@@ -43,6 +43,7 @@
 - 🔒 Privacy first - bring your own keys or use local models with Ollama. Your browsing history stays on your computer
 - 🚀 Open source and community driven - see exactly what's happening under the hood
 - 🤝 (coming soon) MCP store to one-click install popular MCPs and use them directly in the browser bar
+- 🧑‍🦽 (coming soon) Run it on google.colab and android + cloud version 
 - 🛡️ (coming soon) Built-in AI ad blocker that works across more scenarios!  
 
 ## Demos
