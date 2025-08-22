@@ -21,3 +21,4 @@ browseros/branding-file-updates.patch
 browseros/updates-llm-chat-and-hub.patch
 browseros/llm-settings-page-updates.patch
 browseros/disable-sidepanel-animation.patch
+browseros/ctrl-tab-most-recent.patch

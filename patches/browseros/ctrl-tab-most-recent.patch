@@ -1,0 +1,181 @@
+From 58cceea8003f85852f48c4b073b6c7e4444fc9ef Mon Sep 17 00:00:00 2001
+From: BrowserOS Team <team@browseros.com>
+Date: Thu, 24 Jul 2025 13:48:38 -0700
+Subject: [PATCH] Add CTRL+Tab for cycling between most recent tabs
+
+This patch implements the most recent tab switching functionality using
+CTRL+Tab (or Cmd+Tab on Mac) to cycle through tabs in order of most
+recently used, similar to how Sidekick browser worked.
+
+---
+ chrome/app/chrome_command_ids.h                    |   3 +
+ chrome/browser/ui/browser_command_controller.cc    |  25 +++
+ chrome/browser/ui/tabs/tab_strip_model.cc          |  45 ++++
+ chrome/browser/ui/tabs/tab_strip_model.h           |  12 ++
+ chrome/browser/ui/views/accelerator_table.cc       |   4 +
+ chrome/browser/global_keyboard_shortcuts_mac.mm    |   2 +
+ 6 files changed, 91 insertions(+)
+
+diff --git a/chrome/app/chrome_command_ids.h b/chrome/app/chrome_command_ids.h
+index 6db32fe196921..c22b9bd1d77ab 100644
+--- a/chrome/app/chrome_command_ids.h
++++ b/chrome/app/chrome_command_ids.h
+@@ -290,6 +290,9 @@
+ #define IDC_SHOW_HISTORY_SIDE_PANEL     40293
+ #define IDC_OPEN_GLIC                   40294
+ #define IDC_FIND_EXTENSIONS  40295
++#define IDC_SELECT_MOST_RECENT_TAB      40296
++#define IDC_SELECT_PREVIOUS_MOST_RECENT_TAB 40297
++#define IDC_SELECT_NEXT_MOST_RECENT_TAB 40298
+ 
+ // Spell-check
+ // Insert any additional suggestions before _LAST; these have to be consecutive.
+diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
+index 6f2feda3e7920..f0912a69e5c05 100644
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -912,6 +912,31 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
+       browser_->GetFeatures().side_panel_ui()->Show(
+           SidePanelEntryId::kBookmarks, SidePanelOpenTrigger::kAppMenu);
+       break;
++    case IDC_SELECT_MOST_RECENT_TAB:
++      // This is the main CTRL+Tab command that cycles forward
++      if (browser_->tab_strip_model()) {
++        browser_->tab_strip_model()->SelectMostRecentTab();
++      }
++      break;
++    case IDC_SELECT_NEXT_MOST_RECENT_TAB:
++      // Cycle forward through most recent tabs
++      if (browser_->tab_strip_model()) {
++        browser_->tab_strip_model()->SelectNextMostRecentTab();
++      }
++      break;
++    case IDC_SELECT_PREVIOUS_MOST_RECENT_TAB:
++      // Cycle backward through most recent tabs (CTRL+Shift+Tab)
++      if (browser_->tab_strip_model()) {
++        browser_->tab_strip_model()->SelectPreviousMostRecentTab();
++      }
++      break;
+     case IDC_SHOW_APP_MENU:
+       base::RecordAction(base::UserMetricsAction("Accel_Show_App_Menu"));
+       ShowAppMenu(browser_);
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.cc b/chrome/browser/ui/tabs/tab_strip_model.cc
+index 2af616e71a52a..36605fd2eddbf 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -100,6 +100,21 @@ void TabStripModel::SelectMostRecentTab() {
+   if (most_recent_tabs_.empty()) {
+     return;
+   }
++  
++  // Get the current active tab index
++  int current_index = active_index();
++  
++  // Find the current tab in the most recent list
++  auto current_it = std::find(most_recent_tabs_.begin(), most_recent_tabs_.end(), current_index);
++  
++  // If current tab is in the list, move to the next one
++  if (current_it != most_recent_tabs_.end()) {
++    auto next_it = std::next(current_it);
++    if (next_it == most_recent_tabs_.end()) {
++      next_it = most_recent_tabs_.begin();  // Wrap around
++    }
++    ActivateTabAt(*next_it, TabStripUserGestureDetails());
++  } else {
++    // If current tab is not in the list, select the most recent
++    ActivateTabAt(most_recent_tabs_.front(), TabStripUserGestureDetails());
++  }
+ }
+ 
++void TabStripModel::SelectNextMostRecentTab() {
++  SelectMostRecentTab();  // Same behavior for now
++}
++
++void TabStripModel::SelectPreviousMostRecentTab() {
++  if (most_recent_tabs_.empty()) {
++    return;
++  }
++  
++  // Get the current active tab index
++  int current_index = active_index();
++  
++  // Find the current tab in the most recent list
++  auto current_it = std::find(most_recent_tabs_.begin(), most_recent_tabs_.end(), current_index);
++  
++  // If current tab is in the list, move to the previous one
++  if (current_it != most_recent_tabs_.end()) {
++    if (current_it == most_recent_tabs_.begin()) {
++      current_it = most_recent_tabs_.end();  // Wrap around to end
++    }
++    --current_it;
++    ActivateTabAt(*current_it, TabStripUserGestureDetails());
++  } else {
++    // If current tab is not in the list, select the most recent
++    ActivateTabAt(most_recent_tabs_.front(), TabStripUserGestureDetails());
++  }
++}
++
++void TabStripModel::UpdateMostRecentTabs(int tab_index) {
++  // Remove the tab from its current position if it exists
++  auto it = std::find(most_recent_tabs_.begin(), most_recent_tabs_.end(), tab_index);
++  if (it != most_recent_tabs_.end()) {
++    most_recent_tabs_.erase(it);
++  }
++  
++  // Add it to the front (most recent)
++  most_recent_tabs_.insert(most_recent_tabs_.begin(), tab_index);
++  
++  // Keep only the last 10 most recent tabs to avoid memory issues
++  if (most_recent_tabs_.size() > 10) {
++    most_recent_tabs_.resize(10);
++  }
++}
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.h b/chrome/browser/ui/tabs/tab_strip_model.h
+index 2af616e71a52a..36605fd2eddbf 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.h
++++ b/chrome/browser/ui/tabs/tab_strip_model.h
+@@ -200,6 +200,18 @@ class TabStripModel : public TabGroupController {
+   // Selects the most recently used tab
+   void SelectMostRecentTab();
+ 
++  // Selects the next tab in the most recent order
++  void SelectNextMostRecentTab();
++
++  // Selects the previous tab in the most recent order
++  void SelectPreviousMostRecentTab();
++
++  // Updates the most recent tabs list when a tab is activated
++  void UpdateMostRecentTabs(int tab_index);
++
++  // Gets the most recent tabs list
++  const std::vector<int>& GetMostRecentTabs() const { return most_recent_tabs_; }
+ 
+  private:
+   // The list of tabs in order of most recently used
+diff --git a/chrome/browser/ui/views/accelerator_table.cc b/chrome/browser/ui/views/accelerator_table.cc
+index 6db32fe196921..c22b9bd1d77ab 100644
+--- a/chrome/browser/ui/views/accelerator_table.cc
++++ b/chrome/browser/ui/views/accelerator_table.cc
+@@ -151,6 +151,10 @@ const AcceleratorMapping kAcceleratorMap[] = {
+     {ui::VKEY_F11, ui::EF_NONE, IDC_FULLSCREEN},
+     {ui::VKEY_M, ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR,
+      IDC_SHOW_AVATAR_MENU},
++    {ui::VKEY_TAB, ui::EF_CONTROL_DOWN, IDC_SELECT_MOST_RECENT_TAB},
++    {ui::VKEY_TAB, ui::EF_CONTROL_DOWN | ui::EF_SHIFT_DOWN, 
++     IDC_SELECT_PREVIOUS_MOST_RECENT_TAB},
+ 
+ // Platform-specific key maps.
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+diff --git a/chrome/browser/global_keyboard_shortcuts_mac.mm b/chrome/browser/global_keyboard_shortcuts_mac.mm
+index cbc0d472d9476..262d771e6b568 100644
+--- a/chrome/browser/global_keyboard_shortcuts_mac.mm
++++ b/chrome/browser/global_keyboard_shortcuts_mac.mm
+@@ -145,6 +145,8 @@ const std::vector<KeyboardShortcutData>& GetShortcutsNotPresentInMainMenu() {
+ 
+       {true,  true,  false, false, kVK_ANSI_M,            IDC_SHOW_AVATAR_MENU},
+       {true,  false, false, true,  kVK_ANSI_L,            IDC_SHOW_DOWNLOADS},
++      {true,  false, false, false, kVK_Tab,               IDC_SELECT_MOST_RECENT_TAB},
++      {true,  true,  false, false, kVK_Tab,               IDC_SELECT_PREVIOUS_MOST_RECENT_TAB},
+ 
+       {true,  true,  false, false, kVK_ANSI_C,            IDC_DEV_TOOLS_INSPECT},
+       {true,  false, false, true,  kVK_ANSI_C,            IDC_DEV_TOOLS_INSPECT},
