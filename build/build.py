@@ -105,6 +105,7 @@ def build_main(
     patch_interactive: bool = False,
     patch_commit: bool = False,
     upload_gcs: bool = True,  # Default to uploading to GCS
+    auth_config: str = "default",  # Authentication configuration
 ):
     """Main build orchestration"""
     log_info("🚀 Nxtscape Build System")
@@ -178,6 +179,25 @@ def build_main(
         if IS_WINDOWS and "signing" in config and "certificate_name" in config["signing"]:
             certificate_name = config["signing"]["certificate_name"]
             log_info(f"🔏 Using certificate for signing: {certificate_name}")
+
+        # Handle authentication configuration
+        if auth_config == "auth":
+            log_info("🔐 Using authentication-enabled build configuration")
+            # Override GN flags file to use authentication-enabled config
+            if IS_WINDOWS:
+                gn_flags_file = Path("build/config/gn/flags.windows.auth.gn")
+            elif IS_MACOS:
+                gn_flags_file = Path("build/config/gn/flags.macos.auth.gn")
+            elif IS_LINUX:
+                gn_flags_file = Path("build/config/gn/flags.linux.auth.gn")
+            
+            if gn_flags_file and gn_flags_file.exists():
+                log_info(f"📄 Using authentication GN flags: {gn_flags_file}")
+            else:
+                log_warning(f"Authentication GN flags file not found: {gn_flags_file}")
+                log_warning("Falling back to default configuration")
+        else:
+            log_info("🔒 Using default (privacy-focused) build configuration")
 
     # CLI takes precedence over config
     if chromium_src_dir:
@@ -499,6 +519,12 @@ def build_main(
     help="Apply string replacements to chromium files",
 )
 @click.option(
+    "--auth-config",
+    type=click.Choice(["default", "auth"]),
+    default="default",
+    help="Authentication configuration: default (disabled) or auth (enabled)",
+)
+@click.option(
     "--patch-interactive",
     "-i",
     is_flag=True,
@@ -532,6 +558,7 @@ def main(
     merge,
     add_replace,
     string_replace,
+    auth_config,
     patch_interactive,
     patch_commit,
     no_gcs_upload,
@@ -627,6 +654,7 @@ def main(
         patch_interactive=patch_interactive,
         patch_commit=patch_commit,
         upload_gcs=not no_gcs_upload,  # Invert the flag
+        auth_config=auth_config,  # Pass authentication configuration
     )
 
 

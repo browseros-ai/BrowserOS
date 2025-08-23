@@ -1,0 +1,49 @@
+# Windows Build Configuration with Google Authentication Enabled
+# This configuration enables Google OAuth and authentication services
+# while maintaining BrowserOS's privacy-focused approach
+
+use_siso=false
+is_debug = false
+is_component_build = false
+is_official_build = true
+symbol_level = 0
+is_clang=true
+chrome_pgo_phase = 0
+proprietary_codecs=true
+
+enable_widevine=true
+exclude_unwind_tables=true
+
+# Google Authentication Services - ENABLED
+google_api_key=""
+google_default_client_id=""
+google_default_client_secret=""
+use_official_google_api_keys=false
+use_unofficial_version_number=false
+
+# Enable authentication and sign-in services
+enable_signin=true
+enable_sync=true
+enable_identity_services=true
+
+# OAuth and authentication features
+enable_oauth2=true
+enable_identity_api=true
+
+# Privacy settings - maintain BrowserOS's privacy focus
+enable_reporting=false
+enable_service_discovery=false
+enable_metrics=false
+
+target_cpu="x64"
+use_sysroot=false
+blink_symbol_level=0
+v8_symbol_level=0
+symbol_level=0
+
+ffmpeg_branding="Chrome"
+
+# Additional authentication-related flags
+enable_web_auth=true
+enable_credential_management_api=true
+enable_identity_credentials=true

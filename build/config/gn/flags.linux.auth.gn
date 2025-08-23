@@ -1,0 +1,58 @@
+# Linux Build Configuration with Google Authentication Enabled
+# This configuration enables Google OAuth and authentication services
+# while maintaining BrowserOS's privacy-focused approach
+
+# Build type
+is_debug = false
+is_official_build = true
+is_component_build = false
+
+# Compiler
+use_sysroot = true
+use_custom_libcxx = true
+is_clang = true
+clang_use_chrome_plugins = false
+fatal_linker_warnings = false
+
+# Core features
+enable_nacl = false
+enable_widevine = true
+disable_fieldtrial_testing_config = true
+
+# Media
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+
+# Hardware acceleration
+use_vaapi = true
+
+# Libraries
+use_system_libffi = false
+
+# Optimization and binary size reduction
+symbol_level = 0
+blink_symbol_level = 0
+exclude_unwind_tables = true
+
+# Disable PGO (Profile-Guided Optimization)
+chrome_pgo_phase = 0
+
+# Google Authentication Services - ENABLED
+google_api_key = ""
+google_default_client_id = ""
+google_default_client_secret = ""
+use_official_google_api_keys = false
+
+# Enable authentication and sign-in services
+enable_signin = true
+enable_sync = true
+enable_identity_services = true
+
+# OAuth and authentication features
+enable_oauth2 = true
+enable_identity_api = true
+
+# Additional authentication-related flags
+enable_web_auth = true
+enable_credential_management_api = true
+enable_identity_credentials = true

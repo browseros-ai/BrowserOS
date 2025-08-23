@@ -1,0 +1,47 @@
+# macOS Build Configuration with Google Authentication Enabled
+# This configuration enables Google OAuth and authentication services
+# while maintaining BrowserOS's privacy-focused approach
+
+is_debug=false
+is_component_build=false
+is_official_build=true
+symbol_level=0
+is_clang=true
+chrome_pgo_phase = 0
+enable_sparkle=true
+
+enable_reading_list=false
+enable_reporting=false
+enable_service_discovery=false
+enable_widevine=true
+
+# Google Authentication Services - ENABLED
+google_api_key=""
+google_default_client_id=""
+google_default_client_secret=""
+use_official_google_api_keys=false
+use_unofficial_version_number=false
+
+# Enable authentication and sign-in services
+enable_signin=true
+enable_sync=true
+enable_identity_services=true
+
+# OAuth and authentication features
+enable_oauth2=true
+enable_identity_api=true
+
+# Privacy settings - maintain BrowserOS's privacy focus
+enable_updater=false
+blink_symbol_level=0
+enable_mse_mpeg2ts_stream_parser=true
+enable_swiftshader=true
+ffmpeg_branding="Chrome"
+proprietary_codecs=true
+enable_platform_hevc = true
+disable_fieldtrial_testing_config=true
+
+# Additional authentication-related flags
+enable_web_auth=true
+enable_credential_management_api=true
+enable_identity_credentials=true

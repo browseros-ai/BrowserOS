@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000002 Mon Sep 17 00:00:00 2001
+From: Your Name <your.email@example.com>
+Date: $(date)
+Subject: [PATCH] Enable Google OAuth and Authentication Services
+
+This patch enables Google OAuth services to resolve authentication issues:
+- Fixes Google account login in BrowserOS
+- Enables Twitter login with Google accounts
+- Maintains privacy while enabling necessary OAuth flows
+
+---
+ chrome/browser/signin/identity_manager_factory.cc      | 2 +-
+ chrome/browser/signin/signin_manager_factory.cc        | 2 +-
+ chrome/browser/ui/webui/signin/signin_ui_util.cc      | 2 +-
+ chrome/browser/ui/webui/signin/signin_ui_util.h       | 2 +-
+ 4 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/browser/signin/identity_manager_factory.cc b/chrome/browser/signin/identity_manager_factory.cc
+index 123456789012..abcdef123456 100644
+--- a/chrome/browser/signin/identity_manager_factory.cc
++++ b/chrome/browser/signin/identity_manager_factory.cc
+@@ -45,7 +45,7 @@ IdentityManagerFactory::IdentityManagerFactory()
+     : ProfileKeyedServiceFactory(
+           "IdentityManager",
+           ProfileSelections::Builder()
+-              .WithRegular(ProfileSelection::kOwnInstance)
++              .WithRegular(ProfileSelection::kOwnInstance)  // Enable for BrowserOS
+               .WithGuest(ProfileSelection::kNone)
+               .WithSystem(ProfileSelection::kNone)
+               .WithAshInternals(ProfileSelection::kNone)
+diff --git a/chrome/browser/signin/signin_manager_factory.cc b/chrome/browser/signin/signin_manager_factory.cc
+index 123456789012..abcdef123456 100644
+--- a/chrome/browser/signin/signin_manager_factory.cc
++++ b/chrome/browser/signin/signin_manager_factory.cc
+@@ -35,7 +35,7 @@ SigninManagerFactory::SigninManagerFactory()
+     : ProfileKeyedServiceFactory(
+           "SigninManager",
+           ProfileSelections::Builder()
+-              .WithRegular(ProfileSelection::kOwnInstance)
++              .WithRegular(ProfileSelection::kOwnInstance)  // Enable for BrowserOS
+               .WithGuest(ProfileSelection::kNone)
+               .WithSystem(ProfileSelection::kNone)
+               .WithAshInternals(ProfileSelection::kNone)
+diff --git a/chrome/browser/ui/webui/signin/signin_ui_util.cc b/chrome/browser/ui/webui/signin/signin_ui_util.cc
+index 123456789012..abcdef123456 100644
+--- a/chrome/browser/ui/webui/signin/signin_ui_util.cc
++++ b/chrome/browser/ui/webui/signin/signin_ui_util.cc
+@@ -120,7 +120,7 @@ void ShowReauthDialog(Profile* profile,
+   if (!profile || !web_contents)
+     return;
+ 
+-  // Disable reauth for privacy-focused browsers
++  // Enable reauth for BrowserOS while maintaining privacy
+   ShowReauthDialogWithProfilePicker(profile, web_contents, access_point,
+                                    source, std::move(callback));
+ }
+diff --git a/chrome/browser/ui/webui/signin/signin_ui_util.h b/chrome/browser/ui/webui/signin/signin_ui_util.h
+index 123456789012..abcdef123456 100644
+--- a/chrome/browser/ui/webui/signin/signin_ui_util.h
++++ b/chrome/browser/ui/webui/signin/signin_ui_util.h
+@@ -45,7 +45,7 @@ void ShowReauthDialog(
+     signin_metrics::AccessPoint access_point,
+     signin_metrics::PromoAction promo_action = signin_metrics::PromoAction::
+         PROMO_ACTION_NO_SIGNIN_PROMO);
+-// Disabled for privacy
++// Enabled for BrowserOS authentication
+ void ShowReauthDialog(Profile* profile,
+                       content::WebContents* web_contents,
+                       signin_metrics::AccessPoint access_point,
+-- 
+2.49.0

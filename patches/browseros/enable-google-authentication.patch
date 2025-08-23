@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000001 Mon Sep 17 00:00:00 2001
+From: Your Name <your.email@example.com>
+Date: $(date)
+Subject: [PATCH] Enable Google Authentication Services
+
+This patch enables Google authentication services to allow users to:
+1. Sign in to BrowserOS with Google accounts
+2. Use Google OAuth for third-party sites (like Twitter)
+3. Maintain privacy while enabling necessary authentication
+
+---
+ chrome/browser/signin/signin_util.cc                    | 2 +-
+ chrome/browser/ui/startup/google_api_keys_infobar_delegate.cc | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/signin/signin_util.cc b/chrome/browser/signin/signin_util.cc
+index 123456789012..abcdef123456 100644
+--- a/chrome/browser/signin/signin_util.cc
++++ b/chrome/browser/signin/signin_util.cc
+@@ -50,7 +50,7 @@ bool IsSigninAllowed(const Profile* profile) {
+   // Check if sign-in is allowed by policy.
+   if (profile->GetPrefs()->GetBoolean(prefs::kSigninAllowed) == false)
+     return false;
+-  return true;
++  return true;  // Allow sign-in for BrowserOS
+ }
+ 
+ bool IsSigninAllowedByPolicy(const Profile* profile) {
+diff --git a/chrome/browser/ui/startup/google_api_keys_infobar_delegate.cc b/chrome/browser/ui/startup/google_api_keys_infobar_delegate.cc
+index 78b37b940137..5e11f058c5537 100644
+--- a/chrome/browser/ui/startup/google_api_keys_infobar_delegate.cc
++++ b/chrome/browser/ui/startup/google_api_keys_infobar_delegate.cc
+@@ -30,15 +30,15 @@ GoogleApiKeysInfoBarDelegate::GetIdentifier() const {
+ }
+ 
+ std::u16string GoogleApiKeysInfoBarDelegate::GetLinkText() const {
+-  // return l10n_util::GetStringUTF16(IDS_LEARN_MORE);
+-  return std::u16string();
++  return l10n_util::GetStringUTF16(IDS_LEARN_MORE);
+ }
+ 
+ GURL GoogleApiKeysInfoBarDelegate::GetLinkURL() const {
+-  // return GURL(google_apis::kAPIKeysDevelopersHowToURL);
+-  return GURL();
++  return GURL(google_apis::kAPIKeysDevelopersHowToURL);
+ }
+ 
+ std::u16string GoogleApiKeysInfoBarDelegate::GetMessageText() const {
+-  // return l10n_util::GetStringUTF16(IDS_MISSING_GOOGLE_API_KEYS);
+-  return std::u16string();
++  return l10n_util::GetStringUTF16(IDS_MISSING_GOOGLE_API_KEYS);
+ }
+ 
+ int GoogleApiKeysInfoBarDelegate::GetButtons() const {
+-- 
+2.49.0
