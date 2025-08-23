@@ -1,0 +1,34 @@
+# Test Configuration for Authentication-Enabled Build
+# This demonstrates how to use the new --auth-config feature
+
+# Build configuration
+build:
+  type: "release"
+  architecture: "x64"
+  universal: false
+
+# Build steps
+steps:
+  clean: true
+  git_setup: false
+  apply_patches: true
+  build: true
+  sign: false
+  package: false
+
+# Paths
+paths:
+  chromium_src: "/path/to/your/chromium/src"
+
+# GN flags (will be overridden by --auth-config auth)
+gn_flags:
+  file: "build/config/gn/flags.windows.auth.gn"
+
+# Notifications
+notifications:
+  slack: false
+
+# Authentication configuration
+# Note: This is handled by the --auth-config CLI option
+# When using --auth-config auth, the system will automatically
+# use the appropriate authentication-enabled GN flags file
