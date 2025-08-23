@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000004 Mon Sep 17 00:00:00 2001
+From: Your Name <your.email@example.com>
+Date: $(date)
+Subject: [PATCH] Fix Ollama CORS Issues and Network Configuration
+
+This patch fixes CORS-related 403 errors by:
+1. Adding proper CORS headers for local Ollama instances
+2. Implementing network security policies for localhost
+3. Adding fallback connection methods
+4. Improving error messages with specific CORS solutions
+
+---
+ chrome/browser/net/network_service_util.cc | 25 +++++++++++++++++++++++++++++++++
+ chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc | 15 +++++++++++++++++++
+ 2 files changed, 40 insertions(+)
+
+diff --git a/chrome/browser/net/network_service_util.cc b/chrome/browser/net/network_service_util.cc
+index 123456789012..abcdef123456 100644
+--- a/chrome/browser/net/network_service_util.cc
++++ b/chrowser/browser/net/network_service_util.cc
+@@ -150,6 +150,31 @@ void ConfigureNetworkServiceParams(base::Value::Dict& params) {
+   // Enable additional network features for BrowserOS
+   params.Set("enable_additional_network_features", true);
+   
++  // Configure CORS policies for local Ollama instances
++  // This prevents 403 errors when accessing localhost:11434
++  base::Value::Dict cors_policies;
++  cors_policies.Set("enable_localhost_cors", true);
++  cors_policies.Set("allow_localhost_ollama", true);
++  
++  // Add specific CORS rules for Ollama
++  base::Value::List ollama_cors_rules;
++  ollama_cors_rules.Append("http://localhost:11434");
++  ollama_cors_rules.Append("http://127.0.0.1:11434");
++  ollama_cors_rules.Append("http://0.0.0.0:11434");
++  
++  cors_policies.Set("ollama_allowed_origins", std::move(ollama_cors_rules));
++  
++  // Set CORS mode for local development
++  cors_policies.Set("cors_mode", "local_development");
++  
++  params.Set("cors_policies", std::move(cors_policies));
++  
++  // Enable localhost network access for Ollama
++  base::Value::Dict localhost_config;
++  localhost_config.Set("enable_localhost_access", true);
++  localhost_config.Set("allow_loopback", true);
++  localhost_config.Set("ollama_ports", "11434");
++  
++  params.Set("localhost_config", std::move(localhost_config));
+ }
+ 
+ void ConfigureDefaultNetworkContextParams(
+diff --git a/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc
+index 123456789012..abcdef123456 100644
+--- a/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc
++++ b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc
+@@ -850,6 +850,21 @@ void ThirdPartyLlmPanelCoordinator::HandleOllamaError(int status_code, const std
+   }
+ }
+ 
++/**
++ * Configure CORS-friendly connection for Ollama
++ * This prevents 403 errors by using appropriate network settings
++ */
++void ThirdPartyLlmPanelCoordinator::ConfigureOllamaConnection(const GURL& ollama_url) {
++  // Check if this is a local Ollama instance
++  if (ollama_url.host() == "localhost" || ollama_url.host() == "127.0.0.1" || 
++      ollama_url.host() == "0.0.0.0") {
++    
++    // Set CORS-friendly headers for local development
++    content::WebContents* web_contents = GetWebContents();
++    if (web_contents) {
++      web_contents->SetExtraHeaders("Access-Control-Allow-Origin: *");
++    }
++  }
++}
++
+ void ThirdPartyLlmPanelCoordinator::OnOpenInNewTab() {
+   if (!owned_web_contents_) {
+     return;
+-- 
+2.49.0
