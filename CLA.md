@@ -45,4 +45,4 @@ You are not expected to provide support for Your Contributions, except to the ex
 
 **To sign this CLA, please comment on your pull request with:**
 
-`I have read the CLA Document and I hereby sign the CLA`
+I have read the CLA Document and I hereby sign the CLA
