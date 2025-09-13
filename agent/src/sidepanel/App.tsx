@@ -55,7 +55,7 @@ export function App() {
         announcer.announce('An error occurred. Please try again.', 'assertive')
       }}
     >
-      <div className="h-screen bg-background overflow-x-hidden" role="main" aria-label="BrowserOS Chat Assistant">
+      <div className="h-screen bg-background overflow-hidden" role="main" aria-label="BrowserOS Chat Assistant">
         <SkipLink />
         <Chat isConnected={connected} />
         {humanInputRequest && (
