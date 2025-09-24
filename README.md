@@ -51,6 +51,7 @@
 - 🤖 AI agents that run on YOUR browser, not in the cloud
 - 🔒 Privacy first - bring your own keys or use local models with Ollama. Your browsing history stays on your computer
 - 🚀 Open source and community driven - see exactly what's happening under the hood
+- 🔄 Most recent tab switching - press Ctrl+Tab to cycle through your most recently used tabs (like Sidekick browser!)
 - 🤝 (coming soon) MCP store to one-click install popular MCPs and use them directly in the browser bar
 - 🛡️ (coming soon) Built-in AI ad blocker that works across more scenarios!  
 
