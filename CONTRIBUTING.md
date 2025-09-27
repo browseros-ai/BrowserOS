@@ -31,7 +31,7 @@ By participating in this project, you agree to abide by our community standards:
 
 Before you begin, ensure you have the following installed:
 
-- **Node.js** (v18 or higher) - for the Chrome extension development
+- **Node.js** (v18 or higher) - for the BrowserOS extension development
 - **Python 3** - for the Chromium build system
 - **Git** - version control
 - **Chrome/Chromium** browser for testing
@@ -62,8 +62,8 @@ For **Chromium browser development** (optional, only if building the full browse
 
 BrowserOS consists of two main components:
 
-### 1. Chrome Extension (`agent/`)
-The main AI agent that runs as a Chrome extension, providing:
+### 1. BrowserOS Extension (`agent/`)
+The main AI agent that runs as a BrowserOS extension, providing:
 - **AI-powered browser automation** using LLM agents
 - **Multi-tab management** and browser context handling
 - **Tool system** for extensible browser operations
@@ -92,9 +92,9 @@ A custom Chromium build with AI-native features:
 
 ## 🛠️ Development Setup
 
-### Chrome Extension Development (Recommended for Most Contributors)
+### BrowserOS Extension Development (Recommended for Most Contributors)
 
-Most contributors will work on the Chrome extension in the `agent/` directory:
+Most contributors will work on the BrowserOS extension in the `agent/` directory:
 
 1. **Navigate to the agent directory:**
    ```bash
@@ -121,8 +121,8 @@ Most contributors will work on the Chrome extension in the `agent/` directory:
    npm run build:dev
    ```
 
-5. **Load extension in Chrome:**
-   - Open Chrome and navigate to `chrome://extensions/`
+5. **Load extension in BrowserOS:**
+   - Open BrowserOS and navigate to `chrome://extensions/`
    - Enable "Developer mode" (top-right toggle)
    - Click "Load unpacked" and select the `agent/dist` directory
    - The extension will appear with a side panel (Cmd/Ctrl+E to toggle)
@@ -284,7 +284,7 @@ git checkout -b fix/bug-description
 
 ### 4. Run Quality Checks
 
-**For Chrome Extension development:**
+**For BrowserOS Extension development:**
 ```bash
 cd agent
 
@@ -300,7 +300,7 @@ npm test -- path/to/file.test.ts  # Specific test
 
 # Build and test the extension
 npm run build:dev
-# Load in Chrome and test manually
+# Load in BrowserOS and test manually
 ```
 
 **For Chromium development:**
@@ -569,7 +569,7 @@ agent/src/lib/
    ```
 
 3. **Test manually**:
-   - Load extension in Chrome and test your changes
+   - Load extension in BrowserOS and test your changes
    - Verify no regressions in existing functionality
    - Test edge cases and error scenarios
 
@@ -806,19 +806,16 @@ Browse [Good First Issues](https://github.com/browseros-ai/BrowserOS/labels/good
 ## ❓ FAQ
 
 **Q: How do I set up the development environment?**
-A: Follow the [Chrome Extension Development](#chrome-extension-development-recommended-for-most-contributors) section above. Most contributors only need the extension setup.
+A: Follow the [BrowserOS Extension Development](#BrowserOS-extension-development-recommended-for-most-contributors) section above. Most contributors only need the extension setup.
 
 **Q: I'm new to open source. Where should I start?**
 A: Welcome! Start with [Good First Issues](https://github.com/browseros-ai/BrowserOS/labels/good%20first%20issue), join our Discord, and don't hesitate to ask questions.
 
 **Q: How do I run the extension locally?**
-A: Run `npm run build:dev` in the `agent/` directory, then load the `dist` folder as an unpacked extension in Chrome.
+A: Run `npm run build:dev` in the `agent/` directory, then load the `dist` folder as an unpacked extension in BrowserOS.
 
 **Q: Do I need to build the full Chromium browser?**
-A: No! Most contributors only work on the Chrome extension. Chromium building is only needed for browser-level features.
-
-**Q: What's the difference between BrowserOS and the Chrome extension?**
-A: BrowserOS is the full custom browser. The Chrome extension (in `agent/`) provides the same AI features but runs on regular Chrome.
+A: No! Most contributors only work on the BrowserOS extension. Chromium building is only needed for browser-level features.
 
 **Q: How long does code review take?**
 A: We aim for 2-3 business days for most PRs. Complex changes may take longer.
