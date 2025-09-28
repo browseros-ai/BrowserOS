@@ -34,7 +34,10 @@ export enum MessageType {
   LOG_METRIC = 'LOG_METRIC',
   // Newtab to sidepanel communication
   EXECUTE_IN_SIDEPANEL = 'EXECUTE_IN_SIDEPANEL',
-  EXECUTION_STARTING = 'EXECUTION_STARTING'
+  EXECUTION_STARTING = 'EXECUTION_STARTING',
+  // LLM Provider management
+  GET_LLM_PROVIDERS = 'GET_LLM_PROVIDERS',
+  SAVE_LLM_PROVIDERS = 'SAVE_LLM_PROVIDERS'
 }
 
 // Create a zod enum for MessageType
@@ -288,6 +291,28 @@ export const PlanGenerationUpdateMessageSchema = MessageSchema.extend({
 
 export type PlanGenerationUpdateMessage = z.infer<typeof PlanGenerationUpdateMessageSchema>
 
+/**
+ * Get LLM providers message schema
+ */
+export const GetLLMProvidersMessageSchema = MessageSchema.extend({
+  type: z.literal(MessageType.GET_LLM_PROVIDERS),
+  payload: z.object({})
+})
+
+export type GetLLMProvidersMessage = z.infer<typeof GetLLMProvidersMessageSchema>
+
+/**
+ * Save LLM providers message schema
+ */
+export const SaveLLMProvidersMessageSchema = MessageSchema.extend({
+  type: z.literal(MessageType.SAVE_LLM_PROVIDERS),
+  payload: z.object({
+    providersConfig: z.any()  // NemoProvidersConfig type
+  })
+})
+
+export type SaveLLMProvidersMessage = z.infer<typeof SaveLLMProvidersMessageSchema>
+
 
 /**
  * Union of all message types
@@ -306,7 +331,9 @@ export const ExtensionMessageSchema = z.discriminatedUnion('type', [
   GlowStopMessageSchema,
   GeneratePlanMessageSchema,
   RefinePlanMessageSchema,
-  PlanGenerationUpdateMessageSchema
+  PlanGenerationUpdateMessageSchema,
+  GetLLMProvidersMessageSchema,
+  SaveLLMProvidersMessageSchema
 ])
 
 export type ExtensionMessage = z.infer<typeof ExtensionMessageSchema>

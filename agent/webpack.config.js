@@ -25,6 +25,7 @@ const processEnv = {
   'process.env.KLAVIS_API_KEY': JSON.stringify(envKeys.KLAVIS_API_KEY || ''),
   'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),
   'process.env.MOONDREAM_API_KEY': JSON.stringify(envKeys.MOONDREAM_API_KEY || ''),
+  'process.env.OPENAI_API_KEY': JSON.stringify(envKeys.OPENAI_API_KEY || ''),
   // Firebase environment variables
   'process.env.FIREBASE_API_KEY': JSON.stringify(envKeys.FIREBASE_API_KEY || ''),
   'process.env.FIREBASE_AUTH_DOMAIN': JSON.stringify(envKeys.FIREBASE_AUTH_DOMAIN || ''),

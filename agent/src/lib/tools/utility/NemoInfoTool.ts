@@ -166,7 +166,7 @@ npm run lint
 ## Environment Variables
 \`\`\`bash
 # For development
-LITELLM_API_KEY=your-api-key
+OPENAI_API_KEY=your-api-key
 MOONDREAM_API_KEY=your-vision-api-key
 \`\`\``,
 
@@ -410,7 +410,7 @@ pause and wait for me to complete it manually
 export function createNemoInfoTool(executionContext: ExecutionContext): DynamicStructuredTool {
   const browserOSInfoTool = new NemoInfoTool(executionContext)
 
-  return new DynamicStructuredTool({
+  const dynamicTool = new DynamicStructuredTool({
     name: "nemo_info_tool",
     description: `Get comprehensive information about Nemoures, configuration, and usage.
 
@@ -433,4 +433,6 @@ export function createNemoInfoTool(executionContext: ExecutionContext): DynamicS
       return JSON.stringify(result)
     }
   })
+
+  return dynamicTool
 }

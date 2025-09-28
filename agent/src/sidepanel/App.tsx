@@ -45,6 +45,11 @@ export function App() {
     announcer.announce(connected ? 'Extension connected' : 'Extension disconnected')
   }, [connected, announcer])
   
+
+
+
+
+  
   return (
     <ErrorBoundary
       onError={(error, errorInfo) => {

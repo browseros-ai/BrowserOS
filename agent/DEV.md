@@ -13,10 +13,9 @@
 
 2. **Create a `.env` file in the root directory**
    ```
-   // fyi, this key has very limited usage limits
-   LITELLM_API_KEY=sk-xYnTqbxdLtQTrqVhtZgmrw
+   API
    ```
-   > **Note:** You'll need a LiteLLM API key to use the LLM features.
+   > **Note:** You'll need an AWS Bedrock API key to use the LLM features. The extension now only supports AWS Bedrock for LLM functionality.
 
 3. **Build the extension**
    ```bash
@@ -57,4 +56,3 @@ If you want to use a different LLM provider instead of LiteLLM, you can use the 
    yarn build:dev
    ```
    
-> **Note:** This is useful for testing with different LLM providers or when you want to use your own API keys directly.

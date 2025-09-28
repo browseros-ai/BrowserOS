@@ -1,28 +1,39 @@
 import { MessageType } from '@/lib/types/messaging'
 import { PortMessage } from '@/lib/runtime/PortMessaging'
-import { LLMSettingsReader } from '@/lib/llm/settings/LLMSettingsReader'
-import { langChainProvider } from '@/lib/llm/LangChainProvider'
-import { NemoProvidersConfigSchema, NEMO_PREFERENCE_KEYS } from '@/lib/llm/settings/NemoTypes'
 import { Logging } from '@/lib/utils/Logging'
 
 /**
- * Handles LLM provider configuration messages:
- * - GET_LLM_PROVIDERS: Get current provider configuration
- * - SAVE_LLM_PROVIDERS: Save provider configuration
+ * Handles LLM provider configuration messages.
+ * Since we now only support ChatOpenAI, this handler provides a simplified
+ * response with the single provider configuration.
  */
 export class ProvidersHandler {
-  private lastProvidersConfigJson: string | null = null
-
   /**
    * Handle GET_LLM_PROVIDERS message
+   * Returns the single ChatOpenAI provider configuration
    */
   async handleGetProviders(
     message: PortMessage,
     port: chrome.runtime.Port
   ): Promise<void> {
     try {
-      const config = await LLMSettingsReader.readAllProviders()
-      this.lastProvidersConfigJson = JSON.stringify(config)
+      // Return simplified ChatOpenAI-only configuration
+      const config = {
+        defaultProviderId: 'openai',
+        providers: [{
+          id: 'openai',
+          name: 'OpenAI',
+          type: 'openai',
+          isDefault: true,
+          isBuiltIn: true,
+          apiKey: process.env.OPENAI_API_KEY || '',
+          modelId: 'gpt-4o-mini',
+          capabilities: { supportsImages: true },
+          modelConfig: { contextWindow: 128000, temperature: 0.2 },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }]
+      }
       
       port.postMessage({
         type: MessageType.WORKFLOW_STATUS,
@@ -49,73 +60,19 @@ export class ProvidersHandler {
 
   /**
    * Handle SAVE_LLM_PROVIDERS message
+   * Since we only support ChatOpenAI, this is a no-op
    */
   handleSaveProviders(
     message: PortMessage,
     port: chrome.runtime.Port
   ): void {
-    try {
-      const config = NemoProvidersConfigSchema.parse(message.payload)
-      const nemo = (chrome as any)?.browserOS as { 
-        setPref?: (name: string, value: any, pageId?: string, cb?: (ok: boolean) => void) => void 
-      } | undefined
-      
-      if (nemo?.setPref) {
-        nemo.setPref(
-          NEMO_PREFERENCE_KEYS.PROVIDERS,
-          JSON.stringify(config),
-          undefined,
-          (success?: boolean) => {
-            if (success) {
-              try { langChainProvider.clearCache() } catch (_) {}
-              this.lastProvidersConfigJson = JSON.stringify(config)
-              this.broadcastProvidersConfig(config)
-            }
-            port.postMessage({
-              type: MessageType.WORKFLOW_STATUS,
-              payload: success ? { status: 'success' } : { status: 'error', error: 'Save failed' },
-              id: message.id
-            })
-          }
-        )
-      } else {
-        // Fallback to chrome.storage.local
-        try {
-          const key = NEMO_PREFERENCE_KEYS.PROVIDERS
-          chrome.storage?.local?.set({ [key]: JSON.stringify(config) }, () => {
-            try { langChainProvider.clearCache() } catch (_) {}
-            this.lastProvidersConfigJson = JSON.stringify(config)
-            this.broadcastProvidersConfig(config)
-            port.postMessage({
-              type: MessageType.WORKFLOW_STATUS,
-              payload: { status: 'success' },
-              id: message.id
-            })
-          })
-        } catch (_e) {
-          port.postMessage({
-            type: MessageType.WORKFLOW_STATUS,
-            payload: { status: 'error', error: 'Save failed' },
-            id: message.id
-          })
-        }
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error)
-      port.postMessage({
-        type: MessageType.WORKFLOW_STATUS,
-        payload: { status: 'error', error: errorMessage },
-        id: message.id
-      })
-    }
-  }
-
-  /**
-   * Broadcast provider config to all connected panels
-   */
-  private broadcastProvidersConfig(config: unknown): void {
-    // This would be handled by PortManager in the new architecture
-    // For now, keeping empty as placeholder
-    Logging.log('ProvidersHandler', 'Provider config updated')
+    // ChatOpenAI configuration is fixed, no need to save
+    Logging.log('ProvidersHandler', 'Provider save requested but ChatOpenAI config is fixed', 'info')
+    
+    port.postMessage({
+      type: MessageType.WORKFLOW_STATUS,
+      payload: { status: 'success' },
+      id: message.id
+    })
   }
 }
