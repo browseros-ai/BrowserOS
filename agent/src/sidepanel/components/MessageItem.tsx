@@ -8,9 +8,6 @@ import { ChevronDown, ChevronUp, Copy, Check } from 'lucide-react'
 import { TaskManagerDropdown } from './TaskManagerDropdown'
 import { useSettingsStore } from '@/sidepanel/stores/settingsStore'
 import { useCopyToClipboard } from '@/sidepanel/hooks/useCopyToClipboard'
-import { FeedbackButtons } from './feedback/FeedbackButtons'
-import { FeedbackModal } from './feedback/FeedbackModal'
-import type { FeedbackType } from '@/lib/types/feedback'
 
 interface MessageItemProps {
   message: Message
@@ -329,7 +326,6 @@ const ToolResultInline = ({ name, content, autoCollapseAfterMs }: ToolResultInli
 export const MessageItem = memo<MessageItemProps>(function MessageItem({ message, shouldIndent = false, showLocalIndentLine = false, applyIndentMargin = true }: MessageItemProps) {
   const { autoCollapseTools } = useSettingsStore()
   const messages = useChatStore(state => state.messages)
-  const { submitFeedback, getFeedbackForMessage, getFeedbackUIState, setFeedbackUIState } = useChatStore()
   const { copyToClipboard, isCopied } = useCopyToClipboard()
   
   // Check if this is the latest thinking message (for shimmer effect)
@@ -363,10 +359,6 @@ export const MessageItem = memo<MessageItemProps>(function MessageItem({ message
   // Special cases we still need to detect
   const isTodoTable = message.content.includes('| # | Status | Task |')
   
-  // Feedback functionality
-  const feedback = getFeedbackForMessage(message.msgId)
-  const feedbackUI = getFeedbackUIState(message.msgId)
-  const [showThankYou, setShowThankYou] = useState(false)
   
   // Check if this is the latest assistant message (for completed responses)
   const isLatestAssistant = useMemo(() => {
@@ -378,46 +370,6 @@ export const MessageItem = memo<MessageItemProps>(function MessageItem({ message
   // Check if agent is currently processing (streaming)
   const { isProcessing } = useChatStore(state => ({ isProcessing: state.isProcessing }))
   
-  // Determine if we should show feedback buttons
-  const shouldShowFeedback = useMemo(() => {
-    return message.role === 'assistant' && 
-           !isTodoTable &&
-           !feedback &&
-           // Show feedback for completed assistant messages (not currently streaming)
-           (!isLatestAssistant || !isProcessing)
-  }, [message.role, isTodoTable, feedback, isLatestAssistant, isProcessing])
-  
-  // Handle feedback submission
-  const handleFeedback = useCallback(async (messageId: string, type: FeedbackType) => {
-    if (type === 'thumbs_up') {
-      await submitFeedback(messageId, type)
-    } else {
-      // Open modal for thumbs down
-      setFeedbackUIState(messageId, { showModal: true })
-    }
-  }, [submitFeedback, setFeedbackUIState])
-  
-  // Handle feedback modal submission
-  const handleFeedbackModalSubmit = useCallback(async (textFeedback: string) => {
-    await submitFeedback(message.msgId, 'thumbs_down', textFeedback)
-  }, [submitFeedback, message.msgId])
-  
-  // Handle feedback modal close
-  const handleFeedbackModalClose = useCallback(() => {
-    setFeedbackUIState(message.msgId, { showModal: false })
-  }, [setFeedbackUIState, message.msgId])
-  
- 
-  useEffect(() => {
-    if (feedback && !feedbackUI.showModal) {
-      setShowThankYou(true)
-      const timer = setTimeout(() => {
-        setShowThankYou(false)
-      }, 2000) 
-      
-      return () => clearTimeout(timer)
-    }
-  }, [feedback, feedbackUI.showModal])
 
 
 
@@ -654,40 +606,6 @@ export const MessageItem = memo<MessageItemProps>(function MessageItem({ message
             </button>
           )}
           
-          {/* Feedback section below content for assistant messages */}
-          {message.role === 'assistant' && (shouldShowFeedback || feedback) && (
-            <div className="mt-3 flex items-center justify-start">
-              {shouldShowFeedback && (
-                <FeedbackButtons
-                  messageId={message.msgId}
-                  onFeedback={handleFeedback}
-                  isSubmitted={!!feedback}
-                  submittedType={feedback?.type}
-                  isSubmitting={feedbackUI.isSubmitting}
-                />
-              )}
-              
-              {/* Thank you message for submitted feedback */}
-              {showThankYou && feedback && !feedbackUI.showModal && (
-                <div className={cn(
-                  "text-xs text-green-600 px-2 py-1 bg-green-50 rounded-md ml-2 transition-all duration-300",
-                  "animate-in fade-in-0 slide-in-from-bottom-1"
-                )}>
-                  {feedback.type === 'thumbs_up' ? 'Thanks for your feedback!' : 'Feedback submitted'}
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* Feedback modal */}
-          {feedbackUI.showModal && (
-            <FeedbackModal
-              isOpen={feedbackUI.showModal}
-              onClose={handleFeedbackModalClose}
-              onSubmit={handleFeedbackModalSubmit}
-              isSubmitting={feedbackUI.isSubmitting}
-            />
-          )}
         </div>
       )}
     </div>

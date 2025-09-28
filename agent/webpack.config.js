@@ -26,14 +26,6 @@ const processEnv = {
   'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),
   'process.env.MOONDREAM_API_KEY': JSON.stringify(envKeys.MOONDREAM_API_KEY || ''),
   'process.env.OPENAI_API_KEY': JSON.stringify(envKeys.OPENAI_API_KEY || ''),
-  // Firebase environment variables
-  'process.env.FIREBASE_API_KEY': JSON.stringify(envKeys.FIREBASE_API_KEY || ''),
-  'process.env.FIREBASE_AUTH_DOMAIN': JSON.stringify(envKeys.FIREBASE_AUTH_DOMAIN || ''),
-  'process.env.FIREBASE_PROJECT_ID': JSON.stringify(envKeys.FIREBASE_PROJECT_ID || ''),
-  'process.env.FIREBASE_STORAGE_BUCKET': JSON.stringify(envKeys.FIREBASE_STORAGE_BUCKET || ''),
-  'process.env.FIREBASE_MESSAGING_SENDER_ID': JSON.stringify(envKeys.FIREBASE_MESSAGING_SENDER_ID || ''),
-  'process.env.FIREBASE_APP_ID': JSON.stringify(envKeys.FIREBASE_APP_ID || ''),
-  'process.env.FIREBbase_MEASUREMENT_ID': JSON.stringify(envKeys.FIREBASE_MEASUREMENT_ID || ''),
 }
 
 console.log('API keys will be injected at build time (keys hidden for security)')

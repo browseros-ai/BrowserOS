@@ -1,9 +1,5 @@
 import { create } from 'zustand'
 import { z } from 'zod'
-import { MessageType } from '@/lib/types/messaging'
-import { PortMessaging } from '@/lib/runtime/PortMessaging'
-import { FeedbackSubmissionSchema, type FeedbackSubmission, type FeedbackType } from '@/lib/types/feedback'
-import { feedbackService } from '@/lib/services/feedbackService'
 
 // Message schema for chat store with Zod validation
 export const MessageSchema = z.object({
@@ -23,12 +19,6 @@ const ChatStateSchema = z.object({
   messages: z.array(MessageSchema),  // All chat messages
   isProcessing: z.boolean(),  // Is agent currently processing
   error: z.string().nullable(),  // Current error message if any
-  feedbacks: z.record(z.string(), FeedbackSubmissionSchema),  // messageId -> feedback
-  feedbackUI: z.record(z.string(), z.object({
-    isSubmitting: z.boolean(),
-    showModal: z.boolean(),
-    error: z.string().nullable()
-  }))  // messageId -> UI state
 })
 
 type ChatState = z.infer<typeof ChatStateSchema>
@@ -55,13 +45,6 @@ interface ChatActions {
   // Error handling
   setError: (error: string | null) => void
   
-  // Feedback operations
-  submitFeedback: (messageId: string, type: FeedbackType, textFeedback?: string) => Promise<void>
-  getFeedbackForMessage: (messageId: string) => FeedbackSubmission | null
-  setFeedbackUIState: (messageId: string, state: Partial<{ isSubmitting: boolean; showModal: boolean; error: string | null }>) => void
-  getFeedbackUIState: (messageId: string) => { isSubmitting: boolean; showModal: boolean; error: string | null }
-  
-
   executedPlans: Record<string, boolean>
   setPlanExecuted: (planId: string) => void
   
@@ -74,8 +57,6 @@ const initialState: ChatState & { executedPlans: Record<string, boolean> } = {
   messages: [],
   isProcessing: false,
   error: null,
-  feedbacks: {},
-  feedbackUI: {},
   executedPlans: {}
 }
 
@@ -138,110 +119,11 @@ export const useChatStore = create<ChatState & ChatActions>((set) => ({
   setProcessing: (processing) => set({ isProcessing: processing }),
   
   setError: (error) => set({ error }),
-  
-
 
   setPlanExecuted: (planId) => {
     set((state) => ({
       executedPlans: { ...state.executedPlans, [planId]: true }
     }))
-  },
-
-  // Feedback operations
-  submitFeedback: async (messageId, type, textFeedback) => {
-    const sessionId = crypto.randomUUID()
-    const feedbackId = crypto.randomUUID()
-    
-    // Set submitting state
-    set((state) => ({
-      feedbackUI: {
-        ...state.feedbackUI,
-        [messageId]: {
-          ...state.feedbackUI[messageId],
-          isSubmitting: true,
-          error: null
-        }
-      }
-    }))
-
-    try {
-      const state = useChatStore.getState()
-      const message = state.messages.find((m: Message) => m.msgId === messageId)
-      
-      // Find the user message that triggered this agent response
-      const messageIndex = state.messages.findIndex((m: Message) => m.msgId === messageId)
-      let userQuery = 'No user query found'
-      
-      // Look backwards from agent message to find the most recent user message
-      for (let i = messageIndex - 1; i >= 0; i--) {
-        if (state.messages[i].role === 'user') {
-          userQuery = state.messages[i].content
-          break
-        }
-      }
-      
-      const feedback: FeedbackSubmission = {
-        feedbackId,
-        messageId,
-        sessionId,
-        type,
-        textFeedback,
-        timestamp: new Date(),
-        agentResponse: message?.content,
-        userQuery
-      }
-
-      // Store feedback locally
-      set((state) => ({
-        feedbacks: { ...state.feedbacks, [messageId]: feedback },
-        feedbackUI: {
-          ...state.feedbackUI,
-          [messageId]: {
-            isSubmitting: false,
-            showModal: false,
-            error: null
-          }
-        }
-      }))
-
-      // Submit to Firebase
-      await feedbackService.submitFeedback(feedback)
-      
-    } catch (error) {
-      set((state) => ({
-        feedbackUI: {
-          ...state.feedbackUI,
-          [messageId]: {
-            ...state.feedbackUI[messageId],
-            isSubmitting: false,
-            error: error instanceof Error ? error.message : 'Failed to submit feedback'
-          }
-        }
-      }))
-    }
-  },
-
-  getFeedbackForMessage: (messageId): FeedbackSubmission | null => {
-    const state = useChatStore.getState()
-    return state.feedbacks[messageId] || null
-  },
-
-  setFeedbackUIState: (messageId, newState) => {
-    set((state) => ({
-      feedbackUI: {
-        ...state.feedbackUI,
-        [messageId]: {
-          ...state.feedbackUI[messageId],
-          ...newState
-        }
-      }
-    }))
-  },
-
-  getFeedbackUIState: (messageId): { isSubmitting: boolean; showModal: boolean; error: string | null } => {
-    const state = useChatStore.getState()
-    const uiState = state.feedbackUI[messageId]
-    return uiState || { isSubmitting: false, showModal: false, error: null }
   },
   
   reset: () => set(initialState)
