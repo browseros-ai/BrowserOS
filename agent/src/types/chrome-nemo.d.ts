@@ -1,6 +1,6 @@
-// Type definitions for chrome.browserOS API
+// Type definitions for chrome.nemo API
 
-declare namespace chrome.browserOS {
+declare namespace chrome.nemo {
   // Page load status information
   interface PageLoadStatus {
     isResourcesLoading: boolean;

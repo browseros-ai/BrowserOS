@@ -1,25 +1,25 @@
 /// <reference path="../../types/chrome-nemo.d.ts" />
 
-// ============= Re-export types from chrome.browserOS namespace =============
+// ============= Re-export types from chrome.nemo namespace =============
 
-export type InteractiveNode = chrome.browserOS.InteractiveNode;
-export type InteractiveSnapshot = chrome.browserOS.InteractiveSnapshot;
+export type InteractiveNode = chrome.nemo.InteractiveNode;
+export type InteractiveSnapshot = chrome.nemo.InteractiveSnapshot;
 export type InteractiveSnapshotOptions =
-  chrome.browserOS.InteractiveSnapshotOptions;
-export type PageLoadStatus = chrome.browserOS.PageLoadStatus;
-export type InteractiveNodeType = chrome.browserOS.InteractiveNodeType;
-export type Rect = chrome.browserOS.BoundingRect;
+  chrome.nemo.InteractiveSnapshotOptions;
+export type PageLoadStatus = chrome.nemo.PageLoadStatus;
+export type InteractiveNodeType = chrome.nemo.InteractiveNodeType;
+export type Rect = chrome.nemo.BoundingRect;
 
 // New snapshot types
-export type SnapshotType = chrome.browserOS.SnapshotType;
-export type SnapshotContext = chrome.browserOS.SnapshotContext;
-export type SectionType = chrome.browserOS.SectionType;
-export type TextSnapshotResult = chrome.browserOS.TextSnapshotResult;
-export type LinkInfo = chrome.browserOS.LinkInfo;
-export type LinksSnapshotResult = chrome.browserOS.LinksSnapshotResult;
-export type SnapshotSection = chrome.browserOS.SnapshotSection;
-export type Snapshot = chrome.browserOS.Snapshot;
-export type SnapshotOptions = chrome.browserOS.SnapshotOptions;
+export type SnapshotType = chrome.nemo.SnapshotType;
+export type SnapshotContext = chrome.nemo.SnapshotContext;
+export type SectionType = chrome.nemo.SectionType;
+export type TextSnapshotResult = chrome.nemo.TextSnapshotResult;
+export type LinkInfo = chrome.nemo.LinkInfo;
+export type LinksSnapshotResult = chrome.nemo.LinksSnapshotResult;
+export type SnapshotSection = chrome.nemo.SnapshotSection;
+export type Snapshot = chrome.nemo.Snapshot;
+export type SnapshotOptions = chrome.nemo.SnapshotOptions;
 
 // ============= Nemo Adapter =============
 
@@ -34,7 +34,7 @@ export type ScreenshotSizeKey = keyof typeof SCREENSHOT_SIZES;
 
 /**
  * Adapter for Chrome Nemo Extension APIs
- * Provides a clean interface to browserOS functionality with extensibility
+ * Provides a clean interface to nemo functionality with extensibility
  */
 export class NemoAdapter {
   private static instance: NemoAdapter | null = null;
@@ -65,7 +65,7 @@ export class NemoAdapter {
 
       return new Promise<InteractiveSnapshot>((resolve, reject) => {
         if (options) {
-          chrome.browserOS.getInteractiveSnapshot(
+          chrome.nemo.getInteractiveSnapshot(
             tabId,
             options,
             (snapshot: InteractiveSnapshot) => {
@@ -80,7 +80,7 @@ export class NemoAdapter {
             },
           );
         } else {
-          chrome.browserOS.getInteractiveSnapshot(
+          chrome.nemo.getInteractiveSnapshot(
             tabId,
             (snapshot: InteractiveSnapshot) => {
               if (chrome.runtime.lastError) {
@@ -113,7 +113,7 @@ export class NemoAdapter {
       console.log(`[NemoAdapter] Clicking node ${nodeId} in tab ${tabId}`);
 
       return new Promise<void>((resolve, reject) => {
-        chrome.browserOS.click(tabId, nodeId, () => {
+        chrome.nemo.click(tabId, nodeId, () => {
           if (chrome.runtime.lastError) {
             reject(new Error(chrome.runtime.lastError.message));
           } else {
@@ -139,7 +139,7 @@ export class NemoAdapter {
       );
 
       return new Promise<void>((resolve, reject) => {
-        chrome.browserOS.inputText(tabId, nodeId, text, () => {
+        chrome.nemo.inputText(tabId, nodeId, text, () => {
           if (chrome.runtime.lastError) {
             reject(new Error(chrome.runtime.lastError.message));
           } else {
@@ -165,7 +165,7 @@ export class NemoAdapter {
       console.log(`[NemoAdapter] Clearing node ${nodeId} in tab ${tabId}`);
 
       return new Promise<void>((resolve, reject) => {
-        chrome.browserOS.clear(tabId, nodeId, () => {
+        chrome.nemo.clear(tabId, nodeId, () => {
           if (chrome.runtime.lastError) {
             reject(new Error(chrome.runtime.lastError.message));
           } else {
@@ -191,7 +191,7 @@ export class NemoAdapter {
       );
 
       return new Promise<boolean>((resolve, reject) => {
-        chrome.browserOS.scrollToNode(tabId, nodeId, (scrolled: boolean) => {
+        chrome.nemo.scrollToNode(tabId, nodeId, (scrolled: boolean) => {
           if (chrome.runtime.lastError) {
             reject(new Error(chrome.runtime.lastError.message));
           } else {
@@ -212,12 +212,12 @@ export class NemoAdapter {
   /**
    * Send keyboard keys
    */
-  async sendKeys(tabId: number, keys: chrome.browserOS.Key): Promise<void> {
+  async sendKeys(tabId: number, keys: chrome.nemo.Key): Promise<void> {
     try {
       console.log(`[NemoAdapter] Sending keys "${keys}" to tab ${tabId}`);
 
       return new Promise<void>((resolve, reject) => {
-        chrome.browserOS.sendKeys(tabId, keys, () => {
+        chrome.nemo.sendKeys(tabId, keys, () => {
           if (chrome.runtime.lastError) {
             reject(new Error(chrome.runtime.lastError.message));
           } else {
@@ -243,7 +243,7 @@ export class NemoAdapter {
       );
 
       return new Promise<PageLoadStatus>((resolve, reject) => {
-        chrome.browserOS.getPageLoadStatus(tabId, (status: PageLoadStatus) => {
+        chrome.nemo.getPageLoadStatus(tabId, (status: PageLoadStatus) => {
           if (chrome.runtime.lastError) {
             reject(new Error(chrome.runtime.lastError.message));
           } else {
@@ -266,17 +266,17 @@ export class NemoAdapter {
    */
   async getAccessibilityTree(
     tabId: number,
-  ): Promise<chrome.browserOS.AccessibilityTree> {
+  ): Promise<chrome.nemo.AccessibilityTree> {
     try {
       console.log(
         `[NemoAdapter] Getting accessibility tree for tab ${tabId}`,
       );
 
-      return new Promise<chrome.browserOS.AccessibilityTree>(
+      return new Promise<chrome.nemo.AccessibilityTree>(
         (resolve, reject) => {
-          chrome.browserOS.getAccessibilityTree(
+          chrome.nemo.getAccessibilityTree(
             tabId,
-            (tree: chrome.browserOS.AccessibilityTree) => {
+            (tree: chrome.nemo.AccessibilityTree) => {
               if (chrome.runtime.lastError) {
                 reject(new Error(chrome.runtime.lastError.message));
               } else {
@@ -322,7 +322,7 @@ export class NemoAdapter {
       return new Promise<string>((resolve, reject) => {
         // Use exact dimensions if provided
         if (width !== undefined && height !== undefined) {
-          chrome.browserOS.captureScreenshot(
+          chrome.nemo.captureScreenshot(
             tabId,
             0, // thumbnailSize ignored when width/height specified
             showHighlights || false,
@@ -343,7 +343,7 @@ export class NemoAdapter {
           const pixelSize = size ? SCREENSHOT_SIZES[size] : 0;
           // Use the API with thumbnail size and highlights
           if (showHighlights !== undefined) {
-            chrome.browserOS.captureScreenshot(
+            chrome.nemo.captureScreenshot(
               tabId,
               pixelSize,
               showHighlights,
@@ -359,7 +359,7 @@ export class NemoAdapter {
               },
             );
           } else {
-            chrome.browserOS.captureScreenshot(
+            chrome.nemo.captureScreenshot(
               tabId,
               pixelSize,
               (dataUrl: string) => {
@@ -376,7 +376,7 @@ export class NemoAdapter {
           }
         } else {
           // Use the original API without size (backwards compatibility)
-          chrome.browserOS.captureScreenshot(tabId, (dataUrl: string) => {
+          chrome.nemo.captureScreenshot(tabId, (dataUrl: string) => {
             if (chrome.runtime.lastError) {
               reject(new Error(chrome.runtime.lastError.message));
             } else {
@@ -413,7 +413,7 @@ export class NemoAdapter {
 
       return new Promise<Snapshot>((resolve, reject) => {
         if (options) {
-          chrome.browserOS.getSnapshot(
+          chrome.nemo.getSnapshot(
             tabId,
             type,
             options,
@@ -429,7 +429,7 @@ export class NemoAdapter {
             },
           );
         } else {
-          chrome.browserOS.getSnapshot(tabId, type, (snapshot: Snapshot) => {
+          chrome.nemo.getSnapshot(tabId, type, (snapshot: Snapshot) => {
             if (chrome.runtime.lastError) {
               reject(new Error(chrome.runtime.lastError.message));
             } else {
@@ -481,12 +481,12 @@ export class NemoAdapter {
     try {
       console.log(`[NemoAdapter] Invoking Nemo API: ${method}`);
 
-      if (!(method in chrome.browserOS)) {
+      if (!(method in chrome.nemo)) {
         throw new Error(`Unknown Nemo API method: ${method}`);
       }
 
       // @ts-expect-error - Dynamic API invocation
-      const result = await chrome.browserOS[method](...args);
+      const result = await chrome.nemo[method](...args);
       return result;
     } catch (error) {
       const errorMessage =
@@ -504,16 +504,16 @@ export class NemoAdapter {
    * Check if a specific API is available
    */
   isAPIAvailable(method: string): boolean {
-    return method in chrome.browserOS;
+    return method in chrome.nemo;
   }
 
   /**
    * Get list of available Nemo
    */
   getAvailableAPIs(): string[] {
-    return Object.keys(chrome.browserOS).filter((key) => {
+    return Object.keys(chrome.nemo).filter((key) => {
       // @ts-expect-error - Dynamic key access for API discovery
-      return typeof chrome.browserOS[key] === "function";
+      return typeof chrome.nemo[key] === "function";
     });
   }
 
@@ -527,10 +527,10 @@ export class NemoAdapter {
       return new Promise<string | null>((resolve, reject) => {
         // Check if getVersionNumber API is available
         if (
-          "getVersionNumber" in chrome.browserOS &&
-          typeof chrome.browserOS.getVersionNumber === "function"
+          "getVersionNumber" in chrome.nemo &&
+          typeof chrome.nemo.getVersionNumber === "function"
         ) {
-          chrome.browserOS.getVersionNumber((version: string) => {
+          chrome.nemo.getVersionNumber((version: string) => {
             if (chrome.runtime.lastError) {
               reject(new Error(chrome.runtime.lastError.message));
             } else {
@@ -569,11 +569,11 @@ export class NemoAdapter {
       return new Promise<void>((resolve, reject) => {
         // Check if logMetric API is available
         if (
-          "logMetric" in chrome.browserOS &&
-          typeof chrome.browserOS.logMetric === "function"
+          "logMetric" in chrome.nemo &&
+          typeof chrome.nemo.logMetric === "function"
         ) {
           if (properties) {
-            chrome.browserOS.logMetric(eventName, properties, () => {
+            chrome.nemo.logMetric(eventName, properties, () => {
               if (chrome.runtime.lastError) {
                 reject(new Error(chrome.runtime.lastError.message));
               } else {
@@ -582,7 +582,7 @@ export class NemoAdapter {
               }
             });
           } else {
-            chrome.browserOS.logMetric(eventName, () => {
+            chrome.nemo.logMetric(eventName, () => {
               if (chrome.runtime.lastError) {
                 reject(new Error(chrome.runtime.lastError.message));
               } else {
@@ -622,10 +622,10 @@ export class NemoAdapter {
       return new Promise<any>((resolve, reject) => {
         // Check if executeJavaScript API is available
         if (
-          "executeJavaScript" in chrome.browserOS &&
-          typeof chrome.browserOS.executeJavaScript === "function"
+          "executeJavaScript" in chrome.nemo &&
+          typeof chrome.nemo.executeJavaScript === "function"
         ) {
-          chrome.browserOS.executeJavaScript(tabId, code, (result: any) => {
+          chrome.nemo.executeJavaScript(tabId, code, (result: any) => {
             if (chrome.runtime.lastError) {
               reject(new Error(chrome.runtime.lastError.message));
             } else {
@@ -664,10 +664,10 @@ export class NemoAdapter {
       return new Promise<void>((resolve, reject) => {
         // Check if clickCoordinates API is available
         if (
-          "clickCoordinates" in chrome.browserOS &&
-          typeof chrome.browserOS.clickCoordinates === "function"
+          "clickCoordinates" in chrome.nemo &&
+          typeof chrome.nemo.clickCoordinates === "function"
         ) {
-          chrome.browserOS.clickCoordinates(tabId, x, y, () => {
+          chrome.nemo.clickCoordinates(tabId, x, y, () => {
             if (chrome.runtime.lastError) {
               reject(new Error(chrome.runtime.lastError.message));
             } else {
@@ -712,10 +712,10 @@ export class NemoAdapter {
       return new Promise<void>((resolve, reject) => {
         // Check if typeAtCoordinates API is available
         if (
-          "typeAtCoordinates" in chrome.browserOS &&
-          typeof chrome.browserOS.typeAtCoordinates === "function"
+          "typeAtCoordinates" in chrome.nemo &&
+          typeof chrome.nemo.typeAtCoordinates === "function"
         ) {
-          chrome.browserOS.typeAtCoordinates(tabId, x, y, text, () => {
+          chrome.nemo.typeAtCoordinates(tabId, x, y, text, () => {
             if (chrome.runtime.lastError) {
               reject(new Error(chrome.runtime.lastError.message));
             } else {

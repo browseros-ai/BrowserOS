@@ -623,7 +623,7 @@ export const useProviderStore = create<ProviderState & ProviderActions>()(
             if (provider.autoSubmit && tabId != null) {
               if (hasPlaceholder || queryInjected) {
                 const submitKey = provider.submitKey || 'Enter'
-                await nemo.sendKeys(tabId, submitKey as chrome.browserOS.Key)
+                await nemo.sendKeys(tabId, submitKey as chrome.nemo.Key)
               }
             }
           } catch (error) {

@@ -37,7 +37,7 @@ export class BrowserPage {
   private _tabId: number;
   private _url: string;
   private _title: string;
-  private _browserOS = getNemoAdapter();
+  private _nemo = getNemoAdapter();
 
   // Snapshot cache for the latest interactive snapshot
   private _snapshotCache: InteractiveSnapshot | null = null;
@@ -123,7 +123,7 @@ export class BrowserPage {
           `Fetching fresh snapshot for tab ${this._tabId}`,
           "info",
         );
-        const snapshot = await this._browserOS.getInteractiveSnapshot(
+        const snapshot = await this._nemo.getInteractiveSnapshot(
           this._tabId,
         );
         this._snapshotCache = snapshot;
@@ -327,7 +327,7 @@ export class BrowserPage {
     await profileAsync(`BrowserPage.clickElement[${nodeId}]`, async () => {
       // Show pointer before clicking
       await this._showPointerForElement(nodeId, "Click");
-      await this._browserOS.click(this._tabId, nodeId);
+      await this._nemo.click(this._tabId, nodeId);
       this._invalidateCache(); // Invalidate cache after click
       await this.waitForStability();
     });
@@ -341,8 +341,8 @@ export class BrowserPage {
       // Show pointer before typing, with preview of text
       const displayText = text.length > 20 ? `${text.substring(0, 20)}...` : text;
       await this._showPointerForElement(nodeId, `Type: ${displayText}`);
-      await this._browserOS.clear(this._tabId, nodeId);
-      await this._browserOS.inputText(this._tabId, nodeId, text);
+      await this._nemo.clear(this._tabId, nodeId);
+      await this._nemo.inputText(this._tabId, nodeId, text);
       this._invalidateCache(); // Invalidate cache after text input
       await this.waitForStability();
     });
@@ -354,7 +354,7 @@ export class BrowserPage {
   async clearElement(nodeId: number): Promise<void> {
     // Show pointer before clearing
     await this._showPointerForElement(nodeId, "Clear");
-    await this._browserOS.clear(this._tabId, nodeId);
+    await this._nemo.clear(this._tabId, nodeId);
     this._invalidateCache(); // Invalidate cache after clearing
     await this.waitForStability();
   }
@@ -363,7 +363,7 @@ export class BrowserPage {
    * Scroll to element by node ID
    */
   async scrollToElement(nodeId: number): Promise<boolean> {
-    return await this._browserOS.scrollToNode(this._tabId, nodeId);
+    return await this._nemo.scrollToNode(this._tabId, nodeId);
   }
 
   /**
@@ -418,7 +418,7 @@ export class BrowserPage {
    * Send keyboard keys
    */
   async sendKeys(keys: string): Promise<void> {
-    // Define supported keys based on chrome.browserOS.Key type
+    // Define supported keys based on chrome.nemo.Key type
     const supportedKeys = [
       "Enter",
       "Delete",
@@ -441,7 +441,7 @@ export class BrowserPage {
       );
     }
 
-    await this._browserOS.sendKeys(this._tabId, keys as chrome.browserOS.Key);
+    await this._nemo.sendKeys(this._tabId, keys as chrome.nemo.Key);
 
     // Only invalidate cache for keys that might change the DOM structure
     const domChangingKeys = ["Enter", "Delete", "Backspace", "Tab"];
@@ -461,7 +461,7 @@ export class BrowserPage {
 
     // Scroll the specified number of viewports with delay between each
     for (let i = 0; i < scrollCount; i++) {
-      await this._browserOS.sendKeys(this._tabId, "PageDown");
+      await this._nemo.sendKeys(this._tabId, "PageDown");
 
       // Add 50ms delay between scrolls (except after the last one)
       if (i < scrollCount - 1) {
@@ -476,7 +476,7 @@ export class BrowserPage {
 
     // Scroll the specified number of viewports with delay between each
     for (let i = 0; i < scrollCount; i++) {
-      await this._browserOS.sendKeys(this._tabId, "PageUp");
+      await this._nemo.sendKeys(this._tabId, "PageUp");
 
       // Add 50ms delay between scrolls (except after the last one)
       if (i < scrollCount - 1) {
@@ -533,7 +533,7 @@ export class BrowserPage {
 
       while (Date.now() - startTime < maxWaitTime) {
         try {
-          const status = await this._browserOS.getPageLoadStatus(this._tabId);
+          const status = await this._nemo.getPageLoadStatus(this._tabId);
           // Wait for both conditions: DOM loaded AND resources no longer loading
           if (status.isDOMContentLoaded) {
             //&& !status.isResourcesLoading) {
@@ -581,7 +581,7 @@ export class BrowserPage {
   ): Promise<string | null> {
     try {
       // Return the full data URL directly from Nemo
-      return await this._browserOS.captureScreenshot(
+      return await this._nemo.captureScreenshot(
         this._tabId,
         size,
         showHighlights,
@@ -610,7 +610,7 @@ export class BrowserPage {
   ): Promise<string | null> {
     try {
       // Return the full data URL directly from Nemo with exact dimensions
-      return await this._browserOS.captureScreenshot(
+      return await this._nemo.captureScreenshot(
         this._tabId,
         undefined, // size is undefined when using exact dimensions
         showHighlights,
@@ -634,7 +634,7 @@ export class BrowserPage {
    */
   async executeJavaScript(code: string): Promise<any> {
     try {
-      return await this._browserOS.executeJavaScript(this._tabId, code);
+      return await this._nemo.executeJavaScript(this._tabId, code);
     } catch (error) {
       Logging.log(
         "BrowserPage",
@@ -656,7 +656,7 @@ export class BrowserPage {
       async () => {
         // Show pointer before clicking
         await this.showPointer(x, y, "Click");
-        await this._browserOS.clickCoordinates(this._tabId, x, y);
+        await this._nemo.clickCoordinates(this._tabId, x, y);
         this._invalidateCache(); // Invalidate cache after click
         await this.waitForStability();
       },
@@ -675,11 +675,11 @@ export class BrowserPage {
       // Show pointer before typing
       await this.showPointer(x, y, `Type: ${text.substring(0, 20)}`);
       // First click to focus the element at coordinates
-      // await this._browserOS.clickAtCoordinates(this._tabId, x, y);
+      // await this._nemo.clickAtCoordinates(this._tabId, x, y);
       // Small delay to ensure focus is established
       // await new Promise(resolve => setTimeout(resolve, 100));
       // Then type the text
-      await this._browserOS.typeAtCoordinates(this._tabId, x, y, text);
+      await this._nemo.typeAtCoordinates(this._tabId, x, y, text);
       this._invalidateCache(); // Invalidate cache after typing
       await this.waitForStability();
     });
@@ -777,7 +777,7 @@ export class BrowserPage {
    * @returns Snapshot with text content from specified sections
    */
   async getTextSnapshot(options?: SnapshotOptions): Promise<Snapshot> {
-    return await this._browserOS.getTextSnapshot(this._tabId, options);
+    return await this._nemo.getTextSnapshot(this._tabId, options);
   }
 
   /**
@@ -786,7 +786,7 @@ export class BrowserPage {
    * @returns Snapshot with links from specified sections
    */
   async getLinksSnapshot(options?: SnapshotOptions): Promise<Snapshot> {
-    return await this._browserOS.getLinksSnapshot(this._tabId, options);
+    return await this._nemo.getLinksSnapshot(this._tabId, options);
   }
 
   /**

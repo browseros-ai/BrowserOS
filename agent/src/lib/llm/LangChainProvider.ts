@@ -13,7 +13,7 @@ import { BaseMessage } from "@langchain/core/messages"
 import { Logging } from '@/lib/utils/Logging'
 
 // Default constants
-const DEFAULT_MODEL = "claude-opus-4"
+const DEFAULT_MODEL = "nemo-llm"
 const DEFAULT_BASE_URL = "http://localhost:4000"
 const DEFAULT_TEMPERATURE = 0.2
 const DEFAULT_STREAMING = true

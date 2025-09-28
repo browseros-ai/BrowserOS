@@ -244,13 +244,13 @@ MOONDREAM_API_KEY=your-vision-api-key
 ## JavaScript API
 \`\`\`javascript
 // Execute a task
-await browserOS.execute("Navigate to Google and search for cats")
+await nemo.execute("Navigate to Google and search for cats")
 
 // Get browser state
-const state = await browserOS.getBrowserState()
+const state = await nemo.getBrowserState()
 
 // Take screenshot
-const screenshot = await browserOS.takeScreenshot()
+const screenshot = await nemo.takeScreenshot()
 \`\`\``,
 
       troubleshooting: `# Nemo Troubleshooting
@@ -284,7 +284,7 @@ const screenshot = await browserOS.takeScreenshot()
 ## Debug Mode
 Enable debug logging:
 \`\`\`javascript
-localStorage.setItem('browserOS.debug', 'true')
+localStorage.setItem('nemo.debug', 'true')
 \`\`\`
 
 ## Getting Help
@@ -408,7 +408,7 @@ pause and wait for me to complete it manually
  * Factory function to create NemoInfoTool for LangChain integration
  */
 export function createNemoInfoTool(executionContext: ExecutionContext): DynamicStructuredTool {
-  const browserOSInfoTool = new NemoInfoTool(executionContext)
+  const nemoInfoTool = new NemoInfoTool(executionContext)
 
   const dynamicTool = new DynamicStructuredTool({
     name: "nemo_info_tool",
@@ -429,7 +429,7 @@ export function createNemoInfoTool(executionContext: ExecutionContext): DynamicS
     schema: NemoInfoToolInputSchema,
 
     func: async (args): Promise<string> => {
-      const result = await browserOSInfoTool.execute(args)
+      const result = await nemoInfoTool.execute(args)
       return JSON.stringify(result)
     }
   })

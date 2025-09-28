@@ -20,7 +20,7 @@
     "test:ui": "vitest --ui"
   },
   "author": "",
-  "license": "MIT",
+  "license": "",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.50.4",
     "@langchain/anthropic": "^0.3.23",

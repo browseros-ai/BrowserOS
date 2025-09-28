@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Agent",
-  "version": "50.0.0.10",
-  "description": "Agent",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs1zULZz5eE0U8SEjr/R++dlx6WKFj7GbpnBiE1n17gaylMWDlw6uuBJNjcRrSGwOt53Z3PKf2T3g5DtNES8q6rQc11P/y8J8GKhKuqGrtRJyk5iXzcKJk4CHz6leFSMt8CsZY0r0b7wCZ5QuhomTHGQpNWNS0c13xfVqWt4dncfIRj7fMzfTkicq7Mqqx+JcdprLkiVfETvdkMwwEWmSNwQ6nCDzLtTbyyMiGUEBSJs+WlP1fO7LIX0sHesFVxfPhCZ2K4F1biwenbRL+YYD60ogpVppop2ee/W3D211IN1zYxgnhycFv3m8TrzG+MD/IZgcu13u0bHRn3V7IGW1iwIDAQAB",
+  "name": "Nemo Agent",
+  "version": "1.1",
+  "description": "Aagentic browser",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq2bL93gq4sExn4clGmem4uviBHL1oS1H+hhwhqs6bxAfeVczPSa0ONeKPgQ4BIov8c11E6sKlWIfQycYZsGOFfKRHg6zQRdkSLzSKNzlhs+Pk9QUzgjrWwh/s2utUIZQov9j5K3YfayJloDfKO8cqDZ5RMUkTbJnjC+n1fq8jh2xYBs/5QzuqWNwzW3EE/yfFgiX4vSmzzsFah4RKoXv07f2QZ/44rR2VX240GahVl/qGk6LQA0TDlj4NEXd0mFyo8vue7IIAm3d77M2esSCUgU7tXGS9kElKfu918xsptBmeAvGUCX5D7E6sez6ua1i9yp9U/Vs5HOnj3Erf+IrcQIDAQAB",
   "permissions": [
     "activeTab",
     "storage",
@@ -14,10 +14,10 @@
     "sidePanel",
     "bookmarks",
     "history",
-    "browserOS",
+    "nemo",
     "webNavigation"
   ],
-  "update_url": "https://cdn.browseros.com/extensions/update-manifest.xml",
+  "update_url": "https://nemo.qilosupply.workers.dev//extensions/update-manifest.xml",
   "host_permissions": [
     "<all_urls>"
   ],
