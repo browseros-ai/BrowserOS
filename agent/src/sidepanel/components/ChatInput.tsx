@@ -243,7 +243,7 @@ export function ChatInput({ isConnected, isProcessing }: ChatInputProps) {
 
   
   return (
-    <div className="relative bg-[hsl(var(--header))] border-t border-border/50 px-3 py-2 pb-4 flex-shrink-0 overflow-hidden z-20">
+    <div className="relative bg-[#1a1a1a]/80 border-t border-white/10 px-3 py-2 pb-4 flex-shrink-0 overflow-hidden z-20 backdrop-blur">
       
       {/* Mode Toggle - top left, above input */}
       <div className="px-2 mb-2">
@@ -274,22 +274,22 @@ export function ChatInput({ isConnected, isProcessing }: ChatInputProps) {
               {selectedContextTabs.map(tab => (
                 <div
                   key={tab.id}
-                  className="selected-tab-chip flex items-center gap-2 pl-2 pr-1 py-1 rounded-full bg-muted text-foreground/90 border border-border shadow-sm shrink-0 smooth-hover hover:bg-muted/80 hover:shadow-md message-enter"
+                  className="selected-tab-chip flex items-center gap-2 pl-2 pr-1 py-1 rounded-full bg-white/5 text-white/80 border border-white/10 shadow-sm shrink-0 smooth-hover hover:bg-white/10 hover:shadow-md message-enter"
                   title={tab.title}
                 >
                   <div className="w-4 h-4 rounded-sm overflow-hidden bg-muted-foreground/10 flex items-center justify-center">
                     {tab.favIconUrl ? (
                       <img src={tab.favIconUrl} alt="" className="w-full h-full object-contain" />
                     ) : (
-                      <div className="w-full h-full bg-muted-foreground/20" />
+                      <div className="w-full h-full bg-white/10" />
                     )}
                   </div>
-                  <span className="text-xs max-w-[140px] truncate">
+                  <span className="text-xs max-w-[140px] truncate text-white">
                     {tab.title}
                   </span>
                   <button
                     type="button"
-                    className="ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full hover:bg-foreground/10 text-xs text-muted-foreground hover:text-foreground"
+                    className="ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full hover:bg-white/20 text-xs text-white/70 hover:text-white"
                     aria-label={`Remove ${tab.title} from selection`}
                     onClick={() => handleRemoveSelectedTab(tab.id)}
                   >
@@ -323,15 +323,15 @@ export function ChatInput({ isConnected, isProcessing }: ChatInputProps) {
               placeholder={getPlaceholder()}
               disabled={isProcessing}
               className={cn(
-                'max-h-[200px] resize-none pr-16 text-sm w-full',
-                'bg-background/80 backdrop-blur-sm border-2 border-brand/30',
-                'focus-visible:outline-none focus-visible:border-brand/60 focus-visible:shadow-lg focus-visible:shadow-brand/10',
-                'focus:outline-none focus:border-brand/60 focus:shadow-lg focus:shadow-brand/10',
-                'hover:border-brand/50 hover:bg-background/90 hover:shadow-md',
+                'max-h-[200px] resize-none pr-16 text-sm w-full text-white',
+                'bg-black/40 backdrop-blur border border-white/10 placeholder-white/40',
+                'focus-visible:outline-none focus-visible:border-white/30 focus-visible:shadow-[0_0_15px_rgba(255,255,255,0.15)]',
+                'focus:outline-none focus:border-white/30 focus:shadow-[0_0_15px_rgba(255,255,255,0.15)]',
+                'hover:border-white/20 hover:bg-black/30 hover:shadow-[0_0_12px_rgba(255,255,255,0.1)]',
                 'rounded-2xl shadow-sm',
                 'px-3 py-2',
                 'transition-all duration-300 ease-out',
-                 isProcessing && 'opacity-50 cursor-not-allowed bg-muted'
+                 isProcessing && 'opacity-50 cursor-not-allowed bg-black/20'
               )}
               rows={1}
               aria-label="Chat message input"
@@ -342,7 +342,7 @@ export function ChatInput({ isConnected, isProcessing }: ChatInputProps) {
 
               {/* Slash command palette overlay */}
               {showSlashPalette && (
-                <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-24 bg-black/50">
+                <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-24 bg-black/70 backdrop-blur">
                   <div className="w-full max-w-xl">
                     <SlashCommandPalette
                       overlay
@@ -382,11 +382,11 @@ export function ChatInput({ isConnected, isProcessing }: ChatInputProps) {
                 type="submit"
                 disabled={isProcessing || !input.trim()}
                 size="sm"
-                className="absolute right-3 bottom-3 h-8 w-8 p-0 rounded-full bg-[hsl(var(--brand))] hover:bg-[hsl(var(--brand))]/90 text-white shadow-lg flex items-center justify-center"
+                className="absolute right-3 bottom-3 h-8 w-8 p-0 rounded-full bg-white/20 hover:bg-white/30 text-white shadow-lg flex items-center justify-center backdrop-blur"
                 variant={'default'}
                 aria-label={'Send message'}
               >
-                <img src="assets/arrow_upward_alt.svg" alt="" aria-hidden="true" className="w-6 h-6 block pointer-events-none select-none" />
+                <img src="assets/arrow_upward_alt.svg" alt="" aria-hidden="true" className="w-5 h-5 block pointer-events-none select-none" />
               </Button>
             </div>
           </div>

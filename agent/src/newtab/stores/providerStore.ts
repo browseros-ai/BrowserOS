@@ -74,6 +74,19 @@ const DEFAULT_PROVIDERS: Provider[] = [
     submitKey: 'Enter',
     focusBeforeSubmit: true,
     iconUrl: '/assets/new_tab_search/google.svg'
+  },
+  {
+    id: 'gemini',
+    name: 'Gemini',
+    category: 'llm',
+    actionType: 'url',
+    urlPattern: 'https://gemini.google.com',
+    available: true,
+    openIn: 'newTab',
+    autoSubmit: true,
+    submitKey: 'Enter',
+    focusBeforeSubmit: true,
+    iconUrl: '/assets/new_tab_search/google.svg'
   }
 ]
 

@@ -3,9 +3,8 @@ import { Button } from '@/sidepanel/components/ui/button'
 import { useSidePanelPortMessaging } from '@/sidepanel/hooks'
 import { MessageType } from '@/lib/types/messaging'
 import { useAnalytics } from '../hooks/useAnalytics'
-import { SettingsModal } from './SettingsModal'
-import { HelpSection } from './HelpSection'
-import { Settings, Pause, RotateCcw, HelpCircle } from 'lucide-react'
+// import { HelpSection } from './HelpSection'
+import { Pause, RotateCcw } from 'lucide-react'
 import { useSettingsStore } from '@/sidepanel/stores/settingsStore'
 import { useEffect } from 'react'
 import { MCP_SERVERS, type MCPServerConfig } from '@/config/mcpServers'
@@ -25,8 +24,7 @@ interface HeaderProps {
 export const Header = memo(function Header({ onReset, showReset, isProcessing }: HeaderProps) {
   const { sendMessage, connected, addMessageListener, removeMessageListener } = useSidePanelPortMessaging()
   const { trackClick } = useAnalytics()
-  const [showSettings, setShowSettings] = useState(false)
-  const [showHelp, setShowHelp] = useState(false)
+  
   const [showMCPDropdown, setShowMCPDropdown] = useState(false)
   const [mcpInstallStatus, setMcpInstallStatus] = useState<{ message: string; type: 'error' | 'success' } | null>(null)
   const [installedServers, setInstalledServers] = useState<any[]>([])
@@ -51,15 +49,7 @@ export const Header = memo(function Header({ onReset, showReset, isProcessing }:
     onReset()
   }
 
-  const handleSettingsClick = () => {
-    trackClick('open_settings')
-    setShowSettings(true)
-  }
 
-  const handleHelpClick = () => {
-    trackClick('open_help')
-    setShowHelp(true)
-  }
 
   const fetchInstalledServers = () => {
     sendMessage(MessageType.MCP_GET_INSTALLED_SERVERS, {})
@@ -83,21 +73,7 @@ export const Header = memo(function Header({ onReset, showReset, isProcessing }:
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [showMCPDropdown])
 
-  // Close settings and help dropdowns when clicking outside
-  useEffect(() => {
-    if (!showSettings && !showHelp) return
-    
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as HTMLElement
-      if (!target.closest('.settings-dropdown') && !target.closest('.help-dropdown')) {
-        setShowSettings(false)
-        setShowHelp(false)
-      }
-    }
-    
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [showSettings, showHelp])
+  
 
   // Load installed servers
   useEffect(() => {
@@ -152,10 +128,35 @@ export const Header = memo(function Header({ onReset, showReset, isProcessing }:
     return () => removeMessageListener<any>(MessageType.MCP_SERVER_STATUS, handler)
   }, [])
 
+  // Example work items that can be automated by the agent
+  const EXAMPLE_WORK: string[] = [
+    'Fill out and submit a web form',
+    'Scan product listings and compare prices',
+    'Extract contact info from a webpage',
+    'Schedule meetings from email threads',
+    'Auto-fill repetitive form fields',
+    'Download invoices from account pages',
+    'Monitor a page for price drops',
+    'Collect article summaries from sites',
+    'Open multiple tabs and capture screenshots',
+    'Follow a link tree and list all URLs'
+  ]
+
+  const [currentExampleIndex, setCurrentExampleIndex] = useState<number>(Math.floor(Math.random() * EXAMPLE_WORK.length))
+  // Rotate example every 10 seconds automatically
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentExampleIndex((prevIndex: number) => {
+        const next = (prevIndex + 1) % EXAMPLE_WORK.length
+        return next
+      })
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [])
   return (
     <>
       <header 
-        className="relative flex items-center justify-between h-12 px-3 bg-[hsl(var(--header))] border-b border-border/50"
+        className="relative flex items-center justify-between h-12 px-3 bg-[#262626]/90 border-b border-white/10 backdrop-blur"
         role="banner"
       >
         
@@ -169,7 +170,7 @@ export const Header = memo(function Header({ onReset, showReset, isProcessing }:
               onClick={handleCancel}
               variant="ghost"
               size="sm"
-              className="h-9 w-9 p-0 rounded-xl hover:bg-red-100 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 transition-all duration-300"
+              className="h-9 w-9 p-0 rounded-xl bg-white/5 hover:bg-red-500/20 text-white transition-all duration-300"
               aria-label="Pause current task"
               title="Pause"
             >
@@ -183,7 +184,7 @@ export const Header = memo(function Header({ onReset, showReset, isProcessing }:
               onClick={handleReset}
               variant="ghost"
               size="sm"
-              className="h-9 w-9 p-0 rounded-xl hover:bg-orange-100 dark:hover:bg-orange-900/20 hover:text-orange-600 dark:hover:text-orange-400 transition-all duration-300"
+              className="h-9 w-9 p-0 rounded-xl bg-white/5 hover:bg-orange-500/20 text-white transition-all duration-300"
               aria-label="Reset conversation"
               title="Reset"
             >
@@ -192,46 +193,17 @@ export const Header = memo(function Header({ onReset, showReset, isProcessing }:
           )}
         </nav>
 
-        {/* Right side - Help and Settings buttons */}
-        <div className="flex items-center gap-2">
-          {/* Help button */}
-          <div className="relative help-dropdown">
-            <Button
-              onClick={handleHelpClick}
-              variant="ghost"
-              size="sm"
-              className="h-9 w-9 p-0 rounded-xl hover:bg-blue-100 dark:hover:bg-blue-900/20 hover:text-blue-600 dark:hover:text-blue-400 transition-all duration-300"
-              aria-label="Open help"
-              title="Help"
+        {/* Right side - Examples (absolute to ensure visibility) */}
+        <div className="absolute right-3 top-1/2 -translate-y-1/2">
+          <div className="pointer-events-auto flex items-center gap-2 text-sm text-white/95  font-mono bg-[#00000040] px-2 py-1 rounded-md">
+            <span
+              className="text-sm text-white/95 whitespace-nowrap"
+              title={EXAMPLE_WORK[currentExampleIndex]}
+              role="status"
+              aria-live="polite"
             >
-              <HelpCircle className="w-4 h-4" />
-            </Button>
-            <HelpSection 
-              isOpen={showHelp}
-              onClose={() => setShowHelp(false)}
-            />
-          </div>
-
-          {/* Settings button */}
-          <div className="relative settings-dropdown">
-            <Button
-              onClick={handleSettingsClick}
-              variant="ghost"
-              size="sm"
-              className="h-9 w-9 p-0 rounded-xl hover:bg-brand/10 hover:text-brand transition-all duration-300"
-              aria-label="Open settings"
-              title="Settings"
-            >
-              <Settings className="w-4 h-4" />
-            </Button>
-            <SettingsModal 
-              isOpen={showSettings}
-              onClose={() => setShowSettings(false)}
-              onOpenHelp={() => {
-                setShowSettings(false)
-                setShowHelp(true)
-              }}
-            />
+              {EXAMPLE_WORK[currentExampleIndex]}
+            </span>
           </div>
         </div>
       </header>

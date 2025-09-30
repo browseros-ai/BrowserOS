@@ -29,27 +29,111 @@
   }
 
   .dark {
-    --background: 220 15% 20%;
-    --background-alt: 220 15% 18%;
+    --background: 0 0% 8%;
+    --background-alt: 0 0% 6%;
     --foreground: 0 0% 90%;
-    --card: 220 15% 20%;
+    --card: 0 0% 12%;
     --card-foreground: 0 0% 90%;
-    --popover: 220 15% 20%;
+    --popover: 0 0% 12%;
     --popover-foreground: 0 0% 90%;
-    --primary: 355 65% 60%;
+    --primary: 280 80% 60%;
     --primary-foreground: 0 0% 98%;
-    --secondary: 220 15% 25%;
+    --secondary: 0 0% 15%;
     --secondary-foreground: 0 0% 90%;
-    --muted: 220 15% 25%;
+    --muted: 0 0% 15%;
     --muted-foreground: 0 0% 70%;
-    --accent: 220 15% 25%;
+    --accent: 0 0% 15%;
     --accent-foreground: 0 0% 90%;
-    --destructive: 0 62.8% 30.6%;
+    --destructive: 0 62.8% 50%;
     --destructive-foreground: 210 40% 98%;
-    --border: 220 15% 30%;
-    --input: 220 15% 30%;
-    --ring: 355 65% 60%;
-    --brand: 355 65% 60%;
+    --border: 0 0% 20%;
+    --input: 0 0% 20%;
+    --ring: 280 80% 60%;
+    --brand: 280 80% 60%;
+  }
+
+  /* Galaxy theme styles */
+  .dark body {
+    background:
+      radial-gradient(ellipse at top, rgba(75, 0, 130, 0.4), transparent 60%),
+      radial-gradient(ellipse at bottom left, rgba(138, 43, 226, 0.3), transparent 60%),
+      radial-gradient(ellipse at bottom right, rgba(25, 25, 112, 0.4), transparent 60%),
+      radial-gradient(ellipse at center, rgba(0, 0, 0, 0.8), transparent 80%),
+      linear-gradient(135deg, #050510 0%, #000000 30%, #050510 100%);
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Animated twinkling stars - Layer 1 (Large bright stars) */
+  .dark body::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+    background-image:
+      radial-gradient(5px 5px at 15% 25%, rgba(255,255,255,0.9), rgba(255,255,255,0.3) 50%, transparent),
+      radial-gradient(3px 3px at 85% 15%, rgba(255,255,255,0.8), rgba(255,255,255,0.2) 50%, transparent),
+      radial-gradient(6px 6px at 70% 60%, rgba(255,107,107,0.9), rgba(255,107,107,0.3) 50%, transparent),
+      radial-gradient(4px 4px at 30% 80%, rgba(255,255,255,0.7), rgba(255,255,255,0.2) 50%, transparent),
+      radial-gradient(5px 5px at 90% 70%, rgba(78,205,196,0.8), rgba(78,205,196,0.2) 50%, transparent),
+      radial-gradient(3px 3px at 20% 90%, rgba(255,255,255,0.9), rgba(255,255,255,0.3) 50%, transparent),
+      radial-gradient(4px 4px at 60% 20%, rgba(69,183,209,0.7), rgba(69,183,209,0.2) 50%, transparent),
+      radial-gradient(3px 3px at 40% 40%, rgba(255,255,255,0.6), rgba(255,255,255,0.2) 50%, transparent);
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+    animation: twinkle-large 3s ease-in-out infinite alternate;
+    filter: drop-shadow(0 0 2px rgba(255,255,255,0.5));
+  }
+
+  /* Animated twinkling stars - Layer 2 (Medium stars) */
+  .dark body::after {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 2;
+    background-image:
+      radial-gradient(3px 3px at 25% 35%, rgba(255,255,255,0.7), rgba(255,255,255,0.2) 50%, transparent),
+      radial-gradient(2px 2px at 75% 25%, rgba(249,202,36,0.8), rgba(249,202,36,0.2) 50%, transparent),
+      radial-gradient(3px 3px at 65% 75%, rgba(255,255,255,0.5), rgba(255,255,255,0.1) 50%, transparent),
+      radial-gradient(2px 2px at 35% 65%, rgba(108,92,231,0.7), rgba(108,92,231,0.2) 50%, transparent),
+      radial-gradient(3px 3px at 80% 85%, rgba(255,255,255,0.8), rgba(255,255,255,0.2) 50%, transparent),
+      radial-gradient(2px 2px at 10% 75%, rgba(253,121,168,0.6), rgba(253,121,168,0.1) 50%, transparent),
+      radial-gradient(3px 3px at 50% 10%, rgba(255,255,255,0.6), rgba(255,255,255,0.2) 50%, transparent),
+      radial-gradient(2px 2px at 90% 50%, rgba(0,184,148,0.7), rgba(0,184,148,0.2) 50%, transparent),
+      radial-gradient(3px 3px at 15% 55%, rgba(255,255,255,0.7), rgba(255,255,255,0.2) 50%, transparent),
+      radial-gradient(2px 2px at 85% 45%, rgba(225,112,85,0.6), rgba(225,112,85,0.1) 50%, transparent),
+      radial-gradient(3px 3px at 45% 85%, rgba(255,255,255,0.5), rgba(255,255,255,0.1) 50%, transparent),
+      radial-gradient(2px 2px at 75% 65%, rgba(116,185,255,0.7), rgba(116,185,255,0.2) 50%, transparent);
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+    animation: twinkle-medium 4s ease-in-out infinite alternate;
+    filter: drop-shadow(0 0 1px rgba(255,255,255,0.3));
+  }
+
+  @keyframes twinkle-large {
+    0% { opacity: 0.4; transform: scale(0.8); }
+    50% { opacity: 1; transform: scale(1.1); }
+    100% { opacity: 0.6; transform: scale(0.9); }
+  }
+
+  @keyframes twinkle-medium {
+    0% { opacity: 0.3; transform: scale(0.9); }
+    50% { opacity: 0.9; transform: scale(1.2); }
+    100% { opacity: 0.5; transform: scale(1); }
+  }
+
+  @keyframes twinkle-small {
+    0% { opacity: 0.2; transform: scale(0.8); }
+    50% { opacity: 0.7; transform: scale(1.3); }
+    100% { opacity: 0.4; transform: scale(1); }
   }
 
 }
@@ -76,4 +160,13 @@
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
 }

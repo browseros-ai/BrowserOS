@@ -189,7 +189,7 @@ export function MessageList({ messages, isProcessing = false, onScrollStateChang
         <div className="relative z-0 flex flex-col items-center justify-center min-h-0 max-w-lg w-full">
           
           {/* Tagline */}
-          <div className="flex items-center justify-center">
+          {/* <div className="flex items-center justify-center">
             <h2 className="text-3xl font-bold text-muted-foreground animate-fade-in-up flex items-baseline flex-wrap justify-center gap-2 text-center px-2">
               <span>Your <span className="text-brand">Agentic</span></span>
               <span>
@@ -201,14 +201,14 @@ export function MessageList({ messages, isProcessing = false, onScrollStateChang
                 />
               </span>
             </h2>
-          </div>
+          </div> */}
 
           {/* Welcome message */}
           <div className="mt-6">
-            <p className="text-lg text-muted-foreground animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
-              Ready to help you navigate and automate the web
+            <p className="text-2xl font-geist-mono font-bold text-white animate-fade-in-up animation-delay-0.5s">
+              Easily navigate the web with Nemo
             </p>
-          </div>
+          </div>  
         </div>
       </div>
     )
@@ -220,7 +220,7 @@ export function MessageList({ messages, isProcessing = false, onScrollStateChang
       
       {/* Messages container */}
       <div 
-        className="flex-1 overflow-y-auto overflow-x-hidden bg-[hsl(var(--background))]"
+        className="flex-1 overflow-y-auto overflow-x-hidden"
         ref={containerRef}
         role="log"
         aria-label="Chat messages"

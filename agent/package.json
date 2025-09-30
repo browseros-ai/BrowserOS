@@ -42,6 +42,8 @@
     "luxon": "^3.4.4",
     "markdown-to-jsx": "^7.7.12",
     "match-sorter": "^6.3.4",
+    "node-fetch": "^2.7.0",
+    "motion": "^12.23.22",
     "ollama": "^0.5.16",
     "openai": "^5.15.0",
     "posthog-js": "^1.252.0",

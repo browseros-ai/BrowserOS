@@ -43,7 +43,7 @@ export function Chat({ isConnected }: ChatProps) {
   // We don't show them in the chat to keep the conversation clean
 
   return (
-    <div className="flex flex-col h-full bg-background-alt">
+    <div className="flex flex-col h-full bg-transparent">
 
       {/* Header */}
       <Header 
