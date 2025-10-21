@@ -8,3 +8,5 @@
 nxtscape-cli-access.json
 gclient.json
 .env
+packages/browseros/resources/files/ai_side_panel/.api_key_private
+packages/browseros/resources/files/ai_side_panel/.env
