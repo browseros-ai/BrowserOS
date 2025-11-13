@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/browseros_extension_constants.h b/chrome/browser/extensions/browseros_extension_constants.h
 new file mode 100644
-index 0000000000000..e42df6740460c
+index 0000000000000..e2ffd24bff8d5
 --- /dev/null
 +++ b/chrome/browser/extensions/browseros_extension_constants.h
-@@ -0,0 +1,112 @@
+@@ -0,0 +1,118 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -22,6 +22,10 @@ index 0000000000000..e42df6740460c
 +// AI Agent Extension ID
 +inline constexpr char kAISidePanelExtensionId[] =
 +    "djhdjhlnljbjgejbndockeedocneiaei";
++
++// Agent V2 Extension ID
++inline constexpr char kAgentV2ExtensionId[] =
++    "bflpfmnmnokmjhmgnolecpppdbdophmk";
 +
 +// Bug Reporter Extension ID
 +inline constexpr char kBugReporterExtensionId[] =
@@ -52,6 +56,7 @@ index 0000000000000..e42df6740460c
 +    {kAISidePanelExtensionId, "BrowserOS", true, true},
 +    {kBugReporterExtensionId, "BrowserOS/bug-reporter", true, false},
 +    {kControllerExtensionId, "BrowserOS/controller", false, false},
++    {kAgentV2ExtensionId, "BrowserOS", false, false},
 +};
 +
 +// Allowlist of BrowserOS extension IDs that are permitted to be installed.
@@ -60,6 +65,7 @@ index 0000000000000..e42df6740460c
 +    kBrowserOSExtensions[0].id,
 +    kBrowserOSExtensions[1].id,
 +    kBrowserOSExtensions[2].id,
++    kBrowserOSExtensions[3].id,
 +};
 +
 +inline constexpr size_t kBrowserOSExtensionsCount =
