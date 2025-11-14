@@ -9,6 +9,21 @@
 
     <!-- Updates -->
     <item>
+      <title>Nxtscape - 0.30.0</title>
+      <description sparkle:format="plain-text">
+      </description>
+      <sparkle:version>7234.69</sparkle:version>
+      <sparkle:shortVersionString>0.30.0</sparkle:shortVersionString>
+      <pubDate>Wed, 13 Nov 2025 17:30:00 -0700</pubDate>
+      <link>https://nxtscape.ai</link>
+      <enclosure
+        url="http://cdn.browseros.com/dmg/BrowserOS_v0.30.0_arm64.dmg"
+        sparkle:edSignature="wv921agAn6Twv8hcgHq36uvR/ejZrmHewMiNTzkAws9c+bR4PIu4vMUf+fqlg6qKAM/x8XlNKV9XZS1fXkpWDA=="
+        length="163158394"
+        type="application/octet-stream" />
+      <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
+    </item>
+    <item>
       <title>Nxtscape - 0.29.0</title>
       <description sparkle:format="plain-text">
 🤖 Brand new agent in BrowserOS mode!
