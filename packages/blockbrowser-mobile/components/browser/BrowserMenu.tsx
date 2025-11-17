@@ -9,6 +9,7 @@ import {
   Platform,
   Alert,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { LiquidGlassView, isLiquidGlassSupported } from '@callstack/liquid-glass';
 import { Colors } from '@/constants/Colors';
@@ -112,20 +113,25 @@ export const BrowserMenu: React.FC<BrowserMenuProps> = ({
         },
       ]}
     >
-      {/* Header */}
-      <View
-        style={[
-          styles.header,
-          {
-            borderBottomColor: colors.border,
-          },
-        ]}
+      {/* Header with Gradient */}
+      <LinearGradient
+        colors={['#667eea', '#764ba2']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.gradientHeader}
       >
-        <Text style={[styles.title, { color: colors.text }]}>Browser Menu</Text>
-        <TouchableOpacity onPress={onClose}>
-          <Ionicons name="close" size={28} color={colors.textSecondary} />
-        </TouchableOpacity>
-      </View>
+        <View style={styles.headerContent}>
+          <View style={styles.headerLeft}>
+            <View style={styles.menuLogoPlaceholder}>
+              <Text style={styles.menuLogoText}>B</Text>
+            </View>
+            <Text style={styles.menuTitle}>Browser Menu</Text>
+          </View>
+          <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+            <Ionicons name="close" size={28} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      </LinearGradient>
 
       {/* Menu Items */}
       <View style={styles.menuItems}>
@@ -210,20 +216,55 @@ const styles = StyleSheet.create({
   menuContent: {
     flex: 1,
   },
-  header: {
+  gradientHeader: {
+    paddingTop: Platform.OS === 'ios' ? 60 : 24,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  headerContent: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 16,
-    paddingTop: Platform.OS === 'ios' ? 60 : 16,
-    borderBottomWidth: 1,
   },
-  title: {
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  menuLogoPlaceholder: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  menuLogoText: {
     fontSize: 24,
-    fontWeight: '700',
+    fontWeight: '900',
+    color: '#fff',
+  },
+  menuTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#fff',
+    letterSpacing: 0.5,
+  },
+  closeButton: {
+    padding: 4,
   },
   menuItems: {
     padding: 16,
+    paddingTop: 20,
     gap: 12,
   },
   menuItem: {

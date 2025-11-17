@@ -9,6 +9,7 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LiquidGlassView, isLiquidGlassSupported } from '@callstack/liquid-glass';
@@ -56,15 +57,31 @@ export default function TabsScreen() {
 
   const EmptyState = () => (
     <View style={styles.emptyContainer}>
-      <Ionicons name="browsers-outline" size={64} color={colors.textSecondary} />
-      <Text style={[styles.emptyTitle, { color: colors.text }]}>
-        No Open Tabs
-      </Text>
-      <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
-        Create a new tab to start browsing
-      </Text>
-      <View style={styles.emptyButton}>
-        <NewTabButton />
+      <LinearGradient
+        colors={['#667eea', '#764ba2']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.emptyGradient}
+      >
+        <View style={styles.emptyLogoPlaceholder}>
+          <Text style={styles.emptyLogoText}>B</Text>
+        </View>
+        <Ionicons name="browsers-outline" size={48} color="#fff" />
+        <Text style={styles.emptyGradientTitle}>No Open Tabs</Text>
+        <Text style={styles.emptyGradientSubtitle}>
+          Create a new tab to start browsing the web
+        </Text>
+      </LinearGradient>
+      <View style={styles.emptyContent}>
+        <Text style={[styles.emptyTitle, { color: colors.text }]}>
+          Get Started
+        </Text>
+        <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
+          Open a new tab and explore
+        </Text>
+        <View style={styles.emptyButton}>
+          <NewTabButton />
+        </View>
       </View>
     </View>
   );
@@ -153,21 +170,65 @@ const styles = StyleSheet.create({
   },
   emptyContainer: {
     flex: 1,
+  },
+  emptyGradient: {
+    paddingTop: 60,
+    paddingBottom: 40,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  emptyLogoPlaceholder: {
+    width: 72,
+    height: 72,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+    marginBottom: 16,
+  },
+  emptyLogoText: {
+    fontSize: 42,
+    fontWeight: '900',
+    color: '#fff',
+  },
+  emptyGradientTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#fff',
+    marginTop: 16,
+    letterSpacing: 0.5,
+  },
+  emptyGradientSubtitle: {
+    fontSize: 15,
+    color: 'rgba(255, 255, 255, 0.9)',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  emptyContent: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 32,
   },
   emptyTitle: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '700',
-    marginTop: 24,
     textAlign: 'center',
   },
   emptySubtitle: {
-    fontSize: 16,
+    fontSize: 15,
     marginTop: 8,
     textAlign: 'center',
-    lineHeight: 24,
+    lineHeight: 22,
   },
   emptyButton: {
     marginTop: 32,
