@@ -7,126 +7,109 @@ export interface AIMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: number;
-  providerId?: string;
-  modelId?: string;
-  error?: string;
+  isStreaming?: boolean;
 }
 
 export interface ChatSession {
   id: string;
   title: string;
   messages: AIMessage[];
+  providerId: string;
+  providerType: string;
+  model: string;
   createdAt: number;
   updatedAt: number;
-  providerId: string;
 }
 
 interface AIState {
   sessions: ChatSession[];
-  currentSessionId: string | null;
-  isStreaming: boolean;
-  streamingMessageId: string | null;
+  activeSessionId: string | null;
 
   // Session Actions
-  createSession: (providerId: string) => string;
-  switchSession: (sessionId: string) => void;
+  createSession: (providerId: string, providerType: string, model: string) => string;
+  setActiveSession: (sessionId: string) => void;
   deleteSession: (sessionId: string) => void;
-  getCurrentSession: () => ChatSession | null;
   clearAllSessions: () => void;
 
   // Message Actions
   addMessage: (
     sessionId: string,
     role: AIMessage['role'],
-    content: string,
-    providerId?: string,
-    modelId?: string
+    content: string
   ) => string;
-  updateMessage: (sessionId: string, messageId: string, content: string) => void;
+  updateMessageContent: (sessionId: string, messageId: string, content: string) => void;
   deleteMessage: (sessionId: string, messageId: string) => void;
-  setMessageError: (sessionId: string, messageId: string, error: string) => void;
 
   // Streaming Actions
   startStreaming: (messageId: string) => void;
-  stopStreaming: () => void;
-  appendToStreamingMessage: (sessionId: string, content: string) => void;
+  endStreaming: (messageId: string) => void;
 }
 
 export const useAIStore = create<AIState>()(
   persist(
     (set, get) => ({
       sessions: [],
-      currentSessionId: null,
-      isStreaming: false,
-      streamingMessageId: null,
+      activeSessionId: null,
 
-      createSession: (providerId: string) => {
+      createSession: (providerId: string, providerType: string, model: string) => {
         const newSession: ChatSession = {
-          id: `session_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+          id: `session_${ Date.now()}_${Math.random().toString(36).substring(7)}`,
           title: 'New Chat',
           messages: [],
+          providerId,
+          providerType,
+          model,
           createdAt: Date.now(),
           updatedAt: Date.now(),
-          providerId,
         };
 
         set((state) => ({
           sessions: [newSession, ...state.sessions],
-          currentSessionId: newSession.id,
+          activeSessionId: newSession.id,
         }));
 
         return newSession.id;
       },
 
-      switchSession: (sessionId: string) => {
-        set({ currentSessionId: sessionId });
+      setActiveSession: (sessionId: string) => {
+        set({ activeSessionId: sessionId });
       },
 
       deleteSession: (sessionId: string) => {
-        const { sessions, currentSessionId } = get();
+        const { sessions, activeSessionId } = get();
         const newSessions = sessions.filter((s) => s.id !== sessionId);
 
-        // If deleting current session, switch to next one
-        let newCurrentId = currentSessionId;
-        if (sessionId === currentSessionId) {
-          newCurrentId = newSessions.length > 0 ? newSessions[0].id : null;
+        let newActiveId = activeSessionId;
+        if (sessionId === activeSessionId) {
+          newActiveId = newSessions.length > 0 ? newSessions[0].id : null;
         }
 
         set({
           sessions: newSessions,
-          currentSessionId: newCurrentId,
+          activeSessionId: newActiveId,
         });
       },
 
-      getCurrentSession: () => {
-        const { sessions, currentSessionId } = get();
-        return sessions.find((s) => s.id === currentSessionId) || null;
-      },
-
       clearAllSessions: () => {
-        set({ sessions: [], currentSessionId: null });
+        set({ sessions: [], activeSessionId: null });
       },
 
       addMessage: (
         sessionId: string,
         role: AIMessage['role'],
-        content: string,
-        providerId?: string,
-        modelId?: string
+        content: string
       ) => {
         const newMessage: AIMessage = {
           id: `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`,
           role,
           content,
           timestamp: Date.now(),
-          providerId,
-          modelId,
+          isStreaming: false,
         };
 
         set((state) => ({
           sessions: state.sessions.map((session) => {
             if (session.id === sessionId) {
-              // Update session title based on first user message
               let title = session.title;
               if (session.messages.length === 0 && role === 'user') {
                 title = content.substring(0, 50) + (content.length > 50 ? '...' : '');
@@ -146,7 +129,7 @@ export const useAIStore = create<AIState>()(
         return newMessage.id;
       },
 
-      updateMessage: (sessionId: string, messageId: string, content: string) => {
+      updateMessageContent: (sessionId: string, messageId: string, content: string) => {
         set((state) => ({
           sessions: state.sessions.map((session) => {
             if (session.id === sessionId) {
@@ -178,48 +161,25 @@ export const useAIStore = create<AIState>()(
         }));
       },
 
-      setMessageError: (sessionId: string, messageId: string, error: string) => {
+      startStreaming: (messageId: string) => {
         set((state) => ({
-          sessions: state.sessions.map((session) => {
-            if (session.id === sessionId) {
-              return {
-                ...session,
-                messages: session.messages.map((msg) =>
-                  msg.id === messageId ? { ...msg, error } : msg
-                ),
-              };
-            }
-            return session;
-          }),
+          sessions: state.sessions.map((session) => ({
+            ...session,
+            messages: session.messages.map((msg) =>
+              msg.id === messageId ? { ...msg, isStreaming: true } : msg
+            ),
+          })),
         }));
       },
 
-      startStreaming: (messageId: string) => {
-        set({ isStreaming: true, streamingMessageId: messageId });
-      },
-
-      stopStreaming: () => {
-        set({ isStreaming: false, streamingMessageId: null });
-      },
-
-      appendToStreamingMessage: (sessionId: string, content: string) => {
-        const { streamingMessageId } = get();
-        if (!streamingMessageId) return;
-
+      endStreaming: (messageId: string) => {
         set((state) => ({
-          sessions: state.sessions.map((session) => {
-            if (session.id === sessionId) {
-              return {
-                ...session,
-                messages: session.messages.map((msg) =>
-                  msg.id === streamingMessageId
-                    ? { ...msg, content: msg.content + content }
-                    : msg
-                ),
-              };
-            }
-            return session;
-          }),
+          sessions: state.sessions.map((session) => ({
+            ...session,
+            messages: session.messages.map((msg) =>
+              msg.id === messageId ? { ...msg, isStreaming: false } : msg
+            ),
+          })),
         }));
       },
     }),
@@ -227,8 +187,8 @@ export const useAIStore = create<AIState>()(
       name: 'ai-storage',
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (state) => ({
-        sessions: state.sessions.slice(0, 50), // Keep last 50 sessions
-        currentSessionId: state.currentSessionId,
+        sessions: state.sessions.slice(0, 50),
+        activeSessionId: state.activeSessionId,
       }),
     }
   )

@@ -11,6 +11,7 @@ export interface Tab {
   canGoForward: boolean;
   isLoading: boolean;
   progress: number;
+  isIncognito?: boolean;
   createdAt: number;
   lastAccessed: number;
 }
@@ -26,6 +27,7 @@ export interface Bookmark {
   id: string;
   url: string;
   title: string;
+  favicon?: string;
   folder?: string;
   createdAt: number;
 }
@@ -38,9 +40,10 @@ interface BrowserState {
   incognitoMode: boolean;
 
   // Tab Actions
-  addTab: (url: string) => string;
+  addTab: (url: string, isIncognito?: boolean) => string;
   closeTab: (id: string) => void;
   switchTab: (id: string) => void;
+  setActiveTab: (id: string) => void;
   updateTab: (id: string, updates: Partial<Tab>) => void;
   getActiveTab: () => Tab | null;
   clearAllTabs: () => void;
@@ -51,8 +54,9 @@ interface BrowserState {
   searchHistory: (query: string) => BrowserHistory[];
 
   // Bookmark Actions
-  addBookmark: (url: string, title: string, folder?: string) => void;
+  addBookmark: (url: string, title: string, favicon?: string, folder?: string) => void;
   removeBookmark: (id: string) => void;
+  clearBookmarks: () => void;
   getBookmarkByUrl: (url: string) => Bookmark | null;
 
   // Settings
@@ -68,7 +72,7 @@ export const useBrowserStore = create<BrowserState>()(
       bookmarks: [],
       incognitoMode: false,
 
-      addTab: (url: string) => {
+      addTab: (url: string, isIncognito: boolean = false) => {
         const newTab: Tab = {
           id: `tab_${Date.now()}_${Math.random().toString(36).substring(7)}`,
           url,
@@ -77,6 +81,7 @@ export const useBrowserStore = create<BrowserState>()(
           canGoForward: false,
           isLoading: true,
           progress: 0,
+          isIncognito,
           createdAt: Date.now(),
           lastAccessed: Date.now(),
         };
@@ -117,6 +122,10 @@ export const useBrowserStore = create<BrowserState>()(
             tab.id === id ? { ...tab, lastAccessed: Date.now() } : tab
           ),
         }));
+      },
+
+      setActiveTab: (id: string) => {
+        set({ activeTabId: id });
       },
 
       updateTab: (id: string, updates: Partial<Tab>) => {
@@ -169,11 +178,12 @@ export const useBrowserStore = create<BrowserState>()(
         );
       },
 
-      addBookmark: (url: string, title: string, folder?: string) => {
+      addBookmark: (url: string, title: string, favicon?: string, folder?: string) => {
         const newBookmark: Bookmark = {
           id: `bookmark_${Date.now()}`,
           url,
           title,
+          favicon,
           folder,
           createdAt: Date.now(),
         };
@@ -188,6 +198,8 @@ export const useBrowserStore = create<BrowserState>()(
           bookmarks: state.bookmarks.filter((b) => b.id !== id),
         }));
       },
+
+      clearBookmarks: () => set({ bookmarks: [] }),
 
       getBookmarkByUrl: (url: string) => {
         const { bookmarks } = get();
