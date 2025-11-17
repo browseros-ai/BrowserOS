@@ -1,14 +1,15 @@
-import React, { useEffect } from 'react';
-import { View, StyleSheet, useColorScheme } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, StyleSheet, useColorScheme, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '@/constants/Colors';
 import { useBrowserStore } from '@/store/browser-store';
-import { WebViewBrowser } from '@/components/browser/WebViewBrowser';
+import { WebViewBrowser, WebViewBrowserRef } from '@/components/browser/WebViewBrowser';
 import { AddressBar } from '@/components/browser/AddressBar';
 
 export default function BrowserScreen() {
   const colorScheme = useColorScheme();
   const colors = colorScheme === 'dark' ? Colors.dark : Colors.light;
+  const webViewRef = useRef<WebViewBrowserRef>(null);
 
   const {
     tabs,
@@ -16,7 +17,9 @@ export default function BrowserScreen() {
     addTab,
     updateTab,
     setActiveTab,
-    addToHistory,
+    bookmarks,
+    addBookmark,
+    removeBookmark,
   } = useBrowserStore();
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
@@ -36,53 +39,50 @@ export default function BrowserScreen() {
   };
 
   const handleGoBack = () => {
-    // WebView ref will handle this
+    webViewRef.current?.goBack();
   };
 
   const handleGoForward = () => {
-    // WebView ref will handle this
+    webViewRef.current?.goForward();
   };
 
-  const handleRefresh = () => {
-    // WebView ref will handle this
+  const handleReload = () => {
+    webViewRef.current?.reload();
   };
 
-  const handleLoadStart = () => {
-    if (activeTabId) {
-      updateTab(activeTabId, { isLoading: true, progress: 0 });
+  const handleStop = () => {
+    webViewRef.current?.stopLoading();
+  };
+
+  const handleBookmark = () => {
+    if (!activeTab) return;
+
+    const isBookmarked = bookmarks.some((b) => b.url === activeTab.url);
+
+    if (isBookmarked) {
+      // Remove bookmark
+      const bookmark = bookmarks.find((b) => b.url === activeTab.url);
+      if (bookmark) {
+        removeBookmark(bookmark.id);
+        Alert.alert('Bookmark Removed', `Removed "${activeTab.title}" from bookmarks`);
+      }
+    } else {
+      // Add bookmark
+      addBookmark(activeTab.url, activeTab.title, activeTab.favicon);
+      Alert.alert('Bookmark Added', `Added "${activeTab.title}" to bookmarks`);
     }
   };
 
-  const handleLoadProgress = (progress: number) => {
-    if (activeTabId) {
-      updateTab(activeTabId, { progress });
-    }
-  };
-
-  const handleLoadEnd = () => {
-    if (activeTabId) {
-      updateTab(activeTabId, { isLoading: false, progress: 1 });
-    }
-  };
-
-  const handlePageInfoUpdate = (info: {
-    title: string;
-    url: string;
-    favicon?: string;
-    canGoBack: boolean;
-    canGoForward: boolean;
-  }) => {
-    if (activeTabId) {
-      updateTab(activeTabId, info);
-      addToHistory(info.url, info.title);
-    }
-  };
+  // Check if current URL is bookmarked
+  const isBookmarked = activeTab
+    ? bookmarks.some((b) => b.url === activeTab.url)
+    : false;
 
   if (!activeTab) {
     return (
       <SafeAreaView
         style={[styles.container, { backgroundColor: colors.background }]}
-        edges={['top']}
+        edges={['top', 'bottom']}
       />
     );
   }
@@ -90,7 +90,7 @@ export default function BrowserScreen() {
   return (
     <SafeAreaView
       style={[styles.container, { backgroundColor: colors.background }]}
-      edges={['top']}
+      edges={['bottom']}
     >
       {/* Address Bar */}
       <AddressBar
@@ -102,17 +102,19 @@ export default function BrowserScreen() {
         onNavigate={handleNavigate}
         onGoBack={handleGoBack}
         onGoForward={handleGoForward}
-        onRefresh={handleRefresh}
+        onReload={handleReload}
+        onStop={handleStop}
+        onBookmark={handleBookmark}
+        isBookmarked={isBookmarked}
       />
 
       {/* WebView Browser */}
       <View style={styles.webviewContainer}>
         <WebViewBrowser
+          ref={webViewRef}
+          tabId={activeTab.id}
           url={activeTab.url}
-          onLoadStart={handleLoadStart}
-          onLoadProgress={handleLoadProgress}
-          onLoadEnd={handleLoadEnd}
-          onPageInfoUpdate={handlePageInfoUpdate}
+          isIncognito={activeTab.isIncognito}
         />
       </View>
     </SafeAreaView>
