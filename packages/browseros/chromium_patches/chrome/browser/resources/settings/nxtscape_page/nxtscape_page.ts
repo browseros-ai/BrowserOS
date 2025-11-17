@@ -401,7 +401,7 @@ index 0000000000000..80e988de4d595
 +  private saveProviders_() {
 +    // Safety check: don't save if prefs aren't ready
 +    if (!this.prefs || !this.prefs.browseros || this.prefs.browseros.providers === undefined) {
-+      console.warn('browseros: Cannot save providers - prefs not ready');
++      console.warn('blockbrowser: Cannot save providers - prefs not ready');
 +      return;
 +    }
 +    
@@ -412,7 +412,7 @@ index 0000000000000..80e988de4d595
 +    
 +    // @ts-ignore: setPrefValue exists at runtime from PrefsMixin
 +    this.setPrefValue('browseros.providers', JSON.stringify(data));
-+    console.log('browseros: Saving providers:', data);
++    console.log('blockbrowser: Saving providers:', data);
 +  }
 +
 +  private generateId_(): string {
@@ -420,7 +420,7 @@ index 0000000000000..80e988de4d595
 +  }
 +
 +  private onAddProvider_() {
-+    console.log('browseros: Add Provider clicked');
++    console.log('blockbrowser: Add Provider clicked');
 +    
 +    // Toggle the form visibility
 +    this.set('showProviderForm_', !this.showProviderForm_);
@@ -448,7 +448,7 @@ index 0000000000000..80e988de4d595
 +      this.scrollToForm_();
 +    }
 +    
-+    console.log('browseros: Form visibility:', this.showProviderForm_);
++    console.log('blockbrowser: Form visibility:', this.showProviderForm_);
 +  }
 +
 +  private onEditProvider_(e: Event) {
@@ -485,7 +485,7 @@ index 0000000000000..80e988de4d595
 +    const providerId = target.dataset['providerId'];
 +    const provider = this.providers_.find(p => p.id === providerId);
 +    
-+    console.log('browseros: Delete provider clicked:', providerId, provider);
++    console.log('blockbrowser: Delete provider clicked:', providerId, provider);
 +    
 +    // Don't allow deleting built-in providers
 +    if (!provider || provider.isBuiltIn) return;
@@ -516,11 +516,11 @@ index 0000000000000..80e988de4d595
 +      this.set('dialogProviderType_', providerType);
 +    }
 +    
-+    console.log('browseros: Provider type changed to:', providerType);
++    console.log('blockbrowser: Provider type changed to:', providerType);
 +    
 +    const defaults = PROVIDER_DEFAULTS[providerType];
 +    if (defaults) {
-+      console.log('browseros: Applying defaults:', defaults);
++      console.log('blockbrowser: Applying defaults:', defaults);
 +      // Use Polymer's set method to ensure proper data binding
 +      this.set('dialogBaseUrl_', defaults.baseUrl || '');
 +      this.set('dialogModelId_', defaults.modelId || '');
@@ -650,7 +650,7 @@ index 0000000000000..80e988de4d595
 +          const contextLength = getModelContextLength(this.dialogProviderType_, selectedModel);
 +          if (contextLength) {
 +            this.set('dialogContextWindow_', contextLength);
-+            console.log('browseros: Auto-set context length to:', contextLength);
++            console.log('blockbrowser: Auto-set context length to:', contextLength);
 +          }
 +          
 +          this.set('showModelDropdown_', false);
@@ -675,10 +675,10 @@ index 0000000000000..80e988de4d595
 +    
 +    const target = event.currentTarget as HTMLElement;
 +    const model = target.dataset['model'];
-+    console.log('browseros: Model suggestion clicked:', model);
++    console.log('blockbrowser: Model suggestion clicked:', model);
 +    
 +    if (model) {
-+      console.log('browseros: Setting dialogModelId_ to:', model);
++      console.log('blockbrowser: Setting dialogModelId_ to:', model);
 +      this.set('dialogModelId_', model);
 +      this.set('showModelDropdown_', false);
 +      this.set('selectedSuggestionIndex_', -1);
@@ -687,14 +687,14 @@ index 0000000000000..80e988de4d595
 +      const contextLength = getModelContextLength(this.dialogProviderType_, model);
 +      if (contextLength) {
 +        this.set('dialogContextWindow_', contextLength);
-+        console.log('browseros: Auto-set context length to:', contextLength);
++        console.log('blockbrowser: Auto-set context length to:', contextLength);
 +      }
 +      
 +      // Force update the input field value
 +      const input = this.shadowRoot?.querySelector('.model-id-input') as HTMLInputElement;
 +      if (input) {
 +        input.value = model;
-+        console.log('browseros: Input value set to:', input.value);
++        console.log('blockbrowser: Input value set to:', input.value);
 +      }
 +    }
 +  }
@@ -737,7 +737,7 @@ index 0000000000000..80e988de4d595
 +    this.set('selectedSuggestionIndex_', -1);
 +    
 +    // Log that a custom model was selected
-+    console.log('browseros: Custom model selected:', this.dialogModelId_);
++    console.log('blockbrowser: Custom model selected:', this.dialogModelId_);
 +    
 +    // Force update the input field value to ensure it's synced
 +    const input = this.shadowRoot?.querySelector('.model-id-input') as HTMLInputElement;
@@ -851,7 +851,7 @@ index 0000000000000..80e988de4d595
 +  }
 +
 +  private validateProviderForm_(): boolean {
-+    console.log('browseros: Validating form:', {
++    console.log('blockbrowser: Validating form:', {
 +      name: this.dialogProviderName_,
 +      type: this.dialogProviderType_,
 +      apiKey: this.dialogApiKey_,
@@ -1040,7 +1040,7 @@ index 0000000000000..80e988de4d595
 +      }
 +    }, 600);
 +    
-+    console.log('browseros: Using template:', template.name);
++    console.log('blockbrowser: Using template:', template.name);
 +  }
 +
 +  private getProviderSubtitle_(provider: ProviderConfig): string {

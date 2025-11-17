@@ -1067,7 +1067,7 @@ index 0000000000000..f33e0463b1bfa
 +    
 +    // @ts-ignore: setPrefValue exists at runtime from PrefsMixin
 +    this.setPrefValue('browseros.providers', JSON.stringify(data));
-+    console.log('browseros: Saving providers:', data);
++    console.log('blockbrowser: Saving providers:', data);
 +    this.showStatusMessage_();
 +  }
 +
@@ -1076,7 +1076,7 @@ index 0000000000000..f33e0463b1bfa
 +  }
 +
 +  private onAddProvider_() {
-+    console.log('browseros: Add Provider clicked');
++    console.log('blockbrowser: Add Provider clicked');
 +    
 +    // Toggle the form visibility
 +    this.set('showProviderForm_', !this.showProviderForm_);
@@ -1096,7 +1096,7 @@ index 0000000000000..f33e0463b1bfa
 +      this.onProviderTypeChange_();
 +    }
 +    
-+    console.log('browseros: Form visibility:', this.showProviderForm_);
++    console.log('blockbrowser: Form visibility:', this.showProviderForm_);
 +  }
 +
 +  private onEditProvider_(e: Event) {
@@ -1125,7 +1125,7 @@ index 0000000000000..f33e0463b1bfa
 +    const providerId = target.dataset['providerId'];
 +    const provider = this.providers_.find(p => p.id === providerId);
 +    
-+    console.log('browseros: Delete provider clicked:', providerId, provider);
++    console.log('blockbrowser: Delete provider clicked:', providerId, provider);
 +    
 +    if (!provider || provider.isBuiltIn) return;
 +    
@@ -1155,11 +1155,11 @@ index 0000000000000..f33e0463b1bfa
 +      this.set('dialogProviderType_', providerType);
 +    }
 +    
-+    console.log('browseros: Provider type changed to:', providerType);
++    console.log('blockbrowser: Provider type changed to:', providerType);
 +    
 +    const defaults = PROVIDER_DEFAULTS[providerType];
 +    if (defaults) {
-+      console.log('browseros: Applying defaults:', defaults);
++      console.log('blockbrowser: Applying defaults:', defaults);
 +      // Use Polymer's set method to ensure proper data binding
 +      this.set('dialogBaseUrl_', defaults.baseUrl || '');
 +      this.set('dialogModelId_', defaults.modelId || '');
@@ -1242,7 +1242,7 @@ index 0000000000000..f33e0463b1bfa
 +  }
 +
 +  private validateProviderForm_(): boolean {
-+    console.log('browseros: Validating form:', {
++    console.log('blockbrowser: Validating form:', {
 +      name: this.dialogProviderName_,
 +      type: this.dialogProviderType_,
 +      apiKey: this.dialogApiKey_,

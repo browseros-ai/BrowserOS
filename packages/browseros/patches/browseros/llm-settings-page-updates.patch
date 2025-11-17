@@ -1051,7 +1051,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
    private saveProviders_() {
 +    // Safety check: don't save if prefs aren't ready
 +    if (!this.prefs || !this.prefs.browseros || this.prefs.browseros.providers === undefined) {
-+      console.warn('browseros: Cannot save providers - prefs not ready');
++      console.warn('blockbrowser: Cannot save providers - prefs not ready');
 +      return;
 +    }
 +    
@@ -1084,7 +1084,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
 +      this.scrollToForm_();
      }
      
-     console.log('browseros: Form visibility:', this.showProviderForm_);
+     console.log('blockbrowser: Form visibility:', this.showProviderForm_);
 @@ -306,7 +463,15 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
      this.set('dialogContextWindow_', provider.modelConfig?.contextWindow || 128000);
      this.set('dialogTemperature_', provider.modelConfig?.temperature || 0.7);
@@ -1103,7 +1103,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
    private onDeleteProvider_(e: Event) {
 @@ -317,6 +482,7 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
      
-     console.log('browseros: Delete provider clicked:', providerId, provider);
+     console.log('blockbrowser: Delete provider clicked:', providerId, provider);
      
 +    // Don't allow deleting built-in providers
      if (!provider || provider.isBuiltIn) return;
@@ -1235,7 +1235,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
 +          const contextLength = getModelContextLength(this.dialogProviderType_, selectedModel);
 +          if (contextLength) {
 +            this.set('dialogContextWindow_', contextLength);
-+            console.log('browseros: Auto-set context length to:', contextLength);
++            console.log('blockbrowser: Auto-set context length to:', contextLength);
 +          }
 +          
 +          this.set('showModelDropdown_', false);
@@ -1260,10 +1260,10 @@ index f33e0463b1bfa..99c366e7c4e44 100644
 +    
 +    const target = event.currentTarget as HTMLElement;
 +    const model = target.dataset['model'];
-+    console.log('browseros: Model suggestion clicked:', model);
++    console.log('blockbrowser: Model suggestion clicked:', model);
 +    
 +    if (model) {
-+      console.log('browseros: Setting dialogModelId_ to:', model);
++      console.log('blockbrowser: Setting dialogModelId_ to:', model);
 +      this.set('dialogModelId_', model);
 +      this.set('showModelDropdown_', false);
 +      this.set('selectedSuggestionIndex_', -1);
@@ -1272,14 +1272,14 @@ index f33e0463b1bfa..99c366e7c4e44 100644
 +      const contextLength = getModelContextLength(this.dialogProviderType_, model);
 +      if (contextLength) {
 +        this.set('dialogContextWindow_', contextLength);
-+        console.log('browseros: Auto-set context length to:', contextLength);
++        console.log('blockbrowser: Auto-set context length to:', contextLength);
 +      }
 +      
 +      // Force update the input field value
 +      const input = this.shadowRoot?.querySelector('.model-id-input') as HTMLInputElement;
 +      if (input) {
 +        input.value = model;
-+        console.log('browseros: Input value set to:', input.value);
++        console.log('blockbrowser: Input value set to:', input.value);
 +      }
 +    }
 +  }
@@ -1322,7 +1322,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
 +    this.set('selectedSuggestionIndex_', -1);
 +    
 +    // Log that a custom model was selected
-+    console.log('browseros: Custom model selected:', this.dialogModelId_);
++    console.log('blockbrowser: Custom model selected:', this.dialogModelId_);
 +    
 +    // Force update the input field value to ensure it's synced
 +    const input = this.shadowRoot?.querySelector('.model-id-input') as HTMLInputElement;
@@ -1484,7 +1484,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
 +      }
 +    }, 600);
 +    
-+    console.log('browseros: Using template:', template.name);
++    console.log('blockbrowser: Using template:', template.name);
 +  }
  
    private getProviderSubtitle_(provider: ProviderConfig): string {
