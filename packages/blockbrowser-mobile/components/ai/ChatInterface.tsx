@@ -11,7 +11,8 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LiquidGlassView, isLiquidGlassSupported } from '@callstack/liquid-glass';
+import { LiquidGlassView } from '@callstack/liquid-glass';
+import { isLiquidGlassSupported } from '@/lib/utils/liquid-glass-helper';
 import { Colors } from '@/constants/Colors';
 import { useAIStore } from '@/store/ai-store';
 import { AIProviderFactory } from '@/lib/ai/providers/factory';
@@ -62,7 +63,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ sessionId }) => {
       startStreaming(aiMessageId);
 
       // Get provider configuration
-      const provider = AIProviderFactory.getProvider(session.providerType);
+      const provider = AIProviderFactory.getProvider(session.providerType as any);
       const apiKey = await SecureStorage.getApiKey(session.providerId);
 
       if (!apiKey) {
@@ -87,13 +88,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ sessionId }) => {
         }));
 
       // Stream AI response
+      let fullMessage = '';
       await provider.chat(
         conversationMessages,
         session.model,
         apiKey,
         {
-          onStream: (chunk: string) => {
-            updateMessageContent(sessionId, aiMessageId, chunk);
+          onStream: (chunk) => {
+            fullMessage += chunk.content;
+            updateMessageContent(sessionId, aiMessageId, fullMessage);
           },
         }
       );

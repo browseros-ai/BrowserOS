@@ -348,7 +348,6 @@ export const WebViewBrowser = forwardRef<WebViewBrowserRef, WebViewBrowserProps>
           mixedContentMode="compatibility"
           userAgent={userAgent}
           originWhitelist={['*']}
-          androidHardwareAccelerationDisabled={false}
           androidLayerType="hardware"
         />
       </View>

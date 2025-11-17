@@ -10,7 +10,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { LiquidGlassView, isLiquidGlassSupported } from '@callstack/liquid-glass';
+import { LiquidGlassView } from '@callstack/liquid-glass';
+import { isLiquidGlassSupported } from '@/lib/utils/liquid-glass-helper';
 import { Colors } from '@/constants/Colors';
 import { useAIStore } from '@/store/ai-store';
 import { useSettingsStore } from '@/store/settings-store';

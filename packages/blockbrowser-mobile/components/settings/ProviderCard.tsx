@@ -9,7 +9,8 @@ import {
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LiquidGlassView, isLiquidGlassSupported } from '@callstack/liquid-glass';
+import { LiquidGlassView } from '@callstack/liquid-glass';
+import { isLiquidGlassSupported } from '@/lib/utils/liquid-glass-helper';
 import { Colors } from '@/constants/Colors';
 import { AIProvider, useSettingsStore } from '@/store/settings-store';
 import { ApiKeyInput } from './ApiKeyInput';

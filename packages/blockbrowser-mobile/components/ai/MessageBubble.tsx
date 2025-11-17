@@ -6,7 +6,8 @@ import {
   useColorScheme,
   Platform,
 } from 'react-native';
-import { LiquidGlassView, isLiquidGlassSupported } from '@callstack/liquid-glass';
+import { LiquidGlassView } from '@callstack/liquid-glass';
+import { isLiquidGlassSupported } from '@/lib/utils/liquid-glass-helper';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/Colors';
 import { AIMessage } from '@/store/ai-store';
