@@ -10,6 +10,7 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/Colors';
 import { useSettingsStore } from '@/store/settings-store';
@@ -233,25 +234,35 @@ export default function SettingsScreen() {
         {/* About Section */}
         <SettingSection title="ABOUT" />
         <View style={styles.section}>
-          <View
-            style={[
-              styles.aboutCard,
-              {
-                backgroundColor: colors.surface,
-                borderColor: colors.border,
-              },
-            ]}
+          <LinearGradient
+            colors={['#667eea', '#764ba2']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.aboutCard}
           >
-            <Text style={[styles.appName, { color: colors.text }]}>
-              BlockBrowser
-            </Text>
-            <Text style={[styles.version, { color: colors.textSecondary }]}>
-              Version 1.0.0
-            </Text>
-            <Text style={[styles.description, { color: colors.textSecondary }]}>
+            <View style={styles.aboutLogo}>
+              <Text style={styles.aboutLogoText}>B</Text>
+            </View>
+            <Text style={styles.appName}>BlockBrowser</Text>
+            <Text style={styles.version}>Version 1.0.0</Text>
+            <Text style={styles.description}>
               AI-powered mobile browser with privacy-first features
             </Text>
-          </View>
+            <View style={styles.featuresList}>
+              <View style={styles.featureItem}>
+                <Ionicons name="shield-checkmark" size={16} color="#fff" />
+                <Text style={styles.featureText}>Privacy-first</Text>
+              </View>
+              <View style={styles.featureItem}>
+                <Ionicons name="sparkles" size={16} color="#fff" />
+                <Text style={styles.featureText}>AI-powered</Text>
+              </View>
+              <View style={styles.featureItem}>
+                <Ionicons name="flash" size={16} color="#fff" />
+                <Text style={styles.featureText}>Fast & secure</Text>
+              </View>
+            </View>
+          </LinearGradient>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -313,23 +324,66 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   aboutCard: {
-    padding: 20,
-    borderRadius: 12,
-    borderWidth: 1,
+    padding: 24,
+    borderRadius: 20,
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  aboutLogo: {
+    width: 64,
+    height: 64,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+    marginBottom: 16,
+  },
+  aboutLogoText: {
+    fontSize: 36,
+    fontWeight: '900',
+    color: '#fff',
   },
   appName: {
-    fontSize: 24,
-    fontWeight: '700',
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#fff',
+    letterSpacing: 0.5,
   },
   version: {
     fontSize: 14,
-    marginTop: 4,
+    color: 'rgba(255, 255, 255, 0.8)',
+    marginTop: 6,
   },
   description: {
-    fontSize: 14,
+    fontSize: 15,
+    color: 'rgba(255, 255, 255, 0.95)',
     marginTop: 12,
     textAlign: 'center',
-    lineHeight: 20,
+    lineHeight: 22,
+  },
+  featuresList: {
+    flexDirection: 'row',
+    marginTop: 20,
+    gap: 16,
+  },
+  featureItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 16,
+  },
+  featureText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
   },
 });

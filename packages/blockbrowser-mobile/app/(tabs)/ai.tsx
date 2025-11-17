@@ -8,6 +8,7 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { LiquidGlassView, isLiquidGlassSupported } from '@callstack/liquid-glass';
 import { Colors } from '@/constants/Colors';
@@ -59,32 +60,64 @@ export default function AIScreen() {
 
   const EmptyState = () => (
     <View style={styles.emptyContainer}>
-      <Ionicons name="sparkles" size={64} color={colors.primary} />
-      <Text style={[styles.emptyTitle, { color: colors.text }]}>
-        Welcome to BlockBrowser AI
-      </Text>
-      <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
-        Start a conversation with your AI assistant
-      </Text>
-
-      <View style={styles.providerSelectorContainer}>
-        <ProviderSelector
-          selectedProviderId={selectedProviderId}
-          selectedModel={selectedModel}
-          onSelect={handleProviderSelect}
-        />
-      </View>
-
-      <TouchableOpacity
-        style={[styles.newChatButton, { backgroundColor: colors.primary }]}
-        onPress={handleNewChat}
-        disabled={!selectedProviderId}
+      {/* Gradient Header with Logo */}
+      <LinearGradient
+        colors={['#667eea', '#764ba2']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.emptyGradientHeader}
       >
-        <Ionicons name="add-circle" size={24} color={colors.background} />
-        <Text style={[styles.newChatButtonText, { color: colors.background }]}>
-          Start New Chat
+        <View style={styles.logoPlaceholder}>
+          <Text style={styles.logoText}>B</Text>
+        </View>
+        <View style={styles.sparklesIcon}>
+          <Ionicons name="sparkles" size={32} color="#fff" />
+        </View>
+        <Text style={styles.emptyHeaderTitle}>BlockBrowser AI</Text>
+        <Text style={styles.emptyHeaderSubtitle}>
+          Powered by multiple AI providers
         </Text>
-      </TouchableOpacity>
+      </LinearGradient>
+
+      <View style={styles.emptyContent}>
+        <Text style={[styles.emptyTitle, { color: colors.text }]}>
+          Start a conversation
+        </Text>
+        <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
+          Choose your AI provider and model to begin chatting
+        </Text>
+
+        <View style={styles.providerSelectorContainer}>
+          <ProviderSelector
+            selectedProviderId={selectedProviderId}
+            selectedModel={selectedModel}
+            onSelect={handleProviderSelect}
+          />
+        </View>
+
+        <TouchableOpacity
+          style={[
+            styles.newChatButton,
+            { backgroundColor: selectedProviderId ? colors.primary : colors.border },
+          ]}
+          onPress={handleNewChat}
+          disabled={!selectedProviderId}
+        >
+          <Ionicons
+            name="add-circle"
+            size={24}
+            color={selectedProviderId ? colors.background : colors.textSecondary}
+          />
+          <Text
+            style={[
+              styles.newChatButtonText,
+              { color: selectedProviderId ? colors.background : colors.textSecondary },
+            ]}
+          >
+            Start New Chat
+          </Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 
@@ -149,21 +182,74 @@ const styles = StyleSheet.create({
   },
   emptyContainer: {
     flex: 1,
+  },
+  emptyGradientHeader: {
+    paddingTop: 60,
+    paddingBottom: 40,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  logoPlaceholder: {
+    width: 80,
+    height: 80,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  logoText: {
+    fontSize: 48,
+    fontWeight: '900',
+    color: '#fff',
+  },
+  sparklesIcon: {
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 50,
+  },
+  emptyHeaderTitle: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#fff',
+    marginTop: 16,
+    letterSpacing: 0.5,
+  },
+  emptyHeaderSubtitle: {
+    fontSize: 15,
+    color: 'rgba(255, 255, 255, 0.9)',
+    marginTop: 8,
+  },
+  emptyContent: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 32,
   },
   emptyTitle: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '700',
-    marginTop: 24,
     textAlign: 'center',
   },
   emptySubtitle: {
-    fontSize: 16,
+    fontSize: 15,
     marginTop: 8,
     textAlign: 'center',
-    lineHeight: 24,
+    lineHeight: 22,
   },
   providerSelectorContainer: {
     width: '100%',
@@ -173,13 +259,18 @@ const styles = StyleSheet.create({
   newChatButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderRadius: 12,
+    paddingHorizontal: 28,
+    paddingVertical: 16,
+    borderRadius: 16,
     gap: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 4,
   },
   newChatButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
   },
 });

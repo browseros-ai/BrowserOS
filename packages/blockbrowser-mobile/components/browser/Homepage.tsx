@@ -7,7 +7,9 @@ import {
   useColorScheme,
   FlatList,
   Image,
+  ScrollView,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/Colors';
 import { useBrowserStore } from '@/store/browser-store';
@@ -21,28 +23,40 @@ export const Homepage: React.FC<HomepageProps> = ({ onNavigate }) => {
   const colors = colorScheme === 'dark' ? Colors.dark : Colors.light;
   const { bookmarks, history } = useBrowserStore();
 
-  // Quick access shortcuts
+  // Quick access shortcuts with individual colors
   const shortcuts = [
-    { id: '1', name: 'Google', url: 'https://www.google.com', icon: 'search' },
-    { id: '2', name: 'YouTube', url: 'https://www.youtube.com', icon: 'logo-youtube' },
-    { id: '3', name: 'Twitter', url: 'https://twitter.com', icon: 'logo-twitter' },
-    { id: '4', name: 'GitHub', url: 'https://github.com', icon: 'logo-github' },
-    { id: '5', name: 'Reddit', url: 'https://reddit.com', icon: 'logo-reddit' },
-    { id: '6', name: 'Wikipedia', url: 'https://wikipedia.org', icon: 'book' },
+    { id: '1', name: 'Google', url: 'https://www.google.com', icon: 'search', color: '#4285F4' },
+    { id: '2', name: 'YouTube', url: 'https://www.youtube.com', icon: 'logo-youtube', color: '#FF0000' },
+    { id: '3', name: 'Twitter', url: 'https://twitter.com', icon: 'logo-twitter', color: '#1DA1F2' },
+    { id: '4', name: 'GitHub', url: 'https://github.com', icon: 'logo-github', color: '#333' },
+    { id: '5', name: 'Reddit', url: 'https://reddit.com', icon: 'logo-reddit', color: '#FF4500' },
+    { id: '6', name: 'Wikipedia', url: 'https://wikipedia.org', icon: 'book', color: '#000' },
   ];
 
   const recentHistory = history.slice(0, 10);
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Logo/Header */}
-      <View style={styles.header}>
-        <Ionicons name="browsers" size={64} color={colors.primary} />
-        <Text style={[styles.title, { color: colors.text }]}>BlockBrowser</Text>
-        <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-          Privacy-first mobile browsing
-        </Text>
-      </View>
+    <ScrollView
+      style={[styles.container, { backgroundColor: colors.background }]}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* Gradient Header with Logo */}
+      <LinearGradient
+        colors={['#667eea', '#764ba2']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.gradientHeader}
+      >
+        <View style={styles.logoContainer}>
+          <View style={styles.logoPlaceholder}>
+            <Text style={styles.logoText}>B</Text>
+          </View>
+          <Text style={styles.brandTitle}>BlockBrowser</Text>
+          <Text style={styles.brandSubtitle}>
+            Privacy-first mobile browsing
+          </Text>
+        </View>
+      </LinearGradient>
 
       {/* Quick Access Shortcuts */}
       <View style={styles.section}>
@@ -66,13 +80,13 @@ export const Homepage: React.FC<HomepageProps> = ({ onNavigate }) => {
               <View
                 style={[
                   styles.shortcutIcon,
-                  { backgroundColor: colors.primary + '20' },
+                  { backgroundColor: shortcut.color + '15' },
                 ]}
               >
                 <Ionicons
                   name={shortcut.icon as any}
                   size={28}
-                  color={colors.primary}
+                  color={shortcut.color}
                 />
               </View>
               <Text style={[styles.shortcutName, { color: colors.text }]}>
@@ -165,30 +179,64 @@ export const Homepage: React.FC<HomepageProps> = ({ onNavigate }) => {
           />
         </View>
       )}
-    </View>
+    </ScrollView>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 16,
   },
-  header: {
+  gradientHeader: {
+    paddingTop: 60,
+    paddingBottom: 40,
+    paddingHorizontal: 24,
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  logoContainer: {
     alignItems: 'center',
-    paddingVertical: 32,
   },
-  title: {
+  logoPlaceholder: {
+    width: 80,
+    height: 80,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  logoText: {
+    fontSize: 48,
+    fontWeight: '900',
+    color: '#fff',
+  },
+  brandTitle: {
     fontSize: 32,
-    fontWeight: '700',
+    fontWeight: '800',
+    color: '#fff',
     marginTop: 16,
+    letterSpacing: 0.5,
   },
-  subtitle: {
+  brandSubtitle: {
     fontSize: 16,
+    color: 'rgba(255, 255, 255, 0.9)',
     marginTop: 8,
   },
   section: {
     marginTop: 24,
+    paddingHorizontal: 16,
   },
   sectionTitle: {
     fontSize: 20,
@@ -203,12 +251,17 @@ const styles = StyleSheet.create({
   shortcutCard: {
     width: '30%',
     aspectRatio: 1,
-    borderRadius: 16,
+    borderRadius: 20,
     borderWidth: 1,
     padding: 16,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   shortcutIcon: {
     width: 56,

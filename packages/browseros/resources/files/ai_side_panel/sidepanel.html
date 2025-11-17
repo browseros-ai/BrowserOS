@@ -1,4 +1,14 @@
-<!doctype html><html lang="en" class="dark"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BlockBrowser AI Assistant</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"><style>/* Modern reset and base styles for BlockBrowser AI Assistant */
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BlockBrowser AI Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* Modern reset and base styles for BlockBrowser AI Assistant */
     :root {
       /* Light mode colors */
       --bg-primary: #ffffff;
@@ -8,9 +18,14 @@
       --text-secondary: #6c757d;
       --border-color: #dee2e6;
       --accent-primary: #667eea;
+      --accent-secondary: #764ba2;
       --accent-hover: #5568d3;
+      --success: #10b981;
+      --error: #ef4444;
+      --warning: #f59e0b;
       --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
       --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
     }
 
     /* Dark mode colors */
@@ -22,9 +37,14 @@
       --text-secondary: #adb5bd;
       --border-color: #404040;
       --accent-primary: #7c8ef7;
+      --accent-secondary: #8b5dbf;
       --accent-hover: #8b9bff;
+      --success: #34d399;
+      --error: #f87171;
+      --warning: #fbbf24;
       --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
       --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
     }
 
     * {
@@ -55,34 +75,140 @@
 
     /* Smooth transitions for theme switching */
     html, body, #root {
-      transition: background-color 0.2s ease, color 0.2s ease;
+      transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+                  color 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }
 
     /* Scrollbar styling */
     ::-webkit-scrollbar {
-      width: 8px;
-      height: 8px;
+      width: 10px;
+      height: 10px;
     }
 
     ::-webkit-scrollbar-track {
       background: var(--bg-secondary);
+      border-radius: 5px;
     }
 
     ::-webkit-scrollbar-thumb {
       background: var(--border-color);
-      border-radius: 4px;
+      border-radius: 5px;
+      transition: background 0.2s ease;
     }
 
     ::-webkit-scrollbar-thumb:hover {
       background: var(--text-secondary);
     }
 
-    /* Loading state */
+    /* Enhanced loading state with logo */
     .loading {
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
       height: 100%;
+      gap: 24px;
+      padding: 32px;
+    }
+
+    .loading-logo {
+      width: 80px;
+      height: 80px;
+      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 36px;
+      font-weight: 700;
+      color: white;
+      box-shadow: var(--shadow-lg);
+      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+      50% {
+        opacity: 0.8;
+        transform: scale(0.95);
+      }
+    }
+
+    .loading-text {
+      font-size: 16px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .loading-subtext {
       font-size: 14px;
       color: var(--text-secondary);
-    }</style><script defer="defer" src="sidepanel.js"></script></head><body><div id="root"><div class="loading">Loading BlockBrowser AI...</div></div><script src="sidepanel.js"></script></body></html>
+    }
+
+    /* Header branding */
+    .brand-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 20px;
+      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+      box-shadow: var(--shadow-md);
+    }
+
+    .brand-logo {
+      width: 32px;
+      height: 32px;
+      background: white;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .brand-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: white;
+      flex: 1;
+    }
+
+    /* Button styles */
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      background: var(--accent-primary);
+      color: white;
+    }
+
+    .btn:hover {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-md);
+    }
+
+    .btn:active {
+      transform: translateY(0);
+    }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <div class="loading">
+      <div class="loading-logo">B</div>
+      <div class="loading-text">BlockBrowser AI Assistant</div>
+      <div class="loading-subtext">Initializing...</div>
+    </div>
+  </div>
+  <script src="sidepanel.js"></script>
+</body>
+</html>
