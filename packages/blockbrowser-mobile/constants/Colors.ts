@@ -1,0 +1,36 @@
+export const Colors = {
+  light: {
+    primary: '#667eea',
+    primaryHover: '#5568d3',
+    secondary: '#764ba2',
+    background: '#ffffff',
+    surface: '#f8f9fa',
+    surfaceSecondary: '#e9ecef',
+    text: '#1f2937',
+    textSecondary: '#6b7280',
+    border: '#e5e7eb',
+    success: '#10b981',
+    error: '#ef4444',
+    warning: '#f59e0b',
+    info: '#3b82f6',
+    shadow: 'rgba(0, 0, 0, 0.1)',
+  },
+  dark: {
+    primary: '#7c8ef7',
+    primaryHover: '#8b9bff',
+    secondary: '#8b5dbf',
+    background: '#1a1a1b',
+    surface: '#272728',
+    surfaceSecondary: '#3a3a3c',
+    text: '#f8f9fa',
+    textSecondary: '#9ca3af',
+    border: '#404040',
+    success: '#34d399',
+    error: '#f87171',
+    warning: '#fbbf24',
+    info: '#60a5fa',
+    shadow: 'rgba(0, 0, 0, 0.4)',
+  },
+};
+
+export type Theme = 'light' | 'dark' | 'system';

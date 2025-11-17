@@ -1,0 +1,75 @@
+{
+  "expo": {
+    "name": "BlockBrowser",
+    "slug": "blockbrowser-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "blockbrowser",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#667eea"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.blockbrowser.mobile",
+      "buildNumber": "1.0.0",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Allow BlockBrowser to use your camera",
+        "NSMicrophoneUsageDescription": "Allow BlockBrowser to use your microphone",
+        "NSUserTrackingUsageDescription": "This app does not track you",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#667eea"
+      },
+      "package": "com.blockbrowser.mobile",
+      "versionCode": 1,
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "react-native-webview",
+        {
+          "allowFileAccess": true,
+          "cacheEnabled": true
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static"
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "blockbrowser-mobile-project-id"
+      }
+    }
+  }
+}
