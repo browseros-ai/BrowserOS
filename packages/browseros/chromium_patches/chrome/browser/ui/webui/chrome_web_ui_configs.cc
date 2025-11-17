@@ -6,7 +6,7 @@ index cbcdde4afa71b..6b72a49ababc0 100644
  #include "chrome/browser/ui/webui/signin_internals_ui.h"
  #include "chrome/browser/ui/webui/sync_internals/sync_internals_ui.h"
  #include "chrome/browser/ui/webui/translate_internals/translate_internals_ui.h"
-+#include "chrome/browser/ui/webui/nxtscape_first_run.h"
++#include "chrome/browser/ui/webui/blockbrowser_first_run.h"
  #include "chrome/browser/ui/webui/usb_internals/usb_internals_ui.h"
  #include "chrome/browser/ui/webui/user_actions/user_actions_ui.h"
  #include "chrome/browser/ui/webui/version/version_ui.h"
@@ -22,7 +22,7 @@ index cbcdde4afa71b..6b72a49ababc0 100644
    map.AddWebUIConfig(std::make_unique<SiteEngagementUIConfig>());
    map.AddWebUIConfig(std::make_unique<SyncInternalsUIConfig>());
    map.AddWebUIConfig(std::make_unique<TranslateInternalsUIConfig>());
-+  map.AddWebUIConfig(std::make_unique<NxtscapeFirstRunUIConfig>());
++  map.AddWebUIConfig(std::make_unique<BlockBrowserFirstRunUIConfig>());
    map.AddWebUIConfig(std::make_unique<UsbInternalsUIConfig>());
    map.AddWebUIConfig(std::make_unique<UserActionsUIConfig>());
    map.AddWebUIConfig(std::make_unique<VersionUIConfig>());

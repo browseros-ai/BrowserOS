@@ -6,32 +6,32 @@ index 846a910323217..e78e1125f61cd 100644
      ],
      "contexts": ["privileged_extension"]
    }],
-+  "browserOS": {
-+    "dependencies": ["permission:browserOS"],
++  "blockbrowser": {
++    "dependencies": ["permission:blockbrowser"],
 +    "contexts": ["privileged_extension"]
 +  },
-+  "browserOS.getAccessibilityTree": {
-+    "dependencies": ["permission:browserOS"],
++  "blockbrowser.getAccessibilityTree": {
++    "dependencies": ["permission:blockbrowser"],
 +    "contexts": ["privileged_extension"]
 +  },
-+  "browserOS.getInteractiveSnapshot": {
-+    "dependencies": ["permission:browserOS"],
++  "blockbrowser.getInteractiveSnapshot": {
++    "dependencies": ["permission:blockbrowser"],
 +    "contexts": ["privileged_extension"]
 +  },
-+  "browserOS.getPageStructure": {
-+    "dependencies": ["permission:browserOS"],
++  "blockbrowser.getPageStructure": {
++    "dependencies": ["permission:blockbrowser"],
 +    "contexts": ["privileged_extension"]
 +  },
-+  "browserOS.click": {
-+    "dependencies": ["permission:browserOS"],
++  "blockbrowser.click": {
++    "dependencies": ["permission:blockbrowser"],
 +    "contexts": ["privileged_extension"]
 +  },
-+  "browserOS.inputText": {
-+    "dependencies": ["permission:browserOS"],
++  "blockbrowser.inputText": {
++    "dependencies": ["permission:blockbrowser"],
 +    "contexts": ["privileged_extension"]
 +  },
-+  "browserOS.clear": {
-+    "dependencies": ["permission:browserOS"],
++  "blockbrowser.clear": {
++    "dependencies": ["permission:blockbrowser"],
 +    "contexts": ["privileged_extension"]
 +  },
    "browsingData": {

@@ -6,7 +6,7 @@ index 93ae24f9a0972..01742801dc6b5 100644
      "extension_types": ["extension", "legacy_packaged_app", "platform_app"],
      "location": "component"
    },
-+  "browserOS": {
++  "blockbrowser": {
 +    "channel": "stable",
 +    "extension_types": ["extension", "platform_app"]
 +  },

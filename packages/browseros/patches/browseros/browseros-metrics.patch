@@ -52,7 +52,7 @@ index ea4e1a621b201..21a7a3aef2872 100644
  }
  
  void ChromeMetricsServiceClient::NotifyApplicationNotIdle() {
-+  browseros_metrics::BrowserOSMetrics::Log("alive", 0.01);
++  browseros_metrics::BlockBrowserMetrics::Log("alive", 0.01);
    metrics_service_->OnApplicationNotIdle();
  }
  
@@ -92,7 +92,7 @@ index c6e46fb1d8030..f06e6e0e07cfa 100644
  #endif
    BitmapFetcherServiceFactory::GetInstance();
    BluetoothChooserContextFactory::GetInstance();
-+  browseros_metrics::BrowserOSMetricsServiceFactory::GetInstance();
++  browseros_metrics::BlockBrowserMetricsServiceFactory::GetInstance();
  #if defined(TOOLKIT_VIEWS)
    BookmarkExpandedStateTrackerFactory::GetInstance();
    BookmarkMergedSurfaceServiceFactory::GetInstance();
@@ -127,18 +127,18 @@ index 0000000000000..a213967b46676
 +
 +namespace settings {
 +
-+BrowserOSMetricsHandler::BrowserOSMetricsHandler() = default;
++BlockBrowserMetricsHandler::BlockBrowserMetricsHandler() = default;
 +
-+BrowserOSMetricsHandler::~BrowserOSMetricsHandler() = default;
++BlockBrowserMetricsHandler::~BlockBrowserMetricsHandler() = default;
 +
-+void BrowserOSMetricsHandler::RegisterMessages() {
++void BlockBrowserMetricsHandler::RegisterMessages() {
 +  web_ui()->RegisterMessageCallback(
-+      "logBrowserOSMetric",
-+      base::BindRepeating(&BrowserOSMetricsHandler::HandleLogBrowserOSMetric,
++      "logBlockBrowserMetric",
++      base::BindRepeating(&BlockBrowserMetricsHandler::HandleLogBlockBrowserMetric,
 +                         base::Unretained(this)));
 +}
 +
-+void BrowserOSMetricsHandler::HandleLogBrowserOSMetric(
++void BlockBrowserMetricsHandler::HandleLogBlockBrowserMetric(
 +    const base::Value::List& args) {
 +  if (args.size() < 1 || !args[0].is_string()) {
 +    LOG(WARNING) << "browseros: Invalid metric event name";
@@ -151,22 +151,22 @@ index 0000000000000..a213967b46676
 +    // Has properties
 +    if (args[1].is_dict()) {
 +      base::Value::Dict properties = args[1].GetDict().Clone();
-+      browseros_metrics::BrowserOSMetrics::Log(event_name, std::move(properties));
++      browseros_metrics::BlockBrowserMetrics::Log(event_name, std::move(properties));
 +    } else {
 +      LOG(WARNING) << "browseros: Invalid metric properties format";
-+      browseros_metrics::BrowserOSMetrics::Log(event_name);
++      browseros_metrics::BlockBrowserMetrics::Log(event_name);
 +    }
 +  } else {
 +    // No properties
-+    browseros_metrics::BrowserOSMetrics::Log(event_name);
++    browseros_metrics::BlockBrowserMetrics::Log(event_name);
 +  }
 +}
 +
-+void BrowserOSMetricsHandler::OnJavascriptAllowed() {
++void BlockBrowserMetricsHandler::OnJavascriptAllowed() {
 +  // No special setup needed
 +}
 +
-+void BrowserOSMetricsHandler::OnJavascriptDisallowed() {
++void BlockBrowserMetricsHandler::OnJavascriptDisallowed() {
 +  // No cleanup needed
 +}
 +
@@ -193,21 +193,21 @@ index 0000000000000..dfcb0485c0432
 +
 +namespace settings {
 +
-+// Handler for BrowserOS metrics messages from the settings page.
-+class BrowserOSMetricsHandler : public SettingsPageUIHandler {
++// Handler for BlockBrowser metrics messages from the settings page.
++class BlockBrowserMetricsHandler : public SettingsPageUIHandler {
 + public:
-+  BrowserOSMetricsHandler();
-+  ~BrowserOSMetricsHandler() override;
++  BlockBrowserMetricsHandler();
++  ~BlockBrowserMetricsHandler() override;
 +
-+  BrowserOSMetricsHandler(const BrowserOSMetricsHandler&) = delete;
-+  BrowserOSMetricsHandler& operator=(const BrowserOSMetricsHandler&) = delete;
++  BlockBrowserMetricsHandler(const BlockBrowserMetricsHandler&) = delete;
++  BlockBrowserMetricsHandler& operator=(const BlockBrowserMetricsHandler&) = delete;
 +
 +  // WebUIMessageHandler:
 +  void RegisterMessages() override;
 +
 + private:
-+  // Handler for logBrowserOSMetric message from JavaScript
-+  void HandleLogBrowserOSMetric(const base::Value::List& args);
++  // Handler for logBlockBrowserMetric message from JavaScript
++  void HandleLogBlockBrowserMetric(const base::Value::List& args);
 +
 +  // SettingsPageUIHandler:
 +  void OnJavascriptAllowed() override;
@@ -234,7 +234,7 @@ index 83e3f47da279e..67c338a86ccc8 100644
  #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
    AddSettingsPageUIHandler(std::make_unique<PasskeysHandler>());
  #endif
-+  AddSettingsPageUIHandler(std::make_unique<BrowserOSMetricsHandler>());
++  AddSettingsPageUIHandler(std::make_unique<BlockBrowserMetricsHandler>());
  
  #if BUILDFLAG(IS_CHROMEOS)
    InitBrowserSettingsWebUIHandlers();
@@ -247,8 +247,8 @@ index 12f83b0cc1ab5..fb0a6d63e909a 100644
  inline constexpr char kSharedWorkerBlobURLFixEnabled[] =
      "worker.shared_worker_blob_url_fix_enabled";
 +
-+// String containing the stable client ID for BrowserOS metrics
-+inline constexpr char kBrowserOSMetricsClientId[] =
++// String containing the stable client ID for BlockBrowser metrics
++inline constexpr char kBlockBrowserMetricsClientId[] =
 +    "browseros.metrics_client_id";
  }  // namespace prefs
  
@@ -347,7 +347,7 @@ index 0000000000000..02a1dc121bb7a
 +namespace {
 +
 +// Helper to get the metrics service
-+BrowserOSMetricsService* GetMetricsService() {
++BlockBrowserMetricsService* GetMetricsService() {
 +  // Must be called on UI thread
 +  if (!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
 +    return nullptr;
@@ -366,7 +366,7 @@ index 0000000000000..02a1dc121bb7a
 +  }
 +  
 +  // Get the metrics service
-+  return BrowserOSMetricsServiceFactory::GetForBrowserContext(profile);
++  return BlockBrowserMetricsServiceFactory::GetForBrowserContext(profile);
 +}
 +
 +void LogOnUIThread(const std::string& event_name, base::Value::Dict properties) {
@@ -381,12 +381,12 @@ index 0000000000000..02a1dc121bb7a
 +}  // namespace
 +
 +// static
-+void BrowserOSMetrics::Log(const std::string& event_name, double sample_rate) {
++void BlockBrowserMetrics::Log(const std::string& event_name, double sample_rate) {
 +  Log(event_name, base::Value::Dict(), sample_rate);
 +}
 +
 +// static
-+void BrowserOSMetrics::Log(const std::string& event_name,
++void BlockBrowserMetrics::Log(const std::string& event_name,
 +                           std::initializer_list<std::pair<std::string, base::Value>> properties,
 +                           double sample_rate) {
 +  base::Value::Dict dict;
@@ -397,7 +397,7 @@ index 0000000000000..02a1dc121bb7a
 +}
 +
 +// static
-+void BrowserOSMetrics::Log(const std::string& event_name, base::Value::Dict properties,
++void BlockBrowserMetrics::Log(const std::string& event_name, base::Value::Dict properties,
 +                           double sample_rate) {
 +  if (sample_rate <= 0.0 || sample_rate > 1.0) {
 +    return;
@@ -446,9 +446,9 @@ index 0000000000000..73e98afdaa28a
 +
 +namespace browseros_metrics {
 +
-+// Simple static API for logging BrowserOS metrics.
-+// Usage: BrowserOSMetrics::Log("event.name");
-+class BrowserOSMetrics {
++// Simple static API for logging BlockBrowser metrics.
++// Usage: BlockBrowserMetrics::Log("event.name");
++class BlockBrowserMetrics {
 + public:
 +  // Log an event with no properties
 +  // sample_rate: 0.0 to 1.0, defaults to 1.0 (always log)
@@ -466,7 +466,7 @@ index 0000000000000..73e98afdaa28a
 +                  double sample_rate = 1.0);
 +
 + private:
-+  BrowserOSMetrics() = delete;
++  BlockBrowserMetrics() = delete;
 +};
 +
 +}  // namespace browseros_metrics
@@ -495,7 +495,7 @@ index 0000000000000..87f898f345e74
 +  // Register the stable client ID pref - this should not sync across devices
 +  // as each browser instance needs its own unique ID
 +  registry->RegisterStringPref(
-+      prefs::kBrowserOSMetricsClientId,
++      prefs::kBlockBrowserMetricsClientId,
 +      std::string());
 +}
 +
@@ -526,10 +526,10 @@ index 0000000000000..a417e8d8af351
 +
 +namespace browseros_metrics {
 +
-+// Registers BrowserOS metrics preferences for the profile.
++// Registers BlockBrowser metrics preferences for the profile.
 +void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 +
-+// Registers BrowserOS metrics preferences for local state.
++// Registers BlockBrowser metrics preferences for local state.
 +void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
 +
 +}  // namespace browseros_metrics
@@ -582,16 +582,16 @@ index 0000000000000..707ac50393820
 +constexpr char kPostHogEndpoint[] = "https://us.i.posthog.com/i/v0/e/";
 +constexpr size_t kMaxUploadSize = 256 * 1024;  // 256KB max upload size
 +
-+constexpr net::NetworkTrafficAnnotationTag kBrowserOSMetricsTrafficAnnotation =
++constexpr net::NetworkTrafficAnnotationTag kBlockBrowserMetricsTrafficAnnotation =
 +    net::DefineNetworkTrafficAnnotation("browseros_metrics", R"(
 +        semantics {
-+          sender: "BrowserOS Metrics"
++          sender: "BlockBrowser Metrics"
 +          description:
-+            "Sends anonymous usage metrics to PostHog for BrowserOS features. "
++            "Sends anonymous usage metrics to PostHog for BlockBrowser features. "
 +            "This helps improve the browser by understanding how features are "
 +            "used. No personally identifiable information is collected."
 +          trigger:
-+            "Triggered when BrowserOS features are used, such as extension "
++            "Triggered when BlockBrowser features are used, such as extension "
 +            "actions or settings changes."
 +          data:
 +            "Event name, timestamp, anonymous client ID, browser version, "
@@ -612,7 +612,7 @@ index 0000000000000..707ac50393820
 +
 +}  // namespace
 +
-+BrowserOSMetricsService::BrowserOSMetricsService(
++BlockBrowserMetricsService::BlockBrowserMetricsService(
 +    PrefService* pref_service,
 +    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
 +    : pref_service_(pref_service),
@@ -622,9 +622,9 @@ index 0000000000000..707ac50393820
 +  InitializeClientId();
 +}
 +
-+BrowserOSMetricsService::~BrowserOSMetricsService() = default;
++BlockBrowserMetricsService::~BlockBrowserMetricsService() = default;
 +
-+void BrowserOSMetricsService::CaptureEvent(const std::string& event_name,
++void BlockBrowserMetricsService::CaptureEvent(const std::string& event_name,
 +                                            base::Value::Dict properties) {
 +  if (event_name.empty()) {
 +    LOG(WARNING) << "browseros: Attempted to capture event with empty name";
@@ -640,21 +640,21 @@ index 0000000000000..707ac50393820
 +  SendEventToPostHog(event_name, std::move(properties));
 +}
 +
-+std::string BrowserOSMetricsService::GetClientId() const {
++std::string BlockBrowserMetricsService::GetClientId() const {
 +  return client_id_;
 +}
 +
-+void BrowserOSMetricsService::Shutdown() {
++void BlockBrowserMetricsService::Shutdown() {
 +  // Cancel any pending network requests
 +  weak_factory_.InvalidateWeakPtrs();
 +}
 +
-+void BrowserOSMetricsService::InitializeClientId() {
++void BlockBrowserMetricsService::InitializeClientId() {
 +  CHECK(pref_service_);
 +  
 +  // Check if we have an existing client ID
 +  const std::string& stored_id =
-+      pref_service_->GetString(prefs::kBrowserOSMetricsClientId);
++      pref_service_->GetString(prefs::kBlockBrowserMetricsClientId);
 +  
 +  if (!stored_id.empty() && base::Uuid::ParseCaseInsensitive(stored_id).is_valid()) {
 +    client_id_ = stored_id;
@@ -662,13 +662,13 @@ index 0000000000000..707ac50393820
 +  } else {
 +    // Generate a new UUID
 +    client_id_ = base::Uuid::GenerateRandomV4().AsLowercaseString();
-+    pref_service_->SetString(prefs::kBrowserOSMetricsClientId, client_id_);
++    pref_service_->SetString(prefs::kBlockBrowserMetricsClientId, client_id_);
 +    LOG(INFO) << "browseros: Generated new metrics client ID";
 +  }
 +  VLOG(1) << "browseros: Metrics client ID: " << client_id_;
 +}
 +
-+void BrowserOSMetricsService::SendEventToPostHog(
++void BlockBrowserMetricsService::SendEventToPostHog(
 +    const std::string& event_name,
 +    base::Value::Dict properties) {
 +  // Build the request payload
@@ -694,7 +694,7 @@ index 0000000000000..707ac50393820
 +  
 +  // Create the URL loader
 +  auto url_loader = network::SimpleURLLoader::Create(
-+      std::move(resource_request), kBrowserOSMetricsTrafficAnnotation);
++      std::move(resource_request), kBlockBrowserMetricsTrafficAnnotation);
 +  url_loader->SetAllowHttpErrorResults(true);
 +  url_loader->AttachStringForUpload(json_payload, "application/json");
 +  
@@ -702,12 +702,12 @@ index 0000000000000..707ac50393820
 +  network::SimpleURLLoader* loader_ptr = url_loader.get();
 +  loader_ptr->DownloadToString(
 +      url_loader_factory_.get(),
-+      base::BindOnce(&BrowserOSMetricsService::OnPostHogResponse,
++      base::BindOnce(&BlockBrowserMetricsService::OnPostHogResponse,
 +                     weak_factory_.GetWeakPtr(), std::move(url_loader)),
 +      kMaxUploadSize);
 +}
 +
-+void BrowserOSMetricsService::OnPostHogResponse(
++void BlockBrowserMetricsService::OnPostHogResponse(
 +    std::unique_ptr<network::SimpleURLLoader> loader,
 +    std::unique_ptr<std::string> response_body) {
 +  int response_code = 0;
@@ -726,7 +726,7 @@ index 0000000000000..707ac50393820
 +  }
 +}
 +
-+void BrowserOSMetricsService::AddDefaultProperties(
++void BlockBrowserMetricsService::AddDefaultProperties(
 +    base::Value::Dict& properties) {
 +  // Add browser version
 +  properties.Set("$browser_version", version_info::GetVersionNumber());
@@ -776,16 +776,16 @@ index 0000000000000..db124fd11382a
 +
 +// Service for capturing and sending analytics events to PostHog.
 +// This service manages a stable client ID and sends events to the PostHog API.
-+class BrowserOSMetricsService : public KeyedService {
++class BlockBrowserMetricsService : public KeyedService {
 + public:
-+  explicit BrowserOSMetricsService(
++  explicit BlockBrowserMetricsService(
 +      PrefService* pref_service,
 +      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
 +
-+  BrowserOSMetricsService(const BrowserOSMetricsService&) = delete;
-+  BrowserOSMetricsService& operator=(const BrowserOSMetricsService&) = delete;
++  BlockBrowserMetricsService(const BlockBrowserMetricsService&) = delete;
++  BlockBrowserMetricsService& operator=(const BlockBrowserMetricsService&) = delete;
 +
-+  ~BrowserOSMetricsService() override;
++  ~BlockBrowserMetricsService() override;
 +
 +  // Captures a single event with the given name and properties.
 +  // Properties should not contain PII. Common properties like client_id,
@@ -824,7 +824,7 @@ index 0000000000000..db124fd11382a
 +  std::string client_id_;
 +
 +  // Weak pointer factory for callbacks.
-+  base::WeakPtrFactory<BrowserOSMetricsService> weak_factory_{this};
++  base::WeakPtrFactory<BlockBrowserMetricsService> weak_factory_{this};
 +};
 +
 +}  // namespace browseros_metrics
@@ -856,28 +856,28 @@ index 0000000000000..bddc97f6d9a05
 +namespace browseros_metrics {
 +
 +// static
-+BrowserOSMetricsService* BrowserOSMetricsServiceFactory::GetForBrowserContext(
++BlockBrowserMetricsService* BlockBrowserMetricsServiceFactory::GetForBrowserContext(
 +    content::BrowserContext* context) {
-+  return static_cast<BrowserOSMetricsService*>(
++  return static_cast<BlockBrowserMetricsService*>(
 +      GetInstance()->GetServiceForBrowserContext(context, true));
 +}
 +
 +// static
-+BrowserOSMetricsServiceFactory*
-+BrowserOSMetricsServiceFactory::GetInstance() {
-+  static base::NoDestructor<BrowserOSMetricsServiceFactory> instance;
++BlockBrowserMetricsServiceFactory*
++BlockBrowserMetricsServiceFactory::GetInstance() {
++  static base::NoDestructor<BlockBrowserMetricsServiceFactory> instance;
 +  return instance.get();
 +}
 +
-+BrowserOSMetricsServiceFactory::BrowserOSMetricsServiceFactory()
++BlockBrowserMetricsServiceFactory::BlockBrowserMetricsServiceFactory()
 +    : BrowserContextKeyedServiceFactory(
-+          "BrowserOSMetricsService",
++          "BlockBrowserMetricsService",
 +          BrowserContextDependencyManager::GetInstance()) {}
 +
-+BrowserOSMetricsServiceFactory::~BrowserOSMetricsServiceFactory() = default;
++BlockBrowserMetricsServiceFactory::~BlockBrowserMetricsServiceFactory() = default;
 +
 +std::unique_ptr<KeyedService>
-+BrowserOSMetricsServiceFactory::BuildServiceInstanceForBrowserContext(
++BlockBrowserMetricsServiceFactory::BuildServiceInstanceForBrowserContext(
 +    content::BrowserContext* context) const {
 +  Profile* profile = Profile::FromBrowserContext(context);
 +  
@@ -886,7 +886,7 @@ index 0000000000000..bddc97f6d9a05
 +    return nullptr;
 +  }
 +  
-+  return std::make_unique<BrowserOSMetricsService>(
++  return std::make_unique<BlockBrowserMetricsService>(
 +      profile->GetPrefs(),
 +      profile->GetDefaultStoragePartition()
 +          ->GetURLLoaderFactoryForBrowserProcess());
@@ -916,29 +916,29 @@ index 0000000000000..014eb17aba442
 +
 +namespace browseros_metrics {
 +
-+class BrowserOSMetricsService;
++class BlockBrowserMetricsService;
 +
-+// Factory for creating BrowserOSMetricsService instances per profile.
-+class BrowserOSMetricsServiceFactory
++// Factory for creating BlockBrowserMetricsService instances per profile.
++class BlockBrowserMetricsServiceFactory
 +    : public BrowserContextKeyedServiceFactory {
 + public:
-+  BrowserOSMetricsServiceFactory(const BrowserOSMetricsServiceFactory&) =
++  BlockBrowserMetricsServiceFactory(const BlockBrowserMetricsServiceFactory&) =
 +      delete;
-+  BrowserOSMetricsServiceFactory& operator=(
-+      const BrowserOSMetricsServiceFactory&) = delete;
++  BlockBrowserMetricsServiceFactory& operator=(
++      const BlockBrowserMetricsServiceFactory&) = delete;
 +
-+  // Returns the BrowserOSMetricsService for |context|, creating one if needed.
-+  static BrowserOSMetricsService* GetForBrowserContext(
++  // Returns the BlockBrowserMetricsService for |context|, creating one if needed.
++  static BlockBrowserMetricsService* GetForBrowserContext(
 +      content::BrowserContext* context);
 +
 +  // Returns the singleton factory instance.
-+  static BrowserOSMetricsServiceFactory* GetInstance();
++  static BlockBrowserMetricsServiceFactory* GetInstance();
 +
 + private:
-+  friend base::NoDestructor<BrowserOSMetricsServiceFactory>;
++  friend base::NoDestructor<BlockBrowserMetricsServiceFactory>;
 +
-+  BrowserOSMetricsServiceFactory();
-+  ~BrowserOSMetricsServiceFactory() override;
++  BlockBrowserMetricsServiceFactory();
++  ~BlockBrowserMetricsServiceFactory() override;
 +
 +  // BrowserContextKeyedServiceFactory:
 +  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(

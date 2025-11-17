@@ -1,4 +1,4 @@
-# Nxtscape Windows Release Build Configuration
+# BlockBrowser Windows Release Build Configuration
 build:
   type: release
   architecture: x64 # Windows default architecture

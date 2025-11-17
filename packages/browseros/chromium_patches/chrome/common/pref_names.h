@@ -16,27 +16,27 @@ index 0e898dc745b6e..c649ec745fbcd 100644
  inline constexpr char kSharedWorkerBlobURLFixEnabled[] =
      "worker.shared_worker_blob_url_fix_enabled";
 +
-+// String containing the stable client ID for BrowserOS metrics
-+inline constexpr char kBrowserOSMetricsClientId[] =
++// String containing the stable client ID for BlockBrowser metrics
++inline constexpr char kBlockBrowserMetricsClientId[] =
 +    "browseros.metrics_client_id";
 +
-+// String containing the stable install ID for BrowserOS metrics (Local State)
-+inline constexpr char kBrowserOSMetricsInstallId[] =
++// String containing the stable install ID for BlockBrowser metrics (Local State)
++inline constexpr char kBlockBrowserMetricsInstallId[] =
 +    "browseros.metrics_install_id";
 +
-+// JSON string containing custom AI providers for BrowserOS
-+inline constexpr char kBrowserOSCustomProviders[] = 
++// JSON string containing custom AI providers for BlockBrowser
++inline constexpr char kBlockBrowserCustomProviders[] = 
 +    "browseros.custom_providers";
 +
 +// JSON string containing the list of AI providers and configuration
-+inline constexpr char kBrowserOSProviders[] = "browseros.providers";
++inline constexpr char kBlockBrowserProviders[] = "browseros.providers";
 +
-+// String containing the default provider ID for BrowserOS
-+inline constexpr char kBrowserOSDefaultProviderId[] = 
++// String containing the default provider ID for BlockBrowser
++inline constexpr char kBlockBrowserDefaultProviderId[] = 
 +    "browseros.default_provider_id";
 +
-+// Boolean that controls whether toolbar labels are shown for BrowserOS actions
-+inline constexpr char kBrowserOSShowToolbarLabels[] =
++// Boolean that controls whether toolbar labels are shown for BlockBrowser actions
++inline constexpr char kBlockBrowserShowToolbarLabels[] =
 +    "browseros.show_toolbar_labels";
  }  // namespace prefs
  

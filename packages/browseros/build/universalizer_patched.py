@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# Copyright Nxtscape Authors
+# Copyright BlockBrowser Authors
 # Patch of src/chrome/installer/mac/universalizer.py to handle merging of two archs
 # for MacOS into unverisal build when third_party tools already are in universal format
 

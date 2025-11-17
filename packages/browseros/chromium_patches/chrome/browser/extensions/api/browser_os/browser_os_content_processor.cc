@@ -1,14 +1,14 @@
-diff --git a/chrome/browser/extensions/api/browser_os/browser_os_content_processor.cc b/chrome/browser/extensions/api/browser_os/browser_os_content_processor.cc
+diff --git a/chrome/browser/extensions/api/blockbrowser/blockbrowser_content_processor.cc b/chrome/browser/extensions/api/blockbrowser/blockbrowser_content_processor.cc
 new file mode 100644
 index 0000000000000..4166f1a38737c
 --- /dev/null
-+++ b/chrome/browser/extensions/api/browser_os/browser_os_content_processor.cc
++++ b/chrome/browser/extensions/api/blockbrowser/blockbrowser_content_processor.cc
 @@ -0,0 +1,247 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "chrome/browser/extensions/api/browser_os/browser_os_content_processor.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_content_processor.h"
 +
 +#include <algorithm>
 +
@@ -51,10 +51,10 @@ index 0000000000000..4166f1a38737c
 +}  // namespace
 +
 +// static
-+std::vector<browser_os::ContentItem> ContentProcessor::ExtractPageContent(
++std::vector<blockbrowser::ContentItem> ContentProcessor::ExtractPageContent(
 +    const ui::AXTreeUpdate& tree_update) {
 +
-+  std::vector<browser_os::ContentItem> items;
++  std::vector<blockbrowser::ContentItem> items;
 +
 +  if (tree_update.nodes.empty()) {
 +    LOG(INFO) << "browseros: ExtractPageContent - tree is empty";
@@ -81,7 +81,7 @@ index 0000000000000..4166f1a38737c
 +void ContentProcessor::TraverseDFS(
 +    int32_t node_id,
 +    const std::unordered_map<int32_t, ui::AXNodeData>& node_map,
-+    std::vector<browser_os::ContentItem>& items) {
++    std::vector<blockbrowser::ContentItem>& items) {
 +
 +  auto it = node_map.find(node_id);
 +  if (it == node_map.end()) {
@@ -137,10 +137,10 @@ index 0000000000000..4166f1a38737c
 +}
 +
 +// static
-+browser_os::ContentItem ContentProcessor::ExtractHeading(
++blockbrowser::ContentItem ContentProcessor::ExtractHeading(
 +    const ui::AXNodeData& node) {
-+  browser_os::ContentItem item;
-+  item.type = browser_os::ContentItemType::kHeading;
++  blockbrowser::ContentItem item;
++  item.type = blockbrowser::ContentItemType::kHeading;
 +
 +  std::string name = GetAccessibleName(node);
 +  if (!name.empty()) {
@@ -160,10 +160,10 @@ index 0000000000000..4166f1a38737c
 +}
 +
 +// static
-+browser_os::ContentItem ContentProcessor::ExtractText(
++blockbrowser::ContentItem ContentProcessor::ExtractText(
 +    const ui::AXNodeData& node) {
-+  browser_os::ContentItem item;
-+  item.type = browser_os::ContentItemType::kText;
++  blockbrowser::ContentItem item;
++  item.type = blockbrowser::ContentItemType::kText;
 +
 +  std::string name = GetAccessibleName(node);
 +  if (!name.empty()) {
@@ -174,10 +174,10 @@ index 0000000000000..4166f1a38737c
 +}
 +
 +// static
-+browser_os::ContentItem ContentProcessor::ExtractLink(
++blockbrowser::ContentItem ContentProcessor::ExtractLink(
 +    const ui::AXNodeData& node) {
-+  browser_os::ContentItem item;
-+  item.type = browser_os::ContentItemType::kLink;
++  blockbrowser::ContentItem item;
++  item.type = blockbrowser::ContentItemType::kLink;
 +
 +  std::string name = GetAccessibleName(node);
 +  if (!name.empty()) {
@@ -193,10 +193,10 @@ index 0000000000000..4166f1a38737c
 +}
 +
 +// static
-+browser_os::ContentItem ContentProcessor::ExtractImage(
++blockbrowser::ContentItem ContentProcessor::ExtractImage(
 +    const ui::AXNodeData& node) {
-+  browser_os::ContentItem item;
-+  item.type = browser_os::ContentItemType::kImage;
++  blockbrowser::ContentItem item;
++  item.type = blockbrowser::ContentItemType::kImage;
 +
 +  // Get alt text from name
 +  std::string name = GetAccessibleName(node);
@@ -215,10 +215,10 @@ index 0000000000000..4166f1a38737c
 +}
 +
 +// static
-+browser_os::ContentItem ContentProcessor::ExtractVideo(
++blockbrowser::ContentItem ContentProcessor::ExtractVideo(
 +    const ui::AXNodeData& node) {
-+  browser_os::ContentItem item;
-+  item.type = browser_os::ContentItemType::kVideo;
++  blockbrowser::ContentItem item;
++  item.type = blockbrowser::ContentItemType::kVideo;
 +
 +  // Get video title from name
 +  std::string name = GetAccessibleName(node);

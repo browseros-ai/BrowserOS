@@ -374,7 +374,7 @@ index 0000000000000..77cb397565a2d
 +  shortcuts_label->SetFontList(
 +      shortcuts_label->font_list().DeriveWithSizeDelta(-1));
 +  
-+  browseros_metrics::BrowserOSMetrics::Log("llmchat.created");
++  browseros_metrics::BlockBrowserMetrics::Log("llmchat.created");
 +  
 +  return container;
 +}
@@ -492,7 +492,7 @@ index 0000000000000..77cb397565a2d
 +
 +  provider_change_in_progress_ = true;
 +
-+  browseros_metrics::BrowserOSMetrics::Log("llmchat.provider.changed");
++  browseros_metrics::BlockBrowserMetrics::Log("llmchat.provider.changed");
 +
 +  if (owned_web_contents_) {
 +    GURL current_url = owned_web_contents_->GetURL();
@@ -643,7 +643,7 @@ index 0000000000000..77cb397565a2d
 +  ui::ScopedClipboardWriter clipboard_writer(ui::ClipboardBuffer::kCopyPaste);
 +  clipboard_writer.WriteImage(image.AsBitmap());
 +  
-+  browseros_metrics::BrowserOSMetrics::Log("llmchat.screenshot.captured");
++  browseros_metrics::BlockBrowserMetrics::Log("llmchat.screenshot.captured");
 +
 +  // Show success feedback
 +  if (copy_feedback_label_) {
@@ -662,8 +662,8 @@ index 0000000000000..77cb397565a2d
 +
 +void ThirdPartyLlmPanelCoordinator::OnAccessibilityTreeReceived(
 +    ui::AXTreeUpdate& update) {
-+  // Use the BrowserOS simple page extractor
-+  std::u16string extracted_text = side_panel::BrowserOSSimplePageExtractor::ExtractStructuredText(update);
++  // Use the BlockBrowser simple page extractor
++  std::u16string extracted_text = side_panel::BlockBrowserSimplePageExtractor::ExtractStructuredText(update);
 +
 +  // Check if we actually got content
 +  if (extracted_text.empty()) {
@@ -684,7 +684,7 @@ index 0000000000000..77cb397565a2d
 +  ui::ScopedClipboardWriter clipboard_writer(ui::ClipboardBuffer::kCopyPaste);
 +  clipboard_writer.WriteText(formatted_output);
 +
-+  browseros_metrics::BrowserOSMetrics::Log("llmchat.content.copied");
++  browseros_metrics::BlockBrowserMetrics::Log("llmchat.content.copied");
 +
 +  // Show feedback message
 +  if (copy_feedback_label_) {
@@ -1042,7 +1042,7 @@ index 0000000000000..77cb397565a2d
 +      break;
 +  }
 +  if (!event_name.empty()) {
-+    browseros_metrics::BrowserOSMetrics::Log(event_name);
++    browseros_metrics::BlockBrowserMetrics::Log(event_name);
 +  }
 +  
 +  switch (command_id) {

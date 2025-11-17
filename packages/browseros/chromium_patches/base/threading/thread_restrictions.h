@@ -7,7 +7,7 @@ index 59d6e6e4d899f..9f2737ff17c6f 100644
  }
  }  // namespace blink
 +namespace browseros {
-+class BrowserOSServerManager;
++class BlockBrowserServerManager;
 +}  // namespace browseros
  namespace cc {
  class CategorizedWorkerPoolJob;
@@ -16,7 +16,7 @@ index 59d6e6e4d899f..9f2737ff17c6f 100644
    friend class base::subtle::PlatformSharedMemoryRegion;
    friend class base::win::ScopedAllowBlockingForUserAccountControl;
    friend class blink::DiskDataAllocator;
-+  friend class browseros::BrowserOSServerManager;
++  friend class browseros::BlockBrowserServerManager;
    friend class chromecast::CrashUtil;
    friend class content::BrowserProcessIOThread;
    friend class content::DWriteFontProxyImpl;
@@ -24,7 +24,7 @@ index 59d6e6e4d899f..9f2737ff17c6f 100644
    friend class base::SimpleThread;
    friend class base::internal::GetAppOutputScopedAllowBaseSyncPrimitives;
    friend class blink::SourceStream;
-+  friend class browseros::BrowserOSServerManager;
++  friend class browseros::BlockBrowserServerManager;
    friend class blink::VideoTrackRecorderImplContextProvider;
    friend class blink::WorkerThread;
    friend class blink::scheduler::NonMainThreadImpl;

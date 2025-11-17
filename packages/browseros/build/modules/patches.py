@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Patch management module for Nxtscape build system
+Patch management module for BlockBrowser build system
 """
 
 import sys
@@ -62,7 +62,7 @@ def apply_patches_with_dev_cli(
 def apply_patches(
     ctx: BuildContext, interactive: bool = False, commit_each: bool = False
 ) -> bool:
-    """Apply Nxtscape patches"""
+    """Apply BlockBrowser patches"""
     # Use new patching system if enabled
     if NEW_PATCHING:
         return apply_patches_with_dev_cli(ctx, interactive, commit_each)
@@ -82,13 +82,13 @@ def apply_patches(
 
     # Get list of patches
     root_patches_dir = ctx.get_patches_dir()
-    nxtscape_patches_dir = ctx.get_nxtscape_patches_dir()
+    blockbrowser_patches_dir = ctx.get_blockbrowser_patches_dir()
 
-    if not nxtscape_patches_dir.exists():
-        log_error(f"Patches directory not found: {nxtscape_patches_dir}")
-        raise FileNotFoundError(f"Patches directory not found: {nxtscape_patches_dir}")
+    if not blockbrowser_patches_dir.exists():
+        log_error(f"Patches directory not found: {blockbrowser_patches_dir}")
+        raise FileNotFoundError(f"Patches directory not found: {blockbrowser_patches_dir}")
 
-    # get all patches in nxtscape_patches_dir
+    # get all patches in blockbrowser_patches_dir
     all_patches = list(parse_series_file(root_patches_dir))
 
     # Filter out patches that should be skipped on this platform

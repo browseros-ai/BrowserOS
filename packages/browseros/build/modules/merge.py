@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Universal binary merge module for Nxtscape Browser
+Universal binary merge module for BlockBrowser Browser
 Provides functions to merge two architecture builds into a universal binary
 """
 
@@ -214,7 +214,7 @@ def merge_sign_package(
                 log_error("Make sure you provided the correct --chromium-src path")
                 return False
 
-            if create_dmg(output_path, dmg_path, "BrowserOS", pkg_dmg_path):
+            if create_dmg(output_path, dmg_path, "BlockBrowser", pkg_dmg_path):
                 log_success(f"DMG created: {dmg_name}")
             else:
                 log_error("Failed to create DMG")

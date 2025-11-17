@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/extensions/browseros_external_loader.h b/chrome/browser/extensions/browseros_external_loader.h
+diff --git a/chrome/browser/extensions/blockbrowser_external_loader.h b/chrome/browser/extensions/blockbrowser_external_loader.h
 new file mode 100644
 index 0000000000000..b313a0ba6fa10
 --- /dev/null
-+++ b/chrome/browser/extensions/browseros_external_loader.h
++++ b/chrome/browser/extensions/blockbrowser_external_loader.h
 @@ -0,0 +1,126 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -31,14 +31,14 @@ index 0000000000000..b313a0ba6fa10
 +namespace extensions {
 +
 +// A specialization of the ExternalLoader that loads extension information
-+// from a remote URL. This is designed for BrowserOS to specify a set of
++// from a remote URL. This is designed for BlockBrowser to specify a set of
 +// extensions that should be installed at startup.
-+class BrowserOSExternalLoader : public ExternalLoader {
++class BlockBrowserExternalLoader : public ExternalLoader {
 + public:
-+  explicit BrowserOSExternalLoader(Profile* profile);
++  explicit BlockBrowserExternalLoader(Profile* profile);
 +
-+  BrowserOSExternalLoader(const BrowserOSExternalLoader&) = delete;
-+  BrowserOSExternalLoader& operator=(const BrowserOSExternalLoader&) = delete;
++  BlockBrowserExternalLoader(const BlockBrowserExternalLoader&) = delete;
++  BlockBrowserExternalLoader& operator=(const BlockBrowserExternalLoader&) = delete;
 +
 +  // Sets the URL from which to fetch the extension configuration.
 +  // Must be called before StartLoading().
@@ -58,11 +58,11 @@ index 0000000000000..b313a0ba6fa10
 +  // Fetches the latest config and checks for changes
 +  void FetchAndCheckConfig();
 +  
-+  // Forces immediate update check for BrowserOS extensions
++  // Forces immediate update check for BlockBrowser extensions
 +  void ForceUpdateCheck();
 +
 + protected:
-+  ~BrowserOSExternalLoader() override;
++  ~BlockBrowserExternalLoader() override;
 +
 +  // ExternalLoader:
 +  void StartLoading() override;
@@ -86,13 +86,13 @@ index 0000000000000..b313a0ba6fa10
 +  // Handles the config contents read from a local file.
 +  void OnConfigFileLoaded(std::string contents);
 +  
-+  // Checks for uninstalled BrowserOS extensions and reinstalls them
++  // Checks for uninstalled BlockBrowser extensions and reinstalls them
 +  void ReinstallUninstalledExtensions();
 +  
-+  // Re-enables BrowserOS extensions that were disabled by user action
++  // Re-enables BlockBrowser extensions that were disabled by user action
 +  void ReenableDisabledExtensions();
 +  
-+  // Triggers immediate installation of all BrowserOS extensions on first start
++  // Triggers immediate installation of all BlockBrowser extensions on first start
 +  void TriggerImmediateInstallation();
 +
 +  // Checks extension state and logs to metrics if not enabled
@@ -113,8 +113,8 @@ index 0000000000000..b313a0ba6fa10
 +  // URLLoaderFactory for making network requests.
 +  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 +
-+  // List of BrowserOS extension IDs to monitor
-+  std::set<std::string> browseros_extension_ids_;
++  // List of BlockBrowser extension IDs to monitor
++  std::set<std::string> blockbrowser_extension_ids_;
 +  
 +  // Last fetched config for comparison
 +  base::Value::Dict last_config_;
@@ -124,7 +124,7 @@ index 0000000000000..b313a0ba6fa10
 +
 +  base::RepeatingTimer periodic_timer_;
 +
-+  base::WeakPtrFactory<BrowserOSExternalLoader> weak_ptr_factory_{this};
++  base::WeakPtrFactory<BlockBrowserExternalLoader> weak_ptr_factory_{this};
 +};
 +
 +}  // namespace extensions

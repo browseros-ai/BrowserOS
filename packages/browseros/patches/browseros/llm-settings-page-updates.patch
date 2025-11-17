@@ -5,13 +5,13 @@ Subject: [PATCH] llm settings page: updates
 
 ---
  chrome/browser/resources/settings/BUILD.gn    |   1 +
- .../settings/nxtscape_page/models_data.html   |   0
- .../settings/nxtscape_page/models_data.ts     | 279 +++++++++
- .../settings/nxtscape_page/nxtscape_page.html | 370 +++++++++++-
- .../settings/nxtscape_page/nxtscape_page.ts   | 543 +++++++++++++++++-
+ .../settings/blockbrowser_page/models_data.html   |   0
+ .../settings/blockbrowser_page/models_data.ts     | 279 +++++++++
+ .../settings/blockbrowser_page/blockbrowser_page.html | 370 +++++++++++-
+ .../settings/blockbrowser_page/blockbrowser_page.ts   | 543 +++++++++++++++++-
  5 files changed, 1164 insertions(+), 29 deletions(-)
- create mode 100644 chrome/browser/resources/settings/nxtscape_page/models_data.html
- create mode 100644 chrome/browser/resources/settings/nxtscape_page/models_data.ts
+ create mode 100644 chrome/browser/resources/settings/blockbrowser_page/models_data.html
+ create mode 100644 chrome/browser/resources/settings/blockbrowser_page/models_data.ts
 
 diff --git a/chrome/browser/resources/settings/BUILD.gn b/chrome/browser/resources/settings/BUILD.gn
 index c7a1069d49c2b..45911df3d14f9 100644
@@ -21,18 +21,18 @@ index c7a1069d49c2b..45911df3d14f9 100644
    web_component_files = [
      "a11y_page/a11y_page.ts",
      "about_page/about_page.ts",
-+    "nxtscape_page/models_data.ts",
-     "nxtscape_page/nxtscape_page.ts",
++    "blockbrowser_page/models_data.ts",
+     "blockbrowser_page/blockbrowser_page.ts",
      "browseros_prefs_page/browseros_prefs_page.ts",
      "ai_page/ai_compare_subpage.ts",
-diff --git a/chrome/browser/resources/settings/nxtscape_page/models_data.html b/chrome/browser/resources/settings/nxtscape_page/models_data.html
+diff --git a/chrome/browser/resources/settings/blockbrowser_page/models_data.html b/chrome/browser/resources/settings/blockbrowser_page/models_data.html
 new file mode 100644
 index 0000000000000..e69de29bb2d1d
-diff --git a/chrome/browser/resources/settings/nxtscape_page/models_data.ts b/chrome/browser/resources/settings/nxtscape_page/models_data.ts
+diff --git a/chrome/browser/resources/settings/blockbrowser_page/models_data.ts b/chrome/browser/resources/settings/blockbrowser_page/models_data.ts
 new file mode 100644
 index 0000000000000..36638c1910a09
 --- /dev/null
-+++ b/chrome/browser/resources/settings/nxtscape_page/models_data.ts
++++ b/chrome/browser/resources/settings/blockbrowser_page/models_data.ts
 @@ -0,0 +1,279 @@
 +// Model data interface
 +export interface ModelInfo {
@@ -313,10 +313,10 @@ index 0000000000000..36638c1910a09
 +  const model = models.find(m => m.model_id === modelId);
 +  return model?.context_length;
 +}
-diff --git a/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.html b/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.html
+diff --git a/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.html b/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.html
 index 9a429f31f43a0..6680e841cbb1e 100644
---- a/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.html
-+++ b/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.html
+--- a/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.html
++++ b/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.html
 @@ -111,6 +111,94 @@
        .provider-card.browseros {
          background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
@@ -778,17 +778,17 @@ index 9a429f31f43a0..6680e841cbb1e 100644
                  <button class="provider-action-button"
                          on-click="onEditProvider_"
                          data-provider-id$="[[item.id]]">
-diff --git a/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.ts b/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.ts
+diff --git a/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.ts b/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.ts
 index f33e0463b1bfa..99c366e7c4e44 100644
---- a/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.ts
-+++ b/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.ts
+--- a/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.ts
++++ b/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.ts
 @@ -21,11 +21,13 @@ import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
  import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
  
- import {getTemplate} from './nxtscape_page.html.js';
+ import {getTemplate} from './blockbrowser_page.html.js';
 +import {MODELS_DATA, getModelsForProvider, getModelContextLength} from './models_data.js';
  
- const SettingsNxtscapePageElementBase = PrefsMixin(PolymerElement);
+ const SettingsBlockBrowserPageElementBase = PrefsMixin(PolymerElement);
  
  export enum ProviderType {
    BROWSEROS = 'browseros',
@@ -923,10 +923,10 @@ index f33e0463b1bfa..99c366e7c4e44 100644
 +  return models.map(m => m.model_id);
 +}
 +
- export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase {
+ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase {
    static get is() {
-     return 'settings-nxtscape-page';
-@@ -183,6 +264,31 @@ export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase
+     return 'settings-blockbrowser-page';
+@@ -183,6 +264,31 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
          type: Boolean,
          value: false,
        },
@@ -958,7 +958,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
      };
    }
  
-@@ -200,10 +306,16 @@ export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase
+@@ -200,10 +306,16 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
    private declare dialogContextWindow_: number;
    private declare dialogTemperature_: number;
    private declare isTestingConnection_: boolean;
@@ -976,10 +976,10 @@ index f33e0463b1bfa..99c366e7c4e44 100644
    }
  
    private onPrefsChanged_() {
-@@ -214,8 +326,9 @@ export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase
+@@ -214,8 +326,9 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
  
    private loadProviders_() {
-     // Load from preferences or initialize with BrowserOS
+     // Load from preferences or initialize with BlockBrowser
 -    if (!this.prefs || !this.prefs.browseros) {
 -      this.initializeDefaultProviders_();
 +    if (!this.prefs || !this.prefs.browseros || !this.prefs.browseros.providers) {
@@ -988,19 +988,19 @@ index f33e0463b1bfa..99c366e7c4e44 100644
        return;
      }
      
-@@ -225,6 +338,11 @@ export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase
+@@ -225,6 +338,11 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
          const data = JSON.parse(stored.value) as AIProviderPreferences;
          this.providers_ = data.providers;
          this.defaultProviderId_ = data.defaultProviderId;
 +        
-+        // Ensure BrowserOS is always present
++        // Ensure BlockBrowser is always present
 +        if (!this.providers_.some(p => p.id === 'browseros')) {
 +          this.initializeDefaultProviders_();
 +        }
        } catch (e) {
          this.initializeDefaultProviders_();
        }
-@@ -233,23 +351,54 @@ export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase
+@@ -233,23 +351,54 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
      }
    }
  
@@ -1010,7 +1010,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
 +    
 +    const browseros: ProviderConfig = {
 +      id: 'browseros',
-+      name: 'BrowserOS',
++      name: 'BlockBrowser',
 +      type: ProviderType.BROWSEROS,
 +      isDefault: true,
 +      isBuiltIn: true,
@@ -1028,7 +1028,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
 +    
      const browseros: ProviderConfig = {
        id: 'browseros',
-       name: 'BrowserOS',
+       name: 'BlockBrowser',
        type: ProviderType.BROWSEROS,
        isDefault: true,
        isBuiltIn: true,
@@ -1058,7 +1058,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
      const data: AIProviderPreferences = {
        defaultProviderId: this.defaultProviderId_,
        providers: this.providers_,
-@@ -273,7 +422,7 @@ export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase
+@@ -273,7 +422,7 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
      
      if (this.showProviderForm_) {
        this.set('editingProvider_', null);
@@ -1067,7 +1067,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
        this.set('dialogProviderName_', '');
        this.set('dialogBaseUrl_', '');
        this.set('dialogApiKey_', '');
-@@ -282,8 +431,16 @@ export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase
+@@ -282,8 +431,16 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
        this.set('dialogContextWindow_', 128000);
        this.set('dialogTemperature_', 0.7);
        
@@ -1085,7 +1085,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
      }
      
      console.log('browseros: Form visibility:', this.showProviderForm_);
-@@ -306,7 +463,15 @@ export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase
+@@ -306,7 +463,15 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
      this.set('dialogContextWindow_', provider.modelConfig?.contextWindow || 128000);
      this.set('dialogTemperature_', provider.modelConfig?.temperature || 0.7);
      
@@ -1101,7 +1101,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
    }
  
    private onDeleteProvider_(e: Event) {
-@@ -317,6 +482,7 @@ export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase
+@@ -317,6 +482,7 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
      
      console.log('browseros: Delete provider clicked:', providerId, provider);
      
@@ -1109,7 +1109,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
      if (!provider || provider.isBuiltIn) return;
      
      // Delete immediately without confirmation
-@@ -357,6 +523,252 @@ export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase
+@@ -357,6 +523,252 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
        this.set('dialogContextWindow_', defaults.modelConfig?.contextWindow || 128000);
        this.set('dialogTemperature_', defaults.modelConfig?.temperature || 0.7);
      }
@@ -1362,7 +1362,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
    }
  
    private async testConnection_() {
-@@ -396,6 +808,7 @@ export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase
+@@ -396,6 +808,7 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
            },
            updatedAt: now,
          };
@@ -1370,7 +1370,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
          this.set(`providers_.${index}`, updated);
        }
      } else {
-@@ -465,6 +878,51 @@ export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase
+@@ -465,6 +878,51 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
      this.set('showProviderForm_', false);
      this.editingProvider_ = null;
    }
@@ -1422,7 +1422,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
  
    private onDefaultProviderChange_(e: Event) {
      const select = e.target as HTMLSelectElement;
-@@ -503,6 +961,7 @@ export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase
+@@ -503,6 +961,7 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
    private getProviderIcon_(type: ProviderType): string {
      const icons: Record<ProviderType, string> = {
        [ProviderType.BROWSEROS]: 'B',
@@ -1430,7 +1430,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
        [ProviderType.OPENAI_COMPATIBLE]: 'O',
        [ProviderType.ANTHROPIC]: 'A',
        [ProviderType.GOOGLE_GEMINI]: 'G',
-@@ -523,6 +982,58 @@ export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase
+@@ -523,6 +982,58 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
      }
      return classes;
    }
@@ -1489,7 +1489,7 @@ index f33e0463b1bfa..99c366e7c4e44 100644
  
    private getProviderSubtitle_(provider: ProviderConfig): string {
      if (provider.type === ProviderType.BROWSEROS) {
-@@ -554,6 +1065,10 @@ export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase
+@@ -554,6 +1065,10 @@ export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase
    private getFormCardClass_(show: boolean): string {
      return show ? 'show' : '';
    }

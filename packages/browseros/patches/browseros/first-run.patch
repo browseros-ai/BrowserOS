@@ -6,10 +6,10 @@ Subject: [PATCH] first run
 ---
  chrome/browser/chrome_browser_main.cc         |   2 +
  .../browser/ui/webui/chrome_web_ui_configs.cc |   2 +
- chrome/browser/ui/webui/nxtscape_first_run.h  | 194 ++++++++++++++++++
+ chrome/browser/ui/webui/blockbrowser_first_run.h  | 194 ++++++++++++++++++
  chrome/common/webui_url_constants.cc          |   1 +
  4 files changed, 199 insertions(+)
- create mode 100644 chrome/browser/ui/webui/nxtscape_first_run.h
+ create mode 100644 chrome/browser/ui/webui/blockbrowser_first_run.h
 
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
 index 681fd3282078c..c1c03ff72af7e 100644
@@ -20,7 +20,7 @@ index 681fd3282078c..c1c03ff72af7e 100644
      if (!base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kApp) &&
          !base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kAppId)) {
 +      browser_creator_->AddFirstRunTabs({GURL("chrome://browseros-first-run")});
-+      browser_creator_->AddFirstRunTabs({GURL("https://bit.ly/BrowserOS-setup")});
++      browser_creator_->AddFirstRunTabs({GURL("https://bit.ly/BlockBrowser-setup")});
        browser_creator_->AddFirstRunTabs(master_prefs_->new_tabs);
      }
  
@@ -32,7 +32,7 @@ index cbcdde4afa71b..0b1381fe9813c 100644
  #include "chrome/browser/ui/webui/signin_internals_ui.h"
  #include "chrome/browser/ui/webui/sync_internals/sync_internals_ui.h"
  #include "chrome/browser/ui/webui/translate_internals/translate_internals_ui.h"
-+#include "chrome/browser/ui/webui/nxtscape_first_run.h"
++#include "chrome/browser/ui/webui/blockbrowser_first_run.h"
  #include "chrome/browser/ui/webui/usb_internals/usb_internals_ui.h"
  #include "chrome/browser/ui/webui/user_actions/user_actions_ui.h"
  #include "chrome/browser/ui/webui/version/version_ui.h"
@@ -40,15 +40,15 @@ index cbcdde4afa71b..0b1381fe9813c 100644
    map.AddWebUIConfig(std::make_unique<SiteEngagementUIConfig>());
    map.AddWebUIConfig(std::make_unique<SyncInternalsUIConfig>());
    map.AddWebUIConfig(std::make_unique<TranslateInternalsUIConfig>());
-+  map.AddWebUIConfig(std::make_unique<NxtscapeFirstRunUIConfig>());
++  map.AddWebUIConfig(std::make_unique<BlockBrowserFirstRunUIConfig>());
    map.AddWebUIConfig(std::make_unique<UsbInternalsUIConfig>());
    map.AddWebUIConfig(std::make_unique<UserActionsUIConfig>());
    map.AddWebUIConfig(std::make_unique<VersionUIConfig>());
-diff --git a/chrome/browser/ui/webui/nxtscape_first_run.h b/chrome/browser/ui/webui/nxtscape_first_run.h
+diff --git a/chrome/browser/ui/webui/blockbrowser_first_run.h b/chrome/browser/ui/webui/blockbrowser_first_run.h
 new file mode 100644
 index 0000000000000..3c2a0cbaffed5
 --- /dev/null
-+++ b/chrome/browser/ui/webui/nxtscape_first_run.h
++++ b/chrome/browser/ui/webui/blockbrowser_first_run.h
 @@ -0,0 +1,194 @@
 +#ifndef CHROME_BROWSER_UI_WEBUI_NXTSCAPE_FIRST_RUN_H_
 +#define CHROME_BROWSER_UI_WEBUI_NXTSCAPE_FIRST_RUN_H_
@@ -97,7 +97,7 @@ index 0000000000000..3c2a0cbaffed5
 +  std::string source = R"(<!DOCTYPE html>
 +<html lang="en">
 +<head>
-+<title>BrowserOS First Run</title>
++<title>BlockBrowser First Run</title>
 +<meta charset="UTF-8">
 +<meta name="color-scheme" content="light dark">
 +<style>
@@ -149,8 +149,8 @@ index 0000000000000..3c2a0cbaffed5
 +<section>
 + <h2 class="section-title">🚀 Getting Started</h2>
 + <p style="text-align: center; margin: 1em 0; padding: 0.8em; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 0.5em;">
-+  <a href="https://bit.ly/BrowserOS-setup" target="_blank" style="color: white; font-weight: bold; font-size: 1.1em;">
-+   📖 Quick Start Guide - bit.ly/BrowserOS-setup
++  <a href="https://bit.ly/BlockBrowser-setup" target="_blank" style="color: white; font-weight: bold; font-size: 1.1em;">
++   📖 Quick Start Guide - bit.ly/BlockBrowser-setup
 +  </a>
 + </p>
 + <details open>
@@ -181,7 +181,7 @@ index 0000000000000..3c2a0cbaffed5
 +<section>
 + <h2 class="section-title">✨ Key Features</h2>
 + <ul class="feature-list">
-+  <li>🤖 <strong>BrowserOS Agent:</strong> Your productivity agent that can manage your tabs and browsing sessions. For example:
++  <li>🤖 <strong>BlockBrowser Agent:</strong> Your productivity agent that can manage your tabs and browsing sessions. For example:
 +   <ul>
 +    <li>"list tabs I have open"</li>
 +    <li>"close duplicate tabs"</li>
@@ -193,7 +193,7 @@ index 0000000000000..3c2a0cbaffed5
 +    <li>"organize my entire bookmark collection"</li>
 +   </ul>
 +  </li>
-+  <li>🧭 <strong>BrowserOS Navigator:</strong> Performs agentic tasks for you on web pages. For example:
++  <li>🧭 <strong>BlockBrowser Navigator:</strong> Performs agentic tasks for you on web pages. For example:
 +   <ul>
 +    <li>Go to amazon.com and search for "hard disk"</li>
 +    <li>Navigate to specific pages and interact with content</li>
@@ -207,7 +207,7 @@ index 0000000000000..3c2a0cbaffed5
 + <h2 class="section-title">🤝 Join Our Community & Explore</h2>
 + <p class="community-links">
 +  <a href="https://discord.gg/YKwjt5vuKr">💬 Discord</a>
-+  <a href="https://github.com/browseros-ai/BrowserOS">💻 GitHub</a>
++  <a href="https://github.com/browseros-ai/BlockBrowser">💻 GitHub</a>
 +  <a href="https://x.com/browseros_ai">🐦 X (Twitter)</a>
 + </p>
 + <p style="font-size:0.9em; text-align:center;">Have questions or want to contribute? We'd love to hear from you!</p>
@@ -228,19 +228,19 @@ index 0000000000000..3c2a0cbaffed5
 +  std::move(callback).Run(base::MakeRefCounted<base::RefCountedString>(std::move(source)));
 +}
 +
-+class NxtscapeFirstRun;
-+class NxtscapeFirstRunUIConfig : public content::DefaultWebUIConfig<NxtscapeFirstRun> {
++class BlockBrowserFirstRun;
++class BlockBrowserFirstRunUIConfig : public content::DefaultWebUIConfig<BlockBrowserFirstRun> {
 +  public:
-+   NxtscapeFirstRunUIConfig() : DefaultWebUIConfig("chrome", "browseros-first-run") {}
++   BlockBrowserFirstRunUIConfig() : DefaultWebUIConfig("chrome", "browseros-first-run") {}
 +};
 +
-+class NxtscapeFirstRun : public content::WebUIController {
++class BlockBrowserFirstRun : public content::WebUIController {
 + public:
-+  NxtscapeFirstRun(content::WebUI* web_ui) : content::WebUIController(web_ui) {
++  BlockBrowserFirstRun(content::WebUI* web_ui) : content::WebUIController(web_ui) {
 +    content::URLDataSource::Add(Profile::FromWebUI(web_ui), std::make_unique<UFRDataSource>());
 +  }
-+  NxtscapeFirstRun(const NxtscapeFirstRun&) = delete;
-+  NxtscapeFirstRun& operator=(const NxtscapeFirstRun&) = delete;
++  BlockBrowserFirstRun(const BlockBrowserFirstRun&) = delete;
++  BlockBrowserFirstRun& operator=(const BlockBrowserFirstRun&) = delete;
 +};
 +
 +#endif  // CHROME_BROWSER_UI_WEBUI_NXTSCAPE_FIRST_RUN_H_

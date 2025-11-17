@@ -1,4 +1,4 @@
 [submodule "packages/browseros-agent"]
 	path = packages/browseros-agent
-	url = https://github.com/browseros-ai/BrowserOS-agent.git
+	url = https://github.com/browseros-ai/BlockBrowser-agent.git
 	branch = main

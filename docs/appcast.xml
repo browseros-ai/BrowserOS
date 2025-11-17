@@ -2,16 +2,16 @@
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
   xmlns:dc="http://purl.org/dc/elements/1.1/">
   <channel>
-    <title>BrowserOS</title>
+    <title>BlockBrowser</title>
     <link>https://cdn.browseros.com/appcast.xml</link>
     <description>Most recent changes with links to updates.</description>
     <language>en</language>
 
     <!-- Updates -->
     <item>
-      <title>Nxtscape - 0.29.0</title>
+      <title>BlockBrowser - 0.29.0</title>
       <description sparkle:format="plain-text">
-🤖 Brand new agent in BrowserOS mode!
+🤖 Brand new agent in BlockBrowser mode!
       </description>
       <sparkle:version>7229.69</sparkle:version>
       <sparkle:shortVersionString>0.29.0</sparkle:shortVersionString>
@@ -25,7 +25,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>Nxtscape - 0.28.0</title>
+      <title>BlockBrowser - 0.28.0</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7218.69</sparkle:version>
@@ -40,7 +40,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>Nxtscape - 0.27.0</title>
+      <title>BlockBrowser - 0.27.0</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7215.69</sparkle:version>
@@ -55,7 +55,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>Nxtscape - 0.26.0</title>
+      <title>BlockBrowser - 0.26.0</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7212.69</sparkle:version>
@@ -70,7 +70,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.25.0</title>
+      <title>BlockBrowser - 0.25.0</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7209.69</sparkle:version>
@@ -85,7 +85,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.24.0</title>
+      <title>BlockBrowser - 0.24.0</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7207.69</sparkle:version>
@@ -100,7 +100,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.23.1</title>
+      <title>BlockBrowser - 0.23.1</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7204.69</sparkle:version>
@@ -115,7 +115,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.22.0</title>
+      <title>BlockBrowser - 0.22.0</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7202.69</sparkle:version>
@@ -130,7 +130,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.21.0</title>
+      <title>BlockBrowser - 0.21.0</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7201.69</sparkle:version>
@@ -145,7 +145,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.20.0</title>
+      <title>BlockBrowser - 0.20.0</title>
       <description sparkle:format="plain-text">
 - New updated Agent UI!
 - Fixed MacOS bug which caused the app to crash on startup for some users. This unfortunately also makes a breaking change, requiring re-installation of extensions and logins.
@@ -162,7 +162,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.19.0</title>
+      <title>BlockBrowser - 0.19.0</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7197.69</sparkle:version>
@@ -177,7 +177,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.18.0</title>
+      <title>BlockBrowser - 0.18.0</title>
       <description sparkle:format="plain-text">
 - New revamped Agent infra! This should improve our agents reliability and performance. Please test it out and give us your feedback!
       </description>
@@ -193,7 +193,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.17.0</title>
+      <title>BlockBrowser - 0.17.0</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7193.69</sparkle:version>
@@ -208,7 +208,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.16.0</title>
+      <title>BlockBrowser - 0.16.0</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7192.69</sparkle:version>
@@ -223,10 +223,10 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.15.0</title>
+      <title>BlockBrowser - 0.15.0</title>
       <description sparkle:format="plain-text">
 - Support for screenshot in LLM chat.
-- New settings page `chrome://settings/browseros-settings` for configuring BrowserOS internals. Today, it supports hiding labels in toolbar.
+- New settings page `chrome://settings/browseros-settings` for configuring BlockBrowser internals. Today, it supports hiding labels in toolbar.
 - Various fixes and improvesments.
       </description>
       <sparkle:version>7189.69</sparkle:version>
@@ -241,7 +241,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.14.0</title>
+      <title>BlockBrowser - 0.14.0</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7187.69</sparkle:version>
@@ -256,7 +256,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <!-- <item> -->
-    <!--   <title>BrowserOS - 0.13.0</title> -->
+    <!--   <title>BlockBrowser - 0.13.0</title> -->
     <!--   <description sparkle:format="plain-text"> -->
     <!--   </description> -->
     <!--   <sparkle:version>7185.69</sparkle:version> -->
@@ -271,7 +271,7 @@
     <!--   <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion> -->
     <!-- </item> -->
     <item>
-      <title>BrowserOS - 0.12.0</title>
+      <title>BlockBrowser - 0.12.0</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7183.69</sparkle:version>
@@ -286,7 +286,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.11.0</title>
+      <title>BlockBrowser - 0.11.0</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7180.69</sparkle:version>
@@ -301,7 +301,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.10.0</title>
+      <title>BlockBrowser - 0.10.0</title>
       <description sparkle:format="plain-text">
 - BrowserOS now supports Windows. Check our GitHub page for the Windows installer.
 - Added a new easy way to report bugs and request features from the browser.
@@ -318,7 +318,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.9.1</title>
+      <title>BlockBrowser - 0.9.1</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7177.69</sparkle:version>
@@ -333,7 +333,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.9.0</title>
+      <title>BlockBrowser - 0.9.0</title>
       <description sparkle:format="plain-text">
 - Minor stability improvements.
       </description>
@@ -349,7 +349,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.8.0</title>
+      <title>BlockBrowser - 0.8.0</title>
       <description sparkle:format="plain-text">
 - NEW FEATURE: Sidekick LLM. Brings third party LLMs to side panel.
   - Quickly toggle between ChatGPT, Claude, Gemini, Perplexity, and Ollama
@@ -367,7 +367,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.7.0</title>
+      <title>BlockBrowser - 0.7.0</title>
       <description sparkle:format="plain-text">
 - Improved agent to allow interruptions
 - Agent now supports pausing and resuming tasks
@@ -384,7 +384,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.6.0</title>
+      <title>BlockBrowser - 0.6.0</title>
       <description sparkle:format="plain-text">
 - Support for MacOS x86_64 with Universal binary.
 - Minor fixes to updater
@@ -402,7 +402,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.5.0</title>
+      <title>BlockBrowser - 0.5.0</title>
       <description sparkle:format="plain-text">
 - Improved Ollama support
 - Fixed issues with the unified agent
@@ -419,7 +419,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.4.0</title>
+      <title>BlockBrowser - 0.4.0</title>
       <description sparkle:format="plain-text">
 - [Fix] OTA updates were not working correctly for some users; fixing it.
       </description>
@@ -435,7 +435,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.3.0</title>
+      <title>BlockBrowser - 0.3.0</title>
       <description sparkle:format="plain-text">
 – Much improved AI agent for browser navigation tasks
 - Merged Productivity Agent and Browser Agent into a single AI agent
@@ -452,7 +452,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.2.0</title>
+      <title>BlockBrowser - 0.2.0</title>
       <description sparkle:format="plain-text">
 – Support for overriding baseUrl in OpenAI, Claude
 – Gemini support in BYOK
@@ -470,7 +470,7 @@
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
     <item>
-      <title>BrowserOS - 0.1.0</title>
+      <title>BlockBrowser - 0.1.0</title>
       <description sparkle:format="plain-text">
 – Updates to AI agent to perform better on navigation tasks
 – Improves to MacOS updater

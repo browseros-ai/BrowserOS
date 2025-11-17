@@ -6,7 +6,7 @@ index 3a1c48b14b37f..c9fe51ab1848b 100644
  
  void RegisterGeminiSettingsPrefs(user_prefs::PrefRegistrySyncable* registry);
  
-+void RegisterBrowserOSPrefs(user_prefs::PrefRegistrySyncable* registry);
++void RegisterBlockBrowserPrefs(user_prefs::PrefRegistrySyncable* registry);
 +
  // Register all prefs that will be used via a PrefService attached to a user
  // Profile using the locale of |g_browser_process|.

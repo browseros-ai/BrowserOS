@@ -1,8 +1,8 @@
-diff --git a/components/metrics/browseros_metrics/BUILD.gn b/components/metrics/browseros_metrics/BUILD.gn
+diff --git a/components/metrics/blockbrowser_metrics/BUILD.gn b/components/metrics/blockbrowser_metrics/BUILD.gn
 new file mode 100644
 index 0000000000000..c57c43bb575ea
 --- /dev/null
-+++ b/components/metrics/browseros_metrics/BUILD.gn
++++ b/components/metrics/blockbrowser_metrics/BUILD.gn
 @@ -0,0 +1,39 @@
 +# Copyright 2025 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
@@ -10,16 +10,16 @@ index 0000000000000..c57c43bb575ea
 +
 +import("//build/config/features.gni")
 +
-+static_library("browseros_metrics") {
++static_library("blockbrowser_metrics") {
 +  sources = [
-+    "browseros_metrics.cc",
-+    "browseros_metrics.h",
-+    "browseros_metrics_prefs.cc",
-+    "browseros_metrics_prefs.h",
-+    "browseros_metrics_service.cc",
-+    "browseros_metrics_service.h",
-+    "browseros_metrics_service_factory.cc",
-+    "browseros_metrics_service_factory.h",
++    "blockbrowser_metrics.cc",
++    "blockbrowser_metrics.h",
++    "blockbrowser_metrics_prefs.cc",
++    "blockbrowser_metrics_prefs.h",
++    "blockbrowser_metrics_service.cc",
++    "blockbrowser_metrics_service.h",
++    "blockbrowser_metrics_service_factory.cc",
++    "blockbrowser_metrics_service_factory.h",
 +  ]
 +
 +  deps = [

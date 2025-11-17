@@ -6,7 +6,7 @@ index 7eba27856109e..141f5f93d7213 100644
      {APIPermissionID::kBookmark, "bookmarks"},
      {APIPermissionID::kBrailleDisplayPrivate, "brailleDisplayPrivate",
       APIPermissionInfo::kFlagCannotBeOptional},
-+    {APIPermissionID::kBrowserOS, "browserOS"},
++    {APIPermissionID::kBlockBrowser, "blockbrowser"},
      {APIPermissionID::kBrowsingData, "browsingData",
       APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
      {APIPermissionID::kCertificateProvider, "certificateProvider",

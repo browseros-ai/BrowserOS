@@ -53,7 +53,7 @@ index 298138e77b9f6..d89ef96cc4d86 100644
 -const base::FilePath::CharType kBrowserResourcesDll[] = FPL("chrome.dll");
 -const base::FilePath::CharType kElfDll[] = FPL("chrome_elf.dll");
 +const base::FilePath::CharType kBrowserResourcesDll[] = FPL("browseros.dll");
-+const base::FilePath::CharType kElfDll[] = FPL("browseros_elf.dll");
++const base::FilePath::CharType kElfDll[] = FPL("blockbrowser_elf.dll");
  const base::FilePath::CharType kStatusTrayWindowClass[] =
      FPL("Chrome_StatusTrayWindow");
  #endif  // BUILDFLAG(IS_WIN)

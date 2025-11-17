@@ -213,7 +213,7 @@ index 0000000000000..4a801a5d847ea
 +
 +namespace side_panel {
 +
-+std::u16string BrowserOSSimplePageExtractor::ExtractStructuredText(
++std::u16string BlockBrowserSimplePageExtractor::ExtractStructuredText(
 +    const ui::AXTreeUpdate& update) {
 +  if (update.nodes.empty()) {
 +    return u"";

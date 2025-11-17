@@ -4,7 +4,7 @@ index 0000000000000..889b72abb254a
 --- /dev/null
 +++ b/chrome/browser/ui/webui/help/sparkle_version_updater_mac.mm
 @@ -0,0 +1,109 @@
-+// Copyright 2024 Nxtscape Browser Authors. All rights reserved.
++// Copyright 2024 BlockBrowser Browser Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +

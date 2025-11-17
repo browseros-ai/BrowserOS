@@ -6,7 +6,7 @@ index a9fc73b11371d..41f81b3712a6c 100644
  #include "base/metrics/histogram_functions.h"
  #include "base/metrics/histogram_macros.h"
  #include "base/notimplemented.h"
-+#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/extensions/blockbrowser_extension_constants.h"
  #include "chrome/browser/extensions/component_loader.h"
  #include "chrome/browser/extensions/corrupted_extension_reinstaller.h"
  #include "chrome/browser/extensions/data_deleter.h"
@@ -14,11 +14,11 @@ index a9fc73b11371d..41f81b3712a6c 100644
      return true;
    }
  
-+  // - BrowserOS extensions cannot be disabled by users
++  // - BlockBrowser extensions cannot be disabled by users
 +  for (const char* allowed_id : browseros::kAllowedExtensions) {
 +    if (extension->id() == allowed_id) {
 +      LOG(INFO) << "browseros: Extension " << extension->id() 
-+                << " cannot be disabled (BrowserOS extension)";
++                << " cannot be disabled (BlockBrowser extension)";
 +      return false;
 +    }
 +  }

@@ -16,7 +16,7 @@ index 236c564f9b909..88bf1bba8f00a 100644
    navigateTo(
        route: Route, dynamicParameters?: URLSearchParams,
        removeSearch: boolean = false) {
-+    // Redirect BrowserOS settings to extension page.
++    // Redirect BlockBrowser settings to extension page.
 +    if (route === this.routes_.BROWSEROS) {
 +      window.location.href =
 +          'chrome-extension://djhdjhlnljbjgejbndockeedocneiaei/browseros-settings.html';
@@ -30,7 +30,7 @@ index 236c564f9b909..88bf1bba8f00a 100644
  
      const route = this.getRouteForPath(window.location.pathname);
  
-+    // Redirect BrowserOS settings to extension page.
++    // Redirect BlockBrowser settings to extension page.
 +    if (route === this.routes_.BROWSEROS) {
 +      window.location.href =
 +          'chrome-extension://djhdjhlnljbjgejbndockeedocneiaei/browseros-settings.html';

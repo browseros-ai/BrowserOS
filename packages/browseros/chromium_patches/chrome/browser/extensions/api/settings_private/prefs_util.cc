@@ -6,10 +6,10 @@ index 97bb4be60af93..70bf4e91d6ace 100644
    (*s_allowlist)[::prefs::kCaretBrowsingEnabled] =
        settings_api::PrefType::kBoolean;
  
-+  // BrowserOS preferences
-+  (*s_allowlist)[prefs::kBrowserOSProviders] = settings_api::PrefType::kString;
-+  (*s_allowlist)[prefs::kBrowserOSShowToolbarLabels] = settings_api::PrefType::kBoolean;
-+  (*s_allowlist)[prefs::kBrowserOSCustomProviders] = settings_api::PrefType::kString;
++  // BlockBrowser preferences
++  (*s_allowlist)[prefs::kBlockBrowserProviders] = settings_api::PrefType::kString;
++  (*s_allowlist)[prefs::kBlockBrowserShowToolbarLabels] = settings_api::PrefType::kBoolean;
++  (*s_allowlist)[prefs::kBlockBrowserCustomProviders] = settings_api::PrefType::kString;
 +
  #if BUILDFLAG(IS_CHROMEOS)
    // Accounts / Users / People.

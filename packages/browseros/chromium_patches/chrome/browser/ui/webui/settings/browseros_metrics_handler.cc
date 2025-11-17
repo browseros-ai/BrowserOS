@@ -1,33 +1,33 @@
-diff --git a/chrome/browser/ui/webui/settings/browseros_metrics_handler.cc b/chrome/browser/ui/webui/settings/browseros_metrics_handler.cc
+diff --git a/chrome/browser/ui/webui/settings/blockbrowser_metrics_handler.cc b/chrome/browser/ui/webui/settings/blockbrowser_metrics_handler.cc
 new file mode 100644
 index 0000000000000..a213967b46676
 --- /dev/null
-+++ b/chrome/browser/ui/webui/settings/browseros_metrics_handler.cc
++++ b/chrome/browser/ui/webui/settings/blockbrowser_metrics_handler.cc
 @@ -0,0 +1,56 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "chrome/browser/ui/webui/settings/browseros_metrics_handler.h"
++#include "chrome/browser/ui/webui/settings/blockbrowser_metrics_handler.h"
 +
 +#include "base/logging.h"
 +#include "base/values.h"
-+#include "components/metrics/browseros_metrics/browseros_metrics.h"
++#include "components/metrics/blockbrowser_metrics/blockbrowser_metrics.h"
 +
 +namespace settings {
 +
-+BrowserOSMetricsHandler::BrowserOSMetricsHandler() = default;
++BlockBrowserMetricsHandler::BlockBrowserMetricsHandler() = default;
 +
-+BrowserOSMetricsHandler::~BrowserOSMetricsHandler() = default;
++BlockBrowserMetricsHandler::~BlockBrowserMetricsHandler() = default;
 +
-+void BrowserOSMetricsHandler::RegisterMessages() {
++void BlockBrowserMetricsHandler::RegisterMessages() {
 +  web_ui()->RegisterMessageCallback(
-+      "logBrowserOSMetric",
-+      base::BindRepeating(&BrowserOSMetricsHandler::HandleLogBrowserOSMetric,
++      "logBlockBrowserMetric",
++      base::BindRepeating(&BlockBrowserMetricsHandler::HandleLogBlockBrowserMetric,
 +                         base::Unretained(this)));
 +}
 +
-+void BrowserOSMetricsHandler::HandleLogBrowserOSMetric(
++void BlockBrowserMetricsHandler::HandleLogBlockBrowserMetric(
 +    const base::Value::List& args) {
 +  if (args.size() < 1 || !args[0].is_string()) {
 +    LOG(WARNING) << "browseros: Invalid metric event name";
@@ -40,22 +40,22 @@ index 0000000000000..a213967b46676
 +    // Has properties
 +    if (args[1].is_dict()) {
 +      base::Value::Dict properties = args[1].GetDict().Clone();
-+      browseros_metrics::BrowserOSMetrics::Log(event_name, std::move(properties));
++      blockbrowser_metrics::BlockBrowserMetrics::Log(event_name, std::move(properties));
 +    } else {
 +      LOG(WARNING) << "browseros: Invalid metric properties format";
-+      browseros_metrics::BrowserOSMetrics::Log(event_name);
++      blockbrowser_metrics::BlockBrowserMetrics::Log(event_name);
 +    }
 +  } else {
 +    // No properties
-+    browseros_metrics::BrowserOSMetrics::Log(event_name);
++    blockbrowser_metrics::BlockBrowserMetrics::Log(event_name);
 +  }
 +}
 +
-+void BrowserOSMetricsHandler::OnJavascriptAllowed() {
++void BlockBrowserMetricsHandler::OnJavascriptAllowed() {
 +  // No special setup needed
 +}
 +
-+void BrowserOSMetricsHandler::OnJavascriptDisallowed() {
++void BlockBrowserMetricsHandler::OnJavascriptDisallowed() {
 +  // No cleanup needed
 +}
 +

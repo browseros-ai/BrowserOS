@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Chromium file replacement module for Nxtscape build system
+Chromium file replacement module for BlockBrowser build system
 """
 
 import sys

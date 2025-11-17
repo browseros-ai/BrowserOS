@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Linux packaging module for BrowserOS (AppImage and .deb)
+Linux packaging module for BlockBrowser (AppImage and .deb)
 """
 
 import os
@@ -68,16 +68,16 @@ def copy_browser_files(
         else:
             log_warning(f"  ⚠ File not found: {file}")
 
-    dirs_to_copy = ["locales", "MEIPreload", "BrowserOSServer"]
+    dirs_to_copy = ["locales", "MEIPreload", "BlockBrowserServer"]
     for dir_name in dirs_to_copy:
         src = join_paths(out_dir, dir_name)
         if Path(src).exists():
             shutil.copytree(src, join_paths(target_dir, dir_name), dirs_exist_ok=True)
             log_info(f"  ✓ Copied {dir_name}/")
 
-    browseros_path = Path(join_paths(target_dir, ctx.NXTSCAPE_APP_NAME))
-    if browseros_path.exists():
-        browseros_path.chmod(0o755)
+    blockbrowser_path = Path(join_paths(target_dir, ctx.NXTSCAPE_APP_NAME))
+    if blockbrowser_path.exists():
+        blockbrowser_path.chmod(0o755)
 
     sandbox_path = Path(join_paths(target_dir, "chrome_sandbox"))
     if sandbox_path.exists():
@@ -107,7 +107,7 @@ def create_desktop_file(apps_dir: Path, exec_path: str) -> Path:
 
     desktop_content = f"""[Desktop Entry]
 Version=1.0
-Name=BrowserOS
+Name=BlockBrowser
 GenericName=Web Browser
 Comment=Browse the World Wide Web
 Exec={exec_path} %U
@@ -274,7 +274,7 @@ def create_launcher_script(ctx: BuildContext, bin_dir: Path) -> None:
     bin_dir.mkdir(parents=True, exist_ok=True)
 
     launcher_content = f"""#!/bin/sh
-# BrowserOS launcher script
+# BlockBrowser launcher script
 export LD_LIBRARY_PATH=/usr/lib/browseros:$LD_LIBRARY_PATH
 exec /usr/lib/browseros/{ctx.NXTSCAPE_APP_NAME} "$@"
 """
@@ -290,7 +290,7 @@ def create_control_file(ctx: BuildContext, debian_dir: Path) -> None:
     debian_dir.mkdir(parents=True, exist_ok=True)
 
     # Version formatting: strip 'v' prefix and spaces, ensure numeric
-    version = ctx.get_nxtscape_chromium_version()
+    version = ctx.get_blockbrowser_chromium_version()
     version = version.lstrip("v").replace(" ", "").replace("_", ".")
 
     # Architecture mapping
@@ -302,10 +302,10 @@ Section: web
 Priority: optional
 Architecture: {deb_arch}
 Depends: libc6 (>= 2.31), libglib2.0-0, libnss3, libnspr4, libx11-6, libatk1.0-0, libatk-bridge2.0-0, libcups2, libasound2, libdrm2, libgbm1, libpango-1.0-0, libcairo2, libudev1, libxcomposite1, libxdamage1, libxrandr2, libxkbcommon0, libgtk-3-0
-Maintainer: BrowserOS Team <support@browseros.com>
+Maintainer: BlockBrowser Team <support@browseros.com>
 Homepage: https://www.browseros.com/
-Description: BrowserOS - The open source agentic browser
- BrowserOS is a privacy-focused web browser built on Chromium,
+Description: BlockBrowser - The open source agentic browser
+ BlockBrowser is a privacy-focused web browser built on Chromium,
  designed for modern web browsing with AI capabilities.
 """
 
@@ -321,7 +321,7 @@ def create_postinst_script(debian_dir: Path) -> None:
     so we set it in postinst after installation.
     """
     postinst_content = """#!/bin/sh
-# Post-installation script for BrowserOS
+# Post-installation script for BlockBrowser
 set -e
 
 # Set SUID bit on chrome_sandbox for sandboxing support
@@ -434,7 +434,7 @@ def package_appimage(ctx: BuildContext, package_dir: Path) -> Optional[Path]:
         safe_rmtree(appdir)
         return None
 
-    version = ctx.get_nxtscape_chromium_version().replace(" ", "_")
+    version = ctx.get_blockbrowser_chromium_version().replace(" ", "_")
     arch_suffix = "x86_64" if ctx.architecture == "x64" else "arm64"
     filename = f"{ctx.NXTSCAPE_APP_BASE_NAME}-{version}-{arch_suffix}.AppImage"
     output_path = Path(join_paths(package_dir, filename))
@@ -467,13 +467,13 @@ def package_deb(ctx: BuildContext, package_dir: Path) -> Optional[Path]:
         return None
 
     version = (
-        ctx.get_nxtscape_chromium_version()
+        ctx.get_blockbrowser_chromium_version()
         .lstrip("v")
         .replace(" ", "")
         .replace("_", ".")
     )
     arch_suffix = "amd64" if ctx.architecture == "x64" else "arm64"
-    filename = f"browseros_{version}_{arch_suffix}.deb"
+    filename = f"blockbrowser_{version}_{arch_suffix}.deb"
     output_path = Path(join_paths(package_dir, filename))
 
     success = create_deb(ctx, debdir, output_path)
@@ -488,9 +488,9 @@ def package_deb(ctx: BuildContext, package_dir: Path) -> Optional[Path]:
 
 
 def package(ctx: BuildContext) -> bool:
-    """Package BrowserOS for Linux as both AppImage and .deb"""
+    """Package BlockBrowser for Linux as both AppImage and .deb"""
     log_info(
-        f"📦 Packaging {ctx.NXTSCAPE_APP_BASE_NAME} {ctx.get_nxtscape_chromium_version()} for Linux ({ctx.architecture})"
+        f"📦 Packaging {ctx.NXTSCAPE_APP_BASE_NAME} {ctx.get_blockbrowser_chromium_version()} for Linux ({ctx.architecture})"
     )
 
     # Create packaging directory

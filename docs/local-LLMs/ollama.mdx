@@ -1,6 +1,6 @@
 ---
 title: "Setting up Ollama"
-description: "Configure Ollama to work with BrowserOS for local AI capabilities"
+description: "Configure Ollama to work with BlockBrowser for local AI capabilities"
 icon: "robot"
 ---
 
@@ -33,7 +33,7 @@ icon: "robot"
 
 ### Step 1: Navigate to Settings Page
 
-Navigate to the BrowserOS AI settings page at `chrome://settings/browseros-ai`
+Navigate to the BlockBrowser AI settings page at `chrome://settings/browseros-ai`
 
 <Frame>
   ![Navigate to settings page](/images/setting-up-ollama/ollama-step1.png)
@@ -49,7 +49,7 @@ Identify and copy your Ollama model ID for configuration.
 
 ### Step 3: Start Ollama from CLI
 
-Run Ollama with the required CORS settings to allow BrowserOS to connect:
+Run Ollama with the required CORS settings to allow BlockBrowser to connect:
 
 ```bash
 OLLAMA_ORIGINS="*" ollama serve

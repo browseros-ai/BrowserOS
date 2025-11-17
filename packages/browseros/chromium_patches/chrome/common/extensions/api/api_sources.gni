@@ -6,7 +6,7 @@ index cb1b525b39038..c57c8b74785f0 100644
      "bookmark_manager_private.json",
      "bookmarks.json",
      "braille_display_private.idl",
-+    "browser_os.idl",
++    "blockbrowser.idl",
      "chrome_web_view_internal.json",
      "command_line_private.json",
      "content_settings.json",

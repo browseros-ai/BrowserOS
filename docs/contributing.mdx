@@ -1,12 +1,12 @@
 ---
-title: "Contributing to BrowserOS"
+title: "Contributing to BlockBrowser"
 description: "Let's build the best open-source browser!"
 icon: "code-branch"
 ---
 
-Hey there! Thanks for your interest in BrowserOS. Whether you're fixing bugs, adding features, improving docs, or just poking around the code, we're glad you're here.
+Hey there! Thanks for your interest in BlockBrowser. Whether you're fixing bugs, adding features, improving docs, or just poking around the code, we're glad you're here.
 
-BrowserOS is a monorepo with two main parts:
+BlockBrowser is a monorepo with two main parts:
 - **Agent** - The Chrome extension with AI features (TypeScript/React)
 - **Browser** - The custom Chromium build (C++/Python)
 
@@ -18,7 +18,7 @@ Most folks start with the agent since it's way easier to set up and iterate on.
   <Card
     title="GitHub Repository"
     icon="github"
-    href="https://github.com/BrowserOS-ai/BrowserOS"
+    href="https://github.com/BlockBrowser-ai/BlockBrowser"
   >
     Star, fork, and contribute to our codebase
   </Card>
@@ -32,7 +32,7 @@ Most folks start with the agent since it's way easier to set up and iterate on.
   <Card
     title="Report Issues"
     icon="bug"
-    href="https://github.com/BrowserOS-ai/BrowserOS/issues"
+    href="https://github.com/BlockBrowser-ai/BlockBrowser/issues"
   >
     Report bugs or suggest new features
   </Card>
@@ -40,20 +40,20 @@ Most folks start with the agent since it's way easier to set up and iterate on.
 
 ## 2. Ways to Contribute
 
-You can contribute to BrowserOS in many ways! Whether you want to build features or help out in other ways, we appreciate all contributions.
+You can contribute to BlockBrowser in many ways! Whether you want to build features or help out in other ways, we appreciate all contributions.
 
 <Tabs>
   <Tab title="🐛 Report Bugs">
-    Found a bug? [Open an issue](https://github.com/browseros-ai/BrowserOS/issues/new) with:
+    Found a bug? [Open an issue](https://github.com/browseros-ai/BlockBrowser/issues/new) with:
     - Clear description
     - Steps to reproduce
     - Expected vs actual behavior
     - Screenshots/videos
-    - Environment details (OS, browser version, BrowserOS version)
+    - Environment details (OS, browser version, BlockBrowser version)
   </Tab>
 
   <Tab title="💡 Suggest Features">
-    Have an idea? [Share it here](https://github.com/browseros-ai/BrowserOS/issues/99) or chat with us on [Discord](https://discord.gg/YKwjt5vuKr).
+    Have an idea? [Share it here](https://github.com/browseros-ai/BlockBrowser/issues/99) or chat with us on [Discord](https://discord.gg/YKwjt5vuKr).
   </Tab>
 
   <Tab title="📚 Improve Docs">
@@ -137,7 +137,7 @@ The agent is a Chrome extension that provides AI-powered automation. Most contri
   </Step>
 </Steps>
 
-#### Load in BrowserOS
+#### Load in BlockBrowser
 
 <Steps>
   <Step title="Open Extensions Page">
@@ -158,7 +158,7 @@ The agent is a Chrome extension that provides AI-powered automation. Most contri
 </Steps>
 
 <Note>
-For detailed setup, architecture, and code standards, see the [Agent Contributing Guide](https://github.com/BrowserOS-ai/BrowserOS/blob/main/packages/browseros-agent/CONTRIBUTING.md).
+For detailed setup, architecture, and code standards, see the [Agent Contributing Guide](https://github.com/BlockBrowser-ai/BlockBrowser/blob/main/packages/browseros-agent/CONTRIBUTING.md).
 </Note>
 
 </Accordion>
@@ -261,28 +261,28 @@ Building the custom Chromium browser requires significant disk space and time. O
     </Note>
   </Step>
 
-  <Step title="Run BrowserOS">
-    After the build completes successfully, you can run BrowserOS:
+  <Step title="Run BlockBrowser">
+    After the build completes successfully, you can run BlockBrowser:
 
     <Tabs>
       <Tab title="macOS Debug (ARM64)">
         ```bash
-        out/Default_arm64/BrowserOS\ Dev.app/Contents/MacOS/BrowserOS\ Dev --user-data-dir=/tmp/test-profile
+        out/Default_arm64/BlockBrowser\ Dev.app/Contents/MacOS/BlockBrowser\ Dev --user-data-dir=/tmp/test-profile
         ```
       </Tab>
       <Tab title="macOS Debug (x64)">
         ```bash
-        out/Default_x64/BrowserOS\ Dev.app/Contents/MacOS/BrowserOS\ Dev --user-data-dir=/tmp/test-profile
+        out/Default_x64/BlockBrowser\ Dev.app/Contents/MacOS/BlockBrowser\ Dev --user-data-dir=/tmp/test-profile
         ```
       </Tab>
       <Tab title="macOS Release (ARM64)">
         ```bash
-        out/Default_arm64/BrowserOS.app/Contents/MacOS/BrowserOS --user-data-dir=/tmp/test-profile
+        out/Default_arm64/BlockBrowser.app/Contents/MacOS/BlockBrowser --user-data-dir=/tmp/test-profile
         ```
       </Tab>
       <Tab title="macOS Release (x64)">
         ```bash
-        out/Default_x64/BrowserOS.app/Contents/MacOS/BrowserOS --user-data-dir=/tmp/test-profile
+        out/Default_x64/BlockBrowser.app/Contents/MacOS/BlockBrowser --user-data-dir=/tmp/test-profile
         ```
       </Tab>
       <Tab title="Linux/Windows">
@@ -332,7 +332,7 @@ On your first PR, our bot will ask you to sign the Contributor License Agreement
 
 <Steps>
   <Step title="Read the CLA">
-    Read the [CLA document](https://github.com/BrowserOS-ai/BrowserOS/blob/main/CLA.md)
+    Read the [CLA document](https://github.com/BlockBrowser-ai/BlockBrowser/blob/main/CLA.md)
   </Step>
 
   <Step title="Sign via Comment">
@@ -391,7 +391,7 @@ export type ToolInput = z.infer<typeof ToolInputSchema>
 
 <Note>
 claude.md file can be found at below:
-- Agent: [packages/browseros-agent/CLAUDE.md](https://github.com/BrowserOS-ai/BrowserOS/blob/main/packages/browseros-agent/CLAUDE.md)
+- Agent: [packages/browseros-agent/CLAUDE.md](https://github.com/BlockBrowser-ai/BlockBrowser/blob/main/packages/browseros-agent/CLAUDE.md)
 </Note>
 
 ## 6. Project Structure
@@ -422,8 +422,8 @@ monorepo/
   <Step title="Fork and Clone">
     Fork the repository on GitHub and clone it locally:
     ```bash
-    git clone https://github.com/YOUR-USERNAME/BrowserOS.git
-    cd BrowserOS
+    git clone https://github.com/YOUR-USERNAME/BlockBrowser.git
+    cd BlockBrowser
     ```
   </Step>
 
@@ -467,14 +467,14 @@ Stuck? Need clarification? We're here to help.
   <Card
     title="GitHub Issues"
     icon="bug"
-    href="https://github.com/browseros-ai/BrowserOS/issues"
+    href="https://github.com/browseros-ai/BlockBrowser/issues"
   >
     Bug reports and features
   </Card>
   <Card
     title="GitHub Discussions"
     icon="comments"
-    href="https://github.com/browseros-ai/BrowserOS/discussions"
+    href="https://github.com/browseros-ai/BlockBrowser/discussions"
   >
     General questions
   </Card>

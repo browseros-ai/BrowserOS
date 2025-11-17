@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Resource management module for Nxtscape build system
+Resource management module for BlockBrowser build system
 """
 
 import sys

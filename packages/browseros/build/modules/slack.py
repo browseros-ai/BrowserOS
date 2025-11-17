@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Slack notification module for Nxtscape build system
+Slack notification module for BlockBrowser build system
 """
 
 import os
@@ -54,12 +54,12 @@ def send_slack_notification(message: str, success: bool = True) -> bool:
                 "color": color,
                 "fields": [
                     {
-                        "title": "Nxtscape Build",
+                        "title": "BlockBrowser Build",
                         "value": f"{emoji} {message}",
                         "short": False,
                     }
                 ],
-                "footer": f"{os_emoji} Nxtscape Build System - {os_name}",
+                "footer": f"{os_emoji} BlockBrowser Build System - {os_name}",
                 "ts": None,  # Slack will use current timestamp
             }
         ]

@@ -6,7 +6,7 @@ index e5e724a22d015..4eaf639e58b84 100644
  // These hosts will also be suggested by BuiltinProvider.
  base::span<const base::cstring_view> ChromeURLHosts() {
    static constexpr auto kChromeURLHosts = std::to_array<base::cstring_view>({
-+      kBrowserOSFirstRun,
++      kBlockBrowserFirstRun,
        kChromeUIAboutHost,
        kChromeUIAccessibilityHost,
  #if !BUILDFLAG(IS_ANDROID)

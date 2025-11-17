@@ -1,7 +1,7 @@
 From 700edf9260afe9b76b8d274f355b60586d94eafd Mon Sep 17 00:00:00 2001
 From: Nikhil Sonti <nikhilsv92@gmail.com>
 Date: Tue, 22 Jul 2025 21:35:35 -0700
-Subject: [PATCH] patch: nxtscape-updater-sparkle
+Subject: [PATCH] patch: blockbrowser-updater-sparkle
 
 ---
  chrome/BUILD.gn                               |   5 +
@@ -156,7 +156,7 @@ index 0000000000000..c0b84c7873a18
 --- /dev/null
 +++ b/chrome/browser/mac/sparkle_glue.h
 @@ -0,0 +1,51 @@
-+// Copyright 2024 Nxtscape Browser Authors. All rights reserved.
++// Copyright 2024 BlockBrowser Browser Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
@@ -214,7 +214,7 @@ index 0000000000000..cf39a1f49a55a
 --- /dev/null
 +++ b/chrome/browser/mac/sparkle_glue.mm
 @@ -0,0 +1,580 @@
-+// Copyright 2024 Nxtscape Browser Authors. All rights reserved.
++// Copyright 2024 BlockBrowser Browser Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
@@ -800,7 +800,7 @@ index 0000000000000..f857acdfbfa4d
 --- /dev/null
 +++ b/chrome/browser/mac/su_updater.h
 @@ -0,0 +1,42 @@
-+// Copyright 2024 Nxtscape Browser Authors. All rights reserved.
++// Copyright 2024 BlockBrowser Browser Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
@@ -849,11 +849,11 @@ index 0000000000000..984f9ab75b1fa
 --- /dev/null
 +++ b/chrome/browser/sparkle_buildflags.gni
 @@ -0,0 +1,21 @@
-+ # Copyright 2024 Nxtscape Browser Authors. All rights reserved.
++ # Copyright 2024 BlockBrowser Browser Authors. All rights reserved.
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
 +
-+# Copyright 2024 Nxtscape Browser Authors. All rights reserved.
++# Copyright 2024 BlockBrowser Browser Authors. All rights reserved.
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
 +
@@ -898,7 +898,7 @@ index 0000000000000..bdb3d62440d0d
 --- /dev/null
 +++ b/chrome/browser/ui/webui/help/sparkle_version_updater_mac.h
 @@ -0,0 +1,58 @@
-+// Copyright 2024 Nxtscape Browser Authors. All rights reserved.
++// Copyright 2024 BlockBrowser Browser Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
@@ -963,7 +963,7 @@ index 0000000000000..889b72abb254a
 --- /dev/null
 +++ b/chrome/browser/ui/webui/help/sparkle_version_updater_mac.mm
 @@ -0,0 +1,109 @@
-+// Copyright 2024 Nxtscape Browser Authors. All rights reserved.
++// Copyright 2024 BlockBrowser Browser Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +

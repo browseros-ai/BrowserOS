@@ -1,8 +1,8 @@
-diff --git a/components/metrics/browseros_metrics/DEPS b/components/metrics/browseros_metrics/DEPS
+diff --git a/components/metrics/blockbrowser_metrics/DEPS b/components/metrics/blockbrowser_metrics/DEPS
 new file mode 100644
 index 0000000000000..365047c83b7f2
 --- /dev/null
-+++ b/components/metrics/browseros_metrics/DEPS
++++ b/components/metrics/blockbrowser_metrics/DEPS
 @@ -0,0 +1,14 @@
 +include_rules = [
 +  "+base",

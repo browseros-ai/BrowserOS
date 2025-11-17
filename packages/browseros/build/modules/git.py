@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Git operations module for Nxtscape build system
+Git operations module for BlockBrowser build system
 """
 
 import os

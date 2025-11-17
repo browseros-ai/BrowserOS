@@ -1,14 +1,14 @@
-diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api_utils.cc b/chrome/browser/extensions/api/browser_os/browser_os_api_utils.cc
+diff --git a/chrome/browser/extensions/api/blockbrowser/blockbrowser_api_utils.cc b/chrome/browser/extensions/api/blockbrowser/blockbrowser_api_utils.cc
 new file mode 100644
 index 0000000000000..0c3a060fc70de
 --- /dev/null
-+++ b/chrome/browser/extensions/api/browser_os/browser_os_api_utils.cc
++++ b/chrome/browser/extensions/api/blockbrowser/blockbrowser_api_utils.cc
 @@ -0,0 +1,167 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "chrome/browser/extensions/api/browser_os/browser_os_api_utils.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_api_utils.h"
 +
 +#include "base/hash/hash.h"
 +#include "base/no_destructor.h"
@@ -26,7 +26,7 @@ index 0000000000000..0c3a060fc70de
 +namespace api {
 +
 +// NodeInfo implementation
-+NodeInfo::NodeInfo() : ax_node_id(0), ax_tree_id(), node_type(browser_os::InteractiveNodeType::kOther), in_viewport(false) {}
++NodeInfo::NodeInfo() : ax_node_id(0), ax_tree_id(), node_type(blockbrowser::InteractiveNodeType::kOther), in_viewport(false) {}
 +NodeInfo::~NodeInfo() = default;
 +NodeInfo::NodeInfo(const NodeInfo&) = default;
 +NodeInfo& NodeInfo::operator=(const NodeInfo&) = default;
@@ -88,12 +88,12 @@ index 0000000000000..0c3a060fc70de
 +}
 +
 +// Helper to determine if a node is interactive (clickable/typeable/selectable)
-+browser_os::InteractiveNodeType GetInteractiveNodeType(
++blockbrowser::InteractiveNodeType GetInteractiveNodeType(
 +    const ui::AXNodeData& node_data) {
 +  
 +  // Skip invisible or ignored nodes early
 +  if (node_data.IsInvisibleOrIgnored()) {
-+    return browser_os::InteractiveNodeType::kOther;
++    return blockbrowser::InteractiveNodeType::kOther;
 +  }
 +
 +  // Use built-in IsTextField() and related methods for typeable elements
@@ -102,17 +102,17 @@ index 0000000000000..0c3a060fc70de
 +      node_data.IsAtomicTextField() ||
 +      node_data.IsNonAtomicTextField() ||
 +      node_data.IsSpinnerTextField()) {
-+    return browser_os::InteractiveNodeType::kTypeable;
++    return blockbrowser::InteractiveNodeType::kTypeable;
 +  }
 +
 +  // Use built-in IsSelectable() for selectable elements
 +  if (node_data.IsSelectable()) {
-+    return browser_os::InteractiveNodeType::kSelectable;
++    return blockbrowser::InteractiveNodeType::kSelectable;
 +  }
 +  
 +  // Use built-in IsClickable() method
 +  if (node_data.IsClickable()) {
-+    return browser_os::InteractiveNodeType::kClickable;
++    return blockbrowser::InteractiveNodeType::kClickable;
 +  }
 +  
 +  // Additional check for combobox and list options which might not be caught by IsSelectable
@@ -126,10 +126,10 @@ index 0000000000000..0c3a060fc70de
 +      node_data.role == Role::kMenuItem ||
 +      node_data.role == Role::kMenuItemCheckBox ||
 +      node_data.role == Role::kMenuItemRadio) {
-+    return browser_os::InteractiveNodeType::kSelectable;
++    return blockbrowser::InteractiveNodeType::kSelectable;
 +  }
 +  
-+  return browser_os::InteractiveNodeType::kOther;
++  return blockbrowser::InteractiveNodeType::kOther;
 +}
 +
 +// Helper to get the HTML tag name from AX role

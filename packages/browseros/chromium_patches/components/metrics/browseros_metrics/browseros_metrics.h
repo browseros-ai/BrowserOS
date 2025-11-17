@@ -1,8 +1,8 @@
-diff --git a/components/metrics/browseros_metrics/browseros_metrics.h b/components/metrics/browseros_metrics/browseros_metrics.h
+diff --git a/components/metrics/blockbrowser_metrics/blockbrowser_metrics.h b/components/metrics/blockbrowser_metrics/blockbrowser_metrics.h
 new file mode 100644
 index 0000000000000..73e98afdaa28a
 --- /dev/null
-+++ b/components/metrics/browseros_metrics/browseros_metrics.h
++++ b/components/metrics/blockbrowser_metrics/blockbrowser_metrics.h
 @@ -0,0 +1,40 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -16,11 +16,11 @@ index 0000000000000..73e98afdaa28a
 +
 +#include "base/values.h"
 +
-+namespace browseros_metrics {
++namespace blockbrowser_metrics {
 +
-+// Simple static API for logging BrowserOS metrics.
-+// Usage: BrowserOSMetrics::Log("event.name");
-+class BrowserOSMetrics {
++// Simple static API for logging BlockBrowser metrics.
++// Usage: BlockBrowserMetrics::Log("event.name");
++class BlockBrowserMetrics {
 + public:
 +  // Log an event with no properties
 +  // sample_rate: 0.0 to 1.0, defaults to 1.0 (always log)
@@ -38,10 +38,10 @@ index 0000000000000..73e98afdaa28a
 +                  double sample_rate = 1.0);
 +
 + private:
-+  BrowserOSMetrics() = delete;
++  BlockBrowserMetrics() = delete;
 +};
 +
-+}  // namespace browseros_metrics
++}  // namespace blockbrowser_metrics
 +
 +#endif  // COMPONENTS_METRICS_BROWSEROS_METRICS_BROWSEROS_METRICS_H_
 \ No newline at end of file

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Google Cloud Storage upload module for Nxtscape build artifacts
+Google Cloud Storage upload module for BlockBrowser build artifacts
 """
 
 import os
@@ -32,7 +32,7 @@ except ImportError:
 SERVICE_ACCOUNT_FILE = "gclient.json"
 
 # GCS bucket configuration
-GCS_BUCKET_NAME = "nxtscape"
+GCS_BUCKET_NAME = "blockbrowser"
 
 
 def _get_platform_dir(platform_override: Optional[str] = None) -> str:
@@ -56,7 +56,7 @@ def upload_to_gcs(
     """Upload build artifacts to Google Cloud Storage
 
     Args:
-        ctx: BuildContext with root_dir and nxtscape_version
+        ctx: BuildContext with root_dir and blockbrowser_version
         file_paths: List of file paths to upload
         platform_override: Optional platform override (macos/linux/win)
 
@@ -75,8 +75,8 @@ def upload_to_gcs(
     # Determine platform subdirectory
     platform_dir = _get_platform_dir(platform_override)
 
-    # Build GCS path: gs://nxtscape/resources/<version>/<platform>/
-    gcs_prefix = f"resources/{ctx.nxtscape_version}/{platform_dir}"
+    # Build GCS path: gs://blockbrowser/resources/<version>/<platform>/
+    gcs_prefix = f"resources/{ctx.blockbrowser_version}/{platform_dir}"
 
     log_info(f"\n☁️  Uploading artifacts to gs://{GCS_BUCKET_NAME}/{gcs_prefix}/")
 
@@ -338,7 +338,7 @@ def handle_upload_dist(
             build_type="release",  # Not needed for upload
         )
         # Override the version with what we detected
-        ctx.nxtscape_version = version
+        ctx.blockbrowser_version = version
     except Exception as e:
         # If BuildContext fails, we can still upload with minimal info
         log_warning(f"Could not create full BuildContext: {e}")
@@ -348,7 +348,7 @@ def handle_upload_dist(
         class MinimalContext:
             def __init__(self, root_dir: Path, version: str):
                 self.root_dir = root_dir
-                self.nxtscape_version = version
+                self.blockbrowser_version = version
 
         ctx = MinimalContext(root_dir, version)
 

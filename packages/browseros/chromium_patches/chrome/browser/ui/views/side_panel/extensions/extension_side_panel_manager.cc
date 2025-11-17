@@ -6,7 +6,7 @@ index 30d4b3bc95d1c..558e8f442d671 100644
  
  #include "base/memory/scoped_refptr.h"
  #include "base/strings/utf_string_conversions.h"
-+#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/extensions/blockbrowser_extension_constants.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/actions/chrome_action_id.h"
  #include "chrome/browser/ui/actions/chrome_actions.h"
@@ -23,9 +23,9 @@ index 30d4b3bc95d1c..558e8f442d671 100644
                             actions::ActionPinnableState::kPinnable))
            .Build());
 +
-+  // Auto-pin BrowserOS extensions to the toolbar.
-+  if (browseros::IsBrowserOSExtension(extension->id())) {
-+    LOG(INFO) << "browseros: Auto-pinning BrowserOS extension: " << extension->id();
++  // Auto-pin BlockBrowser extensions to the toolbar.
++  if (browseros::IsBlockBrowserExtension(extension->id())) {
++    LOG(INFO) << "browseros: Auto-pinning BlockBrowser extension: " << extension->id();
 +    if (auto* pinned_model = PinnedToolbarActionsModel::Get(profile_)) {
 +      pinned_model->UpdatePinnedState(extension_action_id, true);
 +    }
@@ -38,9 +38,9 @@ index 30d4b3bc95d1c..558e8f442d671 100644
      coordinators_.erase(extension->id());
    }
 +  
-+  // Unpin BrowserOS extensions before removing the action item
-+  if (browseros::IsBrowserOSExtension(extension->id())) {
-+    LOG(INFO) << "browseros: Unpinning BrowserOS extension: " << extension->id() 
++  // Unpin BlockBrowser extensions before removing the action item
++  if (browseros::IsBlockBrowserExtension(extension->id())) {
++    LOG(INFO) << "browseros: Unpinning BlockBrowser extension: " << extension->id() 
 +              << " reason: " << static_cast<int>(reason);
 +    if (auto* pinned_model = PinnedToolbarActionsModel::Get(profile_)) {
 +      // Get the action ID to unpin it

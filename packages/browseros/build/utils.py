@@ -36,7 +36,7 @@ def _ensure_log_file():
         # Open with UTF-8 encoding to handle any characters
         _log_file = open(log_file_path, "w", encoding="utf-8")
         _log_file.write(
-            f"Nxtscape Build Log - Started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"BlockBrowser Build Log - Started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         )
         _log_file.write("=" * 80 + "\n\n")
     return _log_file

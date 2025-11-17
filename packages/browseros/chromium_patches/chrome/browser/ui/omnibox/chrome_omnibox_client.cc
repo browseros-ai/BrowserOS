@@ -19,14 +19,14 @@ index 121eb4476bfcc..a1ee736be6b5f 100644
 +      location_bar_->GetLocationBarModel()->GetURLForDisplay();
 +
 +#if BUILDFLAG(ENABLE_EXTENSIONS)
-+  // Transform BrowserOS extension URLs to display custom names
++  // Transform BlockBrowser extension URLs to display custom names
 +  GURL url = location_bar_->GetLocationBarModel()->GetURL();
 +  if (url.SchemeIs(extensions::kExtensionScheme)) {
 +    std::string extension_id = url.host();
 +    if (auto display_name =
 +            extensions::browseros::GetExtensionDisplayName(extension_id)) {
 +      std::u16string result = base::UTF8ToUTF16(display_name.value());
-+      // Append path if present (e.g., "BrowserOS-Agent/popup.html")
++      // Append path if present (e.g., "BlockBrowser-Agent/popup.html")
 +      if (url.has_path() && url.path() != "/") {
 +        result += u"/";
 +        result += base::UTF8ToUTF16(url.path().substr(1));  // Skip leading '/'

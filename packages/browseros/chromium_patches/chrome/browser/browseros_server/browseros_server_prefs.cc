@@ -1,18 +1,18 @@
-diff --git a/chrome/browser/browseros_server/browseros_server_prefs.cc b/chrome/browser/browseros_server/browseros_server_prefs.cc
+diff --git a/chrome/browser/blockbrowser_server/blockbrowser_server_prefs.cc b/chrome/browser/blockbrowser_server/blockbrowser_server_prefs.cc
 new file mode 100644
 index 0000000000000..f9c7a9990cb01
 --- /dev/null
-+++ b/chrome/browser/browseros_server/browseros_server_prefs.cc
++++ b/chrome/browser/blockbrowser_server/blockbrowser_server_prefs.cc
 @@ -0,0 +1,49 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "chrome/browser/browseros_server/browseros_server_prefs.h"
++#include "chrome/browser/blockbrowser_server/blockbrowser_server_prefs.h"
 +
 +#include "components/prefs/pref_registry_simple.h"
 +
-+namespace browseros_server {
++namespace blockbrowser_server {
 +
 +// CDP server port (0 = auto-assign random port on startup)
 +const char kCDPServerPort[] = "browseros.server.cdp_port";
@@ -52,4 +52,4 @@ index 0000000000000..f9c7a9990cb01
 +  registry->RegisterBooleanPref(kRestartServerRequested, false);
 +}
 +
-+}  // namespace browseros_server
++}  // namespace blockbrowser_server

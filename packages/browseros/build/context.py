@@ -32,14 +32,14 @@ class BuildContext:
     package: bool = False
     build: bool = False
     chromium_version: str = ""
-    nxtscape_version: str = ""
-    nxtscape_chromium_version: str = ""
+    blockbrowser_version: str = ""
+    blockbrowser_chromium_version: str = ""
     start_time: float = 0.0
 
     # App names - will be set based on platform
     CHROMIUM_APP_NAME: str = ""
     NXTSCAPE_APP_NAME: str = ""
-    NXTSCAPE_APP_BASE_NAME: str = "BrowserOS"  # Base name without extension
+    NXTSCAPE_APP_BASE_NAME: str = "BlockBrowser"  # Base name without extension
 
     # Third party
     SPARKLE_VERSION: str = "2.7.0"
@@ -83,19 +83,19 @@ class BuildContext:
                 # Construct chromium_version as MAJOR.MINOR.BUILD.PATCH
                 self.chromium_version = f"{version_dict['MAJOR']}.{version_dict['MINOR']}.{version_dict['BUILD']}.{version_dict['PATCH']}"
 
-        if not self.nxtscape_version:
+        if not self.blockbrowser_version:
             # Read from NXTSCAPE_VERSION file
             version_file = join_paths(
                 self.root_dir, "build", "config", "NXTSCAPE_VERSION"
             )
             if version_file.exists():
-                self.nxtscape_version = version_file.read_text().strip()
+                self.blockbrowser_version = version_file.read_text().strip()
 
-        # Set nxtscape_chromium_version as chromium version with BUILD + nxtscape_version
-        if self.chromium_version and self.nxtscape_version and version_dict:
-            # Calculate new BUILD number by adding nxtscape_version to original BUILD
-            new_build = int(version_dict["BUILD"]) + int(self.nxtscape_version)
-            self.nxtscape_chromium_version = f"{version_dict['MAJOR']}.{version_dict['MINOR']}.{new_build}.{version_dict['PATCH']}"
+        # Set blockbrowser_chromium_version as chromium version with BUILD + blockbrowser_version
+        if self.chromium_version and self.blockbrowser_version and version_dict:
+            # Calculate new BUILD number by adding blockbrowser_version to original BUILD
+            new_build = int(version_dict["BUILD"]) + int(self.blockbrowser_version)
+            self.blockbrowser_chromium_version = f"{version_dict['MAJOR']}.{version_dict['MINOR']}.{new_build}.{version_dict['PATCH']}"
 
         # Determine chromium source directory
         if self.chromium_src and self.chromium_src.exists():
@@ -137,8 +137,8 @@ class BuildContext:
         """Get patches directory"""
         return join_paths(self.root_dir, "patches")
 
-    def get_nxtscape_patches_dir(self) -> Path:
-        """Get Nxtscape specific patches directory"""
+    def get_blockbrowser_patches_dir(self) -> Path:
+        """Get BlockBrowser specific patches directory"""
         return join_paths(self.get_patches_dir(), "browseros")
 
     def get_sparkle_dir(self) -> Path:
@@ -212,20 +212,20 @@ class BuildContext:
         """Get DMG filename with architecture suffix"""
         if self.architecture == "universal":
             if signed:
-                return f"{self.NXTSCAPE_APP_BASE_NAME}_{self.nxtscape_chromium_version}_universal_signed.dmg"
-            return f"{self.NXTSCAPE_APP_BASE_NAME}_{self.nxtscape_chromium_version}_universal.dmg"
+                return f"{self.NXTSCAPE_APP_BASE_NAME}_{self.blockbrowser_chromium_version}_universal_signed.dmg"
+            return f"{self.NXTSCAPE_APP_BASE_NAME}_{self.blockbrowser_chromium_version}_universal.dmg"
         else:
             if signed:
-                return f"{self.NXTSCAPE_APP_BASE_NAME}_{self.nxtscape_chromium_version}_{self.architecture}_signed.dmg"
-            return f"{self.NXTSCAPE_APP_BASE_NAME}_{self.nxtscape_chromium_version}_{self.architecture}.dmg"
+                return f"{self.NXTSCAPE_APP_BASE_NAME}_{self.blockbrowser_chromium_version}_{self.architecture}_signed.dmg"
+            return f"{self.NXTSCAPE_APP_BASE_NAME}_{self.blockbrowser_chromium_version}_{self.architecture}.dmg"
 
-    def get_nxtscape_chromium_version(self) -> str:
-        """Get Nxtscape version string"""
-        return self.nxtscape_chromium_version
+    def get_blockbrowser_chromium_version(self) -> str:
+        """Get BlockBrowser version string"""
+        return self.blockbrowser_chromium_version
 
-    def get_nxtscape_version(self) -> str:
-        """Get Nxtscape version string"""
-        return self.nxtscape_version
+    def get_blockbrowser_version(self) -> str:
+        """Get BlockBrowser version string"""
+        return self.blockbrowser_version
 
     def get_app_base_name(self) -> str:
         """Get app base name without extension"""
@@ -233,7 +233,7 @@ class BuildContext:
 
     def get_dist_dir(self) -> Path:
         """Get distribution output directory with version"""
-        return join_paths(self.root_dir, "dist", self.nxtscape_version)
+        return join_paths(self.root_dir, "dist", self.blockbrowser_version)
 
     # Dev CLI specific methods
     def get_dev_patches_dir(self) -> Path:

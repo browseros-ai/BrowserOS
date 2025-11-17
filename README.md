@@ -22,8 +22,8 @@
 <br />
 </div>
 
-## 
-🌐 BrowserOS is an open-source chromium fork that runs AI agents natively. **Your open-source, privacy-first alternative to ChatGPT Atlas, Perplexity Comet, Dia**.
+##
+🌐 BlockBrowser is an open-source chromium fork that runs AI agents natively. **Your open-source, privacy-first alternative to ChatGPT Atlas, Perplexity Comet, and Dia**.
 
 🔒 Privacy first - use your own API keys or run local models with Ollama. Your data stays on your computer.
 
@@ -31,7 +31,7 @@
 
 ## Quick start
 
-1. Download and install BrowserOS:
+1. Download and install BlockBrowser:
    - [macOS](https://files.browseros.com/download/BrowserOS.dmg)
    - [Windows](https://files.browseros.com/download/BrowserOS_installer.exe)
    - [Linux (AppImage)](https://files.browseros.com/download/BrowserOS.AppImage)
@@ -43,45 +43,45 @@
 
 4. Start automating!
 
-## What makes BrowserOS special
+## What makes BlockBrowser special
 - 🏠 Feels like home - same familiar interface as Google Chrome, works with all your extensions
 - 🤖 AI agents that run on YOUR browser, not in the cloud
 - 🔒 Privacy first - bring your own keys or use local models with Ollama. Your browsing history stays on your computer
 - 🚀 Open source and community driven - see exactly what's happening under the hood
-- 🤝 BrowserOS as MCP server - you can install our MCP server and use the browser from within `claude-code` or `gemini-cli`.
+- 🤝 BlockBrowser as MCP server - you can install our MCP server and use the browser from within `claude-code` or `gemini-cli`.
 - 🛡️ (coming soon) Built-in AI ad blocker that works across more scenarios!  
 
 ## Demos
 
-### 🤖 BrowserOS agent in action
-[![BrowserOS agent in action](docs/videos/browserOS-agent-in-action.gif)](https://www.youtube.com/watch?v=SoSFev5R5dI)
+### 🤖 BlockBrowser agent in action
+[![BlockBrowser agent in action](docs/videos/browserOS-agent-in-action.gif)](https://www.youtube.com/watch?v=SoSFev5R5dI)
 <br/><br/>
 
-### 🎇 Install [BrowserOS as MCP](https://docs.browseros.com/browseros-mcp/how-to-guide) and control it from `claude-code`
+### 🎇 Install [BlockBrowser as MCP](https://docs.browseros.com/browseros-mcp/how-to-guide) and control it from `claude-code`
 
 https://github.com/user-attachments/assets/c725d6df-1a0d-40eb-a125-ea009bf664dc
 
 <br/><br/>
 
-### 💬 Use BrowserOS to chat
+### 💬 Use BlockBrowser to chat
 
 https://github.com/user-attachments/assets/726803c5-8e36-420e-8694-c63a2607beca
 
 <br/><br/>
 
-### ⚡ Use BrowserOS to scrape data
+### ⚡ Use BlockBrowser to scrape data
 
 https://github.com/user-attachments/assets/9f038216-bc24-4555-abf1-af2adcb7ebc0
 
 <br/><br/>
 
-## Why We're Building BrowserOS
+## Why We're Building BlockBrowser
 
 For the first time since Netscape pioneered the web in 1994, AI gives us the chance to completely reimagine the browser. We've seen tools like Cursor deliver 10x productivity gains for developers—yet everyday browsing remains frustratingly archaic.
 
-You're likely juggling 70+ tabs, battling your browser instead of having it assist you. Routine tasks, like ordering something from amazon or filling a form should be handled seamlessly by AI agents.
+You're likely juggling 70+ tabs, battling your browser instead of having it assist you. Routine tasks, like ordering something from Amazon or filling a form should be handled seamlessly by AI agents.
 
-At BrowserOS, we're convinced that AI should empower you by automating tasks locally and securely—keeping your data private. We are building the best browser for this future!
+At BlockBrowser, we're convinced that AI should empower you by automating tasks locally and securely—keeping your data private. We are building the best browser for this future!
 
 ## How we compare
 
@@ -111,16 +111,16 @@ They're a search/ad company. Your browser history becomes their product. We keep
 
 ## Contributing
 
-We'd love your help making BrowserOS better!
+We'd love your help making BlockBrowser better!
 
-- 🐛 [Report bugs](https://github.com/nxtscape/nxtscape/issues)
+- 🐛 [Report bugs](https://github.com/browseros-ai/BrowserOS/issues)
 - 💡 [Suggest features](https://github.com/browseros-ai/BrowserOS/issues/99)
 - 💬 [Join Discord](https://discord.gg/YKwjt5vuKr)
 - 🐦 [Follow on Twitter](https://x.com/browserOS_ai)
 
 ## License
 
-BrowserOS is open source under the [AGPL-3.0 license](LICENSE).
+BlockBrowser is open source under the [AGPL-3.0 license](LICENSE).
 
 ## Stargazers
 Thank you to all our supporters!

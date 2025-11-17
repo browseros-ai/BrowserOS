@@ -1,14 +1,14 @@
-diff --git a/chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.cc b/chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.cc
+diff --git a/chrome/browser/extensions/api/blockbrowser/blockbrowser_snapshot_processor.cc b/chrome/browser/extensions/api/blockbrowser/blockbrowser_snapshot_processor.cc
 new file mode 100644
 index 0000000000000..885942336dcd6
 --- /dev/null
-+++ b/chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.cc
++++ b/chrome/browser/extensions/api/blockbrowser/blockbrowser_snapshot_processor.cc
 @@ -0,0 +1,648 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_snapshot_processor.h"
 +
 +#include <algorithm>
 +#include <atomic>
@@ -28,7 +28,7 @@ index 0000000000000..885942336dcd6
 +#include "base/strings/string_util.h"
 +#include "base/task/thread_pool.h"
 +#include "base/time/time.h"
-+#include "chrome/browser/extensions/api/browser_os/browser_os_api_utils.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_api_utils.h"
 +#include "content/public/browser/browser_thread.h"
 +#include "content/public/browser/render_widget_host_view.h"
 +#include "content/browser/renderer_host/render_widget_host_view_base.h"
@@ -128,8 +128,8 @@ index 0000000000000..885942336dcd6
 +  }
 +  
 +  // Get the interactive type and skip if it's not interactive
-+  browser_os::InteractiveNodeType node_type = GetInteractiveNodeType(node_data);
-+  if (node_type == browser_os::InteractiveNodeType::kOther) {
++  blockbrowser::InteractiveNodeType node_type = GetInteractiveNodeType(node_data);
++  if (node_type == blockbrowser::InteractiveNodeType::kOther) {
 +    return true;
 +  }
 +  
@@ -141,7 +141,7 @@ index 0000000000000..885942336dcd6
 +// Internal structure for managing async processing
 +struct SnapshotProcessor::ProcessingContext 
 +    : public base::RefCountedThreadSafe<ProcessingContext> {
-+  browser_os::InteractiveSnapshot snapshot;
++  blockbrowser::InteractiveSnapshot snapshot;
 +  std::unordered_map<int32_t, ui::AXNodeData> node_map;
 +  std::unordered_map<int32_t, int32_t> parent_map;  // child_id -> parent_id  
 +  std::unordered_map<int32_t, std::vector<int32_t>> children_map;  // parent_id -> child_ids
@@ -347,7 +347,7 @@ index 0000000000000..885942336dcd6
 +    }
 +    
 +    // Get the interactive node type
-+    browser_os::InteractiveNodeType node_type = GetInteractiveNodeType(node_data);
++    blockbrowser::InteractiveNodeType node_type = GetInteractiveNodeType(node_data);
 +    
 +    ProcessedNode data;
 +    data.node_data = &node_data;
@@ -444,13 +444,13 @@ index 0000000000000..885942336dcd6
 +            << " (name: " << node_data.name << ")";
 +    
 +    // Create interactive node
-+    browser_os::InteractiveNode interactive_node;
++    blockbrowser::InteractiveNode interactive_node;
 +    interactive_node.node_id = node_data.node_id;
 +    interactive_node.type = node_data.node_type;
 +    interactive_node.name = node_data.name;
 +    
 +    // Set the bounding rectangle
-+    browser_os::Rect rect;
++    blockbrowser::Rect rect;
 +    rect.x = node_data.absolute_bounds.x();
 +    rect.y = node_data.absolute_bounds.y();
 +    rect.width = node_data.absolute_bounds.width();
@@ -459,7 +459,7 @@ index 0000000000000..885942336dcd6
 +    
 +    // Create attributes dictionary by iterating over all key-value pairs
 +    if (!node_data.attributes.empty()) {
-+      browser_os::InteractiveNode::Attributes attributes;
++      blockbrowser::InteractiveNode::Attributes attributes;
 +      
 +      // Iterate over all attributes and add them to the dictionary
 +      for (const auto& [key, value] : node_data.attributes) {
@@ -479,8 +479,8 @@ index 0000000000000..885942336dcd6
 +    // Sort elements by node_id to maintain consistent ordering
 +    std::sort(context->snapshot.elements.begin(), 
 +              context->snapshot.elements.end(),
-+              [](const browser_os::InteractiveNode& a, 
-+                 const browser_os::InteractiveNode& b) {
++              [](const blockbrowser::InteractiveNode& a, 
++                 const blockbrowser::InteractiveNode& b) {
 +                return a.node_id < b.node_id;
 +              });
 +

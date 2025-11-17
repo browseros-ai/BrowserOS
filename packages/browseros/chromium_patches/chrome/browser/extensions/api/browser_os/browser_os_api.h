@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.h b/chrome/browser/extensions/api/browser_os/browser_os_api.h
+diff --git a/chrome/browser/extensions/api/blockbrowser/blockbrowser_api.h b/chrome/browser/extensions/api/blockbrowser/blockbrowser_api.h
 new file mode 100644
 index 0000000000000..e4b1c5f821342
 --- /dev/null
-+++ b/chrome/browser/extensions/api/browser_os/browser_os_api.h
++++ b/chrome/browser/extensions/api/blockbrowser/blockbrowser_api.h
 @@ -0,0 +1,331 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -15,9 +15,9 @@ index 0000000000000..e4b1c5f821342
 +
 +#include "base/memory/raw_ptr.h"
 +#include "base/values.h"
-+#include "chrome/browser/extensions/api/browser_os/browser_os_api_utils.h"
-+#include "chrome/browser/extensions/api/browser_os/browser_os_content_processor.h"
-+#include "chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_api_utils.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_content_processor.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_snapshot_processor.h"
 +#include "extensions/browser/extension_function.h"
 +#include "third_party/skia/include/core/SkBitmap.h"
 +
@@ -33,15 +33,15 @@ index 0000000000000..e4b1c5f821342
 +namespace api {
 +
 +
-+class BrowserOSGetAccessibilityTreeFunction : public ExtensionFunction {
++class BlockBrowserGetAccessibilityTreeFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.getAccessibilityTree",
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.getAccessibilityTree",
 +                             BROWSER_OS_GETACCESSIBILITYTREE)
 +
-+  BrowserOSGetAccessibilityTreeFunction() = default;
++  BlockBrowserGetAccessibilityTreeFunction() = default;
 +
 + protected:
-+  ~BrowserOSGetAccessibilityTreeFunction() override = default;
++  ~BlockBrowserGetAccessibilityTreeFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
@@ -50,15 +50,15 @@ index 0000000000000..e4b1c5f821342
 +  void OnAccessibilityTreeReceived(ui::AXTreeUpdate& tree_update);
 +};
 +
-+class BrowserOSGetInteractiveSnapshotFunction : public ExtensionFunction {
++class BlockBrowserGetInteractiveSnapshotFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.getInteractiveSnapshot",
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.getInteractiveSnapshot",
 +                             BROWSER_OS_GETINTERACTIVESNAPSHOT)
 +
-+  BrowserOSGetInteractiveSnapshotFunction();
++  BlockBrowserGetInteractiveSnapshotFunction();
 +
 + protected:
-+  ~BrowserOSGetInteractiveSnapshotFunction() override;
++  ~BlockBrowserGetInteractiveSnapshotFunction() override;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
@@ -77,119 +77,119 @@ index 0000000000000..e4b1c5f821342
 +  raw_ptr<content::WebContents> web_contents_ = nullptr;
 +};
 +
-+class BrowserOSClickFunction : public ExtensionFunction {
++class BlockBrowserClickFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.click", BROWSER_OS_CLICK)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.click", BROWSER_OS_CLICK)
 +
-+  BrowserOSClickFunction() = default;
++  BlockBrowserClickFunction() = default;
 +
 + protected:
-+  ~BrowserOSClickFunction() override = default;
++  ~BlockBrowserClickFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSInputTextFunction : public ExtensionFunction {
++class BlockBrowserInputTextFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.inputText", BROWSER_OS_INPUTTEXT)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.inputText", BROWSER_OS_INPUTTEXT)
 +
-+  BrowserOSInputTextFunction() = default;
++  BlockBrowserInputTextFunction() = default;
 +
 + protected:
-+  ~BrowserOSInputTextFunction() override = default;
++  ~BlockBrowserInputTextFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSClearFunction : public ExtensionFunction {
++class BlockBrowserClearFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.clear", BROWSER_OS_CLEAR)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.clear", BROWSER_OS_CLEAR)
 +
-+  BrowserOSClearFunction() = default;
++  BlockBrowserClearFunction() = default;
 +
 + protected:
-+  ~BrowserOSClearFunction() override = default;
++  ~BlockBrowserClearFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSGetPageLoadStatusFunction : public ExtensionFunction {
++class BlockBrowserGetPageLoadStatusFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.getPageLoadStatus", 
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.getPageLoadStatus", 
 +                             BROWSER_OS_GETPAGELOADSTATUS)
 +
-+  BrowserOSGetPageLoadStatusFunction() = default;
++  BlockBrowserGetPageLoadStatusFunction() = default;
 +
 + protected:
-+  ~BrowserOSGetPageLoadStatusFunction() override = default;
++  ~BlockBrowserGetPageLoadStatusFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSScrollUpFunction : public ExtensionFunction {
++class BlockBrowserScrollUpFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.scrollUp", BROWSER_OS_SCROLLUP)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.scrollUp", BROWSER_OS_SCROLLUP)
 +
-+  BrowserOSScrollUpFunction() = default;
++  BlockBrowserScrollUpFunction() = default;
 +
 + protected:
-+  ~BrowserOSScrollUpFunction() override = default;
++  ~BlockBrowserScrollUpFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSScrollDownFunction : public ExtensionFunction {
++class BlockBrowserScrollDownFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.scrollDown", BROWSER_OS_SCROLLDOWN)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.scrollDown", BROWSER_OS_SCROLLDOWN)
 +
-+  BrowserOSScrollDownFunction() = default;
++  BlockBrowserScrollDownFunction() = default;
 +
 + protected:
-+  ~BrowserOSScrollDownFunction() override = default;
++  ~BlockBrowserScrollDownFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSScrollToNodeFunction : public ExtensionFunction {
++class BlockBrowserScrollToNodeFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.scrollToNode", BROWSER_OS_SCROLLTONODE)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.scrollToNode", BROWSER_OS_SCROLLTONODE)
 +
-+  BrowserOSScrollToNodeFunction() = default;
++  BlockBrowserScrollToNodeFunction() = default;
 +
 + protected:
-+  ~BrowserOSScrollToNodeFunction() override = default;
++  ~BlockBrowserScrollToNodeFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSSendKeysFunction : public ExtensionFunction {
++class BlockBrowserSendKeysFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.sendKeys", BROWSER_OS_SENDKEYS)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.sendKeys", BROWSER_OS_SENDKEYS)
 +
-+  BrowserOSSendKeysFunction() = default;
++  BlockBrowserSendKeysFunction() = default;
 +
 + protected:
-+  ~BrowserOSSendKeysFunction() override = default;
++  ~BlockBrowserSendKeysFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSCaptureScreenshotFunction : public ExtensionFunction {
++class BlockBrowserCaptureScreenshotFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.captureScreenshot", BROWSER_OS_CAPTURESCREENSHOT)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.captureScreenshot", BROWSER_OS_CAPTURESCREENSHOT)
 +
-+  BrowserOSCaptureScreenshotFunction();
++  BlockBrowserCaptureScreenshotFunction();
 +
 + protected:
-+  ~BrowserOSCaptureScreenshotFunction() override;
++  ~BlockBrowserCaptureScreenshotFunction() override;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
@@ -207,14 +207,14 @@ index 0000000000000..e4b1c5f821342
 +  bool use_exact_dimensions_ = false;
 +};
 +
-+class BrowserOSGetSnapshotFunction : public ExtensionFunction {
++class BlockBrowserGetSnapshotFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.getSnapshot", BROWSER_OS_GETSNAPSHOT)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.getSnapshot", BROWSER_OS_GETSNAPSHOT)
 +
-+  BrowserOSGetSnapshotFunction() = default;
++  BlockBrowserGetSnapshotFunction() = default;
 +
 + protected:
-+  ~BrowserOSGetSnapshotFunction() override = default;
++  ~BlockBrowserGetSnapshotFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
@@ -224,79 +224,79 @@ index 0000000000000..e4b1c5f821342
 +};
 +
 +// Settings API functions
-+class BrowserOSGetPrefFunction : public ExtensionFunction {
++class BlockBrowserGetPrefFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.getPref", BROWSER_OS_GETPREF)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.getPref", BROWSER_OS_GETPREF)
 +
-+  BrowserOSGetPrefFunction() = default;
++  BlockBrowserGetPrefFunction() = default;
 +
 + protected:
-+  ~BrowserOSGetPrefFunction() override = default;
++  ~BlockBrowserGetPrefFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSSetPrefFunction : public ExtensionFunction {
++class BlockBrowserSetPrefFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.setPref", BROWSER_OS_SETPREF)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.setPref", BROWSER_OS_SETPREF)
 +
-+  BrowserOSSetPrefFunction() = default;
++  BlockBrowserSetPrefFunction() = default;
 +
 + protected:
-+  ~BrowserOSSetPrefFunction() override = default;
++  ~BlockBrowserSetPrefFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSGetAllPrefsFunction : public ExtensionFunction {
++class BlockBrowserGetAllPrefsFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.getAllPrefs", BROWSER_OS_GETALLPREFS)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.getAllPrefs", BROWSER_OS_GETALLPREFS)
 +
-+  BrowserOSGetAllPrefsFunction() = default;
++  BlockBrowserGetAllPrefsFunction() = default;
 +
 + protected:
-+  ~BrowserOSGetAllPrefsFunction() override = default;
++  ~BlockBrowserGetAllPrefsFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSLogMetricFunction : public ExtensionFunction {
++class BlockBrowserLogMetricFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.logMetric", BROWSER_OS_LOGMETRIC)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.logMetric", BROWSER_OS_LOGMETRIC)
 +
-+  BrowserOSLogMetricFunction() = default;
++  BlockBrowserLogMetricFunction() = default;
 +
 + protected:
-+  ~BrowserOSLogMetricFunction() override = default;
++  ~BlockBrowserLogMetricFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSGetVersionNumberFunction : public ExtensionFunction {
++class BlockBrowserGetVersionNumberFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.getVersionNumber", BROWSER_OS_GETVERSIONNUMBER)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.getVersionNumber", BROWSER_OS_GETVERSIONNUMBER)
 +
-+  BrowserOSGetVersionNumberFunction() = default;
++  BlockBrowserGetVersionNumberFunction() = default;
 +
 + protected:
-+  ~BrowserOSGetVersionNumberFunction() override = default;
++  ~BlockBrowserGetVersionNumberFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSExecuteJavaScriptFunction : public ExtensionFunction {
++class BlockBrowserExecuteJavaScriptFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.executeJavaScript", BROWSER_OS_EXECUTEJAVASCRIPT)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.executeJavaScript", BROWSER_OS_EXECUTEJAVASCRIPT)
 +
-+  BrowserOSExecuteJavaScriptFunction() = default;
++  BlockBrowserExecuteJavaScriptFunction() = default;
 +
 + protected:
-+  ~BrowserOSExecuteJavaScriptFunction() override = default;
++  ~BlockBrowserExecuteJavaScriptFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
@@ -305,27 +305,27 @@ index 0000000000000..e4b1c5f821342
 +  void OnJavaScriptExecuted(base::Value result);
 +};
 +
-+class BrowserOSClickCoordinatesFunction : public ExtensionFunction {
++class BlockBrowserClickCoordinatesFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.clickCoordinates", BROWSER_OS_CLICKCOORDINATES)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.clickCoordinates", BROWSER_OS_CLICKCOORDINATES)
 +
-+  BrowserOSClickCoordinatesFunction() = default;
++  BlockBrowserClickCoordinatesFunction() = default;
 +
 + protected:
-+  ~BrowserOSClickCoordinatesFunction() override = default;
++  ~BlockBrowserClickCoordinatesFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSTypeAtCoordinatesFunction : public ExtensionFunction {
++class BlockBrowserTypeAtCoordinatesFunction : public ExtensionFunction {
 + public:
-+  DECLARE_EXTENSION_FUNCTION("browserOS.typeAtCoordinates", BROWSER_OS_TYPEATCOORDINATES)
++  DECLARE_EXTENSION_FUNCTION("blockbrowser.typeAtCoordinates", BROWSER_OS_TYPEATCOORDINATES)
 +
-+  BrowserOSTypeAtCoordinatesFunction() = default;
++  BlockBrowserTypeAtCoordinatesFunction() = default;
 +
 + protected:
-+  ~BrowserOSTypeAtCoordinatesFunction() override = default;
++  ~BlockBrowserTypeAtCoordinatesFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;

@@ -6,7 +6,7 @@ index 43fd55ea0b83c..2da0ef8a114fa 100644
  import 'chrome://resources/js/search_highlight_utils.js';
  import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
  import '../about_page/about_page.js';
-+import '../nxtscape_page/nxtscape_page.js';
++import '../blockbrowser_page/blockbrowser_page.js';
 +import '../browseros_prefs_page/browseros_prefs_page.js';
  import '../basic_page/basic_page.js';
  import '../search_settings.js';
@@ -15,7 +15,7 @@ index 43fd55ea0b83c..2da0ef8a114fa 100644
  interface MainPageVisibility {
    about: boolean;
    settings: boolean;
-+  nxtscape: boolean;
++  blockbrowser: boolean;
 +  browserosPrefs: boolean;
  }
  
@@ -25,7 +25,7 @@ index 43fd55ea0b83c..2da0ef8a114fa 100644
          type: Object,
          value() {
 -          return {about: false, settings: false};
-+          return {about: false, settings: false, nxtscape: false, browserosPrefs: false};
++          return {about: false, settings: false, blockbrowser: false, browserosPrefs: false};
          },
        },
  
@@ -38,13 +38,13 @@ index 43fd55ea0b83c..2da0ef8a114fa 100644
 -    this.showPages_ = {about: inAbout, settings: !inAbout};
 +    const currentRoute = Router.getInstance().getCurrentRoute();
 +    const inAbout = routes.ABOUT.contains(currentRoute);
-+    const inNxtscape = routes.NXTSCAPE.contains(currentRoute);
-+    const inBrowserOSPrefs = routes.BROWSEROS_PREFS.contains(currentRoute);
++    const inBlockBrowser = routes.NXTSCAPE.contains(currentRoute);
++    const inBlockBrowserPrefs = routes.BROWSEROS_PREFS.contains(currentRoute);
 +    this.showPages_ = {
 +      about: inAbout,
-+      settings: !inAbout && !inNxtscape && !inBrowserOSPrefs,
-+      nxtscape: inNxtscape,
-+      browserosPrefs: inBrowserOSPrefs
++      settings: !inAbout && !inBlockBrowser && !inBlockBrowserPrefs,
++      blockbrowser: inBlockBrowser,
++      browserosPrefs: inBlockBrowserPrefs
 +    };
    }
  

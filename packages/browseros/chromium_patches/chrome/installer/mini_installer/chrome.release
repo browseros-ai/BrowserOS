@@ -7,10 +7,10 @@ index 0f331c3e0f2a3..e16dcd326b97f 100644
  MEIPreload\preloaded_data.pb: %(VersionDir)s\MEIPreload\
  
 +#
-+# BrowserOS Server
++# BlockBrowser Server
 +#
-+BrowserOSServer\default\resources\*.*: %(VersionDir)s\BrowserOSServer\default\resources\
-+BrowserOSServer\default\resources\bin\*.*: %(VersionDir)s\BrowserOSServer\default\resources\bin\
++BlockBrowserServer\default\resources\*.*: %(VersionDir)s\BlockBrowserServer\default\resources\
++BlockBrowserServer\default\resources\bin\*.*: %(VersionDir)s\BlockBrowserServer\default\resources\bin\
 +
  #
  # IWA Key Distribution

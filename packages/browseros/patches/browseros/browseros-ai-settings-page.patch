@@ -8,8 +8,8 @@ Subject: [PATCH] patch(M): llm settings page
  chrome/browser/prefs/browser_prefs.cc         |  35 +
  chrome/browser/prefs/browser_prefs.h          |   2 +
  chrome/browser/resources/settings/BUILD.gn    |   1 +
- .../settings/nxtscape_page/nxtscape_page.html | 659 ++++++++++++++++++
- .../settings/nxtscape_page/nxtscape_page.ts   | 582 ++++++++++++++++
+ .../settings/blockbrowser_page/blockbrowser_page.html | 659 ++++++++++++++++++
+ .../settings/blockbrowser_page/blockbrowser_page.ts   | 582 ++++++++++++++++
  chrome/browser/resources/settings/route.ts    |   1 +
  chrome/browser/resources/settings/router.ts   |   1 +
  chrome/browser/resources/settings/settings.ts |   1 +
@@ -18,8 +18,8 @@ Subject: [PATCH] patch(M): llm settings page
  .../settings/settings_menu/settings_menu.html |   6 +
  chrome/common/pref_names.h                    |  11 +
  13 files changed, 1343 insertions(+), 4 deletions(-)
- create mode 100644 chrome/browser/resources/settings/nxtscape_page/nxtscape_page.html
- create mode 100644 chrome/browser/resources/settings/nxtscape_page/nxtscape_page.ts
+ create mode 100644 chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.html
+ create mode 100644 chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.ts
 
 diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
 index c27e0e96e4bce..200d72995460e 100644
@@ -29,32 +29,32 @@ index c27e0e96e4bce..200d72995460e 100644
    (*s_allowlist)[::prefs::kCaretBrowsingEnabled] =
        settings_api::PrefType::kBoolean;
  
-+  // Nxtscape AI provider preferences
-+  (*s_allowlist)[prefs::kBrowserOSProviders] = settings_api::PrefType::kString;
-+  (*s_allowlist)["nxtscape.default_provider"] = settings_api::PrefType::kString;
++  // BlockBrowser AI provider preferences
++  (*s_allowlist)[prefs::kBlockBrowserProviders] = settings_api::PrefType::kString;
++  (*s_allowlist)["blockbrowser.default_provider"] = settings_api::PrefType::kString;
 +  
-+  // Nxtscape provider settings
-+  (*s_allowlist)["nxtscape.nxtscape_model"] = settings_api::PrefType::kString;
++  // BlockBrowser provider settings
++  (*s_allowlist)["blockbrowser.blockbrowser_model"] = settings_api::PrefType::kString;
 +  
 +  // OpenAI provider settings
-+  (*s_allowlist)["nxtscape.openai_api_key"] = settings_api::PrefType::kString;
-+  (*s_allowlist)["nxtscape.openai_model"] = settings_api::PrefType::kString;
-+  (*s_allowlist)["nxtscape.openai_base_url"] = settings_api::PrefType::kString;
++  (*s_allowlist)["blockbrowser.openai_api_key"] = settings_api::PrefType::kString;
++  (*s_allowlist)["blockbrowser.openai_model"] = settings_api::PrefType::kString;
++  (*s_allowlist)["blockbrowser.openai_base_url"] = settings_api::PrefType::kString;
 +
 +  // Anthropic provider settings
-+  (*s_allowlist)["nxtscape.anthropic_api_key"] = settings_api::PrefType::kString;
-+  (*s_allowlist)["nxtscape.anthropic_model"] = settings_api::PrefType::kString;
-+  (*s_allowlist)["nxtscape.anthropic_base_url"] = settings_api::PrefType::kString;
++  (*s_allowlist)["blockbrowser.anthropic_api_key"] = settings_api::PrefType::kString;
++  (*s_allowlist)["blockbrowser.anthropic_model"] = settings_api::PrefType::kString;
++  (*s_allowlist)["blockbrowser.anthropic_base_url"] = settings_api::PrefType::kString;
 +
 +  // Gemini provider settings
-+  (*s_allowlist)["nxtscape.gemini_api_key"] = settings_api::PrefType::kString;
-+  (*s_allowlist)["nxtscape.gemini_model"] = settings_api::PrefType::kString;
-+  (*s_allowlist)["nxtscape.gemini_base_url"] = settings_api::PrefType::kString;
++  (*s_allowlist)["blockbrowser.gemini_api_key"] = settings_api::PrefType::kString;
++  (*s_allowlist)["blockbrowser.gemini_model"] = settings_api::PrefType::kString;
++  (*s_allowlist)["blockbrowser.gemini_base_url"] = settings_api::PrefType::kString;
 +
 +  // Ollama provider settings
-+  (*s_allowlist)["nxtscape.ollama_api_key"] = settings_api::PrefType::kString;
-+  (*s_allowlist)["nxtscape.ollama_base_url"] = settings_api::PrefType::kString;
-+  (*s_allowlist)["nxtscape.ollama_model"] = settings_api::PrefType::kString;
++  (*s_allowlist)["blockbrowser.ollama_api_key"] = settings_api::PrefType::kString;
++  (*s_allowlist)["blockbrowser.ollama_base_url"] = settings_api::PrefType::kString;
++  (*s_allowlist)["blockbrowser.ollama_model"] = settings_api::PrefType::kString;
 +
  #if BUILDFLAG(IS_CHROMEOS)
    // Accounts / Users / People.
@@ -67,7 +67,7 @@ index c83cfdfe3708c..e6f03310af7ee 100644
    regional_capabilities::prefs::RegisterProfilePrefs(registry);
    RegisterBrowserUserPrefs(registry);
    RegisterGeminiSettingsPrefs(registry);
-+  RegisterNxtscapePrefs(registry);
++  RegisterBlockBrowserPrefs(registry);
    RegisterPrefersDefaultScrollbarStylesPrefs(registry);
    RegisterSafetyHubProfilePrefs(registry);
  #if BUILDFLAG(IS_CHROMEOS)
@@ -75,38 +75,38 @@ index c83cfdfe3708c..e6f03310af7ee 100644
    registry->RegisterIntegerPref(prefs::kGeminiSettings, 0);
  }
  
-+void RegisterNxtscapePrefs(user_prefs::PrefRegistrySyncable* registry) {
++void RegisterBlockBrowserPrefs(user_prefs::PrefRegistrySyncable* registry) {
 +  // AI Provider configurations stored as JSON
 +  // This will store the entire provider configuration including:
 +  // - defaultProviderId
 +  // - providers array with all configured providers
-+  registry->RegisterStringPref(prefs::kBrowserOSProviders, "");
++  registry->RegisterStringPref(prefs::kBlockBrowserProviders, "");
 +  
 +  // Legacy preferences (kept for backward compatibility)
-+  registry->RegisterStringPref("nxtscape.default_provider", "browseros");
++  registry->RegisterStringPref("blockbrowser.default_provider", "browseros");
 +  
-+  // Nxtscape provider settings
-+  registry->RegisterStringPref("nxtscape.nxtscape_model", "");
++  // BlockBrowser provider settings
++  registry->RegisterStringPref("blockbrowser.blockbrowser_model", "");
 +
 +  // OpenAI provider settings
-+  registry->RegisterStringPref("nxtscape.openai_api_key", "");
-+  registry->RegisterStringPref("nxtscape.openai_model", "gpt-4o");
-+  registry->RegisterStringPref("nxtscape.openai_base_url", "");
++  registry->RegisterStringPref("blockbrowser.openai_api_key", "");
++  registry->RegisterStringPref("blockbrowser.openai_model", "gpt-4o");
++  registry->RegisterStringPref("blockbrowser.openai_base_url", "");
 +
 +  // Anthropic provider settings
-+  registry->RegisterStringPref("nxtscape.anthropic_api_key", "");
-+  registry->RegisterStringPref("nxtscape.anthropic_model", "claude-3-5-sonnet-latest");
-+  registry->RegisterStringPref("nxtscape.anthropic_base_url", "");
++  registry->RegisterStringPref("blockbrowser.anthropic_api_key", "");
++  registry->RegisterStringPref("blockbrowser.anthropic_model", "claude-3-5-sonnet-latest");
++  registry->RegisterStringPref("blockbrowser.anthropic_base_url", "");
 +
 +  // Gemini provider settings
-+  registry->RegisterStringPref("nxtscape.gemini_api_key", "");
-+  registry->RegisterStringPref("nxtscape.gemini_model", "gemini-1.5-pro");
-+  registry->RegisterStringPref("nxtscape.gemini_base_url", "");
++  registry->RegisterStringPref("blockbrowser.gemini_api_key", "");
++  registry->RegisterStringPref("blockbrowser.gemini_model", "gemini-1.5-pro");
++  registry->RegisterStringPref("blockbrowser.gemini_base_url", "");
 +
 +  // Ollama provider settings
-+  registry->RegisterStringPref("nxtscape.ollama_api_key", "");
-+  registry->RegisterStringPref("nxtscape.ollama_base_url", "http://localhost:11434");
-+  registry->RegisterStringPref("nxtscape.ollama_model", "");
++  registry->RegisterStringPref("blockbrowser.ollama_api_key", "");
++  registry->RegisterStringPref("blockbrowser.ollama_base_url", "http://localhost:11434");
++  registry->RegisterStringPref("blockbrowser.ollama_model", "");
 +}
 +
  #if BUILDFLAG(IS_CHROMEOS)
@@ -120,7 +120,7 @@ index 3a1c48b14b37f..5600baa2143e0 100644
  
  void RegisterGeminiSettingsPrefs(user_prefs::PrefRegistrySyncable* registry);
  
-+void RegisterNxtscapePrefs(user_prefs::PrefRegistrySyncable* registry);
++void RegisterBlockBrowserPrefs(user_prefs::PrefRegistrySyncable* registry);
 +
  // Register all prefs that will be used via a PrefService attached to a user
  // Profile using the locale of |g_browser_process|.
@@ -133,15 +133,15 @@ index 6eb2b37837e97..1a8cd69860514 100644
    web_component_files = [
      "a11y_page/a11y_page.ts",
      "about_page/about_page.ts",
-+    "nxtscape_page/nxtscape_page.ts",
++    "blockbrowser_page/blockbrowser_page.ts",
      "ai_page/ai_compare_subpage.ts",
      "ai_page/ai_info_card.ts",
      "ai_page/ai_logging_info_bullet.ts",
-diff --git a/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.html b/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.html
+diff --git a/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.html b/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.html
 new file mode 100644
 index 0000000000000..9a429f31f43a0
 --- /dev/null
-+++ b/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.html
++++ b/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.html
 @@ -0,0 +1,659 @@
 +    <link rel="import" href="../controls/settings_toggle_button.html">
 +    <link rel="import" href="chrome://resources/cr_elements/cr_button/cr_button.html">
@@ -802,18 +802,18 @@ index 0000000000000..9a429f31f43a0
 +      <cr-icon icon="cr:check-circle"></cr-icon>
 +      <span>Settings saved successfully</span>
 +    </div>
-diff --git a/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.ts b/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.ts
+diff --git a/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.ts b/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.ts
 new file mode 100644
 index 0000000000000..f33e0463b1bfa
 --- /dev/null
-+++ b/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.ts
++++ b/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.ts
 @@ -0,0 +1,582 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +/**
-+ * @fileoverview 'settings-nxtscape-page' contains AI provider-specific settings.
++ * @fileoverview 'settings-blockbrowser-page' contains AI provider-specific settings.
 + */
 +
 +import '../settings_page/settings_section.js';
@@ -830,9 +830,9 @@ index 0000000000000..f33e0463b1bfa
 +import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 +import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 +
-+import {getTemplate} from './nxtscape_page.html.js';
++import {getTemplate} from './blockbrowser_page.html.js';
 +
-+const SettingsNxtscapePageElementBase = PrefsMixin(PolymerElement);
++const SettingsBlockBrowserPageElementBase = PrefsMixin(PolymerElement);
 +
 +export enum ProviderType {
 +  BROWSEROS = 'browseros',
@@ -912,9 +912,9 @@ index 0000000000000..f33e0463b1bfa
 +  }
 +};
 +
-+export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase {
++export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase {
 +  static get is() {
-+    return 'settings-nxtscape-page';
++    return 'settings-blockbrowser-page';
 +  }
 +
 +  static get template() {
@@ -1023,7 +1023,7 @@ index 0000000000000..f33e0463b1bfa
 +  }
 +
 +  private loadProviders_() {
-+    // Load from preferences or initialize with BrowserOS
++    // Load from preferences or initialize with BlockBrowser
 +    if (!this.prefs || !this.prefs.browseros) {
 +      this.initializeDefaultProviders_();
 +      return;
@@ -1046,7 +1046,7 @@ index 0000000000000..f33e0463b1bfa
 +  private initializeDefaultProviders_() {
 +    const browseros: ProviderConfig = {
 +      id: 'browseros',
-+      name: 'BrowserOS',
++      name: 'BlockBrowser',
 +      type: ProviderType.BROWSEROS,
 +      isDefault: true,
 +      isBuiltIn: true,
@@ -1134,7 +1134,7 @@ index 0000000000000..f33e0463b1bfa
 +    if (index !== -1) {
 +      this.splice('providers_', index, 1);
 +      
-+      // If deleted provider was default, set BrowserOS as default
++      // If deleted provider was default, set BlockBrowser as default
 +      if (provider.id === this.defaultProviderId_) {
 +        this.set('defaultProviderId_', 'browseros');
 +        this.updateProvidersDefaultStatus_();
@@ -1231,7 +1231,7 @@ index 0000000000000..f33e0463b1bfa
 +      };
 +      this.push('providers_', newProvider);
 +      
-+      chrome.send('logBrowserOSMetric', ['settings.provider.added', {
++      chrome.send('logBlockBrowserMetric', ['settings.provider.added', {
 +        provider_type: newProvider.type,
 +        model_id: newProvider.modelId
 +      }]);
@@ -1283,7 +1283,7 @@ index 0000000000000..f33e0463b1bfa
 +    this.updateProvidersDefaultStatus_();
 +    this.saveProviders_();
 +    
-+    chrome.send('logBrowserOSMetric', ['settings.default_provider.changed', {
++    chrome.send('logBlockBrowserMetric', ['settings.default_provider.changed', {
 +      old_provider_id: oldProviderId,
 +      new_provider_id: this.defaultProviderId_
 +    }]);
@@ -1304,7 +1304,7 @@ index 0000000000000..f33e0463b1bfa
 +    this.updateProvidersDefaultStatus_();
 +    this.saveProviders_();
 +    
-+    chrome.send('logBrowserOSMetric', ['settings.default_provider.changed', {
++    chrome.send('logBlockBrowserMetric', ['settings.default_provider.changed', {
 +      old_provider_id: oldProviderId,
 +      new_provider_id: this.defaultProviderId_
 +    }]);
@@ -1384,12 +1384,12 @@ index 0000000000000..f33e0463b1bfa
 +
 +declare global {
 +  interface HTMLElementTagNameMap {
-+    'settings-nxtscape-page': SettingsNxtscapePageElement;
++    'settings-blockbrowser-page': SettingsBlockBrowserPageElement;
 +  }
 +}
 +
 +customElements.define(
-+    SettingsNxtscapePageElement.is, SettingsNxtscapePageElement);
++    SettingsBlockBrowserPageElement.is, SettingsBlockBrowserPageElement);
 diff --git a/chrome/browser/resources/settings/route.ts b/chrome/browser/resources/settings/route.ts
 index 2458ecb3791b0..e8dd01dc3e7b6 100644
 --- a/chrome/browser/resources/settings/route.ts
@@ -1398,7 +1398,7 @@ index 2458ecb3791b0..e8dd01dc3e7b6 100644
    // Root pages.
    r.BASIC = new Route('/');
    r.ABOUT = new Route('/help', loadTimeData.getString('aboutPageTitle'));
-+  r.NXTSCAPE = new Route('/browseros-ai', 'BrowserOS AI Settings');
++  r.NXTSCAPE = new Route('/browseros-ai', 'BlockBrowser AI Settings');
  
    r.SEARCH = r.BASIC.createSection(
        '/search', 'search', loadTimeData.getString('searchPageTitle'));
@@ -1422,7 +1422,7 @@ index 85e1db9929325..dbd5e82c285f9 100644
  export {PluralStringProxyImpl as SettingsPluralStringProxyImpl} from 'chrome://resources/js/plural_string_proxy.js';
  export {getTrustedHTML} from 'chrome://resources/js/static_types.js';
  export {SettingsAboutPageElement} from './about_page/about_page.js';
-+export {SettingsNxtscapePageElement} from './nxtscape_page/nxtscape_page.js';
++export {SettingsBlockBrowserPageElement} from './blockbrowser_page/blockbrowser_page.js';
  export {ControlledRadioButtonElement} from './controls/controlled_radio_button.js';
  export {SettingsDropdownMenuElement} from './controls/settings_dropdown_menu.js';
  export {SettingsToggleButtonElement} from './controls/settings_toggle_button.js';
@@ -1434,11 +1434,11 @@ index 329e9552760de..403f2f2258fb8 100644
            prefs="{{prefs}}">
        </settings-about-page>
      </template>
-+    <template is="dom-if" if="[[showPages_.nxtscape]]">
-+      <settings-nxtscape-page role="main"
++    <template is="dom-if" if="[[showPages_.blockbrowser]]">
++      <settings-blockbrowser-page role="main"
 +          class="cr-centered-card-container"
 +          prefs="{{prefs}}">
-+      </settings-nxtscape-page>
++      </settings-blockbrowser-page>
 +    </template>
 diff --git a/chrome/browser/resources/settings/settings_main/settings_main.ts b/chrome/browser/resources/settings/settings_main/settings_main.ts
 index 43fd55ea0b83c..433afef3be384 100644
@@ -1448,7 +1448,7 @@ index 43fd55ea0b83c..433afef3be384 100644
  import 'chrome://resources/js/search_highlight_utils.js';
  import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
  import '../about_page/about_page.js';
-+import '../nxtscape_page/nxtscape_page.js';
++import '../blockbrowser_page/blockbrowser_page.js';
  import '../basic_page/basic_page.js';
  import '../search_settings.js';
  import '../settings_shared.css.js';
@@ -1456,7 +1456,7 @@ index 43fd55ea0b83c..433afef3be384 100644
  interface MainPageVisibility {
    about: boolean;
    settings: boolean;
-+  nxtscape: boolean;
++  blockbrowser: boolean;
  }
  
  export interface SettingsMainElement {
@@ -1465,7 +1465,7 @@ index 43fd55ea0b83c..433afef3be384 100644
          type: Object,
          value() {
 -          return {about: false, settings: false};
-+          return {about: false, settings: false, nxtscape: false};
++          return {about: false, settings: false, blockbrowser: false};
          },
        },
  
@@ -1478,11 +1478,11 @@ index 43fd55ea0b83c..433afef3be384 100644
 -    this.showPages_ = {about: inAbout, settings: !inAbout};
 +    const currentRoute = Router.getInstance().getCurrentRoute();
 +    const inAbout = routes.ABOUT.contains(currentRoute);
-+    const inNxtscape = routes.NXTSCAPE.contains(currentRoute);
++    const inBlockBrowser = routes.NXTSCAPE.contains(currentRoute);
 +    this.showPages_ = {
 +      about: inAbout,
-+      settings: !inAbout && !inNxtscape,
-+      nxtscape: inNxtscape
++      settings: !inAbout && !inBlockBrowser,
++      blockbrowser: inBlockBrowser
 +    };
    }
  
@@ -1495,10 +1495,10 @@ index 79aad7032abc7..8f123acf9b322 100644
            $i18n{peoplePageTitle}
            <cr-ripple></cr-ripple>
          </a>
-+        <a role="menuitem" id="nxtscape-menu" href="/browseros-ai"
++        <a role="menuitem" id="blockbrowser-menu" href="/browseros-ai"
 +            class="cr-nav-menu-item">
 +          <cr-icon icon="[[aiPageIcon_]]"></cr-icon>
-+          BrowserOS AI
++          BlockBrowser AI
 +          <cr-ripple></cr-ripple>
 +        </a>
          <a role="menuitem" id="autofill" href="/autofill"
@@ -1509,19 +1509,19 @@ index fb0a6d63e909a..a453af343fed7 100644
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
 @@ -4277,6 +4277,17 @@ inline constexpr char kSharedWorkerBlobURLFixEnabled[] =
- // String containing the stable client ID for BrowserOS metrics
- inline constexpr char kBrowserOSMetricsClientId[] =
+ // String containing the stable client ID for BlockBrowser metrics
+ inline constexpr char kBlockBrowserMetricsClientId[] =
      "browseros.metrics_client_id";
 +
-+// JSON string containing custom AI providers for BrowserOS
-+inline constexpr char kBrowserOSCustomProviders[] = 
++// JSON string containing custom AI providers for BlockBrowser
++inline constexpr char kBlockBrowserCustomProviders[] = 
 +    "browseros.custom_providers";
 +
 +// JSON string containing the list of AI providers and configuration
-+inline constexpr char kBrowserOSProviders[] = "browseros.providers";
++inline constexpr char kBlockBrowserProviders[] = "browseros.providers";
 +
-+// String containing the default provider ID for BrowserOS
-+inline constexpr char kBrowserOSDefaultProviderId[] = 
++// String containing the default provider ID for BlockBrowser
++inline constexpr char kBlockBrowserDefaultProviderId[] = 
 +    "browseros.default_provider_id";
  }  // namespace prefs
  

@@ -1,15 +1,15 @@
-diff --git a/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.ts b/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.ts
+diff --git a/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.ts b/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.ts
 new file mode 100644
 index 0000000000000..80e988de4d595
 --- /dev/null
-+++ b/chrome/browser/resources/settings/nxtscape_page/nxtscape_page.ts
++++ b/chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.ts
 @@ -0,0 +1,1099 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +/**
-+ * @fileoverview 'settings-nxtscape-page' contains AI provider-specific settings.
++ * @fileoverview 'settings-blockbrowser-page' contains AI provider-specific settings.
 + */
 +
 +import '../settings_page/settings_section.js';
@@ -26,10 +26,10 @@ index 0000000000000..80e988de4d595
 +import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 +import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 +
-+import {getTemplate} from './nxtscape_page.html.js';
++import {getTemplate} from './blockbrowser_page.html.js';
 +import {MODELS_DATA, getModelsForProvider, getModelContextLength} from './models_data.js';
 +
-+const SettingsNxtscapePageElementBase = PrefsMixin(PolymerElement);
++const SettingsBlockBrowserPageElementBase = PrefsMixin(PolymerElement);
 +
 +export enum ProviderType {
 +  BROWSEROS = 'browseros',
@@ -189,9 +189,9 @@ index 0000000000000..80e988de4d595
 +  return models.map(m => m.model_id);
 +}
 +
-+export class SettingsNxtscapePageElement extends SettingsNxtscapePageElementBase {
++export class SettingsBlockBrowserPageElement extends SettingsBlockBrowserPageElementBase {
 +  static get is() {
-+    return 'settings-nxtscape-page';
++    return 'settings-blockbrowser-page';
 +  }
 +
 +  static get template() {
@@ -331,7 +331,7 @@ index 0000000000000..80e988de4d595
 +  }
 +
 +  private loadProviders_() {
-+    // Load from preferences or initialize with BrowserOS
++    // Load from preferences or initialize with BlockBrowser
 +    if (!this.prefs || !this.prefs.browseros || !this.prefs.browseros.providers) {
 +      // Prefs not ready yet, initialize defaults locally only
 +      this.initializeDefaultProvidersLocally_();
@@ -345,7 +345,7 @@ index 0000000000000..80e988de4d595
 +        this.providers_ = data.providers;
 +        this.defaultProviderId_ = data.defaultProviderId;
 +        
-+        // Ensure BrowserOS is always present
++        // Ensure BlockBrowser is always present
 +        if (!this.providers_.some(p => p.id === 'browseros')) {
 +          this.initializeDefaultProviders_();
 +        }
@@ -363,7 +363,7 @@ index 0000000000000..80e988de4d595
 +    
 +    const browseros: ProviderConfig = {
 +      id: 'browseros',
-+      name: 'BrowserOS',
++      name: 'BlockBrowser',
 +      type: ProviderType.BROWSEROS,
 +      isDefault: true,
 +      isBuiltIn: true,
@@ -381,7 +381,7 @@ index 0000000000000..80e988de4d595
 +    
 +    const browseros: ProviderConfig = {
 +      id: 'browseros',
-+      name: 'BrowserOS',
++      name: 'BlockBrowser',
 +      type: ProviderType.BROWSEROS,
 +      isDefault: true,
 +      isBuiltIn: true,
@@ -495,7 +495,7 @@ index 0000000000000..80e988de4d595
 +    if (index !== -1) {
 +      this.splice('providers_', index, 1);
 +      
-+      // If deleted provider was default, set BrowserOS as default
++      // If deleted provider was default, set BlockBrowser as default
 +      if (provider.id === this.defaultProviderId_) {
 +        this.set('defaultProviderId_', 'browseros');
 +        this.updateProvidersDefaultStatus_();
@@ -839,7 +839,7 @@ index 0000000000000..80e988de4d595
 +      };
 +      this.push('providers_', newProvider);
 +      
-+      chrome.send('logBrowserOSMetric', ['settings.provider.added', {
++      chrome.send('logBlockBrowserMetric', ['settings.provider.added', {
 +        provider_type: newProvider.type,
 +        model_id: newProvider.modelId
 +      }]);
@@ -938,7 +938,7 @@ index 0000000000000..80e988de4d595
 +    this.saveProviders_();
 +    this.showStatusMessage_('Default provider changed');
 +
-+    chrome.send('logBrowserOSMetric', ['settings.default_provider.changed', {
++    chrome.send('logBlockBrowserMetric', ['settings.default_provider.changed', {
 +      old_provider_id: oldProviderId,
 +      new_provider_id: this.defaultProviderId_
 +    }]);
@@ -960,7 +960,7 @@ index 0000000000000..80e988de4d595
 +    this.saveProviders_();
 +    this.showStatusMessage_('Default provider changed');
 +
-+    chrome.send('logBrowserOSMetric', ['settings.default_provider.changed', {
++    chrome.send('logBlockBrowserMetric', ['settings.default_provider.changed', {
 +      old_provider_id: oldProviderId,
 +      new_provider_id: this.defaultProviderId_
 +    }]);
@@ -1097,9 +1097,9 @@ index 0000000000000..80e988de4d595
 +
 +declare global {
 +  interface HTMLElementTagNameMap {
-+    'settings-nxtscape-page': SettingsNxtscapePageElement;
++    'settings-blockbrowser-page': SettingsBlockBrowserPageElement;
 +  }
 +}
 +
 +customElements.define(
-+    SettingsNxtscapePageElement.is, SettingsNxtscapePageElement);
++    SettingsBlockBrowserPageElement.is, SettingsBlockBrowserPageElement);

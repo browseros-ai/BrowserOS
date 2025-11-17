@@ -1,4 +1,4 @@
-# Nxtscape Release Build Configuration
+# BlockBrowser Release Build Configuration
 build:
   type: release
   # architecture: arm64  # Default single architecture

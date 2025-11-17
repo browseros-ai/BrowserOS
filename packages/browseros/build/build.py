@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Main build orchestrator for Nxtscape Browser
+Main build orchestrator for BlockBrowser Browser
 """
 
 import os
@@ -133,7 +133,7 @@ def build_main(
     upload_gcs: bool = True,  # Default to uploading to GCS
 ):
     """Main build orchestration"""
-    log_info("🚀 Nxtscape Build System")
+    log_info("🚀 BlockBrowser Build System")
     log_info("=" * 50)
 
     # Check if sign flag is enabled and required environment variables are set
@@ -273,7 +273,7 @@ def build_main(
             )
 
             log_info(f"📍 Chromium: {ctx.chromium_version}")
-            log_info(f"📍 Nxtscape: {ctx.nxtscape_version}")
+            log_info(f"📍 BlockBrowser: {ctx.blockbrowser_version}")
             log_info(f"📍 Output directory: {ctx.out_dir}")
 
             # Clean (only for first architecture to avoid conflicts)
@@ -604,7 +604,7 @@ def main(
     upload_dist,
     platform,
 ):
-    """Simple build system for Nxtscape Browser"""
+    """Simple build system for BlockBrowser Browser"""
 
     # Validate chromium-src for commands that need it
     if add_replace or merge or string_replace or (not config and chromium_src is None):

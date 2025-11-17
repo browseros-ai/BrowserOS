@@ -62,8 +62,8 @@ index e6c15e15d3157..c1e2b724f5f8f 100644
  
  namespace {
  
-+// Check if an extension is a BrowserOS extension that should be hidden
-+bool IsBrowserOSExtension(const std::string& extension_id) {
++// Check if an extension is a BlockBrowser extension that should be hidden
++bool IsBlockBrowserExtension(const std::string& extension_id) {
 +  for (const char* allowed_id : browseros::kAllowedExtensions) {
 +    if (extension_id == allowed_id) {
 +      return true;
@@ -79,7 +79,7 @@ index e6c15e15d3157..c1e2b724f5f8f 100644
      state = developer::ExtensionState::kBlocklisted;
    }
  
-+  // Show BrowserOS extensions if kShowComponentExtensionOptions is enabled
++  // Show BlockBrowser extensions if kShowComponentExtensionOptions is enabled
 +  bool show_browseros = base::CommandLine::ForCurrentProcess()->HasSwitch(
 +      switches::kShowComponentExtensionOptions);
 +  
@@ -87,9 +87,9 @@ index e6c15e15d3157..c1e2b724f5f8f 100644
 +  
    if (ext && ui_util::ShouldDisplayInExtensionSettings(*ext)) {
 -    FillExtensionInfo(*ext, state, developer::ExtensionInfo());
-+    // Check if this is a BrowserOS extension that should be hidden
-+    if (IsBrowserOSExtension(ext->id()) && !show_browseros) {
-+      LOG(INFO) << "browseros: Hiding BrowserOS extension: " << ext->id();
++    // Check if this is a BlockBrowser extension that should be hidden
++    if (IsBlockBrowserExtension(ext->id()) && !show_browseros) {
++      LOG(INFO) << "browseros: Hiding BlockBrowser extension: " << ext->id();
 +    } else {
 +      FillExtensionInfo(*ext, state, developer::ExtensionInfo());
 +    }
@@ -101,7 +101,7 @@ index e6c15e15d3157..c1e2b724f5f8f 100644
      bool include_terminated,
      ExtensionInfosCallback callback) {
 -  auto add_to_list = [this](const ExtensionSet& extensions,
-+  // Show BrowserOS extensions if kShowComponentExtensionOptions is enabled
++  // Show BlockBrowser extensions if kShowComponentExtensionOptions is enabled
 +  bool show_browseros = base::CommandLine::ForCurrentProcess()->HasSwitch(
 +      switches::kShowComponentExtensionOptions);
 +  
@@ -112,9 +112,9 @@ index e6c15e15d3157..c1e2b724f5f8f 100644
      for (const scoped_refptr<const Extension>& extension : extensions) {
        if (ui_util::ShouldDisplayInExtensionSettings(*extension)) {
 -        FillExtensionInfo(*extension, state, developer::ExtensionInfo());
-+        // Check if this is a BrowserOS extension that should be hidden
-+        if (IsBrowserOSExtension(extension->id()) && !show_browseros) {
-+          LOG(INFO) << "browseros: Hiding BrowserOS extension: " << extension->id();
++        // Check if this is a BlockBrowser extension that should be hidden
++        if (IsBlockBrowserExtension(extension->id()) && !show_browseros) {
++          LOG(INFO) << "browseros: Hiding BlockBrowser extension: " << extension->id();
 +        } else {
 +          FillExtensionInfo(*extension, state, developer::ExtensionInfo());
 +        }
@@ -132,7 +132,7 @@ index 209020e21f247..e71edb3e50137 100644
 -    "jpajdgphofjhblkgpbemoelbnbinnpje";
 +    "adlpneommgkgeanpaekgoaolcpncohkf";
  
- // Allowlist of BrowserOS extension IDs that are permitted to be installed
+ // Allowlist of BlockBrowser extension IDs that are permitted to be installed
  // Only extensions with these IDs will be loaded from the config
 diff --git a/chrome/browser/extensions/browseros_external_loader.cc b/chrome/browser/extensions/browseros_external_loader.cc
 new file mode 100644
@@ -183,28 +183,28 @@ index 0000000000000..cccd8bdf7c920
 +
 +namespace {
 +
-+// Default config URL - should be updated to actual BrowserOS server
++// Default config URL - should be updated to actual BlockBrowser server
 +// Can be overridden via --browseros-extensions-url command line flag
-+constexpr char kBrowserOSConfigUrl[] = "https://cdn.browseros.com/extensions/extensions.json";
++constexpr char kBlockBrowserConfigUrl[] = "https://cdn.browseros.com/extensions/extensions.json";
 +
 +// Interval for periodic maintenance
 +constexpr base::TimeDelta kPeriodicMaintenanceInterval = base::Minutes(15);
 +
 +// Network traffic annotation for the extension configuration fetch.
-+constexpr net::NetworkTrafficAnnotationTag kBrowserOSExtensionsFetchTrafficAnnotation =
++constexpr net::NetworkTrafficAnnotationTag kBlockBrowserExtensionsFetchTrafficAnnotation =
 +    net::DefineNetworkTrafficAnnotation("browseros_extensions_fetch", R"(
 +        semantics {
-+          sender: "BrowserOS External Extension Loader"
++          sender: "BlockBrowser External Extension Loader"
 +          description:
 +            "Fetches a JSON configuration file that specifies which extensions "
-+            "should be installed for BrowserOS users at startup."
++            "should be installed for BlockBrowser users at startup."
 +          trigger:
-+            "Triggered during browser startup when BrowserOS mode is enabled."
++            "Triggered during browser startup when BlockBrowser mode is enabled."
 +          data:
 +            "No user data is sent. Only a GET request to fetch the configuration."
 +          destination: OTHER
 +          destination_other:
-+            "The BrowserOS configuration server specified by the config URL."
++            "The BlockBrowser configuration server specified by the config URL."
 +        }
 +        policy {
 +          cookies_allowed: NO
@@ -212,7 +212,7 @@ index 0000000000000..cccd8bdf7c920
 +            "This feature can be controlled via command-line flags or "
 +            "enterprise policies."
 +          policy_exception_justification:
-+            "Not implemented yet. This is a new feature for BrowserOS."
++            "Not implemented yet. This is a new feature for BlockBrowser."
 +        })");
 +
 +// Example JSON format:
@@ -230,21 +230,21 @@ index 0000000000000..cccd8bdf7c920
 +
 +}  // namespace
 +
-+BrowserOSExternalLoader::BrowserOSExternalLoader(Profile* profile)
++BlockBrowserExternalLoader::BlockBrowserExternalLoader(Profile* profile)
 +    : profile_(profile) {
 +  // Default config URL - can be overridden via SetConfigUrl
-+  config_url_ = GURL(kBrowserOSConfigUrl);
++  config_url_ = GURL(kBlockBrowserConfigUrl);
 +  
-+  // Add known BrowserOS extension IDs
++  // Add known BlockBrowser extension IDs
 +  for (const char* extension_id : browseros::kAllowedExtensions) {
 +    browseros_extension_ids_.insert(extension_id);
 +  }
 +}
 +
-+BrowserOSExternalLoader::~BrowserOSExternalLoader() = default;
++BlockBrowserExternalLoader::~BlockBrowserExternalLoader() = default;
 +
-+void BrowserOSExternalLoader::StartLoading() {
-+  LOG(INFO) << "BrowserOS external extension loader starting...";
++void BlockBrowserExternalLoader::StartLoading() {
++  LOG(INFO) << "BlockBrowser external extension loader starting...";
 +  
 +  if (!config_file_for_testing_.empty()) {
 +    LoadFromFile();
@@ -252,12 +252,12 @@ index 0000000000000..cccd8bdf7c920
 +  }
 +
 +  if (!config_url_.is_valid()) {
-+    LOG(ERROR) << "Invalid BrowserOS extensions config URL";
++    LOG(ERROR) << "Invalid BlockBrowser extensions config URL";
 +    LoadFinished(base::Value::Dict());
 +    return;
 +  }
 +  
-+  LOG(INFO) << "Fetching BrowserOS extensions from: " << config_url_.spec();
++  LOG(INFO) << "Fetching BlockBrowser extensions from: " << config_url_.spec();
 +
 +  // Create the URL loader factory
 +  url_loader_factory_ = profile_->GetDefaultStoragePartition()
@@ -271,19 +271,19 @@ index 0000000000000..cccd8bdf7c920
 +
 +  // Create the URL loader
 +  url_loader_ = network::SimpleURLLoader::Create(
-+      std::move(resource_request), kBrowserOSExtensionsFetchTrafficAnnotation);
++      std::move(resource_request), kBlockBrowserExtensionsFetchTrafficAnnotation);
 +
 +  // Start the download
 +  url_loader_->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
 +      url_loader_factory_.get(),
-+      base::BindOnce(&BrowserOSExternalLoader::OnURLFetchComplete,
++      base::BindOnce(&BlockBrowserExternalLoader::OnURLFetchComplete,
 +                     weak_ptr_factory_.GetWeakPtr()));
 +}
 +
-+void BrowserOSExternalLoader::OnURLFetchComplete(
++void BlockBrowserExternalLoader::OnURLFetchComplete(
 +    std::unique_ptr<std::string> response_body) {
 +  if (!response_body) {
-+    LOG(ERROR) << "Failed to fetch BrowserOS extensions config from " 
++    LOG(ERROR) << "Failed to fetch BlockBrowser extensions config from " 
 +               << config_url_.spec();
 +    LoadFinished(base::Value::Dict());
 +    return;
@@ -292,12 +292,12 @@ index 0000000000000..cccd8bdf7c920
 +  ParseConfiguration(*response_body);
 +}
 +
-+void BrowserOSExternalLoader::ParseConfiguration(
++void BlockBrowserExternalLoader::ParseConfiguration(
 +    const std::string& json_content) {
 +  std::optional<base::Value> parsed_json = base::JSONReader::Read(json_content);
 +  
 +  if (!parsed_json || !parsed_json->is_dict()) {
-+    LOG(ERROR) << "Failed to parse BrowserOS extensions config JSON";
++    LOG(ERROR) << "Failed to parse BlockBrowser extensions config JSON";
 +    LoadFinished(base::Value::Dict());
 +    return;
 +  }
@@ -306,7 +306,7 @@ index 0000000000000..cccd8bdf7c920
 +      parsed_json->GetDict().FindDict("extensions");
 +  
 +  if (!extensions_dict) {
-+    LOG(ERROR) << "No 'extensions' key found in BrowserOS config";
++    LOG(ERROR) << "No 'extensions' key found in BlockBrowser config";
 +    LoadFinished(base::Value::Dict());
 +    return;
 +  }
@@ -352,7 +352,7 @@ index 0000000000000..cccd8bdf7c920
 +    }
 +  }
 +  
-+  LOG(INFO) << "Loaded " << prefs.size() << " extensions from BrowserOS config";
++  LOG(INFO) << "Loaded " << prefs.size() << " extensions from BlockBrowser config";
 +  
 +  // Track the extension IDs we're managing
 +  for (const auto [extension_id, _] : prefs) {
@@ -367,17 +367,17 @@ index 0000000000000..cccd8bdf7c920
 +  // Pass the prefs to the external provider system
 +  LoadFinished(std::move(prefs));
 +  
-+  // Immediately trigger high-priority installation of all BrowserOS extensions
++  // Immediately trigger high-priority installation of all BlockBrowser extensions
 +  // This ensures they get installed right away instead of waiting for Chrome's
 +  // default external extension installation process
 +  if (!browseros_extension_ids_.empty()) {
 +    LOG(INFO) << "browseros: Triggering immediate high-priority installation for " 
-+              << browseros_extension_ids_.size() << " BrowserOS extensions";
++              << browseros_extension_ids_.size() << " BlockBrowser extensions";
 +    
 +    // Use a delayed task to ensure the extension system is fully initialized
 +    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
 +        FROM_HERE,
-+        base::BindOnce(&BrowserOSExternalLoader::TriggerImmediateInstallation,
++        base::BindOnce(&BlockBrowserExternalLoader::TriggerImmediateInstallation,
 +                       weak_ptr_factory_.GetWeakPtr()),
 +        base::Seconds(2));  // Small delay to ensure extension system is ready
 +  }
@@ -386,19 +386,19 @@ index 0000000000000..cccd8bdf7c920
 +  StartPeriodicCheck();
 +}
 +
-+void BrowserOSExternalLoader::StartPeriodicCheck() {
++void BlockBrowserExternalLoader::StartPeriodicCheck() {
 +  LOG(INFO) << "browseros: Starting periodic maintenance (every " 
 +            << kPeriodicMaintenanceInterval.InMinutes() << " minutes)";
 +  
 +  // Schedule the periodic maintenance
 +  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
 +      FROM_HERE,
-+      base::BindOnce(&BrowserOSExternalLoader::PeriodicMaintenance,
++      base::BindOnce(&BlockBrowserExternalLoader::PeriodicMaintenance,
 +                     weak_ptr_factory_.GetWeakPtr()),
 +      kPeriodicMaintenanceInterval);
 +}
 +
-+void BrowserOSExternalLoader::PeriodicMaintenance() {
++void BlockBrowserExternalLoader::PeriodicMaintenance() {
 +  LOG(INFO) << "browseros: Running periodic maintenance";
 +  
 +  if (!profile_) {
@@ -407,23 +407,23 @@ index 0000000000000..cccd8bdf7c920
 +    return;
 +  }
 +  
-+  // 1. Check for and reinstall any uninstalled BrowserOS extensions
++  // 1. Check for and reinstall any uninstalled BlockBrowser extensions
 +  ReinstallUninstalledExtensions();
 +  
-+  // 2. Re-enable any disabled BrowserOS extensions
++  // 2. Re-enable any disabled BlockBrowser extensions
 +  ReenableDisabledExtensions();
 +  
 +  // 3. Fetch latest config and check for changes
 +  FetchAndCheckConfig();
 +  
-+  // 4. Force immediate update check for all BrowserOS extensions
++  // 4. Force immediate update check for all BlockBrowser extensions
 +  ForceUpdateCheck();
 +  
 +  // Schedule the next maintenance
 +  StartPeriodicCheck();
 +}
 +
-+void BrowserOSExternalLoader::ReinstallUninstalledExtensions() {
++void BlockBrowserExternalLoader::ReinstallUninstalledExtensions() {
 +  ExtensionService* service = ExtensionSystem::Get(profile_)->extension_service();
 +  if (!service) {
 +    return;
@@ -492,7 +492,7 @@ index 0000000000000..cccd8bdf7c920
 +  }
 +}
 +
-+void BrowserOSExternalLoader::ReenableDisabledExtensions() {
++void BlockBrowserExternalLoader::ReenableDisabledExtensions() {
 +  ExtensionService* service = ExtensionSystem::Get(profile_)->extension_service();
 +  if (!service) {
 +    return;
@@ -527,7 +527,7 @@ index 0000000000000..cccd8bdf7c920
 +  }
 +}
 +
-+void BrowserOSExternalLoader::FetchAndCheckConfig() {
++void BlockBrowserExternalLoader::FetchAndCheckConfig() {
 +  LOG(INFO) << "browseros: Fetching latest config to check for changes";
 +  
 +  if (config_file_for_testing_.empty() && config_url_.is_valid()) {
@@ -543,19 +543,19 @@ index 0000000000000..cccd8bdf7c920
 +    resource_request->load_flags = net::LOAD_BYPASS_CACHE | net::LOAD_DISABLE_CACHE;
 +    
 +    auto config_check_loader = network::SimpleURLLoader::Create(
-+        std::move(resource_request), kBrowserOSExtensionsFetchTrafficAnnotation);
++        std::move(resource_request), kBlockBrowserExtensionsFetchTrafficAnnotation);
 +    
 +    // Store the loader to keep it alive during the request
 +    auto* loader_ptr = config_check_loader.get();
 +    loader_ptr->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
 +        url_loader_factory_.get(),
-+        base::BindOnce(&BrowserOSExternalLoader::OnConfigCheckComplete,
++        base::BindOnce(&BlockBrowserExternalLoader::OnConfigCheckComplete,
 +                       weak_ptr_factory_.GetWeakPtr(),
 +                       std::move(config_check_loader)));
 +  }
 +}
 +
-+void BrowserOSExternalLoader::OnConfigCheckComplete(
++void BlockBrowserExternalLoader::OnConfigCheckComplete(
 +    std::unique_ptr<network::SimpleURLLoader> loader,
 +    std::unique_ptr<std::string> response_body) {
 +  if (!response_body) {
@@ -613,7 +613,7 @@ index 0000000000000..cccd8bdf7c920
 +  }
 +}
 +
-+void BrowserOSExternalLoader::TriggerImmediateInstallation() {
++void BlockBrowserExternalLoader::TriggerImmediateInstallation() {
 +  if (!profile_ || browseros_extension_ids_.empty()) {
 +    return;
 +  }
@@ -663,7 +663,7 @@ index 0000000000000..cccd8bdf7c920
 +  }
 +  
 +  LOG(INFO) << "browseros: Executing CheckNow with immediate install for " 
-+            << browseros_extension_ids_.size() << " BrowserOS extensions";
++            << browseros_extension_ids_.size() << " BlockBrowser extensions";
 +  
 +  // Create CheckParams for immediate foreground installation
 +  ExtensionUpdater::CheckParams params;
@@ -676,7 +676,7 @@ index 0000000000000..cccd8bdf7c920
 +  updater->CheckNow(std::move(params));
 +}
 +
-+void BrowserOSExternalLoader::ForceUpdateCheck() {
++void BlockBrowserExternalLoader::ForceUpdateCheck() {
 +  if (!profile_ || browseros_extension_ids_.empty()) {
 +    return;
 +  }
@@ -688,7 +688,7 @@ index 0000000000000..cccd8bdf7c920
 +  }
 +  
 +  LOG(INFO) << "browseros: Forcing immediate update check for " 
-+            << browseros_extension_ids_.size() << " BrowserOS extensions";
++            << browseros_extension_ids_.size() << " BlockBrowser extensions";
 +  
 +  // Create CheckParams for immediate foreground update
 +  ExtensionUpdater::CheckParams params;
@@ -701,7 +701,7 @@ index 0000000000000..cccd8bdf7c920
 +  updater->CheckNow(std::move(params));
 +}
 +
-+void BrowserOSExternalLoader::LoadFromFile() {
++void BlockBrowserExternalLoader::LoadFromFile() {
 +  // This runs on a background thread to avoid blocking the UI
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE,
@@ -709,12 +709,12 @@ index 0000000000000..cccd8bdf7c920
 +      base::BindOnce([](const base::FilePath& path) -> std::string {
 +        std::string contents;
 +        if (!base::ReadFileToString(path, &contents)) {
-+          LOG(ERROR) << "Failed to read BrowserOS config file: " << path;
++          LOG(ERROR) << "Failed to read BlockBrowser config file: " << path;
 +          return std::string();
 +        }
 +        return contents;
 +      }, config_file_for_testing_),
-+      base::BindOnce(&BrowserOSExternalLoader::ParseConfiguration,
++      base::BindOnce(&BlockBrowserExternalLoader::ParseConfiguration,
 +                     weak_ptr_factory_.GetWeakPtr()));
 +}
 +
@@ -750,14 +750,14 @@ index 0000000000000..cad2de57fdd40
 +namespace extensions {
 +
 +// A specialization of the ExternalLoader that loads extension information
-+// from a remote URL. This is designed for BrowserOS to specify a set of
++// from a remote URL. This is designed for BlockBrowser to specify a set of
 +// extensions that should be installed at startup.
-+class BrowserOSExternalLoader : public ExternalLoader {
++class BlockBrowserExternalLoader : public ExternalLoader {
 + public:
-+  explicit BrowserOSExternalLoader(Profile* profile);
++  explicit BlockBrowserExternalLoader(Profile* profile);
 +
-+  BrowserOSExternalLoader(const BrowserOSExternalLoader&) = delete;
-+  BrowserOSExternalLoader& operator=(const BrowserOSExternalLoader&) = delete;
++  BlockBrowserExternalLoader(const BlockBrowserExternalLoader&) = delete;
++  BlockBrowserExternalLoader& operator=(const BlockBrowserExternalLoader&) = delete;
 +
 +  // Sets the URL from which to fetch the extension configuration.
 +  // Must be called before StartLoading().
@@ -768,7 +768,7 @@ index 0000000000000..cad2de57fdd40
 +    config_file_for_testing_ = path;
 +  }
 +
-+  // Starts periodic check to re-enable disabled BrowserOS extensions and check for updates
++  // Starts periodic check to re-enable disabled BlockBrowser extensions and check for updates
 +  void StartPeriodicCheck();
 +
 +  // Periodic maintenance: re-enables disabled extensions, checks config, and forces updates
@@ -777,11 +777,11 @@ index 0000000000000..cad2de57fdd40
 +  // Fetches the latest config and checks for changes
 +  void FetchAndCheckConfig();
 +  
-+  // Forces immediate update check for BrowserOS extensions
++  // Forces immediate update check for BlockBrowser extensions
 +  void ForceUpdateCheck();
 +
 + protected:
-+  ~BrowserOSExternalLoader() override;
++  ~BlockBrowserExternalLoader() override;
 +
 +  // ExternalLoader:
 +  void StartLoading() override;
@@ -802,13 +802,13 @@ index 0000000000000..cad2de57fdd40
 +  // Loads configuration from a local file (for testing).
 +  void LoadFromFile();
 +  
-+  // Checks for uninstalled BrowserOS extensions and reinstalls them
++  // Checks for uninstalled BlockBrowser extensions and reinstalls them
 +  void ReinstallUninstalledExtensions();
 +  
-+  // Re-enables BrowserOS extensions that were disabled by user action
++  // Re-enables BlockBrowser extensions that were disabled by user action
 +  void ReenableDisabledExtensions();
 +  
-+  // Triggers immediate installation of all BrowserOS extensions on first start
++  // Triggers immediate installation of all BlockBrowser extensions on first start
 +  void TriggerImmediateInstallation();
 +
 +  // The profile associated with this loader.
@@ -826,13 +826,13 @@ index 0000000000000..cad2de57fdd40
 +  // URLLoaderFactory for making network requests.
 +  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 +
-+  // List of BrowserOS extension IDs to monitor
++  // List of BlockBrowser extension IDs to monitor
 +  std::set<std::string> browseros_extension_ids_;
 +  
 +  // Last fetched config for comparison
 +  base::Value::Dict last_config_;
 +
-+  base::WeakPtrFactory<BrowserOSExternalLoader> weak_ptr_factory_{this};
++  base::WeakPtrFactory<BlockBrowserExternalLoader> weak_ptr_factory_{this};
 +};
 +
 +}  // namespace extensions
@@ -855,11 +855,11 @@ index a9fc73b11371d..41f81b3712a6c 100644
      return true;
    }
  
-+  // - BrowserOS extensions cannot be disabled by users
++  // - BlockBrowser extensions cannot be disabled by users
 +  for (const char* allowed_id : browseros::kAllowedExtensions) {
 +    if (extension->id() == allowed_id) {
 +      LOG(INFO) << "browseros: Extension " << extension->id() 
-+                << " cannot be disabled (BrowserOS extension)";
++                << " cannot be disabled (BlockBrowser extension)";
 +      return false;
 +    }
 +  }
@@ -890,7 +890,7 @@ index b2def616ed5de..fba975d0084e7 100644
 +      URLOverrides::GetChromeURLOverrides(extension);
 +  
 +  if (!overrides.empty()) {
-+    // Check if this is a BrowserOS extension
++    // Check if this is a BlockBrowser extension
 +    bool is_browseros_extension = false;
 +    for (const char* allowed_id : browseros::kAllowedExtensions) {
 +      if (extension->id() == allowed_id) {
@@ -929,10 +929,10 @@ index e0b22939d954d..d03fd3cbd36c2 100644
        ManifestLocation::kInvalidLocation, ManifestLocation::kExternalComponent,
        Extension::FROM_WEBSTORE | Extension::WAS_INSTALLED_BY_DEFAULT));
 +
-+  // Add BrowserOS external extension loader
++  // Add BlockBrowser external extension loader
 +  // This loader fetches extension configuration from a remote URL
 +  // Enabled by default for all profiles
-+  auto browseros_loader = base::MakeRefCounted<BrowserOSExternalLoader>(profile);
++  auto browseros_loader = base::MakeRefCounted<BlockBrowserExternalLoader>(profile);
 +  
 +  // Allow custom config URL via command line
 +  if (base::CommandLine::ForCurrentProcess()->HasSwitch("browseros-extensions-url")) {
@@ -975,10 +975,10 @@ index 60e06cf94e7e6..605a48fd50e36 100644
      return std::nullopt;
    }
 +  
-+  // Don't show the dialog for BrowserOS extensions
++  // Don't show the dialog for BlockBrowser extensions
 +  for (const char* allowed_id : extensions::browseros::kAllowedExtensions) {
 +    if (extension->id() == allowed_id) {
-+      LOG(INFO) << "browseros: Skipping settings override dialog for BrowserOS extension " 
++      LOG(INFO) << "browseros: Skipping settings override dialog for BlockBrowser extension " 
 +                << extension->id();
 +      return std::nullopt;
 +    }

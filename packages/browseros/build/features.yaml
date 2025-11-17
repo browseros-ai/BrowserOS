@@ -57,8 +57,8 @@ features:
     - chrome/browser/prefs/browser_prefs.cc
     - chrome/browser/prefs/browser_prefs.h
     - chrome/browser/resources/settings/BUILD.gn
-    - chrome/browser/resources/settings/nxtscape_page/nxtscape_page.html
-    - chrome/browser/resources/settings/nxtscape_page/nxtscape_page.ts
+    - chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.html
+    - chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.ts
     - chrome/browser/resources/settings/route.ts
     - chrome/browser/resources/settings/router.ts
     - chrome/browser/resources/settings/settings.ts
@@ -70,24 +70,24 @@ features:
     description: browseros API
     files:
     - chrome/browser/extensions/BUILD.gn
-    - chrome/browser/extensions/api/browser_os/browser_os_api.cc
-    - chrome/browser/extensions/api/browser_os/browser_os_api.h
-    - chrome/browser/extensions/api/browser_os/browser_os_api_helpers.cc
-    - chrome/browser/extensions/api/browser_os/browser_os_api_helpers.h
-    - chrome/browser/extensions/api/browser_os/browser_os_api_utils.cc
-    - chrome/browser/extensions/api/browser_os/browser_os_api_utils.h
-    - chrome/browser/extensions/api/browser_os/browser_os_change_detector.cc
-    - chrome/browser/extensions/api/browser_os/browser_os_change_detector.h
-    - chrome/browser/extensions/api/browser_os/browser_os_content_processor.cc
-    - chrome/browser/extensions/api/browser_os/browser_os_content_processor.h
-    - chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.cc
-    - chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.h
+    - chrome/browser/extensions/api/blockbrowser/blockbrowser_api.cc
+    - chrome/browser/extensions/api/blockbrowser/blockbrowser_api.h
+    - chrome/browser/extensions/api/blockbrowser/blockbrowser_api_helpers.cc
+    - chrome/browser/extensions/api/blockbrowser/blockbrowser_api_helpers.h
+    - chrome/browser/extensions/api/blockbrowser/blockbrowser_api_utils.cc
+    - chrome/browser/extensions/api/blockbrowser/blockbrowser_api_utils.h
+    - chrome/browser/extensions/api/blockbrowser/blockbrowser_change_detector.cc
+    - chrome/browser/extensions/api/blockbrowser/blockbrowser_change_detector.h
+    - chrome/browser/extensions/api/blockbrowser/blockbrowser_content_processor.cc
+    - chrome/browser/extensions/api/blockbrowser/blockbrowser_content_processor.h
+    - chrome/browser/extensions/api/blockbrowser/blockbrowser_snapshot_processor.cc
+    - chrome/browser/extensions/api/blockbrowser/blockbrowser_snapshot_processor.h
     - chrome/browser/extensions/chrome_extensions_browser_api_provider.cc
     - chrome/browser/media/extension_media_access_handler.cc
     - chrome/common/extensions/api/_api_features.json
     - chrome/common/extensions/api/_permission_features.json
     - chrome/common/extensions/api/api_sources.gni
-    - chrome/common/extensions/api/browser_os.idl
+    - chrome/common/extensions/api/blockbrowser.idl
     - chrome/common/extensions/permissions/chrome_api_permissions.cc
     - extensions/browser/extension_function_histogram_value.h
     - extensions/common/mojom/api_permission_id.mojom
@@ -95,7 +95,7 @@ features:
   server:
     description: browseros server
     files:
-    - chrome/browser/browseros_server/
+    - chrome/browser/blockbrowser_server/
     - base/threading/thread_restrictions.h
   metrics:
     description: browseros metrics
@@ -104,28 +104,28 @@ features:
     - chrome/browser/prefs/browser_prefs.cc
     - chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
     - chrome/browser/ui/BUILD.gn
-    - chrome/browser/ui/webui/settings/browseros_metrics_handler.cc
-    - chrome/browser/ui/webui/settings/browseros_metrics_handler.h
+    - chrome/browser/ui/webui/settings/blockbrowser_metrics_handler.cc
+    - chrome/browser/ui/webui/settings/blockbrowser_metrics_handler.h
     - chrome/browser/ui/webui/settings/settings_ui.cc
     - chrome/common/pref_names.h
-    - components/metrics/browseros_metrics/BUILD.gn
-    - components/metrics/browseros_metrics/DEPS
-    - components/metrics/browseros_metrics/browseros_metrics.cc
-    - components/metrics/browseros_metrics/browseros_metrics.h
-    - components/metrics/browseros_metrics/browseros_metrics_prefs.cc
-    - components/metrics/browseros_metrics/browseros_metrics_prefs.h
-    - components/metrics/browseros_metrics/browseros_metrics_service.cc
-    - components/metrics/browseros_metrics/browseros_metrics_service.h
-    - components/metrics/browseros_metrics/browseros_metrics_service_factory.cc
-    - components/metrics/browseros_metrics/browseros_metrics_service_factory.h
+    - components/metrics/blockbrowser_metrics/BUILD.gn
+    - components/metrics/blockbrowser_metrics/DEPS
+    - components/metrics/blockbrowser_metrics/blockbrowser_metrics.cc
+    - components/metrics/blockbrowser_metrics/blockbrowser_metrics.h
+    - components/metrics/blockbrowser_metrics/blockbrowser_metrics_prefs.cc
+    - components/metrics/blockbrowser_metrics/blockbrowser_metrics_prefs.h
+    - components/metrics/blockbrowser_metrics/blockbrowser_metrics_service.cc
+    - components/metrics/blockbrowser_metrics/blockbrowser_metrics_service.h
+    - components/metrics/blockbrowser_metrics/blockbrowser_metrics_service_factory.cc
+    - components/metrics/blockbrowser_metrics/blockbrowser_metrics_service_factory.h
   ota-updater:
     description: extensions ota updater
     files:
     - chrome/browser/extensions/BUILD.gn
     - chrome/browser/extensions/api/developer_private/extension_info_generator_shared.cc
-    - chrome/browser/extensions/browseros_extension_constants.h
-    - chrome/browser/extensions/browseros_external_loader.cc
-    - chrome/browser/extensions/browseros_external_loader.h
+    - chrome/browser/extensions/blockbrowser_extension_constants.h
+    - chrome/browser/extensions/blockbrowser_external_loader.cc
+    - chrome/browser/extensions/blockbrowser_external_loader.h
     - chrome/browser/extensions/chrome_extension_registrar_delegate.cc
     - chrome/browser/extensions/extension_web_ui_override_registrar.cc
     - chrome/browser/extensions/external_provider_impl.cc
@@ -197,7 +197,7 @@ features:
     files:
     - chrome/browser/chrome_browser_main.cc
     - chrome/browser/ui/webui/chrome_web_ui_configs.cc
-    - chrome/browser/ui/webui/nxtscape_first_run.h
+    - chrome/browser/ui/webui/blockbrowser_first_run.h
     - chrome/common/webui_url_constants.cc
   llm-chat:
     description: llm chat and updates
@@ -213,8 +213,8 @@ features:
     - chrome/browser/ui/ui_features.h
     - chrome/browser/ui/views/accelerator_table.cc
     - chrome/browser/ui/views/side_panel/BUILD.gn
-    - chrome/browser/ui/views/side_panel/browseros_simple_page_extractor.cc
-    - chrome/browser/ui/views/side_panel/browseros_simple_page_extractor.h
+    - chrome/browser/ui/views/side_panel/blockbrowser_simple_page_extractor.cc
+    - chrome/browser/ui/views/side_panel/blockbrowser_simple_page_extractor.h
     - chrome/browser/ui/views/side_panel/clash_of_gpts/clash_of_gpts_coordinator.cc
     - chrome/browser/ui/views/side_panel/side_panel_entry_id.h
     - chrome/browser/ui/views/side_panel/side_panel_prefs.cc
@@ -260,12 +260,12 @@ features:
     description: 'llm settings page: updates'
     files:
     - chrome/browser/resources/settings/BUILD.gn
-    - chrome/browser/resources/settings/nxtscape_page/models_data.html
-    - chrome/browser/resources/settings/nxtscape_page/models_data.ts
-    - chrome/browser/resources/settings/nxtscape_page/nxtscape_page.html
-    - chrome/browser/resources/settings/nxtscape_page/nxtscape_page.ts
+    - chrome/browser/resources/settings/blockbrowser_page/models_data.html
+    - chrome/browser/resources/settings/blockbrowser_page/models_data.ts
+    - chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.html
+    - chrome/browser/resources/settings/blockbrowser_page/blockbrowser_page.ts
   mac-sparkle-updater:
-    description: 'patch: nxtscape-updater-sparkle'
+    description: 'patch: blockbrowser-updater-sparkle'
     files:
     - chrome/BUILD.gn
     - chrome/browser/BUILD.gn
@@ -283,9 +283,9 @@ features:
   pin-chat-and-hub:
     description: pin browseros native panels
     files:
-    - chrome/browser/extensions/browseros_extension_constants.h
+    - chrome/browser/extensions/blockbrowser_extension_constants.h
     - chrome/browser/sync/prefs/chrome_syncable_prefs_database.cc
-    - chrome/browser/ui/actions/browseros_actions_config.h
+    - chrome/browser/ui/actions/blockbrowser_actions_config.h
     - chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc
     - chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h
     - chrome/browser/ui/toolbar/toolbar_pref_names.cc
@@ -295,10 +295,10 @@ features:
   pin-extensions-toolbar:
     description: pin browseros extensions to extension toolbar
     files:
-    - chrome/browser/extensions/browseros_extension_constants.h
+    - chrome/browser/extensions/blockbrowser_extension_constants.h
     - chrome/browser/extensions/extension_context_menu_model.cc
     - chrome/browser/extensions/extension_management.cc
-    - chrome/browser/ui/actions/browseros_actions_config.h
+    - chrome/browser/ui/actions/blockbrowser_actions_config.h
     - chrome/browser/ui/toolbar/toolbar_actions_model.cc
     - chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.cc
   preferences-settings-page:
@@ -307,8 +307,8 @@ features:
     - chrome/browser/extensions/api/settings_private/prefs_util.cc
     - chrome/browser/prefs/browser_prefs.cc
     - chrome/browser/resources/settings/BUILD.gn
-    - chrome/browser/resources/settings/browseros_prefs_page/browseros_prefs_page.html
-    - chrome/browser/resources/settings/browseros_prefs_page/browseros_prefs_page.ts
+    - chrome/browser/resources/settings/blockbrowser_prefs_page/blockbrowser_prefs_page.html
+    - chrome/browser/resources/settings/blockbrowser_prefs_page/blockbrowser_prefs_page.ts
     - chrome/browser/resources/settings/route.ts
     - chrome/browser/resources/settings/router.ts
     - chrome/browser/resources/settings/settings.ts

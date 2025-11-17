@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/ui/webui/settings/browseros_metrics_handler.h b/chrome/browser/ui/webui/settings/browseros_metrics_handler.h
+diff --git a/chrome/browser/ui/webui/settings/blockbrowser_metrics_handler.h b/chrome/browser/ui/webui/settings/blockbrowser_metrics_handler.h
 new file mode 100644
 index 0000000000000..dfcb0485c0432
 --- /dev/null
-+++ b/chrome/browser/ui/webui/settings/browseros_metrics_handler.h
++++ b/chrome/browser/ui/webui/settings/blockbrowser_metrics_handler.h
 @@ -0,0 +1,39 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -19,21 +19,21 @@ index 0000000000000..dfcb0485c0432
 +
 +namespace settings {
 +
-+// Handler for BrowserOS metrics messages from the settings page.
-+class BrowserOSMetricsHandler : public SettingsPageUIHandler {
++// Handler for BlockBrowser metrics messages from the settings page.
++class BlockBrowserMetricsHandler : public SettingsPageUIHandler {
 + public:
-+  BrowserOSMetricsHandler();
-+  ~BrowserOSMetricsHandler() override;
++  BlockBrowserMetricsHandler();
++  ~BlockBrowserMetricsHandler() override;
 +
-+  BrowserOSMetricsHandler(const BrowserOSMetricsHandler&) = delete;
-+  BrowserOSMetricsHandler& operator=(const BrowserOSMetricsHandler&) = delete;
++  BlockBrowserMetricsHandler(const BlockBrowserMetricsHandler&) = delete;
++  BlockBrowserMetricsHandler& operator=(const BlockBrowserMetricsHandler&) = delete;
 +
 +  // WebUIMessageHandler:
 +  void RegisterMessages() override;
 +
 + private:
-+  // Handler for logBrowserOSMetric message from JavaScript
-+  void HandleLogBrowserOSMetric(const base::Value::List& args);
++  // Handler for logBlockBrowserMetric message from JavaScript
++  void HandleLogBlockBrowserMetric(const base::Value::List& args);
 +
 +  // SettingsPageUIHandler:
 +  void OnJavascriptAllowed() override;

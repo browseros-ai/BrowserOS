@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "BrowserOS Feedback",
+  "name": "BlockBrowser Feedback",
   "version": "38",
   "browser_version": "137.0.7189.69",
-  "description": "Submit bug reports and feature requests for your browser",
+  "description": "Submit bug reports and feature requests for BlockBrowser",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnoMJfHW7wa5LjImbRQ6AX/3mgNP4W7oRoFvTM9AcDgDJH4vFH6VKiqo6jug968Q8HDAu9lizxdNcC+YiwMo1K0ipfx5iGELFp9iBAmiJy3e4ybfqXglR4FuXpchO3rsb+Z1G8oV4BrdLEVbDEyJhEHYqUDFvF6np870zWkKnvhJV6so4n+ePhvm3zJ3F63VuUJbeuKvclAY3+nY0IonREP01YePgiG82NJN6sd/O5W7qKNJ6Rj/GzckUqi5CFczdPeTn8tVTglZvCD1MTkBf0QxH4n+fNYiPv1SgcKH+vz8VkWoMeKW9bkBHWQtjuzIMwfz7F3GAhLCeydvOo6lPsQIDAQAB",
   "permissions": [
     "storage",
@@ -19,7 +19,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Browser Feedback",
+    "default_title": "BlockBrowser Feedback",
     "default_icon": {
       "16": "assets/icon16.png",
       "48": "assets/icon48.png",

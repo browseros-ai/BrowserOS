@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/browseros_server/browseros_server_manager.h b/chrome/browser/browseros_server/browseros_server_manager.h
+diff --git a/chrome/browser/blockbrowser_server/blockbrowser_server_manager.h b/chrome/browser/blockbrowser_server/blockbrowser_server_manager.h
 new file mode 100644
 index 0000000000000..d991d965c4913
 --- /dev/null
-+++ b/chrome/browser/browseros_server/browseros_server_manager.h
++++ b/chrome/browser/blockbrowser_server/blockbrowser_server_manager.h
 @@ -0,0 +1,138 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -33,27 +33,27 @@ index 0000000000000..d991d965c4913
 +
 +namespace browseros {
 +
-+// BrowserOS: Manages the lifecycle of the BrowserOS server process (singleton)
++// BlockBrowser: Manages the lifecycle of the BlockBrowser server process (singleton)
 +// This manager:
 +// 1. Starts Chromium's CDP WebSocket server (port 9222+, auto-discovered)
-+// 2. Launches the bundled BrowserOS server binary with CDP and MCP ports
++// 2. Launches the bundled BlockBrowser server binary with CDP and MCP ports
 +// 3. Monitors MCP server health via HTTP /health endpoint and auto-restarts
-+class BrowserOSServerManager {
++class BlockBrowserServerManager {
 + public:
-+  static BrowserOSServerManager* GetInstance();
++  static BlockBrowserServerManager* GetInstance();
 +
-+  BrowserOSServerManager(const BrowserOSServerManager&) = delete;
-+  BrowserOSServerManager& operator=(const BrowserOSServerManager&) = delete;
++  BlockBrowserServerManager(const BlockBrowserServerManager&) = delete;
++  BlockBrowserServerManager& operator=(const BlockBrowserServerManager&) = delete;
 +
-+  // Starts the BrowserOS server if not already running
++  // Starts the BlockBrowser server if not already running
 +  // This will:
 +  // 1. Find available CDP port (starting from 9222 or saved pref)
 +  // 2. Start CDP WebSocket server on discovered port
 +  // 3. Find available MCP port (starting from 9223 or saved pref)
-+  // 4. Launch browseros_server binary with discovered ports
++  // 4. Launch blockbrowser_server binary with discovered ports
 +  void Start();
 +
-+  // Stops the BrowserOS server
++  // Stops the BlockBrowser server
 +  void Stop();
 +
 +  // Returns true if the server is running
@@ -78,20 +78,20 @@ index 0000000000000..d991d965c4913
 +  void Shutdown();
 +
 + private:
-+  friend base::NoDestructor<BrowserOSServerManager>;
++  friend base::NoDestructor<BlockBrowserServerManager>;
 +
-+  BrowserOSServerManager();
-+  ~BrowserOSServerManager();
++  BlockBrowserServerManager();
++  ~BlockBrowserServerManager();
 +
 +  bool AcquireLock();
 +  void InitializePortsAndPrefs();
 +  void SavePortsToPrefs();
 +  void StartCDPServer();
 +  void StopCDPServer();
-+  void LaunchBrowserOSProcess();
++  void LaunchBlockBrowserProcess();
 +  void OnProcessLaunched(base::Process process);
-+  void TerminateBrowserOSProcess();
-+  void RestartBrowserOSProcess();
++  void TerminateBlockBrowserProcess();
++  void RestartBlockBrowserProcess();
 +  void OnProcessExited(int exit_code);
 +  void CheckServerHealth();
 +  void OnHealthCheckComplete(
@@ -110,9 +110,9 @@ index 0000000000000..d991d965c4913
 +      scoped_refptr<net::HttpResponseHeaders> headers);
 +  void CheckProcessStatus();
 +
-+  base::FilePath GetBrowserOSServerResourcesPath() const;
-+  base::FilePath GetBrowserOSExecutionDir() const;
-+  base::FilePath GetBrowserOSServerExecutablePath() const;
++  base::FilePath GetBlockBrowserServerResourcesPath() const;
++  base::FilePath GetBlockBrowserExecutionDir() const;
++  base::FilePath GetBlockBrowserServerExecutablePath() const;
 +  int FindAvailablePort(int starting_port);
 +  bool IsPortAvailable(int port);
 +
@@ -136,7 +136,7 @@ index 0000000000000..d991d965c4913
 +  // Preference change registrar for monitoring MCP enabled changes
 +  std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
 +
-+  base::WeakPtrFactory<BrowserOSServerManager> weak_factory_{this};
++  base::WeakPtrFactory<BlockBrowserServerManager> weak_factory_{this};
 +};
 +
 +}  // namespace browseros

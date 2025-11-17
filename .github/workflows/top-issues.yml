@@ -12,7 +12,7 @@ permissions:
 jobs:
   update-top-issues:
     runs-on: ubuntu-latest
-    if: github.repository == 'browseros-ai/BrowserOS'
+    if: github.repository == 'browseros-ai/BlockBrowser'
 
     steps:
       - name: Update top issues list
@@ -41,7 +41,7 @@ jobs:
                 }
               }
             }
-          ' -f owner='browseros-ai' -f repo='BrowserOS')
+          ' -f owner='browseros-ai' -f repo='BlockBrowser')
 
           # Parse and sort issues by thumbs up count
           sorted_issues=$(echo "$issues" | jq -r --arg ISSUE_NUMBER "$ISSUE_NUMBER" '
@@ -74,7 +74,7 @@ jobs:
           # Update the tracking issue
           echo "Updating issue #$ISSUE_NUMBER..."
           gh issue edit "$ISSUE_NUMBER" \
-            --repo browseros-ai/BrowserOS \
+            --repo browseros-ai/BlockBrowser \
             --body-file /tmp/issue_body.md
 
           echo "✅ Successfully updated top issues list!"

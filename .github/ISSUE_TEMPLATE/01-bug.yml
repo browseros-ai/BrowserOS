@@ -1,5 +1,5 @@
 name: Bug report
-description: File a bug report for BrowserOS
+description: File a bug report for BlockBrowser
 title: "<short description of the bug>"
 labels:
   - "bug"
@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thank you for taking the time to report this issue and help improve BrowserOS. We'll look into it! 🐛
+        Thank you for taking the time to report this issue and help improve BlockBrowser. We'll look into it! 🐛
 
   - id: issue-type
     type: dropdown
@@ -47,7 +47,7 @@ body:
     attributes:
       label: Steps to Reproduce
       placeholder: |
-        1. Open BrowserOS and navigate to...
+        1. Open BlockBrowser and navigate to...
         2. Click on...
         3. See error
     validations:
@@ -63,8 +63,8 @@ body:
   - id: browseros-version
     type: input
     attributes:
-      label: BrowserOS Version
-      description: Which version of BrowserOS are you using? (Find it in `chrome://settings/help`)
+      label: BlockBrowser Version
+      description: Which version of BlockBrowser are you using? (Find it in `chrome://settings/help`)
       placeholder: e.g., 137.0.7212.69
 
   - id: additional-context

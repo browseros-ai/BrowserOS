@@ -2870,7 +2870,7 @@
         "kind": 2,
         "importPath": "packages.browseros.build.modules.compile",
         "description": "packages.browseros.build.modules.compile",
-        "peekOfCode": "def build(ctx: BuildContext) -> bool:\n    \"\"\"Run the actual build\"\"\"\n    log_info(\"\\n🔨 Building Nxtscape (this will take a while)...\")\n    # Create VERSION file with nxtscape_chromium_version\n    if ctx.nxtscape_chromium_version:\n        # Parse the nxtscape_chromium_version back into components\n        parts = ctx.nxtscape_chromium_version.split(\".\")\n        if len(parts) == 4:\n            version_content = f\"MAJOR={parts[0]}\\nMINOR={parts[1]}\\nBUILD={parts[2]}\\nPATCH={parts[3]}\"\n            # Create temporary VERSION file",
+        "peekOfCode": "def build(ctx: BuildContext) -> bool:\n    \"\"\"Run the actual build\"\"\"\n    log_info(\"\\n🔨 Building BlockBrowser (this will take a while)...\")\n    # Create VERSION file with blockbrowser_chromium_version\n    if ctx.blockbrowser_chromium_version:\n        # Parse the blockbrowser_chromium_version back into components\n        parts = ctx.blockbrowser_chromium_version.split(\".\")\n        if len(parts) == 4:\n            version_content = f\"MAJOR={parts[0]}\\nMINOR={parts[1]}\\nBUILD={parts[2]}\\nPATCH={parts[3]}\"\n            # Create temporary VERSION file",
         "detail": "packages.browseros.build.modules.compile",
         "documentation": {}
     },
@@ -2888,7 +2888,7 @@
         "kind": 2,
         "importPath": "packages.browseros.build.modules.gcs",
         "description": "packages.browseros.build.modules.gcs",
-        "peekOfCode": "def upload_to_gcs(\n    ctx: BuildContext,\n    file_paths: List[Path],\n    platform_override: Optional[str] = None\n) -> Tuple[bool, List[str]]:\n    \"\"\"Upload build artifacts to Google Cloud Storage\n    Args:\n        ctx: BuildContext with root_dir and nxtscape_version\n        file_paths: List of file paths to upload\n        platform_override: Optional platform override (macos/linux/win)",
+        "peekOfCode": "def upload_to_gcs(\n    ctx: BuildContext,\n    file_paths: List[Path],\n    platform_override: Optional[str] = None\n) -> Tuple[bool, List[str]]:\n    \"\"\"Upload build artifacts to Google Cloud Storage\n    Args:\n        ctx: BuildContext with root_dir and blockbrowser_version\n        file_paths: List of file paths to upload\n        platform_override: Optional platform override (macos/linux/win)",
         "detail": "packages.browseros.build.modules.gcs",
         "documentation": {}
     },
@@ -2933,7 +2933,7 @@
         "kind": 5,
         "importPath": "packages.browseros.build.modules.gcs",
         "description": "packages.browseros.build.modules.gcs",
-        "peekOfCode": "SERVICE_ACCOUNT_FILE = \"gclient.json\"\n# GCS bucket configuration\nGCS_BUCKET_NAME = \"nxtscape\"\ndef _get_platform_dir(platform_override: Optional[str] = None) -> str:\n    \"\"\"Get platform directory name for GCS path\"\"\"\n    if platform_override:\n        return platform_override\n    if IS_WINDOWS:\n        return \"win\"\n    elif IS_MACOS:",
+        "peekOfCode": "SERVICE_ACCOUNT_FILE = \"gclient.json\"\n# GCS bucket configuration\nGCS_BUCKET_NAME = \"blockbrowser\"\ndef _get_platform_dir(platform_override: Optional[str] = None) -> str:\n    \"\"\"Get platform directory name for GCS path\"\"\"\n    if platform_override:\n        return platform_override\n    if IS_WINDOWS:\n        return \"win\"\n    elif IS_MACOS:",
         "detail": "packages.browseros.build.modules.gcs",
         "documentation": {}
     },
@@ -2942,7 +2942,7 @@
         "kind": 5,
         "importPath": "packages.browseros.build.modules.gcs",
         "description": "packages.browseros.build.modules.gcs",
-        "peekOfCode": "GCS_BUCKET_NAME = \"nxtscape\"\ndef _get_platform_dir(platform_override: Optional[str] = None) -> str:\n    \"\"\"Get platform directory name for GCS path\"\"\"\n    if platform_override:\n        return platform_override\n    if IS_WINDOWS:\n        return \"win\"\n    elif IS_MACOS:\n        return \"macos\"\n    else:",
+        "peekOfCode": "GCS_BUCKET_NAME = \"blockbrowser\"\ndef _get_platform_dir(platform_override: Optional[str] = None) -> str:\n    \"\"\"Get platform directory name for GCS path\"\"\"\n    if platform_override:\n        return platform_override\n    if IS_WINDOWS:\n        return \"win\"\n    elif IS_MACOS:\n        return \"macos\"\n    else:",
         "detail": "packages.browseros.build.modules.gcs",
         "documentation": {}
     },
@@ -2978,7 +2978,7 @@
         "kind": 2,
         "importPath": "packages.browseros.build.modules.inject",
         "description": "packages.browseros.build.modules.inject",
-        "peekOfCode": "def inject_version_to_manifest(\n    manifest_path: Path, browser_version: str, nxtscape_version: str\n) -> bool:\n    \"\"\"Inject browser version and increment version into a single manifest.json file\"\"\"\n    try:\n        if not manifest_path.exists():\n            log_error(f\"Manifest not found: {manifest_path}\")\n            return False\n        # Read existing manifest\n        with open(manifest_path, \"r\", encoding=\"utf-8\") as f:",
+        "peekOfCode": "def inject_version_to_manifest(\n    manifest_path: Path, browser_version: str, blockbrowser_version: str\n) -> bool:\n    \"\"\"Inject browser version and increment version into a single manifest.json file\"\"\"\n    try:\n        if not manifest_path.exists():\n            log_error(f\"Manifest not found: {manifest_path}\")\n            return False\n        # Read existing manifest\n        with open(manifest_path, \"r\", encoding=\"utf-8\") as f:",
         "detail": "packages.browseros.build.modules.inject",
         "documentation": {}
     },
@@ -3077,7 +3077,7 @@
         "kind": 2,
         "importPath": "packages.browseros.build.modules.package",
         "description": "packages.browseros.build.modules.package",
-        "peekOfCode": "def create_dmg(\n    app_path: Path,\n    dmg_path: Path,\n    volume_name: str = \"BrowserOS\",\n    pkg_dmg_path: Optional[Path] = None,\n) -> bool:\n    \"\"\"Create a DMG package from an app bundle\"\"\"\n    log_info(f\"\\n📀 Creating DMG package: {dmg_path.name}\")\n    # Verify app exists\n    if not app_path.exists():",
+        "peekOfCode": "def create_dmg(\n    app_path: Path,\n    dmg_path: Path,\n    volume_name: str = \"BlockBrowser\",\n    pkg_dmg_path: Optional[Path] = None,\n) -> bool:\n    \"\"\"Create a DMG package from an app bundle\"\"\"\n    log_info(f\"\\n📀 Creating DMG package: {dmg_path.name}\")\n    # Verify app exists\n    if not app_path.exists():",
         "detail": "packages.browseros.build.modules.package",
         "documentation": {}
     },
@@ -3104,7 +3104,7 @@
         "kind": 2,
         "importPath": "packages.browseros.build.modules.package",
         "description": "packages.browseros.build.modules.package",
-        "peekOfCode": "def create_signed_notarized_dmg(\n    app_path: Path,\n    dmg_path: Path,\n    certificate_name: str,\n    volume_name: str = \"BrowserOS\",\n    pkg_dmg_path: Optional[Path] = None,\n    keychain_profile: str = \"notarytool-profile\",\n) -> bool:\n    \"\"\"Create, sign, and notarize a DMG in one go\"\"\"\n    log_info(\"=\" * 70)",
+        "peekOfCode": "def create_signed_notarized_dmg(\n    app_path: Path,\n    dmg_path: Path,\n    certificate_name: str,\n    volume_name: str = \"BlockBrowser\",\n    pkg_dmg_path: Optional[Path] = None,\n    keychain_profile: str = \"notarytool-profile\",\n) -> bool:\n    \"\"\"Create, sign, and notarize a DMG in one go\"\"\"\n    log_info(\"=\" * 70)",
         "detail": "packages.browseros.build.modules.package",
         "documentation": {}
     },
@@ -3149,7 +3149,7 @@
         "kind": 2,
         "importPath": "packages.browseros.build.modules.package_linux",
         "description": "packages.browseros.build.modules.package_linux",
-        "peekOfCode": "def package(ctx: BuildContext) -> bool:\n    \"\"\"Package BrowserOS for Linux as AppImage\"\"\"\n    log_info(\n        f\"📦 Packaging {ctx.NXTSCAPE_APP_BASE_NAME} {ctx.get_nxtscape_chromium_version()} for Linux ({ctx.architecture})\"\n    )\n    # Create packaging directory\n    package_dir = ctx.get_dist_dir()\n    package_dir.mkdir(parents=True, exist_ok=True)\n    # Prepare AppDir\n    appdir = Path(join_paths(package_dir, f\"{ctx.NXTSCAPE_APP_BASE_NAME}.AppDir\"))",
+        "peekOfCode": "def package(ctx: BuildContext) -> bool:\n    \"\"\"Package BlockBrowser for Linux as AppImage\"\"\"\n    log_info(\n        f\"📦 Packaging {ctx.NXTSCAPE_APP_BASE_NAME} {ctx.get_blockbrowser_chromium_version()} for Linux ({ctx.architecture})\"\n    )\n    # Create packaging directory\n    package_dir = ctx.get_dist_dir()\n    package_dir.mkdir(parents=True, exist_ok=True)\n    # Prepare AppDir\n    appdir = Path(join_paths(package_dir, f\"{ctx.NXTSCAPE_APP_BASE_NAME}.AppDir\"))",
         "detail": "packages.browseros.build.modules.package_linux",
         "documentation": {}
     },
@@ -3266,7 +3266,7 @@
         "kind": 2,
         "importPath": "packages.browseros.build.modules.patches",
         "description": "packages.browseros.build.modules.patches",
-        "peekOfCode": "def apply_patches(\n    ctx: BuildContext, interactive: bool = False, commit_each: bool = False\n) -> bool:\n    \"\"\"Apply Nxtscape patches\"\"\"\n    # Use new patching system if enabled\n    if NEW_PATCHING:\n        return apply_patches_with_dev_cli(ctx, interactive, commit_each)\n    # Otherwise, use the legacy patching system\n    if not ctx.apply_patches:\n        log_info(\"\\n⏭️  Skipping patches\")",
+        "peekOfCode": "def apply_patches(\n    ctx: BuildContext, interactive: bool = False, commit_each: bool = False\n) -> bool:\n    \"\"\"Apply BlockBrowser patches\"\"\"\n    # Use new patching system if enabled\n    if NEW_PATCHING:\n        return apply_patches_with_dev_cli(ctx, interactive, commit_each)\n    # Otherwise, use the legacy patching system\n    if not ctx.apply_patches:\n        log_info(\"\\n⏭️  Skipping patches\")",
         "detail": "packages.browseros.build.modules.patches",
         "documentation": {}
     },
@@ -3464,7 +3464,7 @@
         "kind": 2,
         "importPath": "packages.browseros.build.modules.sign",
         "description": "packages.browseros.build.modules.sign",
-        "peekOfCode": "def sign_app(ctx: BuildContext, create_dmg: bool = True) -> bool:\n    \"\"\"Main signing function that uses BuildContext from build.py\"\"\"\n    log_info(\"=\" * 70)\n    log_info(\"🚀 Starting signing process for BrowserOS...\")\n    log_info(\"=\" * 70)\n    # Error tracking similar to bash script\n    error_count = 0\n    error_messages = []\n    def track_error(msg: str):\n        nonlocal error_count",
+        "peekOfCode": "def sign_app(ctx: BuildContext, create_dmg: bool = True) -> bool:\n    \"\"\"Main signing function that uses BuildContext from build.py\"\"\"\n    log_info(\"=\" * 70)\n    log_info(\"🚀 Starting signing process for BlockBrowser...\")\n    log_info(\"=\" * 70)\n    # Error tracking similar to bash script\n    error_count = 0\n    error_messages = []\n    def track_error(msg: str):\n        nonlocal error_count",
         "detail": "packages.browseros.build.modules.sign",
         "documentation": {}
     },
@@ -3572,7 +3572,7 @@
         "kind": 5,
         "importPath": "packages.browseros.build.modules.string_replaces",
         "description": "packages.browseros.build.modules.string_replaces",
-        "peekOfCode": "branding_replacements = [\n    (\n        r\"The Chromium Authors. All rights reserved.\",\n        r\"The BrowserOS Authors. All rights reserved.\",\n    ),\n    (\n        r\"Google LLC. All rights reserved.\",\n        r\"The BrowserOS Authors. All rights reserved.\",\n    ),\n    (r\"The Chromium Authors\", r\"BrowserOS Software Inc\"),",
+        "peekOfCode": "branding_replacements = [\n    (\n        r\"The Chromium Authors. All rights reserved.\",\n        r\"The BlockBrowser Authors. All rights reserved.\",\n    ),\n    (\n        r\"Google LLC. All rights reserved.\",\n        r\"The BlockBrowser Authors. All rights reserved.\",\n    ),\n    (r\"The Chromium Authors\", r\"BlockBrowser Software Inc\"),",
         "detail": "packages.browseros.build.modules.string_replaces",
         "documentation": {}
     },

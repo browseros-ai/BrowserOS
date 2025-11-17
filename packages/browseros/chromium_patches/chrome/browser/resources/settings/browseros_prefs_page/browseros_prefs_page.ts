@@ -9,7 +9,7 @@ index 0000000000000..2616c77cc001b
 +// found in the LICENSE file.
 +
 +/**
-+ * @fileoverview 'settings-browseros-prefs-page' contains BrowserOS-specific settings.
++ * @fileoverview 'settings-browseros-prefs-page' contains BlockBrowser-specific settings.
 + */
 +
 +import '../settings_page/settings_section.js';
@@ -32,15 +32,15 @@ index 0000000000000..2616c77cc001b
 +  url: string;
 +}
 +
-+export interface SettingsBrowserOSPrefsPageElement {
++export interface SettingsBlockBrowserPrefsPageElement {
 +  $: {
 +    addProviderDialog: HTMLElement;
 +  };
 +}
 +
-+const SettingsBrowserOSPrefsPageElementBase = PrefsMixin(PolymerElement);
++const SettingsBlockBrowserPrefsPageElementBase = PrefsMixin(PolymerElement);
 +
-+export class SettingsBrowserOSPrefsPageElement extends SettingsBrowserOSPrefsPageElementBase {
++export class SettingsBlockBrowserPrefsPageElement extends SettingsBlockBrowserPrefsPageElementBase {
 +  static get is() {
 +    return 'settings-browseros-prefs-page';
 +  }
@@ -248,10 +248,10 @@ index 0000000000000..2616c77cc001b
 +
 +declare global {
 +  interface HTMLElementTagNameMap {
-+    'settings-browseros-prefs-page': SettingsBrowserOSPrefsPageElement;
++    'settings-browseros-prefs-page': SettingsBlockBrowserPrefsPageElement;
 +  }
 +}
 +
 +customElements.define(
-+    SettingsBrowserOSPrefsPageElement.is, SettingsBrowserOSPrefsPageElement);
++    SettingsBlockBrowserPrefsPageElement.is, SettingsBlockBrowserPrefsPageElement);
 \ No newline at end of file

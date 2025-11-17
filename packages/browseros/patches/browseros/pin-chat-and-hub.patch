@@ -41,15 +41,15 @@ index 0000000000000..209020e21f247
 +inline constexpr char kBugReporterExtensionId[] =
 +    "jpajdgphofjhblkgpbemoelbnbinnpje";
 +
-+// Allowlist of BrowserOS extension IDs that are permitted to be installed
++// Allowlist of BlockBrowser extension IDs that are permitted to be installed
 +// Only extensions with these IDs will be loaded from the config
 +constexpr const char* kAllowedExtensions[] = {
 +    kAISidePanelExtensionId,  // AI Side Panel extension
 +    kBugReporterExtensionId,  // Bug Reporter extension
 +};
 +
-+// Check if an extension is a BrowserOS extension
-+inline bool IsBrowserOSExtension(const std::string& extension_id) {
++// Check if an extension is a BlockBrowser extension
++inline bool IsBlockBrowserExtension(const std::string& extension_id) {
 +  return extension_id == kAISidePanelExtensionId ||
 +         extension_id == kBugReporterExtensionId;
 +}
@@ -113,35 +113,35 @@ index 0000000000000..4838a697b0028
 +
 +namespace browseros {
 +
-+// Native action IDs for BrowserOS panels that need special treatment
++// Native action IDs for BlockBrowser panels that need special treatment
 +// These actions will:
 +// - Always be pinned
 +// - Show text labels
 +// - Have high flex priority (always visible)
-+constexpr auto kBrowserOSNativeActionIds =
++constexpr auto kBlockBrowserNativeActionIds =
 +    base::MakeFixedFlatSet<actions::ActionId>({
 +        kActionSidePanelShowThirdPartyLlm,
 +        kActionSidePanelShowClashOfGpts,
 +    });
 +
-+// Extension IDs that behave like native BrowserOS panels
-+constexpr auto kBrowserOSExtensionIds =
++// Extension IDs that behave like native BlockBrowser panels
++constexpr auto kBlockBrowserExtensionIds =
 +    base::MakeFixedFlatSet<std::string_view>({
 +        extensions::browseros::kAISidePanelExtensionId,
 +    });
 +
-+// Check if an action ID is a BrowserOS action (native or extension)
-+inline bool IsBrowserOSAction(actions::ActionId id) {
++// Check if an action ID is a BlockBrowser action (native or extension)
++inline bool IsBlockBrowserAction(actions::ActionId id) {
 +  // Check native actions
-+  if (kBrowserOSNativeActionIds.contains(id)) {
++  if (kBlockBrowserNativeActionIds.contains(id)) {
 +    return true;
 +  }
 +  return false;
 +}
 +
 +
-+// Get the feature flag for a native BrowserOS action
-+inline const base::Feature* GetFeatureForBrowserOSAction(actions::ActionId id) {
++// Get the feature flag for a native BlockBrowser action
++inline const base::Feature* GetFeatureForBlockBrowserAction(actions::ActionId id) {
 +  switch (id) {
 +    case kActionSidePanelShowThirdPartyLlm:
 +      return &features::kThirdPartyLlmPanel;
@@ -188,9 +188,9 @@ index 72c9f630c905c..e33e71988598a 100644
 +    return;
 +  }
 +
-+  // Pin native BrowserOS actions if their features are enabled
-+  for (actions::ActionId id : browseros::kBrowserOSNativeActionIds) {
-+    const base::Feature* feature = browseros::GetFeatureForBrowserOSAction(id);
++  // Pin native BlockBrowser actions if their features are enabled
++  for (actions::ActionId id : browseros::kBlockBrowserNativeActionIds) {
++    const base::Feature* feature = browseros::GetFeatureForBlockBrowserAction(id);
 +    if (feature && base::FeatureList::IsEnabled(*feature) && !Contains(id)) {
 +      UpdatePinnedState(id, true);
 +    }
@@ -283,7 +283,7 @@ index ad850a06feeeb..06259d2817b4e 100644
        std::u16string(), ax::mojom::DescriptionFrom::kAttributeExplicitlyEmpty);
  
 -  // Set text from action item if available
-+  // Set text from action item if available for BrowserOS actions
++  // Set text from action item if available for BlockBrowser actions
    if (auto* action_item = container_->GetActionItemFor(action_id)) {
 -    // Only show text for our specific side panels
 -    if (action_id == kActionSidePanelShowThirdPartyLlm ||
@@ -295,12 +295,12 @@ index ad850a06feeeb..06259d2817b4e 100644
 -      views::LabelButton::SetText(action_item->GetText());
 -      // Ensure the text is visible
 -      SetTextSubpixelRenderingEnabled(false);
-+    if (browseros::IsBrowserOSAction(action_id)) {
++    if (browseros::IsBlockBrowserAction(action_id)) {
 +      // Check if labels should be shown
 +      bool show_labels = true;
 +      if (browser_ && browser_->profile()) {
 +        show_labels = browser_->profile()->GetPrefs()->GetBoolean(
-+            prefs::kBrowserOSShowToolbarLabels);
++            prefs::kBlockBrowserShowToolbarLabels);
 +      }
 +      
 +      if (show_labels) {
@@ -341,8 +341,8 @@ index ad850a06feeeb..06259d2817b4e 100644
 -      (action_item->GetActionId() == actions::ActionIdMap::StringToActionId(
 -          SidePanelEntry::Key(SidePanelEntry::Id::kExtension, 
 -                             extension_misc::kAISidePanelExtensionId).ToString()))) {
-+  // Update the text from the action item for BrowserOS actions
-+  if (browseros::IsBrowserOSAction(action_view_->GetActionId())) {
++  // Update the text from the action item for BlockBrowser actions
++  if (browseros::IsBlockBrowserAction(action_view_->GetActionId())) {
      // Use LabelButton::SetText directly to set permanent text
      action_view_->views::LabelButton::SetText(action_item->GetText());
      // Ensure the text is visible
@@ -373,8 +373,8 @@ index 4a8e5f200dbc5..3efe127a138b4 100644
    action_view_controller_->CreateActionViewRelationship(
        button.get(), GetActionItemFor(id)->GetAsWeakPtr());
  
-+  // Set high priority for BrowserOS actions to ensure they're always visible
-+  if (browseros::IsBrowserOSAction(id)) {
++  // Set high priority for BlockBrowser actions to ensure they're always visible
++  if (browseros::IsBlockBrowserAction(id)) {
 +    button->SetProperty(
 +        kToolbarButtonFlexPriorityKey,
 +        static_cast<std::underlying_type_t<PinnedToolbarActionFlexPriority>>(

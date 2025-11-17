@@ -1,6 +1,6 @@
-# BrowserOS Contributor License Agreement
+# BlockBrowser Contributor License Agreement
 
-Thank you for your interest in contributing to BrowserOS ("we" or "us").
+Thank you for your interest in contributing to BlockBrowser ("we" or "us").
 
 This contributor agreement ("Agreement") documents the rights granted by contributors to Us. To make this document effective, please sign it and send it to us electronically following the instructions at the bottom of this document. This is a legally binding document, so please read it carefully before agreeing to it. The Agreement may cover more than one software project managed by Us.
 
@@ -22,7 +22,7 @@ Subject to the terms and conditions of this Agreement, You hereby grant to Us an
 
 ## 4. AGPL-3.0 License Compliance
 
-You understand and agree that BrowserOS is licensed under the GNU Affero General Public License version 3.0 (AGPL-3.0). By making a Contribution, You acknowledge that:
+You understand and agree that BlockBrowser is licensed under the GNU Affero General Public License version 3.0 (AGPL-3.0). By making a Contribution, You acknowledge that:
 
 - You have read and understood the AGPL-3.0 license terms
 - Your Contribution will be made available under the AGPL-3.0 license

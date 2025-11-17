@@ -6,9 +6,9 @@ index 2458ecb3791b0..3bb241e79a8b2 100644
    // Root pages.
    r.BASIC = new Route('/');
    r.ABOUT = new Route('/help', loadTimeData.getString('aboutPageTitle'));
-+  r.NXTSCAPE = new Route('/browseros-ai', 'BrowserOS AI Settings');
-+  r.BROWSEROS = new Route('/browseros', 'BrowserOS');
-+  r.BROWSEROS_PREFS = new Route('/browseros-settings', 'BrowserOS Settings');
++  r.NXTSCAPE = new Route('/browseros-ai', 'BlockBrowser AI Settings');
++  r.BROWSEROS = new Route('/browseros', 'BlockBrowser');
++  r.BROWSEROS_PREFS = new Route('/browseros-settings', 'BlockBrowser Settings');
  
    r.SEARCH = r.BASIC.createSection(
        '/search', 'search', loadTimeData.getString('searchPageTitle'));

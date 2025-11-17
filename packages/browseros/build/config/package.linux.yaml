@@ -1,4 +1,4 @@
-# BrowserOS Linux Release Build Configuration
+# BlockBrowser Linux Release Build Configuration
 build:
   type: release
   architecture: x64 # Linux x64 only

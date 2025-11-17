@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Application signing and notarization module for BrowserOS
+Application signing and notarization module for BlockBrowser
 NOTE: This module is macOS-specific. Windows signing would require signtool.exe
 """
 
@@ -22,12 +22,12 @@ from utils import (
     join_paths,
 )
 
-# Central list of BrowserOS Server binaries we need to sign explicitly.
+# Central list of BlockBrowser Server binaries we need to sign explicitly.
 # Each entry controls identifiers, signing options, and entitlement files so
 # adding a new binary is a one-line update here rather than scattered changes.
 BROWSEROS_SERVER_BINARIES: Dict[str, Dict[str, str]] = {
-    "browseros_server": {
-        "identifier_suffix": "browseros_server",
+    "blockbrowser_server": {
+        "identifier_suffix": "blockbrowser_server",
         "options": "runtime",
         "entitlements": "browseros-executable-entitlements.plist",
     },
@@ -39,8 +39,8 @@ BROWSEROS_SERVER_BINARIES: Dict[str, Dict[str, str]] = {
 }
 
 
-def get_browseros_server_binary_info(component_path: Path) -> Optional[Dict[str, str]]:
-    """Return metadata for known BrowserOS Server binaries, if applicable."""
+def get_blockbrowser_server_binary_info(component_path: Path) -> Optional[Dict[str, str]]:
+    """Return metadata for known BlockBrowser Server binaries, if applicable."""
     name = component_path.stem.lower()
     return BROWSEROS_SERVER_BINARIES.get(name)
 
@@ -140,32 +140,32 @@ def find_components_to_sign(
 
     framework_path = join_paths(app_path, "Contents", "Frameworks")
 
-    # Check both versioned and non-versioned paths for BrowserOS Framework
+    # Check both versioned and non-versioned paths for BlockBrowser Framework
     # Handle both release and debug framework names
     framework_names = [
-        "BrowserOS Framework.framework",
-        "BrowserOS Dev Framework.framework",
+        "BlockBrowser Framework.framework",
+        "BlockBrowser Dev Framework.framework",
     ]
-    nxtscape_framework_paths = []
+    blockbrowser_framework_paths = []
 
     for fw_name in framework_names:
         fw_path = join_paths(framework_path, fw_name)
         if fw_path.exists():
-            nxtscape_framework_paths.append(fw_path)
+            blockbrowser_framework_paths.append(fw_path)
 
             # Add versioned path if context is available
-            if ctx and ctx.nxtscape_chromium_version:
+            if ctx and ctx.blockbrowser_chromium_version:
                 versioned_path = join_paths(
-                    fw_path, "Versions", ctx.nxtscape_chromium_version
+                    fw_path, "Versions", ctx.blockbrowser_chromium_version
                 )
                 if versioned_path.exists():
-                    nxtscape_framework_paths.insert(
+                    blockbrowser_framework_paths.insert(
                         0, versioned_path
                     )  # Prioritize versioned path
 
     # Find all helper apps
-    for nxtscape_fw_path in nxtscape_framework_paths:
-        helpers_dir = join_paths(nxtscape_fw_path, "Helpers")
+    for blockbrowser_fw_path in blockbrowser_framework_paths:
+        helpers_dir = join_paths(blockbrowser_fw_path, "Helpers")
         if helpers_dir.exists():
             # Find all .app helpers
             components["helpers"].extend(helpers_dir.glob("*.app"))
@@ -193,9 +193,9 @@ def find_components_to_sign(
                 if autoupdate.exists() and autoupdate.is_file():
                     components["executables"].append(autoupdate)
 
-    # Find all dylibs (check versioned path for BrowserOS Framework libraries)
-    for nxtscape_fw_path in nxtscape_framework_paths:
-        libraries_dir = join_paths(nxtscape_fw_path, "Libraries")
+    # Find all dylibs (check versioned path for BlockBrowser Framework libraries)
+    for blockbrowser_fw_path in blockbrowser_framework_paths:
+        libraries_dir = join_paths(blockbrowser_fw_path, "Libraries")
         if libraries_dir.exists():
             components["dylibs"].extend(libraries_dir.glob("*.dylib"))
 
@@ -209,10 +209,10 @@ def find_components_to_sign(
         if nested_app not in components["helpers"]:
             components["apps"].append(nested_app)
 
-    # Find BrowserOS Server binaries
-    browseros_server_dir = join_paths(app_path, "Contents", "Resources", "BrowserOSServer")
-    if browseros_server_dir.exists():
-        for item in browseros_server_dir.rglob("*"):
+    # Find BlockBrowser Server binaries
+    blockbrowser_server_dir = join_paths(app_path, "Contents", "Resources", "BlockBrowserServer")
+    if blockbrowser_server_dir.exists():
+        for item in blockbrowser_server_dir.rglob("*"):
             if item.is_file() and not item.suffix and os.access(item, os.X_OK):
                 components["executables"].append(item)
 
@@ -242,10 +242,10 @@ def get_identifier_for_component(
         if key in str(component_path):
             return identifier
 
-    # BrowserOS Server binaries share the same entitlements/options but need unique identifiers.
-    browseros_server_info = get_browseros_server_binary_info(component_path)
-    if browseros_server_info:
-        suffix = browseros_server_info.get("identifier_suffix", component_path.stem)
+    # BlockBrowser Server binaries share the same entitlements/options but need unique identifiers.
+    blockbrowser_server_info = get_blockbrowser_server_binary_info(component_path)
+    if blockbrowser_server_info:
+        suffix = blockbrowser_server_info.get("identifier_suffix", component_path.stem)
         return f"{base_identifier}.{suffix}"
 
     # For helper apps
@@ -259,7 +259,7 @@ def get_identifier_for_component(
 
     # For frameworks
     if component_path.suffix == ".framework":
-        if name == "BrowserOS Framework" or name == "BrowserOS Dev Framework":
+        if name == "BlockBrowser Framework" or name == "BlockBrowser Dev Framework":
             return f"{base_identifier}.framework"
         else:
             return f"{base_identifier}.{name.replace(' ', '_').lower()}"
@@ -288,10 +288,10 @@ def get_signing_options(component_path: Path) -> str:
     ):
         return "restrict,kill,runtime"
 
-    # Known BrowserOS Server binaries share the same relaxed options.
-    browseros_server_info = get_browseros_server_binary_info(component_path)
-    if browseros_server_info:
-        return browseros_server_info.get("options", "runtime")
+    # Known BlockBrowser Server binaries share the same relaxed options.
+    blockbrowser_server_info = get_blockbrowser_server_binary_info(component_path)
+    if blockbrowser_server_info:
+        return blockbrowser_server_info.get("options", "runtime")
 
     # For dylibs - library flag ONLY for dynamic libraries
     if component_path.suffix == ".dylib":
@@ -379,9 +379,9 @@ def sign_all_components(
 
             # Check for specific entitlements
             entitlements = None
-            browseros_server_info = get_browseros_server_binary_info(exe)
-            if browseros_server_info:
-                entitlements_name = browseros_server_info.get("entitlements")
+            blockbrowser_server_info = get_blockbrowser_server_binary_info(exe)
+            if blockbrowser_server_info:
+                entitlements_name = blockbrowser_server_info.get("entitlements")
                 if entitlements_name:
                     for ent_dir in entitlements_dirs:
                         ent_path = join_paths(ent_dir, entitlements_name)
@@ -435,10 +435,10 @@ def sign_all_components(
             ):
                 return False
 
-    # 6. Sign frameworks (except the main BrowserOS Framework)
+    # 6. Sign frameworks (except the main BlockBrowser Framework)
     if components["frameworks"]:
         log_info("\n🔏 Signing frameworks...")
-        # Sort to sign Sparkle.framework before BrowserOS Framework.framework
+        # Sort to sign Sparkle.framework before BlockBrowser Framework.framework
         frameworks_sorted = sorted(
             components["frameworks"], key=lambda x: 0 if "Sparkle" in x.name else 1
         )
@@ -450,7 +450,7 @@ def sign_all_components(
     # 7. Sign main executable
     log_info("\n🔏 Signing main executable...")
     # Handle both release and debug executable names
-    main_exe_names = ["BrowserOS", "BrowserOS Dev"]
+    main_exe_names = ["BlockBrowser", "BlockBrowser Dev"]
     main_exe = None
     for exe_name in main_exe_names:
         exe_path = join_paths(app_path, "Contents", "MacOS", exe_name)
@@ -464,13 +464,13 @@ def sign_all_components(
         )
         return False
 
-    if not sign_component(main_exe, certificate_name, "com.browseros.BrowserOS"):
+    if not sign_component(main_exe, certificate_name, "com.browseros.BlockBrowser"):
         return False
 
     # 8. Finally sign the app bundle
     log_info("\n🔏 Signing application bundle...")
     requirements = (
-        '=designated => identifier "com.browseros.BrowserOS" and '
+        '=designated => identifier "com.browseros.BlockBrowser" and '
         "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and "
         "certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */"
     )
@@ -511,7 +511,7 @@ def sign_all_components(
         "--force",
         "--timestamp",
         "--identifier",
-        "com.browseros.BrowserOS",
+        "com.browseros.BlockBrowser",
         "--options",
         "restrict,library,runtime,kill",
         "--requirements",
@@ -662,7 +662,7 @@ def notarize_app(
 def sign_app(ctx: BuildContext, create_dmg: bool = True) -> bool:
     """Main signing function that uses BuildContext from build.py"""
     log_info("=" * 70)
-    log_info("🚀 Starting signing process for BrowserOS...")
+    log_info("🚀 Starting signing process for BlockBrowser...")
     log_info("=" * 70)
 
     # Error tracking similar to bash script
@@ -730,7 +730,7 @@ def sign_app(ctx: BuildContext, create_dmg: bool = True) -> bool:
                 app_path=app_path,
                 dmg_path=dmg_path,
                 certificate_name=env_vars["certificate_name"],
-                volume_name="BrowserOS",
+                volume_name="BlockBrowser",
                 pkg_dmg_path=pkg_dmg_path,
                 keychain_profile="notarytool-profile",
             ):

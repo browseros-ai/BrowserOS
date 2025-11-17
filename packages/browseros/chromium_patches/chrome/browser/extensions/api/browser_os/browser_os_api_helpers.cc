@@ -1,21 +1,21 @@
-diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api_helpers.cc b/chrome/browser/extensions/api/browser_os/browser_os_api_helpers.cc
+diff --git a/chrome/browser/extensions/api/blockbrowser/blockbrowser_api_helpers.cc b/chrome/browser/extensions/api/blockbrowser/blockbrowser_api_helpers.cc
 new file mode 100644
 index 0000000000000..f40a2424641e1
 --- /dev/null
-+++ b/chrome/browser/extensions/api/browser_os/browser_os_api_helpers.cc
++++ b/chrome/browser/extensions/api/blockbrowser/blockbrowser_api_helpers.cc
 @@ -0,0 +1,1073 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "chrome/browser/extensions/api/browser_os/browser_os_api_helpers.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_api_helpers.h"
 +
 +#include "base/strings/string_number_conversions.h"
 +#include "base/strings/stringprintf.h"
 +#include "base/strings/utf_string_conversions.h"
 +#include "base/task/sequenced_task_runner.h"
-+#include "chrome/browser/extensions/api/browser_os/browser_os_api_utils.h"
-+#include "chrome/browser/extensions/api/browser_os/browser_os_change_detector.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_api_utils.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_change_detector.h"
 +#include "components/input/native_web_keyboard_event.h"
 +#include "content/public/browser/render_frame_host.h"
 +#include "content/browser/renderer_host/render_widget_host_impl.h"
@@ -635,14 +635,14 @@ index 0000000000000..f40a2424641e1
 +    
 +    // For out-of-viewport nodes, use AccessibilityDoDefault first (most reliable after scroll)
 +    // LOG(INFO) << "[browseros] Node was out of viewport, trying AccessibilityDoDefault click first";
-+    // bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++    // bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +    //     web_contents,
 +    //     [&]() { AccessibilityDoDefault(web_contents, node_info); },
 +    //     base::Milliseconds(300));
 +    
 +    gfx::PointF click_point = GetNodeCenterPoint(web_contents, node_info);
 +    
-+    bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++    bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +        web_contents,
 +        [&]() { PointClick(web_contents, click_point); },
 +        base::Milliseconds(300));
@@ -651,7 +651,7 @@ index 0000000000000..f40a2424641e1
 +      // Skip coordinate click for out-of-viewport nodes (coordinates unreliable)
 +      // Go straight to HTML click
 +      LOG(INFO) << "[browseros] No change from accessibility click, trying HTML click";
-+      changed = BrowserOSChangeDetector::ExecuteWithDetection(
++      changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +          web_contents,
 +          [&]() { HtmlClick(web_contents, node_info); },
 +          base::Milliseconds(200));
@@ -665,7 +665,7 @@ index 0000000000000..f40a2424641e1
 +  LOG(INFO) << "[browseros] Node is in viewport, trying coordinate click first";
 +  gfx::PointF click_point = GetNodeCenterPoint(web_contents, node_info);
 +  
-+  bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++  bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +      web_contents,
 +      [&]() { PointClick(web_contents, click_point); },
 +      base::Milliseconds(300));
@@ -673,7 +673,7 @@ index 0000000000000..f40a2424641e1
 +  // If still no change, try HTML click as final fallback
 +  if (!changed) {
 +      LOG(INFO) << "[browseros] No change from accessibility click, trying HTML click";
-+      changed = BrowserOSChangeDetector::ExecuteWithDetection(
++      changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +          web_contents,
 +          [&]() { HtmlClick(web_contents, node_info); },
 +          base::Milliseconds(200));
@@ -730,7 +730,7 @@ index 0000000000000..f40a2424641e1
 +  
 +  // Try native typing first (most natural method)
 +  LOG(INFO) << "[browseros] Trying native typing";
-+  bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++  bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +      web_contents,
 +      [&]() {
 +        NativeType(web_contents, text);
@@ -740,7 +740,7 @@ index 0000000000000..f40a2424641e1
 +  // If no change detected, try JavaScript typing as second fallback
 +  if (!changed) {
 +    LOG(INFO) << "[browseros] No change from native typing, trying JavaScript";
-+    changed = BrowserOSChangeDetector::ExecuteWithDetection(
++    changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +        web_contents,
 +        [&]() { JavaScriptType(web_contents, node_info, text); },
 +        base::Milliseconds(200));
@@ -749,7 +749,7 @@ index 0000000000000..f40a2424641e1
 +  // If still no change, try accessibility SetValue as final fallback
 +  // if (!changed) {
 +  //   LOG(INFO) << "[browseros] No change from JavaScript, trying accessibility SetValue";
-+  //   changed = BrowserOSChangeDetector::ExecuteWithDetection(
++  //   changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +  //       web_contents,
 +  //       [&]() {
 +  //         AccessibilitySetValue(web_contents, node_info, text);
@@ -765,7 +765,7 @@ index 0000000000000..f40a2424641e1
 +bool ClearWithDetection(content::WebContents* web_contents,
 +                       const NodeInfo& node_info) {
 +  // Use change detection with JavaScript clear
-+  bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++  bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +      web_contents,
 +      [&]() {
 +        content::RenderFrameHost* rfh = web_contents->GetPrimaryMainFrame();
@@ -802,7 +802,7 @@ index 0000000000000..f40a2424641e1
 +bool KeyPressWithDetection(content::WebContents* web_contents,
 +                          const std::string& key) {
 +  // Use change detection with key press
-+  bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++  bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +      web_contents,
 +      [&]() { KeyPress(web_contents, key); },
 +      base::Milliseconds(200));
@@ -834,9 +834,9 @@ index 0000000000000..f40a2424641e1
 +    
 +    // Check if element is clickable, typeable, or selectable using stored node_type
 +    // Skip "other" interactive type as requested
-+    if (node_info.node_type == browser_os::InteractiveNodeType::kClickable ||
-+        node_info.node_type == browser_os::InteractiveNodeType::kTypeable ||
-+        node_info.node_type == browser_os::InteractiveNodeType::kSelectable) {
++    if (node_info.node_type == blockbrowser::InteractiveNodeType::kClickable ||
++        node_info.node_type == blockbrowser::InteractiveNodeType::kTypeable ||
++        node_info.node_type == blockbrowser::InteractiveNodeType::kSelectable) {
 +      filtered_nodes[node_id] = node_info;
 +    }
 +  }
@@ -999,7 +999,7 @@ index 0000000000000..f40a2424641e1
 +            << point.x() << ", " << point.y() << ")";
 +  
 +  // Perform coordinate click with change detection
-+  bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++  bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +      web_contents,
 +      [&]() { 
 +        PointClick(web_contents, point);
@@ -1025,7 +1025,7 @@ index 0000000000000..f40a2424641e1
 +  base::PlatformThread::Sleep(base::Milliseconds(100));
 +  
 +  // Now type the text with change detection
-+  bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++  bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +      web_contents,
 +      [&]() { 
 +        NativeType(web_contents, text);

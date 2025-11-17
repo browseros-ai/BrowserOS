@@ -1,14 +1,14 @@
-diff --git a/components/metrics/browseros_metrics/browseros_metrics_service.cc b/components/metrics/browseros_metrics/browseros_metrics_service.cc
+diff --git a/components/metrics/blockbrowser_metrics/blockbrowser_metrics_service.cc b/components/metrics/blockbrowser_metrics/blockbrowser_metrics_service.cc
 new file mode 100644
 index 0000000000000..4f592a2c7b95b
 --- /dev/null
-+++ b/components/metrics/browseros_metrics/browseros_metrics_service.cc
++++ b/components/metrics/blockbrowser_metrics/blockbrowser_metrics_service.cc
 @@ -0,0 +1,231 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "components/metrics/browseros_metrics/browseros_metrics_service.h"
++#include "components/metrics/blockbrowser_metrics/blockbrowser_metrics_service.h"
 +
 +#include <memory>
 +#include <string>
@@ -30,7 +30,7 @@ index 0000000000000..4f592a2c7b95b
 +#include "services/network/public/cpp/simple_url_loader.h"
 +#include "services/network/public/mojom/url_response_head.mojom.h"
 +
-+namespace browseros_metrics {
++namespace blockbrowser_metrics {
 +
 +namespace {
 +
@@ -44,16 +44,16 @@ index 0000000000000..4f592a2c7b95b
 +constexpr char kPostHogEndpoint[] = "https://us.i.posthog.com/i/v0/e/";
 +constexpr size_t kMaxUploadSize = 256 * 1024;  // 256KB max upload size
 +
-+constexpr net::NetworkTrafficAnnotationTag kBrowserOSMetricsTrafficAnnotation =
-+    net::DefineNetworkTrafficAnnotation("browseros_metrics", R"(
++constexpr net::NetworkTrafficAnnotationTag kBlockBrowserMetricsTrafficAnnotation =
++    net::DefineNetworkTrafficAnnotation("blockbrowser_metrics", R"(
 +        semantics {
-+          sender: "BrowserOS Metrics"
++          sender: "BlockBrowser Metrics"
 +          description:
-+            "Sends anonymous usage metrics to PostHog for BrowserOS features. "
++            "Sends anonymous usage metrics to PostHog for BlockBrowser features. "
 +            "This helps improve the browser by understanding how features are "
 +            "used. No personally identifiable information is collected."
 +          trigger:
-+            "Triggered when BrowserOS features are used, such as extension "
++            "Triggered when BlockBrowser features are used, such as extension "
 +            "actions or settings changes."
 +          data:
 +            "Event name, timestamp, anonymous client ID, browser version, "
@@ -74,7 +74,7 @@ index 0000000000000..4f592a2c7b95b
 +
 +}  // namespace
 +
-+BrowserOSMetricsService::BrowserOSMetricsService(
++BlockBrowserMetricsService::BlockBrowserMetricsService(
 +    PrefService* pref_service,
 +    PrefService* local_state_prefs,
 +    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
@@ -88,9 +88,9 @@ index 0000000000000..4f592a2c7b95b
 +  InitializeInstallId();
 +}
 +
-+BrowserOSMetricsService::~BrowserOSMetricsService() = default;
++BlockBrowserMetricsService::~BlockBrowserMetricsService() = default;
 +
-+void BrowserOSMetricsService::CaptureEvent(const std::string& event_name,
++void BlockBrowserMetricsService::CaptureEvent(const std::string& event_name,
 +                                            base::Value::Dict properties) {
 +  if (event_name.empty()) {
 +    LOG(WARNING) << "browseros: Attempted to capture event with empty name";
@@ -106,25 +106,25 @@ index 0000000000000..4f592a2c7b95b
 +  SendEventToPostHog(event_name, std::move(properties));
 +}
 +
-+std::string BrowserOSMetricsService::GetClientId() const {
++std::string BlockBrowserMetricsService::GetClientId() const {
 +  return client_id_;
 +}
 +
-+std::string BrowserOSMetricsService::GetInstallId() const {
++std::string BlockBrowserMetricsService::GetInstallId() const {
 +  return install_id_;
 +}
 +
-+void BrowserOSMetricsService::Shutdown() {
++void BlockBrowserMetricsService::Shutdown() {
 +  // Cancel any pending network requests
 +  weak_factory_.InvalidateWeakPtrs();
 +}
 +
-+void BrowserOSMetricsService::InitializeClientId() {
++void BlockBrowserMetricsService::InitializeClientId() {
 +  CHECK(pref_service_);
 +
 +  // Check if we have an existing client ID
 +  const std::string& stored_id =
-+      pref_service_->GetString(prefs::kBrowserOSMetricsClientId);
++      pref_service_->GetString(prefs::kBlockBrowserMetricsClientId);
 +
 +  if (!stored_id.empty() && base::Uuid::ParseCaseInsensitive(stored_id).is_valid()) {
 +    client_id_ = stored_id;
@@ -132,18 +132,18 @@ index 0000000000000..4f592a2c7b95b
 +  } else {
 +    // Generate a new UUID
 +    client_id_ = base::Uuid::GenerateRandomV4().AsLowercaseString();
-+    pref_service_->SetString(prefs::kBrowserOSMetricsClientId, client_id_);
++    pref_service_->SetString(prefs::kBlockBrowserMetricsClientId, client_id_);
 +    LOG(INFO) << "browseros: Generated new metrics client ID";
 +  }
 +  VLOG(1) << "browseros: Metrics client ID: " << client_id_;
 +}
 +
-+void BrowserOSMetricsService::InitializeInstallId() {
++void BlockBrowserMetricsService::InitializeInstallId() {
 +  CHECK(local_state_prefs_);
 +
 +  // Check if we have an existing install ID
 +  const std::string& stored_id =
-+      local_state_prefs_->GetString(prefs::kBrowserOSMetricsInstallId);
++      local_state_prefs_->GetString(prefs::kBlockBrowserMetricsInstallId);
 +
 +  if (!stored_id.empty() && base::Uuid::ParseCaseInsensitive(stored_id).is_valid()) {
 +    install_id_ = stored_id;
@@ -151,13 +151,13 @@ index 0000000000000..4f592a2c7b95b
 +  } else {
 +    // Generate a new UUID
 +    install_id_ = base::Uuid::GenerateRandomV4().AsLowercaseString();
-+    local_state_prefs_->SetString(prefs::kBrowserOSMetricsInstallId, install_id_);
++    local_state_prefs_->SetString(prefs::kBlockBrowserMetricsInstallId, install_id_);
 +    LOG(INFO) << "browseros: Generated new metrics install ID";
 +  }
 +  VLOG(1) << "browseros: Metrics install ID: " << install_id_;
 +}
 +
-+void BrowserOSMetricsService::SendEventToPostHog(
++void BlockBrowserMetricsService::SendEventToPostHog(
 +    const std::string& event_name,
 +    base::Value::Dict properties) {
 +  // Build the request payload
@@ -183,7 +183,7 @@ index 0000000000000..4f592a2c7b95b
 +  
 +  // Create the URL loader
 +  auto url_loader = network::SimpleURLLoader::Create(
-+      std::move(resource_request), kBrowserOSMetricsTrafficAnnotation);
++      std::move(resource_request), kBlockBrowserMetricsTrafficAnnotation);
 +  url_loader->SetAllowHttpErrorResults(true);
 +  url_loader->AttachStringForUpload(json_payload, "application/json");
 +  
@@ -191,12 +191,12 @@ index 0000000000000..4f592a2c7b95b
 +  network::SimpleURLLoader* loader_ptr = url_loader.get();
 +  loader_ptr->DownloadToString(
 +      url_loader_factory_.get(),
-+      base::BindOnce(&BrowserOSMetricsService::OnPostHogResponse,
++      base::BindOnce(&BlockBrowserMetricsService::OnPostHogResponse,
 +                     weak_factory_.GetWeakPtr(), std::move(url_loader)),
 +      kMaxUploadSize);
 +}
 +
-+void BrowserOSMetricsService::OnPostHogResponse(
++void BlockBrowserMetricsService::OnPostHogResponse(
 +    std::unique_ptr<network::SimpleURLLoader> loader,
 +    std::unique_ptr<std::string> response_body) {
 +  int response_code = 0;
@@ -215,7 +215,7 @@ index 0000000000000..4f592a2c7b95b
 +  }
 +}
 +
-+void BrowserOSMetricsService::AddDefaultProperties(
++void BlockBrowserMetricsService::AddDefaultProperties(
 +    base::Value::Dict& properties) {
 +  // Add browser version
 +  properties.Set("$browser_version", version_info::GetVersionNumber());
@@ -234,4 +234,4 @@ index 0000000000000..4f592a2c7b95b
 +  properties.Set("install_id", install_id_);
 +}
 +
-+}  // namespace browseros_metrics
++}  // namespace blockbrowser_metrics

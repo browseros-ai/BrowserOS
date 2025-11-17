@@ -1,14 +1,14 @@
-diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.cc b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
+diff --git a/chrome/browser/extensions/api/blockbrowser/blockbrowser_api.cc b/chrome/browser/extensions/api/blockbrowser/blockbrowser_api.cc
 new file mode 100644
 index 0000000000000..0022c6ea0fe1b
 --- /dev/null
-+++ b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
++++ b/chrome/browser/extensions/api/blockbrowser/blockbrowser_api.cc
 @@ -0,0 +1,1316 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "chrome/browser/extensions/api/browser_os/browser_os_api.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_api.h"
 +
 +#include <set>
 +#include <string>
@@ -28,17 +28,17 @@ index 0000000000000..0022c6ea0fe1b
 +#include "base/values.h"
 +#include "base/version_info/version_info.h"
 +#include "components/metrics/browseros_metrics/browseros_metrics.h"
-+#include "chrome/browser/extensions/api/browser_os/browser_os_api_helpers.h"
-+#include "chrome/browser/extensions/api/browser_os/browser_os_api_utils.h"
-+#include "chrome/browser/extensions/api/browser_os/browser_os_change_detector.h"
-+#include "chrome/browser/extensions/api/browser_os/browser_os_content_processor.h"
-+#include "chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_api_helpers.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_api_utils.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_change_detector.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_content_processor.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_snapshot_processor.h"
 +#include "chrome/browser/extensions/extension_tab_util.h"
 +#include "chrome/browser/extensions/window_controller.h"
 +#include "chrome/browser/ui/browser.h"
 +#include "chrome/browser/ui/browser_finder.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
-+#include "chrome/common/extensions/api/browser_os.h"
++#include "chrome/common/extensions/api/blockbrowser.h"
 +#include "content/browser/renderer_host/render_widget_host_impl.h"
 +#include "content/public/browser/render_frame_host.h"
 +#include "content/public/browser/render_widget_host.h"
@@ -267,15 +267,15 @@ index 0000000000000..0022c6ea0fe1b
 +}  // namespace
 +
 +// Static member initialization
-+uint32_t BrowserOSGetInteractiveSnapshotFunction::next_snapshot_id_ = 1;
++uint32_t BlockBrowserGetInteractiveSnapshotFunction::next_snapshot_id_ = 1;
 +
 +// Constructor and destructor implementations
-+BrowserOSGetInteractiveSnapshotFunction::BrowserOSGetInteractiveSnapshotFunction() = default;
-+BrowserOSGetInteractiveSnapshotFunction::~BrowserOSGetInteractiveSnapshotFunction() = default;
++BlockBrowserGetInteractiveSnapshotFunction::BlockBrowserGetInteractiveSnapshotFunction() = default;
++BlockBrowserGetInteractiveSnapshotFunction::~BlockBrowserGetInteractiveSnapshotFunction() = default;
 +
-+ExtensionFunction::ResponseAction BrowserOSGetAccessibilityTreeFunction::Run() {
-+  std::optional<browser_os::GetAccessibilityTree::Params> params =
-+      browser_os::GetAccessibilityTree::Params::Create(args());
++ExtensionFunction::ResponseAction BlockBrowserGetAccessibilityTreeFunction::Run() {
++  std::optional<blockbrowser::GetAccessibilityTree::Params> params =
++      blockbrowser::GetAccessibilityTree::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  // Get the target tab
@@ -299,7 +299,7 @@ index 0000000000000..0022c6ea0fe1b
 +  // Use WebContents with extended properties to get a full tree
 +  web_contents->RequestAXTreeSnapshot(
 +      base::BindOnce(
-+          &BrowserOSGetAccessibilityTreeFunction::OnAccessibilityTreeReceived,
++          &BlockBrowserGetAccessibilityTreeFunction::OnAccessibilityTreeReceived,
 +          this),
 +      ui::AXMode(ui::AXMode::kWebContents | ui::AXMode::kExtendedProperties |
 +                 ui::AXMode::kInlineTextBoxes),
@@ -310,9 +310,9 @@ index 0000000000000..0022c6ea0fe1b
 +  return RespondLater();
 +}
 +
-+void BrowserOSGetAccessibilityTreeFunction::OnAccessibilityTreeReceived(
++void BlockBrowserGetAccessibilityTreeFunction::OnAccessibilityTreeReceived(
 +    ui::AXTreeUpdate& tree_update) {
-+  browser_os::AccessibilityTree result;
++  blockbrowser::AccessibilityTree result;
 +  result.root_id = tree_update.root_id;
 +
 +  // Serialize all nodes with complete AX data
@@ -324,19 +324,19 @@ index 0000000000000..0022c6ea0fe1b
 +  result.nodes.additional_properties = std::move(nodes);
 +
 +  // Serialize tree-level metadata
-+  browser_os::AccessibilityTree::TreeData tree_data_obj;
++  blockbrowser::AccessibilityTree::TreeData tree_data_obj;
 +  tree_data_obj.additional_properties = SerializeAXTreeData(tree_update.tree_data);
 +  result.tree_data = std::move(tree_data_obj);
 +
 +  Respond(ArgumentList(
-+      browser_os::GetAccessibilityTree::Results::Create(result)));
++      blockbrowser::GetAccessibilityTree::Results::Create(result)));
 +}
 +
-+// Implementation of BrowserOSGetInteractiveSnapshotFunction
++// Implementation of BlockBrowserGetInteractiveSnapshotFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSGetInteractiveSnapshotFunction::Run() {
-+  std::optional<browser_os::GetInteractiveSnapshot::Params> params =
-+      browser_os::GetInteractiveSnapshot::Params::Create(args());
++ExtensionFunction::ResponseAction BlockBrowserGetInteractiveSnapshotFunction::Run() {
++  std::optional<blockbrowser::GetInteractiveSnapshot::Params> params =
++      blockbrowser::GetInteractiveSnapshot::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  // Get the target tab
@@ -363,18 +363,18 @@ index 0000000000000..0022c6ea0fe1b
 +  content::RenderFrameHost* rfh = web_contents->GetPrimaryMainFrame();
 +  if (!rfh || !rfh->IsRenderFrameLive() || !rfh->IsActive()) {
 +    LOG(WARNING) << "[browseros] Frame not stable for AX snapshot - skipping";
-+    browser_os::InteractiveSnapshot empty_snapshot;
++    blockbrowser::InteractiveSnapshot empty_snapshot;
 +    empty_snapshot.snapshot_id = next_snapshot_id_++;
 +    empty_snapshot.timestamp = base::Time::Now().InMillisecondsFSinceUnixEpoch();
 +    empty_snapshot.processing_time_ms = 0;
 +    return RespondNow(ArgumentList(
-+        browser_os::GetInteractiveSnapshot::Results::Create(empty_snapshot)));
++        blockbrowser::GetInteractiveSnapshot::Results::Create(empty_snapshot)));
 +  }
 +  
 +  // Request accessibility tree snapshot
 +  web_contents->RequestAXTreeSnapshot(
 +      base::BindOnce(
-+          &BrowserOSGetInteractiveSnapshotFunction::OnAccessibilityTreeReceived,
++          &BlockBrowserGetInteractiveSnapshotFunction::OnAccessibilityTreeReceived,
 +          this),
 +      ui::AXMode(ui::AXMode::kWebContents | ui::AXMode::kExtendedProperties |
 +                 ui::AXMode::kInlineTextBoxes),
@@ -386,29 +386,29 @@ index 0000000000000..0022c6ea0fe1b
 +  return RespondLater();
 +}
 +
-+void BrowserOSGetInteractiveSnapshotFunction::OnAccessibilityTreeReceived(
++void BlockBrowserGetInteractiveSnapshotFunction::OnAccessibilityTreeReceived(
 +    ui::AXTreeUpdate& tree_update) {
 +  // Double-check frame is still valid before processing
 +  if (!web_contents_) {
 +    LOG(WARNING) << "[browseros] WebContents gone during AX snapshot callback";
-+    browser_os::InteractiveSnapshot empty_snapshot;
++    blockbrowser::InteractiveSnapshot empty_snapshot;
 +    empty_snapshot.snapshot_id = next_snapshot_id_++;
 +    empty_snapshot.timestamp = base::Time::Now().InMillisecondsFSinceUnixEpoch();
 +    empty_snapshot.processing_time_ms = 0;
 +    Respond(ArgumentList(
-+        browser_os::GetInteractiveSnapshot::Results::Create(empty_snapshot)));
++        blockbrowser::GetInteractiveSnapshot::Results::Create(empty_snapshot)));
 +    return;
 +  }
 +  
 +  content::RenderFrameHost* rfh = web_contents_->GetPrimaryMainFrame();
 +  if (!rfh || !rfh->IsRenderFrameLive()) {
 +    LOG(WARNING) << "[browseros] Frame became unstable during AX snapshot callback";
-+    browser_os::InteractiveSnapshot empty_snapshot;
++    blockbrowser::InteractiveSnapshot empty_snapshot;
 +    empty_snapshot.snapshot_id = next_snapshot_id_++;
 +    empty_snapshot.timestamp = base::Time::Now().InMillisecondsFSinceUnixEpoch();
 +    empty_snapshot.processing_time_ms = 0;
 +    Respond(ArgumentList(
-+        browser_os::GetInteractiveSnapshot::Results::Create(empty_snapshot)));
++        blockbrowser::GetInteractiveSnapshot::Results::Create(empty_snapshot)));
 +    return;
 +  }
 +  
@@ -419,21 +419,21 @@ index 0000000000000..0022c6ea0fe1b
 +      next_snapshot_id_++,
 +      web_contents_,
 +      base::BindOnce(
-+          &BrowserOSGetInteractiveSnapshotFunction::OnSnapshotProcessed,
++          &BlockBrowserGetInteractiveSnapshotFunction::OnSnapshotProcessed,
 +          base::WrapRefCounted(this)));
 +}
 +
-+void BrowserOSGetInteractiveSnapshotFunction::OnSnapshotProcessed(
++void BlockBrowserGetInteractiveSnapshotFunction::OnSnapshotProcessed(
 +    SnapshotProcessingResult result) {
 +  Respond(ArgumentList(
-+      browser_os::GetInteractiveSnapshot::Results::Create(result.snapshot)));
++      blockbrowser::GetInteractiveSnapshot::Results::Create(result.snapshot)));
 +}
 +
-+// Implementation of BrowserOSClickFunction
++// Implementation of BlockBrowserClickFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSClickFunction::Run() {
-+  std::optional<browser_os::Click::Params> params =
-+      browser_os::Click::Params::Create(args());
++ExtensionFunction::ResponseAction BlockBrowserClickFunction::Run() {
++  std::optional<blockbrowser::Click::Params> params =
++      blockbrowser::Click::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  // Get the target tab
@@ -465,18 +465,18 @@ index 0000000000000..0022c6ea0fe1b
 +  bool change_detected = ClickWithDetection(web_contents, node_info);
 +  
 +  // Create interaction response
-+  browser_os::InteractionResponse response;
++  blockbrowser::InteractionResponse response;
 +  response.success = change_detected;
 +  
 +  return RespondNow(ArgumentList(
-+      browser_os::Click::Results::Create(response)));
++      blockbrowser::Click::Results::Create(response)));
 +}
 +
-+// Implementation of BrowserOSInputTextFunction
++// Implementation of BlockBrowserInputTextFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSInputTextFunction::Run() {
-+  std::optional<browser_os::InputText::Params> params =
-+      browser_os::InputText::Params::Create(args());
++ExtensionFunction::ResponseAction BlockBrowserInputTextFunction::Run() {
++  std::optional<blockbrowser::InputText::Params> params =
++      blockbrowser::InputText::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  // Get the target tab
@@ -514,18 +514,18 @@ index 0000000000000..0022c6ea0fe1b
 +  }
 +  
 +  // Create interaction response
-+  browser_os::InteractionResponse response;
++  blockbrowser::InteractionResponse response;
 +  response.success = change_detected;
 +  
 +  return RespondNow(ArgumentList(
-+      browser_os::InputText::Results::Create(response)));
++      blockbrowser::InputText::Results::Create(response)));
 +}
 +
-+// Implementation of BrowserOSClearFunction
++// Implementation of BlockBrowserClearFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSClearFunction::Run() {
-+  std::optional<browser_os::Clear::Params> params =
-+      browser_os::Clear::Params::Create(args());
++ExtensionFunction::ResponseAction BlockBrowserClearFunction::Run() {
++  std::optional<blockbrowser::Clear::Params> params =
++      blockbrowser::Clear::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  // Get the target tab
@@ -563,18 +563,18 @@ index 0000000000000..0022c6ea0fe1b
 +  }
 +  
 +  // Create interaction response
-+  browser_os::InteractionResponse response;
++  blockbrowser::InteractionResponse response;
 +  response.success = change_detected;
 +  
 +  return RespondNow(ArgumentList(
-+      browser_os::Clear::Results::Create(response)));
++      blockbrowser::Clear::Results::Create(response)));
 +}
 +
-+// Implementation of BrowserOSGetPageLoadStatusFunction
++// Implementation of BlockBrowserGetPageLoadStatusFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSGetPageLoadStatusFunction::Run() {
-+  std::optional<browser_os::GetPageLoadStatus::Params> params =
-+      browser_os::GetPageLoadStatus::Params::Create(args());
++ExtensionFunction::ResponseAction BlockBrowserGetPageLoadStatusFunction::Run() {
++  std::optional<blockbrowser::GetPageLoadStatus::Params> params =
++      blockbrowser::GetPageLoadStatus::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  // Get the target tab
@@ -595,7 +595,7 @@ index 0000000000000..0022c6ea0fe1b
 +  }
 +  
 +  // Build the status object
-+  browser_os::PageLoadStatus status;
++  blockbrowser::PageLoadStatus status;
 +  
 +  // Check if any resources are still loading
 +  status.is_resources_loading = web_contents->IsLoading();
@@ -607,14 +607,14 @@ index 0000000000000..0022c6ea0fe1b
 +  status.is_page_complete = rfh->IsDocumentOnLoadCompletedInMainFrame();
 +  
 +  return RespondNow(ArgumentList(
-+      browser_os::GetPageLoadStatus::Results::Create(status)));
++      blockbrowser::GetPageLoadStatus::Results::Create(status)));
 +}
 +
-+// Implementation of BrowserOSScrollUpFunction
++// Implementation of BlockBrowserScrollUpFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSScrollUpFunction::Run() {
-+  std::optional<browser_os::ScrollUp::Params> params =
-+      browser_os::ScrollUp::Params::Create(args());
++ExtensionFunction::ResponseAction BlockBrowserScrollUpFunction::Run() {
++  std::optional<blockbrowser::ScrollUp::Params> params =
++      blockbrowser::ScrollUp::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  // Get the target tab
@@ -653,11 +653,11 @@ index 0000000000000..0022c6ea0fe1b
 +  return RespondNow(NoArguments());
 +}
 +
-+// Implementation of BrowserOSScrollDownFunction
++// Implementation of BlockBrowserScrollDownFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSScrollDownFunction::Run() {
-+  std::optional<browser_os::ScrollDown::Params> params =
-+      browser_os::ScrollDown::Params::Create(args());
++ExtensionFunction::ResponseAction BlockBrowserScrollDownFunction::Run() {
++  std::optional<blockbrowser::ScrollDown::Params> params =
++      blockbrowser::ScrollDown::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  // Get the target tab
@@ -696,11 +696,11 @@ index 0000000000000..0022c6ea0fe1b
 +  return RespondNow(NoArguments());
 +}
 +
-+// Implementation of BrowserOSScrollToNodeFunction
++// Implementation of BlockBrowserScrollToNodeFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSScrollToNodeFunction::Run() {
-+  std::optional<browser_os::ScrollToNode::Params> params =
-+      browser_os::ScrollToNode::Params::Create(args());
++ExtensionFunction::ResponseAction BlockBrowserScrollToNodeFunction::Run() {
++  std::optional<blockbrowser::ScrollToNode::Params> params =
++      blockbrowser::ScrollToNode::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  // Get the target tab
@@ -771,14 +771,14 @@ index 0000000000000..0022c6ea0fe1b
 +  }
 +  
 +  return RespondNow(ArgumentList(
-+      browser_os::ScrollToNode::Results::Create(!is_in_view)));
++      blockbrowser::ScrollToNode::Results::Create(!is_in_view)));
 +}
 +
-+// Implementation of BrowserOSSendKeysFunction
++// Implementation of BlockBrowserSendKeysFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSSendKeysFunction::Run() {
-+  std::optional<browser_os::SendKeys::Params> params =
-+      browser_os::SendKeys::Params::Create(args());
++ExtensionFunction::ResponseAction BlockBrowserSendKeysFunction::Run() {
++  std::optional<blockbrowser::SendKeys::Params> params =
++      blockbrowser::SendKeys::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  // Get the target tab
@@ -813,21 +813,21 @@ index 0000000000000..0022c6ea0fe1b
 +  }
 +  
 +  // Create interaction response
-+  browser_os::InteractionResponse response;
++  blockbrowser::InteractionResponse response;
 +  response.success = change_detected;
 +  
 +  return RespondNow(ArgumentList(
-+      browser_os::SendKeys::Results::Create(response)));
++      blockbrowser::SendKeys::Results::Create(response)));
 +}
 +
-+// Implementation of BrowserOSCaptureScreenshotFunction
++// Implementation of BlockBrowserCaptureScreenshotFunction
 +
-+BrowserOSCaptureScreenshotFunction::BrowserOSCaptureScreenshotFunction() = default;
-+BrowserOSCaptureScreenshotFunction::~BrowserOSCaptureScreenshotFunction() = default;
++BlockBrowserCaptureScreenshotFunction::BlockBrowserCaptureScreenshotFunction() = default;
++BlockBrowserCaptureScreenshotFunction::~BlockBrowserCaptureScreenshotFunction() = default;
 +
-+ExtensionFunction::ResponseAction BrowserOSCaptureScreenshotFunction::Run() {
-+  std::optional<browser_os::CaptureScreenshot::Params> params =
-+      browser_os::CaptureScreenshot::Params::Create(args());
++ExtensionFunction::ResponseAction BlockBrowserCaptureScreenshotFunction::Run() {
++  std::optional<blockbrowser::CaptureScreenshot::Params> params =
++      blockbrowser::CaptureScreenshot::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +  
 +  // Store whether to show highlights
@@ -916,7 +916,7 @@ index 0000000000000..0022c6ea0fe1b
 +  return RespondLater();
 +}
 +
-+void BrowserOSCaptureScreenshotFunction::DrawHighlightsAndCapture() {
++void BlockBrowserCaptureScreenshotFunction::DrawHighlightsAndCapture() {
 +  // Only draw highlights if requested via the showHighlights flag
 +  if (show_highlights_) {
 +    // Check if we have snapshot data for this tab to draw highlights
@@ -934,7 +934,7 @@ index 0000000000000..0022c6ea0fe1b
 +    // Use scoped_refptr to keep the function alive
 +    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
 +        FROM_HERE,
-+        base::BindOnce(&BrowserOSCaptureScreenshotFunction::CaptureScreenshotNow,
++        base::BindOnce(&BlockBrowserCaptureScreenshotFunction::CaptureScreenshotNow,
 +                       base::WrapRefCounted(this)),
 +        base::Milliseconds(1000));  // Give enough time for JS execution and paint
 +  } else {
@@ -943,7 +943,7 @@ index 0000000000000..0022c6ea0fe1b
 +  }
 +}
 +
-+void BrowserOSCaptureScreenshotFunction::CaptureScreenshotNow() {
++void BlockBrowserCaptureScreenshotFunction::CaptureScreenshotNow() {
 +  if (!web_contents_) {
 +    Respond(Error("Web contents destroyed"));
 +    return;
@@ -968,11 +968,11 @@ index 0000000000000..0022c6ea0fe1b
 +  rwhi->GetView()->CopyFromSurface(
 +      gfx::Rect(),  // Empty rect means copy entire surface
 +      target_size_,
-+      base::BindOnce(&BrowserOSCaptureScreenshotFunction::OnScreenshotCaptured,
++      base::BindOnce(&BlockBrowserCaptureScreenshotFunction::OnScreenshotCaptured,
 +                     this));
 +}
 +
-+void BrowserOSCaptureScreenshotFunction::OnScreenshotCaptured(
++void BlockBrowserCaptureScreenshotFunction::OnScreenshotCaptured(
 +    const SkBitmap& bitmap) {
 +  // Clean up the highlights immediately after capture (only if we added them)
 +  if (show_highlights_ && web_contents_) {
@@ -997,12 +997,12 @@ index 0000000000000..0022c6ea0fe1b
 +  std::string data_url = "data:image/png;base64," + base64_data;
 +  
 +  Respond(ArgumentList(
-+      browser_os::CaptureScreenshot::Results::Create(data_url)));
++      blockbrowser::CaptureScreenshot::Results::Create(data_url)));
 +}
 +
-+// BrowserOSGetSnapshotFunction implementation
-+ExtensionFunction::ResponseAction BrowserOSGetSnapshotFunction::Run() {
-+  auto params = browser_os::GetSnapshot::Params::Create(args());
++// BlockBrowserGetSnapshotFunction implementation
++ExtensionFunction::ResponseAction BlockBrowserGetSnapshotFunction::Run() {
++  auto params = blockbrowser::GetSnapshot::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +  
 +  // Get the target tab
@@ -1018,7 +1018,7 @@ index 0000000000000..0022c6ea0fe1b
 +  
 +  // Request accessibility tree snapshot
 +  web_contents->RequestAXTreeSnapshot(
-+      base::BindOnce(&BrowserOSGetSnapshotFunction::OnAccessibilityTreeReceived,
++      base::BindOnce(&BlockBrowserGetSnapshotFunction::OnAccessibilityTreeReceived,
 +                     this),
 +      ui::AXMode(ui::AXMode::kWebContents | ui::AXMode::kExtendedProperties),
 +      /* max_nodes= */ 0,  // No limit
@@ -1028,7 +1028,7 @@ index 0000000000000..0022c6ea0fe1b
 +  return RespondLater();
 +}
 +
-+void BrowserOSGetSnapshotFunction::OnAccessibilityTreeReceived(
++void BlockBrowserGetSnapshotFunction::OnAccessibilityTreeReceived(
 +    ui::AXTreeUpdate& tree_update) {
 +  if (!has_callback()) {
 +    return;
@@ -1039,19 +1039,19 @@ index 0000000000000..0022c6ea0fe1b
 +  auto items = ContentProcessor::ExtractPageContent(tree_update);
 +
 +  // Build result
-+  browser_os::PageContent result;
++  blockbrowser::PageContent result;
 +  result.items = std::move(items);
 +  result.timestamp = base::Time::Now().InMillisecondsFSinceUnixEpoch();
 +  result.processing_time_ms =
 +      (base::Time::Now() - start_time).InMilliseconds();
 +
-+  Respond(ArgumentList(browser_os::GetSnapshot::Results::Create(result)));
++  Respond(ArgumentList(blockbrowser::GetSnapshot::Results::Create(result)));
 +}
 +
-+// BrowserOSGetPrefFunction
-+ExtensionFunction::ResponseAction BrowserOSGetPrefFunction::Run() {
-+  std::optional<browser_os::GetPref::Params> params =
-+      browser_os::GetPref::Params::Create(args());
++// BlockBrowserGetPrefFunction
++ExtensionFunction::ResponseAction BlockBrowserGetPrefFunction::Run() {
++  std::optional<blockbrowser::GetPref::Params> params =
++      blockbrowser::GetPref::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  Profile* profile = Profile::FromBrowserContext(browser_context());
@@ -1061,7 +1061,7 @@ index 0000000000000..0022c6ea0fe1b
 +    return RespondNow(Error("Preference not found: " + params->name));
 +  }
 +
-+  browser_os::PrefObject pref_obj;
++  blockbrowser::PrefObject pref_obj;
 +  pref_obj.key = params->name;
 +
 +  const base::Value* value = prefs->GetUserPrefValue(params->name);
@@ -1073,13 +1073,13 @@ index 0000000000000..0022c6ea0fe1b
 +  pref_obj.value = value->Clone();
 +
 +  return RespondNow(ArgumentList(
-+      browser_os::GetPref::Results::Create(pref_obj)));
++      blockbrowser::GetPref::Results::Create(pref_obj)));
 +}
 +
-+// BrowserOSSetPrefFunction
-+ExtensionFunction::ResponseAction BrowserOSSetPrefFunction::Run() {
-+  std::optional<browser_os::SetPref::Params> params =
-+      browser_os::SetPref::Params::Create(args());
++// BlockBrowserSetPrefFunction
++ExtensionFunction::ResponseAction BlockBrowserSetPrefFunction::Run() {
++  std::optional<blockbrowser::SetPref::Params> params =
++      blockbrowser::SetPref::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  // Security: only allow modifying browseros.* prefs
@@ -1097,11 +1097,11 @@ index 0000000000000..0022c6ea0fe1b
 +  prefs->Set(params->name, params->value);
 +
 +  return RespondNow(ArgumentList(
-+      browser_os::SetPref::Results::Create(true)));
++      blockbrowser::SetPref::Results::Create(true)));
 +}
 +
-+// BrowserOSGetAllPrefsFunction
-+ExtensionFunction::ResponseAction BrowserOSGetAllPrefsFunction::Run() {
++// BlockBrowserGetAllPrefsFunction
++ExtensionFunction::ResponseAction BlockBrowserGetAllPrefsFunction::Run() {
 +  Profile* profile = Profile::FromBrowserContext(browser_context());
 +  PrefService* profile_prefs = profile->GetPrefs();
 +  PrefService* local_state = g_browser_process->local_state();
@@ -1133,21 +1133,21 @@ index 0000000000000..0022c6ea0fe1b
 +  merge_prefs_from_service(profile_prefs, "profile_prefs");
 +
 +  // Create single PrefObject with the entire browseros dict
-+  std::vector<browser_os::PrefObject> pref_objects;
-+  browser_os::PrefObject pref_obj;
++  std::vector<blockbrowser::PrefObject> pref_objects;
++  blockbrowser::PrefObject pref_obj;
 +  pref_obj.key = "browseros";
 +  pref_obj.type = "dictionary";
 +  pref_obj.value = base::Value(std::move(combined_browseros));
 +  pref_objects.push_back(std::move(pref_obj));
 +
 +  return RespondNow(ArgumentList(
-+      browser_os::GetAllPrefs::Results::Create(pref_objects)));
++      blockbrowser::GetAllPrefs::Results::Create(pref_objects)));
 +}
 +
-+// BrowserOSLogMetricFunction
-+ExtensionFunction::ResponseAction BrowserOSLogMetricFunction::Run() {
-+  std::optional<browser_os::LogMetric::Params> params =
-+      browser_os::LogMetric::Params::Create(args());
++// BlockBrowserLogMetricFunction
++ExtensionFunction::ResponseAction BlockBrowserLogMetricFunction::Run() {
++  std::optional<blockbrowser::LogMetric::Params> params =
++      blockbrowser::LogMetric::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  const std::string& event_name = params->event_name;
@@ -1162,10 +1162,10 @@ index 0000000000000..0022c6ea0fe1b
 +    // Add extension ID as a property
 +    properties.Set("extension_id", extension_id());
 +    
-+    browseros_metrics::BrowserOSMetrics::Log(prefixed_event, std::move(properties));
++    browseros_metrics::BlockBrowserMetrics::Log(prefixed_event, std::move(properties));
 +  } else {
 +    // No properties, just log with extension ID
-+    browseros_metrics::BrowserOSMetrics::Log(prefixed_event, {
++    browseros_metrics::BlockBrowserMetrics::Log(prefixed_event, {
 +      {"extension_id", base::Value(extension_id())}
 +    });
 +  }
@@ -1174,19 +1174,19 @@ index 0000000000000..0022c6ea0fe1b
 +  return RespondNow(NoArguments());
 +}
 +
-+// BrowserOSGetVersionNumberFunction
-+ExtensionFunction::ResponseAction BrowserOSGetVersionNumberFunction::Run() {
++// BlockBrowserGetVersionNumberFunction
++ExtensionFunction::ResponseAction BlockBrowserGetVersionNumberFunction::Run() {
 +  // Get the version number from version_info
 +  std::string version = std::string(version_info::GetVersionNumber());
 +  
 +  return RespondNow(ArgumentList(
-+      browser_os::GetVersionNumber::Results::Create(version)));
++      blockbrowser::GetVersionNumber::Results::Create(version)));
 +}
 +
-+// BrowserOSExecuteJavaScriptFunction
-+ExtensionFunction::ResponseAction BrowserOSExecuteJavaScriptFunction::Run() {
-+  std::optional<browser_os::ExecuteJavaScript::Params> params =
-+      browser_os::ExecuteJavaScript::Params::Create(args());
++// BlockBrowserExecuteJavaScriptFunction
++ExtensionFunction::ResponseAction BlockBrowserExecuteJavaScriptFunction::Run() {
++  std::optional<blockbrowser::ExecuteJavaScript::Params> params =
++      blockbrowser::ExecuteJavaScript::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  // Get the target tab
@@ -1215,14 +1215,14 @@ index 0000000000000..0022c6ea0fe1b
 +  // This will return the result of the execution
 +  rfh->ExecuteJavaScriptForTests(
 +      js_code,
-+      base::BindOnce(&BrowserOSExecuteJavaScriptFunction::OnJavaScriptExecuted,
++      base::BindOnce(&BlockBrowserExecuteJavaScriptFunction::OnJavaScriptExecuted,
 +                     this),
 +      /*honor_js_content_settings=*/false);
 +  
 +  return RespondLater();
 +}
 +
-+void BrowserOSExecuteJavaScriptFunction::OnJavaScriptExecuted(base::Value result) {
++void BlockBrowserExecuteJavaScriptFunction::OnJavaScriptExecuted(base::Value result) {
 +  LOG(INFO) << "[browseros] ExecuteJavaScript: Execution completed";
 +
 +  if (result.is_none()) {
@@ -1233,13 +1233,13 @@ index 0000000000000..0022c6ea0fe1b
 +  
 +  // Return the result directly
 +  Respond(ArgumentList(
-+      browser_os::ExecuteJavaScript::Results::Create(result)));
++      blockbrowser::ExecuteJavaScript::Results::Create(result)));
 +}
 +
-+// Implementation of BrowserOSClickCoordinatesFunction
-+ExtensionFunction::ResponseAction BrowserOSClickCoordinatesFunction::Run() {
-+  std::optional<browser_os::ClickCoordinates::Params> params =
-+      browser_os::ClickCoordinates::Params::Create(args());
++// Implementation of BlockBrowserClickCoordinatesFunction
++ExtensionFunction::ResponseAction BlockBrowserClickCoordinatesFunction::Run() {
++  std::optional<blockbrowser::ClickCoordinates::Params> params =
++      blockbrowser::ClickCoordinates::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  // Get the target tab
@@ -1249,10 +1249,10 @@ index 0000000000000..0022c6ea0fe1b
 +                                       &error_message);
 +  if (!tab_info) {
 +    LOG(ERROR) << "[browseros] ClickCoordinates: " << error_message;
-+    browser_os::InteractionResponse response;
++    blockbrowser::InteractionResponse response;
 +    response.success = false;
 +    return RespondNow(ArgumentList(
-+        browser_os::ClickCoordinates::Results::Create(response)));
++        blockbrowser::ClickCoordinates::Results::Create(response)));
 +  }
 +  
 +  content::WebContents* web_contents = tab_info->web_contents;
@@ -1267,20 +1267,20 @@ index 0000000000000..0022c6ea0fe1b
 +  bool success = ClickCoordinatesWithDetection(web_contents, click_point);
 +  
 +  // Prepare the response
-+  browser_os::InteractionResponse response;
++  blockbrowser::InteractionResponse response;
 +  response.success = success;
 +  
 +  LOG(INFO) << "[browseros] ClickCoordinates: Result = " 
 +            << (success ? "success" : "no change detected");
 +  
 +  return RespondNow(ArgumentList(
-+      browser_os::ClickCoordinates::Results::Create(response)));
++      blockbrowser::ClickCoordinates::Results::Create(response)));
 +}
 +
-+// Implementation of BrowserOSTypeAtCoordinatesFunction  
-+ExtensionFunction::ResponseAction BrowserOSTypeAtCoordinatesFunction::Run() {
-+  std::optional<browser_os::TypeAtCoordinates::Params> params =
-+      browser_os::TypeAtCoordinates::Params::Create(args());
++// Implementation of BlockBrowserTypeAtCoordinatesFunction  
++ExtensionFunction::ResponseAction BlockBrowserTypeAtCoordinatesFunction::Run() {
++  std::optional<blockbrowser::TypeAtCoordinates::Params> params =
++      blockbrowser::TypeAtCoordinates::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  // Get the target tab
@@ -1290,10 +1290,10 @@ index 0000000000000..0022c6ea0fe1b
 +                                       &error_message);
 +  if (!tab_info) {
 +    LOG(ERROR) << "[browseros] TypeAtCoordinates: " << error_message;
-+    browser_os::InteractionResponse response;
++    blockbrowser::InteractionResponse response;
 +    response.success = false;
 +    return RespondNow(ArgumentList(
-+        browser_os::TypeAtCoordinates::Results::Create(response)));
++        blockbrowser::TypeAtCoordinates::Results::Create(response)));
 +  }
 +  
 +  content::WebContents* web_contents = tab_info->web_contents;
@@ -1308,14 +1308,14 @@ index 0000000000000..0022c6ea0fe1b
 +  bool success = TypeAtCoordinatesWithDetection(web_contents, click_point, params->text);
 +  
 +  // Prepare the response
-+  browser_os::InteractionResponse response;
++  blockbrowser::InteractionResponse response;
 +  response.success = success;
 +  
 +  LOG(INFO) << "[browseros] TypeAtCoordinates: Result = " 
 +            << (success ? "success" : "failed");
 +  
 +  return RespondNow(ArgumentList(
-+      browser_os::TypeAtCoordinates::Results::Create(response)));
++      blockbrowser::TypeAtCoordinates::Results::Create(response)));
 +}
 +
 +}  // namespace api

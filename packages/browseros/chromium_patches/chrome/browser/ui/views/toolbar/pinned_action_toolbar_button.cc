@@ -35,14 +35,14 @@ index 7ccb336f542f3..6d54a267d75b0 100644
    GetViewAccessibility().SetDescription(
        std::u16string(), ax::mojom::DescriptionFrom::kAttributeExplicitlyEmpty);
  
-+  // Set text from action item if available for BrowserOS actions
++  // Set text from action item if available for BlockBrowser actions
 +  if (auto* action_item = container_->GetActionItemFor(action_id)) {
-+    if (browseros::IsBrowserOSAction(action_id)) {
++    if (browseros::IsBlockBrowserAction(action_id)) {
 +      // Check if labels should be shown
 +      bool show_labels = true;
 +      if (browser_ && browser_->profile()) {
 +        show_labels = browser_->profile()->GetPrefs()->GetBoolean(
-+            prefs::kBrowserOSShowToolbarLabels);
++            prefs::kBlockBrowserShowToolbarLabels);
 +      }
 +      else {
 +      }
@@ -81,13 +81,13 @@ index 7ccb336f542f3..6d54a267d75b0 100644
      }
    }
  
-+  // Update the text from the action item for BrowserOS actions
-+  if (browseros::IsBrowserOSAction(action_view_->GetActionId())) {
++  // Update the text from the action item for BlockBrowser actions
++  if (browseros::IsBlockBrowserAction(action_view_->GetActionId())) {
 +    // Check if labels should be shown
 +    bool show_labels = true;
 +    if (action_view_->GetBrowser() && action_view_->GetBrowser()->profile()) {
 +      show_labels = action_view_->GetBrowser()->profile()->GetPrefs()->GetBoolean(
-+          prefs::kBrowserOSShowToolbarLabels);
++          prefs::kBlockBrowserShowToolbarLabels);
 +    }
 +    
 +    if (show_labels) {

@@ -1,15 +1,15 @@
-diff --git a/chrome/browser/browseros_server/validate_resources.py b/chrome/browser/browseros_server/validate_resources.py
+diff --git a/chrome/browser/blockbrowser_server/validate_resources.py b/chrome/browser/blockbrowser_server/validate_resources.py
 new file mode 100644
 index 0000000000000..d7dc82b132dad
 --- /dev/null
-+++ b/chrome/browser/browseros_server/validate_resources.py
++++ b/chrome/browser/blockbrowser_server/validate_resources.py
 @@ -0,0 +1,43 @@
 +#!/usr/bin/env python3
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
 +
-+"""Validates that required BrowserOS resources exist.
++"""Validates that required BlockBrowser resources exist.
 +
 +Required resources must be listed in REQUIRED_RESOURCES below.
 +"""
@@ -20,7 +20,7 @@ index 0000000000000..d7dc82b132dad
 +# Required resources that must exist in the resources/ directory
 +# Add more resources as needed - paths are relative to resources/
 +REQUIRED_RESOURCES = [
-+    "bin/browseros_server",
++    "bin/blockbrowser_server",
 +]
 +
 +script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -31,7 +31,7 @@ index 0000000000000..d7dc82b132dad
 +  resource_path = os.path.join(resources_dir, resource)
 +
 +  if not os.path.exists(resource_path):
-+    print(f"ERROR: Required BrowserOS resource not found: {resource_path}")
++    print(f"ERROR: Required BlockBrowser resource not found: {resource_path}")
 +    all_valid = False
 +    continue
 +
@@ -45,5 +45,5 @@ index 0000000000000..d7dc82b132dad
 +    print(f"  - resources/{resource}")
 +  sys.exit(1)
 +
-+print(f"✓ BrowserOS resources validated ({len(REQUIRED_RESOURCES)} resources)")
++print(f"✓ BlockBrowser resources validated ({len(REQUIRED_RESOURCES)} resources)")
 +sys.exit(0)

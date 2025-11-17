@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/extensions/api/browser_os/browser_os_change_detector.h b/chrome/browser/extensions/api/browser_os/browser_os_change_detector.h
+diff --git a/chrome/browser/extensions/api/blockbrowser/blockbrowser_change_detector.h b/chrome/browser/extensions/api/blockbrowser/blockbrowser_change_detector.h
 new file mode 100644
 index 0000000000000..b3287913fd5ac
 --- /dev/null
-+++ b/chrome/browser/extensions/api/browser_os/browser_os_change_detector.h
++++ b/chrome/browser/extensions/api/blockbrowser/blockbrowser_change_detector.h
 @@ -0,0 +1,108 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -33,7 +33,7 @@ index 0000000000000..b3287913fd5ac
 +// Change detector that monitors if any change occurred in the web content
 +// after an action is performed. This is used to verify that actions like
 +// click, type, clear, etc. actually had an effect on the page.
-+class BrowserOSChangeDetector : public content::WebContentsObserver {
++class BlockBrowserChangeDetector : public content::WebContentsObserver {
 + public:
 +  // Execute an action and detect if it causes any change in the page
 +  // Returns true if any change was detected within the timeout period
@@ -50,12 +50,12 @@ index 0000000000000..b3287913fd5ac
 +      base::TimeDelta timeout = base::Milliseconds(300));
 +
 +  // Constructor and destructor are public for use by factory methods
-+  explicit BrowserOSChangeDetector(content::WebContents* web_contents);
-+  ~BrowserOSChangeDetector() override;
++  explicit BlockBrowserChangeDetector(content::WebContents* web_contents);
++  ~BlockBrowserChangeDetector() override;
 +
 + private:
-+  BrowserOSChangeDetector(const BrowserOSChangeDetector&) = delete;
-+  BrowserOSChangeDetector& operator=(const BrowserOSChangeDetector&) = delete;
++  BlockBrowserChangeDetector(const BlockBrowserChangeDetector&) = delete;
++  BlockBrowserChangeDetector& operator=(const BlockBrowserChangeDetector&) = delete;
 +
 +  // Start monitoring for changes
 +  void StartMonitoring();
@@ -105,7 +105,7 @@ index 0000000000000..b3287913fd5ac
 +  base::OneShotTimer timeout_timer_;
 +  
 +  // Weak pointer factory
-+  base::WeakPtrFactory<BrowserOSChangeDetector> weak_factory_{this};
++  base::WeakPtrFactory<BlockBrowserChangeDetector> weak_factory_{this};
 +};
 +
 +}  // namespace api

@@ -16,17 +16,17 @@ diff --git a/chrome/browser/extensions/browseros_extension_constants.h b/chrome/
 index e71edb3e50137..79dc812fae32f 100644
 --- a/chrome/browser/extensions/browseros_extension_constants.h
 +++ b/chrome/browser/extensions/browseros_extension_constants.h
-@@ -29,6 +29,19 @@ inline bool IsBrowserOSExtension(const std::string& extension_id) {
+@@ -29,6 +29,19 @@ inline bool IsBlockBrowserExtension(const std::string& extension_id) {
           extension_id == kBugReporterExtensionId;
  }
  
-+// Check if an extension can be uninstalled (false for BrowserOS extensions)
++// Check if an extension can be uninstalled (false for BlockBrowser extensions)
 +inline bool CanUninstallExtension(const std::string& extension_id) {
-+  return !IsBrowserOSExtension(extension_id);
++  return !IsBlockBrowserExtension(extension_id);
 +}
 +
-+// Get all BrowserOS extension IDs
-+inline std::vector<std::string> GetBrowserOSExtensionIds() {
++// Get all BlockBrowser extension IDs
++inline std::vector<std::string> GetBlockBrowserExtensionIds() {
 +  return {
 +    kAISidePanelExtensionId,
 +    kBugReporterExtensionId
@@ -75,8 +75,8 @@ index ae782891ad341..393c6c78e372e 100644
      }
    }
 +  
-+  // Always force-pin BrowserOS extensions
-+  for (const auto& extension_id : browseros::GetBrowserOSExtensionIds()) {
++  // Always force-pin BlockBrowser extensions
++  for (const auto& extension_id : browseros::GetBlockBrowserExtensionIds()) {
 +    force_pinned_list.insert(extension_id);
 +  }
 +  
@@ -87,20 +87,20 @@ diff --git a/chrome/browser/ui/actions/browseros_actions_config.h b/chrome/brows
 index 4838a697b0028..3900759f40883 100644
 --- a/chrome/browser/ui/actions/browseros_actions_config.h
 +++ b/chrome/browser/ui/actions/browseros_actions_config.h
-@@ -30,18 +30,23 @@ constexpr auto kBrowserOSNativeActionIds =
+@@ -30,18 +30,23 @@ constexpr auto kBlockBrowserNativeActionIds =
          kActionSidePanelShowClashOfGpts,
      });
  
--// Extension IDs that behave like native BrowserOS panels
--constexpr auto kBrowserOSExtensionIds =
+-// Extension IDs that behave like native BlockBrowser panels
+-constexpr auto kBlockBrowserExtensionIds =
 -    base::MakeFixedFlatSet<std::string_view>({
 -        extensions::browseros::kAISidePanelExtensionId,
 -    });
 -
- // Check if an action ID is a BrowserOS action (native or extension)
- inline bool IsBrowserOSAction(actions::ActionId id) {
+ // Check if an action ID is a BlockBrowser action (native or extension)
+ inline bool IsBlockBrowserAction(actions::ActionId id) {
    // Check native actions
-   if (kBrowserOSNativeActionIds.contains(id)) {
+   if (kBlockBrowserNativeActionIds.contains(id)) {
      return true;
    }
 +
@@ -133,8 +133,8 @@ index 8c748d7cc5fc1..2019fe0341327 100644
  }
  
  bool ToolbarActionsModel::IsActionForcePinned(const ActionId& action_id) const {
-+  // Check if it's a BrowserOS extension
-+  if (extensions::browseros::IsBrowserOSExtension(action_id)) {
++  // Check if it's a BlockBrowser extension
++  if (extensions::browseros::IsBlockBrowserExtension(action_id)) {
 +    return true;
 +  }
 +  
@@ -146,7 +146,7 @@ index 8c748d7cc5fc1..2019fe0341327 100644
        management->GetForcePinnedList(), std::back_inserter(pinned),
        [&pinned](const std::string& id) { return !base::Contains(pinned, id); });
 +      
-+  // Add BrowserOS extensions to the force-pinned list
++  // Add BlockBrowser extensions to the force-pinned list
 +  for (const char* ext_id : extensions::browseros::kAllowedExtensions) {
 +    if (!base::Contains(pinned, ext_id)) {
 +      pinned.push_back(ext_id);
@@ -180,9 +180,9 @@ index 30d4b3bc95d1c..558e8f442d671 100644
                             actions::ActionPinnableState::kPinnable))
            .Build());
 +
-+  // Auto-pin BrowserOS extensions to the toolbar.
-+  if (browseros::IsBrowserOSExtension(extension->id())) {
-+    LOG(INFO) << "browseros: Auto-pinning BrowserOS extension: " << extension->id();
++  // Auto-pin BlockBrowser extensions to the toolbar.
++  if (browseros::IsBlockBrowserExtension(extension->id())) {
++    LOG(INFO) << "browseros: Auto-pinning BlockBrowser extension: " << extension->id();
 +    if (auto* pinned_model = PinnedToolbarActionsModel::Get(profile_)) {
 +      pinned_model->UpdatePinnedState(extension_action_id, true);
 +    }
@@ -195,9 +195,9 @@ index 30d4b3bc95d1c..558e8f442d671 100644
      coordinators_.erase(extension->id());
    }
 +  
-+  // Unpin BrowserOS extensions before removing the action item
-+  if (browseros::IsBrowserOSExtension(extension->id())) {
-+    LOG(INFO) << "browseros: Unpinning BrowserOS extension: " << extension->id() 
++  // Unpin BlockBrowser extensions before removing the action item
++  if (browseros::IsBlockBrowserExtension(extension->id())) {
++    LOG(INFO) << "browseros: Unpinning BlockBrowser extension: " << extension->id() 
 +              << " reason: " << static_cast<int>(reason);
 +    if (auto* pinned_model = PinnedToolbarActionsModel::Get(profile_)) {
 +      // Get the action ID to unpin it

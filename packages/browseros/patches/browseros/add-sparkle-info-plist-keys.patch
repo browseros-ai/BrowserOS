@@ -26,7 +26,7 @@ index 9190c5ef6c092..cf0106b8ba53e 100644
 +  <key>SUAutomaticallyUpdate</key>
 +  <true/>
 +	<key>CrProductDirName</key>
-+	<string>BrowserOS</string>
++	<string>BlockBrowser</string>
  </dict>
  </plist>
 -- 

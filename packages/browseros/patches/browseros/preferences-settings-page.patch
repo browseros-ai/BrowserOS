@@ -27,12 +27,12 @@ index 200d72995460e..1bff654e3ac42 100644
 --- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
 +++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
 @@ -607,6 +607,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
-   (*s_allowlist)["nxtscape.ollama_base_url"] = settings_api::PrefType::kString;
-   (*s_allowlist)["nxtscape.ollama_model"] = settings_api::PrefType::kString;
+   (*s_allowlist)["blockbrowser.ollama_base_url"] = settings_api::PrefType::kString;
+   (*s_allowlist)["blockbrowser.ollama_model"] = settings_api::PrefType::kString;
  
-+  // BrowserOS preferences
-+  (*s_allowlist)[prefs::kBrowserOSShowToolbarLabels] = settings_api::PrefType::kBoolean;
-+  (*s_allowlist)[prefs::kBrowserOSCustomProviders] = settings_api::PrefType::kString;
++  // BlockBrowser preferences
++  (*s_allowlist)[prefs::kBlockBrowserShowToolbarLabels] = settings_api::PrefType::kBoolean;
++  (*s_allowlist)[prefs::kBlockBrowserCustomProviders] = settings_api::PrefType::kString;
 +
  #if BUILDFLAG(IS_CHROMEOS)
    // Accounts / Users / People.
@@ -41,16 +41,16 @@ diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browse
 index e6f03310af7ee..bfe1a9243a920 100644
 --- a/chrome/browser/prefs/browser_prefs.cc
 +++ b/chrome/browser/prefs/browser_prefs.cc
-@@ -2357,6 +2357,12 @@ void RegisterNxtscapePrefs(user_prefs::PrefRegistrySyncable* registry) {
-   registry->RegisterStringPref("nxtscape.ollama_api_key", "");
-   registry->RegisterStringPref("nxtscape.ollama_base_url", "http://localhost:11434");
-   registry->RegisterStringPref("nxtscape.ollama_model", "");
+@@ -2357,6 +2357,12 @@ void RegisterBlockBrowserPrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterStringPref("blockbrowser.ollama_api_key", "");
+   registry->RegisterStringPref("blockbrowser.ollama_base_url", "http://localhost:11434");
+   registry->RegisterStringPref("blockbrowser.ollama_model", "");
 +  
-+  // BrowserOS toolbar settings
-+  registry->RegisterBooleanPref(prefs::kBrowserOSShowToolbarLabels, true);
++  // BlockBrowser toolbar settings
++  registry->RegisterBooleanPref(prefs::kBlockBrowserShowToolbarLabels, true);
 +  
 +  // Custom providers list - stored as a JSON string
-+  registry->RegisterStringPref(prefs::kBrowserOSCustomProviders, "[]");
++  registry->RegisterStringPref(prefs::kBlockBrowserCustomProviders, "[]");
  }
  
  #if BUILDFLAG(IS_CHROMEOS)
@@ -61,7 +61,7 @@ index 1a8cd69860514..c7a1069d49c2b 100644
 @@ -57,6 +57,7 @@ build_webui("build") {
      "a11y_page/a11y_page.ts",
      "about_page/about_page.ts",
-     "nxtscape_page/nxtscape_page.ts",
+     "blockbrowser_page/blockbrowser_page.ts",
 +    "browseros_prefs_page/browseros_prefs_page.ts",
      "ai_page/ai_compare_subpage.ts",
      "ai_page/ai_info_card.ts",
@@ -314,8 +314,8 @@ index 0000000000000..f7766f378ba0a
 +        <cr-icon icon="settings:settings"></cr-icon>
 +      </div>
 +      <div>
-+        <h1 class="page-title">BrowserOS Preferences</h1>
-+        <div class="page-subtitle">Configure BrowserOS-specific settings</div>
++        <h1 class="page-title">BlockBrowser Preferences</h1>
++        <div class="page-subtitle">Configure BlockBrowser-specific settings</div>
 +      </div>
 +    </div>
 +    
@@ -328,7 +328,7 @@ index 0000000000000..f7766f378ba0a
 +        <div class="prefs-toggle-row">
 +          <div>
 +            <div class="prefs-toggle-label">Show labels in toolbar</div>
-+            <div class="prefs-toggle-sublabel">Display text labels next to BrowserOS toolbar icons</div>
++            <div class="prefs-toggle-sublabel">Display text labels next to BlockBrowser toolbar icons</div>
 +            <div class="prefs-toggle-sublabel" style="color: var(--google-orange-600); font-weight: 500; margin-top: 4px;">
 +              NOTE: Needs browser restart
 +            </div>
@@ -420,7 +420,7 @@ index 0000000000000..2616c77cc001b
 +// found in the LICENSE file.
 +
 +/**
-+ * @fileoverview 'settings-browseros-prefs-page' contains BrowserOS-specific settings.
++ * @fileoverview 'settings-browseros-prefs-page' contains BlockBrowser-specific settings.
 + */
 +
 +import '../settings_page/settings_section.js';
@@ -443,15 +443,15 @@ index 0000000000000..2616c77cc001b
 +  url: string;
 +}
 +
-+export interface SettingsBrowserOSPrefsPageElement {
++export interface SettingsBlockBrowserPrefsPageElement {
 +  $: {
 +    addProviderDialog: HTMLElement;
 +  };
 +}
 +
-+const SettingsBrowserOSPrefsPageElementBase = PrefsMixin(PolymerElement);
++const SettingsBlockBrowserPrefsPageElementBase = PrefsMixin(PolymerElement);
 +
-+export class SettingsBrowserOSPrefsPageElement extends SettingsBrowserOSPrefsPageElementBase {
++export class SettingsBlockBrowserPrefsPageElement extends SettingsBlockBrowserPrefsPageElementBase {
 +  static get is() {
 +    return 'settings-browseros-prefs-page';
 +  }
@@ -659,12 +659,12 @@ index 0000000000000..2616c77cc001b
 +
 +declare global {
 +  interface HTMLElementTagNameMap {
-+    'settings-browseros-prefs-page': SettingsBrowserOSPrefsPageElement;
++    'settings-browseros-prefs-page': SettingsBlockBrowserPrefsPageElement;
 +  }
 +}
 +
 +customElements.define(
-+    SettingsBrowserOSPrefsPageElement.is, SettingsBrowserOSPrefsPageElement);
++    SettingsBlockBrowserPrefsPageElement.is, SettingsBlockBrowserPrefsPageElement);
 \ No newline at end of file
 diff --git a/chrome/browser/resources/settings/route.ts b/chrome/browser/resources/settings/route.ts
 index e8dd01dc3e7b6..c8996cc719973 100644
@@ -673,8 +673,8 @@ index e8dd01dc3e7b6..c8996cc719973 100644
 @@ -184,6 +184,7 @@ function createRoutes(): SettingsRoutes {
    r.BASIC = new Route('/');
    r.ABOUT = new Route('/help', loadTimeData.getString('aboutPageTitle'));
-   r.NXTSCAPE = new Route('/browseros-ai', 'BrowserOS AI Settings');
-+  r.BROWSEROS_PREFS = new Route('/browseros-settings', 'BrowserOS Settings');
+   r.NXTSCAPE = new Route('/browseros-ai', 'BlockBrowser AI Settings');
++  r.BROWSEROS_PREFS = new Route('/browseros-settings', 'BlockBrowser Settings');
  
    r.SEARCH = r.BASIC.createSection(
        '/search', 'search', loadTimeData.getString('searchPageTitle'));
@@ -697,8 +697,8 @@ index dbd5e82c285f9..35c91e53c07dc 100644
 @@ -33,6 +33,7 @@ export {PluralStringProxyImpl as SettingsPluralStringProxyImpl} from 'chrome://r
  export {getTrustedHTML} from 'chrome://resources/js/static_types.js';
  export {SettingsAboutPageElement} from './about_page/about_page.js';
- export {SettingsNxtscapePageElement} from './nxtscape_page/nxtscape_page.js';
-+export {SettingsBrowserOSPrefsPageElement} from './browseros_prefs_page/browseros_prefs_page.js';
+ export {SettingsBlockBrowserPageElement} from './blockbrowser_page/blockbrowser_page.js';
++export {SettingsBlockBrowserPrefsPageElement} from './browseros_prefs_page/browseros_prefs_page.js';
  export {ControlledRadioButtonElement} from './controls/controlled_radio_button.js';
  export {SettingsDropdownMenuElement} from './controls/settings_dropdown_menu.js';
  export {SettingsToggleButtonElement} from './controls/settings_toggle_button.js';
@@ -708,7 +708,7 @@ index 403f2f2258fb8..b0c5e71a428ad 100644
 +++ b/chrome/browser/resources/settings/settings_main/settings_main.html
 @@ -55,3 +55,9 @@
            prefs="{{prefs}}">
-       </settings-nxtscape-page>
+       </settings-blockbrowser-page>
      </template>
 +    <template is="dom-if" if="[[showPages_.browserosPrefs]]">
 +      <settings-browseros-prefs-page role="main"
@@ -723,7 +723,7 @@ index 433afef3be384..2da0ef8a114fa 100644
 @@ -15,6 +15,7 @@ import 'chrome://resources/js/search_highlight_utils.js';
  import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
  import '../about_page/about_page.js';
- import '../nxtscape_page/nxtscape_page.js';
+ import '../blockbrowser_page/blockbrowser_page.js';
 +import '../browseros_prefs_page/browseros_prefs_page.js';
  import '../basic_page/basic_page.js';
  import '../search_settings.js';
@@ -731,7 +731,7 @@ index 433afef3be384..2da0ef8a114fa 100644
 @@ -34,6 +35,7 @@ interface MainPageVisibility {
    about: boolean;
    settings: boolean;
-   nxtscape: boolean;
+   blockbrowser: boolean;
 +  browserosPrefs: boolean;
  }
  
@@ -740,23 +740,23 @@ index 433afef3be384..2da0ef8a114fa 100644
        showPages_: {
          type: Object,
          value() {
--          return {about: false, settings: false, nxtscape: false};
-+          return {about: false, settings: false, nxtscape: false, browserosPrefs: false};
+-          return {about: false, settings: false, blockbrowser: false};
++          return {about: false, settings: false, blockbrowser: false, browserosPrefs: false};
          },
        },
  
 @@ -119,10 +121,12 @@ export class SettingsMainElement extends SettingsMainElementBase {
      const currentRoute = Router.getInstance().getCurrentRoute();
      const inAbout = routes.ABOUT.contains(currentRoute);
-     const inNxtscape = routes.NXTSCAPE.contains(currentRoute);
-+    const inBrowserOSPrefs = routes.BROWSEROS_PREFS.contains(currentRoute);
+     const inBlockBrowser = routes.NXTSCAPE.contains(currentRoute);
++    const inBlockBrowserPrefs = routes.BROWSEROS_PREFS.contains(currentRoute);
      this.showPages_ = {
        about: inAbout,
--      settings: !inAbout && !inNxtscape,
--      nxtscape: inNxtscape
-+      settings: !inAbout && !inNxtscape && !inBrowserOSPrefs,
-+      nxtscape: inNxtscape,
-+      browserosPrefs: inBrowserOSPrefs
+-      settings: !inAbout && !inBlockBrowser,
+-      blockbrowser: inBlockBrowser
++      settings: !inAbout && !inBlockBrowser && !inBlockBrowserPrefs,
++      blockbrowser: inBlockBrowser,
++      browserosPrefs: inBlockBrowserPrefs
      };
    }
  
@@ -765,13 +765,13 @@ index 8f123acf9b322..a1f1454c2bf2a 100644
 --- a/chrome/browser/resources/settings/settings_menu/settings_menu.html
 +++ b/chrome/browser/resources/settings/settings_menu/settings_menu.html
 @@ -63,6 +63,12 @@
-           BrowserOS AI
+           BlockBrowser AI
            <cr-ripple></cr-ripple>
          </a>
 +        <a role="menuitem" id="browseros-prefs-menu" href="/browseros-settings"
 +            class="cr-nav-menu-item">
 +          <cr-icon icon="settings:system"></cr-icon>
-+          BrowserOS Settings
++          BlockBrowser Settings
 +          <cr-ripple></cr-ripple>
 +        </a>
          <a role="menuitem" id="autofill" href="/autofill"
@@ -792,7 +792,7 @@ index 06259d2817b4e..6d54a267d75b0 100644
  DEFINE_UI_CLASS_PROPERTY_KEY(
 @@ -87,6 +89,8 @@ PinnedActionToolbarButton::PinnedActionToolbarButton(
          show_labels = browser_->profile()->GetPrefs()->GetBoolean(
-             prefs::kBrowserOSShowToolbarLabels);
+             prefs::kBlockBrowserShowToolbarLabels);
        }
 +      else {
 +      }
@@ -801,8 +801,8 @@ index 06259d2817b4e..6d54a267d75b0 100644
          // Use LabelButton::SetText directly to set permanent text
 @@ -361,10 +365,22 @@ void PinnedActionToolbarButtonActionViewInterface::ActionItemChangedImpl(
  
-   // Update the text from the action item for BrowserOS actions
-   if (browseros::IsBrowserOSAction(action_view_->GetActionId())) {
+   // Update the text from the action item for BlockBrowser actions
+   if (browseros::IsBlockBrowserAction(action_view_->GetActionId())) {
 -    // Use LabelButton::SetText directly to set permanent text
 -    action_view_->views::LabelButton::SetText(action_item->GetText());
 -    // Ensure the text is visible
@@ -811,7 +811,7 @@ index 06259d2817b4e..6d54a267d75b0 100644
 +    bool show_labels = true;
 +    if (action_view_->GetBrowser() && action_view_->GetBrowser()->profile()) {
 +      show_labels = action_view_->GetBrowser()->profile()->GetPrefs()->GetBoolean(
-+          prefs::kBrowserOSShowToolbarLabels);
++          prefs::kBlockBrowserShowToolbarLabels);
 +    }
 +    
 +    if (show_labels) {
@@ -842,13 +842,13 @@ diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
 index a453af343fed7..b06aec04ab52e 100644
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
-@@ -4288,6 +4288,10 @@ inline constexpr char kBrowserOSProviders[] = "browseros.providers";
- // String containing the default provider ID for BrowserOS
- inline constexpr char kBrowserOSDefaultProviderId[] = 
+@@ -4288,6 +4288,10 @@ inline constexpr char kBlockBrowserProviders[] = "browseros.providers";
+ // String containing the default provider ID for BlockBrowser
+ inline constexpr char kBlockBrowserDefaultProviderId[] = 
      "browseros.default_provider_id";
 +
-+// Boolean that controls whether toolbar labels are shown for BrowserOS actions
-+inline constexpr char kBrowserOSShowToolbarLabels[] =
++// Boolean that controls whether toolbar labels are shown for BlockBrowser actions
++inline constexpr char kBlockBrowserShowToolbarLabels[] =
 +    "browseros.show_toolbar_labels";
  }  // namespace prefs
  

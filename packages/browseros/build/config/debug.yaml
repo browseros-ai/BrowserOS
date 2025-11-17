@@ -1,4 +1,4 @@
-# Nxtscape Debug Build Configuration
+# BlockBrowser Debug Build Configuration
 build:
   type: debug
   architecture: arm64 # Single arch for faster debug builds

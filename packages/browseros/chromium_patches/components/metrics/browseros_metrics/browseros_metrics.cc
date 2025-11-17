@@ -1,31 +1,31 @@
-diff --git a/components/metrics/browseros_metrics/browseros_metrics.cc b/components/metrics/browseros_metrics/browseros_metrics.cc
+diff --git a/components/metrics/blockbrowser_metrics/blockbrowser_metrics.cc b/components/metrics/blockbrowser_metrics/blockbrowser_metrics.cc
 new file mode 100644
 index 0000000000000..02a1dc121bb7a
 --- /dev/null
-+++ b/components/metrics/browseros_metrics/browseros_metrics.cc
++++ b/components/metrics/blockbrowser_metrics/blockbrowser_metrics.cc
 @@ -0,0 +1,100 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "components/metrics/browseros_metrics/browseros_metrics.h"
++#include "components/metrics/blockbrowser_metrics/blockbrowser_metrics.h"
 +
 +#include "base/logging.h"
 +#include "base/rand_util.h"
 +#include "base/task/thread_pool.h"
 +#include "chrome/browser/browser_process.h"
 +#include "chrome/browser/profiles/profile_manager.h"
-+#include "components/metrics/browseros_metrics/browseros_metrics_service_factory.h"
-+#include "components/metrics/browseros_metrics/browseros_metrics_service.h"
++#include "components/metrics/blockbrowser_metrics/blockbrowser_metrics_service_factory.h"
++#include "components/metrics/blockbrowser_metrics/blockbrowser_metrics_service.h"
 +#include "content/public/browser/browser_task_traits.h"
 +#include "content/public/browser/browser_thread.h"
 +
-+namespace browseros_metrics {
++namespace blockbrowser_metrics {
 +
 +namespace {
 +
 +// Helper to get the metrics service
-+BrowserOSMetricsService* GetMetricsService() {
++BlockBrowserMetricsService* GetMetricsService() {
 +  // Must be called on UI thread
 +  if (!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
 +    return nullptr;
@@ -44,7 +44,7 @@ index 0000000000000..02a1dc121bb7a
 +  }
 +  
 +  // Get the metrics service
-+  return BrowserOSMetricsServiceFactory::GetForBrowserContext(profile);
++  return BlockBrowserMetricsServiceFactory::GetForBrowserContext(profile);
 +}
 +
 +void LogOnUIThread(const std::string& event_name, base::Value::Dict properties) {
@@ -59,12 +59,12 @@ index 0000000000000..02a1dc121bb7a
 +}  // namespace
 +
 +// static
-+void BrowserOSMetrics::Log(const std::string& event_name, double sample_rate) {
++void BlockBrowserMetrics::Log(const std::string& event_name, double sample_rate) {
 +  Log(event_name, base::Value::Dict(), sample_rate);
 +}
 +
 +// static
-+void BrowserOSMetrics::Log(const std::string& event_name,
++void BlockBrowserMetrics::Log(const std::string& event_name,
 +                           std::initializer_list<std::pair<std::string, base::Value>> properties,
 +                           double sample_rate) {
 +  base::Value::Dict dict;
@@ -75,7 +75,7 @@ index 0000000000000..02a1dc121bb7a
 +}
 +
 +// static
-+void BrowserOSMetrics::Log(const std::string& event_name, base::Value::Dict properties,
++void BlockBrowserMetrics::Log(const std::string& event_name, base::Value::Dict properties,
 +                           double sample_rate) {
 +  if (sample_rate <= 0.0 || sample_rate > 1.0) {
 +    return;
@@ -103,4 +103,4 @@ index 0000000000000..02a1dc121bb7a
 +  }
 +}
 +
-+}  // namespace browseros_metrics
++}  // namespace blockbrowser_metrics

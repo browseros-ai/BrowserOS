@@ -6,7 +6,7 @@ icon: "brain"
 
 ## Complete Setup Guide
 
-This guide will walk you through setting up and using OpenAI's GPT-OSS model with LM Studio and BrowserOS.
+This guide will walk you through setting up and using OpenAI's GPT-OSS model with LM Studio and BlockBrowser.
 
 ## Step 1: Setup LM Studio and Download GPT-OSS
 
@@ -54,14 +54,14 @@ This guide will walk you through setting up and using OpenAI's GPT-OSS model wit
   </Step>
 </Steps>
 
-## Step 2: Configure BrowserOS to use LM Studio
+## Step 2: Configure BlockBrowser to use LM Studio
 
 <Steps>
   <Step title="Add Provider">
     Navigate to `chrome://settings/browseros-ai` and click **Add Provider**.
 
     <Frame>
-      <img src="/images/using-lm-studio-openais-gpt-oss/lm-studio-openais-step6.png" alt="Configure BrowserOS to use LMStudio" />
+      <img src="/images/using-lm-studio-openais-gpt-oss/lm-studio-openais-step6.png" alt="Configure BlockBrowser to use LMStudio" />
     </Frame>
   </Step>
 
@@ -119,7 +119,7 @@ This guide will walk you through setting up and using OpenAI's GPT-OSS model wit
     - Context Length: 32768
     - Server: `http://127.0.0.1:1234/v1`
   </Card>
-  <Card title="BrowserOS Settings" icon="browser">
+  <Card title="BlockBrowser Settings" icon="browser">
     - Provider Type: OpenAI Compatible
     - Base URL: `http://127.0.0.1:1234/v1`
     - Model ID: `openai/gpt-oss-20b`
@@ -136,7 +136,7 @@ This guide will walk you through setting up and using OpenAI's GPT-OSS model wit
 </Accordion>
 
 <Accordion title="Context length errors">
-  - Make sure the context length in BrowserOS matches LM Studio
+  - Make sure the context length in BlockBrowser matches LM Studio
   - Reduce context length if you're running out of memory
   - Consider using a smaller model if hardware is limited
 </Accordion>

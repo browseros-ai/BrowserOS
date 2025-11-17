@@ -25,28 +25,28 @@ index 0000000000000..68985b1490511
 +
 +namespace browseros {
 +
-+// Native action IDs for BrowserOS panels that need special treatment
++// Native action IDs for BlockBrowser panels that need special treatment
 +// These actions will:
 +// - Always be pinned
 +// - Show text labels
 +// - Have high flex priority (always visible)
-+constexpr auto kBrowserOSNativeActionIds =
++constexpr auto kBlockBrowserNativeActionIds =
 +    base::MakeFixedFlatSet<actions::ActionId>({
 +        kActionSidePanelShowThirdPartyLlm,
 +        kActionSidePanelShowClashOfGpts,
 +    });
 +
-+// Check if an action ID is a BrowserOS action (native or extension)
-+inline bool IsBrowserOSAction(actions::ActionId id) {
++// Check if an action ID is a BlockBrowser action (native or extension)
++inline bool IsBlockBrowserAction(actions::ActionId id) {
 +  // Check native actions
-+  if (kBrowserOSNativeActionIds.contains(id)) {
++  if (kBlockBrowserNativeActionIds.contains(id)) {
 +    return true;
 +  }
 +
-+  // Only labelled extensions are considered for BrowserOS actions
++  // Only labelled extensions are considered for BlockBrowser actions
 +  for (const auto& ext_id :
-+       extensions::browseros::GetBrowserOSExtensionIds()) {
-+    if (!extensions::browseros::IsBrowserOSLabelledExtension(ext_id)) {
++       extensions::browseros::GetBlockBrowserExtensionIds()) {
++    if (!extensions::browseros::IsBlockBrowserLabelledExtension(ext_id)) {
 +      continue;
 +    }
 +    auto ext_action_id = actions::ActionIdMap::StringToActionId(
@@ -61,8 +61,8 @@ index 0000000000000..68985b1490511
 +}
 +
 +
-+// Get the feature flag for a native BrowserOS action
-+inline const base::Feature* GetFeatureForBrowserOSAction(actions::ActionId id) {
++// Get the feature flag for a native BlockBrowser action
++inline const base::Feature* GetFeatureForBlockBrowserAction(actions::ActionId id) {
 +  switch (id) {
 +    case kActionSidePanelShowThirdPartyLlm:
 +      return &features::kThirdPartyLlmPanel;

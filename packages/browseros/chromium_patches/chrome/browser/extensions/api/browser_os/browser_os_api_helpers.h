@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api_helpers.h b/chrome/browser/extensions/api/browser_os/browser_os_api_helpers.h
+diff --git a/chrome/browser/extensions/api/blockbrowser/blockbrowser_api_helpers.h b/chrome/browser/extensions/api/blockbrowser/blockbrowser_api_helpers.h
 new file mode 100644
 index 0000000000000..1b12c66835998
 --- /dev/null
-+++ b/chrome/browser/extensions/api/browser_os/browser_os_api_helpers.h
++++ b/chrome/browser/extensions/api/blockbrowser/blockbrowser_api_helpers.h
 @@ -0,0 +1,136 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be

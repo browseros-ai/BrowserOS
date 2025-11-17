@@ -37,7 +37,7 @@ index 5242a1c3f930c..8065045e17330 100644
  #include "content/public/browser/web_contents.h"
  #include "third_party/blink/public/common/input/web_input_event.h"
  #include "third_party/blink/public/common/input/web_mouse_event.h"
-@@ -178,6 +180,7 @@ ExtensionFunction::ResponseAction BrowserOSGetInteractiveSnapshotFunction::Run()
+@@ -178,6 +180,7 @@ ExtensionFunction::ResponseAction BlockBrowserGetInteractiveSnapshotFunction::Run()
    }
    
    content::WebContents* web_contents = tab_info->web_contents;
@@ -45,7 +45,7 @@ index 5242a1c3f930c..8065045e17330 100644
    
    // Note: We don't need to get scale factors here!
    // The accessibility tree provides bounds in CSS pixels (logical pixels),
-@@ -186,14 +189,19 @@ ExtensionFunction::ResponseAction BrowserOSGetInteractiveSnapshotFunction::Run()
+@@ -186,14 +189,19 @@ ExtensionFunction::ResponseAction BlockBrowserGetInteractiveSnapshotFunction::Run()
    
    // Store tab ID for mapping
    tab_id_ = tab_info->tab_id;
@@ -72,7 +72,7 @@ index 5242a1c3f930c..8065045e17330 100644
    // Request accessibility tree snapshot
    web_contents->RequestAXTreeSnapshot(
        base::BindOnce(
-@@ -204,18 +212,43 @@ ExtensionFunction::ResponseAction BrowserOSGetInteractiveSnapshotFunction::Run()
+@@ -204,18 +212,43 @@ ExtensionFunction::ResponseAction BlockBrowserGetInteractiveSnapshotFunction::Run()
        /* max_nodes= */ 0,  // No limit
        /* timeout= */ base::TimeDelta(),
        content::WebContents::AXTreeSnapshotPolicy::kAll);
@@ -81,7 +81,7 @@ index 5242a1c3f930c..8065045e17330 100644
    return RespondLater();
  }
  
- void BrowserOSGetInteractiveSnapshotFunction::OnAccessibilityTreeReceived(
+ void BlockBrowserGetInteractiveSnapshotFunction::OnAccessibilityTreeReceived(
      ui::AXTreeUpdate& tree_update) {
 +  // Double-check frame is still valid before processing
 +  if (!web_contents_) {
@@ -115,16 +115,16 @@ index 5242a1c3f930c..8065045e17330 100644
 -      viewport_size_,
 +      web_contents_,
        base::BindOnce(
-           &BrowserOSGetInteractiveSnapshotFunction::OnSnapshotProcessed,
+           &BlockBrowserGetInteractiveSnapshotFunction::OnSnapshotProcessed,
            base::WrapRefCounted(this)));
-@@ -620,10 +653,16 @@ ExtensionFunction::ResponseAction BrowserOSSendKeysFunction::Run() {
+@@ -620,10 +653,16 @@ ExtensionFunction::ResponseAction BlockBrowserSendKeysFunction::Run() {
  
- // Implementation of BrowserOSCaptureScreenshotFunction
+ // Implementation of BlockBrowserCaptureScreenshotFunction
  
-+BrowserOSCaptureScreenshotFunction::BrowserOSCaptureScreenshotFunction() = default;
-+BrowserOSCaptureScreenshotFunction::~BrowserOSCaptureScreenshotFunction() = default;
++BlockBrowserCaptureScreenshotFunction::BlockBrowserCaptureScreenshotFunction() = default;
++BlockBrowserCaptureScreenshotFunction::~BlockBrowserCaptureScreenshotFunction() = default;
 +
- ExtensionFunction::ResponseAction BrowserOSCaptureScreenshotFunction::Run() {
+ ExtensionFunction::ResponseAction BlockBrowserCaptureScreenshotFunction::Run() {
    std::optional<browser_os::CaptureScreenshot::Params> params =
        browser_os::CaptureScreenshot::Params::Create(args());
    EXTENSION_FUNCTION_VALIDATE(params);
@@ -134,7 +134,7 @@ index 5242a1c3f930c..8065045e17330 100644
  
    // Get the target tab
    std::string error_message;
-@@ -635,6 +674,8 @@ ExtensionFunction::ResponseAction BrowserOSCaptureScreenshotFunction::Run() {
+@@ -635,6 +674,8 @@ ExtensionFunction::ResponseAction BlockBrowserCaptureScreenshotFunction::Run() {
    }
    
    content::WebContents* web_contents = tab_info->web_contents;
@@ -143,7 +143,7 @@ index 5242a1c3f930c..8065045e17330 100644
    
    // Get the render widget host view
    content::RenderFrameHost* rfh = web_contents->GetPrimaryMainFrame();
-@@ -655,51 +696,120 @@ ExtensionFunction::ResponseAction BrowserOSCaptureScreenshotFunction::Run() {
+@@ -655,51 +696,120 @@ ExtensionFunction::ResponseAction BlockBrowserCaptureScreenshotFunction::Run() {
    // Get the view bounds to determine the size
    gfx::Rect view_bounds = rwhv->GetViewBounds();
    
@@ -220,7 +220,7 @@ index 5242a1c3f930c..8065045e17330 100644
 +  return RespondLater();
 +}
 +
-+void BrowserOSCaptureScreenshotFunction::DrawHighlightsAndCapture() {
++void BlockBrowserCaptureScreenshotFunction::DrawHighlightsAndCapture() {
 +  // Only draw highlights if requested via the showHighlights flag
 +  if (show_highlights_) {
 +    // Check if we have snapshot data for this tab to draw highlights
@@ -238,7 +238,7 @@ index 5242a1c3f930c..8065045e17330 100644
 +    // Use scoped_refptr to keep the function alive
 +    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
 +        FROM_HERE,
-+        base::BindOnce(&BrowserOSCaptureScreenshotFunction::CaptureScreenshotNow,
++        base::BindOnce(&BlockBrowserCaptureScreenshotFunction::CaptureScreenshotNow,
 +                       base::WrapRefCounted(this)),
 +        base::Milliseconds(1000));  // Give enough time for JS execution and paint
 +  } else {
@@ -247,7 +247,7 @@ index 5242a1c3f930c..8065045e17330 100644
 +  }
 +}
 +
-+void BrowserOSCaptureScreenshotFunction::CaptureScreenshotNow() {
++void BlockBrowserCaptureScreenshotFunction::CaptureScreenshotNow() {
 +  if (!web_contents_) {
 +    Respond(Error("Web contents destroyed"));
 +    return;
@@ -276,13 +276,13 @@ index 5242a1c3f930c..8065045e17330 100644
        gfx::Rect(),  // Empty rect means copy entire surface
 -      thumbnail_size,
 +      target_size_,
-       base::BindOnce(&BrowserOSCaptureScreenshotFunction::OnScreenshotCaptured,
+       base::BindOnce(&BlockBrowserCaptureScreenshotFunction::OnScreenshotCaptured,
                       this));
 -  
 -  return RespondLater();
  }
  
- void BrowserOSCaptureScreenshotFunction::OnScreenshotCaptured(
+ void BlockBrowserCaptureScreenshotFunction::OnScreenshotCaptured(
      const SkBitmap& bitmap) {
 +  // Clean up the highlights immediately after capture (only if we added them)
 +  if (show_highlights_ && web_contents_) {
@@ -292,12 +292,12 @@ index 5242a1c3f930c..8065045e17330 100644
    if (bitmap.empty()) {
      Respond(Error("Failed to capture screenshot"));
      return;
-@@ -1011,5 +1121,140 @@ ExtensionFunction::ResponseAction BrowserOSGetVersionNumberFunction::Run() {
+@@ -1011,5 +1121,140 @@ ExtensionFunction::ResponseAction BlockBrowserGetVersionNumberFunction::Run() {
        browser_os::GetVersionNumber::Results::Create(version)));
  }
  
-+// BrowserOSExecuteJavaScriptFunction
-+ExtensionFunction::ResponseAction BrowserOSExecuteJavaScriptFunction::Run() {
++// BlockBrowserExecuteJavaScriptFunction
++ExtensionFunction::ResponseAction BlockBrowserExecuteJavaScriptFunction::Run() {
 +  std::optional<browser_os::ExecuteJavaScript::Params> params =
 +      browser_os::ExecuteJavaScript::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
@@ -328,14 +328,14 @@ index 5242a1c3f930c..8065045e17330 100644
 +  // This will return the result of the execution
 +  rfh->ExecuteJavaScriptForTests(
 +      js_code,
-+      base::BindOnce(&BrowserOSExecuteJavaScriptFunction::OnJavaScriptExecuted,
++      base::BindOnce(&BlockBrowserExecuteJavaScriptFunction::OnJavaScriptExecuted,
 +                     this),
 +      /*honor_js_content_settings=*/false);
 +  
 +  return RespondLater();
 +}
 +
-+void BrowserOSExecuteJavaScriptFunction::OnJavaScriptExecuted(base::Value result) {
++void BlockBrowserExecuteJavaScriptFunction::OnJavaScriptExecuted(base::Value result) {
 +  LOG(INFO) << "[browseros] ExecuteJavaScript: Execution completed";
 +
 +  if (result.is_none()) {
@@ -349,8 +349,8 @@ index 5242a1c3f930c..8065045e17330 100644
 +      browser_os::ExecuteJavaScript::Results::Create(result)));
 +}
 +
-+// Implementation of BrowserOSClickCoordinatesFunction
-+ExtensionFunction::ResponseAction BrowserOSClickCoordinatesFunction::Run() {
++// Implementation of BlockBrowserClickCoordinatesFunction
++ExtensionFunction::ResponseAction BlockBrowserClickCoordinatesFunction::Run() {
 +  std::optional<browser_os::ClickCoordinates::Params> params =
 +      browser_os::ClickCoordinates::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
@@ -390,8 +390,8 @@ index 5242a1c3f930c..8065045e17330 100644
 +      browser_os::ClickCoordinates::Results::Create(response)));
 +}
 +
-+// Implementation of BrowserOSTypeAtCoordinatesFunction  
-+ExtensionFunction::ResponseAction BrowserOSTypeAtCoordinatesFunction::Run() {
++// Implementation of BlockBrowserTypeAtCoordinatesFunction  
++ExtensionFunction::ResponseAction BlockBrowserTypeAtCoordinatesFunction::Run() {
 +  std::optional<browser_os::TypeAtCoordinates::Params> params =
 +      browser_os::TypeAtCoordinates::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
@@ -445,7 +445,7 @@ index 27721d9b0b9a0..51ba01b900769 100644
  #include "base/values.h"
  #include "chrome/browser/extensions/api/browser_os/browser_os_api_utils.h"
  #include "chrome/browser/extensions/api/browser_os/browser_os_content_processor.h"
-@@ -66,8 +67,8 @@ class BrowserOSGetInteractiveSnapshotFunction : public ExtensionFunction {
+@@ -66,8 +67,8 @@ class BlockBrowserGetInteractiveSnapshotFunction : public ExtensionFunction {
    // Tab ID for storing mappings
    int tab_id_ = -1;
    
@@ -455,17 +455,17 @@ index 27721d9b0b9a0..51ba01b900769 100644
 +  raw_ptr<content::WebContents> web_contents_ = nullptr;
  };
  
- class BrowserOSClickFunction : public ExtensionFunction {
-@@ -179,16 +180,25 @@ class BrowserOSCaptureScreenshotFunction : public ExtensionFunction {
+ class BlockBrowserClickFunction : public ExtensionFunction {
+@@ -179,16 +180,25 @@ class BlockBrowserCaptureScreenshotFunction : public ExtensionFunction {
   public:
    DECLARE_EXTENSION_FUNCTION("browserOS.captureScreenshot", BROWSER_OS_CAPTURESCREENSHOT)
  
--  BrowserOSCaptureScreenshotFunction() = default;
-+  BrowserOSCaptureScreenshotFunction();
+-  BlockBrowserCaptureScreenshotFunction() = default;
++  BlockBrowserCaptureScreenshotFunction();
  
   protected:
--  ~BrowserOSCaptureScreenshotFunction() override = default;
-+  ~BrowserOSCaptureScreenshotFunction() override;
+-  ~BlockBrowserCaptureScreenshotFunction() override = default;
++  ~BlockBrowserCaptureScreenshotFunction() override;
  
    // ExtensionFunction:
    ResponseAction Run() override;
@@ -483,19 +483,19 @@ index 27721d9b0b9a0..51ba01b900769 100644
 +  bool use_exact_dimensions_ = false;
  };
  
- class BrowserOSGetSnapshotFunction : public ExtensionFunction {
-@@ -275,6 +285,48 @@ class BrowserOSGetVersionNumberFunction : public ExtensionFunction {
+ class BlockBrowserGetSnapshotFunction : public ExtensionFunction {
+@@ -275,6 +285,48 @@ class BlockBrowserGetVersionNumberFunction : public ExtensionFunction {
    ResponseAction Run() override;
  };
  
-+class BrowserOSExecuteJavaScriptFunction : public ExtensionFunction {
++class BlockBrowserExecuteJavaScriptFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.executeJavaScript", BROWSER_OS_EXECUTEJAVASCRIPT)
 +
-+  BrowserOSExecuteJavaScriptFunction() = default;
++  BlockBrowserExecuteJavaScriptFunction() = default;
 +
 + protected:
-+  ~BrowserOSExecuteJavaScriptFunction() override = default;
++  ~BlockBrowserExecuteJavaScriptFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
@@ -504,27 +504,27 @@ index 27721d9b0b9a0..51ba01b900769 100644
 +  void OnJavaScriptExecuted(base::Value result);
 +};
 +
-+class BrowserOSClickCoordinatesFunction : public ExtensionFunction {
++class BlockBrowserClickCoordinatesFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.clickCoordinates", BROWSER_OS_CLICKCOORDINATES)
 +
-+  BrowserOSClickCoordinatesFunction() = default;
++  BlockBrowserClickCoordinatesFunction() = default;
 +
 + protected:
-+  ~BrowserOSClickCoordinatesFunction() override = default;
++  ~BlockBrowserClickCoordinatesFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSTypeAtCoordinatesFunction : public ExtensionFunction {
++class BlockBrowserTypeAtCoordinatesFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.typeAtCoordinates", BROWSER_OS_TYPEATCOORDINATES)
 +
-+  BrowserOSTypeAtCoordinatesFunction() = default;
++  BlockBrowserTypeAtCoordinatesFunction() = default;
 +
 + protected:
-+  ~BrowserOSTypeAtCoordinatesFunction() override = default;
++  ~BlockBrowserTypeAtCoordinatesFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
@@ -614,14 +614,14 @@ index d05a75dd626e9..b8555289c07f9 100644
      // For out-of-viewport nodes, use AccessibilityDoDefault first (most reliable after scroll)
 -    LOG(INFO) << "[browseros] Node was out of viewport, trying AccessibilityDoDefault click first";
 +    // LOG(INFO) << "[browseros] Node was out of viewport, trying AccessibilityDoDefault click first";
-+    // bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++    // bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +    //     web_contents,
 +    //     [&]() { AccessibilityDoDefault(web_contents, node_info); },
 +    //     base::Milliseconds(300));
 +    
 +    gfx::PointF click_point = GetNodeCenterPoint(web_contents, node_info);
 +    
-     bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
+     bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
          web_contents,
 -        [&]() { AccessibilityDoDefault(web_contents, node_info); },
 +        [&]() { PointClick(web_contents, click_point); },
@@ -634,7 +634,7 @@ index d05a75dd626e9..b8555289c07f9 100644
    // If still no change, try accessibility SetValue as final fallback
 -  if (!changed) {
 -    LOG(INFO) << "[browseros] No change from JavaScript, trying accessibility SetValue";
--    changed = BrowserOSChangeDetector::ExecuteWithDetection(
+-    changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 -        web_contents,
 -        [&]() {
 -          AccessibilitySetValue(web_contents, node_info, text);
@@ -643,7 +643,7 @@ index d05a75dd626e9..b8555289c07f9 100644
 -  }
 +  // if (!changed) {
 +  //   LOG(INFO) << "[browseros] No change from JavaScript, trying accessibility SetValue";
-+  //   changed = BrowserOSChangeDetector::ExecuteWithDetection(
++  //   changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +  //       web_contents,
 +  //       [&]() {
 +  //         AccessibilitySetValue(web_contents, node_info, text);
@@ -665,7 +665,7 @@ index d05a75dd626e9..b8555289c07f9 100644
 +  // VisualizeInteractionPoint(web_contents, clear_point, 2000, 50.0f);
    
    // Use change detection with JavaScript clear
-   bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
+   bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 @@ -971,5 +961,273 @@ bool KeyPressWithDetection(content::WebContents* web_contents,
    return changed;
  }
@@ -857,7 +857,7 @@ index d05a75dd626e9..b8555289c07f9 100644
 +            << point.x() << ", " << point.y() << ")";
 +  
 +  // Perform coordinate click with change detection
-+  bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++  bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +      web_contents,
 +      [&]() { 
 +        PointClick(web_contents, point);
@@ -888,7 +888,7 @@ index d05a75dd626e9..b8555289c07f9 100644
 +  base::PlatformThread::Sleep(base::Milliseconds(100));
 +  
 +  // Now type the text with change detection
-+  bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++  bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +      web_contents,
 +      [&]() { 
 +        NativeType(web_contents, text);
@@ -1255,10 +1255,10 @@ index 6b3227c786686..3666bf5a0d2c8 100644
 --- a/chrome/browser/extensions/chrome_extensions_browser_api_provider.cc
 +++ b/chrome/browser/extensions/chrome_extensions_browser_api_provider.cc
 @@ -28,6 +28,7 @@ void ChromeExtensionsBrowserAPIProvider::RegisterExtensionFunctions(
-   registry->RegisterFunction<api::BrowserOSClickFunction>();
-   registry->RegisterFunction<api::BrowserOSInputTextFunction>();
-   registry->RegisterFunction<api::BrowserOSClearFunction>();
-+  registry->RegisterFunction<api::BrowserOSExecuteJavaScriptFunction>();
+   registry->RegisterFunction<api::BlockBrowserClickFunction>();
+   registry->RegisterFunction<api::BlockBrowserInputTextFunction>();
+   registry->RegisterFunction<api::BlockBrowserClearFunction>();
++  registry->RegisterFunction<api::BlockBrowserExecuteJavaScriptFunction>();
  
    // Generated APIs from Chrome.
    api::ChromeGeneratedFunctionRegistry::RegisterAll(registry);

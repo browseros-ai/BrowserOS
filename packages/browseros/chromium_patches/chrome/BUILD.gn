@@ -14,7 +14,7 @@ index 97f843f8133c4..0acbe29f11806 100644
      }
  
      data_deps += [
-+      "//chrome/browser/browseros_server:browseros_server_resources",
++      "//chrome/browser/blockbrowser_server:blockbrowser_server_resources",
        "//chrome/browser/resources/media/mei_preload:component",
        "//components/privacy_sandbox/privacy_sandbox_attestations/preload:component",
        "//components/webapps/isolated_web_apps/preload:component",
@@ -22,7 +22,7 @@ index 97f843f8133c4..0acbe29f11806 100644
        ":chrome_versioned_bundle_data",
        "//base/allocator:early_zone_registration_apple",
        "//build:branding_buildflags",
-+      "//chrome/browser/browseros_server:browseros_server_resources",
++      "//chrome/browser/blockbrowser_server:blockbrowser_server_resources",
        "//chrome/common:buildflags",
        "//chrome/common:version_header",
      ]

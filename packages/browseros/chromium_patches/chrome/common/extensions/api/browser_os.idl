@@ -1,15 +1,15 @@
-diff --git a/chrome/common/extensions/api/browser_os.idl b/chrome/common/extensions/api/browser_os.idl
+diff --git a/chrome/common/extensions/api/blockbrowser.idl b/chrome/common/extensions/api/blockbrowser.idl
 new file mode 100644
 index 0000000000000..36468c42af41a
 --- /dev/null
-+++ b/chrome/common/extensions/api/browser_os.idl
++++ b/chrome/common/extensions/api/blockbrowser.idl
 @@ -0,0 +1,336 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+// browserOS API for accessing system-level browser functionality
-+namespace browserOS {
++// blockbrowser API for accessing system-level browser functionality
++namespace blockbrowser {
 +
 +  dictionary AccessibilityTree {
 +    // The ID of the root node
@@ -293,14 +293,14 @@ index 0000000000000..36468c42af41a
 +
 +    // Settings API functions - compatible with chrome.settingsPrivate
 +    // Gets a specific preference value
-+    // |name|: The preference name (e.g., "nxtscape.default_provider").
++    // |name|: The preference name (e.g., "blockbrowser.default_provider").
 +    // |callback|: Called with the preference object.
 +    static void getPref(
 +        DOMString name,
 +        GetPrefCallback callback);
 +
 +    // Sets a specific preference value
-+    // |name|: The preference name (e.g., "nxtscape.default_provider").
++    // |name|: The preference name (e.g., "blockbrowser.default_provider").
 +    // |value|: The value to set.
 +    // |pageId|: Optional page ID for settings tracking (can be empty string).
 +    // |callback|: Called with success status.
@@ -310,7 +310,7 @@ index 0000000000000..36468c42af41a
 +        optional DOMString pageId,
 +        SetPrefCallback callback);
 +
-+    // Gets all preferences (filtered to nxtscape.* prefs)
++    // Gets all preferences (filtered to blockbrowser.* prefs)
 +    // |callback|: Called with array of preference objects.
 +    static void getAllPrefs(
 +        GetAllPrefsCallback callback);

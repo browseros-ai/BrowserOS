@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/extensions/browseros_extension_constants.h b/chrome/browser/extensions/browseros_extension_constants.h
+diff --git a/chrome/browser/extensions/blockbrowser_extension_constants.h b/chrome/browser/extensions/blockbrowser_extension_constants.h
 new file mode 100644
 index 0000000000000..e2ffd24bff8d5
 --- /dev/null
-+++ b/chrome/browser/extensions/browseros_extension_constants.h
++++ b/chrome/browser/extensions/blockbrowser_extension_constants.h
 @@ -0,0 +1,118 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -35,84 +35,84 @@ index 0000000000000..e2ffd24bff8d5
 +inline constexpr char kControllerExtensionId[] =
 +    "nlnihljpboknmfagkikhkdblbedophja";
 +
-+// BrowserOS CDN update manifest URL
++// BlockBrowser CDN update manifest URL
 +// Used for extensions installed from local .crx files that don't have
 +// an update_url in their manifest
-+inline constexpr char kBrowserOSUpdateUrl[] =
++inline constexpr char kBlockBrowserUpdateUrl[] =
 +    "https://cdn.browseros.com/extensions/update-manifest.xml";
 +
-+// BrowserOS extension config URL
-+inline constexpr char kBrowserOSConfigUrl[] =
++// BlockBrowser extension config URL
++inline constexpr char kBlockBrowserConfigUrl[] =
 +    "https://cdn.browseros.com/extensions/extensions.json";
 +
-+struct BrowserOSExtensionInfo {
++struct BlockBrowserExtensionInfo {
 +  const char* id;
 +  const char* display_name;
 +  bool is_pinned;
 +  bool is_labelled;
 +};
 +
-+inline constexpr BrowserOSExtensionInfo kBrowserOSExtensions[] = {
-+    {kAISidePanelExtensionId, "BrowserOS", true, true},
-+    {kBugReporterExtensionId, "BrowserOS/bug-reporter", true, false},
-+    {kControllerExtensionId, "BrowserOS/controller", false, false},
-+    {kAgentV2ExtensionId, "BrowserOS", false, false},
++inline constexpr BlockBrowserExtensionInfo kBlockBrowserExtensions[] = {
++    {kAISidePanelExtensionId, "BlockBrowser", true, true},
++    {kBugReporterExtensionId, "BlockBrowser/bug-reporter", true, false},
++    {kControllerExtensionId, "BlockBrowser/controller", false, false},
++    {kAgentV2ExtensionId, "BlockBrowser", false, false},
 +};
 +
-+// Allowlist of BrowserOS extension IDs that are permitted to be installed.
++// Allowlist of BlockBrowser extension IDs that are permitted to be installed.
 +// Only extensions with these IDs will be loaded from the config.
 +inline constexpr const char* kAllowedExtensions[] = {
-+    kBrowserOSExtensions[0].id,
-+    kBrowserOSExtensions[1].id,
-+    kBrowserOSExtensions[2].id,
-+    kBrowserOSExtensions[3].id,
++    kBlockBrowserExtensions[0].id,
++    kBlockBrowserExtensions[1].id,
++    kBlockBrowserExtensions[2].id,
++    kBlockBrowserExtensions[3].id,
 +};
 +
-+inline constexpr size_t kBrowserOSExtensionsCount =
-+    sizeof(kBrowserOSExtensions) / sizeof(kBrowserOSExtensions[0]);
++inline constexpr size_t kBlockBrowserExtensionsCount =
++    sizeof(kBlockBrowserExtensions) / sizeof(kBlockBrowserExtensions[0]);
 +
-+inline const BrowserOSExtensionInfo* FindBrowserOSExtensionInfo(
++inline const BlockBrowserExtensionInfo* FindBlockBrowserExtensionInfo(
 +    const std::string& extension_id) {
-+  for (const auto& info : kBrowserOSExtensions) {
++  for (const auto& info : kBlockBrowserExtensions) {
 +    if (extension_id == info.id)
 +      return &info;
 +  }
 +  return nullptr;
 +}
 +
-+// Check if an extension is a BrowserOS extension
-+inline bool IsBrowserOSExtension(const std::string& extension_id) {
-+  return FindBrowserOSExtensionInfo(extension_id) != nullptr;
++// Check if an extension is a BlockBrowser extension
++inline bool IsBlockBrowserExtension(const std::string& extension_id) {
++  return FindBlockBrowserExtensionInfo(extension_id) != nullptr;
 +}
 +
-+inline bool IsBrowserOSPinnedExtension(const std::string& extension_id) {
-+  const BrowserOSExtensionInfo* info =
-+      FindBrowserOSExtensionInfo(extension_id);
++inline bool IsBlockBrowserPinnedExtension(const std::string& extension_id) {
++  const BlockBrowserExtensionInfo* info =
++      FindBlockBrowserExtensionInfo(extension_id);
 +  return info && info->is_pinned;
 +}
 +
-+inline bool IsBrowserOSLabelledExtension(const std::string& extension_id) {
-+  const BrowserOSExtensionInfo* info =
-+      FindBrowserOSExtensionInfo(extension_id);
++inline bool IsBlockBrowserLabelledExtension(const std::string& extension_id) {
++  const BlockBrowserExtensionInfo* info =
++      FindBlockBrowserExtensionInfo(extension_id);
 +  return info && info->is_labelled;
 +}
 +
-+// Get all BrowserOS extension IDs
-+inline std::vector<std::string> GetBrowserOSExtensionIds() {
++// Get all BlockBrowser extension IDs
++inline std::vector<std::string> GetBlockBrowserExtensionIds() {
 +  std::vector<std::string> ids;
-+  ids.reserve(kBrowserOSExtensionsCount);
-+  for (const auto& info : kBrowserOSExtensions)
++  ids.reserve(kBlockBrowserExtensionsCount);
++  for (const auto& info : kBlockBrowserExtensions)
 +    ids.push_back(info.id);
 +  return ids;
 +}
 +
-+// Get display name for BrowserOS extensions in omnibox
-+// Returns the display name if extension_id is a BrowserOS extension,
++// Get display name for BlockBrowser extensions in omnibox
++// Returns the display name if extension_id is a BlockBrowser extension,
 +// otherwise returns std::nullopt
 +inline std::optional<std::string> GetExtensionDisplayName(
 +    const std::string& extension_id) {
-+  if (const BrowserOSExtensionInfo* info =
-+          FindBrowserOSExtensionInfo(extension_id)) {
++  if (const BlockBrowserExtensionInfo* info =
++          FindBlockBrowserExtensionInfo(extension_id)) {
 +    return info->display_name;
 +  }
 +  return std::nullopt;

@@ -6,7 +6,7 @@ index 681fd3282078c..df6e7d2cbb9e4 100644
  #include <utility>
  
  #include "base/at_exit.h"
-+#include "chrome/browser/browseros_server/browseros_server_manager.h"
++#include "chrome/browser/blockbrowser_server/blockbrowser_server_manager.h"
  #include "base/base_switches.h"
  #include "base/check.h"
  #include "base/command_line.h"
@@ -15,7 +15,7 @@ index 681fd3282078c..df6e7d2cbb9e4 100644
      if (!base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kApp) &&
          !base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kAppId)) {
 +      browser_creator_->AddFirstRunTabs({GURL("chrome://browseros-first-run")});
-+      browser_creator_->AddFirstRunTabs({GURL("https://bit.ly/BrowserOS-setup")});
++      browser_creator_->AddFirstRunTabs({GURL("https://bit.ly/BlockBrowser-setup")});
        browser_creator_->AddFirstRunTabs(master_prefs_->new_tabs);
      }
  
@@ -23,9 +23,9 @@ index 681fd3282078c..df6e7d2cbb9e4 100644
    // running.
    browser_process_->PreMainMessageLoopRun();
  
-+  // BrowserOS: Start the BrowserOS server after browser initialization
-+  LOG(INFO) << "browseros: Starting BrowserOS server process";
-+  browseros::BrowserOSServerManager::GetInstance()->Start();
++  // BlockBrowser: Start the BlockBrowser server after browser initialization
++  LOG(INFO) << "browseros: Starting BlockBrowser server process";
++  browseros::BlockBrowserServerManager::GetInstance()->Start();
 +
  #if BUILDFLAG(IS_WIN)
    // If the command line specifies 'uninstall' then we need to work here
@@ -35,9 +35,9 @@ index 681fd3282078c..df6e7d2cbb9e4 100644
      chrome_extra_part->PostMainMessageLoopRun();
  
 +
-+  // BrowserOS: Stop the BrowserOS server during shutdown
-+  LOG(INFO) << "browseros: Stopping BrowserOS server process";
-+  browseros::BrowserOSServerManager::GetInstance()->Shutdown();
++  // BlockBrowser: Stop the BlockBrowser server during shutdown
++  LOG(INFO) << "browseros: Stopping BlockBrowser server process";
++  browseros::BlockBrowserServerManager::GetInstance()->Shutdown();
 +
    TranslateService::Shutdown();
  

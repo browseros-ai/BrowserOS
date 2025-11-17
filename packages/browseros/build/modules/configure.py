@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build configuration module for Nxtscape build system
+Build configuration module for BlockBrowser build system
 """
 
 import os

@@ -6,10 +6,10 @@ index e467d7d6245c3..ba83e0a868ac1 100644
    // A map of the active service worker keepalives.
    ServiceWorkerKeepaliveDataMap service_worker_keepalives_;
  
-+  // BrowserOS: Maps WorkerId to keepalive UUID for BrowserOS extensions that
++  // BlockBrowser: Maps WorkerId to keepalive UUID for BlockBrowser extensions that
 +  // should never be terminated. These permanent keepalives prevent the service
 +  // worker from being killed due to inactivity.
-+  std::map<WorkerId, base::Uuid> browseros_permanent_keepalives_;
++  std::map<WorkerId, base::Uuid> blockbrowser_permanent_keepalives_;
 +
    // Must be last member, see doc on WeakPtrFactory.
    base::WeakPtrFactory<ProcessManager> weak_ptr_factory_{this};

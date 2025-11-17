@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/extensions/api/browser_os/browser_os_content_processor.h b/chrome/browser/extensions/api/browser_os/browser_os_content_processor.h
+diff --git a/chrome/browser/extensions/api/blockbrowser/blockbrowser_content_processor.h b/chrome/browser/extensions/api/blockbrowser/blockbrowser_content_processor.h
 new file mode 100644
 index 0000000000000..472c7b114fe97
 --- /dev/null
-+++ b/chrome/browser/extensions/api/browser_os/browser_os_content_processor.h
++++ b/chrome/browser/extensions/api/blockbrowser/blockbrowser_content_processor.h
 @@ -0,0 +1,57 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -15,7 +15,7 @@ index 0000000000000..472c7b114fe97
 +#include <unordered_map>
 +#include <vector>
 +
-+#include "chrome/common/extensions/api/browser_os.h"
++#include "chrome/common/extensions/api/blockbrowser.h"
 +#include "ui/accessibility/ax_tree_update.h"
 +#include "ui/gfx/geometry/size.h"
 +
@@ -36,7 +36,7 @@ index 0000000000000..472c7b114fe97
 +
 +  // Extracts page content in document order.
 +  // Returns content items preserving the order they appear in the document.
-+  static std::vector<browser_os::ContentItem> ExtractPageContent(
++  static std::vector<blockbrowser::ContentItem> ExtractPageContent(
 +      const ui::AXTreeUpdate& tree_update);
 +
 + private:
@@ -44,14 +44,14 @@ index 0000000000000..472c7b114fe97
 +  static void TraverseDFS(
 +      int32_t node_id,
 +      const std::unordered_map<int32_t, ui::AXNodeData>& node_map,
-+      std::vector<browser_os::ContentItem>& items);
++      std::vector<blockbrowser::ContentItem>& items);
 +
 +  // Content extraction helpers
-+  static browser_os::ContentItem ExtractHeading(const ui::AXNodeData& node);
-+  static browser_os::ContentItem ExtractText(const ui::AXNodeData& node);
-+  static browser_os::ContentItem ExtractLink(const ui::AXNodeData& node);
-+  static browser_os::ContentItem ExtractImage(const ui::AXNodeData& node);
-+  static browser_os::ContentItem ExtractVideo(const ui::AXNodeData& node);
++  static blockbrowser::ContentItem ExtractHeading(const ui::AXNodeData& node);
++  static blockbrowser::ContentItem ExtractText(const ui::AXNodeData& node);
++  static blockbrowser::ContentItem ExtractLink(const ui::AXNodeData& node);
++  static blockbrowser::ContentItem ExtractImage(const ui::AXNodeData& node);
++  static blockbrowser::ContentItem ExtractVideo(const ui::AXNodeData& node);
 +
 +  // Get accessible name from node
 +  static std::string GetAccessibleName(const ui::AXNodeData& node);

@@ -8,7 +8,7 @@ index b2def616ed5de..fba975d0084e7 100644
  #include "base/lazy_instance.h"
 +#include "base/logging.h"
  #include "base/one_shot_event.h"
-+#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/extensions/blockbrowser_extension_constants.h"
  #include "chrome/browser/extensions/extension_web_ui.h"
  #include "chrome/browser/profiles/profile.h"
  #include "extensions/browser/extension_system.h"
@@ -21,16 +21,16 @@ index b2def616ed5de..fba975d0084e7 100644
 +      URLOverrides::GetChromeURLOverrides(extension);
 +  
 +  if (!overrides.empty()) {
-+    // Check if this is a BrowserOS extension
-+    bool is_browseros_extension = false;
++    // Check if this is a BlockBrowser extension
++    bool is_blockbrowser_extension = false;
 +    for (const char* allowed_id : browseros::kAllowedExtensions) {
 +      if (extension->id() == allowed_id) {
-+        is_browseros_extension = true;
++        is_blockbrowser_extension = true;
 +        break;
 +      }
 +    }
 +    
-+    if (!is_browseros_extension) {
++    if (!is_blockbrowser_extension) {
 +      // disable other extensions from overriding Chrome URLs
 +      return;
 +    }

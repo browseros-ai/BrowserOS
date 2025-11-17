@@ -1,4 +1,4 @@
-resources/media/nxtscape-productivity.gif filter=lfs diff=lfs merge=lfs -text
-resources/nxtscape-productivity.gif filter=lfs diff=lfs merge=lfs -text
-resources/media/nxtscape-agent.gif filter=lfs diff=lfs merge=lfs -text
-resources/media/nxtscape-chat.gif filter=lfs diff=lfs merge=lfs -text
+resources/media/blockbrowser-productivity.gif filter=lfs diff=lfs merge=lfs -text
+resources/blockbrowser-productivity.gif filter=lfs diff=lfs merge=lfs -text
+resources/media/blockbrowser-agent.gif filter=lfs diff=lfs merge=lfs -text
+resources/media/blockbrowser-chat.gif filter=lfs diff=lfs merge=lfs -text

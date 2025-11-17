@@ -52,7 +52,7 @@ index 31d54b9d0fb58..5242a1c3f930c 100644
  #include "chrome/browser/extensions/api/browser_os/browser_os_api_helpers.h"
  #include "chrome/browser/extensions/api/browser_os/browser_os_api_utils.h"
  #include "chrome/browser/extensions/api/browser_os/browser_os_change_detector.h"
-@@ -255,13 +259,15 @@ ExtensionFunction::ResponseAction BrowserOSClickFunction::Run() {
+@@ -255,13 +259,15 @@ ExtensionFunction::ResponseAction BlockBrowserClickFunction::Run() {
    
    const NodeInfo& node_info = node_it->second;
    
@@ -72,8 +72,8 @@ index 31d54b9d0fb58..5242a1c3f930c 100644
 +      browser_os::Click::Results::Create(response)));
  }
  
- // Implementation of BrowserOSInputTextFunction
-@@ -296,15 +302,21 @@ ExtensionFunction::ResponseAction BrowserOSInputTextFunction::Run() {
+ // Implementation of BlockBrowserInputTextFunction
+@@ -296,15 +302,21 @@ ExtensionFunction::ResponseAction BlockBrowserInputTextFunction::Run() {
    
    const NodeInfo& node_info = node_it->second;
    
@@ -99,8 +99,8 @@ index 31d54b9d0fb58..5242a1c3f930c 100644
 +      browser_os::InputText::Results::Create(response)));
  }
  
- // Implementation of BrowserOSClearFunction
-@@ -339,39 +351,21 @@ ExtensionFunction::ResponseAction BrowserOSClearFunction::Run() {
+ // Implementation of BlockBrowserClearFunction
+@@ -339,39 +351,21 @@ ExtensionFunction::ResponseAction BlockBrowserClearFunction::Run() {
    
    const NodeInfo& node_info = node_it->second;
    
@@ -149,8 +149,8 @@ index 31d54b9d0fb58..5242a1c3f930c 100644
 +      browser_os::Clear::Results::Create(response)));
  }
  
- // Implementation of BrowserOSGetPageLoadStatusFunction
-@@ -607,10 +601,21 @@ ExtensionFunction::ResponseAction BrowserOSSendKeysFunction::Run() {
+ // Implementation of BlockBrowserGetPageLoadStatusFunction
+@@ -607,10 +601,21 @@ ExtensionFunction::ResponseAction BlockBrowserSendKeysFunction::Run() {
      return RespondNow(Error("Unsupported key: " + params->key));
    }
    
@@ -174,8 +174,8 @@ index 31d54b9d0fb58..5242a1c3f930c 100644
 +      browser_os::SendKeys::Results::Create(response)));
  }
  
- // Implementation of BrowserOSCaptureScreenshotFunction
-@@ -650,16 +655,31 @@ ExtensionFunction::ResponseAction BrowserOSCaptureScreenshotFunction::Run() {
+ // Implementation of BlockBrowserCaptureScreenshotFunction
+@@ -650,16 +655,31 @@ ExtensionFunction::ResponseAction BlockBrowserCaptureScreenshotFunction::Run() {
    // Get the view bounds to determine the size
    gfx::Rect view_bounds = rwhv->GetViewBounds();
    
@@ -214,18 +214,18 @@ index 31d54b9d0fb58..5242a1c3f930c 100644
      thumbnail_size = gfx::ScaleToFlooredSize(thumbnail_size, scale);
    }
    
-@@ -791,5 +811,205 @@ void BrowserOSGetSnapshotFunction::OnContentProcessed(
+@@ -791,5 +811,205 @@ void BlockBrowserGetSnapshotFunction::OnContentProcessed(
        browser_os::GetSnapshot::Results::Create(result.snapshot)));
  }
  
-+// BrowserOSGetPrefFunction
-+ExtensionFunction::ResponseAction BrowserOSGetPrefFunction::Run() {
++// BlockBrowserGetPrefFunction
++ExtensionFunction::ResponseAction BlockBrowserGetPrefFunction::Run() {
 +  std::optional<browser_os::GetPref::Params> params =
 +      browser_os::GetPref::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
 +  // Allow reading any preferences - no restrictions for now
-+  // This includes nxtscape.*, browseros.*, and any other preferences
++  // This includes blockbrowser.*, browseros.*, and any other preferences
 +  // Note: Be careful with this in production as it exposes all Chrome preferences
 +
 +  Profile* profile = Profile::FromBrowserContext(browser_context());
@@ -277,17 +277,17 @@ index 31d54b9d0fb58..5242a1c3f930c 100644
 +      browser_os::GetPref::Results::Create(pref_obj)));
 +}
 +
-+// BrowserOSSetPrefFunction
-+ExtensionFunction::ResponseAction BrowserOSSetPrefFunction::Run() {
++// BlockBrowserSetPrefFunction
++ExtensionFunction::ResponseAction BlockBrowserSetPrefFunction::Run() {
 +  std::optional<browser_os::SetPref::Params> params =
 +      browser_os::SetPref::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +
-+  // Allow setting nxtscape.* and browseros.* prefs
++  // Allow setting blockbrowser.* and browseros.* prefs
 +  // This provides access to AI provider configurations
-+  if (!params->name.starts_with("nxtscape.") && 
++  if (!params->name.starts_with("blockbrowser.") && 
 +      !params->name.starts_with("browseros.")) {
-+    return RespondNow(Error("Only nxtscape.* and browseros.* preferences can be modified"));
++    return RespondNow(Error("Only blockbrowser.* and browseros.* preferences can be modified"));
 +  }
 +
 +  Profile* profile = Profile::FromBrowserContext(browser_context());
@@ -304,28 +304,28 @@ index 31d54b9d0fb58..5242a1c3f930c 100644
 +      browser_os::SetPref::Results::Create(true)));
 +}
 +
-+// BrowserOSGetAllPrefsFunction
-+ExtensionFunction::ResponseAction BrowserOSGetAllPrefsFunction::Run() {
++// BlockBrowserGetAllPrefsFunction
++ExtensionFunction::ResponseAction BlockBrowserGetAllPrefsFunction::Run() {
 +  Profile* profile = Profile::FromBrowserContext(browser_context());
 +  PrefService* prefs = profile->GetPrefs();
 +
-+  // List of all nxtscape and browseros prefs to return
-+  const std::vector<std::string> nxtscape_prefs = {
-+    // Legacy nxtscape prefs
-+    "nxtscape.default_provider",
-+    "nxtscape.nxtscape_model",
-+    "nxtscape.openai_api_key",
-+    "nxtscape.openai_model",
-+    "nxtscape.openai_base_url",
-+    "nxtscape.anthropic_api_key",
-+    "nxtscape.anthropic_model",
-+    "nxtscape.anthropic_base_url",
-+    "nxtscape.gemini_api_key",
-+    "nxtscape.gemini_model",
-+    "nxtscape.gemini_base_url",
-+    "nxtscape.ollama_api_key",
-+    "nxtscape.ollama_model",
-+    "nxtscape.ollama_base_url",
++  // List of all blockbrowser and browseros prefs to return
++  const std::vector<std::string> blockbrowser_prefs = {
++    // Legacy blockbrowser prefs
++    "blockbrowser.default_provider",
++    "blockbrowser.blockbrowser_model",
++    "blockbrowser.openai_api_key",
++    "blockbrowser.openai_model",
++    "blockbrowser.openai_base_url",
++    "blockbrowser.anthropic_api_key",
++    "blockbrowser.anthropic_model",
++    "blockbrowser.anthropic_base_url",
++    "blockbrowser.gemini_api_key",
++    "blockbrowser.gemini_model",
++    "blockbrowser.gemini_base_url",
++    "blockbrowser.ollama_api_key",
++    "blockbrowser.ollama_model",
++    "blockbrowser.ollama_base_url",
 +    // New browseros prefs
 +    "browseros.providers",
 +    "browseros.default_provider_id",
@@ -335,7 +335,7 @@ index 31d54b9d0fb58..5242a1c3f930c 100644
 +
 +  std::vector<browser_os::PrefObject> pref_objects;
 +
-+  for (const auto& pref_name : nxtscape_prefs) {
++  for (const auto& pref_name : blockbrowser_prefs) {
 +    if (prefs->HasPrefPath(pref_name)) {
 +      browser_os::PrefObject pref_obj;
 +      pref_obj.key = pref_name;
@@ -379,8 +379,8 @@ index 31d54b9d0fb58..5242a1c3f930c 100644
 +      browser_os::GetAllPrefs::Results::Create(pref_objects)));
 +}
 +
-+// BrowserOSLogMetricFunction
-+ExtensionFunction::ResponseAction BrowserOSLogMetricFunction::Run() {
++// BlockBrowserLogMetricFunction
++ExtensionFunction::ResponseAction BlockBrowserLogMetricFunction::Run() {
 +  std::optional<browser_os::LogMetric::Params> params =
 +      browser_os::LogMetric::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
@@ -397,10 +397,10 @@ index 31d54b9d0fb58..5242a1c3f930c 100644
 +    // Add extension ID as a property
 +    properties.Set("extension_id", extension_id());
 +    
-+    browseros_metrics::BrowserOSMetrics::Log(prefixed_event, std::move(properties));
++    browseros_metrics::BlockBrowserMetrics::Log(prefixed_event, std::move(properties));
 +  } else {
 +    // No properties, just log with extension ID
-+    browseros_metrics::BrowserOSMetrics::Log(prefixed_event, {
++    browseros_metrics::BlockBrowserMetrics::Log(prefixed_event, {
 +      {"extension_id", base::Value(extension_id())}
 +    });
 +  }
@@ -409,8 +409,8 @@ index 31d54b9d0fb58..5242a1c3f930c 100644
 +  return RespondNow(NoArguments());
 +}
 +
-+// BrowserOSGetVersionNumberFunction
-+ExtensionFunction::ResponseAction BrowserOSGetVersionNumberFunction::Run() {
++// BlockBrowserGetVersionNumberFunction
++ExtensionFunction::ResponseAction BlockBrowserGetVersionNumberFunction::Run() {
 +  // Get the version number from version_info
 +  std::string version = std::string(version_info::GetVersionNumber());
 +  
@@ -424,71 +424,71 @@ diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.h b/chrome/
 index 6090d2fbeb6a4..27721d9b0b9a0 100644
 --- a/chrome/browser/extensions/api/browser_os/browser_os_api.h
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.h
-@@ -209,6 +209,72 @@ class BrowserOSGetSnapshotFunction : public ExtensionFunction {
+@@ -209,6 +209,72 @@ class BlockBrowserGetSnapshotFunction : public ExtensionFunction {
        api::ContentProcessingResult result);
  };
  
 +// Settings API functions
-+class BrowserOSGetPrefFunction : public ExtensionFunction {
++class BlockBrowserGetPrefFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.getPref", BROWSER_OS_GETPREF)
 +
-+  BrowserOSGetPrefFunction() = default;
++  BlockBrowserGetPrefFunction() = default;
 +
 + protected:
-+  ~BrowserOSGetPrefFunction() override = default;
++  ~BlockBrowserGetPrefFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSSetPrefFunction : public ExtensionFunction {
++class BlockBrowserSetPrefFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.setPref", BROWSER_OS_SETPREF)
 +
-+  BrowserOSSetPrefFunction() = default;
++  BlockBrowserSetPrefFunction() = default;
 +
 + protected:
-+  ~BrowserOSSetPrefFunction() override = default;
++  ~BlockBrowserSetPrefFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSGetAllPrefsFunction : public ExtensionFunction {
++class BlockBrowserGetAllPrefsFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.getAllPrefs", BROWSER_OS_GETALLPREFS)
 +
-+  BrowserOSGetAllPrefsFunction() = default;
++  BlockBrowserGetAllPrefsFunction() = default;
 +
 + protected:
-+  ~BrowserOSGetAllPrefsFunction() override = default;
++  ~BlockBrowserGetAllPrefsFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSLogMetricFunction : public ExtensionFunction {
++class BlockBrowserLogMetricFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.logMetric", BROWSER_OS_LOGMETRIC)
 +
-+  BrowserOSLogMetricFunction() = default;
++  BlockBrowserLogMetricFunction() = default;
 +
 + protected:
-+  ~BrowserOSLogMetricFunction() override = default;
++  ~BlockBrowserLogMetricFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSGetVersionNumberFunction : public ExtensionFunction {
++class BlockBrowserGetVersionNumberFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.getVersionNumber", BROWSER_OS_GETVERSIONNUMBER)
 +
-+  BrowserOSGetVersionNumberFunction() = default;
++  BlockBrowserGetVersionNumberFunction() = default;
 +
 + protected:
-+  ~BrowserOSGetVersionNumberFunction() override = default;
++  ~BlockBrowserGetVersionNumberFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
@@ -1068,7 +1068,7 @@ index 2e2c9a875dd09..d05a75dd626e9 100644
 -ChangeDetectionResult Click(content::WebContents* web_contents,
 -                           const NodeInfo& node_info) {
 -  // Create change detector and start monitoring
--  auto change_detector = std::make_unique<BrowserOSChangeDetector>(web_contents);
+-  auto change_detector = std::make_unique<BlockBrowserChangeDetector>(web_contents);
 -  change_detector->StartMonitoring(node_info.ax_tree_id);
 -  
 -  // Perform the click action using coordinate-based click
@@ -1100,7 +1100,7 @@ index 2e2c9a875dd09..d05a75dd626e9 100644
 +    
 +    // For out-of-viewport nodes, use AccessibilityDoDefault first (most reliable after scroll)
 +    LOG(INFO) << "[browseros] Node was out of viewport, trying AccessibilityDoDefault click first";
-+    bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++    bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +        web_contents,
 +        [&]() { AccessibilityDoDefault(web_contents, node_info); },
 +        base::Milliseconds(300));
@@ -1111,7 +1111,7 @@ index 2e2c9a875dd09..d05a75dd626e9 100644
 +      // Skip coordinate click for out-of-viewport nodes (coordinates unreliable)
 +      // Go straight to HTML click
 +      LOG(INFO) << "[browseros] No change from accessibility click, trying HTML click";
-+      changed = BrowserOSChangeDetector::ExecuteWithDetection(
++      changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +          web_contents,
 +          [&]() { HtmlClick(web_contents, node_info); },
 +          base::Milliseconds(200));
@@ -1125,7 +1125,7 @@ index 2e2c9a875dd09..d05a75dd626e9 100644
 +  LOG(INFO) << "[browseros] Node is in viewport, trying coordinate click first";
 +  gfx::PointF click_point = GetNodeCenterPoint(web_contents, node_info);
 +  
-+  bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++  bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +      web_contents,
 +      [&]() { PointClick(web_contents, click_point); },
 +      base::Milliseconds(300));
@@ -1133,7 +1133,7 @@ index 2e2c9a875dd09..d05a75dd626e9 100644
 +  // If still no change, try HTML click as final fallback
 +  if (!changed) {
 +      LOG(INFO) << "[browseros] No change from accessibility click, trying HTML click";
-+      changed = BrowserOSChangeDetector::ExecuteWithDetection(
++      changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +          web_contents,
 +          [&]() { HtmlClick(web_contents, node_info); },
 +          base::Milliseconds(200));
@@ -1191,7 +1191,7 @@ index 2e2c9a875dd09..d05a75dd626e9 100644
 +  
 +  // Try native typing first (most natural method)
 +  LOG(INFO) << "[browseros] Trying native typing";
-+  bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++  bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +      web_contents,
 +      [&]() {
 +        NativeType(web_contents, text);
@@ -1201,7 +1201,7 @@ index 2e2c9a875dd09..d05a75dd626e9 100644
 +  // If no change detected, try JavaScript typing as second fallback
 +  if (!changed) {
 +    LOG(INFO) << "[browseros] No change from native typing, trying JavaScript";
-+    changed = BrowserOSChangeDetector::ExecuteWithDetection(
++    changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +        web_contents,
 +        [&]() { JavaScriptType(web_contents, node_info, text); },
 +        base::Milliseconds(200));
@@ -1210,7 +1210,7 @@ index 2e2c9a875dd09..d05a75dd626e9 100644
 +  // If still no change, try accessibility SetValue as final fallback
 +  if (!changed) {
 +    LOG(INFO) << "[browseros] No change from JavaScript, trying accessibility SetValue";
-+    changed = BrowserOSChangeDetector::ExecuteWithDetection(
++    changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +        web_contents,
 +        [&]() {
 +          AccessibilitySetValue(web_contents, node_info, text);
@@ -1232,7 +1232,7 @@ index 2e2c9a875dd09..d05a75dd626e9 100644
 +  VisualizeInteractionPoint(web_contents, clear_point, 2000, 50.0f);
 +  
 +  // Use change detection with JavaScript clear
-+  bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++  bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +      web_contents,
 +      [&]() {
 +        content::RenderFrameHost* rfh = web_contents->GetPrimaryMainFrame();
@@ -1269,7 +1269,7 @@ index 2e2c9a875dd09..d05a75dd626e9 100644
 +bool KeyPressWithDetection(content::WebContents* web_contents,
 +                          const std::string& key) {
 +  // Use change detection with key press
-+  bool changed = BrowserOSChangeDetector::ExecuteWithDetection(
++  bool changed = BlockBrowserChangeDetector::ExecuteWithDetection(
 +      web_contents,
 +      [&]() { KeyPress(web_contents, key); },
 +      base::Milliseconds(200));
@@ -1518,18 +1518,18 @@ index 7962fb78b6e48..1df7f2cbf0e0c 100644
 -ChangeDetectionResult::ChangeDetectionResult(ChangeDetectionResult&&) = default;
 -ChangeDetectionResult& ChangeDetectionResult::operator=(ChangeDetectionResult&&) = default;
 -
--BrowserOSChangeDetector::BrowserOSChangeDetector(
+-BlockBrowserChangeDetector::BlockBrowserChangeDetector(
 -    content::WebContents* web_contents)
-+BrowserOSChangeDetector::BrowserOSChangeDetector(content::WebContents* web_contents)
++BlockBrowserChangeDetector::BlockBrowserChangeDetector(content::WebContents* web_contents)
      : content::WebContentsObserver(web_contents) {}
  
- BrowserOSChangeDetector::~BrowserOSChangeDetector() {
--  LOG(INFO) << "BrowserOSChangeDetector destroyed";
+ BlockBrowserChangeDetector::~BlockBrowserChangeDetector() {
+-  LOG(INFO) << "BlockBrowserChangeDetector destroyed";
 -  StopMonitoring();
 +  timeout_timer_.Stop();
  }
  
--void BrowserOSChangeDetector::StartMonitoring(
+-void BlockBrowserChangeDetector::StartMonitoring(
 -    const ui::AXTreeID& initial_tree_id) {
 -  DCHECK(!monitoring_active_);
 -  
@@ -1544,34 +1544,34 @@ index 7962fb78b6e48..1df7f2cbf0e0c 100644
 -  VLOG(1) << "Started monitoring for changes, initial tree ID: " 
 -          << initial_tree_id.ToString();
 +// Static method for synchronous detection
-+bool BrowserOSChangeDetector::ExecuteWithDetection(
++bool BlockBrowserChangeDetector::ExecuteWithDetection(
 +    content::WebContents* web_contents,
 +    std::function<void()> action,
 +    base::TimeDelta timeout) {
-+  auto detector = std::make_unique<BrowserOSChangeDetector>(web_contents);
++  auto detector = std::make_unique<BlockBrowserChangeDetector>(web_contents);
 +  return detector->ExecuteAndWait(std::move(action), timeout);
  }
  
--ChangeDetectionResult BrowserOSChangeDetector::WaitForChanges(
+-ChangeDetectionResult BlockBrowserChangeDetector::WaitForChanges(
 +// Static method for asynchronous detection
-+void BrowserOSChangeDetector::ExecuteWithDetectionAsync(
++void BlockBrowserChangeDetector::ExecuteWithDetectionAsync(
 +    content::WebContents* web_contents,
 +    std::function<void()> action,
 +    base::OnceCallback<void(bool)> callback,
      base::TimeDelta timeout) {
 -  DCHECK(monitoring_active_);
 +  // Create detector on heap - it will delete itself when done
-+  auto* detector = new BrowserOSChangeDetector(web_contents);
++  auto* detector = new BlockBrowserChangeDetector(web_contents);
 +  detector->ExecuteAndNotify(std::move(action), std::move(callback), timeout);
 +}
 +
-+void BrowserOSChangeDetector::StartMonitoring() {
++void BlockBrowserChangeDetector::StartMonitoring() {
 +  monitoring_ = true;
 +  change_detected_ = false;
 +  VLOG(1) << "[browseros] Started monitoring for changes";
 +}
 +
-+bool BrowserOSChangeDetector::ExecuteAndWait(std::function<void()> action,
++bool BlockBrowserChangeDetector::ExecuteAndWait(std::function<void()> action,
 +                                             base::TimeDelta timeout) {
 +  StartMonitoring();
 +  
@@ -1591,8 +1591,8 @@ index 7962fb78b6e48..1df7f2cbf0e0c 100644
    base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
    wait_callback_ = run_loop.QuitClosure();
    
-@@ -69,203 +71,135 @@ ChangeDetectionResult BrowserOSChangeDetector::WaitForChanges(
-                       base::BindOnce(&BrowserOSChangeDetector::OnTimeout,
+@@ -69,203 +71,135 @@ ChangeDetectionResult BlockBrowserChangeDetector::WaitForChanges(
+                       base::BindOnce(&BlockBrowserChangeDetector::OnTimeout,
                                      weak_factory_.GetWeakPtr()));
    
 -  // Wait for changes or timeout
@@ -1609,13 +1609,13 @@ index 7962fb78b6e48..1df7f2cbf0e0c 100644
 +  return change_detected_;
  }
  
--ChangeDetectionResult BrowserOSChangeDetector::GetResult() const {
+-ChangeDetectionResult BlockBrowserChangeDetector::GetResult() const {
 -  ChangeDetectionResult result;
 -  result.detected = change_detected_;
 -  result.all_changes = detected_changes_;
 -  result.new_tree_id = current_tree_id_;
 -  result.time_to_change = time_to_first_change_;
-+void BrowserOSChangeDetector::ExecuteAndNotify(
++void BlockBrowserChangeDetector::ExecuteAndNotify(
 +    std::function<void()> action,
 +    base::OnceCallback<void(bool)> callback,
 +    base::TimeDelta timeout) {
@@ -1624,7 +1624,7 @@ index 7962fb78b6e48..1df7f2cbf0e0c 100644
    
 -  // Determine primary change type
 -  if (!detected_changes_.empty()) {
--    VLOG(1) << "BrowserOSChangeDetector detected changes: "
+-    VLOG(1) << "BlockBrowserChangeDetector detected changes: "
 -              << static_cast<int>(detected_changes_.size());
 -    // Priority order for primary change
 -    if (detected_changes_.count(ChangeType::kNewTabOpened)) {
@@ -1642,7 +1642,7 @@ index 7962fb78b6e48..1df7f2cbf0e0c 100644
 -    }
 -  }
 -  else {
--    LOG(INFO) << "BrowserOSChangeDetector empty detected changes";
+-    LOG(INFO) << "BlockBrowserChangeDetector empty detected changes";
 +  // Execute the action
 +  action();
 +  
@@ -1658,14 +1658,14 @@ index 7962fb78b6e48..1df7f2cbf0e0c 100644
 +  // Start timeout timer
 +  timeout_timer_.Start(
 +      FROM_HERE, timeout,
-+      base::BindOnce(&BrowserOSChangeDetector::OnTimeout,
++      base::BindOnce(&BlockBrowserChangeDetector::OnTimeout,
 +                    weak_factory_.GetWeakPtr()));
  }
  
--void BrowserOSChangeDetector::AccessibilityEventReceived(
+-void BlockBrowserChangeDetector::AccessibilityEventReceived(
 -    const ui::AXUpdatesAndEvents& details) {
 -  if (!monitoring_active_) {
-+void BrowserOSChangeDetector::OnChangeDetected() {
++void BlockBrowserChangeDetector::OnChangeDetected() {
 +  if (!monitoring_ || change_detected_) {
      return;
    }
@@ -1673,7 +1673,7 @@ index 7962fb78b6e48..1df7f2cbf0e0c 100644
 -  ProcessAccessibilityEvent(details);
 -}
 -
--void BrowserOSChangeDetector::ProcessAccessibilityEvent(
+-void BlockBrowserChangeDetector::ProcessAccessibilityEvent(
 -    const ui::AXUpdatesAndEvents& details) {
 -  bool significant_change = false;
 +  change_detected_ = true;
@@ -1768,7 +1768,7 @@ index 7962fb78b6e48..1df7f2cbf0e0c 100644
    }
  }
  
--void BrowserOSChangeDetector::DidOpenRequestedURL(
+-void BlockBrowserChangeDetector::DidOpenRequestedURL(
 -    content::WebContents* new_contents,
 -    content::RenderFrameHost* source_render_frame_host,
 -    const GURL& url,
@@ -1779,7 +1779,7 @@ index 7962fb78b6e48..1df7f2cbf0e0c 100644
 -    bool renderer_initiated) {
 -  if (!monitoring_active_) {
 -    return;
-+void BrowserOSChangeDetector::OnTimeout() {
++void BlockBrowserChangeDetector::OnTimeout() {
 +  VLOG(1) << "[browseros] Change detection timeout";
 +  monitoring_ = false;
 +  
@@ -1812,13 +1812,13 @@ index 7962fb78b6e48..1df7f2cbf0e0c 100644
    }
  }
  
--void BrowserOSChangeDetector::OnFocusChangedInPage(
+-void BlockBrowserChangeDetector::OnFocusChangedInPage(
 -    content::FocusedNodeDetails* details) {
 -  if (!monitoring_active_ || !details) {
 -    return;
 +// WebContentsObserver overrides - any of these counts as a "change"
 +
-+void BrowserOSChangeDetector::AccessibilityEventReceived(
++void BlockBrowserChangeDetector::AccessibilityEventReceived(
 +    const ui::AXUpdatesAndEvents& details) {
 +  if (!monitoring_) return;
 +  
@@ -1829,7 +1829,7 @@ index 7962fb78b6e48..1df7f2cbf0e0c 100644
    }
 +}
 +
-+void BrowserOSChangeDetector::DidFinishNavigation(
++void BlockBrowserChangeDetector::DidFinishNavigation(
 +    content::NavigationHandle* navigation_handle) {
 +  if (!monitoring_) return;
    
@@ -1838,7 +1838,7 @@ index 7962fb78b6e48..1df7f2cbf0e0c 100644
 +  OnChangeDetected();
 +}
 +
-+void BrowserOSChangeDetector::DOMContentLoaded(
++void BlockBrowserChangeDetector::DOMContentLoaded(
 +    content::RenderFrameHost* render_frame_host) {
 +  if (!monitoring_) return;
    
@@ -1854,9 +1854,9 @@ index 7962fb78b6e48..1df7f2cbf0e0c 100644
 +  OnChangeDetected();
  }
  
--void BrowserOSChangeDetector::OnTimeout() {
+-void BlockBrowserChangeDetector::OnTimeout() {
 -  VLOG(1) << "Change detection timeout reached";
-+void BrowserOSChangeDetector::OnFocusChangedInPage(
++void BlockBrowserChangeDetector::OnFocusChangedInPage(
 +    content::FocusedNodeDetails* details) {
 +  if (!monitoring_) return;
    
@@ -1867,11 +1867,11 @@ index 7962fb78b6e48..1df7f2cbf0e0c 100644
 +  OnChangeDetected();
  }
  
--void BrowserOSChangeDetector::StopMonitoring() {
+-void BlockBrowserChangeDetector::StopMonitoring() {
 -  monitoring_active_ = false;
 -  timeout_timer_.Stop();
 -  wait_callback_.Reset();
-+void BrowserOSChangeDetector::DidOpenRequestedURL(
++void BlockBrowserChangeDetector::DidOpenRequestedURL(
 +    content::WebContents* new_contents,
 +    content::RenderFrameHost* source_render_frame_host,
 +    const GURL& url,
@@ -1950,7 +1950,7 @@ index f4a902e1b4970..b3287913fd5ac 100644
 +// Change detector that monitors if any change occurred in the web content
 +// after an action is performed. This is used to verify that actions like
 +// click, type, clear, etc. actually had an effect on the page.
- class BrowserOSChangeDetector : public content::WebContentsObserver {
+ class BlockBrowserChangeDetector : public content::WebContentsObserver {
   public:
 +  // Execute an action and detect if it causes any change in the page
 +  // Returns true if any change was detected within the timeout period
@@ -1967,12 +1967,12 @@ index f4a902e1b4970..b3287913fd5ac 100644
 +      base::TimeDelta timeout = base::Milliseconds(300));
 +
 +  // Constructor and destructor are public for use by factory methods
-   explicit BrowserOSChangeDetector(content::WebContents* web_contents);
-   ~BrowserOSChangeDetector() override;
+   explicit BlockBrowserChangeDetector(content::WebContents* web_contents);
+   ~BlockBrowserChangeDetector() override;
  
 + private:
-   BrowserOSChangeDetector(const BrowserOSChangeDetector&) = delete;
-   BrowserOSChangeDetector& operator=(const BrowserOSChangeDetector&) = delete;
+   BlockBrowserChangeDetector(const BlockBrowserChangeDetector&) = delete;
+   BlockBrowserChangeDetector& operator=(const BlockBrowserChangeDetector&) = delete;
  
 -  // Start monitoring for changes with a specific tree ID
 -  void StartMonitoring(const ui::AXTreeID& initial_tree_id);
@@ -2056,7 +2056,7 @@ index f4a902e1b4970..b3287913fd5ac 100644
 +  base::OneShotTimer timeout_timer_;
 +  
    // Weak pointer factory
-   base::WeakPtrFactory<BrowserOSChangeDetector> weak_factory_{this};
+   base::WeakPtrFactory<BlockBrowserChangeDetector> weak_factory_{this};
  };
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.cc b/chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.cc
 index ee9da99ed9bc7..8dfc0cce77512 100644
@@ -2591,14 +2591,14 @@ index 6934ee144987d..a8cbf0250d19a 100644
 +
 +    // Settings API functions - compatible with chrome.settingsPrivate
 +    // Gets a specific preference value
-+    // |name|: The preference name (e.g., "nxtscape.default_provider").
++    // |name|: The preference name (e.g., "blockbrowser.default_provider").
 +    // |callback|: Called with the preference object.
 +    static void getPref(
 +        DOMString name,
 +        GetPrefCallback callback);
 +
 +    // Sets a specific preference value
-+    // |name|: The preference name (e.g., "nxtscape.default_provider").
++    // |name|: The preference name (e.g., "blockbrowser.default_provider").
 +    // |value|: The value to set.
 +    // |pageId|: Optional page ID for settings tracking (can be empty string).
 +    // |callback|: Called with success status.
@@ -2608,7 +2608,7 @@ index 6934ee144987d..a8cbf0250d19a 100644
 +        optional DOMString pageId,
 +        SetPrefCallback callback);
 +
-+    // Gets all preferences (filtered to nxtscape.* prefs)
++    // Gets all preferences (filtered to blockbrowser.* prefs)
 +    // |callback|: Called with array of preference objects.
 +    static void getAllPrefs(
 +        GetAllPrefsCallback callback);

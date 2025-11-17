@@ -4,7 +4,7 @@ index 0000000000000..cf39a1f49a55a
 --- /dev/null
 +++ b/chrome/browser/mac/sparkle_glue.mm
 @@ -0,0 +1,580 @@
-+// Copyright 2024 Nxtscape Browser Authors. All rights reserved.
++// Copyright 2024 BlockBrowser Browser Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +

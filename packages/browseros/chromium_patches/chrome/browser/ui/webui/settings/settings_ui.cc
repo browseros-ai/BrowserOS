@@ -6,7 +6,7 @@ index ee6aaefb7fc82..67c338a86ccc8 100644
  #include "chrome/browser/ui/webui/settings/accessibility_main_handler.h"
  #include "chrome/browser/ui/webui/settings/appearance_handler.h"
  #include "chrome/browser/ui/webui/settings/browser_lifetime_handler.h"
-+#include "chrome/browser/ui/webui/settings/browseros_metrics_handler.h"
++#include "chrome/browser/ui/webui/settings/blockbrowser_metrics_handler.h"
  #include "chrome/browser/ui/webui/settings/downloads_handler.h"
  #include "chrome/browser/ui/webui/settings/font_handler.h"
  #include "chrome/browser/ui/webui/settings/hats_handler.h"
@@ -22,7 +22,7 @@ index ee6aaefb7fc82..67c338a86ccc8 100644
  #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
    AddSettingsPageUIHandler(std::make_unique<PasskeysHandler>());
  #endif
-+  AddSettingsPageUIHandler(std::make_unique<BrowserOSMetricsHandler>());
++  AddSettingsPageUIHandler(std::make_unique<BlockBrowserMetricsHandler>());
  
  #if BUILDFLAG(IS_CHROMEOS)
    InitBrowserSettingsWebUIHandlers();

@@ -1,15 +1,15 @@
 ---
 title: "n8n Integration"
-description: "Connect BrowserOS MCP to n8n for AI-powered browser automation workflows"
+description: "Connect BlockBrowser MCP to n8n for AI-powered browser automation workflows"
 icon: "workflow"
 ---
 
-Build AI workflows that automate browser tasks using n8n and BrowserOS MCP.
+Build AI workflows that automate browser tasks using n8n and BlockBrowser MCP.
 
 ## Prerequisites
 
 - Node.js and npm installed ([nodejs.org](https://nodejs.org))
-- BrowserOS running with MCP server enabled
+- BlockBrowser running with MCP server enabled
 - LLM API key (OpenAI, Claude, etc.)
 
 ## Setup
@@ -69,7 +69,7 @@ Click on the **MCP Client** node to configure it:
 4. **Arguments**: `mcp-remote http://127.0.0.1:9101/mcp`
 
 <Note>
-Replace `9101` with your BrowserOS MCP port from **Settings → MCP** in BrowserOS.
+Replace `9101` with your BlockBrowser MCP port from **Settings → MCP** in BlockBrowser.
 </Note>
 
 ### Step 6: Configure MCP Tool Execution
@@ -88,22 +88,22 @@ In the same MCP Client node:
 Save the workflow and test with a chat input:
 
 ```
-Open google.com in BrowserOS
+Open google.com in BlockBrowser
 ```
 
-Execute and watch BrowserOS respond!
+Execute and watch BlockBrowser respond!
 
 ## Troubleshooting
 
 <Warning>
 Connection issues? Verify:
-- BrowserOS is running
-- MCP server is enabled in BrowserOS settings
-- Port number matches your BrowserOS MCP configuration
+- BlockBrowser is running
+- MCP server is enabled in BlockBrowser settings
+- Port number matches your BlockBrowser MCP configuration
 </Warning>
 
 ## Resources
 
-<Card title="BrowserOS MCP Guide" icon="book" href="/browseros-mcp/how-to-guide">
-  Learn more about BrowserOS MCP
+<Card title="BlockBrowser MCP Guide" icon="book" href="/browseros-mcp/how-to-guide">
+  Learn more about BlockBrowser MCP
 </Card>

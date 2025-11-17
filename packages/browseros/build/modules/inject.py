@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Version injection module for manifest.json files
-Injects nxtscape browser version into extension manifests
+Injects blockbrowser browser version into extension manifests
 """
 
 import json
@@ -27,8 +27,8 @@ def inject_version(ctx: BuildContext) -> bool:
     for manifest_path in manifest_paths:
         if not inject_version_to_manifest(
             manifest_path,
-            ctx.get_nxtscape_chromium_version(),
-            ctx.get_nxtscape_version(),
+            ctx.get_blockbrowser_chromium_version(),
+            ctx.get_blockbrowser_version(),
         ):
             success = False
 
@@ -41,7 +41,7 @@ def inject_version(ctx: BuildContext) -> bool:
 
 
 def inject_version_to_manifest(
-    manifest_path: Path, browser_version: str, nxtscape_version: str
+    manifest_path: Path, browser_version: str, blockbrowser_version: str
 ) -> bool:
     """Inject browser version and increment version into a single manifest.json file"""
     try:
@@ -57,7 +57,7 @@ def inject_version_to_manifest(
         if "version" in manifest_data:
             current_version = manifest_data["version"]
             # Format version as X.0.0.0
-            formatted_version = f"{nxtscape_version}.0.0.0"
+            formatted_version = f"{blockbrowser_version}.0.0.0"
             manifest_data["version"] = formatted_version
             log_info(
                 f"  Manifest version updated: {current_version} → {formatted_version}"

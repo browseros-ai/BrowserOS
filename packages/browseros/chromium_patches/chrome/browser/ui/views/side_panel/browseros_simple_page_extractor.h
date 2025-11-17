@@ -20,7 +20,7 @@ index 0000000000000..b9cbddf65327e
 +namespace side_panel {
 +
 +// Extracts structured text content from accessibility tree snapshots for
-+// BrowserOS LLM features (LLM Chat, Clash of GPTs).
++// BlockBrowser LLM features (LLM Chat, Clash of GPTs).
 +//
 +// Uses depth-first search (DFS) with semantic boundary detection to extract
 +// clean, structured text without duplication. Formats output as markdown-like
@@ -47,12 +47,12 @@ index 0000000000000..b9cbddf65327e
 +// Example usage:
 +//   active_contents->RequestAXTreeSnapshot(
 +//       base::BindOnce([](ui::AXTreeUpdate& update) {
-+//         std::u16string text = side_panel::BrowserOSSimplePageExtractor
++//         std::u16string text = side_panel::BlockBrowserSimplePageExtractor
 +//             ::ExtractStructuredText(update);
 +//         // Use extracted text...
 +//       }), ...);
 +//
-+class BrowserOSSimplePageExtractor {
++class BlockBrowserSimplePageExtractor {
 + public:
 +  // Extracts structured text from an accessibility tree update.
 +  //
@@ -66,10 +66,10 @@ index 0000000000000..b9cbddf65327e
 +  static std::u16string ExtractStructuredText(const ui::AXTreeUpdate& update);
 +
 +  // Utility class - no instances allowed
-+  BrowserOSSimplePageExtractor() = delete;
-+  ~BrowserOSSimplePageExtractor() = delete;
-+  BrowserOSSimplePageExtractor(const BrowserOSSimplePageExtractor&) = delete;
-+  BrowserOSSimplePageExtractor& operator=(const BrowserOSSimplePageExtractor&) = delete;
++  BlockBrowserSimplePageExtractor() = delete;
++  ~BlockBrowserSimplePageExtractor() = delete;
++  BlockBrowserSimplePageExtractor(const BlockBrowserSimplePageExtractor&) = delete;
++  BlockBrowserSimplePageExtractor& operator=(const BlockBrowserSimplePageExtractor&) = delete;
 +};
 +
 +}  // namespace side_panel

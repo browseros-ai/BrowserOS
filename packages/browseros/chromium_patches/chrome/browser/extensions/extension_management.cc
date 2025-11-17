@@ -6,7 +6,7 @@ index ae782891ad341..02e100fd1a934 100644
  #include <utility>
  
  #include "base/command_line.h"
-+#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/extensions/blockbrowser_extension_constants.h"
  #include "base/containers/contains.h"
  #include "base/feature_list.h"
  #include "base/functional/bind.h"
@@ -15,9 +15,9 @@ index ae782891ad341..02e100fd1a934 100644
      }
    }
 +  
-+  // Always force-pin BrowserOS extensions that are marked pinned.
-+  for (const auto& extension_id : browseros::GetBrowserOSExtensionIds()) {
-+    if (browseros::IsBrowserOSPinnedExtension(extension_id)) {
++  // Always force-pin BlockBrowser extensions that are marked pinned.
++  for (const auto& extension_id : browseros::GetBlockBrowserExtensionIds()) {
++    if (browseros::IsBlockBrowserPinnedExtension(extension_id)) {
 +      force_pinned_list.insert(extension_id);
 +    }
 +  }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Clean module for Nxtscape build system
+Clean module for BlockBrowser build system
 """
 
 import os

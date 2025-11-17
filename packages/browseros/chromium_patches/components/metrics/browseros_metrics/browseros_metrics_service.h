@@ -1,8 +1,8 @@
-diff --git a/components/metrics/browseros_metrics/browseros_metrics_service.h b/components/metrics/browseros_metrics/browseros_metrics_service.h
+diff --git a/components/metrics/blockbrowser_metrics/blockbrowser_metrics_service.h b/components/metrics/blockbrowser_metrics/blockbrowser_metrics_service.h
 new file mode 100644
 index 0000000000000..cb7519c887826
 --- /dev/null
-+++ b/components/metrics/browseros_metrics/browseros_metrics_service.h
++++ b/components/metrics/blockbrowser_metrics/blockbrowser_metrics_service.h
 @@ -0,0 +1,95 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -27,22 +27,22 @@ index 0000000000000..cb7519c887826
 +class SharedURLLoaderFactory;
 +}  // namespace network
 +
-+namespace browseros_metrics {
++namespace blockbrowser_metrics {
 +
 +// Service for capturing and sending analytics events to PostHog.
 +// This service manages a stable client ID (per-profile) and install ID
 +// (per-installation) and sends events to the PostHog API.
-+class BrowserOSMetricsService : public KeyedService {
++class BlockBrowserMetricsService : public KeyedService {
 + public:
-+  explicit BrowserOSMetricsService(
++  explicit BlockBrowserMetricsService(
 +      PrefService* pref_service,
 +      PrefService* local_state_prefs,
 +      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
 +
-+  BrowserOSMetricsService(const BrowserOSMetricsService&) = delete;
-+  BrowserOSMetricsService& operator=(const BrowserOSMetricsService&) = delete;
++  BlockBrowserMetricsService(const BlockBrowserMetricsService&) = delete;
++  BlockBrowserMetricsService& operator=(const BlockBrowserMetricsService&) = delete;
 +
-+  ~BrowserOSMetricsService() override;
++  ~BlockBrowserMetricsService() override;
 +
 +  // Captures a single event with the given name and properties.
 +  // Properties should not contain PII. Common properties like client_id,
@@ -93,10 +93,10 @@ index 0000000000000..cb7519c887826
 +  std::string install_id_;
 +
 +  // Weak pointer factory for callbacks.
-+  base::WeakPtrFactory<BrowserOSMetricsService> weak_factory_{this};
++  base::WeakPtrFactory<BlockBrowserMetricsService> weak_factory_{this};
 +};
 +
-+}  // namespace browseros_metrics
++}  // namespace blockbrowser_metrics
 +
 +#endif  // COMPONENTS_METRICS_BROWSEROS_METRICS_BROWSEROS_METRICS_SERVICE_H_
 \ No newline at end of file

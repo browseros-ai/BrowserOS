@@ -1,4 +1,4 @@
-# Requirements for Nxtscape Build System
+# Requirements for BlockBrowser Build System
 click>=8.0.0 
 PyYAML>=5.4.1
 requests>=2.25.1

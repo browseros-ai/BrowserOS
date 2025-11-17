@@ -33,9 +33,9 @@ index 613d124be1752..e33e71988598a 100644
 +    return;
 +  }
 +
-+  // Pin native BrowserOS actions if their features are enabled
-+  for (actions::ActionId id : browseros::kBrowserOSNativeActionIds) {
-+    const base::Feature* feature = browseros::GetFeatureForBrowserOSAction(id);
++  // Pin native BlockBrowser actions if their features are enabled
++  for (actions::ActionId id : browseros::kBlockBrowserNativeActionIds) {
++    const base::Feature* feature = browseros::GetFeatureForBlockBrowserAction(id);
 +    if (feature && base::FeatureList::IsEnabled(*feature) && !Contains(id)) {
 +      UpdatePinnedState(id, true);
 +    }

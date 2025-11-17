@@ -1,14 +1,14 @@
-diff --git a/chrome/browser/extensions/api/browser_os/browser_os_change_detector.cc b/chrome/browser/extensions/api/browser_os/browser_os_change_detector.cc
+diff --git a/chrome/browser/extensions/api/blockbrowser/blockbrowser_change_detector.cc b/chrome/browser/extensions/api/blockbrowser/blockbrowser_change_detector.cc
 new file mode 100644
 index 0000000000000..1df7f2cbf0e0c
 --- /dev/null
-+++ b/chrome/browser/extensions/api/browser_os/browser_os_change_detector.cc
++++ b/chrome/browser/extensions/api/blockbrowser/blockbrowser_change_detector.cc
 @@ -0,0 +1,205 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "chrome/browser/extensions/api/browser_os/browser_os_change_detector.h"
++#include "chrome/browser/extensions/api/blockbrowser/blockbrowser_change_detector.h"
 +
 +#include "base/functional/bind.h"
 +#include "base/logging.h"
@@ -22,40 +22,40 @@ index 0000000000000..1df7f2cbf0e0c
 +namespace extensions {
 +namespace api {
 +
-+BrowserOSChangeDetector::BrowserOSChangeDetector(content::WebContents* web_contents)
++BlockBrowserChangeDetector::BlockBrowserChangeDetector(content::WebContents* web_contents)
 +    : content::WebContentsObserver(web_contents) {}
 +
-+BrowserOSChangeDetector::~BrowserOSChangeDetector() {
++BlockBrowserChangeDetector::~BlockBrowserChangeDetector() {
 +  timeout_timer_.Stop();
 +}
 +
 +// Static method for synchronous detection
-+bool BrowserOSChangeDetector::ExecuteWithDetection(
++bool BlockBrowserChangeDetector::ExecuteWithDetection(
 +    content::WebContents* web_contents,
 +    std::function<void()> action,
 +    base::TimeDelta timeout) {
-+  auto detector = std::make_unique<BrowserOSChangeDetector>(web_contents);
++  auto detector = std::make_unique<BlockBrowserChangeDetector>(web_contents);
 +  return detector->ExecuteAndWait(std::move(action), timeout);
 +}
 +
 +// Static method for asynchronous detection
-+void BrowserOSChangeDetector::ExecuteWithDetectionAsync(
++void BlockBrowserChangeDetector::ExecuteWithDetectionAsync(
 +    content::WebContents* web_contents,
 +    std::function<void()> action,
 +    base::OnceCallback<void(bool)> callback,
 +    base::TimeDelta timeout) {
 +  // Create detector on heap - it will delete itself when done
-+  auto* detector = new BrowserOSChangeDetector(web_contents);
++  auto* detector = new BlockBrowserChangeDetector(web_contents);
 +  detector->ExecuteAndNotify(std::move(action), std::move(callback), timeout);
 +}
 +
-+void BrowserOSChangeDetector::StartMonitoring() {
++void BlockBrowserChangeDetector::StartMonitoring() {
 +  monitoring_ = true;
 +  change_detected_ = false;
 +  VLOG(1) << "[browseros] Started monitoring for changes";
 +}
 +
-+bool BrowserOSChangeDetector::ExecuteAndWait(std::function<void()> action,
++bool BlockBrowserChangeDetector::ExecuteAndWait(std::function<void()> action,
 +                                             base::TimeDelta timeout) {
 +  StartMonitoring();
 +  
@@ -74,7 +74,7 @@ index 0000000000000..1df7f2cbf0e0c
 +  
 +  // Start timeout timer
 +  timeout_timer_.Start(FROM_HERE, timeout,
-+                      base::BindOnce(&BrowserOSChangeDetector::OnTimeout,
++                      base::BindOnce(&BlockBrowserChangeDetector::OnTimeout,
 +                                    weak_factory_.GetWeakPtr()));
 +  
 +  // Wait for change or timeout
@@ -89,7 +89,7 @@ index 0000000000000..1df7f2cbf0e0c
 +  return change_detected_;
 +}
 +
-+void BrowserOSChangeDetector::ExecuteAndNotify(
++void BlockBrowserChangeDetector::ExecuteAndNotify(
 +    std::function<void()> action,
 +    base::OnceCallback<void(bool)> callback,
 +    base::TimeDelta timeout) {
@@ -110,11 +110,11 @@ index 0000000000000..1df7f2cbf0e0c
 +  // Start timeout timer
 +  timeout_timer_.Start(
 +      FROM_HERE, timeout,
-+      base::BindOnce(&BrowserOSChangeDetector::OnTimeout,
++      base::BindOnce(&BlockBrowserChangeDetector::OnTimeout,
 +                    weak_factory_.GetWeakPtr()));
 +}
 +
-+void BrowserOSChangeDetector::OnChangeDetected() {
++void BlockBrowserChangeDetector::OnChangeDetected() {
 +  if (!monitoring_ || change_detected_) {
 +    return;
 +  }
@@ -139,7 +139,7 @@ index 0000000000000..1df7f2cbf0e0c
 +  }
 +}
 +
-+void BrowserOSChangeDetector::OnTimeout() {
++void BlockBrowserChangeDetector::OnTimeout() {
 +  VLOG(1) << "[browseros] Change detection timeout";
 +  monitoring_ = false;
 +  
@@ -157,7 +157,7 @@ index 0000000000000..1df7f2cbf0e0c
 +
 +// WebContentsObserver overrides - any of these counts as a "change"
 +
-+void BrowserOSChangeDetector::AccessibilityEventReceived(
++void BlockBrowserChangeDetector::AccessibilityEventReceived(
 +    const ui::AXUpdatesAndEvents& details) {
 +  if (!monitoring_) return;
 +  
@@ -168,7 +168,7 @@ index 0000000000000..1df7f2cbf0e0c
 +  }
 +}
 +
-+void BrowserOSChangeDetector::DidFinishNavigation(
++void BlockBrowserChangeDetector::DidFinishNavigation(
 +    content::NavigationHandle* navigation_handle) {
 +  if (!monitoring_) return;
 +  
@@ -176,7 +176,7 @@ index 0000000000000..1df7f2cbf0e0c
 +  OnChangeDetected();
 +}
 +
-+void BrowserOSChangeDetector::DOMContentLoaded(
++void BlockBrowserChangeDetector::DOMContentLoaded(
 +    content::RenderFrameHost* render_frame_host) {
 +  if (!monitoring_) return;
 +  
@@ -184,7 +184,7 @@ index 0000000000000..1df7f2cbf0e0c
 +  OnChangeDetected();
 +}
 +
-+void BrowserOSChangeDetector::OnFocusChangedInPage(
++void BlockBrowserChangeDetector::OnFocusChangedInPage(
 +    content::FocusedNodeDetails* details) {
 +  if (!monitoring_) return;
 +  
@@ -192,7 +192,7 @@ index 0000000000000..1df7f2cbf0e0c
 +  OnChangeDetected();
 +}
 +
-+void BrowserOSChangeDetector::DidOpenRequestedURL(
++void BlockBrowserChangeDetector::DidOpenRequestedURL(
 +    content::WebContents* new_contents,
 +    content::RenderFrameHost* source_render_frame_host,
 +    const GURL& url,

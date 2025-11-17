@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Agent",
+  "name": "BlockBrowser AI Assistant",
   "version": "40",
-  "description": "Agent",
+  "description": "AI-powered assistant for BlockBrowser",
   "key": "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDC0C0AakL+XOcj+PMf24WqoKHA/hhypDQZUUd9sJr/c7cx3nLJS+kaJaB+cz8V3RhPZq01BFeByofLg6Hg6ZNVvBVn3wtGLcNPmuCwMmDiHetTV0oJsFOWs2VznP9py1ww5FFhU+Wmw1CWyLJqnwsIsLLCQyUXAZpVEOLJlOqX1wIDAQAB",
   "permissions": [
     "activeTab",
@@ -15,7 +15,7 @@
     "bookmarks",
     "history",
     "settingsPrivate",
-    "browserOS"
+    "blockbrowser"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -39,7 +39,7 @@
         "default": "Ctrl+E",
         "mac": "Command+E"
       },
-      "description": "Toggle the Nxtscape side panel"
+      "description": "Toggle the BlockBrowser AI Assistant"
     }
   },
   "content_scripts": [

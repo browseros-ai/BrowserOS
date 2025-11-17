@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/browseros_server/BUILD.gn b/chrome/browser/browseros_server/BUILD.gn
+diff --git a/chrome/browser/blockbrowser_server/BUILD.gn b/chrome/browser/blockbrowser_server/BUILD.gn
 new file mode 100644
 index 0000000000000..ddbdf0b78c0a3
 --- /dev/null
-+++ b/chrome/browser/browseros_server/BUILD.gn
++++ b/chrome/browser/blockbrowser_server/BUILD.gn
 @@ -0,0 +1,66 @@
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
@@ -11,24 +11,24 @@ index 0000000000000..ddbdf0b78c0a3
 +import("//build/config/chrome_build.gni")
 +
 +# Validate that required resources exist at build time
-+# GN will fail at generation time if resources/bin/browseros_server is missing
-+_browseros_binary_name = "browseros_server"
++# GN will fail at generation time if resources/bin/blockbrowser_server is missing
++_blockbrowser_binary_name = "blockbrowser_server"
 +if (is_win) {
-+  _browseros_binary_name += ".exe"
++  _blockbrowser_binary_name += ".exe"
 +}
 +
-+action("validate_browseros_resources") {
++action("validate_blockbrowser_resources") {
 +  script = "validate_resources.py"
-+  inputs = [ "resources/bin/${_browseros_binary_name}" ]
-+  outputs = [ "$target_gen_dir/browseros_resources_validated" ]
++  inputs = [ "resources/bin/${_blockbrowser_binary_name}" ]
++  outputs = [ "$target_gen_dir/blockbrowser_resources_validated" ]
 +}
 +
-+source_set("browseros_server") {
++source_set("blockbrowser_server") {
 +  sources = [
-+    "browseros_server_manager.cc",
-+    "browseros_server_manager.h",
-+    "browseros_server_prefs.cc",
-+    "browseros_server_prefs.h",
++    "blockbrowser_server_manager.cc",
++    "blockbrowser_server_manager.h",
++    "blockbrowser_server_prefs.cc",
++    "blockbrowser_server_prefs.h",
 +  ]
 +
 +  deps = [
@@ -45,28 +45,28 @@ index 0000000000000..ddbdf0b78c0a3
 +  import("//build/config/apple/symbols.gni")
 +  import("//build/config/mac/mac_sdk.gni")
 +
-+  # Bundle data for macOS - recursively packages resources/ to Resources/BrowserOSServer/default/
-+  bundle_data("browseros_resources_bundle") {
++  # Bundle data for macOS - recursively packages resources/ to Resources/BlockBrowserServer/default/
++  bundle_data("blockbrowser_resources_bundle") {
 +    sources = [ "resources" ]
-+    outputs = [ "{{bundle_resources_dir}}/BrowserOSServer/default/{{source_file_part}}" ]
-+    # TODO: Re-enable validation when resources/bin/browseros_server is available
-+    # deps = [ ":validate_browseros_resources" ]
++    outputs = [ "{{bundle_resources_dir}}/BlockBrowserServer/default/{{source_file_part}}" ]
++    # TODO: Re-enable validation when resources/bin/blockbrowser_server is available
++    # deps = [ ":validate_blockbrowser_resources" ]
 +  }
 +} else {
-+  # Copy for Windows/Linux - recursively packages resources/ to <exe_dir>/BrowserOSServer/default/
-+  copy("browseros_resources_copy") {
++  # Copy for Windows/Linux - recursively packages resources/ to <exe_dir>/BlockBrowserServer/default/
++  copy("blockbrowser_resources_copy") {
 +    sources = [ "resources" ]
-+    outputs = [ "$root_out_dir/BrowserOSServer/default/{{source_file_part}}" ]
-+    # TODO: Re-enable validation when resources/bin/browseros_server is available
-+    # deps = [ ":validate_browseros_resources" ]
++    outputs = [ "$root_out_dir/BlockBrowserServer/default/{{source_file_part}}" ]
++    # TODO: Re-enable validation when resources/bin/blockbrowser_server is available
++    # deps = [ ":validate_blockbrowser_resources" ]
 +  }
 +}
 +
-+# Group for all BrowserOS server resources
-+group("browseros_server_resources") {
++# Group for all BlockBrowser server resources
++group("blockbrowser_server_resources") {
 +  if (is_mac) {
-+    deps = [ ":browseros_resources_bundle" ]
++    deps = [ ":blockbrowser_resources_bundle" ]
 +  } else {
-+    deps = [ ":browseros_resources_copy" ]
++    deps = [ ":blockbrowser_resources_copy" ]
 +  }
 +}

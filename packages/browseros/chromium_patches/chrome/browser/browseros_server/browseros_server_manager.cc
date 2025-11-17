@@ -1,14 +1,14 @@
-diff --git a/chrome/browser/browseros_server/browseros_server_manager.cc b/chrome/browser/browseros_server/browseros_server_manager.cc
+diff --git a/chrome/browser/blockbrowser_server/blockbrowser_server_manager.cc b/chrome/browser/blockbrowser_server/blockbrowser_server_manager.cc
 new file mode 100644
 index 0000000000000..a53135fb1500f
 --- /dev/null
-+++ b/chrome/browser/browseros_server/browseros_server_manager.cc
++++ b/chrome/browser/blockbrowser_server/blockbrowser_server_manager.cc
 @@ -0,0 +1,1077 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "chrome/browser/browseros_server/browseros_server_manager.h"
++#include "chrome/browser/blockbrowser_server/blockbrowser_server_manager.h"
 +
 +#include "base/command_line.h"
 +#include "base/files/file_path.h"
@@ -30,13 +30,13 @@ index 0000000000000..a53135fb1500f
 +#include <signal.h>
 +#endif
 +
-+#include "chrome/browser/browseros_server/browseros_server_prefs.h"
++#include "chrome/browser/blockbrowser_server/blockbrowser_server_prefs.h"
 +#include "chrome/browser/net/system_network_context_manager.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/profiles/profile_manager.h"
 +#include "chrome/common/chrome_paths.h"
-+#include "components/metrics/browseros_metrics/browseros_metrics_service.h"
-+#include "components/metrics/browseros_metrics/browseros_metrics_service_factory.h"
++#include "components/metrics/blockbrowser_metrics/blockbrowser_metrics_service.h"
++#include "components/metrics/blockbrowser_metrics/blockbrowser_metrics_service_factory.h"
 +#include "components/prefs/pref_change_registrar.h"
 +#include "components/prefs/pref_service.h"
 +#include "components/version_info/version_info.h"
@@ -94,7 +94,7 @@ index 0000000000000..a53135fb1500f
 +  return port;
 +}
 +
-+// Launches the BrowserOS server process on a background thread.
++// Launches the BlockBrowser server process on a background thread.
 +// This function performs blocking I/O operations (PathExists, LaunchProcess).
 +base::Process LaunchProcessOnBackgroundThread(
 +    const base::FilePath& exe_path,
@@ -106,7 +106,7 @@ index 0000000000000..a53135fb1500f
 +    uint16_t extension_port) {
 +  // Check if executable exists (blocking I/O)
 +  if (!base::PathExists(exe_path)) {
-+    LOG(ERROR) << "browseros: BrowserOS server executable not found at: "
++    LOG(ERROR) << "browseros: BlockBrowser server executable not found at: "
 +               << exe_path;
 +    return base::Process();
 +  }
@@ -171,7 +171,7 @@ index 0000000000000..a53135fb1500f
 +
 +  std::unique_ptr<net::ServerSocket> CreateForTethering(
 +      std::string* name) override {
-+    return nullptr;  // Tethering not needed for BrowserOS
++    return nullptr;  // Tethering not needed for BlockBrowser
 +  }
 +
 +  uint16_t port_;
@@ -182,22 +182,22 @@ index 0000000000000..a53135fb1500f
 +namespace browseros {
 +
 +// static
-+BrowserOSServerManager* BrowserOSServerManager::GetInstance() {
-+  static base::NoDestructor<BrowserOSServerManager> instance;
++BlockBrowserServerManager* BlockBrowserServerManager::GetInstance() {
++  static base::NoDestructor<BlockBrowserServerManager> instance;
 +  return instance.get();
 +}
 +
-+BrowserOSServerManager::BrowserOSServerManager() = default;
++BlockBrowserServerManager::BlockBrowserServerManager() = default;
 +
-+BrowserOSServerManager::~BrowserOSServerManager() {
++BlockBrowserServerManager::~BlockBrowserServerManager() {
 +  Shutdown();
 +}
 +
-+bool BrowserOSServerManager::AcquireLock() {
++bool BlockBrowserServerManager::AcquireLock() {
 +  // Allow blocking for lock file operations (short-duration I/O)
 +  base::ScopedAllowBlocking allow_blocking;
 +
-+  base::FilePath exec_dir = GetBrowserOSExecutionDir();
++  base::FilePath exec_dir = GetBlockBrowserExecutionDir();
 +  if (exec_dir.empty()) {
 +    LOG(ERROR) << "browseros: Failed to resolve execution directory for lock";
 +    return false;
@@ -228,51 +228,51 @@ index 0000000000000..a53135fb1500f
 +  return true;
 +}
 +
-+void BrowserOSServerManager::InitializePortsAndPrefs() {
++void BlockBrowserServerManager::InitializePortsAndPrefs() {
 +  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
 +  PrefService* prefs = g_browser_process->local_state();
 +
 +  // STEP 1: Read from prefs or use defaults
 +  if (!prefs) {
-+    cdp_port_ = browseros_server::kDefaultCDPPort;
-+    mcp_port_ = browseros_server::kDefaultMCPPort;
-+    agent_port_ = browseros_server::kDefaultAgentPort;
-+    extension_port_ = browseros_server::kDefaultExtensionPort;
++    cdp_port_ = blockbrowser_server::kDefaultCDPPort;
++    mcp_port_ = blockbrowser_server::kDefaultMCPPort;
++    agent_port_ = blockbrowser_server::kDefaultAgentPort;
++    extension_port_ = blockbrowser_server::kDefaultExtensionPort;
 +    mcp_enabled_ = true;
 +  } else {
-+    cdp_port_ = prefs->GetInteger(browseros_server::kCDPServerPort);
++    cdp_port_ = prefs->GetInteger(blockbrowser_server::kCDPServerPort);
 +    if (cdp_port_ <= 0) {
-+      cdp_port_ = browseros_server::kDefaultCDPPort;
++      cdp_port_ = blockbrowser_server::kDefaultCDPPort;
 +    }
 +
-+    mcp_port_ = prefs->GetInteger(browseros_server::kMCPServerPort);
++    mcp_port_ = prefs->GetInteger(blockbrowser_server::kMCPServerPort);
 +    if (mcp_port_ <= 0) {
-+      mcp_port_ = browseros_server::kDefaultMCPPort;
++      mcp_port_ = blockbrowser_server::kDefaultMCPPort;
 +    }
 +
-+    agent_port_ = prefs->GetInteger(browseros_server::kAgentServerPort);
++    agent_port_ = prefs->GetInteger(blockbrowser_server::kAgentServerPort);
 +    if (agent_port_ <= 0) {
-+      agent_port_ = browseros_server::kDefaultAgentPort;
++      agent_port_ = blockbrowser_server::kDefaultAgentPort;
 +    }
 +
-+    extension_port_ = prefs->GetInteger(browseros_server::kExtensionServerPort);
++    extension_port_ = prefs->GetInteger(blockbrowser_server::kExtensionServerPort);
 +    if (extension_port_ <= 0) {
-+      extension_port_ = browseros_server::kDefaultExtensionPort;
++      extension_port_ = blockbrowser_server::kDefaultExtensionPort;
 +    }
 +
-+    mcp_enabled_ = prefs->GetBoolean(browseros_server::kMCPServerEnabled);
++    mcp_enabled_ = prefs->GetBoolean(blockbrowser_server::kMCPServerEnabled);
 +
 +    // Set up pref change observers
 +    if (!pref_change_registrar_) {
 +      pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
 +      pref_change_registrar_->Init(prefs);
 +      pref_change_registrar_->Add(
-+          browseros_server::kMCPServerEnabled,
-+          base::BindRepeating(&BrowserOSServerManager::OnMCPEnabledChanged,
++          blockbrowser_server::kMCPServerEnabled,
++          base::BindRepeating(&BlockBrowserServerManager::OnMCPEnabledChanged,
 +                              base::Unretained(this)));
 +      pref_change_registrar_->Add(
-+          browseros_server::kRestartServerRequested,
-+          base::BindRepeating(&BrowserOSServerManager::OnRestartServerRequestedChanged,
++          blockbrowser_server::kRestartServerRequested,
++          base::BindRepeating(&BlockBrowserServerManager::OnRestartServerRequestedChanged,
 +                              base::Unretained(this)));
 +    }
 +  }
@@ -312,30 +312,30 @@ index 0000000000000..a53135fb1500f
 +            << ", Extension: " << extension_port_;
 +}
 +
-+void BrowserOSServerManager::SavePortsToPrefs() {
++void BlockBrowserServerManager::SavePortsToPrefs() {
 +  PrefService* prefs = g_browser_process->local_state();
 +  if (!prefs) {
 +    return;
 +  }
 +
-+  prefs->SetInteger(browseros_server::kCDPServerPort, cdp_port_);
-+  prefs->SetInteger(browseros_server::kMCPServerPort, mcp_port_);
-+  prefs->SetInteger(browseros_server::kAgentServerPort, agent_port_);
-+  prefs->SetInteger(browseros_server::kExtensionServerPort, extension_port_);
-+  prefs->SetBoolean(browseros_server::kMCPServerEnabled, mcp_enabled_);
++  prefs->SetInteger(blockbrowser_server::kCDPServerPort, cdp_port_);
++  prefs->SetInteger(blockbrowser_server::kMCPServerPort, mcp_port_);
++  prefs->SetInteger(blockbrowser_server::kAgentServerPort, agent_port_);
++  prefs->SetInteger(blockbrowser_server::kExtensionServerPort, extension_port_);
++  prefs->SetBoolean(blockbrowser_server::kMCPServerEnabled, mcp_enabled_);
 +
 +  LOG(INFO) << "browseros: Saved finalized ports to prefs";
 +}
 +
-+void BrowserOSServerManager::Start() {
++void BlockBrowserServerManager::Start() {
 +  if (is_running_) {
-+    LOG(INFO) << "browseros: BrowserOS server already running";
++    LOG(INFO) << "browseros: BlockBrowser server already running";
 +    return;
 +  }
 +
 +  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
 +  if (command_line->HasSwitch("disable-browseros-server")) {
-+    LOG(INFO) << "browseros: BrowserOS server disabled via command line";
++    LOG(INFO) << "browseros: BlockBrowser server disabled via command line";
 +    return;
 +  }
 +
@@ -344,7 +344,7 @@ index 0000000000000..a53135fb1500f
 +    return;  // Another Chrome process already owns the server
 +  }
 +
-+  LOG(INFO) << "browseros: Starting BrowserOS server";
++  LOG(INFO) << "browseros: Starting BlockBrowser server";
 +
 +  // Initialize and finalize ports
 +  InitializePortsAndPrefs();
@@ -352,22 +352,22 @@ index 0000000000000..a53135fb1500f
 +
 +  // Start servers and process
 +  StartCDPServer();
-+  LaunchBrowserOSProcess();
++  LaunchBlockBrowserProcess();
 +
 +  health_check_timer_.Start(FROM_HERE, base::Seconds(60), this,
-+                            &BrowserOSServerManager::CheckServerHealth);
++                            &BlockBrowserServerManager::CheckServerHealth);
 +}
 +
-+void BrowserOSServerManager::Stop() {
++void BlockBrowserServerManager::Stop() {
 +  if (!is_running_) {
 +    return;
 +  }
 +
-+  LOG(INFO) << "browseros: Stopping BrowserOS server";
++  LOG(INFO) << "browseros: Stopping BlockBrowser server";
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
 +
-+  TerminateBrowserOSProcess();
++  TerminateBlockBrowserProcess();
 +  StopCDPServer();
 +
 +  // Release lock
@@ -378,15 +378,15 @@ index 0000000000000..a53135fb1500f
 +  }
 +}
 +
-+bool BrowserOSServerManager::IsRunning() const {
++bool BlockBrowserServerManager::IsRunning() const {
 +  return is_running_ && process_.IsValid();
 +}
 +
-+void BrowserOSServerManager::Shutdown() {
++void BlockBrowserServerManager::Shutdown() {
 +  Stop();
 +}
 +
-+void BrowserOSServerManager::StartCDPServer() {
++void BlockBrowserServerManager::StartCDPServer() {
 +  LOG(INFO) << "browseros: Starting CDP server on port " << cdp_port_;
 +
 +  content::DevToolsAgentHost::StartRemoteDebuggingServer(
@@ -402,7 +402,7 @@ index 0000000000000..a53135fb1500f
 +  LOG(INFO) << "browseros: Extension server port: " << extension_port_;
 +}
 +
-+void BrowserOSServerManager::StopCDPServer() {
++void BlockBrowserServerManager::StopCDPServer() {
 +  if (cdp_port_ == 0) {
 +    return;
 +  }
@@ -412,10 +412,10 @@ index 0000000000000..a53135fb1500f
 +  cdp_port_ = 0;
 +}
 +
-+void BrowserOSServerManager::LaunchBrowserOSProcess() {
-+  base::FilePath exe_path = GetBrowserOSServerExecutablePath();
-+  base::FilePath resources_dir = GetBrowserOSServerResourcesPath();
-+  base::FilePath execution_dir = GetBrowserOSExecutionDir();
++void BlockBrowserServerManager::LaunchBlockBrowserProcess() {
++  base::FilePath exe_path = GetBlockBrowserServerExecutablePath();
++  base::FilePath resources_dir = GetBlockBrowserServerResourcesPath();
++  base::FilePath execution_dir = GetBlockBrowserExecutionDir();
 +  if (execution_dir.empty()) {
 +    LOG(ERROR) << "browseros: Failed to resolve execution directory";
 +    StopCDPServer();
@@ -438,13 +438,13 @@ index 0000000000000..a53135fb1500f
 +      base::BindOnce(&LaunchProcessOnBackgroundThread, exe_path, resources_dir,
 +                     execution_dir, cdp_port, mcp_port, agent_port,
 +                     extension_port),
-+      base::BindOnce(&BrowserOSServerManager::OnProcessLaunched,
++      base::BindOnce(&BlockBrowserServerManager::OnProcessLaunched,
 +                     weak_factory_.GetWeakPtr()));
 +}
 +
-+void BrowserOSServerManager::OnProcessLaunched(base::Process process) {
++void BlockBrowserServerManager::OnProcessLaunched(base::Process process) {
 +  if (!process.IsValid()) {
-+    LOG(ERROR) << "browseros: Failed to launch BrowserOS server";
++    LOG(ERROR) << "browseros: Failed to launch BlockBrowser server";
 +    StopCDPServer();
 +    is_restarting_ = false;
 +    return;
@@ -453,21 +453,21 @@ index 0000000000000..a53135fb1500f
 +  process_ = std::move(process);
 +  is_running_ = true;
 +
-+  LOG(INFO) << "browseros: BrowserOS server started";
++  LOG(INFO) << "browseros: BlockBrowser server started";
 +  LOG(INFO) << "browseros: CDP port: " << cdp_port_;
 +  LOG(INFO) << "browseros: MCP port: " << mcp_port_;
 +  LOG(INFO) << "browseros: Agent port: " << agent_port_;
 +  LOG(INFO) << "browseros: Extension port: " << extension_port_;
 +
 +  process_check_timer_.Start(FROM_HERE, base::Seconds(5), this,
-+                             &BrowserOSServerManager::CheckProcessStatus);
++                             &BlockBrowserServerManager::CheckProcessStatus);
 +
 +  // Reset restart flag and pref after successful launch
 +  if (is_restarting_) {
 +    is_restarting_ = false;
 +    PrefService* prefs = g_browser_process->local_state();
-+    if (prefs && prefs->GetBoolean(browseros_server::kRestartServerRequested)) {
-+      prefs->SetBoolean(browseros_server::kRestartServerRequested, false);
++    if (prefs && prefs->GetBoolean(blockbrowser_server::kRestartServerRequested)) {
++      prefs->SetBoolean(blockbrowser_server::kRestartServerRequested, false);
 +      LOG(INFO) << "browseros: Restart completed, reset restart_requested pref";
 +    }
 +  }
@@ -480,12 +480,12 @@ index 0000000000000..a53135fb1500f
 +  }
 +}
 +
-+void BrowserOSServerManager::TerminateBrowserOSProcess() {
++void BlockBrowserServerManager::TerminateBlockBrowserProcess() {
 +  if (!process_.IsValid()) {
 +    return;
 +  }
 +
-+  LOG(INFO) << "browseros: Force killing BrowserOS server process (PID: "
++  LOG(INFO) << "browseros: Force killing BlockBrowser server process (PID: "
 +            << process_.Pid() << ")";
 +
 +  // Reset init flag so it gets sent again after restart
@@ -523,29 +523,29 @@ index 0000000000000..a53135fb1500f
 +  is_running_ = false;
 +}
 +
-+void BrowserOSServerManager::OnProcessExited(int exit_code) {
-+  LOG(INFO) << "browseros: BrowserOS server exited with code: " << exit_code;
++void BlockBrowserServerManager::OnProcessExited(int exit_code) {
++  LOG(INFO) << "browseros: BlockBrowser server exited with code: " << exit_code;
 +  is_running_ = false;
 +
-+  // Stop CDP server since BrowserOS process is gone
++  // Stop CDP server since BlockBrowser process is gone
 +  StopCDPServer();
 +
 +  // Restart if it crashed unexpectedly
 +  if (exit_code != 0) {
-+    LOG(WARNING) << "browseros: BrowserOS server crashed, restarting...";
++    LOG(WARNING) << "browseros: BlockBrowser server crashed, restarting...";
 +    Start();
 +  }
 +}
 +
-+void BrowserOSServerManager::CheckServerHealth() {
++void BlockBrowserServerManager::CheckServerHealth() {
 +  if (!is_running_) {
 +    return;
 +  }
 +
 +  // First check if process is still alive
 +  if (!process_.IsValid()) {
-+    LOG(WARNING) << "browseros: BrowserOS server process is invalid, restarting...";
-+    RestartBrowserOSProcess();
++    LOG(WARNING) << "browseros: BlockBrowser server process is invalid, restarting...";
++    RestartBlockBrowserProcess();
 +    return;
 +  }
 +
@@ -554,11 +554,11 @@ index 0000000000000..a53135fb1500f
 +
 +  // Create network traffic annotation
 +  net::NetworkTrafficAnnotationTag traffic_annotation =
-+      net::DefineNetworkTrafficAnnotation("browseros_health_check", R"(
++      net::DefineNetworkTrafficAnnotation("blockbrowser_health_check", R"(
 +        semantics {
-+          sender: "BrowserOS Server Manager"
++          sender: "BlockBrowser Server Manager"
 +          description:
-+            "Checks if the BrowserOS MCP server is healthy by querying its "
++            "Checks if the BlockBrowser MCP server is healthy by querying its "
 +            "/health endpoint."
 +          trigger: "Periodic health check every 60 seconds while server is running."
 +          data: "No user data sent, just an HTTP GET request."
@@ -568,7 +568,7 @@ index 0000000000000..a53135fb1500f
 +          cookies_allowed: NO
 +          setting: "This feature cannot be disabled by settings."
 +          policy_exception_justification:
-+            "Internal health check for BrowserOS server functionality."
++            "Internal health check for BlockBrowser server functionality."
 +        })");
 +
 +  // Create resource request
@@ -593,11 +593,11 @@ index 0000000000000..a53135fb1500f
 +  // Download response
 +  url_loader_ptr->DownloadHeadersOnly(
 +      url_loader_factory,
-+      base::BindOnce(&BrowserOSServerManager::OnHealthCheckComplete,
++      base::BindOnce(&BlockBrowserServerManager::OnHealthCheckComplete,
 +                     weak_factory_.GetWeakPtr(), std::move(url_loader)));
 +}
 +
-+void BrowserOSServerManager::CheckProcessStatus() {
++void BlockBrowserServerManager::CheckProcessStatus() {
 +  if (!is_running_ || !process_.IsValid()) {
 +    return;
 +  }
@@ -610,7 +610,7 @@ index 0000000000000..a53135fb1500f
 +  }
 +}
 +
-+void BrowserOSServerManager::OnHealthCheckComplete(
++void BlockBrowserServerManager::OnHealthCheckComplete(
 +    std::unique_ptr<network::SimpleURLLoader> url_loader,
 +    scoped_refptr<net::HttpResponseHeaders> headers) {
 +  if (!is_running_) {
@@ -639,23 +639,23 @@ index 0000000000000..a53135fb1500f
 +  int net_error = url_loader->NetError();
 +  LOG(WARNING) << "browseros: Health check failed - HTTP " << response_code
 +               << ", net error: " << net::ErrorToString(net_error)
-+               << ", restarting BrowserOS server process...";
++               << ", restarting BlockBrowser server process...";
 +
-+  RestartBrowserOSProcess();
++  RestartBlockBrowserProcess();
 +}
 +
-+void BrowserOSServerManager::RestartBrowserOSProcess() {
-+  LOG(INFO) << "browseros: Restarting BrowserOS server process";
++void BlockBrowserServerManager::RestartBlockBrowserProcess() {
++  LOG(INFO) << "browseros: Restarting BlockBrowser server process";
 +
 +  // Stop the process and monitoring
 +  process_check_timer_.Stop();
-+  TerminateBrowserOSProcess();
++  TerminateBlockBrowserProcess();
 +
 +  // Relaunch the process
-+  LaunchBrowserOSProcess();
++  LaunchBlockBrowserProcess();
 +}
 +
-+void BrowserOSServerManager::OnMCPEnabledChanged() {
++void BlockBrowserServerManager::OnMCPEnabledChanged() {
 +  if (!is_running_) {
 +    return;
 +  }
@@ -665,7 +665,7 @@ index 0000000000000..a53135fb1500f
 +    return;
 +  }
 +
-+  bool new_value = prefs->GetBoolean(browseros_server::kMCPServerEnabled);
++  bool new_value = prefs->GetBoolean(blockbrowser_server::kMCPServerEnabled);
 +
 +  if (new_value != mcp_enabled_) {
 +    LOG(INFO) << "browseros: MCP enabled preference changed from "
@@ -677,13 +677,13 @@ index 0000000000000..a53135fb1500f
 +  }
 +}
 +
-+void BrowserOSServerManager::OnRestartServerRequestedChanged() {
++void BlockBrowserServerManager::OnRestartServerRequestedChanged() {
 +  PrefService* prefs = g_browser_process->local_state();
 +  if (!prefs) {
 +    return;
 +  }
 +
-+  bool restart_requested = prefs->GetBoolean(browseros_server::kRestartServerRequested);
++  bool restart_requested = prefs->GetBoolean(blockbrowser_server::kRestartServerRequested);
 +
 +  // Only process if pref is set to true
 +  if (!restart_requested) {
@@ -700,7 +700,7 @@ index 0000000000000..a53135fb1500f
 +  if (!is_running_) {
 +    LOG(WARNING) << "browseros: Cannot restart - server is not running";
 +    // Reset pref anyway
-+    prefs->SetBoolean(browseros_server::kRestartServerRequested, false);
++    prefs->SetBoolean(blockbrowser_server::kRestartServerRequested, false);
 +    return;
 +  }
 +
@@ -717,21 +717,21 @@ index 0000000000000..a53135fb1500f
 +  base::ThreadPool::PostTask(
 +      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
 +      base::BindOnce(
-+          [](BrowserOSServerManager* manager,
++          [](BlockBrowserServerManager* manager,
 +             scoped_refptr<base::SequencedTaskRunner> ui_runner) {
 +            // Kill old process and wait for exit (blocking, safe on background)
-+            manager->TerminateBrowserOSProcess();
++            manager->TerminateBlockBrowserProcess();
 +
 +            // Post back to UI thread to launch new process
 +            ui_runner->PostTask(
 +                FROM_HERE,
-+                base::BindOnce(&BrowserOSServerManager::LaunchBrowserOSProcess,
++                base::BindOnce(&BlockBrowserServerManager::LaunchBlockBrowserProcess,
 +                               base::Unretained(manager)));
 +          },
 +          base::Unretained(this), ui_task_runner));
 +}
 +
-+void BrowserOSServerManager::SendMCPControlRequest(bool enabled) {
++void BlockBrowserServerManager::SendMCPControlRequest(bool enabled) {
 +  if (!is_running_) {
 +    return;
 +  }
@@ -740,11 +740,11 @@ index 0000000000000..a53135fb1500f
 +                   "/mcp/control");
 +
 +  net::NetworkTrafficAnnotationTag traffic_annotation =
-+      net::DefineNetworkTrafficAnnotation("browseros_mcp_control", R"(
++      net::DefineNetworkTrafficAnnotation("blockbrowser_mcp_control", R"(
 +        semantics {
-+          sender: "BrowserOS Server Manager"
++          sender: "BlockBrowser Server Manager"
 +          description:
-+            "Sends control command to BrowserOS MCP server to enable/disable "
++            "Sends control command to BlockBrowser MCP server to enable/disable "
 +            "the MCP protocol at runtime."
 +          trigger: "User changes MCP enabled preference."
 +          data: "JSON payload with enabled state: {\"enabled\": true/false}"
@@ -754,7 +754,7 @@ index 0000000000000..a53135fb1500f
 +          cookies_allowed: NO
 +          setting: "This feature cannot be disabled by settings."
 +          policy_exception_justification:
-+            "Internal control request for BrowserOS server functionality."
++            "Internal control request for BlockBrowser server functionality."
 +        })");
 +
 +  auto resource_request = std::make_unique<network::ResourceRequest>();
@@ -778,7 +778,7 @@ index 0000000000000..a53135fb1500f
 +
 +  url_loader_ptr->DownloadHeadersOnly(
 +      url_loader_factory,
-+      base::BindOnce(&BrowserOSServerManager::OnMCPControlRequestComplete,
++      base::BindOnce(&BlockBrowserServerManager::OnMCPControlRequestComplete,
 +                     weak_factory_.GetWeakPtr(), enabled,
 +                     std::move(url_loader)));
 +
@@ -786,7 +786,7 @@ index 0000000000000..a53135fb1500f
 +            << (enabled ? "true" : "false") << "}";
 +}
 +
-+void BrowserOSServerManager::OnMCPControlRequestComplete(
++void BlockBrowserServerManager::OnMCPControlRequestComplete(
 +    bool requested_state,
 +    std::unique_ptr<network::SimpleURLLoader> url_loader,
 +    scoped_refptr<net::HttpResponseHeaders> headers) {
@@ -810,12 +810,12 @@ index 0000000000000..a53135fb1500f
 +             << ", net error: " << net::ErrorToString(net_error);
 +}
 +
-+void BrowserOSServerManager::SendInitRequest() {
++void BlockBrowserServerManager::SendInitRequest() {
 +  if (!is_running_) {
 +    return;
 +  }
 +
-+  // Get the default profile to access BrowserOSMetricsService
++  // Get the default profile to access BlockBrowserMetricsService
 +  ProfileManager* profile_manager = g_browser_process->profile_manager();
 +  if (!profile_manager) {
 +    LOG(ERROR) << "browseros: Failed to get ProfileManager for /init request";
@@ -828,12 +828,12 @@ index 0000000000000..a53135fb1500f
 +    return;
 +  }
 +
-+  // Get BrowserOSMetricsService to retrieve install_id
-+  browseros_metrics::BrowserOSMetricsService* metrics_service =
-+      browseros_metrics::BrowserOSMetricsServiceFactory::GetForBrowserContext(
++  // Get BlockBrowserMetricsService to retrieve install_id
++  blockbrowser_metrics::BlockBrowserMetricsService* metrics_service =
++      blockbrowser_metrics::BlockBrowserMetricsServiceFactory::GetForBrowserContext(
 +          profile);
 +  if (!metrics_service) {
-+    LOG(ERROR) << "browseros: Failed to get BrowserOSMetricsService for /init "
++    LOG(ERROR) << "browseros: Failed to get BlockBrowserMetricsService for /init "
 +                  "request";
 +    return;
 +  }
@@ -855,13 +855,13 @@ index 0000000000000..a53135fb1500f
 +                "/init");
 +
 +  net::NetworkTrafficAnnotationTag traffic_annotation =
-+      net::DefineNetworkTrafficAnnotation("browseros_server_init", R"(
++      net::DefineNetworkTrafficAnnotation("blockbrowser_server_init", R"(
 +        semantics {
-+          sender: "BrowserOS Server Manager"
++          sender: "BlockBrowser Server Manager"
 +          description:
-+            "Sends initialization metadata to BrowserOS MCP server including "
++            "Sends initialization metadata to BlockBrowser MCP server including "
 +            "install ID, browser version, OS, and architecture."
-+          trigger: "BrowserOS server process successfully launched."
++          trigger: "BlockBrowser server process successfully launched."
 +          data:
 +            "JSON payload with install_id, version, os, and arch. No PII."
 +          destination: LOCAL
@@ -870,7 +870,7 @@ index 0000000000000..a53135fb1500f
 +          cookies_allowed: NO
 +          setting: "This feature cannot be disabled by settings."
 +          policy_exception_justification:
-+            "Internal initialization for BrowserOS server functionality."
++            "Internal initialization for BlockBrowser server functionality."
 +        })");
 +
 +  auto resource_request = std::make_unique<network::ResourceRequest>();
@@ -892,13 +892,13 @@ index 0000000000000..a53135fb1500f
 +
 +  url_loader_ptr->DownloadHeadersOnly(
 +      url_loader_factory,
-+      base::BindOnce(&BrowserOSServerManager::OnInitRequestComplete,
++      base::BindOnce(&BlockBrowserServerManager::OnInitRequestComplete,
 +                     weak_factory_.GetWeakPtr(), std::move(url_loader)));
 +
 +  LOG(INFO) << "browseros: Sent /init request to MCP server";
 +}
 +
-+void BrowserOSServerManager::OnInitRequestComplete(
++void BlockBrowserServerManager::OnInitRequestComplete(
 +    std::unique_ptr<network::SimpleURLLoader> url_loader,
 +    scoped_refptr<net::HttpResponseHeaders> headers) {
 +  if (!is_running_) {
@@ -920,7 +920,7 @@ index 0000000000000..a53135fb1500f
 +               << ", net error: " << net::ErrorToString(net_error);
 +}
 +
-+int BrowserOSServerManager::FindAvailablePort(int starting_port) {
++int BlockBrowserServerManager::FindAvailablePort(int starting_port) {
 +  const int kMaxPortAttempts = 100;
 +  const int kMaxPort = 65535;
 +
@@ -953,7 +953,7 @@ index 0000000000000..a53135fb1500f
 +  return starting_port;
 +}
 +
-+bool BrowserOSServerManager::IsPortAvailable(int port) {
++bool BlockBrowserServerManager::IsPortAvailable(int port) {
 +  // Check port is in valid range
 +  if (!net::IsPortValid(port) || port == 0) {
 +    return false;
@@ -991,7 +991,7 @@ index 0000000000000..a53135fb1500f
 +  return true;
 +}
 +
-+base::FilePath BrowserOSServerManager::GetBrowserOSServerResourcesPath() const {
++base::FilePath BlockBrowserServerManager::GetBlockBrowserServerResourcesPath() const {
 +  // Check for command-line override first
 +  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
 +  if (command_line->HasSwitch("browseros-server-resources-dir")) {
@@ -1016,12 +1016,12 @@ index 0000000000000..a53135fb1500f
 +  exe_dir = exe_dir.DirName().Append("Resources");
 +
 +#elif BUILDFLAG(IS_WIN)
-+  // On Windows, installer places BrowserOS Server under the versioned directory
++  // On Windows, installer places BlockBrowser Server under the versioned directory
 +  if (!base::PathService::Get(base::DIR_EXE, &exe_dir)) {
 +    LOG(ERROR) << "browseros: Failed to get executable directory";
 +    return base::FilePath();
 +  }
-+  // Append version directory (chrome.release places BrowserOSServer under versioned dir)
++  // Append version directory (chrome.release places BlockBrowserServer under versioned dir)
 +  exe_dir = exe_dir.AppendASCII(version_info::GetVersionNumber());
 +
 +#elif BUILDFLAG(IS_LINUX)
@@ -1033,12 +1033,12 @@ index 0000000000000..a53135fb1500f
 +#endif
 +
 +  // Return path to resources directory
-+  return exe_dir.Append(FILE_PATH_LITERAL("BrowserOSServer"))
++  return exe_dir.Append(FILE_PATH_LITERAL("BlockBrowserServer"))
 +      .Append(FILE_PATH_LITERAL("default"))
 +      .Append(FILE_PATH_LITERAL("resources"));
 +}
 +
-+base::FilePath BrowserOSServerManager::GetBrowserOSExecutionDir() const {
++base::FilePath BlockBrowserServerManager::GetBlockBrowserExecutionDir() const {
 +#if BUILDFLAG(IS_LINUX)
 +  base::FilePath user_data_dir;
 +  if (!base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir)) {
@@ -1061,23 +1061,23 @@ index 0000000000000..a53135fb1500f
 +  return exec_dir;
 +#else
 +  // On Mac and Windows, use the resources path itself as execution directory
-+  base::FilePath resources_path = GetBrowserOSServerResourcesPath();
++  base::FilePath resources_path = GetBlockBrowserServerResourcesPath();
 +  LOG(INFO) << "browseros: Using resources path as execution directory: " << resources_path;
 +  return resources_path;
 +#endif
 +}
 +
-+base::FilePath BrowserOSServerManager::GetBrowserOSServerExecutablePath() const {
-+  base::FilePath browseros_exe =
-+      GetBrowserOSServerResourcesPath()
++base::FilePath BlockBrowserServerManager::GetBlockBrowserServerExecutablePath() const {
++  base::FilePath blockbrowser_exe =
++      GetBlockBrowserServerResourcesPath()
 +          .Append(FILE_PATH_LITERAL("bin"))
-+          .Append(FILE_PATH_LITERAL("browseros_server"));
++          .Append(FILE_PATH_LITERAL("blockbrowser_server"));
 +
 +#if BUILDFLAG(IS_WIN)
-+  browseros_exe = browseros_exe.AddExtension(FILE_PATH_LITERAL(".exe"));
++  blockbrowser_exe = blockbrowser_exe.AddExtension(FILE_PATH_LITERAL(".exe"));
 +#endif
 +
-+  return browseros_exe;
++  return blockbrowser_exe;
 +}
 +
 +}  // namespace browseros

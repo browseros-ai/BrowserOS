@@ -25,8 +25,8 @@ index 4a8e5f200dbc5..3efe127a138b4 100644
    action_view_controller_->CreateActionViewRelationship(
        button.get(), GetActionItemFor(id)->GetAsWeakPtr());
  
-+  // Set high priority for BrowserOS actions to ensure they're always visible
-+  if (browseros::IsBrowserOSAction(id)) {
++  // Set high priority for BlockBrowser actions to ensure they're always visible
++  if (browseros::IsBlockBrowserAction(id)) {
 +    button->SetProperty(
 +        kToolbarButtonFlexPriorityKey,
 +        static_cast<std::underlying_type_t<PinnedToolbarActionFlexPriority>>(

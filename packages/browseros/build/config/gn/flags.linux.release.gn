@@ -1,4 +1,4 @@
-# Minimal Linux Release Build Flags for BrowserOS
+# Minimal Linux Release Build Flags for BlockBrowser
 
 # Build type
 is_debug = false

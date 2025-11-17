@@ -1,8 +1,8 @@
-diff --git a/components/metrics/browseros_metrics/browseros_metrics_service_factory.h b/components/metrics/browseros_metrics/browseros_metrics_service_factory.h
+diff --git a/components/metrics/blockbrowser_metrics/blockbrowser_metrics_service_factory.h b/components/metrics/blockbrowser_metrics/blockbrowser_metrics_service_factory.h
 new file mode 100644
 index 0000000000000..014eb17aba442
 --- /dev/null
-+++ b/components/metrics/browseros_metrics/browseros_metrics_service_factory.h
++++ b/components/metrics/blockbrowser_metrics/blockbrowser_metrics_service_factory.h
 @@ -0,0 +1,48 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -18,38 +18,38 @@ index 0000000000000..014eb17aba442
 +class BrowserContext;
 +}  // namespace content
 +
-+namespace browseros_metrics {
++namespace blockbrowser_metrics {
 +
-+class BrowserOSMetricsService;
++class BlockBrowserMetricsService;
 +
-+// Factory for creating BrowserOSMetricsService instances per profile.
-+class BrowserOSMetricsServiceFactory
++// Factory for creating BlockBrowserMetricsService instances per profile.
++class BlockBrowserMetricsServiceFactory
 +    : public BrowserContextKeyedServiceFactory {
 + public:
-+  BrowserOSMetricsServiceFactory(const BrowserOSMetricsServiceFactory&) =
++  BlockBrowserMetricsServiceFactory(const BlockBrowserMetricsServiceFactory&) =
 +      delete;
-+  BrowserOSMetricsServiceFactory& operator=(
-+      const BrowserOSMetricsServiceFactory&) = delete;
++  BlockBrowserMetricsServiceFactory& operator=(
++      const BlockBrowserMetricsServiceFactory&) = delete;
 +
-+  // Returns the BrowserOSMetricsService for |context|, creating one if needed.
-+  static BrowserOSMetricsService* GetForBrowserContext(
++  // Returns the BlockBrowserMetricsService for |context|, creating one if needed.
++  static BlockBrowserMetricsService* GetForBrowserContext(
 +      content::BrowserContext* context);
 +
 +  // Returns the singleton factory instance.
-+  static BrowserOSMetricsServiceFactory* GetInstance();
++  static BlockBrowserMetricsServiceFactory* GetInstance();
 +
 + private:
-+  friend base::NoDestructor<BrowserOSMetricsServiceFactory>;
++  friend base::NoDestructor<BlockBrowserMetricsServiceFactory>;
 +
-+  BrowserOSMetricsServiceFactory();
-+  ~BrowserOSMetricsServiceFactory() override;
++  BlockBrowserMetricsServiceFactory();
++  ~BlockBrowserMetricsServiceFactory() override;
 +
 +  // BrowserContextKeyedServiceFactory:
 +  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
 +      content::BrowserContext* context) const override;
 +};
 +
-+}  // namespace browseros_metrics
++}  // namespace blockbrowser_metrics
 +
 +#endif  // COMPONENTS_METRICS_BROWSEROS_METRICS_BROWSEROS_METRICS_SERVICE_FACTORY_H_
 \ No newline at end of file

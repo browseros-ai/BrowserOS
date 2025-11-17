@@ -30,9 +30,9 @@ index e6c15e15d3157..38f6be4832650 100644
  
  namespace {
  
-+// Check if an extension is a BrowserOS extension that should be hidden.
-+bool IsBrowserOSExtension(const std::string& extension_id) {
-+  return browseros::IsBrowserOSExtension(extension_id);
++// Check if an extension is a BlockBrowser extension that should be hidden.
++bool IsBlockBrowserExtension(const std::string& extension_id) {
++  return browseros::IsBlockBrowserExtension(extension_id);
 +}
 +
  // Given a Manifest::Type, converts it into its developer_private
@@ -42,7 +42,7 @@ index e6c15e15d3157..38f6be4832650 100644
      state = developer::ExtensionState::kBlocklisted;
    }
  
-+  // Show BrowserOS extensions if kShowComponentExtensionOptions is enabled
++  // Show BlockBrowser extensions if kShowComponentExtensionOptions is enabled
 +  bool show_browseros = base::CommandLine::ForCurrentProcess()->HasSwitch(
 +      switches::kShowComponentExtensionOptions);
 +  
@@ -50,9 +50,9 @@ index e6c15e15d3157..38f6be4832650 100644
 +  
    if (ext && ui_util::ShouldDisplayInExtensionSettings(*ext)) {
 -    FillExtensionInfo(*ext, state, developer::ExtensionInfo());
-+    // Check if this is a BrowserOS extension that should be hidden
-+    if (IsBrowserOSExtension(ext->id()) && !show_browseros) {
-+      LOG(INFO) << "browseros: Hiding BrowserOS extension: " << ext->id();
++    // Check if this is a BlockBrowser extension that should be hidden
++    if (IsBlockBrowserExtension(ext->id()) && !show_browseros) {
++      LOG(INFO) << "browseros: Hiding BlockBrowser extension: " << ext->id();
 +    } else {
 +      FillExtensionInfo(*ext, state, developer::ExtensionInfo());
 +    }
@@ -64,7 +64,7 @@ index e6c15e15d3157..38f6be4832650 100644
      bool include_terminated,
      ExtensionInfosCallback callback) {
 -  auto add_to_list = [this](const ExtensionSet& extensions,
-+  // Show BrowserOS extensions if kShowComponentExtensionOptions is enabled
++  // Show BlockBrowser extensions if kShowComponentExtensionOptions is enabled
 +  bool show_browseros = base::CommandLine::ForCurrentProcess()->HasSwitch(
 +      switches::kShowComponentExtensionOptions);
 +  
@@ -75,9 +75,9 @@ index e6c15e15d3157..38f6be4832650 100644
      for (const scoped_refptr<const Extension>& extension : extensions) {
        if (ui_util::ShouldDisplayInExtensionSettings(*extension)) {
 -        FillExtensionInfo(*extension, state, developer::ExtensionInfo());
-+        // Check if this is a BrowserOS extension that should be hidden
-+        if (IsBrowserOSExtension(extension->id()) && !show_browseros) {
-+          LOG(INFO) << "browseros: Hiding BrowserOS extension: " << extension->id();
++        // Check if this is a BlockBrowser extension that should be hidden
++        if (IsBlockBrowserExtension(extension->id()) && !show_browseros) {
++          LOG(INFO) << "browseros: Hiding BlockBrowser extension: " << extension->id();
 +        } else {
 +          FillExtensionInfo(*extension, state, developer::ExtensionInfo());
 +        }

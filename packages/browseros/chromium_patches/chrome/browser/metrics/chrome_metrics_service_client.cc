@@ -6,7 +6,7 @@ index ea4e1a621b201..21a7a3aef2872 100644
  #include "components/component_updater/component_updater_service.h"
  #include "components/crash/core/common/crash_keys.h"
  #include "components/history/core/browser/history_service.h"
-+#include "components/metrics/browseros_metrics/browseros_metrics.h"
++#include "components/metrics/blockbrowser_metrics/blockbrowser_metrics.h"
  #include "components/metrics/call_stacks/call_stack_profile_metrics_provider.h"
  #include "components/metrics/component_metrics_provider.h"
  #include "components/metrics/content/content_stability_metrics_provider.h"
@@ -14,7 +14,7 @@ index ea4e1a621b201..21a7a3aef2872 100644
  }
  
  void ChromeMetricsServiceClient::NotifyApplicationNotIdle() {
-+  browseros_metrics::BrowserOSMetrics::Log("alive", 0.01);
++  blockbrowser_metrics::BlockBrowserMetrics::Log("alive", 0.01);
    metrics_service_->OnApplicationNotIdle();
  }
  

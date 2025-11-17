@@ -129,13 +129,13 @@ index 0000000000000..31d54b9d0fb58
 +namespace api {
 +
 +// Static member initialization
-+uint32_t BrowserOSGetInteractiveSnapshotFunction::next_snapshot_id_ = 1;
++uint32_t BlockBrowserGetInteractiveSnapshotFunction::next_snapshot_id_ = 1;
 +
 +// Constructor and destructor implementations
-+BrowserOSGetInteractiveSnapshotFunction::BrowserOSGetInteractiveSnapshotFunction() = default;
-+BrowserOSGetInteractiveSnapshotFunction::~BrowserOSGetInteractiveSnapshotFunction() = default;
++BlockBrowserGetInteractiveSnapshotFunction::BlockBrowserGetInteractiveSnapshotFunction() = default;
++BlockBrowserGetInteractiveSnapshotFunction::~BlockBrowserGetInteractiveSnapshotFunction() = default;
 +
-+ExtensionFunction::ResponseAction BrowserOSGetAccessibilityTreeFunction::Run() {
++ExtensionFunction::ResponseAction BlockBrowserGetAccessibilityTreeFunction::Run() {
 +  std::optional<browser_os::GetAccessibilityTree::Params> params =
 +      browser_os::GetAccessibilityTree::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
@@ -161,7 +161,7 @@ index 0000000000000..31d54b9d0fb58
 +  // Use WebContents with extended properties to get a full tree
 +  web_contents->RequestAXTreeSnapshot(
 +      base::BindOnce(
-+          &BrowserOSGetAccessibilityTreeFunction::OnAccessibilityTreeReceived,
++          &BlockBrowserGetAccessibilityTreeFunction::OnAccessibilityTreeReceived,
 +          this),
 +      ui::AXMode(ui::AXMode::kWebContents | ui::AXMode::kExtendedProperties |
 +                 ui::AXMode::kInlineTextBoxes),
@@ -172,7 +172,7 @@ index 0000000000000..31d54b9d0fb58
 +  return RespondLater();
 +}
 +
-+void BrowserOSGetAccessibilityTreeFunction::OnAccessibilityTreeReceived(
++void BlockBrowserGetAccessibilityTreeFunction::OnAccessibilityTreeReceived(
 +    ui::AXTreeUpdate& tree_update) {
 +  browser_os::AccessibilityTree result;
 +  result.root_id = tree_update.root_id;
@@ -229,9 +229,9 @@ index 0000000000000..31d54b9d0fb58
 +      browser_os::GetAccessibilityTree::Results::Create(result)));
 +}
 +
-+// Implementation of BrowserOSGetInteractiveSnapshotFunction
++// Implementation of BlockBrowserGetInteractiveSnapshotFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSGetInteractiveSnapshotFunction::Run() {
++ExtensionFunction::ResponseAction BlockBrowserGetInteractiveSnapshotFunction::Run() {
 +  std::optional<browser_os::GetInteractiveSnapshot::Params> params =
 +      browser_os::GetInteractiveSnapshot::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
@@ -265,7 +265,7 @@ index 0000000000000..31d54b9d0fb58
 +  // Request accessibility tree snapshot
 +  web_contents->RequestAXTreeSnapshot(
 +      base::BindOnce(
-+          &BrowserOSGetInteractiveSnapshotFunction::OnAccessibilityTreeReceived,
++          &BlockBrowserGetInteractiveSnapshotFunction::OnAccessibilityTreeReceived,
 +          this),
 +      ui::AXMode(ui::AXMode::kWebContents | ui::AXMode::kExtendedProperties |
 +                 ui::AXMode::kInlineTextBoxes),
@@ -276,7 +276,7 @@ index 0000000000000..31d54b9d0fb58
 +  return RespondLater();
 +}
 +
-+void BrowserOSGetInteractiveSnapshotFunction::OnAccessibilityTreeReceived(
++void BlockBrowserGetInteractiveSnapshotFunction::OnAccessibilityTreeReceived(
 +    ui::AXTreeUpdate& tree_update) {
 +  // Simple API layer - just delegates to the processor
 +  SnapshotProcessor::ProcessAccessibilityTree(
@@ -285,19 +285,19 @@ index 0000000000000..31d54b9d0fb58
 +      next_snapshot_id_++,
 +      viewport_size_,
 +      base::BindOnce(
-+          &BrowserOSGetInteractiveSnapshotFunction::OnSnapshotProcessed,
++          &BlockBrowserGetInteractiveSnapshotFunction::OnSnapshotProcessed,
 +          base::WrapRefCounted(this)));
 +}
 +
-+void BrowserOSGetInteractiveSnapshotFunction::OnSnapshotProcessed(
++void BlockBrowserGetInteractiveSnapshotFunction::OnSnapshotProcessed(
 +    SnapshotProcessingResult result) {
 +  Respond(ArgumentList(
 +      browser_os::GetInteractiveSnapshot::Results::Create(result.snapshot)));
 +}
 +
-+// Implementation of BrowserOSClickFunction
++// Implementation of BlockBrowserClickFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSClickFunction::Run() {
++ExtensionFunction::ResponseAction BlockBrowserClickFunction::Run() {
 +  std::optional<browser_os::Click::Params> params =
 +      browser_os::Click::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
@@ -336,9 +336,9 @@ index 0000000000000..31d54b9d0fb58
 +  return RespondNow(WithArguments(std::move(response)));
 +}
 +
-+// Implementation of BrowserOSInputTextFunction
++// Implementation of BlockBrowserInputTextFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSInputTextFunction::Run() {
++ExtensionFunction::ResponseAction BlockBrowserInputTextFunction::Run() {
 +  std::optional<browser_os::InputText::Params> params =
 +      browser_os::InputText::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
@@ -379,9 +379,9 @@ index 0000000000000..31d54b9d0fb58
 +  return RespondNow(NoArguments());
 +}
 +
-+// Implementation of BrowserOSClearFunction
++// Implementation of BlockBrowserClearFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSClearFunction::Run() {
++ExtensionFunction::ResponseAction BlockBrowserClearFunction::Run() {
 +  std::optional<browser_os::Clear::Params> params =
 +      browser_os::Clear::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
@@ -446,9 +446,9 @@ index 0000000000000..31d54b9d0fb58
 +  return RespondNow(NoArguments());
 +}
 +
-+// Implementation of BrowserOSGetPageLoadStatusFunction
++// Implementation of BlockBrowserGetPageLoadStatusFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSGetPageLoadStatusFunction::Run() {
++ExtensionFunction::ResponseAction BlockBrowserGetPageLoadStatusFunction::Run() {
 +  std::optional<browser_os::GetPageLoadStatus::Params> params =
 +      browser_os::GetPageLoadStatus::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
@@ -486,9 +486,9 @@ index 0000000000000..31d54b9d0fb58
 +      browser_os::GetPageLoadStatus::Results::Create(status)));
 +}
 +
-+// Implementation of BrowserOSScrollUpFunction
++// Implementation of BlockBrowserScrollUpFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSScrollUpFunction::Run() {
++ExtensionFunction::ResponseAction BlockBrowserScrollUpFunction::Run() {
 +  std::optional<browser_os::ScrollUp::Params> params =
 +      browser_os::ScrollUp::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
@@ -529,9 +529,9 @@ index 0000000000000..31d54b9d0fb58
 +  return RespondNow(NoArguments());
 +}
 +
-+// Implementation of BrowserOSScrollDownFunction
++// Implementation of BlockBrowserScrollDownFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSScrollDownFunction::Run() {
++ExtensionFunction::ResponseAction BlockBrowserScrollDownFunction::Run() {
 +  std::optional<browser_os::ScrollDown::Params> params =
 +      browser_os::ScrollDown::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
@@ -572,9 +572,9 @@ index 0000000000000..31d54b9d0fb58
 +  return RespondNow(NoArguments());
 +}
 +
-+// Implementation of BrowserOSScrollToNodeFunction
++// Implementation of BlockBrowserScrollToNodeFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSScrollToNodeFunction::Run() {
++ExtensionFunction::ResponseAction BlockBrowserScrollToNodeFunction::Run() {
 +  std::optional<browser_os::ScrollToNode::Params> params =
 +      browser_os::ScrollToNode::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
@@ -650,9 +650,9 @@ index 0000000000000..31d54b9d0fb58
 +      browser_os::ScrollToNode::Results::Create(!is_in_view)));
 +}
 +
-+// Implementation of BrowserOSSendKeysFunction
++// Implementation of BlockBrowserSendKeysFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSSendKeysFunction::Run() {
++ExtensionFunction::ResponseAction BlockBrowserSendKeysFunction::Run() {
 +  std::optional<browser_os::SendKeys::Params> params =
 +      browser_os::SendKeys::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
@@ -685,9 +685,9 @@ index 0000000000000..31d54b9d0fb58
 +  return RespondNow(NoArguments());
 +}
 +
-+// Implementation of BrowserOSCaptureScreenshotFunction
++// Implementation of BlockBrowserCaptureScreenshotFunction
 +
-+ExtensionFunction::ResponseAction BrowserOSCaptureScreenshotFunction::Run() {
++ExtensionFunction::ResponseAction BlockBrowserCaptureScreenshotFunction::Run() {
 +  std::optional<browser_os::CaptureScreenshot::Params> params =
 +      browser_os::CaptureScreenshot::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
@@ -744,13 +744,13 @@ index 0000000000000..31d54b9d0fb58
 +  rwhi->GetView()->CopyFromSurface(
 +      gfx::Rect(),  // Empty rect means copy entire surface
 +      thumbnail_size,
-+      base::BindOnce(&BrowserOSCaptureScreenshotFunction::OnScreenshotCaptured,
++      base::BindOnce(&BlockBrowserCaptureScreenshotFunction::OnScreenshotCaptured,
 +                     this));
 +  
 +  return RespondLater();
 +}
 +
-+void BrowserOSCaptureScreenshotFunction::OnScreenshotCaptured(
++void BlockBrowserCaptureScreenshotFunction::OnScreenshotCaptured(
 +    const SkBitmap& bitmap) {
 +  if (bitmap.empty()) {
 +    Respond(Error("Failed to capture screenshot"));
@@ -773,8 +773,8 @@ index 0000000000000..31d54b9d0fb58
 +      browser_os::CaptureScreenshot::Results::Create(data_url)));
 +}
 +
-+// BrowserOSGetSnapshotFunction implementation
-+ExtensionFunction::ResponseAction BrowserOSGetSnapshotFunction::Run() {
++// BlockBrowserGetSnapshotFunction implementation
++ExtensionFunction::ResponseAction BlockBrowserGetSnapshotFunction::Run() {
 +  auto params = browser_os::GetSnapshot::Params::Create(args());
 +  EXTENSION_FUNCTION_VALIDATE(params);
 +  
@@ -791,7 +791,7 @@ index 0000000000000..31d54b9d0fb58
 +  
 +  // Request accessibility tree snapshot
 +  web_contents->RequestAXTreeSnapshot(
-+      base::BindOnce(&BrowserOSGetSnapshotFunction::OnAccessibilityTreeReceived,
++      base::BindOnce(&BlockBrowserGetSnapshotFunction::OnAccessibilityTreeReceived,
 +                     this),
 +      ui::AXMode(ui::AXMode::kWebContents | ui::AXMode::kExtendedProperties),
 +      /* max_nodes= */ 0,  // No limit
@@ -801,7 +801,7 @@ index 0000000000000..31d54b9d0fb58
 +  return RespondLater();
 +}
 +
-+void BrowserOSGetSnapshotFunction::OnAccessibilityTreeReceived(
++void BlockBrowserGetSnapshotFunction::OnAccessibilityTreeReceived(
 +    ui::AXTreeUpdate& tree_update) {
 +  if (!has_callback()) {
 +    return;
@@ -850,10 +850,10 @@ index 0000000000000..31d54b9d0fb58
 +      context,
 +      include_sections,
 +      viewport_size,
-+      base::BindOnce(&BrowserOSGetSnapshotFunction::OnContentProcessed, this));
++      base::BindOnce(&BlockBrowserGetSnapshotFunction::OnContentProcessed, this));
 +}
 +
-+void BrowserOSGetSnapshotFunction::OnContentProcessed(
++void BlockBrowserGetSnapshotFunction::OnContentProcessed(
 +    api::ContentProcessingResult result) {
 +  if (!has_callback()) {
 +    return;
@@ -899,15 +899,15 @@ index 0000000000000..6090d2fbeb6a4
 +namespace api {
 +
 +
-+class BrowserOSGetAccessibilityTreeFunction : public ExtensionFunction {
++class BlockBrowserGetAccessibilityTreeFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.getAccessibilityTree",
 +                             BROWSER_OS_GETACCESSIBILITYTREE)
 +
-+  BrowserOSGetAccessibilityTreeFunction() = default;
++  BlockBrowserGetAccessibilityTreeFunction() = default;
 +
 + protected:
-+  ~BrowserOSGetAccessibilityTreeFunction() override = default;
++  ~BlockBrowserGetAccessibilityTreeFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
@@ -916,15 +916,15 @@ index 0000000000000..6090d2fbeb6a4
 +  void OnAccessibilityTreeReceived(ui::AXTreeUpdate& tree_update);
 +};
 +
-+class BrowserOSGetInteractiveSnapshotFunction : public ExtensionFunction {
++class BlockBrowserGetInteractiveSnapshotFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.getInteractiveSnapshot",
 +                             BROWSER_OS_GETINTERACTIVESNAPSHOT)
 +
-+  BrowserOSGetInteractiveSnapshotFunction();
++  BlockBrowserGetInteractiveSnapshotFunction();
 +
 + protected:
-+  ~BrowserOSGetInteractiveSnapshotFunction() override;
++  ~BlockBrowserGetInteractiveSnapshotFunction() override;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
@@ -943,119 +943,119 @@ index 0000000000000..6090d2fbeb6a4
 +  gfx::Size viewport_size_;
 +};
 +
-+class BrowserOSClickFunction : public ExtensionFunction {
++class BlockBrowserClickFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.click", BROWSER_OS_CLICK)
 +
-+  BrowserOSClickFunction() = default;
++  BlockBrowserClickFunction() = default;
 +
 + protected:
-+  ~BrowserOSClickFunction() override = default;
++  ~BlockBrowserClickFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSInputTextFunction : public ExtensionFunction {
++class BlockBrowserInputTextFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.inputText", BROWSER_OS_INPUTTEXT)
 +
-+  BrowserOSInputTextFunction() = default;
++  BlockBrowserInputTextFunction() = default;
 +
 + protected:
-+  ~BrowserOSInputTextFunction() override = default;
++  ~BlockBrowserInputTextFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSClearFunction : public ExtensionFunction {
++class BlockBrowserClearFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.clear", BROWSER_OS_CLEAR)
 +
-+  BrowserOSClearFunction() = default;
++  BlockBrowserClearFunction() = default;
 +
 + protected:
-+  ~BrowserOSClearFunction() override = default;
++  ~BlockBrowserClearFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSGetPageLoadStatusFunction : public ExtensionFunction {
++class BlockBrowserGetPageLoadStatusFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.getPageLoadStatus", 
 +                             BROWSER_OS_GETPAGELOADSTATUS)
 +
-+  BrowserOSGetPageLoadStatusFunction() = default;
++  BlockBrowserGetPageLoadStatusFunction() = default;
 +
 + protected:
-+  ~BrowserOSGetPageLoadStatusFunction() override = default;
++  ~BlockBrowserGetPageLoadStatusFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSScrollUpFunction : public ExtensionFunction {
++class BlockBrowserScrollUpFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.scrollUp", BROWSER_OS_SCROLLUP)
 +
-+  BrowserOSScrollUpFunction() = default;
++  BlockBrowserScrollUpFunction() = default;
 +
 + protected:
-+  ~BrowserOSScrollUpFunction() override = default;
++  ~BlockBrowserScrollUpFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSScrollDownFunction : public ExtensionFunction {
++class BlockBrowserScrollDownFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.scrollDown", BROWSER_OS_SCROLLDOWN)
 +
-+  BrowserOSScrollDownFunction() = default;
++  BlockBrowserScrollDownFunction() = default;
 +
 + protected:
-+  ~BrowserOSScrollDownFunction() override = default;
++  ~BlockBrowserScrollDownFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSScrollToNodeFunction : public ExtensionFunction {
++class BlockBrowserScrollToNodeFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.scrollToNode", BROWSER_OS_SCROLLTONODE)
 +
-+  BrowserOSScrollToNodeFunction() = default;
++  BlockBrowserScrollToNodeFunction() = default;
 +
 + protected:
-+  ~BrowserOSScrollToNodeFunction() override = default;
++  ~BlockBrowserScrollToNodeFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSSendKeysFunction : public ExtensionFunction {
++class BlockBrowserSendKeysFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.sendKeys", BROWSER_OS_SENDKEYS)
 +
-+  BrowserOSSendKeysFunction() = default;
++  BlockBrowserSendKeysFunction() = default;
 +
 + protected:
-+  ~BrowserOSSendKeysFunction() override = default;
++  ~BlockBrowserSendKeysFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
 +};
 +
-+class BrowserOSCaptureScreenshotFunction : public ExtensionFunction {
++class BlockBrowserCaptureScreenshotFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.captureScreenshot", BROWSER_OS_CAPTURESCREENSHOT)
 +
-+  BrowserOSCaptureScreenshotFunction() = default;
++  BlockBrowserCaptureScreenshotFunction() = default;
 +
 + protected:
-+  ~BrowserOSCaptureScreenshotFunction() override = default;
++  ~BlockBrowserCaptureScreenshotFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
@@ -1064,14 +1064,14 @@ index 0000000000000..6090d2fbeb6a4
 +  void OnScreenshotCaptured(const SkBitmap& bitmap);
 +};
 +
-+class BrowserOSGetSnapshotFunction : public ExtensionFunction {
++class BlockBrowserGetSnapshotFunction : public ExtensionFunction {
 + public:
 +  DECLARE_EXTENSION_FUNCTION("browserOS.getSnapshot", BROWSER_OS_GETSNAPSHOT)
 +
-+  BrowserOSGetSnapshotFunction() = default;
++  BlockBrowserGetSnapshotFunction() = default;
 +
 + protected:
-+  ~BrowserOSGetSnapshotFunction() override = default;
++  ~BlockBrowserGetSnapshotFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
@@ -1475,7 +1475,7 @@ index 0000000000000..2e2c9a875dd09
 +ChangeDetectionResult Click(content::WebContents* web_contents,
 +                           const NodeInfo& node_info) {
 +  // Create change detector and start monitoring
-+  auto change_detector = std::make_unique<BrowserOSChangeDetector>(web_contents);
++  auto change_detector = std::make_unique<BlockBrowserChangeDetector>(web_contents);
 +  change_detector->StartMonitoring(node_info.ax_tree_id);
 +  
 +  // Perform the click action using coordinate-based click
@@ -1913,16 +1913,16 @@ index 0000000000000..7962fb78b6e48
 +ChangeDetectionResult::ChangeDetectionResult(ChangeDetectionResult&&) = default;
 +ChangeDetectionResult& ChangeDetectionResult::operator=(ChangeDetectionResult&&) = default;
 +
-+BrowserOSChangeDetector::BrowserOSChangeDetector(
++BlockBrowserChangeDetector::BlockBrowserChangeDetector(
 +    content::WebContents* web_contents)
 +    : content::WebContentsObserver(web_contents) {}
 +
-+BrowserOSChangeDetector::~BrowserOSChangeDetector() {
-+  LOG(INFO) << "BrowserOSChangeDetector destroyed";
++BlockBrowserChangeDetector::~BlockBrowserChangeDetector() {
++  LOG(INFO) << "BlockBrowserChangeDetector destroyed";
 +  StopMonitoring();
 +}
 +
-+void BrowserOSChangeDetector::StartMonitoring(
++void BlockBrowserChangeDetector::StartMonitoring(
 +    const ui::AXTreeID& initial_tree_id) {
 +  DCHECK(!monitoring_active_);
 +  
@@ -1938,7 +1938,7 @@ index 0000000000000..7962fb78b6e48
 +          << initial_tree_id.ToString();
 +}
 +
-+ChangeDetectionResult BrowserOSChangeDetector::WaitForChanges(
++ChangeDetectionResult BlockBrowserChangeDetector::WaitForChanges(
 +    base::TimeDelta timeout) {
 +  DCHECK(monitoring_active_);
 +  
@@ -1953,7 +1953,7 @@ index 0000000000000..7962fb78b6e48
 +  
 +  // Start timeout timer
 +  timeout_timer_.Start(FROM_HERE, timeout,
-+                      base::BindOnce(&BrowserOSChangeDetector::OnTimeout,
++                      base::BindOnce(&BlockBrowserChangeDetector::OnTimeout,
 +                                    weak_factory_.GetWeakPtr()));
 +  
 +  // Wait for changes or timeout
@@ -1966,7 +1966,7 @@ index 0000000000000..7962fb78b6e48
 +  return GetResult();
 +}
 +
-+ChangeDetectionResult BrowserOSChangeDetector::GetResult() const {
++ChangeDetectionResult BlockBrowserChangeDetector::GetResult() const {
 +  ChangeDetectionResult result;
 +  result.detected = change_detected_;
 +  result.all_changes = detected_changes_;
@@ -1975,7 +1975,7 @@ index 0000000000000..7962fb78b6e48
 +  
 +  // Determine primary change type
 +  if (!detected_changes_.empty()) {
-+    VLOG(1) << "BrowserOSChangeDetector detected changes: "
++    VLOG(1) << "BlockBrowserChangeDetector detected changes: "
 +              << static_cast<int>(detected_changes_.size());
 +    // Priority order for primary change
 +    if (detected_changes_.count(ChangeType::kNewTabOpened)) {
@@ -1993,13 +1993,13 @@ index 0000000000000..7962fb78b6e48
 +    }
 +  }
 +  else {
-+    LOG(INFO) << "BrowserOSChangeDetector empty detected changes";
++    LOG(INFO) << "BlockBrowserChangeDetector empty detected changes";
 +  }
 +  
 +  return result;
 +}
 +
-+void BrowserOSChangeDetector::AccessibilityEventReceived(
++void BlockBrowserChangeDetector::AccessibilityEventReceived(
 +    const ui::AXUpdatesAndEvents& details) {
 +  if (!monitoring_active_) {
 +    return;
@@ -2008,7 +2008,7 @@ index 0000000000000..7962fb78b6e48
 +  ProcessAccessibilityEvent(details);
 +}
 +
-+void BrowserOSChangeDetector::ProcessAccessibilityEvent(
++void BlockBrowserChangeDetector::ProcessAccessibilityEvent(
 +    const ui::AXUpdatesAndEvents& details) {
 +  bool significant_change = false;
 +  
@@ -2089,7 +2089,7 @@ index 0000000000000..7962fb78b6e48
 +  }
 +}
 +
-+void BrowserOSChangeDetector::DidOpenRequestedURL(
++void BlockBrowserChangeDetector::DidOpenRequestedURL(
 +    content::WebContents* new_contents,
 +    content::RenderFrameHost* source_render_frame_host,
 +    const GURL& url,
@@ -2122,7 +2122,7 @@ index 0000000000000..7962fb78b6e48
 +  }
 +}
 +
-+void BrowserOSChangeDetector::OnFocusChangedInPage(
++void BlockBrowserChangeDetector::OnFocusChangedInPage(
 +    content::FocusedNodeDetails* details) {
 +  if (!monitoring_active_ || !details) {
 +    return;
@@ -2140,7 +2140,7 @@ index 0000000000000..7962fb78b6e48
 +  }
 +}
 +
-+void BrowserOSChangeDetector::OnTimeout() {
++void BlockBrowserChangeDetector::OnTimeout() {
 +  VLOG(1) << "Change detection timeout reached";
 +  
 +  if (wait_callback_) {
@@ -2148,7 +2148,7 @@ index 0000000000000..7962fb78b6e48
 +  }
 +}
 +
-+void BrowserOSChangeDetector::StopMonitoring() {
++void BlockBrowserChangeDetector::StopMonitoring() {
 +  monitoring_active_ = false;
 +  timeout_timer_.Stop();
 +  wait_callback_.Reset();
@@ -2222,13 +2222,13 @@ index 0000000000000..f4a902e1b4970
 +};
 +
 +// Detects changes in the DOM after user actions using accessibility events
-+class BrowserOSChangeDetector : public content::WebContentsObserver {
++class BlockBrowserChangeDetector : public content::WebContentsObserver {
 + public:
-+  explicit BrowserOSChangeDetector(content::WebContents* web_contents);
-+  ~BrowserOSChangeDetector() override;
++  explicit BlockBrowserChangeDetector(content::WebContents* web_contents);
++  ~BlockBrowserChangeDetector() override;
 +
-+  BrowserOSChangeDetector(const BrowserOSChangeDetector&) = delete;
-+  BrowserOSChangeDetector& operator=(const BrowserOSChangeDetector&) = delete;
++  BlockBrowserChangeDetector(const BlockBrowserChangeDetector&) = delete;
++  BlockBrowserChangeDetector& operator=(const BlockBrowserChangeDetector&) = delete;
 +
 +  // Start monitoring for changes with a specific tree ID
 +  void StartMonitoring(const ui::AXTreeID& initial_tree_id);
@@ -2275,7 +2275,7 @@ index 0000000000000..f4a902e1b4970
 +  base::OnceClosure wait_callback_;
 +
 +  // Weak pointer factory
-+  base::WeakPtrFactory<BrowserOSChangeDetector> weak_factory_{this};
++  base::WeakPtrFactory<BlockBrowserChangeDetector> weak_factory_{this};
 +};
 +
 +}  // namespace api
@@ -4010,11 +4010,11 @@ index 9c73fc6067b2f..6b3227c786686 100644
    registry->RegisterFunction<GetAllCommandsFunction>();
  
 +  // Browser OS API
-+  registry->RegisterFunction<api::BrowserOSGetAccessibilityTreeFunction>();
-+  registry->RegisterFunction<api::BrowserOSGetInteractiveSnapshotFunction>();
-+  registry->RegisterFunction<api::BrowserOSClickFunction>();
-+  registry->RegisterFunction<api::BrowserOSInputTextFunction>();
-+  registry->RegisterFunction<api::BrowserOSClearFunction>();
++  registry->RegisterFunction<api::BlockBrowserGetAccessibilityTreeFunction>();
++  registry->RegisterFunction<api::BlockBrowserGetInteractiveSnapshotFunction>();
++  registry->RegisterFunction<api::BlockBrowserClickFunction>();
++  registry->RegisterFunction<api::BlockBrowserInputTextFunction>();
++  registry->RegisterFunction<api::BlockBrowserClearFunction>();
 +
    // Generated APIs from Chrome.
    api::ChromeGeneratedFunctionRegistry::RegisterAll(registry);
@@ -4388,7 +4388,7 @@ index 7eba27856109e..141f5f93d7213 100644
      {APIPermissionID::kBookmark, "bookmarks"},
      {APIPermissionID::kBrailleDisplayPrivate, "brailleDisplayPrivate",
       APIPermissionInfo::kFlagCannotBeOptional},
-+    {APIPermissionID::kBrowserOS, "browserOS"},
++    {APIPermissionID::kBlockBrowser, "browserOS"},
      {APIPermissionID::kBrowsingData, "browsingData",
       APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
      {APIPermissionID::kCertificateProvider, "certificateProvider",
@@ -4424,7 +4424,7 @@ index 96be0882a86cb..6e99ceae68be8 100644
    kExperimentalAiData = 260,
    kOmniboxDirectInput = 261,
    kExperimentalActor = 262,
-+  kBrowserOS = 263,
++  kBlockBrowser = 263,
  
    // Add new entries at the end of the enum and be sure to update the
    // "ExtensionPermission3" enum in

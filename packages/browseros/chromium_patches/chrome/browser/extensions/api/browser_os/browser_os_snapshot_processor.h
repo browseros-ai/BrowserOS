@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.h b/chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.h
+diff --git a/chrome/browser/extensions/api/blockbrowser/blockbrowser_snapshot_processor.h b/chrome/browser/extensions/api/blockbrowser/blockbrowser_snapshot_processor.h
 new file mode 100644
 index 0000000000000..5c85cd73b26f3
 --- /dev/null
-+++ b/chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.h
++++ b/chrome/browser/extensions/api/blockbrowser/blockbrowser_snapshot_processor.h
 @@ -0,0 +1,111 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -18,7 +18,7 @@ index 0000000000000..5c85cd73b26f3
 +
 +#include "base/functional/callback.h"
 +#include "base/memory/raw_ptr.h"
-+#include "chrome/common/extensions/api/browser_os.h"
++#include "chrome/common/extensions/api/blockbrowser.h"
 +#include "ui/gfx/geometry/rect_f.h"
 +
 +namespace content {
@@ -39,7 +39,7 @@ index 0000000000000..5c85cd73b26f3
 +
 +// Result of snapshot processing
 +struct SnapshotProcessingResult {
-+  browser_os::InteractiveSnapshot snapshot;
++  blockbrowser::InteractiveSnapshot snapshot;
 +  int nodes_processed = 0;
 +  int64_t processing_time_ms = 0;
 +};
@@ -58,7 +58,7 @@ index 0000000000000..5c85cd73b26f3
 +    
 +    raw_ptr<const ui::AXNodeData> node_data;
 +    uint32_t node_id;
-+    browser_os::InteractiveNodeType node_type;
++    blockbrowser::InteractiveNodeType node_type;
 +    std::string name;
 +    gfx::RectF absolute_bounds;
 +    // All attributes stored as key-value pairs

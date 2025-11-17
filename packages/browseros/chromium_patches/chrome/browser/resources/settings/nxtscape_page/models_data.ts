@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/resources/settings/nxtscape_page/models_data.ts b/chrome/browser/resources/settings/nxtscape_page/models_data.ts
+diff --git a/chrome/browser/resources/settings/blockbrowser_page/models_data.ts b/chrome/browser/resources/settings/blockbrowser_page/models_data.ts
 new file mode 100644
 index 0000000000000..36638c1910a09
 --- /dev/null
-+++ b/chrome/browser/resources/settings/nxtscape_page/models_data.ts
++++ b/chrome/browser/resources/settings/blockbrowser_page/models_data.ts
 @@ -0,0 +1,279 @@
 +// Model data interface
 +export interface ModelInfo {

@@ -5,6 +5,6 @@
 **/logs
 **/old-scripts
 **/__pycache__/**
-nxtscape-cli-access.json
+blockbrowser-cli-access.json
 gclient.json
 .env

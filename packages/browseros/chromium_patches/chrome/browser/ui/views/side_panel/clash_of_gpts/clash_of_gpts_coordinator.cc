@@ -79,7 +79,7 @@ index 0000000000000..b4f8a66530403
 +  if (widget_) {
 +    widget_->Show();
 +    widget_->Activate();
-+    browseros_metrics::BrowserOSMetrics::Log("llmhub.shown");
++    browseros_metrics::BlockBrowserMetrics::Log("llmhub.shown");
 +  }
 +}
 +
@@ -265,7 +265,7 @@ index 0000000000000..b4f8a66530403
 +  current_pane_count_ = count;
 +  SaveState();
 +  
-+  browseros_metrics::BrowserOSMetrics::Log("llmhub.panecount.changed", 
++  browseros_metrics::BlockBrowserMetrics::Log("llmhub.panecount.changed", 
 +    {{"count", base::Value(count)}});
 +
 +  // Update the view if it exists

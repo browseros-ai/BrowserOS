@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Windows packaging module for Nxtscape Browser
+Windows packaging module for BlockBrowser Browser
 Based on ungoogled-chromium-windows packaging approach
 """
 
@@ -21,17 +21,17 @@ from utils import (
     IS_WINDOWS,
 )
 
-# BrowserOS Server binaries packaged alongside Chrome that must be signed prior to
+# BlockBrowser Server binaries packaged alongside Chrome that must be signed prior to
 # building the installer. Extend this list when new server-side executables are added.
 BROWSEROS_SERVER_BINARIES: List[str] = [
-    "browseros_server.exe",
+    "blockbrowser_server.exe",
     "codex.exe",
 ]
 
 
-def get_browseros_server_binary_paths(build_output_dir: Path) -> List[Path]:
-    """Return absolute paths to BrowserOS Server binaries for signing."""
-    server_dir = build_output_dir / "BrowserOSServer" / "default" / "resources" / "bin"
+def get_blockbrowser_server_binary_paths(build_output_dir: Path) -> List[Path]:
+    """Return absolute paths to BlockBrowser Server binaries for signing."""
+    server_dir = build_output_dir / "BlockBrowserServer" / "default" / "resources" / "bin"
     return [server_dir / binary for binary in BROWSEROS_SERVER_BINARIES]
 
 
@@ -149,7 +149,7 @@ def create_installer(ctx: BuildContext) -> bool:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate installer filename with version and architecture
-    installer_name = f"{ctx.get_app_base_name()}_{ctx.get_nxtscape_chromium_version()}_{ctx.architecture}_installer.exe"
+    installer_name = f"{ctx.get_app_base_name()}_{ctx.get_blockbrowser_chromium_version()}_{ctx.architecture}_installer.exe"
     installer_path = output_dir / installer_name
 
     # Copy mini_installer to final location
@@ -182,14 +182,14 @@ def create_portable_zip(ctx: BuildContext) -> bool:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate ZIP filename with version and architecture
-    zip_name = f"{ctx.get_app_base_name()}_{ctx.get_nxtscape_chromium_version()}_{ctx.architecture}_installer.zip"
+    zip_name = f"{ctx.get_app_base_name()}_{ctx.get_blockbrowser_chromium_version()}_{ctx.architecture}_installer.zip"
     zip_path = output_dir / zip_name
 
     # Create ZIP file containing just the installer
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
             # Add mini_installer.exe to the zip
-            installer_name = f"{ctx.get_app_base_name()}_{ctx.get_nxtscape_version()}_{ctx.architecture}_installer.exe"
+            installer_name = f"{ctx.get_app_base_name()}_{ctx.get_blockbrowser_version()}_{ctx.architecture}_installer.exe"
             zipf.write(mini_installer_path, installer_name)
 
             # Get file size for logging
@@ -210,10 +210,10 @@ def sign_binaries(ctx: BuildContext, certificate_name: Optional[str] = None) -> 
     # Get paths to sign
     build_output_dir = join_paths(ctx.chromium_src, ctx.out_dir)
 
-    # STEP 1: Sign chrome.exe and BrowserOS Server binaries BEFORE building mini_installer
+    # STEP 1: Sign chrome.exe and BlockBrowser Server binaries BEFORE building mini_installer
     log_info("\nStep 1/3: Signing executables before packaging...")
     binaries_to_sign_first = [build_output_dir / "chrome.exe"]
-    binaries_to_sign_first.extend(get_browseros_server_binary_paths(build_output_dir))
+    binaries_to_sign_first.extend(get_blockbrowser_server_binary_paths(build_output_dir))
 
     # Check which binaries exist
     existing_binaries = []

@@ -1,4 +1,4 @@
-# Nxtscape Windows Sign & Package Configuration
+# BlockBrowser Windows Sign & Package Configuration
 build:
   type: release
   architecture: x64 # Windows default architecture

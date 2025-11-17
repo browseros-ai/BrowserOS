@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api_utils.h b/chrome/browser/extensions/api/browser_os/browser_os_api_utils.h
+diff --git a/chrome/browser/extensions/api/blockbrowser/blockbrowser_api_utils.h b/chrome/browser/extensions/api/blockbrowser/blockbrowser_api_utils.h
 new file mode 100644
 index 0000000000000..f4fdcb73186cd
 --- /dev/null
-+++ b/chrome/browser/extensions/api/browser_os/browser_os_api_utils.h
++++ b/chrome/browser/extensions/api/blockbrowser/blockbrowser_api_utils.h
 @@ -0,0 +1,80 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -17,7 +17,7 @@ index 0000000000000..f4fdcb73186cd
 +
 +#include "base/memory/raw_ptr.h"
 +#include "base/values.h"
-+#include "chrome/common/extensions/api/browser_os.h"
++#include "chrome/common/extensions/api/blockbrowser.h"
 +#include "ui/accessibility/ax_node_data.h"
 +#include "ui/accessibility/ax_tree_id.h"
 +#include "ui/gfx/geometry/rect_f.h"
@@ -56,7 +56,7 @@ index 0000000000000..f4fdcb73186cd
 +  ui::AXTreeID ax_tree_id;  // Tree ID for change detection
 +  gfx::RectF bounds;  // Absolute bounds in CSS pixels
 +  std::unordered_map<std::string, std::string> attributes;  // All computed attributes
-+  browser_os::InteractiveNodeType node_type;  // Cached node type to avoid recomputation
++  blockbrowser::InteractiveNodeType node_type;  // Cached node type to avoid recomputation
 +  bool in_viewport;  // Whether the node is currently visible in viewport
 +};
 +
@@ -73,7 +73,7 @@ index 0000000000000..f4fdcb73186cd
 +    std::string* error_message);
 +
 +// Helper to determine if a node is interactive (clickable/typable)
-+browser_os::InteractiveNodeType GetInteractiveNodeType(
++blockbrowser::InteractiveNodeType GetInteractiveNodeType(
 +    const ui::AXNodeData& node_data);
 +
 +// Helper to get the HTML tag name from AX role

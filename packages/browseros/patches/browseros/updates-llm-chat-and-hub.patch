@@ -81,7 +81,7 @@ index ce0ab7befb361..e6a8b8b97eada 100644
      widget_->Activate();
 -  } else {
 -    LOG(ERROR) << "widget_ is null after CreateWindowIfNeeded!";
-+    browseros_metrics::BrowserOSMetrics::Log("llmhub.shown");
++    browseros_metrics::BlockBrowserMetrics::Log("llmhub.shown");
    }
  }
  
@@ -90,7 +90,7 @@ index ce0ab7befb361..e6a8b8b97eada 100644
    current_pane_count_ = count;
    SaveState();
 +  
-+  browseros_metrics::BrowserOSMetrics::Log("llmhub.panecount.changed", 
++  browseros_metrics::BlockBrowserMetrics::Log("llmhub.panecount.changed", 
 +    {{"count", base::Value(count)}});
  
    // Update the view if it exists
@@ -208,7 +208,7 @@ index 21a1737b9bb83..e0118e58a9990 100644
    shortcuts_label->SetFontList(
        shortcuts_label->font_list().DeriveWithSizeDelta(-1));
    
-+  browseros_metrics::BrowserOSMetrics::Log("llmchat.created");
++  browseros_metrics::BlockBrowserMetrics::Log("llmchat.created");
 +  
    return container;
  }
@@ -218,7 +218,7 @@ index 21a1737b9bb83..e0118e58a9990 100644
  
    provider_change_in_progress_ = true;
 +  
-+  browseros_metrics::BrowserOSMetrics::Log("llmchat.provider.changed");
++  browseros_metrics::BlockBrowserMetrics::Log("llmchat.provider.changed");
  
    if (owned_web_contents_) {
      GURL current_url = owned_web_contents_->GetURL();
@@ -311,7 +311,7 @@ index 21a1737b9bb83..e0118e58a9990 100644
 +  ui::ScopedClipboardWriter clipboard_writer(ui::ClipboardBuffer::kCopyPaste);
 +  clipboard_writer.WriteImage(image.AsBitmap());
 +  
-+  browseros_metrics::BrowserOSMetrics::Log("llmchat.screenshot.captured");
++  browseros_metrics::BlockBrowserMetrics::Log("llmchat.screenshot.captured");
 +
 +  // Show success feedback
 +  if (copy_feedback_label_) {
@@ -335,7 +335,7 @@ index 21a1737b9bb83..e0118e58a9990 100644
      ui::ScopedClipboardWriter clipboard_writer(ui::ClipboardBuffer::kCopyPaste);
      clipboard_writer.WriteText(formatted_output);
      
-+    browseros_metrics::BrowserOSMetrics::Log("llmchat.content.copied");
++    browseros_metrics::BlockBrowserMetrics::Log("llmchat.content.copied");
 +    
      // Show feedback message
      if (copy_feedback_label_) {
@@ -431,7 +431,7 @@ index 21a1737b9bb83..e0118e58a9990 100644
 +      break;
 +  }
 +  if (!event_name.empty()) {
-+    browseros_metrics::BrowserOSMetrics::Log(event_name);
++    browseros_metrics::BlockBrowserMetrics::Log(event_name);
 +  }
 +  
 +  switch (command_id) {

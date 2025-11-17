@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/ui/webui/nxtscape_first_run.h b/chrome/browser/ui/webui/nxtscape_first_run.h
+diff --git a/chrome/browser/ui/webui/blockbrowser_first_run.h b/chrome/browser/ui/webui/blockbrowser_first_run.h
 new file mode 100644
 index 0000000000000..51ab05bc94583
 --- /dev/null
-+++ b/chrome/browser/ui/webui/nxtscape_first_run.h
++++ b/chrome/browser/ui/webui/blockbrowser_first_run.h
 @@ -0,0 +1,354 @@
 +#ifndef CHROME_BROWSER_UI_WEBUI_NXTSCAPE_FIRST_RUN_H_
 +#define CHROME_BROWSER_UI_WEBUI_NXTSCAPE_FIRST_RUN_H_
@@ -58,7 +58,7 @@ index 0000000000000..51ab05bc94583
 +<!DOCTYPE html>
 +<html lang="en">
 +<head>
-+<title>BrowserOS — First Run</title>
++<title>BlockBrowser — First Run</title>
 +<meta charset="UTF-8">
 + <meta name="color-scheme" content="light dark">
 +<style>
@@ -199,7 +199,7 @@ index 0000000000000..51ab05bc94583
 +  <span class="badge">Backed by YC</span>
 + </div>
 + <h1>The Open Source <span class="accent">Agentic</span> <span class="accent">Browser</span></h1>
-+ <p>BrowserOS is an AI-powered browser that lets you build and run agents to automate tedious tasks. It looks like Chrome but reimagined for the AI era.</p>
++ <p>BlockBrowser is an AI-powered browser that lets you build and run agents to automate tedious tasks. It looks like Chrome but reimagined for the AI era.</p>
 + <div class="actions">
 +  </div>
 +</section>
@@ -207,8 +207,8 @@ index 0000000000000..51ab05bc94583
 +<section>
 + <div class="section-head"><span class="label">🚀 Getting Started</span></div>
 + <div style="text-align:center;">
-+  <a class="btn btn-accent" href="https://bit.ly/BrowserOS-setup">Quick start guide</a>
-+  <a class="btn btn-outline" href="https://github.com/nxtscape/nxtscape">
++  <a class="btn btn-accent" href="https://bit.ly/BlockBrowser-setup">Quick start guide</a>
++  <a class="btn btn-outline" href="https://github.com/blockbrowser/blockbrowser">
 +   <span class="icon" aria-hidden="true">
 +    <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#eac54f"><path d="m354-287 126-76 126 77-33-144 111-96-146-13-58-136-58 135-146 13 111 97-33 143ZM233-120l65-281L80-590l288-25 112-265 112 265 288 25-218 189 65 281-247-149-247 149Zm247-350Z"/></svg>
 +   </span>
@@ -254,7 +254,7 @@ index 0000000000000..51ab05bc94583
 +   </span>
 +   Step 3: All done!
 +  </div>
-+  <div class="muted" style="margin-top:.4rem">Your ready to use BrowserOS, have fun! This page can be always accessed again at <a href="chrome://browseros-first-run"><code>chrome://browseros-first-run</code></a></div>
++  <div class="muted" style="margin-top:.4rem">Your ready to use BlockBrowser, have fun! This page can be always accessed again at <a href="chrome://browseros-first-run"><code>chrome://browseros-first-run</code></a></div>
 + </div>
 +</section>
 +
@@ -313,7 +313,7 @@ index 0000000000000..51ab05bc94583
 +   </span>
 +   Discord
 +  </a>
-+  <a href="https://github.com/browseros-ai/BrowserOS">
++  <a href="https://github.com/browseros-ai/BlockBrowser">
 +   <span class="icon" aria-hidden="true">
 +    <svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
 +     <title>GitHub</title>
@@ -322,7 +322,7 @@ index 0000000000000..51ab05bc94583
 +   </span>
 +   GitHub
 +  </a>
-+  <a href="https://x.com/browserOS_ai">
++  <a href="https://x.com/blockbrowser_ai">
 +   <span class="icon" aria-hidden="true">
 +    <svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
 +     <title>X</title>
@@ -342,19 +342,19 @@ index 0000000000000..51ab05bc94583
 +  std::move(callback).Run(base::MakeRefCounted<base::RefCountedString>(std::move(source)));
 +}
 +
-+class NxtscapeFirstRun;
-+class NxtscapeFirstRunUIConfig : public content::DefaultWebUIConfig<NxtscapeFirstRun> {
++class BlockBrowserFirstRun;
++class BlockBrowserFirstRunUIConfig : public content::DefaultWebUIConfig<BlockBrowserFirstRun> {
 +  public:
-+   NxtscapeFirstRunUIConfig() : DefaultWebUIConfig("chrome", "browseros-first-run") {}
++   BlockBrowserFirstRunUIConfig() : DefaultWebUIConfig("chrome", "browseros-first-run") {}
 +};
 +
-+class NxtscapeFirstRun : public content::WebUIController {
++class BlockBrowserFirstRun : public content::WebUIController {
 + public:
-+  NxtscapeFirstRun(content::WebUI* web_ui) : content::WebUIController(web_ui) {
++  BlockBrowserFirstRun(content::WebUI* web_ui) : content::WebUIController(web_ui) {
 +    content::URLDataSource::Add(Profile::FromWebUI(web_ui), std::make_unique<UFRDataSource>());
 +  }
-+  NxtscapeFirstRun(const NxtscapeFirstRun&) = delete;
-+  NxtscapeFirstRun& operator=(const NxtscapeFirstRun&) = delete;
++  BlockBrowserFirstRun(const BlockBrowserFirstRun&) = delete;
++  BlockBrowserFirstRun& operator=(const BlockBrowserFirstRun&) = delete;
 +};
 +
 +#endif  // CHROME_BROWSER_UI_WEBUI_NXTSCAPE_FIRST_RUN_H_

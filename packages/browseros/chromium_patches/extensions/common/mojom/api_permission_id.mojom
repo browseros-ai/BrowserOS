@@ -6,7 +6,7 @@ index 96be0882a86cb..6e99ceae68be8 100644
    kExperimentalAiData = 260,
    kOmniboxDirectInput = 261,
    kExperimentalActor = 262,
-+  kBrowserOS = 263,
++  kBlockBrowser = 263,
  
    // Add new entries at the end of the enum and be sure to update the
    // "ExtensionPermission3" enum in

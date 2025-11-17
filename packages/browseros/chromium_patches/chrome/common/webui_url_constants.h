@@ -6,7 +6,7 @@ index d2e895dbc4a16..a6882132cdf40 100644
  // needed.
  // Please keep in alphabetical order, with OS/feature specific sections below.
  inline constexpr char kChromeUIAboutHost[] = "about";
-+inline constexpr char kBrowserOSFirstRun[] = "browseros-first-run";
++inline constexpr char kBlockBrowserFirstRun[] = "browseros-first-run";
  inline constexpr char kChromeUIAboutURL[] = "chrome://about/";
  inline constexpr char kChromeUIAccessCodeCastHost[] = "access-code-cast";
  inline constexpr char kChromeUIAccessCodeCastURL[] =

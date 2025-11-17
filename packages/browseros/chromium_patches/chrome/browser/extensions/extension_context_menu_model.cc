@@ -6,7 +6,7 @@ index d5e3f14b43b44..350087695ae38 100644
  #include <memory>
  
  #include "base/containers/contains.h"
-+#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/extensions/blockbrowser_extension_constants.h"
  #include "base/feature_list.h"
  #include "base/functional/bind.h"
  #include "base/metrics/histogram_macros.h"
@@ -16,7 +16,7 @@ index d5e3f14b43b44..350087695ae38 100644
    bool has_options_page = OptionsPageInfo::HasOptionsPage(extension);
 -  bool can_uninstall_extension = !is_component_ && !is_required_by_policy;
 +  bool can_uninstall_extension = !is_component_ && !is_required_by_policy &&
-+                                  !browseros::IsBrowserOSExtension(extension->id());
++                                  !browseros::IsBlockBrowserExtension(extension->id());
    if (can_show_icon_in_toolbar || has_options_page || can_uninstall_extension) {
      AddSeparator(ui::NORMAL_SEPARATOR);
    }

@@ -7,8 +7,8 @@ contact_links:
     url: https://dub.sh/browserOS-slack
     about: Join our Slack for help and queries!
   - name: 💡 Feature Requests
-    url: https://github.com/browseros-ai/BrowserOS/issues/99
+    url: https://github.com/browseros-ai/BlockBrowser/issues/99
     about: Have an idea? Share it here and vote on others
   - name: 📚 Documentation
     url: https://docs.browseros.com/
-    about: Find setup guides and learn how to use BrowserOS
+    about: Find setup guides and learn how to use BlockBrowser

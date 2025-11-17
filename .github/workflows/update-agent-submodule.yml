@@ -18,7 +18,7 @@ jobs:
   update-submodule:
     runs-on: ubuntu-latest
     # Only run on the main repository, not on forks
-    if: github.repository == 'browseros-ai/BrowserOS'
+    if: github.repository == 'browseros-ai/BlockBrowser'
 
     steps:
       - name: Checkout repository with submodules

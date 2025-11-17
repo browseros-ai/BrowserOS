@@ -14,8 +14,8 @@ index 8c748d7cc5fc1..e2649d27ad776 100644
  }
  
  bool ToolbarActionsModel::IsActionForcePinned(const ActionId& action_id) const {
-+  // Check if it's a BrowserOS extension
-+  if (extensions::browseros::IsBrowserOSPinnedExtension(action_id)) {
++  // Check if it's a BlockBrowser extension
++  if (extensions::browseros::IsBlockBrowserPinnedExtension(action_id)) {
 +    return true;
 +  }
 +  
@@ -27,9 +27,9 @@ index 8c748d7cc5fc1..e2649d27ad776 100644
        management->GetForcePinnedList(), std::back_inserter(pinned),
        [&pinned](const std::string& id) { return !base::Contains(pinned, id); });
 +      
-+  // Add BrowserOS extensions that are marked pinned.
-+  for (const auto& extension_id : extensions::browseros::GetBrowserOSExtensionIds()) {
-+    if (!extensions::browseros::IsBrowserOSPinnedExtension(extension_id)) {
++  // Add BlockBrowser extensions that are marked pinned.
++  for (const auto& extension_id : extensions::browseros::GetBlockBrowserExtensionIds()) {
++    if (!extensions::browseros::IsBlockBrowserPinnedExtension(extension_id)) {
 +      continue;
 +    }
 +    if (!base::Contains(pinned, extension_id)) {
