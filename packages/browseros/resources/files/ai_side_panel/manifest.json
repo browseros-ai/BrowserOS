@@ -1,0 +1,63 @@
+{
+  "manifest_version": 3,
+  "name": "Agent",
+  "version": "40",
+  "description": "Agent",
+  "key": "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDC0C0AakL+XOcj+PMf24WqoKHA/hhypDQZUUd9sJr/c7cx3nLJS+kaJaB+cz8V3RhPZq01BFeByofLg6Hg6ZNVvBVn3wtGLcNPmuCwMmDiHetTV0oJsFOWs2VznP9py1ww5FFhU+Wmw1CWyLJqnwsIsLLCQyUXAZpVEOLJlOqX1wIDAQAB",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "tabs",
+    "tabGroups",
+    "debugger",
+    "sidePanel",
+    "bookmarks",
+    "history",
+    "settingsPrivate",
+    "browserOS"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background_wrapper.js"
+  },
+  "action": {
+    "default_icon": {
+      "16": "assets/icon16.png",
+      "48": "assets/icon48.png",
+      "128": "assets/icon128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "commands": {
+    "toggle-panel": {
+      "suggested_key": {
+        "default": "Ctrl+E",
+        "mac": "Command+E"
+      },
+      "description": "Toggle the Nxtscape side panel"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "icons": {
+    "16": "assets/icon16.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "component": true
+}

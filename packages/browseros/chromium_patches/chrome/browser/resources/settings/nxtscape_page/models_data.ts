@@ -8,6 +8,7 @@ index 0000000000000..36638c1910a09
 +export interface ModelInfo {
 +  model_id: string;
 +  context_length: number;
++  requires_computer_use?: boolean;
 +}
 +
 +export interface ModelsData {
@@ -66,6 +67,7 @@ index 0000000000000..36638c1910a09
 +    { model_id: 'gemini-2.5-pro-preview-05-06', context_length: 1048576 },
 +    { model_id: 'gemini-2.5-pro-preview-06-05', context_length: 1048576 },
 +    { model_id: 'gemini-2.5-pro', context_length: 1048576 },
++    { model_id: 'gemini-2.5-computer-use-preview-10-2025', context_length: 1048576, requires_computer_use: true },
 +    { model_id: 'gemini-2.0-flash-exp', context_length: 1048576 },
 +    { model_id: 'gemini-2.0-flash', context_length: 1048576 },
 +    { model_id: 'gemini-2.0-flash-001', context_length: 1048576 },
