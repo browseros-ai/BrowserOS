@@ -1,8 +1,8 @@
 diff --git a/extensions/browser/extension_function_histogram_value.h b/extensions/browser/extension_function_histogram_value.h
-index 6d9bd29ae220f..c623a72ed5023 100644
+index 6d9bd29ae220f..b0f0045a26410 100644
 --- a/extensions/browser/extension_function_histogram_value.h
 +++ b/extensions/browser/extension_function_histogram_value.h
-@@ -2011,6 +2011,27 @@ enum HistogramValue {
+@@ -2011,6 +2011,29 @@ enum HistogramValue {
    DEVELOPERPRIVATE_SHOWSITESETTINGS = 1948,
    ACCESSIBILITY_PRIVATE_PROCESSPENDINGSPOKENFEEDBACKEVENT = 1949,
    ACCESSIBILITY_PRIVATE_ENABLESPOKENFEEDBACKMV3KEYHANDLING = 1950,
@@ -27,6 +27,8 @@ index 6d9bd29ae220f..c623a72ed5023 100644
 +  BROWSER_OS_EXECUTEJAVASCRIPT = 1969,
 +  BROWSER_OS_CLICKCOORDINATES = 1970,
 +  BROWSER_OS_TYPEATCOORDINATES = 1971,
++  SIDEPANEL_BROWSEROSTOGGLE = 1972,
++  SIDEPANEL_BROWSEROSISOPEN = 1973,
    // Last entry: Add new entries above, then run:
    // tools/metrics/histograms/update_extension_histograms.py
    ENUM_BOUNDARY

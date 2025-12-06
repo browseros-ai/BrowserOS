@@ -1,0 +1,62 @@
+diff --git a/chrome/common/extensions/api/side_panel.idl b/chrome/common/extensions/api/side_panel.idl
+index 7d41beb7dad84..f61f0bf21ad88 100644
+--- a/chrome/common/extensions/api/side_panel.idl
++++ b/chrome/common/extensions/api/side_panel.idl
+@@ -124,10 +124,33 @@ namespace sidePanel {
+     DOMString path;
+   };
+ 
++  // Options for toggling the side panel on a specific tab (BrowserOS).
++  dictionary BrowserosToggleOptions {
++    // The tab on which to toggle the side panel. Required.
++    long tabId;
++    // Optional desired state. If true, opens the panel. If false, closes it.
++    // If omitted, toggles the current state.
++    boolean? open;
++  };
++
++  // Result of toggling the side panel (BrowserOS).
++  dictionary BrowserosToggleResult {
++    // Whether the side panel is now open.
++    boolean opened;
++  };
++
++  // Options for checking if the side panel is open on a specific tab (BrowserOS).
++  dictionary BrowserosIsOpenOptions {
++    // The tab to check. Required.
++    long tabId;
++  };
++
+   callback VoidCallback = void();
+   callback PanelOptionsCallback = void(PanelOptions options);
+   callback PanelBehaviorCallback = void(PanelBehavior behavior);
+   callback PanelLayoutCallback = void(PanelLayout layout);
++  callback BrowserosToggleCallback = void(BrowserosToggleResult result);
++  callback BrowserosIsOpenCallback = void(boolean isOpen);
+ 
+   interface Functions {
+     // Configures the side panel.
+@@ -176,6 +199,23 @@ namespace sidePanel {
+     [nodoc] static void close(
+         CloseOptions options,
+         VoidCallback callback);
++
++    // Toggles the extension's side panel on a specific tab (BrowserOS).
++    // Opens the panel if closed, closes if open. The panel is contextual
++    // (tab-specific only) and will not appear on other tabs.
++    // Auto-registers a contextual panel if none exists for the tab.
++    // |options|: Specifies the tab on which to toggle the side panel.
++    // |callback|: Called with the result indicating if the panel is now open.
++    [nodoc] static void browserosToggle(
++        BrowserosToggleOptions options,
++        BrowserosToggleCallback callback);
++
++    // Checks if the extension's side panel is open on a specific tab (BrowserOS).
++    // |options|: Specifies the tab to check.
++    // |callback|: Called with true if the panel is open, false otherwise.
++    [nodoc] static void browserosIsOpen(
++        BrowserosIsOpenOptions options,
++        BrowserosIsOpenCallback callback);
+   };
+ 
+   interface Events {
