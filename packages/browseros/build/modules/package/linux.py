@@ -397,6 +397,15 @@ def create_postinst_script(debian_dir: Path) -> None:
 
     Debian policy prohibits setting SUID in package files directly,
     so we set it in postinst after installation.
+
+    TODO: Externalize this. Add the new AppArmor profile next to it.
+            Is the sandbox referenced here created at all? How does it work in .AppImage?
+            As of now, I am placing the file in
+                packages/browseros/resources/entitlements/browseros since the
+                contents (? I never developed for Mac) appear to be explicit declaration
+                of permissions/intents
+            Would this method ultimately orchestrate addition of the 2 files?
+                Or do we eliminate/rename it to reflect the inclusion rather than creation?
     """
     postinst_content = """#!/bin/sh
 # Post-installation script for BrowserOS

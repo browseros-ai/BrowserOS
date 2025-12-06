@@ -1,0 +1,153 @@
+# Last Modified: Thu Dec  4 22:34:18 2025
+abi <abi/4.0>,
+
+include <tunables/global>
+include <tunables/kernelvars>
+
+# This profile allows everything and only exists to give the
+# application a name instead of having the label "unconfined"
+
+
+profile browseros /tmp/.mount_Brows*/opt/browseros/browseros flags=(complain) {
+  include <abstractions/X> # Modern desktop environments run X11 server unconfined. Here, this GUI app is being given explicit socket permission
+  include <abstractions/base> # lib rules
+  include <abstractions/bash> # proc debugging
+  include <abstractions/dbus-accessibility-strict>
+  include <abstractions/dbus-session>
+  include <abstractions/evince>
+  include <abstractions/fonts>
+  include <abstractions/nameservice>
+  include <abstractions/postfix-common>
+  include <abstractions/ubuntu-browsers.d/multimedia>
+  include <abstractions/ubuntu-browsers.d/ubuntu-integration>
+  include <abstractions/user-tmp>
+  include <abstractions/vulkan>
+  include if exists <local/chrome>
+
+  capability sys_admin,
+  capability sys_ptrace,
+
+  deny dbus (send)
+    bus=system
+    peer=(name=org.bluez),
+
+  dbus (receive)
+    bus=system
+    peer=(name=org.freedesktop.UPower),
+
+  dbus (receive)
+    bus=system
+    path=/org/freedesktop/UPower/devices/DisplayDevice
+    interface=org.freedesktop.DBus.Properties
+    member=PropertiesChanged
+    peer=(name=org.freedesktop.UPower),
+
+  dbus (send)
+    bus=system
+    peer=(name=org.freedesktop.UPower),
+
+  signal receive set=pwr peer=browseros,
+  signal send set=pwr peer=browseros,
+
+  ptrace trace peer=browseros,
+
+  / r, # Chromium spawns utility processes that sometimes probe the filesystem root for path resolution, working directory context, or symlink canonicalization.
+  /dev/ r,
+  /etc/igfx_user_feature.txt r,
+  /etc/igfx_user_feature_next.txt r,
+  /etc/ld.so.cache r,
+  /proc/ r,
+  /proc/*/stat r,
+  /proc/*/statm r,
+  /proc/pressure/* r,
+  /proc/sys/ r,
+  /proc/sys/dev/*/perf_stream_paranoid r, # Goes in addition to <abstractions/X>
+  /proc/sys/fs/inotify/max_user_watches r,
+  /proc/sys/fs/nr_open r,
+  /proc/sys/kernel/yama/ptrace_scope r,
+  /run/user/@{uid}/at-spi/** rw,
+  /run/user/@{uid}/bus rw,
+  /sys/bus/ r,
+  /sys/bus/pci/devices/ r,
+  /sys/bus/usb/devices/ r,
+  /sys/class/ r,
+  /sys/devices/pci0000:*/** r, # Goes in addition to <abstractions/X>
+  /sys/devices/system/cpu/* r,
+  /sys/devices/system/cpu/*/** r,
+  /sys/devices/virtual/dmi/id/product_name r,
+  /sys/devices/virtual/dmi/id/sys_vendor r,
+  /sys/devices/virtual/tty/tty0/active r,
+  /tmp/.mount_Brows*/** mrix,
+  /usr/bin/basename mrix,
+  /usr/bin/cut mrix,
+  /usr/bin/grep mrix,
+  /usr/bin/which.debianutils mrix,
+  /usr/bin/xdg-settings mrix,
+  /usr/lib/ r,
+  /var/lib/snapd/desktop/icons/ r,
+  owner /dev/shm/.org.chromium.Chromium.* rw,
+  owner /home/*/ r,
+  owner /home/*/.cache/browser-os/** rw,
+  owner /home/*/.cache/ibus/* rw,
+  owner /home/*/.cache/mesa_shader_cache_db/* rw, # Goes in addition to <abstractions/X>
+  owner /home/*/.cache/mesa_shader_cache_db/**.db rwk,
+  owner /home/*/.cache/mesa_shader_cache_db/**.idx rwk,
+  owner /home/*/.cache/mesa_shader_cache_db/part0/mesa_cache.db rw,
+  owner /home/*/.config/browser-os/ r,
+  owner /home/*/.config/browser-os/** mrwk,
+  owner /home/*/.config/dconf/user r,
+  owner /home/*/.config/ibus/bus/ r,
+  owner /home/*/.config/ibus/bus/* r,
+  owner /home/*/.pki/ rwk, # These .pki lines are mandatory for Chromium SSL/TLS client certificate storage and crypto operations.
+  owner /home/*/.pki/nssdb/ rwk,
+  owner /home/*/.pki/nssdb/cert9.db rwk,
+  owner /home/*/.pki/nssdb/key4.db rwk,
+  owner /home/*/.pki/nssdb/pkcs11.txt rwk,
+  @{HOME}/.pki/nssdb/** rwk,
+  /home/*/.pki/nssdb/** rwk,
+  owner /proc/*/cgroup r,
+  owner /proc/*/clear_refs w,
+  owner /proc/*/smaps_rollup r,
+  owner /proc/*/task/*/status r,
+  owner /proc/[0-9]*/cmdline r,
+  owner /proc/[0-9]*/fd/ r,
+  owner /proc/[0-9]*/gid_map w,
+  owner /proc/[0-9]*/mem r,
+  owner /proc/[0-9]*/oom_score_adj rw,
+  owner /proc/[0-9]*/setgroups w,
+  owner /proc/[0-9]*/stat r,
+  owner /proc/[0-9]*/task/ r,
+  owner /proc/[0-9]*/task/[0-9]*/comm r,
+  owner /proc/[0-9]*/uid_map w,
+  owner /run/user/[0-9]*/bus rw, # Granting access to the D-Bus socket
+  owner /sys/fs/cgroup/user.slice/**.high r,
+  owner /sys/fs/cgroup/user.slice/**.max r,
+
+  userns,
+
+  # Sandbox child processes inherit these
+  /tmp/.mount_Brows*/opt/browseros/browseros// ix,
+  profile child_sandbox flags=(attach_disconnected, complain, mediate_deleted) {
+    include <abstractions/base>
+    dbus (receive)
+      bus=system
+      peer=(name=org.freedesktop.UPower),
+    dbus (receive)
+      bus=system
+      path=/org/freedesktop/UPower/devices/DisplayDevice
+      interface=org.freedesktop.DBus.Properties
+      member=PropertiesChanged
+      peer=(name=org.freedesktop.UPower),
+    dbus (send)
+      bus=system
+      peer=(name=org.freedesktop.UPower),
+
+    owner /home/*/.pki/ rwk, # These .pki lines are mandatory for Chromium SSL/TLS client certificate storage and crypto operations.
+    owner /home/*/.pki/nssdb/ rwk,
+    owner /home/*/.pki/nssdb/cert9.db rwk,
+    owner /home/*/.pki/nssdb/key4.db rwk,
+    owner /home/*/.pki/nssdb/pkcs11.txt rwk,
+    @{HOME}/.pki/nssdb/** rwk,
+    /home/*/.pki/nssdb/** rwk,
+  }
+}
