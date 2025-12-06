@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
-index deb531f8832e3..aa697f378d47b 100644
+index deb531f8832e3..977d40cf6ff10 100644
 --- a/chrome/browser/ui/browser_command_controller.cc
 +++ b/chrome/browser/ui/browser_command_controller.cc
 @@ -70,6 +70,8 @@
@@ -11,7 +11,19 @@ index deb531f8832e3..aa697f378d47b 100644
  #include "chrome/browser/ui/web_applications/app_browser_controller.h"
  #include "chrome/browser/ui/web_applications/web_app_dialog_utils.h"
  #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
-@@ -988,6 +990,33 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
+@@ -104,7 +106,11 @@
+ #include "content/public/browser/web_contents_observer.h"
+ #include "content/public/common/profiling.h"
+ #include "content/public/common/url_constants.h"
++#include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
++#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/extensions/extension_tab_util.h"
+ #include "extensions/browser/extension_registrar.h"
++#include "extensions/browser/extension_registry.h"
+ #include "extensions/common/extension_urls.h"
+ #include "printing/buildflags/buildflags.h"
+ #include "ui/actions/actions.h"
+@@ -988,6 +994,58 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
        browser_->GetFeatures().side_panel_ui()->Show(
            SidePanelEntryId::kBookmarks, SidePanelOpenTrigger::kAppMenu);
        break;
@@ -42,10 +54,35 @@ index deb531f8832e3..aa697f378d47b 100644
 +        coordinator->Show();
 +      }
 +      break;
++    case IDC_TOGGLE_BROWSEROS_AGENT: {
++      content::WebContents* active_contents =
++          browser_->tab_strip_model()->GetActiveWebContents();
++      if (!active_contents) {
++        break;
++      }
++      int tab_id = extensions::ExtensionTabUtil::GetTabId(active_contents);
++      Profile* profile = browser_->profile();
++      const extensions::Extension* extension =
++          extensions::ExtensionRegistry::Get(profile)
++              ->enabled_extensions()
++              .GetByID(extensions::browseros::kAgentV2ExtensionId);
++      if (!extension) {
++        break;
++      }
++      extensions::SidePanelService* service =
++          extensions::SidePanelService::Get(profile);
++      if (service) {
++        std::ignore = service->BrowserosToggleSidePanelForTab(
++            *extension, profile, tab_id,
++            /*include_incognito_information=*/true,
++            /*desired_state=*/std::nullopt);
++      }
++      break;
++    }
      case IDC_SHOW_APP_MENU:
        base::RecordAction(base::UserMetricsAction("Accel_Show_App_Menu"));
        ShowAppMenu(browser_);
-@@ -1648,6 +1677,12 @@ void BrowserCommandController::InitCommandState() {
+@@ -1648,6 +1706,13 @@ void BrowserCommandController::InitCommandState() {
    }
  
    command_updater_.UpdateCommandEnabled(IDC_SHOW_BOOKMARK_SIDE_PANEL, true);
@@ -55,6 +92,7 @@ index deb531f8832e3..aa697f378d47b 100644
 +                                        base::FeatureList::IsEnabled(features::kThirdPartyLlmPanel));
 +  command_updater_.UpdateCommandEnabled(IDC_OPEN_CLASH_OF_GPTS,
 +                                        base::FeatureList::IsEnabled(features::kClashOfGpts));
++  command_updater_.UpdateCommandEnabled(IDC_TOGGLE_BROWSEROS_AGENT, true);
  
    if (browser_->is_type_normal()) {
      // Reading list commands.
