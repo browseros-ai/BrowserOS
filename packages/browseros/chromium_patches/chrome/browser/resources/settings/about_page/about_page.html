@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/resources/settings/about_page/about_page.html b/chrome/browser/resources/settings/about_page/about_page.html
-index 5069802bf7a17..6776eda5ded93 100644
+index 5069802bf7a17..07776dff915bf 100644
 --- a/chrome/browser/resources/settings/about_page/about_page.html
 +++ b/chrome/browser/resources/settings/about_page/about_page.html
 @@ -5,10 +5,7 @@
@@ -36,14 +36,14 @@ index 5069802bf7a17..6776eda5ded93 100644
            </div>
            <span id="deprecationWarning"
                hidden="[[!obsoleteSystemInfo_.obsolete]]">
-@@ -95,6 +86,7 @@
+@@ -94,6 +85,7 @@
+             </a>
            </span>
  </if>
++          <div class="secondary">BrowserOS - $i18n{aboutBrowserOSVersion}</div>
            <div class="secondary">$i18n{aboutBrowserVersion}</div>
-+          <div class="secondary">BrowserOS Version $i18n{aboutBrowserOSVersion}</div>
          </div>
  <if expr="not is_chromeos">
-         <div class="separator" hidden="[[!showButtonContainer_]]"></div>
 @@ -114,12 +106,6 @@
              on-click="onPromoteUpdaterClick_">
            <div class="flex">
