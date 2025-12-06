@@ -1,8 +1,20 @@
 diff --git a/chrome/browser/ui/browser_actions.cc b/chrome/browser/ui/browser_actions.cc
-index fb3dba200be8c..f437fadeb7790 100644
+index fb3dba200be8c..080fadd58fd7e 100644
 --- a/chrome/browser/ui/browser_actions.cc
 +++ b/chrome/browser/ui/browser_actions.cc
-@@ -253,6 +253,36 @@ void BrowserActions::InitializeBrowserActions() {
+@@ -20,6 +20,11 @@
+ #include "chrome/browser/sharing_hub/sharing_hub_features.h"
+ #include "chrome/browser/ui/actions/chrome_action_id.h"
+ #include "chrome/browser/ui/actions/chrome_actions.h"
++#include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
++#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/extensions/extension_tab_util.h"
++#include "chrome/browser/ui/extensions/extension_side_panel_utils.h"
++#include "extensions/browser/extension_registry.h"
+ #include "chrome/browser/ui/autofill/address_bubbles_icon_controller.h"
+ #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
+ #include "chrome/browser/ui/autofill/payments/mandatory_reauth_bubble_controller_impl.h"
+@@ -253,6 +258,37 @@ void BrowserActions::InitializeBrowserActions() {
              .Build());
    }
  
@@ -35,6 +47,7 @@ index fb3dba200be8c..f437fadeb7790 100644
 +            vector_icons::kClashOfGptsIcon)
 +            .Build());
 +  }
++
 +
    if (HistorySidePanelCoordinator::IsSupported()) {
      root_action_item_->AddChild(

@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc b/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc
-index d9315fa4fa5b0..8edfc67de1d63 100644
+index d9315fa4fa5b0..a82f97bad37d7 100644
 --- a/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc
 +++ b/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc
 @@ -17,6 +17,7 @@
@@ -23,7 +23,7 @@ index d9315fa4fa5b0..8edfc67de1d63 100644
      pref_service_->SetBoolean(prefs::kPinnedChromeLabsMigrationComplete, true);
    }
    if (features::HasTabSearchToolbarButton() &&
-@@ -253,6 +257,23 @@ void PinnedToolbarActionsModel::MaybeMigrateExistingPinnedStates() {
+@@ -253,6 +257,25 @@ void PinnedToolbarActionsModel::MaybeMigrateExistingPinnedStates() {
    }
  }
  
@@ -33,10 +33,12 @@ index d9315fa4fa5b0..8edfc67de1d63 100644
 +    return;
 +  }
 +
-+  // Pin native BrowserOS actions if their features are enabled
++  // Pin native BrowserOS actions if their features are enabled (or no feature flag)
 +  for (actions::ActionId id : browseros::kBrowserOSNativeActionIds) {
 +    const base::Feature* feature = browseros::GetFeatureForBrowserOSAction(id);
-+    if (feature && base::FeatureList::IsEnabled(*feature) && !Contains(id)) {
++    // Pin if: no feature flag (always enabled) OR feature is enabled
++    bool should_pin = !feature || base::FeatureList::IsEnabled(*feature);
++    if (should_pin && !Contains(id)) {
 +      UpdatePinnedState(id, true);
 +    }
 +  }

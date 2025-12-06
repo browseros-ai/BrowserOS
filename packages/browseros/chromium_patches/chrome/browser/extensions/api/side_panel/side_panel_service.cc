@@ -1,16 +1,19 @@
 diff --git a/chrome/browser/extensions/api/side_panel/side_panel_service.cc b/chrome/browser/extensions/api/side_panel/side_panel_service.cc
-index 0582cf9b5141a..edce3344646fc 100644
+index 0582cf9b5141a..1d5ef1c16da3b 100644
 --- a/chrome/browser/extensions/api/side_panel/side_panel_service.cc
 +++ b/chrome/browser/extensions/api/side_panel/side_panel_service.cc
-@@ -8,6 +8,7 @@
+@@ -8,8 +8,10 @@
  #include <memory>
  #include <optional>
  
 +#include "base/logging.h"
  #include "base/no_destructor.h"
  #include "base/strings/stringprintf.h"
++#include "chrome/browser/extensions/browseros_extension_constants.h"
  #include "chrome/browser/extensions/extension_tab_util.h"
-@@ -464,6 +465,139 @@ void SidePanelService::OnExtensionUninstalled(
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+@@ -464,6 +466,157 @@ void SidePanelService::OnExtensionUninstalled(
    RemoveExtensionOptions(extension->id());
  }
  
@@ -73,6 +76,24 @@ index 0582cf9b5141a..edce3344646fc 100644
 +
 +    LOG(INFO) << "browseros: Auto-registering contextual panel for tab_id="
 +              << tab_id << " with path=" << *default_options.path;
++
++    // For BrowserOS extensions using contextual toggle, automatically disable
++    // the global panel so the side panel only works per-tab. This prevents the
++    // panel from bleeding to other tabs when switching.
++    if (browseros::UsesContextualSidePanelToggle(extension.id())) {
++      // Check if global panel is still enabled (not yet disabled).
++      api::side_panel::PanelOptions global_options =
++          GetSpecificOptionsForTab(extension, SessionID::InvalidValue().id());
++      if (global_options.enabled.value_or(true)) {
++        LOG(INFO) << "browseros: Auto-disabling global panel for BrowserOS "
++                     "extension="
++                  << extension.id();
++        api::side_panel::PanelOptions disable_global;
++        // No tab_id means global options.
++        disable_global.enabled = false;
++        SetOptions(extension, std::move(disable_global));
++      }
++    }
 +
 +    // Create contextual options for this tab.
 +    api::side_panel::PanelOptions contextual_options;

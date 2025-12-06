@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/browseros_extension_constants.h b/chrome/browser/extensions/browseros_extension_constants.h
 new file mode 100644
-index 0000000000000..5a3b518b224a7
+index 0000000000000..fa424c0921d07
 --- /dev/null
 +++ b/chrome/browser/extensions/browseros_extension_constants.h
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,126 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -97,6 +97,12 @@ index 0000000000000..5a3b518b224a7
 +  const BrowserOSExtensionInfo* info =
 +      FindBrowserOSExtensionInfo(extension_id);
 +  return info && info->is_labelled;
++}
++
++// Returns true if this extension uses the contextual (tab-specific) side panel
++// toggle behavior. Currently only Agent V2 uses this.
++inline bool UsesContextualSidePanelToggle(const std::string& extension_id) {
++  return extension_id == kAgentV2ExtensionId;
 +}
 +
 +// Get all BrowserOS extension IDs
