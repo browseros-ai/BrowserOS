@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc
 new file mode 100644
-index 0000000000000..f8e61ae5325b9
+index 0000000000000..9b7d7f0c48175
 --- /dev/null
 +++ b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc
-@@ -0,0 +1,1157 @@
+@@ -0,0 +1,1163 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -15,6 +15,7 @@ index 0000000000000..f8e61ae5325b9
 +
 +#include "base/check.h"
 +#include "base/check_deref.h"
++#include "build/build_config.h"
 +#include "base/functional/callback.h"
 +#include "ui/views/controls/menu/menu_runner.h"
 +#include "ui/base/mojom/menu_source_type.mojom.h"
@@ -373,8 +374,13 @@ index 0000000000000..f8e61ae5325b9
 +  keyboard_icon->SetEnabledColor(ui::kColorLabelForegroundSecondary);
 +  
 +  // Add shortcut text
++#if BUILDFLAG(IS_MAC)
 +  auto* shortcuts_label = footer->AddChildView(
-+      std::make_unique<views::Label>(u"Toggle: ⌘⇧L  •  Switch: ⌘⇧;"));
++      std::make_unique<views::Label>(u"Toggle: Option+K  •  Next: Option+L"));
++#else
++  auto* shortcuts_label = footer->AddChildView(
++      std::make_unique<views::Label>(u"Toggle: Alt+K  •  Next: Alt+L"));
++#endif
 +  shortcuts_label->SetEnabledColor(ui::kColorLabelForegroundSecondary);
 +  shortcuts_label->SetFontList(
 +      shortcuts_label->font_list().DeriveWithSizeDelta(-1));

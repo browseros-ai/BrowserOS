@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/ui/views/side_panel/clash_of_gpts/clash_of_gpts_view.cc b/chrome/browser/ui/views/side_panel/clash_of_gpts/clash_of_gpts_view.cc
 new file mode 100644
-index 0000000000000..0a917c1613c48
+index 0000000000000..24eefea8b8860
 --- /dev/null
 +++ b/chrome/browser/ui/views/side_panel/clash_of_gpts/clash_of_gpts_view.cc
-@@ -0,0 +1,467 @@
+@@ -0,0 +1,474 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -13,6 +13,7 @@ index 0000000000000..0a917c1613c48
 +#include <utility>
 +
 +#include "base/functional/bind.h"
++#include "build/build_config.h"
 +#include "chrome/browser/ui/views/side_panel/clash_of_gpts/clash_of_gpts_coordinator.h"
 +#include "chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.h"
 +#include "base/strings/string_number_conversions.h"
@@ -175,9 +176,15 @@ index 0000000000000..0a917c1613c48
 +      8));
 +
 +  // Add keyboard shortcuts text
++#if BUILDFLAG(IS_MAC)
 +  auto* shortcuts_label = footer->AddChildView(
 +      std::make_unique<views::Label>(
-+          u"⌨️  Shortcuts: Toggle window: ⌘⇧U  •  Cycle pane: Click dropdown"));
++          u"⌨️  Toggle: Cmd+Shift+U  •  Cycle pane: Click dropdown"));
++#else
++  auto* shortcuts_label = footer->AddChildView(
++      std::make_unique<views::Label>(
++          u"⌨️  Toggle: Alt+Shift+U  •  Cycle pane: Click dropdown"));
++#endif
 +  shortcuts_label->SetEnabledColor(ui::kColorLabelForegroundSecondary);
 +  shortcuts_label->SetFontList(
 +      shortcuts_label->font_list().DeriveWithSizeDelta(-1));
