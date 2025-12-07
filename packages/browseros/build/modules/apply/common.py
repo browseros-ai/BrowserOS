@@ -153,10 +153,8 @@ def process_patch_list(
     patch_list: List[Tuple[Path, str]],
     chromium_src: Path,
     patches_dir: Path,
-    commit_each: bool = False,
     dry_run: bool = False,
     interactive: bool = False,
-    feature_name: Optional[str] = None,
     reset_to: Optional[str] = None,
 ) -> Tuple[int, List[str]]:
     """Process a list of patches.
@@ -165,10 +163,8 @@ def process_patch_list(
         patch_list: List of (patch_path, display_name) tuples
         chromium_src: Chromium source directory
         patches_dir: Base directory for relative path display
-        commit_each: Create a commit after each patch
         dry_run: Only check if patches would apply
         interactive: Ask for confirmation before each patch
-        feature_name: Optional feature name for commit messages
         reset_to: Commit to reset files to before applying (optional)
 
     Returns:
@@ -218,8 +214,6 @@ def process_patch_list(
 
         if success:
             applied += 1
-            if commit_each and not dry_run:
-                create_patch_commit(display_name, chromium_src, feature_name)
         else:
             failed.append(display_name)
 

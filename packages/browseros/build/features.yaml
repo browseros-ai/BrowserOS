@@ -23,32 +23,7 @@ features:
     files:
       - chrome/app/chromium_strings.grd
       - chrome/app/settings_chromium_strings.grdp
-      - chrome/app/theme/chromium/BRANDING
-      - chrome/app/theme/chromium/chromeos/
-      - chrome/app/theme/chromium/chromium.ai
-      - chrome/app/theme/chromium/linux/
-      - chrome/app/theme/chromium/mac/
-      - chrome/app/theme/chromium/product_logo.ai
-      - chrome/app/theme/chromium/product_logo.svg
-      - chrome/app/theme/chromium/product_logo.png
-      - chrome/app/theme/chromium/product_logo_16.png
-      - chrome/app/theme/chromium/product_logo_22.png
-      - chrome/app/theme/chromium/product_logo_22_mono.png
-      - chrome/app/theme/chromium/product_logo_24.png
-      - chrome/app/theme/chromium/product_logo_32.png
-      - chrome/app/theme/chromium/product_logo_48.png
-      - chrome/app/theme/chromium/product_logo_64.png
-      - chrome/app/theme/chromium/product_logo_128.png
-      - chrome/app/theme/chromium/product_logo_192.png
-      - chrome/app/theme/chromium/product_logo_256.png
-      - chrome/app/theme/chromium/product_logo_animation.svg
-      - chrome/app/theme/chromium/product_logo_name_22.png
-      - chrome/app/theme/chromium/product_logo_name_22_2x.png
-      - chrome/app/theme/chromium/product_logo_name_22_white.png
-      - chrome/app/theme/chromium/product_logo_name_22_white_2x.png
-      - chrome/app/theme/chromium/win/
-      - chrome/app/theme/default_100_percent/chromium/
-      - chrome/app/theme/default_200_percent/chromium/
+      - chrome/app/theme/
       - chrome/enterprise_companion/branding.gni
   ai-settings-page:
     description: llm settings page

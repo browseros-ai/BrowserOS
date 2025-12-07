@@ -266,9 +266,11 @@ def apply_all(
     interactive: bool = Option(
         True, "--interactive/--no-interactive", "-i/-n", help="Interactive mode"
     ),
-    commit: bool = Option(False, "--commit", "-c", help="Commit after each patch"),
     reset_to: Optional[str] = Option(
         None, "--reset-to", "-r", help="Reset files to this commit before applying patches"
+    ),
+    annotate: bool = Option(
+        False, "--annotate", "-a", help="Create git commits per feature after applying"
     ),
 ):
     """Apply all patches from chromium_patches/"""
@@ -281,7 +283,7 @@ def apply_all(
     module = ApplyAllModule()
     try:
         module.validate(ctx)
-        module.execute(ctx, interactive=interactive, commit=commit, reset_to=reset_to)
+        module.execute(ctx, interactive=interactive, reset_to=reset_to, annotate=annotate)
     except Exception as e:
         log_error(f"Failed to apply patches: {e}")
         raise typer.Exit(1)
@@ -293,9 +295,11 @@ def apply_feature(
     interactive: bool = Option(
         True, "--interactive/--no-interactive", "-i/-n", help="Interactive mode"
     ),
-    commit: bool = Option(False, "--commit", "-c", help="Commit after applying"),
     reset_to: Optional[str] = Option(
         None, "--reset-to", "-r", help="Reset files to this commit before applying patches"
+    ),
+    annotate: bool = Option(
+        False, "--annotate", "-a", help="Create git commit for this feature after applying"
     ),
 ):
     """Apply patches for a specific feature"""
@@ -309,7 +313,7 @@ def apply_feature(
     try:
         module.validate(ctx)
         module.execute(
-            ctx, feature_name=feature_name, interactive=interactive, commit=commit, reset_to=reset_to
+            ctx, feature_name=feature_name, interactive=interactive, reset_to=reset_to, annotate=annotate
         )
     except Exception as e:
         log_error(f"Failed to apply feature: {e}")
@@ -400,6 +404,37 @@ def feature_add(
         )
     except Exception as e:
         log_error(f"Failed to add feature: {e}")
+        raise typer.Exit(1)
+
+
+# Annotate command
+@app.command(name="annotate")
+def annotate_cmd(
+    feature_name: Optional[str] = Argument(
+        None, help="Optional: specific feature to annotate (default: all features)"
+    ),
+):
+    """Create git commits organized by features from features.yaml
+
+    For each feature with modified files, creates a commit with the format:
+    "{feature_name}: {description}"
+
+    Examples:
+        browseros dev annotate -S /path/to/chromium
+        browseros dev annotate llm-chat -S /path/to/chromium
+    """
+    ctx = create_build_context(state.chromium_src)
+    if not ctx:
+        raise typer.Exit(1)
+
+    from ..modules.annotate import AnnotateModule
+
+    module = AnnotateModule()
+    try:
+        module.validate(ctx)
+        module.execute(ctx, feature_name=feature_name)
+    except Exception as e:
+        log_error(f"Failed to annotate: {e}")
         raise typer.Exit(1)
 
 

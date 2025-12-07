@@ -6,13 +6,12 @@ from typing import List, Tuple, Optional
 
 from ...common.context import Context
 from ...common.module import CommandModule, ValidationError
-from ...common.utils import log_info, log_error, log_warning
+from ...common.utils import log_info, log_error, log_warning, log_success
 from .common import find_patch_files, process_patch_list
 
 
 def apply_all_patches(
     build_ctx: Context,
-    commit_each: bool = False,
     dry_run: bool = False,
     interactive: bool = False,
     reset_to: Optional[str] = None,
@@ -21,7 +20,6 @@ def apply_all_patches(
 
     Args:
         build_ctx: Build context
-        commit_each: Create a commit after each patch
         dry_run: Only check if patches would apply
         interactive: Ask for confirmation before each patch
         reset_to: Commit to reset files to before applying (optional)
@@ -55,7 +53,6 @@ def apply_all_patches(
         patch_list,
         build_ctx.chromium_src,
         patches_dir,
-        commit_each,
         dry_run,
         interactive,
         reset_to=reset_to,
@@ -92,23 +89,34 @@ class ApplyAllModule(CommandModule):
         self,
         ctx: Context,
         interactive: bool = True,
-        commit: bool = False,
         reset_to: Optional[str] = None,
+        annotate: bool = False,
         **kwargs,
     ) -> None:
         """Execute apply all patches
 
         Args:
             interactive: Interactive mode (ask before each patch)
-            commit: Create git commit after each patch
             reset_to: Commit to reset files to before applying (optional)
+            annotate: Create git commits per feature after applying
         """
         applied, failed = apply_all_patches(
             ctx,
-            commit_each=commit,
             dry_run=False,
             interactive=interactive,
             reset_to=reset_to,
         )
         if failed:
             raise RuntimeError(f"Failed to apply {len(failed)} patches")
+
+        # Run annotate if requested
+        if annotate:
+            from ..annotate import annotate_features
+
+            log_info("\n" + "=" * 60)
+            log_info("🏗️  Creating feature-based commits...")
+            commits, skipped = annotate_features(ctx)
+            if commits > 0:
+                log_success(f"✓ Created {commits} commit(s)")
+            else:
+                log_info("No commits created (no modified files found)")

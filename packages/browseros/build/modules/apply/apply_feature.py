@@ -7,14 +7,13 @@ from typing import List, Tuple, Optional
 
 from ...common.context import Context
 from ...common.module import CommandModule, ValidationError
-from ...common.utils import log_info, log_error, log_warning
+from ...common.utils import log_info, log_error, log_warning, log_success
 from .common import process_patch_list
 
 
 def apply_feature_patches(
     build_ctx: Context,
     feature_name: str,
-    commit_each: bool = False,
     dry_run: bool = False,
     reset_to: Optional[str] = None,
 ) -> Tuple[int, List[str]]:
@@ -23,7 +22,6 @@ def apply_feature_patches(
     Args:
         build_ctx: Build context
         feature_name: Name of the feature
-        commit_each: Create a commit after each patch
         dry_run: Only check if patches would apply
         reset_to: Commit to reset files to before applying (optional)
 
@@ -71,10 +69,8 @@ def apply_feature_patches(
         patch_list,
         build_ctx.chromium_src,
         patches_dir,
-        commit_each,
         dry_run,
         interactive=False,  # Feature patches don't support interactive mode
-        feature_name=feature_name,
         reset_to=reset_to,
     )
 
@@ -110,8 +106,8 @@ class ApplyFeatureModule(CommandModule):
         ctx: Context,
         feature_name: str,
         interactive: bool = True,
-        commit: bool = False,
         reset_to: Optional[str] = None,
+        annotate: bool = False,
         **kwargs,
     ) -> None:
         """Execute apply feature patches
@@ -119,13 +115,12 @@ class ApplyFeatureModule(CommandModule):
         Args:
             feature_name: Name of the feature to apply
             interactive: Interactive mode (ask before each patch)
-            commit: Create git commit after applying
             reset_to: Commit to reset files to before applying (optional)
+            annotate: Create git commit for this feature after applying
         """
         applied, failed = apply_feature_patches(
             ctx,
             feature_name,
-            commit_each=commit,
             dry_run=False,
             reset_to=reset_to,
         )
@@ -133,3 +128,14 @@ class ApplyFeatureModule(CommandModule):
             raise RuntimeError(
                 f"Failed to apply {len(failed)} patches for feature '{feature_name}'"
             )
+
+        # Run annotate for this specific feature if requested
+        if annotate:
+            from ..annotate import annotate_single_feature
+
+            log_info("\n" + "=" * 60)
+            log_info(f"🏗️  Creating commit for feature '{feature_name}'...")
+            if annotate_single_feature(ctx, feature_name):
+                log_success(f"✓ Created commit for '{feature_name}'")
+            else:
+                log_info("No commit created (no modified files found)")
