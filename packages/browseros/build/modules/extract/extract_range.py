@@ -4,7 +4,7 @@ Extract Range - Extract patches from a range of git commits.
 
 import click
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from ...common.context import Context
 from ...common.module import CommandModule, ValidationError
@@ -33,11 +33,11 @@ def extract_commit_range(
     force: bool = False,
     include_binary: bool = False,
     custom_base: Optional[str] = None,
-) -> int:
+) -> Tuple[int, List[str]]:
     """Extract patches from a commit range as a single cumulative diff
 
     Returns:
-        Number of patches successfully extracted
+        Tuple of (count, list of extracted file paths)
     """
     # Step 1: Validate commits
     if not validate_commit_exists(base_commit, ctx.chromium_src):
@@ -56,7 +56,7 @@ def extract_commit_range(
 
     if commit_count == 0:
         log_warning(f"No commits between {base_commit} and {head_commit}")
-        return 0
+        return 0, []
 
     log_info(f"Processing {commit_count} commits")
 
@@ -80,7 +80,7 @@ def extract_commit_range(
 
         if not changed_files:
             log_warning("No files changed in range")
-            return 0
+            return 0, []
 
         log_info(f"Found {len(changed_files)} files changed in range")
 
@@ -107,15 +107,16 @@ def extract_commit_range(
 
     if not file_patches:
         log_warning("No changes found in commit range")
-        return 0
+        return 0, []
 
     # Check for existing patches
     if not force and not check_overwrite(ctx, file_patches, verbose):
-        return 0
+        return 0, []
 
     success_count = 0
     fail_count = 0
     skip_count = 0
+    extracted_files: List[str] = []
 
     # Process with progress indicator
     with click.progressbar(
@@ -129,6 +130,7 @@ def extract_commit_range(
             if patch.operation == FileOperation.DELETE:
                 if create_deletion_marker(ctx, file_path):
                     success_count += 1
+                    extracted_files.append(file_path)
                 else:
                     fail_count += 1
 
@@ -136,6 +138,7 @@ def extract_commit_range(
                 if include_binary:
                     if create_binary_marker(ctx, file_path, patch.operation):
                         success_count += 1
+                        extracted_files.append(file_path)
                     else:
                         fail_count += 1
                 else:
@@ -144,6 +147,7 @@ def extract_commit_range(
             elif patch.patch_content:
                 if write_patch_file(ctx, file_path, patch.patch_content):
                     success_count += 1
+                    extracted_files.append(file_path)
                 else:
                     fail_count += 1
             else:
@@ -157,7 +161,7 @@ def extract_commit_range(
     if skip_count > 0:
         log_info(f"Skipped {skip_count} files")
 
-    return success_count
+    return success_count, extracted_files
 
 
 def extract_commits_individually(
@@ -168,13 +172,13 @@ def extract_commits_individually(
     force: bool = False,
     include_binary: bool = False,
     custom_base: Optional[str] = None,
-) -> int:
+) -> Tuple[int, List[str]]:
     """Extract patches from each commit in a range individually
 
     This preserves commit boundaries and can help with conflict resolution.
 
     Returns:
-        Total number of patches successfully extracted
+        Tuple of (count, list of extracted file paths)
     """
     # Validate custom base if provided
     if custom_base and not validate_commit_exists(custom_base, ctx.chromium_src):
@@ -193,13 +197,14 @@ def extract_commits_individually(
 
     if not commits:
         log_warning(f"No commits between {base_commit} and {head_commit}")
-        return 0
+        return 0, []
 
     log_info(f"Extracting patches from {len(commits)} commits individually")
     if custom_base:
         log_info(f"Using custom base: {custom_base}")
 
     total_extracted = 0
+    all_extracted_files: List[str] = []
     failed_commits = []
 
     with click.progressbar(
@@ -209,7 +214,7 @@ def extract_commits_individually(
             try:
                 if custom_base:
                     # Use extract_with_base for full diff from custom base
-                    extracted = extract_with_base(
+                    extracted, files = extract_with_base(
                         ctx,
                         commit,
                         custom_base,
@@ -219,7 +224,7 @@ def extract_commits_individually(
                     )
                 else:
                     # Normal extraction from parent
-                    extracted = extract_single_commit(
+                    extracted, files = extract_single_commit(
                         ctx,
                         commit,
                         verbose=False,
@@ -227,6 +232,7 @@ def extract_commits_individually(
                         include_binary=include_binary,
                     )
                 total_extracted += extracted
+                all_extracted_files.extend(files)
             except GitError as e:
                 failed_commits.append((commit, str(e)))
                 if verbose:
@@ -239,7 +245,9 @@ def extract_commits_individually(
         if len(failed_commits) > 5:
             log_warning(f"  ... and {len(failed_commits) - 5} more")
 
-    return total_extracted
+    # Deduplicate files (same file may appear in multiple commits)
+    unique_files = list(dict.fromkeys(all_extracted_files))
+    return total_extracted, unique_files
 
 
 class ExtractRangeModule(CommandModule):
@@ -268,6 +276,7 @@ class ExtractRangeModule(CommandModule):
         include_binary: bool = False,
         squash: bool = False,
         base: Optional[str] = None,
+        feature: bool = False,
     ) -> None:
         """Execute extract range
 
@@ -281,10 +290,11 @@ class ExtractRangeModule(CommandModule):
             include_binary: Include binary files
             squash: Squash all commits into single patches
             base: Use different base for diff (full diff from base for files in range)
+            feature: Prompt to add extracted files to a feature in features.yaml
         """
         try:
             if squash:
-                count = extract_commit_range(
+                count, extracted_files = extract_commit_range(
                     ctx,
                     base_commit=start,
                     head_commit=end,
@@ -294,7 +304,7 @@ class ExtractRangeModule(CommandModule):
                     custom_base=base,
                 )
             else:
-                count = extract_commits_individually(
+                count, extracted_files = extract_commits_individually(
                     ctx,
                     base_commit=start,
                     head_commit=end,
@@ -307,5 +317,28 @@ class ExtractRangeModule(CommandModule):
                 log_warning(f"No patches extracted from range {start}..{end}")
             else:
                 log_success(f"Successfully extracted {count} patches from {start}..{end}")
+
+                # Handle --feature flag
+                if feature and extracted_files:
+                    self._add_to_feature(ctx, end, extracted_files)
+
         except GitError as e:
             raise RuntimeError(f"Git error: {e}")
+
+    def _add_to_feature(self, ctx: Context, commit: str, files: List[str]) -> None:
+        """Prompt user to add extracted files to a feature."""
+        from ..feature import prompt_feature_selection, add_files_to_feature
+        from .utils import get_commit_info
+
+        # Get commit info for context (use the end commit)
+        commit_info = get_commit_info(commit, ctx.chromium_src)
+        commit_message = commit_info.get("subject") if commit_info else None
+
+        # Prompt for feature selection
+        result = prompt_feature_selection(ctx, commit[:12], commit_message)
+        if result is None:
+            log_warning("Skipped adding files to feature")
+            return
+
+        feature_name, description = result
+        add_files_to_feature(ctx, feature_name, description, files)

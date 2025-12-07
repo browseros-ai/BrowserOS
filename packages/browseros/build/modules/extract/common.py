@@ -6,7 +6,7 @@ Contains core extraction logic used by extract_commit and extract_range.
 
 import click
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 from ...common.context import Context
 from ...common.utils import log_info, log_error, log_warning
@@ -50,11 +50,16 @@ def write_patches(
     file_patches: Dict[str, FilePatch],
     verbose: bool,
     include_binary: bool,
-) -> int:
-    """Write patches to disk"""
+) -> Tuple[int, List[str]]:
+    """Write patches to disk.
+
+    Returns:
+        Tuple of (success_count, list of successfully extracted file paths)
+    """
     success_count = 0
     fail_count = 0
     skip_count = 0
+    extracted_files: List[str] = []
 
     for file_path, patch in file_patches.items():
         if verbose:
@@ -66,6 +71,7 @@ def write_patches(
             # Create deletion marker
             if create_deletion_marker(ctx, file_path):
                 success_count += 1
+                extracted_files.append(file_path)
             else:
                 fail_count += 1
 
@@ -74,6 +80,7 @@ def write_patches(
                 # Create binary marker
                 if create_binary_marker(ctx, file_path, patch.operation):
                     success_count += 1
+                    extracted_files.append(file_path)
                 else:
                     fail_count += 1
             else:
@@ -86,6 +93,7 @@ def write_patches(
                 # If there are changes beyond the rename
                 if write_patch_file(ctx, file_path, patch.patch_content):
                     success_count += 1
+                    extracted_files.append(file_path)
                 else:
                     fail_count += 1
             else:
@@ -98,6 +106,7 @@ def write_patches(
                     marker_path.write_text(marker_content)
                     log_info(f"  Rename marked: {file_path}")
                     success_count += 1
+                    extracted_files.append(file_path)
                 except Exception as e:
                     log_error(f"  Failed to mark rename: {e}")
                     fail_count += 1
@@ -107,6 +116,7 @@ def write_patches(
             if patch.patch_content:
                 if write_patch_file(ctx, file_path, patch.patch_content):
                     success_count += 1
+                    extracted_files.append(file_path)
                 else:
                     fail_count += 1
             else:
@@ -121,7 +131,7 @@ def write_patches(
     if skip_count > 0:
         log_info(f"Skipped {skip_count} files")
 
-    return success_count
+    return success_count, extracted_files
 
 
 def extract_normal(
@@ -130,8 +140,12 @@ def extract_normal(
     verbose: bool,
     force: bool,
     include_binary: bool,
-) -> int:
-    """Extract patches normally (diff against parent)"""
+) -> Tuple[int, List[str]]:
+    """Extract patches normally (diff against parent).
+
+    Returns:
+        Tuple of (count, list of extracted file paths)
+    """
     from .utils import GitError
 
     # Get diff against parent
@@ -149,11 +163,11 @@ def extract_normal(
 
     if not file_patches:
         log_warning("No changes found in commit")
-        return 0
+        return 0, []
 
     # Check for existing patches
     if not force and not check_overwrite(ctx, file_patches, verbose):
-        return 0
+        return 0, []
 
     # Write patches
     return write_patches(ctx, file_patches, verbose, include_binary)
@@ -166,15 +180,19 @@ def extract_with_base(
     verbose: bool,
     force: bool,
     include_binary: bool,
-) -> int:
-    """Extract patches with custom base (full diff from base for files in commit)"""
+) -> Tuple[int, List[str]]:
+    """Extract patches with custom base (full diff from base for files in commit).
+
+    Returns:
+        Tuple of (count, list of extracted file paths)
+    """
 
     # Step 1: Get list of files changed in the commit
     changed_files = get_commit_changed_files(commit_hash, ctx.chromium_src)
 
     if not changed_files:
         log_warning(f"No files changed in commit {commit_hash}")
-        return 0
+        return 0, []
 
     if verbose:
         log_info(f"Files changed in {commit_hash}: {len(changed_files)}")
@@ -243,13 +261,13 @@ def extract_with_base(
 
     if not file_patches:
         log_warning("No patches to extract")
-        return 0
+        return 0, []
 
     log_info(f"Extracting {len(file_patches)} patches with base {base}")
 
     # Check for existing patches
     if not force and not check_overwrite(ctx, file_patches, verbose):
-        return 0
+        return 0, []
 
     # Write patches
     return write_patches(ctx, file_patches, verbose, include_binary)

@@ -3,7 +3,7 @@ Extract Commit - Extract patches from a single git commit.
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from ...common.context import Context
 from ...common.module import CommandModule, ValidationError
@@ -24,7 +24,7 @@ def extract_single_commit(
     force: bool = False,
     include_binary: bool = False,
     base: Optional[str] = None,
-) -> int:
+) -> Tuple[int, List[str]]:
     """Extract patches from a single commit
 
     Args:
@@ -36,7 +36,7 @@ def extract_single_commit(
         base: If provided, extract full diff from base for files in commit
 
     Returns:
-        Number of patches successfully extracted
+        Tuple of (count, list of extracted file paths)
     """
     # Step 1: Validate commit
     if not validate_commit_exists(commit_hash, ctx.chromium_src):
@@ -82,6 +82,7 @@ class ExtractCommitModule(CommandModule):
         force: bool = False,
         include_binary: bool = False,
         base: Optional[str] = None,
+        feature: bool = False,
     ) -> None:
         """Execute extract commit
 
@@ -93,9 +94,10 @@ class ExtractCommitModule(CommandModule):
             force: Overwrite existing patches
             include_binary: Include binary files
             base: Extract full diff from base commit for files in COMMIT
+            feature: Prompt to add extracted files to a feature in features.yaml
         """
         try:
-            count = extract_single_commit(
+            count, extracted_files = extract_single_commit(
                 ctx,
                 commit_hash=commit,
                 verbose=verbose,
@@ -107,5 +109,28 @@ class ExtractCommitModule(CommandModule):
                 log_warning(f"No patches extracted from {commit}")
             else:
                 log_success(f"Successfully extracted {count} patches from {commit}")
+
+                # Handle --feature flag
+                if feature and extracted_files:
+                    self._add_to_feature(ctx, commit, extracted_files)
+
         except GitError as e:
             raise RuntimeError(f"Git error: {e}")
+
+    def _add_to_feature(self, ctx: Context, commit: str, files: List[str]) -> None:
+        """Prompt user to add extracted files to a feature."""
+        from ..feature import prompt_feature_selection, add_files_to_feature
+        from .utils import get_commit_info
+
+        # Get commit info for context
+        commit_info = get_commit_info(commit, ctx.chromium_src)
+        commit_message = commit_info.get("subject") if commit_info else None
+
+        # Prompt for feature selection
+        result = prompt_feature_selection(ctx, commit[:12], commit_message)
+        if result is None:
+            log_warning("Skipped adding files to feature")
+            return
+
+        feature_name, description = result
+        add_files_to_feature(ctx, feature_name, description, files)

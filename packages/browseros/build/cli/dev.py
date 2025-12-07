@@ -170,6 +170,9 @@ def extract_commit(
     base: Optional[str] = Option(
         None, "--base", help="Extract full diff from base commit for files in COMMIT"
     ),
+    feature: bool = Option(
+        False, "--feature", help="Add extracted files to a feature in features.yaml"
+    ),
 ):
     """Extract patches from a single commit"""
     ctx = create_build_context(state.chromium_src)
@@ -190,6 +193,7 @@ def extract_commit(
             force=force,
             include_binary=include_binary,
             base=base,
+            feature=feature,
         )
     except Exception as e:
         log_error(f"Failed to extract commit: {e}")
@@ -201,6 +205,9 @@ def extract_patch_cmd(
     chromium_path: str = Argument(..., help="Chromium file path (e.g., chrome/common/foo.h)"),
     base: str = Option(..., "--base", "-b", help="Base commit to diff against"),
     force: bool = Option(False, "--force", "-f", help="Overwrite existing patch without prompting"),
+    feature: bool = Option(
+        False, "--feature", help="Add extracted file to a feature in features.yaml"
+    ),
 ):
     """Extract patch for a specific file"""
     ctx = create_build_context(state.chromium_src)
@@ -214,6 +221,17 @@ def extract_patch_cmd(
         log_error(error or "Unknown error")
         raise typer.Exit(1)
     log_success(f"Successfully extracted patch for: {chromium_path}")
+
+    # Handle --feature flag
+    if feature:
+        from ..modules.feature import prompt_feature_selection, add_files_to_feature
+
+        result = prompt_feature_selection(ctx, base[:12], None)
+        if result is None:
+            log_warning("Skipped adding file to feature")
+        else:
+            feature_name, description = result
+            add_files_to_feature(ctx, feature_name, description, [chromium_path])
 
 
 @extract_app.command(name="range")
@@ -231,6 +249,9 @@ def extract_range(
         None,
         "--base",
         help="Use different base for diff (full diff from base for files in range)",
+    ),
+    feature: bool = Option(
+        False, "--feature", help="Add extracted files to a feature in features.yaml"
     ),
 ):
     """Extract patches from a range of commits"""
@@ -254,6 +275,7 @@ def extract_range(
             include_binary=include_binary,
             squash=squash,
             base=base,
+            feature=feature,
         )
     except Exception as e:
         log_error(f"Failed to extract range: {e}")
