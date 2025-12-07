@@ -152,3 +152,31 @@ class AddFeatureModule(CommandModule):
         success = add_feature(ctx, feature_name, commit, description)
         if not success:
             raise RuntimeError(f"Failed to add feature '{feature_name}'")
+
+
+class ClassifyFeaturesModule(CommandModule):
+    """Classify unclassified patch files into features"""
+    produces = []
+    requires = []
+    description = "Classify unclassified patch files into features"
+
+    def validate(self, ctx: Context) -> None:
+        """Validate patches directory exists"""
+        patches_dir = ctx.get_patches_dir()
+        if not patches_dir.exists():
+            raise ValidationError(f"Patches directory not found: {patches_dir}")
+
+    def execute(self, ctx: Context, **kwargs) -> None:
+        from .select import classify_files, get_unclassified_files
+
+        # Show summary first
+        unclassified = get_unclassified_files(ctx)
+        if not unclassified:
+            log_success("All patch files are already classified!")
+            return
+
+        log_info(f"Found {len(unclassified)} unclassified patch file(s)")
+        log_info("")
+
+        # Run classification
+        classified, skipped = classify_files(ctx)

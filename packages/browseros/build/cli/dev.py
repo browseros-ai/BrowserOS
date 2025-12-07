@@ -429,6 +429,31 @@ def feature_add(
         raise typer.Exit(1)
 
 
+@feature_app.command(name="classify")
+def feature_classify():
+    """Classify unclassified patch files into features
+
+    Lists all patches in chromium_patches/ that are not in any feature,
+    then prompts one-by-one to assign each to a feature.
+
+    Examples:
+        browseros dev feature classify
+    """
+    ctx = create_build_context(state.chromium_src)
+    if not ctx:
+        raise typer.Exit(1)
+
+    from ..modules.feature import ClassifyFeaturesModule
+
+    module = ClassifyFeaturesModule()
+    try:
+        module.validate(ctx)
+        module.execute(ctx)
+    except Exception as e:
+        log_error(f"Failed to classify features: {e}")
+        raise typer.Exit(1)
+
+
 # Annotate command
 @app.command(name="annotate")
 def annotate_cmd(

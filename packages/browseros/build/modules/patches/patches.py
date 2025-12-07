@@ -24,13 +24,11 @@ class PatchesModule(CommandModule):
 
     def execute(self, ctx: Context) -> None:
         log_info("\n🩹 Applying patches...")
-        if not apply_patches_impl(ctx, interactive=False, commit_each=False):
+        if not apply_patches_impl(ctx, interactive=False):
             raise RuntimeError("Failed to apply patches")
 
 
-def apply_patches_impl(
-    ctx: Context, interactive: bool = False, commit_each: bool = False
-) -> bool:
+def apply_patches_impl(ctx: Context, interactive: bool = False) -> bool:
     """Apply patches using the dev CLI patch system
 
     Returns:
@@ -53,7 +51,6 @@ def apply_patches_impl(
     # Call the dev CLI function directly
     _, failed = apply_all_patches(
         build_ctx=ctx,
-        commit_each=commit_each,
         dry_run=False,
         interactive=interactive,
     )
