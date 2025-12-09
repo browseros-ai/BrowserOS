@@ -363,6 +363,7 @@ features:
   keyboard-shorcuts:
     description: keyboard shortcuts
     files:
+    - chrome/browser/global_keyboard_shortcuts_mac.mm
     - chrome/browser/ui/accelerator_table.cc
   mac-sparkle:
     description: mac sparkle updater
