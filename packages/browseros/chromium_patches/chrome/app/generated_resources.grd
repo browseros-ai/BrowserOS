@@ -1,5 +1,5 @@
 diff --git a/chrome/app/generated_resources.grd b/chrome/app/generated_resources.grd
-index 873f67b36de4d..8d0b2e34e77f9 100644
+index 873f67b36de4d..98ef4f45ce0cc 100644
 --- a/chrome/app/generated_resources.grd
 +++ b/chrome/app/generated_resources.grd
 @@ -9033,6 +9033,15 @@ Keep your key file in a safe place. You will need it to create new versions of y
@@ -7,10 +7,10 @@ index 873f67b36de4d..8d0b2e34e77f9 100644
          Collapse <ph name="HEADER">$1<ex>Unread</ex></ph>
        </message>
 +      <message name="IDS_THIRD_PARTY_LLM_TITLE" desc="Title for 3rd party LLM side panel">
-+        LLM Chat
++        Chat 
 +      </message>
 +      <message name="IDS_CLASH_OF_GPTS_TITLE" desc="Title for Clash of GPTs side panel">
-+        LLM Hub
++        Hub
 +      </message>
 +      <message name="IDS_CLASH_OF_GPTS_TOOLTIP" desc="Tooltip for Clash of GPTs side panel button">
 +        Compare responses from multiple AI models
