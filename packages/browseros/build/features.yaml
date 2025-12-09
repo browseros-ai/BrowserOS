@@ -330,6 +330,7 @@ features:
     - chrome/browser/ui/views/new_tab_footer/footer_controller.cc
     - chrome/browser/ui/webui/new_tab_footer/
     - chrome/browser/ui/webui/new_tab_footer/new_tab_footer_ui.cc
+    - chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler_unittest.cc
     - components/bookmarks/browser/bookmark_utils.cc
     - components/content_settings/core/browser/cookie_settings.cc
     - components/payments/core/payment_prefs.cc
