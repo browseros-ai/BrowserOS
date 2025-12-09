@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/extensions/browseros_extension_constants.h b/chrome/browser/extensions/browseros_extension_constants.h
 new file mode 100644
-index 0000000000000..fa424c0921d07
+index 0000000000000..3a2119d05122b
 --- /dev/null
 +++ b/chrome/browser/extensions/browseros_extension_constants.h
 @@ -0,0 +1,126 @@
@@ -58,7 +58,7 @@ index 0000000000000..fa424c0921d07
 +    {kAISidePanelExtensionId, "BrowserOS", true, true},
 +    {kBugReporterExtensionId, "BrowserOS/bug-reporter", true, false},
 +    {kControllerExtensionId, "BrowserOS/controller", false, false},
-+    {kAgentV2ExtensionId, "BrowserOS", true, true},
++    {kAgentV2ExtensionId, "BrowserOS", false, false},
 +};
 +
 +// Allowlist of BrowserOS extension IDs that are permitted to be installed.

@@ -284,10 +284,13 @@ features:
   pin-extensions-toolbar:
     description: pin browseros extensions to extension toolbar
     files:
+    - chrome/browser/extensions/api/side_panel/side_panel_service.cc
     - chrome/browser/extensions/browseros_extension_constants.h
     - chrome/browser/extensions/extension_context_menu_model.cc
     - chrome/browser/extensions/extension_management.cc
     - chrome/browser/ui/actions/browseros_actions_config.h
+    - chrome/browser/ui/actions/chrome_action_id.h
+    - chrome/browser/ui/browser_actions.cc
     - chrome/browser/ui/toolbar/toolbar_actions_model.cc
     - chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.cc
     - chrome/browser/ui/views/side_panel/side_panel_action_callback.cc

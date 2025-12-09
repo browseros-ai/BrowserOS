@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/ui/actions/browseros_actions_config.h b/chrome/browser/ui/actions/browseros_actions_config.h
 new file mode 100644
-index 0000000000000..68985b1490511
+index 0000000000000..bc33293c0e432
 --- /dev/null
 +++ b/chrome/browser/ui/actions/browseros_actions_config.h
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,73 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -34,6 +34,7 @@ index 0000000000000..68985b1490511
 +    base::MakeFixedFlatSet<actions::ActionId>({
 +        kActionSidePanelShowThirdPartyLlm,
 +        kActionSidePanelShowClashOfGpts,
++        kActionBrowserOSAgent,
 +    });
 +
 +// Check if an action ID is a BrowserOS action (native or extension)

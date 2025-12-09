@@ -1,8 +1,16 @@
 diff --git a/chrome/browser/ui/browser_actions.cc b/chrome/browser/ui/browser_actions.cc
-index fb3dba200be8c..080fadd58fd7e 100644
+index fb3dba200be8c..29d60f64eab67 100644
 --- a/chrome/browser/ui/browser_actions.cc
 +++ b/chrome/browser/ui/browser_actions.cc
-@@ -20,6 +20,11 @@
+@@ -12,6 +12,7 @@
+ #include "base/check_op.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
++#include "chrome/grit/theme_resources.h"
+ #include "chrome/app/vector_icons/vector_icons.h"
+ #include "chrome/browser/devtools/devtools_window.h"
+ #include "chrome/browser/prefs/incognito_mode_prefs.h"
+@@ -20,6 +21,11 @@
  #include "chrome/browser/sharing_hub/sharing_hub_features.h"
  #include "chrome/browser/ui/actions/chrome_action_id.h"
  #include "chrome/browser/ui/actions/chrome_actions.h"
@@ -14,7 +22,7 @@ index fb3dba200be8c..080fadd58fd7e 100644
  #include "chrome/browser/ui/autofill/address_bubbles_icon_controller.h"
  #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
  #include "chrome/browser/ui/autofill/payments/mandatory_reauth_bubble_controller_impl.h"
-@@ -253,6 +258,37 @@ void BrowserActions::InitializeBrowserActions() {
+@@ -253,6 +259,97 @@ void BrowserActions::InitializeBrowserActions() {
              .Build());
    }
  
@@ -48,6 +56,66 @@ index fb3dba200be8c..080fadd58fd7e 100644
 +            .Build());
 +  }
 +
++  // BrowserOS Agent - toggles contextual side panel on active tab.
++  // This is a native action that dynamically looks up the extension at
++  // invocation time, avoiding stale WeakPtr issues during extension updates.
++  root_action_item_->AddChild(
++      actions::ActionItem::Builder(
++          base::BindRepeating(
++              [](BrowserWindowInterface* bwi, actions::ActionItem* item,
++                 actions::ActionInvocationContext context) {
++                auto* tab = bwi->GetActiveTabInterface();
++                if (!tab || !tab->GetContents()) {
++                  LOG(WARNING) << "browseros: No active tab for Agent action";
++                  return;
++                }
++
++                content::WebContents* contents = tab->GetContents();
++                Profile* profile =
++                    Profile::FromBrowserContext(contents->GetBrowserContext());
++
++                const extensions::Extension* extension =
++                    extensions::ExtensionRegistry::Get(profile)
++                        ->enabled_extensions()
++                        .GetByID(extensions::browseros::kAgentV2ExtensionId);
++                if (!extension) {
++                  LOG(WARNING) << "browseros: Agent extension not found";
++                  return;
++                }
++
++                int tab_id = extensions::ExtensionTabUtil::GetTabId(contents);
++                LOG(INFO) << "browseros: Agent toolbar action for tab_id="
++                          << tab_id;
++
++                extensions::SidePanelService* service =
++                    extensions::SidePanelService::Get(profile);
++                if (!service) {
++                  LOG(WARNING) << "browseros: SidePanelService not found";
++                  return;
++                }
++
++                auto result = service->BrowserosToggleSidePanelForTab(
++                    *extension, profile, tab_id,
++                    /*include_incognito_information=*/true,
++                    /*desired_state=*/std::nullopt);
++
++                if (!result.has_value()) {
++                  LOG(WARNING) << "browseros: Agent toggle failed: "
++                               << result.error();
++                } else {
++                  LOG(INFO) << "browseros: Agent toggle result: "
++                            << result.value();
++                }
++              },
++              bwi))
++          .SetActionId(kActionBrowserOSAgent)
++          .SetText(u"Assistant")
++          .SetTooltipText(u"Ask BrowserOS")
++          .SetImage(ui::ImageModel::FromResourceId(IDR_PRODUCT_LOGO_16))
++          .SetProperty(actions::kActionItemPinnableKey,
++                       std::underlying_type_t<actions::ActionPinnableState>(
++                           actions::ActionPinnableState::kNotPinnable))
++          .Build());
 +
    if (HistorySidePanelCoordinator::IsSupported()) {
      root_action_item_->AddChild(
