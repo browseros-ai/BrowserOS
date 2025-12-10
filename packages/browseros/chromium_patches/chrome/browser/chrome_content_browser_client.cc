@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index 0ab10486a183c..f1112005ba0ec 100644
+index 0ab10486a183c..2c0bc8127ffae 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
 @@ -613,6 +613,7 @@
@@ -19,7 +19,65 @@ index 0ab10486a183c..f1112005ba0ec 100644
    // Register user prefs for mapping SitePerProcess and IsolateOrigins in
    // user policy in addition to the same named ones in Local State (which are
    // used for mapping the command-line flags).
-@@ -7741,6 +7742,15 @@ content::ContentBrowserClient::PrivateNetworkRequestPolicyOverride
+@@ -4975,6 +4976,43 @@ bool ChromeContentBrowserClient::
+              prefs.root_scrollbar_theme_color;
+ }
+ 
++// Handles chrome://browseros/* URLs by rewriting to extension URLs.
++// Forward handler: chrome://browseros/ai -> chrome-extension://[id]/options.html
++static bool HandleBrowserOSURL(GURL* url,
++                               content::BrowserContext* browser_context) {
++  if (!url->SchemeIs(content::kChromeUIScheme) ||
++      url->host() != extensions::browseros::kBrowserOSHost) {
++    return false;
++  }
++
++  std::string extension_url =
++      extensions::browseros::GetBrowserOSExtensionURL(url->path());
++  if (extension_url.empty()) {
++    return false;
++  }
++
++  *url = GURL(extension_url);
++  return true;
++}
++
++// Reverse handler: chrome-extension://[id]/options.html#ai -> chrome://browseros/ai
++// This ensures the virtual URL is shown in the address bar.
++static bool ReverseBrowserOSURL(GURL* url,
++                                content::BrowserContext* browser_context) {
++  if (!url->SchemeIs(extensions::kExtensionScheme)) {
++    return false;
++  }
++
++  std::string virtual_url = extensions::browseros::GetBrowserOSVirtualURL(
++      url->host(), url->path(), url->ref());
++  if (virtual_url.empty()) {
++    return false;
++  }
++
++  *url = GURL(virtual_url);
++  return true;
++}
++
+ void ChromeContentBrowserClient::BrowserURLHandlerCreated(
+     BrowserURLHandler* handler) {
+   // The group policy NTP URL handler must be registered before the other NTP
+@@ -4991,6 +5029,13 @@ void ChromeContentBrowserClient::BrowserURLHandlerCreated(
+   handler->AddHandlerPair(&HandleChromeAboutAndChromeSyncRewrite,
+                           BrowserURLHandler::null_handler());
+ 
++  // Handler to rewrite chrome://browseros/* to extension URLs.
++  handler->AddHandlerPair(&HandleBrowserOSURL, &ReverseBrowserOSURL);
++  // Reverse-only handler for when extension opens its URL directly
++  // (e.g., chrome.tabs.create({url: 'options.html#ai'}))
++  handler->AddHandlerPair(BrowserURLHandler::null_handler(),
++                          &ReverseBrowserOSURL);
++
+ #if BUILDFLAG(IS_ANDROID)
+   // Handler to rewrite chrome://newtab on Android.
+   handler->AddHandlerPair(&chrome::android::HandleAndroidNativePageURL,
+@@ -7741,6 +7786,15 @@ content::ContentBrowserClient::PrivateNetworkRequestPolicyOverride
  ChromeContentBrowserClient::ShouldOverridePrivateNetworkRequestPolicy(
      content::BrowserContext* browser_context,
      const url::Origin& origin) {

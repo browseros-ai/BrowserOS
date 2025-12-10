@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/omnibox/chrome_omnibox_client.cc b/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
-index 89857e5f1bc3e..8a80a3d1de864 100644
+index 89857e5f1bc3e..ab8e144cd999f 100644
 --- a/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
 +++ b/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
 @@ -115,6 +115,7 @@
@@ -10,33 +10,54 @@ index 89857e5f1bc3e..8a80a3d1de864 100644
  #include "chrome/browser/safe_browsing/extension_telemetry/extension_telemetry_service.h"
  #include "chrome/browser/ui/extensions/settings_api_bubble_helpers.h"
  #endif
-@@ -305,7 +306,28 @@ std::u16string ChromeOmniboxClient::GetFormattedFullURL() const {
+@@ -301,15 +302,50 @@ gfx::Image ChromeOmniboxClient::GetSizedIcon(const gfx::Image& icon) const {
  }
  
- std::u16string ChromeOmniboxClient::GetURLForDisplay() const {
--  return location_bar_->GetLocationBarModel()->GetURLForDisplay();
-+  std::u16string display_url =
-+      location_bar_->GetLocationBarModel()->GetURLForDisplay();
-+
+ std::u16string ChromeOmniboxClient::GetFormattedFullURL() const {
 +#if BUILDFLAG(ENABLE_EXTENSIONS)
-+  // Transform BrowserOS extension URLs to display custom names
++  // Transform BrowserOS extension URLs to chrome://browseros/* virtual URLs
 +  GURL url = location_bar_->GetLocationBarModel()->GetURL();
 +  if (url.SchemeIs(extensions::kExtensionScheme)) {
-+    std::string extension_id = url.host();
-+    if (auto display_name =
-+            extensions::browseros::GetExtensionDisplayName(extension_id)) {
-+      std::u16string result = base::UTF8ToUTF16(display_name.value());
-+      // Append path if present (e.g., "BrowserOS-Agent/popup.html")
-+      if (url.has_path() && url.path() != "/") {
-+        result += u"/";
-+        result += base::UTF8ToUTF16(url.path().substr(1));  // Skip leading '/'
-+      }
-+      return result;
++    std::string virtual_url = extensions::browseros::GetBrowserOSVirtualURL(
++        url.host(), url.path(), url.ref());
++    if (!virtual_url.empty()) {
++      return base::UTF8ToUTF16(virtual_url);
 +    }
 +  }
 +#endif
-+
-+  return display_url;
+   return location_bar_->GetLocationBarModel()->GetFormattedFullURL();
+ }
+ 
+ std::u16string ChromeOmniboxClient::GetURLForDisplay() const {
++#if BUILDFLAG(ENABLE_EXTENSIONS)
++  // Transform BrowserOS extension URLs to chrome://browseros/* virtual URLs
++  GURL url = location_bar_->GetLocationBarModel()->GetURL();
++  if (url.SchemeIs(extensions::kExtensionScheme)) {
++    std::string virtual_url = extensions::browseros::GetBrowserOSVirtualURL(
++        url.host(), url.path(), url.ref());
++    if (!virtual_url.empty()) {
++      return base::UTF8ToUTF16(virtual_url);
++    }
++  }
++#endif
+   return location_bar_->GetLocationBarModel()->GetURLForDisplay();
  }
  
  GURL ChromeOmniboxClient::GetNavigationEntryURL() const {
++#if BUILDFLAG(ENABLE_EXTENSIONS)
++  // Transform BrowserOS extension URLs to chrome://browseros/* virtual URLs
++  GURL url = location_bar_->GetLocationBarModel()->GetURL();
++  if (url.SchemeIs(extensions::kExtensionScheme)) {
++    std::string virtual_url = extensions::browseros::GetBrowserOSVirtualURL(
++        url.host(), url.path(), url.ref());
++    if (!virtual_url.empty()) {
++      return GURL(virtual_url);
++    }
++  }
++  return url;
++#else
+   return location_bar_->GetLocationBarModel()->GetURL();
++#endif
+ }
+ 
+ metrics::OmniboxEventProto::PageClassification
