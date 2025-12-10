@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/browseros_external_loader.cc b/chrome/browser/extensions/browseros_external_loader.cc
 new file mode 100644
-index 0000000000000..8f01037dfcb90
+index 0000000000000..ac49a85ada194
 --- /dev/null
 +++ b/chrome/browser/extensions/browseros_external_loader.cc
-@@ -0,0 +1,757 @@
+@@ -0,0 +1,661 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -13,7 +13,6 @@ index 0000000000000..8f01037dfcb90
 +#include <memory>
 +#include <utility>
 +
-+#include "base/feature_list.h"
 +#include "base/files/file_util.h"
 +#include "base/functional/bind.h"
 +#include "base/json/json_reader.h"
@@ -23,7 +22,6 @@ index 0000000000000..8f01037dfcb90
 +#include "base/task/thread_pool.h"
 +#include "base/task/single_thread_task_runner.h"
 +#include "base/values.h"
-+#include "chrome/browser/browser_features.h"
 +#include "chrome/browser/browser_process.h"
 +#include "chrome/browser/extensions/browseros_extension_constants.h"
 +#include "chrome/browser/extensions/extension_service.h"
@@ -92,43 +90,12 @@ index 0000000000000..8f01037dfcb90
 +//   }
 +// }
 +
-+// Determines if a BrowserOS extension should be enabled based on the
-+// kBrowserOsAlphaFeatures flag state.
-+// - kAgentV2ExtensionId: enabled only when flag is ON
-+// - kAISidePanelExtensionId: enabled only when flag is OFF
-+// - All other extensions: always enabled
-+bool ShouldExtensionBeEnabled(const std::string& extension_id) {
-+  bool alpha_features_enabled =
-+      base::FeatureList::IsEnabled(features::kBrowserOsAlphaFeatures);
-+
-+  if (extension_id == browseros::kAgentV2ExtensionId) {
-+    return alpha_features_enabled;
-+  }
-+
-+  if (extension_id == browseros::kAISidePanelExtensionId) {
-+    return !alpha_features_enabled;
-+  }
-+
-+  // All other BrowserOS extensions are always enabled
-+  return true;
-+}
-+
-+// Returns the appropriate config URL based on the alpha features flag.
-+const char* GetConfigUrl() {
-+  if (base::FeatureList::IsEnabled(features::kBrowserOsAlphaFeatures)) {
-+    return browseros::kBrowserOSAlphaConfigUrl;
-+  }
-+  return browseros::kBrowserOSConfigUrl;
-+}
-+
 +}  // namespace
 +
 +BrowserOSExternalLoader::BrowserOSExternalLoader(Profile* profile)
 +    : profile_(profile) {
-+  // Select config URL based on alpha features flag
-+  config_url_ = GURL(GetConfigUrl());
-+  
-+  // Add known BrowserOS extension IDs
++  config_url_ = GURL(browseros::kBrowserOSConfigUrl);
++
 +  for (const char* extension_id : browseros::kAllowedExtensions) {
 +    browseros_extension_ids_.insert(extension_id);
 +  }
@@ -306,19 +273,16 @@ index 0000000000000..8f01037dfcb90
 +  // 1. Check for and reinstall any uninstalled BrowserOS extensions
 +  ReinstallUninstalledExtensions();
 +
-+  // 2. Re-enable any disabled BrowserOS extensions (respects flag state)
++  // 2. Re-enable any disabled BrowserOS extensions
 +  ReenableDisabledExtensions();
 +
-+  // 3. Enforce correct enabled/disabled state based on alpha features flag
-+  EnforceExtensionStateBasedOnFlag();
-+
-+  // 4. Fetch latest config and check for changes
++  // 3. Fetch latest config and check for changes
 +  FetchAndCheckConfig();
 +
-+  // 5. Force immediate update check for all BrowserOS extensions
++  // 4. Force immediate update check for all BrowserOS extensions
 +  ForceUpdateCheck();
 +
-+  // 6. Log extension state after all maintenance attempts
++  // 5. Log extension state after all maintenance attempts
 +  CheckAndLogExtensionState("periodic_maintenance");
 +
 +  // Schedule the next maintenance
@@ -399,26 +363,19 @@ index 0000000000000..8f01037dfcb90
 +  if (!service) {
 +    return;
 +  }
-+  
++
 +  ExtensionRegistry* registry = ExtensionRegistry::Get(profile_);
 +  ExtensionPrefs* prefs = ExtensionPrefs::Get(profile_);
-+  
++
 +  if (!registry || !prefs) {
 +    return;
 +  }
-+  
++
 +  for (const std::string& extension_id : browseros_extension_ids_) {
-+    // Check if extension is disabled
 +    if (!registry->disabled_extensions().Contains(extension_id)) {
-+      continue;  // Extension is not disabled, skip to next
++      continue;
 +    }
 +
-+    // Only re-enable if this extension should be enabled based on flag state
-+    if (!ShouldExtensionBeEnabled(extension_id)) {
-+      continue;  // Extension should stay disabled based on flag
-+    }
-+
-+    // Re-enable BrowserOS extensions regardless of disable reason
 +    auto* registrar = extensions::ExtensionRegistrar::Get(profile_);
 +    if (!registrar) {
 +      LOG(WARNING) << "browseros: Cannot re-enable " << extension_id
@@ -428,50 +385,6 @@ index 0000000000000..8f01037dfcb90
 +
 +    LOG(INFO) << "browseros: Re-enabling extension " << extension_id;
 +    registrar->EnableExtension(extension_id);
-+  }
-+}
-+
-+void BrowserOSExternalLoader::EnforceExtensionStateBasedOnFlag() {
-+  if (!profile_) {
-+    return;
-+  }
-+
-+  ExtensionRegistry* registry = ExtensionRegistry::Get(profile_);
-+  ExtensionPrefs* prefs = ExtensionPrefs::Get(profile_);
-+  auto* registrar = extensions::ExtensionRegistrar::Get(profile_);
-+
-+  if (!registry || !prefs || !registrar) {
-+    return;
-+  }
-+
-+  bool alpha_features_enabled =
-+      base::FeatureList::IsEnabled(features::kBrowserOsAlphaFeatures);
-+
-+  LOG(INFO) << "browseros: Enforcing extension state (alpha_features="
-+            << (alpha_features_enabled ? "ON" : "OFF") << ")";
-+
-+  for (const std::string& extension_id : browseros_extension_ids_) {
-+    bool should_be_enabled = ShouldExtensionBeEnabled(extension_id);
-+    bool is_enabled = registry->enabled_extensions().Contains(extension_id);
-+    bool is_disabled = registry->disabled_extensions().Contains(extension_id);
-+
-+    // Skip if extension is not installed yet
-+    if (!is_enabled && !is_disabled) {
-+      continue;
-+    }
-+
-+    if (should_be_enabled && is_disabled) {
-+      // Extension should be enabled but is disabled - enable it
-+      LOG(INFO) << "browseros: Enabling extension " << extension_id
-+                << " (flag state requires it to be enabled)";
-+      registrar->EnableExtension(extension_id);
-+    } else if (!should_be_enabled && is_enabled) {
-+      // Extension should be disabled but is enabled - disable it
-+      LOG(INFO) << "browseros: Disabling extension " << extension_id
-+                << " (flag state requires it to be disabled)";
-+      registrar->DisableExtension(extension_id,
-+                                  {disable_reason::DISABLE_USER_ACTION});
-+    }
 +  }
 +}
 +
@@ -622,15 +535,6 @@ index 0000000000000..8f01037dfcb90
 +
 +  // Trigger the installation
 +  updater->CheckNow(std::move(params));
-+
-+  // Schedule enforcement of extension state after installation completes.
-+  // This ensures the correct extension is enabled/disabled based on the
-+  // kBrowserOsAlphaFeatures flag after fresh installation.
-+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-+      FROM_HERE,
-+      base::BindOnce(&BrowserOSExternalLoader::EnforceExtensionStateBasedOnFlag,
-+                     weak_ptr_factory_.GetWeakPtr()),
-+      base::Seconds(30));
 +}
 +
 +void BrowserOSExternalLoader::ForceUpdateCheck() {
