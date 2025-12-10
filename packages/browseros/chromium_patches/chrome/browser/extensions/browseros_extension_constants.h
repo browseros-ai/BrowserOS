@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/extensions/browseros_extension_constants.h b/chrome/browser/extensions/browseros_extension_constants.h
 new file mode 100644
-index 0000000000000..b78f8dc74c960
+index 0000000000000..aec78219fe724
 --- /dev/null
 +++ b/chrome/browser/extensions/browseros_extension_constants.h
 @@ -0,0 +1,236 @@
@@ -32,7 +32,7 @@ index 0000000000000..b78f8dc74c960
 +}
 +
 +// AI Agent Extension ID
-+inline constexpr char kAISidePanelExtensionId[] =
++inline constexpr char kAgentV1ExtensionId[] =
 +    "djhdjhlnljbjgejbndockeedocneiaei";
 +
 +// Agent V2 Extension ID
@@ -174,10 +174,10 @@ index 0000000000000..b78f8dc74c960
 +};
 +
 +inline constexpr BrowserOSExtensionInfo kBrowserOSExtensions[] = {
-+    {kAISidePanelExtensionId, true, true},
++    {kAgentV1ExtensionId, true, true},
++    {kAgentV2ExtensionId, false, false},
 +    {kBugReporterExtensionId, true, false},
 +    {kControllerExtensionId, false, false},
-+    {kAgentV2ExtensionId, false, false},
 +    // ublock origin gets installed from chrome web store
 +    {kUBlockOriginExtensionId, false, false},
 +};
