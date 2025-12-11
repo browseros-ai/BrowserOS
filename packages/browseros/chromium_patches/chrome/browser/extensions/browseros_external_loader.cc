@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/browseros_external_loader.cc b/chrome/browser/extensions/browseros_external_loader.cc
 new file mode 100644
-index 0000000000000..61e57851b9178
+index 0000000000000..83c9677581de2
 --- /dev/null
 +++ b/chrome/browser/extensions/browseros_external_loader.cc
-@@ -0,0 +1,667 @@
+@@ -0,0 +1,709 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -37,6 +37,7 @@ index 0000000000000..61e57851b9178
 +#include "extensions/browser/extension_prefs.h"
 +#include "extensions/browser/extension_registrar.h"
 +#include "extensions/browser/extension_registry.h"
++#include "extensions/browser/uninstall_reason.h"
 +#include "extensions/browser/extension_system.h"
 +#include "extensions/browser/pending_extension_manager.h"
 +#include "extensions/common/extension.h"
@@ -102,7 +103,7 @@ index 0000000000000..61e57851b9178
 +    config_url_ = GURL(browseros::kBrowserOSConfigUrl);
 +  }
 +
-+  for (const char* extension_id : browseros::kAllowedExtensions) {
++  for (const std::string& extension_id : browseros::GetBrowserOSExtensionIds()) {
 +    browseros_extension_ids_.insert(extension_id);
 +  }
 +}
@@ -233,20 +234,12 @@ index 0000000000000..61e57851b9178
 +  // Pass the prefs to the external provider system
 +  LoadFinished(std::move(prefs));
 +  
-+  // Immediately trigger high-priority installation of all BrowserOS extensions
-+  // This ensures they get installed right away instead of waiting for Chrome's
-+  // default external extension installation process
-+  if (!browseros_extension_ids_.empty()) {
-+    LOG(INFO) << "browseros: Triggering immediate high-priority installation for " 
-+              << browseros_extension_ids_.size() << " BrowserOS extensions";
-+    
-+    // Use a delayed task to ensure the extension system is fully initialized
-+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-+        FROM_HERE,
-+        base::BindOnce(&BrowserOSExternalLoader::TriggerImmediateInstallation,
-+                       weak_ptr_factory_.GetWeakPtr()),
-+        base::Seconds(2));  // Small delay to ensure extension system is ready
-+  }
++  // Use a delayed task to ensure the extension system is fully initialized
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(&BrowserOSExternalLoader::TriggerImmediateInstallation,
++                     weak_ptr_factory_.GetWeakPtr()),
++      base::Seconds(2));
 +  
 +  // Start periodic checking after initial load
 +  StartPeriodicCheck();
@@ -276,19 +269,22 @@ index 0000000000000..61e57851b9178
 +    return;
 +  }
 +  
-+  // 1. Check for and reinstall any uninstalled BrowserOS extensions
++  // 1. Uninstall deprecated extensions (in kBrowserOSExtensions but not in server config)
++  UninstallDeprecatedExtensions();
++
++  // 2. Check for and reinstall any uninstalled BrowserOS extensions
 +  ReinstallUninstalledExtensions();
 +
-+  // 2. Re-enable any disabled BrowserOS extensions
++  // 3. Re-enable any disabled BrowserOS extensions
 +  ReenableDisabledExtensions();
 +
-+  // 3. Fetch latest config and check for changes
++  // 4. Fetch latest config and check for changes
 +  FetchAndCheckConfig();
 +
-+  // 4. Force immediate update check for all BrowserOS extensions
++  // 5. Force immediate update check for all BrowserOS extensions
 +  ForceUpdateCheck();
 +
-+  // 5. Log extension state after all maintenance attempts
++  // 6. Log extension state after all maintenance attempts
 +  CheckAndLogExtensionState("periodic_maintenance");
 +
 +  // Schedule the next maintenance
@@ -667,6 +663,52 @@ index 0000000000000..61e57851b9178
 +    LOG(WARNING) << "browseros: Extension " << extension_id
 +                 << " in unexpected state: " << state
 +                 << " (context: " << context << ")";
++  }
++}
++
++void BrowserOSExternalLoader::UninstallDeprecatedExtensions() {
++  if (!profile_ || last_config_.empty()) {
++    return;
++  }
++
++  ExtensionRegistry* registry = ExtensionRegistry::Get(profile_);
++  if (!registry) {
++    return;
++  }
++
++  auto* registrar = ExtensionRegistrar::Get(profile_);
++  if (!registrar) {
++    return;
++  }
++
++  // Build set of extension IDs currently in server config
++  std::set<std::string> server_extension_ids;
++  for (const auto [extension_id, _] : last_config_) {
++    server_extension_ids.insert(extension_id);
++  }
++
++  // Check all BrowserOS-managed extensions
++  for (const std::string& extension_id : browseros::GetBrowserOSExtensionIds()) {
++    // Skip if extension is in server config (still wanted)
++    if (server_extension_ids.contains(extension_id)) {
++      continue;
++    }
++
++    // Check if extension is installed
++    const Extension* extension = registry->GetInstalledExtension(extension_id);
++    if (!extension) {
++      continue;
++    }
++
++    LOG(INFO) << "browseros: Uninstalling deprecated extension " << extension_id;
++
++    std::u16string error;
++    if (!registrar->UninstallExtension(extension_id,
++                                       UNINSTALL_REASON_ORPHANED_EXTERNAL_EXTENSION,
++                                       &error)) {
++      LOG(WARNING) << "browseros: Failed to uninstall deprecated extension "
++                   << extension_id << ": " << error;
++    }
 +  }
 +}
 +

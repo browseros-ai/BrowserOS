@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/browseros_extension_constants.h b/chrome/browser/extensions/browseros_extension_constants.h
 new file mode 100644
-index 0000000000000..aec78219fe724
+index 0000000000000..65020a43f27e1
 --- /dev/null
 +++ b/chrome/browser/extensions/browseros_extension_constants.h
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,226 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -180,16 +180,6 @@ index 0000000000000..aec78219fe724
 +    {kControllerExtensionId, false, false},
 +    // ublock origin gets installed from chrome web store
 +    {kUBlockOriginExtensionId, false, false},
-+};
-+
-+// Allowlist of BrowserOS extension IDs that are permitted to be installed.
-+// Only extensions with these IDs will be loaded from the config.
-+inline constexpr const char* kAllowedExtensions[] = {
-+    kBrowserOSExtensions[0].id,
-+    kBrowserOSExtensions[1].id,
-+    kBrowserOSExtensions[2].id,
-+    kBrowserOSExtensions[3].id,
-+    kBrowserOSExtensions[4].id,
 +};
 +
 +inline constexpr size_t kBrowserOSExtensionsCount =

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/browseros_external_loader.h b/chrome/browser/extensions/browseros_external_loader.h
 new file mode 100644
-index 0000000000000..dc70fac86ca0a
+index 0000000000000..d5e6384343492
 --- /dev/null
 +++ b/chrome/browser/extensions/browseros_external_loader.h
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,128 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -94,6 +94,11 @@ index 0000000000000..dc70fac86ca0a
 +
 +  // Checks extension state and logs to metrics if not enabled
 +  void CheckAndLogExtensionState(const std::string& context);
++
++  // Uninstalls extensions that are in kAllBrowserOSExtensions but not in
++  // the current server config (extensions.json). This handles cleanup of
++  // deprecated extensions for users upgrading from older versions.
++  void UninstallDeprecatedExtensions();
 +
 +  // The profile associated with this loader.
 +  raw_ptr<Profile> profile_;

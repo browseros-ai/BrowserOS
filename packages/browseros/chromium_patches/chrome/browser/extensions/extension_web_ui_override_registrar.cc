@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/extensions/extension_web_ui_override_registrar.cc b/chrome/browser/extensions/extension_web_ui_override_registrar.cc
-index 7b48bcb950bad..4e7750c2a6112 100644
+index 7b48bcb950bad..73f7c36fd3a7c 100644
 --- a/chrome/browser/extensions/extension_web_ui_override_registrar.cc
 +++ b/chrome/browser/extensions/extension_web_ui_override_registrar.cc
 @@ -6,7 +6,9 @@
@@ -12,7 +12,7 @@ index 7b48bcb950bad..4e7750c2a6112 100644
  #include "chrome/browser/extensions/extension_web_ui.h"
  #include "chrome/browser/profiles/profile.h"
  #include "extensions/browser/extension_system.h"
-@@ -32,15 +34,29 @@ ExtensionWebUIOverrideRegistrar::~ExtensionWebUIOverrideRegistrar() = default;
+@@ -32,15 +34,20 @@ ExtensionWebUIOverrideRegistrar::~ExtensionWebUIOverrideRegistrar() = default;
  void ExtensionWebUIOverrideRegistrar::OnExtensionLoaded(
      content::BrowserContext* browser_context,
      const Extension* extension) {
@@ -26,16 +26,7 @@ index 7b48bcb950bad..4e7750c2a6112 100644
    if (!overrides.empty()) {
 -    for (auto& observer : observer_list_) {
 -      observer.OnExtensionOverrideAdded(*extension);
-+    // Check if this is a BrowserOS extension
-+    bool is_browseros_extension = false;
-+    for (const char* allowed_id : browseros::kAllowedExtensions) {
-+      if (extension->id() == allowed_id) {
-+        is_browseros_extension = true;
-+        break;
-+      }
-+    }
-+
-+    if (!is_browseros_extension) {
++    if (!browseros::IsBrowserOSExtension(extension->id())) {
 +      // disable other extensions from overriding Chrome URLs
 +      return;
      }
