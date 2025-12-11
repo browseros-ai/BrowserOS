@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros_server/browseros_server_manager.cc b/chrome/browser/browseros_server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..0a3a2d12d08fc
+index 0000000000000..692b9b05869d1
 --- /dev/null
 +++ b/chrome/browser/browseros_server/browseros_server_manager.cc
-@@ -0,0 +1,1076 @@
+@@ -0,0 +1,966 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -56,6 +56,71 @@ index 0000000000000..0a3a2d12d08fc
 +namespace {
 +
 +const int kBackLog = 10;
++const char kConfigFileName[] = "server_config.json";
++
++// Holds configuration data gathered on UI thread, passed to background thread
++struct ServerConfig {
++  std::string install_id;
++  std::string browseros_version;
++  std::string chromium_version;
++  bool allow_remote_in_mcp = false;
++};
++
++// Writes the server configuration to a JSON file.
++// Returns the path to the config file on success, empty path on failure.
++base::FilePath WriteConfigJson(const base::FilePath& execution_dir,
++                               const base::FilePath& resources_dir,
++                               uint16_t cdp_port,
++                               uint16_t mcp_port,
++                               uint16_t agent_port,
++                               uint16_t extension_port,
++                               const ServerConfig& server_config) {
++  base::FilePath config_path =
++      execution_dir.Append(FILE_PATH_LITERAL(kConfigFileName));
++
++  base::Value::Dict config;
++
++  // ports
++  base::Value::Dict ports;
++  ports.Set("cdp", static_cast<int>(cdp_port));
++  ports.Set("http_mcp", static_cast<int>(mcp_port));
++  ports.Set("agent", static_cast<int>(agent_port));
++  ports.Set("extension", static_cast<int>(extension_port));
++  config.Set("ports", std::move(ports));
++
++  // directories
++  base::Value::Dict directories;
++  directories.Set("resources", resources_dir.AsUTF8Unsafe());
++  directories.Set("execution", execution_dir.AsUTF8Unsafe());
++  config.Set("directories", std::move(directories));
++
++  // flags
++  base::Value::Dict flags;
++  flags.Set("allow_remote_in_mcp", server_config.allow_remote_in_mcp);
++  config.Set("flags", std::move(flags));
++
++  // instance
++  base::Value::Dict instance;
++  instance.Set("install_id", server_config.install_id);
++  instance.Set("browseros_version", server_config.browseros_version);
++  instance.Set("chromium_version", server_config.chromium_version);
++  config.Set("instance", std::move(instance));
++
++  std::string json_output;
++  if (!base::JSONWriter::WriteWithOptions(
++          config, base::JSONWriter::OPTIONS_PRETTY_PRINT, &json_output)) {
++    LOG(ERROR) << "browseros: Failed to serialize config to JSON";
++    return base::FilePath();
++  }
++
++  if (!base::WriteFile(config_path, json_output)) {
++    LOG(ERROR) << "browseros: Failed to write config file: " << config_path;
++    return base::FilePath();
++  }
++
++  LOG(INFO) << "browseros: Wrote config to " << config_path;
++  return config_path;
++}
 +
 +// Helper function to check for command-line port override.
 +// Returns the port value if valid override is found, 0 otherwise.
@@ -95,7 +160,8 @@ index 0000000000000..0a3a2d12d08fc
 +}
 +
 +// Launches the BrowserOS server process on a background thread.
-+// This function performs blocking I/O operations (PathExists, LaunchProcess).
++// This function performs blocking I/O operations (PathExists, WriteConfigToml,
++// LaunchProcess).
 +base::Process LaunchProcessOnBackgroundThread(
 +    const base::FilePath& exe_path,
 +    const base::FilePath& resources_dir,
@@ -103,7 +169,8 @@ index 0000000000000..0a3a2d12d08fc
 +    uint16_t cdp_port,
 +    uint16_t mcp_port,
 +    uint16_t agent_port,
-+    uint16_t extension_port) {
++    uint16_t extension_port,
++    const ServerConfig& server_config) {
 +  // Check if executable exists (blocking I/O)
 +  if (!base::PathExists(exe_path)) {
 +    LOG(ERROR) << "browseros: BrowserOS server executable not found at: "
@@ -123,14 +190,18 @@ index 0000000000000..0a3a2d12d08fc
 +    return base::Process();
 +  }
 +
-+  // Build command line
++  // Write configuration to JSON file
++  base::FilePath config_path = WriteConfigJson(
++      execution_dir, resources_dir, cdp_port, mcp_port, agent_port,
++      extension_port, server_config);
++  if (config_path.empty()) {
++    LOG(ERROR) << "browseros: Failed to write config file, aborting launch";
++    return base::Process();
++  }
++
++  // Build command line with --config flag
 +  base::CommandLine cmd(exe_path);
-+  cmd.AppendSwitchASCII("cdp-port", base::NumberToString(cdp_port));
-+  cmd.AppendSwitchASCII("http-mcp-port", base::NumberToString(mcp_port));
-+  cmd.AppendSwitchASCII("agent-port", base::NumberToString(agent_port));
-+  cmd.AppendSwitchASCII("extension-port", base::NumberToString(extension_port));
-+  cmd.AppendSwitchPath("resources-dir", resources_dir);
-+  cmd.AppendSwitchPath("execution-dir", execution_dir);
++  cmd.AppendSwitchPath("config", config_path);
 +
 +  // Set up launch options
 +  base::LaunchOptions options;
@@ -238,7 +309,7 @@ index 0000000000000..0a3a2d12d08fc
 +    mcp_port_ = browseros_server::kDefaultMCPPort;
 +    agent_port_ = browseros_server::kDefaultAgentPort;
 +    extension_port_ = browseros_server::kDefaultExtensionPort;
-+    mcp_enabled_ = true;
++    allow_remote_in_mcp_ = false;
 +  } else {
 +    cdp_port_ = prefs->GetInteger(browseros_server::kCDPServerPort);
 +    if (cdp_port_ <= 0) {
@@ -260,20 +331,22 @@ index 0000000000000..0a3a2d12d08fc
 +      extension_port_ = browseros_server::kDefaultExtensionPort;
 +    }
 +
-+    mcp_enabled_ = prefs->GetBoolean(browseros_server::kMCPServerEnabled);
++    allow_remote_in_mcp_ = prefs->GetBoolean(browseros_server::kAllowRemoteInMCP);
 +
 +    // Set up pref change observers
 +    if (!pref_change_registrar_) {
 +      pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
 +      pref_change_registrar_->Init(prefs);
 +      pref_change_registrar_->Add(
-+          browseros_server::kMCPServerEnabled,
-+          base::BindRepeating(&BrowserOSServerManager::OnMCPEnabledChanged,
-+                              base::Unretained(this)));
++          browseros_server::kAllowRemoteInMCP,
++          base::BindRepeating(
++              &BrowserOSServerManager::OnAllowRemoteInMCPChanged,
++              base::Unretained(this)));
 +      pref_change_registrar_->Add(
 +          browseros_server::kRestartServerRequested,
-+          base::BindRepeating(&BrowserOSServerManager::OnRestartServerRequestedChanged,
-+                              base::Unretained(this)));
++          base::BindRepeating(
++              &BrowserOSServerManager::OnRestartServerRequestedChanged,
++              base::Unretained(this)));
 +    }
 +  }
 +  cdp_port_ = FindAvailablePort(cdp_port_);
@@ -292,7 +365,6 @@ index 0000000000000..0a3a2d12d08fc
 +      command_line, "browseros-mcp-port", "MCP port");
 +  if (mcp_override > 0) {
 +    mcp_port_ = mcp_override;
-+    mcp_enabled_ = true;  // Implicit enable when port specified
 +  }
 +
 +  int agent_override = GetPortOverrideFromCommandLine(
@@ -323,12 +395,10 @@ index 0000000000000..0a3a2d12d08fc
 +  prefs->SetInteger(browseros_server::kMCPServerPort, mcp_port_);
 +  prefs->SetInteger(browseros_server::kAgentServerPort, agent_port_);
 +  prefs->SetInteger(browseros_server::kExtensionServerPort, extension_port_);
-+  prefs->SetBoolean(browseros_server::kMCPServerEnabled, mcp_enabled_);
 +
 +  LOG(INFO) << "browseros: Saving to prefs - CDP: " << cdp_port_
 +            << ", MCP: " << mcp_port_ << ", Agent: " << agent_port_
-+            << ", Extension: " << extension_port_
-+            << ", MCP enabled: " << (mcp_enabled_ ? "true" : "false");
++            << ", Extension: " << extension_port_;
 +}
 +
 +void BrowserOSServerManager::Start() {
@@ -403,7 +473,8 @@ index 0000000000000..0a3a2d12d08fc
 +  LOG(INFO) << "browseros: CDP WebSocket server started at ws://127.0.0.1:"
 +            << cdp_port_;
 +  LOG(INFO) << "browseros: MCP server port: " << mcp_port_
-+            << " (enabled: " << (mcp_enabled_ ? "true" : "false") << ")";
++            << " (allow_remote: "
++            << (allow_remote_in_mcp_ ? "true" : "false") << ")";
 +  LOG(INFO) << "browseros: Agent server port: " << agent_port_;
 +  LOG(INFO) << "browseros: Extension server port: " << extension_port_;
 +}
@@ -438,12 +509,34 @@ index 0000000000000..0a3a2d12d08fc
 +  uint16_t agent_port = agent_port_;
 +  uint16_t extension_port = extension_port_;
 +
++  // Gather server config on UI thread
++  ServerConfig server_config;
++  server_config.browseros_version =
++      std::string(version_info::GetBrowserOSVersionNumber());
++  server_config.chromium_version =
++      std::string(version_info::GetVersionNumber());
++  server_config.allow_remote_in_mcp = allow_remote_in_mcp_;
++
++  // Get install_id from BrowserOSMetricsService if available
++  ProfileManager* profile_manager = g_browser_process->profile_manager();
++  if (profile_manager) {
++    Profile* profile = profile_manager->GetLastUsedProfileIfLoaded();
++    if (profile && !profile->IsOffTheRecord()) {
++      browseros_metrics::BrowserOSMetricsService* metrics_service =
++          browseros_metrics::BrowserOSMetricsServiceFactory::GetForBrowserContext(
++              profile);
++      if (metrics_service) {
++        server_config.install_id = metrics_service->GetInstallId();
++      }
++    }
++  }
++
 +  // Post blocking work to background thread, get result back on UI thread
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
 +      base::BindOnce(&LaunchProcessOnBackgroundThread, exe_path, resources_dir,
 +                     execution_dir, cdp_port, mcp_port, agent_port,
-+                     extension_port),
++                     extension_port, server_config),
 +      base::BindOnce(&BrowserOSServerManager::OnProcessLaunched,
 +                     weak_factory_.GetWeakPtr()));
 +}
@@ -477,13 +570,6 @@ index 0000000000000..0a3a2d12d08fc
 +      LOG(INFO) << "browseros: Restart completed, reset restart_requested pref";
 +    }
 +  }
-+
-+  // /init will be sent after first successful periodic health check
-+
-+  // If MCP is disabled, send control request to disable it
-+  if (!mcp_enabled_) {
-+    SendMCPControlRequest(false);
-+  }
 +}
 +
 +void BrowserOSServerManager::TerminateBrowserOSProcess() {
@@ -494,10 +580,7 @@ index 0000000000000..0a3a2d12d08fc
 +  LOG(INFO) << "browseros: Force killing BrowserOS server process (PID: "
 +            << process_.Pid() << ")";
 +
-+  // Reset init flag so it gets sent again after restart
-+  init_request_sent_ = false;
-+
-+  // sync primitives is needed for process termination. 
++  // sync primitives is needed for process termination.
 +  // NOTE: only run on background threads
 +  base::ScopedAllowBaseSyncPrimitives allow_sync;
 +  base::ScopedAllowBlocking allow_blocking;
@@ -630,14 +713,7 @@ index 0000000000000..0a3a2d12d08fc
 +  }
 +
 +  if (response_code == 200) {
-+    // Health check passed
 +    LOG(INFO) << "browseros: Health check passed";
-+
-+    // Send /init request on first successful health check
-+    if (!init_request_sent_) {
-+      init_request_sent_ = true;
-+      SendInitRequest();
-+    }
 +    return;
 +  }
 +
@@ -661,7 +737,7 @@ index 0000000000000..0a3a2d12d08fc
 +  LaunchBrowserOSProcess();
 +}
 +
-+void BrowserOSServerManager::OnMCPEnabledChanged() {
++void BrowserOSServerManager::OnAllowRemoteInMCPChanged() {
 +  if (!is_running_) {
 +    return;
 +  }
@@ -671,15 +747,18 @@ index 0000000000000..0a3a2d12d08fc
 +    return;
 +  }
 +
-+  bool new_value = prefs->GetBoolean(browseros_server::kMCPServerEnabled);
++  bool new_value = prefs->GetBoolean(browseros_server::kAllowRemoteInMCP);
 +
-+  if (new_value != mcp_enabled_) {
-+    LOG(INFO) << "browseros: MCP enabled preference changed from "
-+              << (mcp_enabled_ ? "true" : "false") << " to "
-+              << (new_value ? "true" : "false");
++  if (new_value != allow_remote_in_mcp_) {
++    LOG(INFO) << "browseros: allow_remote_in_mcp preference changed from "
++              << (allow_remote_in_mcp_ ? "true" : "false") << " to "
++              << (new_value ? "true" : "false")
++              << ", restarting server...";
 +
-+    mcp_enabled_ = new_value;
-+    SendMCPControlRequest(new_value);
++    allow_remote_in_mcp_ = new_value;
++
++    // Restart server to apply new config
++    RestartBrowserOSProcess();
 +  }
 +}
 +
@@ -735,195 +814,6 @@ index 0000000000000..0a3a2d12d08fc
 +                               base::Unretained(manager)));
 +          },
 +          base::Unretained(this), ui_task_runner));
-+}
-+
-+void BrowserOSServerManager::SendMCPControlRequest(bool enabled) {
-+  if (!is_running_) {
-+    return;
-+  }
-+
-+  GURL control_url("http://127.0.0.1:" + base::NumberToString(mcp_port_) +
-+                   "/mcp/control");
-+
-+  net::NetworkTrafficAnnotationTag traffic_annotation =
-+      net::DefineNetworkTrafficAnnotation("browseros_mcp_control", R"(
-+        semantics {
-+          sender: "BrowserOS Server Manager"
-+          description:
-+            "Sends control command to BrowserOS MCP server to enable/disable "
-+            "the MCP protocol at runtime."
-+          trigger: "User changes MCP enabled preference."
-+          data: "JSON payload with enabled state: {\"enabled\": true/false}"
-+          destination: LOCAL
-+        }
-+        policy {
-+          cookies_allowed: NO
-+          setting: "This feature cannot be disabled by settings."
-+          policy_exception_justification:
-+            "Internal control request for BrowserOS server functionality."
-+        })");
-+
-+  auto resource_request = std::make_unique<network::ResourceRequest>();
-+  resource_request->url = control_url;
-+  resource_request->method = "POST";
-+  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
-+  resource_request->headers.SetHeader("Content-Type", "application/json");
-+
-+  std::string json_body = enabled ? "{\"enabled\":true}" : "{\"enabled\":false}";
-+
-+  auto url_loader = network::SimpleURLLoader::Create(
-+      std::move(resource_request), traffic_annotation);
-+  url_loader->AttachStringForUpload(json_body, "application/json");
-+  url_loader->SetTimeoutDuration(base::Seconds(10));
-+
-+  auto* url_loader_factory =
-+      g_browser_process->system_network_context_manager()
-+          ->GetURLLoaderFactory();
-+
-+  auto* url_loader_ptr = url_loader.get();
-+
-+  url_loader_ptr->DownloadHeadersOnly(
-+      url_loader_factory,
-+      base::BindOnce(&BrowserOSServerManager::OnMCPControlRequestComplete,
-+                     weak_factory_.GetWeakPtr(), enabled,
-+                     std::move(url_loader)));
-+
-+  LOG(INFO) << "browseros: Sent MCP control request: {\"enabled\": "
-+            << (enabled ? "true" : "false") << "}";
-+}
-+
-+void BrowserOSServerManager::OnMCPControlRequestComplete(
-+    bool requested_state,
-+    std::unique_ptr<network::SimpleURLLoader> url_loader,
-+    scoped_refptr<net::HttpResponseHeaders> headers) {
-+  if (!is_running_) {
-+    return;
-+  }
-+
-+  int response_code = 0;
-+  if (headers) {
-+    response_code = headers->response_code();
-+  }
-+
-+  if (response_code == 200) {
-+    LOG(INFO) << "browseros: MCP control request succeeded - MCP server is now "
-+              << (requested_state ? "enabled" : "disabled");
-+    return;
-+  }
-+
-+  int net_error = url_loader->NetError();
-+  LOG(ERROR) << "browseros: MCP control request failed - HTTP " << response_code
-+             << ", net error: " << net::ErrorToString(net_error);
-+}
-+
-+void BrowserOSServerManager::SendInitRequest() {
-+  if (!is_running_) {
-+    return;
-+  }
-+
-+  // Get the default profile to access BrowserOSMetricsService
-+  ProfileManager* profile_manager = g_browser_process->profile_manager();
-+  if (!profile_manager) {
-+    LOG(ERROR) << "browseros: Failed to get ProfileManager for /init request";
-+    return;
-+  }
-+
-+  Profile* profile = profile_manager->GetLastUsedProfileIfLoaded();
-+  if (!profile || profile->IsOffTheRecord()) {
-+    LOG(WARNING) << "browseros: No valid profile available for /init request";
-+    return;
-+  }
-+
-+  // Get BrowserOSMetricsService to retrieve install_id
-+  browseros_metrics::BrowserOSMetricsService* metrics_service =
-+      browseros_metrics::BrowserOSMetricsServiceFactory::GetForBrowserContext(
-+          profile);
-+  if (!metrics_service) {
-+    LOG(ERROR) << "browseros: Failed to get BrowserOSMetricsService for /init "
-+                  "request";
-+    return;
-+  }
-+
-+  // Build the /init payload
-+  base::Value::Dict payload;
-+  payload.Set("client_id", metrics_service->GetInstallId());
-+  payload.Set("version", version_info::GetVersionNumber());
-+  payload.Set("os", base::SysInfo::OperatingSystemName());
-+  payload.Set("arch", base::SysInfo::OperatingSystemArchitecture());
-+
-+  std::string json_payload;
-+  if (!base::JSONWriter::Write(payload, &json_payload)) {
-+    LOG(ERROR) << "browseros: Failed to serialize /init payload";
-+    return;
-+  }
-+
-+  GURL init_url("http://127.0.0.1:" + base::NumberToString(mcp_port_) +
-+                "/init");
-+
-+  net::NetworkTrafficAnnotationTag traffic_annotation =
-+      net::DefineNetworkTrafficAnnotation("browseros_server_init", R"(
-+        semantics {
-+          sender: "BrowserOS Server Manager"
-+          description:
-+            "Sends initialization metadata to BrowserOS MCP server including "
-+            "install ID, browser version, OS, and architecture."
-+          trigger: "BrowserOS server process successfully launched."
-+          data:
-+            "JSON payload with install_id, version, os, and arch. No PII."
-+          destination: LOCAL
-+        }
-+        policy {
-+          cookies_allowed: NO
-+          setting: "This feature cannot be disabled by settings."
-+          policy_exception_justification:
-+            "Internal initialization for BrowserOS server functionality."
-+        })");
-+
-+  auto resource_request = std::make_unique<network::ResourceRequest>();
-+  resource_request->url = init_url;
-+  resource_request->method = "POST";
-+  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
-+  resource_request->headers.SetHeader("Content-Type", "application/json");
-+
-+  auto url_loader = network::SimpleURLLoader::Create(
-+      std::move(resource_request), traffic_annotation);
-+  url_loader->AttachStringForUpload(json_payload, "application/json");
-+  url_loader->SetTimeoutDuration(base::Seconds(10));
-+
-+  auto* url_loader_factory =
-+      g_browser_process->system_network_context_manager()
-+          ->GetURLLoaderFactory();
-+
-+  auto* url_loader_ptr = url_loader.get();
-+
-+  url_loader_ptr->DownloadHeadersOnly(
-+      url_loader_factory,
-+      base::BindOnce(&BrowserOSServerManager::OnInitRequestComplete,
-+                     weak_factory_.GetWeakPtr(), std::move(url_loader)));
-+
-+  LOG(INFO) << "browseros: Sent /init request to MCP server";
-+}
-+
-+void BrowserOSServerManager::OnInitRequestComplete(
-+    std::unique_ptr<network::SimpleURLLoader> url_loader,
-+    scoped_refptr<net::HttpResponseHeaders> headers) {
-+  if (!is_running_) {
-+    return;
-+  }
-+
-+  int response_code = 0;
-+  if (headers) {
-+    response_code = headers->response_code();
-+  }
-+
-+  if (response_code == 200) {
-+    LOG(INFO) << "browseros: /init request succeeded";
-+    return;
-+  }
-+
-+  int net_error = url_loader->NetError();
-+  LOG(WARNING) << "browseros: /init request failed - HTTP " << response_code
-+               << ", net error: " << net::ErrorToString(net_error);
 +}
 +
 +int BrowserOSServerManager::FindAvailablePort(int starting_port) {

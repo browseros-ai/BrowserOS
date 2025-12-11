@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros_server/browseros_server_prefs.cc b/chrome/browser/browseros_server/browseros_server_prefs.cc
 new file mode 100644
-index 0000000000000..f9c7a9990cb01
+index 0000000000000..3f9acaa85b210
 --- /dev/null
 +++ b/chrome/browser/browseros_server/browseros_server_prefs.cc
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,52 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -26,11 +26,14 @@ index 0000000000000..f9c7a9990cb01
 +// Extension server port
 +const char kExtensionServerPort[] = "browseros.server.extension_port";
 +
-+// Whether MCP server is enabled
-+const char kMCPServerEnabled[] = "browseros.server.mcp_enabled";
++// Allow remote connections to MCP server (security setting)
++const char kAllowRemoteInMCP[] = "browseros.server.allow_remote_in_mcp";
 +
 +// Whether server restart has been requested (auto-reset after restart)
 +const char kRestartServerRequested[] = "browseros.server.restart_requested";
++
++// DEPRECATED: kept for migration, no longer used
++const char kMCPServerEnabled[] = "browseros.server.mcp_enabled";
 +
 +void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
 +  // CDP port
@@ -45,8 +48,8 @@ index 0000000000000..f9c7a9990cb01
 +  // Extension port
 +  registry->RegisterIntegerPref(kExtensionServerPort, kDefaultExtensionPort);
 +
-+  // MCP enabled
-+  registry->RegisterBooleanPref(kMCPServerEnabled, true);
++  // Allow remote MCP connections (default: false for security)
++  registry->RegisterBooleanPref(kAllowRemoteInMCP, false);
 +
 +  // Restart requested (default false, auto-reset after restart)
 +  registry->RegisterBooleanPref(kRestartServerRequested, false);

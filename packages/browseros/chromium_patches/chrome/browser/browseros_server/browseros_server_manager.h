@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros_server/browseros_server_manager.h b/chrome/browser/browseros_server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000..d991d965c4913
+index 0000000000000..9eb9a37980f11
 --- /dev/null
 +++ b/chrome/browser/browseros_server/browseros_server_manager.h
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,128 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -71,8 +71,8 @@ index 0000000000000..d991d965c4913
 +  // Gets the Extension port (auto-discovered, stable across restarts)
 +  int GetExtensionPort() const { return extension_port_; }
 +
-+  // Returns whether MCP server is enabled
-+  bool IsMCPEnabled() const { return mcp_enabled_; }
++  // Returns whether remote connections are allowed in MCP server
++  bool IsAllowRemoteInMCP() const { return allow_remote_in_mcp_; }
 +
 +  // Called when browser is shutting down
 +  void Shutdown();
@@ -97,17 +97,8 @@ index 0000000000000..d991d965c4913
 +  void OnHealthCheckComplete(
 +      std::unique_ptr<network::SimpleURLLoader> url_loader,
 +      scoped_refptr<net::HttpResponseHeaders> headers);
-+  void OnMCPEnabledChanged();
++  void OnAllowRemoteInMCPChanged();
 +  void OnRestartServerRequestedChanged();
-+  void SendMCPControlRequest(bool enabled);
-+  void OnMCPControlRequestComplete(
-+      bool requested_state,
-+      std::unique_ptr<network::SimpleURLLoader> url_loader,
-+      scoped_refptr<net::HttpResponseHeaders> headers);
-+  void SendInitRequest();
-+  void OnInitRequestComplete(
-+      std::unique_ptr<network::SimpleURLLoader> url_loader,
-+      scoped_refptr<net::HttpResponseHeaders> headers);
 +  void CheckProcessStatus();
 +
 +  base::FilePath GetBrowserOSServerResourcesPath() const;
@@ -122,10 +113,9 @@ index 0000000000000..d991d965c4913
 +  int mcp_port_ = 0;  // MCP port (auto-discovered)
 +  int agent_port_ = 0;  // Agent port (auto-discovered)
 +  int extension_port_ = 0;  // Extension port (auto-discovered)
-+  bool mcp_enabled_ = true;  // Whether MCP server is enabled
++  bool allow_remote_in_mcp_ = false;  // Whether remote connections allowed in MCP
 +  bool is_running_ = false;
 +  bool is_restarting_ = false;  // Whether server is currently restarting
-+  bool init_request_sent_ = false;  // Whether /init request has been sent
 +
 +  // Timer for health checks
 +  base::RepeatingTimer health_check_timer_;
@@ -133,7 +123,7 @@ index 0000000000000..d991d965c4913
 +  // Timer for process status checks
 +  base::RepeatingTimer process_check_timer_;
 +
-+  // Preference change registrar for monitoring MCP enabled changes
++  // Preference change registrar for monitoring pref changes
 +  std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
 +
 +  base::WeakPtrFactory<BrowserOSServerManager> weak_factory_{this};
