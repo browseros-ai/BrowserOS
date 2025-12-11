@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/resources/settings/settings_main/settings_main.html b/chrome/browser/resources/settings/settings_main/settings_main.html
-index e91a42678789f..defdc535cdeeb 100644
+index e91a42678789f..b45aab13e278c 100644
 --- a/chrome/browser/resources/settings/settings_main/settings_main.html
 +++ b/chrome/browser/resources/settings/settings_main/settings_main.html
-@@ -228,4 +228,34 @@
+@@ -228,4 +228,24 @@
        </settings-about-page>
      </template>
    </div>
@@ -14,16 +14,6 @@ index e91a42678789f..defdc535cdeeb 100644
 +          class="cr-centered-card-container"
 +          prefs="{{prefs}}">
 +      </settings-nxtscape-page>
-+    </template>
-+  </div>
-+
-+  <div slot="view" id="browseros">
-+    <template is="dom-if" if="[[renderPlugin_(
-+        routes_.BROWSEROS, lastRoute_, inSearchMode_)]]">
-+      <settings-browseros-page role="main"
-+          class="cr-centered-card-container"
-+          prefs="{{prefs}}">
-+      </settings-browseros-page>
 +    </template>
 +  </div>
 +
