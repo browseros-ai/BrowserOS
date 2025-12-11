@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
-index deb531f8832e3..977d40cf6ff10 100644
+index deb531f8832e3..78591a95b2bc7 100644
 --- a/chrome/browser/ui/browser_command_controller.cc
 +++ b/chrome/browser/ui/browser_command_controller.cc
 @@ -70,6 +70,8 @@
@@ -11,19 +11,21 @@ index deb531f8832e3..977d40cf6ff10 100644
  #include "chrome/browser/ui/web_applications/app_browser_controller.h"
  #include "chrome/browser/ui/web_applications/web_app_dialog_utils.h"
  #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
-@@ -104,7 +106,11 @@
+@@ -104,7 +106,13 @@
  #include "content/public/browser/web_contents_observer.h"
  #include "content/public/common/profiling.h"
  #include "content/public/common/url_constants.h"
 +#include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
 +#include "chrome/browser/extensions/browseros_extension_constants.h"
 +#include "chrome/browser/extensions/extension_tab_util.h"
++#include "chrome/browser/infobars/simple_alert_infobar_creator.h"
++#include "components/infobars/content/content_infobar_manager.h"
  #include "extensions/browser/extension_registrar.h"
 +#include "extensions/browser/extension_registry.h"
  #include "extensions/common/extension_urls.h"
  #include "printing/buildflags/buildflags.h"
  #include "ui/actions/actions.h"
-@@ -988,6 +994,58 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
+@@ -988,6 +996,71 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
        browser_->GetFeatures().side_panel_ui()->Show(
            SidePanelEntryId::kBookmarks, SidePanelOpenTrigger::kAppMenu);
        break;
@@ -67,6 +69,19 @@ index deb531f8832e3..977d40cf6ff10 100644
 +              ->enabled_extensions()
 +              .GetByID(extensions::browseros::kAgentV2ExtensionId);
 +      if (!extension) {
++        infobars::ContentInfoBarManager* infobar_manager =
++            infobars::ContentInfoBarManager::FromWebContents(active_contents);
++        if (infobar_manager) {
++          CreateSimpleAlertInfoBar(
++              infobar_manager,
++              infobars::InfoBarDelegate::
++                  BROWSEROS_AGENT_INSTALLING_INFOBAR_DELEGATE,
++              nullptr,
++              u"BrowserOS Agent is installing/updating. Please try again shortly.",
++              /*auto_expire=*/true,
++              /*should_animate=*/true,
++              /*closeable=*/true);
++        }
 +        break;
 +      }
 +      extensions::SidePanelService* service =
@@ -82,7 +97,7 @@ index deb531f8832e3..977d40cf6ff10 100644
      case IDC_SHOW_APP_MENU:
        base::RecordAction(base::UserMetricsAction("Accel_Show_App_Menu"));
        ShowAppMenu(browser_);
-@@ -1648,6 +1706,13 @@ void BrowserCommandController::InitCommandState() {
+@@ -1648,6 +1721,13 @@ void BrowserCommandController::InitCommandState() {
    }
  
    command_updater_.UpdateCommandEnabled(IDC_SHOW_BOOKMARK_SIDE_PANEL, true);

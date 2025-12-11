@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/browser_actions.cc b/chrome/browser/ui/browser_actions.cc
-index fb3dba200be8c..29d60f64eab67 100644
+index fb3dba200be8c..85429c5ab0acf 100644
 --- a/chrome/browser/ui/browser_actions.cc
 +++ b/chrome/browser/ui/browser_actions.cc
 @@ -12,6 +12,7 @@
@@ -10,19 +10,21 @@ index fb3dba200be8c..29d60f64eab67 100644
  #include "chrome/app/vector_icons/vector_icons.h"
  #include "chrome/browser/devtools/devtools_window.h"
  #include "chrome/browser/prefs/incognito_mode_prefs.h"
-@@ -20,6 +21,11 @@
+@@ -20,6 +21,13 @@
  #include "chrome/browser/sharing_hub/sharing_hub_features.h"
  #include "chrome/browser/ui/actions/chrome_action_id.h"
  #include "chrome/browser/ui/actions/chrome_actions.h"
 +#include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
 +#include "chrome/browser/extensions/browseros_extension_constants.h"
 +#include "chrome/browser/extensions/extension_tab_util.h"
++#include "chrome/browser/infobars/simple_alert_infobar_creator.h"
++#include "components/infobars/content/content_infobar_manager.h"
 +#include "chrome/browser/ui/extensions/extension_side_panel_utils.h"
 +#include "extensions/browser/extension_registry.h"
  #include "chrome/browser/ui/autofill/address_bubbles_icon_controller.h"
  #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
  #include "chrome/browser/ui/autofill/payments/mandatory_reauth_bubble_controller_impl.h"
-@@ -253,6 +259,97 @@ void BrowserActions::InitializeBrowserActions() {
+@@ -253,6 +261,110 @@ void BrowserActions::InitializeBrowserActions() {
              .Build());
    }
  
@@ -80,6 +82,19 @@ index fb3dba200be8c..29d60f64eab67 100644
 +                        .GetByID(extensions::browseros::kAgentV2ExtensionId);
 +                if (!extension) {
 +                  LOG(WARNING) << "browseros: Agent extension not found";
++                  infobars::ContentInfoBarManager* infobar_manager =
++                      infobars::ContentInfoBarManager::FromWebContents(contents);
++                  if (infobar_manager) {
++                    CreateSimpleAlertInfoBar(
++                        infobar_manager,
++                        infobars::InfoBarDelegate::
++                            BROWSEROS_AGENT_INSTALLING_INFOBAR_DELEGATE,
++                        nullptr,
++                        u"BrowserOS Agent is installing/updating. Please try again shortly.",
++                        /*auto_expire=*/true,
++                        /*should_animate=*/true,
++                        /*closeable=*/true);
++                  }
 +                  return;
 +                }
 +
