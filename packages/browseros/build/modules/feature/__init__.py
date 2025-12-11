@@ -12,12 +12,14 @@ Provides commands for managing features:
 - validate_feature_name: Validate feature name format
 """
 
-from .feature import (
-    add_feature,
-    add_or_update_feature,
+from .validation import (
     validate_description,
     validate_feature_name,
     VALID_PREFIXES,
+)
+from .feature import (
+    add_feature,
+    add_or_update_feature,
     AddFeatureModule,
     AddUpdateFeatureModule,
     list_features,

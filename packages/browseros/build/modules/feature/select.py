@@ -11,6 +11,7 @@ from typing import List, Optional, Dict, Tuple, Set
 
 from ...common.context import Context
 from ...common.utils import log_info, log_success, log_warning, log_error
+from .validation import validate_feature_name, validate_description, VALID_PREFIXES
 
 
 def load_features_yaml(features_file: Path) -> Dict:
@@ -120,29 +121,57 @@ def prompt_new_feature(default_description: Optional[str] = None) -> Optional[Tu
     log_info("")
     log_info("Creating new feature:")
     log_info("-" * 40)
+    log_info(f"  Valid prefixes: {', '.join(VALID_PREFIXES)}")
+    log_info("")
 
     try:
-        # Get feature name
-        feature_name = input("Feature name: ").strip()
-        if not feature_name:
-            log_warning("Cancelled - no feature name provided")
-            return None
+        # Get and validate feature name
+        while True:
+            feature_name = input("Feature name (kebab-case): ").strip()
+            if not feature_name:
+                log_warning("Cancelled - no feature name provided")
+                return None
 
-        # Sanitize feature name (lowercase, hyphens instead of spaces)
-        feature_name = feature_name.lower().replace(" ", "-")
+            # Sanitize feature name (lowercase, hyphens instead of spaces)
+            feature_name = feature_name.lower().replace(" ", "-")
 
-        # Get description
-        if default_description:
-            desc_prompt = f"Description [{default_description}]: "
-        else:
-            desc_prompt = "Description: "
+            # Validate
+            valid, error = validate_feature_name(feature_name)
+            if valid:
+                break
+            log_warning(f"Invalid name: {error}")
 
-        description = input(desc_prompt).strip()
-        if not description and default_description:
-            description = default_description
+        # Get and validate description
+        while True:
+            if default_description:
+                # Check if default already has valid prefix
+                valid, _ = validate_description(default_description)
+                if valid:
+                    desc_prompt = f"Description [{default_description}]: "
+                else:
+                    desc_prompt = f"Description (e.g., feat: {default_description}): "
+            else:
+                desc_prompt = "Description (e.g., feat: Add feature): "
 
-        if not description:
-            description = f"Feature: {feature_name}"
+            description = input(desc_prompt).strip()
+            if not description and default_description:
+                # Check if default is valid
+                valid, _ = validate_description(default_description)
+                if valid:
+                    description = default_description
+                else:
+                    log_warning(f"Default description needs prefix. Valid: {', '.join(VALID_PREFIXES)}")
+                    continue
+
+            if not description:
+                log_warning(f"Description required. Must start with: {', '.join(VALID_PREFIXES)}")
+                continue
+
+            # Validate
+            valid, error = validate_description(description)
+            if valid:
+                break
+            log_warning(f"Invalid description: {error}")
 
         return (feature_name, description)
 
