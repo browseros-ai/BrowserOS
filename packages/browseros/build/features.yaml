@@ -373,3 +373,9 @@ features:
     description: mac sparkle updater
     files:
     - third_party/sparkle/BUILD.gn
+  windows-icon-fix:
+    description: 'fix: windows icon fix'
+    files:
+    - chrome/browser/profiles/profile_shortcut_manager_win.cc
+    - chrome/browser/ui/views/frame/browser_desktop_window_tree_host_win.cc
+    - chrome/browser/ui/views/frame/browser_window_property_manager_win.cc
