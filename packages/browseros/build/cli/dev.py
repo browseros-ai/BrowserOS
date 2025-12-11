@@ -403,29 +403,40 @@ def feature_show(
         raise typer.Exit(1)
 
 
-@feature_app.command(name="add")
-def feature_add(
-    feature_name: str = Argument(..., help="Feature name to add"),
-    commit: str = Argument(..., help="Git commit reference"),
-    description: Optional[str] = Option(
-        None, "--description", "-d", help="Feature description"
+@feature_app.command(name="add-update")
+def feature_add_update(
+    name: str = Option(
+        ..., "--name", "-n", help="Feature name (lowercase kebab-case, e.g., 'llm-chat')"
+    ),
+    commit: str = Option(..., "--commit", "-c", help="Git commit reference"),
+    description: str = Option(
+        ...,
+        "--description",
+        "-d",
+        help="Feature description with prefix (feat:, fix:, build:, chore:, series:)",
     ),
 ):
-    """Add a new feature from a commit"""
+    """Add or update a feature with files from a commit.
+
+    If the feature exists, merges new files into it.
+    If the feature is new, creates it.
+
+    Examples:
+        browseros dev feature add-update --name llm-chat --commit HEAD -d "feat: LLM chat panel"
+        browseros dev feature add-update -n api -c HEAD~3 -d "feat: browseros API updates"
+    """
     ctx = create_build_context(state.chromium_src)
     if not ctx:
         raise typer.Exit(1)
 
-    from ..modules.feature import AddFeatureModule
+    from ..modules.feature import AddUpdateFeatureModule
 
-    module = AddFeatureModule()
+    module = AddUpdateFeatureModule()
     try:
         module.validate(ctx)
-        module.execute(
-            ctx, feature_name=feature_name, commit=commit, description=description
-        )
+        module.execute(ctx, name=name, commit=commit, description=description)
     except Exception as e:
-        log_error(f"Failed to add feature: {e}")
+        log_error(f"Failed to add/update feature: {e}")
         raise typer.Exit(1)
 
 

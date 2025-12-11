@@ -5,49 +5,169 @@ Simple feature management with YAML persistence.
 """
 
 import yaml
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 from ...common.context import Context
 from ...common.module import CommandModule, ValidationError
 from ..extract.utils import get_commit_changed_files
 from ...common.utils import log_info, log_error, log_success, log_warning
 
 
-def add_feature(ctx: Context, feature_name: str, commit: str, description: Optional[str] = None) -> bool:
-    """Add files from a commit to a feature
+# Valid description prefixes (conventional commits style)
+VALID_PREFIXES = ("feat:", "fix:", "build:", "chore:", "series:")
 
-    Examples:
-      dev feature add my-feature HEAD
-      dev feature add llm-chat HEAD~3 --description "LLM chat integration"
+
+def validate_description(description: str) -> Tuple[bool, str]:
+    """Validate description has required prefix.
+
+    Returns:
+        Tuple of (is_valid, error_message)
     """
+    description = description.strip()
+    if not description:
+        return False, "Description cannot be empty"
+
+    if not any(description.startswith(prefix) for prefix in VALID_PREFIXES):
+        return False, f"Description must start with one of: {', '.join(VALID_PREFIXES)}"
+
+    return True, ""
+
+
+def validate_feature_name(name: str) -> Tuple[bool, str]:
+    """Validate feature name format.
+
+    Feature names should be lowercase kebab-case identifiers.
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if not name:
+        return False, "Feature name cannot be empty"
+
+    if " " in name:
+        return False, "Feature name cannot contain spaces (use hyphens instead)"
+
+    if ":" in name:
+        return False, "Feature name cannot contain ':' (did you pass a description as the name?)"
+
+    if name != name.lower():
+        return False, f"Feature name must be lowercase (got '{name}', use '{name.lower()}')"
+
+    # Check for valid characters (alphanumeric, hyphens, underscores)
+    import re
+    if not re.match(r'^[a-z0-9][a-z0-9_-]*$', name):
+        return False, "Feature name must start with a letter/number and contain only lowercase letters, numbers, hyphens, and underscores"
+
+    return True, ""
+
+
+def add_or_update_feature(
+    ctx: Context,
+    feature_name: str,
+    commit: str,
+    description: str,
+) -> Tuple[bool, str]:
+    """Add or update a feature with files from a commit.
+
+    If feature exists, merges files (appends new ones).
+    If feature is new, creates it.
+
+    Args:
+        ctx: Build context
+        feature_name: Feature key name (e.g., 'llm-chat')
+        commit: Git commit reference
+        description: Feature description with prefix (e.g., 'feat: LLM chat')
+
+    Returns:
+        Tuple of (success, error_message)
+    """
+    # Validate inputs
+    valid, error = validate_feature_name(feature_name)
+    if not valid:
+        return False, error
+
+    valid, error = validate_description(description)
+    if not valid:
+        return False, error
+
     features_file = ctx.get_features_yaml_path()
 
     # Get changed files from commit
     changed_files = get_commit_changed_files(commit, ctx.chromium_src)
     if not changed_files:
-        log_error(f"No changed files found in commit {commit}")
-        return False
+        return False, f"No changed files found in commit {commit}"
 
     # Load existing features
-    features: Dict = {"features": {}}
+    features: Dict = {"version": "1.0", "features": {}}
     if features_file.exists():
         with open(features_file, "r") as f:
             content = yaml.safe_load(f)
-            if content and "features" in content:
+            if content:
                 features = content
+                if "features" not in features:
+                    features["features"] = {}
 
-    # Add or update feature
-    features["features"][feature_name] = {
-        "description": description or f"Feature: {feature_name}",
-        "files": sorted(changed_files),
-        "commit": commit,
-    }
+    existing_feature = features["features"].get(feature_name)
+
+    if existing_feature:
+        # Update existing feature - merge files
+        existing_files = set(existing_feature.get("files", []))
+        new_files = set(changed_files)
+
+        added_files = new_files - existing_files
+        already_present = new_files & existing_files
+        merged_files = existing_files | new_files
+
+        log_info(f"Updating existing feature '{feature_name}'")
+        log_info(f"  Current files: {len(existing_files)}")
+        log_info(f"  Files from commit: {len(new_files)}")
+
+        if added_files:
+            log_success(f"  Adding {len(added_files)} new file(s):")
+            for f in sorted(added_files)[:10]:
+                log_info(f"    + {f}")
+            if len(added_files) > 10:
+                log_info(f"    ... and {len(added_files) - 10} more")
+
+        if already_present:
+            log_warning(f"  Skipping {len(already_present)} file(s) already in feature")
+
+        features["features"][feature_name]["files"] = sorted(merged_files)
+        # Update description if provided (allows updating description)
+        features["features"][feature_name]["description"] = description
+
+    else:
+        # Create new feature
+        log_info(f"Creating new feature '{feature_name}'")
+        log_info(f"  Files from commit: {len(changed_files)}")
+
+        features["features"][feature_name] = {
+            "description": description,
+            "files": sorted(changed_files),
+        }
 
     # Save to file
     with open(features_file, "w") as f:
         yaml.safe_dump(features, f, sort_keys=False, default_flow_style=False)
 
-    log_success(f"✓ Added feature '{feature_name}' with {len(changed_files)} files")
-    return True
+    total_files = len(features["features"][feature_name]["files"])
+    if existing_feature:
+        log_success(f"✓ Updated feature '{feature_name}' - now has {total_files} files")
+    else:
+        log_success(f"✓ Created feature '{feature_name}' with {total_files} files")
+
+    return True, ""
+
+
+# Keep old function name for backwards compatibility but mark deprecated
+def add_feature(ctx: Context, feature_name: str, commit: str, description: Optional[str] = None) -> bool:
+    """Deprecated: Use add_or_update_feature instead."""
+    if description is None:
+        log_error("Description is required and must have a valid prefix")
+        return False
+    success, error = add_or_update_feature(ctx, feature_name, commit, description)
+    if not success:
+        log_error(error)
+    return success
 
 
 def list_features(ctx: Context):
@@ -134,11 +254,11 @@ class ShowFeatureModule(CommandModule):
         show_feature(ctx, feature_name)
 
 
-class AddFeatureModule(CommandModule):
-    """Add files from a commit to a feature"""
+class AddUpdateFeatureModule(CommandModule):
+    """Add or update a feature with files from a commit"""
     produces = []
     requires = []
-    description = "Add files from a commit to a feature"
+    description = "Add or update a feature with files from a commit"
 
     def validate(self, ctx: Context) -> None:
         """Validate git is available"""
@@ -148,10 +268,21 @@ class AddFeatureModule(CommandModule):
         if not ctx.chromium_src.exists():
             raise ValidationError(f"Chromium source not found: {ctx.chromium_src}")
 
-    def execute(self, ctx: Context, feature_name: str, commit: str, description: Optional[str] = None, **kwargs) -> None:
-        success = add_feature(ctx, feature_name, commit, description)
+    def execute(
+        self,
+        ctx: Context,
+        name: str,
+        commit: str,
+        description: str,
+        **kwargs,
+    ) -> None:
+        success, error = add_or_update_feature(ctx, name, commit, description)
         if not success:
-            raise RuntimeError(f"Failed to add feature '{feature_name}'")
+            raise RuntimeError(error)
+
+
+# Backwards compatibility alias
+AddFeatureModule = AddUpdateFeatureModule
 
 
 class ClassifyFeaturesModule(CommandModule):

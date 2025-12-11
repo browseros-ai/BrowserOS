@@ -366,8 +366,8 @@ features:
       - chrome/browser/profiles/profile_shortcut_manager_win.cc
       - chrome/browser/ui/views/frame/browser_desktop_window_tree_host_win.cc
       - chrome/browser/ui/views/frame/browser_window_property_manager_win.cc
-  "feat: chromium urls for browseros":
-    description: "feat: feat: chromium urls for browseros"
+  chromium-urls:
+    description: "feat: chromium urls for browseros"
     files:
       - chrome/browser/chrome_content_browser_client.cc
       - chrome/browser/extensions/browseros_extension_constants.h
