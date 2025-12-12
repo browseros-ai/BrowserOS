@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros_server/browseros_server_manager.cc b/chrome/browser/browseros_server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..43f1ee391f0a8
+index 0000000000000..e16b9181f8e3d
 --- /dev/null
 +++ b/chrome/browser/browseros_server/browseros_server_manager.cc
-@@ -0,0 +1,967 @@
+@@ -0,0 +1,952 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -55,9 +55,16 @@ index 0000000000000..43f1ee391f0a8
 +
 +namespace {
 +
-+const int kBackLog = 10;
++constexpr int kBackLog = 10;
 +constexpr base::FilePath::CharType kConfigFileName[] =
 +    FILE_PATH_LITERAL("server_config.json");
++
++constexpr base::TimeDelta kHealthCheckInterval = base::Seconds(30);
++constexpr base::TimeDelta kHealthCheckTimeout = base::Seconds(15);
++constexpr base::TimeDelta kProcessCheckInterval = base::Seconds(10);
++
++constexpr int kMaxPortAttempts = 100;
++constexpr int kMaxPort = 65535;
 +
 +// Holds configuration data gathered on UI thread, passed to background thread
 +struct ServerConfig {
@@ -426,13 +433,10 @@ index 0000000000000..43f1ee391f0a8
 +
 +  LOG(INFO) << "browseros: Starting BrowserOS server";
 +
-+
 +  // Start servers and process
++  // Note: monitoring timers are started in OnProcessLaunched() after successful launch
 +  StartCDPServer();
 +  LaunchBrowserOSProcess();
-+
-+  health_check_timer_.Start(FROM_HERE, base::Seconds(60), this,
-+                            &BrowserOSServerManager::CheckServerHealth);
 +}
 +
 +void BrowserOSServerManager::Stop() {
@@ -444,8 +448,8 @@ index 0000000000000..43f1ee391f0a8
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
 +
-+  TerminateBrowserOSProcess();
-+  StopCDPServer();
++  // Use wait=false for shutdown - just send kill signal, don't block UI thread
++  TerminateBrowserOSProcess(/*wait=*/false);
 +
 +  // Release lock
 +  if (lock_file_.IsValid()) {
@@ -496,7 +500,6 @@ index 0000000000000..43f1ee391f0a8
 +  base::FilePath execution_dir = GetBrowserOSExecutionDir();
 +  if (execution_dir.empty()) {
 +    LOG(ERROR) << "browseros: Failed to resolve execution directory";
-+    StopCDPServer();
 +    return;
 +  }
 +
@@ -545,7 +548,9 @@ index 0000000000000..43f1ee391f0a8
 +void BrowserOSServerManager::OnProcessLaunched(base::Process process) {
 +  if (!process.IsValid()) {
 +    LOG(ERROR) << "browseros: Failed to launch BrowserOS server";
-+    StopCDPServer();
++    // Don't stop CDP server - it's independent and may be used by other things
++    // Leave system in degraded state (CDP up, no browseros_server) rather than
++    // completely broken state (no CDP, no server)
 +    is_restarting_ = false;
 +    return;
 +  }
@@ -553,13 +558,16 @@ index 0000000000000..43f1ee391f0a8
 +  process_ = std::move(process);
 +  is_running_ = true;
 +
-+  LOG(INFO) << "browseros: BrowserOS server started";
++  LOG(INFO) << "browseros: BrowserOS server started with PID: " << process_.Pid();
 +  LOG(INFO) << "browseros: CDP port: " << cdp_port_;
 +  LOG(INFO) << "browseros: MCP port: " << mcp_port_;
 +  LOG(INFO) << "browseros: Agent port: " << agent_port_;
 +  LOG(INFO) << "browseros: Extension port: " << extension_port_;
 +
-+  process_check_timer_.Start(FROM_HERE, base::Seconds(5), this,
++  // Start/restart monitoring timers
++  health_check_timer_.Start(FROM_HERE, kHealthCheckInterval, this,
++                            &BrowserOSServerManager::CheckServerHealth);
++  process_check_timer_.Start(FROM_HERE, kProcessCheckInterval, this,
 +                             &BrowserOSServerManager::CheckProcessStatus);
 +
 +  // Reset restart flag and pref after successful launch
@@ -573,36 +581,34 @@ index 0000000000000..43f1ee391f0a8
 +  }
 +}
 +
-+void BrowserOSServerManager::TerminateBrowserOSProcess() {
++void BrowserOSServerManager::TerminateBrowserOSProcess(bool wait) {
 +  if (!process_.IsValid()) {
 +    return;
 +  }
 +
-+  LOG(INFO) << "browseros: Force killing BrowserOS server process (PID: "
-+            << process_.Pid() << ")";
-+
-+  // sync primitives is needed for process termination.
-+  // NOTE: only run on background threads
-+  base::ScopedAllowBaseSyncPrimitives allow_sync;
-+  base::ScopedAllowBlocking allow_blocking;
++  LOG(INFO) << "browseros: Terminating BrowserOS server process (PID: "
++            << process_.Pid() << ", wait: " << (wait ? "true" : "false") << ")";
 +
 +#if BUILDFLAG(IS_POSIX)
-+  // POSIX: Send SIGKILL for immediate termination (no graceful shutdown)
-+  // This matches Windows TerminateProcess behavior
 +  base::ProcessId pid = process_.Pid();
-+  if (kill(pid, SIGKILL) == 0) {
++  if (kill(pid, SIGKILL) != 0) {
++    PLOG(ERROR) << "browseros: Failed to send SIGKILL to PID " << pid;
++  } else if (wait) {
++    // Blocking wait - must be called from background thread
++    base::ScopedAllowBaseSyncPrimitives allow_sync;
++    base::ScopedAllowBlocking allow_blocking;
 +    int exit_code = 0;
 +    if (process_.WaitForExit(&exit_code)) {
-+      LOG(INFO) << "browseros: Process killed successfully with SIGKILL";
++      LOG(INFO) << "browseros: Process killed successfully";
 +    } else {
-+      LOG(WARNING) << "browseros: SIGKILL sent but WaitForExit failed";
++      LOG(WARNING) << "browseros: WaitForExit failed";
 +    }
 +  } else {
-+    PLOG(ERROR) << "browseros: Failed to send SIGKILL to PID " << pid;
++    LOG(INFO) << "browseros: SIGKILL sent (not waiting for exit)";
 +  }
 +#else
-+  // Windows: TerminateProcess is already immediate force kill
-+  bool terminated = process_.Terminate(0, true);
++  // Windows: Terminate with wait parameter
++  bool terminated = process_.Terminate(0, wait);
 +  if (terminated) {
 +    LOG(INFO) << "browseros: Process terminated successfully";
 +  } else {
@@ -617,25 +623,18 @@ index 0000000000000..43f1ee391f0a8
 +  LOG(INFO) << "browseros: BrowserOS server exited with code: " << exit_code;
 +  is_running_ = false;
 +
-+  // Stop CDP server since BrowserOS process is gone
-+  StopCDPServer();
++  // Stop timers during restart to prevent races
++  health_check_timer_.Stop();
++  process_check_timer_.Stop();
 +
-+  // Restart if it crashed unexpectedly
-+  if (exit_code != 0) {
-+    LOG(WARNING) << "browseros: BrowserOS server crashed, restarting...";
-+    Start();
-+  }
++  // Always restart - we want the server running
++  // Don't call Start() - we already hold the lock and CDP server is running
++  LOG(WARNING) << "browseros: BrowserOS server exited, restarting process...";
++  LaunchBrowserOSProcess();
 +}
 +
 +void BrowserOSServerManager::CheckServerHealth() {
 +  if (!is_running_) {
-+    return;
-+  }
-+
-+  // First check if process is still alive
-+  if (!process_.IsValid()) {
-+    LOG(WARNING) << "browseros: BrowserOS server process is invalid, restarting...";
-+    RestartBrowserOSProcess();
 +    return;
 +  }
 +
@@ -667,10 +666,9 @@ index 0000000000000..43f1ee391f0a8
 +  resource_request->method = "GET";
 +  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
 +
-+  // Create URL loader with 10 second timeout
 +  auto url_loader = network::SimpleURLLoader::Create(
 +      std::move(resource_request), traffic_annotation);
-+  url_loader->SetTimeoutDuration(base::Seconds(10));
++  url_loader->SetTimeoutDuration(kHealthCheckTimeout);
 +
 +  // Get URL loader factory from default storage partition
 +  auto* url_loader_factory =
@@ -692,10 +690,13 @@ index 0000000000000..43f1ee391f0a8
 +    return;
 +  }
 +
-+  // Check if process has exited
 +  int exit_code = 0;
-+  if (process_.WaitForExitWithTimeout(base::TimeDelta(), &exit_code)) {
-+    // Process has exited
++  bool exited = process_.WaitForExitWithTimeout(base::TimeDelta(), &exit_code);
++  LOG(INFO) << "browseros: CheckProcessStatus PID: " << process_.Pid()
++            << ", WaitForExitWithTimeout returned: " << exited
++            << ", exit_code: " << exit_code;
++
++  if (exited) {
 +    OnProcessExited(exit_code);
 +  }
 +}
@@ -730,12 +731,36 @@ index 0000000000000..43f1ee391f0a8
 +void BrowserOSServerManager::RestartBrowserOSProcess() {
 +  LOG(INFO) << "browseros: Restarting BrowserOS server process";
 +
-+  // Stop the process and monitoring
-+  process_check_timer_.Stop();
-+  TerminateBrowserOSProcess();
++  // Prevent multiple concurrent restarts
++  if (is_restarting_) {
++    LOG(INFO) << "browseros: Restart already in progress, ignoring";
++    return;
++  }
++  is_restarting_ = true;
 +
-+  // Relaunch the process
-+  LaunchBrowserOSProcess();
++  // Stop all timers during restart to prevent races
++  health_check_timer_.Stop();
++  process_check_timer_.Stop();
++
++  // Capture UI task runner to post back after background work
++  auto ui_task_runner = base::SequencedTaskRunner::GetCurrentDefault();
++
++  // Kill process on background thread (wait=true requires background thread),
++  // then relaunch on UI thread
++  base::ThreadPool::PostTask(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
++      base::BindOnce(
++          [](BrowserOSServerManager* manager,
++             scoped_refptr<base::SequencedTaskRunner> ui_runner) {
++            manager->TerminateBrowserOSProcess(/*wait=*/true);
++
++            // Post back to UI thread to launch new process
++            ui_runner->PostTask(
++                FROM_HERE,
++                base::BindOnce(&BrowserOSServerManager::LaunchBrowserOSProcess,
++                               base::Unretained(manager)));
++          },
++          base::Unretained(this), ui_task_runner));
 +}
 +
 +void BrowserOSServerManager::OnAllowRemoteInMCPChanged() {
@@ -776,51 +801,11 @@ index 0000000000000..43f1ee391f0a8
 +    return;
 +  }
 +
-+  // Ignore if already restarting (prevents thrashing from UI spam)
-+  if (is_restarting_) {
-+    LOG(INFO) << "browseros: Restart already in progress, ignoring duplicate request";
-+    return;
-+  }
-+
-+  // Ignore if not running
-+  if (!is_running_) {
-+    LOG(WARNING) << "browseros: Cannot restart - server is not running";
-+    // Reset pref anyway
-+    prefs->SetBoolean(browseros_server::kRestartServerRequested, false);
-+    return;
-+  }
-+
 +  LOG(INFO) << "browseros: Server restart requested via preference";
-+  is_restarting_ = true;
-+
-+  // Stop timer now (must be on UI thread)
-+  process_check_timer_.Stop();
-+
-+  // Capture UI task runner to post back after background work
-+  auto ui_task_runner = base::SequencedTaskRunner::GetCurrentDefault();
-+
-+  // Kill process on background thread, then relaunch on UI thread
-+  base::ThreadPool::PostTask(
-+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
-+      base::BindOnce(
-+          [](BrowserOSServerManager* manager,
-+             scoped_refptr<base::SequencedTaskRunner> ui_runner) {
-+            // Kill old process and wait for exit (blocking, safe on background)
-+            manager->TerminateBrowserOSProcess();
-+
-+            // Post back to UI thread to launch new process
-+            ui_runner->PostTask(
-+                FROM_HERE,
-+                base::BindOnce(&BrowserOSServerManager::LaunchBrowserOSProcess,
-+                               base::Unretained(manager)));
-+          },
-+          base::Unretained(this), ui_task_runner));
++  RestartBrowserOSProcess();
 +}
 +
 +int BrowserOSServerManager::FindAvailablePort(int starting_port) {
-+  const int kMaxPortAttempts = 100;
-+  const int kMaxPort = 65535;
-+
 +  LOG(INFO) << "browseros: Finding port starting from "
 +            << starting_port;
 +

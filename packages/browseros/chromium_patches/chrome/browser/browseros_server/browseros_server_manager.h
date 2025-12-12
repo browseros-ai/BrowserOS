@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros_server/browseros_server_manager.h b/chrome/browser/browseros_server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000..9eb9a37980f11
+index 0000000000000..0f6ff92facf88
 --- /dev/null
 +++ b/chrome/browser/browseros_server/browseros_server_manager.h
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,131 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -90,7 +90,10 @@ index 0000000000000..9eb9a37980f11
 +  void StopCDPServer();
 +  void LaunchBrowserOSProcess();
 +  void OnProcessLaunched(base::Process process);
-+  void TerminateBrowserOSProcess();
++  // Terminates the BrowserOS server process.
++  // If wait=true, blocks until process exits (must be called from background thread).
++  // If wait=false, just sends kill signal and returns (safe from any thread).
++  void TerminateBrowserOSProcess(bool wait);
 +  void RestartBrowserOSProcess();
 +  void OnProcessExited(int exit_code);
 +  void CheckServerHealth();
