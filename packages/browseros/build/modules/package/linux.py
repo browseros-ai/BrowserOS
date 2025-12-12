@@ -183,6 +183,7 @@ Type=Application
 Categories=Network;WebBrowser;
 MimeType=text/html;text/xml;application/xhtml+xml;application/xml;application/vnd.mozilla.xul+xml;application/rss+xml;application/rdf+xml;image/gif;image/jpeg;image/png;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/ftp;x-scheme-handler/chrome;video/webm;application/x-xpinstall;
 Icon=browseros
+StartupWMClass=chromium-browser
 """
 
     desktop_file = Path(join_paths(apps_dir, "browseros.desktop"))
