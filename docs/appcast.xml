@@ -8,18 +8,33 @@
     <language>en</language>
 
     <!-- Updates -->
+    <!-- <item> -->
+    <!--   <title>BrowserOS - 0.31.0.14</title> -->
+    <!--   <description sparkle:format="plain-text"> -->
+    <!--   </description> -->
+    <!--   <sparkle:version>7535.49</sparkle:version> -->
+    <!--   <sparkle:shortVersionString>0.31.0.14</sparkle:shortVersionString> -->
+    <!--   <pubDate>Fri, 12 Dec 2025 02:34:49 +0000</pubDate> -->
+    <!--   <link>https://browseros.com</link> -->
+    <!--   <enclosure -->
+    <!--     url="http://cdn.browseros.com/releases/0.31.0.14/macos/BrowserOS_v0.31.0.14_x64.dmg" -->
+    <!--     sparkle:edSignature="2Wfs2WtzdTsLMe5g4wkgFtZ+CNwrWXyzQIQZf6F0jlZDrCEPJVzNsk8LQrClDui8nCXOYKlCvxbRVAwwu+EvAg==" -->
+    <!--     length="170790283" -->
+    <!--     type="application/octet-stream" /> -->
+    <!--   <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion> -->
+    <!-- </item> -->
     <item>
-      <title>BrowserOS - 0.31.0.14</title>
+      <title>BrowserOS - 0.31.0.7</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>7535.49</sparkle:version>
-      <sparkle:shortVersionString>0.31.0.14</sparkle:shortVersionString>
-      <pubDate>Fri, 12 Dec 2025 02:34:49 +0000</pubDate>
+      <sparkle:shortVersionString>0.31.0.7</sparkle:shortVersionString>
+      <pubDate>Tue, 09 Dec 2025 04:51:00 +0000</pubDate>
       <link>https://browseros.com</link>
       <enclosure
-        url="http://cdn.browseros.com/releases/0.31.0.14/macos/BrowserOS_v0.31.0.14_x64.dmg"
-        sparkle:edSignature="2Wfs2WtzdTsLMe5g4wkgFtZ+CNwrWXyzQIQZf6F0jlZDrCEPJVzNsk8LQrClDui8nCXOYKlCvxbRVAwwu+EvAg=="
-        length="170790283"
+        url="http://cdn.browseros.com/releases/0.31.0.7/macos/BrowserOS_v0.31.0.7_arm64.dmg"
+        sparkle:edSignature="3Ogu5iNeyiKaQvkpSaSXkyVnbYSJPA6E0IPbj3xejGm1AN3e3PHYFrRjIyGTFMVPwsJFh7YfXlQus1FSQ0iXCw=="
+        length="158944893"
         type="application/octet-stream" />
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
