@@ -1,9 +1,9 @@
 diff --git a/chrome/common/extensions/api/browser_os.idl b/chrome/common/extensions/api/browser_os.idl
 new file mode 100644
-index 0000000000000..36468c42af41a
+index 0000000000000..ab1d6842fce7f
 --- /dev/null
 +++ b/chrome/common/extensions/api/browser_os.idl
-@@ -0,0 +1,336 @@
+@@ -0,0 +1,341 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -327,6 +327,11 @@ index 0000000000000..36468c42af41a
 +    // Gets the browser version number
 +    // |callback|: Called with the version string.
 +    static void getVersionNumber(
++        GetVersionNumberCallback callback);
++
++    // Gets the BrowserOS version number
++    // |callback|: Called with the version string.
++    static void getBrowserosVersionNumber(
 +        GetVersionNumberCallback callback);
 +    
 +    // Executes JavaScript code in the specified tab

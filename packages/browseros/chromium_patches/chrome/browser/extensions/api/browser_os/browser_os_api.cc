@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.cc b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
 new file mode 100644
-index 0000000000000..84988d84caa41
+index 0000000000000..5b5d1e6539412
 --- /dev/null
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
-@@ -0,0 +1,1317 @@
+@@ -0,0 +1,1325 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1179,9 +1179,17 @@ index 0000000000000..84988d84caa41
 +ExtensionFunction::ResponseAction BrowserOSGetVersionNumberFunction::Run() {
 +  // Get the version number from version_info
 +  std::string version = std::string(version_info::GetVersionNumber());
-+  
++
 +  return RespondNow(ArgumentList(
 +      browser_os::GetVersionNumber::Results::Create(version)));
++}
++
++// BrowserOSGetBrowserosVersionNumberFunction
++ExtensionFunction::ResponseAction BrowserOSGetBrowserosVersionNumberFunction::Run() {
++  std::string version = std::string(version_info::GetBrowserOSVersionNumber());
++
++  return RespondNow(ArgumentList(
++      browser_os::GetBrowserosVersionNumber::Results::Create(version)));
 +}
 +
 +// BrowserOSExecuteJavaScriptFunction

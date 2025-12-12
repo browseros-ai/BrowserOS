@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.h b/chrome/browser/extensions/api/browser_os/browser_os_api.h
 new file mode 100644
-index 0000000000000..e4b1c5f821342
+index 0000000000000..5f4276cf89432
 --- /dev/null
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.h
-@@ -0,0 +1,331 @@
+@@ -0,0 +1,344 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -284,6 +284,19 @@ index 0000000000000..e4b1c5f821342
 +
 + protected:
 +  ~BrowserOSGetVersionNumberFunction() override = default;
++
++  // ExtensionFunction:
++  ResponseAction Run() override;
++};
++
++class BrowserOSGetBrowserosVersionNumberFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("browserOS.getBrowserosVersionNumber", BROWSER_OS_GETBROWSEROSVERSIONNUMBER)
++
++  BrowserOSGetBrowserosVersionNumberFunction() = default;
++
++ protected:
++  ~BrowserOSGetBrowserosVersionNumberFunction() override = default;
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
