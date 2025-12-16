@@ -6,6 +6,9 @@ is_official_build = true
 is_component_build = false
 use_siso=false
 
+# Enable SUID sandbox
+use_suid_sandbox = true
+
 # Compiler
 use_sysroot = true
 use_custom_libcxx = true
