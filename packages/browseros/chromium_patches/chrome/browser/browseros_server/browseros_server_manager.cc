@@ -1,14 +1,16 @@
 diff --git a/chrome/browser/browseros_server/browseros_server_manager.cc b/chrome/browser/browseros_server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..e16b9181f8e3d
+index 0000000000000..8fe062bf92c25
 --- /dev/null
 +++ b/chrome/browser/browseros_server/browseros_server_manager.cc
-@@ -0,0 +1,952 @@
+@@ -0,0 +1,959 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "chrome/browser/browseros_server/browseros_server_manager.h"
++
++#include <optional>
 +
 +#include "base/command_line.h"
 +#include "base/files/file_path.h"
@@ -114,14 +116,13 @@ index 0000000000000..e16b9181f8e3d
 +  instance.Set("chromium_version", server_config.chromium_version);
 +  config.Set("instance", std::move(instance));
 +
-+  std::string json_output;
-+  if (!base::JSONWriter::WriteWithOptions(
-+          config, base::JSONWriter::OPTIONS_PRETTY_PRINT, &json_output)) {
++  std::optional<std::string> json_output = base::WriteJson(config);
++  if (!json_output.has_value()) {
 +    LOG(ERROR) << "browseros: Failed to serialize config to JSON";
 +    return base::FilePath();
 +  }
 +
-+  if (!base::WriteFile(config_path, json_output)) {
++  if (!base::WriteFile(config_path, json_output.value())) {
 +    LOG(ERROR) << "browseros: Failed to write config file: " << config_path;
 +    return base::FilePath();
 +  }
@@ -207,9 +208,15 @@ index 0000000000000..e16b9181f8e3d
 +    return base::Process();
 +  }
 +
-+  // Build command line with --config flag
++  // Build command line with --config flag and explicit port args
++  // Ports are passed via CLI to avoid config file read race conditions
++  // CLI takes precedence over config file in the server's merge logic
 +  base::CommandLine cmd(exe_path);
 +  cmd.AppendSwitchPath("config", config_path);
++  cmd.AppendSwitchASCII("cdp-port", base::NumberToString(cdp_port));
++  cmd.AppendSwitchASCII("http-mcp-port", base::NumberToString(mcp_port));
++  cmd.AppendSwitchASCII("agent-port", base::NumberToString(agent_port));
++  cmd.AppendSwitchASCII("extension-port", base::NumberToString(extension_port));
 +
 +  // Set up launch options
 +  base::LaunchOptions options;
