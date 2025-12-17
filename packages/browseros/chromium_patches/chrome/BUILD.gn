@@ -1,5 +1,5 @@
 diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
-index 0753724487493..fb30162a1a20f 100644
+index 0753724487493..bf40f3bb50e37 100644
 --- a/chrome/BUILD.gn
 +++ b/chrome/BUILD.gn
 @@ -18,6 +18,7 @@ import("//build/config/win/manifest.gni")
@@ -14,7 +14,7 @@ index 0753724487493..fb30162a1a20f 100644
      }
  
      data_deps += [
-+      "//chrome/browser/browseros_server:browseros_server_resources",
++      "//chrome/browser/browseros/server:browseros_server_resources",
        "//chrome/browser/resources/media/mei_preload:component",
        "//components/privacy_sandbox/privacy_sandbox_attestations/preload:component",
        "//components/webapps/isolated_web_apps/preload:component",
@@ -22,7 +22,7 @@ index 0753724487493..fb30162a1a20f 100644
        ":chrome_versioned_bundle_data",
        "//base/allocator:early_zone_registration_apple",
        "//build:branding_buildflags",
-+      "//chrome/browser/browseros_server:browseros_server_resources",
++      "//chrome/browser/browseros/server:browseros_server_resources",
        "//chrome/common:buildflags",
        "//chrome/common:version_header",
      ]
