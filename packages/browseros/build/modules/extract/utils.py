@@ -337,23 +337,20 @@ def write_patch_file(ctx: Context, file_path: str, patch_content: str) -> bool:
         return False
 
 
-def create_deletion_marker(
-    ctx: Context, file_path: str, force: bool = False
-) -> Optional[bool]:
+def create_deletion_marker(ctx: Context, file_path: str) -> Optional[bool]:
     """
     Create a marker file for deleted files.
 
     If existing patch files exist for this file, prompts user to confirm
-    their removal (unless force=True).
+    their removal and choose the appropriate action.
 
     Args:
         ctx: Build context
         file_path: Path of the deleted file
-        force: Skip confirmation prompts
 
     Returns:
-        True if marker created successfully
-        False if failed to create marker
+        True if marker created successfully (or patch removed without marker)
+        False if failed
         None if user chose to skip
     """
     patches_dir = ctx.get_patches_dir()
@@ -361,40 +358,48 @@ def create_deletion_marker(
 
     # Check for existing patch-related files that would conflict
     existing_files = []
+
+    # Check if raw patch file exists (no suffix - this is how patches are stored)
+    if base_path.exists():
+        existing_files.append(base_path)
+
+    # Also check for marker files
     for suffix in [".patch", ".binary", ".rename"]:
         check_path = base_path.with_suffix(base_path.suffix + suffix)
         if check_path.exists():
             existing_files.append(check_path)
 
     if existing_files:
-        if force:
-            for ef in existing_files:
-                try:
-                    ef.unlink()
-                    log_warning(f"  Removed existing: {ef.relative_to(ctx.root_dir)}")
-                except Exception as e:
-                    log_error(f"  Failed to remove {ef}: {e}")
-                    return False
-        else:
-            log_warning(
-                f"File '{file_path}' is being deleted, but existing patch(es) found:"
-            )
-            for ef in existing_files:
-                log_warning(f"  - {ef.relative_to(ctx.root_dir)}")
+        log_warning(
+            f"File '{file_path}' is being deleted, but existing patch(es) found:"
+        )
+        for ef in existing_files:
+            log_warning(f"  - {ef.relative_to(ctx.root_dir)}")
 
-            if not click.confirm(
-                "Remove existing patch(es) and mark as deleted?", default=True
-            ):
-                log_warning(f"  Skipped: {file_path}")
-                return None
+        click.echo("\nHow should this be handled?")
+        click.echo("  1) Remove patch and create .deleted marker (file exists in upstream)")
+        click.echo("  2) Remove patch only (file was added by your patches, not in upstream)")
+        click.echo("  3) Skip (keep existing patch, don't record deletion)")
 
-            for ef in existing_files:
-                try:
-                    ef.unlink()
-                    log_warning(f"  Removed: {ef.relative_to(ctx.root_dir)}")
-                except Exception as e:
-                    log_error(f"  Failed to remove {ef}: {e}")
-                    return False
+        choice = click.prompt("Choice", type=click.Choice(["1", "2", "3"]), default="1")
+
+        if choice == "3":
+            log_warning(f"  Skipped: {file_path}")
+            return None
+
+        # Remove existing files for choices 1 and 2
+        for ef in existing_files:
+            try:
+                ef.unlink()
+                log_warning(f"  Removed: {ef.relative_to(ctx.root_dir)}")
+            except Exception as e:
+                log_error(f"  Failed to remove {ef}: {e}")
+                return False
+
+        if choice == "2":
+            # User chose to remove patch only, no .deleted marker
+            log_success(f"  Removed patch for: {file_path} (no .deleted marker)")
+            return True
 
     # Create deletion marker
     marker_path = base_path.with_suffix(base_path.suffix + ".deleted")

@@ -50,7 +50,6 @@ def write_patches(
     file_patches: Dict[str, FilePatch],
     verbose: bool,
     include_binary: bool,
-    force: bool = False,
 ) -> Tuple[int, List[str]]:
     """Write patches to disk.
 
@@ -70,7 +69,7 @@ def write_patches(
         # Handle different operations
         if patch.operation == FileOperation.DELETE:
             # Create deletion marker
-            result = create_deletion_marker(ctx, file_path, force)
+            result = create_deletion_marker(ctx, file_path)
             if result is True:
                 success_count += 1
                 extracted_files.append(file_path)
@@ -174,7 +173,7 @@ def extract_normal(
         return 0, []
 
     # Write patches
-    return write_patches(ctx, file_patches, verbose, include_binary, force)
+    return write_patches(ctx, file_patches, verbose, include_binary)
 
 
 def extract_with_base(
@@ -274,4 +273,4 @@ def extract_with_base(
         return 0, []
 
     # Write patches
-    return write_patches(ctx, file_patches, verbose, include_binary, force)
+    return write_patches(ctx, file_patches, verbose, include_binary)
