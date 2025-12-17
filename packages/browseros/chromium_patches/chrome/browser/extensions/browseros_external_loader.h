@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/extensions/browseros_external_loader.h b/chrome/browser/extensions/browseros_external_loader.h
 new file mode 100644
-index 0000000000000..1c5dba065d91e
+index 0000000000000..c0ad7daffefa7
 --- /dev/null
 +++ b/chrome/browser/extensions/browseros_external_loader.h
 @@ -0,0 +1,131 @@
@@ -119,7 +119,7 @@ index 0000000000000..1c5dba065d91e
 +  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 +
 +  // Extension IDs from server config (validated against master list)
-+  std::set<std::string> server_extension_ids_;
++  std::set<std::string> browseros_extension_ids_;
 +
 +  // Last fetched config for comparison and update URLs
 +  base::Value::Dict last_config_;
