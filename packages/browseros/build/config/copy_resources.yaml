@@ -39,17 +39,6 @@ copy_operations:
     destination: "chrome/BROWSEROS_VERSION"
     type: "file"
 
-  # Extensions
-  # - name: "AI Side Panel Extension"
-  #   source: "resources/files/ai_side_panel"
-  #   destination: "chrome/browser/resources/ai_side_panel"
-  #   type: "directory"
-
-  # - name: "Bug Reporter Extension"
-  #   source: "resources/files/bug_reporter"
-  #   destination: "chrome/browser/resources/bug_reporter"
-  #   type: "directory"
-
   # Icons - General
   - name: "Product Logo Icons"
     source: "resources/icons/*.png"
@@ -131,78 +120,35 @@ copy_operations:
   # BrowserOS Server Binary - Platform & Architecture specific
   - name: "BrowserOS Server Binary - macOS ARM64"
     source: "resources/binaries/browseros_server/browseros-server-darwin-arm64"
-    destination: "chrome/browser/browseros_server/resources/bin/browseros_server"
+    destination: "chrome/browser/browseros/server/resources/bin/browseros_server"
     type: "file"
     os: ["macos"]
     arch: ["arm64"]
 
   - name: "BrowserOS Server Binary - macOS x64"
     source: "resources/binaries/browseros_server/browseros-server-darwin-x64"
-    destination: "chrome/browser/browseros_server/resources/bin/browseros_server"
+    destination: "chrome/browser/browseros/server/resources/bin/browseros_server"
     type: "file"
     os: ["macos"]
     arch: ["x64"]
 
   - name: "BrowserOS Server Binary - Linux ARM64"
     source: "resources/binaries/browseros_server/browseros-server-linux-arm64"
-    destination: "chrome/browser/browseros_server/resources/bin/browseros_server"
+    destination: "chrome/browser/browseros/server/resources/bin/browseros_server"
     type: "file"
     os: ["linux"]
     arch: ["arm64"]
 
   - name: "BrowserOS Server Binary - Linux x64"
     source: "resources/binaries/browseros_server/browseros-server-linux-x64"
-    destination: "chrome/browser/browseros_server/resources/bin/browseros_server"
+    destination: "chrome/browser/browseros/server/resources/bin/browseros_server"
     type: "file"
     os: ["linux"]
     arch: ["x64"]
 
   - name: "BrowserOS Server Binary - Windows x64"
     source: "resources/binaries/browseros_server/browseros-server-windows-x64.exe"
-    destination: "chrome/browser/browseros_server/resources/bin/browseros_server.exe"
+    destination: "chrome/browser/browseros/server/resources/bin/browseros_server.exe"
     type: "file"
     os: ["windows"]
     arch: ["x64"]
-
-  # Codex Binary - Platform & Architecture specific
-  # - name: "Codex Binary - macOS ARM64"
-  #   source: "resources/binaries/codex/codex-aarch64-apple-darwin"
-  #   destination: "chrome/browser/browseros_server/resources/bin/codex"
-  #   type: "file"
-  #   os: ["macos"]
-  #   arch: ["arm64"]
-  #
-  # - name: "Codex Binary - macOS x64"
-  #   source: "resources/binaries/codex/codex-x86_64-apple-darwin"
-  #   destination: "chrome/browser/browseros_server/resources/bin/codex"
-  #   type: "file"
-  #   os: ["macos"]
-  #   arch: ["x64"]
-  #
-  # - name: "Codex Binary - Linux ARM64"
-  #   source: "resources/binaries/codex/codex-aarch64-unknown-linux-musl"
-  #   destination: "chrome/browser/browseros_server/resources/bin/codex"
-  #   type: "file"
-  #   os: ["linux"]
-  #   arch: ["arm64"]
-  #
-  # - name: "Codex Binary - Linux x64"
-  #   source: "resources/binaries/codex/codex-x86_64-unknown-linux-musl"
-  #   destination: "chrome/browser/browseros_server/resources/bin/codex"
-  #   type: "file"
-  #   os: ["linux"]
-  #   arch: ["x64"]
-  #
-  # - name: "Codex Binary - Windows ARM64"
-  #   source: "resources/binaries/codex/codex-aarch64-pc-windows-msvc.exe"
-  #   destination: "chrome/browser/browseros_server/resources/bin/codex.exe"
-  #   type: "file"
-  #   os: ["windows"]
-  #   arch: ["arm64"]
-  #
-  # - name: "Codex Binary - Windows x64"
-  #   source: "resources/binaries/codex/codex-x86_64-pc-windows-msvc.exe"
-  #   destination: "chrome/browser/browseros_server/resources/bin/codex.exe"
-  #   type: "file"
-  #   os: ["windows"]
-  #   arch: ["x64"]
