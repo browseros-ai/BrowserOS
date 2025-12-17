@@ -1,12 +1,12 @@
 diff --git a/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc b/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc
-index d9315fa4fa5b0..a82f97bad37d7 100644
+index d9315fa4fa5b0..92f7ca0867689 100644
 --- a/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc
 +++ b/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc
 @@ -17,6 +17,7 @@
  #include "base/strings/strcat.h"
  #include "base/values.h"
  #include "chrome/browser/profiles/profile.h"
-+#include "chrome/browser/ui/actions/browseros_actions_config.h"
++#include "chrome/browser/ui/actions/browseros_action_utils.h"
  #include "chrome/browser/ui/actions/chrome_action_id.h"
  #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model_factory.h"
  #include "chrome/browser/ui/toolbar/toolbar_pref_names.h"

@@ -1,15 +1,15 @@
-diff --git a/chrome/browser/ui/actions/browseros_actions_config.h b/chrome/browser/ui/actions/browseros_actions_config.h
+diff --git a/chrome/browser/ui/actions/browseros_action_utils.h b/chrome/browser/ui/actions/browseros_action_utils.h
 new file mode 100644
-index 0000000000000..0198b11ff1394
+index 0000000000000..3d2ec755cd479
 --- /dev/null
-+++ b/chrome/browser/ui/actions/browseros_actions_config.h
++++ b/chrome/browser/ui/actions/browseros_action_utils.h
 @@ -0,0 +1,73 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#ifndef CHROME_BROWSER_UI_ACTIONS_BROWSEROS_ACTIONS_CONFIG_H_
-+#define CHROME_BROWSER_UI_ACTIONS_BROWSEROS_ACTIONS_CONFIG_H_
++#ifndef CHROME_BROWSER_UI_ACTIONS_BROWSEROS_ACTION_UTILS_H_
++#define CHROME_BROWSER_UI_ACTIONS_BROWSEROS_ACTION_UTILS_H_
 +
 +#include <string>
 +#include <string_view>
@@ -76,4 +76,4 @@ index 0000000000000..0198b11ff1394
 +
 +}  // namespace browseros
 +
-+#endif  // CHROME_BROWSER_UI_ACTIONS_BROWSEROS_ACTIONS_CONFIG_H_
++#endif  // CHROME_BROWSER_UI_ACTIONS_BROWSEROS_ACTION_UTILS_H_

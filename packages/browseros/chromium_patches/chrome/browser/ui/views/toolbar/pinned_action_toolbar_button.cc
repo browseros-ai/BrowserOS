@@ -1,12 +1,12 @@
 diff --git a/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc b/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc
-index f8298702050da..76fce26e797dd 100644
+index f8298702050da..a666d65dd226c 100644
 --- a/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc
 +++ b/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc
 @@ -8,6 +8,11 @@
  #include <type_traits>
  
  #include "base/auto_reset.h"
-+#include "chrome/browser/ui/actions/browseros_actions_config.h"
++#include "chrome/browser/ui/actions/browseros_action_utils.h"
 +#include "chrome/browser/ui/actions/chrome_action_id.h"
 +#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
 +#include "chrome/browser/ui/views/side_panel/side_panel_entry_id.h"
