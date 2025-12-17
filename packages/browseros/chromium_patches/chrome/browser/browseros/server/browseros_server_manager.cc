@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..55b1d8110cc0e
+index 0000000000000..114189758b373
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,975 @@
+@@ -0,0 +1,1038 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -645,10 +645,31 @@ index 0000000000000..55b1d8110cc0e
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
 +
++  // Prevent concurrent restarts (e.g., if RestartBrowserOSProcess is in progress)
++  if (is_restarting_) {
++    LOG(INFO) << "browseros: Restart already in progress, skipping";
++    return;
++  }
++  is_restarting_ = true;
++
 +  // Always restart - we want the server running
 +  // Don't call Start() - we already hold the lock and CDP server is running
 +  LOG(WARNING) << "browseros: BrowserOS server exited, restarting process...";
-+  LaunchBrowserOSProcess();
++
++  // Capture current ports for background thread
++  int cdp = cdp_port_;
++  int mcp = mcp_port_;
++  int agent = agent_port_;
++  int extension = extension_port_;
++
++  // Revalidate ports on background thread, then launch on UI thread
++  // Process is already dead, no need to terminate
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
++      base::BindOnce(&BrowserOSServerManager::RevalidatePorts,
++                     base::Unretained(this), cdp, mcp, agent, extension),
++      base::BindOnce(&BrowserOSServerManager::OnPortsRevalidated,
++                     weak_factory_.GetWeakPtr()));
 +}
 +
 +void BrowserOSServerManager::CheckServerHealth() {
@@ -760,25 +781,67 @@ index 0000000000000..55b1d8110cc0e
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
 +
-+  // Capture UI task runner to post back after background work
-+  auto ui_task_runner = base::SequencedTaskRunner::GetCurrentDefault();
++  // Capture current ports for background thread
++  int cdp = cdp_port_;
++  int mcp = mcp_port_;
++  int agent = agent_port_;
++  int extension = extension_port_;
 +
-+  // Kill process on background thread (wait=true requires background thread),
-+  // then relaunch on UI thread
-+  base::ThreadPool::PostTask(
++  // Kill process on background thread, revalidate ports, then launch on UI thread
++  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
 +      base::BindOnce(
-+          [](BrowserOSServerManager* manager,
-+             scoped_refptr<base::SequencedTaskRunner> ui_runner) {
++          [](BrowserOSServerManager* manager, int cdp, int mcp, int agent,
++             int extension) -> RevalidatedPorts {
 +            manager->TerminateBrowserOSProcess(/*wait=*/true);
-+
-+            // Post back to UI thread to launch new process
-+            ui_runner->PostTask(
-+                FROM_HERE,
-+                base::BindOnce(&BrowserOSServerManager::LaunchBrowserOSProcess,
-+                               base::Unretained(manager)));
++            return manager->RevalidatePorts(cdp, mcp, agent, extension);
 +          },
-+          base::Unretained(this), ui_task_runner));
++          base::Unretained(this), cdp, mcp, agent, extension),
++      base::BindOnce(&BrowserOSServerManager::OnPortsRevalidated,
++                     weak_factory_.GetWeakPtr()));
++}
++
++BrowserOSServerManager::RevalidatedPorts BrowserOSServerManager::RevalidatePorts(
++    int cdp_port,
++    int current_mcp,
++    int current_agent,
++    int current_extension) {
++  // CDP port is excluded - it's still bound by Chrome's DevTools server
++  std::set<int> excluded_ports;
++  excluded_ports.insert(cdp_port);
++
++  RevalidatedPorts result;
++  result.mcp_port = FindAvailablePort(current_mcp, excluded_ports);
++  excluded_ports.insert(result.mcp_port);
++
++  result.agent_port = FindAvailablePort(current_agent, excluded_ports);
++  excluded_ports.insert(result.agent_port);
++
++  result.extension_port = FindAvailablePort(current_extension, excluded_ports);
++
++  return result;
++}
++
++void BrowserOSServerManager::OnPortsRevalidated(RevalidatedPorts ports) {
++  bool ports_changed = (ports.mcp_port != mcp_port_) ||
++                       (ports.agent_port != agent_port_) ||
++                       (ports.extension_port != extension_port_);
++
++  if (ports_changed) {
++    LOG(INFO) << "browseros: Ports changed during revalidation - "
++              << "MCP: " << mcp_port_ << " -> " << ports.mcp_port
++              << ", Agent: " << agent_port_ << " -> " << ports.agent_port
++              << ", Extension: " << extension_port_ << " -> "
++              << ports.extension_port;
++
++    mcp_port_ = ports.mcp_port;
++    agent_port_ = ports.agent_port;
++    extension_port_ = ports.extension_port;
++    SavePortsToPrefs();
++  }
++
++  // Note: is_restarting_ is cleared in OnProcessLaunched() after launch completes
++  LaunchBrowserOSProcess();
 +}
 +
 +void BrowserOSServerManager::OnAllowRemoteInMCPChanged() {

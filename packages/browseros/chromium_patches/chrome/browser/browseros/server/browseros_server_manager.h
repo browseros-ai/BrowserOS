@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.h b/chrome/browser/browseros/server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000..1c58d85224b98
+index 0000000000000..320f4502fdce2
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.h
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,154 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -81,6 +81,13 @@ index 0000000000000..1c58d85224b98
 + private:
 +  friend base::NoDestructor<BrowserOSServerManager>;
 +
++  // Result of port revalidation (passed between background and UI threads)
++  struct RevalidatedPorts {
++    int mcp_port;
++    int agent_port;
++    int extension_port;
++  };
++
 +  BrowserOSServerManager();
 +  ~BrowserOSServerManager();
 +
@@ -96,6 +103,19 @@ index 0000000000000..1c58d85224b98
 +  // If wait=false, just sends kill signal and returns (safe from any thread).
 +  void TerminateBrowserOSProcess(bool wait);
 +  void RestartBrowserOSProcess();
++
++  // Revalidates MCP/Agent/Extension ports on background thread.
++  // CDP port is excluded (still bound by Chrome's DevTools server).
++  // Returns potentially updated port values.
++  RevalidatedPorts RevalidatePorts(int cdp_port,
++                                   int current_mcp,
++                                   int current_agent,
++                                   int current_extension);
++
++  // UI thread callback after port revalidation.
++  // Updates member vars and prefs if changed, then launches process.
++  void OnPortsRevalidated(RevalidatedPorts ports);
++
 +  void OnProcessExited(int exit_code);
 +  void CheckServerHealth();
 +  void OnHealthCheckComplete(
