@@ -27,6 +27,7 @@ from ..common.utils import (
     log_error,
     log_info,
     log_success,
+    log_warning,
     IS_MACOS,
     IS_WINDOWS,
     IS_LINUX,
@@ -119,7 +120,6 @@ EXECUTION_ORDER = [
             "resources",
             "chromium_replace",
             "string_replaces",
-            "series_patches",
             "patches",
         ],
     ),
@@ -423,6 +423,7 @@ def main(
             phase_names.append("setup")
         if prep:
             phase_names.append("prep")
+            log_warning("⚠️  --prep does NOT apply series_patches. Run 'browseros build -m series_patches' separately if needed.")
         if build:
             phase_names.append("build")
         if sign:
