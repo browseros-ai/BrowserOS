@@ -337,20 +337,67 @@ def write_patch_file(ctx: Context, file_path: str, patch_content: str) -> bool:
         return False
 
 
-def create_deletion_marker(ctx: Context, file_path: str) -> bool:
+def create_deletion_marker(
+    ctx: Context, file_path: str, force: bool = False
+) -> Optional[bool]:
     """
     Create a marker file for deleted files.
+
+    If existing patch files exist for this file, prompts user to confirm
+    their removal (unless force=True).
 
     Args:
         ctx: Build context
         file_path: Path of the deleted file
+        force: Skip confirmation prompts
 
     Returns:
-        True if successful, False otherwise
+        True if marker created successfully
+        False if failed to create marker
+        None if user chose to skip
     """
-    marker_path = ctx.get_patches_dir() / file_path
-    marker_path = marker_path.with_suffix(marker_path.suffix + ".deleted")
+    patches_dir = ctx.get_patches_dir()
+    base_path = patches_dir / file_path
 
+    # Check for existing patch-related files that would conflict
+    existing_files = []
+    for suffix in [".patch", ".binary", ".rename"]:
+        check_path = base_path.with_suffix(base_path.suffix + suffix)
+        if check_path.exists():
+            existing_files.append(check_path)
+
+    if existing_files:
+        if force:
+            for ef in existing_files:
+                try:
+                    ef.unlink()
+                    log_warning(f"  Removed existing: {ef.relative_to(ctx.root_dir)}")
+                except Exception as e:
+                    log_error(f"  Failed to remove {ef}: {e}")
+                    return False
+        else:
+            log_warning(
+                f"File '{file_path}' is being deleted, but existing patch(es) found:"
+            )
+            for ef in existing_files:
+                log_warning(f"  - {ef.relative_to(ctx.root_dir)}")
+
+            if not click.confirm(
+                "Remove existing patch(es) and mark as deleted?", default=True
+            ):
+                log_warning(f"  Skipped: {file_path}")
+                return None
+
+            for ef in existing_files:
+                try:
+                    ef.unlink()
+                    log_warning(f"  Removed: {ef.relative_to(ctx.root_dir)}")
+                except Exception as e:
+                    log_error(f"  Failed to remove {ef}: {e}")
+                    return False
+
+    # Create deletion marker
+    marker_path = base_path.with_suffix(base_path.suffix + ".deleted")
     marker_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
