@@ -1,12 +1,12 @@
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
-index 03aef97f335b0..ff67ae73dcfe9 100644
+index 03aef97f335b0..c6b111da5e01e 100644
 --- a/chrome/browser/chrome_browser_main.cc
 +++ b/chrome/browser/chrome_browser_main.cc
 @@ -10,6 +10,7 @@
  #include <utility>
  
  #include "base/at_exit.h"
-+#include "chrome/browser/browseros_server/browseros_server_manager.h"
++#include "chrome/browser/browseros/server/browseros_server_manager.h"
  #include "base/base_switches.h"
  #include "base/check.h"
  #include "base/command_line.h"

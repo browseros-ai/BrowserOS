@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/extensions/api/side_panel/side_panel_service.cc b/chrome/browser/extensions/api/side_panel/side_panel_service.cc
-index 0582cf9b5141a..ee75475834fe9 100644
+index 0582cf9b5141a..d3ec91af0f140 100644
 --- a/chrome/browser/extensions/api/side_panel/side_panel_service.cc
 +++ b/chrome/browser/extensions/api/side_panel/side_panel_service.cc
 @@ -8,8 +8,10 @@
@@ -9,7 +9,7 @@ index 0582cf9b5141a..ee75475834fe9 100644
 +#include "base/logging.h"
  #include "base/no_destructor.h"
  #include "base/strings/stringprintf.h"
-+#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/browseros/core/browseros_constants.h"
  #include "chrome/browser/extensions/extension_tab_util.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"

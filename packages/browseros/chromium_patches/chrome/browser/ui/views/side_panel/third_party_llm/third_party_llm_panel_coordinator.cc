@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc
 new file mode 100644
-index 0000000000000..9b7d7f0c48175
+index 0000000000000..f87c563fdd645
 --- /dev/null
 +++ b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc
 @@ -0,0 +1,1163 @@
@@ -75,7 +75,7 @@ index 0000000000000..9b7d7f0c48175
 +#include "content/public/browser/file_select_listener.h"
 +#include "third_party/blink/public/common/mediastream/media_stream_request.h"
 +#include "content/public/browser/render_frame_host.h"
-+#include "components/metrics/browseros_metrics/browseros_metrics.h"
++#include "chrome/browser/browseros/metrics/browseros_metrics.h"
 +#include "chrome/browser/ui/views/side_panel/clash_of_gpts/clash_of_gpts_coordinator.h"
 +
 +namespace {

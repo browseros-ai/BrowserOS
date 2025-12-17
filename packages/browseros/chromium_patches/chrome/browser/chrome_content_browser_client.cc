@@ -1,12 +1,12 @@
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index 0ab10486a183c..2c0bc8127ffae 100644
+index 0ab10486a183c..e25fbac661e4d 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
 @@ -613,6 +613,7 @@
  #endif
  
  #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
-+#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/browseros/core/browseros_constants.h"
  #include "chrome/browser/extensions/chrome_content_browser_client_extensions_part.h"
  #include "chrome/browser/extensions/chrome_extension_cookies.h"
  #include "extensions/browser/api/web_request/web_request_api.h"
@@ -28,12 +28,12 @@ index 0ab10486a183c..2c0bc8127ffae 100644
 +static bool HandleBrowserOSURL(GURL* url,
 +                               content::BrowserContext* browser_context) {
 +  if (!url->SchemeIs(content::kChromeUIScheme) ||
-+      url->host() != extensions::browseros::kBrowserOSHost) {
++      url->host() != browseros::kBrowserOSHost) {
 +    return false;
 +  }
 +
 +  std::string extension_url =
-+      extensions::browseros::GetBrowserOSExtensionURL(url->path());
++      browseros::GetBrowserOSExtensionURL(url->path());
 +  if (extension_url.empty()) {
 +    return false;
 +  }
@@ -50,7 +50,7 @@ index 0ab10486a183c..2c0bc8127ffae 100644
 +    return false;
 +  }
 +
-+  std::string virtual_url = extensions::browseros::GetBrowserOSVirtualURL(
++  std::string virtual_url = browseros::GetBrowserOSVirtualURL(
 +      url->host(), url->path(), url->ref());
 +  if (virtual_url.empty()) {
 +    return false;
@@ -85,7 +85,7 @@ index 0ab10486a183c..2c0bc8127ffae 100644
 +  // Allow BrowserOS extensions to access private networks (e.g., localhost).
 +  // This enables extension service workers to connect to local servers.
 +  if (origin.scheme() == extensions::kExtensionScheme &&
-+      extensions::browseros::IsBrowserOSExtension(origin.host())) {
++      browseros::IsBrowserOSExtension(origin.host())) {
 +    return PrivateNetworkRequestPolicyOverride::kForceAllow;
 +  }
 +#endif

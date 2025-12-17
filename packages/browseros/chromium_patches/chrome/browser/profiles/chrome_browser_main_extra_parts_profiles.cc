@@ -1,16 +1,16 @@
 diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
-index c6e46fb1d8030..f06e6e0e07cfa 100644
+index fdb211c4c8ae2..ccd0f1b891a3e 100644
 --- a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 +++ b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
-@@ -49,6 +49,7 @@
+@@ -52,6 +52,7 @@
  #include "chrome/browser/collaboration/messaging/messaging_backend_service_factory.h"
  #include "chrome/browser/commerce/shopping_service_factory.h"
  #include "chrome/browser/consent_auditor/consent_auditor_factory.h"
-+#include "components/metrics/browseros_metrics/browseros_metrics_service_factory.h"
++#include "chrome/browser/browseros/metrics/browseros_metrics_service_factory.h"
  #include "chrome/browser/content_index/content_index_provider_factory.h"
  #include "chrome/browser/content_settings/cookie_settings_factory.h"
  #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
-@@ -722,6 +723,7 @@ void ChromeBrowserMainExtraPartsProfiles::
+@@ -755,6 +756,7 @@ void ChromeBrowserMainExtraPartsProfiles::
  #endif
    BitmapFetcherServiceFactory::GetInstance();
    BluetoothChooserContextFactory::GetInstance();

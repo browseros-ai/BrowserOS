@@ -1,0 +1,23 @@
+diff --git a/chrome/browser/browseros/core/BUILD.gn b/chrome/browser/browseros/core/BUILD.gn
+new file mode 100644
+index 0000000000000..fde6e4fc542e0
+--- /dev/null
++++ b/chrome/browser/browseros/core/BUILD.gn
+@@ -0,0 +1,17 @@
++# Copyright 2024 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++# BrowserOS core constants and utilities.
++# This is a header-only library containing shared constants and utility
++# functions used across BrowserOS components.
++
++source_set("core") {
++  sources = [
++    "browseros_constants.h",
++  ]
++
++  deps = [
++    "//base",
++  ]
++}

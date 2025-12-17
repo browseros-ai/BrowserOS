@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/ui/webui/settings/browseros_metrics_handler.cc b/chrome/browser/ui/webui/settings/browseros_metrics_handler.cc
 new file mode 100644
-index 0000000000000..a213967b46676
+index 0000000000000..d043fcba5a32c
 --- /dev/null
 +++ b/chrome/browser/ui/webui/settings/browseros_metrics_handler.cc
 @@ -0,0 +1,56 @@
@@ -12,7 +12,7 @@ index 0000000000000..a213967b46676
 +
 +#include "base/logging.h"
 +#include "base/values.h"
-+#include "components/metrics/browseros_metrics/browseros_metrics.h"
++#include "chrome/browser/browseros/metrics/browseros_metrics.h"
 +
 +namespace settings {
 +

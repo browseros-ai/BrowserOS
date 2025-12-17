@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/ui/actions/browseros_actions_config.h b/chrome/browser/ui/actions/browseros_actions_config.h
 new file mode 100644
-index 0000000000000..bc33293c0e432
+index 0000000000000..0198b11ff1394
 --- /dev/null
 +++ b/chrome/browser/ui/actions/browseros_actions_config.h
 @@ -0,0 +1,73 @@
@@ -20,7 +20,7 @@ index 0000000000000..bc33293c0e432
 +#include "chrome/browser/ui/ui_features.h"
 +#include "chrome/browser/ui/views/side_panel/side_panel_entry_key.h"
 +#include "chrome/common/chrome_features.h"
-+#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/browseros/core/browseros_constants.h"
 +#include "ui/actions/actions.h"
 +
 +namespace browseros {
@@ -46,8 +46,8 @@ index 0000000000000..bc33293c0e432
 +
 +  // Only labelled extensions are considered for BrowserOS actions
 +  for (const auto& ext_id :
-+       extensions::browseros::GetBrowserOSExtensionIds()) {
-+    if (!extensions::browseros::IsBrowserOSLabelledExtension(ext_id)) {
++       browseros::GetBrowserOSExtensionIds()) {
++    if (!browseros::IsBrowserOSLabelledExtension(ext_id)) {
 +      continue;
 +    }
 +    auto ext_action_id = actions::ActionIdMap::StringToActionId(

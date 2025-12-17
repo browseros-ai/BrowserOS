@@ -1,14 +1,14 @@
-diff --git a/components/metrics/browseros_metrics/browseros_metrics_prefs.cc b/components/metrics/browseros_metrics/browseros_metrics_prefs.cc
+diff --git a/chrome/browser/browseros/metrics/browseros_metrics_prefs.cc b/chrome/browser/browseros/metrics/browseros_metrics_prefs.cc
 new file mode 100644
-index 0000000000000..88c920a9f16a9
+index 0000000000000..83f4ab681749f
 --- /dev/null
-+++ b/components/metrics/browseros_metrics/browseros_metrics_prefs.cc
++++ b/chrome/browser/browseros/metrics/browseros_metrics_prefs.cc
 @@ -0,0 +1,28 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "components/metrics/browseros_metrics/browseros_metrics_prefs.h"
++#include "chrome/browser/browseros/metrics/browseros_metrics_prefs.h"
 +
 +#include "chrome/common/pref_names.h"
 +#include "components/prefs/pref_registry_simple.h"
@@ -32,4 +32,3 @@ index 0000000000000..88c920a9f16a9
 +}
 +
 +}  // namespace browseros_metrics
-\ No newline at end of file

@@ -1,12 +1,12 @@
 diff --git a/chrome/browser/media/extension_media_access_handler.cc b/chrome/browser/media/extension_media_access_handler.cc
-index 8946078143534..3b46ec65c2832 100644
+index 8946078143534..69894bea5d27c 100644
 --- a/chrome/browser/media/extension_media_access_handler.cc
 +++ b/chrome/browser/media/extension_media_access_handler.cc
 @@ -6,6 +6,7 @@
  
  #include <utility>
  
-+#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/browseros/core/browseros_constants.h"
  #include "chrome/browser/media/webrtc/media_stream_device_permissions.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/common/extensions/extension_constants.h"
@@ -25,7 +25,7 @@ index 8946078143534..3b46ec65c2832 100644
 -         extension->id() == "egfdjlfmgnehecnclamagfafdccgfndp";
 +         extension->id() == "egfdjlfmgnehecnclamagfafdccgfndp" ||
 +         // BrowserOS extensions
-+         extensions::browseros::IsBrowserOSExtension(extension->id());
++         browseros::IsBrowserOSExtension(extension->id());
  }
  
  }  // namespace
@@ -34,7 +34,7 @@ index 8946078143534..3b46ec65c2832 100644
                        prefs::kVideoCaptureAllowedUrls) != ALWAYS_DENY;
  
 +  // For BrowserOS extensions in sidepanel, allow audio for teach mode
-+  if (extensions::browseros::IsBrowserOSExtension(extension->id())) {
++  if (browseros::IsBrowserOSExtension(extension->id())) {
 +    audio_allowed = request.audio_type ==
 +                    blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE;
 +  }

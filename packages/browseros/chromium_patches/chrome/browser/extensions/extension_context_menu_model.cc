@@ -1,12 +1,12 @@
 diff --git a/chrome/browser/extensions/extension_context_menu_model.cc b/chrome/browser/extensions/extension_context_menu_model.cc
-index 39b916751757d..d27b0640c174a 100644
+index 39b916751757d..25b504181aeb6 100644
 --- a/chrome/browser/extensions/extension_context_menu_model.cc
 +++ b/chrome/browser/extensions/extension_context_menu_model.cc
 @@ -7,6 +7,7 @@
  #include <memory>
  
  #include "base/containers/contains.h"
-+#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/browseros/core/browseros_constants.h"
  #include "base/feature_list.h"
  #include "base/functional/bind.h"
  #include "base/metrics/histogram_macros.h"

@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
-index deb531f8832e3..78591a95b2bc7 100644
+index deb531f8832e3..91cf6b70413ff 100644
 --- a/chrome/browser/ui/browser_command_controller.cc
 +++ b/chrome/browser/ui/browser_command_controller.cc
 @@ -70,6 +70,8 @@
@@ -16,7 +16,7 @@ index deb531f8832e3..78591a95b2bc7 100644
  #include "content/public/common/profiling.h"
  #include "content/public/common/url_constants.h"
 +#include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
-+#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/browseros/core/browseros_constants.h"
 +#include "chrome/browser/extensions/extension_tab_util.h"
 +#include "chrome/browser/infobars/simple_alert_infobar_creator.h"
 +#include "components/infobars/content/content_infobar_manager.h"
@@ -67,7 +67,7 @@ index deb531f8832e3..78591a95b2bc7 100644
 +      const extensions::Extension* extension =
 +          extensions::ExtensionRegistry::Get(profile)
 +              ->enabled_extensions()
-+              .GetByID(extensions::browseros::kAgentV2ExtensionId);
++              .GetByID(browseros::kAgentV2ExtensionId);
 +      if (!extension) {
 +        infobars::ContentInfoBarManager* infobar_manager =
 +            infobars::ContentInfoBarManager::FromWebContents(active_contents);

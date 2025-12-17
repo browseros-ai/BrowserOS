@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/browser_actions.cc b/chrome/browser/ui/browser_actions.cc
-index fb3dba200be8c..85429c5ab0acf 100644
+index fb3dba200be8c..9b7941ff32407 100644
 --- a/chrome/browser/ui/browser_actions.cc
 +++ b/chrome/browser/ui/browser_actions.cc
 @@ -12,6 +12,7 @@
@@ -15,7 +15,7 @@ index fb3dba200be8c..85429c5ab0acf 100644
  #include "chrome/browser/ui/actions/chrome_action_id.h"
  #include "chrome/browser/ui/actions/chrome_actions.h"
 +#include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
-+#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/browseros/core/browseros_constants.h"
 +#include "chrome/browser/extensions/extension_tab_util.h"
 +#include "chrome/browser/infobars/simple_alert_infobar_creator.h"
 +#include "components/infobars/content/content_infobar_manager.h"
@@ -79,7 +79,7 @@ index fb3dba200be8c..85429c5ab0acf 100644
 +                const extensions::Extension* extension =
 +                    extensions::ExtensionRegistry::Get(profile)
 +                        ->enabled_extensions()
-+                        .GetByID(extensions::browseros::kAgentV2ExtensionId);
++                        .GetByID(browseros::kAgentV2ExtensionId);
 +                if (!extension) {
 +                  LOG(WARNING) << "browseros: Agent extension not found";
 +                  infobars::ContentInfoBarManager* infobar_manager =

@@ -1,0 +1,21 @@
+diff --git a/chrome/browser/browseros/BUILD.gn b/chrome/browser/browseros/BUILD.gn
+new file mode 100644
+index 0000000000000..39cb2962b009e
+--- /dev/null
++++ b/chrome/browser/browseros/BUILD.gn
+@@ -0,0 +1,15 @@
++# Copyright 2024 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++# Master BUILD file for BrowserOS components.
++# This groups together all BrowserOS-related code that lives under
++# chrome/browser/browseros/.
++
++group("browseros") {
++  deps = [
++    "//chrome/browser/browseros/core",
++    "//chrome/browser/browseros/metrics",
++    "//chrome/browser/browseros/server",
++  ]
++}

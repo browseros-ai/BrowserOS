@@ -1,14 +1,14 @@
-diff --git a/components/metrics/browseros_metrics/browseros_metrics_service.cc b/components/metrics/browseros_metrics/browseros_metrics_service.cc
+diff --git a/chrome/browser/browseros/metrics/browseros_metrics_service.cc b/chrome/browser/browseros/metrics/browseros_metrics_service.cc
 new file mode 100644
-index 0000000000000..4f592a2c7b95b
+index 0000000000000..8c8c588df4481
 --- /dev/null
-+++ b/components/metrics/browseros_metrics/browseros_metrics_service.cc
++++ b/chrome/browser/browseros/metrics/browseros_metrics_service.cc
 @@ -0,0 +1,231 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "components/metrics/browseros_metrics/browseros_metrics_service.h"
++#include "chrome/browser/browseros/metrics/browseros_metrics_service.h"
 +
 +#include <memory>
 +#include <string>
@@ -98,10 +98,10 @@ index 0000000000000..4f592a2c7b95b
 +  }
 +
 +  VLOG(1) << "browseros: Capturing event: " << event_name;
-+  
++
 +  // Add default properties
 +  AddDefaultProperties(properties);
-+  
++
 +  // Send to PostHog
 +  SendEventToPostHog(event_name, std::move(properties));
 +}
@@ -166,7 +166,7 @@ index 0000000000000..4f592a2c7b95b
 +  payload.Set("event", "browseros.native." + event_name);
 +  payload.Set("distinct_id", client_id_);
 +  payload.Set("properties", std::move(properties));
-+  
++
 +  // Convert to JSON
 +  std::string json_payload;
 +  if (!base::JSONWriter::Write(payload, &json_payload)) {
@@ -180,13 +180,13 @@ index 0000000000000..4f592a2c7b95b
 +  resource_request->method = "POST";
 +  resource_request->load_flags = net::LOAD_DISABLE_CACHE;
 +  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
-+  
++
 +  // Create the URL loader
 +  auto url_loader = network::SimpleURLLoader::Create(
 +      std::move(resource_request), kBrowserOSMetricsTrafficAnnotation);
 +  url_loader->SetAllowHttpErrorResults(true);
 +  url_loader->AttachStringForUpload(json_payload, "application/json");
-+  
++
 +  // Send the request
 +  network::SimpleURLLoader* loader_ptr = url_loader.get();
 +  loader_ptr->DownloadToString(
@@ -203,7 +203,7 @@ index 0000000000000..4f592a2c7b95b
 +  if (loader->ResponseInfo() && loader->ResponseInfo()->headers) {
 +    response_code = loader->ResponseInfo()->headers->response_code();
 +  }
-+  
++
 +  if (response_code == net::HTTP_OK) {
 +    VLOG(2) << "browseros: Metrics event sent successfully";
 +  } else {

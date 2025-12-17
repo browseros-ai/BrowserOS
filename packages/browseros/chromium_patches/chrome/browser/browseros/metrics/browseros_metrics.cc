@@ -1,22 +1,22 @@
-diff --git a/components/metrics/browseros_metrics/browseros_metrics.cc b/components/metrics/browseros_metrics/browseros_metrics.cc
+diff --git a/chrome/browser/browseros/metrics/browseros_metrics.cc b/chrome/browser/browseros/metrics/browseros_metrics.cc
 new file mode 100644
-index 0000000000000..02a1dc121bb7a
+index 0000000000000..cf1a9a0c1790b
 --- /dev/null
-+++ b/components/metrics/browseros_metrics/browseros_metrics.cc
++++ b/chrome/browser/browseros/metrics/browseros_metrics.cc
 @@ -0,0 +1,100 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "components/metrics/browseros_metrics/browseros_metrics.h"
++#include "chrome/browser/browseros/metrics/browseros_metrics.h"
 +
 +#include "base/logging.h"
 +#include "base/rand_util.h"
 +#include "base/task/thread_pool.h"
 +#include "chrome/browser/browser_process.h"
++#include "chrome/browser/browseros/metrics/browseros_metrics_service.h"
++#include "chrome/browser/browseros/metrics/browseros_metrics_service_factory.h"
 +#include "chrome/browser/profiles/profile_manager.h"
-+#include "components/metrics/browseros_metrics/browseros_metrics_service_factory.h"
-+#include "components/metrics/browseros_metrics/browseros_metrics_service.h"
 +#include "content/public/browser/browser_task_traits.h"
 +#include "content/public/browser/browser_thread.h"
 +
@@ -30,19 +30,19 @@ index 0000000000000..02a1dc121bb7a
 +  if (!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
 +    return nullptr;
 +  }
-+  
++
 +  // Get the profile manager
 +  ProfileManager* profile_manager = g_browser_process->profile_manager();
 +  if (!profile_manager) {
 +    return nullptr;
 +  }
-+  
++
 +  // Get the last used profile (or the default one)
 +  Profile* profile = profile_manager->GetLastUsedProfile();
 +  if (!profile || profile->IsOffTheRecord()) {
 +    return nullptr;
 +  }
-+  
++
 +  // Get the metrics service
 +  return BrowserOSMetricsServiceFactory::GetForBrowserContext(profile);
 +}
@@ -80,18 +80,18 @@ index 0000000000000..02a1dc121bb7a
 +  if (sample_rate <= 0.0 || sample_rate > 1.0) {
 +    return;
 +  }
-+  
++
 +  if (sample_rate < 1.0) {
 +    double random_value = base::RandDouble();
 +    if (random_value > sample_rate) {
 +      return;
 +    }
 +  }
-+  
++
 +  if (sample_rate < 1.0) {
 +    properties.Set("sample_rate", sample_rate);
 +  }
-+  
++
 +  // If we're already on the UI thread, log directly
 +  if (content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
 +    LogOnUIThread(event_name, std::move(properties));

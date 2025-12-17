@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/ui/views/side_panel/clash_of_gpts/clash_of_gpts_coordinator.cc b/chrome/browser/ui/views/side_panel/clash_of_gpts/clash_of_gpts_coordinator.cc
 new file mode 100644
-index 0000000000000..6167eb277556d
+index 0000000000000..9e1c6dc9fe8a1
 --- /dev/null
 +++ b/chrome/browser/ui/views/side_panel/clash_of_gpts/clash_of_gpts_coordinator.cc
 @@ -0,0 +1,568 @@
@@ -38,7 +38,7 @@ index 0000000000000..6167eb277556d
 +#include "ui/accessibility/ax_tree_update.h"
 +#include "ui/events/keycodes/keyboard_codes.h"
 +#include "third_party/blink/public/common/input/web_input_event.h"
-+#include "components/metrics/browseros_metrics/browseros_metrics.h"
++#include "chrome/browser/browseros/metrics/browseros_metrics.h"
 +
 +namespace {
 +

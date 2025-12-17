@@ -1,9 +1,9 @@
-diff --git a/chrome/browser/browseros_server/BUILD.gn b/chrome/browser/browseros_server/BUILD.gn
+diff --git a/chrome/browser/browseros/server/BUILD.gn b/chrome/browser/browseros/server/BUILD.gn
 new file mode 100644
-index 0000000000000..ddbdf0b78c0a3
+index 0000000000000..7e6f379ba0c94
 --- /dev/null
-+++ b/chrome/browser/browseros_server/BUILD.gn
-@@ -0,0 +1,66 @@
++++ b/chrome/browser/browseros/server/BUILD.gn
+@@ -0,0 +1,67 @@
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -23,7 +23,7 @@ index 0000000000000..ddbdf0b78c0a3
 +  outputs = [ "$target_gen_dir/browseros_resources_validated" ]
 +}
 +
-+source_set("browseros_server") {
++source_set("server") {
 +  sources = [
 +    "browseros_server_manager.cc",
 +    "browseros_server_manager.h",
@@ -34,6 +34,7 @@ index 0000000000000..ddbdf0b78c0a3
 +  deps = [
 +    "//base",
 +    "//chrome/browser:browser_process",
++    "//chrome/browser/browseros/metrics",
 +    "//chrome/common",
 +    "//components/prefs",
 +    "//content/public/browser",

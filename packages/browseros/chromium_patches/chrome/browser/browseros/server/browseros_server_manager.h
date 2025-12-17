@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/browseros_server/browseros_server_manager.h b/chrome/browser/browseros_server/browseros_server_manager.h
+diff --git a/chrome/browser/browseros/server/browseros_server_manager.h b/chrome/browser/browseros/server/browseros_server_manager.h
 new file mode 100644
 index 0000000000000..1c58d85224b98
 --- /dev/null
-+++ b/chrome/browser/browseros_server/browseros_server_manager.h
++++ b/chrome/browser/browseros/server/browseros_server_manager.h
 @@ -0,0 +1,134 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be

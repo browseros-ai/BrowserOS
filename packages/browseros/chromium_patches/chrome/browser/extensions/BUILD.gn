@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/extensions/BUILD.gn b/chrome/browser/extensions/BUILD.gn
-index a8e054baadb1f..815529560b0bb 100644
+index a8e054baadb1f..15720b812f2b9 100644
 --- a/chrome/browser/extensions/BUILD.gn
 +++ b/chrome/browser/extensions/BUILD.gn
 @@ -351,6 +351,8 @@ source_set("extensions") {
@@ -34,7 +34,7 @@ index a8e054baadb1f..815529560b0bb 100644
        "//components/language/core/common",
        "//components/language/core/language_model",
        "//components/live_caption:constants",
-+      "//components/metrics/browseros_metrics",
++      "//chrome/browser/browseros/metrics",
        "//components/media_device_salt",
        "//components/navigation_interception",
        "//components/net_log",

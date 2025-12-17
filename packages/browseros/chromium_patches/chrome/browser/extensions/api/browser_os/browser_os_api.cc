@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.cc b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
 new file mode 100644
-index 0000000000000..5b5d1e6539412
+index 0000000000000..58abbe5b785ed
 --- /dev/null
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
 @@ -0,0 +1,1325 @@
@@ -28,7 +28,7 @@ index 0000000000000..5b5d1e6539412
 +#include "base/time/time.h"
 +#include "base/values.h"
 +#include "base/version_info/version_info.h"
-+#include "components/metrics/browseros_metrics/browseros_metrics.h"
++#include "chrome/browser/browseros/metrics/browseros_metrics.h"
 +#include "chrome/browser/extensions/api/browser_os/browser_os_api_helpers.h"
 +#include "chrome/browser/extensions/api/browser_os/browser_os_api_utils.h"
 +#include "chrome/browser/extensions/api/browser_os/browser_os_change_detector.h"

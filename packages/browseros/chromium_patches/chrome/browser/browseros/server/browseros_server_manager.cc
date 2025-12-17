@@ -1,14 +1,14 @@
-diff --git a/chrome/browser/browseros_server/browseros_server_manager.cc b/chrome/browser/browseros_server/browseros_server_manager.cc
+diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..c7070f4975655
+index 0000000000000..55b1d8110cc0e
 --- /dev/null
-+++ b/chrome/browser/browseros_server/browseros_server_manager.cc
++++ b/chrome/browser/browseros/server/browseros_server_manager.cc
 @@ -0,0 +1,975 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "chrome/browser/browseros_server/browseros_server_manager.h"
++#include "chrome/browser/browseros/server/browseros_server_manager.h"
 +
 +#include <optional>
 +#include <set>
@@ -33,13 +33,13 @@ index 0000000000000..c7070f4975655
 +#include <signal.h>
 +#endif
 +
-+#include "chrome/browser/browseros_server/browseros_server_prefs.h"
++#include "chrome/browser/browseros/metrics/browseros_metrics_service.h"
++#include "chrome/browser/browseros/metrics/browseros_metrics_service_factory.h"
++#include "chrome/browser/browseros/server/browseros_server_prefs.h"
 +#include "chrome/browser/net/system_network_context_manager.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/profiles/profile_manager.h"
 +#include "chrome/common/chrome_paths.h"
-+#include "components/metrics/browseros_metrics/browseros_metrics_service.h"
-+#include "components/metrics/browseros_metrics/browseros_metrics_service_factory.h"
 +#include "components/prefs/pref_change_registrar.h"
 +#include "components/prefs/pref_service.h"
 +#include "components/version_info/version_info.h"

@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/browseros_server/validate_resources.py b/chrome/browser/browseros_server/validate_resources.py
+diff --git a/chrome/browser/browseros/server/validate_resources.py b/chrome/browser/browseros/server/validate_resources.py
 new file mode 100644
 index 0000000000000..d7dc82b132dad
 --- /dev/null
-+++ b/chrome/browser/browseros_server/validate_resources.py
++++ b/chrome/browser/browseros/server/validate_resources.py
 @@ -0,0 +1,43 @@
 +#!/usr/bin/env python3
 +# Copyright 2024 The Chromium Authors

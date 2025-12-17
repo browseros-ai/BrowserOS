@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 7280ef29b85c1..21bac5423e38b 100644
+index 7280ef29b85c1..83531f60b1b9f 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
 @@ -12,6 +12,7 @@ import("//build/config/features.gni")
@@ -22,18 +22,15 @@ index 7280ef29b85c1..21bac5423e38b 100644
  source_set("browser_process") {
    sources = [
      "browser_process.cc",
-@@ -275,6 +281,10 @@ static_library("browser") {
-     "chrome_browser_interface_binders_webui.h",
-     "chrome_browser_interface_binders_webui_parts.h",
-     "chrome_browser_interface_binders_webui_parts_features.cc",
-+    "browseros_server/browseros_server_manager.cc",
-+    "browseros_server/browseros_server_manager.h",
-+    "browseros_server/browseros_server_prefs.cc",
-+    "browseros_server/browseros_server_prefs.h",
-     "chrome_browser_main.cc",
-     "chrome_browser_main.h",
-     "chrome_content_browser_client.cc",
-@@ -6751,6 +6761,18 @@ static_library("browser") {
+@@ -1901,6 +1907,7 @@ static_library("browser") {
+     "//chrome/browser/bluetooth",
+     "//chrome/browser/bluetooth:impl",
+     "//chrome/browser/breadcrumbs",
++    "//chrome/browser/browseros",
+     "//chrome/browser/browsing_data:constants",
+     "//chrome/browser/chooser_controller",
+     "//chrome/browser/commerce",
+@@ -6751,6 +6758,20 @@ static_library("browser") {
      ]
    }
  
@@ -41,12 +38,14 @@ index 7280ef29b85c1..21bac5423e38b 100644
 +    sources += [
 +      "mac/sparkle_glue.h",
 +      "mac/sparkle_glue.mm",
++      "mac/su_updater.h",
 +    ]
 +
-+    deps += [ ":sparkle_buildflags" ]
-+
-+    # Headers config for compilation (linking handled by chrome_framework)
-+    public_configs = [ "//third_party/sparkle:sparkle_link_framework" ]
++    # Add dependency on sparkle buildflags and framework
++    deps += [
++      ":sparkle_buildflags",
++      "//third_party/sparkle:sparkle_framework",
++    ]
 +  }
 +
    if (is_android || is_mac || is_win || is_chromeos) {

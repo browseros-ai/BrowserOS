@@ -1,15 +1,15 @@
-diff --git a/components/metrics/browseros_metrics/browseros_metrics_service.h b/components/metrics/browseros_metrics/browseros_metrics_service.h
+diff --git a/chrome/browser/browseros/metrics/browseros_metrics_service.h b/chrome/browser/browseros/metrics/browseros_metrics_service.h
 new file mode 100644
-index 0000000000000..cb7519c887826
+index 0000000000000..2157d1eb1698e
 --- /dev/null
-+++ b/components/metrics/browseros_metrics/browseros_metrics_service.h
++++ b/chrome/browser/browseros/metrics/browseros_metrics_service.h
 @@ -0,0 +1,95 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#ifndef COMPONENTS_METRICS_BROWSEROS_METRICS_BROWSEROS_METRICS_SERVICE_H_
-+#define COMPONENTS_METRICS_BROWSEROS_METRICS_BROWSEROS_METRICS_SERVICE_H_
++#ifndef CHROME_BROWSER_BROWSEROS_METRICS_BROWSEROS_METRICS_SERVICE_H_
++#define CHROME_BROWSER_BROWSEROS_METRICS_BROWSEROS_METRICS_SERVICE_H_
 +
 +#include <memory>
 +#include <string>
@@ -98,5 +98,4 @@ index 0000000000000..cb7519c887826
 +
 +}  // namespace browseros_metrics
 +
-+#endif  // COMPONENTS_METRICS_BROWSEROS_METRICS_BROWSEROS_METRICS_SERVICE_H_
-\ No newline at end of file
++#endif  // CHROME_BROWSER_BROWSEROS_METRICS_BROWSEROS_METRICS_SERVICE_H_

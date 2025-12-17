@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/side_panel/BUILD.gn b/chrome/browser/ui/views/side_panel/BUILD.gn
-index 55cfc94371d78..023b0f77d179e 100644
+index 55cfc94371d78..28cb30711041a 100644
 --- a/chrome/browser/ui/views/side_panel/BUILD.gn
 +++ b/chrome/browser/ui/views/side_panel/BUILD.gn
 @@ -89,6 +89,19 @@ source_set("side_panel") {
@@ -26,7 +26,7 @@ index 55cfc94371d78..023b0f77d179e 100644
      "//chrome/browser/ui/webui/side_panel/customize_chrome",
      "//chrome/common",
      "//chrome/common/read_anything:mojo_bindings",
-+    "//components/metrics/browseros_metrics",
++    "//chrome/browser/browseros/metrics",
      "//components/omnibox/browser",
      "//components/prefs",
      "//components/search_engines",

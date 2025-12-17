@@ -1,8 +1,8 @@
-diff --git a/components/metrics/browseros_metrics/BUILD.gn b/components/metrics/browseros_metrics/BUILD.gn
+diff --git a/chrome/browser/browseros/metrics/BUILD.gn b/chrome/browser/browseros/metrics/BUILD.gn
 new file mode 100644
-index 0000000000000..c57c43bb575ea
+index 0000000000000..f3b7a978b3998
 --- /dev/null
-+++ b/components/metrics/browseros_metrics/BUILD.gn
++++ b/chrome/browser/browseros/metrics/BUILD.gn
 @@ -0,0 +1,39 @@
 +# Copyright 2025 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
@@ -10,7 +10,7 @@ index 0000000000000..c57c43bb575ea
 +
 +import("//build/config/features.gni")
 +
-+static_library("browseros_metrics") {
++source_set("metrics") {
 +  sources = [
 +    "browseros_metrics.cc",
 +    "browseros_metrics.h",
@@ -43,4 +43,3 @@ index 0000000000000..c57c43bb575ea
 +    "//components/keyed_service/core",
 +  ]
 +}
-\ No newline at end of file

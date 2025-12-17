@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/extensions/extension_web_ui_override_registrar.cc b/chrome/browser/extensions/extension_web_ui_override_registrar.cc
-index 7b48bcb950bad..73f7c36fd3a7c 100644
+index 7b48bcb950bad..2082d547240f2 100644
 --- a/chrome/browser/extensions/extension_web_ui_override_registrar.cc
 +++ b/chrome/browser/extensions/extension_web_ui_override_registrar.cc
 @@ -6,7 +6,9 @@
@@ -8,7 +8,7 @@ index 7b48bcb950bad..73f7c36fd3a7c 100644
  #include "base/lazy_instance.h"
 +#include "base/logging.h"
  #include "base/one_shot_event.h"
-+#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/browseros/core/browseros_constants.h"
  #include "chrome/browser/extensions/extension_web_ui.h"
  #include "chrome/browser/profiles/profile.h"
  #include "extensions/browser/extension_system.h"

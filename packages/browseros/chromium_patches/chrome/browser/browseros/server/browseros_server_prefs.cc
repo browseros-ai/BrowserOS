@@ -1,14 +1,14 @@
-diff --git a/chrome/browser/browseros_server/browseros_server_prefs.cc b/chrome/browser/browseros_server/browseros_server_prefs.cc
+diff --git a/chrome/browser/browseros/server/browseros_server_prefs.cc b/chrome/browser/browseros/server/browseros_server_prefs.cc
 new file mode 100644
-index 0000000000000..3f9acaa85b210
+index 0000000000000..25a4e85878c1e
 --- /dev/null
-+++ b/chrome/browser/browseros_server/browseros_server_prefs.cc
++++ b/chrome/browser/browseros/server/browseros_server_prefs.cc
 @@ -0,0 +1,52 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "chrome/browser/browseros_server/browseros_server_prefs.h"
++#include "chrome/browser/browseros/server/browseros_server_prefs.h"
 +
 +#include "components/prefs/pref_registry_simple.h"
 +

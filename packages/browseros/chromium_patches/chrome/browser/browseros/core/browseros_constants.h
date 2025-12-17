@@ -1,15 +1,15 @@
-diff --git a/chrome/browser/extensions/browseros_extension_constants.h b/chrome/browser/extensions/browseros_extension_constants.h
+diff --git a/chrome/browser/browseros/core/browseros_constants.h b/chrome/browser/browseros/core/browseros_constants.h
 new file mode 100644
-index 0000000000000..ae19be51c4e8b
+index 0000000000000..81fcb0fea9326
 --- /dev/null
-+++ b/chrome/browser/extensions/browseros_extension_constants.h
-@@ -0,0 +1,226 @@
++++ b/chrome/browser/browseros/core/browseros_constants.h
+@@ -0,0 +1,224 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#ifndef CHROME_BROWSER_EXTENSIONS_BROWSEROS_EXTENSION_CONSTANTS_H_
-+#define CHROME_BROWSER_EXTENSIONS_BROWSEROS_EXTENSION_CONSTANTS_H_
++#ifndef CHROME_BROWSER_BROWSEROS_CORE_BROWSEROS_CONSTANTS_H_
++#define CHROME_BROWSER_BROWSEROS_CORE_BROWSEROS_CONSTANTS_H_
 +
 +#include <cstddef>
 +#include <string>
@@ -17,7 +17,6 @@ index 0000000000000..ae19be51c4e8b
 +
 +#include "base/command_line.h"
 +
-+namespace extensions {
 +namespace browseros {
 +
 +// Command line switch to disable chrome://browseros/* URL overrides.
@@ -174,7 +173,7 @@ index 0000000000000..ae19be51c4e8b
 +};
 +
 +inline constexpr BrowserOSExtensionInfo kBrowserOSExtensions[] = {
-+    {kAgentV1ExtensionId, true, false},
++    {kAgentV1ExtensionId, true, true},
 +    {kAgentV2ExtensionId, false, false},
 +    {kBugReporterExtensionId, true, false},
 +    {kControllerExtensionId, false, false},
@@ -227,6 +226,5 @@ index 0000000000000..ae19be51c4e8b
 +}
 +
 +}  // namespace browseros
-+}  // namespace extensions
 +
-+#endif  // CHROME_BROWSER_EXTENSIONS_BROWSEROS_EXTENSION_CONSTANTS_H_
++#endif  // CHROME_BROWSER_BROWSEROS_CORE_BROWSEROS_CONSTANTS_H_
