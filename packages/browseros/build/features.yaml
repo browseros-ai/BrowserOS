@@ -474,3 +474,7 @@ features:
       - components/metrics/browseros_metrics/browseros_metrics_service_factory.h
       - extensions/browser/BUILD.gn
       - extensions/browser/process_manager.cc
+  disable-cdp-notifications:
+    description: "fix: disable cdp notification for attach/detatch"
+    files:
+      - content/browser/devtools/protocol/target_handler.cc
