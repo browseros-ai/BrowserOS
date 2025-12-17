@@ -121,10 +121,11 @@ EXECUTION_ORDER = [
             "chromium_replace",
             "string_replaces",
             "patches",
+            "configure",
         ],
     ),
-    # Phase 3: Configure & Build
-    ("build", ["configure", "compile"]),
+    # Phase 3: Build
+    ("build", ["compile"]),
     # Phase 4: Code Signing (platform-aware)
     ("sign", [_get_sign_module()]),
     # Phase 5: Packaging (platform-aware)
@@ -263,12 +264,12 @@ def main(
     prep: bool = typer.Option(
         False,
         "--prep",
-        help="Run prep phase (patches, chromium_replace, string_replaces, resources)",
+        help="Run prep phase (resources, chromium_replace, string_replaces, patches, configure)",
     ),
     build: bool = typer.Option(
         False,
         "--build",
-        help="Run build phase (configure, compile)",
+        help="Run build phase (compile)",
     ),
     sign: bool = typer.Option(
         False,
