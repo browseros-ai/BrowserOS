@@ -1,10 +1,10 @@
 diff --git a/chrome/browser/ui/webui/help/sparkle_version_updater_mac.h b/chrome/browser/ui/webui/help/sparkle_version_updater_mac.h
 new file mode 100644
-index 0000000000000..bdb3d62440d0d
+index 0000000000000..a915a04e3aa03
 --- /dev/null
 +++ b/chrome/browser/ui/webui/help/sparkle_version_updater_mac.h
-@@ -0,0 +1,58 @@
-+// Copyright 2024 Nxtscape Browser Authors. All rights reserved.
+@@ -0,0 +1,39 @@
++// Copyright 2024 BrowserOS Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
@@ -12,27 +12,14 @@ index 0000000000000..bdb3d62440d0d
 +#define CHROME_BROWSER_UI_WEBUI_HELP_SPARKLE_VERSION_UPDATER_MAC_H_
 +
 +#include "chrome/browser/ui/webui/help/version_updater.h"
-+#include "chrome/browser/mac/sparkle_glue.h"
-+#include "base/memory/weak_ptr.h"
 +
 +#if defined(__OBJC__)
-+@class NSNotification;
++@class SparkleVersionUpdaterBridge;
 +#else
-+class NSNotification;
++class SparkleVersionUpdaterBridge;
 +#endif
 +
-+// Enum for Sparkle update status
-+enum SparkleUpdateStatus {
-+  kSparkleStatusChecking,
-+  kSparkleStatusNoUpdate,
-+  kSparkleStatusUpdateFound,
-+  kSparkleStatusDownloading,
-+  kSparkleStatusReadyToInstall,
-+  kSparkleStatusError
-+};
-+
-+// SparkleVersionUpdater is the VersionUpdater implementation for macOS
-+// that uses the Sparkle framework for updates.
++// VersionUpdater implementation for macOS using Sparkle framework.
 +class SparkleVersionUpdater : public VersionUpdater {
 + public:
 +  SparkleVersionUpdater();
@@ -45,21 +32,14 @@ index 0000000000000..bdb3d62440d0d
 +                      PromoteCallback promote_callback) override;
 +  void PromoteUpdater() override;
 +
-+  // Called by SparkleGlue to notify of status changes
-+  void OnSparkleStatusChange(SparkleUpdateStatus status, const std::string& error_message = "");
-+  
-+  // Called by SparkleGlue to notify of download progress
-+  void OnDownloadProgress(double progress);
-+
-+  // Get a weak pointer to this object
-+  base::WeakPtr<SparkleVersionUpdater> GetWeakPtr();
++  // Called by SparkleVersionUpdaterBridge.
++  void OnStatusChanged(int status);
++  void OnProgressChanged(int percentage);
++  void OnError(const std::string& message);
 +
 + private:
-+  void UpdateStatus(SparkleUpdateStatus status, const std::string& error_message = "");
-+
 +  StatusCallback status_callback_;
-+  base::WeakPtrFactory<SparkleVersionUpdater> weak_ptr_factory_{this};
++  SparkleVersionUpdaterBridge* __strong bridge_;
 +};
 +
 +#endif  // CHROME_BROWSER_UI_WEBUI_HELP_SPARKLE_VERSION_UPDATER_MAC_H_
-\ No newline at end of file

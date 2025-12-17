@@ -1,9 +1,9 @@
 diff --git a/third_party/sparkle/BUILD.gn b/third_party/sparkle/BUILD.gn
 new file mode 100644
-index 0000000000000..5c09b44984519
+index 0000000000000..5e54fedf2db48
 --- /dev/null
 +++ b/third_party/sparkle/BUILD.gn
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,52 @@
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -12,46 +12,47 @@ index 0000000000000..5c09b44984519
 +
 +assert(is_mac)
 +
-+# Bundle data for Sparkle.framework
-+bundle_data("sparkle_framework_bundle_data") {
++# Bundle data for Sparkle.framework - copies to app bundle
++bundle_data("sparkle_framework_bundle") {
 +  sources = [ "Sparkle.framework" ]
 +  outputs = [ "{{bundle_contents_dir}}/Frameworks/{{source_file_part}}" ]
 +}
 +
-+# Main Sparkle framework target
-+group("sparkle") {
-+  public_deps = [ ":sparkle_framework_bundle_data" ]
-+}
++# Config for component builds (test binaries, etc.)
++config("sparkle_link_test") {
++  _sparkle_dir = rebase_path(".", root_build_dir)
 +
-+# Configuration for including Sparkle headers
-+config("sparkle_config") {
-+  framework_dirs = [ "$root_out_dir" ]
-+  
-+  # Add the framework search path
 +  ldflags = [
++    "-rpath",
++    "@executable_path/../Frameworks",
 +    "-F",
-+    rebase_path(".", root_build_dir),
++    _sparkle_dir,
 +    "-framework",
 +    "Sparkle",
-+    "-weak_framework",
++  ]
++
++  cflags_objc = [ "-F" + _sparkle_dir ]
++  cflags_objcc = [ "-F" + _sparkle_dir ]
++}
++
++# Config for chrome_framework (the main shared library)
++config("sparkle_link_framework") {
++  _sparkle_dir = rebase_path(".", root_build_dir)
++
++  ldflags = [
++    "-rpath",
++    "@loader_path/Frameworks",
++    "-F",
++    _sparkle_dir,
++    "-framework",
 +    "Sparkle",
 +  ]
++
++  cflags_objc = [ "-F" + _sparkle_dir ]
++  cflags_objcc = [ "-F" + _sparkle_dir ]
 +}
 +
-+# Target for apps that want to use Sparkle
-+group("sparkle_framework") {
-+  public_deps = [ ":sparkle" ]
-+  
-+  public_configs = [ ":sparkle_config" ]
++# Target for code that uses Sparkle (provides headers only, no linking)
++group("sparkle_headers") {
++  public_configs = [ ":sparkle_link_framework" ]
 +}
-+
-+# Resources that might be needed by Sparkle
-+bundle_data("sparkle_resources") {
-+  sources = [
-+    "Sparkle.framework/Versions/B/Resources/Autoupdate.app",
-+    "Sparkle.framework/Versions/B/Resources/Updater.app",
-+  ]
-+  
-+  outputs = [ "{{bundle_contents_dir}}/Frameworks/Sparkle.framework/Resources/{{source_file_part}}" ]
-+} 
-\ No newline at end of file

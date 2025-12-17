@@ -27,9 +27,10 @@ features:
   mac-sparkle-updater:
     description: "feat: mac sparkle updater"
     files:
-      - chrome/app/app-Info.plist
       - chrome/BUILD.gn
+      - chrome/app/app-Info.plist
       - chrome/browser/BUILD.gn
+      - chrome/browser/buildflags.gni
       - chrome/browser/mac/chrome_browser_main_extra_parts_mac.h
       - chrome/browser/mac/chrome_browser_main_extra_parts_mac.mm
       - chrome/browser/mac/sparkle_glue.h
@@ -37,9 +38,12 @@ features:
       - chrome/browser/mac/su_updater.h
       - chrome/browser/sparkle_buildflags.gni
       - chrome/browser/ui/BUILD.gn
+      - chrome/browser/ui/toolbar/app_menu_icon_controller.cc
+      - chrome/browser/ui/views/relaunch_notification/relaunch_notification_controller.cc
       - chrome/browser/ui/webui/help/sparkle_version_updater_mac.h
       - chrome/browser/ui/webui/help/sparkle_version_updater_mac.mm
       - chrome/browser/ui/webui/help/version_updater_mac.mm
+      - chrome/browser/upgrade_detector/upgrade_detector_impl.cc
       - third_party/sparkle/BUILD.gn
   settings-page:
     description: "feat: settings page updates"

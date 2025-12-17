@@ -1,5 +1,5 @@
 diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
-index 0753724487493..eb8244129b93f 100644
+index 0753724487493..fb30162a1a20f 100644
 --- a/chrome/BUILD.gn
 +++ b/chrome/BUILD.gn
 @@ -18,6 +18,7 @@ import("//build/config/win/manifest.gni")
@@ -26,12 +26,14 @@ index 0753724487493..eb8244129b93f 100644
        "//chrome/common:buildflags",
        "//chrome/common:version_header",
      ]
-@@ -1201,6 +1204,10 @@ if (is_win) {
+@@ -1201,6 +1204,12 @@ if (is_win) {
        bundle_deps += [ ":angle_binaries" ]
      }
  
 +    if (enable_sparkle) {
-+      bundle_deps += [ "//third_party/sparkle:sparkle" ]
++      bundle_deps += [ "//third_party/sparkle:sparkle_framework_bundle" ]
++      configs += [ "//third_party/sparkle:sparkle_link_framework" ]
++      framework_contents += [ "Frameworks" ]
 +    }
 +
      configs += [ ":chrome_dll_symbol_order" ]
