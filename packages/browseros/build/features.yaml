@@ -103,16 +103,25 @@ features:
     description: "feat: browseros server"
     files:
       - base/threading/thread_restrictions.h
-      - chrome/browser/browseros_server/
-      - chrome/browser/browseros_server/BUILD.gn
-      - chrome/browser/browseros_server/browseros_server_manager.cc
-      - chrome/browser/browseros_server/browseros_server_manager.h
-      - chrome/browser/browseros_server/browseros_server_prefs.cc
-      - chrome/browser/browseros_server/browseros_server_prefs.h
-      - chrome/browser/browseros_server/validate_resources.py
+      - chrome/browser/browseros/server/BUILD.gn
+      - chrome/browser/browseros/server/browseros_server_manager.cc
+      - chrome/browser/browseros/server/browseros_server_manager.h
+      - chrome/browser/browseros/server/browseros_server_prefs.cc
+      - chrome/browser/browseros/server/browseros_server_prefs.h
+      - chrome/browser/browseros/server/resources/bin/browseros_server
+      - chrome/browser/browseros/server/validate_resources.py
   metrics:
     description: "feat: browseros metrics"
     files:
+      - chrome/browser/browseros/metrics/BUILD.gn
+      - chrome/browser/browseros/metrics/browseros_metrics.cc
+      - chrome/browser/browseros/metrics/browseros_metrics.h
+      - chrome/browser/browseros/metrics/browseros_metrics_prefs.cc
+      - chrome/browser/browseros/metrics/browseros_metrics_prefs.h
+      - chrome/browser/browseros/metrics/browseros_metrics_service.cc
+      - chrome/browser/browseros/metrics/browseros_metrics_service.h
+      - chrome/browser/browseros/metrics/browseros_metrics_service_factory.cc
+      - chrome/browser/browseros/metrics/browseros_metrics_service_factory.h
       - chrome/browser/metrics/chrome_metrics_service_client.cc
       - chrome/browser/prefs/browser_prefs.cc
       - chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
@@ -121,22 +130,12 @@ features:
       - chrome/browser/ui/webui/settings/browseros_metrics_handler.h
       - chrome/browser/ui/webui/settings/settings_ui.cc
       - chrome/common/pref_names.h
-      - components/metrics/browseros_metrics/BUILD.gn
-      - components/metrics/browseros_metrics/DEPS
-      - components/metrics/browseros_metrics/browseros_metrics.cc
-      - components/metrics/browseros_metrics/browseros_metrics.h
-      - components/metrics/browseros_metrics/browseros_metrics_prefs.cc
-      - components/metrics/browseros_metrics/browseros_metrics_prefs.h
-      - components/metrics/browseros_metrics/browseros_metrics_service.cc
-      - components/metrics/browseros_metrics/browseros_metrics_service.h
-      - components/metrics/browseros_metrics/browseros_metrics_service_factory.cc
-      - components/metrics/browseros_metrics/browseros_metrics_service_factory.h
   ota-updater:
     description: "feat: extensions ota updater"
     files:
       - chrome/browser/extensions/BUILD.gn
       - chrome/browser/extensions/api/developer_private/extension_info_generator_shared.cc
-      - chrome/browser/extensions/browseros_extension_constants.h
+      - chrome/browser/browseros/core/browseros_constants.h
       - chrome/browser/extensions/browseros_external_loader.cc
       - chrome/browser/extensions/browseros_external_loader.h
       - chrome/browser/extensions/chrome_extension_registrar_delegate.cc
@@ -271,7 +270,7 @@ features:
   pin-chat-and-hub:
     description: "feat: pin browseros native panels"
     files:
-      - chrome/browser/extensions/browseros_extension_constants.h
+      - chrome/browser/browseros/core/browseros_constants.h
       - chrome/browser/sync/prefs/chrome_syncable_prefs_database.cc
       - chrome/browser/ui/actions/browseros_actions_config.h
       - chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc
@@ -284,7 +283,7 @@ features:
     description: "feat: pin browseros extensions to toolbar"
     files:
       - chrome/browser/extensions/api/side_panel/side_panel_service.cc
-      - chrome/browser/extensions/browseros_extension_constants.h
+      - chrome/browser/browseros/core/browseros_constants.h
       - chrome/browser/extensions/extension_context_menu_model.cc
       - chrome/browser/extensions/extension_management.cc
       - chrome/browser/ui/actions/browseros_actions_config.h
@@ -361,7 +360,7 @@ features:
     description: "feat: chromium urls for browseros"
     files:
       - chrome/browser/chrome_content_browser_client.cc
-      - chrome/browser/extensions/browseros_extension_constants.h
+      - chrome/browser/browseros/core/browseros_constants.h
       - chrome/browser/resources/settings/route.ts
       - chrome/browser/resources/settings/router.ts
       - chrome/browser/ui/browser_commands.cc
@@ -405,75 +404,10 @@ features:
       - components/infobars/core/infobar_delegate.h
       - tools/metrics/histograms/metadata/browser/enums.xml
   new-browseros-dir:
-    description: "chore: refactor new chrome/browser/browseros folder"
+    description: "chore: chrome/browser/browseros folder structure"
     files:
-      - chrome/BUILD.gn
-      - chrome/browser/BUILD.gn
       - chrome/browser/browseros/BUILD.gn
       - chrome/browser/browseros/core/BUILD.gn
-      - chrome/browser/browseros/core/browseros_constants.h
-      - chrome/browser/browseros/metrics/BUILD.gn
-      - chrome/browser/browseros/metrics/browseros_metrics.cc
-      - chrome/browser/browseros/metrics/browseros_metrics.h
-      - chrome/browser/browseros/metrics/browseros_metrics_prefs.cc
-      - chrome/browser/browseros/metrics/browseros_metrics_prefs.h
-      - chrome/browser/browseros/metrics/browseros_metrics_service.cc
-      - chrome/browser/browseros/metrics/browseros_metrics_service.h
-      - chrome/browser/browseros/metrics/browseros_metrics_service_factory.cc
-      - chrome/browser/browseros/metrics/browseros_metrics_service_factory.h
-      - chrome/browser/browseros/server/BUILD.gn
-      - chrome/browser/browseros/server/browseros_server_manager.cc
-      - chrome/browser/browseros/server/browseros_server_manager.h
-      - chrome/browser/browseros/server/browseros_server_prefs.cc
-      - chrome/browser/browseros/server/browseros_server_prefs.h
-      - chrome/browser/browseros/server/resources/bin/browseros_server
-      - chrome/browser/browseros/server/validate_resources.py
-      - chrome/browser/browseros_server/BUILD.gn
-      - chrome/browser/browseros_server/browseros_server_manager.cc
-      - chrome/browser/browseros_server/browseros_server_manager.h
-      - chrome/browser/browseros_server/browseros_server_prefs.cc
-      - chrome/browser/browseros_server/browseros_server_prefs.h
-      - chrome/browser/browseros_server/resources/bin/browseros_server
-      - chrome/browser/browseros_server/validate_resources.py
-      - chrome/browser/chrome_browser_main.cc
-      - chrome/browser/chrome_content_browser_client.cc
-      - chrome/browser/extensions/BUILD.gn
-      - chrome/browser/extensions/api/browser_os/browser_os_api.cc
-      - chrome/browser/extensions/api/side_panel/side_panel_service.cc
-      - chrome/browser/extensions/browseros_extension_constants.h
-      - chrome/browser/extensions/browseros_external_loader.cc
-      - chrome/browser/extensions/chrome_extension_registrar_delegate.cc
-      - chrome/browser/extensions/extension_context_menu_model.cc
-      - chrome/browser/extensions/extension_management.cc
-      - chrome/browser/extensions/extension_web_ui_override_registrar.cc
-      - chrome/browser/media/extension_media_access_handler.cc
-      - chrome/browser/metrics/chrome_metrics_service_client.cc
-      - chrome/browser/prefs/browser_prefs.cc
-      - chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
-      - chrome/browser/ui/actions/browseros_actions_config.h
-      - chrome/browser/ui/browser_actions.cc
-      - chrome/browser/ui/browser_command_controller.cc
-      - chrome/browser/ui/browser_commands.cc
-      - chrome/browser/ui/extensions/settings_overridden_params_providers.cc
-      - chrome/browser/ui/omnibox/chrome_omnibox_client.cc
-      - chrome/browser/ui/toolbar/toolbar_actions_model.cc
-      - chrome/browser/ui/views/side_panel/BUILD.gn
-      - chrome/browser/ui/views/side_panel/clash_of_gpts/clash_of_gpts_coordinator.cc
-      - chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.cc
-      - chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc
-      - chrome/browser/ui/webui/settings/browseros_metrics_handler.cc
-      - components/metrics/browseros_metrics/BUILD.gn
-      - components/metrics/browseros_metrics/DEPS
-      - components/metrics/browseros_metrics/browseros_metrics.cc
-      - components/metrics/browseros_metrics/browseros_metrics.h
-      - components/metrics/browseros_metrics/browseros_metrics_prefs.cc
-      - components/metrics/browseros_metrics/browseros_metrics_prefs.h
-      - components/metrics/browseros_metrics/browseros_metrics_service.cc
-      - components/metrics/browseros_metrics/browseros_metrics_service.h
-      - components/metrics/browseros_metrics/browseros_metrics_service_factory.cc
-      - components/metrics/browseros_metrics/browseros_metrics_service_factory.h
-      - extensions/browser/BUILD.gn
-      - extensions/browser/process_manager.cc
   disable-cdp-notifications:
     description: "fix: disable cdp notification for attach/detatch"
     files:
