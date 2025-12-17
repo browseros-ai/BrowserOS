@@ -18,8 +18,10 @@ from .utils import (
     write_patch_file,
     create_deletion_marker,
     create_binary_marker,
+    remove_old_path_patches,
     log_extraction_summary,
     get_commit_changed_files,
+    get_commit_renames,
 )
 
 
@@ -91,6 +93,10 @@ def write_patches(
                 skip_count += 1
 
         elif patch.operation == FileOperation.RENAME:
+            # First, remove any existing patches for the old path
+            if patch.old_path:
+                remove_old_path_patches(ctx, patch.old_path)
+
             # Write patch with rename info
             if patch.patch_content:
                 # If there are changes beyond the rename
@@ -199,6 +205,13 @@ def extract_with_base(
 
     if verbose:
         log_info(f"Files changed in {commit_hash}: {len(changed_files)}")
+
+    # Step 1.5: Detect renames and remove old path patches
+    renames = get_commit_renames(commit_hash, ctx.chromium_src)
+    if renames:
+        log_info(f"Detected {len(renames)} renames in commit")
+        for old_path, new_path in renames.items():
+            remove_old_path_patches(ctx, old_path)
 
     # Step 2: For each file, get diff from base to commit
     file_patches = {}
