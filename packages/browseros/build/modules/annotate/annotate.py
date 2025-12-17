@@ -156,8 +156,8 @@ def annotate_features(
 
         log_info(f"   Found {len(modified_files)} modified file(s)")
 
-        # Create commit
-        commit_message = f"{feature_name}: {description}"
+        # Create commit (use description only from features.yaml)
+        commit_message = description
 
         if git_add_and_commit(ctx.chromium_src, modified_files, commit_message):
             log_success(f"   ✓ Committed {len(modified_files)} file(s)")
