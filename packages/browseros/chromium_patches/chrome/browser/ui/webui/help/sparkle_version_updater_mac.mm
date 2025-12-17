@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/ui/webui/help/sparkle_version_updater_mac.mm b/chrome/browser/ui/webui/help/sparkle_version_updater_mac.mm
 new file mode 100644
-index 0000000000000..6dacb6090e02a
+index 0000000000000..47957c4108f40
 --- /dev/null
 +++ b/chrome/browser/ui/webui/help/sparkle_version_updater_mac.mm
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,166 @@
 +// Copyright 2024 BrowserOS Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -11,6 +11,7 @@ index 0000000000000..6dacb6090e02a
 +#include "chrome/browser/ui/webui/help/sparkle_version_updater_mac.h"
 +
 +#include "base/logging.h"
++#include "base/memory/raw_ptr_exclusion.h"
 +#include "base/strings/string_number_conversions.h"
 +#include "base/strings/sys_string_conversions.h"
 +#include "base/strings/utf_string_conversions.h"
@@ -29,7 +30,8 @@ index 0000000000000..6dacb6090e02a
 +@end
 +
 +@implementation SparkleVersionUpdaterBridge {
-+  SparkleVersionUpdater* _updater;  // Raw pointer, bridge does not own updater.
++  // Not raw_ptr<> - prevent C++ template in Objective-C implementation block.
++  RAW_PTR_EXCLUSION SparkleVersionUpdater* _updater;
 +}
 +
 +- (instancetype)initWithUpdater:(SparkleVersionUpdater*)updater {
