@@ -87,57 +87,17 @@ copy_operations:
     destination: "chrome/app/theme/chromium/win"
     type: "directory"
 
-  # Icons - DPI specific
-  - name: "Product Logo Name 22 - 100%"
-    source: "resources/icons/product_logo_name_22.png"
-    destination: "chrome/app/theme/default_100_percent/chromium/product_logo_name_22.png"
-    type: "file"
+  # Icons - DPI specific (100%)
+  - name: "DPI 100% Icons"
+    source: "resources/icons/default_100_percent"
+    destination: "chrome/app/theme/default_100_percent/chromium"
+    type: "directory"
 
-  - name: "Product Logo Name 22 White - 100%"
-    source: "resources/icons/product_logo_name_22_white.png"
-    destination: "chrome/app/theme/default_100_percent/chromium/product_logo_name_22_white.png"
-    type: "file"
-
-  - name: "Product Logo Name 22 - 200%"
-    source: "resources/icons/product_logo_name_22_2x.png"
-    destination: "chrome/app/theme/default_200_percent/chromium/product_logo_name_22.png"
-    type: "file"
-
-  - name: "Product Logo Name 22 White - 200%"
-    source: "resources/icons/product_logo_name_22_white_2x.png"
-    destination: "chrome/app/theme/default_200_percent/chromium/product_logo_name_22_white.png"
-    type: "file"
-
-  - name: "Product Logo 16 - 100%"
-    source: "resources/icons/product_logo_16.png"
-    destination: "chrome/app/theme/default_100_percent/chromium/product_logo_16.png"
-    type: "file"
-
-  - name: "Product Logo 32 - 100%"
-    source: "resources/icons/product_logo_32.png"
-    destination: "chrome/app/theme/default_100_percent/chromium/product_logo_32.png"
-    type: "file"
-
-  - name: "Product Logo 16 - 200%"
-    source: "resources/icons/product_logo_32.png"
-    destination: "chrome/app/theme/default_200_percent/chromium/product_logo_16.png"
-    type: "file"
-
-  - name: "Product Logo 32 - 200%"
-    source: "resources/icons/product_logo_64.png"
-    destination: "chrome/app/theme/default_200_percent/chromium/product_logo_32.png"
-    type: "file"
-
-  # Linux icons for default_100_percent (16x16, 32x32)
-  - name: "Linux Product Logo 16 - 100%"
-    source: "resources/icons/product_logo_16.png"
-    destination: "chrome/app/theme/default_100_percent/chromium/linux/product_logo_16.png"
-    type: "file"
-
-  - name: "Linux Product Logo 32 - 100%"
-    source: "resources/icons/product_logo_32.png"
-    destination: "chrome/app/theme/default_100_percent/chromium/linux/product_logo_32.png"
-    type: "file"
+  # Icons - DPI specific (200%)
+  - name: "DPI 200% Icons"
+    source: "resources/icons/default_200_percent"
+    destination: "chrome/app/theme/default_200_percent/chromium"
+    type: "directory"
 
   # BrowserOS Server Binary - Platform & Architecture specific
   - name: "BrowserOS Server Binary - macOS ARM64"

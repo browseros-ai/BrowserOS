@@ -41,6 +41,9 @@ PNG source/app_icon.png 192 product_logo_192.png
 PNG source/app_icon.png 256 product_logo_256.png
 PNG source/app_icon.png 1024 product_logo_1024.png
 
+# Generic product_logo.png (no size suffix, used as default)
+PNG source/app_icon.png 128 product_logo.png
+
 # Monochrome variant (white silhouette)
 MONO source/app_icon.png 22 product_logo_22_mono.png
 
@@ -49,6 +52,24 @@ PNG source/app_icon.png 22 product_logo_name_22.png
 PNG source/app_icon.png 44 product_logo_name_22_2x.png
 PNG source/app_icon.png 22 product_logo_name_22_white.png
 PNG source/app_icon.png 44 product_logo_name_22_white_2x.png
+
+# ==============================================================================
+# DPI-SPECIFIC ICONS (default_100_percent, default_200_percent)
+# ==============================================================================
+
+# 100% DPI (1x) - actual pixel sizes
+PNG source/app_icon.png 16 default_100_percent/product_logo_16.png
+PNG source/app_icon.png 32 default_100_percent/product_logo_32.png
+PNG source/app_icon.png 22 default_100_percent/product_logo_name_22.png
+PNG source/app_icon.png 22 default_100_percent/product_logo_name_22_white.png
+PNG source/app_icon.png 16 default_100_percent/linux/product_logo_16.png
+PNG source/app_icon.png 32 default_100_percent/linux/product_logo_32.png
+
+# 200% DPI (2x) - double the pixel size for retina/HiDPI
+PNG source/app_icon.png 32 default_200_percent/product_logo_16.png
+PNG source/app_icon.png 64 default_200_percent/product_logo_32.png
+PNG source/app_icon.png 44 default_200_percent/product_logo_name_22.png
+PNG source/app_icon.png 44 default_200_percent/product_logo_name_22_white.png
 
 # ==============================================================================
 # WINDOWS ICONS
