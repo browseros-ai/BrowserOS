@@ -128,6 +128,17 @@ copy_operations:
     destination: "chrome/app/theme/default_200_percent/chromium/product_logo_32.png"
     type: "file"
 
+  # Linux icons for default_100_percent (16x16, 32x32)
+  - name: "Linux Product Logo 16 - 100%"
+    source: "resources/icons/product_logo_16.png"
+    destination: "chrome/app/theme/default_100_percent/chromium/linux/product_logo_16.png"
+    type: "file"
+
+  - name: "Linux Product Logo 32 - 100%"
+    source: "resources/icons/product_logo_32.png"
+    destination: "chrome/app/theme/default_100_percent/chromium/linux/product_logo_32.png"
+    type: "file"
+
   # BrowserOS Server Binary - Platform & Architecture specific
   - name: "BrowserOS Server Binary - macOS ARM64"
     source: "resources/binaries/browseros_server/browseros-server-darwin-arm64"
