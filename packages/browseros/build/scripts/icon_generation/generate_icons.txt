@@ -1,0 +1,108 @@
+# BrowserOS Icon Generation Configuration
+# =========================================
+#
+# Format:
+#   OPERATION source [size|sizes] destination
+#
+# Operations:
+#   PNG    source size dest     - Generate PNG at specified size
+#   MONO   source size dest     - Generate monochrome (white silhouette) PNG
+#   ICO    source sizes dest    - Generate Windows ICO (sizes comma-separated)
+#   XPM    source size dest     - Generate Linux XPM via ImageMagick
+#   ICNS   source dest          - Generate macOS .icns via iconutil
+#   XCASSETS source dest_dir    - Generate Assets.xcassets structure
+#   ASSETS_CAR dest_dir         - Generate Assets.car from xcassets (run after XCASSETS)
+#   COPY   source dest          - Copy static file as-is
+#
+# Paths are relative to:
+#   - source: icon_generation/ directory
+#   - dest: resources/icons/ directory
+
+# ==============================================================================
+# STATIC FILES (manually maintained, just copied)
+# ==============================================================================
+
+COPY static/product_logo.svg product_logo.svg
+COPY static/product_logo.ai product_logo.ai
+COPY static/product_logo_animation.svg product_logo_animation.svg
+
+# ==============================================================================
+# COMMON PNG ICONS (used across platforms)
+# ==============================================================================
+
+PNG source/app_icon.png 16 product_logo_16.png
+PNG source/app_icon.png 22 product_logo_22.png
+PNG source/app_icon.png 24 product_logo_24.png
+PNG source/app_icon.png 32 product_logo_32.png
+PNG source/app_icon.png 48 product_logo_48.png
+PNG source/app_icon.png 64 product_logo_64.png
+PNG source/app_icon.png 128 product_logo_128.png
+PNG source/app_icon.png 192 product_logo_192.png
+PNG source/app_icon.png 256 product_logo_256.png
+PNG source/app_icon.png 1024 product_logo_1024.png
+
+# Monochrome variant (white silhouette)
+MONO source/app_icon.png 22 product_logo_22_mono.png
+
+# Product logo with name (toolbar icons) - using main icon for now
+PNG source/app_icon.png 22 product_logo_name_22.png
+PNG source/app_icon.png 44 product_logo_name_22_2x.png
+PNG source/app_icon.png 22 product_logo_name_22_white.png
+PNG source/app_icon.png 44 product_logo_name_22_white_2x.png
+
+# ==============================================================================
+# WINDOWS ICONS
+# ==============================================================================
+
+# Main app icon - all sizes for proper taskbar display
+ICO source/app_icon.png 16,20,24,32,40,48,64,128,256 win/chromium.ico
+
+# Incognito mode icon
+ICO source/app_icon.png 16,20,24,32,40,48,64,128,256 win/incognito.ico
+
+# App launcher icon
+ICO source/app_icon.png 16,20,24,32,40,48,64,128,256 win/app_list.ico
+
+# Document association icons
+ICO source/app_icon.png 16,32,48,256 win/chromium_doc.ico
+ICO source/app_icon.png 16,32,48,256 win/chromium_pdf.ico
+
+# Windows tiles
+PNG source/app_icon.png 150 win/tiles/Logo.png
+PNG source/app_icon.png 70 win/tiles/SmallLogo.png
+
+# ==============================================================================
+# MACOS ICONS
+# ==============================================================================
+
+# Main app icon bundle
+ICNS source/app_icon.png mac/app.icns
+
+# Document icon bundle
+ICNS source/app_icon.png mac/document.icns
+
+# Assets.xcassets structure (for modern macOS)
+XCASSETS source/app_icon.png mac
+
+# Compile Assets.car from xcassets
+ASSETS_CAR mac
+
+# ==============================================================================
+# LINUX ICONS
+# ==============================================================================
+
+PNG source/app_icon.png 24 linux/product_logo_24.png
+PNG source/app_icon.png 48 linux/product_logo_48.png
+PNG source/app_icon.png 64 linux/product_logo_64.png
+PNG source/app_icon.png 128 linux/product_logo_128.png
+PNG source/app_icon.png 256 linux/product_logo_256.png
+
+# XPM format (legacy X11 support)
+XPM source/app_icon.png 32 linux/product_logo_32.xpm
+
+# ==============================================================================
+# CHROMEOS ICONS
+# ==============================================================================
+
+PNG source/app_icon.png 32 chromeos/chrome_app_icon_32.png
+PNG source/app_icon.png 192 chromeos/chrome_app_icon_192.png
