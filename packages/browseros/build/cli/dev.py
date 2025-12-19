@@ -364,6 +364,56 @@ def apply_patch_cmd(
     log_success(f"Successfully applied patch for: {chromium_path}")
 
 
+@apply_app.command(name="changed")
+def apply_changed(
+    commit: Optional[str] = Option(
+        None, "--commit", "-c", help="Single commit hash to get changed patches from"
+    ),
+    range_start: Optional[str] = Option(
+        None, "--range-start", help="Start commit of range (exclusive)"
+    ),
+    range_end: Optional[str] = Option(
+        None, "--range-end", help="End commit of range (inclusive)"
+    ),
+    reset_to: str = Option(
+        ..., "--reset-to", "-r", help="Reset chromium files to this commit before applying (required)"
+    ),
+    dry_run: bool = Option(False, "--dry-run", help="Preview changes without applying"),
+):
+    """Apply only patches that changed in specific commits.
+
+    Useful for testing changes on another machine without full rebuild.
+    Only resets and applies files that were modified in the specified commits.
+
+    Examples:
+        # Apply patches changed in a single commit
+        browseros dev apply changed --commit 1c78477 --reset-to base -S /chromium
+
+        # Apply patches changed in a range of commits
+        browseros dev apply changed --range-start HEAD~5 --range-end HEAD --reset-to base -S /chromium
+    """
+    ctx = create_build_context(state.chromium_src)
+    if not ctx:
+        raise typer.Exit(1)
+
+    from ..modules.apply import ApplyChangedModule
+
+    module = ApplyChangedModule()
+    try:
+        module.validate(ctx)
+        module.execute(
+            ctx,
+            reset_to=reset_to,
+            commit=commit,
+            range_start=range_start,
+            range_end=range_end,
+            dry_run=dry_run,
+        )
+    except Exception as e:
+        log_error(f"Failed to apply changed patches: {e}")
+        raise typer.Exit(1)
+
+
 # Feature commands
 @feature_app.command(name="list")
 def feature_list():
