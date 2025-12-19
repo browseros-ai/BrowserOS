@@ -84,6 +84,9 @@ def main(
     os_filter: Optional[str] = typer.Option(
         None, "--os", help="Filter by OS: macos, windows, linux"
     ),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Output directory for downloads (default: temp dir)"
+    ),
     show_modules: bool = typer.Option(
         False, "--show-modules", help="Show available modules and exit"
     ),
@@ -98,6 +101,7 @@ def main(
       browseros release --version 0.31.0 --publish    # Publish to download/ paths
       browseros release --version 0.31.0 --download   # Download all artifacts
       browseros release --version 0.31.0 --download --os macos  # Download macOS only
+      browseros release --version 0.31.0 --download --output ./downloads  # Custom dir
 
     \b
     GitHub Release (Sub-command):
@@ -158,7 +162,7 @@ def main(
 
     if download:
         log_info(f"📥 Downloading artifacts for v{version}")
-        execute_module(release_ctx, DownloadModule(os_filter=os_filter))
+        execute_module(release_ctx, DownloadModule(os_filter=os_filter, output_dir=output))
 
 
 @github_app.command("create")

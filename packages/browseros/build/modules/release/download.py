@@ -34,8 +34,9 @@ class DownloadModule(CommandModule):
     requires = []
     description = "Download release artifacts from CDN"
 
-    def __init__(self, os_filter: Optional[str] = None):
+    def __init__(self, os_filter: Optional[str] = None, output_dir: Optional[Path] = None):
         self.os_filter = os_filter
+        self.output_dir = output_dir
 
     def validate(self, ctx: Context) -> None:
         if not ctx.release_version:
@@ -58,7 +59,10 @@ class DownloadModule(CommandModule):
             log_error(f"No release metadata found for version {version}")
             return
 
-        download_dir = Path(tempfile.gettempdir()) / "browseros-releases" / version
+        if self.output_dir:
+            download_dir = self.output_dir / version
+        else:
+            download_dir = Path(tempfile.gettempdir()) / "browseros-releases" / version
         download_dir.mkdir(parents=True, exist_ok=True)
 
         log_info(f"\nDownloading to {download_dir}\n")
