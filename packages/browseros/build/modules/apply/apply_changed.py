@@ -23,6 +23,17 @@ from .utils import (
 )
 
 
+def get_git_root(repo_path: Path) -> Path:
+    """Get the root directory of the git repository."""
+    result = run_git_command(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=repo_path,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to get git root: {result.stderr}")
+    return Path(result.stdout.strip())
+
+
 class ChangeType(Enum):
     """Types of changes to patch files"""
     ADDED = "A"
@@ -296,6 +307,19 @@ class ApplyChangedModule(CommandModule):
         if (range_start and not range_end) or (range_end and not range_start):
             raise RuntimeError("--range requires both start and end commits")
 
+        # Get git root and compute the prefix for chromium_patches relative to git root
+        git_root = get_git_root(ctx.root_dir)
+        # ctx.root_dir might be a subdir of git_root (e.g., packages/browseros)
+        # We need to compute the path prefix from git root to chromium_patches
+        try:
+            relative_root = ctx.root_dir.relative_to(git_root)
+            patches_prefix = str(relative_root / "chromium_patches") + "/"
+        except ValueError:
+            # root_dir is not under git_root, use simple prefix
+            patches_prefix = "chromium_patches/"
+
+        log_info(f"Looking for changes in: {patches_prefix}")
+
         # Validate commits exist in browseros repo
         if commit:
             if not validate_commit_exists(commit, ctx.root_dir):
@@ -314,8 +338,8 @@ class ApplyChangedModule(CommandModule):
         if not validate_commit_exists(reset_to, ctx.chromium_src):
             raise RuntimeError(f"Reset commit not found in chromium repo: {reset_to}")
 
-        # Filter to chromium_patches/ only
-        patch_changes = filter_patch_changes(changes)
+        # Filter to chromium_patches/ only (using computed prefix)
+        patch_changes = filter_patch_changes(changes, patches_prefix)
 
         if not patch_changes:
             log_warning("No chromium_patches/ files changed in the specified commit(s)")
