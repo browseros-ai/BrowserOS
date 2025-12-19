@@ -169,41 +169,6 @@ def get_commit_changed_files(commit_hash: str, chromium_src: Path) -> List[str]:
         return []
 
 
-def get_commit_renames(commit_hash: str, chromium_src: Path) -> Dict[str, str]:
-    """Get renames in a commit.
-
-    Uses git diff-tree with -M to detect renames.
-
-    Returns:
-        Dict mapping old_path -> new_path for renamed files
-    """
-    try:
-        result = run_git_command(
-            ["git", "diff-tree", "--no-commit-id", "-r", "-M", "--name-status", commit_hash],
-            cwd=chromium_src,
-        )
-
-        if result.returncode != 0:
-            log_error(f"Failed to get renames for commit {commit_hash}")
-            return {}
-
-        renames = {}
-        for line in result.stdout.strip().split("\n"):
-            if not line.strip():
-                continue
-            parts = line.split("\t")
-            if len(parts) >= 3 and parts[0].startswith("R"):
-                # Rename: R100\told_path\tnew_path
-                old_path = parts[1]
-                new_path = parts[2]
-                renames[old_path] = new_path
-
-        return renames
-    except GitError as e:
-        log_error(f"Error getting renames: {e}")
-        return {}
-
-
 def parse_diff_output(diff_output: str) -> Dict[str, FilePatch]:
     """
     Parse git diff output into individual file patches with full metadata.
@@ -448,52 +413,6 @@ def create_deletion_marker(ctx: Context, file_path: str) -> Optional[bool]:
     except Exception as e:
         log_error(f"  Failed to create deletion marker: {e}")
         return False
-
-
-def remove_old_path_patches(ctx: Context, old_path: str) -> bool:
-    """
-    Remove existing patches for a file that has been renamed.
-
-    Similar to delete handling, but without creating a .deleted marker
-    since the file still exists (just at a new location).
-
-    Args:
-        ctx: Build context
-        old_path: The old file path before rename
-
-    Returns:
-        True if successful (or no patches existed), False on error
-    """
-    patches_dir = ctx.get_patches_dir()
-    base_path = patches_dir / old_path
-
-    # Check for existing patch-related files
-    existing_files = []
-
-    # Check if raw patch file exists
-    if base_path.exists():
-        existing_files.append(base_path)
-
-    # Also check for marker files
-    for suffix in [".patch", ".binary", ".rename", ".deleted"]:
-        check_path = base_path.with_suffix(base_path.suffix + suffix)
-        if check_path.exists():
-            existing_files.append(check_path)
-
-    if not existing_files:
-        return True  # Nothing to remove
-
-    log_warning(f"Removing patches for renamed file: {old_path}")
-
-    for ef in existing_files:
-        try:
-            ef.unlink()
-            log_warning(f"  Removed: {ef.relative_to(ctx.root_dir)}")
-        except Exception as e:
-            log_error(f"  Failed to remove {ef}: {e}")
-            return False
-
-    return True
 
 
 def create_binary_marker(

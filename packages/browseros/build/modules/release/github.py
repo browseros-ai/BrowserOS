@@ -79,6 +79,14 @@ def upload_to_github_release(version: str, repo: str, file_path: Path) -> bool:
         return False
 
 
+def normalize_version(version: str) -> str:
+    """Normalize version to MAJOR.MINOR.BUILD (strip patch if present)"""
+    parts = version.split(".")
+    if len(parts) >= 3:
+        return ".".join(parts[:3])
+    return version
+
+
 def download_and_upload_artifacts(
     version: str,
     repo: str,
@@ -87,7 +95,7 @@ def download_and_upload_artifacts(
 ) -> List[Tuple[str, bool]]:
     """Download artifacts from R2 and upload to GitHub release"""
     if platforms is None:
-        platforms = ["win", "linux"]  # Skip macOS - served from CDN
+        platforms = PLATFORMS
 
     results = []
 
@@ -165,6 +173,7 @@ class GithubModule(CommandModule):
 
     def execute(self, ctx: Context) -> None:
         version = ctx.release_version
+        tag_version = normalize_version(version)
         repo = ctx.github_repo
 
         metadata = fetch_all_release_metadata(version, ctx.env)
@@ -173,7 +182,7 @@ class GithubModule(CommandModule):
             return
 
         log_info(f"\n{'='*60}")
-        log_info(f"Creating GitHub Release: v{version}")
+        log_info(f"Creating GitHub Release: v{tag_version}")
         log_info(f"{'='*60}")
 
         for platform, release in metadata.items():
@@ -184,11 +193,11 @@ class GithubModule(CommandModule):
         log_info(f"  Draft: {self.draft}")
 
         # Create release
-        release_title = self.title or f"v{version}"
-        notes = generate_release_notes(version, metadata)
+        release_title = self.title or f"v{tag_version}"
+        notes = generate_release_notes(tag_version, metadata)
 
         log_info("\nCreating GitHub release...")
-        success, result = create_github_release(version, repo, release_title, notes, self.draft)
+        success, result = create_github_release(tag_version, repo, release_title, notes, self.draft)
 
         if success:
             log_success(f"Release created: {result}")
@@ -202,7 +211,7 @@ class GithubModule(CommandModule):
         # Upload artifacts
         if not self.skip_upload:
             log_info("\nUploading artifacts to GitHub release...")
-            results = download_and_upload_artifacts(version, repo, metadata)
+            results = download_and_upload_artifacts(tag_version, repo, metadata)
 
             failed = [f for f, ok in results if not ok]
             if failed:
@@ -224,7 +233,7 @@ class GithubModule(CommandModule):
                 if arch in release.get("artifacts", {}):
                     artifact = release["artifacts"][arch]
                     log_info(f"\n{arch_to_file[arch]} ({arch}):")
-                    print(generate_appcast_item(artifact, version, sparkle_version, build_date))
+                    print(generate_appcast_item(artifact, tag_version, sparkle_version, build_date))
 
         log_info(f"\n{'='*60}")
-        log_success(f"Release v{version} complete!")
+        log_success(f"Release v{tag_version} complete!")

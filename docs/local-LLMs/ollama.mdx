@@ -8,16 +8,16 @@ icon: "robot"
 
 <Steps>
   <Step title="Navigate to AI Settings">
-    Navigate to `chrome://settings/browseros` to add Ollama as a provider.
+    Navigate to `chrome://browseros/settings` or click the **Settings** icon on the new tab page to add Ollama as a provider.
   </Step>
   <Step title="Get Model ID">
     Get the model ID of your Ollama model (e.g., `gpt-oss:20b`)
   </Step>
   <Step title="Start Ollama Server">
-    Start Ollama with CORS enabled:
+    Start Ollama:
 
     ```bash
-    OLLAMA_ORIGINS="*" ollama serve
+    ollama serve
     ```
   </Step>
   <Step title="Select and Use">
@@ -25,15 +25,12 @@ icon: "robot"
   </Step>
 </Steps>
 
-<Warning>
-  If you don't want to run from CLI with CORS settings, we recommend using LM Studio instead. See the [LM Studio setup guide](/local-LLMs/lm-studio).
-</Warning>
 
 ## Detailed Visual Guide
 
 ### Step 1: Navigate to Settings Page
 
-Navigate to the BrowserOS AI settings page at `chrome://settings/browseros-ai`
+Navigate to `chrome://browseros/settings` or click the **Settings** icon on the new tab page
 
 <Frame>
   ![Navigate to settings page](/images/setting-up-ollama/ollama-step1.png)
@@ -49,15 +46,11 @@ Identify and copy your Ollama model ID for configuration.
 
 ### Step 3: Start Ollama from CLI
 
-Run Ollama with the required CORS settings to allow BrowserOS to connect:
+Run Ollama to start the local server:
 
 ```bash
-OLLAMA_ORIGINS="*" ollama serve
+ollama serve
 ```
-
-<Note>
-  Unfortunately, Ollama by default doesn't allow requests from other apps without this configuration.
-</Note>
 
 <Frame>
   ![Start Ollama from CLI](/images/setting-up-ollama/ollama-step3.png)

@@ -6,12 +6,12 @@ description: "Connect BrowserOS as an MCP server to Claude Code or Claude Deskto
 ## How to use `BrowserOS-mcp` on Claude Code
 
 1. Download binary from [BrowserOS.com](https://BrowserOS.com)
-2. Open BrowserOS and from a new tab click the settings icon to open the settings page.
-3. From the settings page, navigate to **MCP** in the sidebar and copy the MCP URL
-4. In your terminal, type the below command (Replace `<mcp_url>` with the MCP URL you copied above): 
+2. Open BrowserOS and navigate to `chrome://browseros/settings` or click the **Settings** icon on the new tab page.
+3. Navigate to **MCP** in the sidebar and copy the MCP URL
+4. In your terminal, type the below command (Replace `<mcp_url>` with the MCP URL you copied above):
    ```
-   claude mcp add --transport http browseros <mcp_url>
-   # example: claude mcp add --transport http browseros http://127.0.0.1:9226/mcp
+   claude mcp add --transport http browseros <mcp_url> --scope user
+   # example: claude mcp add --transport http browseros http://127.0.0.1:9226/mcp --scope user
    ``` 
 5. Now start Claude Code: `claude --dangerously-skip-permissions` (so Claude doesn't ask for confirmation each time)
 6. Now, in Claude Code, type `Open amazon.com on browseros` to open the tab in BrowserOS.
@@ -22,9 +22,8 @@ Here's a [loom video](https://www.loom.com/share/9a41b74f265649a2993c329b05f93b5
 The steps are roughly the same as above, but to add the MCP server, run the following command:
 
 ```
-gemini mcp add local-server <mcp_url> --transport http
-# example: gemini mcp add local-server http://127.0.0.1:9226/mcp --transport http
-
+gemini mcp add local-server <mcp_url> --transport http --scope user
+# example: gemini mcp add local-server http://127.0.0.1:9226/mcp --transport http --scope user
 ```
 
 ---
@@ -32,7 +31,7 @@ gemini mcp add local-server <mcp_url> --transport http
 ## How to add `BrowserOS-mcp` on Claude Desktop
 
 1. Download binary from [BrowserOS.com](https://BrowserOS.com)
-2. Open BrowserOS and from a new tab click the settings icon to open the settings page. From the settings page, navigate to **MCP** in the sidebar and note the port number (usually `9225`).
+2. Open BrowserOS and navigate to `chrome://browseros/settings` or click the **Settings** icon on the new tab page. Navigate to **MCP** in the sidebar and note the port number (usually `9225`).
 3. Open your Claude Desktop config file: `/Users/<username>/Library/Application Support/Claude/claude_desktop_config.json`
 4. Add BrowserOS to your config (replace the port with the value shown in MCP settings page):
 ```json

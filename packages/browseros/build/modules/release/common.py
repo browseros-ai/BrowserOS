@@ -3,11 +3,11 @@
 
 import subprocess
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from ...common.env import EnvConfig
 from ...common.utils import log_warning
-from ..upload import get_release_json
+from ..upload import get_release_json, get_r2_client, BOTO3_AVAILABLE
 
 PLATFORMS = ["macos", "win", "linux"]
 PLATFORM_DISPLAY_NAMES = {"macos": "macOS", "win": "Windows", "linux": "Linux"}
@@ -42,6 +42,65 @@ def fetch_all_release_metadata(
             metadata[platform] = release_data
 
     return metadata
+
+
+def list_all_versions(env: Optional[EnvConfig] = None) -> List[str]:
+    """List all available release versions from R2.
+
+    Returns versions sorted in descending order (newest first).
+    """
+    if not BOTO3_AVAILABLE:
+        return []
+
+    if env is None:
+        env = EnvConfig()
+
+    if not env.has_r2_config():
+        return []
+
+    client = get_r2_client(env)
+    if not client:
+        return []
+
+    versions = []
+    continuation_token = None
+
+    while True:
+        kwargs = {
+            "Bucket": env.r2_bucket,
+            "Prefix": "releases/",
+            "Delimiter": "/",
+        }
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+
+        try:
+            response = client.list_objects_v2(**kwargs)
+        except Exception:
+            break
+
+        for prefix in response.get("CommonPrefixes", []):
+            # prefix looks like "releases/0.31.0/"
+            version = prefix["Prefix"].replace("releases/", "").rstrip("/")
+            if version:
+                versions.append(version)
+
+        if not response.get("IsTruncated"):
+            break
+        continuation_token = response.get("NextContinuationToken")
+
+    # Sort versions descending (newest first) using version tuple comparison
+    def version_key(v: str) -> tuple:
+        parts = []
+        for part in v.split("."):
+            try:
+                parts.append(int(part))
+            except ValueError:
+                parts.append(0)
+        return tuple(parts)
+
+    versions.sort(key=version_key, reverse=True)
+    return versions
 
 
 def format_size(size_bytes: int) -> str:

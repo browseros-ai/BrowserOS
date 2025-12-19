@@ -1,7 +1,0 @@
-diff --git a/chrome/browser/browseros_server/.gitignore b/chrome/browser/browseros_server/.gitignore
-new file mode 100644
-index 0000000000000..cb76b31565a77
---- /dev/null
-+++ b/chrome/browser/browseros_server/.gitignore
-@@ -0,0 +1 @@
-+resources/

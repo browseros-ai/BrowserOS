@@ -9,6 +9,7 @@ from .common import (
     PLATFORMS,
     PLATFORM_DISPLAY_NAMES,
     fetch_all_release_metadata,
+    list_all_versions,
     format_size,
 )
 
@@ -29,10 +30,30 @@ class ListModule(CommandModule):
         if not ctx.env.has_r2_config():
             raise ValidationError("R2 configuration not set")
 
-        if not ctx.release_version:
-            raise ValidationError("--version is required")
-
     def execute(self, ctx: Context) -> None:
+        if not ctx.release_version:
+            self._list_all_versions(ctx)
+            return
+
+        self._list_version_details(ctx)
+
+    def _list_all_versions(self, ctx: Context) -> None:
+        """List all available versions"""
+        versions = list_all_versions(ctx.env)
+
+        if not versions:
+            log_info("No releases found in R2")
+            return
+
+        log_info(f"\nAvailable releases ({len(versions)} total):")
+        log_info("=" * 40)
+        for version in versions:
+            log_info(f"  {version}")
+        log_info("=" * 40)
+        log_info("\nUse --version <version> for details")
+
+    def _list_version_details(self, ctx: Context) -> None:
+        """List detailed artifacts for a specific version"""
         version = ctx.release_version
         metadata = fetch_all_release_metadata(version, ctx.env)
 

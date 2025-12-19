@@ -92,7 +92,8 @@ def main(
 
     \b
     Quick Operations (Flags):
-      browseros release --version 0.31.0 --list       # List artifacts
+      browseros release --list                        # List all available versions
+      browseros release --list --version 0.31.0       # List artifacts for version
       browseros release --version 0.31.0 --appcast    # Generate appcast XML
       browseros release --version 0.31.0 --publish    # Publish to download/ paths
       browseros release --version 0.31.0 --download   # Download all artifacts
@@ -130,17 +131,21 @@ def main(
         typer.echo("Use --show-modules to see available modules")
         raise typer.Exit(1)
 
-    # Version is required for flag operations
-    if not version:
-        log_error("--version is required for release operations")
+    # Version is required for all flags except --list
+    requires_version = any([appcast, publish, download])
+    if requires_version and not version:
+        log_error("--version is required for this operation")
         raise typer.Exit(1)
 
     # Create context
-    release_ctx = create_release_context(version)
+    release_ctx = create_release_context(version or "")
 
     # Execute requested modules
     if list_artifacts:
-        log_info(f"📋 Listing artifacts for v{version}")
+        if version:
+            log_info(f"📋 Listing artifacts for v{version}")
+        else:
+            log_info("📋 Listing all available releases")
         execute_module(release_ctx, ListModule())
 
     if appcast:

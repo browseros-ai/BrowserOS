@@ -355,6 +355,7 @@ def create_launcher_script(ctx: Context, bin_dir: Path) -> None:
     launcher_content = f"""#!/bin/sh
 # BrowserOS launcher script
 export LD_LIBRARY_PATH=/usr/lib/browseros:$LD_LIBRARY_PATH
+export CHROME_DEVEL_SANDBOX=/usr/lib/browseros/chrome_sandbox
 exec /usr/lib/browseros/{ctx.BROWSEROS_APP_NAME} "$@"
 """
 
