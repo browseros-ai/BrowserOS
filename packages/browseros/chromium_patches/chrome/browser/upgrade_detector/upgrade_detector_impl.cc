@@ -1,19 +1,8 @@
 diff --git a/chrome/browser/upgrade_detector/upgrade_detector_impl.cc b/chrome/browser/upgrade_detector/upgrade_detector_impl.cc
-index 15ca9a708125d..e514262a53eb9 100644
+index 15ca9a708125d..7ac5ff51b31ab 100644
 --- a/chrome/browser/upgrade_detector/upgrade_detector_impl.cc
 +++ b/chrome/browser/upgrade_detector/upgrade_detector_impl.cc
-@@ -28,6 +28,10 @@
- #include "build/build_config.h"
- #include "chrome/browser/browser_process.h"
- #include "chrome/browser/buildflags.h"
-+
-+#if BUILDFLAG(IS_MAC)
-+#include "chrome/browser/sparkle_buildflags.h"
-+#endif
- #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
- #include "chrome/browser/google/google_brand.h"
- #include "chrome/browser/obsolete_system/obsolete_system.h"
-@@ -48,11 +52,13 @@
+@@ -48,11 +48,13 @@
  namespace {
  
  // The default thresholds for reaching annoyance levels.
@@ -32,23 +21,23 @@ index 15ca9a708125d..e514262a53eb9 100644
  
  // How long to wait (each cycle) before checking which severity level we should
  // be at. Once we reach the highest severity, the timer will stop.
-@@ -68,7 +74,10 @@ constexpr auto kOutdatedBuildDetectorPeriod = base::Days(1);
+@@ -68,7 +70,10 @@ constexpr auto kOutdatedBuildDetectorPeriod = base::Days(1);
  constexpr auto kOutdatedBuildAge = base::Days(7) * 8;
  
  bool ShouldDetectOutdatedBuilds() {
 -#if BUILDFLAG(ENABLE_UPDATE_NOTIFICATIONS) && !BUILDFLAG(IS_CHROMEOS)
-+#if BUILDFLAG(IS_MAC) && BUILDFLAG(ENABLE_SPARKLE)
++#if BUILDFLAG(ENABLE_SPARKLE)
 +  // Sparkle handles its own updates, no need for outdated build detection.
 +  return false;
 +#elif BUILDFLAG(ENABLE_UPDATE_NOTIFICATIONS) && !BUILDFLAG(IS_CHROMEOS)
    // Don't show the bubble if we have a brand code that is NOT organic
    std::string brand;
    if (google_brand::GetBrand(&brand) && !google_brand::IsOrganic(brand)) {
-@@ -157,6 +166,15 @@ void UpgradeDetectorImpl::CalculateThresholds() {
+@@ -157,6 +162,15 @@ void UpgradeDetectorImpl::CalculateThresholds() {
  void UpgradeDetectorImpl::DoCalculateThresholds() {
    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
  
-+#if BUILDFLAG(IS_MAC) && BUILDFLAG(ENABLE_SPARKLE)
++#if BUILDFLAG(ENABLE_SPARKLE)
 +  // Sparkle notifies us when updates are ready to install.
 +  // Use minimal thresholds so notification appears quickly.
 +  stages_[kStagesIndexVeryLow] = base::Minutes(1);
@@ -56,19 +45,19 @@ index 15ca9a708125d..e514262a53eb9 100644
 +  stages_[kStagesIndexElevated] = base::Minutes(1);
 +  stages_[kStagesIndexGrace] = base::Minutes(1);
 +  stages_[kStagesIndexHigh] = base::Minutes(1);
-+#else   // !BUILDFLAG(IS_MAC) || !BUILDFLAG(ENABLE_SPARKLE)
++#else   // !BUILDFLAG(ENABLE_SPARKLE)
    base::TimeDelta notification_period = GetRelaunchNotificationPeriod();
    const std::optional<RelaunchWindow> relaunch_window =
        GetRelaunchWindowPolicyValue();
-@@ -210,6 +228,7 @@ void UpgradeDetectorImpl::DoCalculateThresholds() {
+@@ -210,6 +224,7 @@ void UpgradeDetectorImpl::DoCalculateThresholds() {
      for (auto& stage : stages_)
        stage /= scale_factor;
    }
-+#endif  // BUILDFLAG(IS_MAC) && BUILDFLAG(ENABLE_SPARKLE)
++#endif  // BUILDFLAG(ENABLE_SPARKLE)
  }
  
  void UpgradeDetectorImpl::StartOutdatedBuildDetector() {
-@@ -275,6 +294,8 @@ void UpgradeDetectorImpl::DetectOutdatedInstall() {
+@@ -275,6 +290,8 @@ void UpgradeDetectorImpl::DetectOutdatedInstall() {
  void UpgradeDetectorImpl::UpgradeDetected(UpgradeAvailable upgrade_available) {
    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
  
@@ -77,7 +66,7 @@ index 15ca9a708125d..e514262a53eb9 100644
    set_upgrade_available(upgrade_available);
    set_critical_update_acknowledged(false);
  
-@@ -327,6 +348,10 @@ void UpgradeDetectorImpl::NotifyOnUpgradeWithTimePassed(
+@@ -327,6 +344,10 @@ void UpgradeDetectorImpl::NotifyOnUpgradeWithTimePassed(
        next_delay = *(it - 1) - time_passed;
    }
  
@@ -88,18 +77,18 @@ index 15ca9a708125d..e514262a53eb9 100644
    set_upgrade_notification_stage(new_stage);
    if (!next_delay.is_zero()) {
      // Schedule the next wakeup in 20 minutes or when the next change to the
-@@ -485,7 +510,10 @@ void UpgradeDetectorImpl::Init() {
+@@ -485,7 +506,10 @@ void UpgradeDetectorImpl::Init() {
  
    auto* const build_state = g_browser_process->GetBuildState();
    build_state->AddObserver(this);
-+#if !BUILDFLAG(IS_MAC) || !BUILDFLAG(ENABLE_SPARKLE)
++#if !BUILDFLAG(ENABLE_SPARKLE)
 +  // Sparkle handles version checking via appcast, no need to poll file system.
    installed_version_poller_.emplace(build_state);
-+#endif  // !BUILDFLAG(IS_MAC) || !BUILDFLAG(ENABLE_SPARKLE)
++#endif  // !BUILDFLAG(ENABLE_SPARKLE)
  #endif  // BUILDFLAG(ENABLE_UPDATE_NOTIFICATIONS)
  }
  
-@@ -529,6 +557,9 @@ base::Time UpgradeDetectorImpl::GetAnnoyanceLevelDeadline(
+@@ -529,6 +553,9 @@ base::Time UpgradeDetectorImpl::GetAnnoyanceLevelDeadline(
  void UpgradeDetectorImpl::OnUpdate(const BuildState* build_state) {
    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
  

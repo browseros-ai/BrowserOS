@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
-index f4531197ae5e1..e1119bd7d3537 100644
+index f4531197ae5e1..027e77f1536c6 100644
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
 @@ -1275,6 +1275,8 @@ static_library("ui") {
@@ -20,11 +20,3 @@ index f4531197ae5e1..e1119bd7d3537 100644
        "webui/help/version_updater_mac.mm",
        "webui/settings/mac_system_settings_handler.cc",
        "webui/settings/mac_system_settings_handler.h",
-@@ -3185,6 +3189,7 @@ static_library("ui") {
-     allow_circular_includes_from += [ "//chrome/browser/apps/app_shim" ]
- 
-     deps += [
-+      "//chrome/browser:sparkle_buildflags",
-       "//chrome/browser/apps/app_shim",
-       "//chrome/browser/enterprise/connectors/device_trust/key_management/core/mac",
-       "//chrome/browser/updater:browser_updater_client",

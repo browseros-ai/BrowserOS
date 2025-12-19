@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 7280ef29b85c1..2bc37ee09e695 100644
+index 7280ef29b85c1..5a3690a409d58 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
 @@ -12,6 +12,7 @@ import("//build/config/features.gni")
@@ -10,19 +10,15 @@ index 7280ef29b85c1..2bc37ee09e695 100644
  import("//chrome/browser/downgrade/buildflags.gni")
  import("//chrome/common/features.gni")
  import("//chrome/common/request_header_integrity/buildflags.gni")
-@@ -117,6 +118,11 @@ buildflag_header("buildflags") {
-   }
- }
- 
-+buildflag_header("sparkle_buildflags") {
-+  header = "sparkle_buildflags.h"
-+  flags = [ "ENABLE_SPARKLE=$enable_sparkle" ]
-+}
-+
- source_set("browser_process") {
-   sources = [
-     "browser_process.cc",
-@@ -1901,6 +1907,7 @@ static_library("browser") {
+@@ -98,6 +99,7 @@ if (is_win) {
+ buildflag_header("buildflags") {
+   header = "buildflags.h"
+   flags = [
++    "ENABLE_SPARKLE=$enable_sparkle",
+     "ENABLE_UPDATER=$enable_updater",
+     "ENABLE_UPDATE_NOTIFICATIONS=$enable_update_notifications",
+     "USE_MINIKIN_HYPHENATION=$use_minikin_hyphenation",
+@@ -1901,6 +1903,7 @@ static_library("browser") {
      "//chrome/browser/bluetooth",
      "//chrome/browser/bluetooth:impl",
      "//chrome/browser/breadcrumbs",
@@ -30,7 +26,7 @@ index 7280ef29b85c1..2bc37ee09e695 100644
      "//chrome/browser/browsing_data:constants",
      "//chrome/browser/chooser_controller",
      "//chrome/browser/commerce",
-@@ -6751,6 +6758,18 @@ static_library("browser") {
+@@ -6751,6 +6754,16 @@ static_library("browser") {
      ]
    }
  
@@ -39,8 +35,6 @@ index 7280ef29b85c1..2bc37ee09e695 100644
 +      "mac/sparkle_glue.h",
 +      "mac/sparkle_glue.mm",
 +    ]
-+
-+    deps += [ ":sparkle_buildflags" ]
 +
 +    # Headers config for compilation (linking handled by chrome_framework)
 +    public_configs = [ "//third_party/sparkle:sparkle_link_framework" ]

@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/webui/help/version_updater_mac.mm b/chrome/browser/ui/webui/help/version_updater_mac.mm
-index 992157e28e8f5..4df0133b28fdb 100644
+index ad6be624e5cb0..a0d9043c06fa1 100644
 --- a/chrome/browser/ui/webui/help/version_updater_mac.mm
 +++ b/chrome/browser/ui/webui/help/version_updater_mac.mm
 @@ -6,6 +6,15 @@
@@ -8,7 +8,7 @@ index 992157e28e8f5..4df0133b28fdb 100644
  
 +// Include Sparkle updater if available
 +#include "base/command_line.h"
-+#include "chrome/browser/sparkle_buildflags.h"
++#include "chrome/browser/buildflags.h"
 +
 +#if BUILDFLAG(ENABLE_SPARKLE)
 +#include "chrome/browser/ui/webui/help/sparkle_version_updater_mac.h"
@@ -18,7 +18,7 @@ index 992157e28e8f5..4df0133b28fdb 100644
  #include <algorithm>
  #include <memory>
  #include <string>
-@@ -74,6 +83,8 @@ void UpdateStatus(VersionUpdater::StatusCallback status_callback,
+@@ -78,6 +87,8 @@ void UpdateStatus(VersionUpdater::StatusCallback status_callback,
                     : VersionUpdater::Status::UPDATED;
        break;
      case updater::UpdateService::UpdateState::State::kUpdateError:
@@ -27,7 +27,7 @@ index 992157e28e8f5..4df0133b28fdb 100644
        switch (update_state.error_code) {
          case updater::GOOPDATE_E_APP_UPDATE_DISABLED_BY_POLICY:
            status = VersionUpdater::Status::DISABLED_BY_ADMIN;
-@@ -143,12 +154,27 @@ class VersionUpdaterMac : public VersionUpdater {
+@@ -147,12 +158,27 @@ class VersionUpdaterMac : public VersionUpdater {
              },
              base::BindRepeating(&UpdateStatus, status_callback)));
    }
