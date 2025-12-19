@@ -350,12 +350,6 @@ features:
     files:
       - chrome/browser/global_keyboard_shortcuts_mac.mm
       - chrome/browser/ui/accelerator_table.cc
-  windows-icon-fix:
-    description: "fix: windows icon"
-    files:
-      - chrome/browser/profiles/profile_shortcut_manager_win.cc
-      - chrome/browser/ui/views/frame/browser_desktop_window_tree_host_win.cc
-      - chrome/browser/ui/views/frame/browser_window_property_manager_win.cc
   chromium-urls:
     description: "feat: chromium urls for browseros"
     files:
