@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_constants.h b/chrome/browser/browseros/core/browseros_constants.h
 new file mode 100644
-index 0000000000000..e537bbc6efd37
+index 0000000000000..6d20e32069f92
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_constants.h
-@@ -0,0 +1,219 @@
+@@ -0,0 +1,214 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -24,10 +24,6 @@ index 0000000000000..e537bbc6efd37
 +inline bool IsURLOverridesDisabled() {
 +  return base::CommandLine::ForCurrentProcess()->HasSwitch(kDisableUrlOverrides);
 +}
-+
-+// AI Agent Extension ID
-+inline constexpr char kAgentV1ExtensionId[] =
-+    "djhdjhlnljbjgejbndockeedocneiaei";
 +
 +// Agent V2 Extension ID
 +inline constexpr char kAgentV2ExtensionId[] =
@@ -168,7 +164,6 @@ index 0000000000000..e537bbc6efd37
 +};
 +
 +inline constexpr BrowserOSExtensionInfo kBrowserOSExtensions[] = {
-+    {kAgentV1ExtensionId, true, true},
 +    {kAgentV2ExtensionId, false, false},
 +    {kBugReporterExtensionId, true, false},
 +    {kControllerExtensionId, false, false},
