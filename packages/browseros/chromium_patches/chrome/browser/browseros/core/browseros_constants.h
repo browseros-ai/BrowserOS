@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_constants.h b/chrome/browser/browseros/core/browseros_constants.h
 new file mode 100644
-index 0000000000000..81fcb0fea9326
+index 0000000000000..e537bbc6efd37
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_constants.h
-@@ -0,0 +1,224 @@
+@@ -0,0 +1,219 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -16,18 +16,13 @@ index 0000000000000..81fcb0fea9326
 +#include <vector>
 +
 +#include "base/command_line.h"
++#include "chrome/browser/browseros/core/browseros_switches.h"
 +
 +namespace browseros {
 +
-+// Command line switch to disable chrome://browseros/* URL overrides.
-+// Useful for debugging to see raw extension URLs.
-+inline constexpr char kDisableURLOverridesSwitch[] =
-+    "browseros-disable-url-overrides";
-+
 +// Check if URL overrides are disabled via command line flag
 +inline bool IsURLOverridesDisabled() {
-+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-+      kDisableURLOverridesSwitch);
++  return base::CommandLine::ForCurrentProcess()->HasSwitch(kDisableUrlOverrides);
 +}
 +
 +// AI Agent Extension ID

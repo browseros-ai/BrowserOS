@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..fbba5c6219ffd
+index 0000000000000..dab79743c4753
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1189 @@
+@@ -0,0 +1,1190 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -33,6 +33,7 @@ index 0000000000000..fbba5c6219ffd
 +#include <signal.h>
 +#endif
 +
++#include "chrome/browser/browseros/core/browseros_switches.h"
 +#include "chrome/browser/browseros/metrics/browseros_metrics_service.h"
 +#include "chrome/browser/browseros/metrics/browseros_metrics_service_factory.h"
 +#include "chrome/browser/browseros/server/browseros_server_prefs.h"
@@ -407,25 +408,25 @@ index 0000000000000..fbba5c6219ffd
 +
 +  // Apply command-line overrides (internal testing only)
 +  int cdp_override = GetPortOverrideFromCommandLine(
-+      command_line, "browseros-cdp-port", "CDP port");
++      command_line, browseros::kCDPPort, "CDP port");
 +  if (cdp_override > 0) {
 +    cdp_port_ = cdp_override;
 +  }
 +
 +  int mcp_override = GetPortOverrideFromCommandLine(
-+      command_line, "browseros-mcp-port", "MCP port");
++      command_line, browseros::kMCPPort, "MCP port");
 +  if (mcp_override > 0) {
 +    mcp_port_ = mcp_override;
 +  }
 +
 +  int agent_override = GetPortOverrideFromCommandLine(
-+      command_line, "browseros-agent-port", "Agent port");
++      command_line, browseros::kAgentPort, "Agent port");
 +  if (agent_override > 0) {
 +    agent_port_ = agent_override;
 +  }
 +
 +  int extension_override = GetPortOverrideFromCommandLine(
-+      command_line, "browseros-extension-port", "Extension port");
++      command_line, browseros::kExtensionPort, "Extension port");
 +  if (extension_override > 0) {
 +    extension_port_ = extension_override;
 +  }
@@ -464,7 +465,7 @@ index 0000000000000..fbba5c6219ffd
 +  InitializePortsAndPrefs();
 +  SavePortsToPrefs();
 +
-+  if (command_line->HasSwitch("disable-browseros-server")) {
++  if (command_line->HasSwitch(browseros::kDisableServer)) {
 +    LOG(INFO) << "browseros: BrowserOS server disabled via command line";
 +    return;
 +  }
@@ -670,7 +671,7 @@ index 0000000000000..fbba5c6219ffd
 +  // Start the updater (if not already running and not disabled)
 +  if (!updater_) {
 +    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-+            "disable-browseros-server-updater")) {
++            browseros::kDisableServerUpdater)) {
 +      LOG(INFO) << "browseros: Server updater disabled via command line";
 +    } else {
 +      updater_ =
@@ -1113,9 +1114,9 @@ index 0000000000000..fbba5c6219ffd
 +base::FilePath BrowserOSServerManager::GetBrowserOSServerResourcesPath() const {
 +  // Check for command-line override first
 +  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-+  if (command_line->HasSwitch("browseros-server-resources-dir")) {
++  if (command_line->HasSwitch(browseros::kServerResourcesDir)) {
 +    base::FilePath custom_path =
-+        command_line->GetSwitchValuePath("browseros-server-resources-dir");
++        command_line->GetSwitchValuePath(browseros::kServerResourcesDir);
 +    LOG(INFO) << "browseros: Using custom resources dir from command line: "
 +              << custom_path;
 +    return custom_path;

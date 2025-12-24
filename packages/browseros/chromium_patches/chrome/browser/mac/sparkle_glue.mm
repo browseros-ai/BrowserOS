@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/mac/sparkle_glue.mm b/chrome/browser/mac/sparkle_glue.mm
 new file mode 100644
-index 0000000000000..61df8716ef93e
+index 0000000000000..93cb6d545b19c
 --- /dev/null
 +++ b/chrome/browser/mac/sparkle_glue.mm
-@@ -0,0 +1,659 @@
+@@ -0,0 +1,660 @@
 +// Copyright 2024 BrowserOS Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -20,6 +20,7 @@ index 0000000000000..61df8716ef93e
 +#include "base/system/sys_info.h"
 +#include "base/version.h"
 +#include "chrome/browser/browser_process.h"
++#include "chrome/browser/browseros/core/browseros_switches.h"
 +#include "chrome/browser/upgrade_detector/build_state.h"
 +
 +#import <Sparkle/Sparkle.h>
@@ -403,18 +404,18 @@ index 0000000000000..61df8716ef93e
 +  }
 +
 +#if !defined(OFFICIAL_BUILD)
-+  if (cmd->HasSwitch("sparkle-dry-run")) {
++  if (cmd->HasSwitch(browseros::kSparkleDryRun)) {
 +    LOG(WARNING) << "Sparkle: DRY-RUN MODE enabled";
 +    _dryRunMode = YES;
 +  }
 +
-+  if (cmd->HasSwitch("sparkle-spoof-version")) {
-+    std::string version = cmd->GetSwitchValueASCII("sparkle-spoof-version");
++  if (cmd->HasSwitch(browseros::kSparkleSpoofVersion)) {
++    std::string version = cmd->GetSwitchValueASCII(browseros::kSparkleSpoofVersion);
 +    LOG(WARNING) << "Sparkle: Spoofing version as " << version;
 +    _spoofedVersion = base::SysUTF8ToNSString(version);
 +  }
 +
-+  if (cmd->HasSwitch("sparkle-verbose")) {
++  if (cmd->HasSwitch(browseros::kSparkleVerbose)) {
 +    [[NSUserDefaults standardUserDefaults] setBool:YES
 +                                            forKey:@"SUEnableDebugMode"];
 +    VLOG(1) << "Sparkle: Verbose logging enabled";
@@ -424,7 +425,7 @@ index 0000000000000..61df8716ef93e
 +
 +- (void)maybeForceUpdateCheck {
 +  auto* cmd = base::CommandLine::ForCurrentProcess();
-+  if (cmd && cmd->HasSwitch("browseros-sparkle-force-check")) {
++  if (cmd && cmd->HasSwitch(browseros::kSparkleForceCheck)) {
 +    VLOG(1) << "Sparkle: Force check triggered via command line";
 +    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC),
 +                   dispatch_get_main_queue(), ^{
@@ -531,8 +532,8 @@ index 0000000000000..61df8716ef93e
 +
 +- (nullable NSString*)feedURLStringForUpdater:(SPUUpdater*)updater {
 +  auto* cmd = base::CommandLine::ForCurrentProcess();
-+  if (cmd && cmd->HasSwitch("browseros-sparkle-url")) {
-+    std::string url = cmd->GetSwitchValueASCII("browseros-sparkle-url");
++  if (cmd && cmd->HasSwitch(browseros::kSparkleUrl)) {
++    std::string url = cmd->GetSwitchValueASCII(browseros::kSparkleUrl);
 +    LOG(WARNING) << "Sparkle: Using override URL: " << url;
 +    return base::SysUTF8ToNSString(url);
 +  }
@@ -580,7 +581,7 @@ index 0000000000000..61df8716ef93e
 +    shouldAllowInsecureConnectionForHost:(NSString*)host
 +                              isMainFeed:(BOOL)isMainFeed {
 +  auto* cmd = base::CommandLine::ForCurrentProcess();
-+  if (cmd && cmd->HasSwitch("sparkle-skip-signature")) {
++  if (cmd && cmd->HasSwitch(browseros::kSparkleSkipSignature)) {
 +    LOG(WARNING) << "Sparkle: Allowing insecure connection to "
 +                 << base::SysNSStringToUTF8(host);
 +    return YES;

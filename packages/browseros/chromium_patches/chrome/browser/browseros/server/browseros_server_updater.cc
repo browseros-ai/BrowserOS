@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.cc b/chrome/browser/browseros/server/browseros_server_updater.cc
 new file mode 100644
-index 0000000000000..f9e555d2c2356
+index 0000000000000..62162c8924fce
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.cc
-@@ -0,0 +1,1009 @@
+@@ -0,0 +1,1061 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -25,6 +25,7 @@ index 0000000000000..f9e555d2c2356
 +#include "chrome/browser/browser_features.h"
 +#include "chrome/browser/browser_process.h"
 +#include "chrome/browser/browseros/metrics/browseros_metrics.h"
++#include "chrome/browser/browseros/core/browseros_switches.h"
 +#include "chrome/browser/browseros/server/browseros_server_constants.h"
 +#include "chrome/browser/browseros/server/browseros_server_manager.h"
 +#include "chrome/browser/browseros/server/browseros_server_prefs.h"
@@ -232,12 +233,21 @@ index 0000000000000..f9e555d2c2356
 +  // Step 1: Verify signature
 +  if (!VerifyEd25519Signature(zip_path, signature, kServerUpdatePublicKey)) {
 +    result.error = "Signature verification failed";
-+    // Delete the bad ZIP
 +    base::DeleteFile(zip_path);
 +    return result;
 +  }
 +
-+  // Step 2: Extract ZIP
++  // Step 2: Clean stale destination if exists (handles interrupted updates)
++  if (base::PathExists(dest_dir)) {
++    LOG(WARNING) << "browseros: Cleaning stale version directory: " << dest_dir;
++    if (!base::DeletePathRecursively(dest_dir)) {
++      result.error = "Failed to clean stale version directory";
++      base::DeleteFile(zip_path);
++      return result;
++    }
++  }
++
++  // Step 3: Extract ZIP
 +  std::string extract_error = ExtractZipFile(zip_path, dest_dir);
 +  if (!extract_error.empty()) {
 +    result.error = extract_error;
@@ -402,8 +412,8 @@ index 0000000000000..f9e555d2c2356
 +  // Get appcast URL (allow override via command line, otherwise use alpha/stable)
 +  std::string appcast_url;
 +  base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
-+  if (cmd->HasSwitch(kAppcastUrlSwitch)) {
-+    appcast_url = cmd->GetSwitchValueASCII(kAppcastUrlSwitch);
++  if (cmd->HasSwitch(browseros::kServerAppcastUrl)) {
++    appcast_url = cmd->GetSwitchValueASCII(browseros::kServerAppcastUrl);
 +    LOG(INFO) << "browseros: Using custom appcast URL: " << appcast_url;
 +  } else if (base::FeatureList::IsEnabled(features::kBrowserOsAlphaFeatures)) {
 +    appcast_url = kAlphaAppcastUrl;
@@ -481,10 +491,36 @@ index 0000000000000..f9e555d2c2356
 +    return;
 +  }
 +
-+  LOG(INFO) << "browseros: New version available, starting download";
++  LOG(INFO) << "browseros: New version available: " << item->version.GetString();
 +  pending_item_ = *item;
 +  pending_signature_ = enclosure->signature;
-+  StartDownload(*enclosure, item->version);
++  CheckVersionAlreadyDownloaded(*enclosure, item->version);
++}
++
++void BrowserOSServerUpdater::CheckVersionAlreadyDownloaded(
++    const AppcastEnclosure& enclosure,
++    const base::Version& version) {
++  base::FilePath version_dir = GetVersionDir(version);
++
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock()},
++      base::BindOnce(&base::PathExists, version_dir),
++      base::BindOnce(&BrowserOSServerUpdater::OnVersionExistsCheck,
++                     weak_factory_.GetWeakPtr(), enclosure, version));
++}
++
++void BrowserOSServerUpdater::OnVersionExistsCheck(
++    const AppcastEnclosure& enclosure,
++    const base::Version& version,
++    bool exists) {
++  if (exists) {
++    LOG(INFO) << "browseros: Version " << version.GetString()
++              << " already downloaded, skipping to test";
++    TestBinary(version);
++    return;
++  }
++
++  StartDownload(enclosure, version);
 +}
 +
 +void BrowserOSServerUpdater::StartDownload(const AppcastEnclosure& enclosure,
@@ -997,6 +1033,22 @@ index 0000000000000..f9e555d2c2356
 +    props.Set("version", pending_item_.version.GetString());
 +  }
 +  browseros_metrics::BrowserOSMetrics::Log("server.ota.error", std::move(props));
++
++  // Clean version directory if we failed after extraction (test or hotswap stage)
++  if (pending_item_.version.IsValid() &&
++      (stage == "test" || stage == "hotswap")) {
++    base::FilePath version_dir = GetVersionDir(pending_item_.version);
++    base::ThreadPool::PostTask(
++        FROM_HERE, {base::MayBlock()},
++        base::BindOnce(
++            [](base::FilePath dir) {
++              if (base::PathExists(dir)) {
++                LOG(INFO) << "browseros: Cleaning up failed version: " << dir;
++                base::DeletePathRecursively(dir);
++              }
++            },
++            version_dir));
++  }
 +
 +  CleanupPendingUpdate();
 +  ResetState();

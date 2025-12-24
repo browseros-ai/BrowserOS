@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.h b/chrome/browser/browseros/server/browseros_server_updater.h
 new file mode 100644
-index 0000000000000..799a2917f29a5
+index 0000000000000..03bdaf2bb38bc
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.h
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,176 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -91,6 +91,11 @@ index 0000000000000..799a2917f29a5
 +  void OnAppcastFetched(std::unique_ptr<std::string> response);
 +
 +  // Download flow
++  void CheckVersionAlreadyDownloaded(const AppcastEnclosure& enclosure,
++                                     const base::Version& version);
++  void OnVersionExistsCheck(const AppcastEnclosure& enclosure,
++                            const base::Version& version,
++                            bool exists);
 +  void StartDownload(const AppcastEnclosure& enclosure,
 +                     const base::Version& version);
 +  void OnDownloadComplete(const base::Version& version,
