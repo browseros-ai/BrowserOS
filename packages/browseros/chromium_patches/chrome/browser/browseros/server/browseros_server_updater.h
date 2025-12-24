@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.h b/chrome/browser/browseros/server/browseros_server_updater.h
 new file mode 100644
-index 0000000000000..49b57c959e14f
+index 0000000000000..799a2917f29a5
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.h
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,171 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -69,6 +69,11 @@ index 0000000000000..49b57c959e14f
 +  // Returns the resources path for the best available binary.
 +  base::FilePath GetBestServerResourcesPath();
 +
++  // Called by manager when downloaded version is unusable (missing or crashes).
++  // Nukes all downloaded versions and current_version file, forcing fallback
++  // to bundled binary until next successful update.
++  void InvalidateDownloadedVersion();
++
 + private:
 +  enum class State {
 +    kIdle,
@@ -106,8 +111,9 @@ index 0000000000000..49b57c959e14f
 +                            const std::string& output);
 +
 +  // Hot-swap flow
-+  void CheckServerStatus(const base::Version& version);
-+  void OnServerStatusChecked(const base::Version& version, bool can_update);
++  void CheckServerStatus();
++  void OnStatusFetched(std::unique_ptr<std::string> response);
++  void OnServerStatusChecked(bool can_update);
 +  void PerformHotSwap(const base::Version& version);
 +  void OnHotSwapComplete(const base::Version& old_version,
 +                         const base::Version& new_version,
@@ -151,6 +157,7 @@ index 0000000000000..49b57c959e14f
 +  // Keep loaders alive during async operations
 +  std::unique_ptr<network::SimpleURLLoader> appcast_loader_;
 +  std::unique_ptr<network::SimpleURLLoader> download_loader_;
++  std::unique_ptr<network::SimpleURLLoader> status_loader_;
 +
 +  // Pending update info
 +  AppcastItem pending_item_;

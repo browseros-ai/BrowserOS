@@ -406,3 +406,17 @@ features:
     description: "fix: disable cdp notification for attach/detatch"
     files:
       - content/browser/devtools/protocol/target_handler.cc
+  browseros-server-ota:
+    description: "feat: browseros-server ota updater"
+    files:
+      - chrome/browser/browseros/server/BUILD.gn
+      - chrome/browser/browseros/server/browseros_appcast_parser.cc
+      - chrome/browser/browseros/server/browseros_appcast_parser.h
+      - chrome/browser/browseros/server/browseros_server_constants.h
+      - chrome/browser/browseros/server/browseros_server_manager.cc
+      - chrome/browser/browseros/server/browseros_server_manager.h
+      - chrome/browser/browseros/server/browseros_server_prefs.cc
+      - chrome/browser/browseros/server/browseros_server_prefs.h
+      - chrome/browser/browseros/server/browseros_server_updater.cc
+      - chrome/browser/browseros/server/browseros_server_updater.h
+      - third_party/libxml/BUILD.gn

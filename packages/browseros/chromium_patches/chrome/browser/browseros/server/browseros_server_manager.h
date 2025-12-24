@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.h b/chrome/browser/browseros/server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000..eb14eec343450
+index 0000000000000..3c322437eada1
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.h
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,182 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -92,6 +92,13 @@ index 0000000000000..eb14eec343450
 +  using UpdateCompleteCallback = base::OnceCallback<void(bool success)>;
 +  void RestartServerForUpdate(UpdateCompleteCallback callback);
 +
++  // Result from launching the server process on background thread
++  // Public because it's used by free function LaunchProcessOnBackgroundThread
++  struct LaunchResult {
++    base::Process process;
++    bool used_fallback = false;  // True if fell back to bundled binary
++  };
++
 + private:
 +  friend base::NoDestructor<BrowserOSServerManager>;
 +
@@ -111,7 +118,7 @@ index 0000000000000..eb14eec343450
 +  void StartCDPServer();
 +  void StopCDPServer();
 +  void LaunchBrowserOSProcess();
-+  void OnProcessLaunched(base::Process process);
++  void OnProcessLaunched(LaunchResult result);
 +  // Terminates the BrowserOS server process.
 +  // If wait=true, blocks until process exits (must be called from background thread).
 +  // If wait=false, just sends kill signal and returns (safe from any thread).
@@ -156,6 +163,10 @@ index 0000000000000..eb14eec343450
 +  bool is_restarting_ = false;  // Whether server is currently restarting
 +  bool is_updating_ = false;    // Whether restarting for OTA update
 +  UpdateCompleteCallback update_complete_callback_;
++
++  // Crash tracking for automatic rollback
++  int consecutive_startup_failures_ = 0;
++  base::TimeTicks last_launch_time_;
 +
 +  // Timer for health checks
 +  base::RepeatingTimer health_check_timer_;

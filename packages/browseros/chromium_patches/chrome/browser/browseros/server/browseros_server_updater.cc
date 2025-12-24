@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.cc b/chrome/browser/browseros/server/browseros_server_updater.cc
 new file mode 100644
-index 0000000000000..f5962788159bc
+index 0000000000000..f9e555d2c2356
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.cc
-@@ -0,0 +1,887 @@
+@@ -0,0 +1,1009 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -12,6 +12,7 @@ index 0000000000000..f5962788159bc
 +
 +#include "base/base64.h"
 +#include "base/command_line.h"
++#include "base/json/json_reader.h"
 +#include "base/feature_list.h"
 +#include "base/files/file_enumerator.h"
 +#include "base/files/file_util.h"
@@ -26,6 +27,8 @@ index 0000000000000..f5962788159bc
 +#include "chrome/browser/browseros/metrics/browseros_metrics.h"
 +#include "chrome/browser/browseros/server/browseros_server_constants.h"
 +#include "chrome/browser/browseros/server/browseros_server_manager.h"
++#include "chrome/browser/browseros/server/browseros_server_prefs.h"
++#include "components/prefs/pref_service.h"
 +#include "chrome/browser/net/system_network_context_manager.h"
 +#include "chrome/common/chrome_paths.h"
 +#include "net/base/net_errors.h"
@@ -59,7 +62,7 @@ index 0000000000000..f5962788159bc
 +    }
 +    policy {
 +      cookies_allowed: NO
-+      setting: "This feature can be disabled via --disable-browseros-server."
++      setting: "This feature can be disabled via --disable-browseros-server or --disable-browseros-server-updater."
 +      policy_exception_justification:
 +        "Essential for keeping BrowserOS server component up to date."
 +    })");
@@ -82,9 +85,32 @@ index 0000000000000..f5962788159bc
 +    }
 +    policy {
 +      cookies_allowed: NO
-+      setting: "This feature can be disabled via --disable-browseros-server."
++      setting: "This feature can be disabled via --disable-browseros-server or --disable-browseros-server-updater."
 +      policy_exception_justification:
 +        "Essential for keeping BrowserOS server component up to date."
++    })");
++}
++
++net::NetworkTrafficAnnotationTag GetStatusTrafficAnnotation() {
++  return net::DefineNetworkTrafficAnnotation("browseros_server_status", R"(
++    semantics {
++      sender: "BrowserOS Server Updater"
++      description:
++        "Checks if the local BrowserOS server is ready for hot-swap update."
++      trigger: "When a new version is downloaded and ready to install."
++      data: "No user data sent, just an HTTP GET to localhost."
++      destination: LOCAL
++      internal {
++        contacts {
++          email: "nickolaj@nickolaj.com"
++        }
++      }
++    }
++    policy {
++      cookies_allowed: NO
++      setting: "This feature can be disabled via --disable-browseros-server or --disable-browseros-server-updater."
++      policy_exception_justification:
++        "Essential for coordinating BrowserOS server updates."
 +    })");
 +}
 +
@@ -329,6 +355,15 @@ index 0000000000000..f5962788159bc
 +    return;  // Wait for both to complete
 +  }
 +
++  // Sync version pref with current best version
++  base::Version current = GetCurrentVersion();
++  if (current.IsValid()) {
++    PrefService* prefs = g_browser_process->local_state();
++    if (prefs) {
++      prefs->SetString(kServerVersion, current.GetString());
++    }
++  }
++
 +  // Now trigger the first check
 +  CheckNow();
 +}
@@ -338,6 +373,7 @@ index 0000000000000..f5962788159bc
 +  update_check_timer_.Stop();
 +  appcast_loader_.reset();
 +  download_loader_.reset();
++  status_loader_.reset();
 +  ResetState();
 +}
 +
@@ -496,7 +532,7 @@ index 0000000000000..f5962788159bc
 +            // Add progress logging (visible with --vmodule=*browseros*=1)
 +            self->download_loader_->SetOnDownloadProgressCallback(
 +                base::BindRepeating([](uint64_t current) {
-+                  VLOG(1) << "browseros: Download progress: "
++                  LOG(INFO) << "browseros: Download progress: "
 +                          << (current / 1024 / 1024) << " MB";
 +                }));
 +
@@ -618,36 +654,77 @@ index 0000000000000..f5962788159bc
 +  LOG(INFO) << "browseros: Binary test passed: " << output;
 +
 +  // Check if server is ready for hot-swap
-+  CheckServerStatus(version);
++  CheckServerStatus();
 +}
 +
-+void BrowserOSServerUpdater::CheckServerStatus(const base::Version& version) {
-+#if 0
-+  // TODO: Implement /status API check
-+  // Fetch http://127.0.0.1:{mcp_port}/status
-+  // Parse JSON response, check "can_update": true
-+  // If false, retry at next update check interval
++void BrowserOSServerUpdater::CheckServerStatus() {
 +  GURL status_url("http://127.0.0.1:" +
 +                  base::NumberToString(manager_->GetMCPPort()) + "/status");
-+  // ... fetch and parse ...
-+#endif
 +
-+  // For now, always proceed with hot-swap
-+  OnServerStatusChecked(version, /*can_update=*/true);
++  LOG(INFO) << "browseros: Checking server status at " << status_url;
++
++  auto request = std::make_unique<network::ResourceRequest>();
++  request->url = status_url;
++  request->method = "GET";
++  request->credentials_mode = network::mojom::CredentialsMode::kOmit;
++
++  status_loader_ = network::SimpleURLLoader::Create(std::move(request),
++                                                    GetStatusTrafficAnnotation());
++  status_loader_->SetTimeoutDuration(kStatusCheckTimeout);
++
++  auto* url_loader_factory = g_browser_process->system_network_context_manager()
++                                 ->GetURLLoaderFactory();
++
++  status_loader_->DownloadToString(
++      url_loader_factory,
++      base::BindOnce(&BrowserOSServerUpdater::OnStatusFetched,
++                     weak_factory_.GetWeakPtr()),
++      4096);
 +}
 +
-+void BrowserOSServerUpdater::OnServerStatusChecked(const base::Version& version,
-+                                                   bool can_update) {
++void BrowserOSServerUpdater::OnStatusFetched(
++    std::unique_ptr<std::string> response) {
++  if (!response) {
++    int net_error = status_loader_->NetError();
++    LOG(WARNING) << "browseros: Failed to fetch server status: "
++                 << net::ErrorToString(net_error)
++                 << ", proceeding with update anyway";
++    OnServerStatusChecked(/*can_update=*/true);
++    return;
++  }
++
++  std::optional<base::Value> json = base::JSONReader::Read(*response);
++  if (!json || !json->is_dict()) {
++    LOG(WARNING) << "browseros: Invalid status response, proceeding with update";
++    OnServerStatusChecked(/*can_update=*/true);
++    return;
++  }
++
++  const base::Value::Dict& dict = json->GetDict();
++  std::optional<bool> can_update = dict.FindBool("can_update");
++
++  if (!can_update.has_value()) {
++    LOG(WARNING) << "browseros: Status response missing can_update field";
++    OnServerStatusChecked(/*can_update=*/true);
++    return;
++  }
++
++  OnServerStatusChecked(can_update.value());
++}
++
++void BrowserOSServerUpdater::OnServerStatusChecked(bool can_update) {
 +  if (!can_update) {
 +    LOG(INFO) << "browseros: Server busy, will retry hot-swap at next check";
-+    // Don't reset state - keep the downloaded version for next attempt
-+    // The next timer tick will re-check
++
++    base::Value::Dict props;
++    props.Set("pending_version", pending_item_.version.GetString());
++    browseros_metrics::BrowserOSMetrics::Log("server.ota.busy", std::move(props));
++
 +    ResetState();
 +    return;
 +  }
 +
-+  // Proceed with hot-swap
-+  PerformHotSwap(version);
++  PerformHotSwap(pending_item_.version);
 +}
 +
 +void BrowserOSServerUpdater::PerformHotSwap(const base::Version& version) {
@@ -719,6 +796,12 @@ index 0000000000000..f5962788159bc
 +  // Update cache immediately
 +  cached_downloaded_version_ = version;
 +
++  // Update version pref for observability
++  PrefService* prefs = g_browser_process->local_state();
++  if (prefs) {
++    prefs->SetString(kServerVersion, version.GetString());
++  }
++
 +  base::FilePath version_file =
 +      GetExecutionDir().AppendASCII(kCurrentVersionFileName);
 +
@@ -729,6 +812,44 @@ index 0000000000000..f5962788159bc
 +            base::WriteFile(path, content);
 +          },
 +          version_file, version.GetString()));
++}
++
++void BrowserOSServerUpdater::InvalidateDownloadedVersion() {
++  LOG(WARNING) << "browseros: Invalidating downloaded version, "
++               << "nuking versions directory";
++
++  // Clear cached version immediately
++  cached_downloaded_version_ = base::Version();
++
++  // Set version pref to bundled version (falling back)
++  PrefService* prefs = g_browser_process->local_state();
++  if (prefs && cached_bundled_version_.IsValid()) {
++    prefs->SetString(kServerVersion, cached_bundled_version_.GetString());
++  }
++
++  // Nuke versions directory and current_version file on background thread
++  base::FilePath versions_dir = GetVersionsDir();
++  base::FilePath version_file =
++      GetExecutionDir().AppendASCII(kCurrentVersionFileName);
++
++  base::ThreadPool::PostTask(
++      FROM_HERE, {base::MayBlock()},
++      base::BindOnce(
++          [](base::FilePath versions_dir, base::FilePath version_file) {
++            if (base::PathExists(versions_dir)) {
++              if (!base::DeletePathRecursively(versions_dir)) {
++                LOG(ERROR) << "browseros: Failed to delete versions directory: "
++                           << versions_dir;
++              }
++            }
++            if (base::PathExists(version_file)) {
++              if (!base::DeleteFile(version_file)) {
++                LOG(ERROR) << "browseros: Failed to delete current_version file: "
++                           << version_file;
++              }
++            }
++          },
++          versions_dir, version_file));
 +}
 +
 +base::FilePath BrowserOSServerUpdater::GetExecutionDir() const {
@@ -886,6 +1007,7 @@ index 0000000000000..f5962788159bc
 +  update_in_progress_ = false;
 +  appcast_loader_.reset();
 +  download_loader_.reset();
++  status_loader_.reset();
 +  pending_item_ = AppcastItem();
 +  pending_signature_.clear();
 +}

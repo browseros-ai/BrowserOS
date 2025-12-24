@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_constants.h b/chrome/browser/browseros/server/browseros_server_constants.h
 new file mode 100644
-index 0000000000000..07222d4d47501
+index 0000000000000..1f3b18c5fea51
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_constants.h
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,55 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -40,6 +40,9 @@ index 0000000000000..07222d4d47501
 +
 +// Timeout for fetching appcast XML
 +inline constexpr base::TimeDelta kAppcastFetchTimeout = base::Seconds(30);
++
++// Timeout for fetching server status
++inline constexpr base::TimeDelta kStatusCheckTimeout = base::Seconds(5);
 +
 +// Maximum size of appcast XML (prevent DoS via huge responses)
 +inline constexpr size_t kMaxAppcastSize = 512 * 1024;  // 512 KB

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_prefs.cc b/chrome/browser/browseros/server/browseros_server_prefs.cc
 new file mode 100644
-index 0000000000000..25a4e85878c1e
+index 0000000000000..9ea53758657d7
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_prefs.cc
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,58 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -32,6 +32,9 @@ index 0000000000000..25a4e85878c1e
 +// Whether server restart has been requested (auto-reset after restart)
 +const char kRestartServerRequested[] = "browseros.server.restart_requested";
 +
++// Current active browseros-server version (for observability)
++const char kServerVersion[] = "browseros.server.version";
++
 +// DEPRECATED: kept for migration, no longer used
 +const char kMCPServerEnabled[] = "browseros.server.mcp_enabled";
 +
@@ -53,6 +56,9 @@ index 0000000000000..25a4e85878c1e
 +
 +  // Restart requested (default false, auto-reset after restart)
 +  registry->RegisterBooleanPref(kRestartServerRequested, false);
++
++  // Current server version (empty = unknown/bundled)
++  registry->RegisterStringPref(kServerVersion, std::string());
 +}
 +
 +}  // namespace browseros_server

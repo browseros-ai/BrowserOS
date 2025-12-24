@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_prefs.h b/chrome/browser/browseros/server/browseros_server_prefs.h
 new file mode 100644
-index 0000000000000..8e1bf54357cf9
+index 0000000000000..0506a219c6272
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_prefs.h
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,35 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -28,6 +28,7 @@ index 0000000000000..8e1bf54357cf9
 +extern const char kExtensionServerPort[];
 +extern const char kAllowRemoteInMCP[];
 +extern const char kRestartServerRequested[];
++extern const char kServerVersion[];
 +
 +// Deprecated prefs (kept for migration, will be removed in future)
 +extern const char kMCPServerEnabled[];  // DEPRECATED: no longer used
