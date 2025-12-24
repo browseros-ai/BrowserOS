@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/BUILD.gn b/chrome/browser/browseros/server/BUILD.gn
 new file mode 100644
-index 0000000000000..7e6f379ba0c94
+index 0000000000000..711d6896d6c4a
 --- /dev/null
 +++ b/chrome/browser/browseros/server/BUILD.gn
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,77 @@
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -25,10 +25,15 @@ index 0000000000000..7e6f379ba0c94
 +
 +source_set("server") {
 +  sources = [
++    "browseros_appcast_parser.cc",
++    "browseros_appcast_parser.h",
++    "browseros_server_constants.h",
 +    "browseros_server_manager.cc",
 +    "browseros_server_manager.h",
 +    "browseros_server_prefs.cc",
 +    "browseros_server_prefs.h",
++    "browseros_server_updater.cc",
++    "browseros_server_updater.h",
 +  ]
 +
 +  deps = [
@@ -38,7 +43,12 @@ index 0000000000000..7e6f379ba0c94
 +    "//chrome/common",
 +    "//components/prefs",
 +    "//content/public/browser",
++    "//crypto",
 +    "//net",
++    "//services/network/public/cpp",
++    "//third_party/boringssl",
++    "//third_party/libxml:xml_reader",
++    "//third_party/zlib/google:zip",
 +  ]
 +}
 +

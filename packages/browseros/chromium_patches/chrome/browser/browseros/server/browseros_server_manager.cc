@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..114189758b373
+index 0000000000000..d197127e67dda
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1038 @@
+@@ -0,0 +1,1115 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -36,6 +36,7 @@ index 0000000000000..114189758b373
 +#include "chrome/browser/browseros/metrics/browseros_metrics_service.h"
 +#include "chrome/browser/browseros/metrics/browseros_metrics_service_factory.h"
 +#include "chrome/browser/browseros/server/browseros_server_prefs.h"
++#include "chrome/browser/browseros/server/browseros_server_updater.h"
 +#include "chrome/browser/net/system_network_context_manager.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/profiles/profile_manager.h"
@@ -466,6 +467,12 @@ index 0000000000000..114189758b373
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
 +
++  // Stop the updater
++  if (updater_) {
++    updater_->Stop();
++    updater_.reset();
++  }
++
 +  // Use wait=false for shutdown - just send kill signal, don't block UI thread
 +  TerminateBrowserOSProcess(/*wait=*/false);
 +
@@ -513,8 +520,17 @@ index 0000000000000..114189758b373
 +}
 +
 +void BrowserOSServerManager::LaunchBrowserOSProcess() {
-+  base::FilePath exe_path = GetBrowserOSServerExecutablePath();
-+  base::FilePath resources_dir = GetBrowserOSServerResourcesPath();
++  // Use updater's best paths if available (for OTA updates), otherwise bundled
++  base::FilePath exe_path;
++  base::FilePath resources_dir;
++  if (updater_) {
++    exe_path = updater_->GetBestServerBinaryPath();
++    resources_dir = updater_->GetBestServerResourcesPath();
++  } else {
++    exe_path = GetBrowserOSServerExecutablePath();
++    resources_dir = GetBrowserOSServerResourcesPath();
++  }
++
 +  base::FilePath execution_dir = GetBrowserOSExecutionDir();
 +  if (execution_dir.empty()) {
 +    LOG(ERROR) << "browseros: Failed to resolve execution directory";
@@ -564,12 +580,22 @@ index 0000000000000..114189758b373
 +}
 +
 +void BrowserOSServerManager::OnProcessLaunched(base::Process process) {
++  bool was_updating = is_updating_;
++
 +  if (!process.IsValid()) {
 +    LOG(ERROR) << "browseros: Failed to launch BrowserOS server";
 +    // Don't stop CDP server - it's independent and may be used by other things
 +    // Leave system in degraded state (CDP up, no browseros_server) rather than
 +    // completely broken state (no CDP, no server)
 +    is_restarting_ = false;
++
++    // Notify updater of failure if this was an update restart
++    if (was_updating) {
++      is_updating_ = false;
++      if (update_complete_callback_) {
++        std::move(update_complete_callback_).Run(false);
++      }
++    }
 +    return;
 +  }
 +
@@ -596,6 +622,20 @@ index 0000000000000..114189758b373
 +      prefs->SetBoolean(browseros_server::kRestartServerRequested, false);
 +      LOG(INFO) << "browseros: Restart completed, reset restart_requested pref";
 +    }
++  }
++
++  // Notify updater of success if this was an update restart
++  if (was_updating) {
++    is_updating_ = false;
++    if (update_complete_callback_) {
++      std::move(update_complete_callback_).Run(true);
++    }
++  }
++
++  // Start the updater (if not already running)
++  if (!updater_) {
++    updater_ = std::make_unique<browseros_server::BrowserOSServerUpdater>(this);
++    updater_->Start();
 +  }
 +}
 +
@@ -842,6 +882,43 @@ index 0000000000000..114189758b373
 +
 +  // Note: is_restarting_ is cleared in OnProcessLaunched() after launch completes
 +  LaunchBrowserOSProcess();
++}
++
++void BrowserOSServerManager::RestartServerForUpdate(
++    UpdateCompleteCallback callback) {
++  LOG(INFO) << "browseros: Restarting server for OTA update";
++
++  // Prevent multiple concurrent restarts
++  if (is_restarting_ || is_updating_) {
++    LOG(WARNING) << "browseros: Restart already in progress, failing update";
++    std::move(callback).Run(false);
++    return;
++  }
++
++  is_updating_ = true;
++  update_complete_callback_ = std::move(callback);
++
++  // Use same restart flow as RestartBrowserOSProcess
++  is_restarting_ = true;
++  health_check_timer_.Stop();
++  process_check_timer_.Stop();
++
++  int cdp = cdp_port_;
++  int mcp = mcp_port_;
++  int agent = agent_port_;
++  int extension = extension_port_;
++
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
++      base::BindOnce(
++          [](BrowserOSServerManager* manager, int cdp, int mcp, int agent,
++             int extension) -> RevalidatedPorts {
++            manager->TerminateBrowserOSProcess(/*wait=*/true);
++            return manager->RevalidatePorts(cdp, mcp, agent, extension);
++          },
++          base::Unretained(this), cdp, mcp, agent, extension),
++      base::BindOnce(&BrowserOSServerManager::OnPortsRevalidated,
++                     weak_factory_.GetWeakPtr()));
 +}
 +
 +void BrowserOSServerManager::OnAllowRemoteInMCPChanged() {
