@@ -417,6 +417,10 @@ class Context:
         """Get Sparkle download URL"""
         return f"https://github.com/sparkle-project/Sparkle/releases/download/{self.SPARKLE_VERSION}/Sparkle-{self.SPARKLE_VERSION}.tar.xz"
 
+    def get_extensions_manifest_url(self) -> str:
+        """Get CDN URL for bundled extensions update manifest"""
+        return "https://cdn.browseros.com/extensions/update-manifest.xml"
+
     def get_entitlements_dir(self) -> Path:
         """Get entitlements directory"""
         return join_paths(self.root_dir, "resources", "entitlements")

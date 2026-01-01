@@ -43,6 +43,7 @@ from ..modules.patches.series_patches import SeriesPatchesModule
 from ..modules.resources.chromium_replace import ChromiumReplaceModule
 from ..modules.resources.string_replaces import StringReplacesModule
 from ..modules.resources.resources import ResourcesModule
+from ..modules.extensions import BundledExtensionsModule
 from ..modules.upload import UploadModule
 
 # Platform-specific modules (imported unconditionally - validation handles platform checks)
@@ -66,6 +67,7 @@ AVAILABLE_MODULES = {
     "chromium_replace": ChromiumReplaceModule,
     "string_replaces": StringReplacesModule,
     "resources": ResourcesModule,
+    "bundled_extensions": BundledExtensionsModule,
     # Build
     "compile": CompileModule,
     "universal_build": UniversalBuildModule,  # macOS universal binary (arm64 + x64)
@@ -118,6 +120,7 @@ EXECUTION_ORDER = [
         "prep",
         [
             "resources",
+            "bundled_extensions",
             "chromium_replace",
             "string_replaces",
             "patches",
