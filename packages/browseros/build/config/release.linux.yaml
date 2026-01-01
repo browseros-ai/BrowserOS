@@ -19,6 +19,7 @@ modules:
 
   # Phase 2: Patches & Resources
   - resources
+  - bundled_extensions
   - chromium_replace
   - string_replaces
   - series_patches
