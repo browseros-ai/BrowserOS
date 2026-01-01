@@ -1,17 +1,21 @@
 diff --git a/chrome/browser/extensions/BUILD.gn b/chrome/browser/extensions/BUILD.gn
-index a8e054baadb1f..15720b812f2b9 100644
+index a8e054baadb1f..870b10ddd4eaa 100644
 --- a/chrome/browser/extensions/BUILD.gn
 +++ b/chrome/browser/extensions/BUILD.gn
-@@ -351,6 +351,8 @@ source_set("extensions") {
+@@ -351,6 +351,12 @@ source_set("extensions") {
      "external_install_manager.h",
      "external_install_manager_factory.cc",
      "external_install_manager_factory.h",
-+    "browseros_external_loader.cc",
-+    "browseros_external_loader.h",
++    "//chrome/browser/browseros/extensions/browseros_extension_installer.cc",
++    "//chrome/browser/browseros/extensions/browseros_extension_installer.h",
++    "//chrome/browser/browseros/extensions/browseros_extension_loader.cc",
++    "//chrome/browser/browseros/extensions/browseros_extension_loader.h",
++    "//chrome/browser/browseros/extensions/browseros_extension_maintainer.cc",
++    "//chrome/browser/browseros/extensions/browseros_extension_maintainer.h",
      "external_loader.cc",
      "external_loader.h",
      "external_policy_loader.cc",
-@@ -677,6 +679,18 @@ source_set("extensions") {
+@@ -677,6 +683,18 @@ source_set("extensions") {
        "api/automation_internal/chrome_automation_internal_api_delegate.h",
        "api/bookmark_manager_private/bookmark_manager_private_api.cc",
        "api/bookmark_manager_private/bookmark_manager_private_api.h",
@@ -30,10 +34,11 @@ index a8e054baadb1f..15720b812f2b9 100644
        "api/chrome_device_permissions_prompt.h",
        "api/developer_private/developer_private_event_router_desktop.cc",
        "api/developer_private/developer_private_event_router_desktop.h",
-@@ -1006,6 +1020,7 @@ source_set("extensions") {
+@@ -1006,6 +1024,8 @@ source_set("extensions") {
        "//components/language/core/common",
        "//components/language/core/language_model",
        "//components/live_caption:constants",
++      "//chrome/browser/browseros/core",
 +      "//chrome/browser/browseros/metrics",
        "//components/media_device_salt",
        "//components/navigation_interception",

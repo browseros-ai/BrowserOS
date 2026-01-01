@@ -1,0 +1,38 @@
+diff --git a/chrome/browser/browseros/bundled_extensions/BUILD.gn b/chrome/browser/browseros/bundled_extensions/BUILD.gn
+new file mode 100644
+index 0000000000000..baac689c55368
+--- /dev/null
++++ b/chrome/browser/browseros/bundled_extensions/BUILD.gn
+@@ -0,0 +1,32 @@
++# Copyright 2024 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++# Bundled BrowserOS extensions for immediate installation on first run.
++# These CRX files are installed locally before fetching remote updates.
++#
++# To add a new bundled extension:
++# 1. Add the .crx file to this directory
++# 2. Add an entry to bundled_extensions.json with the extension ID, filename, and version
++# 3. Add the .crx file to the sources list below
++# 4. Ensure the extension's manifest.json has an update_url for future updates
++
++_bundled_extensions_sources = [
++  "bundled_extensions.json",
++  "bflpfmnmnokmjhmgnolecpppdbdophmk.crx",  # Agent V2
++  "adlpneommgkgeanpaekgoaolcpncohkf.crx",  # Bug Reporter
++  "nlnihljpboknmfagkikhkdblbedophja.crx",  # Controller
++]
++
++if (!is_mac) {
++  copy("bundled_extensions") {
++    sources = _bundled_extensions_sources
++    outputs = [ "$root_out_dir/browseros_extensions/{{source_file_part}}" ]
++  }
++} else {
++  # On Mac, bundle data goes into the framework bundle
++  bundle_data("bundled_extensions") {
++    sources = _bundled_extensions_sources
++    outputs = [ "{{bundle_contents_dir}}/Resources/browseros_extensions/{{source_file_part}}" ]
++  }
++}
