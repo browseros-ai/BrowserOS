@@ -186,7 +186,7 @@ class ServerOTAModule(CommandModule):
         log_success(f"Appcast saved to: {appcast_path}")
 
         if not self.skip_upload:
-            log_info("\n📤 Uploading to R2...")
+            log_info("\n📤 Uploading artifacts to R2...")
             r2_client = get_r2_client(ctx.env)
             if not r2_client:
                 log_error("Failed to create R2 client")
@@ -197,22 +197,19 @@ class ServerOTAModule(CommandModule):
                     if not upload_file_to_r2(r2_client, artifact.zip_path, r2_key, bucket):
                         log_error(f"Failed to upload {artifact.zip_path.name}")
 
-                r2_appcast_name = f"appcast-server.{self.channel}.xml" if self.channel == "alpha" else "appcast-server.xml"
-                log_info(f"Uploading appcast to {r2_appcast_name}...")
-                upload_file_to_r2(r2_client, appcast_path, r2_appcast_name, bucket)
-
         ctx.artifacts["server_ota_artifacts"] = signed_artifacts
         ctx.artifacts["server_appcast"] = appcast_path
 
         log_info("\n" + "=" * 70)
-        log_success(f"✅ Server OTA v{self.version} ({self.channel}) complete!")
+        log_success(f"✅ Server OTA v{self.version} ({self.channel}) artifacts ready!")
         log_info("=" * 70)
 
-        log_info("\nURLs:")
-        appcast_url = f"https://cdn.browseros.com/appcast-server.{self.channel}.xml" if self.channel == "alpha" else "https://cdn.browseros.com/appcast-server.xml"
-        log_info(f"  {appcast_url}")
+        log_info("\nArtifact URLs:")
         for artifact in signed_artifacts:
             log_info(f"  https://cdn.browseros.com/server/{artifact.zip_path.name}")
+
+        log_info(f"\nAppcast saved to: {appcast_path}")
+        log_info("\n📋 Next step: Run 'browseros ota server release-appcast' to make the release live")
 
     def _sign_binary(self, binary_path: Path, platform: dict, ctx: Context) -> bool:
         """Sign binary based on platform"""

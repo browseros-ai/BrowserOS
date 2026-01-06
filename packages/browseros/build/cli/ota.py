@@ -118,8 +118,8 @@ def server_release(
     execute_module(ctx, module)
 
 
-@server_app.command("publish-appcast")
-def server_publish_appcast(
+@server_app.command("release-appcast")
+def server_release_appcast(
     channel: str = typer.Option(
         "alpha", "--channel", "-c", help="Release channel: alpha or prod"
     ),
@@ -127,19 +127,22 @@ def server_publish_appcast(
         None, "--file", "-f", help="Custom appcast file to upload"
     ),
 ):
-    """Publish server appcast XML to CDN
+    """Publish appcast XML to make the release live
+
+    This is the final step after 'release' uploads artifacts.
+    Publishing the appcast makes the update available to clients.
 
     \b
-    Upload alpha appcast:
-      browseros ota server publish-appcast --channel alpha
+    Release alpha appcast:
+      browseros ota server release-appcast --channel alpha
 
     \b
-    Upload production appcast:
-      browseros ota server publish-appcast --channel prod
+    Release production appcast:
+      browseros ota server release-appcast --channel prod
 
     \b
-    Upload custom file:
-      browseros ota server publish-appcast --file /path/to/appcast.xml
+    Release custom appcast file:
+      browseros ota server release-appcast --file /path/to/appcast.xml
     """
     if appcast_file:
         if not appcast_file.exists():
@@ -193,12 +196,12 @@ def server_main(ctx: typer.Context):
     """BrowserOS Server OTA commands
 
     \b
-    Release:
+    Release (upload artifacts):
       browseros ota server release --version 0.0.36
 
     \b
-    Publish Appcast:
-      browseros ota server publish-appcast --channel alpha
+    Release Appcast (make live):
+      browseros ota server release-appcast --channel alpha
 
     \b
     List Platforms:
@@ -206,7 +209,7 @@ def server_main(ctx: typer.Context):
     """
     if ctx.invoked_subcommand is None:
         typer.echo("Use --help for usage information")
-        typer.echo("Available commands: release, publish-appcast, list-platforms")
+        typer.echo("Available commands: release, release-appcast, list-platforms")
         raise typer.Exit(0)
 
 
@@ -217,7 +220,7 @@ def main(ctx: typer.Context):
     \b
     Server OTA:
       browseros ota server release --version 0.0.36
-      browseros ota server publish-appcast --channel alpha
+      browseros ota server release-appcast --channel alpha
       browseros ota server list-platforms
     """
     if ctx.invoked_subcommand is None:
