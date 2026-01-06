@@ -85,7 +85,7 @@ class ServerOTAModule(CommandModule):
             if not self.binaries_dir.exists():
                 raise ValidationError(f"Binaries directory not found: {self.binaries_dir}")
         else:
-            default_dir = ctx.root_dir / "packages" / "browseros" / "resources" / "binaries" / "browseros_server"
+            default_dir = ctx.root_dir / "resources" / "binaries" / "browseros_server"
             if not default_dir.exists():
                 raise ValidationError(f"Default binaries directory not found: {default_dir}")
             self.binaries_dir = default_dir

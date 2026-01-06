@@ -14,6 +14,7 @@ from ..modules.ota import ServerOTAModule
 from ..modules.ota.common import (
     upload_to_r2,
     get_appcast_path,
+    SERVER_PLATFORMS,
 )
 
 app = typer.Typer(
@@ -21,6 +22,13 @@ app = typer.Typer(
     pretty_exceptions_enable=False,
     pretty_exceptions_show_locals=False,
 )
+
+server_app = typer.Typer(
+    help="BrowserOS Server OTA commands",
+    pretty_exceptions_enable=False,
+    pretty_exceptions_show_locals=False,
+)
+app.add_typer(server_app, name="server")
 
 
 def create_ota_context(root_dir: Optional[Path] = None) -> Context:
@@ -49,8 +57,8 @@ def execute_module(ctx: Context, module) -> None:
         raise typer.Exit(1)
 
 
-@app.command("server")
-def server_ota(
+@server_app.command("release")
+def server_release(
     version: str = typer.Option(
         ..., "--version", "-v", help="Version to release (e.g., 0.0.36)"
     ),
@@ -78,27 +86,19 @@ def server_ota(
 
     \b
     Full Release (all platforms):
-      browseros ota server --version 0.0.36 --channel alpha
+      browseros ota server release --version 0.0.36 --channel alpha
 
     \b
     Single Platform (for cross-platform signing):
-      browseros ota server --version 0.0.36 --platform darwin_arm64
+      browseros ota server release --version 0.0.36 --platform darwin_arm64
 
     \b
     Skip Signing (for pre-signed binaries):
-      browseros ota server --version 0.0.36 --skip-sign
+      browseros ota server release --version 0.0.36 --skip-sign
 
     \b
     Local Testing (no upload):
-      browseros ota server --version 0.0.36 --skip-upload
-
-    \b
-    Available Platforms:
-      darwin_arm64  - macOS Apple Silicon
-      darwin_x64    - macOS Intel
-      linux_arm64   - Linux ARM64
-      linux_x64     - Linux x86_64
-      windows_x64   - Windows x86_64
+      browseros ota server release --version 0.0.36 --skip-upload
     """
     log_info(f"🚀 BrowserOS Server OTA v{version}")
     log_info("=" * 70)
@@ -117,8 +117,8 @@ def server_ota(
     execute_module(ctx, module)
 
 
-@app.command("publish-appcast")
-def publish_appcast(
+@server_app.command("publish-appcast")
+def server_publish_appcast(
     channel: str = typer.Option(
         "alpha", "--channel", "-c", help="Release channel: alpha or prod"
     ),
@@ -126,19 +126,19 @@ def publish_appcast(
         None, "--file", "-f", help="Custom appcast file to upload"
     ),
 ):
-    """Publish appcast XML to CDN
+    """Publish server appcast XML to CDN
 
     \b
     Upload alpha appcast:
-      browseros ota publish-appcast --channel alpha
+      browseros ota server publish-appcast --channel alpha
 
     \b
     Upload production appcast:
-      browseros ota publish-appcast --channel prod
+      browseros ota server publish-appcast --channel prod
 
     \b
     Upload custom file:
-      browseros ota publish-appcast --file /path/to/appcast.xml
+      browseros ota server publish-appcast --file /path/to/appcast.xml
     """
     if appcast_file:
         if not appcast_file.exists():
@@ -149,7 +149,7 @@ def publish_appcast(
         source_path = get_appcast_path(channel)
         if not source_path.exists():
             log_error(f"Appcast file not found: {source_path}")
-            log_error("Run 'browseros ota server' first to generate the appcast")
+            log_error("Run 'browseros ota server release' first to generate the appcast")
             raise typer.Exit(1)
 
     if channel == "alpha":
@@ -167,16 +167,36 @@ def publish_appcast(
         raise typer.Exit(1)
 
 
-@app.command("list-platforms")
-def list_platforms():
+@server_app.command("list-platforms")
+def server_list_platforms():
     """List available server platforms"""
-    from ..modules.ota.common import SERVER_PLATFORMS
-
     log_info("\n📦 Available Server Platforms:")
     log_info("-" * 50)
     for p in SERVER_PLATFORMS:
         log_info(f"  {p['name']:<15} {p['os']:<10} {p['arch']}")
     log_info("-" * 50)
+
+
+@server_app.callback(invoke_without_command=True)
+def server_main(ctx: typer.Context):
+    """BrowserOS Server OTA commands
+
+    \b
+    Release:
+      browseros ota server release --version 0.0.36
+
+    \b
+    Publish Appcast:
+      browseros ota server publish-appcast --channel alpha
+
+    \b
+    List Platforms:
+      browseros ota server list-platforms
+    """
+    if ctx.invoked_subcommand is None:
+        typer.echo("Use --help for usage information")
+        typer.echo("Available commands: release, publish-appcast, list-platforms")
+        raise typer.Exit(0)
 
 
 @app.callback(invoke_without_command=True)
@@ -185,19 +205,13 @@ def main(ctx: typer.Context):
 
     \b
     Server OTA:
-      browseros ota server --version 0.0.36 --channel alpha
-
-    \b
-    Publish Appcast:
-      browseros ota publish-appcast --channel alpha
-
-    \b
-    List Platforms:
-      browseros ota list-platforms
+      browseros ota server release --version 0.0.36
+      browseros ota server publish-appcast --channel alpha
+      browseros ota server list-platforms
     """
     if ctx.invoked_subcommand is None:
         typer.echo("Use --help for usage information")
-        typer.echo("Available commands: server, publish-appcast, list-platforms")
+        typer.echo("Available subcommands: server")
         raise typer.Exit(0)
 
 

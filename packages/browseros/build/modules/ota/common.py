@@ -294,8 +294,8 @@ def upload_to_r2(
 
 
 def get_appcast_path(channel: str = "alpha") -> Path:
-    """Get path to appcast file in config directory"""
-    config_dir = Path(__file__).parent.parent.parent / "config"
+    """Get path to appcast file in config/appcast directory"""
+    appcast_dir = Path(__file__).parent.parent.parent / "config" / "appcast"
     if channel == "alpha":
-        return config_dir / "appcast-server.alpha.xml"
-    return config_dir / "appcast-server.xml"
+        return appcast_dir / "appcast-server.alpha.xml"
+    return appcast_dir / "appcast-server.xml"
