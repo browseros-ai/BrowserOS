@@ -7,52 +7,16 @@
     <language>en</language>
 
     <item>
-      <sparkle:version>0.0.37</sparkle:version>
-      <pubDate>Tue, 06 Jan 2026 19:46:00 +0000</pubDate>
-
-      <!-- macOS arm64 -->
-      <enclosure
-        url="https://cdn.browseros.com/server/browseros_server_0.0.37_darwin_arm64.zip"
-        sparkle:os="macos"
-        sparkle:arch="arm64"
-        sparkle:edSignature="2Re0n5VuZGkx8GtELWImvgyYx2j6fTrUWYrj9uXsenr3olADr5iG/XvX2kB+3+tOoodDGsRvBECkonRa7xfNBw=="
-        length="33612556"
-        type="application/zip"/>
-
-      <!-- macOS x86_64 -->
-      <enclosure
-        url="https://cdn.browseros.com/server/browseros_server_0.0.37_darwin_x64.zip"
-        sparkle:os="macos"
-        sparkle:arch="x86_64"
-        sparkle:edSignature="Vz9uywPFKz9eMfMslb3nSHx3hOdVx41sV82pWWiBxeWltDrjjAfmp83dEtVmIuFsFXRHNuXYDYhQGsB23iO9CA=="
-        length="35954769"
-        type="application/zip"/>
+      <sparkle:version>0.0.39</sparkle:version>
+      <pubDate>Tue, 06 Jan 2026 19:52:21 +0000</pubDate>
 
       <!-- Linux arm64 -->
       <enclosure
-        url="https://cdn.browseros.com/server/browseros_server_0.0.37_linux_arm64.zip"
+        url="https://cdn.browseros.com/server/browseros_server_0.0.39_linux_arm64.zip"
         sparkle:os="linux"
         sparkle:arch="arm64"
         sparkle:edSignature="XeoOffThExiIFC44wWuH5WhwTDGLpFpJTGrLqWQuYhvgiLJn19OWAUms6dwhUUxF+PRPzHYy3yAwjzFjBCRTCg=="
         length="49091705"
-        type="application/zip"/>
-
-      <!-- Linux x86_64 -->
-      <enclosure
-        url="https://cdn.browseros.com/server/browseros_server_0.0.37_linux_x64.zip"
-        sparkle:os="linux"
-        sparkle:arch="x86_64"
-        sparkle:edSignature="zFcWkNB8qebno/tu/0iU1BthNrS9l46l9+FNb2J1tTwFSi5wKtvkjSpKBs8pLV1lSVP0JNwqhZ7BSti1IF4HAQ=="
-        length="50567580"
-        type="application/zip"/>
-
-      <!-- Windows x86_64 -->
-      <enclosure
-        url="https://cdn.browseros.com/server/browseros_server_0.0.37_windows_x64.zip"
-        sparkle:os="windows"
-        sparkle:arch="x86_64"
-        sparkle:edSignature="QTAg6HeF3SDJDhhY+SaolQQN7fb4LJyQ6/lYof3q0jKt5Bur5ckQd88zr8ZZw2JontWMy1g5XDjZ3i3KE0iNAQ=="
-        length="52236978"
         type="application/zip"/>
     </item>
 

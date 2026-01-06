@@ -21,6 +21,7 @@ from .common import (
     SignedArtifact,
     sparkle_sign_file,
     generate_server_appcast,
+    parse_existing_appcast,
     create_server_zip,
     get_appcast_path,
 )
@@ -174,13 +175,15 @@ class ServerOTAModule(CommandModule):
             raise RuntimeError("OTA failed - no artifacts")
 
         log_info("\n📝 Generating appcast...")
+        appcast_path = get_appcast_path(self.channel)
+        existing_appcast = parse_existing_appcast(appcast_path)
+
         appcast_content = generate_server_appcast(
             self.version,
             signed_artifacts,
             self.channel,
+            existing=existing_appcast,
         )
-
-        appcast_path = get_appcast_path(self.channel)
         appcast_path.parent.mkdir(parents=True, exist_ok=True)
         appcast_path.write_text(appcast_content)
         log_success(f"Appcast saved to: {appcast_path}")

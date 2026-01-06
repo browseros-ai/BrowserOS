@@ -4,6 +4,9 @@
 from .common import (
     sparkle_sign_file,
     generate_server_appcast,
+    parse_existing_appcast,
+    ExistingAppcast,
+    SignedArtifact,
     SERVER_PLATFORMS,
     APPCAST_TEMPLATE,
 )
@@ -23,6 +26,9 @@ __all__ = [
     "ServerOTAModule",
     "sparkle_sign_file",
     "generate_server_appcast",
+    "parse_existing_appcast",
+    "ExistingAppcast",
+    "SignedArtifact",
     "sign_macos_binary",
     "notarize_macos_binary",
     "sign_windows_binary",
