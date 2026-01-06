@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Server OTA module for BrowserOS Server binary updates"""
 
+import shutil
 import tempfile
 from pathlib import Path
 from typing import List, Optional
@@ -127,9 +128,13 @@ class ServerOTAModule(CommandModule):
             log_info(f"\n📦 Processing {platform['name']}...")
 
             binary_name = platform["binary"]
-            binary_path = self.binaries_dir / binary_name
+            source_binary = self.binaries_dir / binary_name
 
-            if not self._sign_binary(binary_path, platform, ctx):
+            # Copy binary to temp to preserve original
+            temp_binary = temp_dir / binary_name
+            shutil.copy2(source_binary, temp_binary)
+
+            if not self._sign_binary(temp_binary, platform, ctx):
                 log_warning(f"Skipping {platform['name']} due to signing failure")
                 continue
 
@@ -137,7 +142,7 @@ class ServerOTAModule(CommandModule):
             zip_path = temp_dir / zip_name
             is_windows = platform["os"] == "windows"
 
-            if not create_server_zip(binary_path, zip_path, is_windows):
+            if not create_server_zip(temp_binary, zip_path, is_windows):
                 log_error(f"Failed to create zip for {platform['name']}")
                 continue
 
