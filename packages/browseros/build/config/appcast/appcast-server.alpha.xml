@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>BrowserOS Server (Alpha)</title>
+    <link>https://cdn.browseros.com/appcast-server.alpha.xml</link>
+    <description>BrowserOS Server binary updates</description>
+    <language>en</language>
+
+    <item>
+      <sparkle:version>0.0.37</sparkle:version>
+      <pubDate>Tue, 06 Jan 2026 20:01:05 +0000</pubDate>
+
+      <!-- macOS arm64 -->
+      <enclosure
+        url="https://cdn.browseros.com/server/browseros_server_0.0.37_darwin_arm64.zip"
+        sparkle:os="macos"
+        sparkle:arch="arm64"
+        sparkle:edSignature="ScvV9MfdEBmmATKvqYqREiTV9kfy7fta3sBCd8D/KqI2+k09IzwyLUGIQcSsY4RYvF804/TBCBjnYn6Z24dCAQ=="
+        length="33618179"
+        type="application/zip"/>
+
+      <!-- macOS x86_64 -->
+      <enclosure
+        url="https://cdn.browseros.com/server/browseros_server_0.0.37_darwin_x64.zip"
+        sparkle:os="macos"
+        sparkle:arch="x86_64"
+        sparkle:edSignature="/S3D8e027flwh/8DyrPqrK4axiFQDQbZkDpeGuJvHE6M/TG641WF1mXC5mH160SHXIGLcIVz/bZ8iUeK4mUDDw=="
+        length="36160742"
+        type="application/zip"/>
+
+      <!-- Linux arm64 -->
+      <enclosure
+        url="https://cdn.browseros.com/server/browseros_server_0.0.37_linux_arm64.zip"
+        sparkle:os="linux"
+        sparkle:arch="arm64"
+        sparkle:edSignature="tU10l1RWSwZ3hz/WaoP/pVxWS7y+CegSEEGutyOTZqmD/yqiLHk2W+lZBow/fnGMfPf2YURyIINahh46j6rGDQ=="
+        length="49091705"
+        type="application/zip"/>
+
+      <!-- Linux x86_64 -->
+      <enclosure
+        url="https://cdn.browseros.com/server/browseros_server_0.0.37_linux_x64.zip"
+        sparkle:os="linux"
+        sparkle:arch="x86_64"
+        sparkle:edSignature="1t8Cegfpp1V6aykTOVrZvbROCfb4CtOXLEoUsrgZaTFHYXazSXF/DHB0Ra0+8GRzU05uLAWtfb10/FzVQQeyDg=="
+        length="50567580"
+        type="application/zip"/>
+    </item>
+
+  </channel>
+</rss>

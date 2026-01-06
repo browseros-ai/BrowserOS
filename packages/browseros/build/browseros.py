@@ -40,6 +40,10 @@ app.add_typer(dev.app, name="dev", help="Dev patch management")
 from .cli import release
 app.add_typer(release.app, name="release", help="Release automation")
 
+# OTA update commands
+from .cli import ota
+app.add_typer(ota.app, name="ota", help="OTA update automation")
+
 
 if __name__ == "__main__":
     app()

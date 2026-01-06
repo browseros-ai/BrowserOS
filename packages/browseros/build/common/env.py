@@ -165,6 +165,11 @@ class EnvConfig:
         """Base64-encoded Sparkle Ed25519 private key for macOS auto-update signing"""
         return os.environ.get("SPARKLE_PRIVATE_KEY")
 
+    @property
+    def sparkle_sign_update_path(self) -> Optional[str]:
+        """Path to Sparkle sign_update tool (overrides auto-detection)"""
+        return os.environ.get("SPARKLE_SIGN_UPDATE_PATH")
+
     # === Notifications ===
 
     @property
