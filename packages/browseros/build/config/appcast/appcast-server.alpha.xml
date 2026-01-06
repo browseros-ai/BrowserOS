@@ -5,5 +5,29 @@
     <link>https://cdn.browseros.com/appcast-server.alpha.xml</link>
     <description>BrowserOS Server binary updates</description>
     <language>en</language>
+
+    <item>
+      <sparkle:version>0.0.37</sparkle:version>
+      <pubDate>Tue, 06 Jan 2026 20:01:05 +0000</pubDate>
+
+      <!-- macOS arm64 -->
+      <enclosure
+        url="https://cdn.browseros.com/server/browseros_server_0.0.37_darwin_arm64.zip"
+        sparkle:os="macos"
+        sparkle:arch="arm64"
+        sparkle:edSignature="ScvV9MfdEBmmATKvqYqREiTV9kfy7fta3sBCd8D/KqI2+k09IzwyLUGIQcSsY4RYvF804/TBCBjnYn6Z24dCAQ=="
+        length="33618179"
+        type="application/zip"/>
+
+      <!-- macOS x86_64 -->
+      <enclosure
+        url="https://cdn.browseros.com/server/browseros_server_0.0.37_darwin_x64.zip"
+        sparkle:os="macos"
+        sparkle:arch="x86_64"
+        sparkle:edSignature="/S3D8e027flwh/8DyrPqrK4axiFQDQbZkDpeGuJvHE6M/TG641WF1mXC5mH160SHXIGLcIVz/bZ8iUeK4mUDDw=="
+        length="36160742"
+        type="application/zip"/>
+    </item>
+
   </channel>
 </rss>
