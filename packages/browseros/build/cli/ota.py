@@ -31,14 +31,14 @@ server_app = typer.Typer(
 app.add_typer(server_app, name="server")
 
 
-def create_ota_context(root_dir: Optional[Path] = None) -> Context:
-    """Create Context for OTA operations"""
-    if root_dir is None:
-        root_dir = Path.cwd()
+def create_ota_context(chromium_src: Optional[Path] = None) -> Context:
+    """Create Context for OTA operations
 
+    Args:
+        chromium_src: Path to Chromium source directory (for sign_update tool)
+    """
     return Context(
-        root_dir=root_dir,
-        chromium_src=root_dir,
+        chromium_src=chromium_src or Path(),
         architecture="",
         build_type="release",
     )
@@ -78,15 +78,15 @@ def server_release(
     skip_upload: bool = typer.Option(
         False, "--skip-upload", help="Skip R2 upload (for local testing)"
     ),
-    root_dir: Optional[Path] = typer.Option(
-        None, "--root", "-r", help="Project root directory"
+    chromium_src: Optional[Path] = typer.Option(
+        None, "--chromium-src", "-S", help="Path to Chromium source directory"
     ),
 ):
     """Release BrowserOS Server OTA update
 
     \b
     Full Release (all platforms):
-      browseros ota server release --version 0.0.36 --channel alpha
+      browseros ota server release --version 0.0.36 --channel alpha -S /path/to/chromium
 
     \b
     Single Platform (for cross-platform signing):
@@ -103,7 +103,7 @@ def server_release(
     log_info(f"🚀 BrowserOS Server OTA v{version}")
     log_info("=" * 70)
 
-    ctx = create_ota_context(root_dir)
+    ctx = create_ota_context(chromium_src)
 
     module = ServerOTAModule(
         version=version,

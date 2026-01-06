@@ -62,23 +62,32 @@ class SignedArtifact:
     arch: str
 
 
-def get_sign_update_path(chromium_src: Optional[Path] = None) -> Path:
+def get_sign_update_path(chromium_src: Optional[Path] = None, env: Optional[EnvConfig] = None) -> Path:
     """Get path to Sparkle sign_update tool
 
-    Checks multiple locations:
-    1. Chromium third_party if chromium_src provided
-    2. Hardcoded fallback path
+    Checks in order:
+    1. SPARKLE_SIGN_UPDATE_PATH env var
+    2. Chromium third_party if chromium_src provided
     """
+    if env is None:
+        env = EnvConfig()
+
+    # Check env var first
+    if env.sparkle_sign_update_path:
+        env_path = Path(env.sparkle_sign_update_path)
+        if env_path.exists():
+            return env_path
+
+    # Check chromium third_party
     if chromium_src:
         sparkle_in_chromium = chromium_src / "third_party" / "sparkle" / "bin" / "sign_update"
         if sparkle_in_chromium.exists():
             return sparkle_in_chromium
 
-    fallback = Path("/Users/shadowfax/code/browser-pivot/sparkle-macos/bin/sign_update")
-    if fallback.exists():
-        return fallback
-
-    raise FileNotFoundError("sign_update tool not found")
+    raise FileNotFoundError(
+        "sign_update tool not found. Set SPARKLE_SIGN_UPDATE_PATH or ensure "
+        "chromium_src/third_party/sparkle/bin/sign_update exists"
+    )
 
 
 def sparkle_sign_file(
@@ -99,7 +108,7 @@ def sparkle_sign_file(
     if env is None:
         env = EnvConfig()
 
-    sign_update = get_sign_update_path(chromium_src)
+    sign_update = get_sign_update_path(chromium_src, env)
 
     if not env.has_sparkle_key():
         log_error("SPARKLE_PRIVATE_KEY not set")
