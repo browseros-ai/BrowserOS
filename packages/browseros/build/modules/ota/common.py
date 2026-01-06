@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """Common utilities for OTA update modules"""
 
-import base64
 import os
-import re
-import subprocess
-import tempfile
+import shutil
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List
 from dataclasses import dataclass
 
-from ...common.env import EnvConfig
 from ...common.utils import log_error, log_success
+
+# Re-export sparkle_sign_file from common module
+from ...common.sparkle import sparkle_sign_file
 
 SERVER_PLATFORMS = [
     {"name": "darwin_arm64", "binary": "browseros-server-darwin-arm64", "os": "macos", "arch": "arm64"},
@@ -60,111 +60,6 @@ class SignedArtifact:
     length: int
     os: str
     arch: str
-
-
-def get_sign_update_path(chromium_src: Optional[Path] = None, env: Optional[EnvConfig] = None) -> Path:
-    """Get path to Sparkle sign_update tool
-
-    Checks in order:
-    1. SPARKLE_SIGN_UPDATE_PATH env var
-    2. Chromium third_party if chromium_src provided
-    """
-    if env is None:
-        env = EnvConfig()
-
-    # Check env var first
-    if env.sparkle_sign_update_path:
-        env_path = Path(env.sparkle_sign_update_path)
-        if env_path.exists():
-            return env_path
-
-    # Check chromium third_party
-    if chromium_src:
-        sparkle_in_chromium = chromium_src / "third_party" / "sparkle" / "bin" / "sign_update"
-        if sparkle_in_chromium.exists():
-            return sparkle_in_chromium
-
-    raise FileNotFoundError(
-        "sign_update tool not found. Set SPARKLE_SIGN_UPDATE_PATH or ensure "
-        "chromium_src/third_party/sparkle/bin/sign_update exists"
-    )
-
-
-def sparkle_sign_file(
-    file_path: Path,
-    env: Optional[EnvConfig] = None,
-    chromium_src: Optional[Path] = None,
-) -> Tuple[Optional[str], int]:
-    """Sign a file with Sparkle Ed25519 key
-
-    Args:
-        file_path: Path to file to sign (typically a zip)
-        env: Environment config with Sparkle key
-        chromium_src: Optional chromium source path for sign_update tool
-
-    Returns:
-        (signature, length) tuple, or (None, 0) on failure
-    """
-    if env is None:
-        env = EnvConfig()
-
-    sign_update = get_sign_update_path(chromium_src, env)
-
-    if not env.has_sparkle_key():
-        log_error("SPARKLE_PRIVATE_KEY not set")
-        return None, 0
-
-    key_file = None
-    try:
-        key_data = env.sparkle_private_key
-        if not key_data:
-            log_error("SPARKLE_PRIVATE_KEY is empty")
-            return None, 0
-
-        try:
-            decoded = base64.b64decode(key_data)
-            key_data = decoded.decode("utf-8")
-        except Exception:
-            pass
-
-        key_file = tempfile.NamedTemporaryFile(mode="w", suffix=".key", delete=False)
-        key_file.write(key_data)
-        key_file.close()
-
-        result = subprocess.run(
-            [str(sign_update), "--ed-key-file", key_file.name, str(file_path)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        if result.returncode != 0:
-            log_error(f"sign_update failed: {result.stderr}")
-            return None, 0
-
-        return parse_sparkle_output(result.stdout.strip())
-
-    except Exception as e:
-        log_error(f"Error signing {file_path.name}: {e}")
-        return None, 0
-    finally:
-        if key_file and os.path.exists(key_file.name):
-            os.unlink(key_file.name)
-
-
-def parse_sparkle_output(output: str) -> Tuple[Optional[str], int]:
-    """Parse sign_update output to extract signature and length
-
-    Example output:
-        sparkle:edSignature="abc123..." length="126911210"
-    """
-    sig_match = re.search(r'sparkle:edSignature="([^"]+)"', output)
-    len_match = re.search(r'length="(\d+)"', output)
-
-    if sig_match and len_match:
-        return sig_match.group(1), int(len_match.group(1))
-
-    return None, 0
 
 
 def generate_server_appcast(
@@ -234,9 +129,6 @@ def create_server_zip(
     Returns:
         True on success, False on failure
     """
-    import zipfile
-    import shutil
-
     staging_dir = output_zip.parent / f"staging_{output_zip.stem}"
     try:
         staging_dir.mkdir(parents=True, exist_ok=True)

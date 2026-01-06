@@ -3,7 +3,6 @@
 
 from .common import (
     sparkle_sign_file,
-    parse_sparkle_output,
     generate_server_appcast,
     SERVER_PLATFORMS,
     APPCAST_TEMPLATE,
@@ -23,7 +22,6 @@ __all__ = [
     "AVAILABLE_MODULES",
     "ServerOTAModule",
     "sparkle_sign_file",
-    "parse_sparkle_output",
     "generate_server_appcast",
     "sign_macos_binary",
     "notarize_macos_binary",

@@ -7,10 +7,11 @@ from typing import Optional
 import typer
 
 from ..common.context import Context
+from ..common.env import EnvConfig
 from ..common.module import ValidationError
+from ..common.sparkle import sparkle_sign_file
 from ..common.utils import log_info, log_error, log_success
 
-from ..common.env import EnvConfig
 from ..modules.ota import ServerOTAModule
 from ..modules.ota.common import (
     get_appcast_path,
@@ -32,14 +33,10 @@ server_app = typer.Typer(
 app.add_typer(server_app, name="server")
 
 
-def create_ota_context(chromium_src: Optional[Path] = None) -> Context:
-    """Create Context for OTA operations
-
-    Args:
-        chromium_src: Path to Chromium source directory (for sign_update tool)
-    """
+def create_ota_context() -> Context:
+    """Create Context for OTA operations"""
     return Context(
-        chromium_src=chromium_src or Path(),
+        chromium_src=Path(),
         architecture="",
         build_type="release",
     )
@@ -79,18 +76,15 @@ def server_release(
     skip_upload: bool = typer.Option(
         False, "--skip-upload", help="Skip R2 upload (for local testing)"
     ),
-    chromium_src: Optional[Path] = typer.Option(
-        None, "--chromium-src", "-S", help="Path to Chromium source directory"
-    ),
 ):
     """Release BrowserOS Server OTA update
 
     \b
     Full Release (all platforms):
-      browseros ota server release --version 0.0.36 --channel alpha -S /path/to/chromium
+      browseros ota server release --version 0.0.36 --channel alpha
 
     \b
-    Single Platform (for cross-platform signing):
+    Single Platform:
       browseros ota server release --version 0.0.36 --platform darwin_arm64
 
     \b
@@ -104,7 +98,7 @@ def server_release(
     log_info(f"🚀 BrowserOS Server OTA v{version}")
     log_info("=" * 70)
 
-    ctx = create_ota_context(chromium_src)
+    ctx = create_ota_context()
 
     module = ServerOTAModule(
         version=version,
@@ -189,6 +183,39 @@ def server_list_platforms():
     for p in SERVER_PLATFORMS:
         log_info(f"  {p['name']:<15} {p['os']:<10} {p['arch']}")
     log_info("-" * 50)
+
+
+@app.command("test-signing")
+def test_signing(
+    file_path: Path = typer.Argument(..., help="File to sign for testing"),
+):
+    """Test Sparkle Ed25519 signing on a file
+
+    \b
+    Example:
+      browseros ota test-signing /path/to/file.zip
+    """
+    if not file_path.exists():
+        log_error(f"File not found: {file_path}")
+        raise typer.Exit(1)
+
+    env = EnvConfig()
+    if not env.has_sparkle_key():
+        log_error("SPARKLE_PRIVATE_KEY not set")
+        raise typer.Exit(1)
+
+    log_info(f"\n🔐 Testing Sparkle Ed25519 signing")
+    log_info(f"File: {file_path}")
+    log_info("-" * 60)
+
+    sig, length = sparkle_sign_file(file_path, env)
+    if not sig:
+        log_error("Signing failed")
+        raise typer.Exit(1)
+
+    log_success(f"✅ Signed successfully")
+    log_info(f"   Signature: {sig[:50]}...")
+    log_info(f"   Length: {length}")
 
 
 @server_app.callback(invoke_without_command=True)

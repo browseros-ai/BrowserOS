@@ -151,7 +151,7 @@ class ServerOTAModule(CommandModule):
                 continue
 
             log_info(f"Signing {zip_name} with Sparkle...")
-            signature, length = sparkle_sign_file(zip_path, ctx.env, ctx.chromium_src)
+            signature, length = sparkle_sign_file(zip_path, ctx.env)
 
             if not signature:
                 log_error(f"Failed to sign zip for {platform['name']}")
