@@ -5,20 +5,5 @@
     <link>https://cdn.browseros.com/appcast-server.alpha.xml</link>
     <description>BrowserOS Server binary updates</description>
     <language>en</language>
-
-    <item>
-      <sparkle:version>0.0.39</sparkle:version>
-      <pubDate>Tue, 06 Jan 2026 19:52:21 +0000</pubDate>
-
-      <!-- Linux arm64 -->
-      <enclosure
-        url="https://cdn.browseros.com/server/browseros_server_0.0.39_linux_arm64.zip"
-        sparkle:os="linux"
-        sparkle:arch="arm64"
-        sparkle:edSignature="XeoOffThExiIFC44wWuH5WhwTDGLpFpJTGrLqWQuYhvgiLJn19OWAUms6dwhUUxF+PRPzHYy3yAwjzFjBCRTCg=="
-        length="49091705"
-        type="application/zip"/>
-    </item>
-
   </channel>
 </rss>

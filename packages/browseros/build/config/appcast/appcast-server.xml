@@ -5,9 +5,5 @@
     <link>https://cdn.browseros.com/appcast-server.xml</link>
     <description>BrowserOS Server binary updates</description>
     <language>en</language>
-
-    <item>
-    </item>
-
   </channel>
 </rss>

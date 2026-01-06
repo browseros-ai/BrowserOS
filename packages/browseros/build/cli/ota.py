@@ -68,13 +68,7 @@ def server_release(
     ),
     platform: Optional[str] = typer.Option(
         None, "--platform", "-p",
-        help="Only process specific platform (darwin_arm64, darwin_x64, linux_arm64, linux_x64, windows_x64)"
-    ),
-    skip_sign: bool = typer.Option(
-        False, "--skip-sign", help="Skip binary signing (for pre-signed binaries)"
-    ),
-    skip_upload: bool = typer.Option(
-        False, "--skip-upload", help="Skip R2 upload (for local testing)"
+        help="Platform(s) to process, comma-separated (darwin_arm64, darwin_x64, linux_arm64, linux_x64, windows_x64)"
     ),
 ):
     """Release BrowserOS Server OTA update
@@ -88,12 +82,8 @@ def server_release(
       browseros ota server release --version 0.0.36 --platform darwin_arm64
 
     \b
-    Skip Signing (for pre-signed binaries):
-      browseros ota server release --version 0.0.36 --skip-sign
-
-    \b
-    Local Testing (no upload):
-      browseros ota server release --version 0.0.36 --skip-upload
+    Multiple Platforms:
+      browseros ota server release --version 0.0.36 --platform darwin_arm64,darwin_x64
     """
     log_info(f"🚀 BrowserOS Server OTA v{version}")
     log_info("=" * 70)
@@ -104,8 +94,6 @@ def server_release(
         version=version,
         channel=channel,
         binaries_dir=binaries,
-        skip_sign=skip_sign,
-        skip_upload=skip_upload,
         platform_filter=platform,
     )
 

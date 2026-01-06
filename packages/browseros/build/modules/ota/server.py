@@ -54,8 +54,6 @@ class ServerOTAModule(CommandModule):
         version: str = "",
         channel: str = "alpha",
         binaries_dir: Optional[Path] = None,
-        skip_sign: bool = False,
-        skip_upload: bool = False,
         platform_filter: Optional[str] = None,
     ):
         """
@@ -63,15 +61,11 @@ class ServerOTAModule(CommandModule):
             version: Version string (e.g., "0.0.36")
             channel: Release channel ("alpha" or "prod")
             binaries_dir: Directory containing server binaries
-            skip_sign: Skip binary signing (for already-signed binaries)
-            skip_upload: Skip R2 upload (for local testing)
-            platform_filter: Only process specific platform (e.g., "darwin_arm64")
+            platform_filter: Platform(s) to process, comma-separated (e.g., "darwin_arm64,darwin_x64")
         """
         self.version = version
         self.channel = channel
         self.binaries_dir = binaries_dir
-        self.skip_sign = skip_sign
-        self.skip_upload = skip_upload
         self.platform_filter = platform_filter
 
     def validate(self, context: Context) -> None:
@@ -98,27 +92,24 @@ class ServerOTAModule(CommandModule):
             if not binary_path.exists():
                 raise ValidationError(f"Binary not found: {binary_path}")
 
-        if not self.skip_sign:
-            if IS_MACOS():
-                env = ctx.env
-                if not env.macos_certificate_name:
-                    raise ValidationError("MACOS_CERTIFICATE_NAME required for signing")
-            elif IS_WINDOWS():
-                env = ctx.env
-                if not env.code_sign_tool_path:
-                    raise ValidationError("CODE_SIGN_TOOL_PATH required for signing")
+        if IS_MACOS():
+            if not ctx.env.macos_certificate_name:
+                raise ValidationError("MACOS_CERTIFICATE_NAME required for signing")
+        elif IS_WINDOWS():
+            if not ctx.env.code_sign_tool_path:
+                raise ValidationError("CODE_SIGN_TOOL_PATH required for signing")
 
-        if not self.skip_upload:
-            if not ctx.env.has_r2_config():
-                raise ValidationError(
-                    "R2 configuration not set. Required env vars: "
-                    "R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY"
-                )
+        if not ctx.env.has_r2_config():
+            raise ValidationError(
+                "R2 configuration not set. Required env vars: "
+                "R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY"
+            )
 
     def _get_platforms(self) -> List[dict]:
-        """Get platforms to process based on filter"""
+        """Get platforms to process based on filter (supports comma-separated)"""
         if self.platform_filter:
-            return [p for p in SERVER_PLATFORMS if p["name"] == self.platform_filter]
+            requested = [p.strip() for p in self.platform_filter.split(",")]
+            return [p for p in SERVER_PLATFORMS if p["name"] in requested]
         return SERVER_PLATFORMS
 
     def execute(self, context: Context) -> None:
@@ -138,10 +129,9 @@ class ServerOTAModule(CommandModule):
             binary_name = platform["binary"]
             binary_path = self.binaries_dir / binary_name
 
-            if not self.skip_sign:
-                if not self._sign_binary(binary_path, platform, ctx):
-                    log_warning(f"Skipping {platform['name']} due to signing failure")
-                    continue
+            if not self._sign_binary(binary_path, platform, ctx):
+                log_warning(f"Skipping {platform['name']} due to signing failure")
+                continue
 
             zip_name = f"browseros_server_{self.version}_{platform['name']}.zip"
             zip_path = temp_dir / zip_name
@@ -188,17 +178,16 @@ class ServerOTAModule(CommandModule):
         appcast_path.write_text(appcast_content)
         log_success(f"Appcast saved to: {appcast_path}")
 
-        if not self.skip_upload:
-            log_info("\n📤 Uploading artifacts to R2...")
-            r2_client = get_r2_client(ctx.env)
-            if not r2_client:
-                log_error("Failed to create R2 client")
-            else:
-                bucket = ctx.env.r2_bucket
-                for artifact in signed_artifacts:
-                    r2_key = f"server/{artifact.zip_path.name}"
-                    if not upload_file_to_r2(r2_client, artifact.zip_path, r2_key, bucket):
-                        log_error(f"Failed to upload {artifact.zip_path.name}")
+        log_info("\n📤 Uploading artifacts to R2...")
+        r2_client = get_r2_client(ctx.env)
+        if not r2_client:
+            raise RuntimeError("Failed to create R2 client")
+
+        bucket = ctx.env.r2_bucket
+        for artifact in signed_artifacts:
+            r2_key = f"server/{artifact.zip_path.name}"
+            if not upload_file_to_r2(r2_client, artifact.zip_path, r2_key, bucket):
+                raise RuntimeError(f"Failed to upload {artifact.zip_path.name}")
 
         ctx.artifacts["server_ota_artifacts"] = signed_artifacts
         ctx.artifacts["server_appcast"] = appcast_path
