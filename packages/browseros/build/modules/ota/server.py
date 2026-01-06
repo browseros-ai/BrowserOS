@@ -22,7 +22,6 @@ from .common import (
     sparkle_sign_file,
     generate_server_appcast,
     create_server_zip,
-    upload_to_r2,
     get_appcast_path,
 )
 from .sign_binary import (
@@ -31,6 +30,7 @@ from .sign_binary import (
     sign_windows_binary,
     get_entitlements_path,
 )
+from ..upload import get_r2_client, upload_file_to_r2
 
 
 class ServerOTAModule(CommandModule):
@@ -108,17 +108,11 @@ class ServerOTAModule(CommandModule):
                     raise ValidationError("CODE_SIGN_TOOL_PATH required for signing")
 
         if not self.skip_upload:
-            try:
-                import subprocess
-                result = subprocess.run(
-                    ["wrangler", "--version"],
-                    capture_output=True,
-                    check=False,
+            if not ctx.env.has_r2_config():
+                raise ValidationError(
+                    "R2 configuration not set. Required env vars: "
+                    "R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY"
                 )
-                if result.returncode != 0:
-                    raise ValidationError("wrangler not installed")
-            except FileNotFoundError:
-                raise ValidationError("wrangler not installed")
 
     def _get_platforms(self) -> List[dict]:
         """Get platforms to process based on filter"""
@@ -179,13 +173,6 @@ class ServerOTAModule(CommandModule):
             log_error("No artifacts were processed successfully")
             raise RuntimeError("OTA failed - no artifacts")
 
-        if not self.skip_upload:
-            log_info("\n📤 Uploading to R2...")
-            for artifact in signed_artifacts:
-                r2_path = f"browseros/server/{artifact.zip_path.name}"
-                if not upload_to_r2(artifact.zip_path, r2_path, ctx.env):
-                    log_error(f"Failed to upload {artifact.zip_path.name}")
-
         log_info("\n📝 Generating appcast...")
         appcast_content = generate_server_appcast(
             self.version,
@@ -199,11 +186,20 @@ class ServerOTAModule(CommandModule):
         log_success(f"Appcast saved to: {appcast_path}")
 
         if not self.skip_upload:
-            r2_appcast_name = f"appcast-server.{self.channel}.xml" if self.channel == "alpha" else "appcast-server.xml"
-            r2_appcast_path = f"browseros/{r2_appcast_name}"
+            log_info("\n📤 Uploading to R2...")
+            r2_client = get_r2_client(ctx.env)
+            if not r2_client:
+                log_error("Failed to create R2 client")
+            else:
+                bucket = ctx.env.r2_bucket
+                for artifact in signed_artifacts:
+                    r2_key = f"server/{artifact.zip_path.name}"
+                    if not upload_file_to_r2(r2_client, artifact.zip_path, r2_key, bucket):
+                        log_error(f"Failed to upload {artifact.zip_path.name}")
 
-            log_info(f"Uploading appcast to {r2_appcast_path}...")
-            upload_to_r2(appcast_path, r2_appcast_path, ctx.env)
+                r2_appcast_name = f"appcast-server.{self.channel}.xml" if self.channel == "alpha" else "appcast-server.xml"
+                log_info(f"Uploading appcast to {r2_appcast_name}...")
+                upload_file_to_r2(r2_client, appcast_path, r2_appcast_name, bucket)
 
         ctx.artifacts["server_ota_artifacts"] = signed_artifacts
         ctx.artifacts["server_appcast"] = appcast_path

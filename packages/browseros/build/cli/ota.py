@@ -10,12 +10,13 @@ from ..common.context import Context
 from ..common.module import ValidationError
 from ..common.utils import log_info, log_error, log_success
 
+from ..common.env import EnvConfig
 from ..modules.ota import ServerOTAModule
 from ..modules.ota.common import (
-    upload_to_r2,
     get_appcast_path,
     SERVER_PLATFORMS,
 )
+from ..modules.upload import get_r2_client, upload_file_to_r2
 
 app = typer.Typer(
     help="OTA (Over-The-Air) update automation",
@@ -153,14 +154,24 @@ def server_publish_appcast(
             raise typer.Exit(1)
 
     if channel == "alpha":
-        r2_path = "browseros/appcast-server.alpha.xml"
+        r2_key = "appcast-server.alpha.xml"
     else:
-        r2_path = "browseros/appcast-server.xml"
+        r2_key = "appcast-server.xml"
 
-    log_info(f"📤 Uploading {source_path.name} to {r2_path}...")
+    log_info(f"📤 Uploading {source_path.name} to {r2_key}...")
 
-    if upload_to_r2(source_path, r2_path):
-        cdn_url = f"https://cdn.browseros.com/{r2_path.replace('browseros/', '')}"
+    env = EnvConfig()
+    if not env.has_r2_config():
+        log_error("R2 configuration not set. Required env vars: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY")
+        raise typer.Exit(1)
+
+    r2_client = get_r2_client(env)
+    if not r2_client:
+        log_error("Failed to create R2 client")
+        raise typer.Exit(1)
+
+    if upload_file_to_r2(r2_client, source_path, r2_key, env.r2_bucket):
+        cdn_url = f"https://cdn.browseros.com/{r2_key}"
         log_success(f"✅ Published: {cdn_url}")
     else:
         log_error("Upload failed")

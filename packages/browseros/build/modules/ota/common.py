@@ -264,44 +264,6 @@ def create_server_zip(
             shutil.rmtree(staging_dir)
 
 
-def upload_to_r2(
-    file_path: Path,
-    r2_path: str,
-    env: Optional[EnvConfig] = None,
-) -> bool:
-    """Upload file to R2 using wrangler
-
-    Args:
-        file_path: Local file path
-        r2_path: R2 destination path (e.g., "browseros/server/file.zip")
-        env: Environment config (unused, wrangler uses its own auth)
-
-    Returns:
-        True on success, False on failure
-    """
-    try:
-        result = subprocess.run(
-            ["wrangler", "r2", "object", "put", r2_path, f"--file={file_path}", "--remote"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        if result.returncode != 0:
-            log_error(f"wrangler upload failed: {result.stderr}")
-            return False
-
-        log_success(f"Uploaded {file_path.name} to {r2_path}")
-        return True
-
-    except FileNotFoundError:
-        log_error("wrangler not installed. Install with: npm install -g wrangler")
-        return False
-    except Exception as e:
-        log_error(f"Upload failed: {e}")
-        return False
-
-
 def get_appcast_path(channel: str = "alpha") -> Path:
     """Get path to appcast file in config/appcast directory"""
     appcast_dir = Path(__file__).parent.parent.parent / "config" / "appcast"
