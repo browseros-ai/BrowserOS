@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_constants.h b/chrome/browser/browseros/core/browseros_constants.h
 new file mode 100644
-index 0000000000000..6d20e32069f92
+index 0000000000000..db4aede1d2396
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_constants.h
-@@ -0,0 +1,214 @@
+@@ -0,0 +1,216 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -52,6 +52,8 @@ index 0000000000000..6d20e32069f92
 +// an update_url in their manifest
 +inline constexpr char kBrowserOSUpdateUrl[] =
 +    "https://cdn.browseros.com/extensions/update-manifest.xml";
++inline constexpr char kBrowserOSAlphaUpdateUrl[] =
++    "https://cdn.browseros.com/extensions/update-manifest.alpha.xml";
 +
 +// chrome://browseros host constant
 +inline constexpr char kBrowserOSHost[] = "browseros";

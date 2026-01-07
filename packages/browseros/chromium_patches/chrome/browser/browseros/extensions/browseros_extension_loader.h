@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_loader.h b/chrome/browser/browseros/extensions/browseros_extension_loader.h
 new file mode 100644
-index 0000000000000..44eec5b9b47fe
+index 0000000000000..c0b26b369ad07
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_loader.h
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,81 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -62,7 +62,12 @@ index 0000000000000..44eec5b9b47fe
 +  void OnStartupComplete(bool from_bundled);
 +
 +  // Triggers immediate download for remote-loaded extensions.
-+  void TriggerImmediateInstallation();
++  void TriggerImmediateInstallation(base::Value::Dict config);
++
++  // Adjusts prefs to match existing install locations. Extensions installed via
++  // kExternalPrefDownload must be claimed via external_update_url to avoid
++  // orphan detection when bundled prefs use external_crx.
++  void AdjustPrefsForExistingInstalls(base::Value::Dict& prefs);
 +
 +  raw_ptr<Profile> profile_;
 +  GURL config_url_;

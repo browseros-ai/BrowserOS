@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/extensions/external_provider_impl.cc b/chrome/browser/extensions/external_provider_impl.cc
-index 9c8731d3ed4ab..196a9f6e54d4e 100644
+index 9c8731d3ed4ab..976cd2b21e42b 100644
 --- a/chrome/browser/extensions/external_provider_impl.cc
 +++ b/chrome/browser/extensions/external_provider_impl.cc
 @@ -30,6 +30,8 @@
@@ -37,12 +37,12 @@ index 9c8731d3ed4ab..196a9f6e54d4e 100644
 +  // Allow disabling via command line flag if needed
 +  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
 +          browseros::kDisableExtensions)) {
-+    // Use kExternalPref for bundled CRX files (local install)
-+    // Use kExternalPrefDownload for remote URL fallback
++    // Use kExternalComponent for all BrowserOS extensions - higher privilege
++    // level, consistent location for both bundled CRX and remote URL installs.
 +    auto browseros_provider = std::make_unique<ExternalProviderImpl>(
 +        service, browseros_loader, profile,
-+        ManifestLocation::kExternalPref,          // CRX location (bundled)
-+        ManifestLocation::kExternalPrefDownload,  // Download location (remote)
++        ManifestLocation::kExternalComponent,  // CRX location (bundled)
++        ManifestLocation::kExternalComponent,  // Download location (remote)
 +        Extension::WAS_INSTALLED_BY_DEFAULT);
 +    browseros_provider->set_auto_acknowledge(true);
 +    browseros_provider->set_allow_updates(true);

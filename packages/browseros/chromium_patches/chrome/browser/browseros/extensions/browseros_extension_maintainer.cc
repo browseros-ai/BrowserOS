@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc b/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc
 new file mode 100644
-index 0000000000000..67927df98bafe
+index 0000000000000..fec50b08b130c
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc
-@@ -0,0 +1,379 @@
+@@ -0,0 +1,381 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -40,7 +40,7 @@ index 0000000000000..67927df98bafe
 +namespace {
 +
 +constexpr base::TimeDelta kMaintenanceInterval = base::Minutes(15);
-+constexpr base::TimeDelta kInitialMaintenanceDelay = base::Seconds(10);
++constexpr base::TimeDelta kInitialMaintenanceDelay = base::Seconds(60);
 +
 +constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 +    net::DefineNetworkTrafficAnnotation("browseros_extension_maintenance", R"(
@@ -276,7 +276,9 @@ index 0000000000000..67927df98bafe
 +      params.install_immediately = true;
 +      params.fetch_priority =
 +          extensions::DownloadFetchPriority::kForeground;
-+      updater->CheckNow(std::move(params));
++      // Use InstallPendingNow - the extension is in PendingExtensionManager,
++      // CheckNow with specific IDs only checks installed extensions.
++      updater->InstallPendingNow(std::move(params));
 +    }
 +  }
 +}
