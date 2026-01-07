@@ -38,60 +38,51 @@ Go to **Settings → Community Nodes** and install `n8n-nodes-mcp`:
 
 ### Step 3: Create Workflow
 
-Create a new workflow and add the **AI Agent** node. Then configure it:
+Create a new workflow with:
 
-1. In the AI Agent, add **Chat Model** (e.g., OpenAI Chat Model) and configure your API credentials
-2. In the AI Agent's **Tools** section, search for "mcp" and add **MCP Client Tool**
+1. Add a **Chat Trigger** node (this receives user messages)
+2. Add an **AI Agent** node and connect it to the trigger
+3. Under the AI Agent, click **Chat Model** and add your LLM (e.g., OpenAI Chat Model)
+4. Under the AI Agent, click **Tool** → search "mcp" → select **MCP Client Tool**
 
 <Frame>
-  ![Add MCP Client tool to AI Agent](/images/mcp-node.png)
+  ![Workflow with AI Agent and MCP Client](/images/n8n-step3-workflow.png)
 </Frame>
 
 ### Step 4: Configure AI Agent Prompt
 
-In the AI Agent node, set **Source for Prompt** to **Define below** and paste:
-
-```
-choose the right tool based on the user input:{{ $json.chatInput }}
-```
+In the AI Agent node, set **Source for Prompt (User Message)** to **Connected Chat Trigger Node**.
 
 <Frame>
-  ![Configure AI Agent prompt](/images/agent-step.png)
+  ![Configure AI Agent prompt](/images/n8n-step4-agent-prompt.png)
 </Frame>
 
-### Step 5: Configure MCP Client Credentials
+### Step 5: Configure MCP Client
 
-Click on the **MCP Client** node to configure it:
+Click on the **MCP Client** node and configure:
 
-1. **Credential to connect with** → **Create New Credential**
-2. Select **Command Line (stdio)**
-3. **Command**: `npx`
-4. **Arguments**: `mcp-remote http://127.0.0.1:9101/mcp`
+1. **Endpoint**: Copy your MCP URL from BrowserOS (e.g., `http://127.0.0.1:9228/mcp`)
+2. **Server Transport**: `HTTP Streamable`
 
 <Note>
-  Replace `9101` with your BrowserOS MCP port from **Settings → MCP** in BrowserOS.
+  Find your MCP URL in BrowserOS under **Settings → MCP**.
 </Note>
 
-### Step 6: Configure MCP Tool Execution
-
-In the same MCP Client node:
-
-1. **Operation**: `Execute Tool`
-2. **Tool Name**: `{{ $fromAI("tool") }}`
-
 <Frame>
-  ![Configure MCP Client node](/images/client-step.png)
+  ![Configure MCP Client node](/images/n8n-step5-mcp-client.png)
 </Frame>
 
-### Step 7: Test Workflow
+### Step 6: Test Workflow
 
-Save the workflow and test with a chat input:
+Save the workflow, click **Open chat**, and send a message:
 
 ```
-Open google.com in BrowserOS
+open google.com on browserOS
 ```
 
-Execute and watch BrowserOS respond!
+<Frame>
+  ![Test the workflow](/images/n8n-step6-test.png)
+</Frame>
 
 ## Troubleshooting
 
