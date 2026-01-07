@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/mac/sparkle_glue.mm b/chrome/browser/mac/sparkle_glue.mm
 new file mode 100644
-index 0000000000000..93cb6d545b19c
+index 0000000000000..25a2dd2d5a578
 --- /dev/null
 +++ b/chrome/browser/mac/sparkle_glue.mm
-@@ -0,0 +1,660 @@
+@@ -0,0 +1,662 @@
 +// Copyright 2024 BrowserOS Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -184,8 +184,10 @@ index 0000000000000..93cb6d545b19c
 +      break;
 +
 +    case SPUUserUpdateStageInstalling:
-+      // Already installing, proceed.
-+      reply(SPUUserUpdateChoiceInstall);
++      // Already installing - store reply block and notify user, don't auto-proceed
++      self.installReplyBlock = reply;
++      [self.glue setInternalStatus:SparkleStatusReadyToInstall];
++      NotifyUpgradeReady(base::SysNSStringToUTF8(self.updateVersion));
 +      break;
 +  }
 +}
