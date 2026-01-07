@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.cc b/chrome/browser/browseros/server/browseros_server_updater.cc
 new file mode 100644
-index 0000000000000..62162c8924fce
+index 0000000000000..887113564dfdc
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.cc
-@@ -0,0 +1,1061 @@
+@@ -0,0 +1,1066 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -783,7 +783,12 @@ index 0000000000000..62162c8924fce
 +                                               const base::Version& new_version,
 +                                               bool success) {
 +  if (!success) {
-+    LOG(ERROR) << "browseros: Hot-swap failed, server may need manual restart";
++    LOG(ERROR) << "browseros: Hot-swap failed, reverting to bundled version";
++
++    // Clear downloaded version - this updates cache, pref (to bundled), and
++    // deletes the current_version file so next restart uses bundled
++    WriteCurrentVersionFile(base::Version());
++
 +    OnError("hotswap", "Failed to restart server with new binary");
 +    return;
 +  }
@@ -833,59 +838,59 @@ index 0000000000000..62162c8924fce
 +  cached_downloaded_version_ = version;
 +
 +  // Update version pref for observability
++  // When clearing (invalid version), show bundled version in pref
 +  PrefService* prefs = g_browser_process->local_state();
 +  if (prefs) {
-+    prefs->SetString(kServerVersion, version.GetString());
++    std::string pref_version;
++    if (version.IsValid()) {
++      pref_version = version.GetString();
++    } else if (cached_bundled_version_.IsValid()) {
++      pref_version = cached_bundled_version_.GetString();
++    }
++    prefs->SetString(kServerVersion, pref_version);
 +  }
 +
 +  base::FilePath version_file =
 +      GetExecutionDir().AppendASCII(kCurrentVersionFileName);
 +
-+  base::ThreadPool::PostTask(
-+      FROM_HERE, {base::MayBlock()},
-+      base::BindOnce(
-+          [](base::FilePath path, std::string content) {
-+            base::WriteFile(path, content);
-+          },
-+          version_file, version.GetString()));
++  if (version.IsValid()) {
++    base::ThreadPool::PostTask(
++        FROM_HERE, {base::MayBlock()},
++        base::BindOnce(
++            [](base::FilePath path, std::string content) {
++              base::WriteFile(path, content);
++            },
++            version_file, version.GetString()));
++  } else {
++    // Delete file when clearing downloaded version
++    base::ThreadPool::PostTask(
++        FROM_HERE, {base::MayBlock()},
++        base::BindOnce(
++            [](base::FilePath path) { base::DeleteFile(path); }, version_file));
++  }
 +}
 +
 +void BrowserOSServerUpdater::InvalidateDownloadedVersion() {
 +  LOG(WARNING) << "browseros: Invalidating downloaded version, "
 +               << "nuking versions directory";
 +
-+  // Clear cached version immediately
-+  cached_downloaded_version_ = base::Version();
++  // Clear cache, pref, and current_version file via shared logic
++  WriteCurrentVersionFile(base::Version());
 +
-+  // Set version pref to bundled version (falling back)
-+  PrefService* prefs = g_browser_process->local_state();
-+  if (prefs && cached_bundled_version_.IsValid()) {
-+    prefs->SetString(kServerVersion, cached_bundled_version_.GetString());
-+  }
-+
-+  // Nuke versions directory and current_version file on background thread
++  // Additionally nuke all version directories
 +  base::FilePath versions_dir = GetVersionsDir();
-+  base::FilePath version_file =
-+      GetExecutionDir().AppendASCII(kCurrentVersionFileName);
-+
 +  base::ThreadPool::PostTask(
 +      FROM_HERE, {base::MayBlock()},
 +      base::BindOnce(
-+          [](base::FilePath versions_dir, base::FilePath version_file) {
++          [](base::FilePath versions_dir) {
 +            if (base::PathExists(versions_dir)) {
 +              if (!base::DeletePathRecursively(versions_dir)) {
 +                LOG(ERROR) << "browseros: Failed to delete versions directory: "
 +                           << versions_dir;
 +              }
 +            }
-+            if (base::PathExists(version_file)) {
-+              if (!base::DeleteFile(version_file)) {
-+                LOG(ERROR) << "browseros: Failed to delete current_version file: "
-+                           << version_file;
-+              }
-+            }
 +          },
-+          versions_dir, version_file));
++          versions_dir));
 +}
 +
 +base::FilePath BrowserOSServerUpdater::GetExecutionDir() const {

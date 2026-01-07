@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..dab79743c4753
+index 0000000000000..b82e2496dbd74
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1190 @@
+@@ -0,0 +1,1194 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -891,7 +891,7 @@ index 0000000000000..dab79743c4753
 +  int agent = agent_port_;
 +  int extension = extension_port_;
 +
-+  // Kill process on background thread, revalidate ports, then launch on UI thread
++  // Kill process on background thread, wait for port release, revalidate, launch
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
 +      base::BindOnce(
@@ -914,9 +914,13 @@ index 0000000000000..dab79743c4753
 +  std::set<int> excluded_ports;
 +  excluded_ports.insert(cdp_port);
 +
++  // MCP port is critical for client connectivity - skip validation and trust
++  // it will be available after our process terminates. Exclude it so other
++  // ports don't accidentally take it during TIME_WAIT.
++  excluded_ports.insert(current_mcp);
++
 +  RevalidatedPorts result;
-+  result.mcp_port = FindAvailablePort(current_mcp, excluded_ports);
-+  excluded_ports.insert(result.mcp_port);
++  result.mcp_port = current_mcp;
 +
 +  result.agent_port = FindAvailablePort(current_agent, excluded_ports);
 +  excluded_ports.insert(result.agent_port);
