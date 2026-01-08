@@ -84,7 +84,7 @@
         },
         {
           "anchor": "Slack",
-          "href": "http://dub.sh/browseros-slack",
+          "href": "https://dub.sh/browserOS-slack",
           "icon": "slack"
         }
 
@@ -125,7 +125,7 @@
       "x": "https://x.com/browseros_ai",
       "github": "https://github.com/BrowserOS-ai/BrowserOS",
       "discord": "https://discord.gg/YKwjt5vuKr",
-      "slack": "http://dub.sh/browseros-slack"
+      "slack": "https://dub.sh/browserOS-slack"
     }
   }
 }
