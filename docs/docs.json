@@ -1,95 +1,61 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
+  "theme": "maple",
   "name": "BrowserOS Documentation",
   "colors": {
-    "primary": "#0066CC",
-    "light": "#3399FF",
-    "dark": "#003D7A"
+    "primary": "#f25e1a",
+    "light": "#FF7A3D",
+    "dark": "#D14E10"
   },
   "favicon": "/logo/favicon.png",
   "navigation": {
-    "tabs": [
+    "groups": [
       {
-        "tab": "Documentation",
-        "groups": [
+        "group": "Get Started",
+        "pages": [
+          "index",
+          "onboarding",
+          "update"
+        ]
+      },
+      {
+        "group": "Bring Your Own LLM",
+        "pages": [
+          "llm-setup-guide",
           {
-            "group": "Getting Started",
+            "group": "Cloud Providers",
             "pages": [
-              "index",
-              "onboarding",
-              "update",
-              "features/ad-blocking"
+              "bring-your-own-keys/gemini",
+              "bring-your-own-keys/claude",
+              "bring-your-own-keys/openai",
+              "bring-your-own-keys/openrouter"
             ]
           },
           {
-            "group": "Configure AI",
-            "expanded": true,
+            "group": "Local LLMs",
             "pages": [
-              "llm-setup-guide",
-              {
-                "group": "BYOK LLM",
-                "expanded": true,
-                "pages": [
-                  "bring-your-own-keys/gemini",
-                  "bring-your-own-keys/claude",
-                  "bring-your-own-keys/openai",
-                  "bring-your-own-keys/openrouter"
-                ]
-              },
-              {
-                "group": "Local LLMs",
-                "expanded": true,
-                "pages": [
-                  "local-LLMs/ollama",
-                  "local-LLMs/lm-studio",
-                  "local-LLMs/gpt-oss"
-                ]
-              },
-              {
-                "group": "BrowserOS-mcp",
-                "expanded": true,
-                "pages": [
-                  "browseros-mcp/how-to-guide"
-                ]
-              }
-            ]
-          },
-          {
-            "group": "Integrations",
-            "pages": [
-              "integrations/n8n"
-            ]
-          },
-          {
-            "group": "Contributing",
-            "pages": [
-              "contributing"
+              "local-LLMs/ollama",
+              "local-LLMs/lm-studio",
+              "local-LLMs/gpt-oss"
             ]
           }
         ]
+      },
+      {
+        "group": "Core Features",
+        "pages": [
+          "features/ad-blocking",
+          "browseros-mcp/how-to-guide",
+          "integrations/n8n"
+        ]
+      },
+      {
+        "group": "Contributing",
+        "pages": [
+          "contributing"
+        ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "GitHub",
-          "href": "https://github.com/BrowserOS-ai/BrowserOS",
-          "icon": "github"
-        },
-        {
-          "anchor": "Discord",
-          "href": "https://discord.gg/YKwjt5vuKr",
-          "icon": "discord"
-        },
-        {
-          "anchor": "Slack",
-          "href": "https://dub.sh/browserOS-slack",
-          "icon": "slack"
-        }
-
-      ]
-    }
+    ]
   },
   "logo": {
     "light": "/logo/logo44.png",
@@ -110,15 +76,15 @@
   },
   "contextual": {
     "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
+      "copy",
+      "view",
+      "chatgpt",
+      "claude",
+      "perplexity",
+      "mcp",
+      "cursor",
+      "vscode"
+    ]
   },
   "footer": {
     "socials": {
