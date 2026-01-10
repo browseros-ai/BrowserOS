@@ -6,7 +6,7 @@
 <key>SUEnableAutomaticChecks</key>
 <true/>
 <key>SUScheduledCheckInterval</key>
-<integer>1080</integer>
+<integer>3600</integer>
 <key>SUAllowsAutomaticUpdates</key>
 <true/>
 <key>SUAutomaticallyUpdate</key>
