@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.h b/chrome/browser/browseros/server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000..3c322437eada1
+index 0000000000000..7d78115c373ef
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.h
-@@ -0,0 +1,182 @@
+@@ -0,0 +1,189 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -113,8 +113,13 @@ index 0000000000000..3c322437eada1
 +  ~BrowserOSServerManager();
 +
 +  bool AcquireLock();
-+  void InitializePortsAndPrefs();
-+  void SavePortsToPrefs();
++
++  // Port initialization for startup (called in order by Start())
++  void LoadPortsFromPrefs();       // 1. Load saved values from prefs
++  void SetupPrefObservers();       // 2. Set up pref change observers
++  void ResolvePortsForStartup();   // 3. MCP stays stable, others find available
++  void ApplyCommandLineOverrides(); // 4. Apply --cdp-port, --mcp-port, etc.
++  void SavePortsToPrefs();         // 5. Save final values to prefs
 +  void StartCDPServer();
 +  void StopCDPServer();
 +  void LaunchBrowserOSProcess();
@@ -125,13 +130,15 @@ index 0000000000000..3c322437eada1
 +  void TerminateBrowserOSProcess(bool wait);
 +  void RestartBrowserOSProcess();
 +
-+  // Revalidates MCP/Agent/Extension ports on background thread.
-+  // CDP port is excluded (still bound by Chrome's DevTools server).
-+  // Returns potentially updated port values.
-+  RevalidatedPorts RevalidatePorts(int cdp_port,
-+                                   int current_mcp,
-+                                   int current_agent,
-+                                   int current_extension);
++  // Revalidates ports for restart (runs on background thread).
++  // CDP port is excluded (already bound by Chrome's DevTools server).
++  // If revalidate_all is true, all ports run through FindAvailablePort (PORT_CONFLICT).
++  // If false, MCP stays unchanged; only Agent/Extension are revalidated.
++  RevalidatedPorts RevalidatePortsForRestart(int cdp_port,
++                                             int current_mcp,
++                                             int current_agent,
++                                             int current_extension,
++                                             bool revalidate_all);
 +
 +  // UI thread callback after port revalidation.
 +  // Updates member vars and prefs if changed, then launches process.
