@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..b82e2496dbd74
+index 0000000000000..f930bf5bc0107
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1194 @@
+@@ -0,0 +1,1259 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -75,6 +75,13 @@ index 0000000000000..b82e2496dbd74
 +// Crash tracking: if server crashes within grace period, count as startup failure
 +constexpr base::TimeDelta kStartupGracePeriod = base::Seconds(30);
 +constexpr int kMaxStartupFailures = 3;
++
++// Exit codes from BrowserOS server (must match packages/shared/src/constants/exit-codes.ts)
++// - 0 (SUCCESS): Clean shutdown, don't restart
++// - 1 (GENERAL_ERROR): Restart with same ports (default case, no const needed)
++// - 2 (PORT_CONFLICT): Restart with all ports revalidated
++constexpr int kExitCodeSuccess = 0;
++constexpr int kExitCodePortConflict = 2;
 +
 +constexpr int kMaxPortAttempts = 100;
 +constexpr int kMaxPort = 65535;
@@ -341,72 +348,91 @@ index 0000000000000..b82e2496dbd74
 +  return true;
 +}
 +
-+void BrowserOSServerManager::InitializePortsAndPrefs() {
-+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++void BrowserOSServerManager::LoadPortsFromPrefs() {
 +  PrefService* prefs = g_browser_process->local_state();
 +
-+  // Read from prefs or use defaults
 +  if (!prefs) {
 +    cdp_port_ = browseros_server::kDefaultCDPPort;
 +    mcp_port_ = browseros_server::kDefaultMCPPort;
 +    agent_port_ = browseros_server::kDefaultAgentPort;
 +    extension_port_ = browseros_server::kDefaultExtensionPort;
 +    allow_remote_in_mcp_ = false;
-+  } else {
-+    cdp_port_ = prefs->GetInteger(browseros_server::kCDPServerPort);
-+    if (cdp_port_ <= 0) {
-+      cdp_port_ = browseros_server::kDefaultCDPPort;
-+    }
-+
-+    mcp_port_ = prefs->GetInteger(browseros_server::kMCPServerPort);
-+    if (mcp_port_ <= 0) {
-+      mcp_port_ = browseros_server::kDefaultMCPPort;
-+    }
-+
-+    agent_port_ = prefs->GetInteger(browseros_server::kAgentServerPort);
-+    if (agent_port_ <= 0) {
-+      agent_port_ = browseros_server::kDefaultAgentPort;
-+    }
-+
-+    extension_port_ = prefs->GetInteger(browseros_server::kExtensionServerPort);
-+    if (extension_port_ <= 0) {
-+      extension_port_ = browseros_server::kDefaultExtensionPort;
-+    }
-+
-+    allow_remote_in_mcp_ = prefs->GetBoolean(browseros_server::kAllowRemoteInMCP);
-+
-+    // Set up pref change observers
-+    if (!pref_change_registrar_) {
-+      pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
-+      pref_change_registrar_->Init(prefs);
-+      pref_change_registrar_->Add(
-+          browseros_server::kAllowRemoteInMCP,
-+          base::BindRepeating(
-+              &BrowserOSServerManager::OnAllowRemoteInMCPChanged,
-+              base::Unretained(this)));
-+      pref_change_registrar_->Add(
-+          browseros_server::kRestartServerRequested,
-+          base::BindRepeating(
-+              &BrowserOSServerManager::OnRestartServerRequestedChanged,
-+              base::Unretained(this)));
-+    }
++    return;
 +  }
 +
-+  // Find available ports, tracking assigned ports to prevent collisions
++  cdp_port_ = prefs->GetInteger(browseros_server::kCDPServerPort);
++  if (cdp_port_ <= 0) {
++    cdp_port_ = browseros_server::kDefaultCDPPort;
++  }
++
++  mcp_port_ = prefs->GetInteger(browseros_server::kMCPServerPort);
++  if (mcp_port_ <= 0) {
++    mcp_port_ = browseros_server::kDefaultMCPPort;
++  }
++
++  agent_port_ = prefs->GetInteger(browseros_server::kAgentServerPort);
++  if (agent_port_ <= 0) {
++    agent_port_ = browseros_server::kDefaultAgentPort;
++  }
++
++  extension_port_ = prefs->GetInteger(browseros_server::kExtensionServerPort);
++  if (extension_port_ <= 0) {
++    extension_port_ = browseros_server::kDefaultExtensionPort;
++  }
++
++  allow_remote_in_mcp_ = prefs->GetBoolean(browseros_server::kAllowRemoteInMCP);
++
++  LOG(INFO) << "browseros: Loaded ports from prefs - CDP: " << cdp_port_
++            << ", MCP: " << mcp_port_ << ", Agent: " << agent_port_
++            << ", Extension: " << extension_port_;
++}
++
++void BrowserOSServerManager::SetupPrefObservers() {
++  PrefService* prefs = g_browser_process->local_state();
++  if (!prefs || pref_change_registrar_) {
++    return;  // No prefs or already set up
++  }
++
++  pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
++  pref_change_registrar_->Init(prefs);
++  pref_change_registrar_->Add(
++      browseros_server::kAllowRemoteInMCP,
++      base::BindRepeating(&BrowserOSServerManager::OnAllowRemoteInMCPChanged,
++                          base::Unretained(this)));
++  pref_change_registrar_->Add(
++      browseros_server::kRestartServerRequested,
++      base::BindRepeating(
++          &BrowserOSServerManager::OnRestartServerRequestedChanged,
++          base::Unretained(this)));
++}
++
++void BrowserOSServerManager::ResolvePortsForStartup() {
++  // Track assigned ports to prevent collisions between our services
 +  std::set<int> assigned_ports;
 +
++  // CDP: Chrome binds this port, so find available
 +  cdp_port_ = FindAvailablePort(cdp_port_, assigned_ports);
 +  assigned_ports.insert(cdp_port_);
 +
-+  mcp_port_ = FindAvailablePort(mcp_port_, assigned_ports);
++  // MCP: Use saved value directly - do NOT revalidate.
++  // If port is taken, server will exit with PORT_CONFLICT (code 2),
++  // which triggers full revalidation via RevalidatePortsForRestart().
 +  assigned_ports.insert(mcp_port_);
 +
++  // Agent/Extension: Find available ports
 +  agent_port_ = FindAvailablePort(agent_port_, assigned_ports);
 +  assigned_ports.insert(agent_port_);
 +
 +  extension_port_ = FindAvailablePort(extension_port_, assigned_ports);
 +
-+  // Apply command-line overrides (internal testing only)
++  LOG(INFO) << "browseros: Resolved ports for startup - CDP: " << cdp_port_
++            << ", MCP: " << mcp_port_ << " (stable), Agent: " << agent_port_
++            << ", Extension: " << extension_port_;
++}
++
++void BrowserOSServerManager::ApplyCommandLineOverrides() {
++  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++
 +  int cdp_override = GetPortOverrideFromCommandLine(
 +      command_line, browseros::kCDPPort, "CDP port");
 +  if (cdp_override > 0) {
@@ -431,7 +457,7 @@ index 0000000000000..b82e2496dbd74
 +    extension_port_ = extension_override;
 +  }
 +
-+  LOG(INFO) << "browseros: Final ports - CDP: " << cdp_port_
++  LOG(INFO) << "browseros: Final ports after CLI overrides - CDP: " << cdp_port_
 +            << ", MCP: " << mcp_port_ << ", Agent: " << agent_port_
 +            << ", Extension: " << extension_port_;
 +}
@@ -459,12 +485,19 @@ index 0000000000000..b82e2496dbd74
 +    return;
 +  }
 +
-+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-+  // Initialize and finalize ports, even with browseros-server disabled
-+  // we want to update the prefs from CLI
-+  InitializePortsAndPrefs();
++  // Initialize ports in clean steps:
++  // 1. Load saved values from prefs
++  // 2. Set up pref change observers
++  // 3. Resolve ports for startup (MCP stays stable, others find available)
++  // 4. Apply CLI overrides
++  // 5. Save final values to prefs
++  LoadPortsFromPrefs();
++  SetupPrefObservers();
++  ResolvePortsForStartup();
++  ApplyCommandLineOverrides();
 +  SavePortsToPrefs();
 +
++  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
 +  if (command_line->HasSwitch(browseros::kDisableServer)) {
 +    LOG(INFO) << "browseros: BrowserOS server disabled via command line";
 +    return;
@@ -727,7 +760,13 @@ index 0000000000000..b82e2496dbd74
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
 +
-+  // Crash tracking: check if this was a startup failure
++  // Handle clean shutdown (exit code 0) - don't restart
++  if (exit_code == kExitCodeSuccess) {
++    LOG(INFO) << "browseros: Server exited cleanly (code 0), not restarting";
++    return;
++  }
++
++  // Crash tracking: check if this was a startup failure (only for non-clean exits)
 +  base::TimeDelta uptime = base::TimeTicks::Now() - last_launch_time_;
 +  if (uptime < kStartupGracePeriod) {
 +    consecutive_startup_failures_++;
@@ -756,9 +795,15 @@ index 0000000000000..b82e2496dbd74
 +  }
 +  is_restarting_ = true;
 +
-+  // Always restart - we want the server running
-+  // Don't call Start() - we already hold the lock and CDP server is running
-+  LOG(WARNING) << "browseros: BrowserOS server exited, restarting process...";
++  // Determine restart strategy based on exit code
++  bool revalidate_all = (exit_code == kExitCodePortConflict);
++
++  if (revalidate_all) {
++    LOG(WARNING) << "browseros: Port conflict (code 2), will increment MCP port";
++  } else {
++    LOG(WARNING) << "browseros: Server exited (code " << exit_code
++                 << "), restarting with same ports";
++  }
 +
 +  // Capture current ports for background thread
 +  int cdp = cdp_port_;
@@ -770,8 +815,9 @@ index 0000000000000..b82e2496dbd74
 +  // Process is already dead, no need to terminate
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
-+      base::BindOnce(&BrowserOSServerManager::RevalidatePorts,
-+                     base::Unretained(this), cdp, mcp, agent, extension),
++      base::BindOnce(&BrowserOSServerManager::RevalidatePortsForRestart,
++                     base::Unretained(this), cdp, mcp, agent, extension,
++                     revalidate_all),
 +      base::BindOnce(&BrowserOSServerManager::OnPortsRevalidated,
 +                     weak_factory_.GetWeakPtr()));
 +}
@@ -898,34 +944,52 @@ index 0000000000000..b82e2496dbd74
 +          [](BrowserOSServerManager* manager, int cdp, int mcp, int agent,
 +             int extension) -> RevalidatedPorts {
 +            manager->TerminateBrowserOSProcess(/*wait=*/true);
-+            return manager->RevalidatePorts(cdp, mcp, agent, extension);
++            return manager->RevalidatePortsForRestart(cdp, mcp, agent, extension,
++                                            /*revalidate_all=*/false);
 +          },
 +          base::Unretained(this), cdp, mcp, agent, extension),
 +      base::BindOnce(&BrowserOSServerManager::OnPortsRevalidated,
 +                     weak_factory_.GetWeakPtr()));
 +}
 +
-+BrowserOSServerManager::RevalidatedPorts BrowserOSServerManager::RevalidatePorts(
++BrowserOSServerManager::RevalidatedPorts BrowserOSServerManager::RevalidatePortsForRestart(
 +    int cdp_port,
 +    int current_mcp,
 +    int current_agent,
-+    int current_extension) {
++    int current_extension,
++    bool revalidate_all) {
 +  // CDP port is excluded - it's still bound by Chrome's DevTools server
 +  std::set<int> excluded_ports;
 +  excluded_ports.insert(cdp_port);
 +
-+  // MCP port is critical for client connectivity - skip validation and trust
-+  // it will be available after our process terminates. Exclude it so other
-+  // ports don't accidentally take it during TIME_WAIT.
-+  excluded_ports.insert(current_mcp);
-+
 +  RevalidatedPorts result;
-+  result.mcp_port = current_mcp;
 +
-+  result.agent_port = FindAvailablePort(current_agent, excluded_ports);
-+  excluded_ports.insert(result.agent_port);
++  if (revalidate_all) {
++    // PORT_CONFLICT: server tried binding for 30s, port is truly blocked.
++    // Revalidate ALL ports - FindAvailablePort will increment if needed.
++    result.mcp_port = FindAvailablePort(current_mcp, excluded_ports);
++    excluded_ports.insert(result.mcp_port);
 +
-+  result.extension_port = FindAvailablePort(current_extension, excluded_ports);
++    result.agent_port = FindAvailablePort(current_agent, excluded_ports);
++    excluded_ports.insert(result.agent_port);
++
++    result.extension_port = FindAvailablePort(current_extension, excluded_ports);
++
++    LOG(INFO) << "browseros: Ports revalidated (conflict) - MCP: " << current_mcp
++              << " -> " << result.mcp_port << ", Agent: " << current_agent
++              << " -> " << result.agent_port << ", Extension: "
++              << current_extension << " -> " << result.extension_port;
++  } else {
++    // Normal restart: trust MCP port will be available after TIME_WAIT.
++    // Exclude it so other ports don't accidentally take it.
++    result.mcp_port = current_mcp;
++    excluded_ports.insert(result.mcp_port);
++
++    result.agent_port = FindAvailablePort(current_agent, excluded_ports);
++    excluded_ports.insert(result.agent_port);
++
++    result.extension_port = FindAvailablePort(current_extension, excluded_ports);
++  }
 +
 +  return result;
 +}
@@ -982,7 +1046,8 @@ index 0000000000000..b82e2496dbd74
 +          [](BrowserOSServerManager* manager, int cdp, int mcp, int agent,
 +             int extension) -> RevalidatedPorts {
 +            manager->TerminateBrowserOSProcess(/*wait=*/true);
-+            return manager->RevalidatePorts(cdp, mcp, agent, extension);
++            return manager->RevalidatePortsForRestart(cdp, mcp, agent, extension,
++                                            /*revalidate_all=*/false);
 +          },
 +          base::Unretained(this), cdp, mcp, agent, extension),
 +      base::BindOnce(&BrowserOSServerManager::OnPortsRevalidated,
