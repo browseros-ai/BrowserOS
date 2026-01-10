@@ -11,7 +11,7 @@ index 9190c5ef6c092..cf0106b8ba53e 100644
 +  <key>SUEnableAutomaticChecks</key>
 +  <true/>
 +  <key>SUScheduledCheckInterval</key>
-+  <integer>1080</integer>
++  <integer>3600</integer>
 +  <key>SUAllowsAutomaticUpdates</key>
 +  <true/>
 +  <key>SUAutomaticallyUpdate</key>
