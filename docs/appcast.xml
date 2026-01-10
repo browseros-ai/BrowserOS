@@ -9,17 +9,17 @@
 
     <!-- Updates -->
     <item>
-      <title>BrowserOS - 0.36.1</title>
+      <title>BrowserOS - 0.36.2</title>
       <description sparkle:format="plain-text">
       </description>
-      <sparkle:version>7554.49</sparkle:version>
-      <sparkle:shortVersionString>0.36.1</sparkle:shortVersionString>
-      <pubDate>Tue, 07 Jan 2026 12:00:00 +0000</pubDate>
+      <sparkle:version>7555.49</sparkle:version>
+      <sparkle:shortVersionString>0.36.2</sparkle:shortVersionString>
+      <pubDate>Fri, 10 Jan 2026 12:00:00 +0000</pubDate>
       <link>https://browseros.com</link>
       <enclosure
-        url="http://cdn.browseros.com/releases/0.36.1/macos/BrowserOS_v0.36.1_arm64.dmg"
-        sparkle:edSignature="dYtYf77WFVgmzdkOtpEWkYCjKkVpXO7FrpR4hihPk+iCcj+JHO58t1SWXORphbM08xM3YziU8D5C4JUsGh7vBQ=="
-        length="173907590"
+        url="http://cdn.browseros.com/releases/0.36.2/macos/BrowserOS_v0.36.2_arm64.dmg"
+        sparkle:edSignature="cwkgPpwZ0F23G+RODCiJ+XXcxl426eRTECOJP9vm8UHttLuWA9NbBxiAh9J9v5Prln7OVe8DmC1kuSUYAcdMBg=="
+        length="173894419"
         type="application/octet-stream" />
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
