@@ -1,30 +1,54 @@
 ---
-title: "Onboarding Guide"
-description: "Get started with BrowserOS in 2 simple steps"
+title: "Getting Started"
+description: "Set up BrowserOS in 2 minutes"
 ---
 
-## 🚀 Getting Started
+Welcome to BrowserOS! Let's get you set up.
 
-### Step 1: Import your data from Chrome
+<Steps>
+  <Step title="Import from Chrome">
+    Bring your bookmarks, history, and passwords from Chrome.
 
-Bring your bookmarks, history, and settings over from Chrome.
+    1. Go to `chrome://settings/importData`
+    2. Select **Google Chrome** and click **Import**
+    3. Choose **Always allow** when prompted
 
-1. Navigate to `chrome://settings/importData`
-2. Click **Import**
-3. Follow the prompts and choose **Always allow** when asked to import everything at once
+    <Tip>
+    This imports everything in one click — bookmarks, passwords, history, and extensions.
+    </Tip>
+  </Step>
 
-<Tip>
-  This imports your bookmarks, history, passwords, and settings in one go.
-</Tip>
+  <Step title="Set up your AI">
+    BrowserOS includes a default AI model with limited daily usage. For the best experience, add your own.
 
-### Step 2: BYOK (Bring Your Own Keys)
+    **Quick option:** Get a free Gemini API key from [aistudio.google.com](https://aistudio.google.com) — 20 requests per minute at no cost.
 
-BrowserOS comes with a default LLM provider to test things out. But you have full control over your AI models! Navigate to `chrome://browseros/settings` or click the **Settings** icon on the new tab page to configure your own API keys for various providers.
+    <Card title="Configure your LLM" icon="key" href="/features/bring-your-own-llm">
+      Set up Gemini, Claude, OpenAI, or run models locally with Ollama
+    </Card>
+  </Step>
 
-<Card title="Configure LLM Provider" icon="key" href="/llm-setup-guide">
-  Set up Gemini, Claude, OpenAI, or run models locally with Ollama
-</Card>
+  <Step title="Try it out">
+    Open any webpage and click the **Assistant** button in the toolbar.
 
-### All done!
+    - **Chat Mode:** Ask questions about the page
+    - **Agent Mode:** Describe a task and watch it execute
 
-You're ready to use BrowserOS! This page can always be accessed again at `chrome://browseros-first-run`
+    <Note>
+    For Agent Mode, use Claude Opus 4.5 or Sonnet 4.5. Local models work great for Chat but aren't powerful enough for agents yet.
+    </Note>
+  </Step>
+</Steps>
+
+## You're all set!
+
+Explore what BrowserOS can do:
+
+<Columns cols={2}>
+  <Card title="LLM Chat & Hub" icon="message" href="/features/llm-chat-hub">
+    Chat with AI on any page, compare responses across models
+  </Card>
+  <Card title="Use with Claude Code" icon="terminal" href="/features/use-with-claude-code">
+    Control BrowserOS from Claude Code or Gemini CLI
+  </Card>
+</Columns>
