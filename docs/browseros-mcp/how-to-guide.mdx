@@ -6,13 +6,19 @@ description: "Connect BrowserOS as an MCP server to Claude Code or Claude Deskto
 ## How to use `BrowserOS-mcp` on Claude Code
 
 1. Download binary from [BrowserOS.com](https://BrowserOS.com)
-2. Open BrowserOS and navigate to `chrome://browseros/settings` or click the **Settings** icon on the new tab page.
+2. Open BrowserOS and click the **Settings** icon in the top-right corner of the new tab page, or navigate to `chrome://browseros/settings`.
 3. Navigate to **MCP** in the sidebar and copy the MCP URL
 4. In your terminal, type the below command (Replace `<mcp_url>` with the MCP URL you copied above):
    ```
    claude mcp add --transport http browseros <mcp_url> --scope user
    # example: claude mcp add --transport http browseros http://127.0.0.1:9226/mcp --scope user
    ``` 
+   To remove the server later, use either of the following commands:
+   ```
+   claude mcp remove browseros --scope user
+   claude mcp remove browseros
+   ```
+   If the MCP server is already present and you need to change the port, remove it first and then re-add it with the updated URL.
 5. Now start Claude Code: `claude --dangerously-skip-permissions` (so Claude doesn't ask for confirmation each time)
 6. Now, in Claude Code, type `Open amazon.com on browseros` to open the tab in BrowserOS.
 
@@ -31,7 +37,7 @@ gemini mcp add local-server <mcp_url> --transport http --scope user
 ## How to add `BrowserOS-mcp` on Claude Desktop
 
 1. Download binary from [BrowserOS.com](https://BrowserOS.com)
-2. Open BrowserOS and navigate to `chrome://browseros/settings` or click the **Settings** icon on the new tab page. Navigate to **MCP** in the sidebar and note the port number (usually `9225`).
+2. Open BrowserOS and click the **Settings** icon in the top-right corner of the new tab page, or navigate to `chrome://browseros/settings`. Navigate to **MCP** in the sidebar and note the port number (usually `9225`).
 3. Open your Claude Desktop config file: `/Users/<username>/Library/Application Support/Claude/claude_desktop_config.json`
 4. Add BrowserOS to your config (replace the port with the value shown in MCP settings page):
 ```json
@@ -58,4 +64,3 @@ gemini mcp add local-server <mcp_url> --transport http --scope user
 
 ### vibe coded HN clone in under 5 mintes
 [![vibe coding HN](https://img.youtube.com/vi/c-egH0R3ZTs/0.jpg)](https://youtu.be/c-egH0R3ZTs)
-
