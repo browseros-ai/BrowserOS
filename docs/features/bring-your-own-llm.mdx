@@ -1,0 +1,242 @@
+---
+title: "Bring Your Own LLM"
+description: "Connect your own AI models to BrowserOS"
+---
+
+BrowserOS includes a default AI model you can use right away, but it has strict rate limits. For the best experience, bring your own API keys or run models locally.
+
+**Why bring your own?**
+- Your API keys stay on your machine — requests go directly to the provider
+- No rate limits from BrowserOS — use it as much as you want
+- Run locally with Ollama for complete privacy
+
+## Which Model Should I Use?
+
+This is the most important thing to understand:
+
+| Mode | What works | Recommendation |
+|------|------------|----------------|
+| **Chat Mode** | Any model, including local | Ollama or Gemini Flash — fast and cheap |
+| **Agent Mode** | Cloud models only | Claude Opus 4.5 for best results |
+
+<Warning>
+Local LLMs are great for Chat Mode — asking questions about a page, summarizing, etc. But they're not powerful enough for Agent Mode yet. Agent tasks need strong reasoning to click the right elements and handle multi-step workflows.
+</Warning>
+
+**For Agent Mode, we recommend:**
+- **Claude Opus 4.5** — Best quality, slower
+- **Claude Sonnet 4.5** — Great quality, faster
+- **Claude Haiku 4.5** or **Gemini 3 Flash** — Good and fast
+
+## Cloud Providers
+
+<Tabs>
+  <Tab title="Gemini (Free)">
+    Gemini 3 Flash is fast and free. Google gives you 20 requests per minute at no cost.
+
+    ### Get your API key
+
+    <Steps>
+      <Step title="Go to Google AI Studio">
+        Visit [aistudio.google.com](https://aistudio.google.com) and click **Get API key** in the sidebar.
+
+        ![Google AI Studio](/images/gemini-get-api-key.png)
+      </Step>
+      <Step title="Create a key">
+        Click **Create API key**, name your project, and click **Create key**.
+
+        ![Create API key](/images/gemini-create-key.png)
+      </Step>
+      <Step title="Copy the key">
+        Click on your key to copy it.
+
+        ![Copy key](/images/gemini-copy-key.png)
+      </Step>
+    </Steps>
+
+    ### Add to BrowserOS
+
+    <Steps>
+      <Step title="Open settings">
+        Go to `chrome://browseros/settings` and click **USE** on the Gemini card.
+
+        ![Gemini card in BrowserOS](/images/byollm--gemini-settings-card.png)
+      </Step>
+      <Step title="Configure">
+        - Set **Model ID** to `gemini-2.5-flash-preview-05-20`
+        - Paste your API key
+        - Check **Supports Images**
+        - Set **Context Window** to `1000000`
+        - Click **Save**
+
+        ![Gemini config](/images/byollm--gemini-provider-config.png)
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Claude (Best for Agents)">
+    Claude Opus 4.5 gives the best results for Agent Mode. It's slower but handles complex tasks reliably.
+
+    ### Get your API key
+
+    <Steps>
+      <Step title="Go to Anthropic Console">
+        Visit [console.anthropic.com](https://console.anthropic.com/dashboard) and click **API keys** in the sidebar.
+
+        ![Anthropic console](/images/claude-api-keys.png)
+      </Step>
+      <Step title="Create a key">
+        Click **Create Key**, name it, and copy the key that appears.
+
+        ![Create key](/images/claude-create-key.png)
+      </Step>
+    </Steps>
+
+    ### Add to BrowserOS
+
+    Go to `chrome://browseros/settings`, click **USE** on the Claude card, and configure:
+
+    - **Model ID**: `claude-opus-4-5-20250514` (or `claude-sonnet-4-5-20250514` for faster)
+    - Paste your API key
+    - Check **Supports Images**
+    - Set **Context Window** to `200000`
+    - Click **Save**
+
+    ![Claude config](/images/byollm--claude-provider-config.png)
+  </Tab>
+
+  <Tab title="OpenAI">
+    GPT-4.1 is solid for both chat and agent tasks.
+
+    ### Get your API key
+
+    <Steps>
+      <Step title="Go to OpenAI Platform">
+        Visit [platform.openai.com](https://platform.openai.com), click the settings icon, then **API keys**.
+
+        ![OpenAI platform](/images/openai-api-keys.png)
+      </Step>
+      <Step title="Create a key">
+        Click **Create new secret key**, name it, and copy it. You won't see it again.
+
+        ![Create key](/images/openai-create-key.png)
+      </Step>
+    </Steps>
+
+    ### Add to BrowserOS
+
+    Go to `chrome://browseros/settings`, click **USE** on the OpenAI card, and configure:
+
+    - **Model ID**: `gpt-4.1` (or `gpt-4.1-mini` for cheaper)
+    - Paste your API key
+    - Check **Supports Images**
+    - Set **Context Window** to `128000`
+    - Click **Save**
+
+    ![OpenAI config](/images/byollm--openai-provider-config.png)
+  </Tab>
+
+  <Tab title="OpenRouter">
+    OpenRouter gives you access to 500+ models through one API. Good if you want to try different models.
+
+    ### Get your API key
+
+    Visit [openrouter.ai](https://openrouter.ai), sign up, and grab your API key from the homepage.
+
+    ![OpenRouter](/images/openrouter-get-api-key.png)
+
+    ### Pick a model
+
+    Go to [openrouter.ai/models](https://openrouter.ai/models) and find a model you want. Copy the model ID (like `anthropic/claude-opus-4.5`).
+
+    ![OpenRouter models](/images/openrouter-models.png)
+
+    ### Add to BrowserOS
+
+    Go to `chrome://browseros/settings`, click **USE** on the OpenRouter card, and configure:
+
+    - **Model ID**: The one you copied (e.g., `anthropic/claude-opus-4.5`)
+    - Paste your API key
+    - Set **Context Window** based on the model
+    - Click **Save**
+
+    ![OpenRouter config](/images/byollm--openrouter-provider-config.png)
+  </Tab>
+</Tabs>
+
+## Local Models
+
+Local models are free and private — your data never leaves your machine. They work great for Chat Mode.
+
+<Tabs>
+  <Tab title="Ollama">
+    Ollama is the easiest way to run models locally.
+
+    ### Setup
+
+    <Steps>
+      <Step title="Install Ollama">
+        Download from [ollama.com](https://ollama.com) and install it.
+      </Step>
+      <Step title="Pull a model">
+        Open your terminal and run:
+        ```bash
+        ollama pull llama3.2
+        ```
+      </Step>
+      <Step title="Start Ollama">
+        ```bash
+        ollama serve
+        ```
+
+        ![Ollama running](/images/setting-up-ollama/ollama-step3.png)
+      </Step>
+      <Step title="Add to BrowserOS">
+        Go to `chrome://browseros/settings`, click **Add Provider**, select **Ollama**, and set the model ID to `llama3.2`.
+
+        ![Ollama in BrowserOS](/images/byollm--ollama-config.png)
+      </Step>
+    </Steps>
+
+    **Recommended models:** `llama3.2`, `qwen3:8b`, `mistral`
+  </Tab>
+
+  <Tab title="LM Studio">
+    LM Studio has a nice GUI if you don't want to use the terminal.
+
+    ### Setup
+
+    <Steps>
+      <Step title="Download LM Studio">
+        Get it from [lmstudio.ai](https://lmstudio.ai) and install.
+      </Step>
+      <Step title="Load a model">
+        Open LM Studio, go to the **Developer** tab, and load a model.
+
+        ![LM Studio](/images/setting-up-lm-studio/lmstudio-step1.png)
+      </Step>
+      <Step title="Start the server">
+        LM Studio runs a local server at `http://localhost:1234/v1/`.
+
+        ![LM Studio server](/images/setting-up-lm-studio/lmstudio-step2.png)
+      </Step>
+      <Step title="Add to BrowserOS">
+        Go to `chrome://browseros/settings`, click **Add Provider**, select **OpenAI Compatible**, and set:
+        - **Base URL**: `http://localhost:1234/v1/`
+        - **Model ID**: The model you loaded
+        - **Context Window**: Match your LM Studio config
+
+        ![LM Studio in BrowserOS](/images/byollm--lmstudio-config.png)
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Switching Models
+
+Use the model switcher in the Assistant to change between providers anytime.
+
+- Use local models for sensitive data
+- Switch to Claude for agent tasks
+
+![Model switcher](/images/byollm--switcher.png)
