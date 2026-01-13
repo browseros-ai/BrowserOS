@@ -1,82 +1,106 @@
 ---
 title: "BrowserOS"
-description: "BrowserOS is an AI-powered browser that turns your words into actions. A privacy-first alternative to Chrome, Perplexity Comet, Dia."
+description: "The open-source AI browser that turns your words into actions"
 ---
 
-We believe browsers should be open source and privacy-first — not tracking software for search or ad companies. The future is agents that automate your work locally and securely. We're building the best browser for that future.
+<Frame>
+  <img src="/images/hero-dark.png" alt="BrowserOS in action" />
+</Frame>
+
+BrowserOS is an AI-native browser that lets you automate any web task by describing it in plain English. Built on Chromium, it runs AI agents locally on your machine—keeping your data private while giving you superpowers for browsing.
+
+**Open source. Privacy-first. The browser for the AI era.**
+
+## Three Ways to Use AI
+
+<Columns cols={3}>
+  <Card title="Chat Mode" icon="message">
+    Ask questions about the page you're viewing. Summarize articles, extract data, translate content—without leaving the page.
+  </Card>
+  <Card title="Agent Mode" icon="robot">
+    Describe a task and watch AI execute it: clicking, typing, navigating. Automate form filling, data extraction, and multi-step workflows.
+  </Card>
+  <Card title="Graph Mode" icon="sitemap">
+    Build reliable, repeatable workflows as visual graphs. Edit steps, save, and run anytime. *Coming soon.*
+  </Card>
+</Columns>
 
 ## Quick Start
 
-<CardGroup cols={2}>
-  <Card
-    title="Download BrowserOS"
-    icon="download"
-    href="https://browseros.com"
-  >
-    Get the latest release for macOS, Windows, or Linux
+<Steps>
+  <Step title="Download BrowserOS">
+    Get the latest release from [browseros.com](https://browseros.com) for macOS, Windows, or Linux.
+  </Step>
+  <Step title="Import from Chrome">
+    Navigate to `chrome://settings/importData` and import your bookmarks, passwords, and settings in one click.
+  </Step>
+  <Step title="Configure your AI">
+    BrowserOS includes a default AI model with limited daily usage for testing. For the full experience, bring your own API keys.
+
+    <Card title="Set up your LLM provider" icon="key" href="/llm-setup-guide">
+      Configure Gemini, Claude, OpenAI, or run models locally with Ollama
+    </Card>
+  </Step>
+  <Step title="Try it out">
+    Open any webpage and press the **Assistant** button in the toolbar. Ask a question about the page, or describe a task to automate.
+  </Step>
+</Steps>
+
+## Which AI Model Should I Use?
+
+<Tabs>
+  <Tab title="For Chat Mode">
+    **Any model works great**, including local LLMs.
+
+    - **Ollama** or **LM Studio** — Free, runs locally, great for quick questions
+    - **Gemini Flash** — Fast and affordable
+    - **Claude or GPT-4** — Best quality responses
+
+    Chat Mode just needs to understand the page and answer questions—local models handle this well.
+  </Tab>
+  <Tab title="For Agent Mode">
+    **Use Claude Opus 4.5 for best results.**
+
+    | Model | Speed | Quality |
+    |-------|-------|---------|
+    | Claude Opus 4.5 | Slower | Best |
+    | Claude Sonnet 4.5 | Medium | Great |
+    | Claude Haiku 4.5 | Fast | Good |
+    | Gemini Flash | Fast | Good |
+
+    <Warning>
+    Local LLMs are not yet powerful enough for Agent Mode. The model needs strong reasoning to click the right elements and handle multi-step tasks.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Why BrowserOS?
+
+<Columns cols={2}>
+  <Card title="Privacy-First" icon="shield-check">
+    Run AI locally with Ollama, or bring your own API keys. Your browsing data never leaves your machine unless you choose.
   </Card>
-  <Card
-    title="Configure AI (Recommended)"
-    icon="robot"
-    href="/llm-setup-guide"
-  >
-    Connect your AI provider or set up local models
+  <Card title="Open Source" icon="code-branch">
+    100% open source under AGPL-3.0. Inspect the code, contribute features, or fork it for your needs.
   </Card>
-</CardGroup>
-
-## Key Features
-
-<Accordion title="🪄 Build agents with natural language">
-  Automate any task—from scraping websites to filling out forms—just by describing what you want to do in plain language. BrowserOS translates your words into a repeatable agent that runs locally, giving you custom automation without code.
-</Accordion>
-
-<Accordion title="🪟 Use ChatGPT, Gemini, etc. in Split-View">
-  Summarize articles, draft documents, or get answers without ever leaving the page you are on by opening your favorite AI model in a side panel – ChatGPT, Gemini, Claude or Grok!
-</Accordion>
-
-<Accordion title="🔌 Install any MCP server">
-  BrowserOS comes with pre-installed MCP servers for Gmail, Calendar, Docs, Sheets, and Notion. One-click install any other MCP server — your browser becomes the command center for all work tools.
-</Accordion>
-
-<Accordion title="🧠 Next-gen productivity">
-  Turn your browser into a second brain — search history and bookmarks by meaning, not just keywords. The built-in highlighter keeps important bits right where you found them. No more lost research.
-</Accordion>
-
-<Accordion title="🛡️ True privacy with local LLMs">
-  Run models locally with Ollama or bring your own API keys for cloud models. Your company and work data stay on your machine unless you choose to send it out.
-</Accordion>
-
-<Accordion title="👔 Your executive assistant, built in">
-  Our built-in AI assistant connects to your work apps like Gmail and Calendar to draft replies and schedule meetings. You focus on the real work — your browser handles the rest.
-</Accordion>
-
-## Community & Support
-
-<CardGroup cols={3}>
-  <Card
-    title="Join our Discord"
-    icon="discord"
-    href="https://discord.gg/YKwjt5vuKr"
-  >
-    Get help, share feedback, and connect with other BrowserOS users
+  <Card title="Works with Your Tools" icon="plug">
+    Built-in MCP servers for Gmail, Calendar, Docs, Sheets, Notion. Connect to Claude Code or Gemini CLI for developer workflows.
   </Card>
-  <Card
-    title="GitHub Repository"
-    icon="github"
-    href="https://github.com/BrowserOS-ai/BrowserOS"
-  >
-    Star us on GitHub and contribute to the project
+  <Card title="Chrome Compatible" icon="chrome">
+    All your Chrome extensions work. Import bookmarks, passwords, and settings in one click.
   </Card>
-  <Card
-    title="Follow on Twitter"
-    icon="x-twitter"
-    href="https://x.com/browserOS_ai"
-  >
-    Stay updated with the latest news and features
-  </Card>
-</CardGroup>
+</Columns>
 
----
-<p align="center">
-Built with ❤️ from San Francisco
-</p>
+## Community
+
+<Columns cols={3}>
+  <Card title="Discord" icon="discord" href="https://discord.gg/YKwjt5vuKr">
+    Get help and share feedback
+  </Card>
+  <Card title="GitHub" icon="github" href="https://github.com/BrowserOS-ai/BrowserOS">
+    Star us and contribute
+  </Card>
+  <Card title="Twitter" icon="x-twitter" href="https://x.com/browserOS_ai">
+    Follow for updates
+  </Card>
+</Columns>
