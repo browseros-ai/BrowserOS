@@ -1,6 +1,6 @@
 diff --git a/chrome/utility/importer/browseros/chrome_password_importer.cc b/chrome/utility/importer/browseros/chrome_password_importer.cc
 new file mode 100644
-index 0000000000000..0611c33df3103
+index 0000000000000..cbae752f359b5
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_password_importer.cc
 @@ -0,0 +1,151 @@
@@ -30,12 +30,12 @@ index 0000000000000..0611c33df3103
 +base::FilePath CopyDatabaseToTemp(const base::FilePath& db_path) {
 +  base::FilePath temp_path;
 +  if (!base::CreateTemporaryFile(&temp_path)) {
-+    LOG(WARNING) << "ChromePasswordImporter: Failed to create temp file";
++    LOG(WARNING) << "browseros: Failed to create temp file";
 +    return base::FilePath();
 +  }
 +
 +  if (!base::CopyFile(db_path, temp_path)) {
-+    LOG(WARNING) << "ChromePasswordImporter: Failed to copy database to temp";
++    LOG(WARNING) << "browseros: Failed to copy database to temp";
 +    base::DeleteFile(temp_path);
 +    return base::FilePath();
 +  }
@@ -54,7 +54,7 @@ index 0000000000000..0611c33df3103
 +  std::string encryption_key = ExtractChromeKey(profile_path, &key_result);
 +
 +  if (encryption_key.empty()) {
-+    LOG(WARNING) << "ChromePasswordImporter: Failed to extract encryption key, "
++    LOG(WARNING) << "browseros: Failed to extract encryption key, "
 +                 << "result: " << static_cast<int>(key_result);
 +    return passwords;
 +  }
@@ -62,7 +62,7 @@ index 0000000000000..0611c33df3103
 +  // Path to Login Data database
 +  base::FilePath login_data_path = profile_path.AppendASCII(kLoginDataFilename);
 +  if (!base::PathExists(login_data_path)) {
-+    LOG(WARNING) << "ChromePasswordImporter: Login Data not found at: "
++    LOG(WARNING) << "browseros: Login Data not found at: "
 +                 << login_data_path.value();
 +    return passwords;
 +  }
@@ -76,7 +76,7 @@ index 0000000000000..0611c33df3103
 +  // Open database
 +  sql::Database db(kDatabaseTag);
 +  if (!db.Open(temp_db_path)) {
-+    LOG(WARNING) << "ChromePasswordImporter: Failed to open Login Data database";
++    LOG(WARNING) << "browseros: Failed to open Login Data database";
 +    base::DeleteFile(temp_db_path);
 +    return passwords;
 +  }
@@ -91,7 +91,7 @@ index 0000000000000..0611c33df3103
 +
 +    sql::Statement statement(db.GetUniqueStatement(kQuery));
 +    if (!statement.is_valid()) {
-+      LOG(WARNING) << "ChromePasswordImporter: Failed to prepare query";
++      LOG(WARNING) << "browseros: Failed to prepare query";
 +      base::DeleteFile(temp_db_path);
 +      return passwords;
 +    }
@@ -116,7 +116,7 @@ index 0000000000000..0611c33df3103
 +      if (!encrypted_password.empty()) {
 +        if (!DecryptChromeValue(encrypted_password, encryption_key,
 +                                &decrypted_password)) {
-+          LOG(WARNING) << "ChromePasswordImporter: Failed to decrypt password for: "
++          LOG(WARNING) << "browseros: Failed to decrypt password for: "
 +                       << origin_url;
 +          continue;
 +        }
@@ -148,7 +148,7 @@ index 0000000000000..0611c33df3103
 +  db.Close();
 +  base::DeleteFile(temp_db_path);
 +
-+  LOG(INFO) << "ChromePasswordImporter: Imported " << passwords.size()
++  LOG(INFO) << "browseros: Imported " << passwords.size()
 +            << " passwords";
 +
 +  return passwords;

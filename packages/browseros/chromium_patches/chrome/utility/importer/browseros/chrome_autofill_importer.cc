@@ -1,6 +1,6 @@
 diff --git a/chrome/utility/importer/browseros/chrome_autofill_importer.cc b/chrome/utility/importer/browseros/chrome_autofill_importer.cc
 new file mode 100644
-index 0000000000000..91bcb358a5986
+index 0000000000000..3d1e95eaf3461
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_autofill_importer.cc
 @@ -0,0 +1,79 @@
@@ -35,7 +35,7 @@ index 0000000000000..91bcb358a5986
 +    // Try profile directory as fallback
 +    web_data_path = profile_path.AppendASCII(kWebDataFilename);
 +    if (!base::PathExists(web_data_path)) {
-+      LOG(WARNING) << "ChromeAutofillImporter: Web Data file not found";
++      LOG(WARNING) << "browseros: Web Data file not found";
 +      return entries;
 +    }
 +  }
@@ -47,7 +47,7 @@ index 0000000000000..91bcb358a5986
 +
 +  sql::Database db(kDatabaseTag);
 +  if (!db.Open(temp_path)) {
-+    LOG(WARNING) << "ChromeAutofillImporter: Failed to open database";
++    LOG(WARNING) << "browseros: Failed to open database";
 +    base::DeleteFile(temp_path);
 +    return entries;
 +  }
@@ -60,7 +60,7 @@ index 0000000000000..91bcb358a5986
 +
 +    sql::Statement statement(db.GetUniqueStatement(kQuery));
 +    if (!statement.is_valid()) {
-+      LOG(WARNING) << "ChromeAutofillImporter: Failed to prepare query";
++      LOG(WARNING) << "browseros: Failed to prepare query";
 +      base::DeleteFile(temp_path);
 +      return entries;
 +    }

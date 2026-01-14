@@ -1,6 +1,6 @@
 diff --git a/chrome/utility/importer/browseros/chrome_cookie_importer.cc b/chrome/utility/importer/browseros/chrome_cookie_importer.cc
 new file mode 100644
-index 0000000000000..94a1d766594ae
+index 0000000000000..4497532338b3f
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_cookie_importer.cc
 @@ -0,0 +1,229 @@
@@ -39,12 +39,12 @@ index 0000000000000..94a1d766594ae
 +base::FilePath CopyDatabaseToTemp(const base::FilePath& db_path) {
 +  base::FilePath temp_path;
 +  if (!base::CreateTemporaryFile(&temp_path)) {
-+    LOG(WARNING) << "ChromeCookieImporter: Failed to create temp file";
++    LOG(WARNING) << "browseros: Failed to create temp file";
 +    return base::FilePath();
 +  }
 +
 +  if (!base::CopyFile(db_path, temp_path)) {
-+    LOG(WARNING) << "ChromeCookieImporter: Failed to copy database to temp";
++    LOG(WARNING) << "browseros: Failed to copy database to temp";
 +    base::DeleteFile(temp_path);
 +    return base::FilePath();
 +  }
@@ -116,7 +116,7 @@ index 0000000000000..94a1d766594ae
 +  std::string encryption_key = ExtractChromeKey(profile_path, &key_result);
 +
 +  if (encryption_key.empty()) {
-+    LOG(WARNING) << "ChromeCookieImporter: Failed to extract encryption key, "
++    LOG(WARNING) << "browseros: Failed to extract encryption key, "
 +                 << "result: " << static_cast<int>(key_result);
 +    return cookies;
 +  }
@@ -124,7 +124,7 @@ index 0000000000000..94a1d766594ae
 +  // Path to Cookies database
 +  base::FilePath cookies_path = profile_path.AppendASCII(kCookiesFilename);
 +  if (!base::PathExists(cookies_path)) {
-+    LOG(WARNING) << "ChromeCookieImporter: Cookies not found at: "
++    LOG(WARNING) << "browseros: Cookies not found at: "
 +                 << cookies_path.value();
 +    return cookies;
 +  }
@@ -138,7 +138,7 @@ index 0000000000000..94a1d766594ae
 +  // Open database
 +  sql::Database db(kDatabaseTag);
 +  if (!db.Open(temp_db_path)) {
-+    LOG(WARNING) << "ChromeCookieImporter: Failed to open Cookies database";
++    LOG(WARNING) << "browseros: Failed to open Cookies database";
 +    base::DeleteFile(temp_db_path);
 +    return cookies;
 +  }
@@ -171,7 +171,7 @@ index 0000000000000..94a1d766594ae
 +
 +    sql::Statement statement(db.GetUniqueStatement(kQuery));
 +    if (!statement.is_valid()) {
-+      LOG(WARNING) << "ChromeCookieImporter: Failed to prepare query";
++      LOG(WARNING) << "browseros: Failed to prepare query";
 +      base::DeleteFile(temp_db_path);
 +      return cookies;
 +    }

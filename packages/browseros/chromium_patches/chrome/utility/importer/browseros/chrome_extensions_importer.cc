@@ -1,9 +1,9 @@
 diff --git a/chrome/utility/importer/browseros/chrome_extensions_importer.cc b/chrome/utility/importer/browseros/chrome_extensions_importer.cc
 new file mode 100644
-index 0000000000000..2d5584c4bef50
+index 0000000000000..521ceadec9fc9
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_extensions_importer.cc
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,98 @@
 +// Copyright 2024 AKW Technology Inc
 +// Chrome extensions importer implementation
 +
@@ -26,7 +26,7 @@ index 0000000000000..2d5584c4bef50
 +
 +  std::string preferences_content;
 +  if (!base::ReadFileToString(preferences_path, &preferences_content)) {
-+    LOG(WARNING) << "ChromeExtensionsImporter: Failed to read "
++    LOG(WARNING) << "browseros: Failed to read "
 +                 << preferences_path.BaseName().value();
 +    return extension_ids;
 +  }
@@ -34,7 +34,7 @@ index 0000000000000..2d5584c4bef50
 +  std::optional<base::Value::Dict> preferences = base::JSONReader::ReadDict(
 +      preferences_content, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 +  if (!preferences) {
-+    LOG(WARNING) << "ChromeExtensionsImporter: Failed to parse JSON from "
++    LOG(WARNING) << "browseros: Failed to parse JSON from "
 +                 << preferences_path.BaseName().value();
 +    return extension_ids;
 +  }
@@ -53,7 +53,7 @@ index 0000000000000..2d5584c4bef50
 +    const base::Value::Dict& dict = value.GetDict();
 +
 +    // Skip default-installed extensions
-+    if (dict.FindBool("was_installed_by_default").value_or(true)) {
++    if (dict.FindBool("was_installed_by_default").value_or(false)) {
 +      continue;
 +    }
 +
@@ -81,8 +81,7 @@ index 0000000000000..2d5584c4bef50
 +
 +  if (!base::PathExists(preferences_path) &&
 +      !base::PathExists(secure_preferences_path)) {
-+    LOG(WARNING)
-+        << "ChromeExtensionsImporter: No preferences files found";
++    LOG(WARNING) << "browseros: No preferences files found";
 +    return extension_ids;
 +  }
 +

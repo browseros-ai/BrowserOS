@@ -1,6 +1,6 @@
 diff --git a/chrome/utility/importer/browseros/chrome_history_importer.cc b/chrome/utility/importer/browseros/chrome_history_importer.cc
 new file mode 100644
-index 0000000000000..df44c0e66e383
+index 0000000000000..ec7b96bb6b854
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_history_importer.cc
 @@ -0,0 +1,92 @@
@@ -32,7 +32,7 @@ index 0000000000000..df44c0e66e383
 +
 +  base::FilePath history_path = profile_path.AppendASCII(kHistoryFilename);
 +  if (!base::PathExists(history_path)) {
-+    LOG(WARNING) << "ChromeHistoryImporter: History file not found";
++    LOG(WARNING) << "browseros: History file not found";
 +    return rows;
 +  }
 +
@@ -43,7 +43,7 @@ index 0000000000000..df44c0e66e383
 +
 +  sql::Database db(kDatabaseTag);
 +  if (!db.Open(temp_path)) {
-+    LOG(WARNING) << "ChromeHistoryImporter: Failed to open database";
++    LOG(WARNING) << "browseros: Failed to open database";
 +    base::DeleteFile(temp_path);
 +    return rows;
 +  }
@@ -62,7 +62,7 @@ index 0000000000000..df44c0e66e383
 +
 +    sql::Statement statement(db.GetUniqueStatement(kQuery));
 +    if (!statement.is_valid()) {
-+      LOG(WARNING) << "ChromeHistoryImporter: Failed to prepare query";
++      LOG(WARNING) << "browseros: Failed to prepare query";
 +      base::DeleteFile(temp_path);
 +      return rows;
 +    }

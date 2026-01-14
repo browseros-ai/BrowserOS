@@ -1,6 +1,6 @@
 diff --git a/chrome/utility/importer/browseros/chrome_bookmarks_importer.cc b/chrome/utility/importer/browseros/chrome_bookmarks_importer.cc
 new file mode 100644
-index 0000000000000..f59d873e5a260
+index 0000000000000..6896bb7ab0f7c
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_bookmarks_importer.cc
 @@ -0,0 +1,249 @@
@@ -182,26 +182,26 @@ index 0000000000000..f59d873e5a260
 +  // Read bookmarks JSON file
 +  base::FilePath bookmarks_path = profile_path.AppendASCII(kBookmarksFilename);
 +  if (!base::PathExists(bookmarks_path)) {
-+    LOG(WARNING) << "ChromeBookmarksImporter: Bookmarks file not found";
++    LOG(WARNING) << "browseros: Bookmarks file not found";
 +    return result;
 +  }
 +
 +  std::string bookmarks_content;
 +  if (!base::ReadFileToString(bookmarks_path, &bookmarks_content)) {
-+    LOG(WARNING) << "ChromeBookmarksImporter: Failed to read Bookmarks file";
++    LOG(WARNING) << "browseros: Failed to read Bookmarks file";
 +    return result;
 +  }
 +
 +  std::optional<base::Value> bookmarks_value =
 +      base::JSONReader::Read(bookmarks_content);
 +  if (!bookmarks_value || !bookmarks_value->is_dict()) {
-+    LOG(WARNING) << "ChromeBookmarksImporter: Failed to parse Bookmarks JSON";
++    LOG(WARNING) << "browseros: Failed to parse Bookmarks JSON";
 +    return result;
 +  }
 +
 +  const base::Value::Dict* roots = bookmarks_value->GetDict().FindDict("roots");
 +  if (!roots) {
-+    LOG(WARNING) << "ChromeBookmarksImporter: No roots in Bookmarks";
++    LOG(WARNING) << "browseros: No roots in Bookmarks";
 +    return result;
 +  }
 +

@@ -1,6 +1,6 @@
 diff --git a/chrome/utility/importer/browseros/chrome_decryptor_mac.mm b/chrome/utility/importer/browseros/chrome_decryptor_mac.mm
 new file mode 100644
-index 0000000000000..b07569cc77103
+index 0000000000000..c71a63015ff1d
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_decryptor_mac.mm
 @@ -0,0 +1,188 @@
@@ -54,11 +54,11 @@ index 0000000000000..b07569cc77103
 +  if (!result.has_value()) {
 +    OSStatus error = result.error();
 +    if (error == errSecItemNotFound) {
-+      LOG(WARNING) << "ChromeDecryptor: Chrome Safe Storage not found in Keychain";
++      LOG(WARNING) << "browseros: Chrome Safe Storage not found in Keychain";
 +    } else if (error == errSecAuthFailed) {
-+      LOG(WARNING) << "ChromeDecryptor: Keychain access denied";
++      LOG(WARNING) << "browseros: Keychain access denied";
 +    } else {
-+      LOG(WARNING) << "ChromeDecryptor: Keychain error: " << error;
++      LOG(WARNING) << "browseros: Keychain error: " << error;
 +    }
 +    return false;
 +  }
@@ -92,7 +92,7 @@ index 0000000000000..b07569cc77103
 +                   size_t ciphertext_length,
 +                   std::string* plaintext) {
 +  if (key.size() != kDerivedKeyLength) {
-+    LOG(WARNING) << "ChromeDecryptor: Invalid key size";
++    LOG(WARNING) << "browseros: Invalid key size";
 +    return false;
 +  }
 +
@@ -100,7 +100,7 @@ index 0000000000000..b07569cc77103
 +  bssl::ScopedEVP_CIPHER_CTX ctx;
 +  if (!EVP_DecryptInit_ex(ctx.get(), EVP_aes_128_cbc(), nullptr,
 +                          key.data(), kIv)) {
-+    LOG(WARNING) << "ChromeDecryptor: EVP_DecryptInit_ex failed";
++    LOG(WARNING) << "browseros: EVP_DecryptInit_ex failed";
 +    return false;
 +  }
 +
@@ -110,14 +110,14 @@ index 0000000000000..b07569cc77103
 +
 +  if (!EVP_DecryptUpdate(ctx.get(), output.data(), &output_length,
 +                         ciphertext, ciphertext_length)) {
-+    LOG(WARNING) << "ChromeDecryptor: EVP_DecryptUpdate failed";
++    LOG(WARNING) << "browseros: EVP_DecryptUpdate failed";
 +    return false;
 +  }
 +
 +  int final_length = 0;
 +  if (!EVP_DecryptFinal_ex(ctx.get(), output.data() + output_length,
 +                           &final_length)) {
-+    LOG(WARNING) << "ChromeDecryptor: EVP_DecryptFinal_ex failed - possible padding error";
++    LOG(WARNING) << "browseros: EVP_DecryptFinal_ex failed - possible padding error";
 +    return false;
 +  }
 +
@@ -142,7 +142,7 @@ index 0000000000000..b07569cc77103
 +  // Derive the encryption key using PBKDF2
 +  std::vector<uint8_t> derived_key;
 +  if (!DeriveKeyFromPassword(keychain_password, &derived_key)) {
-+    LOG(WARNING) << "ChromeDecryptor: PBKDF2 key derivation failed";
++    LOG(WARNING) << "browseros: PBKDF2 key derivation failed";
 +    if (result) {
 +      *result = KeyExtractionResult::kUnknownError;
 +    }
@@ -179,7 +179,7 @@ index 0000000000000..b07569cc77103
 +  size_t encrypted_length = ciphertext.length() - kEncryptionVersionPrefixLength;
 +
 +  if (encrypted_length == 0) {
-+    LOG(WARNING) << "ChromeDecryptor: Empty ciphertext after prefix";
++    LOG(WARNING) << "browseros: Empty ciphertext after prefix";
 +    return false;
 +  }
 +

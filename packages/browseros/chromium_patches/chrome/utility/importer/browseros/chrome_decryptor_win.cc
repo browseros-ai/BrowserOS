@@ -1,6 +1,6 @@
 diff --git a/chrome/utility/importer/browseros/chrome_decryptor_win.cc b/chrome/utility/importer/browseros/chrome_decryptor_win.cc
 new file mode 100644
-index 0000000000000..a566740da7517
+index 0000000000000..0de26a2fe4148
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_decryptor_win.cc
 @@ -0,0 +1,246 @@
@@ -49,33 +49,33 @@ index 0000000000000..a566740da7517
 +                                   std::string* encrypted_key) {
 +  std::string json_content;
 +  if (!base::ReadFileToString(local_state_path, &json_content)) {
-+    LOG(WARNING) << "ChromeDecryptor: Failed to read Local State file";
++    LOG(WARNING) << "browseros: Failed to read Local State file";
 +    return false;
 +  }
 +
 +  auto parsed = base::JSONReader::Read(json_content);
 +  if (!parsed || !parsed->is_dict()) {
-+    LOG(WARNING) << "ChromeDecryptor: Failed to parse Local State JSON";
++    LOG(WARNING) << "browseros: Failed to parse Local State JSON";
 +    return false;
 +  }
 +
 +  const base::Value::Dict& dict = parsed->GetDict();
 +  const base::Value::Dict* os_crypt = dict.FindDict("os_crypt");
 +  if (!os_crypt) {
-+    LOG(WARNING) << "ChromeDecryptor: No os_crypt section in Local State";
++    LOG(WARNING) << "browseros: No os_crypt section in Local State";
 +    return false;
 +  }
 +
 +  const std::string* encoded_key = os_crypt->FindString("encrypted_key");
 +  if (!encoded_key || encoded_key->empty()) {
-+    LOG(WARNING) << "ChromeDecryptor: No encrypted_key in os_crypt";
++    LOG(WARNING) << "browseros: No encrypted_key in os_crypt";
 +    return false;
 +  }
 +
 +  // Base64 decode the key
 +  std::optional<std::vector<uint8_t>> decoded = base::Base64Decode(*encoded_key);
 +  if (!decoded) {
-+    LOG(WARNING) << "ChromeDecryptor: Failed to base64 decode encrypted_key";
++    LOG(WARNING) << "browseros: Failed to base64 decode encrypted_key";
 +    return false;
 +  }
 +
@@ -87,13 +87,13 @@ index 0000000000000..a566740da7517
 +bool DecryptWithDpapi(const std::string& encrypted_data,
 +                      std::string* decrypted_data) {
 +  if (encrypted_data.length() <= kDpapiPrefixLength) {
-+    LOG(WARNING) << "ChromeDecryptor: Encrypted data too short";
++    LOG(WARNING) << "browseros: Encrypted data too short";
 +    return false;
 +  }
 +
 +  // Check for "DPAPI" prefix
 +  if (!base::StartsWith(encrypted_data, kDpapiPrefix)) {
-+    LOG(WARNING) << "ChromeDecryptor: Missing DPAPI prefix";
++    LOG(WARNING) << "browseros: Missing DPAPI prefix";
 +    return false;
 +  }
 +
@@ -111,7 +111,7 @@ index 0000000000000..a566740da7517
 +  if (!CryptUnprotectData(&input_blob, nullptr, nullptr, nullptr, nullptr,
 +                          CRYPTPROTECT_UI_FORBIDDEN, &output_blob)) {
 +    DWORD error = GetLastError();
-+    LOG(WARNING) << "ChromeDecryptor: CryptUnprotectData failed with error: "
++    LOG(WARNING) << "browseros: CryptUnprotectData failed with error: "
 +                 << error;
 +    return false;
 +  }
@@ -132,13 +132,13 @@ index 0000000000000..a566740da7517
 +                   size_t ciphertext_length,
 +                   std::string* plaintext) {
 +  if (key.size() != kAesKeyLength) {
-+    LOG(WARNING) << "ChromeDecryptor: Invalid AES key size: " << key.size();
++    LOG(WARNING) << "browseros: Invalid AES key size: " << key.size();
 +    return false;
 +  }
 +
 +  // Minimum: nonce (12) + auth tag (16) + at least 1 byte of data
 +  if (ciphertext_length < kNonceLength + kAuthTagLength) {
-+    LOG(WARNING) << "ChromeDecryptor: Ciphertext too short for AES-GCM";
++    LOG(WARNING) << "browseros: Ciphertext too short for AES-GCM";
 +    return false;
 +  }
 +
@@ -159,7 +159,7 @@ index 0000000000000..a566740da7517
 +      base::span<const uint8_t>());  // empty additional data
 +
 +  if (!decrypted) {
-+    LOG(WARNING) << "ChromeDecryptor: AES-GCM decryption failed";
++    LOG(WARNING) << "browseros: AES-GCM decryption failed";
 +    return false;
 +  }
 +
@@ -174,7 +174,7 @@ index 0000000000000..a566740da7517
 +  // Get path to Local State
 +  base::FilePath local_state_path = GetLocalStatePath(profile_path);
 +  if (!base::PathExists(local_state_path)) {
-+    LOG(WARNING) << "ChromeDecryptor: Local State file not found at: "
++    LOG(WARNING) << "browseros: Local State file not found at: "
 +                 << local_state_path.value();
 +    if (result) {
 +      *result = KeyExtractionResult::kLocalStateNotFound;
@@ -202,7 +202,7 @@ index 0000000000000..a566740da7517
 +
 +  // Verify key length (should be 32 bytes for AES-256)
 +  if (decrypted_key.size() != kAesKeyLength) {
-+    LOG(WARNING) << "ChromeDecryptor: Unexpected key length: "
++    LOG(WARNING) << "browseros: Unexpected key length: "
 +                 << decrypted_key.size() << " (expected " << kAesKeyLength << ")";
 +    if (result) {
 +      *result = KeyExtractionResult::kUnknownError;
@@ -228,7 +228,7 @@ index 0000000000000..a566740da7517
 +  if (ciphertext.length() < kEncryptionVersionPrefixLength ||
 +      !base::StartsWith(ciphertext, kEncryptionVersionPrefix)) {
 +    // Not encrypted with v10, might be plaintext or old format
-+    LOG(INFO) << "ChromeDecryptor: Value doesn't have v10 prefix, may be unencrypted";
++    LOG(INFO) << "browseros: Value doesn't have v10 prefix, may be unencrypted";
 +    *plaintext = ciphertext;
 +    return true;
 +  }
@@ -240,7 +240,7 @@ index 0000000000000..a566740da7517
 +  size_t encrypted_length = ciphertext.length() - kEncryptionVersionPrefixLength;
 +
 +  if (encrypted_length == 0) {
-+    LOG(WARNING) << "ChromeDecryptor: Empty ciphertext after prefix";
++    LOG(WARNING) << "browseros: Empty ciphertext after prefix";
 +    return false;
 +  }
 +

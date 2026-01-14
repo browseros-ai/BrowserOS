@@ -1,6 +1,6 @@
 diff --git a/chrome/utility/importer/browseros/chrome_importer.cc b/chrome/utility/importer/browseros/chrome_importer.cc
 new file mode 100644
-index 0000000000000..56c8e8df5e21e
+index 0000000000000..41dce65dacf4f
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_importer.cc
 @@ -0,0 +1,202 @@
@@ -75,62 +75,62 @@ index 0000000000000..56c8e8df5e21e
 +}
 +
 +void ChromeImporter::ImportHistory() {
-+  LOG(INFO) << "ChromeImporter: Starting history import";
++  LOG(INFO) << "browseros: Starting history import";
 +
 +  std::vector<user_data_importer::ImporterURLRow> rows =
 +      browseros_importer::ImportChromeHistory(source_path_);
 +
 +  if (rows.empty()) {
-+    LOG(INFO) << "ChromeImporter: No history to import";
++    LOG(INFO) << "browseros: No history to import";
 +    return;
 +  }
 +
-+  LOG(INFO) << "ChromeImporter: Importing " << rows.size() << " history items";
++  LOG(INFO) << "browseros: Importing " << rows.size() << " history items";
 +
 +  if (!cancelled()) {
 +    bridge_->SetHistoryItems(rows,
 +                             user_data_importer::VISIT_SOURCE_CHROME_IMPORTED);
 +  }
 +
-+  LOG(INFO) << "ChromeImporter: History import complete";
++  LOG(INFO) << "browseros: History import complete";
 +}
 +
 +void ChromeImporter::ImportBookmarks() {
-+  LOG(INFO) << "ChromeImporter: Starting bookmarks import";
++  LOG(INFO) << "browseros: Starting bookmarks import";
 +
 +  browseros_importer::ChromeBookmarksResult result =
 +      browseros_importer::ImportChromeBookmarks(source_path_);
 +
 +  if (!result.bookmarks.empty() && !cancelled()) {
-+    LOG(INFO) << "ChromeImporter: Importing " << result.bookmarks.size()
++    LOG(INFO) << "browseros: Importing " << result.bookmarks.size()
 +              << " bookmarks";
 +    bridge_->AddBookmarks(result.bookmarks,
 +                          l10n_util::GetStringUTF16(IDS_IMPORT_FROM_CHROME));
 +  } else {
-+    LOG(INFO) << "ChromeImporter: No bookmarks to import";
++    LOG(INFO) << "browseros: No bookmarks to import";
 +  }
 +
 +  if (!result.favicons.empty() && !cancelled()) {
-+    LOG(INFO) << "ChromeImporter: Importing " << result.favicons.size()
++    LOG(INFO) << "browseros: Importing " << result.favicons.size()
 +              << " favicons";
 +    bridge_->SetFavicons(result.favicons);
 +  }
 +
-+  LOG(INFO) << "ChromeImporter: Bookmarks import complete";
++  LOG(INFO) << "browseros: Bookmarks import complete";
 +}
 +
 +void ChromeImporter::ImportPasswords() {
-+  LOG(INFO) << "ChromeImporter: Starting password import";
++  LOG(INFO) << "browseros: Starting password import";
 +
 +  std::vector<user_data_importer::ImportedPasswordForm> passwords =
 +      browseros_importer::ImportChromePasswords(source_path_);
 +
 +  if (passwords.empty()) {
-+    LOG(INFO) << "ChromeImporter: No passwords to import";
++    LOG(INFO) << "browseros: No passwords to import";
 +    return;
 +  }
 +
-+  LOG(INFO) << "ChromeImporter: Importing " << passwords.size() << " passwords";
++  LOG(INFO) << "browseros: Importing " << passwords.size() << " passwords";
 +
 +  for (const auto& password : passwords) {
 +    if (cancelled()) {
@@ -139,21 +139,21 @@ index 0000000000000..56c8e8df5e21e
 +    bridge_->SetPasswordForm(password);
 +  }
 +
-+  LOG(INFO) << "ChromeImporter: Password import complete";
++  LOG(INFO) << "browseros: Password import complete";
 +}
 +
 +void ChromeImporter::ImportCookies() {
-+  LOG(INFO) << "ChromeImporter: Starting cookie import";
++  LOG(INFO) << "browseros: Starting cookie import";
 +
 +  std::vector<browseros_importer::ImportedCookieEntry> cookies =
 +      browseros_importer::ImportChromeCookies(source_path_);
 +
 +  if (cookies.empty()) {
-+    LOG(INFO) << "ChromeImporter: No cookies to import";
++    LOG(INFO) << "browseros: No cookies to import";
 +    return;
 +  }
 +
-+  LOG(INFO) << "ChromeImporter: Importing " << cookies.size() << " cookies";
++  LOG(INFO) << "browseros: Importing " << cookies.size() << " cookies";
 +
 +  for (const auto& cookie : cookies) {
 +    if (cancelled()) {
@@ -162,47 +162,47 @@ index 0000000000000..56c8e8df5e21e
 +    bridge_->SetCookie(cookie);
 +  }
 +
-+  LOG(INFO) << "ChromeImporter: Cookie import complete";
++  LOG(INFO) << "browseros: Cookie import complete";
 +}
 +
 +void ChromeImporter::ImportAutofillFormData() {
-+  LOG(INFO) << "ChromeImporter: Starting autofill import";
++  LOG(INFO) << "browseros: Starting autofill import";
 +
 +  std::vector<ImporterAutofillFormDataEntry> entries =
 +      browseros_importer::ImportChromeAutofill(source_path_);
 +
 +  if (entries.empty()) {
-+    LOG(INFO) << "ChromeImporter: No autofill entries to import";
++    LOG(INFO) << "browseros: No autofill entries to import";
 +    return;
 +  }
 +
-+  LOG(INFO) << "ChromeImporter: Importing " << entries.size()
++  LOG(INFO) << "browseros: Importing " << entries.size()
 +            << " autofill entries";
 +
 +  if (!cancelled()) {
 +    bridge_->SetAutofillFormData(entries);
 +  }
 +
-+  LOG(INFO) << "ChromeImporter: Autofill import complete";
++  LOG(INFO) << "browseros: Autofill import complete";
 +}
 +
 +void ChromeImporter::ImportExtensions() {
-+  LOG(INFO) << "ChromeImporter: Starting extensions import";
++  LOG(INFO) << "browseros: Starting extensions import";
 +
 +  std::vector<std::string> extension_ids =
 +      browseros_importer::ImportChromeExtensions(source_path_);
 +
 +  if (extension_ids.empty()) {
-+    LOG(INFO) << "ChromeImporter: No extensions to import";
++    LOG(INFO) << "browseros: No extensions to import";
 +    return;
 +  }
 +
-+  LOG(INFO) << "ChromeImporter: Importing " << extension_ids.size()
++  LOG(INFO) << "browseros: Importing " << extension_ids.size()
 +            << " extensions";
 +
 +  if (!cancelled()) {
 +    bridge_->SetExtensions(extension_ids);
 +  }
 +
-+  LOG(INFO) << "ChromeImporter: Extensions import complete";
++  LOG(INFO) << "browseros: Extensions import complete";
 +}
