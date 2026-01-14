@@ -1,0 +1,54 @@
+diff --git a/chrome/utility/importer/browseros/BUILD.gn b/chrome/utility/importer/browseros/BUILD.gn
+new file mode 100644
+index 0000000000000..b09f03c71650d
+--- /dev/null
++++ b/chrome/utility/importer/browseros/BUILD.gn
+@@ -0,0 +1,48 @@
++# Copyright 2024 AKW Technology Inc
++# BrowserOS Chrome importer - all Chrome import code in one place
++
++import("//build/config/features.gni")
++
++source_set("browseros") {
++  sources = [
++    # Main importer
++    "chrome_importer.cc",
++    "chrome_importer.h",
++
++    # Decrypt utilities
++    "chrome_decryptor.cc",
++    "chrome_decryptor.h",
++
++    # Password import
++    "chrome_password_importer.cc",
++    "chrome_password_importer.h",
++
++    # Cookie import
++    "chrome_cookie_importer.cc",
++    "chrome_cookie_importer.h",
++  ]
++
++  if (is_mac) {
++    sources += [ "chrome_decryptor_mac.mm" ]
++    frameworks = [ "Security.framework" ]
++  }
++
++  if (is_win) {
++    sources += [ "chrome_decryptor_win.cc" ]
++    libs = [ "crypt32.lib" ]
++  }
++
++  deps = [
++    "//base",
++    "//chrome/common/importer",
++    "//chrome/app:generated_resources",
++    "//components/favicon_base",
++    "//components/user_data_importer/common",
++    "//components/user_data_importer/content",
++    "//crypto",
++    "//net",
++    "//sql",
++    "//ui/base",
++    "//url",
++  ]
++}

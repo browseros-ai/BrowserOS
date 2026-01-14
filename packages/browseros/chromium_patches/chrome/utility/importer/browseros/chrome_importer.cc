@@ -1,14 +1,14 @@
-diff --git a/chrome/utility/importer/chrome_importer.cc b/chrome/utility/importer/chrome_importer.cc
+diff --git a/chrome/utility/importer/browseros/chrome_importer.cc b/chrome/utility/importer/browseros/chrome_importer.cc
 new file mode 100644
-index 0000000000000..5b121cca3a62c
+index 0000000000000..ca9f454baaed8
 --- /dev/null
-+++ b/chrome/utility/importer/chrome_importer.cc
-@@ -0,0 +1,591 @@
++++ b/chrome/utility/importer/browseros/chrome_importer.cc
+@@ -0,0 +1,584 @@
 +// Copyright 2023 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#include "chrome/utility/importer/chrome_importer.h"
++#include "chrome/utility/importer/browseros/chrome_importer.h"
 +
 +#include <memory>
 +#include <string>
@@ -16,12 +16,15 @@ index 0000000000000..5b121cca3a62c
 +
 +#include "base/files/file_util.h"
 +#include "base/json/json_reader.h"
++#include "base/logging.h"
 +#include "base/strings/string_util.h"
 +#include "base/strings/utf_string_conversions.h"
 +#include "base/time/time.h"
 +#include "chrome/common/importer/importer_autofill_form_data_entry.h"
 +#include "chrome/common/importer/importer_bridge.h"
 +#include "chrome/grit/generated_resources.h"
++#include "chrome/utility/importer/browseros/chrome_cookie_importer.h"
++#include "chrome/utility/importer/browseros/chrome_password_importer.h"
 +#include "components/user_data_importer/common/imported_bookmark_entry.h"
 +#include "components/user_data_importer/common/importer_data_types.h"
 +#include "components/user_data_importer/common/importer_url_row.h"
@@ -31,7 +34,6 @@ index 0000000000000..5b121cca3a62c
 +#include "ui/base/l10n/l10n_util.h"
 +#include "ui/base/page_transition_types.h"
 +#include "url/gurl.h"
-+#include "base/logging.h"
 +
 +namespace {
 +
@@ -75,6 +77,12 @@ index 0000000000000..5b121cca3a62c
 +    bridge_->NotifyItemEnded(user_data_importer::PASSWORDS);
 +  }
 +
++  if ((items & user_data_importer::COOKIES) && !cancelled()) {
++    bridge_->NotifyItemStarted(user_data_importer::COOKIES);
++    ImportCookies();
++    bridge_->NotifyItemEnded(user_data_importer::COOKIES);
++  }
++
 +  if ((items & user_data_importer::AUTOFILL_FORM_DATA) && !cancelled()) {
 +    bridge_->NotifyItemStarted(user_data_importer::AUTOFILL_FORM_DATA);
 +    ImportAutofillFormData();
@@ -91,7 +99,6 @@ index 0000000000000..5b121cca3a62c
 +}
 +
 +void ChromeImporter::ImportHistory() {
-+  // Keep only essential logging for startup and completion
 +  LOG(INFO) << "ChromeImporter: Starting history import";
 +
 +  base::FilePath history_path = source_path_.Append(FILE_PATH_LITERAL("History"));
@@ -116,7 +123,6 @@ index 0000000000000..5b121cca3a62c
 +  sql::Database db(kDatabaseTag);
 +  if (!db.Open(temp_history_path)) {
 +    LOG(ERROR) << "ChromeImporter: Failed to open history database";
-+    // Clean up the temp directory
 +    base::DeletePathRecursively(temp_directory);
 +    return;
 +  }
@@ -132,7 +138,6 @@ index 0000000000000..5b121cca3a62c
 +  sql::Statement s(db.GetUniqueStatement(query));
 +  if (!s.is_valid()) {
 +    LOG(ERROR) << "ChromeImporter: Invalid SQL statement";
-+    // Clean up the temp directory
 +    base::DeletePathRecursively(temp_directory);
 +    return;
 +  }
@@ -163,7 +168,6 @@ index 0000000000000..5b121cca3a62c
 +    rows.push_back(row);
 +  }
 +
-+  // Keep only the summary log
 +  LOG(INFO) << "ChromeImporter: Found " << rows.size() << " history items";
 +
 +  if (!rows.empty() && !cancelled()) {
@@ -171,7 +175,6 @@ index 0000000000000..5b121cca3a62c
 +    LOG(INFO) << "ChromeImporter: History import complete";
 +  }
 +
-+  // Clean up the temp directory
 +  base::DeletePathRecursively(temp_directory);
 +}
 +
@@ -274,7 +277,6 @@ index 0000000000000..5b121cca3a62c
 +    }
 +  }
 +
-+  // Clean up the temp directory
 +  base::DeletePathRecursively(temp_directory);
 +  LOG(INFO) << "ChromeImporter: Bookmarks import complete";
 +}
@@ -313,16 +315,16 @@ index 0000000000000..5b121cca3a62c
 +
 +      usage.favicon_url = GURL(s.ColumnString(0));
 +      if (!usage.favicon_url.is_valid())
-+        continue;  // Skip favicons with invalid URLs
++        continue;
 +
 +      std::vector<uint8_t> data;
 +      s.ColumnBlobAsVector(1, &data);
 +      if (data.empty())
-+        continue;  // Skip empty data
++        continue;
 +
 +      auto decoded_data = importer::ReencodeFavicon(base::span(data));
 +      if (!decoded_data)
-+        continue;  // Unable to decode
++        continue;
 +
 +      usage.urls = entry.second;
 +      usage.png_data = std::move(decoded_data).value();
@@ -360,11 +362,9 @@ index 0000000000000..5b121cca3a62c
 +    int64_t date_added_val = date_added ? std::stoll(*date_added) : 0;
 +
 +    if (*type == "folder") {
-+      // Process folder
 +      std::vector<std::u16string> path = parent_path;
 +      path.push_back(title);
 +
-+      // Check if this is an empty folder to add it as an entry
 +      const base::Value::List* inner_children = value.GetDict().FindList("children");
 +      if (inner_children && inner_children->empty()) {
 +        user_data_importer::ImportedBookmarkEntry entry;
@@ -377,10 +377,8 @@ index 0000000000000..5b121cca3a62c
 +        bookmarks->push_back(entry);
 +      }
 +
-+      // Process subfolders and entries
 +      RecursiveReadBookmarksFolder(&value.GetDict(), path, is_in_toolbar, bookmarks);
 +    } else if (*type == "url") {
-+      // Process bookmark URL
 +      const std::string* url_str = value.GetDict().FindString("url");
 +      if (!url_str)
 +        continue;
@@ -403,21 +401,53 @@ index 0000000000000..5b121cca3a62c
 +}
 +
 +base::Time ChromeImporter::ChromeTimeToBaseTime(int64_t time) {
-+  // Chrome time is microseconds since the Windows epoch (1601-01-01 UTC)
-+  // base::Time::FromDeltaSinceWindowsEpoch() handles the conversion properly
 +  return base::Time::FromDeltaSinceWindowsEpoch(base::Microseconds(time));
 +}
 +
 +void ChromeImporter::ImportPasswords() {
-+  // Password import is disabled - users should use CSV import from chrome://password-manager/passwords
-+  LOG(INFO) << "ChromeImporter: Password import is disabled. "
-+            << "Please use CSV import from chrome://password-manager/passwords";
-+  return;
++  LOG(INFO) << "ChromeImporter: Starting password import";
++
++  std::vector<user_data_importer::ImportedPasswordForm> passwords =
++      browseros_importer::ImportChromePasswords(source_path_);
++
++  if (passwords.empty()) {
++    LOG(INFO) << "ChromeImporter: No passwords to import";
++    return;
++  }
++
++  LOG(INFO) << "ChromeImporter: Importing " << passwords.size() << " passwords";
++
++  for (const auto& password : passwords) {
++    if (cancelled()) {
++      break;
++    }
++    bridge_->SetPasswordForm(password);
++  }
++
++  LOG(INFO) << "ChromeImporter: Password import complete";
 +}
 +
-+void ChromeImporter::ImportPasswordsFromFile(const base::FilePath& password_filename) {
-+  // Password import is disabled - this function is kept as a no-op for compatibility
-+  return;
++void ChromeImporter::ImportCookies() {
++  LOG(INFO) << "ChromeImporter: Starting cookie import";
++
++  std::vector<browseros_importer::ImportedCookieEntry> cookies =
++      browseros_importer::ImportChromeCookies(source_path_);
++
++  if (cookies.empty()) {
++    LOG(INFO) << "ChromeImporter: No cookies to import";
++    return;
++  }
++
++  LOG(INFO) << "ChromeImporter: Importing " << cookies.size() << " cookies";
++
++  for (const auto& cookie : cookies) {
++    if (cancelled()) {
++      break;
++    }
++    bridge_->SetCookie(cookie);
++  }
++
++  LOG(INFO) << "ChromeImporter: Cookie import complete";
 +}
 +
 +void ChromeImporter::ImportAutofillFormData() {
@@ -429,14 +459,12 @@ index 0000000000000..5b121cca3a62c
 +    return;
 +  }
 +
-+  // Create temporary directory for copying the database
 +  base::FilePath temp_directory;
 +  if (!base::CreateNewTempDirectory(base::FilePath::StringType(), &temp_directory)) {
 +    LOG(ERROR) << "ChromeImporter: Failed to create temp directory for form data";
 +    return;
 +  }
 +
-+  // Copy the database file to avoid lock issues
 +  base::FilePath temp_web_data_path = temp_directory.Append(FILE_PATH_LITERAL("Web Data"));
 +  if (!base::CopyFile(web_data_path, temp_web_data_path)) {
 +    LOG(ERROR) << "ChromeImporter: Failed to copy Web Data file";
@@ -451,7 +479,6 @@ index 0000000000000..5b121cca3a62c
 +    return;
 +  }
 +
-+  // Import autofill form data
 +  const char query[] =
 +      "SELECT name, value, count, date_created, date_last_used "
 +      "FROM autofill";
@@ -482,20 +509,13 @@ index 0000000000000..5b121cca3a62c
 +    LOG(INFO) << "ChromeImporter: No autofill entries to import";
 +  }
 +
-+  // Clean up temporary files
 +  base::DeletePathRecursively(temp_directory);
 +  LOG(INFO) << "ChromeImporter: Autofill form data import complete";
 +}
 +
-+// Encryption key setup is disabled since password import is disabled
-+// bool ChromeImporter::SetEncryptionKey(const base::FilePath& source_path) {
-+//   return false;
-+// }
-+
 +void ChromeImporter::ImportExtensions() {
 +  LOG(INFO) << "ChromeImporter: Starting extensions import";
 +
-+  // First, check the Preferences and Secure Preferences files to get the list of extensions
 +  base::FilePath preferences_path = source_path_.Append(FILE_PATH_LITERAL("Preferences"));
 +  base::FilePath secure_preferences_path = source_path_.Append(FILE_PATH_LITERAL("Secure Preferences"));
 +
@@ -504,13 +524,11 @@ index 0000000000000..5b121cca3a62c
 +    return;
 +  }
 +
-+  // Start with extensions from Secure Preferences (if it exists)
 +  std::vector<std::string> extension_ids;
 +  if (base::PathExists(secure_preferences_path)) {
 +    extension_ids = GetExtensionsFromPreferencesFile(secure_preferences_path);
 +  }
 +
-+  // Merge with extensions from regular Preferences (if it exists)
 +  if (base::PathExists(preferences_path)) {
 +    std::vector<std::string> pref_extension_ids = GetExtensionsFromPreferencesFile(preferences_path);
 +    extension_ids.insert(extension_ids.end(), pref_extension_ids.begin(), pref_extension_ids.end());
@@ -522,10 +540,7 @@ index 0000000000000..5b121cca3a62c
 +  }
 +
 +  LOG(INFO) << "ChromeImporter: Found " << extension_ids.size() << " extensions to import";
-+
-+  // Send the list of extension IDs to the bridge
 +  bridge_->SetExtensions(extension_ids);
-+
 +  LOG(INFO) << "ChromeImporter: Extensions import complete";
 +}
 +
@@ -546,7 +561,6 @@ index 0000000000000..5b121cca3a62c
 +    return extension_ids;
 +  }
 +
-+  // Extensions are stored in extensions.settings in Chrome preferences
 +  const base::Value::Dict* extensions_dict =
 +      preferences->FindDictByDottedPath("extensions.settings");
 +  if (!extensions_dict) {
@@ -554,7 +568,6 @@ index 0000000000000..5b121cca3a62c
 +    return extension_ids;
 +  }
 +
-+  // Iterate through the extensions dictionary
 +  for (const auto [key, value] : *extensions_dict) {
 +    if (!value.is_dict()) {
 +      continue;
@@ -562,35 +575,15 @@ index 0000000000000..5b121cca3a62c
 +
 +    const base::Value::Dict& dict = value.GetDict();
 +
-+    // Only import if:
-+    // 1. It's from the Chrome Web Store
-+    // 2. It's not installed by default
-+    // 3. It's enabled
-+
 +    if (dict.FindBool("was_installed_by_default").value_or(true)) {
-+      continue;  // Skip default extensions
++      continue;
 +    }
-+
-+    //TODO: nikhil - fix state and other filters
-+    // State 0 means disabled
-+    // if (!dict.FindInt("state").value_or(0)) {
-+    //   continue;  // Skip disabled extensions
-+    // }
 +
 +    if (!dict.FindBool("from_webstore").value_or(false)) {
-+      continue;  // Skip non-webstore extensions
++      continue;
 +    }
 +
-+    extension_ids.push_back(key);  // Add the extension ID to our list
-+
-+    // Check if it's an extension (not a theme or app)
-+    // const base::Value::Dict* manifest = dict.FindDict("manifest");
-+    // if (manifest) {
-+    //   const std::string* type = manifest->FindString("type");
-+    //   if (type && *type == "extension") {
-+    //     extension_ids.push_back(key);  // Add the extension ID to our list
-+    //   }
-+    // }
++    extension_ids.push_back(key);
 +  }
 +
 +  return extension_ids;

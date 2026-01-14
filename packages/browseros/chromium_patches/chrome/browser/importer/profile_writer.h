@@ -1,8 +1,28 @@
 diff --git a/chrome/browser/importer/profile_writer.h b/chrome/browser/importer/profile_writer.h
-index f609d99dde302..7d0a074c0da2c 100644
+index f609d99dde302..54119399b48f0 100644
 --- a/chrome/browser/importer/profile_writer.h
 +++ b/chrome/browser/importer/profile_writer.h
-@@ -92,6 +92,9 @@ class ProfileWriter : public base::RefCountedThreadSafe<ProfileWriter> {
+@@ -22,6 +22,10 @@ namespace autofill {
+ class AutocompleteEntry;
+ }
+ 
++namespace browseros_importer {
++struct ImportedCookieEntry;
++}  // namespace browseros_importer
++
+ namespace password_manager {
+ struct PasswordForm;
+ }  // namespace password_manager
+@@ -48,6 +52,8 @@ class ProfileWriter : public base::RefCountedThreadSafe<ProfileWriter> {
+   // Helper methods for adding data to local stores.
+   virtual void AddPasswordForm(const password_manager::PasswordForm& form);
+ 
++  virtual void AddCookie(const browseros_importer::ImportedCookieEntry& cookie);
++
+   virtual void AddHistoryPage(const history::URLRows& page,
+                               history::VisitSource visit_source);
+ 
+@@ -92,6 +98,9 @@ class ProfileWriter : public base::RefCountedThreadSafe<ProfileWriter> {
    virtual void AddAutocompleteFormDataEntries(
        const std::vector<autofill::AutocompleteEntry>& autocomplete_entries);
  

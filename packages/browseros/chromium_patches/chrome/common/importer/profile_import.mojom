@@ -1,8 +1,65 @@
 diff --git a/chrome/common/importer/profile_import.mojom b/chrome/common/importer/profile_import.mojom
-index b28b7324629ae..7ff6dc29b25c1 100644
+index b28b7324629ae..f93563fe6c863 100644
 --- a/chrome/common/importer/profile_import.mojom
 +++ b/chrome/common/importer/profile_import.mojom
-@@ -82,6 +82,7 @@ interface ProfileImportObserver {
+@@ -32,6 +32,49 @@ struct ImporterIE7PasswordInfo;
+ [Native]
+ enum ImportItem;
+ 
++// Represents information about an imported cookie entry. Typemapped to
++// browseros_importer::ImportedCookieEntry.
++struct ImportedCookieEntry {
++  // Cookie SameSite attribute
++  enum SameSite {
++    kUnspecified,
++    kNoRestriction,
++    kLaxMode,
++    kStrictMode,
++  };
++
++  // Cookie priority
++  enum Priority {
++    kLow,
++    kMedium,
++    kHigh,
++  };
++
++  // Cookie source scheme
++  enum SourceScheme {
++    kUnset,
++    kNonSecure,
++    kSecure,
++  };
++
++  string host_key;
++  string name;
++  string value;
++  string path;
++  // Times stored as microseconds since Windows epoch
++  int64 expires_utc;
++  int64 creation_utc;
++  int64 last_access_utc;
++  int64 last_update_utc;
++  bool is_secure;
++  bool is_httponly;
++  SameSite same_site;
++  Priority priority;
++  SourceScheme source_scheme;
++  int32 source_port;
++  bool is_persistent;
++};
++
+ // Represents information about an imported password form. Typemapped to
+ // importer::ImportedPasswordForm.
+ struct ImportedPasswordForm {
+@@ -76,12 +119,14 @@ interface ProfileImportObserver {
+   OnFaviconsImportStart(uint32 total_favicons_count);
+   OnFaviconsImportGroup(FaviconUsageDataList favicons_group);
+   OnPasswordFormImportReady(ImportedPasswordForm form);
++  OnCookieImportReady(ImportedCookieEntry cookie);
+   OnKeywordsImportReady(
+       array<SearchEngineInfo> search_engines,
+       bool unique_on_host_and_path);
    OnAutofillFormDataImportStart(uint32 total_autofill_form_data_entry_count);
    OnAutofillFormDataImportGroup(
        array<ImporterAutofillFormDataEntry> autofill_form_data_entry_group);

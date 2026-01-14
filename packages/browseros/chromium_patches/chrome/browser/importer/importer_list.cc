@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/importer/importer_list.cc b/chrome/browser/importer/importer_list.cc
-index 62546b572bab8..072d2d89ee990 100644
+index 62546b572bab8..3f4082edf8aa9 100644
 --- a/chrome/browser/importer/importer_list.cc
 +++ b/chrome/browser/importer/importer_list.cc
 @@ -6,10 +6,15 @@
@@ -26,7 +26,7 @@ index 62546b572bab8..072d2d89ee990 100644
  
  #if BUILDFLAG(IS_MAC)
  #include "base/apple/foundation_util.h"
-@@ -29,6 +35,196 @@
+@@ -29,6 +35,200 @@
  
  namespace {
  
@@ -101,6 +101,7 @@ index 62546b572bab8..072d2d89ee990 100644
 +  base::FilePath bookmarks_path = profile_path.Append(FILE_PATH_LITERAL("Bookmarks"));
 +  base::FilePath history_path = profile_path.Append(FILE_PATH_LITERAL("History"));
 +  base::FilePath passwords_path = profile_path.Append(FILE_PATH_LITERAL("Login Data"));
++  base::FilePath cookies_path = profile_path.Append(FILE_PATH_LITERAL("Cookies"));
 +  base::FilePath preferences_path = profile_path.Append(FILE_PATH_LITERAL("Preferences"));
 +  base::FilePath secure_preferences_path = profile_path.Append(FILE_PATH_LITERAL("Secure Preferences"));
 +
@@ -112,6 +113,9 @@ index 62546b572bab8..072d2d89ee990 100644
 +
 +  if (base::PathExists(passwords_path))
 +    *services |= user_data_importer::PASSWORDS;
++
++  if (base::PathExists(cookies_path))
++    *services |= user_data_importer::COOKIES;
 +
 +  if (base::PathExists(preferences_path)) {
 +    *services |= user_data_importer::AUTOFILL_FORM_DATA;
@@ -223,7 +227,7 @@ index 62546b572bab8..072d2d89ee990 100644
  #if BUILDFLAG(IS_WIN)
  void DetectIEProfiles(
      std::vector<user_data_importer::SourceProfile>* profiles) {
-@@ -71,6 +267,21 @@ void DetectBuiltinWindowsProfiles(
+@@ -71,6 +271,21 @@ void DetectBuiltinWindowsProfiles(
  
  #endif  // BUILDFLAG(IS_WIN)
  
@@ -245,7 +249,7 @@ index 62546b572bab8..072d2d89ee990 100644
  #if BUILDFLAG(IS_MAC)
  void DetectSafariProfiles(
      std::vector<user_data_importer::SourceProfile>* profiles) {
-@@ -88,8 +299,30 @@ void DetectSafariProfiles(
+@@ -88,8 +303,30 @@ void DetectSafariProfiles(
    safari.services_supported = items;
    profiles->push_back(safari);
  }
@@ -276,7 +280,7 @@ index 62546b572bab8..072d2d89ee990 100644
  // |locale|: The application locale used for lookups in Firefox's
  // locale-specific search engines feature (see firefox_importer.cc for
  // details).
-@@ -170,8 +403,10 @@ std::vector<user_data_importer::SourceProfile> DetectSourceProfilesWorker(
+@@ -170,8 +407,10 @@ std::vector<user_data_importer::SourceProfile> DetectSourceProfilesWorker(
  #if BUILDFLAG(IS_WIN)
    if (shell_integration::IsFirefoxDefaultBrowser()) {
      DetectFirefoxProfiles(locale, &profiles);
@@ -287,7 +291,7 @@ index 62546b572bab8..072d2d89ee990 100644
      DetectBuiltinWindowsProfiles(&profiles);
      DetectFirefoxProfiles(locale, &profiles);
    }
-@@ -179,11 +414,15 @@ std::vector<user_data_importer::SourceProfile> DetectSourceProfilesWorker(
+@@ -179,11 +418,15 @@ std::vector<user_data_importer::SourceProfile> DetectSourceProfilesWorker(
    if (shell_integration::IsFirefoxDefaultBrowser()) {
      DetectFirefoxProfiles(locale, &profiles);
      DetectSafariProfiles(&profiles);

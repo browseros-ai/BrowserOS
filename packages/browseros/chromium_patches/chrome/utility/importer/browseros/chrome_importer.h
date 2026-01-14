@@ -1,15 +1,15 @@
-diff --git a/chrome/utility/importer/chrome_importer.h b/chrome/utility/importer/chrome_importer.h
+diff --git a/chrome/utility/importer/browseros/chrome_importer.h b/chrome/utility/importer/browseros/chrome_importer.h
 new file mode 100644
-index 0000000000000..d4a0d85ea9c03
+index 0000000000000..736fc58be40bc
 --- /dev/null
-+++ b/chrome/utility/importer/chrome_importer.h
++++ b/chrome/utility/importer/browseros/chrome_importer.h
 @@ -0,0 +1,82 @@
 +// Copyright 2023 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#ifndef CHROME_UTILITY_IMPORTER_CHROME_IMPORTER_H_
-+#define CHROME_UTILITY_IMPORTER_CHROME_IMPORTER_H_
++#ifndef CHROME_UTILITY_IMPORTER_BROWSEROS_CHROME_IMPORTER_H_
++#define CHROME_UTILITY_IMPORTER_BROWSEROS_CHROME_IMPORTER_H_
 +
 +#include <stdint.h>
 +
@@ -51,9 +51,9 @@ index 0000000000000..d4a0d85ea9c03
 +  void ImportBookmarks();
 +  void ImportHistory();
 +  void ImportPasswords();
++  void ImportCookies();
 +  void ImportAutofillFormData();
 +  void ImportExtensions();
-+  void ImportPasswordsFromFile(const base::FilePath& password_filename);
 +
 +  // Helper function to convert Chrome's time format to base::Time
 +  base::Time ChromeTimeToBaseTime(int64_t time);
@@ -85,4 +85,4 @@ index 0000000000000..d4a0d85ea9c03
 +  base::FilePath source_path_;
 +};
 +
-+#endif  // CHROME_UTILITY_IMPORTER_CHROME_IMPORTER_H_
++#endif  // CHROME_UTILITY_IMPORTER_BROWSEROS_CHROME_IMPORTER_H_

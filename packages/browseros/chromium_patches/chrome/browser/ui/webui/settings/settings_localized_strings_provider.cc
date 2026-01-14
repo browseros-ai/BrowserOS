@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-index 0490e6c682dfd..c13e18b953404 100644
+index 0490e6c682dfd..6060a47048cac 100644
 --- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 @@ -13,6 +13,7 @@
@@ -21,11 +21,12 @@ index 0490e6c682dfd..c13e18b953404 100644
    html_source->AddString(
        "aboutProductCopyright",
        base::i18n::MessageFormatter::FormatWithNumberedArgs(
-@@ -908,6 +913,7 @@ void AddImportDataStrings(content::WebUIDataSource* html_source) {
+@@ -908,6 +913,8 @@ void AddImportDataStrings(content::WebUIDataSource* html_source) {
        {"importCommit", IDS_SETTINGS_IMPORT_COMMIT},
        {"noProfileFound", IDS_SETTINGS_IMPORT_NO_PROFILE_FOUND},
        {"importSuccess", IDS_SETTINGS_IMPORT_SUCCESS},
 +      {"importDialogExtensions", IDS_SETTINGS_IMPORT_EXTENSIONS_CHECKBOX},
++      {"importDialogCookies", IDS_SETTINGS_IMPORT_COOKIES_CHECKBOX},
    };
    html_source->AddLocalizedStrings(kLocalizedStrings);
  }

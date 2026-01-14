@@ -1,17 +1,18 @@
 diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
-index 1a4683393ff24..0fa19315fc29a 100644
+index 1a4683393ff24..dc1e69f5fc57d 100644
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
-@@ -1583,6 +1583,8 @@ inline constexpr char kImportDialogSavedPasswords[] =
+@@ -1583,6 +1583,9 @@ inline constexpr char kImportDialogSavedPasswords[] =
      "import_dialog_saved_passwords";
  inline constexpr char kImportDialogSearchEngine[] =
      "import_dialog_search_engine";
 +inline constexpr char kImportDialogExtensions[] =
 +    "import_dialog_extensions";
++inline constexpr char kImportDialogCookies[] = "import_dialog_cookies";
  
  // Profile avatar and name
  inline constexpr char kProfileAvatarIndex[] = "profile.avatar_index";
-@@ -4302,6 +4304,17 @@ inline constexpr char kNonMilestoneUpdateToastVersion[] =
+@@ -4302,6 +4305,17 @@ inline constexpr char kNonMilestoneUpdateToastVersion[] =
      "toast.non_milestone_update_toast_version";
  #endif  // !BUILDFLAG(IS_ANDROID)
  

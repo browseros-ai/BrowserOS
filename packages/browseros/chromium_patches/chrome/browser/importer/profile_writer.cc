@@ -1,11 +1,26 @@
 diff --git a/chrome/browser/importer/profile_writer.cc b/chrome/browser/importer/profile_writer.cc
-index 6edb974687c07..6bc8b7f9e43cb 100644
+index 6edb974687c07..738d8ca61a9b4 100644
 --- a/chrome/browser/importer/profile_writer.cc
 +++ b/chrome/browser/importer/profile_writer.cc
-@@ -37,6 +37,18 @@
+@@ -11,6 +11,7 @@
+ #include <set>
+ #include <string>
+ 
++#include "base/logging.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/utf_string_conversions.h"
+@@ -36,7 +37,25 @@
+ #include "components/prefs/pref_service.h"
  #include "components/search_engines/template_url.h"
  #include "components/search_engines/template_url_service.h"
++#include "chrome/utility/importer/browseros/chrome_cookie_importer.h"
  #include "components/user_data_importer/common/imported_bookmark_entry.h"
++#include "content/public/browser/storage_partition.h"
++#include "net/cookies/canonical_cookie.h"
++#include "net/cookies/cookie_inclusion_status.h"
++#include "net/cookies/cookie_options.h"
++#include "services/network/public/mojom/cookie_manager.mojom.h"
 +#include "chrome/browser/extensions/extension_service.h"
 +#include "extensions/browser/extension_system.h"
 +#include "extensions/common/extension.h"
@@ -21,7 +36,7 @@ index 6edb974687c07..6bc8b7f9e43cb 100644
  
  using bookmarks::BookmarkModel;
  using bookmarks::BookmarkNode;
-@@ -75,6 +87,22 @@ void ShowBookmarkBar(Profile* profile) {
+@@ -75,6 +94,22 @@ void ShowBookmarkBar(Profile* profile) {
    profile->GetPrefs()->SetBoolean(bookmarks::prefs::kShowBookmarkBar, true);
  }
  
@@ -44,7 +59,81 @@ index 6edb974687c07..6bc8b7f9e43cb 100644
  }  // namespace
  
  ProfileWriter::ProfileWriter(Profile* profile) : profile_(profile) {}
-@@ -338,3 +366,119 @@ void ProfileWriter::AddAutocompleteFormDataEntries(
+@@ -99,6 +134,73 @@ void ProfileWriter::AddPasswordForm(
+   }
+ }
+ 
++void ProfileWriter::AddCookie(
++    const browseros_importer::ImportedCookieEntry& cookie) {
++  DCHECK(profile_);
++
++  // Build the cookie URL from host_key
++  std::string scheme = cookie.is_secure ? "https" : "http";
++  std::string host = cookie.host_key;
++  // Remove leading dot if present for URL construction
++  if (!host.empty() && host[0] == '.') {
++    host = host.substr(1);
++  }
++  GURL cookie_url(scheme + "://" + host + cookie.path);
++
++  if (!cookie_url.is_valid()) {
++    LOG(WARNING) << "ProfileWriter: Invalid cookie URL for " << cookie.name;
++    return;
++  }
++
++  // Create a CanonicalCookie from the imported data
++  net::CookieInclusionStatus status;
++  auto canonical_cookie = net::CanonicalCookie::CreateSanitizedCookie(
++      cookie_url,
++      cookie.name,
++      cookie.value,
++      cookie.host_key,
++      cookie.path,
++      cookie.creation_utc,
++      cookie.expires_utc,
++      cookie.last_access_utc,
++      cookie.is_secure,
++      cookie.is_httponly,
++      cookie.same_site,
++      cookie.priority,
++      /*partition_key=*/std::nullopt,
++      &status);
++
++  if (!canonical_cookie) {
++    LOG(WARNING) << "ProfileWriter: Failed to create canonical cookie for "
++                 << cookie.name << " - status: " << status.GetDebugString();
++    return;
++  }
++
++  // Get the cookie manager from the default storage partition
++  network::mojom::CookieManager* cookie_manager =
++      profile_->GetDefaultStoragePartition()
++          ->GetCookieManagerForBrowserProcess();
++
++  if (!cookie_manager) {
++    LOG(WARNING) << "ProfileWriter: Failed to get cookie manager";
++    return;
++  }
++
++  // Set the cookie with appropriate options
++  net::CookieOptions options;
++  options.set_include_httponly();
++  options.set_same_site_cookie_context(
++      net::CookieOptions::SameSiteCookieContext::MakeInclusive());
++
++  cookie_manager->SetCanonicalCookie(
++      *canonical_cookie, cookie_url, options,
++      base::BindOnce([](net::CookieAccessResult result) {
++        if (!result.status.IsInclude()) {
++          LOG(WARNING) << "ProfileWriter: Cookie set failed";
++        }
++      }));
++}
++
+ void ProfileWriter::AddHistoryPage(const history::URLRows& page,
+                                    history::VisitSource visit_source) {
+   if (!page.empty()) {
+@@ -338,3 +440,119 @@ void ProfileWriter::AddAutocompleteFormDataEntries(
  }
  
  ProfileWriter::~ProfileWriter() = default;

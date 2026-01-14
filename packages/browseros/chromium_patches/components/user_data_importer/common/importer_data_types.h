@@ -1,8 +1,14 @@
 diff --git a/components/user_data_importer/common/importer_data_types.h b/components/user_data_importer/common/importer_data_types.h
-index 3cac91f8d5838..ca413f2ddbe00 100644
+index 3cac91f8d5838..8d5937f653020 100644
 --- a/components/user_data_importer/common/importer_data_types.h
 +++ b/components/user_data_importer/common/importer_data_types.h
-@@ -29,7 +29,8 @@ enum ImportItem {
+@@ -24,12 +24,13 @@ enum ImportItem {
+   NONE = 0,
+   HISTORY = 1 << 0,
+   FAVORITES = 1 << 1,
+-  COOKIES = 1 << 2,  // Not supported yet.
++  COOKIES = 1 << 2,
+   PASSWORDS = 1 << 3,
    SEARCH_ENGINES = 1 << 4,
    HOME_PAGE = 1 << 5,
    AUTOFILL_FORM_DATA = 1 << 6,

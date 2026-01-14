@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
-index 79c4eb8fc905c..c688b2179d003 100644
+index 79c4eb8fc905c..dd7f36f954fb1 100644
 --- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
 +++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
 @@ -14,6 +14,7 @@
@@ -29,11 +29,13 @@ index 79c4eb8fc905c..c688b2179d003 100644
  #if BUILDFLAG(IS_CHROMEOS)
    // Accounts / Users / People.
    (*s_allowlist)[ash::kAccountsPrefAllowGuest] =
-@@ -1180,6 +1193,8 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+@@ -1180,6 +1193,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
        settings_api::PrefType::kBoolean;
    (*s_allowlist)[::prefs::kImportDialogSearchEngine] =
        settings_api::PrefType::kBoolean;
 +  (*s_allowlist)[::prefs::kImportDialogExtensions] =
++      settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::prefs::kImportDialogCookies] =
 +      settings_api::PrefType::kBoolean;
  #endif  // BUILDFLAG(IS_CHROMEOS)
  

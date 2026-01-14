@@ -1,12 +1,12 @@
 diff --git a/chrome/utility/importer/importer_creator.cc b/chrome/utility/importer/importer_creator.cc
-index 5f8f27c70bafe..1cbed296ad922 100644
+index 5f8f27c70bafe..6b4107f376b5c 100644
 --- a/chrome/utility/importer/importer_creator.cc
 +++ b/chrome/utility/importer/importer_creator.cc
 @@ -8,6 +8,7 @@
  #include "build/build_config.h"
  #include "chrome/utility/importer/bookmarks_file_importer.h"
  #include "chrome/utility/importer/firefox_importer.h"
-+#include "chrome/utility/importer/chrome_importer.h"
++#include "chrome/utility/importer/browseros/chrome_importer.h"
  
  #if BUILDFLAG(IS_WIN)
  #include "chrome/common/importer/edge_importer_utils_win.h"
