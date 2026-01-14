@@ -1,9 +1,9 @@
 diff --git a/chrome/utility/importer/browseros/chrome_password_importer.cc b/chrome/utility/importer/browseros/chrome_password_importer.cc
 new file mode 100644
-index 0000000000000..870d02c463cdc
+index 0000000000000..0611c33df3103
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_password_importer.cc
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,151 @@
 +// Copyright 2024 AKW Technology Inc
 +// Chrome password importer implementation
 +
@@ -92,7 +92,6 @@ index 0000000000000..870d02c463cdc
 +    sql::Statement statement(db.GetUniqueStatement(kQuery));
 +    if (!statement.is_valid()) {
 +      LOG(WARNING) << "ChromePasswordImporter: Failed to prepare query";
-+      db.Close();
 +      base::DeleteFile(temp_db_path);
 +      return passwords;
 +    }

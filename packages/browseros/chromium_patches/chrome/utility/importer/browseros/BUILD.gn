@@ -1,9 +1,9 @@
 diff --git a/chrome/utility/importer/browseros/BUILD.gn b/chrome/utility/importer/browseros/BUILD.gn
 new file mode 100644
-index 0000000000000..b09f03c71650d
+index 0000000000000..aa7c7fd6f87ab
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/BUILD.gn
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,68 @@
 +# Copyright 2024 AKW Technology Inc
 +# BrowserOS Chrome importer - all Chrome import code in one place
 +
@@ -11,13 +11,25 @@ index 0000000000000..b09f03c71650d
 +
 +source_set("browseros") {
 +  sources = [
-+    # Main importer
++    # Main importer (thin orchestrator)
 +    "chrome_importer.cc",
 +    "chrome_importer.h",
++
++    # Shared utilities
++    "chrome_importer_utils.cc",
++    "chrome_importer_utils.h",
 +
 +    # Decrypt utilities
 +    "chrome_decryptor.cc",
 +    "chrome_decryptor.h",
++
++    # History import
++    "chrome_history_importer.cc",
++    "chrome_history_importer.h",
++
++    # Bookmark import
++    "chrome_bookmarks_importer.cc",
++    "chrome_bookmarks_importer.h",
 +
 +    # Password import
 +    "chrome_password_importer.cc",
@@ -26,6 +38,14 @@ index 0000000000000..b09f03c71650d
 +    # Cookie import
 +    "chrome_cookie_importer.cc",
 +    "chrome_cookie_importer.h",
++
++    # Autofill import
++    "chrome_autofill_importer.cc",
++    "chrome_autofill_importer.h",
++
++    # Extensions import
++    "chrome_extensions_importer.cc",
++    "chrome_extensions_importer.h",
 +  ]
 +
 +  if (is_mac) {

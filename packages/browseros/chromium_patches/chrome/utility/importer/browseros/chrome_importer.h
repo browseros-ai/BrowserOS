@@ -1,9 +1,9 @@
 diff --git a/chrome/utility/importer/browseros/chrome_importer.h b/chrome/utility/importer/browseros/chrome_importer.h
 new file mode 100644
-index 0000000000000..736fc58be40bc
+index 0000000000000..da685413cee76
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_importer.h
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,45 @@
 +// Copyright 2023 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -13,27 +13,17 @@ index 0000000000000..736fc58be40bc
 +
 +#include <stdint.h>
 +
-+#include <map>
-+#include <set>
-+#include <string>
-+#include <vector>
-+
 +#include "base/files/file_path.h"
-+#include "base/values.h"
-+#include "build/build_config.h"
-+#include "chrome/common/importer/importer_autofill_form_data_entry.h"
 +#include "chrome/utility/importer/importer.h"
-+#include "components/favicon_base/favicon_usage_data.h"
 +
-+namespace user_data_importer {
-+struct ImportedBookmarkEntry;
-+}  // namespace user_data_importer
-+
-+namespace sql {
-+class Database;
-+}
-+
-+
++// ChromeImporter orchestrates importing user data from Chrome/Chromium browsers.
++// The actual data extraction is delegated to specialized importer modules:
++// - chrome_history_importer: browsing history
++// - chrome_bookmarks_importer: bookmarks and favicons
++// - chrome_password_importer: saved passwords
++// - chrome_cookie_importer: cookies
++// - chrome_autofill_importer: autofill form data
++// - chrome_extensions_importer: extension IDs
 +class ChromeImporter : public Importer {
 + public:
 +  ChromeImporter();
@@ -54,33 +44,6 @@ index 0000000000000..736fc58be40bc
 +  void ImportCookies();
 +  void ImportAutofillFormData();
 +  void ImportExtensions();
-+
-+  // Helper function to convert Chrome's time format to base::Time
-+  base::Time ChromeTimeToBaseTime(int64_t time);
-+
-+  // Multiple URLs can share the same favicon; this is a map
-+  // of favicon IDs -> URLs that we load as a temporary step before
-+  // actually loading the icons.
-+  using FaviconMap = std::map<int64_t, std::set<GURL>>;
-+
-+  // Loads the URLs associated with the favicons into favicon_map
-+  void ImportFaviconURLs(sql::Database* db, FaviconMap* favicon_map);
-+
-+  // Loads and reencodes the individual favicons
-+  void LoadFaviconData(sql::Database* db,
-+                       const FaviconMap& favicon_map,
-+                       favicon_base::FaviconUsageDataList* favicons);
-+
-+  // Recursively reads a bookmarks folder from the JSON structure
-+  void RecursiveReadBookmarksFolder(
-+      const base::Value::Dict* folder,
-+      const std::vector<std::u16string>& parent_path,
-+      bool is_in_toolbar,
-+      std::vector<user_data_importer::ImportedBookmarkEntry>* bookmarks);
-+
-+  // Extracts extension IDs from Chrome preferences file
-+  std::vector<std::string> GetExtensionsFromPreferencesFile(
-+      const base::FilePath& preferences_path);
 +
 +  base::FilePath source_path_;
 +};
