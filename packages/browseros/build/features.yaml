@@ -145,14 +145,11 @@ features:
   chrome-importer:
     description: "feat: chrome importer"
     files:
-      - components/os_crypt/sync/keychain_password_mac.mm
-      - chrome/app/generated_resources.grd
       - chrome/app/settings_strings.grdp
       - chrome/browser/extensions/api/settings_private/prefs_util.cc
       - chrome/browser/importer/external_process_importer_client.cc
       - chrome/browser/importer/external_process_importer_client.h
       - chrome/browser/importer/importer_list.cc
-      - chrome/browser/importer/importer_uma.cc
       - chrome/browser/importer/in_process_importer_bridge.cc
       - chrome/browser/importer/in_process_importer_bridge.h
       - chrome/browser/importer/profile_writer.cc
@@ -163,20 +160,26 @@ features:
       - chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
       - chrome/browser/ui/webui/settings/settings_ui.cc
       - chrome/common/importer/importer_bridge.h
-      - chrome/common/importer/importer_data_types.h
-      - chrome/common/importer/importer_type.h
       - chrome/common/importer/profile_import.mojom
-      - chrome/common/importer/profile_import_process_param_traits_macros.h
+      - chrome/common/importer/profile_import_process_param_traits.cc
+      - chrome/common/importer/profile_import_process_param_traits.h
       - chrome/common/pref_names.h
       - chrome/utility/BUILD.gn
-      - chrome/utility/importer/chrome_importer.cc
-      - chrome/utility/importer/chrome_importer.h
+      - chrome/utility/importer/browseros/BUILD.gn
+      - chrome/utility/importer/browseros/chrome_cookie_importer.cc
+      - chrome/utility/importer/browseros/chrome_cookie_importer.h
+      - chrome/utility/importer/browseros/chrome_decryptor.cc
+      - chrome/utility/importer/browseros/chrome_decryptor.h
+      - chrome/utility/importer/browseros/chrome_decryptor_mac.mm
+      - chrome/utility/importer/browseros/chrome_decryptor_win.cc
+      - chrome/utility/importer/browseros/chrome_importer.cc
+      - chrome/utility/importer/browseros/chrome_importer.h
+      - chrome/utility/importer/browseros/chrome_password_importer.cc
+      - chrome/utility/importer/browseros/chrome_password_importer.h
       - chrome/utility/importer/external_process_importer_bridge.cc
       - chrome/utility/importer/external_process_importer_bridge.h
       - chrome/utility/importer/importer_creator.cc
       - components/user_data_importer/common/importer_data_types.h
-      - components/user_data_importer/common/importer_type.h
-      - tools/metrics/histograms/metadata/sql/histograms.xml
   default-light-mode:
     description: "feat: enable light mode as default theme"
     files:
