@@ -1,6 +1,6 @@
 diff --git a/chrome/utility/importer/browseros/chrome_decryptor_win.cc b/chrome/utility/importer/browseros/chrome_decryptor_win.cc
 new file mode 100644
-index 0000000000000..0de26a2fe4148
+index 0000000000000..5853c63c5e2d4
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_decryptor_win.cc
 @@ -0,0 +1,246 @@
@@ -154,8 +154,8 @@ index 0000000000000..0de26a2fe4148
 +  aead.Init(base::as_byte_span(key));
 +
 +  std::optional<std::vector<uint8_t>> decrypted = aead.Open(
-+      base::make_span(encrypted_data, encrypted_length),
-+      base::make_span(nonce, kNonceLength),
++      base::span<const uint8_t>(encrypted_data, encrypted_length),
++      base::span<const uint8_t>(nonce, kNonceLength),
 +      base::span<const uint8_t>());  // empty additional data
 +
 +  if (!decrypted) {
