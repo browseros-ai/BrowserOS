@@ -15,7 +15,8 @@
         "pages": [
           "index",
           "onboarding",
-          "update"
+          "update",
+          "changelog"
         ]
       },
       {
