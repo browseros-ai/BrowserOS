@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.h b/chrome/browser/extensions/api/browser_os/browser_os_api.h
 new file mode 100644
-index 0000000000000..5f4276cf89432
+index 0000000000000..9db5a006c85a1
 --- /dev/null
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.h
-@@ -0,0 +1,344 @@
+@@ -0,0 +1,369 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -20,6 +20,7 @@ index 0000000000000..5f4276cf89432
 +#include "chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.h"
 +#include "extensions/browser/extension_function.h"
 +#include "third_party/skia/include/core/SkBitmap.h"
++#include "ui/shell_dialogs/select_file_dialog.h"
 +
 +namespace content {
 +class WebContents;
@@ -342,6 +343,30 @@ index 0000000000000..5f4276cf89432
 +
 +  // ExtensionFunction:
 +  ResponseAction Run() override;
++};
++
++class BrowserOSChoosePathFunction : public ExtensionFunction,
++                                    public ui::SelectFileDialog::Listener {
++ public:
++  DECLARE_EXTENSION_FUNCTION("browserOS.choosePath", BROWSER_OS_CHOOSEPATH)
++
++  BrowserOSChoosePathFunction();
++  BrowserOSChoosePathFunction(const BrowserOSChoosePathFunction&) = delete;
++  BrowserOSChoosePathFunction& operator=(const BrowserOSChoosePathFunction&) =
++      delete;
++
++  // ui::SelectFileDialog::Listener:
++  void FileSelected(const ui::SelectedFileInfo& file, int index) override;
++  void FileSelectionCanceled() override;
++
++ protected:
++  ~BrowserOSChoosePathFunction() override;
++
++  // ExtensionFunction:
++  ResponseAction Run() override;
++
++ private:
++  scoped_refptr<ui::SelectFileDialog> select_file_dialog_;
 +};
 +
 +}  // namespace api

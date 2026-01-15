@@ -1,15 +1,47 @@
 diff --git a/chrome/common/extensions/api/browser_os.idl b/chrome/common/extensions/api/browser_os.idl
 new file mode 100644
-index 0000000000000..ab1d6842fce7f
+index 0000000000000..da7102fd5b5e3
 --- /dev/null
 +++ b/chrome/common/extensions/api/browser_os.idl
-@@ -0,0 +1,341 @@
+@@ -0,0 +1,389 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +// browserOS API for accessing system-level browser functionality
 +namespace browserOS {
++
++  // Selection type for choosePath.
++  // file: Only files can be selected (default).
++  // folder: Only folders/directories can be selected.
++  enum SelectionType {
++    file,
++    folder
++  };
++
++  // Options for choosePath
++  dictionary ChoosePathOptions {
++    // Restrict what can be selected.
++    // Default: file
++    SelectionType? type;
++
++    // Title displayed in the dialog window.
++    // Default: OS-provided default title
++    DOMString? title;
++
++    // Starting directory for the dialog.
++    // If invalid or not provided, falls back to OS default.
++    DOMString? startingDirectory;
++  };
++
++  // Result from choosePath
++  dictionary SelectedPath {
++    // Full absolute path (e.g., "/Users/user/projects/myapp")
++    DOMString path;
++
++    // File or folder name (e.g., "myapp")
++    DOMString name;
++  };
 +
 +  dictionary AccessibilityTree {
 +    // The ID of the root node
@@ -143,6 +175,10 @@ index 0000000000000..ab1d6842fce7f
 +  
 +  // Callback for executeJavaScript
 +  callback ExecuteJavaScriptCallback = void(any result);
++
++  // Callback for choosePath.
++  // |result|: Selected path info, or null if user cancelled.
++  callback ChoosePathCallback = void(optional SelectedPath result);
 +
 +  interface Functions {
 +    // Gets the full accessibility tree for a tab
@@ -342,6 +378,18 @@ index 0000000000000..ab1d6842fce7f
 +        optional long tabId,
 +        DOMString code,
 +        ExecuteJavaScriptCallback callback);
++
++    // Opens a native OS file/folder picker dialog.
++    // Returns the selected path or null if the user cancels.
++    //
++    // |options|: Configuration for the picker dialog.
++    // |callback|: Called with the result.
++    //
++    // Errors:
++    // - "Could not show file dialog" if no browser window context available
++    static void choosePath(
++        optional ChoosePathOptions options,
++        ChoosePathCallback callback);
 +  };
 +};
 +

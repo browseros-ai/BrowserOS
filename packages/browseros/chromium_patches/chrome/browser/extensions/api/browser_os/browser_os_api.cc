@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.cc b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
 new file mode 100644
-index 0000000000000..58abbe5b785ed
+index 0000000000000..2db5f47421f59
 --- /dev/null
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
-@@ -0,0 +1,1325 @@
+@@ -0,0 +1,1429 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -12,6 +12,11 @@ index 0000000000000..58abbe5b785ed
 +
 +#include <set>
 +#include <string>
++
++#include "base/files/file_util.h"
++#include "chrome/browser/platform_util.h"
++#include "chrome/browser/ui/chrome_select_file_policy.h"
++#include "ui/shell_dialogs/selected_file_info.h"
 +#include <unordered_map>
 +#include <utility>
 +#include <vector>
@@ -1325,6 +1330,105 @@ index 0000000000000..58abbe5b785ed
 +  
 +  return RespondNow(ArgumentList(
 +      browser_os::TypeAtCoordinates::Results::Create(response)));
++}
++
++// BrowserOSChoosePathFunction implementation
++
++namespace {
++
++constexpr char kCouldNotShowSelectFileDialogError[] =
++    "Could not show file dialog";
++
++ui::SelectFileDialog::Type GetDialogType(
++    const std::optional<browser_os::SelectionType>& type) {
++  if (type.has_value() && *type == browser_os::SelectionType::kFolder) {
++    return ui::SelectFileDialog::SELECT_FOLDER;
++  }
++  // Default: file
++  return ui::SelectFileDialog::SELECT_OPEN_FILE;
++}
++
++}  // namespace
++
++BrowserOSChoosePathFunction::BrowserOSChoosePathFunction() = default;
++
++BrowserOSChoosePathFunction::~BrowserOSChoosePathFunction() {
++  // Clean up pending file dialogs to prevent callbacks to a destroyed object.
++  if (select_file_dialog_.get()) {
++    select_file_dialog_->ListenerDestroyed();
++  }
++}
++
++ExtensionFunction::ResponseAction BrowserOSChoosePathFunction::Run() {
++  std::optional<browser_os::ChoosePath::Params> params =
++      browser_os::ChoosePath::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++
++  content::WebContents* web_contents = GetSenderWebContents();
++  if (!web_contents) {
++    return RespondNow(Error(kCouldNotShowSelectFileDialogError));
++  }
++
++  // Determine dialog type based on options
++  ui::SelectFileDialog::Type dialog_type = ui::SelectFileDialog::SELECT_OPEN_FILE;
++  std::u16string title;
++  base::FilePath starting_path;
++
++  if (params->options) {
++    dialog_type = GetDialogType(params->options->type);
++
++    if (params->options->title) {
++      title = base::UTF8ToUTF16(*params->options->title);
++    }
++
++    if (params->options->starting_directory) {
++      starting_path =
++          base::FilePath::FromUTF8Unsafe(*params->options->starting_directory);
++      // Validate path exists; if not, use empty path (OS default)
++      if (!base::DirectoryExists(starting_path)) {
++        starting_path = base::FilePath();
++      }
++    }
++  }
++
++  // Get parent window for the dialog
++  gfx::NativeWindow owning_window =
++      platform_util::GetTopLevel(web_contents->GetNativeView());
++
++  // Create and show the file dialog
++  select_file_dialog_ = ui::SelectFileDialog::Create(
++      this, std::make_unique<ChromeSelectFilePolicy>(web_contents));
++
++  select_file_dialog_->SelectFile(
++      dialog_type,
++      title,
++      starting_path,
++      nullptr,  // file_types
++      0,        // file_type_index
++      base::FilePath::StringType(),  // default_extension
++      owning_window);
++
++  // prevent destruction while dialog is showing
++  AddRef();
++  return RespondLater();
++}
++
++void BrowserOSChoosePathFunction::FileSelected(const ui::SelectedFileInfo& file,
++                                               int index) {
++  browser_os::SelectedPath result;
++  result.path = file.path().AsUTF8Unsafe();
++  result.name = file.path().BaseName().AsUTF8Unsafe();
++
++  Respond(ArgumentList(browser_os::ChoosePath::Results::Create(result)));
++  Release();
++}
++
++void BrowserOSChoosePathFunction::FileSelectionCanceled() {
++  // Return null to indicate cancellation (not an error)
++  base::Value::List results;
++  results.Append(base::Value());
++  Respond(ArgumentList(std::move(results)));
++  Release();
 +}
 +
 +}  // namespace api

@@ -1,8 +1,8 @@
 diff --git a/tools/metrics/histograms/metadata/extensions/enums.xml b/tools/metrics/histograms/metadata/extensions/enums.xml
-index c36ba9e58148d..9e29a7ecb82a6 100644
+index c36ba9e58148d..fbc5eefb3a231 100644
 --- a/tools/metrics/histograms/metadata/extensions/enums.xml
 +++ b/tools/metrics/histograms/metadata/extensions/enums.xml
-@@ -2843,6 +2843,27 @@ Called by update_extension_histograms.py.-->
+@@ -2843,6 +2843,31 @@ Called by update_extension_histograms.py.-->
        label="ACCESSIBILITY_PRIVATE_PROCESSPENDINGSPOKENFEEDBACKEVENT"/>
    <int value="1950"
        label="ACCESSIBILITY_PRIVATE_ENABLESPOKENFEEDBACKMV3KEYHANDLING"/>
@@ -27,6 +27,10 @@ index c36ba9e58148d..9e29a7ecb82a6 100644
 +  <int value="1969" label="BROWSER_OS_EXECUTEJAVASCRIPT"/>
 +  <int value="1970" label="BROWSER_OS_CLICKCOORDINATES"/>
 +  <int value="1971" label="BROWSER_OS_TYPEATCOORDINATES"/>
++  <int value="1972" label="SIDEPANEL_BROWSEROSTOGGLE"/>
++  <int value="1973" label="SIDEPANEL_BROWSEROSISOPEN"/>
++  <int value="1974" label="BROWSER_OS_GETBROWSEROSVERSIONNUMBER"/>
++  <int value="1975" label="BROWSER_OS_CHOOSEPATH"/>
  </enum>
  
  <!-- LINT.ThenChange(//extensions/browser/extension_function_histogram_value.h:HistogramValue) -->
