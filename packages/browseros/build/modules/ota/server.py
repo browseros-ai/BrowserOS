@@ -225,10 +225,6 @@ class ServerOTAModule(CommandModule):
             return notarize_macos_binary(binary_path, ctx.env)
 
         elif os_type == "windows":
-            if not IS_WINDOWS():
-                log_warning(f"Windows signing requires Windows - skipping {platform['name']}")
-                return True
-
             return sign_windows_binary(binary_path, ctx.env)
 
         elif os_type == "linux":

@@ -207,25 +207,24 @@ def sign_windows_binary(
     Returns:
         True on success, False on failure
     """
-    if not IS_WINDOWS():
-        log_warning("Windows signing should be done on Windows")
-        log_warning("Skipping signing - binary will be unsigned")
-        return True
-
     if env is None:
         env = EnvConfig()
 
-    if not env.code_sign_tool_path:
-        log_error("CODE_SIGN_TOOL_PATH not set")
+    # Prefer CODE_SIGN_TOOL_EXE (direct path), fall back to CODE_SIGN_TOOL_PATH + .bat
+    if env.code_sign_tool_exe:
+        codesigntool_path = Path(env.code_sign_tool_exe)
+    elif env.code_sign_tool_path:
+        codesigntool_path = Path(env.code_sign_tool_path) / "CodeSignTool.bat"
+    else:
+        log_warning("CODE_SIGN_TOOL_EXE not set - skipping Windows signing")
+        return True
+
+    if not codesigntool_path.exists():
+        log_error(f"CodeSignTool not found at: {codesigntool_path}")
         return False
 
     if not all([env.esigner_username, env.esigner_password, env.esigner_totp_secret]):
         log_error("Missing eSigner credentials")
-        return False
-
-    codesigntool_path = Path(env.code_sign_tool_path) / "CodeSignTool.bat"
-    if not codesigntool_path.exists():
-        log_error(f"CodeSignTool.bat not found at: {codesigntool_path}")
         return False
 
     log_info(f"Signing {binary_path.name}...")
@@ -273,17 +272,22 @@ def sign_windows_binary(
         except Exception:
             pass
 
-        verify_cmd = [
-            "powershell", "-Command",
-            f"(Get-AuthenticodeSignature '{binary_path}').Status",
-        ]
-        verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
-        if "Valid" in verify_result.stdout:
-            log_success(f"Signed and verified {binary_path.name}")
-            return True
+        # Verify signature on Windows only (PowerShell not available on macOS/Linux)
+        if IS_WINDOWS():
+            verify_cmd = [
+                "powershell", "-Command",
+                f"(Get-AuthenticodeSignature '{binary_path}').Status",
+            ]
+            verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
+            if "Valid" in verify_result.stdout:
+                log_success(f"Signed and verified {binary_path.name}")
+            else:
+                log_error(f"Signature verification failed: {verify_result.stdout.strip()}")
+                return False
         else:
-            log_error(f"Signature verification failed: {verify_result.stdout.strip()}")
-            return False
+            log_success(f"Signed {binary_path.name} (verification skipped on non-Windows)")
+
+        return True
 
     except Exception as e:
         log_error(f"Signing failed: {e}")

@@ -100,8 +100,13 @@ class EnvConfig:
 
     @property
     def code_sign_tool_path(self) -> Optional[str]:
-        """Path to Windows code signing tool directory"""
+        """Path to Windows code signing tool directory (legacy, use CODE_SIGN_TOOL_EXE instead)"""
         return os.environ.get("CODE_SIGN_TOOL_PATH")
+
+    @property
+    def code_sign_tool_exe(self) -> Optional[str]:
+        """Path to CodeSignTool executable (CodeSignTool.sh on macOS/Linux, CodeSignTool.bat on Windows)"""
+        return os.environ.get("CODE_SIGN_TOOL_EXE")
 
     @property
     def esigner_username(self) -> Optional[str]:

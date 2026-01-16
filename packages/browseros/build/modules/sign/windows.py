@@ -126,15 +126,19 @@ def sign_with_codesigntool(
     if env is None:
         env = EnvConfig()
 
-    if not env.code_sign_tool_path:
-        log_error("CODE_SIGN_TOOL_PATH not set in .env file")
-        log_error("Set CODE_SIGN_TOOL_PATH=C:/src/CodeSignTool-v1.3.2-windows")
+    # Prefer CODE_SIGN_TOOL_EXE (direct path to executable), fall back to CODE_SIGN_TOOL_PATH + .bat
+    if env.code_sign_tool_exe:
+        codesigntool_path = Path(env.code_sign_tool_exe)
+    elif env.code_sign_tool_path:
+        codesigntool_path = Path(env.code_sign_tool_path) / "CodeSignTool.bat"
+    else:
+        log_error("CODE_SIGN_TOOL_EXE or CODE_SIGN_TOOL_PATH not set in .env file")
+        log_error("Set CODE_SIGN_TOOL_EXE=/path/to/CodeSignTool.sh (macOS/Linux)")
+        log_error("Or CODE_SIGN_TOOL_PATH=C:/src/CodeSignTool-v1.3.2-windows (Windows)")
         return False
 
-    codesigntool_path = Path(env.code_sign_tool_path) / "CodeSignTool.bat"
     if not codesigntool_path.exists():
-        log_error(f"CodeSignTool.bat not found at: {codesigntool_path}")
-        log_error("Make sure CODE_SIGN_TOOL_PATH points to the CodeSignTool directory")
+        log_error(f"CodeSignTool not found at: {codesigntool_path}")
         return False
 
     if not all([env.esigner_username, env.esigner_password, env.esigner_totp_secret]):
@@ -257,8 +261,8 @@ def check_signing_environment(env: Optional[EnvConfig] = None) -> bool:
     if env is None:
         env = EnvConfig()
 
-    if not env.code_sign_tool_path:
-        log_error("CODE_SIGN_TOOL_PATH not set")
+    if not env.code_sign_tool_exe and not env.code_sign_tool_path:
+        log_error("CODE_SIGN_TOOL_EXE or CODE_SIGN_TOOL_PATH not set")
         return False
 
     missing = []
