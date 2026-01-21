@@ -1,0 +1,61 @@
+---
+title: "Workflows"
+description: "Build reliable, repeatable browser automations with a visual graph builder"
+---
+
+Workflows let you turn complex browser tasks into reliable, reusable automations. Instead of hoping the agent figures out the right steps each time, you define the exact sequence—and run it whenever you need.
+
+## When to Use Workflows
+
+Use workflows when:
+- **Reliability matters** — The task needs to work the same way every time
+- **Steps are complex** — Multiple pages, loops, conditionals, or parallel actions
+- **You'll repeat it** — Run the same automation daily, weekly, or on-demand
+
+For quick, one-off tasks, the regular agent works well. For serious automation, build a workflow.
+
+## Creating Your First Workflow
+
+<img src="/features/workflow/workflows-page.png" alt="Access Workflows from the sidebar or create a new workflow" />
+
+1. Open the **Workflows** page from the sidebar
+2. Click **+ New Workflow**
+3. Describe what you want in the chat panel
+
+Try this example—copy and paste it to create a workflow that fills out forms from spreadsheet data:
+
+```
+Navigate to the spreadsheet https://dub.sh/browseros/test-spreadsheet. Get the contact information and fill it out in the form https://dub.sh/browseros/test-form for each entry in the spreadsheet. Feel free to parallelize this, but ensure all entries are filled.
+```
+
+The workflow agent will generate a visual graph representing each step. You can refine the workflow by chatting further—ask it to add steps, handle edge cases, or adjust the logic.
+
+<img src="/features/workflow/sample-workflow.png" alt="Generated workflow graph with parallel execution" />
+
+4. Click **Test Workflow** to run it and verify it works
+5. Click **Save Changes** to keep it for later
+
+## Running Workflows
+
+From the Workflows page, you can:
+- **Run** — Execute the workflow immediately
+- **Edit** — Open the graph builder to refine steps
+- **Delete** — Remove workflows you no longer need
+
+## Example Use Cases
+
+**Data entry automation**
+> Read contacts from a Google Sheet and submit each one to a web form—automatically handling pagination and parallel submissions.
+
+**LinkedIn outreach**
+> Visit each profile from a list, check if they match your criteria, and send a personalized connection request.
+
+**Price monitoring**
+> Check prices across multiple e-commerce sites, extract the data, and compile it into a spreadsheet.
+
+**Bulk unsubscribes**
+> Go through your Gmail, find subscription emails, and click unsubscribe on each one.
+
+## Feedback
+
+Workflows is a new feature. If you'd like to see scheduling support, sharing, or other capabilities, [open a GitHub issue](https://github.com/browseros-ai/BrowserOS/issues) with your request.

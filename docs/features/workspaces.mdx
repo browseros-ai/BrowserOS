@@ -1,0 +1,68 @@
+---
+title: "Workspaces"
+description: "Give the agent access to local files for powerful browser + file automations"
+---
+
+Workspaces let the agent read and write files on your computer. Combine browser automation with local file operations—research on the web, then save reports directly to your folder.
+
+## Why Workspaces?
+
+Without a workspace, the agent can only interact with browser tabs. With a workspace, it can:
+
+- **Read files** from your selected folder
+- **Write files** like reports, spreadsheets, or markdown
+- **Run shell commands** within the folder
+
+The real power: do both browser automation AND file operations in a single task.
+
+## Setting Up a Workspace
+
+<img src="/features/workspace/workspace-selector.png" alt="Select a workspace folder for the agent to operate in" />
+
+1. Click the workspace dropdown (next to the prompt input)
+2. Select a recent folder or click **Choose a different folder**
+3. Grant BrowserOS access to that folder when prompted
+
+The agent is sandboxed to your selected folder—it cannot access files outside of it.
+
+To disable file access, select **No workspace** and the agent will work with browser tabs only.
+
+## Try It: Research and Create a Report
+
+With a workspace selected, try this prompt:
+
+```
+Read the top 3 stories on Hacker News, read the comments too, and write an HTML report.
+```
+
+The agent will:
+1. Navigate to Hacker News
+2. Read each top story and its comments
+3. Generate an HTML report summarizing the findings
+4. Save the report to your workspace folder
+
+<img src="/features/workspace/workspace-research-and-create-example.png" alt="Agent researching Hacker News and generating an HTML report" />
+
+## Example Use Cases
+
+**Organize your downloads**
+> Go through my Downloads folder and organize files by type—documents, images, videos, archives.
+
+**Competitive research report**
+> Research key trends about [topic] on Reddit, Twitter, and LinkedIn. Create an HTML report with your findings.
+
+**Web scraping to files**
+> Visit these 10 product pages, extract the name, price, and description, and save the results as a markdown file.
+
+**Content aggregation**
+> Find the top posts from these 5 subreddits today and compile them into a daily digest document.
+
+## Security
+
+- The agent can **only** access the folder you select—no parent directories or other locations
+- You can revoke access anytime by selecting **No workspace**
+- All file operations happen locally on your machine
+
+## Feedback
+
+Workspaces is a new feature. If you have feedback or feature requests, [open a GitHub issue](https://github.com/browseros-ai/BrowserOS/issues).

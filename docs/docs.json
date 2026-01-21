@@ -12,34 +12,27 @@
     "groups": [
       {
         "group": "Get Started",
-        "pages": [
-          "index",
-          "onboarding",
-          "update",
-          "changelog"
-        ]
+        "pages": ["index", "onboarding", "update", "changelog"]
       },
       {
         "group": "Core Features",
         "pages": [
           "features/bring-your-own-llm",
-          "features/llm-chat-hub",
           "features/scheduled-tasks",
+          "features/workflows",
           "features/use-with-claude-code",
+          "features/workspaces",
+          "features/llm-chat-hub",
           "features/ad-blocking"
         ]
       },
       {
         "group": "Integrations",
-        "pages": [
-          "integrations/n8n"
-        ]
+        "pages": ["integrations/n8n"]
       },
       {
         "group": "Contributing",
-        "pages": [
-          "contributing"
-        ]
+        "pages": ["contributing"]
       }
     ]
   },
