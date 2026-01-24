@@ -1,0 +1,23 @@
+diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
+index 4308450d0a0ac..208b45482369c 100644
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -6903,6 +6903,7 @@ test("unit_tests") {
+     "//chrome/browser/breadcrumbs",
+     "//chrome/browser/breadcrumbs:unit_tests",
+     "//chrome/browser/browsing_data:constants",
++    "//chrome/browser/browseros/server:unit_tests",
+     "//chrome/browser/btm:unit_tests",
+     "//chrome/browser/chooser_controller:unit_tests",
+     "//chrome/browser/commerce",
+@@ -7708,6 +7709,10 @@ test("unit_tests") {
+     # but when we tried to pull it up to the common.gypi level, it broke
+     # other things like the ui and startup tests. *shrug*
+     ldflags = [ "-Wl,-ObjC" ]
++
++    if (enable_sparkle) {
++      configs += [ "//third_party/sparkle:sparkle_link_test" ]
++    }
+   } else {
+     # !is_mac
+     deps += [

@@ -1,9 +1,9 @@
 diff --git a/third_party/sparkle/BUILD.gn b/third_party/sparkle/BUILD.gn
 new file mode 100644
-index 0000000000000..5e54fedf2db48
+index 0000000000000..9b174cb71e497
 --- /dev/null
 +++ b/third_party/sparkle/BUILD.gn
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,55 @@
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -25,6 +25,9 @@ index 0000000000000..5e54fedf2db48
 +  ldflags = [
 +    "-rpath",
 +    "@executable_path/../Frameworks",
++    # Also add direct path to third_party/sparkle for test binaries
++    "-rpath",
++    "@executable_path/" + _sparkle_dir,
 +    "-F",
 +    _sparkle_dir,
 +    "-framework",
