@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.h b/chrome/browser/browseros/server/browseros_server_updater.h
 new file mode 100644
-index 0000000000000..03bdaf2bb38bc
+index 0000000000000..022b703a32e8d
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.h
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,164 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -20,6 +20,7 @@ index 0000000000000..03bdaf2bb38bc
 +#include "base/timer/timer.h"
 +#include "base/version.h"
 +#include "chrome/browser/browseros/server/browseros_appcast_parser.h"
++#include "chrome/browser/browseros/server/server_updater.h"
 +
 +namespace network {
 +class SimpleURLLoader;
@@ -42,37 +43,24 @@ index 0000000000000..03bdaf2bb38bc
 +// 6. Test binary with --version
 +// 7. Update current_version file
 +// 8. Signal manager to use new binary on next restart
-+class BrowserOSServerUpdater {
++class BrowserOSServerUpdater : public browseros::ServerUpdater {
 + public:
 +  explicit BrowserOSServerUpdater(browseros::BrowserOSServerManager* manager);
-+  ~BrowserOSServerUpdater();
++  ~BrowserOSServerUpdater() override;
 +
 +  BrowserOSServerUpdater(const BrowserOSServerUpdater&) = delete;
 +  BrowserOSServerUpdater& operator=(const BrowserOSServerUpdater&) = delete;
 +
-+  // Starts periodic update checks.
-+  void Start();
++  // ServerUpdater implementation:
++  void Start() override;
++  void Stop() override;
++  bool IsUpdateInProgress() const override;
++  base::FilePath GetBestServerBinaryPath() override;
++  base::FilePath GetBestServerResourcesPath() override;
++  void InvalidateDownloadedVersion() override;
 +
-+  // Stops update checks.
-+  void Stop();
-+
-+  // Forces an immediate update check.
++  // Forces an immediate update check (not part of interface).
 +  void CheckNow();
-+
-+  // Returns true if currently checking or downloading.
-+  bool IsUpdateInProgress() const { return update_in_progress_; }
-+
-+  // Returns the best available server binary path.
-+  // Prefers downloaded version if valid and newer, falls back to bundled.
-+  base::FilePath GetBestServerBinaryPath();
-+
-+  // Returns the resources path for the best available binary.
-+  base::FilePath GetBestServerResourcesPath();
-+
-+  // Called by manager when downloaded version is unusable (missing or crashes).
-+  // Nukes all downloaded versions and current_version file, forcing fallback
-+  // to bundled binary until next successful update.
-+  void InvalidateDownloadedVersion();
 +
 + private:
 +  enum class State {

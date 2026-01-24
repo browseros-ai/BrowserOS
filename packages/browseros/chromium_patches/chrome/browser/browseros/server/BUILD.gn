@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/BUILD.gn b/chrome/browser/browseros/server/BUILD.gn
 new file mode 100644
-index 0000000000000..711d6896d6c4a
+index 0000000000000..5ffe3760d75b2
 --- /dev/null
 +++ b/chrome/browser/browseros/server/BUILD.gn
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,128 @@
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -27,6 +27,8 @@ index 0000000000000..711d6896d6c4a
 +  sources = [
 +    "browseros_appcast_parser.cc",
 +    "browseros_appcast_parser.h",
++    "browseros_server_config.cc",
++    "browseros_server_config.h",
 +    "browseros_server_constants.h",
 +    "browseros_server_manager.cc",
 +    "browseros_server_manager.h",
@@ -34,6 +36,18 @@ index 0000000000000..711d6896d6c4a
 +    "browseros_server_prefs.h",
 +    "browseros_server_updater.cc",
 +    "browseros_server_updater.h",
++    "browseros_server_utils.cc",
++    "browseros_server_utils.h",
++    "health_checker.h",
++    "health_checker_impl.cc",
++    "health_checker_impl.h",
++    "process_controller.h",
++    "process_controller_impl.cc",
++    "process_controller_impl.h",
++    "server_state_store.h",
++    "server_state_store_impl.cc",
++    "server_state_store_impl.h",
++    "server_updater.h",
 +  ]
 +
 +  deps = [
@@ -49,6 +63,43 @@ index 0000000000000..711d6896d6c4a
 +    "//third_party/boringssl",
 +    "//third_party/libxml:xml_reader",
 +    "//third_party/zlib/google:zip",
++  ]
++}
++
++source_set("test_support") {
++  testonly = true
++  sources = [
++    "test/mock_health_checker.h",
++    "test/mock_implementations.cc",
++    "test/mock_process_controller.h",
++    "test/mock_server_state_store.h",
++    "test/mock_server_updater.h",
++  ]
++
++  deps = [
++    ":server",
++    "//base",
++    "//testing/gmock",
++  ]
++}
++
++source_set("unit_tests") {
++  testonly = true
++  sources = [
++    "browseros_appcast_parser_unittest.cc",
++    "browseros_server_manager_unittest.cc",
++    "browseros_server_utils_unittest.cc",
++  ]
++
++  deps = [
++    ":server",
++    ":test_support",
++    "//base",
++    "//base/test:test_support",
++    "//components/prefs:test_support",
++    "//net",
++    "//testing/gmock",
++    "//testing/gtest",
 +  ]
 +}
 +

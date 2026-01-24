@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_prefs.cc b/chrome/browser/browseros/server/browseros_server_prefs.cc
 new file mode 100644
-index 0000000000000..9ea53758657d7
+index 0000000000000..631c25fe80c97
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_prefs.cc
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,52 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -19,9 +19,6 @@ index 0000000000000..9ea53758657d7
 +
 +// MCP server port (HTTP)
 +const char kMCPServerPort[] = "browseros.server.mcp_port";
-+
-+// Agent server port
-+const char kAgentServerPort[] = "browseros.server.agent_port";
 +
 +// Extension server port
 +const char kExtensionServerPort[] = "browseros.server.extension_port";
@@ -44,9 +41,6 @@ index 0000000000000..9ea53758657d7
 +
 +  // MCP port
 +  registry->RegisterIntegerPref(kMCPServerPort, kDefaultMCPPort);
-+
-+  // Agent port
-+  registry->RegisterIntegerPref(kAgentServerPort, kDefaultAgentPort);
 +
 +  // Extension port
 +  registry->RegisterIntegerPref(kExtensionServerPort, kDefaultExtensionPort);

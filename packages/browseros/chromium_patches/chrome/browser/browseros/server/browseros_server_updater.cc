@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.cc b/chrome/browser/browseros/server/browseros_server_updater.cc
 new file mode 100644
-index 0000000000000..887113564dfdc
+index 0000000000000..43996b7bec96c
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.cc
-@@ -0,0 +1,1066 @@
+@@ -0,0 +1,1075 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -12,10 +12,10 @@ index 0000000000000..887113564dfdc
 +
 +#include "base/base64.h"
 +#include "base/command_line.h"
-+#include "base/json/json_reader.h"
 +#include "base/feature_list.h"
 +#include "base/files/file_enumerator.h"
 +#include "base/files/file_util.h"
++#include "base/json/json_reader.h"
 +#include "base/logging.h"
 +#include "base/path_service.h"
 +#include "base/process/launch.h"
@@ -24,14 +24,14 @@ index 0000000000000..887113564dfdc
 +#include "base/task/thread_pool.h"
 +#include "chrome/browser/browser_features.h"
 +#include "chrome/browser/browser_process.h"
-+#include "chrome/browser/browseros/metrics/browseros_metrics.h"
 +#include "chrome/browser/browseros/core/browseros_switches.h"
++#include "chrome/browser/browseros/metrics/browseros_metrics.h"
 +#include "chrome/browser/browseros/server/browseros_server_constants.h"
 +#include "chrome/browser/browseros/server/browseros_server_manager.h"
 +#include "chrome/browser/browseros/server/browseros_server_prefs.h"
-+#include "components/prefs/pref_service.h"
 +#include "chrome/browser/net/system_network_context_manager.h"
 +#include "chrome/common/chrome_paths.h"
++#include "components/prefs/pref_service.h"
 +#include "net/base/net_errors.h"
 +#include "net/traffic_annotation/network_traffic_annotation.h"
 +#include "services/network/public/cpp/resource_request.h"
@@ -57,7 +57,7 @@ index 0000000000000..887113564dfdc
 +      destination: OTHER
 +      internal {
 +        contacts {
-+          email: "nickolaj@nickolaj.com"
++          email: "nikhil@browseros.com"
 +        }
 +      }
 +    }
@@ -80,7 +80,7 @@ index 0000000000000..887113564dfdc
 +      destination: OTHER
 +      internal {
 +        contacts {
-+          email: "nickolaj@nickolaj.com"
++          email: "nikhil@browseros.com"
 +        }
 +      }
 +    }
@@ -103,7 +103,7 @@ index 0000000000000..887113564dfdc
 +      destination: LOCAL
 +      internal {
 +        contacts {
-+          email: "nickolaj@nickolaj.com"
++          email: "nikhil@browseros.com"
 +        }
 +      }
 +    }
@@ -158,8 +158,7 @@ index 0000000000000..887113564dfdc
 +  const uint8_t* message =
 +      reinterpret_cast<const uint8_t*>(file_contents.data());
 +  size_t message_len = file_contents.size();
-+  const uint8_t* sig =
-+      reinterpret_cast<const uint8_t*>(signature_bytes.data());
++  const uint8_t* sig = reinterpret_cast<const uint8_t*>(signature_bytes.data());
 +  const uint8_t* pub_key =
 +      reinterpret_cast<const uint8_t*>(public_key_bytes.data());
 +
@@ -337,9 +336,8 @@ index 0000000000000..887113564dfdc
 +  CheckVersionCachesAndStart();
 +}
 +
-+void BrowserOSServerUpdater::OnBundledVersionLoaded(
-+    int exit_code,
-+    const std::string& output) {
++void BrowserOSServerUpdater::OnBundledVersionLoaded(int exit_code,
++                                                    const std::string& output) {
 +  if (exit_code == 0 && !output.empty()) {
 +    // Parse version from output (trim whitespace)
 +    std::string_view trimmed =
@@ -387,6 +385,10 @@ index 0000000000000..887113564dfdc
 +  ResetState();
 +}
 +
++bool BrowserOSServerUpdater::IsUpdateInProgress() const {
++  return update_in_progress_;
++}
++
 +void BrowserOSServerUpdater::CheckNow() {
 +  if (!bundled_version_loaded_ || !downloaded_version_loaded_) {
 +    LOG(INFO) << "browseros: Version caches not loaded yet, skipping check";
@@ -409,7 +411,8 @@ index 0000000000000..887113564dfdc
 +  state_ = State::kFetchingAppcast;
 +  update_in_progress_ = true;
 +
-+  // Get appcast URL (allow override via command line, otherwise use alpha/stable)
++  // Get appcast URL (allow override via command line, otherwise use
++  // alpha/stable)
 +  std::string appcast_url;
 +  base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
 +  if (cmd->HasSwitch(browseros::kServerAppcastUrl)) {
@@ -491,7 +494,8 @@ index 0000000000000..887113564dfdc
 +    return;
 +  }
 +
-+  LOG(INFO) << "browseros: New version available: " << item->version.GetString();
++  LOG(INFO) << "browseros: New version available: "
++            << item->version.GetString();
 +  pending_item_ = *item;
 +  pending_signature_ = enclosure->signature;
 +  CheckVersionAlreadyDownloaded(*enclosure, item->version);
@@ -550,8 +554,9 @@ index 0000000000000..887113564dfdc
 +      base::BindOnce(
 +          [](base::WeakPtr<BrowserOSServerUpdater> self,
 +             const AppcastEnclosure& enc, const base::Version& ver) {
-+            if (!self)
++            if (!self) {
 +              return;
++            }
 +
 +            GURL download_url(enc.url);
 +            LOG(INFO) << "browseros: Downloading " << download_url;
@@ -569,7 +574,7 @@ index 0000000000000..887113564dfdc
 +            self->download_loader_->SetOnDownloadProgressCallback(
 +                base::BindRepeating([](uint64_t current) {
 +                  LOG(INFO) << "browseros: Download progress: "
-+                          << (current / 1024 / 1024) << " MB";
++                            << (current / 1024 / 1024) << " MB";
 +                }));
 +
 +            base::FilePath download_path =
@@ -616,10 +621,11 @@ index 0000000000000..887113564dfdc
 +      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
 +      base::BindOnce(&DoVerifyAndExtract, zip_path, signature, dest_dir),
 +      base::BindOnce(
-+          [](base::WeakPtr<BrowserOSServerUpdater> self,
-+             base::Version version, VerifyExtractResult result) {
-+            if (!self)
++          [](base::WeakPtr<BrowserOSServerUpdater> self, base::Version version,
++             VerifyExtractResult result) {
++            if (!self) {
 +              return;
++            }
 +            self->OnVerifyAndExtractComplete(version, result.success,
 +                                             result.error);
 +          },
@@ -661,8 +667,9 @@ index 0000000000000..887113564dfdc
 +      base::BindOnce(
 +          [](base::WeakPtr<BrowserOSServerUpdater> self, base::Version version,
 +             std::pair<int, std::string> result) {
-+            if (!self)
++            if (!self) {
 +              return;
++            }
 +            self->OnBinaryTestComplete(version, result.first, result.second);
 +          },
 +          weak_factory_.GetWeakPtr(), version));
@@ -704,8 +711,8 @@ index 0000000000000..887113564dfdc
 +  request->method = "GET";
 +  request->credentials_mode = network::mojom::CredentialsMode::kOmit;
 +
-+  status_loader_ = network::SimpleURLLoader::Create(std::move(request),
-+                                                    GetStatusTrafficAnnotation());
++  status_loader_ = network::SimpleURLLoader::Create(
++      std::move(request), GetStatusTrafficAnnotation());
 +  status_loader_->SetTimeoutDuration(kStatusCheckTimeout);
 +
 +  auto* url_loader_factory = g_browser_process->system_network_context_manager()
@@ -731,7 +738,8 @@ index 0000000000000..887113564dfdc
 +
 +  std::optional<base::Value> json = base::JSONReader::Read(*response);
 +  if (!json || !json->is_dict()) {
-+    LOG(WARNING) << "browseros: Invalid status response, proceeding with update";
++    LOG(WARNING)
++        << "browseros: Invalid status response, proceeding with update";
 +    OnServerStatusChecked(/*can_update=*/true);
 +    return;
 +  }
@@ -754,7 +762,8 @@ index 0000000000000..887113564dfdc
 +
 +    base::Value::Dict props;
 +    props.Set("pending_version", pending_item_.version.GetString());
-+    browseros_metrics::BrowserOSMetrics::Log("server.ota.busy", std::move(props));
++    browseros_metrics::BrowserOSMetrics::Log("server.ota.busy",
++                                             std::move(props));
 +
 +    ResetState();
 +    return;
@@ -865,8 +874,8 @@ index 0000000000000..887113564dfdc
 +    // Delete file when clearing downloaded version
 +    base::ThreadPool::PostTask(
 +        FROM_HERE, {base::MayBlock()},
-+        base::BindOnce(
-+            [](base::FilePath path) { base::DeleteFile(path); }, version_file));
++        base::BindOnce([](base::FilePath path) { base::DeleteFile(path); },
++                       version_file));
 +  }
 +}
 +
@@ -968,15 +977,14 @@ index 0000000000000..887113564dfdc
 +
 +void BrowserOSServerUpdater::CleanupPendingUpdate() {
 +  base::FilePath pending_dir = GetPendingUpdateDir();
-+  base::ThreadPool::PostTask(
-+      FROM_HERE, {base::MayBlock()},
-+      base::BindOnce(
-+          [](base::FilePath dir) {
-+            if (base::PathExists(dir)) {
-+              base::DeletePathRecursively(dir);
-+            }
-+          },
-+          pending_dir));
++  base::ThreadPool::PostTask(FROM_HERE, {base::MayBlock()},
++                             base::BindOnce(
++                                 [](base::FilePath dir) {
++                                   if (base::PathExists(dir)) {
++                                     base::DeletePathRecursively(dir);
++                                   }
++                                 },
++                                 pending_dir));
 +}
 +
 +void BrowserOSServerUpdater::CleanupOldVersions() {
@@ -1003,10 +1011,9 @@ index 0000000000000..887113564dfdc
 +            }
 +
 +            // Sort by version (newest first)
-+            std::sort(versions.begin(), versions.end(),
-+                      [](const auto& a, const auto& b) {
-+                        return a.first > b.first;
-+                      });
++            std::sort(
++                versions.begin(), versions.end(),
++                [](const auto& a, const auto& b) { return a.first > b.first; });
 +
 +            // Delete old versions beyond the keep limit
 +            int deleted = 0;
@@ -1037,9 +1044,11 @@ index 0000000000000..887113564dfdc
 +  if (pending_item_.version.IsValid()) {
 +    props.Set("version", pending_item_.version.GetString());
 +  }
-+  browseros_metrics::BrowserOSMetrics::Log("server.ota.error", std::move(props));
++  browseros_metrics::BrowserOSMetrics::Log("server.ota.error",
++                                           std::move(props));
 +
-+  // Clean version directory if we failed after extraction (test or hotswap stage)
++  // Clean version directory if we failed after extraction (test or hotswap
++  // stage)
 +  if (pending_item_.version.IsValid() &&
 +      (stage == "test" || stage == "hotswap")) {
 +    base::FilePath version_dir = GetVersionDir(pending_item_.version);

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.h b/chrome/browser/browseros/server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000..7d78115c373ef
+index 0000000000000..a435432d255c6
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.h
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,206 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -16,24 +16,26 @@ index 0000000000000..7d78115c373ef
 +
 +#include "base/files/file.h"
 +#include "base/files/file_path.h"
-+#include "base/memory/ref_counted.h"
++#include "base/memory/raw_ptr.h"
 +#include "base/memory/weak_ptr.h"
 +#include "base/no_destructor.h"
 +#include "base/process/process.h"
 +#include "base/timer/timer.h"
++#include "chrome/browser/browseros/server/browseros_server_config.h"
++#include "chrome/browser/browseros/server/process_controller.h"
 +
 +class PrefChangeRegistrar;
++class PrefService;
 +
 +namespace browseros_server {
 +class BrowserOSServerUpdater;
 +}
 +
-+namespace net {
-+class HttpResponseHeaders;
-+}
-+
-+namespace network {
-+class SimpleURLLoader;
++namespace browseros {
++class HealthChecker;
++class ProcessController;
++class ServerStateStore;
++class ServerUpdater;
 +}
 +
 +namespace browseros {
@@ -45,7 +47,15 @@ index 0000000000000..7d78115c373ef
 +// 3. Monitors MCP server health via HTTP /health endpoint and auto-restarts
 +class BrowserOSServerManager {
 + public:
++  // Production singleton (uses real implementations)
 +  static BrowserOSServerManager* GetInstance();
++
++  // Test constructor (dependency injection)
++  BrowserOSServerManager(std::unique_ptr<ProcessController> process_controller,
++                         std::unique_ptr<ServerStateStore> state_store,
++                         std::unique_ptr<HealthChecker> health_checker,
++                         std::unique_ptr<ServerUpdater> updater,
++                         PrefService* local_state);
 +
 +  BrowserOSServerManager(const BrowserOSServerManager&) = delete;
 +  BrowserOSServerManager& operator=(const BrowserOSServerManager&) = delete;
@@ -65,22 +75,38 @@ index 0000000000000..7d78115c373ef
 +  bool IsRunning() const;
 +
 +  // Gets the CDP port (auto-discovered, stable across restarts)
-+  int GetCDPPort() const { return cdp_port_; }
++  int GetCDPPort() const { return ports_.cdp; }
 +
 +  // Gets the MCP port (auto-discovered, stable across restarts)
-+  int GetMCPPort() const { return mcp_port_; }
-+
-+  // Gets the Agent port (auto-discovered, stable across restarts)
-+  int GetAgentPort() const { return agent_port_; }
++  int GetMCPPort() const { return ports_.mcp; }
 +
 +  // Gets the Extension port (auto-discovered, stable across restarts)
-+  int GetExtensionPort() const { return extension_port_; }
++  int GetExtensionPort() const { return ports_.extension; }
++
++  // Gets all ports (for testing/debugging)
++  const ServerPorts& GetPorts() const { return ports_; }
 +
 +  // Returns whether remote connections are allowed in MCP server
 +  bool IsAllowRemoteInMCP() const { return allow_remote_in_mcp_; }
 +
 +  // Called when browser is shutting down
 +  void Shutdown();
++
++  // Gets the number of consecutive health check failures (for testing)
++  int GetConsecutiveHealthCheckFailures() const {
++    return consecutive_health_check_failures_;
++  }
++
++  // Returns whether the last restart triggered full port revalidation (for testing)
++  bool DidLastRestartRevalidateAllPorts() const {
++    return last_restart_revalidated_all_ports_;
++  }
++
++  // Health check result handler (public for testing)
++  void OnHealthCheckComplete(bool success);
++
++  // Sets running state for testing (allows OnHealthCheckComplete to execute)
++  void SetRunningForTesting(bool running) { is_running_ = running; }
 +
 +  // Path getters (used by updater)
 +  base::FilePath GetBrowserOSServerExecutablePath() const;
@@ -92,22 +118,8 @@ index 0000000000000..7d78115c373ef
 +  using UpdateCompleteCallback = base::OnceCallback<void(bool success)>;
 +  void RestartServerForUpdate(UpdateCompleteCallback callback);
 +
-+  // Result from launching the server process on background thread
-+  // Public because it's used by free function LaunchProcessOnBackgroundThread
-+  struct LaunchResult {
-+    base::Process process;
-+    bool used_fallback = false;  // True if fell back to bundled binary
-+  };
-+
 + private:
 +  friend base::NoDestructor<BrowserOSServerManager>;
-+
-+  // Result of port revalidation (passed between background and UI threads)
-+  struct RevalidatedPorts {
-+    int mcp_port;
-+    int agent_port;
-+    int extension_port;
-+  };
 +
 +  BrowserOSServerManager();
 +  ~BrowserOSServerManager();
@@ -122,49 +134,49 @@ index 0000000000000..7d78115c373ef
 +  void SavePortsToPrefs();         // 5. Save final values to prefs
 +  void StartCDPServer();
 +  void StopCDPServer();
++
++  // Builds a complete launch configuration by resolving paths and identity.
++  // Called fresh before each launch since updater may change paths.
++  ServerLaunchConfig BuildLaunchConfig();
++
 +  void LaunchBrowserOSProcess();
 +  void OnProcessLaunched(LaunchResult result);
 +  // Terminates the BrowserOS server process.
 +  // If wait=true, blocks until process exits (must be called from background thread).
 +  // If wait=false, just sends kill signal and returns (safe from any thread).
 +  void TerminateBrowserOSProcess(bool wait);
-+  void RestartBrowserOSProcess();
++  void RestartBrowserOSProcess(bool revalidate_all_ports = false);
 +
 +  // Revalidates ports for restart (runs on background thread).
 +  // CDP port is excluded (already bound by Chrome's DevTools server).
 +  // If revalidate_all is true, all ports run through FindAvailablePort (PORT_CONFLICT).
-+  // If false, MCP stays unchanged; only Agent/Extension are revalidated.
-+  RevalidatedPorts RevalidatePortsForRestart(int cdp_port,
-+                                             int current_mcp,
-+                                             int current_agent,
-+                                             int current_extension,
-+                                             bool revalidate_all);
++  // If false, MCP stays unchanged; only Extension is revalidated.
++  ServerPorts RevalidatePortsForRestart(const ServerPorts& current,
++                                        bool revalidate_all);
 +
 +  // UI thread callback after port revalidation.
 +  // Updates member vars and prefs if changed, then launches process.
-+  void OnPortsRevalidated(RevalidatedPorts ports);
++  void OnPortsRevalidated(ServerPorts ports);
 +
 +  void OnProcessExited(int exit_code);
 +  void CheckServerHealth();
-+  void OnHealthCheckComplete(
-+      std::unique_ptr<network::SimpleURLLoader> url_loader,
-+      scoped_refptr<net::HttpResponseHeaders> headers);
 +  void OnAllowRemoteInMCPChanged();
 +  void OnRestartServerRequestedChanged();
 +  void CheckProcessStatus();
 +
 +  base::FilePath GetBrowserOSExecutionDir() const;
-+  // Finds an available port starting from starting_port, excluding ports
-+  // already assigned to other services to prevent collisions.
-+  int FindAvailablePort(int starting_port, const std::set<int>& excluded_ports);
-+  bool IsPortAvailable(int port);
++
++  // Dependencies (owned, injected via test constructor or created in default ctor)
++  std::unique_ptr<ProcessController> process_controller_;
++  std::unique_ptr<ServerStateStore> state_store_;
++  std::unique_ptr<HealthChecker> health_checker_;
++
++  // Not owned, can be null (injected for tests, otherwise uses g_browser_process)
++  raw_ptr<PrefService> local_state_ = nullptr;
 +
 +  base::File lock_file_;  // System-wide lock to ensure single instance
 +  base::Process process_;
-+  int cdp_port_ = 0;  // CDP port (auto-discovered)
-+  int mcp_port_ = 0;  // MCP port (auto-discovered)
-+  int agent_port_ = 0;  // Agent port (auto-discovered)
-+  int extension_port_ = 0;  // Extension port (auto-discovered)
++  ServerPorts ports_;  // All server port assignments
 +  bool allow_remote_in_mcp_ = false;  // Whether remote connections allowed in MCP
 +  bool is_running_ = false;
 +  bool is_restarting_ = false;  // Whether server is currently restarting
@@ -175,6 +187,10 @@ index 0000000000000..7d78115c373ef
 +  int consecutive_startup_failures_ = 0;
 +  base::TimeTicks last_launch_time_;
 +
++  // Health check failure tracking - 3 consecutive failures triggers full port revalidation
++  int consecutive_health_check_failures_ = 0;
++  bool last_restart_revalidated_all_ports_ = false;  // For testing
++
 +  // Timer for health checks
 +  base::RepeatingTimer health_check_timer_;
 +
@@ -184,8 +200,9 @@ index 0000000000000..7d78115c373ef
 +  // Preference change registrar for monitoring pref changes
 +  std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
 +
-+  // Server updater for OTA updates
-+  std::unique_ptr<browseros_server::BrowserOSServerUpdater> updater_;
++  // Server updater for OTA updates (created lazily in OnProcessLaunched)
++  // Can be injected via test constructor as ServerUpdater interface
++  std::unique_ptr<ServerUpdater> updater_;
 +
 +  base::WeakPtrFactory<BrowserOSServerManager> weak_factory_{this};
 +};
