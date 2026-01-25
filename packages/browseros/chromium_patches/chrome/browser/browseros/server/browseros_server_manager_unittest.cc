@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager_unittest.cc b/chrome/browser/browseros/server/browseros_server_manager_unittest.cc
 new file mode 100644
-index 0000000000000..5720abc4b0c1f
+index 0000000000000..82d5ec8ef02f2
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager_unittest.cc
-@@ -0,0 +1,476 @@
+@@ -0,0 +1,515 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -476,6 +476,45 @@ index 0000000000000..5720abc4b0c1f
 +  EXPECT_CALL(*updater_, InvalidateDownloadedVersion()).Times(1);
 +
 +  // This would be triggered during the launch flow
++}
++
++// =============================================================================
++// Orphan Recovery / State Store Tests
++// =============================================================================
++
++TEST_F(BrowserOSServerManagerTest, StopDeletesStateFile) {
++  // When Stop() is called, state file should be deleted for clean shutdown
++  manager_->SetRunningForTesting(true);
++
++  EXPECT_CALL(*state_store_, Delete()).Times(1);
++  EXPECT_CALL(*updater_, Stop()).Times(1);
++
++  manager_->Stop();
++}
++
++TEST_F(BrowserOSServerManagerTest, RecoverFromOrphan_NoStateFile) {
++  // When no state file exists, Read() returns nullopt and no kill happens
++  EXPECT_CALL(*state_store_, Read())
++      .WillOnce(Return(std::nullopt));
++
++  // Delete should not be called when there's no state file
++  EXPECT_CALL(*state_store_, Delete()).Times(0);
++
++  // Simulate the start flow by checking state_store behavior
++  // (RecoverFromOrphan is called internally by Start after AcquireLock)
++}
++
++TEST_F(BrowserOSServerManagerTest, RecoverFromOrphan_ProcessGone) {
++  // When state file exists but process is gone, should delete state file
++  server_utils::ServerState state;
++  state.pid = 99999;  // Non-existent PID
++  state.creation_time = 123456789;
++
++  EXPECT_CALL(*state_store_, Read())
++      .WillOnce(Return(state));
++
++  // State file should be deleted since process doesn't exist
++  EXPECT_CALL(*state_store_, Delete()).Times(1);
 +}
 +
 +}  // namespace

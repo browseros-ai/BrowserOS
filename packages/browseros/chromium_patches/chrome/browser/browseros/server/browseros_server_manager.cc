@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..bee8ce66f298a
+index 0000000000000..9908cbc8930f9
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,914 @@
+@@ -0,0 +1,998 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -214,6 +214,60 @@ index 0000000000000..bee8ce66f298a
 +  return true;
 +}
 +
++bool BrowserOSServerManager::RecoverFromOrphan() {
++  // Allow blocking for state file and process operations
++  base::ScopedAllowBlocking allow_blocking;
++
++  // Read state file
++  std::optional<server_utils::ServerState> state = state_store_->Read();
++  if (!state) {
++    LOG(INFO) << "browseros: No orphan state file found";
++    return false;
++  }
++
++  LOG(INFO) << "browseros: Found state file - PID: " << state->pid
++            << ", creation_time: " << state->creation_time;
++
++  // Check if process exists
++  if (!server_utils::ProcessExists(state->pid)) {
++    LOG(INFO) << "browseros: Process " << state->pid << " no longer exists";
++    state_store_->Delete();
++    return false;
++  }
++
++  // Validate creation time to handle PID reuse
++  std::optional<int64_t> actual_creation_time =
++      server_utils::GetProcessCreationTime(state->pid);
++  if (!actual_creation_time) {
++    LOG(WARNING) << "browseros: Could not get creation time for PID "
++                 << state->pid;
++    state_store_->Delete();
++    return false;
++  }
++
++  if (*actual_creation_time != state->creation_time) {
++    LOG(INFO) << "browseros: PID " << state->pid << " was reused "
++              << "(expected creation_time: " << state->creation_time
++              << ", actual: " << *actual_creation_time << ")";
++    state_store_->Delete();
++    return false;
++  }
++
++  // This is our orphan - kill it
++  LOG(INFO) << "browseros: Killing orphan server (PID: " << state->pid << ")";
++  constexpr base::TimeDelta kGracefulTimeout = base::Seconds(2);
++  bool killed = server_utils::KillProcess(state->pid, kGracefulTimeout);
++
++  if (killed) {
++    LOG(INFO) << "browseros: Orphan server killed successfully";
++  } else {
++    LOG(WARNING) << "browseros: Failed to kill orphan server, proceeding anyway";
++  }
++
++  state_store_->Delete();
++  return killed;
++}
++
 +void BrowserOSServerManager::LoadPortsFromPrefs() {
 +  if (!local_state_) {
 +    ports_.cdp = browseros_server::kDefaultCDPPort;
@@ -349,6 +403,10 @@ index 0000000000000..bee8ce66f298a
 +    return;  // Another Chrome process already owns the server
 +  }
 +
++  // Kill any orphan server from a previous crash (must be after lock, before launch)
++  // This frees the ports so we can reuse them from prefs.
++  RecoverFromOrphan();
++
 +  LOG(INFO) << "browseros: Starting BrowserOS server";
 +
 +  // Start servers and process
@@ -362,6 +420,8 @@ index 0000000000000..bee8ce66f298a
 +    return;
 +  }
 +
++  is_running_ = false;
++
 +  LOG(INFO) << "browseros: Stopping BrowserOS server";
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
@@ -374,6 +434,12 @@ index 0000000000000..bee8ce66f298a
 +
 +  // Use wait=false for shutdown - just send kill signal, don't block UI thread
 +  TerminateBrowserOSProcess(/*wait=*/false);
++
++  // Delete state file - clean shutdown means no orphan to recover
++  {
++    base::ScopedAllowBlocking allow_blocking;
++    state_store_->Delete();
++  }
 +
 +  // Release lock
 +  if (lock_file_.IsValid()) {
@@ -515,6 +581,24 @@ index 0000000000000..bee8ce66f298a
 +
 +  LOG(INFO) << "browseros: BrowserOS server started with PID: " << process_.Pid();
 +  LOG(INFO) << "browseros: " << ports_.DebugString();
++
++  // Write state file for orphan recovery on next startup
++  {
++    base::ScopedAllowBlocking allow_blocking;
++    std::optional<int64_t> creation_time =
++        server_utils::GetProcessCreationTime(process_.Pid());
++    if (creation_time) {
++      server_utils::ServerState state;
++      state.pid = process_.Pid();
++      state.creation_time = *creation_time;
++      if (!state_store_->Write(state)) {
++        LOG(WARNING) << "browseros: Failed to write server state file";
++      }
++    } else {
++      LOG(WARNING)
++          << "browseros: Could not get process creation time for state file";
++    }
++  }
 +
 +  // Start/restart monitoring timers
 +  health_check_timer_.Start(FROM_HERE, kHealthCheckInterval, this,

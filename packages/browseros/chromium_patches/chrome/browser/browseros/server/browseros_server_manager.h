@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.h b/chrome/browser/browseros/server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000..a435432d255c6
+index 0000000000000..457ee9e0295a3
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.h
-@@ -0,0 +1,206 @@
+@@ -0,0 +1,212 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -125,6 +125,12 @@ index 0000000000000..a435432d255c6
 +  ~BrowserOSServerManager();
 +
 +  bool AcquireLock();
++
++  // Orphan recovery - detects and kills any orphan server from a previous crash.
++  // Reads the state file, validates PID + creation_time to avoid killing wrong
++  // process if PID was reused, then kills the orphan if valid.
++  // Returns true if an orphan was found and killed.
++  bool RecoverFromOrphan();
 +
 +  // Port initialization for startup (called in order by Start())
 +  void LoadPortsFromPrefs();       // 1. Load saved values from prefs
