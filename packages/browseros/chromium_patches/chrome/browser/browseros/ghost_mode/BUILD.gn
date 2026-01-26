@@ -1,0 +1,67 @@
+diff --git a/chrome/browser/browseros/ghost_mode/BUILD.gn b/chrome/browser/browseros/ghost_mode/BUILD.gn
+new file mode 100644
+index 0000000000000..1a2b3c4d5e6f7
+--- /dev/null
++++ b/chrome/browser/browseros/ghost_mode/BUILD.gn
+@@ -0,0 +1,58 @@
++# Copyright 2026 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++# Ghost Mode: AI-powered pattern detection and automation suggestion
++# This feature observes user browsing patterns locally and suggests
++# automations based on repetitive actions.
++
++import("//build/config/features.gni")
++
++source_set("ghost_mode") {
++  sources = [
++    "ghost_mode_types.h",
++    "ghost_mode_prefs.cc",
++    "ghost_mode_prefs.h",
++    "action_recorder.cc",
++    "action_recorder.h",
++    "action_store.cc",
++    "action_store.h",
++    "pattern_detector.cc",
++    "pattern_detector.h",
++    "pattern_matcher.cc",
++    "pattern_matcher.h",
++    "sensitive_detector.cc",
++    "sensitive_detector.h",
++    "suggestion_controller.cc",
++    "suggestion_controller.h",
++    "workflow_generator.cc",
++    "workflow_generator.h",
++    "ghost_executor.cc",
++    "ghost_executor.h",
++  ]
++
++  deps = [
++    "//base",
++    "//chrome/browser/profiles:profile",
++    "//chrome/browser/ui",
++    "//components/prefs",
++    "//content/public/browser",
++    "//sql",
++    "//url",
++  ]
++
++  public_deps = [
++    "//chrome/browser/browseros/core",
++  ]
++}
++
++source_set("unit_tests") {
++  testonly = true
++  sources = [
++    "action_recorder_unittest.cc",
++    "pattern_detector_unittest.cc",
++    "sensitive_detector_unittest.cc",
++  ]
++
++  deps = [
++    ":ghost_mode",
++    "//testing/gtest",
++  ]
++}

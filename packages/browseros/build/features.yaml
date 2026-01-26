@@ -1,5 +1,28 @@
 version: "1.0"
 features:
+  ghost-mode:
+    description: "feat: AI Ghost Mode - invisible agent learning from user behavior"
+    files:
+      - chrome/browser/browseros/ghost_mode/BUILD.gn
+      - chrome/browser/browseros/ghost_mode/ghost_mode_types.h
+      - chrome/browser/browseros/ghost_mode/ghost_mode_prefs.cc
+      - chrome/browser/browseros/ghost_mode/ghost_mode_prefs.h
+      - chrome/browser/browseros/ghost_mode/action_recorder.cc
+      - chrome/browser/browseros/ghost_mode/action_recorder.h
+      - chrome/browser/browseros/ghost_mode/action_store.cc
+      - chrome/browser/browseros/ghost_mode/action_store.h
+      - chrome/browser/browseros/ghost_mode/pattern_detector.cc
+      - chrome/browser/browseros/ghost_mode/pattern_detector.h
+      - chrome/browser/browseros/ghost_mode/pattern_matcher.cc
+      - chrome/browser/browseros/ghost_mode/pattern_matcher.h
+      - chrome/browser/browseros/ghost_mode/sensitive_detector.cc
+      - chrome/browser/browseros/ghost_mode/sensitive_detector.h
+      - chrome/browser/browseros/ghost_mode/suggestion_controller.cc
+      - chrome/browser/browseros/ghost_mode/suggestion_controller.h
+      - chrome/browser/browseros/ghost_mode/workflow_generator.cc
+      - chrome/browser/browseros/ghost_mode/workflow_generator.h
+      - chrome/browser/browseros/ghost_mode/ghost_executor.cc
+      - chrome/browser/browseros/ghost_mode/ghost_executor.h
   chrome-version-updater:
     description: "chore: chrome version update"
     files:
