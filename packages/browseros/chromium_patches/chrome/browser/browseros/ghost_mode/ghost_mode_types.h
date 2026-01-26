@@ -92,6 +92,15 @@ index 0000000000000..2a3b4c5d6e7f8
 +  static std::optional<RecordedAction> FromValue(const base::Value::Dict& dict);
 +};
 +
++// Status of a detected pattern
++enum class PatternStatus {
++  kNew,         // Newly detected, not yet shown to user
++  kPending,     // Shown to user, awaiting action
++  kDismissed,   // User dismissed this pattern
++  kConverted,   // User converted to workflow
++  kExecuted,    // Pattern has been auto-executed
++};
++
 +// Represents a detected pattern of repeated actions
 +struct ActionSequence {
 +  // Unique identifier
@@ -99,6 +108,9 @@ index 0000000000000..2a3b4c5d6e7f8
 +  
 +  // Human-readable name (auto-generated or user-provided)
 +  std::string name;
++  
++  // Description of what this pattern does
++  std::string description;
 +  
 +  // The sequence of actions that form this pattern
 +  std::vector<RecordedAction> actions;
@@ -116,6 +128,12 @@ index 0000000000000..2a3b4c5d6e7f8
 +  // Based on consistency, selector stability, completion rate
 +  double confidence_score = 0.0;
 +  
++  // Current status of this pattern
++  PatternStatus status = PatternStatus::kNew;
++  
++  // URL pattern this sequence applies to
++  std::string url_pattern;
++  
 +  // Hash of normalized action sequence (for quick comparison)
 +  std::string pattern_hash;
 +  
@@ -127,6 +145,9 @@ index 0000000000000..2a3b4c5d6e7f8
 +  
 +  // ID of workflow if converted
 +  std::string workflow_id;
++  
++  // Additional metadata
++  base::Value::Dict metadata;
 +  
 +  // Serialize to Value for storage
 +  base::Value::Dict ToValue() const;

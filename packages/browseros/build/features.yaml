@@ -4,6 +4,7 @@ features:
     description: "feat: AI Ghost Mode - invisible agent learning from user behavior"
     files:
       - chrome/browser/browseros/ghost_mode/BUILD.gn
+      - chrome/browser/browseros/ghost_mode/ghost_mode_types.cc
       - chrome/browser/browseros/ghost_mode/ghost_mode_types.h
       - chrome/browser/browseros/ghost_mode/ghost_mode_prefs.cc
       - chrome/browser/browseros/ghost_mode/ghost_mode_prefs.h
