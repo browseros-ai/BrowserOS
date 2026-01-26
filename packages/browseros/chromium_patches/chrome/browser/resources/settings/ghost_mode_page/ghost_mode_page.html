@@ -1,498 +1,492 @@
-diff --git a/chrome/browser/resources/settings/ghost_mode_page/ghost_mode_page.html b/chrome/browser/resources/settings/ghost_mode_page/ghost_mode_page.html
-new file mode 100644
-index 0000000000000..a1b2c3d4e5f6a
---- /dev/null
-+++ b/chrome/browser/resources/settings/ghost_mode_page/ghost_mode_page.html
-@@ -0,0 +1,424 @@
-+<link rel="import" href="../controls/settings_toggle_button.html">
-+<style include="cr-shared-style settings-shared md-select">
-+  .page-header {
-+    display: flex;
-+    align-items: center;
-+    gap: 16px;
-+    padding: 20px 20px 16px;
-+    border-bottom: var(--cr-separator-line);
-+  }
-+  
-+  .page-icon {
-+    width: 32px;
-+    height: 32px;
-+    border-radius: 50%;
-+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
-+    display: flex;
-+    align-items: center;
-+    justify-content: center;
-+    color: white;
-+    font-size: 18px;
-+  }
-+  
-+  .page-title {
-+    font-size: 20px;
-+    font-weight: 400;
-+    color: var(--cr-primary-text-color);
-+    margin: 0;
-+  }
-+  
-+  .page-subtitle {
-+    font-size: 14px;
-+    color: var(--cr-secondary-text-color);
-+    margin: 4px 0 0 0;
-+  }
-+  
-+  .ghost-container {
-+    max-width: 680px;
-+    margin: 20px auto;
-+    padding: 0 20px 20px;
-+  }
-+  
-+  .ghost-section {
-+    background: var(--cr-card-background-color);
-+    border: 1px solid var(--cr-separator-color);
-+    border-radius: 8px;
-+    padding: 20px;
-+    margin-bottom: 16px;
-+  }
-+  
-+  .ghost-section-header {
-+    margin-bottom: 16px;
-+    padding-bottom: 16px;
-+    border-bottom: 1px solid var(--cr-separator-color);
-+  }
-+  
-+  .ghost-section-title {
-+    font-size: 16px;
-+    font-weight: 500;
-+    color: var(--cr-primary-text-color);
-+    margin: 0;
-+    display: flex;
-+    align-items: center;
-+    gap: 8px;
-+  }
-+  
-+  .ghost-section-subtitle {
-+    font-size: 13px;
-+    color: var(--cr-secondary-text-color);
-+    margin: 8px 0 0 0;
-+  }
-+  
-+  .toggle-row {
-+    display: flex;
-+    align-items: center;
-+    justify-content: space-between;
-+    padding: 12px 0;
-+  }
-+  
-+  .toggle-label {
-+    font-size: 14px;
-+    color: var(--cr-primary-text-color);
-+  }
-+  
-+  .toggle-sublabel {
-+    font-size: 12px;
-+    color: var(--cr-secondary-text-color);
-+    margin-top: 4px;
-+  }
-+  
-+  .privacy-badge {
-+    display: inline-flex;
-+    align-items: center;
-+    gap: 4px;
-+    background: #dcfce7;
-+    color: #166534;
-+    padding: 2px 8px;
-+    border-radius: 4px;
-+    font-size: 11px;
-+    font-weight: 500;
-+  }
-+  
-+  .stat-cards {
-+    display: grid;
-+    grid-template-columns: repeat(3, 1fr);
-+    gap: 12px;
-+    margin-top: 16px;
-+  }
-+  
-+  .stat-card {
-+    background: var(--cr-hover-background-color);
-+    border-radius: 8px;
-+    padding: 16px;
-+    text-align: center;
-+  }
-+  
-+  .stat-value {
-+    font-size: 24px;
-+    font-weight: 600;
-+    color: var(--cr-primary-text-color);
-+  }
-+  
-+  .stat-label {
-+    font-size: 12px;
-+    color: var(--cr-secondary-text-color);
-+    margin-top: 4px;
-+  }
-+  
-+  .pattern-list {
-+    margin-top: 16px;
-+  }
-+  
-+  .pattern-item {
-+    display: flex;
-+    align-items: center;
-+    gap: 12px;
-+    padding: 12px;
-+    background: var(--cr-hover-background-color);
-+    border-radius: 6px;
-+    margin-bottom: 8px;
-+    cursor: pointer;
-+    transition: background 0.2s ease;
-+  }
-+  
-+  .pattern-item:hover {
-+    background: var(--cr-active-background-color);
-+  }
-+  
-+  .pattern-icon {
-+    width: 36px;
-+    height: 36px;
-+    border-radius: 8px;
-+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
-+    display: flex;
-+    align-items: center;
-+    justify-content: center;
-+    color: white;
-+    font-size: 16px;
-+  }
-+  
-+  .pattern-info {
-+    flex: 1;
-+  }
-+  
-+  .pattern-name {
-+    font-size: 14px;
-+    font-weight: 500;
-+    color: var(--cr-primary-text-color);
-+  }
-+  
-+  .pattern-meta {
-+    font-size: 12px;
-+    color: var(--cr-secondary-text-color);
-+    margin-top: 2px;
-+  }
-+  
-+  .pattern-actions {
-+    display: flex;
-+    gap: 8px;
-+  }
-+  
-+  .excluded-domains-list {
-+    margin-top: 16px;
-+  }
-+  
-+  .domain-item {
-+    display: flex;
-+    align-items: center;
-+    gap: 12px;
-+    padding: 10px 12px;
-+    background: var(--cr-hover-background-color);
-+    border-radius: 6px;
-+    margin-bottom: 6px;
-+  }
-+  
-+  .domain-name {
-+    flex: 1;
-+    font-size: 14px;
-+    color: var(--cr-primary-text-color);
-+    font-family: monospace;
-+  }
-+  
-+  .add-domain-button {
-+    display: flex;
-+    align-items: center;
-+    gap: 8px;
-+    padding: 8px 16px;
-+    margin-top: 12px;
-+    border: 1px dashed var(--cr-separator-color);
-+    border-radius: 6px;
-+    background: transparent;
-+    color: var(--cr-focus-outline-color);
-+    cursor: pointer;
-+    transition: all 0.2s ease;
-+  }
-+  
-+  .add-domain-button:hover {
-+    background: var(--cr-hover-background-color);
-+    border-color: var(--cr-focus-outline-color);
-+  }
-+  
-+  .retention-slider {
-+    width: 100%;
-+    margin-top: 12px;
-+  }
-+  
-+  .retention-labels {
-+    display: flex;
-+    justify-content: space-between;
-+    font-size: 12px;
-+    color: var(--cr-secondary-text-color);
-+    margin-top: 4px;
-+  }
-+  
-+  .danger-zone {
-+    border-color: #fecaca;
-+    background: #fef2f2;
-+  }
-+  
-+  .danger-zone .ghost-section-title {
-+    color: #dc2626;
-+  }
-+  
-+  .domain-dialog {
-+    --cr-dialog-width: 400px;
-+  }
-+  
-+  .domain-dialog [slot="body"] {
-+    padding: 20px 24px;
-+  }
-+  
-+  .dialog-input {
-+    width: 100%;
-+    padding: 10px 12px;
-+    border: 1px solid var(--cr-separator-color);
-+    border-radius: 6px;
-+    font-size: 14px;
-+    margin-top: 8px;
-+  }
-+  
-+  .dialog-input:focus {
-+    outline: none;
-+    border-color: var(--cr-focus-outline-color);
-+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
-+  }
-+  
-+  .empty-state {
-+    text-align: center;
-+    padding: 32px 16px;
-+    color: var(--cr-secondary-text-color);
-+  }
-+  
-+  .empty-state-icon {
-+    font-size: 48px;
-+    margin-bottom: 12px;
-+    opacity: 0.5;
-+  }
-+</style>
-+
-+<div class="page-header">
-+  <div class="page-icon">👻</div>
-+  <div>
-+    <h1 class="page-title">AI Ghost Mode</h1>
-+    <p class="page-subtitle">Invisible learning from your browsing patterns</p>
-+  </div>
-+  <span class="privacy-badge">
-+    🔒 100% Local
-+  </span>
-+</div>
-+
-+<div class="ghost-container">
-+  <!-- Main Toggle Section -->
-+  <div class="ghost-section">
-+    <div class="ghost-section-header">
-+      <h2 class="ghost-section-title">
-+        Ghost Mode
-+      </h2>
-+      <p class="ghost-section-subtitle">
-+        When enabled, BrowserOS silently observes your repetitive browsing patterns 
-+        and suggests automations. All data stays on your device.
-+      </p>
-+    </div>
-+    
-+    <div class="toggle-row">
-+      <div>
-+        <div class="toggle-label">Enable Ghost Mode</div>
-+        <div class="toggle-sublabel">Learn from your browsing to suggest automations</div>
-+      </div>
-+      <settings-toggle-button
-+        id="ghostModeToggle"
-+        pref="{{prefs.ghost_mode.enabled}}"
-+        no-set-pref>
-+      </settings-toggle-button>
-+    </div>
-+    
-+    <template is="dom-if" if="[[prefs.ghost_mode.enabled.value]]">
-+      <div class="stat-cards">
-+        <div class="stat-card">
-+          <div class="stat-value">[[actionsRecorded_]]</div>
-+          <div class="stat-label">Actions Recorded</div>
-+        </div>
-+        <div class="stat-card">
-+          <div class="stat-value">[[patternsDetected_]]</div>
-+          <div class="stat-label">Patterns Detected</div>
-+        </div>
-+        <div class="stat-card">
-+          <div class="stat-value">[[workflowsGenerated_]]</div>
-+          <div class="stat-label">Workflows Generated</div>
-+        </div>
-+      </div>
-+    </template>
-+  </div>
-+
-+  <!-- Detected Patterns Section -->
-+  <template is="dom-if" if="[[prefs.ghost_mode.enabled.value]]">
-+    <div class="ghost-section">
-+      <div class="ghost-section-header">
-+        <h2 class="ghost-section-title">Detected Patterns</h2>
-+        <p class="ghost-section-subtitle">
-+          Recurring actions that can be automated as workflows
-+        </p>
-+      </div>
-+      
-+      <template is="dom-if" if="[[!patterns_.length]]">
-+        <div class="empty-state">
-+          <div class="empty-state-icon">🔍</div>
-+          <div>No patterns detected yet</div>
-+          <div class="toggle-sublabel">Keep browsing normally - Ghost Mode will learn your patterns</div>
-+        </div>
-+      </template>
-+      
-+      <div class="pattern-list">
-+        <template is="dom-repeat" items="[[patterns_]]">
-+          <div class="pattern-item" on-click="onPatternClick_">
-+            <div class="pattern-icon">🔄</div>
-+            <div class="pattern-info">
-+              <div class="pattern-name">[[item.name]]</div>
-+              <div class="pattern-meta">
-+                [[item.occurrence_count]] occurrences • 
-+                [[item.actions.length]] steps • 
-+                [[formatConfidence_(item.confidence_score)]] confidence
-+              </div>
-+            </div>
-+            <div class="pattern-actions">
-+              <cr-button on-click="convertToWorkflow_">
-+                Convert to Workflow
-+              </cr-button>
-+              <cr-icon-button
-+                iron-icon="cr:delete"
-+                on-click="deletePattern_"
-+                title="Delete pattern">
-+              </cr-icon-button>
-+            </div>
-+          </div>
-+        </template>
-+      </div>
-+    </div>
-+  </template>
-+
-+  <!-- Privacy Settings Section -->
-+  <div class="ghost-section">
-+    <div class="ghost-section-header">
-+      <h2 class="ghost-section-title">Privacy Controls</h2>
-+      <p class="ghost-section-subtitle">
-+        Configure what Ghost Mode can observe and how long data is retained
-+      </p>
-+    </div>
-+    
-+    <div class="toggle-row">
-+      <div>
-+        <div class="toggle-label">Record form inputs</div>
-+        <div class="toggle-sublabel">Non-sensitive input values (search queries, filters). Passwords and payment info are never recorded.</div>
-+      </div>
-+      <settings-toggle-button
-+        pref="{{prefs.ghost_mode.record_inputs}}"
-+        no-set-pref>
-+      </settings-toggle-button>
-+    </div>
-+    
-+    <div class="toggle-row">
-+      <div>
-+        <div class="toggle-label">Learn from scrolling</div>
-+        <div class="toggle-sublabel">Track scroll patterns to understand content consumption</div>
-+      </div>
-+      <settings-toggle-button
-+        pref="{{prefs.ghost_mode.record_scroll}}"
-+        no-set-pref>
-+      </settings-toggle-button>
-+    </div>
-+    
-+    <div style="margin-top: 16px;">
-+      <div class="toggle-label">Data retention period</div>
-+      <div class="toggle-sublabel">How long to keep recorded actions for pattern detection</div>
-+      <input type="range" 
-+             class="retention-slider"
-+             min="7" max="90" step="7"
-+             value="[[prefs.ghost_mode.retention_days.value]]"
-+             on-change="onRetentionChange_">
-+      <div class="retention-labels">
-+        <span>7 days</span>
-+        <span>[[prefs.ghost_mode.retention_days.value]] days</span>
-+        <span>90 days</span>
-+      </div>
-+    </div>
-+  </div>
-+
-+  <!-- Excluded Domains Section -->
-+  <div class="ghost-section">
-+    <div class="ghost-section-header">
-+      <h2 class="ghost-section-title">Excluded Sites</h2>
-+      <p class="ghost-section-subtitle">
-+        Ghost Mode will never observe activity on these sites. Banking and healthcare sites are excluded by default.
-+      </p>
-+    </div>
-+    
-+    <div class="excluded-domains-list">
-+      <template is="dom-repeat" items="[[excludedDomains_]]">
-+        <div class="domain-item">
-+          <span class="domain-name">[[item]]</span>
-+          <cr-icon-button
-+            iron-icon="cr:delete"
-+            on-click="removeDomain_"
-+            title="Remove domain">
-+          </cr-icon-button>
-+        </div>
-+      </template>
-+    </div>
-+    
-+    <button class="add-domain-button" on-click="showAddDomainDialog_">
-+      <cr-icon icon="cr:add"></cr-icon>
-+      Add excluded domain
-+    </button>
-+  </div>
-+
-+  <!-- Danger Zone -->
-+  <div class="ghost-section danger-zone">
-+    <div class="ghost-section-header">
-+      <h2 class="ghost-section-title">⚠️ Danger Zone</h2>
-+    </div>
-+    
-+    <div class="toggle-row">
-+      <div>
-+        <div class="toggle-label">Clear all recorded data</div>
-+        <div class="toggle-sublabel">Delete all recorded actions and detected patterns. This cannot be undone.</div>
-+      </div>
-+      <cr-button class="action-button" on-click="clearAllData_">
-+        Clear Data
-+      </cr-button>
-+    </div>
-+  </div>
-+</div>
-+
-+<!-- Add Domain Dialog -->
-+<cr-dialog id="addDomainDialog" class="domain-dialog">
-+  <div slot="title">Add Excluded Domain</div>
-+  <div slot="body">
-+    <div class="toggle-label">Domain name</div>
-+    <div class="toggle-sublabel">Enter the domain to exclude from Ghost Mode observation</div>
-+    <input type="text" 
-+           class="dialog-input"
-+           id="domainInput"
-+           placeholder="example.com"
-+           value="{{newDomain_::input}}">
-+  </div>
-+  <div slot="button-container">
-+    <cr-button class="cancel-button" on-click="cancelAddDomain_">
-+      Cancel
-+    </cr-button>
-+    <cr-button class="action-button" on-click="confirmAddDomain_">
-+      Add Domain
-+    </cr-button>
-+  </div>
-+</cr-dialog>
+<link rel="import" href="../controls/settings_toggle_button.html">
+<style include="cr-shared-style settings-shared md-select">
+  .page-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 20px 20px 16px;
+    border-bottom: var(--cr-separator-line);
+  }
+  
+  .page-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 18px;
+  }
+  
+  .page-title {
+    font-size: 20px;
+    font-weight: 400;
+    color: var(--cr-primary-text-color);
+    margin: 0;
+  }
+  
+  .page-subtitle {
+    font-size: 14px;
+    color: var(--cr-secondary-text-color);
+    margin: 4px 0 0 0;
+  }
+  
+  .ghost-container {
+    max-width: 680px;
+    margin: 20px auto;
+    padding: 0 20px 20px;
+  }
+  
+  .ghost-section {
+    background: var(--cr-card-background-color);
+    border: 1px solid var(--cr-separator-color);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  
+  .ghost-section-header {
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--cr-separator-color);
+  }
+  
+  .ghost-section-title {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--cr-primary-text-color);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  
+  .ghost-section-subtitle {
+    font-size: 13px;
+    color: var(--cr-secondary-text-color);
+    margin: 8px 0 0 0;
+  }
+  
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 0;
+  }
+  
+  .toggle-label {
+    font-size: 14px;
+    color: var(--cr-primary-text-color);
+  }
+  
+  .toggle-sublabel {
+    font-size: 12px;
+    color: var(--cr-secondary-text-color);
+    margin-top: 4px;
+  }
+  
+  .privacy-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #dcfce7;
+    color: #166534;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  
+  .stat-cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-top: 16px;
+  }
+  
+  .stat-card {
+    background: var(--cr-hover-background-color);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+  }
+  
+  .stat-value {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--cr-primary-text-color);
+  }
+  
+  .stat-label {
+    font-size: 12px;
+    color: var(--cr-secondary-text-color);
+    margin-top: 4px;
+  }
+  
+  .pattern-list {
+    margin-top: 16px;
+  }
+  
+  .pattern-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: var(--cr-hover-background-color);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: background 0.2s ease;
+  }
+  
+  .pattern-item:hover {
+    background: var(--cr-active-background-color);
+  }
+  
+  .pattern-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 16px;
+  }
+  
+  .pattern-info {
+    flex: 1;
+  }
+  
+  .pattern-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--cr-primary-text-color);
+  }
+  
+  .pattern-meta {
+    font-size: 12px;
+    color: var(--cr-secondary-text-color);
+    margin-top: 2px;
+  }
+  
+  .pattern-actions {
+    display: flex;
+    gap: 8px;
+  }
+  
+  .excluded-domains-list {
+    margin-top: 16px;
+  }
+  
+  .domain-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    background: var(--cr-hover-background-color);
+    border-radius: 6px;
+    margin-bottom: 6px;
+  }
+  
+  .domain-name {
+    flex: 1;
+    font-size: 14px;
+    color: var(--cr-primary-text-color);
+    font-family: monospace;
+  }
+  
+  .add-domain-button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    margin-top: 12px;
+    border: 1px dashed var(--cr-separator-color);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--cr-focus-outline-color);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  
+  .add-domain-button:hover {
+    background: var(--cr-hover-background-color);
+    border-color: var(--cr-focus-outline-color);
+  }
+  
+  .retention-slider {
+    width: 100%;
+    margin-top: 12px;
+  }
+  
+  .retention-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--cr-secondary-text-color);
+    margin-top: 4px;
+  }
+  
+  .danger-zone {
+    border-color: #fecaca;
+    background: #fef2f2;
+  }
+  
+  .danger-zone .ghost-section-title {
+    color: #dc2626;
+  }
+  
+  .domain-dialog {
+    --cr-dialog-width: 400px;
+  }
+  
+  .domain-dialog [slot="body"] {
+    padding: 20px 24px;
+  }
+  
+  .dialog-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--cr-separator-color);
+    border-radius: 6px;
+    font-size: 14px;
+    margin-top: 8px;
+  }
+  
+  .dialog-input:focus {
+    outline: none;
+    border-color: var(--cr-focus-outline-color);
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+  }
+  
+  .empty-state {
+    text-align: center;
+    padding: 32px 16px;
+    color: var(--cr-secondary-text-color);
+  }
+  
+  .empty-state-icon {
+    font-size: 48px;
+    margin-bottom: 12px;
+    opacity: 0.5;
+  }
+</style>
+
+<div class="page-header">
+  <div class="page-icon">👻</div>
+  <div>
+    <h1 class="page-title">AI Ghost Mode</h1>
+    <p class="page-subtitle">Invisible learning from your browsing patterns</p>
+  </div>
+  <span class="privacy-badge">
+    🔒 100% Local
+  </span>
+</div>
+
+<div class="ghost-container">
+  <!-- Main Toggle Section -->
+  <div class="ghost-section">
+    <div class="ghost-section-header">
+      <h2 class="ghost-section-title">
+        Ghost Mode
+      </h2>
+      <p class="ghost-section-subtitle">
+        When enabled, BrowserOS silently observes your repetitive browsing patterns 
+        and suggests automations. All data stays on your device.
+      </p>
+    </div>
+    
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Enable Ghost Mode</div>
+        <div class="toggle-sublabel">Learn from your browsing to suggest automations</div>
+      </div>
+      <settings-toggle-button
+        id="ghostModeToggle"
+        pref="{{prefs.ghost_mode.enabled}}"
+        no-set-pref>
+      </settings-toggle-button>
+    </div>
+    
+    <template is="dom-if" if="[[prefs.ghost_mode.enabled.value]]">
+      <div class="stat-cards">
+        <div class="stat-card">
+          <div class="stat-value">[[actionsRecorded_]]</div>
+          <div class="stat-label">Actions Recorded</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">[[patternsDetected_]]</div>
+          <div class="stat-label">Patterns Detected</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">[[workflowsGenerated_]]</div>
+          <div class="stat-label">Workflows Generated</div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- Detected Patterns Section -->
+  <template is="dom-if" if="[[prefs.ghost_mode.enabled.value]]">
+    <div class="ghost-section">
+      <div class="ghost-section-header">
+        <h2 class="ghost-section-title">Detected Patterns</h2>
+        <p class="ghost-section-subtitle">
+          Recurring actions that can be automated as workflows
+        </p>
+      </div>
+      
+      <template is="dom-if" if="[[!patterns_.length]]">
+        <div class="empty-state">
+          <div class="empty-state-icon">🔍</div>
+          <div>No patterns detected yet</div>
+          <div class="toggle-sublabel">Keep browsing normally - Ghost Mode will learn your patterns</div>
+        </div>
+      </template>
+      
+      <div class="pattern-list">
+        <template is="dom-repeat" items="[[patterns_]]">
+          <div class="pattern-item" on-click="onPatternClick_">
+            <div class="pattern-icon">🔄</div>
+            <div class="pattern-info">
+              <div class="pattern-name">[[item.name]]</div>
+              <div class="pattern-meta">
+                [[item.occurrence_count]] occurrences • 
+                [[item.actions.length]] steps • 
+                [[formatConfidence_(item.confidence_score)]] confidence
+              </div>
+            </div>
+            <div class="pattern-actions">
+              <cr-button on-click="convertToWorkflow_">
+                Convert to Workflow
+              </cr-button>
+              <cr-icon-button
+                iron-icon="cr:delete"
+                on-click="deletePattern_"
+                title="Delete pattern">
+              </cr-icon-button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+
+  <!-- Privacy Settings Section -->
+  <div class="ghost-section">
+    <div class="ghost-section-header">
+      <h2 class="ghost-section-title">Privacy Controls</h2>
+      <p class="ghost-section-subtitle">
+        Configure what Ghost Mode can observe and how long data is retained
+      </p>
+    </div>
+    
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Record form inputs</div>
+        <div class="toggle-sublabel">Non-sensitive input values (search queries, filters). Passwords and payment info are never recorded.</div>
+      </div>
+      <settings-toggle-button
+        pref="{{prefs.ghost_mode.record_inputs}}"
+        no-set-pref>
+      </settings-toggle-button>
+    </div>
+    
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Learn from scrolling</div>
+        <div class="toggle-sublabel">Track scroll patterns to understand content consumption</div>
+      </div>
+      <settings-toggle-button
+        pref="{{prefs.ghost_mode.record_scroll}}"
+        no-set-pref>
+      </settings-toggle-button>
+    </div>
+    
+    <div style="margin-top: 16px;">
+      <div class="toggle-label">Data retention period</div>
+      <div class="toggle-sublabel">How long to keep recorded actions for pattern detection</div>
+      <input type="range" 
+             class="retention-slider"
+             min="7" max="90" step="7"
+             value="[[prefs.ghost_mode.retention_days.value]]"
+             on-change="onRetentionChange_">
+      <div class="retention-labels">
+        <span>7 days</span>
+        <span>[[prefs.ghost_mode.retention_days.value]] days</span>
+        <span>90 days</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Excluded Domains Section -->
+  <div class="ghost-section">
+    <div class="ghost-section-header">
+      <h2 class="ghost-section-title">Excluded Sites</h2>
+      <p class="ghost-section-subtitle">
+        Ghost Mode will never observe activity on these sites. Banking and healthcare sites are excluded by default.
+      </p>
+    </div>
+    
+    <div class="excluded-domains-list">
+      <template is="dom-repeat" items="[[excludedDomains_]]">
+        <div class="domain-item">
+          <span class="domain-name">[[item]]</span>
+          <cr-icon-button
+            iron-icon="cr:delete"
+            on-click="removeDomain_"
+            title="Remove domain">
+          </cr-icon-button>
+        </div>
+      </template>
+    </div>
+    
+    <button class="add-domain-button" on-click="showAddDomainDialog_">
+      <cr-icon icon="cr:add"></cr-icon>
+      Add excluded domain
+    </button>
+  </div>
+
+  <!-- Danger Zone -->
+  <div class="ghost-section danger-zone">
+    <div class="ghost-section-header">
+      <h2 class="ghost-section-title">⚠️ Danger Zone</h2>
+    </div>
+    
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Clear all recorded data</div>
+        <div class="toggle-sublabel">Delete all recorded actions and detected patterns. This cannot be undone.</div>
+      </div>
+      <cr-button class="action-button" on-click="clearAllData_">
+        Clear Data
+      </cr-button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Domain Dialog -->
+<cr-dialog id="addDomainDialog" class="domain-dialog">
+  <div slot="title">Add Excluded Domain</div>
+  <div slot="body">
+    <div class="toggle-label">Domain name</div>
+    <div class="toggle-sublabel">Enter the domain to exclude from Ghost Mode observation</div>
+    <input type="text" 
+           class="dialog-input"
+           id="domainInput"
+           placeholder="example.com"
+           value="{{newDomain_::input}}">
+  </div>
+  <div slot="button-container">
+    <cr-button class="cancel-button" on-click="cancelAddDomain_">
+      Cancel
+    </cr-button>
+    <cr-button class="action-button" on-click="confirmAddDomain_">
+      Add Domain
+    </cr-button>
+  </div>
+</cr-dialog>
