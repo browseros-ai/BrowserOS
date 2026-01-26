@@ -16,6 +16,7 @@ index 0000000000000..1a2b3c4d5e6f7
 +
 +source_set("ghost_mode") {
 +  sources = [
++    "ghost_mode_types.cc",
 +    "ghost_mode_types.h",
 +    "ghost_mode_prefs.cc",
 +    "ghost_mode_prefs.h",
