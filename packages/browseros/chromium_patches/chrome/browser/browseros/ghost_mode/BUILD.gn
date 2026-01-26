@@ -36,15 +36,27 @@ index 0000000000000..1a2b3c4d5e6f7
 +    "workflow_generator.h",
 +    "ghost_executor.cc",
 +    "ghost_executor.h",
++    "ghost_mode_service.cc",
++    "ghost_mode_service.h",
++    "ghost_mode_service_factory.cc",
++    "ghost_mode_service_factory.h",
++    "ghost_mode_suggestion_infobar_delegate.cc",
++    "ghost_mode_suggestion_infobar_delegate.h",
 +  ]
 +
 +  deps = [
 +    "//base",
 +    "//chrome/browser/profiles:profile",
 +    "//chrome/browser/ui",
++    "//components/infobars/content",
++    "//components/infobars/core",
++    "//components/keyed_service/content",
++    "//components/keyed_service/core",
 +    "//components/prefs",
++    "//components/vector_icons",
 +    "//content/public/browser",
 +    "//sql",
++    "//ui/base",
 +    "//url",
 +  ]
 +
@@ -58,11 +70,27 @@ index 0000000000000..1a2b3c4d5e6f7
 +  sources = [
 +    "action_recorder_unittest.cc",
 +    "pattern_detector_unittest.cc",
++    "pattern_matcher_unittest.cc",
 +    "sensitive_detector_unittest.cc",
++    "workflow_generator_unittest.cc",
 +  ]
 +
 +  deps = [
 +    ":ghost_mode",
++    "//base/test:test_support",
++    "//chrome/browser/profiles:profile",
++    "//chrome/test:test_support",
++    "//components/prefs:test_support",
++    "//content/test:test_support",
 +    "//testing/gtest",
++    "//url",
++  ]
++}
++
++# Settings page resources
++source_set("settings_resources") {
++  sources = [
++    "//chrome/browser/resources/settings/ghost_mode_page/ghost_mode_page.html",
++    "//chrome/browser/resources/settings/ghost_mode_page/ghost_mode_page.ts",
 +  ]
 +}

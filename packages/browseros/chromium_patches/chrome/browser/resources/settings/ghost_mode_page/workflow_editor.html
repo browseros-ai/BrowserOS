@@ -1,0 +1,365 @@
+diff --git a/chrome/browser/resources/settings/ghost_mode_page/workflow_editor.html b/chrome/browser/resources/settings/ghost_mode_page/workflow_editor.html
+new file mode 100644
+index 0000000000000..e1f2a3b4c5d6e
+--- /dev/null
++++ b/chrome/browser/resources/settings/ghost_mode_page/workflow_editor.html
+@@ -0,0 +1,348 @@
++<style include="cr-shared-style settings-shared">
++  :host {
++    display: block;
++  }
++  
++  .workflow-editor-container {
++    background: var(--cr-card-background-color);
++    border: 1px solid var(--cr-separator-color);
++    border-radius: 12px;
++    overflow: hidden;
++  }
++  
++  .editor-header {
++    display: flex;
++    align-items: center;
++    justify-content: space-between;
++    padding: 16px 20px;
++    background: linear-gradient(135deg, #6366f1, #8b5cf6);
++    color: white;
++  }
++  
++  .editor-title {
++    font-size: 18px;
++    font-weight: 500;
++    margin: 0;
++  }
++  
++  .editor-subtitle {
++    font-size: 13px;
++    opacity: 0.9;
++    margin-top: 4px;
++  }
++  
++  .header-actions {
++    display: flex;
++    gap: 8px;
++  }
++  
++  .header-button {
++    background: rgba(255, 255, 255, 0.2);
++    border: none;
++    border-radius: 6px;
++    padding: 8px 16px;
++    color: white;
++    font-size: 14px;
++    cursor: pointer;
++    transition: background 0.2s ease;
++  }
++  
++  .header-button:hover {
++    background: rgba(255, 255, 255, 0.3);
++  }
++  
++  .header-button.primary {
++    background: white;
++    color: #6366f1;
++    font-weight: 500;
++  }
++  
++  .steps-container {
++    padding: 20px;
++    max-height: 400px;
++    overflow-y: auto;
++  }
++  
++  .step-item {
++    display: flex;
++    align-items: flex-start;
++    gap: 12px;
++    padding: 16px;
++    background: var(--cr-hover-background-color);
++    border: 1px solid var(--cr-separator-color);
++    border-radius: 8px;
++    margin-bottom: 8px;
++    cursor: grab;
++    transition: all 0.2s ease;
++  }
++  
++  .step-item:hover {
++    border-color: var(--cr-focus-outline-color);
++    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
++  }
++  
++  .step-item.dragging {
++    opacity: 0.5;
++    cursor: grabbing;
++  }
++  
++  .step-number {
++    width: 28px;
++    height: 28px;
++    border-radius: 50%;
++    background: linear-gradient(135deg, #6366f1, #8b5cf6);
++    color: white;
++    display: flex;
++    align-items: center;
++    justify-content: center;
++    font-size: 13px;
++    font-weight: 600;
++    flex-shrink: 0;
++  }
++  
++  .step-content {
++    flex: 1;
++    min-width: 0;
++  }
++  
++  .step-type {
++    display: inline-flex;
++    align-items: center;
++    gap: 6px;
++    background: var(--cr-card-background-color);
++    padding: 4px 10px;
++    border-radius: 4px;
++    font-size: 12px;
++    font-weight: 500;
++    color: var(--cr-secondary-text-color);
++    margin-bottom: 8px;
++  }
++  
++  .step-type-icon {
++    font-size: 14px;
++  }
++  
++  .step-details {
++    display: grid;
++    gap: 8px;
++  }
++  
++  .step-field {
++    display: flex;
++    flex-direction: column;
++    gap: 4px;
++  }
++  
++  .step-field-label {
++    font-size: 11px;
++    text-transform: uppercase;
++    letter-spacing: 0.5px;
++    color: var(--cr-secondary-text-color);
++  }
++  
++  .step-field-input {
++    padding: 8px 12px;
++    border: 1px solid var(--cr-separator-color);
++    border-radius: 6px;
++    font-size: 14px;
++    font-family: 'SF Mono', 'Monaco', monospace;
++    background: var(--cr-card-background-color);
++    color: var(--cr-primary-text-color);
++  }
++  
++  .step-field-input:focus {
++    outline: none;
++    border-color: var(--cr-focus-outline-color);
++    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
++  }
++  
++  .step-actions {
++    display: flex;
++    flex-direction: column;
++    gap: 4px;
++  }
++  
++  .step-action-btn {
++    width: 28px;
++    height: 28px;
++    border: none;
++    border-radius: 6px;
++    background: transparent;
++    color: var(--cr-secondary-text-color);
++    cursor: pointer;
++    display: flex;
++    align-items: center;
++    justify-content: center;
++    transition: all 0.2s ease;
++  }
++  
++  .step-action-btn:hover {
++    background: var(--cr-active-background-color);
++    color: var(--cr-primary-text-color);
++  }
++  
++  .step-action-btn.delete:hover {
++    background: #fef2f2;
++    color: #dc2626;
++  }
++  
++  .add-step-button {
++    display: flex;
++    align-items: center;
++    justify-content: center;
++    gap: 8px;
++    width: 100%;
++    padding: 12px;
++    border: 2px dashed var(--cr-separator-color);
++    border-radius: 8px;
++    background: transparent;
++    color: var(--cr-secondary-text-color);
++    font-size: 14px;
++    cursor: pointer;
++    transition: all 0.2s ease;
++  }
++  
++  .add-step-button:hover {
++    border-color: var(--cr-focus-outline-color);
++    color: var(--cr-focus-outline-color);
++    background: rgba(99, 102, 241, 0.05);
++  }
++  
++  .add-step-menu {
++    position: absolute;
++    background: var(--cr-card-background-color);
++    border: 1px solid var(--cr-separator-color);
++    border-radius: 8px;
++    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
++    padding: 8px;
++    z-index: 100;
++  }
++  
++  .add-step-option {
++    display: flex;
++    align-items: center;
++    gap: 10px;
++    padding: 10px 14px;
++    border-radius: 6px;
++    cursor: pointer;
++    transition: background 0.2s ease;
++  }
++  
++  .add-step-option:hover {
++    background: var(--cr-hover-background-color);
++  }
++  
++  .add-step-option-icon {
++    width: 32px;
++    height: 32px;
++    border-radius: 8px;
++    display: flex;
++    align-items: center;
++    justify-content: center;
++    font-size: 16px;
++  }
++  
++  .add-step-option-icon.navigate { background: #dbeafe; }
++  .add-step-option-icon.click { background: #dcfce7; }
++  .add-step-option-icon.type { background: #fef3c7; }
++  .add-step-option-icon.wait { background: #fce7f3; }
++  .add-step-option-icon.scroll { background: #e0e7ff; }
++  
++  .editor-footer {
++    display: flex;
++    align-items: center;
++    justify-content: space-between;
++    padding: 16px 20px;
++    border-top: 1px solid var(--cr-separator-color);
++    background: var(--cr-hover-background-color);
++  }
++  
++  .footer-info {
++    font-size: 13px;
++    color: var(--cr-secondary-text-color);
++  }
++  
++  .footer-actions {
++    display: flex;
++    gap: 8px;
++  }
++</style>
++
++<div class="workflow-editor-container">
++  <div class="editor-header">
++    <div>
++      <h2 class="editor-title">[[workflowName_]]</h2>
++      <div class="editor-subtitle">[[steps_.length]] steps • Generated from Ghost Mode</div>
++    </div>
++    <div class="header-actions">
++      <button class="header-button" on-click="onTestRun_">
++        ▶ Test Run
++      </button>
++      <button class="header-button primary" on-click="onSave_">
++        💾 Save Workflow
++      </button>
++    </div>
++  </div>
++  
++  <div class="steps-container">
++    <template is="dom-repeat" items="[[steps_]]" as="step">
++      <div class="step-item" draggable="true" 
++           on-dragstart="onDragStart_" 
++           on-dragend="onDragEnd_"
++           on-dragover="onDragOver_"
++           on-drop="onDrop_">
++        <div class="step-number">[[getStepNumber_(index)]]</div>
++        <div class="step-content">
++          <div class="step-type">
++            <span class="step-type-icon">[[getStepIcon_(step.type)]]</span>
++            [[step.type]]
++          </div>
++          <div class="step-details">
++            <template is="dom-if" if="[[isNavigateStep_(step)]]">
++              <div class="step-field">
++                <label class="step-field-label">URL</label>
++                <input type="text" class="step-field-input" 
++                       value="[[step.url]]" 
++                       on-change="onFieldChange_">
++              </div>
++            </template>
++            <template is="dom-if" if="[[isClickOrTypeStep_(step)]]">
++              <div class="step-field">
++                <label class="step-field-label">Selector</label>
++                <input type="text" class="step-field-input" 
++                       value="[[step.selector]]" 
++                       on-change="onFieldChange_">
++              </div>
++            </template>
++            <template is="dom-if" if="[[isTypeStep_(step)]]">
++              <div class="step-field">
++                <label class="step-field-label">Value (or parameter name)</label>
++                <input type="text" class="step-field-input" 
++                       value="[[step.value]]" 
++                       placeholder="{{parameterName}}"
++                       on-change="onFieldChange_">
++              </div>
++            </template>
++            <template is="dom-if" if="[[isWaitStep_(step)]]">
++              <div class="step-field">
++                <label class="step-field-label">Wait time (ms)</label>
++                <input type="number" class="step-field-input" 
++                       value="[[step.timeout]]" 
++                       on-change="onFieldChange_">
++              </div>
++            </template>
++          </div>
++        </div>
++        <div class="step-actions">
++          <button class="step-action-btn" on-click="onMoveUp_" title="Move up">↑</button>
++          <button class="step-action-btn" on-click="onMoveDown_" title="Move down">↓</button>
++          <button class="step-action-btn delete" on-click="onDeleteStep_" title="Delete">🗑</button>
++        </div>
++      </div>
++    </template>
++    
++    <button class="add-step-button" on-click="showAddStepMenu_">
++      <cr-icon icon="cr:add"></cr-icon>
++      Add Step
++    </button>
++  </div>
++  
++  <div class="editor-footer">
++    <div class="footer-info">
++      Drag steps to reorder • Click values to edit
++    </div>
++    <div class="footer-actions">
++      <cr-button on-click="onCancel_">Cancel</cr-button>
++      <cr-button class="action-button" on-click="onSave_">Save Changes</cr-button>
++    </div>
++  </div>
++</div>
