@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_loader.cc b/chrome/browser/browseros/extensions/browseros_extension_loader.cc
 new file mode 100644
-index 0000000000000..b1bafdc42be93
+index 0000000000000..52703e88e7478
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_loader.cc
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,212 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -41,7 +41,16 @@ index 0000000000000..b1bafdc42be93
 +               : kBrowserOSConfigUrl);
 +
 +  for (const std::string& id : GetBrowserOSExtensionIds()) {
++    // Clawdbot is feature-gated, skip here and add conditionally below
++    if (id == kClawdbotExtensionId) {
++      continue;
++    }
 +    extension_ids_.insert(id);
++  }
++
++  // Add Clawdbot extension only if feature is enabled
++  if (base::FeatureList::IsEnabled(features::kBrowserOsClawdbot)) {
++    extension_ids_.insert(kClawdbotExtensionId);
 +  }
 +}
 +

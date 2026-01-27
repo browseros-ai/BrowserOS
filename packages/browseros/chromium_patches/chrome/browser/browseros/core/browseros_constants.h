@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_constants.h b/chrome/browser/browseros/core/browseros_constants.h
 new file mode 100644
-index 0000000000000..b56c99f2312f6
+index 0000000000000..476d761245673
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_constants.h
-@@ -0,0 +1,216 @@
+@@ -0,0 +1,222 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -42,6 +42,10 @@ index 0000000000000..b56c99f2312f6
 +// Controller Extension ID
 +inline constexpr char kControllerExtensionId[] =
 +    "nlnihljpboknmfagkikhkdblbedophja";
++
++// Clawdbot Browser Relay Extension ID (feature-gated)
++inline constexpr char kClawdbotExtensionId[] =
++    "nkaehhfoahfeglbnbdglnkidgpapbgma";
 +
 +// uBlock Origin Extension ID (Chrome Web Store)
 +// inline constexpr char kUBlockOriginExtensionId[] =
@@ -171,6 +175,8 @@ index 0000000000000..b56c99f2312f6
 +    {kControllerExtensionId, false, false},
 +    // ublock origin gets installed from chrome web store
 +    // {kUBlockOriginExtensionId, false, false},
++    // Clawdbot is feature-gated (kBrowserOsClawdbot)
++    {kClawdbotExtensionId, true, false},
 +};
 +
 +inline constexpr size_t kBrowserOSExtensionsCount =
