@@ -134,9 +134,8 @@ index 0000000000000..f6a7b8c9d0e1f
 +  }
 +  
 +  // Create recorder for this WebContents
-+  auto recorder = std::make_unique<ActionRecorder>(
-+      web_contents, action_store_.get(), pref_service_);
-+  recorders_[web_contents] = std::move(recorder);
+  auto recorder = std::make_unique<ActionRecorder>(
+      web_contents, pref_service_, action_store_.get());
 +  
 +  VLOG(2) << "Started observing WebContents";
 +}
