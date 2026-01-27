@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/core/browseros_constants.h b/chrome/browser/browseros/core/browseros_constants.h
 new file mode 100644
-index 0000000000000..db4aede1d2396
+index 0000000000000..b56c99f2312f6
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_constants.h
 @@ -0,0 +1,216 @@
@@ -44,8 +44,8 @@ index 0000000000000..db4aede1d2396
 +    "nlnihljpboknmfagkikhkdblbedophja";
 +
 +// uBlock Origin Extension ID (Chrome Web Store)
-+inline constexpr char kUBlockOriginExtensionId[] =
-+    "cjpalhdlnbpafiamejdnhcphjbkeiagm";
++// inline constexpr char kUBlockOriginExtensionId[] =
++//     "cjpalhdlnbpafiamejdnhcphjbkeiagm";
 +
 +// BrowserOS CDN update manifest URL
 +// Used for extensions installed from local .crx files that don't have
@@ -67,8 +67,8 @@ index 0000000000000..db4aede1d2396
 +};
 +
 +inline constexpr BrowserOSURLRoute kBrowserOSURLRoutes[] = {
-+    {"/settings", kAgentV2ExtensionId, "options.html", ""},
-+    {"/mcp", kAgentV2ExtensionId, "options.html", "mcp"},
++    {"/settings", kAgentV2ExtensionId, "app.html", "/settings"},
++    {"/mcp", kAgentV2ExtensionId, "app.html", "/mcp"},
 +    {"/onboarding", kAgentV2ExtensionId, "onboarding.html", ""},
 +};
 +
@@ -170,7 +170,7 @@ index 0000000000000..db4aede1d2396
 +    {kBugReporterExtensionId, true, false},
 +    {kControllerExtensionId, false, false},
 +    // ublock origin gets installed from chrome web store
-+    {kUBlockOriginExtensionId, false, false},
++    // {kUBlockOriginExtensionId, false, false},
 +};
 +
 +inline constexpr size_t kBrowserOSExtensionsCount =
