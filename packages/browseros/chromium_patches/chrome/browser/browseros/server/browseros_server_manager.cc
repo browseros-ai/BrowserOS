@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..9908cbc8930f9
+index 0000000000000..8a43597d654b2
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,998 @@
+@@ -0,0 +1,1002 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -784,7 +784,9 @@ index 0000000000000..9908cbc8930f9
 +
 +  // Kill process on background thread, wait for port release, revalidate, launch
 +  base::ThreadPool::PostTaskAndReplyWithResult(
-+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
++      FROM_HERE,
++      {base::MayBlock(), base::WithBaseSyncPrimitives(),
++       base::TaskPriority::USER_BLOCKING},
 +      base::BindOnce(
 +          [](BrowserOSServerManager* manager, ServerPorts current,
 +             bool revalidate_all) -> ServerPorts {
@@ -869,7 +871,9 @@ index 0000000000000..9908cbc8930f9
 +  ServerPorts current_ports = ports_;
 +
 +  base::ThreadPool::PostTaskAndReplyWithResult(
-+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
++      FROM_HERE,
++      {base::MayBlock(), base::WithBaseSyncPrimitives(),
++       base::TaskPriority::USER_BLOCKING},
 +      base::BindOnce(
 +          [](BrowserOSServerManager* manager,
 +             ServerPorts current) -> ServerPorts {
