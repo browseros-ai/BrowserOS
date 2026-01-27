@@ -18,9 +18,10 @@ index 0000000000000..6e7f8a9b0c1d2
 +namespace browseros::ghost_mode {
 +
 +// Input types that are ALWAYS sensitive - never record values
++// Note: 'hidden' inputs are NOT blocked to allow CSRF tokens and session IDs
++// for form workflows. Sensitive hidden fields are caught by name pattern matching.
 +const std::vector<std::string> SensitiveDetector::kSensitiveInputTypes = {
 +    "password",
-+    "hidden",  // Often contains tokens
 +};
 +
 +// Name/ID patterns that indicate sensitivity (case-insensitive)

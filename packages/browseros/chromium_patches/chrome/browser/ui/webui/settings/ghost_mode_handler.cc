@@ -151,8 +151,8 @@ index 0000000000000..d0e1f2a3b4c5d
 +  dict.Set("name", pattern.name);
 +  dict.Set("occurrence_count", pattern.occurrence_count);
 +  dict.Set("confidence_score", pattern.confidence_score);
-+  dict.Set("first_seen", pattern.first_seen.InMillisecondsFSinceUnixEpoch());
-+  dict.Set("last_seen", pattern.last_seen.InMillisecondsFSinceUnixEpoch());
++  dict.Set("first_seen", pattern.first_seen.InMillisecondsSinceUnixEpoch());
++  dict.Set("last_seen", pattern.last_seen.InMillisecondsSinceUnixEpoch());
 +  
 +  base::Value::List actions_list;
 +  for (const auto& action : pattern.actions) {
