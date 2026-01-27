@@ -17,6 +17,7 @@ index 0000000000000..8a9b0c1d2e3f4
 +#include "chrome/browser/browseros/ghost_mode/ghost_mode_prefs.h"
 +#include "chrome/browser/browseros/ghost_mode/sensitive_detector.h"
 +#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/render_frame_host.h"
 +#include "content/public/browser/web_contents.h"
 +#include "url/gurl.h"
 +
@@ -130,10 +131,9 @@ index 0000000000000..8a9b0c1d2e3f4
 +  action.session_id = session_id_;
 +  
 +  if (web_contents()) {
-+    // Store tab ID for grouping
-+    // Note: Using a simple hash as tab IDs are internal
++    // Store tab ID for grouping using stable frame tree node ID
 +    action.tab_id = static_cast<int>(
-+        std::hash<std::string>{}(web_contents()->GetTitle()));
++        web_contents()->GetPrimaryMainFrame()->GetFrameTreeNodeId().value());
 +  }
 +  
 +  // Calculate time since previous action

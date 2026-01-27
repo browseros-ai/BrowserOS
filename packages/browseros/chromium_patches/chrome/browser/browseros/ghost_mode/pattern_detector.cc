@@ -182,9 +182,9 @@ index 0000000000000..b2c3d4e5f6a7b
 +                return a.timestamp < b.timestamp;
 +              });
 +    
-+    // Split by time gaps
++    // Split by time gaps - use UUID for unique subsession IDs
 +    std::string current_session = session_id + "_" +
-+                                   base::NumberToString(subsession_counter++);
++                                   base::Uuid::GenerateRandomV4().AsLowercaseString();
 +    result[current_session].push_back(session_actions[0]);
 +    
 +    for (size_t i = 1; i < session_actions.size(); ++i) {
@@ -192,9 +192,9 @@ index 0000000000000..b2c3d4e5f6a7b
 +          session_actions[i].timestamp - session_actions[i - 1].timestamp;
 +      
 +      if (gap > kSessionGapThreshold) {
-+        // Start a new subsession
++        // Start a new subsession with UUID for uniqueness
 +        current_session = session_id + "_" +
-+                           base::NumberToString(subsession_counter++);
++                           base::Uuid::GenerateRandomV4().AsLowercaseString();
 +      }
 +      
 +      result[current_session].push_back(session_actions[i]);
