@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..8a43597d654b2
+index 0000000000000..fdf044e5def40
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1002 @@
+@@ -0,0 +1,1062 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -45,6 +45,7 @@ index 0000000000000..8a43597d654b2
 +#include "components/prefs/pref_change_registrar.h"
 +#include "components/prefs/pref_service.h"
 +#include "components/version_info/version_info.h"
++#include "content/public/browser/browser_thread.h"
 +#include "content/public/browser/devtools_agent_host.h"
 +#include "content/public/browser/devtools_socket_factory.h"
 +#include "net/base/address_family.h"
@@ -60,8 +61,8 @@ index 0000000000000..8a43597d654b2
 +
 +constexpr int kBackLog = 10;
 +
-+constexpr base::TimeDelta kHealthCheckInterval = base::Seconds(30);
-+constexpr base::TimeDelta kProcessCheckInterval = base::Seconds(10);
++constexpr base::TimeDelta kHealthCheckInterval = base::Seconds(10);
++constexpr base::TimeDelta kProcessCheckInterval = base::Seconds(5);
 +
 +// Crash tracking: if server crashes within grace period, count as startup failure
 +constexpr base::TimeDelta kStartupGracePeriod = base::Seconds(30);
@@ -432,8 +433,8 @@ index 0000000000000..8a43597d654b2
 +    updater_.reset();
 +  }
 +
-+  // Use wait=false for shutdown - just send kill signal, don't block UI thread
-+  TerminateBrowserOSProcess(/*wait=*/false);
++  // Graceful shutdown: HTTP → SIGKILL fallback
++  TerminateBrowserOSProcess(base::DoNothing());
 +
 +  // Delete state file - clean shutdown means no orphan to recover
 +  {
@@ -637,13 +638,32 @@ index 0000000000000..8a43597d654b2
 +  }
 +}
 +
-+void BrowserOSServerManager::TerminateBrowserOSProcess(bool wait) {
++void BrowserOSServerManager::TerminateBrowserOSProcess(
++    base::OnceCallback<void()> callback) {
 +  if (!process_.IsValid()) {
++    std::move(callback).Run();
 +    return;
 +  }
 +
-+  process_controller_->Terminate(&process_, wait);
-+  is_running_ = false;
++  LOG(INFO) << "browseros: Requesting graceful shutdown via HTTP";
++  health_checker_->RequestShutdown(
++      ports_.mcp,
++      base::BindOnce(&BrowserOSServerManager::OnTerminateHttpComplete,
++                     weak_factory_.GetWeakPtr(), std::move(callback)));
++}
++
++void BrowserOSServerManager::OnTerminateHttpComplete(
++    base::OnceCallback<void()> callback,
++    bool http_success) {
++  if (http_success) {
++    LOG(INFO) << "browseros: Graceful shutdown acknowledged, trusting exit";
++  } else {
++    LOG(WARNING) << "browseros: HTTP shutdown failed, sending SIGKILL";
++    if (process_.IsValid()) {
++      process_controller_->Terminate(&process_, /*wait=*/false);
++    }
++  }
++  std::move(callback).Run();
 +}
 +
 +void BrowserOSServerManager::OnProcessExited(int exit_code) {
@@ -779,10 +799,19 @@ index 0000000000000..8a43597d654b2
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
 +
++  // Graceful shutdown, then continue with restart flow
++  TerminateBrowserOSProcess(
++      base::BindOnce(&BrowserOSServerManager::ContinueRestartAfterTerminate,
++                     weak_factory_.GetWeakPtr(), revalidate_all_ports));
++}
++
++void BrowserOSServerManager::ContinueRestartAfterTerminate(
++    bool revalidate_all_ports) {
 +  // Capture current ports for background thread
 +  ServerPorts current_ports = ports_;
 +
-+  // Kill process on background thread, wait for port release, revalidate, launch
++  // Wait for process exit (if HTTP succeeded, it should exit soon),
++  // then revalidate ports and launch
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE,
 +      {base::MayBlock(), base::WithBaseSyncPrimitives(),
@@ -790,7 +819,19 @@ index 0000000000000..8a43597d654b2
 +      base::BindOnce(
 +          [](BrowserOSServerManager* manager, ServerPorts current,
 +             bool revalidate_all) -> ServerPorts {
-+            manager->TerminateBrowserOSProcess(/*wait=*/true);
++            // Wait for process exit with timeout, SIGKILL if still running
++            constexpr base::TimeDelta kExitTimeout = base::Seconds(5);
++            int exit_code = 0;
++            bool exited = manager->process_controller_->WaitForExitWithTimeout(
++                &manager->process_, kExitTimeout, &exit_code);
++
++            if (!exited) {
++              LOG(WARNING) << "browseros: Process didn't exit in time, "
++                           << "sending SIGKILL";
++              manager->process_controller_->Terminate(&manager->process_,
++                                                      /*wait=*/true);
++            }
++
 +            return manager->RevalidatePortsForRestart(current, revalidate_all);
 +          },
 +          base::Unretained(this), current_ports, revalidate_all_ports),
@@ -868,6 +909,13 @@ index 0000000000000..8a43597d654b2
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
 +
++  // Graceful shutdown, then continue with update flow
++  TerminateBrowserOSProcess(
++      base::BindOnce(&BrowserOSServerManager::ContinueUpdateAfterTerminate,
++                     weak_factory_.GetWeakPtr()));
++}
++
++void BrowserOSServerManager::ContinueUpdateAfterTerminate() {
 +  ServerPorts current_ports = ports_;
 +
 +  base::ThreadPool::PostTaskAndReplyWithResult(
@@ -877,7 +925,19 @@ index 0000000000000..8a43597d654b2
 +      base::BindOnce(
 +          [](BrowserOSServerManager* manager,
 +             ServerPorts current) -> ServerPorts {
-+            manager->TerminateBrowserOSProcess(/*wait=*/true);
++            // Wait for process exit with timeout, SIGKILL if still running
++            constexpr base::TimeDelta kExitTimeout = base::Seconds(5);
++            int exit_code = 0;
++            bool exited = manager->process_controller_->WaitForExitWithTimeout(
++                &manager->process_, kExitTimeout, &exit_code);
++
++            if (!exited) {
++              LOG(WARNING) << "browseros: Process didn't exit for update, "
++                           << "sending SIGKILL";
++              manager->process_controller_->Terminate(&manager->process_,
++                                                      /*wait=*/true);
++            }
++
 +            return manager->RevalidatePortsForRestart(current,
 +                                                      /*revalidate_all=*/false);
 +          },

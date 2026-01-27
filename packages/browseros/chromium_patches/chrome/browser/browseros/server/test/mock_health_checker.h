@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/test/mock_health_checker.h b/chrome/browser/browseros/server/test/mock_health_checker.h
 new file mode 100644
-index 0000000000000..0e771924d9181
+index 0000000000000..e684d775ea25d
 --- /dev/null
 +++ b/chrome/browser/browseros/server/test/mock_health_checker.h
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,33 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -26,6 +26,10 @@ index 0000000000000..0e771924d9181
 +
 +  MOCK_METHOD(void,
 +              CheckHealth,
++              (int, base::OnceCallback<void(bool)>),
++              (override));
++  MOCK_METHOD(void,
++              RequestShutdown,
 +              (int, base::OnceCallback<void(bool)>),
 +              (override));
 +};

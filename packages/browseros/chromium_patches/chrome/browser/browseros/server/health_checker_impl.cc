@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/health_checker_impl.cc b/chrome/browser/browseros/server/health_checker_impl.cc
 new file mode 100644
-index 0000000000000..97fa0ec9cefe2
+index 0000000000000..0e3f384250040
 --- /dev/null
 +++ b/chrome/browser/browseros/server/health_checker_impl.cc
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,153 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -79,12 +79,64 @@ index 0000000000000..97fa0ec9cefe2
 +  // Download response headers only (we just need status code)
 +  url_loader_ptr->DownloadHeadersOnly(
 +      url_loader_factory,
-+      base::BindOnce(&HealthCheckerImpl::OnHealthCheckComplete,
++      base::BindOnce(&HealthCheckerImpl::OnRequestComplete,
 +                     base::Unretained(this), std::move(url_loader),
 +                     std::move(callback)));
 +}
 +
-+void HealthCheckerImpl::OnHealthCheckComplete(
++void HealthCheckerImpl::RequestShutdown(
++    int port,
++    base::OnceCallback<void(bool success)> callback) {
++  // Build shutdown URL
++  GURL shutdown_url("http://127.0.0.1:" + base::NumberToString(port) +
++                    "/shutdown");
++
++  // Create network traffic annotation
++  net::NetworkTrafficAnnotationTag traffic_annotation =
++      net::DefineNetworkTrafficAnnotation("browseros_shutdown_request", R"(
++        semantics {
++          sender: "BrowserOS Server Manager"
++          description:
++            "Requests graceful shutdown of the BrowserOS server via POST to "
++            "/shutdown endpoint."
++          trigger: "Browser shutdown or server restart."
++          data: "No user data sent, just an HTTP POST request."
++          destination: LOCAL
++        }
++        policy {
++          cookies_allowed: NO
++          setting: "This feature cannot be disabled by settings."
++          policy_exception_justification:
++            "Internal shutdown request for BrowserOS server functionality."
++        })");
++
++  // Create resource request
++  auto resource_request = std::make_unique<network::ResourceRequest>();
++  resource_request->url = shutdown_url;
++  resource_request->method = "POST";
++  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
++
++  auto url_loader = network::SimpleURLLoader::Create(
++      std::move(resource_request), traffic_annotation);
++  url_loader->SetTimeoutDuration(base::Seconds(1));
++
++  // Get URL loader factory from system network context
++  auto* url_loader_factory =
++      g_browser_process->system_network_context_manager()
++          ->GetURLLoaderFactory();
++
++  // Keep a raw pointer for the callback
++  auto* url_loader_ptr = url_loader.get();
++
++  // Download response headers only (we just need status code)
++  url_loader_ptr->DownloadHeadersOnly(
++      url_loader_factory,
++      base::BindOnce(&HealthCheckerImpl::OnRequestComplete,
++                     base::Unretained(this), std::move(url_loader),
++                     std::move(callback)));
++}
++
++void HealthCheckerImpl::OnRequestComplete(
 +    std::unique_ptr<network::SimpleURLLoader> url_loader,
 +    base::OnceCallback<void(bool success)> callback,
 +    scoped_refptr<net::HttpResponseHeaders> headers) {
@@ -97,7 +149,7 @@ index 0000000000000..97fa0ec9cefe2
 +
 +  if (!success) {
 +    int net_error = url_loader->NetError();
-+    LOG(WARNING) << "browseros: Health check failed - HTTP " << response_code
++    LOG(WARNING) << "browseros: HTTP request failed - HTTP " << response_code
 +                 << ", net error: " << net::ErrorToString(net_error);
 +  }
 +

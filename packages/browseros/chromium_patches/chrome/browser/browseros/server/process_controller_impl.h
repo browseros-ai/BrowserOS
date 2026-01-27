@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/process_controller_impl.h b/chrome/browser/browseros/server/process_controller_impl.h
 new file mode 100644
-index 0000000000000..1503fa154cad2
+index 0000000000000..46f7d9359dcd7
 --- /dev/null
 +++ b/chrome/browser/browseros/server/process_controller_impl.h
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,35 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -28,6 +28,9 @@ index 0000000000000..1503fa154cad2
 +  // ProcessController implementation:
 +  LaunchResult Launch(const ServerLaunchConfig& config) override;
 +  void Terminate(base::Process* process, bool wait) override;
++  bool WaitForExitWithTimeout(base::Process* process,
++                              base::TimeDelta timeout,
++                              int* exit_code) override;
 +  bool Exists(base::ProcessId pid) override;
 +  std::optional<int64_t> GetCreationTime(base::ProcessId pid) override;
 +  bool Kill(base::ProcessId pid, base::TimeDelta graceful_timeout) override;

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/test/mock_process_controller.h b/chrome/browser/browseros/server/test/mock_process_controller.h
 new file mode 100644
-index 0000000000000..ca55f68e86fd8
+index 0000000000000..97fdf04282691
 --- /dev/null
 +++ b/chrome/browser/browseros/server/test/mock_process_controller.h
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,38 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -29,6 +29,10 @@ index 0000000000000..ca55f68e86fd8
 +              (const ServerLaunchConfig&),
 +              (override));
 +  MOCK_METHOD(void, Terminate, (base::Process*, bool), (override));
++  MOCK_METHOD(bool,
++              WaitForExitWithTimeout,
++              (base::Process*, base::TimeDelta, int*),
++              (override));
 +  MOCK_METHOD(bool, Exists, (base::ProcessId), (override));
 +  MOCK_METHOD(std::optional<int64_t>, GetCreationTime, (base::ProcessId),
 +              (override));

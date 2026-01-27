@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/process_controller.h b/chrome/browser/browseros/server/process_controller.h
 new file mode 100644
-index 0000000000000..9a8b36135f878
+index 0000000000000..08c04e406dac8
 --- /dev/null
 +++ b/chrome/browser/browseros/server/process_controller.h
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,60 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -36,10 +36,17 @@ index 0000000000000..9a8b36135f878
 +  // and whether the fallback binary was used.
 +  virtual LaunchResult Launch(const ServerLaunchConfig& config) = 0;
 +
-+  // Terminate a running process.
++  // Terminate a running process with SIGKILL.
 +  // If wait=true, blocks until process exits (must be called from background
 +  // thread). If wait=false, just sends kill signal and returns immediately.
 +  virtual void Terminate(base::Process* process, bool wait) = 0;
++
++  // Wait for process to exit within timeout.
++  // Returns true if process exited, false if timeout expired.
++  // Must be called from a thread that allows blocking.
++  virtual bool WaitForExitWithTimeout(base::Process* process,
++                                      base::TimeDelta timeout,
++                                      int* exit_code) = 0;
 +
 +  // Check if a process with the given PID exists.
 +  virtual bool Exists(base::ProcessId pid) = 0;

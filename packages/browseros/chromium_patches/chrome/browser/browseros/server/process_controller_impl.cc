@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/process_controller_impl.cc b/chrome/browser/browseros/server/process_controller_impl.cc
 new file mode 100644
-index 0000000000000..caf993c7529ad
+index 0000000000000..3c1014ee9db3e
 --- /dev/null
 +++ b/chrome/browser/browseros/server/process_controller_impl.cc
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,210 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -151,8 +151,8 @@ index 0000000000000..caf993c7529ad
 +    return;
 +  }
 +
-+  LOG(INFO) << "browseros: Terminating process (PID: " << process->Pid()
-+            << ", wait: " << (wait ? "true" : "false") << ")";
++  LOG(INFO) << "browseros: Terminating process with SIGKILL (PID: "
++            << process->Pid() << ", wait: " << (wait ? "true" : "false") << ")";
 +
 +#if BUILDFLAG(IS_POSIX)
 +  base::ProcessId pid = process->Pid();
@@ -178,6 +178,25 @@ index 0000000000000..caf993c7529ad
 +    LOG(ERROR) << "browseros: Failed to terminate process";
 +  }
 +#endif
++}
++
++bool ProcessControllerImpl::WaitForExitWithTimeout(base::Process* process,
++                                                   base::TimeDelta timeout,
++                                                   int* exit_code) {
++  if (!process || !process->IsValid()) {
++    return true;  // No process to wait for
++  }
++
++  LOG(INFO) << "browseros: Waiting for process exit (PID: " << process->Pid()
++            << ", timeout: " << timeout.InSeconds() << "s)";
++
++  bool exited = process->WaitForExitWithTimeout(timeout, exit_code);
++  if (exited) {
++    LOG(INFO) << "browseros: Process exited with code " << *exit_code;
++  } else {
++    LOG(INFO) << "browseros: Process did not exit within timeout";
++  }
++  return exited;
 +}
 +
 +bool ProcessControllerImpl::Exists(base::ProcessId pid) {

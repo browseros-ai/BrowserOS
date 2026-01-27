@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.h b/chrome/browser/browseros/server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000..457ee9e0295a3
+index 0000000000000..1530e596ee855
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.h
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,219 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -147,11 +147,18 @@ index 0000000000000..457ee9e0295a3
 +
 +  void LaunchBrowserOSProcess();
 +  void OnProcessLaunched(LaunchResult result);
-+  // Terminates the BrowserOS server process.
-+  // If wait=true, blocks until process exits (must be called from background thread).
-+  // If wait=false, just sends kill signal and returns (safe from any thread).
-+  void TerminateBrowserOSProcess(bool wait);
++
++  // Graceful shutdown: HTTP POST /shutdown (1s timeout) → SIGKILL if failed.
++  // Invokes callback when termination is initiated (doesn't wait for process exit).
++  // If no process running, calls callback immediately.
++  void TerminateBrowserOSProcess(base::OnceCallback<void()> callback);
++  void OnTerminateHttpComplete(base::OnceCallback<void()> callback,
++                               bool http_success);
++
 +  void RestartBrowserOSProcess(bool revalidate_all_ports = false);
++  void ContinueRestartAfterTerminate(bool revalidate_all_ports);
++
++  void ContinueUpdateAfterTerminate();
 +
 +  // Revalidates ports for restart (runs on background thread).
 +  // CDP port is excluded (already bound by Chrome's DevTools server).
