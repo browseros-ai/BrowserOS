@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.cc b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
 new file mode 100644
-index 0000000000000..2db5f47421f59
+index 0000000000000..c08b705ef6869
 --- /dev/null
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
-@@ -0,0 +1,1429 @@
+@@ -0,0 +1,1437 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -355,7 +355,7 @@ index 0000000000000..2db5f47421f59
 +  }
 +  
 +  content::WebContents* web_contents = tab_info->web_contents;
-+  web_contents_ = web_contents;  // Store for later use in OnSnapshotProcessed
++  web_contents_ = web_contents->GetWeakPtr();
 +  
 +  // Note: We don't need to get scale factors here!
 +  // The accessibility tree provides bounds in CSS pixels (logical pixels),
@@ -423,7 +423,7 @@ index 0000000000000..2db5f47421f59
 +      tree_update,
 +      tab_id_,
 +      next_snapshot_id_++,
-+      web_contents_,
++      web_contents_.get(),
 +      base::BindOnce(
 +          &BrowserOSGetInteractiveSnapshotFunction::OnSnapshotProcessed,
 +          base::WrapRefCounted(this)));
@@ -849,7 +849,7 @@ index 0000000000000..2db5f47421f59
 +  }
 +  
 +  content::WebContents* web_contents = tab_info->web_contents;
-+  web_contents_ = web_contents;
++  web_contents_ = web_contents->GetWeakPtr();
 +  tab_id_ = tab_info->tab_id;
 +  
 +  // Get the render widget host view
@@ -930,7 +930,9 @@ index 0000000000000..2db5f47421f59
 +    if (tab_it != GetNodeIdMappings().end() && !tab_it->second.empty()) {
 +      LOG(INFO) << "[browseros] Drawing highlights for screenshot with " 
 +                << tab_it->second.size() << " interactive elements";
-+      ShowHighlights(web_contents_, tab_it->second, true /* show_labels */);
++      if (web_contents_) {
++        ShowHighlights(web_contents_.get(), tab_it->second, true /* show_labels */);
++      }
 +    } else {
 +      LOG(INFO) << "[browseros] No snapshot data available for highlighting";
 +    }
@@ -950,12 +952,13 @@ index 0000000000000..2db5f47421f59
 +}
 +
 +void BrowserOSCaptureScreenshotFunction::CaptureScreenshotNow() {
-+  if (!web_contents_) {
++  content::WebContents* web_contents = web_contents_.get();
++  if (!web_contents) {
 +    Respond(Error("Web contents destroyed"));
 +    return;
 +  }
-+  
-+  content::RenderFrameHost* rfh = web_contents_->GetPrimaryMainFrame();
++
++  content::RenderFrameHost* rfh = web_contents->GetPrimaryMainFrame();
 +  if (!rfh) {
 +    Respond(Error("No render frame"));
 +    return;
@@ -969,9 +972,14 @@ index 0000000000000..2db5f47421f59
 +  
 +  content::RenderWidgetHostImpl* rwhi = 
 +      static_cast<content::RenderWidgetHostImpl*>(rwh);
++  content::RenderWidgetHostView* view = rwhi->GetView();
++  if (!view) {
++    Respond(Error("No render widget host view"));
++    return;
++  }
 +  
 +  // Request the screenshot
-+  rwhi->GetView()->CopyFromSurface(
++  view->CopyFromSurface(
 +      gfx::Rect(),  // Empty rect means copy entire surface
 +      target_size_,
 +      base::BindOnce(&BrowserOSCaptureScreenshotFunction::OnScreenshotCaptured,
@@ -982,7 +990,7 @@ index 0000000000000..2db5f47421f59
 +    const SkBitmap& bitmap) {
 +  // Clean up the highlights immediately after capture (only if we added them)
 +  if (show_highlights_ && web_contents_) {
-+    RemoveHighlights(web_contents_);
++    RemoveHighlights(web_contents_.get());
 +  }
 +  
 +  if (bitmap.empty()) {

@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.h b/chrome/browser/extensions/api/browser_os/browser_os_api.h
 new file mode 100644
-index 0000000000000..9db5a006c85a1
+index 0000000000000..2e2f5f0253f86
 --- /dev/null
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.h
 @@ -0,0 +1,369 @@
@@ -13,7 +13,7 @@ index 0000000000000..9db5a006c85a1
 +
 +#include <cstdint>
 +
-+#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
 +#include "base/values.h"
 +#include "chrome/browser/extensions/api/browser_os/browser_os_api_utils.h"
 +#include "chrome/browser/extensions/api/browser_os/browser_os_content_processor.h"
@@ -75,7 +75,7 @@ index 0000000000000..9db5a006c85a1
 +  int tab_id_ = -1;
 +  
 +  // Web contents for processing and drawing
-+  raw_ptr<content::WebContents> web_contents_ = nullptr;
++  base::WeakPtr<content::WebContents> web_contents_;
 +};
 +
 +class BrowserOSClickFunction : public ExtensionFunction {
@@ -201,7 +201,7 @@ index 0000000000000..9db5a006c85a1
 +  void OnScreenshotCaptured(const SkBitmap& bitmap);
 +  
 +  // Store web contents and tab id for highlight operations
-+  raw_ptr<content::WebContents> web_contents_ = nullptr;
++  base::WeakPtr<content::WebContents> web_contents_;
 +  int tab_id_ = -1;
 +  gfx::Size target_size_;
 +  bool show_highlights_ = false;
@@ -373,4 +373,3 @@ index 0000000000000..9db5a006c85a1
 +}  // namespace extensions
 +
 +#endif  // CHROME_BROWSER_EXTENSIONS_API_BROWSER_OS_BROWSER_OS_API_H_
-\ No newline at end of file
