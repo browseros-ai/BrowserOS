@@ -131,6 +131,10 @@ index 0000000000000..7f8a9b0c1d2e3
 +  // Current page URL
 +  GURL current_url_;
 +  
++  // Scroll throttling - only record scroll events at most once per 500ms
++  base::Time last_scroll_time_;
++  static constexpr base::TimeDelta kScrollThrottleInterval = base::Milliseconds(500);
++  
 +  // Dependencies (not owned)
 +  raw_ptr<PrefService> pref_service_;
 +  raw_ptr<ActionStore> action_store_;

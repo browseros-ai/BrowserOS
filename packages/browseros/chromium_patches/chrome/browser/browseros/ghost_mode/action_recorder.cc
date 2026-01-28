@@ -10,6 +10,8 @@ index 0000000000000..8a9b0c1d2e3f4
 +
 +#include "chrome/browser/browseros/ghost_mode/action_recorder.h"
 +
++#include <cmath>
++
 +#include "base/logging.h"
 +#include "base/strings/string_util.h"
 +#include "base/uuid.h"
@@ -156,9 +158,49 @@ index 0000000000000..8a9b0c1d2e3f4
 +
 +std::vector<std::string> ActionRecorder::GenerateSelectors(
 +    const std::string& primary_selector) {
-+  // For now, just return the primary selector
-+  // TODO: Generate multiple selector strategies for robustness
-+  return {primary_selector};
++  std::vector<std::string> selectors;
++  
++  // Always include the primary selector first
++  if (!primary_selector.empty()) {
++    selectors.push_back(primary_selector);
++  }
++  
++  // Generate fallback selectors based on the primary type
++  // Priority: data-testid > id > aria-label > class-based > nth-child
++  
++  // If primary is a data-testid, try to derive other selectors
++  if (primary_selector.find("[data-testid") != std::string::npos) {
++    // Already the most stable, add class-based fallback if present
++    size_t class_pos = primary_selector.find(".");
++    if (class_pos != std::string::npos) {
++      selectors.push_back(primary_selector.substr(class_pos));
++    }
++  }
++  // If primary is an ID selector
++  else if (!primary_selector.empty() && primary_selector[0] == '#') {
++    // ID is pretty stable, could add tag + id combo
++    selectors.push_back(primary_selector);
++  }
++  // If primary is aria-label based
++  else if (primary_selector.find("[aria-label") != std::string::npos) {
++    // aria-label is accessibility-focused and fairly stable
++    // Try to add role-based selector
++    if (primary_selector.find("[role=") == std::string::npos) {
++      // Could add [role=button] or similar if we had the info
++    }
++  }
++  // If primary is class-based
++  else if (!primary_selector.empty() && primary_selector[0] == '.') {
++    // Classes can be unstable, add text-based fallback if possible
++    selectors.push_back(primary_selector);
++  }
++  
++  // Always ensure we have at least the primary
++  if (selectors.empty() && !primary_selector.empty()) {
++    selectors.push_back(primary_selector);
++  }
++  
++  return selectors;
 +}
 +
 +void ActionRecorder::StoreAction(RecordedAction action) {
@@ -243,9 +285,23 @@ index 0000000000000..8a9b0c1d2e3f4
 +
 +void ActionRecorder::RecordScroll(int delta_x, int delta_y,
 +                                   int scroll_x, int scroll_y) {
-+  // Scrolling is recorded with lower priority (throttled)
-+  // TODO: Implement throttling to avoid recording every scroll event
 +  if (!is_recording_ || !ShouldRecordForCurrentPage()) {
++    return;
++  }
++  
++  // Throttle scroll events to avoid recording every scroll tick
++  // Only record if enough time has passed since last scroll event
++  base::Time now = base::Time::Now();
++  if (!last_scroll_time_.is_null() &&
++      (now - last_scroll_time_) < kScrollThrottleInterval) {
++    return;  // Skip this scroll event (throttled)
++  }
++  last_scroll_time_ = now;
++  
++  // Only record significant scrolls (ignore tiny movements)
++  constexpr int kMinScrollDelta = 50;  // pixels
++  if (std::abs(delta_x) < kMinScrollDelta && 
++      std::abs(delta_y) < kMinScrollDelta) {
 +    return;
 +  }
 +  

@@ -105,9 +105,38 @@ index 0000000000000..4c5d6e7f8a9b0
 +}
 +
 +bool IsDomainExcluded(PrefService* pref_service, const std::string& domain) {
-+  // TODO: Implement wildcard matching
 +  auto excluded = GetExcludedDomains(pref_service);
-+  return std::find(excluded.begin(), excluded.end(), domain) != excluded.end();
++  
++  for (const auto& pattern : excluded) {
++    // Exact match
++    if (pattern == domain) {
++      return true;
++    }
++    
++    // Wildcard matching: *.example.com matches sub.example.com
++    if (pattern.size() > 2 && pattern[0] == '*' && pattern[1] == '.') {
++      std::string suffix = pattern.substr(1);  // ".example.com"
++      // Check if domain ends with the suffix
++      if (domain.size() >= suffix.size() &&
++          domain.compare(domain.size() - suffix.size(), suffix.size(), suffix) == 0) {
++        return true;
++      }
++      // Also match the base domain itself (*.example.com matches example.com)
++      std::string base_domain = pattern.substr(2);  // "example.com"
++      if (domain == base_domain) {
++        return true;
++      }
++    }
++    
++    // Subdomain matching: if pattern is "example.com", match "sub.example.com"
++    if (domain.size() > pattern.size() + 1 &&
++        domain[domain.size() - pattern.size() - 1] == '.' &&
++        domain.compare(domain.size() - pattern.size(), pattern.size(), pattern) == 0) {
++      return true;
++    }
++  }
++  
++  return false;
 +}
 +
 +}  // namespace browseros::ghost_mode
