@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..fdf044e5def40
+index 0000000000000..7b91e0fdea77d
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1062 @@
+@@ -0,0 +1,1060 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -22,6 +22,7 @@ index 0000000000000..fdf044e5def40
 +#include "base/strings/string_number_conversions.h"
 +#include "base/system/sys_info.h"
 +#include "base/task/thread_pool.h"
++#include "content/public/browser/browser_thread.h"
 +#include "base/threading/thread_restrictions.h"
 +#include "build/build_config.h"
 +#include "chrome/browser/browser_process.h"
@@ -30,6 +31,7 @@ index 0000000000000..fdf044e5def40
 +#include "chrome/browser/browseros/metrics/browseros_metrics_service_factory.h"
 +#include "chrome/browser/browseros/server/browseros_server_config.h"
 +#include "chrome/browser/browseros/server/browseros_server_prefs.h"
++#include "chrome/browser/browseros/server/browseros_server_proxy.h"
 +#include "chrome/browser/browseros/server/browseros_server_updater.h"
 +#include "chrome/browser/browseros/server/browseros_server_utils.h"
 +#include "chrome/browser/browseros/server/health_checker.h"
@@ -39,6 +41,8 @@ index 0000000000000..fdf044e5def40
 +#include "chrome/browser/browseros/server/server_state_store.h"
 +#include "chrome/browser/browseros/server/server_state_store_impl.h"
 +#include "chrome/browser/browseros/server/server_updater.h"
++#include "chrome/browser/net/system_network_context_manager.h"
++#include "services/network/public/cpp/shared_url_loader_factory.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/profiles/profile_manager.h"
 +#include "chrome/common/chrome_paths.h"
@@ -61,22 +65,14 @@ index 0000000000000..fdf044e5def40
 +
 +constexpr int kBackLog = 10;
 +
-+constexpr base::TimeDelta kHealthCheckInterval = base::Seconds(10);
++constexpr base::TimeDelta kHealthCheckInterval = base::Seconds(30);
 +constexpr base::TimeDelta kProcessCheckInterval = base::Seconds(5);
 +
-+// Crash tracking: if server crashes within grace period, count as startup failure
 +constexpr base::TimeDelta kStartupGracePeriod = base::Seconds(30);
 +constexpr int kMaxStartupFailures = 3;
 +
-+// Exit codes from BrowserOS server (must match packages/shared/src/constants/exit-codes.ts)
-+// - 0 (SUCCESS): Clean shutdown, don't restart
-+// - 1 (GENERAL_ERROR): Restart with same ports (default case, no const needed)
-+// - 2 (PORT_CONFLICT): Restart with all ports revalidated
 +constexpr int kExitCodeSuccess = 0;
-+constexpr int kExitCodePortConflict = 2;
 +
-+// Helper function to check for command-line port override.
-+// Returns the port value if valid override is found, 0 otherwise.
 +int GetPortOverrideFromCommandLine(base::CommandLine* command_line,
 +                                    const char* switch_name,
 +                                    const char* port_name) {
@@ -95,7 +91,6 @@ index 0000000000000..fdf044e5def40
 +    return 0;
 +  }
 +
-+  // Warn about problematic ports but respect explicit user intent
 +  if (net::IsWellKnownPort(port)) {
 +    LOG(WARNING) << "browseros: " << port_name << " " << port
 +                 << " is well-known (0-1023) and may require elevated "
@@ -112,7 +107,6 @@ index 0000000000000..fdf044e5def40
 +  return port;
 +}
 +
-+// Factory for creating TCP server sockets for CDP
 +class CDPServerSocketFactory : public content::DevToolsSocketFactory {
 + public:
 +  explicit CDPServerSocketFactory(uint16_t port) : port_(port) {}
@@ -134,14 +128,13 @@ index 0000000000000..fdf044e5def40
 +    return nullptr;
 +  }
 +
-+  // content::DevToolsSocketFactory implementation
 +  std::unique_ptr<net::ServerSocket> CreateForHttpServer() override {
 +    return CreateLocalHostServerSocket(port_);
 +  }
 +
 +  std::unique_ptr<net::ServerSocket> CreateForTethering(
 +      std::string* name) override {
-+    return nullptr;  // Tethering not needed for BrowserOS
++    return nullptr;
 +  }
 +
 +  uint16_t port_;
@@ -181,7 +174,6 @@ index 0000000000000..fdf044e5def40
 +}
 +
 +bool BrowserOSServerManager::AcquireLock() {
-+  // Allow blocking for lock file operations (short-duration I/O)
 +  base::ScopedAllowBlocking allow_blocking;
 +
 +  base::FilePath exec_dir = GetBrowserOSExecutionDir();
@@ -216,10 +208,8 @@ index 0000000000000..fdf044e5def40
 +}
 +
 +bool BrowserOSServerManager::RecoverFromOrphan() {
-+  // Allow blocking for state file and process operations
 +  base::ScopedAllowBlocking allow_blocking;
 +
-+  // Read state file
 +  std::optional<server_utils::ServerState> state = state_store_->Read();
 +  if (!state) {
 +    LOG(INFO) << "browseros: No orphan state file found";
@@ -229,14 +219,12 @@ index 0000000000000..fdf044e5def40
 +  LOG(INFO) << "browseros: Found state file - PID: " << state->pid
 +            << ", creation_time: " << state->creation_time;
 +
-+  // Check if process exists
 +  if (!server_utils::ProcessExists(state->pid)) {
 +    LOG(INFO) << "browseros: Process " << state->pid << " no longer exists";
 +    state_store_->Delete();
 +    return false;
 +  }
 +
-+  // Validate creation time to handle PID reuse
 +  std::optional<int64_t> actual_creation_time =
 +      server_utils::GetProcessCreationTime(state->pid);
 +  if (!actual_creation_time) {
@@ -254,7 +242,6 @@ index 0000000000000..fdf044e5def40
 +    return false;
 +  }
 +
-+  // This is our orphan - kill it
 +  LOG(INFO) << "browseros: Killing orphan server (PID: " << state->pid << ")";
 +  constexpr base::TimeDelta kGracefulTimeout = base::Seconds(2);
 +  bool killed = server_utils::KillProcess(state->pid, kGracefulTimeout);
@@ -272,7 +259,8 @@ index 0000000000000..fdf044e5def40
 +void BrowserOSServerManager::LoadPortsFromPrefs() {
 +  if (!local_state_) {
 +    ports_.cdp = browseros_server::kDefaultCDPPort;
-+    ports_.mcp = browseros_server::kDefaultMCPPort;
++    ports_.proxy = browseros_server::kDefaultProxyPort;
++    ports_.server = browseros_server::kDefaultServerPort;
 +    ports_.extension = browseros_server::kDefaultExtensionPort;
 +    allow_remote_in_mcp_ = false;
 +    return;
@@ -283,9 +271,23 @@ index 0000000000000..fdf044e5def40
 +    ports_.cdp = browseros_server::kDefaultCDPPort;
 +  }
 +
-+  ports_.mcp = local_state_->GetInteger(browseros_server::kMCPServerPort);
-+  if (ports_.mcp <= 0) {
-+    ports_.mcp = browseros_server::kDefaultMCPPort;
++  // Migration: read old kMCPServerPort into proxy if kProxyPort not yet set
++  int proxy_port = local_state_->GetInteger(browseros_server::kProxyPort);
++  if (proxy_port <= 0) {
++    int old_mcp = local_state_->GetInteger(browseros_server::kMCPServerPort);
++    if (old_mcp > 0) {
++      proxy_port = old_mcp;
++      LOG(INFO) << "browseros: Migrated old MCP port " << old_mcp
++                << " to proxy port";
++    } else {
++      proxy_port = browseros_server::kDefaultProxyPort;
++    }
++  }
++  ports_.proxy = proxy_port;
++
++  ports_.server = local_state_->GetInteger(browseros_server::kServerPort);
++  if (ports_.server <= 0) {
++    ports_.server = browseros_server::kDefaultServerPort;
 +  }
 +
 +  ports_.extension = local_state_->GetInteger(browseros_server::kExtensionServerPort);
@@ -300,7 +302,7 @@ index 0000000000000..fdf044e5def40
 +
 +void BrowserOSServerManager::SetupPrefObservers() {
 +  if (!local_state_ || pref_change_registrar_) {
-+    return;  // No prefs or already set up
++    return;
 +  }
 +
 +  pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
@@ -317,24 +319,45 @@ index 0000000000000..fdf044e5def40
 +}
 +
 +void BrowserOSServerManager::ResolvePortsForStartup() {
-+  // Track assigned ports to prevent collisions between our services
++  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
 +  std::set<int> assigned_ports;
 +
-+  // CDP: Chrome binds this port, so find available
-+  ports_.cdp = server_utils::FindAvailablePort(ports_.cdp, assigned_ports);
-+  assigned_ports.insert(ports_.cdp);
++  // Skip FindAvailablePort for CLI-overridden ports — trust the developer.
++  bool cdp_fixed = command_line->HasSwitch(browseros::kCDPPort);
++  bool proxy_fixed = command_line->HasSwitch(browseros::kProxyPort);
++  bool server_fixed = command_line->HasSwitch(browseros::kServerPort);
++  bool extension_fixed = command_line->HasSwitch(browseros::kExtensionPort);
 +
-+  // MCP: Use saved value directly - do NOT revalidate.
-+  // If port is taken, server will exit with PORT_CONFLICT (code 2),
-+  // which triggers full revalidation via RevalidatePortsForRestart().
-+  assigned_ports.insert(ports_.mcp);
++  if (cdp_fixed) {
++    assigned_ports.insert(ports_.cdp);
++  } else {
++    ports_.cdp = server_utils::FindAvailablePort(ports_.cdp, assigned_ports);
++    assigned_ports.insert(ports_.cdp);
++  }
 +
-+  // Extension: Find available port
-+  ports_.extension =
-+      server_utils::FindAvailablePort(ports_.extension, assigned_ports);
++  if (proxy_fixed) {
++    assigned_ports.insert(ports_.proxy);
++  } else {
++    ports_.proxy = server_utils::FindAvailablePort(ports_.proxy, assigned_ports);
++    assigned_ports.insert(ports_.proxy);
++  }
 +
-+  LOG(INFO) << "browseros: Resolved ports for startup - " << ports_.DebugString()
-+            << " (MCP stable)";
++  if (server_fixed) {
++    assigned_ports.insert(ports_.server);
++  } else {
++    ports_.server = server_utils::FindAvailablePort(
++        browseros_server::kDefaultServerPort, assigned_ports);
++    assigned_ports.insert(ports_.server);
++  }
++
++  if (extension_fixed) {
++    assigned_ports.insert(ports_.extension);
++  } else {
++    ports_.extension = server_utils::FindAvailablePort(
++        browseros_server::kDefaultExtensionPort, assigned_ports);
++  }
++
++  LOG(INFO) << "browseros: Resolved ports for startup - " << ports_.DebugString();
 +}
 +
 +void BrowserOSServerManager::ApplyCommandLineOverrides() {
@@ -346,10 +369,16 @@ index 0000000000000..fdf044e5def40
 +    ports_.cdp = cdp_override;
 +  }
 +
-+  int mcp_override = GetPortOverrideFromCommandLine(
-+      command_line, browseros::kMCPPort, "MCP port");
-+  if (mcp_override > 0) {
-+    ports_.mcp = mcp_override;
++  int proxy_override = GetPortOverrideFromCommandLine(
++      command_line, browseros::kProxyPort, "proxy port");
++  if (proxy_override > 0) {
++    ports_.proxy = proxy_override;
++  }
++
++  int server_override = GetPortOverrideFromCommandLine(
++      command_line, browseros::kServerPort, "server port");
++  if (server_override > 0) {
++    ports_.server = server_override;
 +  }
 +
 +  int extension_override = GetPortOverrideFromCommandLine(
@@ -369,8 +398,12 @@ index 0000000000000..fdf044e5def40
 +  }
 +
 +  local_state_->SetInteger(browseros_server::kCDPServerPort, ports_.cdp);
-+  local_state_->SetInteger(browseros_server::kMCPServerPort, ports_.mcp);
++  local_state_->SetInteger(browseros_server::kProxyPort, ports_.proxy);
++  local_state_->SetInteger(browseros_server::kServerPort, ports_.server);
 +  local_state_->SetInteger(browseros_server::kExtensionServerPort, ports_.extension);
++
++  // DEPRECATED: keep mcp_port in sync with server port for backward compat
++  local_state_->SetInteger(browseros_server::kMCPServerPort, ports_.server);
 +
 +  LOG(INFO) << "browseros: Saving to prefs - " << ports_.DebugString();
 +}
@@ -381,15 +414,11 @@ index 0000000000000..fdf044e5def40
 +    return;
 +  }
 +
-+  // Initialize ports in clean steps:
-+  // 1. Load saved values from prefs
-+  // 2. Set up pref change observers
-+  // 3. Resolve ports for startup (MCP stays stable, others find available)
-+  // 4. Apply CLI overrides
-+  // 5. Save final values to prefs
++  // Phase 1: Load user intent (prefs + CLI overrides).
++  // Save stable port preferences so CLI overrides are persisted even when
++  // the server is disabled or we lose the lock.
 +  LoadPortsFromPrefs();
 +  SetupPrefObservers();
-+  ResolvePortsForStartup();
 +  ApplyCommandLineOverrides();
 +  SavePortsToPrefs();
 +
@@ -399,20 +428,20 @@ index 0000000000000..fdf044e5def40
 +    return;
 +  }
 +
-+  // Try to acquire system-wide lock
 +  if (!AcquireLock()) {
-+    return;  // Another Chrome process already owns the server
++    return;
 +  }
 +
-+  // Kill any orphan server from a previous crash (must be after lock, before launch)
-+  // This frees the ports so we can reuse them from prefs.
++  // Phase 2: We hold the lock — we're the active instance.
++  // Now resolve actual available ports and save the final values.
 +  RecoverFromOrphan();
++  ResolvePortsForStartup();
++  SavePortsToPrefs();
 +
 +  LOG(INFO) << "browseros: Starting BrowserOS server";
 +
-+  // Start servers and process
-+  // Note: monitoring timers are started in OnProcessLaunched() after successful launch
 +  StartCDPServer();
++  StartProxy();
 +  LaunchBrowserOSProcess();
 +}
 +
@@ -427,22 +456,20 @@ index 0000000000000..fdf044e5def40
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
 +
-+  // Stop the updater
 +  if (updater_) {
 +    updater_->Stop();
 +    updater_.reset();
 +  }
 +
-+  // Graceful shutdown: HTTP → SIGKILL fallback
++  StopProxy();
++
 +  TerminateBrowserOSProcess(base::DoNothing());
 +
-+  // Delete state file - clean shutdown means no orphan to recover
 +  {
 +    base::ScopedAllowBlocking allow_blocking;
 +    state_store_->Delete();
 +  }
 +
-+  // Release lock
 +  if (lock_file_.IsValid()) {
 +    lock_file_.Unlock();
 +    lock_file_.Close();
@@ -468,9 +495,6 @@ index 0000000000000..fdf044e5def40
 +
 +  LOG(INFO) << "browseros: CDP WebSocket server started at ws://127.0.0.1:"
 +            << ports_.cdp;
-+  LOG(INFO) << "browseros: " << ports_.DebugString()
-+            << " (allow_remote: " << (allow_remote_in_mcp_ ? "true" : "false")
-+            << ")";
 +}
 +
 +void BrowserOSServerManager::StopCDPServer() {
@@ -483,10 +507,48 @@ index 0000000000000..fdf044e5def40
 +  ports_.cdp = 0;
 +}
 +
++void BrowserOSServerManager::StartProxy() {
++  server_proxy_ = std::make_unique<BrowserOSServerProxy>();
++
++  // Clone the factory on the UI thread so it can be bound on the IO thread.
++  auto pending_factory =
++      g_browser_process->system_network_context_manager()
++          ->GetSharedURLLoaderFactory()
++          ->Clone();
++
++  content::GetIOThreadTaskRunner({})->PostTask(
++      FROM_HERE,
++      base::BindOnce(
++          [](BrowserOSServerProxy* proxy, int port,
++             std::unique_ptr<network::PendingSharedURLLoaderFactory> pending,
++             bool allow_remote) {
++            if (!proxy->Start(port, std::move(pending))) {
++              LOG(ERROR) << "browseros: Failed to start MCP proxy on port "
++                         << port;
++              return;
++            }
++            proxy->SetAllowRemote(allow_remote);
++          },
++          server_proxy_.get(), ports_.proxy, std::move(pending_factory),
++          allow_remote_in_mcp_));
++}
++
++void BrowserOSServerManager::StopProxy() {
++  if (server_proxy_) {
++    content::GetIOThreadTaskRunner({})->PostTask(
++        FROM_HERE,
++        base::BindOnce(
++            [](std::unique_ptr<BrowserOSServerProxy> proxy) {
++              proxy->Stop();
++              // proxy destroyed on IO thread
++            },
++            std::move(server_proxy_)));
++  }
++}
++
 +ServerLaunchConfig BrowserOSServerManager::BuildLaunchConfig() {
 +  ServerLaunchConfig config;
 +
-+  // Paths: use updater's best paths if available, otherwise bundled
 +  config.paths.fallback_exe = GetBrowserOSServerExecutablePath();
 +  config.paths.fallback_resources = GetBrowserOSServerResourcesPath();
 +  config.paths.execution = GetBrowserOSExecutionDir();
@@ -499,16 +561,13 @@ index 0000000000000..fdf044e5def40
 +    config.paths.resources = config.paths.fallback_resources;
 +  }
 +
-+  // Ports: copy from our member
 +  config.ports = ports_;
 +
-+  // Identity: gather version info
 +  config.identity.browseros_version =
 +      std::string(version_info::GetBrowserOSVersionNumber());
 +  config.identity.chromium_version =
 +      std::string(version_info::GetVersionNumber());
 +
-+  // Get install_id from BrowserOSMetricsService if available
 +  ProfileManager* profile_manager = g_browser_process->profile_manager();
 +  if (profile_manager) {
 +    Profile* profile = profile_manager->GetLastUsedProfileIfLoaded();
@@ -522,7 +581,6 @@ index 0000000000000..fdf044e5def40
 +    }
 +  }
 +
-+  // Flags
 +  config.allow_remote_in_mcp = allow_remote_in_mcp_;
 +
 +  return config;
@@ -538,12 +596,8 @@ index 0000000000000..fdf044e5def40
 +
 +  LOG(INFO) << "browseros: Launching server - " << config.DebugString();
 +
-+  // Capture process_controller for use in lambda (raw pointer is safe since
-+  // the lambda runs as part of PostTaskAndReplyWithResult which will invoke
-+  // OnProcessLaunched back on this thread, and we own process_controller_)
 +  ProcessController* pc = process_controller_.get();
 +
-+  // Post blocking work to background thread, get result back on UI thread
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
 +      base::BindOnce(&ProcessController::Launch, base::Unretained(pc), config),
@@ -554,19 +608,14 @@ index 0000000000000..fdf044e5def40
 +void BrowserOSServerManager::OnProcessLaunched(LaunchResult result) {
 +  bool was_updating = is_updating_;
 +
-+  // If we fell back to bundled binary, invalidate downloaded version
 +  if (result.used_fallback && updater_) {
 +    updater_->InvalidateDownloadedVersion();
 +  }
 +
 +  if (!result.process.IsValid()) {
 +    LOG(ERROR) << "browseros: Failed to launch BrowserOS server";
-+    // Don't stop CDP server - it's independent and may be used by other things
-+    // Leave system in degraded state (CDP up, no browseros_server) rather than
-+    // completely broken state (no CDP, no server)
 +    is_restarting_ = false;
 +
-+    // Notify updater of failure if this was an update restart
 +    if (was_updating) {
 +      is_updating_ = false;
 +      if (update_complete_callback_) {
@@ -583,7 +632,14 @@ index 0000000000000..fdf044e5def40
 +  LOG(INFO) << "browseros: BrowserOS server started with PID: " << process_.Pid();
 +  LOG(INFO) << "browseros: " << ports_.DebugString();
 +
-+  // Write state file for orphan recovery on next startup
++  // Point proxy at the new backend port (proxy lives on IO thread)
++  if (server_proxy_) {
++    content::GetIOThreadTaskRunner({})->PostTask(
++        FROM_HERE,
++        base::BindOnce(&BrowserOSServerProxy::SetBackendPort,
++                       base::Unretained(server_proxy_.get()), ports_.server));
++  }
++
 +  {
 +    base::ScopedAllowBlocking allow_blocking;
 +    std::optional<int64_t> creation_time =
@@ -601,13 +657,11 @@ index 0000000000000..fdf044e5def40
 +    }
 +  }
 +
-+  // Start/restart monitoring timers
 +  health_check_timer_.Start(FROM_HERE, kHealthCheckInterval, this,
 +                            &BrowserOSServerManager::CheckServerHealth);
 +  process_check_timer_.Start(FROM_HERE, kProcessCheckInterval, this,
 +                             &BrowserOSServerManager::CheckProcessStatus);
 +
-+  // Reset restart flag and pref after successful launch
 +  if (is_restarting_) {
 +    is_restarting_ = false;
 +    if (local_state_ &&
@@ -617,7 +671,6 @@ index 0000000000000..fdf044e5def40
 +    }
 +  }
 +
-+  // Notify updater of success if this was an update restart
 +  if (was_updating) {
 +    is_updating_ = false;
 +    if (update_complete_callback_) {
@@ -625,7 +678,6 @@ index 0000000000000..fdf044e5def40
 +    }
 +  }
 +
-+  // Start the updater (if not already running and not disabled)
 +  if (!updater_) {
 +    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
 +            browseros::kDisableServerUpdater)) {
@@ -647,7 +699,7 @@ index 0000000000000..fdf044e5def40
 +
 +  LOG(INFO) << "browseros: Requesting graceful shutdown via HTTP";
 +  health_checker_->RequestShutdown(
-+      ports_.mcp,
++      ports_.server,
 +      base::BindOnce(&BrowserOSServerManager::OnTerminateHttpComplete,
 +                     weak_factory_.GetWeakPtr(), std::move(callback)));
 +}
@@ -670,17 +722,14 @@ index 0000000000000..fdf044e5def40
 +  LOG(INFO) << "browseros: BrowserOS server exited with code: " << exit_code;
 +  is_running_ = false;
 +
-+  // Stop timers during restart to prevent races
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
 +
-+  // Handle clean shutdown (exit code 0) - don't restart
 +  if (exit_code == kExitCodeSuccess) {
 +    LOG(INFO) << "browseros: Server exited cleanly (code 0), not restarting";
 +    return;
 +  }
 +
-+  // Crash tracking: check if this was a startup failure (only for non-clean exits)
 +  base::TimeDelta uptime = base::TimeTicks::Now() - last_launch_time_;
 +  if (uptime < kStartupGracePeriod) {
 +    consecutive_startup_failures_++;
@@ -698,38 +747,17 @@ index 0000000000000..fdf044e5def40
 +      consecutive_startup_failures_ = 0;
 +    }
 +  } else {
-+    // Process ran past grace period, reset failure counter
 +    consecutive_startup_failures_ = 0;
 +  }
 +
-+  // Prevent concurrent restarts (e.g., if RestartBrowserOSProcess is in progress)
 +  if (is_restarting_) {
 +    LOG(INFO) << "browseros: Restart already in progress, skipping";
 +    return;
 +  }
-+  is_restarting_ = true;
 +
-+  // Determine restart strategy based on exit code
-+  bool revalidate_all = (exit_code == kExitCodePortConflict);
-+
-+  if (revalidate_all) {
-+    LOG(WARNING) << "browseros: Port conflict (code 2), will revalidate all port";
-+  } else {
-+    LOG(WARNING) << "browseros: Server exited (code " << exit_code
-+                 << "), restarting with same ports";
-+  }
-+
-+  // Capture current ports for background thread
-+  ServerPorts current_ports = ports_;
-+
-+  // Revalidate ports on background thread, then launch on UI thread
-+  // Process is already dead, no need to terminate
-+  base::ThreadPool::PostTaskAndReplyWithResult(
-+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
-+      base::BindOnce(&BrowserOSServerManager::RevalidatePortsForRestart,
-+                     base::Unretained(this), current_ports, revalidate_all),
-+      base::BindOnce(&BrowserOSServerManager::OnPortsRevalidated,
-+                     weak_factory_.GetWeakPtr()));
++  LOG(WARNING) << "browseros: Server exited (code " << exit_code
++               << "), restarting with new ephemeral ports";
++  RestartBrowserOSProcess();
 +}
 +
 +void BrowserOSServerManager::CheckServerHealth() {
@@ -738,7 +766,7 @@ index 0000000000000..fdf044e5def40
 +  }
 +
 +  health_checker_->CheckHealth(
-+      ports_.mcp,
++      ports_.server,
 +      base::BindOnce(&BrowserOSServerManager::OnHealthCheckComplete,
 +                     weak_factory_.GetWeakPtr()));
 +}
@@ -750,9 +778,9 @@ index 0000000000000..fdf044e5def40
 +
 +  int exit_code = 0;
 +  bool exited = process_.WaitForExitWithTimeout(base::TimeDelta(), &exit_code);
-+  LOG(INFO) << "browseros: CheckProcessStatus PID: " << process_.Pid()
-+            << ", WaitForExitWithTimeout returned: " << exited
-+            << ", exit_code: " << exit_code;
++  VLOG(1) << "browseros: CheckProcessStatus PID: " << process_.Pid()
++          << ", WaitForExitWithTimeout returned: " << exited
++          << ", exit_code: " << exit_code;
 +
 +  if (exited) {
 +    OnProcessExited(exit_code);
@@ -766,60 +794,37 @@ index 0000000000000..fdf044e5def40
 +
 +  if (success) {
 +    LOG(INFO) << "browseros: Health check passed";
-+    consecutive_health_check_failures_ = 0;
 +    return;
 +  }
 +
-+  consecutive_health_check_failures_++;
-+  LOG(WARNING) << "browseros: Health check failed ("
-+               << consecutive_health_check_failures_ << " consecutive)";
-+
-+  bool revalidate_all = (consecutive_health_check_failures_ >= 3);
-+  if (revalidate_all) {
-+    LOG(WARNING)
-+        << "browseros: 3 consecutive failures, will revalidate all ports";
-+    consecutive_health_check_failures_ = 0;
-+  }
-+  last_restart_revalidated_all_ports_ = revalidate_all;
-+
-+  RestartBrowserOSProcess(revalidate_all);
++  LOG(WARNING) << "browseros: Health check failed, restarting";
++  RestartBrowserOSProcess();
 +}
 +
-+void BrowserOSServerManager::RestartBrowserOSProcess(bool revalidate_all_ports) {
++void BrowserOSServerManager::RestartBrowserOSProcess() {
 +  LOG(INFO) << "browseros: Restarting BrowserOS server process";
 +
-+  // Prevent multiple concurrent restarts
 +  if (is_restarting_) {
 +    LOG(INFO) << "browseros: Restart already in progress, ignoring";
 +    return;
 +  }
 +  is_restarting_ = true;
 +
-+  // Stop all timers during restart to prevent races
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
 +
-+  // Graceful shutdown, then continue with restart flow
 +  TerminateBrowserOSProcess(
 +      base::BindOnce(&BrowserOSServerManager::ContinueRestartAfterTerminate,
-+                     weak_factory_.GetWeakPtr(), revalidate_all_ports));
++                     weak_factory_.GetWeakPtr()));
 +}
 +
-+void BrowserOSServerManager::ContinueRestartAfterTerminate(
-+    bool revalidate_all_ports) {
-+  // Capture current ports for background thread
-+  ServerPorts current_ports = ports_;
-+
-+  // Wait for process exit (if HTTP succeeded, it should exit soon),
-+  // then revalidate ports and launch
-+  base::ThreadPool::PostTaskAndReplyWithResult(
++void BrowserOSServerManager::ContinueRestartAfterTerminate() {
++  base::ThreadPool::PostTaskAndReply(
 +      FROM_HERE,
 +      {base::MayBlock(), base::WithBaseSyncPrimitives(),
 +       base::TaskPriority::USER_BLOCKING},
 +      base::BindOnce(
-+          [](BrowserOSServerManager* manager, ServerPorts current,
-+             bool revalidate_all) -> ServerPorts {
-+            // Wait for process exit with timeout, SIGKILL if still running
++          [](BrowserOSServerManager* manager) {
 +            constexpr base::TimeDelta kExitTimeout = base::Seconds(5);
 +            int exit_code = 0;
 +            bool exited = manager->process_controller_->WaitForExitWithTimeout(
@@ -831,70 +836,49 @@ index 0000000000000..fdf044e5def40
 +              manager->process_controller_->Terminate(&manager->process_,
 +                                                      /*wait=*/true);
 +            }
-+
-+            return manager->RevalidatePortsForRestart(current, revalidate_all);
 +          },
-+          base::Unretained(this), current_ports, revalidate_all_ports),
-+      base::BindOnce(&BrowserOSServerManager::OnPortsRevalidated,
-+                     weak_factory_.GetWeakPtr()));
-+}
++          base::Unretained(this)),
++      base::BindOnce(
++          [](base::WeakPtr<BrowserOSServerManager> weak_manager) {
++            if (!weak_manager) {
++              return;
++            }
++            auto* manager = weak_manager.get();
 +
-+ServerPorts BrowserOSServerManager::RevalidatePortsForRestart(
-+    const ServerPorts& current,
-+    bool revalidate_all) {
-+  // CDP port is excluded - it's still bound by Chrome's DevTools server
-+  std::set<int> excluded_ports;
-+  excluded_ports.insert(current.cdp);
++            // Pick new ephemeral ports for server and extension
++            // (unless CLI-overridden)
++            base::CommandLine* cl =
++                base::CommandLine::ForCurrentProcess();
++            std::set<int> assigned;
++            assigned.insert(manager->ports_.cdp);
++            assigned.insert(manager->ports_.proxy);
 +
-+  ServerPorts result;
-+  result.cdp = current.cdp;  // CDP never changes during restart
++            if (!cl->HasSwitch(browseros::kServerPort)) {
++              manager->ports_.server =
++                  server_utils::FindAvailablePort(
++                      browseros_server::kDefaultServerPort, assigned);
++            }
++            assigned.insert(manager->ports_.server);
 +
-+  if (revalidate_all) {
-+    // PORT_CONFLICT: server tried binding for 30s, port is truly blocked.
-+    // Revalidate ALL ports - FindAvailablePort will increment if needed.
-+    result.mcp = server_utils::FindAvailablePort(current.mcp, excluded_ports);
-+    excluded_ports.insert(result.mcp);
++            if (!cl->HasSwitch(browseros::kExtensionPort)) {
++              manager->ports_.extension =
++                  server_utils::FindAvailablePort(
++                      browseros_server::kDefaultExtensionPort, assigned);
++            }
 +
-+    result.extension =
-+        server_utils::FindAvailablePort(current.extension, excluded_ports);
++            LOG(INFO) << "browseros: New ephemeral ports - "
++                      << manager->ports_.DebugString();
 +
-+    LOG(INFO) << "browseros: Ports revalidated (conflict) - "
-+              << "MCP: " << current.mcp << " -> " << result.mcp
-+              << ", Extension: " << current.extension << " -> "
-+              << result.extension;
-+  } else {
-+    // Normal restart: trust MCP port will be available after TIME_WAIT.
-+    // Exclude it so other ports don't accidentally take it.
-+    result.mcp = current.mcp;
-+    excluded_ports.insert(result.mcp);
-+
-+    result.extension =
-+        server_utils::FindAvailablePort(current.extension, excluded_ports);
-+  }
-+
-+  return result;
-+}
-+
-+void BrowserOSServerManager::OnPortsRevalidated(ServerPorts new_ports) {
-+  bool ports_changed = (new_ports != ports_);
-+
-+  if (ports_changed) {
-+    LOG(INFO) << "browseros: Ports changed during revalidation - "
-+              << "old: " << ports_.DebugString()
-+              << ", new: " << new_ports.DebugString();
-+    ports_ = new_ports;
-+    SavePortsToPrefs();
-+  }
-+
-+  // Note: is_restarting_ is cleared in OnProcessLaunched() after launch completes
-+  LaunchBrowserOSProcess();
++            manager->SavePortsToPrefs();
++            manager->LaunchBrowserOSProcess();
++          },
++          weak_factory_.GetWeakPtr()));
 +}
 +
 +void BrowserOSServerManager::RestartServerForUpdate(
 +    UpdateCompleteCallback callback) {
 +  LOG(INFO) << "browseros: Restarting server for OTA update";
 +
-+  // Prevent multiple concurrent restarts
 +  if (is_restarting_ || is_updating_) {
 +    LOG(WARNING) << "browseros: Restart already in progress, failing update";
 +    std::move(callback).Run(false);
@@ -904,28 +888,22 @@ index 0000000000000..fdf044e5def40
 +  is_updating_ = true;
 +  update_complete_callback_ = std::move(callback);
 +
-+  // Use same restart flow as RestartBrowserOSProcess
 +  is_restarting_ = true;
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
 +
-+  // Graceful shutdown, then continue with update flow
 +  TerminateBrowserOSProcess(
 +      base::BindOnce(&BrowserOSServerManager::ContinueUpdateAfterTerminate,
 +                     weak_factory_.GetWeakPtr()));
 +}
 +
 +void BrowserOSServerManager::ContinueUpdateAfterTerminate() {
-+  ServerPorts current_ports = ports_;
-+
-+  base::ThreadPool::PostTaskAndReplyWithResult(
++  base::ThreadPool::PostTaskAndReply(
 +      FROM_HERE,
 +      {base::MayBlock(), base::WithBaseSyncPrimitives(),
 +       base::TaskPriority::USER_BLOCKING},
 +      base::BindOnce(
-+          [](BrowserOSServerManager* manager,
-+             ServerPorts current) -> ServerPorts {
-+            // Wait for process exit with timeout, SIGKILL if still running
++          [](BrowserOSServerManager* manager) {
 +            constexpr base::TimeDelta kExitTimeout = base::Seconds(5);
 +            int exit_code = 0;
 +            bool exited = manager->process_controller_->WaitForExitWithTimeout(
@@ -937,13 +915,38 @@ index 0000000000000..fdf044e5def40
 +              manager->process_controller_->Terminate(&manager->process_,
 +                                                      /*wait=*/true);
 +            }
-+
-+            return manager->RevalidatePortsForRestart(current,
-+                                                      /*revalidate_all=*/false);
 +          },
-+          base::Unretained(this), current_ports),
-+      base::BindOnce(&BrowserOSServerManager::OnPortsRevalidated,
-+                     weak_factory_.GetWeakPtr()));
++          base::Unretained(this)),
++      base::BindOnce(
++          [](base::WeakPtr<BrowserOSServerManager> weak_manager) {
++            if (!weak_manager) {
++              return;
++            }
++            auto* manager = weak_manager.get();
++
++            base::CommandLine* cl =
++                base::CommandLine::ForCurrentProcess();
++            std::set<int> assigned;
++            assigned.insert(manager->ports_.cdp);
++            assigned.insert(manager->ports_.proxy);
++
++            if (!cl->HasSwitch(browseros::kServerPort)) {
++              manager->ports_.server =
++                  server_utils::FindAvailablePort(
++                      browseros_server::kDefaultServerPort, assigned);
++            }
++            assigned.insert(manager->ports_.server);
++
++            if (!cl->HasSwitch(browseros::kExtensionPort)) {
++              manager->ports_.extension =
++                  server_utils::FindAvailablePort(
++                      browseros_server::kDefaultExtensionPort, assigned);
++            }
++
++            manager->SavePortsToPrefs();
++            manager->LaunchBrowserOSProcess();
++          },
++          weak_factory_.GetWeakPtr()));
 +}
 +
 +void BrowserOSServerManager::OnAllowRemoteInMCPChanged() {
@@ -961,7 +964,13 @@ index 0000000000000..fdf044e5def40
 +
 +    allow_remote_in_mcp_ = new_value;
 +
-+    // Restart server to apply new config
++    if (server_proxy_) {
++      content::GetIOThreadTaskRunner({})->PostTask(
++          FROM_HERE,
++          base::BindOnce(&BrowserOSServerProxy::SetAllowRemote,
++                         base::Unretained(server_proxy_.get()), new_value));
++    }
++
 +    RestartBrowserOSProcess();
 +  }
 +}
@@ -974,7 +983,6 @@ index 0000000000000..fdf044e5def40
 +  bool restart_requested =
 +      local_state_->GetBoolean(browseros_server::kRestartServerRequested);
 +
-+  // Only process if pref is set to true
 +  if (!restart_requested) {
 +    return;
 +  }
@@ -984,7 +992,6 @@ index 0000000000000..fdf044e5def40
 +}
 +
 +base::FilePath BrowserOSServerManager::GetBrowserOSServerResourcesPath() const {
-+  // Check for command-line override first
 +  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
 +  if (command_line->HasSwitch(browseros::kServerResourcesDir)) {
 +    base::FilePath custom_path =
@@ -997,34 +1004,26 @@ index 0000000000000..fdf044e5def40
 +  base::FilePath exe_dir;
 +
 +#if BUILDFLAG(IS_MAC)
-+  // On macOS, the binary will be in the app bundle
 +  if (!base::PathService::Get(base::DIR_EXE, &exe_dir)) {
 +    LOG(ERROR) << "browseros: Failed to get executable directory";
 +    return base::FilePath();
 +  }
-+
-+  // Navigate to Resources folder in the app bundle
-+  // Chrome.app/Contents/MacOS -> Chrome.app/Contents/Resources
 +  exe_dir = exe_dir.DirName().Append("Resources");
 +
 +#elif BUILDFLAG(IS_WIN)
-+  // On Windows, installer places BrowserOS Server under the versioned directory
 +  if (!base::PathService::Get(base::DIR_EXE, &exe_dir)) {
 +    LOG(ERROR) << "browseros: Failed to get executable directory";
 +    return base::FilePath();
 +  }
-+  // Append version directory (chrome.release places BrowserOSServer under versioned dir)
 +  exe_dir = exe_dir.AppendASCII(version_info::GetVersionNumber());
 +
 +#elif BUILDFLAG(IS_LINUX)
-+  // On Linux, binary is in the same directory as chrome
 +  if (!base::PathService::Get(base::DIR_EXE, &exe_dir)) {
 +    LOG(ERROR) << "browseros: Failed to get executable directory";
 +    return base::FilePath();
 +  }
 +#endif
 +
-+  // Return path to resources directory
 +  return exe_dir.Append(FILE_PATH_LITERAL("BrowserOSServer"))
 +      .Append(FILE_PATH_LITERAL("default"))
 +      .Append(FILE_PATH_LITERAL("resources"));
@@ -1039,7 +1038,6 @@ index 0000000000000..fdf044e5def40
 +
 +  base::FilePath exec_dir = user_data_dir.Append(FILE_PATH_LITERAL(".browseros"));
 +
-+  // Ensure directory exists before returning
 +  base::ScopedAllowBlocking allow_blocking;
 +  if (!base::PathExists(exec_dir)) {
 +    if (!base::CreateDirectory(exec_dir)) {

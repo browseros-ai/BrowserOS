@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/BUILD.gn b/chrome/browser/browseros/server/BUILD.gn
 new file mode 100644
-index 0000000000000..5ffe3760d75b2
+index 0000000000000..85e9eaaba051c
 --- /dev/null
 +++ b/chrome/browser/browseros/server/BUILD.gn
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,131 @@
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -34,6 +34,8 @@ index 0000000000000..5ffe3760d75b2
 +    "browseros_server_manager.h",
 +    "browseros_server_prefs.cc",
 +    "browseros_server_prefs.h",
++    "browseros_server_proxy.cc",
++    "browseros_server_proxy.h",
 +    "browseros_server_updater.cc",
 +    "browseros_server_updater.h",
 +    "browseros_server_utils.cc",
@@ -60,6 +62,7 @@ index 0000000000000..5ffe3760d75b2
 +    "//crypto",
 +    "//net",
 +    "//services/network/public/cpp",
++    "//services/network/public/mojom",
 +    "//third_party/boringssl",
 +    "//third_party/libxml:xml_reader",
 +    "//third_party/zlib/google:zip",

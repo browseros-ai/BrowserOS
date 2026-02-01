@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.cc b/chrome/browser/browseros/server/browseros_server_updater.cc
 new file mode 100644
-index 0000000000000..43996b7bec96c
+index 0000000000000..ced363ffbabc2
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.cc
 @@ -0,0 +1,1075 @@
@@ -702,7 +702,7 @@ index 0000000000000..43996b7bec96c
 +
 +void BrowserOSServerUpdater::CheckServerStatus() {
 +  GURL status_url("http://127.0.0.1:" +
-+                  base::NumberToString(manager_->GetMCPPort()) + "/status");
++                  base::NumberToString(manager_->GetServerPort()) + "/status");
 +
 +  LOG(INFO) << "browseros: Checking server status at " << status_url;
 +

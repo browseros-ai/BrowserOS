@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_switches.h b/chrome/browser/browseros/core/browseros_switches.h
 new file mode 100644
-index 0000000000000..4e7932596534c
+index 0000000000000..dcd8b3ae307f2
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_switches.h
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,86 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -36,8 +36,11 @@ index 0000000000000..4e7932596534c
 +// Overrides the CDP (Chrome DevTools Protocol) port.
 +inline constexpr char kCDPPort[] = "browseros-cdp-port";
 +
-+// Overrides the MCP (Model Context Protocol) port.
-+inline constexpr char kMCPPort[] = "browseros-mcp-port";
++// Overrides the stable MCP proxy port (what external clients connect to).
++inline constexpr char kProxyPort[] = "browseros-proxy-port";
++
++// Overrides the sidecar backend server port.
++inline constexpr char kServerPort[] = "browseros-server-port";
 +
 +// Overrides the Agent server port.
 +inline constexpr char kAgentPort[] = "browseros-agent-port";

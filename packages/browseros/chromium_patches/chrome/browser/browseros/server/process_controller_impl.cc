@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/server/process_controller_impl.cc b/chrome/browser/browseros/server/process_controller_impl.cc
 new file mode 100644
-index 0000000000000..3c1014ee9db3e
+index 0000000000000..a398856f672fd
 --- /dev/null
 +++ b/chrome/browser/browseros/server/process_controller_impl.cc
 @@ -0,0 +1,210 @@
@@ -45,7 +45,7 @@ index 0000000000000..3c1014ee9db3e
 +  // ports
 +  base::Value::Dict ports_dict;
 +  ports_dict.Set("cdp", config.ports.cdp);
-+  ports_dict.Set("http_mcp", config.ports.mcp);
++  ports_dict.Set("server", config.ports.server);
 +  ports_dict.Set("extension", config.ports.extension);
 +  root.Set("ports", std::move(ports_dict));
 +
@@ -131,7 +131,7 @@ index 0000000000000..3c1014ee9db3e
 +  base::CommandLine cmd(actual_exe_path);
 +  cmd.AppendSwitchPath("config", config_path);
 +  cmd.AppendSwitchASCII("cdp-port", base::NumberToString(config.ports.cdp));
-+  cmd.AppendSwitchASCII("http-mcp-port", base::NumberToString(config.ports.mcp));
++  cmd.AppendSwitchASCII("server-port", base::NumberToString(config.ports.server));
 +  cmd.AppendSwitchASCII("extension-port",
 +                        base::NumberToString(config.ports.extension));
 +

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_config.cc b/chrome/browser/browseros/server/browseros_server_config.cc
 new file mode 100644
-index 0000000000000..c8e53682b97e3
+index 0000000000000..3e0c69cdf6442
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_config.cc
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,81 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -15,17 +15,18 @@ index 0000000000000..c8e53682b97e3
 +namespace browseros {
 +
 +bool ServerPorts::IsValid() const {
-+  return cdp > 0 && mcp > 0 && extension > 0;
++  return cdp > 0 && server > 0 && extension > 0 && proxy > 0;
 +}
 +
 +std::string ServerPorts::DebugString() const {
 +  return base::StringPrintf(
 +      "ServerPorts{\n"
 +      "  cdp=%d\n"
-+      "  mcp=%d\n"
++      "  server=%d\n"
 +      "  ext=%d\n"
++      "  proxy=%d\n"
 +      "}",
-+      cdp, mcp, extension);
++      cdp, server, extension, proxy);
 +}
 +
 +ServerPaths::ServerPaths() = default;
