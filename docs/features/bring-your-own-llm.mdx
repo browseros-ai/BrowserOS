@@ -121,61 +121,9 @@ Connect to powerful AI models using your API keys. Your keys stay on your machin
 
 ## Local Models
 
-<Note>
-**Run AI completely offline.** Local models are free, private, and your data never leaves your machine. Perfect for Chat Mode with sensitive data.
-</Note>
-
-<AccordionGroup>
-  <div id="ollama" />
-  <Accordion title="Ollama" icon="terminal">
-    The easiest way to run models locally.
-
-    **Setup:**
-    1. Download from [ollama.com](https://ollama.com)
-    2. Pull a model:
-       ```bash
-       ollama pull llama3.2
-       ```
-    3. Start Ollama:
-       ```bash
-       ollama serve
-       ```
-
-    ![Ollama running](/images/setting-up-ollama/ollama-step3.png)
-
-    **Add to BrowserOS:**
-    1. Go to `chrome://browseros/settings`
-    2. Click **USE** on the Ollama card
-    3. Set **Model ID** to `llama3.2`
-    4. Click **Save**
-
-    ![Ollama in BrowserOS](/images/byollm--ollama-config.png)
-
-    **Recommended models:** `llama3.2`, `qwen3:8b`, `mistral`
-  </Accordion>
-
-  <div id="lmstudio" />
-  <Accordion title="LM Studio" icon="desktop">
-    Nice GUI if you don't want to use the terminal.
-
-    **Setup:**
-    1. Download from [lmstudio.ai](https://lmstudio.ai)
-    2. Open LM Studio → **Developer** tab → load a model
-    3. It runs a server at `http://localhost:1234/v1/`
-
-    ![LM Studio](/images/setting-up-lm-studio/lmstudio-step1.png)
-
-    **Add to BrowserOS:**
-    1. Go to `chrome://browseros/settings`
-    2. Click **USE** on the **OpenAI Compatible** card
-    3. Set **Base URL** to `http://localhost:1234/v1/`
-    4. Set **Model ID** to the model you loaded
-    5. Set **Context Window** to match your LM Studio config
-    6. Click **Save**
-
-    ![LM Studio in BrowserOS](/images/byollm--lmstudio-config.png)
-  </Accordion>
-</AccordionGroup>
+<Card title="Local Model Guide" icon="server" href="/features/local-models">
+  Run AI completely offline with Ollama or LM Studio. Includes recommended models, context length setup, and configuration steps.
+</Card>
 
 ---
 

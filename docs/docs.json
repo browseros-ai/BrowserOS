@@ -23,6 +23,7 @@
         "group": "Core Features",
         "pages": [
           "features/bring-your-own-llm",
+          "features/local-models",
           "features/workflows",
           "features/scheduled-tasks",
           "features/cowork",
