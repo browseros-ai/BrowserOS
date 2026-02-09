@@ -1,9 +1,9 @@
 diff --git a/chrome/utility/importer/browseros/chrome_cookie_importer.cc b/chrome/utility/importer/browseros/chrome_cookie_importer.cc
 new file mode 100644
-index 0000000000000..4497532338b3f
+index 0000000000000..da4ba9dd79e93
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_cookie_importer.cc
-@@ -0,0 +1,229 @@
+@@ -0,0 +1,228 @@
 +// Copyright 2024 AKW Technology Inc
 +// Chrome cookie importer implementation
 +
@@ -184,8 +184,7 @@ index 0000000000000..4497532338b3f
 +
 +      // Get both plaintext and encrypted values
 +      std::string plaintext_value = statement.ColumnString(2);
-+      std::string encrypted_value;
-+      statement.ColumnBlobAsString(3, &encrypted_value);
++      std::string encrypted_value = statement.ColumnBlobAsString(3);
 +
 +      // Prefer encrypted_value if present, otherwise use plaintext
 +      if (!encrypted_value.empty()) {

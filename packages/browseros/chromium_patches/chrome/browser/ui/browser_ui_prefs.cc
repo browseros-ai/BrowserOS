@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/browser_ui_prefs.cc b/chrome/browser/ui/browser_ui_prefs.cc
-index 7a2f76324af50..d87b0e71d9a98 100644
+index e94568b1c7542..25e7e791009a0 100644
 --- a/chrome/browser/ui/browser_ui_prefs.cc
 +++ b/chrome/browser/ui/browser_ui_prefs.cc
-@@ -65,7 +65,7 @@ void RegisterBrowserPrefs(PrefRegistrySimple* registry) {
+@@ -68,7 +68,7 @@ void RegisterBrowserPrefs(PrefRegistrySimple* registry) {
  
    registry->RegisterBooleanPref(prefs::kHoverCardImagesEnabled, true);
  
@@ -11,7 +11,7 @@ index 7a2f76324af50..d87b0e71d9a98 100644
  
  #if defined(USE_AURA)
    registry->RegisterBooleanPref(prefs::kOverscrollHistoryNavigationEnabled,
-@@ -109,7 +109,7 @@ void RegisterBrowserUserPrefs(user_prefs::PrefRegistrySyncable* registry) {
+@@ -112,7 +112,7 @@ void RegisterBrowserUserPrefs(user_prefs::PrefRegistrySyncable* registry) {
  
    registry->RegisterBooleanPref(prefs::kHomePageIsNewTabPage, true,
                                  pref_registration_flags);
@@ -20,11 +20,12 @@ index 7a2f76324af50..d87b0e71d9a98 100644
                                  pref_registration_flags);
    registry->RegisterBooleanPref(prefs::kSplitViewDragAndDropEnabled, true,
                                  pref_registration_flags);
-@@ -117,7 +117,7 @@ void RegisterBrowserUserPrefs(user_prefs::PrefRegistrySyncable* registry) {
-   registry->RegisterBooleanPref(prefs::kShowForwardButton, true,
+@@ -121,7 +121,8 @@ void RegisterBrowserUserPrefs(user_prefs::PrefRegistrySyncable* registry) {
                                  pref_registration_flags);
- 
+   registry->RegisterBooleanPref(prefs::kPinContextualTaskButton, true,
+                                 pref_registration_flags);
 -  registry->RegisterBooleanPref(prefs::kPinSplitTabButton, false,
++  // BrowserOS: default split tab button to pinned
 +  registry->RegisterBooleanPref(prefs::kPinSplitTabButton, true,
                                  pref_registration_flags);
  

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_constants.h b/chrome/browser/browseros/core/browseros_constants.h
 new file mode 100644
-index 0000000000000..476d761245673
+index 0000000000000..adc52f61b9771
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_constants.h
-@@ -0,0 +1,222 @@
+@@ -0,0 +1,223 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -13,6 +13,7 @@ index 0000000000000..476d761245673
 +
 +#include <cstddef>
 +#include <string>
++#include <string_view>
 +#include <vector>
 +
 +#include "base/command_line.h"
@@ -81,7 +82,7 @@ index 0000000000000..476d761245673
 +
 +// Find a route for a given virtual path (e.g., "/ai")
 +// Returns nullptr if no matching route found
-+inline const BrowserOSURLRoute* FindBrowserOSRoute(const std::string& path) {
++inline const BrowserOSURLRoute* FindBrowserOSRoute(std::string_view path) {
 +  for (const auto& route : kBrowserOSURLRoutes) {
 +    if (path == route.virtual_path) {
 +      return &route;
@@ -93,7 +94,7 @@ index 0000000000000..476d761245673
 +// Get the extension URL for a chrome://browseros/* path
 +// Returns empty string if no matching route or if URL overrides are disabled
 +// Example: "/ai" -> "chrome-extension://bflp.../options.html#ai"
-+inline std::string GetBrowserOSExtensionURL(const std::string& virtual_path) {
++inline std::string GetBrowserOSExtensionURL(std::string_view virtual_path) {
 +  if (IsURLOverridesDisabled()) {
 +    return std::string();
 +  }
@@ -118,15 +119,15 @@ index 0000000000000..476d761245673
 +//   extension_path: from url.path(), e.g., "/options.html"
 +//   extension_ref: from url.ref(), e.g., "ai" or "/ai" (normalized internally)
 +// Fallback: If no exact hash match, falls back to route with empty hash for same page
-+inline std::string GetBrowserOSVirtualURL(const std::string& extension_id,
-+                                          const std::string& extension_path,
-+                                          const std::string& extension_ref) {
++inline std::string GetBrowserOSVirtualURL(std::string_view extension_id,
++                                          std::string_view extension_path,
++                                          std::string_view extension_ref) {
 +  if (IsURLOverridesDisabled()) {
 +    return std::string();
 +  }
 +
 +  // Normalize ref - strip leading slash if present (handles both #ai and #/ai)
-+  std::string normalized_ref = extension_ref;
++  std::string normalized_ref(extension_ref);
 +  if (!normalized_ref.empty() && normalized_ref[0] == '/') {
 +    normalized_ref = normalized_ref.substr(1);
 +  }

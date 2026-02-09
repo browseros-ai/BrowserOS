@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.h b/chrome/browser/browseros/server/browseros_server_updater.h
 new file mode 100644
-index 0000000000000..022b703a32e8d
+index 0000000000000..a7edcdd9d98ee
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.h
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,165 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -12,6 +12,7 @@ index 0000000000000..022b703a32e8d
 +#define CHROME_BROWSER_BROWSEROS_SERVER_BROWSEROS_SERVER_UPDATER_H_
 +
 +#include <memory>
++#include <optional>
 +#include <string>
 +
 +#include "base/files/file_path.h"
@@ -76,7 +77,7 @@ index 0000000000000..022b703a32e8d
 +
 +  // Appcast flow
 +  void FetchAppcast();
-+  void OnAppcastFetched(std::unique_ptr<std::string> response);
++  void OnAppcastFetched(std::optional<std::string> response);
 +
 +  // Download flow
 +  void CheckVersionAlreadyDownloaded(const AppcastEnclosure& enclosure,
@@ -105,7 +106,7 @@ index 0000000000000..022b703a32e8d
 +
 +  // Hot-swap flow
 +  void CheckServerStatus();
-+  void OnStatusFetched(std::unique_ptr<std::string> response);
++  void OnStatusFetched(std::optional<std::string> response);
 +  void OnServerStatusChecked(bool can_update);
 +  void PerformHotSwap(const base::Version& version);
 +  void OnHotSwapComplete(const base::Version& old_version,

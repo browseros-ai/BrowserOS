@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.cc b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
 new file mode 100644
-index 0000000000000..c08b705ef6869
+index 0000000000000..832e8d5471a78
 --- /dev/null
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
-@@ -0,0 +1,1437 @@
+@@ -0,0 +1,1445 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -21,6 +21,7 @@ index 0000000000000..c08b705ef6869
 +#include <utility>
 +#include <vector>
 +
++#include "components/viz/common/frame_sinks/copy_output_result.h"
 +#include "base/functional/bind.h"
 +#include "base/threading/platform_thread.h"
 +#include "chrome/browser/browser_process.h"
@@ -148,9 +149,9 @@ index 0000000000000..c08b705ef6869
 +  }
 +
 +  // Bool attributes map
-+  if (node.bool_attributes && node.bool_attributes->Size() > 0) {
++  if (node.bool_attributes.Size() > 0) {
 +    base::Value::Dict attrs;
-+    node.bool_attributes->ForEach([&attrs](ax::mojom::BoolAttribute key, bool value) {
++    node.bool_attributes.ForEach([&attrs](ax::mojom::BoolAttribute key, bool value) {
 +      attrs.Set(ui::ToString(key), value);
 +    });
 +    dict.Set("boolAttributes", std::move(attrs));
@@ -982,17 +983,24 @@ index 0000000000000..c08b705ef6869
 +  view->CopyFromSurface(
 +      gfx::Rect(),  // Empty rect means copy entire surface
 +      target_size_,
++      base::TimeDelta(),  // No timeout
 +      base::BindOnce(&BrowserOSCaptureScreenshotFunction::OnScreenshotCaptured,
 +                     this));
 +}
 +
 +void BrowserOSCaptureScreenshotFunction::OnScreenshotCaptured(
-+    const SkBitmap& bitmap) {
++    const content::CopyFromSurfaceResult& result) {
 +  // Clean up the highlights immediately after capture (only if we added them)
 +  if (show_highlights_ && web_contents_) {
 +    RemoveHighlights(web_contents_.get());
 +  }
-+  
++
++  if (!result.has_value()) {
++    Respond(Error("Failed to capture screenshot"));
++    return;
++  }
++
++  const SkBitmap& bitmap = result->bitmap;
 +  if (bitmap.empty()) {
 +    Respond(Error("Failed to capture screenshot"));
 +    return;

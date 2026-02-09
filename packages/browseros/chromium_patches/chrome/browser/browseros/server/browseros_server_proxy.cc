@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_proxy.cc b/chrome/browser/browseros/server/browseros_server_proxy.cc
 new file mode 100644
-index 0000000000000..7ffdb8f011b08
+index 0000000000000..17560c9a2c55a
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_proxy.cc
 @@ -0,0 +1,225 @@
@@ -193,7 +193,7 @@ index 0000000000000..7ffdb8f011b08
 +
 +void BrowserOSServerProxy::OnBackendResponse(
 +    int connection_id,
-+    std::unique_ptr<std::string> response_body) {
++    std::optional<std::string> response_body) {
 +  auto it = pending_loaders_.find(connection_id);
 +  if (it == pending_loaders_.end() || !server_) {
 +    return;
@@ -208,7 +208,7 @@ index 0000000000000..7ffdb8f011b08
 +    response_code = response_info->headers->response_code();
 +  }
 +
-+  if (!response_body || response_code == 0) {
++  if (!response_body.has_value() || response_code == 0) {
 +    Send503(server_.get(), connection_id);
 +    return;
 +  }

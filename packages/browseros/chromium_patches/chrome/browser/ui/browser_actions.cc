@@ -1,16 +1,16 @@
 diff --git a/chrome/browser/ui/browser_actions.cc b/chrome/browser/ui/browser_actions.cc
-index fb3dba200be8c..9b7941ff32407 100644
+index 96ccc8d0a6acc..9c446a5e041a9 100644
 --- a/chrome/browser/ui/browser_actions.cc
 +++ b/chrome/browser/ui/browser_actions.cc
-@@ -12,6 +12,7 @@
- #include "base/check_op.h"
+@@ -14,6 +14,7 @@
  #include "base/functional/bind.h"
  #include "base/functional/callback_helpers.h"
+ #include "chrome/app/chrome_command_ids.h"
 +#include "chrome/grit/theme_resources.h"
  #include "chrome/app/vector_icons/vector_icons.h"
+ #include "chrome/browser/contextual_tasks/contextual_tasks_side_panel_coordinator.h"
  #include "chrome/browser/devtools/devtools_window.h"
- #include "chrome/browser/prefs/incognito_mode_prefs.h"
-@@ -20,6 +21,13 @@
+@@ -23,6 +24,13 @@
  #include "chrome/browser/sharing_hub/sharing_hub_features.h"
  #include "chrome/browser/ui/actions/chrome_action_id.h"
  #include "chrome/browser/ui/actions/chrome_actions.h"
@@ -23,8 +23,8 @@ index fb3dba200be8c..9b7941ff32407 100644
 +#include "extensions/browser/extension_registry.h"
  #include "chrome/browser/ui/autofill/address_bubbles_icon_controller.h"
  #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
- #include "chrome/browser/ui/autofill/payments/mandatory_reauth_bubble_controller_impl.h"
-@@ -253,6 +261,110 @@ void BrowserActions::InitializeBrowserActions() {
+ #include "chrome/browser/ui/autofill/payments/filled_card_information_bubble_controller_impl.h"
+@@ -272,6 +280,110 @@ void BrowserActions::InitializeBrowserActions() {
              .Build());
    }
  

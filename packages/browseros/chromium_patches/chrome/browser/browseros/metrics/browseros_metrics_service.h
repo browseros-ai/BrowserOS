@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/metrics/browseros_metrics_service.h b/chrome/browser/browseros/metrics/browseros_metrics_service.h
 new file mode 100644
-index 0000000000000..2157d1eb1698e
+index 0000000000000..beadbcfd183e0
 --- /dev/null
 +++ b/chrome/browser/browseros/metrics/browseros_metrics_service.h
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,96 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -12,6 +12,7 @@ index 0000000000000..2157d1eb1698e
 +#define CHROME_BROWSER_BROWSEROS_METRICS_BROWSEROS_METRICS_SERVICE_H_
 +
 +#include <memory>
++#include <optional>
 +#include <string>
 +
 +#include "base/functional/callback.h"
@@ -72,7 +73,7 @@ index 0000000000000..2157d1eb1698e
 +
 +  // Handles the response from PostHog API.
 +  void OnPostHogResponse(std::unique_ptr<network::SimpleURLLoader> loader,
-+                         std::unique_ptr<std::string> response_body);
++                         std::optional<std::string> response_body);
 +
 +  // Adds default properties to the event.
 +  void AddDefaultProperties(base::Value::Dict& properties);

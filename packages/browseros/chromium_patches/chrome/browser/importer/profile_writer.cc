@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/importer/profile_writer.cc b/chrome/browser/importer/profile_writer.cc
-index 6edb974687c07..738d8ca61a9b4 100644
+index 08859f9d1fa91..3f542543e6437 100644
 --- a/chrome/browser/importer/profile_writer.cc
 +++ b/chrome/browser/importer/profile_writer.cc
 @@ -11,6 +11,7 @@
@@ -10,7 +10,7 @@ index 6edb974687c07..738d8ca61a9b4 100644
  #include "base/strings/string_number_conversions.h"
  #include "base/strings/string_util.h"
  #include "base/strings/utf_string_conversions.h"
-@@ -36,7 +37,25 @@
+@@ -36,7 +37,24 @@
  #include "components/prefs/pref_service.h"
  #include "components/search_engines/template_url.h"
  #include "components/search_engines/template_url_service.h"
@@ -25,7 +25,6 @@ index 6edb974687c07..738d8ca61a9b4 100644
 +#include "extensions/browser/extension_system.h"
 +#include "extensions/common/extension.h"
 +#include "chrome/browser/extensions/webstore_installer.h"
-+#include "chrome/browser/extensions/install_approval.h"
 +#include "extensions/browser/extension_registry.h"
 +#include "chrome/browser/extensions/extension_install_prompt.h"
 +#include "chrome/browser/extensions/webstore_install_with_prompt.h"
@@ -36,7 +35,7 @@ index 6edb974687c07..738d8ca61a9b4 100644
  
  using bookmarks::BookmarkModel;
  using bookmarks::BookmarkNode;
-@@ -75,6 +94,22 @@ void ShowBookmarkBar(Profile* profile) {
+@@ -75,6 +93,22 @@ void ShowBookmarkBar(Profile* profile) {
    profile->GetPrefs()->SetBoolean(bookmarks::prefs::kShowBookmarkBar, true);
  }
  
@@ -59,7 +58,7 @@ index 6edb974687c07..738d8ca61a9b4 100644
  }  // namespace
  
  ProfileWriter::ProfileWriter(Profile* profile) : profile_(profile) {}
-@@ -99,6 +134,73 @@ void ProfileWriter::AddPasswordForm(
+@@ -99,6 +133,73 @@ void ProfileWriter::AddPasswordForm(
    }
  }
  
@@ -133,7 +132,7 @@ index 6edb974687c07..738d8ca61a9b4 100644
  void ProfileWriter::AddHistoryPage(const history::URLRows& page,
                                     history::VisitSource visit_source) {
    if (!page.empty()) {
-@@ -338,3 +440,119 @@ void ProfileWriter::AddAutocompleteFormDataEntries(
+@@ -338,3 +439,119 @@ void ProfileWriter::AddAutocompleteFormDataEntries(
  }
  
  ProfileWriter::~ProfileWriter() = default;

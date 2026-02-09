@@ -1,9 +1,9 @@
 diff --git a/chrome/utility/importer/browseros/chrome_password_importer.cc b/chrome/utility/importer/browseros/chrome_password_importer.cc
 new file mode 100644
-index 0000000000000..cbae752f359b5
+index 0000000000000..1a01e3951aa3f
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_password_importer.cc
-@@ -0,0 +1,151 @@
+@@ -0,0 +1,150 @@
 +// Copyright 2024 AKW Technology Inc
 +// Chrome password importer implementation
 +
@@ -104,8 +104,7 @@ index 0000000000000..cbae752f359b5
 +      std::u16string password_element = statement.ColumnString16(4);
 +
 +      // password_value is a BLOB - encrypted
-+      std::string encrypted_password;
-+      statement.ColumnBlobAsString(5, &encrypted_password);
++      std::string encrypted_password = statement.ColumnBlobAsString(5);
 +
 +      std::string signon_realm = statement.ColumnString(6);
 +      bool blacklisted = statement.ColumnBool(7);

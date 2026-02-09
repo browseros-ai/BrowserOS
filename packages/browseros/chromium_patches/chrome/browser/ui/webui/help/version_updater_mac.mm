@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/webui/help/version_updater_mac.mm b/chrome/browser/ui/webui/help/version_updater_mac.mm
-index ad6be624e5cb0..a0d9043c06fa1 100644
+index d619a644cef14..a851e42d99acb 100644
 --- a/chrome/browser/ui/webui/help/version_updater_mac.mm
 +++ b/chrome/browser/ui/webui/help/version_updater_mac.mm
 @@ -6,6 +6,15 @@
@@ -18,7 +18,7 @@ index ad6be624e5cb0..a0d9043c06fa1 100644
  #include <algorithm>
  #include <memory>
  #include <string>
-@@ -78,6 +87,8 @@ void UpdateStatus(VersionUpdater::StatusCallback status_callback,
+@@ -77,6 +86,8 @@ void UpdateStatus(VersionUpdater::StatusCallback status_callback,
                     : VersionUpdater::Status::UPDATED;
        break;
      case updater::UpdateService::UpdateState::State::kUpdateError:
@@ -27,17 +27,7 @@ index ad6be624e5cb0..a0d9043c06fa1 100644
        switch (update_state.error_code) {
          case updater::GOOPDATE_E_APP_UPDATE_DISABLED_BY_POLICY:
            status = VersionUpdater::Status::DISABLED_BY_ADMIN;
-@@ -147,12 +158,27 @@ class VersionUpdaterMac : public VersionUpdater {
-             },
-             base::BindRepeating(&UpdateStatus, status_callback)));
-   }
--  void PromoteUpdater() override { SetupSystemUpdater(); }
-+  void PromoteUpdater() override {
-+    SetupSystemUpdater();
-+  }
- };
- 
- }  // namespace
+@@ -134,5 +145,18 @@ void CheckForUpdate(StatusCallback status_callback,
  
  std::unique_ptr<VersionUpdater> VersionUpdater::Create(
      content::WebContents* /* web_contents */) {

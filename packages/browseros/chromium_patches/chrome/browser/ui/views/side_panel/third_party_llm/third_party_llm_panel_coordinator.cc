@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc
 new file mode 100644
-index 0000000000000..ea3e4207ee029
+index 0000000000000..d6a803c592c98
 --- /dev/null
 +++ b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc
-@@ -0,0 +1,1187 @@
+@@ -0,0 +1,1192 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -66,6 +66,9 @@ index 0000000000000..ea3e4207ee029
 +#include "base/timer/timer.h"
 +#include "base/task/sequenced_task_runner.h"
 +#include "components/input/native_web_keyboard_event.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "components/viz/common/frame_sinks/copy_output_result.h"
 +#include "content/public/browser/render_widget_host_view.h"
 +#include "third_party/skia/include/core/SkBitmap.h"
 +#include "ui/gfx/codec/png_codec.h"
@@ -640,14 +643,15 @@ index 0000000000000..ea3e4207ee029
 +  view->CopyFromSurface(
 +      gfx::Rect(),  // Empty rect = full visible surface
 +      gfx::Size(),  // Empty size = original size
++      base::TimeDelta(),  // No timeout
 +      base::BindOnce([](base::WeakPtr<ThirdPartyLlmPanelCoordinator> coordinator,
-+                        const SkBitmap& bitmap) {
++                        const content::CopyFromSurfaceResult& result) {
 +        if (!coordinator) {
 +          return;
 +        }
 +        gfx::Image image;
-+        if (!bitmap.drawsNothing()) {
-+          image = gfx::Image::CreateFrom1xBitmap(bitmap);
++        if (result.has_value() && !result->bitmap.drawsNothing()) {
++          image = gfx::Image::CreateFrom1xBitmap(result->bitmap);
 +        }
 +        coordinator->OnScreenshotCaptured(image);
 +      }, weak_factory_.GetWeakPtr()));
@@ -1175,9 +1179,10 @@ index 0000000000000..ea3e4207ee029
 +      OnOpenInNewTab();
 +      break;
 +    case IDC_CLASH_OF_GPTS:
-+      if (Browser* browser = BrowserList::GetInstance()->GetLastActive()) {
++      if (BrowserWindowInterface* window =
++              GetLastActiveBrowserWindowInterfaceWithAnyProfile()) {
 +        if (auto* coordinator =
-+                browser->browser_window_features()->clash_of_gpts_coordinator()) {
++                window->GetFeatures().clash_of_gpts_coordinator()) {
 +          coordinator->Show();
 +        }
 +      }

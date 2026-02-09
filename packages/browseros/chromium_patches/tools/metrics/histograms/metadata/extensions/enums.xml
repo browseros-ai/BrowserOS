@@ -1,36 +1,36 @@
 diff --git a/tools/metrics/histograms/metadata/extensions/enums.xml b/tools/metrics/histograms/metadata/extensions/enums.xml
-index c36ba9e58148d..fbc5eefb3a231 100644
+index 6a374906f9f2e..4defc26e74df9 100644
 --- a/tools/metrics/histograms/metadata/extensions/enums.xml
 +++ b/tools/metrics/histograms/metadata/extensions/enums.xml
-@@ -2843,6 +2843,31 @@ Called by update_extension_histograms.py.-->
-       label="ACCESSIBILITY_PRIVATE_PROCESSPENDINGSPOKENFEEDBACKEVENT"/>
-   <int value="1950"
-       label="ACCESSIBILITY_PRIVATE_ENABLESPOKENFEEDBACKMV3KEYHANDLING"/>
-+  <int value="1951" label="BROWSER_OS_GETACCESSIBILITYTREE"/>
-+  <int value="1952" label="BROWSER_OS_GETINTERACTIVESNAPSHOT"/>
-+  <int value="1953" label="BROWSER_OS_CLICK"/>
-+  <int value="1954" label="BROWSER_OS_INPUTTEXT"/>
-+  <int value="1955" label="BROWSER_OS_CLEAR"/>
-+  <int value="1956" label="BROWSER_OS_GETPAGELOADSTATUS"/>
-+  <int value="1957" label="BROWSER_OS_SCROLLUP"/>
-+  <int value="1958" label="BROWSER_OS_SCROLLDOWN"/>
-+  <int value="1959" label="BROWSER_OS_SCROLLTONODE"/>
-+  <int value="1960" label="BROWSER_OS_SENDKEYS"/>
-+  <int value="1961" label="BROWSER_OS_GETPAGESTRUCTURE"/>
-+  <int value="1962" label="BROWSER_OS_CAPTURESCREENSHOT"/>
-+  <int value="1963" label="BROWSER_OS_GETSNAPSHOT"/>
-+  <int value="1964" label="BROWSER_OS_GETPREF"/>
-+  <int value="1965" label="BROWSER_OS_SETPREF"/>
-+  <int value="1966" label="BROWSER_OS_GETALLPREFS"/>
-+  <int value="1967" label="BROWSER_OS_LOGMETRIC"/>
-+  <int value="1968" label="BROWSER_OS_GETVERSIONNUMBER"/>
-+  <int value="1969" label="BROWSER_OS_EXECUTEJAVASCRIPT"/>
-+  <int value="1970" label="BROWSER_OS_CLICKCOORDINATES"/>
-+  <int value="1971" label="BROWSER_OS_TYPEATCOORDINATES"/>
-+  <int value="1972" label="SIDEPANEL_BROWSEROSTOGGLE"/>
-+  <int value="1973" label="SIDEPANEL_BROWSEROSISOPEN"/>
-+  <int value="1974" label="BROWSER_OS_GETBROWSEROSVERSIONNUMBER"/>
-+  <int value="1975" label="BROWSER_OS_CHOOSEPATH"/>
+@@ -2871,6 +2871,31 @@ Called by update_extension_histograms.py.-->
+       label="WEBSTOREPRIVATE_SHOULDSHOWENTERPRISEPROMOTIONBANNER"/>
+   <int value="1955" label="WEBSTOREPRIVATE_LOGENTERPRISEPROMOSHOWN"/>
+   <int value="1956" label="WEBSTOREPRIVATE_ONENTERPRISEPROMOCLICK"/>
++  <int value="1957" label="BROWSER_OS_GETACCESSIBILITYTREE"/>
++  <int value="1958" label="BROWSER_OS_GETINTERACTIVESNAPSHOT"/>
++  <int value="1959" label="BROWSER_OS_CLICK"/>
++  <int value="1960" label="BROWSER_OS_INPUTTEXT"/>
++  <int value="1961" label="BROWSER_OS_CLEAR"/>
++  <int value="1962" label="BROWSER_OS_GETPAGELOADSTATUS"/>
++  <int value="1963" label="BROWSER_OS_SCROLLUP"/>
++  <int value="1964" label="BROWSER_OS_SCROLLDOWN"/>
++  <int value="1965" label="BROWSER_OS_SCROLLTONODE"/>
++  <int value="1966" label="BROWSER_OS_SENDKEYS"/>
++  <int value="1967" label="BROWSER_OS_GETPAGESTRUCTURE"/>
++  <int value="1968" label="BROWSER_OS_CAPTURESCREENSHOT"/>
++  <int value="1969" label="BROWSER_OS_GETSNAPSHOT"/>
++  <int value="1970" label="BROWSER_OS_GETPREF"/>
++  <int value="1971" label="BROWSER_OS_SETPREF"/>
++  <int value="1972" label="BROWSER_OS_GETALLPREFS"/>
++  <int value="1973" label="BROWSER_OS_LOGMETRIC"/>
++  <int value="1974" label="BROWSER_OS_GETVERSIONNUMBER"/>
++  <int value="1975" label="BROWSER_OS_EXECUTEJAVASCRIPT"/>
++  <int value="1976" label="BROWSER_OS_CLICKCOORDINATES"/>
++  <int value="1977" label="BROWSER_OS_TYPEATCOORDINATES"/>
++  <int value="1978" label="SIDEPANEL_BROWSEROSTOGGLE"/>
++  <int value="1979" label="SIDEPANEL_BROWSEROSISOPEN"/>
++  <int value="1980" label="BROWSER_OS_GETBROWSEROSVERSIONNUMBER"/>
++  <int value="1981" label="BROWSER_OS_CHOOSEPATH"/>
  </enum>
  
  <!-- LINT.ThenChange(//extensions/browser/extension_function_histogram_value.h:HistogramValue) -->

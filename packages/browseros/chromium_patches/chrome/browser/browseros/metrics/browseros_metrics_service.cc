@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/metrics/browseros_metrics_service.cc b/chrome/browser/browseros/metrics/browseros_metrics_service.cc
 new file mode 100644
-index 0000000000000..8c8c588df4481
+index 0000000000000..cbc1f29e5d407
 --- /dev/null
 +++ b/chrome/browser/browseros/metrics/browseros_metrics_service.cc
 @@ -0,0 +1,231 @@
@@ -198,7 +198,7 @@ index 0000000000000..8c8c588df4481
 +
 +void BrowserOSMetricsService::OnPostHogResponse(
 +    std::unique_ptr<network::SimpleURLLoader> loader,
-+    std::unique_ptr<std::string> response_body) {
++    std::optional<std::string> response_body) {
 +  int response_code = 0;
 +  if (loader->ResponseInfo() && loader->ResponseInfo()->headers) {
 +    response_code = loader->ResponseInfo()->headers->response_code();
@@ -209,7 +209,7 @@ index 0000000000000..8c8c588df4481
 +  } else {
 +    LOG(WARNING) << "browseros: Failed to send metrics event. Response code: "
 +                 << response_code;
-+    if (response_body && !response_body->empty()) {
++    if (response_body.has_value() && !response_body->empty()) {
 +      LOG(WARNING) << "browseros: Error response: " << *response_body;
 +    }
 +  }

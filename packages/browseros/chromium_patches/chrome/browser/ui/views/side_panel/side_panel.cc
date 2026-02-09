@@ -1,13 +1,16 @@
 diff --git a/chrome/browser/ui/views/side_panel/side_panel.cc b/chrome/browser/ui/views/side_panel/side_panel.cc
-index d98e373f9b359..14e1dbb3ca4d4 100644
+index 56a63f28ca526..773d4ff107c9a 100644
 --- a/chrome/browser/ui/views/side_panel/side_panel.cc
 +++ b/chrome/browser/ui/views/side_panel/side_panel.cc
-@@ -677,7 +677,7 @@ void SidePanel::UpdateVisibility(bool should_be_open, bool animate_transition) {
- 
- bool SidePanel::ShouldShowAnimation() const {
-   return lens::features::IsLensOverlayEnabled() &&
--         gfx::Animation::ShouldRenderRichAnimation() && !animations_disabled_;
-+         gfx::Animation::ShouldRenderRichAnimation() && !animations_disabled_ && animations_disabled_browseros_;
+@@ -879,8 +879,10 @@ double SidePanel::GetAnimationValueFor(
  }
  
- void SidePanel::AnnounceResize() {
+ bool SidePanel::ShouldShowAnimation() const {
++  // BrowserOS: animations_disabled_browseros_ used to control animation
+   bool should_show_animations =
+-      gfx::Animation::ShouldRenderRichAnimation() && !animations_disabled_;
++      gfx::Animation::ShouldRenderRichAnimation() && !animations_disabled_ &&
++      animations_disabled_browseros_;
+ #if BUILDFLAG(IS_WIN)
+   // Don't show open/close animations for the toolbar height panel on Windows
+   // due to jank. The "show from" animation should still run which is the only

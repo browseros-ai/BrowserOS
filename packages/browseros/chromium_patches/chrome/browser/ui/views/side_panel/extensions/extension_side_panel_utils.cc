@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc b/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc
-index ff61e95a7bba9..312c019f68442 100644
+index 539677d6bb9ac..bc32fcec8788c 100644
 --- a/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc
 +++ b/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc
 @@ -4,6 +4,7 @@
@@ -10,8 +10,8 @@ index ff61e95a7bba9..312c019f68442 100644
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-@@ -216,4 +217,127 @@ void CloseContextualExtensionSidePanel(BrowserWindowInterface* browser_window,
-   }
+@@ -212,4 +213,127 @@ void CloseContextualExtensionSidePanel(BrowserWindowInterface* browser_window,
+       ExtensionSidePanelCoordinator::GetPanelType());
  }
  
 +bool IsContextualExtensionSidePanelOpen(BrowserWindowInterface* browser_window,
@@ -38,7 +38,7 @@ index ff61e95a7bba9..312c019f68442 100644
 +  // this extension's entry.
 +  if (is_active_tab) {
 +    SidePanelUI* side_panel_ui = browser_window->GetFeatures().side_panel_ui();
-+    bool is_showing = side_panel_ui->IsSidePanelShowing();
++    bool is_showing = side_panel_ui->IsSidePanelShowing(SidePanelEntry::PanelType::kContent);
 +    LOG(INFO) << "browseros: side_panel is_showing=" << is_showing;
 +    if (!is_showing) {
 +      return false;
@@ -84,7 +84,7 @@ index ff61e95a7bba9..312c019f68442 100644
 +
 +  // Check if this extension's contextual panel is currently showing.
 +  bool is_currently_open = false;
-+  if (is_active_tab && side_panel_ui->IsSidePanelShowing()) {
++  if (is_active_tab && side_panel_ui->IsSidePanelShowing(SidePanelEntry::PanelType::kContent)) {
 +    is_currently_open = IsKeyActiveInRegistry(contextual_registry, extension_key);
 +  }
 +
@@ -110,7 +110,7 @@ index ff61e95a7bba9..312c019f68442 100644
 +
 +  if (!should_open) {
 +    LOG(INFO) << "browseros: Closing contextual panel";
-+    side_panel_ui->Close();
++    side_panel_ui->Close(SidePanelEntry::PanelType::kContent);
 +    contextual_registry->ResetActiveEntryFor(SidePanelEntry::PanelType::kContent);
 +    return false;
 +  } else {

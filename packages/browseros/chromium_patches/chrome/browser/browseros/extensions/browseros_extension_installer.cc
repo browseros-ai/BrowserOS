@@ -1,15 +1,16 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_installer.cc b/chrome/browser/browseros/extensions/browseros_extension_installer.cc
 new file mode 100644
-index 0000000000000..e84ab10537ec4
+index 0000000000000..27fadedbd37ef
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_installer.cc
-@@ -0,0 +1,338 @@
+@@ -0,0 +1,341 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "chrome/browser/browseros/extensions/browseros_extension_installer.h"
 +
++#include <optional>
 +#include <utility>
 +
 +#include "base/feature_list.h"
@@ -124,7 +125,8 @@ index 0000000000000..e84ab10537ec4
 +    return base::Value::Dict();
 +  }
 +
-+  std::optional<base::Value> parsed = base::JSONReader::Read(json_content);
++  std::optional<base::Value> parsed =
++      base::JSONReader::Read(json_content, base::JSON_PARSE_RFC);
 +  if (!parsed || !parsed->is_dict()) {
 +    LOG(ERROR) << "browseros: Invalid bundled manifest JSON";
 +    return base::Value::Dict();
@@ -234,8 +236,8 @@ index 0000000000000..e84ab10537ec4
 +}
 +
 +void BrowserOSExtensionInstaller::OnRemoteFetchComplete(
-+    std::unique_ptr<std::string> response_body) {
-+  if (!response_body) {
++    std::optional<std::string> response_body) {
++  if (!response_body.has_value()) {
 +    LOG(ERROR) << "browseros: Failed to fetch config";
 +    Complete(InstallResult());
 +    return;
@@ -317,7 +319,8 @@ index 0000000000000..e84ab10537ec4
 +
 +base::Value::Dict BrowserOSExtensionInstaller::ParseConfigJson(
 +    const std::string& json_content) {
-+  std::optional<base::Value> parsed = base::JSONReader::Read(json_content);
++  std::optional<base::Value> parsed =
++      base::JSONReader::Read(json_content, base::JSON_PARSE_RFC);
 +
 +  if (!parsed || !parsed->is_dict()) {
 +    LOG(ERROR) << "browseros: Invalid config JSON";

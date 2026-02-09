@@ -1,9 +1,9 @@
 diff --git a/chrome/utility/importer/browseros/chrome_bookmarks_importer.cc b/chrome/utility/importer/browseros/chrome_bookmarks_importer.cc
 new file mode 100644
-index 0000000000000..6896bb7ab0f7c
+index 0000000000000..e631448aa5137
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_bookmarks_importer.cc
-@@ -0,0 +1,249 @@
+@@ -0,0 +1,248 @@
 +// Copyright 2024 AKW Technology Inc
 +// Chrome bookmarks importer implementation
 +
@@ -151,8 +151,7 @@ index 0000000000000..6896bb7ab0f7c
 +        continue;
 +      }
 +
-+      std::vector<uint8_t> data;
-+      statement.ColumnBlobAsVector(1, &data);
++      std::vector<uint8_t> data = statement.ColumnBlobAsVector(1);
 +      if (data.empty()) {
 +        statement.Reset(true);
 +        continue;
@@ -193,7 +192,7 @@ index 0000000000000..6896bb7ab0f7c
 +  }
 +
 +  std::optional<base::Value> bookmarks_value =
-+      base::JSONReader::Read(bookmarks_content);
++      base::JSONReader::Read(bookmarks_content, base::JSON_PARSE_RFC);
 +  if (!bookmarks_value || !bookmarks_value->is_dict()) {
 +    LOG(WARNING) << "browseros: Failed to parse Bookmarks JSON";
 +    return result;

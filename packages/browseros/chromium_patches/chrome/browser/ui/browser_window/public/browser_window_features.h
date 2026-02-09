@@ -1,16 +1,16 @@
 diff --git a/chrome/browser/ui/browser_window/public/browser_window_features.h b/chrome/browser/ui/browser_window/public/browser_window_features.h
-index 19048c9478592..cc3c846cac900 100644
+index f1fc1743c6b4b..1d36a9bde9e7c 100644
 --- a/chrome/browser/ui/browser_window/public/browser_window_features.h
 +++ b/chrome/browser/ui/browser_window/public/browser_window_features.h
-@@ -42,6 +42,7 @@ class BrowserUserEducationInterface;
+@@ -43,6 +43,7 @@ class BrowserUserEducationInterface;
  class BrowserView;
  class BrowserWindowInterface;
  class ChromeLabsCoordinator;
 +class ClashOfGptsCoordinator;
  class ColorProviderBrowserHelper;
+ class LocationBar;
  class CommentsSidePanelCoordinator;
- class ContentsBorderController;
-@@ -75,6 +76,7 @@ class TabSearchToolbarButtonController;
+@@ -86,6 +87,7 @@ class TabSearchToolbarButtonController;
  class TabListBridge;
  class TabStripModel;
  class TabStripServiceFeature;
@@ -18,8 +18,8 @@ index 19048c9478592..cc3c846cac900 100644
  class ToastController;
  class ToastService;
  class TranslateBubbleController;
-@@ -253,6 +255,14 @@ class BrowserWindowFeatures {
-     return comments_side_panel_coordinator_.get();
+@@ -277,6 +279,14 @@ class BrowserWindowFeatures {
+     return extension_installed_watcher_.get();
    }
  
 +  ThirdPartyLlmPanelCoordinator* third_party_llm_panel_coordinator() {
@@ -33,7 +33,7 @@ index 19048c9478592..cc3c846cac900 100644
  #if BUILDFLAG(ENABLE_GLIC)
    glic::GlicLegacySidePanelCoordinator* glic_side_panel_coordinator() {
      return glic_side_panel_coordinator_.get();
-@@ -546,6 +556,11 @@ class BrowserWindowFeatures {
+@@ -590,6 +600,11 @@ class BrowserWindowFeatures {
    std::unique_ptr<CommentsSidePanelCoordinator>
        comments_side_panel_coordinator_;
  

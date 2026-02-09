@@ -1,15 +1,16 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc b/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc
 new file mode 100644
-index 0000000000000..fec50b08b130c
+index 0000000000000..404fb31de4e55
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc
-@@ -0,0 +1,381 @@
+@@ -0,0 +1,383 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "chrome/browser/browseros/extensions/browseros_extension_maintainer.h"
 +
++#include <optional>
 +#include <utility>
 +
 +#include "base/json/json_reader.h"
@@ -124,8 +125,8 @@ index 0000000000000..fec50b08b130c
 +
 +void BrowserOSExtensionMaintainer::OnConfigFetched(
 +    std::unique_ptr<network::SimpleURLLoader> loader,
-+    std::unique_ptr<std::string> response_body) {
-+  if (response_body) {
++    std::optional<std::string> response_body) {
++  if (response_body.has_value()) {
 +    base::Value::Dict config = ParseConfigJson(*response_body);
 +    if (!config.empty()) {
 +      last_config_ = std::move(config);
@@ -147,7 +148,8 @@ index 0000000000000..fec50b08b130c
 +
 +base::Value::Dict BrowserOSExtensionMaintainer::ParseConfigJson(
 +    const std::string& json_content) {
-+  std::optional<base::Value> parsed = base::JSONReader::Read(json_content);
++  std::optional<base::Value> parsed =
++      base::JSONReader::Read(json_content, base::JSON_PARSE_RFC);
 +
 +  if (!parsed || !parsed->is_dict()) {
 +    LOG(ERROR) << "browseros: Invalid config JSON";

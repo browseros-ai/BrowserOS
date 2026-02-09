@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.h b/chrome/browser/extensions/api/browser_os/browser_os_api.h
 new file mode 100644
-index 0000000000000..2e2f5f0253f86
+index 0000000000000..53ece24723da0
 --- /dev/null
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.h
-@@ -0,0 +1,369 @@
+@@ -0,0 +1,371 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -18,6 +18,8 @@ index 0000000000000..2e2f5f0253f86
 +#include "chrome/browser/extensions/api/browser_os/browser_os_api_utils.h"
 +#include "chrome/browser/extensions/api/browser_os/browser_os_content_processor.h"
 +#include "chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.h"
++#include "components/viz/common/frame_sinks/copy_output_result.h"
++#include "content/public/browser/render_widget_host_view.h"
 +#include "extensions/browser/extension_function.h"
 +#include "third_party/skia/include/core/SkBitmap.h"
 +#include "ui/shell_dialogs/select_file_dialog.h"
@@ -198,7 +200,7 @@ index 0000000000000..2e2f5f0253f86
 + private:
 +  void DrawHighlightsAndCapture();
 +  void CaptureScreenshotNow();
-+  void OnScreenshotCaptured(const SkBitmap& bitmap);
++  void OnScreenshotCaptured(const content::CopyFromSurfaceResult& result);
 +  
 +  // Store web contents and tab id for highlight operations
 +  base::WeakPtr<content::WebContents> web_contents_;

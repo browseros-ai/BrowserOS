@@ -1,18 +1,18 @@
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
-index f4531197ae5e1..027e77f1536c6 100644
+index 2ec7c847678a0..66767940651d2 100644
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
-@@ -1275,6 +1275,8 @@ static_library("ui") {
-       "webui/settings/reset_settings_handler.h",
-       "webui/settings/search_engines_handler.cc",
+@@ -1297,6 +1297,8 @@ static_library("ui") {
        "webui/settings/search_engines_handler.h",
+       "webui/settings/security_settings_provider.cc",
+       "webui/settings/security_settings_provider.h",
 +      "webui/settings/browseros_metrics_handler.cc",
 +      "webui/settings/browseros_metrics_handler.h",
        "webui/settings/settings_clear_browsing_data_handler.cc",
        "webui/settings/settings_clear_browsing_data_handler.h",
        "webui/settings/settings_localized_strings_privacy_sandbox_provider.cc",
-@@ -3168,6 +3170,8 @@ static_library("ui") {
-       "views/frame/immersive_mode_controller_mac.mm",
+@@ -3225,6 +3227,8 @@ static_library("ui") {
+       "views/frame/immersive_mode_overlay_views_mac.mm",
        "views/tab_contents/chrome_web_contents_view_delegate_views_mac.h",
        "views/tab_contents/chrome_web_contents_view_delegate_views_mac.mm",
 +      "webui/help/sparkle_version_updater_mac.h",

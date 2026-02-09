@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_maintainer.h b/chrome/browser/browseros/extensions/browseros_extension_maintainer.h
 new file mode 100644
-index 0000000000000..e7e228e6fd71e
+index 0000000000000..eb68969a4163f
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_maintainer.h
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,84 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -12,6 +12,7 @@ index 0000000000000..e7e228e6fd71e
 +#define CHROME_BROWSER_BROWSEROS_EXTENSIONS_BROWSEROS_EXTENSION_MAINTAINER_H_
 +
 +#include <memory>
++#include <optional>
 +#include <set>
 +#include <string>
 +
@@ -56,7 +57,7 @@ index 0000000000000..e7e228e6fd71e
 +
 +  // Called when config fetch completes.
 +  void OnConfigFetched(std::unique_ptr<network::SimpleURLLoader> loader,
-+                       std::unique_ptr<std::string> response_body);
++                       std::optional<std::string> response_body);
 +
 +  // Parses config JSON and returns extensions dict.
 +  base::Value::Dict ParseConfigJson(const std::string& json_content);

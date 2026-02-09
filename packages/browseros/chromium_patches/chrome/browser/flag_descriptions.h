@@ -1,20 +1,27 @@
 diff --git a/chrome/browser/flag_descriptions.h b/chrome/browser/flag_descriptions.h
-index fea522351cd1b..cc466bdbf03a3 100644
+index d73e9a053eb63..e22ef4d7024af 100644
 --- a/chrome/browser/flag_descriptions.h
 +++ b/chrome/browser/flag_descriptions.h
-@@ -188,6 +188,15 @@ extern const char kByDateHistoryInSidePanelDescription[];
- extern const char kBookmarksTreeViewName[];
- extern const char kBookmarksTreeViewDescription[];
+@@ -284,6 +284,22 @@ inline constexpr char kBookmarksTreeViewName[] =
+ inline constexpr char kBookmarksTreeViewDescription[] =
+     "Show the bookmarks side panel in a tree view while in compact mode.";
  
-+extern const char kBrowserOsAlphaFeaturesName[];
-+extern const char kBrowserOsAlphaFeaturesDescription[];
++// BrowserOS: feature flags
++inline constexpr char kBrowserOsAlphaFeaturesName[] =
++    "BrowserOS Alpha Features";
++inline constexpr char kBrowserOsAlphaFeaturesDescription[] =
++    "Enables BrowserOS alpha features.";
 +
-+extern const char kBrowserOsClawdbotName[];
-+extern const char kBrowserOsClawdbotDescription[];
++inline constexpr char kBrowserOsClawdbotName[] = "BrowserOS Clawdbot";
++inline constexpr char kBrowserOsClawdbotDescription[] =
++    "Enables Clawdbot Browser Relay extension.";
 +
-+extern const char kBrowserOsKeyboardShortcutsName[];
-+extern const char kBrowserOsKeyboardShortcutsDescription[];
++inline constexpr char kBrowserOsKeyboardShortcutsName[] =
++    "BrowserOS Keyboard Shortcuts";
++inline constexpr char kBrowserOsKeyboardShortcutsDescription[] =
++    "Enables BrowserOS keyboard shortcuts (Cmd+Shift+K, Cmd+Shift+L, "
++    "Option+A). Disable if these conflict with your keyboard layout.";
 +
- extern const char kBrowsingHistoryActorIntegrationM1Name[];
- extern const char kBrowsingHistoryActorIntegrationM1Description[];
- #endif
+ inline constexpr char kBrowsingHistoryActorIntegrationM1Name[] =
+     "Browsing History Actor Integration M1";
+ inline constexpr char kBrowsingHistoryActorIntegrationM1Description[] =

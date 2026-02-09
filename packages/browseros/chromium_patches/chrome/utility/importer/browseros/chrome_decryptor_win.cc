@@ -1,6 +1,6 @@
 diff --git a/chrome/utility/importer/browseros/chrome_decryptor_win.cc b/chrome/utility/importer/browseros/chrome_decryptor_win.cc
 new file mode 100644
-index 0000000000000..5853c63c5e2d4
+index 0000000000000..c56a27b698eda
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_decryptor_win.cc
 @@ -0,0 +1,246 @@
@@ -53,7 +53,7 @@ index 0000000000000..5853c63c5e2d4
 +    return false;
 +  }
 +
-+  auto parsed = base::JSONReader::Read(json_content);
++  auto parsed = base::JSONReader::Read(json_content, base::JSON_PARSE_RFC);
 +  if (!parsed || !parsed->is_dict()) {
 +    LOG(WARNING) << "browseros: Failed to parse Local State JSON";
 +    return false;

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_utils.cc b/chrome/browser/browseros/server/browseros_server_utils.cc
 new file mode 100644
-index 0000000000000..9aca12ed05475
+index 0000000000000..867dbf4699f17
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_utils.cc
-@@ -0,0 +1,517 @@
+@@ -0,0 +1,518 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -275,7 +275,8 @@ index 0000000000000..9aca12ed05475
 +    return std::nullopt;
 +  }
 +
-+  std::optional<base::Value> parsed = base::JSONReader::Read(contents);
++  std::optional<base::Value> parsed =
++      base::JSONReader::Read(contents, base::JSON_PARSE_RFC);
 +  if (!parsed || !parsed->is_dict()) {
 +    LOG(WARNING) << "browseros: Invalid state file format";
 +    return std::nullopt;

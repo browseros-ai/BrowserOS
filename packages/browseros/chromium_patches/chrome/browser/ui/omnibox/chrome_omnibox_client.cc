@@ -1,16 +1,16 @@
 diff --git a/chrome/browser/ui/omnibox/chrome_omnibox_client.cc b/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
-index 89857e5f1bc3e..476b0f0f6a9d2 100644
+index 37cb48b9b7c9f..90d2d430f41a5 100644
 --- a/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
 +++ b/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
-@@ -115,6 +115,7 @@
+@@ -123,6 +123,7 @@
  #include "url/gurl.h"
  
  #if BUILDFLAG(ENABLE_EXTENSIONS)
 +#include "chrome/browser/browseros/core/browseros_constants.h"
- #include "chrome/browser/safe_browsing/extension_telemetry/extension_telemetry_service.h"
  #include "chrome/browser/ui/extensions/settings_api_bubble_helpers.h"
  #endif
-@@ -301,15 +302,50 @@ gfx::Image ChromeOmniboxClient::GetSizedIcon(const gfx::Image& icon) const {
+ 
+@@ -323,15 +324,50 @@ gfx::Image ChromeOmniboxClient::GetSizedIcon(const gfx::Image& icon) const {
  }
  
  std::u16string ChromeOmniboxClient::GetFormattedFullURL() const {

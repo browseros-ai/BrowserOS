@@ -1,11 +1,12 @@
 diff --git a/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar.mojom b/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar.mojom
-index 8eec2ead88a8a..c873205ac549a 100644
+index dc2fed765187a..3ab37408a8488 100644
 --- a/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar.mojom
 +++ b/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar.mojom
-@@ -33,6 +33,8 @@ enum ActionId {
-   kCopyLink,
+@@ -34,6 +34,9 @@ enum ActionId {
    kTabSearch,
    kSplitTab,
+   kContextualTasks,
++  // BrowserOS: custom action IDs
 +  kShowThirdPartyLlm,
 +  kShowClashOfGpts,
  };

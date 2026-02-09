@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_installer.h b/chrome/browser/browseros/extensions/browseros_extension_installer.h
 new file mode 100644
-index 0000000000000..7502da6d31ff5
+index 0000000000000..9a3c2000ed05a
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_installer.h
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,100 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -12,6 +12,7 @@ index 0000000000000..7502da6d31ff5
 +#define CHROME_BROWSER_BROWSEROS_EXTENSIONS_BROWSEROS_EXTENSION_INSTALLER_H_
 +
 +#include <memory>
++#include <optional>
 +#include <set>
 +#include <string>
 +
@@ -81,7 +82,7 @@ index 0000000000000..7502da6d31ff5
 +  void FetchFromRemote();
 +
 +  // Called when remote fetch completes.
-+  void OnRemoteFetchComplete(std::unique_ptr<std::string> response_body);
++  void OnRemoteFetchComplete(std::optional<std::string> response_body);
 +
 +  // Parses config JSON and returns extensions dict.
 +  base::Value::Dict ParseConfigJson(const std::string& json_content);

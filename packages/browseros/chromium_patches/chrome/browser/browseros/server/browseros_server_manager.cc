@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..6d44b32b78ce8
+index 0000000000000..87a0c20a2c67e
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1061 @@
+@@ -0,0 +1,1062 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -14,6 +14,7 @@ index 0000000000000..6d44b32b78ce8
 +#include <set>
 +
 +#include "base/command_line.h"
++#include "base/functional/callback_helpers.h"
 +#include "base/files/file_path.h"
 +#include "base/files/file_util.h"
 +#include "base/logging.h"

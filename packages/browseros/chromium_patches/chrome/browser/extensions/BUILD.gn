@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/extensions/BUILD.gn b/chrome/browser/extensions/BUILD.gn
-index a8e054baadb1f..870b10ddd4eaa 100644
+index 5d5af07b158c0..f32c7889de5be 100644
 --- a/chrome/browser/extensions/BUILD.gn
 +++ b/chrome/browser/extensions/BUILD.gn
-@@ -351,6 +351,12 @@ source_set("extensions") {
+@@ -357,6 +357,12 @@ source_set("extensions") {
      "external_install_manager.h",
      "external_install_manager_factory.cc",
      "external_install_manager_factory.h",
@@ -12,10 +12,10 @@ index a8e054baadb1f..870b10ddd4eaa 100644
 +    "//chrome/browser/browseros/extensions/browseros_extension_loader.h",
 +    "//chrome/browser/browseros/extensions/browseros_extension_maintainer.cc",
 +    "//chrome/browser/browseros/extensions/browseros_extension_maintainer.h",
-     "external_loader.cc",
-     "external_loader.h",
      "external_policy_loader.cc",
-@@ -677,6 +683,18 @@ source_set("extensions") {
+     "external_policy_loader.h",
+     "external_pref_loader.cc",
+@@ -690,6 +696,18 @@ source_set("extensions") {
        "api/automation_internal/chrome_automation_internal_api_delegate.h",
        "api/bookmark_manager_private/bookmark_manager_private_api.cc",
        "api/bookmark_manager_private/bookmark_manager_private_api.h",
@@ -32,9 +32,9 @@ index a8e054baadb1f..870b10ddd4eaa 100644
 +      "api/browser_os/browser_os_snapshot_processor.cc",
 +      "api/browser_os/browser_os_snapshot_processor.h",
        "api/chrome_device_permissions_prompt.h",
-       "api/developer_private/developer_private_event_router_desktop.cc",
-       "api/developer_private/developer_private_event_router_desktop.h",
-@@ -1006,6 +1024,8 @@ source_set("extensions") {
+       "api/enterprise_reporting_private/conversion_utils.cc",
+       "api/enterprise_reporting_private/conversion_utils.h",
+@@ -997,6 +1015,8 @@ source_set("extensions") {
        "//components/language/core/common",
        "//components/language/core/language_model",
        "//components/live_caption:constants",
