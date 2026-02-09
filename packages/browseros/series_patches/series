@@ -11,4 +11,4 @@
 # Comments start with #
 # Inline comments: path/to/patch.patch # comment here
 
-ungoogle-chromium/extensions-manifestv2.patch
+# ungoogle-chromium/extensions-manifestv2.patch

@@ -3,8 +3,8 @@
 # These patches are applied only when building on Windows.
 # Paths are relative to the series_patches directory.
 
-windows/ungoogled-chromium/windows-disable-rcpy.patch
-windows/ungoogled-chromium/windows-fix-rc.patch
-windows/ungoogled-chromium/windows-fix-command-ids.patch
-windows/ungoogled-chromium/windows-disable-download-warning-prompt.patch
-windows/ungoogled-chromium/windows-fix-rc-terminating-error.patch
+# windows/ungoogled-chromium/windows-disable-rcpy.patch
+# windows/ungoogled-chromium/windows-fix-rc.patch
+# windows/ungoogled-chromium/windows-fix-command-ids.patch
+# windows/ungoogled-chromium/windows-disable-download-warning-prompt.patch
+# windows/ungoogled-chromium/windows-fix-rc-terminating-error.patch
