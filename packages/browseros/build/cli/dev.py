@@ -364,6 +364,37 @@ def apply_patch_cmd(
     log_success(f"Successfully applied patch for: {chromium_path}")
 
 
+@apply_app.command(name="force")
+def apply_force(
+    reset_to: Optional[str] = Option(
+        None, "--reset-to", "-r", help="Reset files to this commit before applying patches"
+    ),
+):
+    """Apply all patches non-interactively, writing .rej files for conflicts.
+
+    Applies every patch without prompting. When a patch conflicts, uses
+    git apply --reject to apply what it can and write .rej files for
+    failed hunks, then continues to the next patch.
+
+    Examples:
+        browseros dev apply force -S /chromium
+        browseros dev apply force --reset-to base -S /chromium
+    """
+    ctx = create_build_context(state.chromium_src)
+    if not ctx:
+        raise typer.Exit(1)
+
+    from ..modules.apply import ApplyForceModule
+
+    module = ApplyForceModule()
+    try:
+        module.validate(ctx)
+        module.execute(ctx, reset_to=reset_to)
+    except Exception as e:
+        log_error(f"Failed to apply patches: {e}")
+        raise typer.Exit(1)
+
+
 @apply_app.command(name="changed")
 def apply_changed(
     commit: Optional[str] = Option(
