@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/importer/profile_writer.cc b/chrome/browser/importer/profile_writer.cc
-index 08859f9d1fa91..3f542543e6437 100644
+index 08859f9d1fa91..a20e65c98b9a9 100644
 --- a/chrome/browser/importer/profile_writer.cc
 +++ b/chrome/browser/importer/profile_writer.cc
 @@ -11,6 +11,7 @@
@@ -10,7 +10,7 @@ index 08859f9d1fa91..3f542543e6437 100644
  #include "base/strings/string_number_conversions.h"
  #include "base/strings/string_util.h"
  #include "base/strings/utf_string_conversions.h"
-@@ -36,7 +37,24 @@
+@@ -36,7 +37,23 @@
  #include "components/prefs/pref_service.h"
  #include "components/search_engines/template_url.h"
  #include "components/search_engines/template_url_service.h"
@@ -18,7 +18,6 @@ index 08859f9d1fa91..3f542543e6437 100644
  #include "components/user_data_importer/common/imported_bookmark_entry.h"
 +#include "content/public/browser/storage_partition.h"
 +#include "net/cookies/canonical_cookie.h"
-+#include "net/cookies/cookie_inclusion_status.h"
 +#include "net/cookies/cookie_options.h"
 +#include "services/network/public/mojom/cookie_manager.mojom.h"
 +#include "chrome/browser/extensions/extension_service.h"
@@ -35,7 +34,7 @@ index 08859f9d1fa91..3f542543e6437 100644
  
  using bookmarks::BookmarkModel;
  using bookmarks::BookmarkNode;
-@@ -75,6 +93,22 @@ void ShowBookmarkBar(Profile* profile) {
+@@ -75,6 +92,22 @@ void ShowBookmarkBar(Profile* profile) {
    profile->GetPrefs()->SetBoolean(bookmarks::prefs::kShowBookmarkBar, true);
  }
  
@@ -58,7 +57,7 @@ index 08859f9d1fa91..3f542543e6437 100644
  }  // namespace
  
  ProfileWriter::ProfileWriter(Profile* profile) : profile_(profile) {}
-@@ -99,6 +133,73 @@ void ProfileWriter::AddPasswordForm(
+@@ -99,6 +132,83 @@ void ProfileWriter::AddPasswordForm(
    }
  }
  
@@ -66,10 +65,10 @@ index 08859f9d1fa91..3f542543e6437 100644
 +    const browseros_importer::ImportedCookieEntry& cookie) {
 +  DCHECK(profile_);
 +
-+  // Build the cookie URL from host_key
++  // Build a URL for SetCanonicalCookie's access checking.
 +  std::string scheme = cookie.is_secure ? "https" : "http";
 +  std::string host = cookie.host_key;
-+  // Remove leading dot if present for URL construction
++  // Remove leading dot if present for URL construction.
 +  if (!host.empty() && host[0] == '.') {
 +    host = host.substr(1);
 +  }
@@ -80,10 +79,15 @@ index 08859f9d1fa91..3f542543e6437 100644
 +    return;
 +  }
 +
-+  // Create a CanonicalCookie from the imported data
-+  net::CookieInclusionStatus status;
-+  auto canonical_cookie = net::CanonicalCookie::CreateSanitizedCookie(
-+      cookie_url,
++  // Use FromStorage to restore the cookie faithfully, preserving all original
++  // attributes. This is the correct API for restoring previously-stored
++  // cookies (as opposed to CreateSanitizedCookie which is for processing
++  // new Set-Cookie headers). Key differences:
++  //  - Domain passed as-is: preserves host-only vs domain cookie distinction,
++  //    and allows __Host- prefixed cookies to pass validation.
++  //  - No expiry truncation: CreateSanitizedCookie caps to creation+400 days.
++  //  - Preserves source_scheme, source_port, last_update directly.
++  auto canonical_cookie = net::CanonicalCookie::FromStorage(
 +      cookie.name,
 +      cookie.value,
 +      cookie.host_key,
@@ -91,20 +95,24 @@ index 08859f9d1fa91..3f542543e6437 100644
 +      cookie.creation_utc,
 +      cookie.expires_utc,
 +      cookie.last_access_utc,
++      cookie.last_update_utc,
 +      cookie.is_secure,
 +      cookie.is_httponly,
 +      cookie.same_site,
 +      cookie.priority,
 +      /*partition_key=*/std::nullopt,
-+      &status);
++      cookie.source_scheme,
++      cookie.source_port,
++      net::CookieSourceType::kUnknown,
++      net::CanonicalCookieFromStorageCallSite::kCookieManager);
 +
 +  if (!canonical_cookie) {
-+    LOG(WARNING) << "ProfileWriter: Failed to create canonical cookie for "
-+                 << cookie.name << " - status: " << status.GetDebugString();
++    LOG(WARNING) << "ProfileWriter: Cookie rejected by FromStorage for "
++                 << cookie.name << " on " << cookie.host_key;
 +    return;
 +  }
 +
-+  // Get the cookie manager from the default storage partition
++  // Get the cookie manager from the default storage partition.
 +  network::mojom::CookieManager* cookie_manager =
 +      profile_->GetDefaultStoragePartition()
 +          ->GetCookieManagerForBrowserProcess();
@@ -114,7 +122,8 @@ index 08859f9d1fa91..3f542543e6437 100644
 +    return;
 +  }
 +
-+  // Set the cookie with appropriate options
++  // Set with inclusive options to bypass SameSite/HttpOnly restrictions
++  // during import.
 +  net::CookieOptions options;
 +  options.set_include_httponly();
 +  options.set_same_site_cookie_context(
@@ -132,7 +141,7 @@ index 08859f9d1fa91..3f542543e6437 100644
  void ProfileWriter::AddHistoryPage(const history::URLRows& page,
                                     history::VisitSource visit_source) {
    if (!page.empty()) {
-@@ -338,3 +439,119 @@ void ProfileWriter::AddAutocompleteFormDataEntries(
+@@ -338,3 +448,119 @@ void ProfileWriter::AddAutocompleteFormDataEntries(
  }
  
  ProfileWriter::~ProfileWriter() = default;

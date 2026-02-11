@@ -1,13 +1,15 @@
 diff --git a/chrome/utility/importer/browseros/chrome_cookie_importer.cc b/chrome/utility/importer/browseros/chrome_cookie_importer.cc
 new file mode 100644
-index 0000000000000..da4ba9dd79e93
+index 0000000000000..570f83ac1274c
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_cookie_importer.cc
-@@ -0,0 +1,228 @@
+@@ -0,0 +1,306 @@
 +// Copyright 2024 AKW Technology Inc
 +// Chrome cookie importer implementation
 +
 +#include "chrome/utility/importer/browseros/chrome_cookie_importer.h"
++
++#include <string_view>
 +
 +#include "base/files/file_util.h"
 +#include "base/logging.h"
@@ -105,6 +107,75 @@ index 0000000000000..da4ba9dd79e93
 +  }
 +}
 +
++// Returns true if |domain| matches |target| exactly or is a subdomain of it.
++// E.g., DomainMatchesTarget("accounts.google.com", "google.com") -> true
++//       DomainMatchesTarget("google.com", "google.com") -> true
++//       DomainMatchesTarget("notgoogle.com", "google.com") -> false
++bool DomainMatchesTarget(std::string_view domain, std::string_view target) {
++  if (domain == target) {
++    return true;
++  }
++  // Check subdomain: domain must end with ".target"
++  if (domain.size() > target.size() + 1 &&
++      domain[domain.size() - target.size() - 1] == '.' &&
++      domain.substr(domain.size() - target.size()) == target) {
++    return true;
++  }
++  return false;
++}
++
++// Normalize host_key by stripping the leading dot (if any) for comparison.
++std::string_view NormalizeDomain(std::string_view host_key) {
++  if (!host_key.empty() && host_key[0] == '.') {
++    host_key.remove_prefix(1);
++  }
++  return host_key;
++}
++
++// Device-Bound Session Credential (DBSC) cookies. These cookies are
++// cryptographically tied to local key material and session state stored
++// separately (bound_session_params_storage.cc). Importing them without
++// the binding context causes auth failures after Google's token rotation
++// (~12-24h). They must be skipped.
++struct BoundCookieEntry {
++  std::string_view domain;
++  std::string_view name;
++};
++
++[[maybe_unused]]
++constexpr BoundCookieEntry kBoundSessionCookies[] = {
++    {"google.com", "__Secure-1PSIDTS"},
++    {"google.com", "__Secure-3PSIDTS"},
++};
++
++// Domains whose cookies should never be imported. Cookies from these domains
++// rely on state that cannot be migrated (device binding, token rotation, etc.)
++// and will break after import. Add domains here to blacklist them.
++constexpr std::string_view kBlacklistedDomains[] = {
++    // Example: "example.com" would block all cookies on example.com and
++    // *.example.com. Currently empty; add entries as needed.
++};
++
++bool ShouldSkipCookie(std::string_view host_key, std::string_view name) {
++  std::string_view domain = NormalizeDomain(host_key);
++
++  // Check device-bound session cookies.
++  for (const auto& entry : kBoundSessionCookies) {
++    if (name == entry.name && DomainMatchesTarget(domain, entry.domain)) {
++      return true;
++    }
++  }
++
++  // Check domain blacklist.
++  for (const auto& blocked : kBlacklistedDomains) {
++    if (DomainMatchesTarget(domain, blocked)) {
++      return true;
++    }
++  }
++
++  return false;
++}
++
 +}  // namespace
 +
 +std::vector<ImportedCookieEntry> ImportChromeCookies(
@@ -124,8 +195,7 @@ index 0000000000000..da4ba9dd79e93
 +  // Path to Cookies database
 +  base::FilePath cookies_path = profile_path.AppendASCII(kCookiesFilename);
 +  if (!base::PathExists(cookies_path)) {
-+    LOG(WARNING) << "browseros: Cookies not found at: "
-+                 << cookies_path.value();
++    LOG(WARNING) << "browseros: Cookies not found at: " << cookies_path.value();
 +    return cookies;
 +  }
 +
@@ -219,6 +289,14 @@ index 0000000000000..da4ba9dd79e93
 +      entry.source_port = statement.ColumnInt(13);
 +      entry.is_persistent = statement.ColumnBool(14);
 +      entry.last_update_utc = ChromeTimeToBaseTime(statement.ColumnInt64(15));
++
++      // Skip cookies that cannot be safely migrated (device-bound session
++      // cookies, blacklisted domains).
++      if (ShouldSkipCookie(entry.host_key, entry.name)) {
++        VLOG(1) << "browseros: Skipping cookie " << entry.name << " on "
++                << entry.host_key << " (filtered)";
++        continue;
++      }
 +
 +      cookies.push_back(std::move(entry));
 +    }
