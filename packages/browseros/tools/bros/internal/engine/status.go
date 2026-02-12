@@ -16,11 +16,9 @@ type StatusResult struct {
 	Ahead           int
 	Behind          int
 	Synced          int
-	Orphaned        int
 	AheadFiles      []string
 	BehindFiles     []string
 	SyncedFiles     []string
-	OrphanedFiles   []string
 }
 
 func Status(ctx *config.Context, showFiles bool) (*StatusResult, error) {
@@ -50,18 +48,14 @@ func Status(ctx *config.Context, showFiles bool) (*StatusResult, error) {
 
 	delta := patch.Compare(localPatchSet, repoPatchSet)
 
+	result.Ahead = len(delta.Orphaned)
 	result.Behind = len(delta.NeedsApply) + len(delta.NeedsUpdate)
 	result.Synced = len(delta.UpToDate)
-	result.Orphaned = len(delta.Orphaned)
-
-	// Ahead = local patches not in repo
-	result.Ahead = len(delta.Orphaned)
 
 	if showFiles {
+		result.AheadFiles = delta.Orphaned
 		result.BehindFiles = append(delta.NeedsApply, delta.NeedsUpdate...)
 		result.SyncedFiles = delta.UpToDate
-		result.OrphanedFiles = delta.Orphaned
-		result.AheadFiles = delta.Orphaned
 	}
 
 	return result, nil

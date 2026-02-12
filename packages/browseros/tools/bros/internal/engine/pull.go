@@ -70,7 +70,9 @@ func Pull(ctx *config.Context, opts PullOpts) (*patch.PullResult, error) {
 	}
 
 	// Phase 5: Apply patches (NeedsUpdate + NeedsApply)
-	filesToApply := append(delta.NeedsUpdate, delta.NeedsApply...)
+	filesToApply := make([]string, 0, len(delta.NeedsUpdate)+len(delta.NeedsApply))
+	filesToApply = append(filesToApply, delta.NeedsUpdate...)
+	filesToApply = append(filesToApply, delta.NeedsApply...)
 	for _, path := range filesToApply {
 		repoPatch, ok := repoPatchSet.Patches[path]
 		if !ok || repoPatch.Content == nil {

@@ -11,10 +11,9 @@ import (
 )
 
 type CloneOpts struct {
-	PatchesRepo string
-	VerifyBase  bool
-	Clean       bool
-	DryRun      bool
+	VerifyBase bool
+	Clean      bool
+	DryRun     bool
 }
 
 func Clone(ctx *config.Context, opts CloneOpts) (*patch.PullResult, error) {
@@ -22,21 +21,16 @@ func Clone(ctx *config.Context, opts CloneOpts) (*patch.PullResult, error) {
 
 	// Verify HEAD matches BASE if requested
 	if opts.VerifyBase {
-		head, err := git.HeadRev(ctx.ChromiumDir)
+		head, err := git.RevParse(ctx.ChromiumDir, "HEAD")
 		if err != nil {
 			return nil, fmt.Errorf("clone: getting HEAD: %w", err)
 		}
-		// Compare short hashes
-		baseShort := ctx.BaseCommit
-		if len(baseShort) > len(head) {
-			baseShort = baseShort[:len(head)]
+		base, err := git.RevParse(ctx.ChromiumDir, ctx.BaseCommit)
+		if err != nil {
+			return nil, fmt.Errorf("clone: resolving BASE_COMMIT %s: %w", ctx.BaseCommit, err)
 		}
-		headShort := head
-		if len(headShort) > len(ctx.BaseCommit) {
-			headShort = headShort[:len(ctx.BaseCommit)]
-		}
-		if baseShort != headShort {
-			return nil, fmt.Errorf("clone: HEAD (%s) does not match BASE_COMMIT (%s) — use --verify-base=false to skip", head[:12], ctx.BaseCommit[:min(12, len(ctx.BaseCommit))])
+		if head != base {
+			return nil, fmt.Errorf("clone: HEAD (%s) does not match BASE_COMMIT (%s) — use --verify-base=false to skip", head[:12], base[:12])
 		}
 	}
 

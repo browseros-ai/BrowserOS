@@ -78,11 +78,6 @@ func renderStatus(r *engine.StatusResult) {
 	}
 	fmt.Printf("    %s\n",
 		ui.SuccessStyle.Render(fmt.Sprintf("synced: %3d files", r.Synced)))
-	if r.Orphaned > 0 {
-		fmt.Printf("    %s %s\n",
-			ui.MutedStyle.Render(fmt.Sprintf("orphan: %3d files", r.Orphaned)),
-			ui.MutedStyle.Render("(local changes with no patch in repo)"))
-	}
 
 	if len(r.AheadFiles) > 0 {
 		fmt.Println()

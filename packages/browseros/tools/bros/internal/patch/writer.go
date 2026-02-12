@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sync"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -16,30 +15,14 @@ func WritePatchSet(patchesDir string, ps *PatchSet, dryRun bool) error {
 	g, _ := errgroup.WithContext(context.Background())
 	g.SetLimit(runtime.NumCPU())
 
-	var mu sync.Mutex
-	var writeErrors []string
-
 	for _, fp := range ps.Patches {
 		fp := fp
 		g.Go(func() error {
-			if err := writeSinglePatch(patchesDir, fp, dryRun); err != nil {
-				mu.Lock()
-				writeErrors = append(writeErrors, fmt.Sprintf("%s: %s", fp.Path, err))
-				mu.Unlock()
-			}
-			return nil
+			return writeSinglePatch(patchesDir, fp, dryRun)
 		})
 	}
 
-	if err := g.Wait(); err != nil {
-		return err
-	}
-
-	if len(writeErrors) > 0 {
-		return fmt.Errorf("failed to write %d patches", len(writeErrors))
-	}
-
-	return nil
+	return g.Wait()
 }
 
 func writeSinglePatch(patchesDir string, fp *FilePatch, dryRun bool) error {

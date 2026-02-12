@@ -101,10 +101,9 @@ func runClone(cmd *cobra.Command, args []string) error {
 	}
 
 	opts := engine.CloneOpts{
-		PatchesRepo: clonePatchesRepo,
-		VerifyBase:  cloneVerifyBase,
-		Clean:       cloneClean,
-		DryRun:      cloneDryRun,
+		VerifyBase: cloneVerifyBase,
+		Clean:      cloneClean,
+		DryRun:     cloneDryRun,
 	}
 
 	result, err := engine.Clone(ctx, opts)
@@ -144,7 +143,7 @@ func runClone(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(result.Conflicts) > 0 {
-		os.Exit(1)
+		return fmt.Errorf("%d conflicts — see above for details", len(result.Conflicts))
 	}
 
 	return nil

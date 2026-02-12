@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"time"
 
 	"bros/internal/config"
@@ -70,7 +69,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(result.Conflicts) > 0 {
-		os.Exit(1)
+		return fmt.Errorf("%d conflicts — see above for details", len(result.Conflicts))
 	}
 
 	return nil
