@@ -96,6 +96,11 @@ class EnvConfig:
         """App-specific password for macOS notarization"""
         return os.environ.get("PROD_MACOS_NOTARIZATION_PWD")
 
+    @property
+    def macos_keychain_password(self) -> Optional[str]:
+        """macOS login keychain password (used to unlock keychain on build servers)"""
+        return os.environ.get("MACOS_KEYCHAIN_PASSWORD")
+
     # === Windows Code Signing ===
 
     @property

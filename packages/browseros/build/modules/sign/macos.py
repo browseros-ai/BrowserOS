@@ -52,6 +52,35 @@ def run_command(
     return utils_run_command(cmd, cwd=cwd, check=check)
 
 
+def unlock_keychain(env: Optional[EnvConfig] = None) -> None:
+    """Unlock the login keychain for non-interactive sessions (SSH, launchd).
+
+    Without this, codesign and notarytool fail with errSecInternalComponent
+    or 'User interaction is not allowed' when running over SSH.
+    """
+    keychain_path = Path.home() / "Library" / "Keychains" / "login.keychain-db"
+    password = env.macos_keychain_password if env else os.environ.get("MACOS_KEYCHAIN_PASSWORD")
+
+    if not password:
+        log_warning("MACOS_KEYCHAIN_PASSWORD not set — keychain may be locked (will fail over SSH)")
+        return
+
+    if not keychain_path.exists():
+        log_warning(f"Keychain not found at {keychain_path}")
+        return
+
+    log_info("🔓 Unlocking login keychain...")
+    run_command(
+        ["security", "unlock-keychain", "-p", password, str(keychain_path)],
+        check=False,
+    )
+    # Prevent auto-lock during long signing + notarization runs
+    run_command(
+        ["security", "set-keychain-settings", "-t", "3600", str(keychain_path)],
+        check=False,
+    )
+
+
 class MacOSSignModule(CommandModule):
     produces = ["signed_app"]
     requires = ["built_app"]
@@ -73,6 +102,8 @@ class MacOSSignModule(CommandModule):
         log_info("=" * 70)
         log_info("🚀 Starting signing process for BrowserOS...")
         log_info("=" * 70)
+
+        unlock_keychain(ctx.env)
 
         app_path = ctx.get_app_path()
         env_ok, env_vars = check_environment(ctx.env)
@@ -613,7 +644,7 @@ def notarize_app(
 
     # Store credentials
     log_info("🔑 Storing notarization credentials...")
-    run_command(
+    store_result = run_command(
         [
             "xcrun",
             "notarytool",
@@ -627,12 +658,14 @@ def notarize_app(
             env_vars["notarization_pwd"],
         ],
         check=False,
-    )  # May fail if already stored
+    )
 
-    # Submit for notarization
+    # Submit for notarization — if store-credentials failed, pass creds
+    # directly to avoid depending on the keychain profile.
     log_info("📤 Submitting application for notarization (this may take a while)...")
-    result = run_command(
-        [
+    use_keychain_profile = store_result.returncode == 0
+    if use_keychain_profile:
+        submit_cmd = [
             "xcrun",
             "notarytool",
             "submit",
@@ -640,9 +673,23 @@ def notarize_app(
             "--keychain-profile",
             "notarytool-profile",
             "--wait",
-        ],
-        check=False,
-    )
+        ]
+    else:
+        log_warning("Keychain profile unavailable — passing credentials directly")
+        submit_cmd = [
+            "xcrun",
+            "notarytool",
+            "submit",
+            str(notarize_zip),
+            "--apple-id",
+            env_vars["apple_id"],
+            "--team-id",
+            env_vars["team_id"],
+            "--password",
+            env_vars["notarization_pwd"],
+            "--wait",
+        ]
+    result = run_command(submit_cmd, check=False)
 
     log_info(result.stdout)
     if result.stderr:
@@ -706,6 +753,8 @@ def sign_app(ctx: Context, create_dmg: bool = True) -> bool:
     log_info("=" * 70)
     log_info("🚀 Starting signing process for BrowserOS...")
     log_info("=" * 70)
+
+    unlock_keychain(ctx.env if ctx else None)
 
     # Error tracking similar to bash script
     error_count = 0
