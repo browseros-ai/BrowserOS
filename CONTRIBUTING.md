@@ -115,26 +115,27 @@ Once you have Chromium checked out, navigate to our build system:
 ```bash
 cd packages/browseros
 
-# Debug build (for development)
-# macOS
-python build/build.py --config build/config/debug.macos.yaml --chromium-src /path/to/chromium/src --build
+# Debug build (for development — works on all platforms)
+# Set your Chromium source path in build/config/debug.yaml first, or use CHROMIUM_SRC env var
+browseros build --config build/config/debug.yaml
 
-# Linux
-python build/build.py --config build/config/debug.linux.yaml --chromium-src /path/to/chromium/src --build
-
-# Windows
-python build/build.py --config build/config/debug.windows.yaml --chromium-src /path/to/chromium/src --build
+# Alternative using the Python module directly:
+python -m build.browseros build --config build/config/debug.yaml
 
 # Release build (for production)
 # macOS
-python build/build.py --config build/config/release.macos.yaml --chromium-src /path/to/chromium/src --build
+browseros build --config build/config/release.macos.yaml
 
 # Linux
-python build/build.py --config build/config/release.linux.yaml --chromium-src /path/to/chromium/src --build
+browseros build --config build/config/release.linux.yaml
 
 # Windows
-python build/build.py --config build/config/release.windows.yaml --chromium-src /path/to/chromium/src --build
+browseros build --config build/config/release.windows.yaml
 ```
+
+> **Note:** When using `--config`, all build parameters (including `chromium_src`) come from the
+> YAML file. Set `chromium_src` in the YAML or via the `CHROMIUM_SRC` environment variable.
+> Do **not** mix `--config` with `--build` / `--arch` flags — they are mutually exclusive.
 
 The build typically takes 1-3 hours on modern hardware (M4 Max, Ryzen 9, etc.).
 

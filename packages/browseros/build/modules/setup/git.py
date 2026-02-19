@@ -6,7 +6,7 @@ import tarfile
 import urllib.request
 from ...common.module import CommandModule, ValidationError
 from ...common.context import Context
-from ...common.utils import run_command, log_info, log_error, log_success, IS_WINDOWS, safe_rmtree
+from ...common.utils import run_command, log_info, log_error, log_success, IS_MACOS, IS_WINDOWS, safe_rmtree
 
 
 class GitSetupModule(CommandModule):
@@ -68,7 +68,6 @@ class SparkleSetupModule(CommandModule):
     description = "Download and setup Sparkle framework (macOS only)"
 
     def validate(self, ctx: Context) -> None:
-        from ...common.utils import IS_MACOS
         if not IS_MACOS():
             raise ValidationError("Sparkle setup requires macOS")
 

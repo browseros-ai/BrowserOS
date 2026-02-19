@@ -60,9 +60,9 @@ def parse_series(series_path: Path) -> Iterator[str]:
             continue
         if line.startswith("#"):
             continue
-        # Strip inline comments
-        if " #" in line:
-            line = line.split(" #")[0].strip()
+        # Strip inline comments (GNU Quilt uses ' # ' with trailing space)
+        if " # " in line:
+            line = line.split(" # ")[0].strip()
         if line:
             yield line
 

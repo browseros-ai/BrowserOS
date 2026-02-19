@@ -12,6 +12,12 @@ class ConfigureModule(CommandModule):
     description = "Configure build with GN"
 
     def validate(self, ctx: Context) -> None:
+        valid_build_types = {"debug", "release"}
+        if ctx.build_type not in valid_build_types:
+            raise ValidationError(
+                f"Invalid build_type '{ctx.build_type}'. Must be one of: {sorted(valid_build_types)}"
+            )
+
         if not ctx.chromium_src.exists():
             raise ValidationError(f"Chromium source not found: {ctx.chromium_src}")
 
