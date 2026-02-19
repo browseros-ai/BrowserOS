@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Standard single-architecture build module for BrowserOS"""
 
-import tempfile
 import shutil
 from pathlib import Path
 from ...common.module import CommandModule, ValidationError
@@ -60,13 +59,8 @@ class CompileModule(CommandModule):
 
         version_content = f"MAJOR={parts[0]}\nMINOR={parts[1]}\nBUILD={parts[2]}\nPATCH={parts[3]}"
 
-        with tempfile.NamedTemporaryFile(mode="w", delete=False) as temp_file:
-            temp_file.write(version_content)
-            temp_path = temp_file.name
-
         chrome_version_path = join_paths(ctx.chromium_src, "chrome", "VERSION")
-        shutil.copy2(temp_path, chrome_version_path)
-        Path(temp_path).unlink()
+        chrome_version_path.write_text(version_content)
 
         log_info(f"Created VERSION file: {ctx.browseros_chromium_version}")
 

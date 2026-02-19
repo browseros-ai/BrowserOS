@@ -32,6 +32,7 @@ from ..common.utils import (
     IS_WINDOWS,
     IS_LINUX,
 )
+from ..common.logger import close_log_file
 
 # Import all module classes
 from ..modules.setup.clean import CleanModule
@@ -238,6 +239,8 @@ def execute_pipeline(
         log_error(f"\n❌ Pipeline failed: {e}")
         notify_pipeline_error(pipeline_name, str(e))
         raise typer.Exit(1)
+    finally:
+        close_log_file()
 
 
 def main(
