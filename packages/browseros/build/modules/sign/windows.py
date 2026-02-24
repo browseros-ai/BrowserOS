@@ -19,6 +19,7 @@ from ...common.utils import (
 BROWSEROS_SERVER_BINARIES: List[str] = [
     "browseros_server.exe",
     "codex.exe",
+    "bun.exe",
 ]
 
 
