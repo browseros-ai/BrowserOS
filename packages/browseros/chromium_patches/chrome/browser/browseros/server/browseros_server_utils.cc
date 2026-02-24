@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_utils.cc b/chrome/browser/browseros/server/browseros_server_utils.cc
 new file mode 100644
-index 0000000000000..8b3137bf24e8a
+index 0000000000000..5046cfbef61d0
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_utils.cc
 @@ -0,0 +1,518 @@
@@ -232,16 +232,16 @@ index 0000000000000..8b3137bf24e8a
 +}
 +
 +base::FilePath GetBundledExecutablePath() {
-+  base::FilePath browseros_exe =
++  base::FilePath bun_exe =
 +      GetBundledResourcesPath()
 +          .Append(FILE_PATH_LITERAL("bin"))
-+          .Append(FILE_PATH_LITERAL("browseros_server"));
++          .Append(FILE_PATH_LITERAL("bun"));
 +
 +#if BUILDFLAG(IS_WIN)
-+  browseros_exe = browseros_exe.AddExtension(FILE_PATH_LITERAL(".exe"));
++  bun_exe = bun_exe.AddExtension(FILE_PATH_LITERAL(".exe"));
 +#endif
 +
-+  return browseros_exe;
++  return bun_exe;
 +}
 +
 +base::FilePath GetLockFilePath() {

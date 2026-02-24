@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/BUILD.gn b/chrome/browser/browseros/server/BUILD.gn
 new file mode 100644
-index 0000000000000..85e9eaaba051c
+index 0000000000000..874df7de1e642
 --- /dev/null
 +++ b/chrome/browser/browseros/server/BUILD.gn
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,134 @@
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -11,15 +11,18 @@ index 0000000000000..85e9eaaba051c
 +import("//build/config/chrome_build.gni")
 +
 +# Validate that required resources exist at build time
-+# GN will fail at generation time if resources/bin/browseros_server is missing
-+_browseros_binary_name = "browseros_server"
++# GN will fail at generation time if resources/bin/bun or resources/index.js is missing
++_bun_binary_name = "bun"
 +if (is_win) {
-+  _browseros_binary_name += ".exe"
++  _bun_binary_name += ".exe"
 +}
 +
 +action("validate_browseros_resources") {
 +  script = "validate_resources.py"
-+  inputs = [ "resources/bin/${_browseros_binary_name}" ]
++  inputs = [
++    "resources/bin/${_bun_binary_name}",
++    "resources/index.js",
++  ]
 +  outputs = [ "$target_gen_dir/browseros_resources_validated" ]
 +}
 +
@@ -114,7 +117,7 @@ index 0000000000000..85e9eaaba051c
 +  bundle_data("browseros_resources_bundle") {
 +    sources = [ "resources" ]
 +    outputs = [ "{{bundle_resources_dir}}/BrowserOSServer/default/{{source_file_part}}" ]
-+    # TODO: Re-enable validation when resources/bin/browseros_server is available
++    # TODO: Re-enable validation when resources/bin/bun + resources/index.js are available
 +    # deps = [ ":validate_browseros_resources" ]
 +  }
 +} else {
@@ -122,7 +125,7 @@ index 0000000000000..85e9eaaba051c
 +  copy("browseros_resources_copy") {
 +    sources = [ "resources" ]
 +    outputs = [ "$root_out_dir/BrowserOSServer/default/{{source_file_part}}" ]
-+    # TODO: Re-enable validation when resources/bin/browseros_server is available
++    # TODO: Re-enable validation when resources/bin/bun + resources/index.js are available
 +    # deps = [ ":validate_browseros_resources" ]
 +  }
 +}

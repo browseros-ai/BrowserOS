@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager_unittest.cc b/chrome/browser/browseros/server/browseros_server_manager_unittest.cc
 new file mode 100644
-index 0000000000000..8f97e0b97467f
+index 0000000000000..e6df219bb0144
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager_unittest.cc
 @@ -0,0 +1,497 @@
@@ -58,7 +58,7 @@ index 0000000000000..8f97e0b97467f
 +    testing::Mock::AllowLeak(updater_);
 +
 +    ON_CALL(*updater_, GetBestServerBinaryPath())
-+        .WillByDefault(Return(base::FilePath("/fake/path/browseros_server")));
++        .WillByDefault(Return(base::FilePath("/fake/path/resources/bin/bun")));
 +    ON_CALL(*updater_, GetBestServerResourcesPath())
 +        .WillByDefault(Return(base::FilePath("/fake/path/resources")));
 +

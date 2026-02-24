@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.cc b/chrome/browser/browseros/server/browseros_server_updater.cc
 new file mode 100644
-index 0000000000000..9050130727fc8
+index 0000000000000..666821556af56
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.cc
-@@ -0,0 +1,1078 @@
+@@ -0,0 +1,1083 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -192,23 +192,19 @@ index 0000000000000..9050130727fc8
 +  return "";  // Success
 +}
 +
-+// Runs binary with --version and captures output.
-+// Returns exit code and output via out parameters.
-+void RunBinaryVersionCheck(const base::FilePath& binary_path,
++// Runs the server entry script via the bun runtime with --version and captures
++// output. Returns exit code and output via out parameters.
++void RunBinaryVersionCheck(const base::FilePath& runtime_path,
++                           const base::FilePath& script_path,
 +                           int* exit_code,
 +                           std::string* output) {
-+  base::CommandLine cmd(binary_path);
-+  cmd.AppendSwitch("version");
++  base::CommandLine cmd(runtime_path);
++  cmd.AppendArgPath(script_path);
++  cmd.AppendArg("--version");
 +
 +  std::string stdout_output;
-+  std::string stderr_output;
 +
-+  base::LaunchOptions options;
-+#if BUILDFLAG(IS_WIN)
-+  options.start_hidden = true;
-+#endif
-+
-+  // GetAppOutputWithExitCode runs the process and captures output
++  // GetAppOutputAndError runs the process and captures output
 +  bool success = base::GetAppOutputAndError(cmd, &stdout_output);
 +
 +  if (success) {
@@ -305,18 +301,22 @@ index 0000000000000..9050130727fc8
 +      base::BindOnce(&BrowserOSServerUpdater::OnDownloadedVersionLoaded,
 +                     weak_factory_.GetWeakPtr()));
 +
-+  // Get bundled version by running binary with --version
-+  base::FilePath bundled_binary = GetBundledBinaryPath();
++  // Get bundled version by running bun <script> --version
++  base::FilePath bundled_runtime = GetBundledBinaryPath();
++  base::FilePath bundled_script =
++      GetBundledResourcesPath().Append(FILE_PATH_LITERAL("index.js"));
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
 +      base::BindOnce(
-+          [](base::FilePath path) -> std::pair<int, std::string> {
++          [](base::FilePath runtime,
++             base::FilePath script) -> std::pair<int, std::string> {
 +            int exit_code = 0;
 +            std::string output;
-+            RunBinaryVersionCheck(path, &exit_code, &output);
++            RunBinaryVersionCheck(runtime, script, &exit_code, &output);
 +            return {exit_code, output};
 +          },
-+          bundled_binary),
++          bundled_runtime,
++          bundled_script),
 +      base::BindOnce(
 +          [](base::WeakPtr<BrowserOSServerUpdater> self,
 +             std::pair<int, std::string> result) {
@@ -652,20 +652,25 @@ index 0000000000000..9050130727fc8
 +void BrowserOSServerUpdater::TestBinary(const base::Version& version) {
 +  state_ = State::kTesting;
 +
-+  base::FilePath binary_path = GetDownloadedBinaryPath(version);
-+  LOG(INFO) << "browseros: Testing binary: " << binary_path;
++  base::FilePath runtime_path = GetDownloadedBinaryPath(version);
++  base::FilePath script_path =
++      GetDownloadedResourcesPath(version).Append(FILE_PATH_LITERAL("index.js"));
++  LOG(INFO) << "browseros: Testing binary: " << runtime_path
++            << " with script: " << script_path;
 +
 +  // Run version check on background thread
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
 +      base::BindOnce(
-+          [](base::FilePath path) -> std::pair<int, std::string> {
++          [](base::FilePath runtime,
++             base::FilePath script) -> std::pair<int, std::string> {
 +            int exit_code = 0;
 +            std::string output;
-+            RunBinaryVersionCheck(path, &exit_code, &output);
++            RunBinaryVersionCheck(runtime, script, &exit_code, &output);
 +            return {exit_code, output};
 +          },
-+          binary_path),
++          runtime_path,
++          script_path),
 +      base::BindOnce(
 +          [](base::WeakPtr<BrowserOSServerUpdater> self, base::Version version,
 +             std::pair<int, std::string> result) {
@@ -940,7 +945,7 @@ index 0000000000000..9050130727fc8
 +  base::FilePath binary = GetVersionDir(version)
 +                              .Append(FILE_PATH_LITERAL("resources"))
 +                              .Append(FILE_PATH_LITERAL("bin"))
-+                              .Append(FILE_PATH_LITERAL("browseros_server"));
++                              .Append(FILE_PATH_LITERAL("bun"));
 +#if BUILDFLAG(IS_WIN)
 +  binary = binary.AddExtension(FILE_PATH_LITERAL(".exe"));
 +#endif

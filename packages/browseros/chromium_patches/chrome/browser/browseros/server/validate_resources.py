@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/validate_resources.py b/chrome/browser/browseros/server/validate_resources.py
 new file mode 100644
-index 0000000000000..d7dc82b132dad
+index 0000000000000..38da4519828dd
 --- /dev/null
 +++ b/chrome/browser/browseros/server/validate_resources.py
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,44 @@
 +#!/usr/bin/env python3
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
@@ -20,7 +20,8 @@ index 0000000000000..d7dc82b132dad
 +# Required resources that must exist in the resources/ directory
 +# Add more resources as needed - paths are relative to resources/
 +REQUIRED_RESOURCES = [
-+    "bin/browseros_server",
++    "bin/bun",
++    "index.js",
 +]
 +
 +script_dir = os.path.dirname(os.path.abspath(__file__))

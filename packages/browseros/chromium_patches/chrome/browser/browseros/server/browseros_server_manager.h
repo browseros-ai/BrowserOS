@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.h b/chrome/browser/browseros/server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000..241343e436f94
+index 0000000000000..bc4d412cff413
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.h
 @@ -0,0 +1,158 @@
@@ -45,7 +45,7 @@ index 0000000000000..241343e436f94
 +// This manager:
 +// 1. Starts Chromium's CDP WebSocket server
 +// 2. Binds a stable MCP proxy port that forwards /mcp to the sidecar
-+// 3. Launches the bundled BrowserOS server binary with ephemeral backend ports
++// 3. Launches the bundled bun runtime with the server entry script (index.js)
 +// 4. Monitors server health via HTTP /health endpoint and auto-restarts
 +class BrowserOSServerManager {
 + public:

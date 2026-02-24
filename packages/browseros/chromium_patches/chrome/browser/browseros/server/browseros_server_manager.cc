@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..0d9d3f049581c
+index 0000000000000..b6349befefc11
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
 @@ -0,0 +1,1072 @@
@@ -1063,16 +1063,16 @@ index 0000000000000..0d9d3f049581c
 +}
 +
 +base::FilePath BrowserOSServerManager::GetBrowserOSServerExecutablePath() const {
-+  base::FilePath browseros_exe =
++  base::FilePath bun_exe =
 +      GetBrowserOSServerResourcesPath()
 +          .Append(FILE_PATH_LITERAL("bin"))
-+          .Append(FILE_PATH_LITERAL("browseros_server"));
++          .Append(FILE_PATH_LITERAL("bun"));
 +
 +#if BUILDFLAG(IS_WIN)
-+  browseros_exe = browseros_exe.AddExtension(FILE_PATH_LITERAL(".exe"));
++  bun_exe = bun_exe.AddExtension(FILE_PATH_LITERAL(".exe"));
 +#endif
 +
-+  return browseros_exe;
++  return bun_exe;
 +}
 +
 +}  // namespace browseros

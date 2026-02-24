@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/process_controller_impl.cc b/chrome/browser/browseros/server/process_controller_impl.cc
 new file mode 100644
-index 0000000000000..a398856f672fd
+index 0000000000000..aa9dd3b17c2d9
 --- /dev/null
 +++ b/chrome/browser/browseros/server/process_controller_impl.cc
-@@ -0,0 +1,210 @@
+@@ -0,0 +1,218 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -127,13 +127,21 @@ index 0000000000000..a398856f672fd
 +    return result;
 +  }
 +
-+  // Build command line with --config flag and explicit port args
++  // Build command line: bun <script> <server-flags>
++  // The exe is the bun runtime; the entry script lives in the resources dir.
 +  base::CommandLine cmd(actual_exe_path);
-+  cmd.AppendSwitchPath("config", config_path);
-+  cmd.AppendSwitchASCII("cdp-port", base::NumberToString(config.ports.cdp));
-+  cmd.AppendSwitchASCII("server-port", base::NumberToString(config.ports.server));
-+  cmd.AppendSwitchASCII("extension-port",
-+                        base::NumberToString(config.ports.extension));
++  base::FilePath script_path =
++      actual_resources_dir.Append(FILE_PATH_LITERAL("index.js"));
++  cmd.AppendArgPath(script_path);
++
++  // Server flags as positional args (after the script path) so bun passes
++  // them through to the server's process.argv.
++  cmd.AppendArg("--config=" + config_path.AsUTF8Unsafe());
++  cmd.AppendArg("--cdp-port=" + base::NumberToString(config.ports.cdp));
++  cmd.AppendArg("--server-port=" +
++                base::NumberToString(config.ports.server));
++  cmd.AppendArg("--extension-port=" +
++                base::NumberToString(config.ports.extension));
 +
 +  // Set up launch options
 +  base::LaunchOptions options;
