@@ -159,3 +159,9 @@ copy_operations:
     type: "file"
     os: ["windows"]
     arch: ["x64"]
+
+  # BrowserOS Server Bundle (platform-independent)
+  - name: "BrowserOS Server Bundle"
+    source: "resources/binaries/browseros_server/index.js"
+    destination: "chrome/browser/browseros/server/resources/index.js"
+    type: "file"

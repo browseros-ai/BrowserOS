@@ -97,3 +97,8 @@ download_operations:
     destination: "resources/binaries/bun/bun-windows-x64.exe"
     os: ["windows"]
     arch: ["x64"]
+
+  # BrowserOS Server Bundle (platform-independent)
+  - name: "BrowserOS Server Bundle"
+    r2_key: "binaries/browseros-server/index.js"
+    destination: "resources/binaries/browseros_server/index.js"

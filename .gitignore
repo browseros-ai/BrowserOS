@@ -19,6 +19,9 @@
 
 
 
+# Downloaded binaries (fetched from R2 during build)
+**/resources/binaries/
+
 nxtscape-cli-access.json
 gclient.json
 .env
