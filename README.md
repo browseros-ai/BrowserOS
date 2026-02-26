@@ -136,7 +136,24 @@ BrowserOS is open source under the [AGPL-3.0 license](LICENSE).
 
 - [ungoogled-chromium](https://github.com/ungoogled-software/ungoogled-chromium) - BrowserOS uses some patches for enhanced privacy. Thanks to everyone behind this project!
 - [The Chromium Project](https://www.chromium.org/) - At the core of BrowserOS, making it possible to exist in the first place.
-  
+
+## Citation
+
+If you use BrowserOS in your research or project, please cite:
+
+```bibtex
+@software{browseros2025,
+  author = {Sonti, Nithin Venkat and Sonti, Nikhil Venkat and {BrowserOS-team}},
+  title = {BrowserOS: The open-source Agentic browser},
+  url = {https://github.com/browseros-ai/BrowserOS},
+  year = {2025},
+  publisher = {GitHub},
+  license = {AGPL-3.0},
+}
+```
+
+Copyright &copy; 2025 Felafax, Inc.
+
 ## Stargazers
 Thank you to all our supporters!
 
