@@ -1,14 +1,11 @@
 package patch
 
 import (
-	"context"
 	"os"
 	"path/filepath"
-	"runtime"
+	"sort"
+	"strconv"
 	"strings"
-	"sync"
-
-	"golang.org/x/sync/errgroup"
 )
 
 // ReadPatchSet reads all patches from the chromium_patches/ directory.
@@ -30,34 +27,26 @@ func ReadPatchSet(patchesDir string) (*PatchSet, error) {
 		return nil, err
 	}
 
-	g, _ := errgroup.WithContext(context.Background())
-	g.SetLimit(runtime.NumCPU())
-
-	var mu sync.Mutex
+	// Sort deterministically so marker and patch-file merges are stable.
+	sort.Strings(filePaths)
 
 	for _, path := range filePaths {
-		path := path
-		g.Go(func() error {
-			content, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
 
-			rel, err := filepath.Rel(patchesDir, path)
-			if err != nil {
-				return err
-			}
+		rel, err := filepath.Rel(patchesDir, path)
+		if err != nil {
+			return nil, err
+		}
 
-			fp := classifyPatchFile(rel, content)
-			mu.Lock()
+		fp := classifyPatchFile(rel, content)
+		if existing, ok := ps.Patches[fp.Path]; ok {
+			mergePatchFile(existing, fp)
+		} else {
 			ps.Patches[fp.Path] = fp
-			mu.Unlock()
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		return nil, err
+		}
 	}
 
 	return ps, nil
@@ -113,10 +102,15 @@ func classifyPatchFile(rel string, content []byte) *FilePatch {
 	case strings.HasSuffix(rel, ".rename"):
 		fp.Path = strings.TrimSuffix(rel, ".rename")
 		fp.Op = OpRenamed
-		// Parse rename_from from content
+		// Parse rename metadata from marker content.
 		for _, line := range strings.Split(string(content), "\n") {
 			if strings.HasPrefix(line, "rename_from: ") {
 				fp.OldPath = strings.TrimPrefix(line, "rename_from: ")
+			}
+			if strings.HasPrefix(line, "similarity: ") {
+				if sim, err := strconv.Atoi(strings.TrimPrefix(line, "similarity: ")); err == nil {
+					fp.Similarity = sim
+				}
 			}
 		}
 		fp.Content = nil
@@ -128,4 +122,50 @@ func classifyPatchFile(rel string, content []byte) *FilePatch {
 	}
 
 	return fp
+}
+
+func mergePatchFile(dst, src *FilePatch) {
+	if src == nil || dst == nil {
+		return
+	}
+
+	// Keep real diff content whenever present.
+	if src.Content != nil {
+		dst.Content = src.Content
+	}
+
+	if src.OldPath != "" {
+		dst.OldPath = src.OldPath
+	}
+	if src.Similarity != 0 {
+		dst.Similarity = src.Similarity
+	}
+	if src.IsBinary {
+		dst.IsBinary = true
+	}
+
+	// Preserve the strongest operation classification.
+	if opPriority(src.Op) > opPriority(dst.Op) {
+		dst.Op = src.Op
+	}
+
+	// Marker ops have no patch payload.
+	if dst.Op == OpDeleted || dst.Op == OpBinary {
+		dst.Content = nil
+	}
+}
+
+func opPriority(op FileOp) int {
+	switch op {
+	case OpDeleted:
+		return 5
+	case OpBinary:
+		return 4
+	case OpRenamed:
+		return 3
+	case OpAdded:
+		return 2
+	default:
+		return 1
+	}
 }

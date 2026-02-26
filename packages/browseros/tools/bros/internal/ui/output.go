@@ -16,6 +16,9 @@ func RenderPullResult(r *patch.PullResult) string {
 	for _, f := range r.Applied {
 		b.WriteString(fmt.Sprintf("  %s %s\n", SuccessStyle.Render("+"), f))
 	}
+	for _, f := range r.Reset {
+		b.WriteString(fmt.Sprintf("  %s %s %s\n", ModifiedPrefix, f, MutedStyle.Render("(reset to BASE)")))
+	}
 	for _, c := range r.Conflicts {
 		b.WriteString(fmt.Sprintf("  %s %s\n", ErrorStyle.Render("x"), c.File))
 	}
@@ -29,11 +32,11 @@ func RenderPullResult(r *patch.PullResult) string {
 
 	b.WriteString("\n")
 
-	total := len(r.Applied) + len(r.Conflicts) + len(r.Skipped)
+	total := len(r.Applied) + len(r.Reset) + len(r.Conflicts) + len(r.Skipped) + len(r.Deleted)
 	summary := fmt.Sprintf("Pulled %d patches", total)
 	b.WriteString(SuccessStyle.Render(summary))
-	b.WriteString(MutedStyle.Render(fmt.Sprintf(" (%d applied, %d conflicts, %d skipped)",
-		len(r.Applied), len(r.Conflicts), len(r.Skipped))))
+	b.WriteString(MutedStyle.Render(fmt.Sprintf(" (%d applied, %d reset, %d deleted, %d conflicts, %d skipped)",
+		len(r.Applied), len(r.Reset), len(r.Deleted), len(r.Conflicts), len(r.Skipped))))
 	b.WriteString("\n")
 
 	return b.String()

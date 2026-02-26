@@ -7,6 +7,13 @@ import (
 	"bros/internal/patch"
 )
 
+type NameStatusEntry struct {
+	RawStatus string
+	Op        patch.FileOp
+	OldPath   string
+	Path      string
+}
+
 // DiffNameStatus returns file paths mapped to their operation.
 // Diffs BASE against the working tree (not HEAD) so uncommitted patch
 // applications are visible.
@@ -43,6 +50,65 @@ func DiffNameStatus(dir, base string) (map[string]patch.FileOp, error) {
 		default:
 			result[path] = patch.OpModified
 		}
+	}
+
+	return result, nil
+}
+
+// DiffNameStatusRange returns parsed name-status changes between two revisions.
+// Supports optional pathspec filtering.
+func DiffNameStatusRange(dir, fromRev, toRev string, pathspec ...string) ([]NameStatusEntry, error) {
+	args := []string{"diff", "--name-status", "-M", fromRev + ".." + toRev}
+	if len(pathspec) > 0 {
+		args = append(args, "--")
+		args = append(args, pathspec...)
+	}
+
+	out, err := Run(dir, args...)
+	if err != nil {
+		return nil, fmt.Errorf("diff --name-status %s..%s: %w", fromRev, toRev, err)
+	}
+
+	var result []NameStatusEntry
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		fields := strings.Split(line, "\t")
+		if len(fields) < 2 {
+			continue
+		}
+
+		raw := fields[0]
+		entry := NameStatusEntry{
+			RawStatus: raw,
+			Op:        patch.OpModified,
+		}
+
+		switch {
+		case strings.HasPrefix(raw, "R"):
+			entry.Op = patch.OpRenamed
+			if len(fields) >= 3 {
+				entry.OldPath = fields[1]
+				entry.Path = fields[2]
+			}
+		case raw == "A":
+			entry.Op = patch.OpAdded
+			entry.Path = fields[1]
+		case raw == "D":
+			entry.Op = patch.OpDeleted
+			entry.Path = fields[1]
+		default:
+			entry.Op = patch.OpModified
+			entry.Path = fields[1]
+		}
+
+		if entry.Path == "" {
+			continue
+		}
+		result = append(result, entry)
 	}
 
 	return result, nil

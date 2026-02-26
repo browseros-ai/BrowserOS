@@ -47,14 +47,18 @@ func Status(ctx *config.Context, showFiles bool) (*StatusResult, error) {
 	}
 
 	delta := patch.Compare(localPatchSet, repoPatchSet)
+	actionableDeleted := existingPaths(ctx.ChromiumDir, delta.Deleted)
+	deletedSynced := len(delta.Deleted) - len(actionableDeleted)
 
 	result.Ahead = len(delta.Orphaned)
-	result.Behind = len(delta.NeedsApply) + len(delta.NeedsUpdate)
-	result.Synced = len(delta.UpToDate)
+	result.Behind = len(delta.NeedsApply) + len(delta.NeedsUpdate) + len(actionableDeleted)
+	result.Synced = len(delta.UpToDate) + deletedSynced
 
 	if showFiles {
 		result.AheadFiles = delta.Orphaned
-		result.BehindFiles = append(delta.NeedsApply, delta.NeedsUpdate...)
+		result.BehindFiles = append(result.BehindFiles, delta.NeedsApply...)
+		result.BehindFiles = append(result.BehindFiles, delta.NeedsUpdate...)
+		result.BehindFiles = append(result.BehindFiles, actionableDeleted...)
 		result.SyncedFiles = delta.UpToDate
 	}
 

@@ -60,7 +60,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 		ctx.State.LastPull = &config.SyncEvent{
 			PatchesRepoRev: repoRev,
 			Timestamp:      time.Now(),
-			FileCount:      len(result.Applied) + len(result.Skipped),
+			FileCount:      len(result.Applied) + len(result.Reset) + len(result.Deleted),
 		}
 		_ = config.WriteState(ctx.BrosDir, ctx.State)
 

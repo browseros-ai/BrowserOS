@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"bros/internal/config"
 	"bros/internal/git"
@@ -87,9 +89,10 @@ func diffPull(ctx *config.Context) error {
 	}
 
 	delta := patch.Compare(localPatchSet, repoPatchSet)
+	actionableDeleted := existingPaths(ctx.ChromiumDir, delta.Deleted)
 
-	total := len(delta.NeedsUpdate) + len(delta.NeedsApply)
-	if total == 0 && len(delta.Deleted) == 0 {
+	total := len(delta.NeedsUpdate) + len(delta.NeedsApply) + len(delta.Orphaned)
+	if total == 0 && len(actionableDeleted) == 0 {
 		fmt.Println(ui.MutedStyle.Render("Already up to date."))
 		return nil
 	}
@@ -103,12 +106,25 @@ func diffPull(ctx *config.Context) error {
 	for _, f := range delta.NeedsApply {
 		fmt.Printf("  %s %s %s\n", ui.AddedPrefix, f, ui.MutedStyle.Render("(new)"))
 	}
-	for _, f := range delta.Deleted {
+	for _, f := range delta.Orphaned {
+		fmt.Printf("  %s %s %s\n", ui.ModifiedPrefix, f, ui.MutedStyle.Render("(reset to BASE)"))
+	}
+	for _, f := range actionableDeleted {
 		fmt.Printf("  %s %s %s\n", ui.DeletedPrefix, f, ui.MutedStyle.Render("(delete)"))
 	}
 
 	fmt.Println()
-	fmt.Println(ui.MutedStyle.Render(fmt.Sprintf("%d files would be changed", total+len(delta.Deleted))))
+	fmt.Println(ui.MutedStyle.Render(fmt.Sprintf("%d files would be changed", total+len(actionableDeleted))))
 
 	return nil
+}
+
+func existingPaths(root string, paths []string) []string {
+	var result []string
+	for _, path := range paths {
+		if _, err := os.Stat(filepath.Join(root, path)); err == nil {
+			result = append(result, path)
+		}
+	}
+	return result
 }

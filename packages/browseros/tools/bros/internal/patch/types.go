@@ -62,6 +62,7 @@ func (r *PushResult) Total() int {
 
 type PullResult struct {
 	Applied   []string
+	Reset     []string
 	Skipped   []string
 	Conflicts []ConflictInfo
 	Deleted   []string
