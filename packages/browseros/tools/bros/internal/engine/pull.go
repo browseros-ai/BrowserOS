@@ -54,7 +54,7 @@ func resolveIncrementalPaths(ctx *config.Context, repoHead string, filesFilter [
 		return nil, false, nil
 	}
 
-	if lastPull.BaseCommit != "" && lastPull.BaseCommit != ctx.BaseCommit {
+	if lastPull.BaseCommit != ctx.BaseCommit {
 		return nil, false, nil
 	}
 
