@@ -133,8 +133,9 @@ func runClone(cmd *cobra.Command, args []string) error {
 		repoRev, _ := git.HeadRev(ctx.PatchesRepo)
 		ctx.State.LastPull = &config.SyncEvent{
 			PatchesRepoRev: repoRev,
+			BaseCommit:     ctx.BaseCommit,
 			Timestamp:      time.Now(),
-			FileCount:      len(result.Applied),
+			FileCount:      len(result.Applied) + len(result.Deleted),
 		}
 		_ = config.WriteState(ctx.BrosDir, ctx.State)
 

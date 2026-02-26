@@ -16,6 +16,7 @@ type State struct {
 
 type SyncEvent struct {
 	PatchesRepoRev string    `yaml:"patches_repo_rev"`
+	BaseCommit     string    `yaml:"base_commit,omitempty"`
 	Timestamp      time.Time `yaml:"timestamp"`
 	FileCount      int       `yaml:"file_count"`
 }

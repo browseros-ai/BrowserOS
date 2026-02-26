@@ -59,8 +59,9 @@ func runPull(cmd *cobra.Command, args []string) error {
 		repoRev, _ := git.HeadRev(ctx.PatchesRepo)
 		ctx.State.LastPull = &config.SyncEvent{
 			PatchesRepoRev: repoRev,
+			BaseCommit:     ctx.BaseCommit,
 			Timestamp:      time.Now(),
-			FileCount:      len(result.Applied) + len(result.Skipped),
+			FileCount:      len(result.Applied) + len(result.Deleted) + len(result.Reverted) + len(result.Skipped),
 		}
 		_ = config.WriteState(ctx.BrosDir, ctx.State)
 

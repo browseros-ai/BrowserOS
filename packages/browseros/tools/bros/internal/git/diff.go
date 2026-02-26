@@ -2,6 +2,7 @@ package git
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"bros/internal/patch"
@@ -75,4 +76,51 @@ func DiffFiles(dir, base string, files []string) ([]byte, error) {
 		return nil, fmt.Errorf("diff %s -- [%d files]: %w", base, len(files), err)
 	}
 	return out, nil
+}
+
+// DiffChangedPathsBetween returns changed paths between two revisions.
+// It includes old and new paths for rename/copy records.
+func DiffChangedPathsBetween(dir, fromRev, toRev string, pathspec ...string) ([]string, error) {
+	args := []string{
+		"diff",
+		"--name-status",
+		"--find-renames",
+		fmt.Sprintf("%s..%s", fromRev, toRev),
+	}
+	if len(pathspec) > 0 {
+		args = append(args, "--")
+		args = append(args, pathspec...)
+	}
+
+	out, err := Run(dir, args...)
+	if err != nil {
+		return nil, fmt.Errorf("diff --name-status %s..%s: %w", fromRev, toRev, err)
+	}
+
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		fields := strings.Split(line, "\t")
+		if len(fields) < 2 {
+			continue
+		}
+
+		for _, p := range fields[1:] {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				seen[p] = true
+			}
+		}
+	}
+
+	paths := make([]string, 0, len(seen))
+	for p := range seen {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths, nil
 }

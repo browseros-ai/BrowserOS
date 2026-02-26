@@ -22,6 +22,9 @@ func RenderPullResult(r *patch.PullResult) string {
 	for _, f := range r.Deleted {
 		b.WriteString(fmt.Sprintf("  %s %s\n", DeletedPrefix, f))
 	}
+	for _, f := range r.Reverted {
+		b.WriteString(fmt.Sprintf("  %s %s %s\n", ModifiedPrefix, f, MutedStyle.Render("(reverted to base)")))
+	}
 	if len(r.Skipped) > 0 {
 		b.WriteString(fmt.Sprintf("  %s %s\n", SkippedPrefix,
 			MutedStyle.Render(fmt.Sprintf("%d files skipped (already up to date)", len(r.Skipped)))))
@@ -29,11 +32,11 @@ func RenderPullResult(r *patch.PullResult) string {
 
 	b.WriteString("\n")
 
-	total := len(r.Applied) + len(r.Conflicts) + len(r.Skipped)
-	summary := fmt.Sprintf("Pulled %d patches", total)
+	total := len(r.Applied) + len(r.Deleted) + len(r.Reverted) + len(r.Conflicts) + len(r.Skipped)
+	summary := fmt.Sprintf("Pulled %d patch paths", total)
 	b.WriteString(SuccessStyle.Render(summary))
-	b.WriteString(MutedStyle.Render(fmt.Sprintf(" (%d applied, %d conflicts, %d skipped)",
-		len(r.Applied), len(r.Conflicts), len(r.Skipped))))
+	b.WriteString(MutedStyle.Render(fmt.Sprintf(" (%d applied, %d deleted, %d reverted, %d conflicts, %d skipped)",
+		len(r.Applied), len(r.Deleted), len(r.Reverted), len(r.Conflicts), len(r.Skipped))))
 	b.WriteString("\n")
 
 	return b.String()
