@@ -88,38 +88,39 @@ copy_operations:
     destination: "chrome/app/theme/default_200_percent/chromium"
     type: "directory"
 
-  # BrowserOS Server Binary - Platform & Architecture specific
-  - name: "BrowserOS Server Binary - macOS ARM64"
-    source: "resources/binaries/browseros_server/browseros-server-darwin-arm64"
-    destination: "chrome/browser/browseros/server/resources/bin/browseros_server"
-    type: "file"
+  # BrowserOS Server Resources - Platform & Architecture specific
+  # Copies extracted server zip contents (bin/bun, index.js, index.js.map)
+  - name: "BrowserOS Server Resources - macOS ARM64"
+    source: "resources/server/darwin-arm64/resources"
+    destination: "chrome/browser/browseros/server/resources"
+    type: "directory"
     os: ["macos"]
     arch: ["arm64"]
 
-  - name: "BrowserOS Server Binary - macOS x64"
-    source: "resources/binaries/browseros_server/browseros-server-darwin-x64"
-    destination: "chrome/browser/browseros/server/resources/bin/browseros_server"
-    type: "file"
+  - name: "BrowserOS Server Resources - macOS x64"
+    source: "resources/server/darwin-x64/resources"
+    destination: "chrome/browser/browseros/server/resources"
+    type: "directory"
     os: ["macos"]
     arch: ["x64"]
 
-  - name: "BrowserOS Server Binary - Linux ARM64"
-    source: "resources/binaries/browseros_server/browseros-server-linux-arm64"
-    destination: "chrome/browser/browseros/server/resources/bin/browseros_server"
-    type: "file"
+  - name: "BrowserOS Server Resources - Linux ARM64"
+    source: "resources/server/linux-arm64/resources"
+    destination: "chrome/browser/browseros/server/resources"
+    type: "directory"
     os: ["linux"]
     arch: ["arm64"]
 
-  - name: "BrowserOS Server Binary - Linux x64"
-    source: "resources/binaries/browseros_server/browseros-server-linux-x64"
-    destination: "chrome/browser/browseros/server/resources/bin/browseros_server"
-    type: "file"
+  - name: "BrowserOS Server Resources - Linux x64"
+    source: "resources/server/linux-x64/resources"
+    destination: "chrome/browser/browseros/server/resources"
+    type: "directory"
     os: ["linux"]
     arch: ["x64"]
 
-  - name: "BrowserOS Server Binary - Windows x64"
-    source: "resources/binaries/browseros_server/browseros-server-windows-x64.exe"
-    destination: "chrome/browser/browseros/server/resources/bin/browseros_server.exe"
-    type: "file"
+  - name: "BrowserOS Server Resources - Windows x64"
+    source: "resources/server/windows-x64/resources"
+    destination: "chrome/browser/browseros/server/resources"
+    type: "directory"
     os: ["windows"]
     arch: ["x64"]

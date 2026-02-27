@@ -17,48 +17,64 @@
 # - Use 'executable' field to mark files that need executable permissions
 #   - Set to true for binaries (permissions are not preserved during download)
 #
+# Archive Support:
+# - Use 'archive: "zip"' to download and extract a zip archive
+#   - 'destination' becomes the extraction directory (cleared before extraction)
+#   - Use 'executable_paths' to set executable permissions on extracted files
+# - Use '{server_version}' in r2_key to substitute the version from
+#   resources/BROWSEROS_SERVER_VERSION
+#
 # R2 Path Structure:
-#   binaries/browseros-server/{filename}
+#   server/v{version}/browseros-server-{platform}.zip
 #
 # Example:
-#   - name: "My Binary - macOS ARM64"
-#     r2_key: "binaries/my-binary/my-binary-darwin-arm64"
-#     destination: "resources/binaries/my_binary/my-binary-darwin-arm64"
+#   - name: "My Archive - macOS ARM64"
+#     r2_key: "server/v{server_version}/my-archive-darwin-arm64.zip"
+#     destination: "resources/server/darwin-arm64"
+#     archive: "zip"
+#     executable_paths: ["resources/bin/my_binary"]
 #     os: ["macos"]
 #     arch: ["arm64"]
 
 download_operations:
-  # BrowserOS Server Binary - Platform & Architecture specific
+  # BrowserOS Server Resources - Platform & Architecture specific
+  # Downloads zip archives containing: resources/bin/bun, resources/index.js, resources/index.js.map
   - name: "BrowserOS Server - macOS ARM64"
-    r2_key: "binaries/browseros-server/browseros-server-darwin-arm64"
-    destination: "resources/binaries/browseros_server/browseros-server-darwin-arm64"
+    r2_key: "server/v{server_version}/browseros-server-darwin-arm64.zip"
+    destination: "resources/server/darwin-arm64"
+    archive: "zip"
+    executable_paths: ["resources/bin/bun"]
     os: ["macos"]
     arch: ["arm64"]
-    executable: true
 
   - name: "BrowserOS Server - macOS x64"
-    r2_key: "binaries/browseros-server/browseros-server-darwin-x64"
-    destination: "resources/binaries/browseros_server/browseros-server-darwin-x64"
+    r2_key: "server/v{server_version}/browseros-server-darwin-x64.zip"
+    destination: "resources/server/darwin-x64"
+    archive: "zip"
+    executable_paths: ["resources/bin/bun"]
     os: ["macos"]
     arch: ["x64"]
-    executable: true
 
   - name: "BrowserOS Server - Linux ARM64"
-    r2_key: "binaries/browseros-server/browseros-server-linux-arm64"
-    destination: "resources/binaries/browseros_server/browseros-server-linux-arm64"
+    r2_key: "server/v{server_version}/browseros-server-linux-arm64.zip"
+    destination: "resources/server/linux-arm64"
+    archive: "zip"
+    executable_paths: ["resources/bin/bun"]
     os: ["linux"]
     arch: ["arm64"]
-    executable: true
 
   - name: "BrowserOS Server - Linux x64"
-    r2_key: "binaries/browseros-server/browseros-server-linux-x64"
-    destination: "resources/binaries/browseros_server/browseros-server-linux-x64"
+    r2_key: "server/v{server_version}/browseros-server-linux-x64.zip"
+    destination: "resources/server/linux-x64"
+    archive: "zip"
+    executable_paths: ["resources/bin/bun"]
     os: ["linux"]
     arch: ["x64"]
-    executable: true
 
   - name: "BrowserOS Server - Windows x64"
-    r2_key: "binaries/browseros-server/browseros-server-windows-x64.exe"
-    destination: "resources/binaries/browseros_server/browseros-server-windows-x64.exe"
+    r2_key: "server/v{server_version}/browseros-server-windows-x64.zip"
+    destination: "resources/server/windows-x64"
+    archive: "zip"
+    executable_paths: ["resources/bin/bun.exe"]
     os: ["windows"]
     arch: ["x64"]

@@ -20,7 +20,8 @@ index 0000000000000..d7dc82b132dad
 +# Required resources that must exist in the resources/ directory
 +# Add more resources as needed - paths are relative to resources/
 +REQUIRED_RESOURCES = [
-+    "bin/browseros_server",
++    "bin/bun",
++    "index.js",
 +]
 +
 +script_dir = os.path.dirname(os.path.abspath(__file__))

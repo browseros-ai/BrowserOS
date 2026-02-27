@@ -24,3 +24,4 @@ gclient.json
 .env
 .grove/
 **/resources/binaries/
+**/resources/server/

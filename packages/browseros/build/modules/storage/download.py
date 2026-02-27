@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Download module for fetching build resources from Cloudflare R2"""
 
+import shutil
 import yaml
+import zipfile
 from pathlib import Path
 from typing import List
 
@@ -84,27 +86,83 @@ class DownloadResourcesModule(CommandModule):
 
         for op in filtered_ops:
             name = op.get("name", "Unnamed")
-            r2_key = op["r2_key"]
+            r2_key = self._resolve_r2_key(op["r2_key"], context)
             destination = op["destination"]
+            archive = op.get("archive")
             dest_path = context.root_dir / destination
 
             log_info(f"  {name}")
 
-            # Clear existing file (always re-download)
-            if dest_path.exists():
-                dest_path.unlink()
-                log_info(f"    Cleared existing: {dest_path.name}")
+            if archive == "zip":
+                self._download_and_extract_zip(
+                    client, r2_key, dest_path, bucket, op
+                )
+            else:
+                # Clear existing file (always re-download)
+                if dest_path.exists():
+                    dest_path.unlink()
+                    log_info(f"    Cleared existing: {dest_path.name}")
 
-            # Download from R2
-            if not download_file_from_r2(client, r2_key, dest_path, bucket):
-                raise RuntimeError(f"Failed to download: {name}")
+                if not download_file_from_r2(client, r2_key, dest_path, bucket):
+                    raise RuntimeError(f"Failed to download: {name}")
 
-            # Set executable permissions if specified
-            if op.get("executable", False):
-                dest_path.chmod(dest_path.stat().st_mode | 0o755)
-                log_info(f"    Set executable permissions")
+                if op.get("executable", False):
+                    dest_path.chmod(dest_path.stat().st_mode | 0o755)
+                    log_info(f"    Set executable permissions")
 
         log_success(f"Downloaded {len(filtered_ops)} resource(s) from R2")
+
+    def _resolve_r2_key(self, r2_key: str, context: Context) -> str:
+        """Substitute {version} placeholders using version_file references."""
+        if "{server_version}" not in r2_key:
+            return r2_key
+
+        version_path = context.root_dir / "resources" / "BROWSEROS_SERVER_VERSION"
+        if not version_path.exists():
+            raise RuntimeError(
+                f"Server version file not found: {version_path}"
+            )
+
+        version = version_path.read_text().strip()
+        return r2_key.replace("{server_version}", version)
+
+    def _download_and_extract_zip(
+        self,
+        client,
+        r2_key: str,
+        extract_dir: Path,
+        bucket: str,
+        op: dict,
+    ) -> None:
+        """Download a zip archive from R2 and extract it."""
+        # Clear existing extraction directory
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir)
+            log_info(f"    Cleared existing: {extract_dir.name}")
+
+        extract_dir.mkdir(parents=True, exist_ok=True)
+
+        # Download to a temporary zip file
+        tmp_zip = extract_dir / "_download.zip"
+        if not download_file_from_r2(client, r2_key, tmp_zip, bucket):
+            raise RuntimeError(f"Failed to download: {op.get('name', r2_key)}")
+
+        # Extract
+        log_info(f"    Extracting archive...")
+        with zipfile.ZipFile(tmp_zip, "r") as zf:
+            zf.extractall(extract_dir)
+
+        tmp_zip.unlink()
+
+        # Set executable permissions on specified paths
+        executable_paths = op.get("executable_paths", [])
+        for rel_path in executable_paths:
+            exe_path = extract_dir / rel_path
+            if exe_path.exists():
+                exe_path.chmod(exe_path.stat().st_mode | 0o755)
+                log_info(f"    Set executable: {rel_path}")
+
+        log_info(f"    Extracted to: {extract_dir}")
 
     def _filter_operations(
         self,
