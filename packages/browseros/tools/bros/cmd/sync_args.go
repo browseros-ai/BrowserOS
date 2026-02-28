@@ -34,3 +34,11 @@ func resolveRemoteAndFiles(repoDir string, args []string, explicitRemote string)
 
 	return "", args, nil
 }
+
+func shortRev(rev string) string {
+	rev = strings.TrimSpace(rev)
+	if len(rev) <= 12 {
+		return rev
+	}
+	return rev[:12]
+}

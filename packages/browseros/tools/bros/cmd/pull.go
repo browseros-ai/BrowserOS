@@ -82,7 +82,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 
 		afterRev, _ := git.HeadRev(ctx.PatchesRepo)
 		if beforeRev != "" && afterRev != "" && beforeRev != afterRev {
-			activity.Success("patches repo advanced %s -> %s", beforeRev[:12], afterRev[:12])
+			activity.Success("patches repo advanced %s -> %s", shortRev(beforeRev), shortRev(afterRev))
 		} else {
 			activity.Info("patches repo already up to date")
 		}

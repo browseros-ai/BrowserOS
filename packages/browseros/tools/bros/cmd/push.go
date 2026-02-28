@@ -137,7 +137,7 @@ func syncPatchesRepo(activity *ui.Activity, patchesRepo, remote string, rebase b
 
 	afterRev, _ := git.HeadRev(patchesRepo)
 	if beforeRev != "" && afterRev != "" && beforeRev != afterRev {
-		activity.Success("patches repo advanced %s -> %s", beforeRev[:12], afterRev[:12])
+		activity.Success("patches repo advanced %s -> %s", shortRev(beforeRev), shortRev(afterRev))
 	} else {
 		activity.Info("patches repo already up to date")
 	}
