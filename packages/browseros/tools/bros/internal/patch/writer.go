@@ -32,15 +32,27 @@ func writeSinglePatch(patchesDir string, fp *FilePatch, dryRun bool) error {
 
 	switch fp.Op {
 	case OpDeleted:
+		if err := cleanupArtifacts(patchesDir, fp.Path, fp.Path+".deleted"); err != nil {
+			return err
+		}
 		return writeDeletedMarker(patchesDir, fp)
 	case OpBinary:
+		if err := cleanupArtifacts(patchesDir, fp.Path, fp.Path+".binary"); err != nil {
+			return err
+		}
 		return writeBinaryMarker(patchesDir, fp)
 	case OpRenamed:
+		if err := cleanupArtifacts(patchesDir, fp.Path, fp.Path, fp.Path+".rename"); err != nil {
+			return err
+		}
 		if err := writePatchFile(patchesDir, fp); err != nil {
 			return err
 		}
 		return writeRenameMarker(patchesDir, fp)
 	default:
+		if err := cleanupArtifacts(patchesDir, fp.Path, fp.Path); err != nil {
+			return err
+		}
 		return writePatchFile(patchesDir, fp)
 	}
 }
@@ -78,4 +90,30 @@ func writeRenameMarker(patchesDir string, fp *FilePatch) error {
 	}
 	content := fmt.Sprintf("rename_from: %s\nsimilarity: %d\n", fp.OldPath, fp.Similarity)
 	return os.WriteFile(dest, []byte(content), 0o644)
+}
+
+func cleanupArtifacts(patchesDir, path string, keep ...string) error {
+	keepSet := make(map[string]bool, len(keep))
+	for _, k := range keep {
+		keepSet[k] = true
+	}
+
+	candidates := []string{
+		path,
+		path + ".deleted",
+		path + ".binary",
+		path + ".rename",
+	}
+
+	for _, rel := range candidates {
+		if keepSet[rel] {
+			continue
+		}
+		full := filepath.Join(patchesDir, rel)
+		if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing stale artifact %s: %w", rel, err)
+		}
+	}
+
+	return nil
 }

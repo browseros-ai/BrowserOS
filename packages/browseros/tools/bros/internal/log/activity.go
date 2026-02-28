@@ -72,6 +72,9 @@ func (l *Logger) LogPull(base, repoRev string, result *patch.PullResult) error {
 	for _, f := range result.Reverted {
 		b.WriteString(fmt.Sprintf("  R %s (reverted to base)\n", f))
 	}
+	for _, f := range result.LocalOnly {
+		b.WriteString(fmt.Sprintf("  ~ %s (local-only, kept)\n", f))
+	}
 	for _, c := range result.Conflicts {
 		b.WriteString(fmt.Sprintf("  x %s -> %s (hunk %d/%d failed)\n",
 			c.File, c.RejectFile, c.HunksFailed, c.HunksTotal))
@@ -80,8 +83,8 @@ func (l *Logger) LogPull(base, repoRev string, result *patch.PullResult) error {
 		b.WriteString(fmt.Sprintf("  ~ %d files skipped (already up to date)\n", len(result.Skipped)))
 	}
 
-	b.WriteString(fmt.Sprintf("Summary: %d applied, %d deleted, %d reverted, %d conflicts, %d skipped\n\n",
-		len(result.Applied), len(result.Deleted), len(result.Reverted), len(result.Conflicts), len(result.Skipped)))
+	b.WriteString(fmt.Sprintf("Summary: %d applied, %d deleted, %d reverted, %d local-only, %d conflicts, %d skipped\n\n",
+		len(result.Applied), len(result.Deleted), len(result.Reverted), len(result.LocalOnly), len(result.Conflicts), len(result.Skipped)))
 
 	return l.append(b.String())
 }

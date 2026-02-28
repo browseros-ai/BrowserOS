@@ -21,17 +21,17 @@ var rejFailRe = regexp.MustCompile(`(\d+) out of (\d+) hunks? FAILED`)
 // only as a last resort. Mirrors the Python CLI fallback chain.
 func Apply(dir string, patchContent []byte, patchFile string) (*patch.ConflictInfo, error) {
 	// Strategy 1: Clean apply
-	if tryApply(dir, patchContent, "-p1") == nil {
+	if tryApply(dir, patchContent, "--ignore-whitespace", "--whitespace=nowarn", "-p1") == nil {
 		return nil, nil
 	}
 
 	// Strategy 2: Three-way merge
-	if tryApply(dir, patchContent, "-p1", "--3way") == nil {
+	if tryApply(dir, patchContent, "--ignore-whitespace", "--whitespace=nowarn", "-p1", "--3way") == nil {
 		return nil, nil
 	}
 
 	// Strategy 3: Whitespace fix
-	if tryApply(dir, patchContent, "-p1", "--whitespace=fix") == nil {
+	if tryApply(dir, patchContent, "--ignore-whitespace", "--whitespace=fix", "-p1") == nil {
 		return nil, nil
 	}
 

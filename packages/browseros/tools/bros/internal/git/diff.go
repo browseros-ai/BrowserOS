@@ -1,9 +1,13 @@
 package git
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	"bros/internal/patch"
 )
@@ -76,6 +80,55 @@ func DiffFiles(dir, base string, files []string) ([]byte, error) {
 		return nil, fmt.Errorf("diff %s -- [%d files]: %w", base, len(files), err)
 	}
 	return out, nil
+}
+
+// DiffNoIndexFile builds a patch for an untracked file as if it were added from /dev/null.
+// git diff --no-index exits with status 1 when files differ; treat that as success.
+func DiffNoIndexFile(dir, file string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "diff", "--no-index", "--full-index", "/dev/null", file)
+	cmd.Dir = dir
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err == nil {
+		return stdout.Bytes(), nil
+	}
+
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+		return stdout.Bytes(), nil
+	}
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return nil, fmt.Errorf("diff --no-index %s: timed out", file)
+	}
+	return nil, fmt.Errorf("diff --no-index %s: %w\n%s", file, err, stderr.String())
+}
+
+// UntrackedFiles returns all untracked files (exclude-standard) in the repo.
+func UntrackedFiles(dir string) ([]string, error) {
+	out, err := Run(dir, "ls-files", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, fmt.Errorf("ls-files --others: %w", err)
+	}
+	if strings.TrimSpace(out) == "" {
+		return nil, nil
+	}
+
+	var files []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	sort.Strings(files)
+	return files, nil
 }
 
 // DiffChangedPathsBetween returns changed paths between two revisions.

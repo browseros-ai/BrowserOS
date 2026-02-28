@@ -50,7 +50,11 @@ func ReadPatchSet(patchesDir string) (*PatchSet, error) {
 
 			fp := classifyPatchFile(rel, content)
 			mu.Lock()
-			ps.Patches[fp.Path] = fp
+			if existing, ok := ps.Patches[fp.Path]; ok {
+				ps.Patches[fp.Path] = mergePatchEntry(existing, fp)
+			} else {
+				ps.Patches[fp.Path] = fp
+			}
 			mu.Unlock()
 			return nil
 		})
@@ -128,4 +132,28 @@ func classifyPatchFile(rel string, content []byte) *FilePatch {
 	}
 
 	return fp
+}
+
+func mergePatchEntry(existing, incoming *FilePatch) *FilePatch {
+	switch incoming.Op {
+	case OpDeleted, OpBinary:
+		return incoming
+	case OpRenamed:
+		merged := *incoming
+		if len(existing.Content) > 0 {
+			merged.Content = existing.Content
+		}
+		return &merged
+	}
+
+	switch existing.Op {
+	case OpDeleted, OpBinary:
+		return existing
+	case OpRenamed:
+		merged := *existing
+		merged.Content = incoming.Content
+		return &merged
+	default:
+		return incoming
+	}
 }

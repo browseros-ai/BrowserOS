@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"sort"
 
 	"bros/internal/config"
 	"bros/internal/git"
@@ -20,6 +21,18 @@ func Push(ctx *config.Context, opts PushOpts) (*patch.PushResult, error) {
 	nameStatus, err := git.DiffNameStatus(ctx.ChromiumDir, ctx.BaseCommit)
 	if err != nil {
 		return nil, fmt.Errorf("push: discovering changes: %w", err)
+	}
+
+	untracked, err := git.UntrackedFiles(ctx.ChromiumDir)
+	if err != nil {
+		return nil, fmt.Errorf("push: discovering untracked files: %w", err)
+	}
+	untrackedSet := make(map[string]bool, len(untracked))
+	for _, path := range untracked {
+		untrackedSet[path] = true
+		if _, exists := nameStatus[path]; !exists {
+			nameStatus[path] = patch.OpAdded
+		}
 	}
 
 	if len(nameStatus) == 0 {
@@ -47,10 +60,27 @@ func Push(ctx *config.Context, opts PushOpts) (*patch.PushResult, error) {
 	for f := range nameStatus {
 		files = append(files, f)
 	}
+	sort.Strings(files)
 
 	diffOutput, err = git.DiffFiles(ctx.ChromiumDir, ctx.BaseCommit, files)
 	if err != nil {
 		return nil, fmt.Errorf("push: generating diffs: %w", err)
+	}
+	for _, file := range files {
+		if !untrackedSet[file] {
+			continue
+		}
+		noIndexDiff, err := git.DiffNoIndexFile(ctx.ChromiumDir, file)
+		if err != nil {
+			return nil, fmt.Errorf("push: generating no-index diff for %s: %w", file, err)
+		}
+		if len(noIndexDiff) == 0 {
+			continue
+		}
+		if len(diffOutput) > 0 && diffOutput[len(diffOutput)-1] != '\n' {
+			diffOutput = append(diffOutput, '\n')
+		}
+		diffOutput = append(diffOutput, noIndexDiff...)
 	}
 
 	patchSet, err := patch.ParseUnifiedDiff(diffOutput)
@@ -94,6 +124,10 @@ func Push(ctx *config.Context, opts PushOpts) (*patch.PushResult, error) {
 		}
 	}
 
+	sort.Strings(result.Modified)
+	sort.Strings(result.Added)
+	sort.Strings(result.Deleted)
+
 	// Phase 3: Write patches
 	if err := patch.WritePatchSet(ctx.PatchesDir, patchSet, opts.DryRun); err != nil {
 		return nil, fmt.Errorf("push: writing patches: %w", err)
@@ -106,6 +140,7 @@ func Push(ctx *config.Context, opts PushOpts) (*patch.PushResult, error) {
 			return nil, fmt.Errorf("push: stale cleanup: %w", err)
 		}
 		result.Stale = stale
+		sort.Strings(result.Stale)
 	}
 
 	return result, nil

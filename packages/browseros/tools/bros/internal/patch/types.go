@@ -64,6 +64,7 @@ type PullResult struct {
 	Applied   []string
 	Skipped   []string
 	Reverted  []string
+	LocalOnly []string
 	Conflicts []ConflictInfo
 	Deleted   []string
 }

@@ -13,8 +13,9 @@ import (
 )
 
 type PullOpts struct {
-	DryRun bool
-	Files  []string
+	DryRun        bool
+	Files         []string
+	KeepLocalOnly bool
 }
 
 func Pull(ctx *config.Context, opts PullOpts) (*patch.PullResult, error) {
@@ -34,10 +35,20 @@ func Pull(ctx *config.Context, opts PullOpts) (*patch.PullResult, error) {
 	}
 
 	if shouldUseIncremental {
-		return incrementalPull(ctx, repoPatchSet, incrementalPaths, opts.DryRun)
+		result, err := incrementalPull(ctx, repoPatchSet, incrementalPaths, opts.DryRun)
+		if err != nil {
+			return nil, err
+		}
+		sortPullResult(result)
+		return result, nil
 	}
 
-	return fullPull(ctx, repoPatchSet, opts)
+	result, err := fullPull(ctx, repoPatchSet, opts)
+	if err != nil {
+		return nil, err
+	}
+	sortPullResult(result)
+	return result, nil
 }
 
 func resolveIncrementalPaths(ctx *config.Context, repoHead string, filesFilter []string) ([]string, bool, error) {
@@ -179,19 +190,29 @@ func fullPull(ctx *config.Context, repoPatchSet *patch.PatchSet, opts PullOpts) 
 		result.Applied = append(delta.NeedsUpdate, delta.NeedsApply...)
 		result.Skipped = delta.UpToDate
 		result.Deleted = delta.Deleted
-		result.Reverted = delta.Orphaned
+		if opts.KeepLocalOnly {
+			result.LocalOnly = delta.Orphaned
+		} else {
+			result.Reverted = delta.Orphaned
+		}
 		return result, nil
 	}
 
 	filesToReset := make([]string, 0, len(delta.NeedsUpdate)+len(delta.Orphaned))
 	filesToReset = append(filesToReset, delta.NeedsUpdate...)
-	filesToReset = append(filesToReset, delta.Orphaned...)
+	if !opts.KeepLocalOnly {
+		filesToReset = append(filesToReset, delta.Orphaned...)
+	}
 	for _, path := range filesToReset {
 		if err := resetPathToBase(ctx, path); err != nil {
 			return nil, fmt.Errorf("pull: resetting %s to base: %w", path, err)
 		}
 	}
-	result.Reverted = append(result.Reverted, delta.Orphaned...)
+	if opts.KeepLocalOnly {
+		result.LocalOnly = append(result.LocalOnly, delta.Orphaned...)
+	} else {
+		result.Reverted = append(result.Reverted, delta.Orphaned...)
+	}
 
 	filesToApply := make([]string, 0, len(delta.NeedsUpdate)+len(delta.NeedsApply))
 	filesToApply = append(filesToApply, delta.NeedsUpdate...)
@@ -310,4 +331,15 @@ func filterDelta(d *patch.Delta, files []string) *patch.Delta {
 		}
 	}
 	return filtered
+}
+
+func sortPullResult(result *patch.PullResult) {
+	sort.Strings(result.Applied)
+	sort.Strings(result.Skipped)
+	sort.Strings(result.Reverted)
+	sort.Strings(result.LocalOnly)
+	sort.Strings(result.Deleted)
+	sort.Slice(result.Conflicts, func(i, j int) bool {
+		return result.Conflicts[i].File < result.Conflicts[j].File
+	})
 }
