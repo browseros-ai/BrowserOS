@@ -118,6 +118,8 @@ def copy_browser_files(
         "libGLESv2.so",
         "libvk_swiftshader.so",
         "libvulkan.so.1",
+        "libqt5_shim.so",
+        "libqt6_shim.so",
         "vk_swiftshader_icd.json",
         "icudtl.dat",
         "snapshot_blob.bin",
@@ -381,6 +383,8 @@ Section: web
 Priority: optional
 Architecture: {deb_arch}
 Depends: libc6 (>= 2.31), libglib2.0-0, libnss3, libnspr4, libx11-6, libatk1.0-0, libatk-bridge2.0-0, libcups2, libasound2, libdrm2, libgbm1, libpango-1.0-0, libcairo2, libudev1, libxcomposite1, libxdamage1, libxrandr2, libxkbcommon0, libgtk-3-0
+Provides: www-browser, gnome-www-browser
+Recommends: apparmor
 Maintainer: BrowserOS Team <support@browseros.com>
 Homepage: https://www.browseros.com/
 Description: BrowserOS - The open source agentic browser
@@ -394,11 +398,7 @@ Description: BrowserOS - The open source agentic browser
 
 
 def create_postinst_script(debian_dir: Path) -> None:
-    """Create DEBIAN/postinst script to set SUID on chrome_sandbox.
-
-    Debian policy prohibits setting SUID in package files directly,
-    so we set it in postinst after installation.
-    """
+    """Create DEBIAN/postinst script for sandbox, AppArmor, and alternatives."""
     postinst_content = """#!/bin/sh
 # Post-installation script for BrowserOS
 set -e
@@ -407,6 +407,15 @@ set -e
 if [ -f /usr/lib/browseros/chrome_sandbox ]; then
     chmod 4755 /usr/lib/browseros/chrome_sandbox
 fi
+
+# Load AppArmor profile (required for Ubuntu 23.10+ user namespace restrictions)
+if [ -d /etc/apparmor.d ] && command -v apparmor_parser >/dev/null 2>&1; then
+    apparmor_parser -r -T -W /etc/apparmor.d/browseros 2>/dev/null || true
+fi
+
+# Register as a selectable default browser
+update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/browseros 40
+update-alternatives --install /usr/bin/gnome-www-browser gnome-www-browser /usr/bin/browseros 40
 
 exit 0
 """
@@ -417,6 +426,62 @@ exit 0
     log_info("  ✓ Created DEBIAN/postinst")
 
 
+def create_prerm_script(debian_dir: Path) -> None:
+    """Create DEBIAN/prerm script to clean up on removal."""
+    prerm_content = """#!/bin/sh
+# Pre-removal script for BrowserOS
+set -e
+
+# Unregister as default browser
+if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
+    update-alternatives --remove x-www-browser /usr/bin/browseros 2>/dev/null || true
+    update-alternatives --remove gnome-www-browser /usr/bin/browseros 2>/dev/null || true
+fi
+
+# Unload AppArmor profile before files are removed
+if command -v apparmor_parser >/dev/null 2>&1 && [ -f /etc/apparmor.d/browseros ]; then
+    apparmor_parser -R /etc/apparmor.d/browseros 2>/dev/null || true
+fi
+
+exit 0
+"""
+
+    prerm_path = Path(join_paths(debian_dir, "prerm"))
+    prerm_path.write_text(prerm_content)
+    prerm_path.chmod(0o755)
+    log_info("  ✓ Created DEBIAN/prerm")
+
+
+def create_apparmor_profile(ctx: Context, apparmor_dir: Path) -> None:
+    """Create AppArmor profile that permits unprivileged user namespaces.
+
+    Ubuntu 23.10+ restricts unprivileged user namespaces via AppArmor.
+    Without this profile, the Chromium sandbox cannot create namespaces
+    and the browser fatally crashes on launch (see GitHub issue #165).
+    """
+    apparmor_dir.mkdir(parents=True, exist_ok=True)
+
+    profile_content = f"""# AppArmor profile for BrowserOS
+# This profile allows everything and only exists to give the application
+# a name instead of having the label "unconfined", and to grant permission
+# to create unprivileged user namespaces (required for Chromium sandbox on
+# Ubuntu 23.10+ and other distros that restrict userns via AppArmor).
+
+abi <abi/4.0>,
+include <tunables/global>
+
+profile browseros /usr/lib/browseros/{ctx.BROWSEROS_APP_NAME} flags=(unconfined) {{
+  userns,
+
+  include if exists <local/browseros>
+}}
+"""
+
+    profile_path = Path(join_paths(apparmor_dir, "browseros"))
+    profile_path.write_text(profile_content)
+    log_info("  ✓ Created AppArmor profile")
+
+
 def prepare_debdir(ctx: Context, debdir: Path) -> bool:
     """Prepare directory structure for .deb package.
 
@@ -424,7 +489,11 @@ def prepare_debdir(ctx: Context, debdir: Path) -> bool:
     debdir/
     ├── DEBIAN/
     │   ├── control
-    │   └── postinst
+    │   ├── postinst
+    │   └── prerm
+    ├── etc/
+    │   └── apparmor.d/
+    │       └── browseros
     ├── usr/
     │   ├── bin/
     │   │   └── browseros (launcher script)
@@ -442,6 +511,7 @@ def prepare_debdir(ctx: Context, debdir: Path) -> bool:
     apps_dir = join_paths(share_dir, "applications")
     icons_dir = join_paths(share_dir, "icons", "hicolor")
     debian_dir = join_paths(debdir, "DEBIAN")
+    apparmor_dir = join_paths(debdir, "etc", "apparmor.d")
 
     # Copy browser files (without SUID, will be set in postinst)
     if not copy_browser_files(ctx, lib_dir, set_sandbox_suid=False):
@@ -456,9 +526,13 @@ def prepare_debdir(ctx: Context, debdir: Path) -> bool:
     # Copy icon
     copy_icon(ctx, icons_dir)
 
+    # Install AppArmor profile (fixes crash on Ubuntu 23.10+)
+    create_apparmor_profile(ctx, apparmor_dir)
+
     # Create DEBIAN metadata files
     create_control_file(ctx, debian_dir)
     create_postinst_script(debian_dir)
+    create_prerm_script(debian_dir)
 
     log_success("✓ .deb directory prepared")
     return True
