@@ -123,3 +123,45 @@ copy_operations:
     type: "file"
     os: ["windows"]
     arch: ["x64"]
+
+  # Bun Runtime - Platform & Architecture specific
+  - name: "Bun Runtime - macOS ARM64"
+    source: "resources/binaries/bun/bun-darwin-arm64"
+    destination: "chrome/browser/browseros/server/resources/bin/bun"
+    type: "file"
+    os: ["macos"]
+    arch: ["arm64"]
+
+  - name: "Bun Runtime - macOS x64"
+    source: "resources/binaries/bun/bun-darwin-x64"
+    destination: "chrome/browser/browseros/server/resources/bin/bun"
+    type: "file"
+    os: ["macos"]
+    arch: ["x64"]
+
+  - name: "Bun Runtime - Linux ARM64"
+    source: "resources/binaries/bun/bun-linux-arm64"
+    destination: "chrome/browser/browseros/server/resources/bin/bun"
+    type: "file"
+    os: ["linux"]
+    arch: ["arm64"]
+
+  - name: "Bun Runtime - Linux x64"
+    source: "resources/binaries/bun/bun-linux-x64"
+    destination: "chrome/browser/browseros/server/resources/bin/bun"
+    type: "file"
+    os: ["linux"]
+    arch: ["x64"]
+
+  - name: "Bun Runtime - Windows x64"
+    source: "resources/binaries/bun/bun-windows-x64.exe"
+    destination: "chrome/browser/browseros/server/resources/bin/bun.exe"
+    type: "file"
+    os: ["windows"]
+    arch: ["x64"]
+
+  # BrowserOS Server Bundle (platform-independent)
+  - name: "BrowserOS Server Bundle"
+    source: "resources/binaries/browseros_server/index.js"
+    destination: "chrome/browser/browseros/server/resources/index.js"
+    type: "file"
