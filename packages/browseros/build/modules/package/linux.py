@@ -246,8 +246,7 @@ def prepare_appdir(ctx: Context, appdir: Path) -> bool:
         apps_dir, f"/opt/browseros/{ctx.BROWSEROS_APP_NAME}"
     )
 
-    # Copy icon
-    icon_src = Path(join_paths(ctx.root_dir, "resources", "icons", "product_logo.png"))
+    # Copy icons (multiple sizes)
     copy_icon(ctx, icons_dir)
 
     # AppImage-specific: Copy desktop file to root and update Exec line
@@ -259,7 +258,10 @@ def prepare_appdir(ctx: Context, appdir: Path) -> bool:
     )
     appdir_desktop.write_text(desktop_content)
 
-    # AppImage-specific: Copy icon to root
+    # AppImage-specific: Copy icon to root (256px for best quality)
+    icon_src = Path(join_paths(ctx.root_dir, "resources", "icons", "product_logo_256.png"))
+    if not icon_src.exists():
+        icon_src = Path(join_paths(ctx.root_dir, "resources", "icons", "product_logo.png"))
     if icon_src.exists():
         appdir_icon = Path(join_paths(appdir, "browseros.png"))
         shutil.copy2(icon_src, appdir_icon)
@@ -489,6 +491,64 @@ profile browseros /usr/lib/browseros/{ctx.BROWSEROS_APP_NAME} flags=(unconfined)
     log_info("  ✓ Created AppArmor profile")
 
 
+def create_metainfo_file(ctx: Context, metainfo_dir: Path) -> None:
+    """Create AppStream metainfo file for software center discoverability.
+
+    Installs to /usr/share/metainfo/ so GNOME Software, KDE Discover,
+    and other AppStream-aware tools can display BrowserOS in their catalogs.
+    """
+    metainfo_dir.mkdir(parents=True, exist_ok=True)
+
+    version = ctx.get_browseros_chromium_version()
+    version = version.lstrip("v").replace(" ", "").replace("_", ".")
+
+    metainfo_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>browseros.desktop</id>
+  <launchable type="desktop-id">browseros.desktop</launchable>
+  <name>BrowserOS</name>
+  <developer id="com.browseros">
+    <name>BrowserOS Team</name>
+  </developer>
+  <summary>The open source agentic browser</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>BSD-3-Clause and LGPL-2.1+ and Apache-2.0 and IJG and MIT and GPL-2.0+ and ISC and OpenSSL and (MPL-1.1 or GPL-2.0 or LGPL-2.0)</project_license>
+  <url type="homepage">https://www.browseros.com/</url>
+  <url type="bugtracker">https://github.com/browseros-ai/BrowserOS/issues</url>
+  <url type="help">https://docs.browseros.com/</url>
+  <description>
+    <p>
+      BrowserOS is a privacy-focused web browser built on Chromium,
+      designed for modern web browsing with AI capabilities.
+    </p>
+    <p>
+      Browse the web with built-in agentic AI features that help you
+      automate tasks and interact with web pages intelligently.
+    </p>
+  </description>
+  <categories>
+    <category>Network</category>
+    <category>WebBrowser</category>
+  </categories>
+  <keywords>
+    <keyword>web browser</keyword>
+    <keyword>chromium</keyword>
+    <keyword>ai</keyword>
+    <keyword>agentic</keyword>
+    <keyword>privacy</keyword>
+  </keywords>
+  <releases>
+    <release version="{version}" />
+  </releases>
+  <content_rating type="oars-1.1" />
+</component>
+"""
+
+    metainfo_path = Path(join_paths(metainfo_dir, "browseros.metainfo.xml"))
+    metainfo_path.write_text(metainfo_content)
+    log_info("  ✓ Created AppStream metainfo")
+
+
 def prepare_debdir(ctx: Context, debdir: Path) -> bool:
     """Prepare directory structure for .deb package.
 
@@ -508,7 +568,8 @@ def prepare_debdir(ctx: Context, debdir: Path) -> bool:
     │   │   └── [all browser files]
     │   └── share/
     │       ├── applications/browseros.desktop
-    │       └── icons/hicolor/256x256/apps/browseros.png
+    │       ├── icons/hicolor/{16..256}x{16..256}/apps/browseros.png
+    │       └── metainfo/browseros.metainfo.xml
     """
     log_info("📁 Preparing .deb directory structure...")
 
@@ -517,6 +578,7 @@ def prepare_debdir(ctx: Context, debdir: Path) -> bool:
     share_dir = join_paths(debdir, "usr", "share")
     apps_dir = join_paths(share_dir, "applications")
     icons_dir = join_paths(share_dir, "icons", "hicolor")
+    metainfo_dir = join_paths(share_dir, "metainfo")
     debian_dir = join_paths(debdir, "DEBIAN")
     apparmor_dir = join_paths(debdir, "etc", "apparmor.d")
 
@@ -530,8 +592,11 @@ def prepare_debdir(ctx: Context, debdir: Path) -> bool:
     # Create desktop file
     create_desktop_file(apps_dir, "/usr/bin/browseros")
 
-    # Copy icon
+    # Copy icons (multiple sizes for hicolor theme)
     copy_icon(ctx, icons_dir)
+
+    # Create AppStream metainfo for software center discoverability
+    create_metainfo_file(ctx, metainfo_dir)
 
     # Install AppArmor profile (fixes crash on Ubuntu 23.10+)
     create_apparmor_profile(ctx, apparmor_dir)
