@@ -423,8 +423,10 @@ if [ -d /etc/apparmor.d ] && command -v apparmor_parser >/dev/null 2>&1; then
 fi
 
 # Register as a selectable default browser
-update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/browseros 40
-update-alternatives --install /usr/bin/gnome-www-browser gnome-www-browser /usr/bin/browseros 40
+if [ "$1" = "configure" ]; then
+    update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/browseros 40
+    update-alternatives --install /usr/bin/gnome-www-browser gnome-www-browser /usr/bin/browseros 40
+fi
 
 exit 0
 """
