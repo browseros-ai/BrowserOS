@@ -195,25 +195,32 @@ StartupWMClass=chromium-browser
 
 
 def copy_icon(ctx: Context, icons_dir: Path) -> bool:
-    """Copy product icon to hicolor icon directory.
+    """Copy product icons at multiple sizes to hicolor icon directory.
 
     Args:
         ctx: Build context
         icons_dir: Base icons directory (usr/share/icons/hicolor)
 
     Returns:
-        True if icon was copied, False if not found
+        True if at least one icon was copied, False if none found
     """
-    icon_src = Path(join_paths(ctx.root_dir, "resources", "icons", "product_logo.png"))
-    if not icon_src.exists():
-        log_warning("  ⚠ Icon not found at resources/icons/product_logo.png")
-        return False
+    icons_base = Path(join_paths(ctx.root_dir, "resources", "icons"))
+    copied = False
 
-    icon_dest = Path(join_paths(icons_dir, "256x256", "apps", "browseros.png"))
-    icon_dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(icon_src, icon_dest)
-    log_info("  ✓ Copied icon")
-    return True
+    for size in [16, 22, 24, 32, 48, 64, 128, 256]:
+        icon_src = Path(join_paths(icons_base, f"product_logo_{size}.png"))
+        if icon_src.exists():
+            icon_dest = Path(join_paths(icons_dir, f"{size}x{size}", "apps", "browseros.png"))
+            icon_dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(icon_src, icon_dest)
+            copied = True
+
+    if copied:
+        log_info("  ✓ Copied icons (multiple sizes)")
+    else:
+        log_warning("  ⚠ No icon files found in resources/icons/")
+
+    return copied
 
 
 # =============================================================================

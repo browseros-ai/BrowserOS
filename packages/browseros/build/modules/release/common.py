@@ -23,7 +23,7 @@ DOWNLOAD_PATH_MAPPING = {
     },
     "linux": {
         "x64_appimage": "download/BrowserOS.AppImage",
-        "x64_deb": "download/browseros.deb",
+        "x64_deb": "download/BrowserOS.deb",
     },
 }
 
