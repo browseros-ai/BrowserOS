@@ -38,6 +38,14 @@ class CleanModule(CommandModule):
     def _git_reset(self, ctx: Context) -> None:
         run_command(["git", "reset", "--hard", "HEAD"], cwd=ctx.chromium_src)
 
+        # Reset all dirty submodules so gclient sync doesn't choke
+        log_info("🧹 Resetting dirty submodules...")
+        run_command(
+            ["git", "submodule", "foreach", "--recursive",
+             "git checkout -- . && git clean -fd"],
+            cwd=ctx.chromium_src,
+        )
+
         log_info("🧹 Running git clean with exclusions...")
         run_command(
             [
