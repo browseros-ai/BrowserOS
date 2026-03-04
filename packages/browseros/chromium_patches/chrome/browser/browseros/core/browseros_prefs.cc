@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.cc b/chrome/browser/browseros/core/browseros_prefs.cc
 new file mode 100644
-index 0000000000000..9ebd1e2429ac0
+index 0000000000000..f37f67aa3aca1
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.cc
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,73 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -11,6 +11,7 @@ index 0000000000000..9ebd1e2429ac0
 +#include "chrome/browser/browseros/core/browseros_prefs.h"
 +
 +#include "chrome/browser/ui/actions/chrome_action_id.h"
++#include "chrome/common/pref_names.h"
 +#include "components/pref_registry/pref_registry_syncable.h"
 +
 +namespace browseros {
@@ -20,6 +21,9 @@ index 0000000000000..9ebd1e2429ac0
 +  registry->RegisterBooleanPref(prefs::kShowLLMChat, true);
 +  registry->RegisterBooleanPref(prefs::kShowLLMHub, true);
 +  registry->RegisterBooleanPref(prefs::kShowToolbarLabels, true);
++
++  // Vertical tabs pref
++  registry->RegisterBooleanPref(prefs::kVerticalTabsEnabled, true);
 +
 +  // AI Provider prefs
 +  registry->RegisterStringPref(prefs::kProviders, "");
@@ -37,6 +41,20 @@ index 0000000000000..9ebd1e2429ac0
 +
 +bool ShouldShowToolbarLabels(PrefService* pref_service) {
 +  return pref_service->GetBoolean(prefs::kShowToolbarLabels);
++}
++
++bool IsVerticalTabsEnabled(PrefService* pref_service) {
++  return pref_service->GetBoolean(prefs::kVerticalTabsEnabled);
++}
++
++void SyncVerticalTabsPref(PrefService* pref_service) {
++  const bool browseros_enabled =
++      pref_service->GetBoolean(prefs::kVerticalTabsEnabled);
++  const PrefService::Preference* upstream_pref =
++      pref_service->FindPreference(::prefs::kVerticalTabsEnabled);
++  if (upstream_pref && upstream_pref->IsDefaultValue()) {
++    pref_service->SetBoolean(::prefs::kVerticalTabsEnabled, browseros_enabled);
++  }
 +}
 +
 +const char* GetVisibilityPrefForAction(actions::ActionId id) {

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/BUILD.gn b/chrome/browser/browseros/core/BUILD.gn
 new file mode 100644
-index 0000000000000..0e2fac369ff8d
+index 0000000000000..24fdd618e6a71
 --- /dev/null
 +++ b/chrome/browser/browseros/core/BUILD.gn
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,48 @@
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -30,6 +30,7 @@ index 0000000000000..0e2fac369ff8d
 +  deps = [
 +    "//base",
 +    "//chrome/browser/ui/actions:actions_headers",
++    "//chrome/common:constants",
 +    "//components/pref_registry",
 +    "//components/prefs",
 +    "//ui/actions:actions_headers",

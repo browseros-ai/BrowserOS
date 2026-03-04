@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.h b/chrome/browser/browseros/core/browseros_prefs.h
 new file mode 100644
-index 0000000000000..3d2c46562d783
+index 0000000000000..88cdbb73caf77
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.h
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,76 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -32,6 +32,9 @@ index 0000000000000..3d2c46562d783
 +// Boolean: Show labels on BrowserOS toolbar actions (default: true)
 +inline constexpr char kShowToolbarLabels[] = "browseros.show_toolbar_labels";
 +
++// Boolean: Enable vertical tabs (default: true)
++inline constexpr char kVerticalTabsEnabled[] = "browseros.vertical_tabs_enabled";
++
 +// AI Provider prefs
 +// JSON string containing the list of AI providers and configuration
 +inline constexpr char kProviders[] = "browseros.providers";
@@ -55,6 +58,14 @@ index 0000000000000..3d2c46562d783
 +
 +// Check if toolbar labels should be shown for BrowserOS actions.
 +bool ShouldShowToolbarLabels(PrefService* pref_service);
++
++// Check if vertical tabs should be enabled.
++bool IsVerticalTabsEnabled(PrefService* pref_service);
++
++// Syncs the BrowserOS vertical tabs pref to the upstream Chrome pref.
++// Call this early (e.g. during controller init) so the upstream pref
++// reflects BrowserOS's default.
++void SyncVerticalTabsPref(PrefService* pref_service);
 +
 +// Check if a toolbar action should be shown based on its visibility pref.
 +// Returns true if:
