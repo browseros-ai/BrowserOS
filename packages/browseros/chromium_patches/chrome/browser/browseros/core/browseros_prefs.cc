@@ -63,14 +63,13 @@ index 0000000000000..f3a2e43cd7af2
 +  const PrefService::Preference* user_color_pref =
 +      pref_service->FindPreference(::prefs::kUserColor);
 +  if (user_color_pref && user_color_pref->IsDefaultValue()) {
-+    // Blue tonal spot: SkColorSetRGB(140, 171, 228)
 +    pref_service->SetInteger(::prefs::kUserColor,
-+                             static_cast<int>(SkColorSetRGB(140, 171, 228)));
++                             static_cast<int>(SkColorSetRGB(136, 136, 136)));
 +    pref_service->SetString(::prefs::kCurrentThemeID,
 +                            "user_color_theme_id");
 +    pref_service->SetInteger(
 +        ::prefs::kBrowserColorVariant,
-+        static_cast<int>(ui::mojom::BrowserColorVariant::kTonalSpot));
++        static_cast<int>(ui::mojom::BrowserColorVariant::kNeutral));
 +  }
 +}
 +
