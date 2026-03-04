@@ -112,23 +112,23 @@ index 0000000000000..ad2da65f1d4f4
 +}
 +
 +// static
-+base::Value::Dict BrowserOSExtensionInstaller::ReadBundledManifest(
++base::DictValue BrowserOSExtensionInstaller::ReadBundledManifest(
 +    const base::FilePath& manifest_path,
 +    const base::FilePath& bundled_path) {
 +  std::string json_content;
 +  if (!base::ReadFileToString(manifest_path, &json_content)) {
 +    LOG(ERROR) << "browseros: Failed to read bundled manifest";
-+    return base::Value::Dict();
++    return base::DictValue();
 +  }
 +
 +  std::optional<base::Value> parsed =
 +      base::JSONReader::Read(json_content, base::JSON_PARSE_RFC);
 +  if (!parsed || !parsed->is_dict()) {
 +    LOG(ERROR) << "browseros: Invalid bundled manifest JSON";
-+    return base::Value::Dict();
++    return base::DictValue();
 +  }
 +
-+  base::Value::Dict prefs;
++  base::DictValue prefs;
 +
 +  for (const auto [extension_id, config] : parsed->GetDict()) {
 +    if (!config.is_dict()) {
@@ -142,7 +142,7 @@ index 0000000000000..ad2da65f1d4f4
 +      continue;
 +    }
 +
-+    const base::Value::Dict& config_dict = config.GetDict();
++    const base::DictValue& config_dict = config.GetDict();
 +    const std::string* crx_file = config_dict.FindString("external_crx");
 +    const std::string* version = config_dict.FindString("external_version");
 +
@@ -160,7 +160,7 @@ index 0000000000000..ad2da65f1d4f4
 +      continue;
 +    }
 +
-+    base::Value::Dict ext_prefs;
++    base::DictValue ext_prefs;
 +    ext_prefs.Set(extensions::ExternalProviderImpl::kExternalCrx,
 +                  crx_path.AsUTF8Unsafe());
 +    ext_prefs.Set(extensions::ExternalProviderImpl::kExternalVersion, *version);
@@ -175,7 +175,7 @@ index 0000000000000..ad2da65f1d4f4
 +
 +void BrowserOSExtensionInstaller::OnBundledLoadComplete(
 +    const base::FilePath& bundled_path,
-+    base::Value::Dict prefs) {
++    base::DictValue prefs) {
 +  LOG(INFO) << "browseros: Bundled load complete, " << prefs.size()
 +            << " extensions from " << bundled_path.value();
 +
@@ -233,7 +233,7 @@ index 0000000000000..ad2da65f1d4f4
 +    return;
 +  }
 +
-+  base::Value::Dict extensions_config = ParseConfigJson(*response_body);
++  base::DictValue extensions_config = ParseConfigJson(*response_body);
 +
 +  if (extensions_config.empty()) {
 +    Complete(InstallResult());
@@ -258,8 +258,8 @@ index 0000000000000..ad2da65f1d4f4
 +
 +    result.extension_ids.insert(extension_id);
 +
-+    const base::Value::Dict& config_dict = config.GetDict();
-+    base::Value::Dict ext_prefs;
++    const base::DictValue& config_dict = config.GetDict();
++    base::DictValue ext_prefs;
 +
 +    if (const std::string* update_url = config_dict.FindString(
 +            extensions::ExternalProviderImpl::kExternalUpdateUrl)) {
@@ -289,22 +289,22 @@ index 0000000000000..ad2da65f1d4f4
 +  Complete(std::move(result));
 +}
 +
-+base::Value::Dict BrowserOSExtensionInstaller::ParseConfigJson(
++base::DictValue BrowserOSExtensionInstaller::ParseConfigJson(
 +    const std::string& json_content) {
 +  std::optional<base::Value> parsed =
 +      base::JSONReader::Read(json_content, base::JSON_PARSE_RFC);
 +
 +  if (!parsed || !parsed->is_dict()) {
 +    LOG(ERROR) << "browseros: Invalid config JSON";
-+    return base::Value::Dict();
++    return base::DictValue();
 +  }
 +
-+  const base::Value::Dict* extensions =
++  const base::DictValue* extensions =
 +      parsed->GetDict().FindDict("extensions");
 +
 +  if (!extensions) {
 +    LOG(ERROR) << "browseros: No 'extensions' key in config";
-+    return base::Value::Dict();
++    return base::DictValue();
 +  }
 +
 +  return extensions->Clone();

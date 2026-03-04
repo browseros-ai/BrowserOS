@@ -282,7 +282,7 @@ index 0000000000000..8b3137bf24e8a
 +    return std::nullopt;
 +  }
 +
-+  const base::Value::Dict& dict = parsed->GetDict();
++  const base::DictValue& dict = parsed->GetDict();
 +  std::optional<int> pid = dict.FindInt("pid");
 +  std::optional<double> creation_time = dict.FindDouble("creation_time");
 +
@@ -306,7 +306,7 @@ index 0000000000000..8b3137bf24e8a
 +    return false;
 +  }
 +
-+  base::Value::Dict dict;
++  base::DictValue dict;
 +  dict.Set("pid", static_cast<int>(state.pid));
 +  dict.Set("creation_time", static_cast<double>(state.creation_time));
 +

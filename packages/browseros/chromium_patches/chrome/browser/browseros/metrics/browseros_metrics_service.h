@@ -49,7 +49,7 @@ index 0000000000000..beadbcfd183e0
 +  // Properties should not contain PII. Common properties like client_id,
 +  // browser version, and OS are added automatically.
 +  void CaptureEvent(const std::string& event_name,
-+                    base::Value::Dict properties);
++                    base::DictValue properties);
 +
 +  // Returns the stable client ID for this profile.
 +  std::string GetClientId() const;
@@ -69,14 +69,14 @@ index 0000000000000..beadbcfd183e0
 +
 +  // Sends the event to PostHog API.
 +  void SendEventToPostHog(const std::string& event_name,
-+                          base::Value::Dict properties);
++                          base::DictValue properties);
 +
 +  // Handles the response from PostHog API.
 +  void OnPostHogResponse(std::unique_ptr<network::SimpleURLLoader> loader,
 +                         std::optional<std::string> response_body);
 +
 +  // Adds default properties to the event.
-+  void AddDefaultProperties(base::Value::Dict& properties);
++  void AddDefaultProperties(base::DictValue& properties);
 +
 +  // PrefService for storing the stable client ID (profile prefs).
 +  raw_ptr<PrefService> pref_service_;

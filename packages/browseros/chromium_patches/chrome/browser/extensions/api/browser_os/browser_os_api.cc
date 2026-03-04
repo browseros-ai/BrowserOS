@@ -78,9 +78,9 @@ index 0000000000000..832e8d5471a78
 +
 +namespace {
 +
-+// Serializes ui::AXNodeData to base::Value::Dict with all fields
-+base::Value::Dict SerializeAXNodeData(const ui::AXNodeData& node) {
-+  base::Value::Dict dict;
++// Serializes ui::AXNodeData to base::DictValue with all fields
++base::DictValue SerializeAXNodeData(const ui::AXNodeData& node) {
++  base::DictValue dict;
 +
 +  // Core identity
 +  dict.Set("id", node.id);
@@ -88,7 +88,7 @@ index 0000000000000..832e8d5471a78
 +
 +  // Hierarchy
 +  if (!node.child_ids.empty()) {
-+    base::Value::List children;
++    base::ListValue children;
 +    for (int32_t child_id : node.child_ids) {
 +      children.Append(child_id);
 +    }
@@ -96,7 +96,7 @@ index 0000000000000..832e8d5471a78
 +  }
 +
 +  // State bitfield converted to string array
-+  base::Value::List states;
++  base::ListValue states;
 +  for (int i = static_cast<int>(ax::mojom::State::kMinValue);
 +       i <= static_cast<int>(ax::mojom::State::kMaxValue); ++i) {
 +    auto state = static_cast<ax::mojom::State>(i);
@@ -109,7 +109,7 @@ index 0000000000000..832e8d5471a78
 +  }
 +
 +  // Actions bitfield converted to string array
-+  base::Value::List actions;
++  base::ListValue actions;
 +  for (int i = static_cast<int>(ax::mojom::Action::kMinValue);
 +       i <= static_cast<int>(ax::mojom::Action::kMaxValue); ++i) {
 +    auto action = static_cast<ax::mojom::Action>(i);
@@ -123,7 +123,7 @@ index 0000000000000..832e8d5471a78
 +
 +  // String attributes map with enum keys converted to strings
 +  if (node.string_attributes.size() > 0) {
-+    base::Value::Dict attrs;
++    base::DictValue attrs;
 +    for (const auto& [key, value] : node.string_attributes) {
 +      attrs.Set(ui::ToString(key), value);
 +    }
@@ -132,7 +132,7 @@ index 0000000000000..832e8d5471a78
 +
 +  // Int attributes map
 +  if (node.int_attributes.size() > 0) {
-+    base::Value::Dict attrs;
++    base::DictValue attrs;
 +    for (const auto& [key, value] : node.int_attributes) {
 +      attrs.Set(ui::ToString(key), value);
 +    }
@@ -141,7 +141,7 @@ index 0000000000000..832e8d5471a78
 +
 +  // Float attributes map
 +  if (node.float_attributes.size() > 0) {
-+    base::Value::Dict attrs;
++    base::DictValue attrs;
 +    for (const auto& [key, value] : node.float_attributes) {
 +      attrs.Set(ui::ToString(key), static_cast<double>(value));
 +    }
@@ -150,7 +150,7 @@ index 0000000000000..832e8d5471a78
 +
 +  // Bool attributes map
 +  if (node.bool_attributes.Size() > 0) {
-+    base::Value::Dict attrs;
++    base::DictValue attrs;
 +    node.bool_attributes.ForEach([&attrs](ax::mojom::BoolAttribute key, bool value) {
 +      attrs.Set(ui::ToString(key), value);
 +    });
@@ -159,9 +159,9 @@ index 0000000000000..832e8d5471a78
 +
 +  // IntList attributes map
 +  if (node.intlist_attributes.size() > 0) {
-+    base::Value::Dict attrs;
++    base::DictValue attrs;
 +    for (const auto& [key, values] : node.intlist_attributes) {
-+      base::Value::List list;
++      base::ListValue list;
 +      for (int v : values) {
 +        list.Append(v);
 +      }
@@ -172,9 +172,9 @@ index 0000000000000..832e8d5471a78
 +
 +  // StringList attributes map
 +  if (node.stringlist_attributes.size() > 0) {
-+    base::Value::Dict attrs;
++    base::DictValue attrs;
 +    for (const auto& [key, values] : node.stringlist_attributes) {
-+      base::Value::List list;
++      base::ListValue list;
 +      for (const auto& v : values) {
 +        list.Append(v);
 +      }
@@ -185,7 +185,7 @@ index 0000000000000..832e8d5471a78
 +
 +  // HTML attributes (name-value pairs)
 +  if (!node.html_attributes.empty()) {
-+    base::Value::Dict attrs;
++    base::DictValue attrs;
 +    for (const auto& [name, value] : node.html_attributes) {
 +      attrs.Set(name, value);
 +    }
@@ -195,9 +195,9 @@ index 0000000000000..832e8d5471a78
 +  return dict;
 +}
 +
-+// Serializes ui::AXTreeData to base::Value::Dict
-+base::Value::Dict SerializeAXTreeData(const ui::AXTreeData& tree_data) {
-+  base::Value::Dict dict;
++// Serializes ui::AXTreeData to base::DictValue
++base::DictValue SerializeAXTreeData(const ui::AXTreeData& tree_data) {
++  base::DictValue dict;
 +
 +  // Document metadata
 +  if (!tree_data.title.empty()) {
@@ -224,7 +224,7 @@ index 0000000000000..832e8d5471a78
 +
 +  // Selection
 +  if (tree_data.sel_anchor_object_id != -1) {
-+    base::Value::Dict selection;
++    base::DictValue selection;
 +    selection.Set("anchorObjectId", tree_data.sel_anchor_object_id);
 +    selection.Set("anchorOffset", tree_data.sel_anchor_offset);
 +    selection.Set("focusObjectId", tree_data.sel_focus_object_id);
@@ -323,7 +323,7 @@ index 0000000000000..832e8d5471a78
 +  result.root_id = tree_update.root_id;
 +
 +  // Serialize all nodes with complete AX data
-+  base::Value::Dict nodes;
++  base::DictValue nodes;
 +  for (const auto& node_data : tree_update.nodes) {
 +    nodes.Set(base::NumberToString(node_data.id),
 +              SerializeAXNodeData(node_data));
@@ -1129,7 +1129,7 @@ index 0000000000000..832e8d5471a78
 +  PrefService* local_state = g_browser_process->local_state();
 +
 +  // Build a combined browseros prefs dict from both sources
-+  base::Value::Dict combined_browseros;
++  base::DictValue combined_browseros;
 +
 +  // Lambda to merge browseros prefs from a PrefService
 +  auto merge_prefs_from_service = [&](PrefService* prefs, const std::string& source_name) {
@@ -1138,7 +1138,7 @@ index 0000000000000..832e8d5471a78
 +    }
 +
 +    // Get all preference values (returns nested Dict structure)
-+    base::Value::Dict pref_dict = prefs->GetPreferenceValues(
++    base::DictValue pref_dict = prefs->GetPreferenceValues(
 +        PrefService::INCLUDE_DEFAULTS);
 +
 +    // Look for "browseros" key in the top-level dict
@@ -1179,7 +1179,7 @@ index 0000000000000..832e8d5471a78
 +  
 +  if (params->properties.has_value()) {
 +    // The properties parameter is a Properties struct with additional_properties member
-+    base::Value::Dict properties = params->properties->additional_properties.Clone();
++    base::DictValue properties = params->properties->additional_properties.Clone();
 +    
 +    // Add extension ID as a property
 +    properties.Set("extension_id", extension_id());
@@ -1441,7 +1441,7 @@ index 0000000000000..832e8d5471a78
 +
 +void BrowserOSChoosePathFunction::FileSelectionCanceled() {
 +  // Return null to indicate cancellation (not an error)
-+  base::Value::List results;
++  base::ListValue results;
 +  results.Append(base::Value());
 +  Respond(ArgumentList(std::move(results)));
 +  Release();

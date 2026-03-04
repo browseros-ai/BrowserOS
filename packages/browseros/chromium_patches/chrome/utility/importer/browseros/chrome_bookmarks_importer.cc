@@ -41,7 +41,7 @@ index 0000000000000..e631448aa5137
 +using FaviconMap = std::map<int64_t, std::set<GURL>>;
 +
 +void RecursiveReadBookmarksFolder(
-+    const base::Value::Dict* folder,
++    const base::DictValue* folder,
 +    const std::vector<std::u16string>& parent_path,
 +    bool is_in_toolbar,
 +    std::vector<user_data_importer::ImportedBookmarkEntry>* bookmarks) {
@@ -49,7 +49,7 @@ index 0000000000000..e631448aa5137
 +    return;
 +  }
 +
-+  const base::Value::List* children = folder->FindList("children");
++  const base::ListValue* children = folder->FindList("children");
 +  if (!children) {
 +    return;
 +  }
@@ -59,7 +59,7 @@ index 0000000000000..e631448aa5137
 +      continue;
 +    }
 +
-+    const base::Value::Dict& item = value.GetDict();
++    const base::DictValue& item = value.GetDict();
 +    const std::string* type = item.FindString("type");
 +    if (!type) {
 +      continue;
@@ -79,7 +79,7 @@ index 0000000000000..e631448aa5137
 +      path.push_back(title);
 +
 +      // Add empty folders as bookmark entries
-+      const base::Value::List* inner_children = item.FindList("children");
++      const base::ListValue* inner_children = item.FindList("children");
 +      if (inner_children && inner_children->empty()) {
 +        user_data_importer::ImportedBookmarkEntry entry;
 +        entry.is_folder = true;
@@ -198,14 +198,14 @@ index 0000000000000..e631448aa5137
 +    return result;
 +  }
 +
-+  const base::Value::Dict* roots = bookmarks_value->GetDict().FindDict("roots");
++  const base::DictValue* roots = bookmarks_value->GetDict().FindDict("roots");
 +  if (!roots) {
 +    LOG(WARNING) << "browseros: No roots in Bookmarks";
 +    return result;
 +  }
 +
 +  // Import bookmark bar
-+  const base::Value::Dict* bookmark_bar = roots->FindDict("bookmark_bar");
++  const base::DictValue* bookmark_bar = roots->FindDict("bookmark_bar");
 +  if (bookmark_bar) {
 +    std::vector<std::u16string> path;
 +    const std::string* name = bookmark_bar->FindString("name");
@@ -215,7 +215,7 @@ index 0000000000000..e631448aa5137
 +  }
 +
 +  // Import other bookmarks
-+  const base::Value::Dict* other = roots->FindDict("other");
++  const base::DictValue* other = roots->FindDict("other");
 +  if (other) {
 +    std::vector<std::u16string> path;
 +    const std::string* name = other->FindString("name");

@@ -33,7 +33,7 @@ index 0000000000000..dfcb0485c0432
 +
 + private:
 +  // Handler for logBrowserOSMetric message from JavaScript
-+  void HandleLogBrowserOSMetric(const base::Value::List& args);
++  void HandleLogBrowserOSMetric(const base::ListValue& args);
 +
 +  // SettingsPageUIHandler:
 +  void OnJavascriptAllowed() override;

@@ -70,7 +70,7 @@ index 0000000000000..bb33ae5d3b156
 +
 +void BrowserOSExtensionMaintainer::Start(const GURL& config_url,
 +                                         std::set<std::string> extension_ids,
-+                                         base::Value::Dict initial_config) {
++                                         base::DictValue initial_config) {
 +  config_url_ = config_url;
 +  extension_ids_ = std::move(extension_ids);
 +  last_config_ = std::move(initial_config);
@@ -127,7 +127,7 @@ index 0000000000000..bb33ae5d3b156
 +    std::unique_ptr<network::SimpleURLLoader> loader,
 +    std::optional<std::string> response_body) {
 +  if (response_body.has_value()) {
-+    base::Value::Dict config = ParseConfigJson(*response_body);
++    base::DictValue config = ParseConfigJson(*response_body);
 +    if (!config.empty()) {
 +      last_config_ = std::move(config);
 +
@@ -148,22 +148,22 @@ index 0000000000000..bb33ae5d3b156
 +  ScheduleNextMaintenance();
 +}
 +
-+base::Value::Dict BrowserOSExtensionMaintainer::ParseConfigJson(
++base::DictValue BrowserOSExtensionMaintainer::ParseConfigJson(
 +    const std::string& json_content) {
 +  std::optional<base::Value> parsed =
 +      base::JSONReader::Read(json_content, base::JSON_PARSE_RFC);
 +
 +  if (!parsed || !parsed->is_dict()) {
 +    LOG(ERROR) << "browseros: Invalid config JSON";
-+    return base::Value::Dict();
++    return base::DictValue();
 +  }
 +
-+  const base::Value::Dict* extensions =
++  const base::DictValue* extensions =
 +      parsed->GetDict().FindDict("extensions");
 +
 +  if (!extensions) {
 +    LOG(ERROR) << "browseros: No 'extensions' key in config";
-+    return base::Value::Dict();
++    return base::DictValue();
 +  }
 +
 +  return extensions->Clone();
@@ -246,7 +246,7 @@ index 0000000000000..bb33ae5d3b156
 +      continue;
 +    }
 +
-+    const base::Value::Dict* config = last_config_.FindDict(id);
++    const base::DictValue* config = last_config_.FindDict(id);
 +    if (!config) {
 +      continue;
 +    }
@@ -364,7 +364,7 @@ index 0000000000000..bb33ae5d3b156
 +    }
 +
 +    std::string state;
-+    base::Value::Dict properties;
++    base::DictValue properties;
 +    properties.Set("extension_id", id);
 +    properties.Set("context", context);
 +

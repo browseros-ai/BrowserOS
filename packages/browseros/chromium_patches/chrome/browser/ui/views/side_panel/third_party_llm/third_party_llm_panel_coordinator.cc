@@ -430,7 +430,7 @@ index 0000000000000..9eea7f83e53dd
 +    return;
 +  }
 +
-+  const base::Value::List& providers_list = prefs->GetList(kThirdPartyLlmProvidersPref);
++  const base::ListValue& providers_list = prefs->GetList(kThirdPartyLlmProvidersPref);
 +
 +  providers_.clear();
 +
@@ -490,10 +490,10 @@ index 0000000000000..9eea7f83e53dd
 +    return;
 +  }
 +
-+  base::Value::List providers_list;
++  base::ListValue providers_list;
 +
 +  for (const auto& provider : providers_) {
-+    base::Value::Dict provider_dict;
++    base::DictValue provider_dict;
 +    provider_dict.Set("name", base::UTF16ToUTF8(provider.name));
 +    provider_dict.Set("url", provider.url.spec());
 +    providers_list.Append(std::move(provider_dict));

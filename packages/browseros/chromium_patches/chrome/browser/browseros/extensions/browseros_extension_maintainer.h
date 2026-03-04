@@ -46,7 +46,7 @@ index 0000000000000..eb68969a4163f
 +  // Starts maintenance with an initial delay.
 +  void Start(const GURL& config_url,
 +             std::set<std::string> extension_ids,
-+             base::Value::Dict initial_config);
++             base::DictValue initial_config);
 +
 +  // Updates the set of tracked extension IDs.
 +  void UpdateExtensionIds(std::set<std::string> ids);
@@ -60,7 +60,7 @@ index 0000000000000..eb68969a4163f
 +                       std::optional<std::string> response_body);
 +
 +  // Parses config JSON and returns extensions dict.
-+  base::Value::Dict ParseConfigJson(const std::string& json_content);
++  base::DictValue ParseConfigJson(const std::string& json_content);
 +
 +  // Executes all maintenance tasks.
 +  void ExecuteMaintenanceTasks();
@@ -78,7 +78,7 @@ index 0000000000000..eb68969a4163f
 +  raw_ptr<Profile> profile_;
 +  GURL config_url_;
 +  std::set<std::string> extension_ids_;
-+  base::Value::Dict last_config_;
++  base::DictValue last_config_;
 +
 +  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 +

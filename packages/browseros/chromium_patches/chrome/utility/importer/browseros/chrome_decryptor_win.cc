@@ -59,8 +59,8 @@ index 0000000000000..c56a27b698eda
 +    return false;
 +  }
 +
-+  const base::Value::Dict& dict = parsed->GetDict();
-+  const base::Value::Dict* os_crypt = dict.FindDict("os_crypt");
++  const base::DictValue& dict = parsed->GetDict();
++  const base::DictValue* os_crypt = dict.FindDict("os_crypt");
 +  if (!os_crypt) {
 +    LOG(WARNING) << "browseros: No os_crypt section in Local State";
 +    return false;

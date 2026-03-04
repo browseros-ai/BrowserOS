@@ -747,7 +747,7 @@ index 0000000000000..9050130727fc8
 +    return;
 +  }
 +
-+  const base::Value::Dict& dict = json->GetDict();
++  const base::DictValue& dict = json->GetDict();
 +  std::optional<bool> can_update = dict.FindBool("can_update");
 +
 +  if (!can_update.has_value()) {
@@ -763,7 +763,7 @@ index 0000000000000..9050130727fc8
 +  if (!can_update) {
 +    LOG(INFO) << "browseros: Server busy, will retry hot-swap at next check";
 +
-+    base::Value::Dict props;
++    base::DictValue props;
 +    props.Set("pending_version", pending_item_.version.GetString());
 +    browseros_metrics::BrowserOSMetrics::Log("server.ota.busy",
 +                                             std::move(props));
@@ -813,7 +813,7 @@ index 0000000000000..9050130727fc8
 +  CleanupPendingUpdate();
 +
 +  // Log success metric
-+  base::Value::Dict props;
++  base::DictValue props;
 +  props.Set("old_version",
 +            old_version.IsValid() ? old_version.GetString() : "none");
 +  props.Set("new_version", new_version.GetString());
@@ -1028,7 +1028,7 @@ index 0000000000000..9050130727fc8
 +            }
 +
 +            if (deleted > 0) {
-+              base::Value::Dict props;
++              base::DictValue props;
 +              props.Set("deleted_count", deleted);
 +              browseros_metrics::BrowserOSMetrics::Log("server.ota.cleanup",
 +                                                       std::move(props));
@@ -1041,7 +1041,7 @@ index 0000000000000..9050130727fc8
 +                                     const std::string& error) {
 +  LOG(ERROR) << "browseros: Update error at " << stage << ": " << error;
 +
-+  base::Value::Dict props;
++  base::DictValue props;
 +  props.Set("stage", stage);
 +  props.Set("error", error);
 +  if (pending_item_.version.IsValid()) {

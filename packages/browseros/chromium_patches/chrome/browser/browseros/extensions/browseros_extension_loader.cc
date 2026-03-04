@@ -121,7 +121,7 @@ index 0000000000000..e61b45d08b7e2
 +}
 +
 +void BrowserOSExtensionLoader::InstallRemoteExtensionsNow(
-+    base::Value::Dict config) {
++    base::DictValue config) {
 +  if (!profile_ || extension_ids_.empty() || config.empty()) {
 +    return;
 +  }
@@ -143,7 +143,7 @@ index 0000000000000..e61b45d08b7e2
 +      continue;
 +    }
 +
-+    const base::Value::Dict* ext_config = config.FindDict(id);
++    const base::DictValue* ext_config = config.FindDict(id);
 +    if (!ext_config) {
 +      continue;
 +    }

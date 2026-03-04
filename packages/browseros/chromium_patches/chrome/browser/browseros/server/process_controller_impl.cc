@@ -40,28 +40,28 @@ index 0000000000000..a398856f672fd
 +                               const base::FilePath& actual_resources_dir) {
 +  base::FilePath config_path = config.paths.execution.Append(kConfigFileName);
 +
-+  base::Value::Dict root;
++  base::DictValue root;
 +
 +  // ports
-+  base::Value::Dict ports_dict;
++  base::DictValue ports_dict;
 +  ports_dict.Set("cdp", config.ports.cdp);
 +  ports_dict.Set("server", config.ports.server);
 +  ports_dict.Set("extension", config.ports.extension);
 +  root.Set("ports", std::move(ports_dict));
 +
 +  // directories
-+  base::Value::Dict directories;
++  base::DictValue directories;
 +  directories.Set("resources", actual_resources_dir.AsUTF8Unsafe());
 +  directories.Set("execution", config.paths.execution.AsUTF8Unsafe());
 +  root.Set("directories", std::move(directories));
 +
 +  // flags
-+  base::Value::Dict flags;
++  base::DictValue flags;
 +  flags.Set("allow_remote_in_mcp", config.allow_remote_in_mcp);
 +  root.Set("flags", std::move(flags));
 +
 +  // instance
-+  base::Value::Dict instance;
++  base::DictValue instance;
 +  instance.Set("install_id", config.identity.install_id);
 +  instance.Set("browseros_version", config.identity.browseros_version);
 +  instance.Set("chromium_version", config.identity.chromium_version);

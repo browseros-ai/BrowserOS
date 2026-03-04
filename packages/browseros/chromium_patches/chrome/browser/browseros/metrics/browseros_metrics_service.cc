@@ -91,7 +91,7 @@ index 0000000000000..cbc1f29e5d407
 +BrowserOSMetricsService::~BrowserOSMetricsService() = default;
 +
 +void BrowserOSMetricsService::CaptureEvent(const std::string& event_name,
-+                                            base::Value::Dict properties) {
++                                            base::DictValue properties) {
 +  if (event_name.empty()) {
 +    LOG(WARNING) << "browseros: Attempted to capture event with empty name";
 +    return;
@@ -159,9 +159,9 @@ index 0000000000000..cbc1f29e5d407
 +
 +void BrowserOSMetricsService::SendEventToPostHog(
 +    const std::string& event_name,
-+    base::Value::Dict properties) {
++    base::DictValue properties) {
 +  // Build the request payload
-+  base::Value::Dict payload;
++  base::DictValue payload;
 +  payload.Set("api_key", kPostHogApiKey);
 +  payload.Set("event", "browseros.native." + event_name);
 +  payload.Set("distinct_id", client_id_);
@@ -216,7 +216,7 @@ index 0000000000000..cbc1f29e5d407
 +}
 +
 +void BrowserOSMetricsService::AddDefaultProperties(
-+    base::Value::Dict& properties) {
++    base::DictValue& properties) {
 +  // Add browser version
 +  properties.Set("$browser_version", version_info::GetVersionNumber());
 +

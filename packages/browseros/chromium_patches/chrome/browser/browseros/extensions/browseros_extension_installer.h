@@ -40,8 +40,8 @@ index 0000000000000..9a3c2000ed05a
 +  InstallResult(InstallResult&&);
 +  InstallResult& operator=(InstallResult&&);
 +
-+  base::Value::Dict prefs;           // Extension prefs for ExternalProviderImpl
-+  base::Value::Dict config;          // Raw config for maintenance
++  base::DictValue prefs;           // Extension prefs for ExternalProviderImpl
++  base::DictValue config;          // Raw config for maintenance
 +  std::set<std::string> extension_ids;
 +  base::FilePath bundled_path;       // Set if loaded from bundled
 +  bool from_bundled = false;
@@ -70,13 +70,13 @@ index 0000000000000..9a3c2000ed05a
 +  bool TryLoadFromBundled();
 +
 +  // Reads bundled manifest on FILE thread.
-+  static base::Value::Dict ReadBundledManifest(
++  static base::DictValue ReadBundledManifest(
 +      const base::FilePath& manifest_path,
 +      const base::FilePath& bundled_path);
 +
 +  // Called when bundled manifest read completes.
 +  void OnBundledLoadComplete(const base::FilePath& bundled_path,
-+                             base::Value::Dict prefs);
++                             base::DictValue prefs);
 +
 +  // Fetches config from remote URL.
 +  void FetchFromRemote();
@@ -85,7 +85,7 @@ index 0000000000000..9a3c2000ed05a
 +  void OnRemoteFetchComplete(std::optional<std::string> response_body);
 +
 +  // Parses config JSON and returns extensions dict.
-+  base::Value::Dict ParseConfigJson(const std::string& json_content);
++  base::DictValue ParseConfigJson(const std::string& json_content);
 +
 +  // Completes the installation with the given result.
 +  void Complete(InstallResult result);

@@ -43,7 +43,7 @@ index 62546b572bab8..3f4082edf8aa9 100644
 +    return false;
 +  }
 +
-+  std::optional<base::Value::Dict> preferences =
++  std::optional<base::DictValue> preferences =
 +      base::JSONReader::ReadDict(preferences_content, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 +  if (!preferences) {
 +    LOG(INFO) << "browseros: Failed to parse preferences file as JSON: " << preferences_path.AsUTF8Unsafe();
@@ -51,7 +51,7 @@ index 62546b572bab8..3f4082edf8aa9 100644
 +  }
 +
 +  // Extensions are stored in extensions.settings in Chrome preferences
-+  const base::Value::Dict* extensions_dict =
++  const base::DictValue* extensions_dict =
 +      preferences->FindDictByDottedPath("extensions.settings");
 +  if (!extensions_dict) {
 +    LOG(INFO) << "browseros: No extensions.settings found in preferences file";
@@ -68,7 +68,7 @@ index 62546b572bab8..3f4082edf8aa9 100644
 +      continue;
 +    }
 +
-+    const base::Value::Dict& dict = value.GetDict();
++    const base::DictValue& dict = value.GetDict();
 +
 +    // Only count if:
 +    // 1. It's from the Chrome Web Store
@@ -132,8 +132,8 @@ index 62546b572bab8..3f4082edf8aa9 100644
 +  return *services != user_data_importer::NONE;
 +}
 +
-+base::Value::List GetChromeSourceProfiles(const base::FilePath& local_state_path) {
-+  base::Value::List profiles;
++base::ListValue GetChromeSourceProfiles(const base::FilePath& local_state_path) {
++  base::ListValue profiles;
 +
 +  if (base::PathExists(local_state_path)) {
 +    std::string local_state_content;
@@ -141,7 +141,7 @@ index 62546b572bab8..3f4082edf8aa9 100644
 +      return profiles;
 +    }
 +
-+    std::optional<base::Value::Dict> local_state_dict =
++    std::optional<base::DictValue> local_state_dict =
 +        base::JSONReader::ReadDict(local_state_content, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 +
 +    if (local_state_dict) {
@@ -158,7 +158,7 @@ index 62546b572bab8..3f4082edf8aa9 100644
 +            if (!name)
 +              continue;
 +
-+            base::Value::Dict entry;
++            base::DictValue entry;
 +            entry.Set("id", value.first);
 +            entry.Set("name", *name);
 +            profiles.Append(std::move(entry));
@@ -170,7 +170,7 @@ index 62546b572bab8..3f4082edf8aa9 100644
 +
 +  // If no profiles were found, add the default one
 +  if (profiles.empty()) {
-+    base::Value::Dict entry;
++    base::DictValue entry;
 +    entry.Set("id", "Default");
 +    entry.Set("name", "Default");
 +    profiles.Append(std::move(entry));
@@ -189,7 +189,7 @@ index 62546b572bab8..3f4082edf8aa9 100644
 +
 +  // Get the list of profiles from Local State
 +  base::FilePath local_state_path = chrome_path.Append(FILE_PATH_LITERAL("Local State"));
-+  base::Value::List chrome_profiles = GetChromeSourceProfiles(local_state_path);
++  base::ListValue chrome_profiles = GetChromeSourceProfiles(local_state_path);
 +
 +  // Add each profile
 +  for (const auto& value : chrome_profiles) {

@@ -34,7 +34,7 @@ index 0000000000000..6da70921b619a
 +                  double sample_rate = 1.0);
 +
 +  // Log an event with pre-built properties dict
-+  static void Log(const std::string& event_name, base::Value::Dict properties,
++  static void Log(const std::string& event_name, base::DictValue properties,
 +                  double sample_rate = 1.0);
 +
 + private:

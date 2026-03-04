@@ -31,7 +31,7 @@ index 0000000000000..521ceadec9fc9
 +    return extension_ids;
 +  }
 +
-+  std::optional<base::Value::Dict> preferences = base::JSONReader::ReadDict(
++  std::optional<base::DictValue> preferences = base::JSONReader::ReadDict(
 +      preferences_content, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 +  if (!preferences) {
 +    LOG(WARNING) << "browseros: Failed to parse JSON from "
@@ -39,7 +39,7 @@ index 0000000000000..521ceadec9fc9
 +    return extension_ids;
 +  }
 +
-+  const base::Value::Dict* extensions_dict =
++  const base::DictValue* extensions_dict =
 +      preferences->FindDictByDottedPath("extensions.settings");
 +  if (!extensions_dict) {
 +    return extension_ids;
@@ -50,7 +50,7 @@ index 0000000000000..521ceadec9fc9
 +      continue;
 +    }
 +
-+    const base::Value::Dict& dict = value.GetDict();
++    const base::DictValue& dict = value.GetDict();
 +
 +    // Skip default-installed extensions
 +    if (dict.FindBool("was_installed_by_default").value_or(false)) {

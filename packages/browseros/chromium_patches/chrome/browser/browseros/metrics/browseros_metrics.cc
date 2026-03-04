@@ -47,7 +47,7 @@ index 0000000000000..cf1a9a0c1790b
 +  return BrowserOSMetricsServiceFactory::GetForBrowserContext(profile);
 +}
 +
-+void LogOnUIThread(const std::string& event_name, base::Value::Dict properties) {
++void LogOnUIThread(const std::string& event_name, base::DictValue properties) {
 +  auto* service = GetMetricsService();
 +  if (service) {
 +    service->CaptureEvent(event_name, std::move(properties));
@@ -60,14 +60,14 @@ index 0000000000000..cf1a9a0c1790b
 +
 +// static
 +void BrowserOSMetrics::Log(const std::string& event_name, double sample_rate) {
-+  Log(event_name, base::Value::Dict(), sample_rate);
++  Log(event_name, base::DictValue(), sample_rate);
 +}
 +
 +// static
 +void BrowserOSMetrics::Log(const std::string& event_name,
 +                           std::initializer_list<std::pair<std::string, base::Value>> properties,
 +                           double sample_rate) {
-+  base::Value::Dict dict;
++  base::DictValue dict;
 +  for (const auto& [key, value] : properties) {
 +    dict.Set(key, value.Clone());
 +  }
@@ -75,7 +75,7 @@ index 0000000000000..cf1a9a0c1790b
 +}
 +
 +// static
-+void BrowserOSMetrics::Log(const std::string& event_name, base::Value::Dict properties,
++void BrowserOSMetrics::Log(const std::string& event_name, base::DictValue properties,
 +                           double sample_rate) {
 +  if (sample_rate <= 0.0 || sample_rate > 1.0) {
 +    return;

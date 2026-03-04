@@ -63,7 +63,7 @@ index 0000000000000..2a14e9068156e
 +  void OnStartupComplete(bool from_bundled);
 +
 +  // Installs remote extensions immediately via PendingExtensionManager + updater.
-+  void InstallRemoteExtensionsNow(base::Value::Dict config);
++  void InstallRemoteExtensionsNow(base::DictValue config);
 +
 +  // Installs bundled CRX extensions immediately via CrxInstaller.
 +  void InstallBundledExtensionsNow();
@@ -74,7 +74,7 @@ index 0000000000000..2a14e9068156e
 +
 +  std::set<std::string> extension_ids_;
 +  std::map<std::string, std::string> bundled_versions_;
-+  base::Value::Dict last_config_;
++  base::DictValue last_config_;
 +
 +  std::unique_ptr<BrowserOSExtensionInstaller> installer_;
 +  std::unique_ptr<BrowserOSExtensionMaintainer> maintainer_;
