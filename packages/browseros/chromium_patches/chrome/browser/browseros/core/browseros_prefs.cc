@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.cc b/chrome/browser/browseros/core/browseros_prefs.cc
 new file mode 100644
-index 0000000000000..f3a2e43cd7af2
+index 0000000000000..38f09f1f42dc4
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.cc
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,89 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
