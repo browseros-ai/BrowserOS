@@ -29,7 +29,7 @@ index 89c4445bf4185..39f22a4571f8e 100644
 +  // Add BrowserOS extensions to the force-pinned list (only those marked as pinned)
 +  for (const std::string& ext_id : browseros::GetBrowserOSExtensionIds()) {
 +    if (browseros::IsBrowserOSPinnedExtension(ext_id) &&
-+        !base::Contains(pinned, ext_id)) {
++        !std::ranges::contains(pinned, ext_id)) {
 +      pinned.push_back(ext_id);
 +    }
 +  }

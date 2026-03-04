@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000000000..0adfaa4a8ac83
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_action_utils.h
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,70 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -14,7 +14,6 @@ index 0000000000000..0adfaa4a8ac83
 +#include <string>
 +#include <string_view>
 +
-+#include "base/containers/contains.h"
 +#include "base/containers/fixed_flat_set.h"
 +#include "chrome/browser/browseros/core/browseros_constants.h"
 +#include "chrome/browser/ui/actions/chrome_action_id.h"

@@ -2,7 +2,7 @@ diff --git a/chrome/browser/extensions/updater/extension_updater.cc b/chrome/bro
 index fb3182b3a431c..d63fbc9af10c6 100644
 --- a/chrome/browser/extensions/updater/extension_updater.cc
 +++ b/chrome/browser/extensions/updater/extension_updater.cc
-@@ -610,6 +610,86 @@ void ExtensionUpdater::CheckNow(CheckParams params) {
+@@ -629,7 +629,89 @@ void ExtensionUpdater::CheckNow(CheckParams params) {
    }
  }
  
@@ -56,10 +56,12 @@ index fb3182b3a431c..d63fbc9af10c6 100644
 +                   id, info->update_url(), info->install_source(),
 +                   is_corrupt_reinstall, request_id, params.fetch_priority))) {
 +      request.in_progress_ids.insert(id);
-+      InstallStageTracker::Get(profile_)->ReportInstallationStage(
-+          id, InstallStageTracker::Stage::DOWNLOADING);
++      InstallStageTrackerFactory::GetForBrowserContext(profile_)
++          ->ReportInstallationStage(
++              id, InstallStageTracker::Stage::DOWNLOADING);
 +    } else {
-+      InstallStageTracker::Get(profile_)->ReportFailure(
++      InstallStageTrackerFactory::GetForBrowserContext(profile_)
++          ->ReportFailure(
 +          id, InstallStageTracker::FailureReason::DOWNLOADER_ADD_FAILED);
 +    }
 +  }
@@ -88,4 +90,5 @@ index fb3182b3a431c..d63fbc9af10c6 100644
 +
  void ExtensionUpdater::OnExtensionDownloadStageChanged(const ExtensionId& id,
                                                         Stage stage) {
-   InstallStageTracker::Get(profile_)->ReportDownloadingStage(id, stage);
+   InstallStageTrackerFactory::GetForBrowserContext(profile_)
+       ->ReportDownloadingStage(id, stage);
