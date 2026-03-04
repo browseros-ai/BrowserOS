@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.cc b/chrome/browser/browseros/core/browseros_prefs.cc
 new file mode 100644
-index 0000000000000..f37f67aa3aca1
+index 0000000000000..f3a2e43cd7af2
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.cc
-@@ -0,0 +1,73 @@
+@@ -0,0 +1,90 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -13,6 +13,8 @@ index 0000000000000..f37f67aa3aca1
 +#include "chrome/browser/ui/actions/chrome_action_id.h"
 +#include "chrome/common/pref_names.h"
 +#include "components/pref_registry/pref_registry_syncable.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/base/mojom/themes.mojom.h"
 +
 +namespace browseros {
 +
@@ -54,6 +56,21 @@ index 0000000000000..f37f67aa3aca1
 +      pref_service->FindPreference(::prefs::kVerticalTabsEnabled);
 +  if (upstream_pref && upstream_pref->IsDefaultValue()) {
 +    pref_service->SetBoolean(::prefs::kVerticalTabsEnabled, browseros_enabled);
++  }
++}
++
++void SyncDefaultTheme(PrefService* pref_service) {
++  const PrefService::Preference* user_color_pref =
++      pref_service->FindPreference(::prefs::kUserColor);
++  if (user_color_pref && user_color_pref->IsDefaultValue()) {
++    // Blue tonal spot: SkColorSetRGB(140, 171, 228)
++    pref_service->SetInteger(::prefs::kUserColor,
++                             static_cast<int>(SkColorSetRGB(140, 171, 228)));
++    pref_service->SetString(::prefs::kCurrentThemeID,
++                            "user_color_theme_id");
++    pref_service->SetInteger(
++        ::prefs::kBrowserColorVariant,
++        static_cast<int>(ui::mojom::BrowserColorVariant::kTonalSpot));
 +  }
 +}
 +

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.h b/chrome/browser/browseros/core/browseros_prefs.h
 new file mode 100644
-index 0000000000000..88cdbb73caf77
+index 0000000000000..2719852d7d8c6
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.h
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,80 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -66,6 +66,10 @@ index 0000000000000..88cdbb73caf77
 +// Call this early (e.g. during controller init) so the upstream pref
 +// reflects BrowserOS's default.
 +void SyncVerticalTabsPref(PrefService* pref_service);
++
++// Sets the default BrowserOS theme (blue tonal spot) on first run
++// when the user hasn't customized the theme yet.
++void SyncDefaultTheme(PrefService* pref_service);
 +
 +// Check if a toolbar action should be shown based on its visibility pref.
 +// Returns true if:
