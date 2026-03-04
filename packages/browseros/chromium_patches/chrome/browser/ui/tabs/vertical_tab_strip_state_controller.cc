@@ -17,12 +17,12 @@ index c96a73b395c59..cbc1ef080c91d 100644
 +  browseros::SyncVerticalTabsPref(pref_service_);
 +
    pref_change_registrar_.Init(pref_service_);
- 
+
    pref_change_registrar_.Add(
 @@ -52,6 +55,16 @@ VerticalTabStripStateController::VerticalTabStripStateController(
        base::BindRepeating(&VerticalTabStripStateController::NotifyModeChanged,
                            base::Unretained(this)));
- 
+
 +  pref_change_registrar_.Add(
 +      browseros::prefs::kVerticalTabsEnabled,
 +      base::BindRepeating(
