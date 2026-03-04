@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.html b/chrome/browser/resources/settings/settings_menu/settings_menu.html
-index 436249d603479..27809f00841c7 100644
+index 3cb9e3af7a315..9c955495399f9 100644
 --- a/chrome/browser/resources/settings/settings_menu/settings_menu.html
 +++ b/chrome/browser/resources/settings/settings_menu/settings_menu.html
-@@ -67,6 +67,12 @@
-           $i18n{yourSavedInfoPageTitle}
+@@ -57,6 +57,12 @@
+           $i18n{peoplePageTitle}
            <cr-ripple></cr-ripple>
          </a>
 +        <!-- <a role="menuitem" id="browseros-prefs-menu" href="/browseros-settings" -->
@@ -13,5 +13,5 @@ index 436249d603479..27809f00841c7 100644
 +        <!--   <cr-ripple></cr-ripple> -->
 +        <!-- </a> -->
          <a role="menuitem" id="autofill" href="/autofill"
-             hidden="[[!showAutofillPageMenuItem_(
-                 enableYourSavedInfoSettingsPage_,
+             on-click="onAutofillClick_"
+             class="cr-nav-menu-item"

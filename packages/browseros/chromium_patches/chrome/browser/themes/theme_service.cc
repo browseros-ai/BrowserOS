@@ -1,8 +1,8 @@
-diff --git a/chrome/browser/themes/theme_service_factory.cc b/chrome/browser/themes/theme_service_factory.cc
-index 8634cbb4dc17a..3bd0aec1c7095 100644
---- a/chrome/browser/themes/theme_service_factory.cc
-+++ b/chrome/browser/themes/theme_service_factory.cc
-@@ -131,11 +131,11 @@ void ThemeServiceFactory::RegisterProfilePrefs(
+diff --git a/chrome/browser/themes/theme_service.cc b/chrome/browser/themes/theme_service.cc
+index 0c89bb8539af6..209620f3f0f9a 100644
+--- a/chrome/browser/themes/theme_service.cc
++++ b/chrome/browser/themes/theme_service.cc
+@@ -272,11 +272,11 @@ void ThemeService::RegisterProfilePrefs(
                                  SK_ColorTRANSPARENT);
    registry->RegisterIntegerPref(
        prefs::kDeprecatedBrowserColorSchemeDoNotUse,

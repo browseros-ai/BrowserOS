@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/toolbar/toolbar_actions_model.cc b/chrome/browser/ui/toolbar/toolbar_actions_model.cc
-index e0ac63141989c..067446bb2a571 100644
+index 89c4445bf4185..39f22a4571f8e 100644
 --- a/chrome/browser/ui/toolbar/toolbar_actions_model.cc
 +++ b/chrome/browser/ui/toolbar/toolbar_actions_model.cc
-@@ -19,6 +19,7 @@
+@@ -18,6 +18,7 @@
  #include "base/one_shot_event.h"
  #include "base/strings/utf_string_conversions.h"
  #include "base/task/single_thread_task_runner.h"
@@ -10,7 +10,7 @@ index e0ac63141989c..067446bb2a571 100644
  #include "chrome/browser/extensions/extension_management.h"
  #include "chrome/browser/extensions/extension_tab_util.h"
  #include "chrome/browser/extensions/managed_toolbar_pin_mode.h"
-@@ -323,6 +324,11 @@ bool ToolbarActionsModel::IsActionPinned(const ActionId& action_id) const {
+@@ -383,6 +384,11 @@ bool ToolbarActionsModel::IsActionPinned(const ActionId& action_id) const {
  }
  
  bool ToolbarActionsModel::IsActionForcePinned(const ActionId& action_id) const {
@@ -18,15 +18,14 @@ index e0ac63141989c..067446bb2a571 100644
 +  if (browseros::IsBrowserOSPinnedExtension(action_id)) {
 +    return true;
 +  }
-+  
++
    auto* management =
        extensions::ExtensionManagementFactory::GetForBrowserContext(profile_);
-   return base::Contains(management->GetForcePinnedList(), action_id);
-@@ -565,6 +571,14 @@ ToolbarActionsModel::GetFilteredPinnedActionIds() const {
-   std::ranges::copy_if(
-       management->GetForcePinnedList(), std::back_inserter(pinned),
-       [&pinned](const std::string& id) { return !base::Contains(pinned, id); });
-+      
+   return management->GetForcePinnedList().contains(action_id);
+@@ -628,6 +634,14 @@ ToolbarActionsModel::GetFilteredPinnedActionIds() const {
+                          return !std::ranges::contains(pinned, id);
+                        });
+ 
 +  // Add BrowserOS extensions to the force-pinned list (only those marked as pinned)
 +  for (const std::string& ext_id : browseros::GetBrowserOSExtensionIds()) {
 +    if (browseros::IsBrowserOSPinnedExtension(ext_id) &&
@@ -34,6 +33,7 @@ index e0ac63141989c..067446bb2a571 100644
 +      pinned.push_back(ext_id);
 +    }
 +  }
- 
++
    // TODO(pbos): Make sure that the pinned IDs are pruned from ExtensionPrefs on
    // startup so that we don't keep saving stale IDs.
+   std::vector<ActionId> filtered_action_ids;

@@ -1,10 +1,10 @@
 diff --git a/chrome/browser/ui/ui_features.h b/chrome/browser/ui/ui_features.h
-index 2bedb1e230459..f779499960910 100644
+index 43f876760f130..a1ed839eae250 100644
 --- a/chrome/browser/ui/ui_features.h
 +++ b/chrome/browser/ui/ui_features.h
-@@ -161,6 +161,10 @@ BASE_DECLARE_FEATURE(kPopupBrowserUseNewLayout);
+@@ -156,6 +156,10 @@ BASE_DECLARE_FEATURE(kSideBySide);
  
- BASE_DECLARE_FEATURE(kTabbedBrowserUseNewLayout);
+ BASE_DECLARE_FEATURE(kSideBySideLinkMenuNewBadge);
  
 +// BrowserOS: feature declarations
 +BASE_DECLARE_FEATURE(kThirdPartyLlmPanel);

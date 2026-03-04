@@ -1,12 +1,12 @@
 diff --git a/tools/metrics/histograms/metadata/browser/enums.xml b/tools/metrics/histograms/metadata/browser/enums.xml
-index 007aa3eb6038e..789d47a8811e5 100644
+index 3084d75e4dd4a..c73bd4123c016 100644
 --- a/tools/metrics/histograms/metadata/browser/enums.xml
 +++ b/tools/metrics/histograms/metadata/browser/enums.xml
-@@ -363,6 +363,7 @@ chromium-metrics-reviews@google.com.
-   <int value="128" label="SESSION_RESTORE_INFOBAR_DELEGATE"/>
+@@ -364,6 +364,7 @@ chromium-metrics-reviews@google.com.
    <int value="129" label="ROLL_BACK_MODE_B_INFOBAR_DELEGATE"/>
    <int value="130" label="DEV_TOOLS_REMOTE_DEBUGGING_INFOBAR_DELEGATE"/>
-+  <int value="131" label="BROWSEROS_AGENT_INSTALLING_INFOBAR_DELEGATE"/>
+   <int value="131" label="STARTUP_LAUNCH_INFOBAR_DELEGATE"/>
++  <int value="132" label="BROWSEROS_AGENT_INSTALLING_INFOBAR_DELEGATE"/>
  </enum>
  
  <!-- LINT.ThenChange(//components/infobars/core/infobar_delegate.h:InfoBarIdentifier) -->
