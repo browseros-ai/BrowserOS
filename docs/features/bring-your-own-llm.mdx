@@ -30,40 +30,49 @@ See how to connect your own LLM in under a minute:
 
 {/* <img src="/images/moonshot-partnership-banner.png" alt="BrowserOS x Moonshot AI" className="rounded-xl" /> */}
 
-BrowserOS has partnered with [Moonshot AI](https://platform.moonshot.ai) to bring **Kimi K2.5** as a first-class provider. Kimi K2.5 is an open-source, multimodal model with strong agentic performance at an affordable price point.
+BrowserOS has partnered with [Moonshot AI](https://www.kimi.com) to bring **Kimi K2.5** as a first-class provider. Kimi K2.5 is now the **recommended model** in BrowserOS and is set as the default provider.
+
+For a limited time, BrowserOS users get **extended usage limits** powered by Kimi K2.5. This means you can use the AI agent, chat, and other AI-powered features with increased limits at no cost.
 
 <CardGroup cols={2}>
   <Card title="Open Source" icon="code-branch">
     Fully open-source model you can inspect and trust.
   </Card>
   <Card title="Multimodal" icon="image">
-    Supports images out of the box — works with screenshots and visual context.
+    Supports images out of the box, including screenshots and visual context.
   </Card>
   <Card title="Great for Agents" icon="robot">
-    Strong reasoning for multi-step browser automation tasks.
+    Strong reasoning for browser automation, form filling, and multi-step workflows.
   </Card>
   <Card title="Affordable" icon="piggy-bank">
-    High-quality agentic performance at a budget-friendly price.
+    Excellent agentic performance at a fraction of the cost of other frontier models.
   </Card>
 </CardGroup>
 
 <div id="moonshot" />
 
+### Why Kimi K2.5?
+
+Kimi K2.5 offers excellent performance for agentic tasks at a fraction of the cost of other frontier models. It supports images, has a 128,000 token context window, and delivers strong results on browser automation tasks. Combined with BrowserOS's open-source agent framework, this makes for a powerful and affordable AI browsing experience.
+
+### Bring Your Own Kimi API Key
+
+You can also bring your own Kimi API key if you want to use Kimi K2.5 beyond the extended usage period, or if you want your own dedicated limits.
+
 **Get your API key:**
-1. Go to [platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys)
-2. Sign up or log in
-3. Navigate to **API Keys** and create a new key
+1. Go to [platform.moonshot.ai](https://platform.moonshot.ai) and create an account
+2. Navigate to the **API keys** section in your dashboard
+3. Click **Create new API key** and copy the key
 
 **Add to BrowserOS:**
 1. Go to `chrome://browseros/settings`
 2. Click **USE** on the **Moonshot AI** card
-3. Set **Model ID** to `kimi-k2.5`
-4. Paste your API key
-5. Check **Supports Images**, set **Context Window** to `128000`
-6. Click **Save**
+3. Enter your API key (it will be encrypted and stored locally on your machine)
+4. The model is pre-configured to `kimi-k2.5` with a 128,000 context window
+5. Click **Save**
 
 <Tip>
-Kimi K2.5 is an excellent option for users who want strong agent performance at an affordable price.
+The base URL for the Kimi API (`https://api.moonshot.ai/v1`) is pre-filled automatically when you select the Moonshot AI provider template.
 </Tip>
 
 ---
