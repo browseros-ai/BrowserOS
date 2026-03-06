@@ -29,6 +29,7 @@
           "features/cowork",
           "features/connect-mcps",
           "features/use-with-claude-code",
+          "features/sync-to-cloud",
           "features/llm-chat-hub",
           "features/ad-blocking"
         ]

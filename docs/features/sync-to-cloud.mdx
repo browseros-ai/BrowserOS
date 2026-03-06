@@ -1,0 +1,117 @@
+---
+title: "Sync to Cloud"
+description: "Sign in to sync your conversations, settings, and automations across all your devices"
+---
+
+Sign in to BrowserOS and your data follows you everywhere. Your conversations, AI model settings, and scheduled tasks sync automatically to the cloud so you never lose your setup.
+
+## Why Sign In?
+
+Without an account, everything stays on one device. Sign in and your data is backed up and available wherever you use BrowserOS.
+
+<CardGroup cols={2}>
+  <Card title="Access anywhere" icon="laptop-mobile">
+    Open BrowserOS on a new device and your conversations, model settings, and scheduled tasks are already there.
+  </Card>
+  <Card title="Never lose your history" icon="clock-rotate-left">
+    Chat history is saved to the cloud automatically. Clear your browser data or switch machines and everything is still available.
+  </Card>
+  <Card title="Settings follow you" icon="sliders">
+    Set up your AI models once. Your provider configurations sync across devices so you never re-enter the same setup twice.
+  </Card>
+  <Card title="Automations stay in sync" icon="arrows-rotate">
+    Create a scheduled task on your laptop and it appears on your desktop. Edits sync both ways.
+  </Card>
+</CardGroup>
+
+## How to Sign In
+
+<Steps>
+  <Step title="Open a new tab">
+    Open a new tab in BrowserOS to see the home page.
+  </Step>
+  <Step title="Click Sign In">
+    Click **Sign In** in the sidebar to open the login page.
+  </Step>
+  <Step title="Choose your sign-in method">
+    Enter your email for a magic link, or sign in with Google.
+  </Step>
+  <Step title="Verify and you're in">
+    Click the link in your email (or complete Google sign-in). BrowserOS starts syncing your data immediately.
+  </Step>
+</Steps>
+
+<Tip>
+Magic link sign-in means you never need to create or remember a password. Just enter your email and click the link.
+</Tip>
+
+## What Gets Synced
+
+<AccordionGroup>
+  <Accordion title="Conversations" icon="messages">
+    Your full chat history syncs to the cloud as you go. Every message is saved in real time so you can pick up any conversation on another device. Locally, BrowserOS keeps your 50 most recent conversations. In the cloud, there is no limit.
+  </Accordion>
+
+  <Accordion title="AI model settings" icon="microchip">
+    Your configured LLM providers (OpenAI, Anthropic, Google, Moonshot, Azure, Bedrock, and others) sync across devices. This includes the model name, provider type, base URL, temperature, and context window settings.
+
+    **Your API keys are never synced.** Sensitive credentials like API keys, access keys, and session tokens stay on the device where you entered them. You will need to re-enter API keys on each new device.
+  </Accordion>
+
+  <Accordion title="Scheduled tasks" icon="calendar-check">
+    Your scheduled automations sync in both directions. Create a task on one device, edit it on another, and changes are merged automatically using timestamps to resolve conflicts. Task execution history (last run time, status) is also synced.
+  </Accordion>
+
+  <Accordion title="Profile" icon="user">
+    Your name, profile picture, and account preferences sync across devices. Information you provide during onboarding (role, company) is also saved to your profile.
+  </Accordion>
+</AccordionGroup>
+
+## What Stays Local
+
+Some settings are device-specific and do not sync to the cloud:
+
+- **API keys and secrets** for LLM providers
+- **Theme** (light/dark mode)
+- **Workspace folder** selection
+- **Connected MCP servers**
+- **Workflows**
+
+This is intentional. Sensitive credentials never leave your device, and display preferences can differ between machines.
+
+## How Sync Works
+
+BrowserOS uses a local-first approach. Your data is always saved on your device first, then synced to the cloud in the background.
+
+<Steps>
+  <Step title="Local save">
+    Every action (sending a message, adding a provider, creating a task) is saved locally first. BrowserOS works fully offline.
+  </Step>
+  <Step title="Background sync">
+    When you are signed in, changes are automatically pushed to the cloud. New chat messages sync in real time. Provider and task changes sync whenever they are updated.
+  </Step>
+  <Step title="Restore on new devices">
+    When you sign in on a new device, BrowserOS pulls your conversations, model settings, scheduled tasks, and profile from the cloud and merges them with any local data.
+  </Step>
+</Steps>
+
+<Note>
+If the same scheduled task is edited on two devices before they sync, BrowserOS keeps the version with the most recent timestamp.
+</Note>
+
+## Security
+
+<Columns cols={2}>
+  <Card title="API keys never leave your device" icon="key">
+    Sensitive credentials like API keys, access keys, and tokens are excluded from cloud sync entirely.
+  </Card>
+  <Card title="Session-based authentication" icon="shield-check">
+    Sign-in uses magic links or Google OAuth. No passwords are stored.
+  </Card>
+  <Card title="Scoped to your account" icon="lock">
+    All synced data is tied to your user account and is not accessible to anyone else.
+  </Card>
+  <Card title="Sync failures are silent" icon="wifi-slash">
+    If cloud sync fails (e.g., no internet), your local data is unaffected. Sync resumes automatically when connectivity is restored.
+  </Card>
+</Columns>
