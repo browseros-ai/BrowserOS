@@ -18,15 +18,53 @@ See how to connect your own LLM in under a minute:
 | Mode | What works | Recommendation |
 |------|------------|----------------|
 | **Chat Mode** | Any model, including local | Ollama or Gemini Flash |
-| **Agent Mode** | Cloud models only | Claude Opus 4.5 or Kimi K2.5 (open source) |
+| **Agent Mode** | Cloud models only | Claude Opus 4.5, GPT-5, or Kimi K2.5 (open source) |
 
 <Warning>
-**Local LLMs aren't powerful for most agentic tasks yet.** They're great for Chat — asking questions about a page, summarizing, etc. But agent tasks need strong reasoning to click the right elements and handle multi-step workflows. Use Claude Opus 4.5, Sonnet 4.5, or Kimi K2.5 for agents.
+**Local LLMs aren't powerful for most agentic tasks yet.** They're great for Chat — asking questions about a page, summarizing, etc. But agent tasks need strong reasoning to click the right elements and handle multi-step workflows. Use Claude Opus 4.5, GPT-5, or Kimi K2.5 for agents.
 </Warning>
 
-<Note>
-Kimi K2.5 is an open-source, multimodal model with great agentic performance — and 60-70% cheaper than Claude models.
-</Note>
+---
+
+## Kimi K2.5 — In Partnership with Moonshot AI
+
+{/* <img src="/images/moonshot-partnership-banner.png" alt="BrowserOS x Moonshot AI" className="rounded-xl" /> */}
+
+BrowserOS has partnered with [Moonshot AI](https://platform.moonshot.ai) to bring **Kimi K2.5** as a first-class provider. Kimi K2.5 is an open-source, multimodal model with strong agentic performance at an affordable price point.
+
+<CardGroup cols={2}>
+  <Card title="Open Source" icon="code-branch">
+    Fully open-source model you can inspect and trust.
+  </Card>
+  <Card title="Multimodal" icon="image">
+    Supports images out of the box — works with screenshots and visual context.
+  </Card>
+  <Card title="Great for Agents" icon="robot">
+    Strong reasoning for multi-step browser automation tasks.
+  </Card>
+  <Card title="Affordable" icon="piggy-bank">
+    High-quality agentic performance at a budget-friendly price.
+  </Card>
+</CardGroup>
+
+<div id="moonshot" />
+
+**Get your API key:**
+1. Go to [platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys)
+2. Sign up or log in
+3. Navigate to **API Keys** and create a new key
+
+**Add to BrowserOS:**
+1. Go to `chrome://browseros/settings`
+2. Click **USE** on the **Moonshot AI** card
+3. Set **Model ID** to `kimi-k2.5`
+4. Paste your API key
+5. Check **Supports Images**, set **Context Window** to `128000`
+6. Click **Save**
+
+<Tip>
+Kimi K2.5 is an excellent option for users who want strong agent performance at an affordable price.
+</Tip>
 
 ---
 
@@ -49,7 +87,7 @@ Connect to powerful AI models using your API keys. Your keys stay on your machin
     **Add to BrowserOS:**
     1. Go to `chrome://browseros/settings`
     2. Click **USE** on the Gemini card
-    3. Set **Model ID** to `gemini-2.5-flash-preview-05-20`
+    3. Set **Model ID** to `gemini-2.5-flash` (or `gemini-2.5-pro`, `gemini-3-pro-preview`, `gemini-3-flash-preview`)
     4. Paste your API key
     5. Check **Supports Images**, set **Context Window** to `1000000`
     6. Click **Save**
@@ -71,7 +109,7 @@ Connect to powerful AI models using your API keys. Your keys stay on your machin
     **Add to BrowserOS:**
     1. Go to `chrome://browseros/settings`
     2. Click **USE** on the Anthropic card
-    3. Set **Model ID** to `claude-opus-4-5-20250514`
+    3. Set **Model ID** to `claude-opus-4-5-20251101` (or `claude-sonnet-4-5-20250929`, `claude-haiku-4-5-20251001`)
     4. Paste your API key
     5. Check **Supports Images**, set **Context Window** to `200000`
     6. Click **Save**
@@ -81,7 +119,7 @@ Connect to powerful AI models using your API keys. Your keys stay on your machin
 
   <div id="openai" />
   <Accordion title="OpenAI" icon="brain">
-    GPT-4.1 is solid for both chat and agent tasks.
+    GPT-5 is OpenAI's most capable model for both chat and agent tasks.
 
     **Get your API key:**
     1. Go to [platform.openai.com](https://platform.openai.com)
@@ -93,9 +131,9 @@ Connect to powerful AI models using your API keys. Your keys stay on your machin
     **Add to BrowserOS:**
     1. Go to `chrome://browseros/settings`
     2. Click **USE** on the OpenAI card
-    3. Set **Model ID** to `gpt-4.1`
+    3. Set **Model ID** to `gpt-5` (or `gpt-5.2`, `gpt-5-mini`, `gpt-4.1`, `o4-mini`)
     4. Paste your API key
-    5. Check **Supports Images**, set **Context Window** to `128000`
+    5. Check **Supports Images**, set **Context Window** to `200000`
     6. Click **Save**
 
     ![OpenAI config](/images/byollm--openai-provider-config.png)
@@ -107,10 +145,10 @@ Connect to powerful AI models using your API keys. Your keys stay on your machin
 
     **Get your API key:**
     1. Go to [openrouter.ai](https://openrouter.ai) and sign up
-    2. Copy your API key from the homepage
+    2. Go to [openrouter.ai/keys](https://openrouter.ai/keys) and create a key
 
     **Pick a model:**
-    Go to [openrouter.ai/models](https://openrouter.ai/models) and copy the model ID you want (e.g., `anthropic/claude-opus-4.5`).
+    Go to [openrouter.ai/models](https://openrouter.ai/models) and copy the model ID you want (e.g., `anthropic/claude-opus-4.5`, `google/gemini-2.5-flash`).
 
     ![OpenRouter models](/images/openrouter-models.png)
 
@@ -122,6 +160,70 @@ Connect to powerful AI models using your API keys. Your keys stay on your machin
     5. Click **Save**
 
     ![OpenRouter config](/images/byollm--openrouter-provider-config.png)
+  </Accordion>
+
+  <div id="azure" />
+  <Accordion title="Azure OpenAI" icon="microsoft">
+    Use OpenAI models hosted on your own Azure subscription for enterprise compliance and data residency.
+
+    **Prerequisites:**
+    1. An Azure subscription with access to [Azure OpenAI Service](https://portal.azure.com/#view/Microsoft_Azure_ProjectOxford/CognitiveServicesHub/~/OpenAI)
+    2. A deployed model (e.g., GPT-4o) in your Azure OpenAI resource
+
+    **Get your credentials:**
+    1. Go to [portal.azure.com](https://portal.azure.com) → **Azure OpenAI** resource
+    2. Navigate to **Keys and Endpoint**
+    3. Copy **Key 1** and your **Endpoint URL**
+
+    **Add to BrowserOS:**
+    1. Go to `chrome://browseros/settings`
+    2. Click **USE** on the Azure card
+    3. Set **Base URL** to your Azure endpoint (e.g., `https://your-resource.openai.azure.com/openai/deployments/your-deployment`)
+    4. Set **Model ID** to your deployment name
+    5. Paste your API key
+    6. Check **Supports Images**, set **Context Window** to `128000`
+    7. Click **Save**
+  </Accordion>
+
+  <div id="bedrock" />
+  <Accordion title="AWS Bedrock" icon="aws">
+    Access Claude, Llama, and other models through your AWS account with IAM-based authentication.
+
+    **Prerequisites:**
+    1. An AWS account with [Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/getting-started.html) enabled
+    2. Model access granted in the Bedrock console for your desired models
+
+    **Get your credentials:**
+    1. Go to the [AWS Console](https://console.aws.amazon.com) → **IAM**
+    2. Create or use an existing access key with Bedrock permissions
+    3. Note your **Access Key ID**, **Secret Access Key**, and **Region**
+
+    **Add to BrowserOS:**
+    1. Go to `chrome://browseros/settings`
+    2. Click **USE** on the AWS Bedrock card
+    3. Set **Base URL** to your Bedrock endpoint (region-specific)
+    4. Set **Model ID** to the Bedrock model ID (e.g., `anthropic.claude-3-sonnet-20240229-v1:0`)
+    5. Paste your credentials
+    6. Check **Supports Images**, set **Context Window** to `200000`
+    7. Click **Save**
+  </Accordion>
+
+  <div id="openai-compatible" />
+  <Accordion title="OpenAI Compatible" icon="plug">
+    Connect to any provider that implements the OpenAI-compatible API format (e.g., Together AI, Fireworks, Groq, Perplexity).
+
+    **Add to BrowserOS:**
+    1. Go to `chrome://browseros/settings`
+    2. Click **USE** on the OpenAI Compatible card
+    3. Set **Base URL** to the provider's API endpoint
+    4. Set **Model ID** to the model you want to use
+    5. Paste your API key
+    6. Set **Supports Images** and **Context Window** based on the model
+    7. Click **Save**
+
+    <Tip>
+    Most newer AI providers support the OpenAI-compatible API format. Check your provider's docs for the base URL and available model IDs.
+    </Tip>
   </Accordion>
 </AccordionGroup>
 
