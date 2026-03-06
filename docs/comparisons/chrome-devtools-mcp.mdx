@@ -1,0 +1,201 @@
+---
+title: "Chrome DevTools MCP"
+description: "A developer-focused comparison of BrowserOS MCP and Chrome DevTools MCP for browser automation"
+---
+
+Both BrowserOS MCP and [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) give AI agents control over a browser via the Model Context Protocol. But they're built for different scopes. Chrome DevTools MCP focuses on debugging and inspection, while BrowserOS MCP is a complete browser automation and app integration platform.
+
+This page breaks down the differences for developers evaluating which to use with Claude Code, Gemini CLI, Cursor, or any MCP client.
+
+---
+
+## At a Glance
+
+| | **BrowserOS MCP** | **Chrome DevTools MCP** |
+|---|---|---|
+| **Total MCP tools** | 53 | 29 |
+| **External app integrations** | 40+ (Gmail, Slack, GitHub, etc.) | None |
+| **Setup** | Copy URL from settings, works instantly | Requires `--remote-debugging-port` flag and separate server process |
+| **Browser session** | Your real browser with cookies, logins, extensions | Attached debug session (some sites block WebDriver-controlled browsers) |
+| **Architecture** | Built into the browser | External Node.js process connecting via CDP |
+
+---
+
+## Feature Comparison
+
+### Navigation & Tab Management
+
+| Feature | BrowserOS MCP | Chrome DevTools MCP |
+|---------|:---:|:---:|
+| Navigate to URL / back / forward / reload | `navigate_page` | `navigate_page` |
+| Open new tab | `new_page` | `new_page` |
+| Close tab | `close_page` | `close_page` |
+| List open tabs | `list_pages` | `list_pages` |
+| Switch to tab | `show_page` | `select_page` |
+| Hidden/background tabs | `new_hidden_page` | - |
+| Move tab between windows | `move_page` | - |
+| Get active/focused tab | `get_active_page` | - |
+| Wait for condition | - | `wait_for` |
+
+### Content & Observation
+
+| Feature | BrowserOS MCP | Chrome DevTools MCP |
+|---------|:---:|:---:|
+| Accessibility tree snapshot | `take_snapshot` | `take_snapshot` |
+| Enhanced structural snapshot | `take_enhanced_snapshot` | - |
+| Page content as Markdown | `get_page_content` | - |
+| Extract all page links | `get_page_links` | - |
+| Raw HTML / DOM access | `get_dom` | - |
+| Search DOM (text / CSS / XPath) | `search_dom` | - |
+| Screenshot | `take_screenshot` | `take_screenshot` |
+| Execute JavaScript | `evaluate_script` | `evaluate_script` |
+
+### Interaction & Input
+
+| Feature | BrowserOS MCP | Chrome DevTools MCP |
+|---------|:---:|:---:|
+| Click element | `click` | `click` |
+| Click at coordinates | `click_at` | - |
+| Type / fill text | `fill` | `fill` |
+| Fill entire form | - | `fill_form` |
+| Type text (raw keystrokes) | - | `type_text` |
+| Clear input | `clear` | - |
+| Hover | `hover` | `hover` |
+| Drag | `drag` | `drag` |
+| Press key / key combo | `press_key` | `press_key` |
+| Check / uncheck checkbox | `check` / `uncheck` | - |
+| Select dropdown option | `select_option` | - |
+| Focus element | `focus` | - |
+| Scroll (directional) | `scroll` | - |
+| Upload file | `upload_file` | `upload_file` |
+| Handle dialog (alert/confirm) | `handle_dialog` | `handle_dialog` |
+
+### File & Export
+
+| Feature | BrowserOS MCP | Chrome DevTools MCP |
+|---------|:---:|:---:|
+| Save page as PDF | `save_pdf` | - |
+| Save screenshot to disk | `save_screenshot` | - |
+| Download file via click | `download_file` | - |
+
+### Window Management
+
+| Feature | BrowserOS MCP | Chrome DevTools MCP |
+|---------|:---:|:---:|
+| List windows | `list_windows` | - |
+| Create window | `create_window` | - |
+| Create hidden window | `create_hidden_window` | - |
+| Close window | `close_window` | - |
+| Activate / focus window | `activate_window` | - |
+
+### Tab Groups
+
+| Feature | BrowserOS MCP | Chrome DevTools MCP |
+|---------|:---:|:---:|
+| List tab groups | `list_tab_groups` | - |
+| Create tab group | `group_tabs` | - |
+| Update group (title/color) | `update_tab_group` | - |
+| Ungroup tabs | `ungroup_tabs` | - |
+| Close tab group | `close_tab_group` | - |
+
+### Bookmarks
+
+| Feature | BrowserOS MCP | Chrome DevTools MCP |
+|---------|:---:|:---:|
+| List bookmarks | `get_bookmarks` | - |
+| Create bookmark / folder | `create_bookmark` | - |
+| Remove bookmark | `remove_bookmark` | - |
+| Update bookmark | `update_bookmark` | - |
+| Move bookmark | `move_bookmark` | - |
+| Search bookmarks | `search_bookmarks` | - |
+
+### History
+
+| Feature | BrowserOS MCP | Chrome DevTools MCP |
+|---------|:---:|:---:|
+| Search history | `search_history` | - |
+| Get recent history | `get_recent_history` | - |
+| Delete URL from history | `delete_history_url` | - |
+| Delete history range | `delete_history_range` | - |
+
+### Debugging & Performance
+
+| Feature | BrowserOS MCP | Chrome DevTools MCP |
+|---------|:---:|:---:|
+| Console messages | Coming soon | `get_console_message` / `list_console_messages` |
+| Network request inspection | Coming soon | `get_network_request` / `list_network_requests` |
+| Performance tracing | Coming soon | `performance_start_trace` / `performance_stop_trace` |
+| Performance analysis | Coming soon | `performance_analyze_insight` |
+| Memory snapshot | Coming soon | `take_memory_snapshot` |
+| Lighthouse audit | Coming soon | `lighthouse_audit` |
+| Device / network emulation | Coming soon | `emulate` |
+| Resize viewport | Coming soon | `resize_page` |
+
+### External App Integrations
+
+| Feature | BrowserOS MCP | Chrome DevTools MCP |
+|---------|:---:|:---:|
+| Gmail, Outlook | Yes | - |
+| Google Calendar, Outlook Calendar | Yes | - |
+| Slack, Discord, Teams, WhatsApp | Yes | - |
+| GitHub, GitLab | Yes | - |
+| Linear, Jira, Asana, Monday, ClickUp | Yes | - |
+| Notion, Google Docs/Sheets/Drive | Yes | - |
+| Figma, Canva | Yes | - |
+| Salesforce, HubSpot | Yes | - |
+| Shopify, Stripe | Yes | - |
+| 20+ more services | Yes | - |
+
+---
+
+## Setup Comparison
+
+<Tabs>
+  <Tab title="BrowserOS MCP">
+    BrowserOS MCP is built into the browser. No separate process, no debug flags.
+
+    ```bash
+    # One command, done
+    claude mcp add --transport http browseros http://127.0.0.1:9239/mcp --scope user
+    ```
+
+    The server URL is available at `chrome://browseros/mcp`. Copy it and connect.
+  </Tab>
+  <Tab title="Chrome DevTools MCP">
+    Chrome DevTools MCP requires launching Chrome with remote debugging enabled and running a separate Node.js server.
+
+    ```bash
+    # Step 1: Launch Chrome with debug port
+    /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+
+    # Step 2: Install and run the MCP server
+    npx @anthropic-ai/chrome-devtools-mcp@latest
+
+    # Step 3: Connect your MCP client to the server
+    ```
+
+    Some sites may block sign-in when the browser is controlled via WebDriver (the default launch mechanism).
+  </Tab>
+</Tabs>
+
+---
+
+## Summary
+
+| Dimension | BrowserOS MCP | Chrome DevTools MCP |
+|-----------|:---:|:---:|
+| Browser automation tools | **54** | **29** |
+| External app integrations | **40+** | **0** |
+| Window management | Yes | No |
+| Tab groups | Yes | No |
+| Bookmarks & history | Yes | No |
+| File export (PDF, screenshots, downloads) | Yes | No |
+| Content extraction (Markdown, links, DOM) | Yes | No |
+| Console / network inspection | Coming soon | Yes |
+| Performance tracing & Lighthouse | Coming soon | Yes |
+| Memory snapshots | Coming soon | Yes |
+| Device emulation | Coming soon | Yes |
+| Setup complexity | Copy URL | Debug port + Node server |
+| Browser session | Real (cookies, extensions) | Debug-attached (WebDriver flags) |
+
+BrowserOS MCP gives you a broader automation surface: browser control, content extraction, file operations, and 40+ app integrations through a single connection. Debugging and performance tools are coming soon to BrowserOS MCP, which will close the remaining gap with Chrome DevTools MCP. For most AI agent workflows, BrowserOS MCP already covers more ground out of the box.
