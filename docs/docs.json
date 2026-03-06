@@ -34,6 +34,12 @@
         ]
       },
       {
+        "group": "Comparisons",
+        "pages": [
+          "comparisons/claude-cowork"
+        ]
+      },
+      {
         "group": "Integrations",
         "pages": ["integrations/n8n"]
       },
