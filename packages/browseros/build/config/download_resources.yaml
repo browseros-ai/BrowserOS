@@ -6,6 +6,8 @@
 # - Existing files are cleared and re-downloaded (ensures latest)
 # - Build fails immediately if any download fails
 # - For universal builds on macOS, both arm64 and x64 are downloaded automatically
+# - `download_type: artifact_zip` downloads an archive, validates
+#   `artifact-metadata.json`, and extracts the declared files into `destination`
 #
 # Conditional Operations:
 # - Use 'os' field to specify target operating systems
@@ -16,89 +18,53 @@
 #   - Supported values: debug, release
 # - Use 'executable' field to mark files that need executable permissions
 #   - Set to true for binaries (permissions are not preserved during download)
+# - Use 'download_type' field to switch from plain file download to archive extraction
+#   - Supported values: file, artifact_zip
 #
 # R2 Path Structure:
-#   binaries/browseros-server/{filename}
+#   artifacts/server/latest/browseros-server-resources-{target}.zip
 #
 # Example:
-#   - name: "My Binary - macOS ARM64"
-#     r2_key: "binaries/my-binary/my-binary-darwin-arm64"
-#     destination: "resources/binaries/my_binary/my-binary-darwin-arm64"
+#   - name: "My Artifact - macOS ARM64"
+#     r2_key: "artifacts/server/latest/browseros-server-resources-darwin-arm64.zip"
+#     destination: "resources/binaries/browseros_server/darwin-arm64"
+#     download_type: "artifact_zip"
 #     os: ["macos"]
 #     arch: ["arm64"]
 
 download_operations:
-  # BrowserOS Server Binary - Platform & Architecture specific
-  - name: "BrowserOS Server - macOS ARM64"
-    r2_key: "binaries/browseros-server/browseros-server-darwin-arm64"
-    destination: "resources/binaries/browseros_server/browseros-server-darwin-arm64"
+  # BrowserOS Server resource bundles - Platform & Architecture specific
+  - name: "BrowserOS Server Resources - macOS ARM64"
+    r2_key: "artifacts/server/latest/browseros-server-resources-darwin-arm64.zip"
+    destination: "resources/binaries/browseros_server/darwin-arm64"
+    download_type: "artifact_zip"
     os: ["macos"]
     arch: ["arm64"]
-    executable: true
 
-  - name: "BrowserOS Server - macOS x64"
-    r2_key: "binaries/browseros-server/browseros-server-darwin-x64"
-    destination: "resources/binaries/browseros_server/browseros-server-darwin-x64"
+  - name: "BrowserOS Server Resources - macOS x64"
+    r2_key: "artifacts/server/latest/browseros-server-resources-darwin-x64.zip"
+    destination: "resources/binaries/browseros_server/darwin-x64"
+    download_type: "artifact_zip"
     os: ["macos"]
     arch: ["x64"]
-    executable: true
 
-  - name: "BrowserOS Server - Linux ARM64"
-    r2_key: "binaries/browseros-server/browseros-server-linux-arm64"
-    destination: "resources/binaries/browseros_server/browseros-server-linux-arm64"
+  - name: "BrowserOS Server Resources - Linux ARM64"
+    r2_key: "artifacts/server/latest/browseros-server-resources-linux-arm64.zip"
+    destination: "resources/binaries/browseros_server/linux-arm64"
+    download_type: "artifact_zip"
     os: ["linux"]
     arch: ["arm64"]
-    executable: true
 
-  - name: "BrowserOS Server - Linux x64"
-    r2_key: "binaries/browseros-server/browseros-server-linux-x64"
-    destination: "resources/binaries/browseros_server/browseros-server-linux-x64"
+  - name: "BrowserOS Server Resources - Linux x64"
+    r2_key: "artifacts/server/latest/browseros-server-resources-linux-x64.zip"
+    destination: "resources/binaries/browseros_server/linux-x64"
+    download_type: "artifact_zip"
     os: ["linux"]
     arch: ["x64"]
-    executable: true
 
-  - name: "BrowserOS Server - Windows x64"
-    r2_key: "binaries/browseros-server/browseros-server-windows-x64.exe"
-    destination: "resources/binaries/browseros_server/browseros-server-windows-x64.exe"
+  - name: "BrowserOS Server Resources - Windows x64"
+    r2_key: "artifacts/server/latest/browseros-server-resources-windows-x64.zip"
+    destination: "resources/binaries/browseros_server/windows-x64"
+    download_type: "artifact_zip"
     os: ["windows"]
     arch: ["x64"]
-
-  # Bun Runtime - Platform & Architecture specific
-  - name: "Bun Runtime - macOS ARM64"
-    r2_key: "binaries/bun/bun-darwin-arm64"
-    destination: "resources/binaries/bun/bun-darwin-arm64"
-    os: ["macos"]
-    arch: ["arm64"]
-    executable: true
-
-  - name: "Bun Runtime - macOS x64"
-    r2_key: "binaries/bun/bun-darwin-x64"
-    destination: "resources/binaries/bun/bun-darwin-x64"
-    os: ["macos"]
-    arch: ["x64"]
-    executable: true
-
-  - name: "Bun Runtime - Linux ARM64"
-    r2_key: "binaries/bun/bun-linux-arm64"
-    destination: "resources/binaries/bun/bun-linux-arm64"
-    os: ["linux"]
-    arch: ["arm64"]
-    executable: true
-
-  - name: "Bun Runtime - Linux x64"
-    r2_key: "binaries/bun/bun-linux-x64"
-    destination: "resources/binaries/bun/bun-linux-x64"
-    os: ["linux"]
-    arch: ["x64"]
-    executable: true
-
-  - name: "Bun Runtime - Windows x64"
-    r2_key: "binaries/bun/bun-windows-x64.exe"
-    destination: "resources/binaries/bun/bun-windows-x64.exe"
-    os: ["windows"]
-    arch: ["x64"]
-
-  # BrowserOS Server Bundle (platform-independent)
-  - name: "BrowserOS Server Bundle"
-    r2_key: "binaries/browseros-server/index.js"
-    destination: "resources/binaries/browseros_server/index.js"
