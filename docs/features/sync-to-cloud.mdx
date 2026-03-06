@@ -59,7 +59,7 @@ Magic link sign-in means you never need to create or remember a password. Just e
   </Accordion>
 
   <Accordion title="Scheduled tasks" icon="calendar-check">
-    Your scheduled automations sync in both directions. Create a task on one device, edit it on another, and changes are merged automatically using timestamps to resolve conflicts. Task execution history (last run time, status) is also synced.
+    Your scheduled task configurations sync in both directions. Create a task on one device, edit it on another, and changes are merged automatically using timestamps to resolve conflicts. Only the schedule setup syncs (name, prompt, schedule type, and timing). Task run results and output stay on the device where the task ran.
   </Accordion>
 
   <Accordion title="Profile" icon="user">
@@ -72,12 +72,15 @@ Magic link sign-in means you never need to create or remember a password. Just e
 Some settings are device-specific and do not sync to the cloud:
 
 - **API keys and secrets** for LLM providers
+- **Memory** (core facts and daily notes)
+- **SOUL.md** (assistant personality)
 - **Theme** (light/dark mode)
 - **Workspace folder** selection
 - **Connected MCP servers**
 - **Workflows**
+- **Scheduled task results** (run output stays on the device where the task ran)
 
-This is intentional. Sensitive credentials never leave your device, and display preferences can differ between machines.
+This is intentional. Sensitive credentials never leave your device, memory and personality files stay private, and display preferences can differ between machines.
 
 ## How Sync Works
 
