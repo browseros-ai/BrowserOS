@@ -58,6 +58,9 @@ def _parse_artifact_metadata(metadata_bytes: bytes) -> dict[str, Any]:
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError("Artifact metadata is not valid JSON") from exc
 
+    if not isinstance(metadata, dict):
+        raise RuntimeError("Artifact metadata must be a JSON object")
+
     files = metadata.get("files")
     if not isinstance(files, list) or not files:
         raise RuntimeError("Artifact metadata must contain a non-empty files list")

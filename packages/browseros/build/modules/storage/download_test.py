@@ -101,6 +101,17 @@ class ExtractArtifactZipTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "checksum mismatch"):
                 extract_artifact_zip(archive_path, temp_path / "output")
 
+    def test_rejects_non_object_metadata_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            archive_path = temp_path / "artifact.zip"
+
+            with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr(ARTIFACT_METADATA_NAME, json.dumps(["not-a-dict"]))
+
+            with self.assertRaisesRegex(RuntimeError, "JSON object"):
+                extract_artifact_zip(archive_path, temp_path / "output")
+
     def _write_artifact_zip(
         self,
         archive_path: Path,
