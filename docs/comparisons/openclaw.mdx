@@ -1,0 +1,143 @@
+---
+title: "OpenClaw"
+description: "How BrowserOS compares to OpenClaw for everyday AI assistance"
+---
+
+[OpenClaw](https://openclaw.ai/) is an open-source personal AI assistant that runs on your machine and connects through messaging apps like WhatsApp, Telegram, Slack, and Discord. It is a powerful tool for technical users who want a self-hosted, always-on AI agent.
+
+BrowserOS takes a different approach. Instead of running a background server that you message through chat apps, BrowserOS puts the AI assistant directly inside your browser, where most of your work already happens. No terminal setup, no daemon management, no Node.js required.
+
+This comparison is for users deciding which tool fits their needs.
+
+## At a Glance
+
+| | **BrowserOS** | **OpenClaw** |
+|---|---|---|
+| **What it is** | AI-powered browser with built-in assistant | Self-hosted AI agent you message through chat apps |
+| **Setup** | Download and open | Install via npm, run onboarding wizard, configure daemon |
+| **Technical skill needed** | None | Comfortable with terminal and Node.js |
+| **Interface** | Built into your browser | WhatsApp, Telegram, Slack, Discord, iMessage, and 15+ more |
+| **Browser automation** | 53 tools (clicks, forms, navigation, screenshots, tabs, bookmarks, history) | Chrome via CDP (snapshots and actions) |
+| **App integrations** | 40+ built-in (OAuth or API key depending on the service) | Skills-based (community-built, self-installable) |
+| **Memory** | Two-tier: permanent core facts + 30-day daily notes | Persistent memory across conversations |
+| **Personality** | SOUL.md (inspired by OpenClaw's original concept) | SOUL.md (originated the concept) |
+| **LLM support** | 11+ providers including local models (Ollama, LM Studio) | Multiple providers with failover routing |
+| **Runs on** | macOS, Windows, Linux | macOS, Windows, Linux (+ iOS/Android companion apps) |
+| **Authentication** | OAuth or API key depending on the service | API keys, OAuth, pairing codes per channel |
+| **Open source** | Yes (AGPL-3.0) | Yes (MIT) |
+
+## Where BrowserOS Shines
+
+### No technical setup required
+
+OpenClaw requires Node.js 22+, npm installation, a terminal-based onboarding wizard, daemon configuration (launchd or systemd), and channel pairing for each messaging platform. If something goes wrong, you need `openclaw doctor` to diagnose issues.
+
+BrowserOS is a browser. Download it, open it, and start talking to the assistant. There is no daemon to manage, no services to keep running, and no terminal needed.
+
+### Browser automation built in
+
+BrowserOS gives the assistant full control of your browser with 53 tools: clicking buttons, filling forms, navigating between pages, taking screenshots, managing tabs, organizing bookmarks, searching history, and more. The assistant sees what you see and can interact with any website you are logged into.
+
+OpenClaw has browser automation through a dedicated Chrome instance with CDP, but it runs as a separate process rather than being integrated into the browser you are already using. With BrowserOS, the assistant works directly in your browsing session with all your cookies, logins, and open tabs.
+
+### 40+ app integrations built in
+
+BrowserOS connects to Gmail, Google Calendar, Slack, Notion, GitHub, Linear, Jira, Figma, Salesforce, Stripe, and 30+ more services out of the box. Most services connect through OAuth (one-click sign-in), while some require an API key. Either way, the assistant detects when an app is not connected and walks you through the setup right in the conversation.
+
+OpenClaw uses a skills system where integrations are community-built plugins. Some popular services have skills available, but connecting a new service often means finding the right skill, installing it, and configuring credentials manually.
+
+### Works where you already are
+
+Most of your work happens in a browser. BrowserOS puts the assistant right there, so it can see the page you are on, interact with web apps, and pull data from your open tabs. There is no context-switching between a chat app and your browser.
+
+OpenClaw's approach of messaging through WhatsApp or Telegram is clever for mobile use, but when you are at your computer working in a browser, having the assistant inside that browser is more natural and more capable.
+
+## Where OpenClaw Shines
+
+### Messaging app access
+
+OpenClaw connects to 20+ messaging platforms including WhatsApp, Telegram, Signal, iMessage, Discord, Slack, Microsoft Teams, and more. You can message your assistant from your phone or any chat app without opening a specific application. This is ideal if you want AI help on the go through apps you already have open.
+
+BrowserOS is a desktop browser. To use the assistant, you need to be in BrowserOS.
+
+### Always-on background agent
+
+OpenClaw runs as a daemon on your machine, processing tasks even when you are not actively chatting. It supports cron jobs, webhooks, and Gmail Pub/Sub for automated triggers. It can wake up, do something, and report back through your messaging app.
+
+BrowserOS has [scheduled tasks](/features/scheduled-tasks) that run automations on a schedule, but the browser needs to be running. OpenClaw's daemon approach is more suited for server-like always-on operation.
+
+### Mobile companion apps
+
+OpenClaw offers iOS and Android companion apps with camera access, voice input, screen recording, and device-level actions (notifications, contacts, calendar, SMS). This extends the assistant to your phone in a way that BrowserOS cannot currently match.
+
+### Agent-to-agent communication
+
+OpenClaw supports multi-session agent coordination where agents can discover each other, read transcripts, and send messages between sessions. This is useful for complex workflows where multiple specialized agents collaborate.
+
+### Self-modifying skills
+
+OpenClaw agents can write and install their own skills during a conversation. If the assistant does not have a capability, it can create one on the fly. This makes it extremely flexible for power users who want the agent to extend itself.
+
+## Feature Comparison
+
+### App Integrations
+
+| Service | BrowserOS | OpenClaw |
+|---------|-----------|----------|
+| Gmail | Built-in (OAuth) | Skill + API setup |
+| Google Calendar | Built-in (OAuth) | Skill + API setup |
+| Slack | Built-in (OAuth) | Built-in channel |
+| Discord | Built-in (OAuth) | Built-in channel |
+| Notion | Built-in (OAuth) | Skill |
+| GitHub | Built-in (OAuth) | Skill |
+| Linear | Built-in (OAuth or API key) | Skill |
+| Jira | Built-in (OAuth) | Skill |
+| Figma | Built-in (OAuth) | Skill |
+| Salesforce | Built-in (OAuth) | Skill |
+| Stripe | Built-in (API key) | Skill |
+| WhatsApp | Built-in (OAuth) | Built-in channel |
+| Shopify | Built-in (OAuth or API key) | Community skill |
+| Total integrations | 40+ built-in | 50+ via skills |
+
+### Memory and Personality
+
+| Feature | BrowserOS | OpenClaw |
+|---------|-----------|----------|
+| Persistent memory | Core facts (permanent) + daily notes (30 days) | Persistent across sessions |
+| Memory location | Local files on your machine | Local files on your machine |
+| Personality system | SOUL.md (inspired by OpenClaw) | SOUL.md (originated the concept) |
+| Memory search | Fuzzy search across all memories | Context-based recall |
+
+### Setup and Maintenance
+
+| | BrowserOS | OpenClaw |
+|---|-----------|----------|
+| Installation | Download browser | `npm install -g openclaw`, run onboarding wizard |
+| Runtime | Open the browser | Daemon process (launchd/systemd) |
+| Updates | Auto-update | `openclaw update --channel stable` |
+| Troubleshooting | Built-in | `openclaw doctor` CLI tool |
+| Node.js required | No | Yes (v22+) |
+| Terminal required | No | Yes |
+
+## Who Should Use What
+
+<CardGroup cols={2}>
+  <Card title="Choose BrowserOS if you..." icon="browser">
+    - Want an AI assistant without any technical setup
+    - Do most of your work in a browser
+    - Need browser automation (filling forms, clicking buttons, extracting data)
+    - Want 40+ app integrations that connect with one click
+    - Prefer a visual interface over terminal commands
+  </Card>
+  <Card title="Choose OpenClaw if you..." icon="terminal">
+    - Want to message your AI from WhatsApp, Telegram, or Signal
+    - Need an always-on agent that runs 24/7 as a background service
+    - Are comfortable with Node.js and terminal-based setup
+    - Want mobile companion apps for on-the-go access
+    - Need agents that can write their own extensions
+  </Card>
+</CardGroup>
+
+## Using Both Together
+
+BrowserOS and OpenClaw are not mutually exclusive. Some users run OpenClaw as their always-on mobile assistant (accessible through WhatsApp or Telegram) while using BrowserOS as their desktop browser for work that involves web apps, browser automation, and visual tasks. The two tools complement each other rather than compete directly.

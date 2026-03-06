@@ -40,7 +40,8 @@
         "group": "Comparisons",
         "pages": [
           "comparisons/chrome-devtools-mcp",
-          "comparisons/claude-cowork"
+          "comparisons/claude-cowork",
+          "comparisons/openclaw"
         ]
       },
       {
