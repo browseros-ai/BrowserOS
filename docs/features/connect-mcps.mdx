@@ -1,11 +1,9 @@
 ---
-title: "Connect Apps (MCPs)"
-description: "Link your apps to BrowserOS so the assistant can read data and take actions"
+title: "Connect Apps"
+description: "Connect 40+ apps to BrowserOS so the assistant can work with your email, calendar, projects, and more"
 ---
 
-Connect your favorite apps to BrowserOS so the assistant can read your emails, check your calendar, post to Slack, update Notion, and more -all through natural conversation.
-
-See how to connect an app and start using it with the assistant:
+Connect your favorite apps to BrowserOS and let the assistant work across all of them. Read emails, check your calendar, create tasks, post messages, manage files, and more, all through natural conversation.
 
 <video
   controls
@@ -13,44 +11,180 @@ See how to connect an app and start using it with the assistant:
   src="https://pub-80f8a01e6e8b4239ae53a7652ef85877.r2.dev/resources/feature-videos/4-MCP.mp4"
 ></video>
 
-## What is MCP?
+## How It Works
 
-BrowserOS Connected Apps use the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), an open standard for connecting AI assistants to external systems. Think of it as a single, consistent way to plug your apps into the assistant.
+BrowserOS uses the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) to connect your apps. You do not need to install anything or manage API keys. Just sign in once and the assistant handles the rest.
 
-<Tip>
-Wondering how BrowserOS MCP compares to Chrome DevTools MCP or other browser automation tools? See our [detailed feature comparison](/comparisons/chrome-devtools-mcp) covering 53 browser tools, 40+ app integrations, and why BrowserOS MCP gives developers more out of the box.
-</Tip>
 
-## Built-in Apps
+## Smart App Connection
 
-- **Gmail** - Send, read, and search emails
-- **Google Calendar** - Create events, check your schedule
-- **Google Docs** - Create and edit documents
-- **Google Sheets** - Create and edit spreadsheets
-- **Google Drive** - Upload, download, and manage files
-- **Slack** - Post messages, manage channels
-- **Notion** - Create pages, manage databases
-- **LinkedIn** - Post updates, manage connections
+When you ask the assistant to do something that needs an app you have not connected yet, it will detect this automatically and guide you through signing in, right in the conversation. No need to set things up in advance. You only sign in once per app, and it stays connected for future requests.
 
-## Connect a Built-in App
+<Steps>
+  <Step title="You make a request">
+    Ask the assistant something like "What's on my calendar today?" or "Send an email to Sarah."
+  </Step>
+  <Step title="The assistant detects the app is not connected">
+    If you have not signed into that app yet, the assistant opens a sign-in page in your browser.
+  </Step>
+  <Step title="You sign in once">
+    Complete the OAuth sign-in. Your credentials are never stored in BrowserOS.
+  </Step>
+  <Step title="The assistant continues where it left off">
+    Once you confirm you are signed in, the assistant picks up right where it stopped and completes your request.
+  </Step>
+</Steps>
 
-1. Go to **Settings → Connected Apps**
-2. Click **Add built-in app** and select the app
-3. Sign in and authorize BrowserOS
+{/* <Frame caption="The assistant detects an unconnected app and opens the sign-in page">
+  <img src="/images/connect-apps-smart-connection.png" alt="Smart app connection prompt in chat" />
+</Frame> */}
+
+You can also connect apps ahead of time from Settings if you prefer.
+
+## Connect from Settings
+
+<Steps>
+  <Step title="Open Connected Apps">
+    Go to **Settings > Connected Apps**
+  </Step>
+  <Step title="Add an app">
+    Click **Add built-in app** and select the app you want
+  </Step>
+  <Step title="Sign in">
+    Complete the OAuth sign-in when prompted
+  </Step>
+</Steps>
 
 <Frame caption="Connected apps show a green 'Authenticated' badge">
   <img src="/images/connect-apps-settings.png" alt="Connected Apps settings page" />
 </Frame>
 
-## Use Connected Apps
+## 40+ Supported Apps
 
-Just ask the assistant what you want -it will automatically use the right connected apps.
+BrowserOS connects to over 40 apps across every category you need.
 
-<Frame caption="Ask naturally and the assistant uses your connected apps">
-  <img src="/images/connect-apps-query.png" alt="Asking what's on my calendar today" />
-</Frame>
+<AccordionGroup>
+  <Accordion title="Email" icon="envelope">
+    | App | What you can do |
+    |-----|----------------|
+    | **Gmail** | Send, read, and search emails, manage drafts and labels |
+    | **Outlook Mail** | Send, read, and manage emails |
+    | **Resend** | Send transactional and marketing emails |
+  </Accordion>
+
+  <Accordion title="Calendar and Scheduling" icon="calendar">
+    | App | What you can do |
+    |-----|----------------|
+    | **Google Calendar** | Create events, find free time, manage calendars |
+    | **Outlook Calendar** | Schedule meetings, manage events |
+    | **Cal.com** | Schedule meetings, manage availability |
+  </Accordion>
+
+  <Accordion title="Messaging" icon="comments">
+    | App | What you can do |
+    |-----|----------------|
+    | **Slack** | Post messages, manage channels |
+    | **Discord** | Send messages, manage servers |
+    | **WhatsApp** | Send messages, manage conversations |
+    | **Microsoft Teams** | Chat, meet, and collaborate |
+  </Accordion>
+
+  <Accordion title="Development" icon="code">
+    | App | What you can do |
+    |-----|----------------|
+    | **GitHub** | Manage repos, issues, and pull requests |
+    | **GitLab** | Manage repos, issues, and merge requests |
+    | **Vercel** | Deploy and manage web applications |
+    | **Postman** | Test and manage APIs |
+    | **Cloudflare** | Manage domains, DNS, and security |
+    | **Supabase** | Manage databases and backend services |
+  </Accordion>
+
+  <Accordion title="Project Management" icon="list-check">
+    | App | What you can do |
+    |-----|----------------|
+    | **Linear** | Create issues, manage cycles and projects |
+    | **Jira** | Create issues, manage sprints |
+    | **Asana** | Organize and track team projects |
+    | **Monday** | Manage work and team collaboration |
+    | **ClickUp** | Manage tasks, projects, and workflows |
+  </Accordion>
+
+  <Accordion title="Documents and Productivity" icon="file-lines">
+    | App | What you can do |
+    |-----|----------------|
+    | **Notion** | Create pages, manage databases |
+    | **Google Docs** | Create and edit documents |
+    | **Google Sheets** | Create and edit spreadsheets |
+    | **Google Drive** | Upload, download, and manage files |
+    | **Google Forms** | Create and manage forms and surveys |
+    | **Confluence** | Create and manage documentation |
+    | **Airtable** | Manage bases, tables, and records |
+  </Accordion>
+
+  <Accordion title="File Storage" icon="folder-open">
+    | App | What you can do |
+    |-----|----------------|
+    | **Dropbox** | Store and share files |
+    | **OneDrive** | Store and sync files with Microsoft |
+    | **Box** | Manage and share enterprise files |
+  </Accordion>
+
+  <Accordion title="Design" icon="pen-ruler">
+    | App | What you can do |
+    |-----|----------------|
+    | **Figma** | Access and manage design files |
+    | **Canva** | Create and manage designs |
+  </Accordion>
+
+  <Accordion title="CRM and Marketing" icon="chart-line">
+    | App | What you can do |
+    |-----|----------------|
+    | **Salesforce** | Manage leads, contacts, and opportunities |
+    | **HubSpot** | Manage contacts, deals, and marketing |
+  </Accordion>
+
+  <Accordion title="E-commerce and Payments" icon="cart-shopping">
+    | App | What you can do |
+    |-----|----------------|
+    | **Shopify** | Manage products, orders, and store |
+    | **Stripe** | Manage payments and subscriptions |
+  </Accordion>
+
+  <Accordion title="Analytics" icon="chart-bar">
+    | App | What you can do |
+    |-----|----------------|
+    | **PostHog** | Query analytics, manage feature flags |
+    | **Mixpanel** | Analyze user behavior and metrics |
+  </Accordion>
+
+  <Accordion title="Support" icon="headset">
+    | App | What you can do |
+    |-----|----------------|
+    | **Zendesk** | Manage support tickets and customers |
+    | **Intercom** | Manage customer messaging and support |
+  </Accordion>
+
+  <Accordion title="Search and AI" icon="magnifying-glass">
+    | App | What you can do |
+    |-----|----------------|
+    | **Brave Search** | Search the web privately |
+    | **Exa** | AI-powered semantic web search |
+    | **Mem0** | Store and retrieve AI memory |
+  </Accordion>
+
+  <Accordion title="Social and Content" icon="share-nodes">
+    | App | What you can do |
+    |-----|----------------|
+    | **LinkedIn** | Post updates, manage connections |
+    | **YouTube** | Access video info and transcripts |
+    | **WordPress** | Manage websites and blog content |
+  </Accordion>
+</AccordionGroup>
 
 ## Example Prompts
+
+The assistant figures out which apps to use based on what you ask. Just describe what you want in plain language.
 
 <AccordionGroup>
   <Accordion title="Calendar" icon="calendar">
@@ -65,30 +199,56 @@ Just ask the assistant what you want -it will automatically use the right connec
     - Find emails about the Q4 budget from last week
     - Send an email to the team with the meeting notes
   </Accordion>
-  <Accordion title="Slack" icon="hashtag">
+  <Accordion title="Messaging" icon="hashtag">
     - Post a message to #general saying I'll be out tomorrow
     - What's the latest message in #engineering?
     - Send a DM to Sarah asking if she's free for lunch
     - Summarize what was discussed in #product today
   </Accordion>
-  <Accordion title="Notion" icon="cube">
+  <Accordion title="Project Management" icon="list-check">
+    - Create a new Linear issue for the homepage redesign
+    - What are my open tasks in Jira?
+    - Move the "Launch campaign" task to complete in Asana
+    - Add a comment to the latest ClickUp task
+  </Accordion>
+  <Accordion title="Documents" icon="cube">
     - Add "Review Q4 report" to my Notion tasks database
     - Create a new page in my Projects database for the website redesign
     - What are my open tasks in Notion?
     - Update the status of the "Launch campaign" task to complete
   </Accordion>
-  <Accordion title="Cross-app workflows" icon="diagram-project">
-    - Check my calendar for tomorrow, then draft an email to John summarizing what we're meeting about
-    - Find all emails from last week about the budget and create a summary in Notion
-    - Look at my Slack DMs and add any action items to my Notion tasks
-  </Accordion>
 </AccordionGroup>
+
+## Cross-App Workflows
+
+The real power of connected apps is combining them in a single request. The assistant can pull data from one app and use it in another without you switching between tabs.
+
+<CardGroup cols={2}>
+  <Card title="Email to task" icon="envelope">
+    "Find action items in my latest emails and add them to my Notion tasks"
+  </Card>
+  <Card title="Meeting prep" icon="calendar">
+    "Check my calendar for tomorrow, then draft an email to John summarizing what we're meeting about"
+  </Card>
+  <Card title="Bug triage" icon="bug">
+    "Test the checkout flow on our staging site, file a Linear issue if anything is broken, and post a summary to #engineering on Slack"
+  </Card>
+  <Card title="Sales pipeline" icon="chart-line">
+    "Pull my open deals from Salesforce and create a summary spreadsheet in Google Sheets"
+  </Card>
+  <Card title="Content roundup" icon="newspaper">
+    "Check the latest pull requests on our main repo and post a daily summary to #dev-updates on Slack"
+  </Card>
+  <Card title="Expense tracking" icon="receipt">
+    "Find all receipts in my Gmail from this month and organize them in a Google Sheet"
+  </Card>
+</CardGroup>
 
 ## Add a Custom MCP Server
 
 You can connect any MCP-compatible server that exposes an SSE endpoint.
 
-1. Go to **Settings → Connected Apps**
+1. Go to **Settings > Connected Apps**
 2. Click **Add custom app**
 3. Enter your server URL (e.g., `http://localhost:8000/sse`) and give it a name
 
@@ -127,16 +287,19 @@ Keep the terminal running while you use BrowserOS. The local server handles auth
   </Accordion>
 </AccordionGroup>
 
-## Privacy & Security
+## Privacy and Security
 
-<Columns cols={3}>
-  <Card title="Your data stays local" icon="lock">
-    BrowserOS connects directly to your accounts. Credentials are stored locally on your machine.
+<Columns cols={2}>
+  <Card title="Secure OAuth" icon="shield-check">
+    All apps use OAuth sign-in. BrowserOS never sees or stores your passwords.
+  </Card>
+  <Card title="On-demand only" icon="clock">
+    Apps are only accessed when you ask. Nothing runs in the background.
   </Card>
   <Card title="You control access" icon="toggle-on">
-    Connect or disconnect apps anytime in Settings.
+    Connect or disconnect any app at any time from Settings.
   </Card>
-  <Card title="Secure OAuth" icon="shield-check">
-    Built-in apps use OAuth flows -BrowserOS never sees your passwords.
+  <Card title="Credentials stay local" icon="lock">
+    Your authentication tokens are managed securely and stored locally on your machine.
   </Card>
 </Columns>
