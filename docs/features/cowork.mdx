@@ -1,9 +1,9 @@
 ---
-title: "Filesystem Access"
-description: "Give the assistant controlled access to local files and commands"
+title: "Cowork"
+description: "Give the agent controlled access to local files and commands alongside browser automation"
 ---
 
-Filesystem Access lets you describe complex tasks and let the agent handle them end-to-end. Combine browser automation with local file operations — research on the web, then save reports directly to your folder.
+Cowork lets you describe complex tasks and let the agent handle them end-to-end. It combines browser automation with local file operations: research on the web, then save reports directly to your folder. Read code, edit files, run shell commands, and search through your project, all in the same session as your browser tasks.
 
 Here's what it looks like to give the agent access to your local files:
 
@@ -13,29 +13,38 @@ Here's what it looks like to give the agent access to your local files:
   src="https://pub-80f8a01e6e8b4239ae53a7652ef85877.r2.dev/resources/feature-videos/3-filesystem-access.mp4"
 ></video>
 
-## Why Filesystem Access?
+## Why Cowork?
 
-Without Filesystem Access, the agent can only interact with browser tabs. With Filesystem Access enabled, it gains full access to a folder on your machine:
+Without Cowork, the agent can only interact with browser tabs. With Cowork enabled, it gains full access to a folder on your machine through 7 filesystem tools:
 
-<Columns cols={3}>
-  <Card title="Read files" icon="file-import">
-    Access documents, data files, and more from your selected folder
+<CardGroup cols={3}>
+  <Card title="Read & write files" icon="file-lines">
+    Read documents and data files, write reports, markdown, HTML, and other outputs
   </Card>
-  <Card title="Write files" icon="file-export">
-    Save reports, spreadsheets, markdown, HTML, and other outputs
+  <Card title="Edit files" icon="pen-to-square">
+    Make targeted edits to existing files with surgical string replacement
   </Card>
   <Card title="Run commands" icon="terminal">
-    Execute shell commands within the folder
+    Execute shell commands within the sandboxed folder
   </Card>
-</Columns>
+  <Card title="Search content" icon="magnifying-glass">
+    Search file contents with regex or literal patterns across your project
+  </Card>
+  <Card title="Find files" icon="folder-tree">
+    Find files by glob pattern, with smart filtering of build directories
+  </Card>
+  <Card title="Browse directories" icon="list">
+    List directory contents with file sizes, sorted and organized
+  </Card>
+</CardGroup>
 
 The real power: do both browser automation AND file operations in a single task. Describe what you want, step away, and come back to finished work.
 
-## Setting Up Filesystem Access
+## Setting Up Cowork
 
 <Steps>
-  <Step title="Open the Filesystem Access selector">
-    Click the **Filesystem Access** dropdown next to the prompt input
+  <Step title="Open the Cowork selector">
+    Click the **Cowork** dropdown next to the prompt input
   </Step>
   <Step title="Choose a folder">
     Select a recent folder or click **Choose a different folder**
@@ -49,15 +58,106 @@ The real power: do both browser automation AND file operations in a single task.
   <img src="/features/cowork/cowork-selector.png" alt="Select a folder for the agent to operate in" />
 </Frame>
 
-The agent is sandboxed to your selected folder — it cannot access files outside of it.
+The agent is sandboxed to your selected folder. It cannot access files outside of it.
+
+<Note>
+Cowork is available in **Agent Mode** only. In Chat Mode, the agent works with browser tabs only.
+</Note>
 
 <Tip>
 To disable file access, select **No folder** and the agent will work with browser tabs only.
 </Tip>
 
+## Filesystem Tools
+
+Cowork provides 7 filesystem tools that the agent can use alongside browser automation:
+
+<AccordionGroup>
+  <Accordion title="filesystem_read" icon="file-import">
+    Read a file from the filesystem. Returns text content with line numbers, or image data for image files (PNG, JPG, GIF, WEBP, BMP, SVG, ICO). Supports pagination through large files with `offset` and `limit` parameters.
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `path` | string (required) | File path relative to working directory |
+    | `offset` | number (optional) | Starting line number (1-indexed) |
+    | `limit` | number (optional) | Max lines to read |
+
+    Responses are capped at 2000 lines or 50KB per request.
+  </Accordion>
+
+  <Accordion title="filesystem_write" icon="file-export">
+    Create or overwrite a file. Automatically creates parent directories if they don't exist.
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `path` | string (required) | File path relative to working directory |
+    | `content` | string (required) | Complete file content to write |
+  </Accordion>
+
+  <Accordion title="filesystem_edit" icon="pen-to-square">
+    Make a targeted edit by replacing an exact string match. If the exact match fails, a whitespace-tolerant fuzzy match is attempted. Preserves original line endings (CRLF, CR, LF) and BOM.
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `path` | string (required) | File path relative to working directory |
+    | `old_string` | string (required) | Exact text to find |
+    | `new_string` | string (required) | Replacement text |
+
+    Returns a side-by-side diff of the change.
+  </Accordion>
+
+  <Accordion title="filesystem_bash" icon="terminal">
+    Execute a shell command and return its output. Commands run in `sh`/`bash` on Unix or `cmd` on Windows.
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `command` | string (required) | Shell command to execute |
+    | `timeout` | number (optional) | Timeout in seconds (default: 120) |
+
+    Output is truncated to the last 2000 lines if too large. Returns the exit code on failure.
+  </Accordion>
+
+  <Accordion title="filesystem_find" icon="folder-tree">
+    Find files matching a glob pattern. Searches recursively while skipping common build directories (`node_modules`, `.git`, `dist`, `build`, `.next`, `coverage`, `__pycache__`, and more).
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `pattern` | string (required) | Glob pattern (e.g., `*.ts`, `**/*.json`) |
+    | `path` | string (optional) | Directory to search (default: working directory) |
+    | `limit` | number (optional) | Max results (default: 1000) |
+
+    Returns relative file paths sorted alphabetically.
+  </Accordion>
+
+  <Accordion title="filesystem_grep" icon="magnifying-glass">
+    Search file contents using regex or literal string matching. Skips binary files and files over 2MB.
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `pattern` | string (required) | Search pattern (regex by default) |
+    | `path` | string (optional) | Directory or file to search |
+    | `glob` | string (optional) | Filter files by glob (e.g., `*.ts`) |
+    | `ignore_case` | boolean (optional) | Case-insensitive search |
+    | `literal` | boolean (optional) | Treat pattern as literal string |
+    | `context` | number (optional) | Lines of context around matches |
+    | `limit` | number (optional) | Max matches (default: 100) |
+  </Accordion>
+
+  <Accordion title="filesystem_ls" icon="list">
+    List directory contents. Shows directories first (with trailing `/`), then files with human-readable sizes.
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `path` | string (optional) | Directory path (default: working directory) |
+    | `limit` | number (optional) | Max entries (default: 500) |
+
+    Entries are sorted alphabetically, case-insensitive.
+  </Accordion>
+</AccordionGroup>
+
 ## Try It: Research and Create a Report
 
-With Filesystem Access enabled, try this prompt:
+With Cowork enabled, try this prompt:
 
 ```
 Read the top 3 stories on Hacker News, read the comments too, and write an HTML report.
@@ -88,7 +188,7 @@ The agent will:
 
 <AccordionGroup>
   <Accordion title="Organize your downloads" icon="folder-tree">
-    > Go through my Downloads folder and organize files by type — documents, images, videos, archives.
+    > Go through my Downloads folder and organize files by type: documents, images, videos, archives.
   </Accordion>
   <Accordion title="Competitive research report" icon="magnifying-glass-chart">
     > Research key trends about [topic] on Reddit, Twitter, and LinkedIn. Create an HTML report with your findings.
@@ -99,13 +199,19 @@ The agent will:
   <Accordion title="Content aggregation" icon="newspaper">
     > Find the top posts from these 5 subreddits today and compile them into a daily digest document.
   </Accordion>
+  <Accordion title="Codebase exploration" icon="code">
+    > Search my project for all TODO comments, list them with file paths and line numbers, then create a summary markdown file.
+  </Accordion>
+  <Accordion title="Log analysis" icon="file-lines">
+    > Grep through the log files in this folder for errors from the last 24 hours and write a summary of what went wrong.
+  </Accordion>
 </AccordionGroup>
 
 ## Security
 
-<Columns cols={3}>
+<CardGroup cols={3}>
   <Card title="Sandboxed access" icon="box">
-    The agent can only access the folder you select — no parent directories or other locations
+    The agent can only access the folder you select. No parent directories, no path traversal.
   </Card>
   <Card title="Revoke anytime" icon="ban">
     Select **No folder** to instantly disable file access
@@ -113,8 +219,4 @@ The agent will:
   <Card title="Local only" icon="house-laptop">
     All file operations happen locally on your machine
   </Card>
-</Columns>
-
-## Feedback
-
-Filesystem Access is a new feature. If you have feedback or feature requests, [open a GitHub issue](https://github.com/browseros-ai/BrowserOS/issues).
+</CardGroup>

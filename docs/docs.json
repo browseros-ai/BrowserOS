@@ -35,7 +35,10 @@
       },
       {
         "group": "Comparisons",
-        "pages": ["comparisons/chrome-devtools-mcp"]
+        "pages": [
+          "comparisons/chrome-devtools-mcp",
+          "comparisons/claude-cowork"
+        ]
       },
       {
         "group": "Integrations",
