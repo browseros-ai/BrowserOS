@@ -65,6 +65,10 @@
   "navbar": {
     "links": [
       {
+        "label": "llms.txt",
+        "href": "/llms.txt"
+      },
+      {
         "label": "Support",
         "href": "https://discord.gg/YKwjt5vuKr"
       }
