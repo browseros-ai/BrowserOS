@@ -30,6 +30,7 @@
           "features/connect-mcps",
           "features/use-with-claude-code",
           "features/soul",
+          "features/memory",
           "features/sync-to-cloud",
           "features/llm-chat-hub",
           "features/ad-blocking"

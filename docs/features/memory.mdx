@@ -1,0 +1,128 @@
+---
+title: "Memory"
+description: "Your assistant remembers what matters across every conversation"
+---
+
+The BrowserOS assistant has long-term memory. It remembers your name, your projects, the tools you use, and things that came up in past conversations. You do not need to repeat yourself. The assistant builds up knowledge about you over time and uses it to give better, more relevant answers.
+
+## How Memory Works
+
+Memory is automatic. As you chat, the assistant saves important facts and observations to local files on your machine. Before responding in future conversations, it searches these files to recall relevant context.
+
+<CardGroup cols={2}>
+  <Card title="Remembers you" icon="user">
+    Your name, job, location, projects, and preferences are stored permanently and recalled whenever relevant.
+  </Card>
+  <Card title="Keeps session notes" icon="note-sticky">
+    Useful details from each conversation are saved as daily notes and kept for 30 days.
+  </Card>
+  <Card title="Searches before answering" icon="magnifying-glass">
+    The assistant proactively searches its memory before responding, so it can reference things you have mentioned before.
+  </Card>
+  <Card title="Stays on your machine" icon="hard-drive">
+    All memory files are plain Markdown stored locally. Memory is never uploaded to the cloud, even with Sync to Cloud enabled.
+  </Card>
+</CardGroup>
+
+## Two Types of Memory
+
+BrowserOS uses a two-tier memory system to keep important facts separate from session notes.
+
+### Core Memory
+
+Core memory holds permanent facts about you. Things like your name, where you work, what projects you are working on, the tools and languages you use, and people you mention regularly. These facts persist forever and are never automatically deleted.
+
+Core memory lives in a single file called `CORE.md`. When the assistant learns something new about you, it reads the existing core memory, merges the new fact in, and saves the updated file.
+
+**Examples of what goes in core memory:**
+- Your name and role
+- Company and team
+- Projects you are working on
+- Tools, languages, and frameworks you use
+- People you mention often
+- Long-term preferences ("I prefer TypeScript over JavaScript")
+
+### Daily Memory
+
+Daily memory holds session notes, observations, and recent events. Each day gets its own file (e.g., `2026-03-07.md`), and entries are timestamped so the assistant can see when things happened.
+
+Daily memories automatically expire after **30 days**. If something keeps coming up, the assistant promotes it to core memory so it is not lost.
+
+**Examples of what goes in daily memory:**
+- Tasks you worked on today
+- Decisions made during a conversation
+- Temporary context ("meeting with Sarah moved to Thursday")
+- Research findings from a browsing session
+
+## Memory in Action
+
+You do not need to tell the assistant to remember things. It picks up on important details naturally. But you can also be explicit:
+
+<AccordionGroup>
+  <Accordion title="Automatic memory" icon="wand-magic-sparkles">
+    Just mention something in conversation and the assistant decides whether to save it:
+    - "I'm working on a project called Atlas at Acme Corp" -> saved to core memory
+    - "We decided to go with Postgres instead of MongoDB" -> saved to daily memory
+    - "My name is Sarah" -> saved to core memory
+  </Accordion>
+  <Accordion title="Ask it to remember" icon="bookmark">
+    Be explicit when you want something remembered:
+    - "Remember that our staging URL is staging.example.com"
+    - "Save this: the design review happens every Tuesday at 2pm"
+    - "Remember that I prefer dark mode in all my tools"
+  </Accordion>
+  <Accordion title="Ask it to recall" icon="rotate-left">
+    The assistant searches memory automatically, but you can also ask directly:
+    - "What do you remember about the Atlas project?"
+    - "What did we discuss yesterday?"
+    - "Do you know my team members' names?"
+  </Accordion>
+  <Accordion title="Ask it to forget" icon="eraser">
+    You can ask the assistant to remove specific memories:
+    - "Forget my phone number"
+    - "Remove the note about the staging URL"
+    - "Clear what you know about Project X"
+  </Accordion>
+</AccordionGroup>
+
+## Where Memory Lives
+
+All memory files are stored locally on your machine in the BrowserOS data folder:
+
+| File | Path | Purpose |
+|------|------|---------|
+| **Core memory** | `~/.browseros/memory/CORE.md` | Permanent facts about you |
+| **Daily notes** | `~/.browseros/memory/2026-03-07.md` | Session notes, auto-expire after 30 days |
+
+
+## Memory vs SOUL.md
+
+BrowserOS separates what the assistant **knows** from how it **behaves**. These are two different systems that work together.
+
+<Columns cols={2}>
+  <Card title="Memory" icon="brain">
+    **Facts about you and the world.** Your name, projects, preferences, recent events. Stored in CORE.md and daily files.
+  </Card>
+  <Card title="SOUL.md" icon="heart">
+    **How the assistant acts.** Personality, tone, communication style, boundaries. Stored in a single SOUL.md file. See [SOUL.md](/features/soul) for details.
+  </Card>
+</Columns>
+
+When the assistant learns that you work at Acme Corp, that goes in memory. When it learns that you prefer bullet points over paragraphs, that goes in SOUL.md. This separation means the assistant can change its personality without losing knowledge about you, and vice versa.
+
+## Privacy
+
+<Columns cols={2}>
+  <Card title="Never leaves your machine" icon="lock">
+    Memory files live on your machine and are never uploaded to any server. Even with Sync to Cloud enabled, memory stays local.
+  </Card>
+  <Card title="You control what is remembered" icon="toggle-on">
+    Ask the assistant to forget anything at any time. You can also directly edit or delete the memory files.
+  </Card>
+  <Card title="Plain text files" icon="file-lines">
+    Memory is stored as readable Markdown. No hidden databases or encrypted blobs. You can inspect everything.
+  </Card>
+  <Card title="30-day auto-cleanup" icon="clock">
+    Daily notes are automatically deleted after 30 days. Only facts you have promoted to core memory persist.
+  </Card>
+</Columns>
