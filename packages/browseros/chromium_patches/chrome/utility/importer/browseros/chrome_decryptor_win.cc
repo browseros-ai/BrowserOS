@@ -1,17 +1,16 @@
 diff --git a/chrome/utility/importer/browseros/chrome_decryptor_win.cc b/chrome/utility/importer/browseros/chrome_decryptor_win.cc
 new file mode 100644
-index 0000000000000..c56a27b698eda
+index 0000000000000..d4653cb2abf43
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_decryptor_win.cc
-@@ -0,0 +1,246 @@
+@@ -0,0 +1,245 @@
 +// Copyright 2024 AKW Technology Inc
 +// Chrome decryption - Windows implementation
 +// Uses DPAPI for key retrieval, AES-256-GCM for decryption
 +
 +#include "chrome/utility/importer/browseros/chrome_decryptor.h"
 +
-+#include <windows.h>
-+#include <wincrypt.h>
++#include "base/win/wincrypt_shim.h"
 +
 +#include "base/base64.h"
 +#include "base/files/file_util.h"
