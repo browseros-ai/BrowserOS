@@ -21,11 +21,11 @@ SPARKLE_NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 ET.register_namespace("sparkle", SPARKLE_NS)
 
 SERVER_PLATFORMS = [
-    {"name": "darwin_arm64", "binary": "browseros-server-darwin-arm64", "os": "macos", "arch": "arm64"},
-    {"name": "darwin_x64", "binary": "browseros-server-darwin-x64", "os": "macos", "arch": "x86_64"},
-    {"name": "linux_arm64", "binary": "browseros-server-linux-arm64", "os": "linux", "arch": "arm64"},
-    {"name": "linux_x64", "binary": "browseros-server-linux-x64", "os": "linux", "arch": "x86_64"},
-    {"name": "windows_x64", "binary": "browseros-server-windows-x64.exe", "os": "windows", "arch": "x86_64"},
+    {"name": "darwin_arm64", "binary": "browseros-server-darwin-arm64", "target": "darwin-arm64", "os": "macos", "arch": "arm64"},
+    {"name": "darwin_x64", "binary": "browseros-server-darwin-x64", "target": "darwin-x64", "os": "macos", "arch": "x86_64"},
+    {"name": "linux_arm64", "binary": "browseros-server-linux-arm64", "target": "linux-arm64", "os": "linux", "arch": "arm64"},
+    {"name": "linux_x64", "binary": "browseros-server-linux-x64", "target": "linux-x64", "os": "linux", "arch": "x86_64"},
+    {"name": "windows_x64", "binary": "browseros-server-windows-x64.exe", "target": "windows-x64", "os": "windows", "arch": "x86_64"},
 ]
 
 APPCAST_TEMPLATE = """<?xml version="1.0" encoding="utf-8"?>
@@ -74,6 +74,35 @@ class ExistingAppcast:
     version: str
     pub_date: str
     artifacts: Dict[str, SignedArtifact]
+
+
+def find_server_binary(binaries_dir: Path, platform: dict) -> Optional[Path]:
+    """Find server binary in either flat or artifact-extracted directory structure.
+
+    Supports two layouts:
+      Flat:     {binaries_dir}/{binary_name}        (e.g., browseros-server-darwin-arm64)
+      Artifact: {binaries_dir}/{target}/resources/bin/browseros_server[.exe]
+
+    Args:
+        binaries_dir: Root directory containing server binaries
+        platform: Platform dict from SERVER_PLATFORMS
+
+    Returns:
+        Path to binary if found, None otherwise
+    """
+    # Flat structure (used with --binaries pointing to mono build output)
+    flat_path = binaries_dir / platform["binary"]
+    if flat_path.exists():
+        return flat_path
+
+    # Artifact-extracted structure (used after download_resources)
+    target = platform.get("target", platform["name"].replace("_", "-"))
+    bin_name = "browseros_server.exe" if platform["os"] == "windows" else "browseros_server"
+    artifact_path = binaries_dir / target / "resources" / "bin" / bin_name
+    if artifact_path.exists():
+        return artifact_path
+
+    return None
 
 
 def parse_existing_appcast(appcast_path: Path) -> Optional[ExistingAppcast]:

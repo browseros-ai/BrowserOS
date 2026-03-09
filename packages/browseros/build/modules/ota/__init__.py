@@ -9,6 +9,7 @@ from .common import (
     SignedArtifact,
     SERVER_PLATFORMS,
     APPCAST_TEMPLATE,
+    find_server_binary,
 )
 from .sign_binary import (
     sign_macos_binary,
@@ -29,6 +30,7 @@ __all__ = [
     "parse_existing_appcast",
     "ExistingAppcast",
     "SignedArtifact",
+    "find_server_binary",
     "sign_macos_binary",
     "notarize_macos_binary",
     "sign_windows_binary",

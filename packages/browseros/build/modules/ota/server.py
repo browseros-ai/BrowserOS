@@ -25,6 +25,7 @@ from .common import (
     parse_existing_appcast,
     create_server_zip,
     get_appcast_path,
+    find_server_binary,
 )
 from .sign_binary import (
     sign_macos_binary,
@@ -88,10 +89,13 @@ class ServerOTAModule(CommandModule):
 
         platforms = self._get_platforms()
         for p in platforms:
-            binary_name = p["binary"]
-            binary_path = self.binaries_dir / binary_name
-            if not binary_path.exists():
-                raise ValidationError(f"Binary not found: {binary_path}")
+            binary_path = find_server_binary(self.binaries_dir, p)
+            if not binary_path:
+                raise ValidationError(
+                    f"Binary not found for {p['name']}: "
+                    f"checked flat ({self.binaries_dir / p['binary']}) "
+                    f"and artifact ({self.binaries_dir / p.get('target', '') / 'resources/bin/'})"
+                )
 
         if IS_MACOS():
             if not ctx.env.macos_certificate_name:
@@ -127,11 +131,13 @@ class ServerOTAModule(CommandModule):
         for platform in platforms:
             log_info(f"\n📦 Processing {platform['name']}...")
 
-            binary_name = platform["binary"]
-            source_binary = self.binaries_dir / binary_name
+            source_binary = find_server_binary(self.binaries_dir, platform)
+            if not source_binary:
+                log_warning(f"Binary not found for {platform['name']}, skipping")
+                continue
 
             # Copy binary to temp to preserve original
-            temp_binary = temp_dir / binary_name
+            temp_binary = temp_dir / platform["binary"]
             shutil.copy2(source_binary, temp_binary)
 
             if not self._sign_binary(temp_binary, platform, ctx):
