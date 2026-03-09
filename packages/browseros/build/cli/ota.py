@@ -58,13 +58,10 @@ def execute_module(ctx: Context, module) -> None:
 @server_app.command("release")
 def server_release(
     version: str = typer.Option(
-        ..., "--version", "-v", help="Version to release (e.g., 0.0.36)"
+        ..., "--version", "-v", help="Version to release (e.g., 0.0.69)"
     ),
     channel: str = typer.Option(
         "alpha", "--channel", "-c", help="Release channel: alpha or prod"
-    ),
-    binaries: Optional[Path] = typer.Option(
-        None, "--binaries", "-b", help="Directory containing server binaries"
     ),
     platform: Optional[str] = typer.Option(
         None, "--platform", "-p",
@@ -73,17 +70,20 @@ def server_release(
 ):
     """Release BrowserOS Server OTA update
 
+    Downloads server binaries from R2 (artifacts/server/latest/),
+    signs them, creates Sparkle update packages, and uploads to R2.
+
     \b
     Full Release (all platforms):
-      browseros ota server release --version 0.0.36 --channel alpha
+      browseros ota server release --version 0.0.69 --channel alpha
 
     \b
     Single Platform:
-      browseros ota server release --version 0.0.36 --platform darwin_arm64
+      browseros ota server release --version 0.0.69 --platform darwin_arm64
 
     \b
     Multiple Platforms:
-      browseros ota server release --version 0.0.36 --platform darwin_arm64,darwin_x64
+      browseros ota server release --version 0.0.69 --platform darwin_arm64,darwin_x64
     """
     log_info(f"🚀 BrowserOS Server OTA v{version}")
     log_info("=" * 70)
@@ -93,7 +93,6 @@ def server_release(
     module = ServerOTAModule(
         version=version,
         channel=channel,
-        binaries_dir=binaries,
         platform_filter=platform,
     )
 

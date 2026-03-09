@@ -33,18 +33,18 @@ from .sign_binary import (
     sign_windows_binary,
     get_entitlements_path,
 )
-from ..storage import get_r2_client, upload_file_to_r2
+from ..storage import get_r2_client, upload_file_to_r2, download_file_from_r2
+from ..storage.download import extract_artifact_zip
+
+# R2 key pattern for server artifact zips
+ARTIFACT_R2_KEY = "artifacts/server/latest/browseros-server-resources-{target}.zip"
 
 
 class ServerOTAModule(CommandModule):
     """OTA update module for BrowserOS Server binaries
 
-    This module handles the full OTA workflow:
-    1. Sign individual binaries (codesign for macOS, CodeSignTool for Windows)
-    2. Create zip packages with proper structure
-    3. Sign zips with Sparkle Ed25519
-    4. Upload to R2
-    5. Generate and upload appcast XML
+    Downloads server binaries from R2 (artifacts/server/latest/),
+    signs them, creates Sparkle update zips, and uploads to R2.
     """
 
     produces = ["server_ota_artifacts", "server_appcast"]
@@ -55,56 +55,28 @@ class ServerOTAModule(CommandModule):
         self,
         version: str = "",
         channel: str = "alpha",
-        binaries_dir: Optional[Path] = None,
         platform_filter: Optional[str] = None,
     ):
-        """
-        Args:
-            version: Version string (e.g., "0.0.36")
-            channel: Release channel ("alpha" or "prod")
-            binaries_dir: Directory containing server binaries
-            platform_filter: Platform(s) to process, comma-separated (e.g., "darwin_arm64,darwin_x64")
-        """
         self.version = version
         self.channel = channel
-        self.binaries_dir = binaries_dir
         self.platform_filter = platform_filter
+        self._download_dir: Optional[Path] = None
 
     def validate(self, context: Context) -> None:
-        ctx = context
         if not self.version:
             raise ValidationError("Version is required")
 
         if self.channel not in ["alpha", "prod"]:
             raise ValidationError("Channel must be 'alpha' or 'prod'")
 
-        if self.binaries_dir:
-            if not self.binaries_dir.exists():
-                raise ValidationError(f"Binaries directory not found: {self.binaries_dir}")
-        else:
-            default_dir = ctx.root_dir / "resources" / "binaries" / "browseros_server"
-            if not default_dir.exists():
-                raise ValidationError(f"Default binaries directory not found: {default_dir}")
-            self.binaries_dir = default_dir
-
-        platforms = self._get_platforms()
-        for p in platforms:
-            binary_path = find_server_binary(self.binaries_dir, p)
-            if not binary_path:
-                raise ValidationError(
-                    f"Binary not found for {p['name']}: "
-                    f"checked flat ({self.binaries_dir / p['binary']}) "
-                    f"and artifact ({self.binaries_dir / p.get('target', '') / 'resources/bin/'})"
-                )
-
         if IS_MACOS():
-            if not ctx.env.macos_certificate_name:
+            if not context.env.macos_certificate_name:
                 raise ValidationError("MACOS_CERTIFICATE_NAME required for signing")
         elif IS_WINDOWS():
-            if not ctx.env.code_sign_tool_path:
+            if not context.env.code_sign_tool_path:
                 raise ValidationError("CODE_SIGN_TOOL_PATH required for signing")
 
-        if not ctx.env.has_r2_config():
+        if not context.env.has_r2_config():
             raise ValidationError(
                 "R2 configuration not set. Required env vars: "
                 "R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY"
@@ -117,10 +89,43 @@ class ServerOTAModule(CommandModule):
             return [p for p in SERVER_PLATFORMS if p["name"] in requested]
         return SERVER_PLATFORMS
 
+    def _download_artifacts(self, ctx: Context) -> Path:
+        """Download server artifact zips from R2 latest/ and extract them."""
+        download_dir = Path(tempfile.mkdtemp(prefix="ota_artifacts_"))
+        self._download_dir = download_dir
+
+        r2_client = get_r2_client(ctx.env)
+        if not r2_client:
+            raise RuntimeError("Failed to create R2 client")
+
+        bucket = ctx.env.r2_bucket
+        platforms = self._get_platforms()
+
+        log_info("📥 Downloading server artifacts from R2...")
+
+        for platform in platforms:
+            target = platform["target"]
+            r2_key = ARTIFACT_R2_KEY.format(target=target)
+            zip_path = download_dir / f"{target}.zip"
+            extract_dir = download_dir / target
+
+            log_info(f"  Downloading {target}...")
+            if not download_file_from_r2(r2_client, r2_key, zip_path, bucket):
+                raise RuntimeError(f"Failed to download artifact: {r2_key}")
+
+            extract_artifact_zip(zip_path, extract_dir)
+            zip_path.unlink()
+
+        log_success(f"Downloaded {len(platforms)} artifact(s)")
+        return download_dir
+
     def execute(self, context: Context) -> None:
         ctx = context
         log_info(f"\n🚀 BrowserOS Server OTA v{self.version} ({self.channel})")
         log_info("=" * 70)
+
+        # Download artifacts from R2
+        binaries_dir = self._download_artifacts(ctx)
 
         platforms = self._get_platforms()
         temp_dir = Path(tempfile.mkdtemp())
@@ -131,7 +136,7 @@ class ServerOTAModule(CommandModule):
         for platform in platforms:
             log_info(f"\n📦 Processing {platform['name']}...")
 
-            source_binary = find_server_binary(self.binaries_dir, platform)
+            source_binary = find_server_binary(binaries_dir, platform)
             if not source_binary:
                 log_warning(f"Binary not found for {platform['name']}, skipping")
                 continue
