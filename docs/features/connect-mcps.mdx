@@ -18,26 +18,29 @@ BrowserOS uses the [Model Context Protocol (MCP)](https://modelcontextprotocol.i
 
 ## Smart App Connection
 
-When you ask the assistant to do something that needs an app you have not connected yet, it will detect this automatically and guide you through signing in, right in the conversation. No need to set things up in advance. You only sign in once per app, and it stays connected for future requests.
+When you ask the assistant to do something that needs an app you have not connected yet, it shows an interactive card right in the conversation. You can connect the app with one click or choose to skip it. No need to set things up in advance.
 
 <Steps>
   <Step title="You make a request">
     Ask the assistant something like "What's on my calendar today?" or "Send an email to Sarah."
   </Step>
-  <Step title="The assistant detects the app is not connected">
-    If you have not signed into that app yet, the assistant opens a sign-in page in your browser.
+  <Step title="A connection card appears">
+    The assistant detects the app is not connected and shows a card explaining why connecting it would help. You get two choices: **Connect** or **Do it manually**.
   </Step>
-  <Step title="You sign in once">
-    Complete the OAuth sign-in. Your credentials are never stored in BrowserOS.
+  <Step title="You connect or skip">
+    - **Connect**: Opens a sign-in page. Authorize the app and the assistant continues with full integration access.
+    - **Do it manually**: The assistant skips the integration and navigates to the app's website directly using browser automation.
   </Step>
-  <Step title="The assistant continues where it left off">
-    Once you confirm you are signed in, the assistant picks up right where it stopped and completes your request.
+  <Step title="The assistant continues">
+    Once connected, the app stays linked for all future conversations. If you chose to skip, the assistant remembers and will not ask again.
   </Step>
 </Steps>
 
-{/* <Frame caption="The assistant detects an unconnected app and opens the sign-in page">
+{/* <Frame caption="The assistant detects an unconnected app and shows a connection card">
   <img src="/images/connect-apps-smart-connection.png" alt="Smart app connection prompt in chat" />
 </Frame> */}
+
+See [Smart Nudges](/features/smart-nudges#app-connection) for more details on how connection suggestions work.
 
 You can also connect apps ahead of time from Settings if you prefer.
 

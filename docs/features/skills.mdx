@@ -1,0 +1,193 @@
+---
+title: "Skills"
+description: "Teach your BrowserOS agent new abilities with reusable, custom instructions"
+---
+
+Skills let you teach the BrowserOS agent how to handle specific tasks. Each skill is a set of instructions written in plain Markdown that the agent loads when it recognizes a matching task. Think of skills as recipes: you write the steps once, and the agent follows them whenever that type of task comes up.
+
+BrowserOS implements the open [Agent Skills specification](https://agentskills.io/specification), so skills you create are portable across any AI agent that supports the standard.
+
+## How Skills Work
+
+<Steps>
+  <Step title="You create a skill">
+    Give it a name, a short description of when to use it, and write the instructions in Markdown.
+  </Step>
+  <Step title="The agent sees the skill catalog">
+    When a conversation starts, the agent loads a list of all your enabled skills with their names and descriptions.
+  </Step>
+  <Step title="The agent matches a task">
+    When your request matches a skill's description, the agent loads that skill's full instructions and follows them.
+  </Step>
+</Steps>
+
+## Creating a Skill
+
+<Steps>
+  <Step title="Open Skills settings">
+    Go to **Settings** and click **Skills** in the sidebar.
+  </Step>
+  <Step title="Click New Skill">
+    Click the **New Skill** button to open the creation form.
+  </Step>
+  <Step title="Fill in the details">
+    - **Name**: A short, descriptive name (e.g., "Morning Status Report")
+    - **Description**: Tell the agent when to use this skill. Be specific. For example: "When the user wants to read status updates from work across Notion, Linear, and Slack"
+    - **Content**: Write your instructions in Markdown. Include step-by-step directions, examples, and edge cases.
+  </Step>
+  <Step title="Save and enable">
+    Click **Create**. The skill is enabled by default and will be available to the agent immediately.
+  </Step>
+</Steps>
+
+<Tip>
+Write your description like a trigger. The agent uses it to decide whether to activate the skill. A good description says both **what** the skill does and **when** to use it.
+</Tip>
+
+## Example Skills
+
+<AccordionGroup>
+  <Accordion title="Morning status report">
+    **Description:** When the user wants to read status updates from work
+
+    **Instructions:**
+    ```markdown
+    Always look for updates in 3 sources:
+    1. **Notion** - Check the team updates page for any new entries from today
+    2. **Linear** - Look at issues assigned to the user that were updated in the last 24 hours
+    3. **Slack** - Check the #team-updates and #engineering channels for unread messages
+
+    Summarize everything in a single report grouped by source.
+    If a source has no updates, say so.
+    ```
+  </Accordion>
+
+  <Accordion title="PDF processing">
+    **Description:** Extract text and tables from PDF files, fill PDF forms, and merge multiple PDFs. Use when the user mentions PDFs, forms, or document extraction.
+
+    **Instructions:**
+    ```markdown
+    When extracting text from a PDF:
+    1. Download or open the PDF in the browser
+    2. Use the page content tool to extract visible text
+    3. Preserve table structure using Markdown tables
+    4. If the PDF has multiple pages, process each page
+
+    When filling a PDF form:
+    - Ask the user for the values if not provided
+    - Fill each field carefully and confirm before submitting
+
+    See references/FORMS.md for common form templates.
+    ```
+  </Accordion>
+
+  <Accordion title="Code review checklist">
+    **Description:** When the user asks to review code, a pull request, or wants feedback on code quality
+
+    **Instructions:**
+    ```markdown
+    Follow this checklist for every code review:
+    1. Check for security issues (XSS, injection, hardcoded secrets)
+    2. Look for performance problems (N+1 queries, unnecessary re-renders)
+    3. Verify error handling is present and meaningful
+    4. Check that naming is clear and consistent
+    5. Look for missing tests for new logic
+
+    Format your review as a list of findings with severity: Critical, Warning, or Suggestion.
+    Always start with what the code does well.
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Managing Skills
+
+From the Skills settings page, you can:
+
+- **Enable or disable** a skill using the toggle switch. Disabled skills are not loaded by the agent.
+- **Edit** a skill's name, description, or instructions by clicking the edit icon.
+- **Delete** a skill by clicking the trash icon. This removes the skill permanently.
+
+## Skill File Format
+
+Under the hood, each skill is stored as a `SKILL.md` file following the [Agent Skills specification](https://agentskills.io/specification):
+
+```markdown
+---
+name: morning-status-report
+description: When the user wants to read status updates from work
+metadata:
+  display-name: Morning Status Report
+  enabled: "true"
+---
+Always look for updates in 3 sources:
+1. Notion - Check the team updates page
+2. Linear - Look at assigned issues updated in the last 24 hours
+3. Slack - Check #team-updates and #engineering channels
+
+Summarize everything in a single report grouped by source.
+```
+
+The file uses YAML frontmatter for metadata and Markdown for the instructions.
+
+### Frontmatter fields
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Lowercase, hyphenated identifier (e.g., `morning-status-report`) |
+| `description` | Yes | When and how the agent should use this skill |
+| `license` | No | License for the skill |
+| `compatibility` | No | Environment requirements |
+| `metadata` | No | Extra fields like `display-name`, `enabled`, `version` |
+| `allowed-tools` | No | Restrict which tools the skill can use (experimental) |
+
+### Supporting files
+
+A skill can include additional directories alongside `SKILL.md`:
+
+- **`scripts/`** for executable code the agent can run
+- **`references/`** for detailed documentation loaded on demand
+- **`assets/`** for templates, images, or data files
+
+```
+morning-status-report/
+├── SKILL.md
+├── scripts/
+│   └── format-report.py
+└── references/
+    └── REFERENCE.md
+```
+
+The agent loads the main `SKILL.md` first. Supporting files are only loaded when the instructions reference them, keeping context usage efficient.
+
+## Where Skills Live
+
+Skills are stored as folders inside your BrowserOS configuration directory:
+
+| OS | Path |
+|---|---|
+| macOS | `~/.browseros/skills/` |
+| Windows | `%USERPROFILE%\.browseros\skills\` |
+| Linux | `~/.browseros/skills/` |
+
+Each skill gets its own folder named after the skill's `name` field.
+
+## Tips for Writing Good Skills
+
+<CardGroup cols={2}>
+  <Card title="Be specific in descriptions" icon="crosshairs">
+    Include keywords the agent can match against. "When the user asks about PDFs, forms, or document extraction" is better than "Helps with documents."
+  </Card>
+  <Card title="Keep instructions focused" icon="scissors">
+    A skill should do one thing well. Split complex workflows into multiple skills rather than one large one.
+  </Card>
+  <Card title="Include examples" icon="lightbulb">
+    Show the agent what good output looks like. Examples reduce ambiguity and improve results.
+  </Card>
+  <Card title="Use supporting files" icon="folder-tree">
+    Move detailed references to separate files. The agent loads them only when needed, saving context space.
+  </Card>
+</CardGroup>
+
+<Note>
+Skills follow the open [Agent Skills specification](https://agentskills.io/specification). Skills you create in BrowserOS work with any agent that supports the standard.
+</Note>

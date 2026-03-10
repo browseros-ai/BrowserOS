@@ -28,6 +28,8 @@
           "features/scheduled-tasks",
           "features/cowork",
           "features/connect-mcps",
+          "features/skills",
+          "features/smart-nudges",
           "features/use-with-claude-code",
           "features/soul",
           "features/memory",
