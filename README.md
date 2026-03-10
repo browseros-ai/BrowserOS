@@ -143,7 +143,7 @@ If you use BrowserOS in your research or project, please cite:
 
 ```bibtex
 @software{browseros2025,
-  author = {Sonti, Nithin Venkat and Sonti, Nikhil Venkat and {BrowserOS-team}},
+  author = {Sonti, Nithin and Sonti, Nikhil and {BrowserOS-team}},
   title = {BrowserOS: The open-source Agentic browser},
   url = {https://github.com/browseros-ai/BrowserOS},
   year = {2025},
