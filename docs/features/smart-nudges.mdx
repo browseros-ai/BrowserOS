@@ -1,0 +1,117 @@
+---
+title: "Smart Nudges"
+description: "BrowserOS suggests app connections and task scheduling at the right moment"
+---
+
+Smart Nudges are context-aware suggestions that appear as interactive cards during a conversation. The agent detects opportunities to connect an app or schedule a task, and shows you a card at the right moment. You decide whether to act on it or skip it.
+
+There are two types of nudges: **App Connection** and **Schedule Suggestion**.
+
+## App Connection
+
+When you ask the agent to do something that involves an external app (like sending an email or checking your calendar), it checks whether that app is connected. If it is not, the agent shows a connection card before starting the task.
+
+<Steps>
+  <Step title="You make a request">
+    For example: "Send Sarah an email with the meeting notes."
+  </Step>
+  <Step title="The agent detects an unconnected app">
+    Gmail is not connected yet, so the agent cannot send emails through the integration.
+  </Step>
+  <Step title="A connection card appears">
+    The card explains why connecting the app would help and gives you two choices: **Connect** or **Do it manually**.
+  </Step>
+  <Step title="You choose">
+    - **Connect**: Opens a sign-in page for the app. Once you authorize, the agent continues with full integration access.
+    - **Do it manually**: The agent skips the integration and uses browser automation instead (navigates to the website directly).
+  </Step>
+</Steps>
+
+### What happens after you choose
+
+<CardGroup cols={2}>
+  <Card title="Connected" icon="circle-check">
+    The app is added to your connected list. The agent uses the integration for this and all future conversations. You can manage connected apps in [Connect Apps](/features/connect-mcps).
+  </Card>
+  <Card title="Declined" icon="forward">
+    The agent remembers your choice and will not ask about this app again. It uses browser automation to complete the task instead.
+  </Card>
+</CardGroup>
+
+<Tip>
+If you declined an app but change your mind later, you can connect it anytime from the [Connect Apps](/features/connect-mcps) settings page.
+</Tip>
+
+### Supported apps
+
+The agent can suggest connections for all 40+ built-in integrations, including Gmail, Google Calendar, Slack, Notion, GitHub, Linear, Jira, Figma, Salesforce, and many more. See [Connect Apps](/features/connect-mcps) for the full list.
+
+## Schedule Suggestion
+
+After the agent completes a task that could run on a recurring schedule, it shows a scheduling card. This helps you turn one-time tasks into automated routines without leaving the conversation.
+
+<Steps>
+  <Step title="The agent completes a task">
+    For example: "Here are the top 5 tech headlines from today."
+  </Step>
+  <Step title="The agent recognizes a schedulable task">
+    News gathering, price monitoring, report building, data tracking, and similar tasks that do not need your real-time input are good candidates.
+  </Step>
+  <Step title="A scheduling card appears">
+    The card suggests a name and schedule. For example: "Run this automatically? 'Morning News Briefing' - daily at 09:00."
+  </Step>
+  <Step title="You choose">
+    - **Schedule this task**: Opens the Scheduled Tasks page with the details pre-filled. Review and confirm to create the task.
+    - **Maybe later**: Dismisses the card. You can always create the scheduled task manually later.
+  </Step>
+</Steps>
+
+### You can also ask directly
+
+You do not have to wait for the agent to suggest it. Just tell the agent you want to schedule the task:
+
+<AccordionGroup>
+  <Accordion title="Example prompts" icon="message">
+    - "Schedule this to run every morning"
+    - "Can this run daily at 8am?"
+    - "Automate this task"
+    - "Run this every hour"
+
+    The agent will infer the task name, schedule type, and timing from your conversation and show the scheduling card immediately.
+  </Accordion>
+</AccordionGroup>
+
+### What gets scheduled
+
+The scheduling card pre-fills the [Scheduled Tasks](/features/scheduled-tasks) dialog with:
+
+- **Task name**: A short description based on the conversation
+- **Prompt**: The original query you asked the agent
+- **Schedule type**: Daily or hourly, based on what makes sense for the task
+- **Time**: A suggested time (for daily tasks)
+
+You can adjust any of these before confirming.
+
+## When Nudges Appear
+
+Nudges are designed to appear at the right moment without interrupting your workflow:
+
+| Nudge | When it appears | How often |
+|---|---|---|
+| App Connection | Before the agent starts working, when it detects an unconnected app | Once per app per conversation |
+| Schedule Suggestion | After the agent finishes a task that could be automated | Once per conversation |
+
+Nudges do not appear in:
+- **Scheduled tasks** running in the background
+- **Chat mode** (read-only, no browser automation)
+
+## Privacy
+
+<CardGroup cols={2}>
+  <Card title="Nothing is sent without your approval" icon="shield-check">
+    The agent only suggests a connection. No data is shared with the app until you explicitly authorize it.
+  </Card>
+  <Card title="Your choices are remembered locally" icon="hard-drive">
+    Declined apps are stored on your device. The agent will not ask about them again unless you reconnect from settings.
+  </Card>
+</CardGroup>
