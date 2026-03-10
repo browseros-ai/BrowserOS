@@ -1,6 +1,6 @@
 ---
-title: "MCP Clients (Claude Code)"
-description: "Control your browser and 40+ apps from Claude Code, Gemini CLI, or any MCP client"
+title: "MCP Clients (Claude Code, OpenClaw)"
+description: "Control your browser and 40+ apps from Claude Code, OpenClaw, Gemini CLI, or any MCP client"
 ---
 
 BrowserOS is the best browser for AI coding agents. It comes with a built-in MCP server that gives your AI agent **full browser control** and **direct access to 40+ external services** — Gmail, Slack, GitHub, Google Calendar, Linear, Notion, and more — all through a single MCP connection.
@@ -88,6 +88,20 @@ Wondering how BrowserOS MCP compares to Chrome DevTools MCP or other browser aut
     codex mcp add browseros <mcp_url> --transport http
     # Example: codex mcp add browseros http://127.0.0.1:9239/mcp --transport http
     ```
+  </Tab>
+  <Tab title="OpenClaw">
+    Add BrowserOS to [OpenClaw](https://openclaw.ai/) by adding it to the `mcpServers` section in your `openclaw.json` config file:
+    ```json
+    {
+      "mcpServers": {
+        "browseros": {
+          "url": "http://127.0.0.1:9239/mcp"
+        }
+      }
+    }
+    ```
+
+    Replace the URL with your BrowserOS MCP URL from settings.
   </Tab>
   <Tab title="Claude Desktop">
     Open your Claude Desktop config file:
