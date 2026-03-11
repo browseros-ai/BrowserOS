@@ -103,7 +103,7 @@ features:
       - chrome/browser/upgrade_detector/upgrade_detector_impl.cc
 
   sparkle-third-party:
-    description: "test: sparkle third party framework (downloaded on-the-fly)"
+    description: "feat: sparkle third party framework (downloaded on-the-fly)"
     files:
       - third_party/sparkle/
 
