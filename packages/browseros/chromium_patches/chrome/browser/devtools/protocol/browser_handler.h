@@ -1,22 +1,26 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler.h b/chrome/browser/devtools/protocol/browser_handler.h
-index e1424aa52cbf6..2b8da4a31db41 100644
+index e1424aa52cbf6..ffd1c86c5aed9 100644
 --- a/chrome/browser/devtools/protocol/browser_handler.h
 +++ b/chrome/browser/devtools/protocol/browser_handler.h
-@@ -5,9 +5,13 @@
+@@ -5,9 +5,17 @@
  #ifndef CHROME_BROWSER_DEVTOOLS_PROTOCOL_BROWSER_HANDLER_H_
  #define CHROME_BROWSER_DEVTOOLS_PROTOCOL_BROWSER_HANDLER_H_
  
 +#include <memory>
 +
++#include "base/containers/flat_map.h"
  #include "base/containers/flat_set.h"
++#include "base/memory/raw_ptr.h"
  #include "chrome/browser/devtools/protocol/browser.h"
  
-+class HiddenTabManager;
++class Browser;
++class BrowserWindowInterface;
++class Profile;
 +
  class BrowserHandler : public protocol::Browser::Backend {
   public:
    BrowserHandler(protocol::UberDispatcher* dispatcher,
-@@ -23,6 +27,14 @@ class BrowserHandler : public protocol::Browser::Backend {
+@@ -23,6 +31,14 @@ class BrowserHandler : public protocol::Browser::Backend {
        std::optional<std::string> target_id,
        int* out_window_id,
        std::unique_ptr<protocol::Browser::Bounds>* out_bounds) override;
@@ -31,7 +35,7 @@ index e1424aa52cbf6..2b8da4a31db41 100644
    protocol::Response GetWindowBounds(
        int window_id,
        std::unique_ptr<protocol::Browser::Bounds>* out_bounds) override;
-@@ -41,9 +53,115 @@ class BrowserHandler : public protocol::Browser::Backend {
+@@ -41,9 +57,118 @@ class BrowserHandler : public protocol::Browser::Backend {
    protocol::Response AddPrivacySandboxEnrollmentOverride(
        const std::string& in_url) override;
  
@@ -138,12 +142,15 @@ index e1424aa52cbf6..2b8da4a31db41 100644
 +      std::unique_ptr<protocol::Browser::TabGroupInfo>* out_group) override;
 +
   private:
++  Browser* GetOrCreateHiddenWindow(Profile* profile);
++  void MakeWindowHidden(Browser* browser);
++  void MakeWindowVisible(BrowserWindowInterface* bwi);
++  bool IsHiddenWindow(int window_id) const;
++
    base::flat_set<std::string> contexts_with_overridden_permissions_;
    std::string target_id_;
-+  std::unique_ptr<HiddenTabManager> hidden_tab_manager_;
-+  // Window IDs that are positioned off-screen to appear "hidden" while
-+  // keeping their compositors active for CDP operations.
 +  base::flat_set<int> hidden_window_ids_;
++  base::flat_map<raw_ptr<Profile>, raw_ptr<Browser>> hidden_window_per_profile_;
  };
  
  #endif  // CHROME_BROWSER_DEVTOOLS_PROTOCOL_BROWSER_HANDLER_H_
