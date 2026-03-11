@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/mac/sparkle_glue.mm b/chrome/browser/mac/sparkle_glue.mm
 new file mode 100644
-index 0000000000000..25a2dd2d5a578
+index 0000000000000..bc8c3ec061c3d
 --- /dev/null
 +++ b/chrome/browser/mac/sparkle_glue.mm
-@@ -0,0 +1,662 @@
+@@ -0,0 +1,674 @@
 +// Copyright 2024 BrowserOS Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -258,9 +258,10 @@ index 0000000000000..25a2dd2d5a578
 +  VLOG(1) << "Sparkle: Ready to install and relaunch";
 +  self.installReplyBlock = reply;
 +  [self.glue setInternalStatus:SparkleStatusReadyToInstall];
-+  if (self.updateVersion) {
-+    NotifyUpgradeReady(base::SysNSStringToUTF8(self.updateVersion));
-+  }
++  std::string version = self.updateVersion
++      ? base::SysNSStringToUTF8(self.updateVersion)
++      : std::string();
++  NotifyUpgradeReady(version);
 +}
 +
 +- (void)showInstallingUpdateWithApplicationTerminated:(BOOL)applicationTerminated
@@ -507,6 +508,17 @@ index 0000000000000..25a2dd2d5a578
 +
 +  if (errorMessage && [errorMessage length] > 0) {
 +    [self notifyError:errorMessage];
++  }
++
++  // Ensure the upgrade system is notified whenever we reach ReadyToInstall,
++  // regardless of which Sparkle callback triggered the transition. This covers
++  // automatic background downloads where showUpdateFoundWithAppcastItem: is
++  // not called and updateVersion may be nil.
++  if (status == SparkleStatusReadyToInstall) {
++    std::string version = _userDriver.updateVersion
++        ? base::SysNSStringToUTF8(_userDriver.updateVersion)
++        : std::string();
++    NotifyUpgradeReady(version);
 +  }
 +}
 +
