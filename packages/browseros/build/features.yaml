@@ -101,6 +101,10 @@ features:
       - chrome/browser/ui/webui/help/sparkle_version_updater_mac.mm
       - chrome/browser/ui/webui/help/version_updater_mac.mm
       - chrome/browser/upgrade_detector/upgrade_detector_impl.cc
+
+  sparkle-third-party:
+    description: "test: sparkle third party framework (downloaded on-the-fly)"
+    files:
       - third_party/sparkle/
 
   server:
