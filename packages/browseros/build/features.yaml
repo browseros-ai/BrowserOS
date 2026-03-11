@@ -71,6 +71,14 @@ features:
       - chrome/installer/setup/setup.rc
       - components/download/internal/common/download_item_impl.cc
 
+  crash-reporter:
+    description: "fix: crash reporter branding"
+    files:
+      - chrome/app/chrome_crash_reporter_client.cc
+      - chrome/app/chrome_crash_reporter_client.h
+      - chrome/app/chrome_crash_reporter_client_win.cc
+      - chrome/app/chrome_crash_reporter_client_win.h
+
   # ── LAYER 3: INFRASTRUCTURE SERVICES ──────────────────────
 
   mac-sparkle-updater:
@@ -93,6 +101,10 @@ features:
       - chrome/browser/ui/webui/help/sparkle_version_updater_mac.mm
       - chrome/browser/ui/webui/help/version_updater_mac.mm
       - chrome/browser/upgrade_detector/upgrade_detector_impl.cc
+
+  sparkle-third-party:
+    description: "feat: sparkle third party framework (downloaded on-the-fly)"
+    files:
       - third_party/sparkle/
 
   server:
@@ -221,6 +233,7 @@ features:
     description: "feat: first run experience"
     files:
       - chrome/browser/chrome_browser_main.cc
+      - chrome/browser/ui/webui/browseros_welcome.h
       - chrome/browser/ui/webui/chrome_web_ui_configs.cc
       - chrome/browser/ui/webui/nxtscape_first_run.h
       - chrome/common/webui_url_constants.cc
@@ -290,6 +303,14 @@ features:
     files:
       - chrome/browser/ui/accelerator_table.cc
 
+  vertical-tabs:
+    description: "feat: vertical tab strip"
+    files:
+      - chrome/browser/ui/tabs/BUILD.gn
+      - chrome/browser/ui/tabs/features.cc
+      - chrome/browser/ui/tabs/vertical_tab_strip_state_controller.cc
+      - chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+
   chromium-urls:
     description: "feat: chromium urls for browseros"
     files:
@@ -303,6 +324,38 @@ features:
       - components/infobars/core/infobar_delegate.h
       - tools/metrics/histograms/metadata/browser/enums.xml
 
+  cdp-api:
+    description: "feat: chrome devtools protocol API"
+    files:
+      # DevTools infrastructure
+      - chrome/browser/devtools/BUILD.gn
+      - chrome/browser/devtools/chrome_devtools_manager_delegate.cc
+      - chrome/browser/devtools/chrome_devtools_manager_delegate.h
+      - chrome/browser/devtools/chrome_devtools_session.cc
+      - chrome/browser/devtools/chrome_devtools_session.h
+      - chrome/browser/devtools/inspector_protocol_config.json
+      # Protocol handlers
+      - chrome/browser/devtools/protocol/bookmarks_handler.cc
+      - chrome/browser/devtools/protocol/bookmarks_handler.h
+      - chrome/browser/devtools/protocol/browser_handler.cc
+      - chrome/browser/devtools/protocol/browser_handler.h
+      - chrome/browser/devtools/protocol/browser_handler_android.cc
+      - chrome/browser/devtools/protocol/browser_handler_android.h
+      - chrome/browser/devtools/protocol/browser_handler_mac.h
+      - chrome/browser/devtools/protocol/browser_handler_mac.mm
+      - chrome/browser/devtools/protocol/history_handler.cc
+      - chrome/browser/devtools/protocol/history_handler.h
+      # Content-level delegate
+      - content/public/browser/devtools_manager_delegate.cc
+      - content/public/browser/devtools_manager_delegate.h
+      # Protocol definitions
+      - third_party/blink/public/devtools_protocol/BUILD.gn
+      - third_party/blink/public/devtools_protocol/browser_protocol.pdl
+      - third_party/blink/public/devtools_protocol/domains/Bookmarks.pdl
+      - third_party/blink/public/devtools_protocol/domains/Browser.pdl
+      - third_party/blink/public/devtools_protocol/domains/History.pdl
+      - third_party/blink/public/devtools_protocol/domains/Target.pdl
+
   # ── LAYER 5: FIXES ────────────────────────────────────────
 
   chromium-ui-fixes:
@@ -313,8 +366,11 @@ features:
       - chrome/browser/browser_features.h
       - chrome/browser/net/profile_network_context_service.cc
       - chrome/browser/resources/settings/reset_page/reset_profile_dialog.html
+      - chrome/browser/themes/BUILD.gn
+      - chrome/browser/themes/theme_service.cc
       - chrome/browser/themes/theme_service_factory.cc
       - chrome/browser/ui/browser_ui_prefs.cc
+      - chrome/browser/ui/views/extensions/extension_view_views.cc
       - chrome/browser/ui/startup/google_api_keys_infobar_delegate.cc
       - chrome/browser/ui/views/chrome_layout_provider.cc
       - chrome/browser/ui/views/infobars/infobar_container_view.cc
@@ -339,6 +395,7 @@ features:
       - chrome/browser/extensions/api/side_panel/side_panel_api.cc
       - chrome/browser/ui/views/side_panel/side_panel.cc
       - chrome/browser/ui/views/side_panel/side_panel.h
+      - chrome/browser/ui/views/side_panel/side_panel_coordinator.cc
 
   misc:
     description: "chore: miscellaneous patches"
