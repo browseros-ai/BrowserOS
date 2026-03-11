@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.h b/chrome/browser/browseros/core/browseros_prefs.h
 new file mode 100644
-index 0000000000000..2719852d7d8c6
+index 0000000000000..a94b14e0664ca
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.h
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,86 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -45,6 +45,9 @@ index 0000000000000..2719852d7d8c6
 +// String containing the default provider ID for BrowserOS
 +inline constexpr char kDefaultProviderId[] = "browseros.default_provider_id";
 +
++// Boolean: Focus NTP content instead of omnibox on new tab (default: true)
++inline constexpr char kNtpFocusContent[] = "browseros.ntp_focus_content";
++
 +}  // namespace prefs
 +
 +// Registers BrowserOS profile preferences.
@@ -77,6 +80,9 @@ index 0000000000000..2719852d7d8c6
 +//   - Action's visibility pref is true
 +// Returns false if action's visibility pref is false.
 +bool ShouldShowToolbarAction(actions::ActionId id, PrefService* pref_service);
++
++// Check if NTP content should receive focus instead of the omnibox.
++bool IsNtpFocusContentEnabled(PrefService* pref_service);
 +
 +// Get the visibility pref key for an action, or nullptr if none exists.
 +const char* GetVisibilityPrefForAction(actions::ActionId id);
