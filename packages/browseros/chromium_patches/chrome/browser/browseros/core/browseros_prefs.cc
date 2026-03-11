@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.cc b/chrome/browser/browseros/core/browseros_prefs.cc
 new file mode 100644
-index 0000000000000..5d7c925cb35f9
+index 0000000000000..c191fb3963968
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.cc
 @@ -0,0 +1,96 @@
@@ -33,7 +33,7 @@ index 0000000000000..5d7c925cb35f9
 +  registry->RegisterStringPref(prefs::kDefaultProviderId, "");
 +
 +  // NTP focus pref
-+  registry->RegisterBooleanPref(prefs::kNtpFocusContent, true);
++  registry->RegisterBooleanPref(prefs::kNtpFocusContent, false);
 +}
 +
 +bool ShouldShowLLMChat(PrefService* pref_service) {
