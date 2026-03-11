@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler.cc b/chrome/browser/devtools/protocol/browser_handler.cc
-index 30bd52d09c3fc..2df7c861f26aa 100644
+index 30bd52d09c3fc..33c7d6d8455fc 100644
 --- a/chrome/browser/devtools/protocol/browser_handler.cc
 +++ b/chrome/browser/devtools/protocol/browser_handler.cc
 @@ -8,19 +8,32 @@
@@ -57,7 +57,7 @@ index 30bd52d09c3fc..2df7c861f26aa 100644
  BrowserWindow* GetBrowserWindow(int window_id) {
    BrowserWindow* result = nullptr;
    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-@@ -72,17 +96,398 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
+@@ -72,17 +96,411 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
        .Build();
  }
  
@@ -452,13 +452,26 @@ index 30bd52d09c3fc..2df7c861f26aa 100644
  
 -BrowserHandler::~BrowserHandler() = default;
 +BrowserHandler::~BrowserHandler() {
++  // Close per-profile hidden windows so they don't become orphaned invisible
++  // windows. Verify each still exists via GetBrowserWindowInterface before
++  // touching it — during browser shutdown they may already be gone.
++  for (auto& [profile, browser] : hidden_window_per_profile_) {
++    if (!browser)
++      continue;
++    BrowserWindowInterface* bwi =
++        GetBrowserWindowInterface(browser->session_id().id());
++    if (bwi) {
++      bwi->GetTabStripModel()->CloseAllTabs();
++      bwi->GetWindow()->Close();
++    }
++  }
 +  hidden_window_per_profile_.clear();
 +  hidden_window_ids_.clear();
 +}
  
  Response BrowserHandler::GetWindowForTarget(
      std::optional<std::string> target_id,
-@@ -120,6 +525,65 @@ Response BrowserHandler::GetWindowForTarget(
+@@ -120,6 +538,65 @@ Response BrowserHandler::GetWindowForTarget(
    return Response::Success();
  }
  
@@ -524,7 +537,7 @@ index 30bd52d09c3fc..2df7c861f26aa 100644
  Response BrowserHandler::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -297,3 +761,901 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
+@@ -297,3 +774,910 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
        net::SchemefulSite(url_to_add));
    return Response::Success();
  }
@@ -539,7 +552,7 @@ index 30bd52d09c3fc..2df7c861f26aa 100644
 +  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
 +      [&](BrowserWindowInterface* bwi) {
 +        bool is_hidden =
-+            hidden_window_ids_.contains(bwi->GetSessionID().id());
++            IsHiddenWindow(bwi->GetSessionID().id());
 +        windows->push_back(BuildWindowInfo(bwi, is_hidden));
 +        return true;
 +      });
@@ -552,7 +565,7 @@ index 30bd52d09c3fc..2df7c861f26aa 100644
 +  BrowserWindowInterface* bwi =
 +      GetLastActiveBrowserWindowInterfaceWithAnyProfile();
 +  if (bwi) {
-+    bool is_hidden = hidden_window_ids_.contains(bwi->GetSessionID().id());
++    bool is_hidden = IsHiddenWindow(bwi->GetSessionID().id());
 +    *out_window = BuildWindowInfo(bwi, is_hidden);
 +  }
 +  return Response::Success();
@@ -642,7 +655,7 @@ index 30bd52d09c3fc..2df7c861f26aa 100644
 +  if (!bwi) {
 +    return Response::ServerError("Browser window not found");
 +  }
-+  if (hidden_window_ids_.contains(window_id)) {
++  if (IsHiddenWindow(window_id)) {
 +    MakeWindowVisible(bwi);
 +  }
 +  bwi->GetWindow()->Show();
@@ -674,7 +687,7 @@ index 30bd52d09c3fc..2df7c861f26aa 100644
 +    if (!bwi) {
 +      return Response::ServerError("Browser window not found");
 +    }
-+    bool is_hidden = hidden_window_ids_.contains(bwi->GetSessionID().id());
++    bool is_hidden = IsHiddenWindow(bwi->GetSessionID().id());
 +    TabStripModel* tab_strip = bwi->GetTabStripModel();
 +    for (int i = 0; i < tab_strip->count(); ++i) {
 +      tabs->push_back(
@@ -684,7 +697,7 @@ index 30bd52d09c3fc..2df7c861f26aa 100644
 +    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
 +        [&tabs, this](BrowserWindowInterface* bwi) {
 +          bool is_hidden =
-+              hidden_window_ids_.contains(bwi->GetSessionID().id());
++              IsHiddenWindow(bwi->GetSessionID().id());
 +          if (is_hidden) {
 +            return true;
 +          }
@@ -697,10 +710,10 @@ index 30bd52d09c3fc..2df7c861f26aa 100644
 +        });
 +  }
 +
-+  if (include_hidden.value_or(false)) {
++  if (include_hidden.value_or(false) && !window_id.has_value()) {
 +    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
 +        [&tabs, this](BrowserWindowInterface* bwi) {
-+          if (!hidden_window_ids_.contains(bwi->GetSessionID().id())) {
++          if (!IsHiddenWindow(bwi->GetSessionID().id())) {
 +            return true;
 +          }
 +          TabStripModel* tab_strip = bwi->GetTabStripModel();
@@ -1039,7 +1052,7 @@ index 30bd52d09c3fc..2df7c861f26aa 100644
 +    // Find last active non-hidden window.
 +    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
 +        [this, &target_bwi](BrowserWindowInterface* bwi) {
-+          if (!hidden_window_ids_.contains(bwi->GetSessionID().id())) {
++          if (!IsHiddenWindow(bwi->GetSessionID().id())) {
 +            target_bwi = bwi;
 +            return false;
 +          }
@@ -1411,8 +1424,8 @@ index 30bd52d09c3fc..2df7c861f26aa 100644
 +}
 +
 +void BrowserHandler::MakeWindowVisible(BrowserWindowInterface* bwi) {
-+#if BUILDFLAG(IS_MAC)
 +  Browser* browser = bwi->GetBrowserForMigrationOnly();
++#if BUILDFLAG(IS_MAC)
 +  SetWindowHeadless(browser->window(), false);
 +#else
 +  gfx::Rect bounds = bwi->GetWindow()->GetBounds();
@@ -1420,6 +1433,15 @@ index 30bd52d09c3fc..2df7c861f26aa 100644
 +  bwi->GetWindow()->SetBounds(bounds);
 +#endif
 +  hidden_window_ids_.erase(bwi->GetSessionID().id());
++  // Remove from per-profile cache so GetOrCreateHiddenWindow will lazily
++  // create a new hidden window for future hidden tab operations.
++  for (auto it = hidden_window_per_profile_.begin();
++       it != hidden_window_per_profile_.end(); ++it) {
++    if (it->second == browser) {
++      hidden_window_per_profile_.erase(it);
++      break;
++    }
++  }
 +}
 +
 +bool BrowserHandler::IsHiddenWindow(int window_id) const {
