@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/mac/sparkle_glue.mm b/chrome/browser/mac/sparkle_glue.mm
 new file mode 100644
-index 0000000000000..bc8c3ec061c3d
+index 0000000000000..25c4843095e4f
 --- /dev/null
 +++ b/chrome/browser/mac/sparkle_glue.mm
-@@ -0,0 +1,674 @@
+@@ -0,0 +1,668 @@
 +// Copyright 2024 BrowserOS Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -180,14 +180,12 @@ index 0000000000000..bc8c3ec061c3d
 +      // Update already downloaded, ready to install.
 +      self.installReplyBlock = reply;
 +      [self.glue setInternalStatus:SparkleStatusReadyToInstall];
-+      NotifyUpgradeReady(base::SysNSStringToUTF8(self.updateVersion));
 +      break;
 +
 +    case SPUUserUpdateStageInstalling:
 +      // Already installing - store reply block and notify user, don't auto-proceed
 +      self.installReplyBlock = reply;
 +      [self.glue setInternalStatus:SparkleStatusReadyToInstall];
-+      NotifyUpgradeReady(base::SysNSStringToUTF8(self.updateVersion));
 +      break;
 +  }
 +}
@@ -258,10 +256,6 @@ index 0000000000000..bc8c3ec061c3d
 +  VLOG(1) << "Sparkle: Ready to install and relaunch";
 +  self.installReplyBlock = reply;
 +  [self.glue setInternalStatus:SparkleStatusReadyToInstall];
-+  std::string version = self.updateVersion
-+      ? base::SysNSStringToUTF8(self.updateVersion)
-+      : std::string();
-+  NotifyUpgradeReady(version);
 +}
 +
 +- (void)showInstallingUpdateWithApplicationTerminated:(BOOL)applicationTerminated
@@ -646,8 +640,8 @@ index 0000000000000..bc8c3ec061c3d
 +
 +      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC),
 +                     dispatch_get_main_queue(), ^{
++                       strongSelf->_userDriver.updateVersion = @"999.0.0.0";
 +                       [strongSelf setInternalStatus:SparkleStatusReadyToInstall];
-+                       NotifyUpgradeReady("999.0.0.0");
 +                       LOG(WARNING) << "Sparkle: DRY-RUN complete";
 +                     });
 +    }
