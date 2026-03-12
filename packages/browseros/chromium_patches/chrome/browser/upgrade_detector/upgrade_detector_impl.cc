@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/upgrade_detector/upgrade_detector_impl.cc b/chrome/browser/upgrade_detector/upgrade_detector_impl.cc
-index 15ca9a708125d..7ac5ff51b31ab 100644
+index 07b7e0fcf5119..68c429d702873 100644
 --- a/chrome/browser/upgrade_detector/upgrade_detector_impl.cc
 +++ b/chrome/browser/upgrade_detector/upgrade_detector_impl.cc
-@@ -48,11 +48,13 @@
+@@ -49,11 +49,13 @@
  namespace {
  
  // The default thresholds for reaching annoyance levels.
@@ -21,7 +21,7 @@ index 15ca9a708125d..7ac5ff51b31ab 100644
  
  // How long to wait (each cycle) before checking which severity level we should
  // be at. Once we reach the highest severity, the timer will stop.
-@@ -68,7 +70,10 @@ constexpr auto kOutdatedBuildDetectorPeriod = base::Days(1);
+@@ -69,7 +71,10 @@ constexpr auto kOutdatedBuildDetectorPeriod = base::Days(1);
  constexpr auto kOutdatedBuildAge = base::Days(7) * 8;
  
  bool ShouldDetectOutdatedBuilds() {
@@ -33,23 +33,24 @@ index 15ca9a708125d..7ac5ff51b31ab 100644
    // Don't show the bubble if we have a brand code that is NOT organic
    std::string brand;
    if (google_brand::GetBrand(&brand) && !google_brand::IsOrganic(brand)) {
-@@ -157,6 +162,15 @@ void UpgradeDetectorImpl::CalculateThresholds() {
+@@ -163,6 +168,16 @@ void UpgradeDetectorImpl::CalculateThresholds() {
  void UpgradeDetectorImpl::DoCalculateThresholds() {
    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
  
 +#if BUILDFLAG(ENABLE_SPARKLE)
 +  // Sparkle notifies us when updates are ready to install.
-+  // Use minimal thresholds so notification appears quickly.
-+  stages_[kStagesIndexVeryLow] = base::Minutes(1);
-+  stages_[kStagesIndexLow] = base::Minutes(1);
-+  stages_[kStagesIndexElevated] = base::Minutes(1);
-+  stages_[kStagesIndexGrace] = base::Minutes(1);
-+  stages_[kStagesIndexHigh] = base::Minutes(1);
++  // Zero thresholds so the badge appears immediately on the same call stack
++  // as NotifyUpgradeReady() — no timer delay needed.
++  stages_[kStagesIndexVeryLow] = base::TimeDelta();
++  stages_[kStagesIndexLow] = base::TimeDelta();
++  stages_[kStagesIndexElevated] = base::TimeDelta();
++  stages_[kStagesIndexGrace] = base::TimeDelta();
++  stages_[kStagesIndexHigh] = base::TimeDelta();
 +#else   // !BUILDFLAG(ENABLE_SPARKLE)
    base::TimeDelta notification_period = GetRelaunchNotificationPeriod();
    const std::optional<RelaunchWindow> relaunch_window =
        GetRelaunchWindowPolicyValue();
-@@ -210,6 +224,7 @@ void UpgradeDetectorImpl::DoCalculateThresholds() {
+@@ -216,6 +231,7 @@ void UpgradeDetectorImpl::DoCalculateThresholds() {
      for (auto& stage : stages_)
        stage /= scale_factor;
    }
@@ -57,7 +58,7 @@ index 15ca9a708125d..7ac5ff51b31ab 100644
  }
  
  void UpgradeDetectorImpl::StartOutdatedBuildDetector() {
-@@ -275,6 +290,8 @@ void UpgradeDetectorImpl::DetectOutdatedInstall() {
+@@ -281,6 +297,8 @@ void UpgradeDetectorImpl::DetectOutdatedInstall() {
  void UpgradeDetectorImpl::UpgradeDetected(UpgradeAvailable upgrade_available) {
    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
  
@@ -66,7 +67,7 @@ index 15ca9a708125d..7ac5ff51b31ab 100644
    set_upgrade_available(upgrade_available);
    set_critical_update_acknowledged(false);
  
-@@ -327,6 +344,10 @@ void UpgradeDetectorImpl::NotifyOnUpgradeWithTimePassed(
+@@ -333,6 +351,10 @@ void UpgradeDetectorImpl::NotifyOnUpgradeWithTimePassed(
        next_delay = *(it - 1) - time_passed;
    }
  
@@ -77,7 +78,15 @@ index 15ca9a708125d..7ac5ff51b31ab 100644
    set_upgrade_notification_stage(new_stage);
    if (!next_delay.is_zero()) {
      // Schedule the next wakeup in 20 minutes or when the next change to the
-@@ -485,7 +506,10 @@ void UpgradeDetectorImpl::Init() {
+@@ -360,7 +382,6 @@ void UpgradeDetectorImpl::NotifyOnUpgradeWithTimePassed(
+ base::TimeDelta UpgradeDetectorImpl::GetThresholdForLevel(
+     UpgradeNotificationAnnoyanceLevel level) {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+-  DCHECK(!stages_[0].is_zero());
+   return stages_[AnnoyanceLevelToStagesIndex(level)];
+ }
+ 
+@@ -491,7 +512,10 @@ void UpgradeDetectorImpl::Init() {
  
    auto* const build_state = g_browser_process->GetBuildState();
    build_state->AddObserver(this);
@@ -88,7 +97,7 @@ index 15ca9a708125d..7ac5ff51b31ab 100644
  #endif  // BUILDFLAG(ENABLE_UPDATE_NOTIFICATIONS)
  }
  
-@@ -529,6 +553,9 @@ base::Time UpgradeDetectorImpl::GetAnnoyanceLevelDeadline(
+@@ -535,6 +559,9 @@ base::Time UpgradeDetectorImpl::GetAnnoyanceLevelDeadline(
  void UpgradeDetectorImpl::OnUpdate(const BuildState* build_state) {
    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
  
