@@ -28,3 +28,6 @@ symbol_level=0
 
 ffmpeg_branding="Chrome"
 
+# WinSparkle auto-update framework for Windows
+enable_win_sparkle=true
+

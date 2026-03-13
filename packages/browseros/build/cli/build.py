@@ -35,7 +35,7 @@ from ..common.utils import (
 
 # Import all module classes
 from ..modules.setup.clean import CleanModule
-from ..modules.setup.git import GitSetupModule, SparkleSetupModule
+from ..modules.setup.git import GitSetupModule, SparkleSetupModule, WinSparkleSetupModule
 from ..modules.setup.configure import ConfigureModule
 from ..modules.compile import CompileModule, UniversalBuildModule
 from ..modules.patches.patches import PatchesModule
@@ -60,6 +60,7 @@ AVAILABLE_MODULES = {
     "clean": CleanModule,
     "git_setup": GitSetupModule,
     "sparkle_setup": SparkleSetupModule,
+    "winsparkle_setup": WinSparkleSetupModule,
     "configure": ConfigureModule,
     # Patches & Resources
     "patches": PatchesModule,
@@ -115,7 +116,7 @@ def _get_package_module():
 # Fixed execution order - flags enable/disable phases, order is always the same
 EXECUTION_ORDER = [
     # Phase 1: Setup & Clean
-    ("setup", ["clean", "git_setup", "sparkle_setup"]),
+    ("setup", ["clean", "git_setup", "sparkle_setup", "winsparkle_setup"]),
     # Phase 2: Patches & Resources
     (
         "prep",
@@ -264,7 +265,7 @@ def main(
     setup: bool = typer.Option(
         False,
         "--setup",
-        help="Run setup phase (clean, git_setup, sparkle_setup)",
+        help="Run setup phase (clean, git_setup, sparkle_setup, winsparkle_setup)",
     ),
     prep: bool = typer.Option(
         False,

@@ -4,6 +4,7 @@
 import subprocess
 import tarfile
 import urllib.request
+import zipfile
 from ...common.module import CommandModule, ValidationError
 from ...common.context import Context
 from ...common.utils import run_command, log_info, log_error, log_success, IS_WINDOWS, safe_rmtree
@@ -95,3 +96,37 @@ class SparkleSetupModule(CommandModule):
         sparkle_archive.unlink()
 
         log_success("Sparkle setup complete")
+
+
+class WinSparkleSetupModule(CommandModule):
+    produces = []
+    requires = []
+    description = "Download and setup WinSparkle (Windows auto-update)"
+
+    def validate(self, ctx: Context) -> None:
+        if not ctx.chromium_src.exists():
+            raise ValidationError(f"Chromium source not found: {ctx.chromium_src}")
+
+    def execute(self, ctx: Context) -> None:
+        log_info("\n✨ Setting up WinSparkle...")
+
+        winsparkle_dir = ctx.get_winsparkle_dir()
+
+        if winsparkle_dir.exists():
+            safe_rmtree(winsparkle_dir)
+
+        winsparkle_dir.mkdir(parents=True)
+
+        winsparkle_url = ctx.get_winsparkle_url()
+        winsparkle_archive = winsparkle_dir / "winsparkle.zip"
+
+        log_info(f"Downloading WinSparkle from {winsparkle_url}...")
+        urllib.request.urlretrieve(winsparkle_url, winsparkle_archive)
+
+        log_info("Extracting WinSparkle...")
+        with zipfile.ZipFile(winsparkle_archive, "r") as zf:
+            zf.extractall(winsparkle_dir)
+
+        winsparkle_archive.unlink()
+
+        log_success("WinSparkle setup complete")

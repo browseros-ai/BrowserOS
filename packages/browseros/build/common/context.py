@@ -158,6 +158,7 @@ class BuildConfig:
 
         # Third party versions
         self.SPARKLE_VERSION = "2.7.0"
+        self.WINSPARKLE_VERSION = "0.9.2"
 
         # Set platform-specific app names
         self._set_app_names()
@@ -205,6 +206,7 @@ class Context:
 
     # Third party
     SPARKLE_VERSION: str = "2.7.0"
+    WINSPARKLE_VERSION: str = "0.9.2"
 
     # Legacy artifacts dict - kept for backward compatibility
     # New code should use ctx.artifacts (ArtifactRegistry) instead
@@ -422,6 +424,14 @@ class Context:
     def get_sparkle_url(self) -> str:
         """Get Sparkle download URL"""
         return f"https://github.com/sparkle-project/Sparkle/releases/download/{self.SPARKLE_VERSION}/Sparkle-{self.SPARKLE_VERSION}.tar.xz"
+
+    def get_winsparkle_dir(self) -> Path:
+        """Get WinSparkle directory"""
+        return join_paths(self.chromium_src, "third_party", "winsparkle")
+
+    def get_winsparkle_url(self) -> str:
+        """Get WinSparkle download URL"""
+        return f"https://github.com/vslavik/winsparkle/releases/download/v{self.WINSPARKLE_VERSION}/WinSparkle-{self.WINSPARKLE_VERSION}.zip"
 
     def get_extensions_manifest_url(self) -> str:
         """Get CDN URL for bundled extensions update manifest"""
