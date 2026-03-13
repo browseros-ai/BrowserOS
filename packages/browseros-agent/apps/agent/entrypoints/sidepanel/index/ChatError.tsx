@@ -1,18 +1,25 @@
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import type { FC } from 'react'
-import { useMemo } from 'react'
+// import { useMemo } from 'react'
 import { Button } from '@/components/ui/button'
+import {
+  KIMI_RATE_LIMIT_DOCS_CLICKED_EVENT,
+  KIMI_RATE_LIMIT_PLATFORM_CLICKED_EVENT,
+} from '@/lib/constants/analyticsEvents'
+import { track } from '@/lib/metrics/track'
 
-const SURVEY_DIRECTIONS = [
-  'competitor',
-  'switching',
-  'workflow',
-  'activation',
-] as const
-
-function pickRandomDirection(): string {
-  return SURVEY_DIRECTIONS[Math.floor(Math.random() * SURVEY_DIRECTIONS.length)]
-}
+// --- Commented out for Kimi partnership launch (restore after) ---
+// const SURVEY_DIRECTIONS = [
+//   'competitor',
+//   'switching',
+//   'workflow',
+//   'activation',
+// ] as const
+//
+// function pickRandomDirection(): string {
+//   return SURVEY_DIRECTIONS[Math.floor(Math.random() * SURVEY_DIRECTIONS.length)]
+// }
+// --- End commented out survey code ---
 
 interface ChatErrorProps {
   error: Error
@@ -67,11 +74,13 @@ export const ChatError: FC<ChatErrorProps> = ({ error, onRetry }) => {
     error.message,
   )
 
-  const surveyUrl = useMemo(
-    () =>
-      `/app.html?page=survey&maxTurns=20&experimentId=daily_limit_${pickRandomDirection()}#/settings/survey`,
-    [],
-  )
+  // --- Commented out for Kimi partnership launch (restore after) ---
+  // const surveyUrl = useMemo(
+  //   () =>
+  //     `/app.html?page=survey&maxTurns=20&experimentId=daily_limit_${pickRandomDirection()}#/settings/survey`,
+  //   [],
+  // )
+  // --- End commented out survey code ---
 
   const getTitle = () => {
     if (isRateLimit) return 'Daily limit reached'
@@ -96,6 +105,7 @@ export const ChatError: FC<ChatErrorProps> = ({ error, onRetry }) => {
           View troubleshooting guide
         </a>
       )}
+      {/* --- Commented out for Kimi partnership launch (restore after) ---
       {isRateLimit && (
         <p className="text-muted-foreground text-xs">
           <a
@@ -116,6 +126,36 @@ export const ChatError: FC<ChatErrorProps> = ({ error, onRetry }) => {
             take a quick survey
           </a>
         </p>
+      )}
+      --- End commented out survey code --- */}
+      {isRateLimit && (
+        <div className="flex flex-col items-center gap-1">
+          <p className="text-center text-muted-foreground text-xs">
+            Powered by Kimi K2.5 — in partnership with Moonshot AI
+          </p>
+          <p className="text-muted-foreground text-xs">
+            {/* biome-ignore lint/a11y/useValidAnchor: link with click tracking */}
+            <a
+              href="https://docs.browseros.com/features/bring-your-own-llm#kimi-k2-5-%E2%80%94-in-partnership-with-moonshot-ai"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-foreground"
+              onClick={() => track(KIMI_RATE_LIMIT_DOCS_CLICKED_EVENT)}
+            >
+              Learn how to get a Kimi API key
+            </a>
+            {' or '}
+            <a
+              href="https://platform.moonshot.ai"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-foreground"
+              onClick={() => track(KIMI_RATE_LIMIT_PLATFORM_CLICKED_EVENT)}
+            >
+              get your API key
+            </a>
+          </p>
+        </div>
       )}
       {onRetry && (
         <Button

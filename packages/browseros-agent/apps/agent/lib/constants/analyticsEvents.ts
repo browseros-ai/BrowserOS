@@ -243,3 +243,11 @@ export const KIMI_API_KEY_CONFIGURED_EVENT = 'settings.kimi.api_key_configured'
 /** @public */
 export const KIMI_API_KEY_GUIDE_CLICKED_EVENT =
   'settings.kimi.api_key_guide_clicked'
+
+/** @public */
+export const KIMI_RATE_LIMIT_DOCS_CLICKED_EVENT =
+  'ui.rate_limit.kimi_docs_clicked'
+
+/** @public */
+export const KIMI_RATE_LIMIT_PLATFORM_CLICKED_EVENT =
+  'ui.rate_limit.moonshot_platform_clicked'
