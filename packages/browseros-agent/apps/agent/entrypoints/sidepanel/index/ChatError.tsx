@@ -130,9 +130,6 @@ export const ChatError: FC<ChatErrorProps> = ({ error, onRetry }) => {
       --- End commented out survey code --- */}
       {isRateLimit && (
         <div className="flex flex-col items-center gap-1">
-          <p className="text-center text-muted-foreground text-xs">
-            Powered by Kimi K2.5 — in partnership with Moonshot AI
-          </p>
           <p className="text-muted-foreground text-xs">
             {/* biome-ignore lint/a11y/useValidAnchor: link with click tracking */}
             <a
