@@ -125,7 +125,20 @@ class WinSparkleSetupModule(CommandModule):
 
         log_info("Extracting WinSparkle...")
         with zipfile.ZipFile(winsparkle_archive, "r") as zf:
-            zf.extractall(winsparkle_dir)
+            # Strip the top-level directory (e.g. WinSparkle-0.9.2/) from paths
+            prefix = f"WinSparkle-{ctx.WINSPARKLE_VERSION}/"
+            for member in zf.infolist():
+                if not member.filename.startswith(prefix):
+                    continue
+                rel_path = member.filename[len(prefix):]
+                if not rel_path:
+                    continue
+                target = winsparkle_dir / rel_path
+                if member.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(zf.read(member.filename))
 
         winsparkle_archive.unlink()
 
