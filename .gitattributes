@@ -3,11 +3,11 @@ resources/nxtscape-productivity.gif filter=lfs diff=lfs merge=lfs -text
 resources/media/nxtscape-agent.gif filter=lfs diff=lfs merge=lfs -text
 resources/media/nxtscape-chat.gif filter=lfs diff=lfs merge=lfs -text
 docs/videos/browserOS-agent-in-action.gif filter=lfs diff=lfs merge=lfs -text
-
 # Mark Python build/tooling files as generated so they don't count in language stats
 packages/browseros/build/**/*.py linguist-generated
 packages/browseros/chromium_patches/**/*.py linguist-generated
 scripts/*.py linguist-generated
-
 # Mark build directories as generated
 build/* linguist-generated
+docs/images/** filter=lfs diff=lfs merge=lfs -text
+docs/videos/** filter=lfs diff=lfs merge=lfs -text

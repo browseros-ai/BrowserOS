@@ -24,3 +24,5 @@ gclient.json
 .env
 .grove/
 **/resources/binaries/
+
+packages/browseros/build/tools/
