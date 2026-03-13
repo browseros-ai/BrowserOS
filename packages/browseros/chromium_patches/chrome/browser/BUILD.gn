@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 2fc3a991d8909..8fd8bec18ecd7 100644
+index 2fc3a991d8909..19752589d9924 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
 @@ -12,6 +12,7 @@ import("//build/config/features.gni")
@@ -47,7 +47,7 @@ index 2fc3a991d8909..8fd8bec18ecd7 100644
 +      "win/winsparkle_glue.h",
 +    ]
 +
-+    public_configs += [ "//third_party/winsparkle:winsparkle_link" ]
++    public_configs = [ "//third_party/winsparkle:winsparkle_link" ]
 +    deps += [ "//third_party/winsparkle:winsparkle_dll" ]
 +  }
 +
