@@ -1,13 +1,9 @@
 diff --git a/chrome/browser/sparkle_buildflags.gni b/chrome/browser/sparkle_buildflags.gni
 new file mode 100644
-index 0000000000000..984f9ab75b1fa
+index 0000000000000..09749052a8295
 --- /dev/null
 +++ b/chrome/browser/sparkle_buildflags.gni
-@@ -0,0 +1,21 @@
-+ # Copyright 2024 Nxtscape Browser Authors. All rights reserved.
-+# Use of this source code is governed by a BSD-style license that can be
-+# found in the LICENSE file.
-+
+@@ -0,0 +1,20 @@
 +# Copyright 2024 Nxtscape Browser Authors. All rights reserved.
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -24,5 +20,8 @@ index 0000000000000..984f9ab75b1fa
 +
 +  # Build Sparkle from source (if false, use prebuilt framework)
 +  build_sparkle = false
++
++  # Enable WinSparkle updater for Windows builds
++  enable_win_sparkle = is_win
 +}
 \ No newline at end of file

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_switches.h b/chrome/browser/browseros/core/browseros_switches.h
 new file mode 100644
-index 0000000000000..8d6fcc30fd568
+index 0000000000000..7904aabc5a659
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_switches.h
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,98 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -81,6 +81,18 @@ index 0000000000000..8d6fcc30fd568
 +
 +// Enables verbose Sparkle logging.
 +inline constexpr char kSparkleVerbose[] = "sparkle-verbose";
++
++// === WinSparkle Switches (Windows Browser Updates) ===
++
++// Overrides the WinSparkle appcast URL for browser updates.
++inline constexpr char kWinSparkleUrl[] = "browseros-winsparkle-url";
++
++// Forces an immediate WinSparkle update check.
++inline constexpr char kWinSparkleForceCheck[] =
++    "browseros-winsparkle-force-check";
++
++// Spoofs the current version for WinSparkle (testing).
++inline constexpr char kWinSparkleSpoofVersion[] = "winsparkle-spoof-version";
 +
 +// === Misc Switches ===
 +

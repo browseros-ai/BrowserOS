@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/upgrade_detector/upgrade_detector_impl.cc b/chrome/browser/upgrade_detector/upgrade_detector_impl.cc
-index 07b7e0fcf5119..68c429d702873 100644
+index 07b7e0fcf5119..b878732b4c0be 100644
 --- a/chrome/browser/upgrade_detector/upgrade_detector_impl.cc
 +++ b/chrome/browser/upgrade_detector/upgrade_detector_impl.cc
 @@ -49,11 +49,13 @@
@@ -11,7 +11,7 @@ index 07b7e0fcf5119..68c429d702873 100644
 -constexpr auto kDefaultElevatedThreshold = base::Days(4);
 -constexpr auto kDefaultHighThreshold = base::Days(7);
 -constexpr auto kDefaultGraceThreshold = kDefaultHighThreshold - base::Hours(1);
-+// These may be unused when ENABLE_SPARKLE is true (Sparkle uses its own thresholds).
++// These may be unused when ENABLE_SPARKLE/ENABLE_WIN_SPARKLE is true (Sparkle uses its own thresholds).
 +[[maybe_unused]] constexpr auto kDefaultVeryLowThreshold = base::Hours(1);
 +[[maybe_unused]] constexpr auto kDefaultLowThreshold = base::Days(2);
 +[[maybe_unused]] constexpr auto kDefaultElevatedThreshold = base::Days(4);
@@ -26,39 +26,38 @@ index 07b7e0fcf5119..68c429d702873 100644
  
  bool ShouldDetectOutdatedBuilds() {
 -#if BUILDFLAG(ENABLE_UPDATE_NOTIFICATIONS) && !BUILDFLAG(IS_CHROMEOS)
-+#if BUILDFLAG(ENABLE_SPARKLE)
-+  // Sparkle handles its own updates, no need for outdated build detection.
++#if BUILDFLAG(ENABLE_SPARKLE) || BUILDFLAG(ENABLE_WIN_SPARKLE)
++  // Sparkle/WinSparkle handles its own updates, no need for outdated build detection.
 +  return false;
 +#elif BUILDFLAG(ENABLE_UPDATE_NOTIFICATIONS) && !BUILDFLAG(IS_CHROMEOS)
    // Don't show the bubble if we have a brand code that is NOT organic
    std::string brand;
    if (google_brand::GetBrand(&brand) && !google_brand::IsOrganic(brand)) {
-@@ -163,6 +168,16 @@ void UpgradeDetectorImpl::CalculateThresholds() {
+@@ -163,6 +168,15 @@ void UpgradeDetectorImpl::CalculateThresholds() {
  void UpgradeDetectorImpl::DoCalculateThresholds() {
    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
  
-+#if BUILDFLAG(ENABLE_SPARKLE)
-+  // Sparkle notifies us when updates are ready to install.
-+  // Zero thresholds so the badge appears immediately on the same call stack
-+  // as NotifyUpgradeReady() — no timer delay needed.
-+  stages_[kStagesIndexVeryLow] = base::TimeDelta();
-+  stages_[kStagesIndexLow] = base::TimeDelta();
-+  stages_[kStagesIndexElevated] = base::TimeDelta();
-+  stages_[kStagesIndexGrace] = base::TimeDelta();
-+  stages_[kStagesIndexHigh] = base::TimeDelta();
-+#else   // !BUILDFLAG(ENABLE_SPARKLE)
++#if BUILDFLAG(ENABLE_SPARKLE) || BUILDFLAG(ENABLE_WIN_SPARKLE)
++  // Sparkle/WinSparkle notifies us when updates are ready to install.
++  // Use minimal thresholds so notification appears quickly.
++  stages_[kStagesIndexVeryLow] = base::Minutes(1);
++  stages_[kStagesIndexLow] = base::Minutes(1);
++  stages_[kStagesIndexElevated] = base::Minutes(1);
++  stages_[kStagesIndexGrace] = base::Minutes(1);
++  stages_[kStagesIndexHigh] = base::Minutes(1);
++#else   // !(ENABLE_SPARKLE || ENABLE_WIN_SPARKLE)
    base::TimeDelta notification_period = GetRelaunchNotificationPeriod();
    const std::optional<RelaunchWindow> relaunch_window =
        GetRelaunchWindowPolicyValue();
-@@ -216,6 +231,7 @@ void UpgradeDetectorImpl::DoCalculateThresholds() {
+@@ -216,6 +230,7 @@ void UpgradeDetectorImpl::DoCalculateThresholds() {
      for (auto& stage : stages_)
        stage /= scale_factor;
    }
-+#endif  // BUILDFLAG(ENABLE_SPARKLE)
++#endif  // BUILDFLAG(ENABLE_SPARKLE) || BUILDFLAG(ENABLE_WIN_SPARKLE)
  }
  
  void UpgradeDetectorImpl::StartOutdatedBuildDetector() {
-@@ -281,6 +297,8 @@ void UpgradeDetectorImpl::DetectOutdatedInstall() {
+@@ -281,6 +296,8 @@ void UpgradeDetectorImpl::DetectOutdatedInstall() {
  void UpgradeDetectorImpl::UpgradeDetected(UpgradeAvailable upgrade_available) {
    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
  
@@ -67,7 +66,7 @@ index 07b7e0fcf5119..68c429d702873 100644
    set_upgrade_available(upgrade_available);
    set_critical_update_acknowledged(false);
  
-@@ -333,6 +351,10 @@ void UpgradeDetectorImpl::NotifyOnUpgradeWithTimePassed(
+@@ -333,6 +350,10 @@ void UpgradeDetectorImpl::NotifyOnUpgradeWithTimePassed(
        next_delay = *(it - 1) - time_passed;
    }
  
@@ -78,22 +77,14 @@ index 07b7e0fcf5119..68c429d702873 100644
    set_upgrade_notification_stage(new_stage);
    if (!next_delay.is_zero()) {
      // Schedule the next wakeup in 20 minutes or when the next change to the
-@@ -360,7 +382,6 @@ void UpgradeDetectorImpl::NotifyOnUpgradeWithTimePassed(
- base::TimeDelta UpgradeDetectorImpl::GetThresholdForLevel(
-     UpgradeNotificationAnnoyanceLevel level) {
-   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
--  DCHECK(!stages_[0].is_zero());
-   return stages_[AnnoyanceLevelToStagesIndex(level)];
- }
- 
 @@ -491,7 +512,10 @@ void UpgradeDetectorImpl::Init() {
  
    auto* const build_state = g_browser_process->GetBuildState();
    build_state->AddObserver(this);
-+#if !BUILDFLAG(ENABLE_SPARKLE)
-+  // Sparkle handles version checking via appcast, no need to poll file system.
++#if !BUILDFLAG(ENABLE_SPARKLE) && !BUILDFLAG(ENABLE_WIN_SPARKLE)
++  // Sparkle/WinSparkle handles version checking via appcast, no need to poll.
    installed_version_poller_.emplace(build_state);
-+#endif  // !BUILDFLAG(ENABLE_SPARKLE)
++#endif  // !BUILDFLAG(ENABLE_SPARKLE) && !BUILDFLAG(ENABLE_WIN_SPARKLE)
  #endif  // BUILDFLAG(ENABLE_UPDATE_NOTIFICATIONS)
  }
  

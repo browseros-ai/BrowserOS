@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
-index 2ec7c847678a0..66767940651d2 100644
+index dac5e9152bb28..13cc0b95d4004 100644
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
-@@ -1297,6 +1297,8 @@ static_library("ui") {
+@@ -1289,6 +1289,8 @@ static_library("ui") {
        "webui/settings/search_engines_handler.h",
        "webui/settings/security_settings_provider.cc",
        "webui/settings/security_settings_provider.h",
@@ -11,7 +11,7 @@ index 2ec7c847678a0..66767940651d2 100644
        "webui/settings/settings_clear_browsing_data_handler.cc",
        "webui/settings/settings_clear_browsing_data_handler.h",
        "webui/settings/settings_localized_strings_privacy_sandbox_provider.cc",
-@@ -3225,6 +3227,8 @@ static_library("ui") {
+@@ -3230,6 +3232,8 @@ static_library("ui") {
        "views/frame/immersive_mode_overlay_views_mac.mm",
        "views/tab_contents/chrome_web_contents_view_delegate_views_mac.h",
        "views/tab_contents/chrome_web_contents_view_delegate_views_mac.mm",
@@ -20,3 +20,18 @@ index 2ec7c847678a0..66767940651d2 100644
        "webui/help/version_updater_mac.mm",
        "webui/settings/mac_system_settings_handler.cc",
        "webui/settings/mac_system_settings_handler.h",
+@@ -3360,7 +3364,13 @@ static_library("ui") {
+ 
+     libs += [ "crypt32.lib" ]
+ 
+-    if (is_chrome_branded) {
++    if (enable_win_sparkle) {
++      # WinSparkle replaces other update mechanisms when enabled.
++      sources += [
++        "webui/help/winsparkle_version_updater_win.cc",
++        "webui/help/winsparkle_version_updater_win.h",
++      ]
++    } else if (is_chrome_branded) {
+       sources += [ "webui/help/version_updater_win.cc" ]
+       deps += [
+         "//chrome/browser/win/installer_downloader:prefs",
