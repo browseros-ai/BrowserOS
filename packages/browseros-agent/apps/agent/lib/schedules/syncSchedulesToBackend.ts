@@ -19,6 +19,7 @@ type RemoteScheduledJob = {
   scheduleTime: string | null
   scheduleInterval: number | null
   enabled: boolean
+  llmProviderId: string | null
   createdAt: string
   updatedAt: string
   lastRunAt: string | null
@@ -32,6 +33,7 @@ function toComparable(job: ScheduledJob) {
     ...data,
     scheduleTime: data.scheduleTime ?? null,
     scheduleInterval: data.scheduleInterval ?? null,
+    providerId: data.providerId ?? null,
   }
 }
 
@@ -43,6 +45,7 @@ function remoteToComparable(job: RemoteScheduledJob) {
     scheduleTime: job.scheduleTime,
     scheduleInterval: job.scheduleInterval,
     enabled: job.enabled,
+    providerId: job.llmProviderId,
   }
 }
 
@@ -59,6 +62,7 @@ function remoteToLocal(remote: RemoteScheduledJob): ScheduledJob {
     scheduleTime: remote.scheduleTime ?? undefined,
     scheduleInterval: remote.scheduleInterval ?? undefined,
     enabled: remote.enabled,
+    providerId: remote.llmProviderId ?? undefined,
     createdAt: normalizeTimestamp(remote.createdAt),
     updatedAt: normalizeTimestamp(remote.updatedAt),
     lastRunAt: remote.lastRunAt
@@ -163,6 +167,7 @@ export async function syncSchedulesToBackend(
               scheduleTime: job.scheduleTime ?? null,
               scheduleInterval: job.scheduleInterval ?? null,
               enabled: job.enabled,
+              llmProviderId: job.providerId ?? null,
               lastRunAt: job.lastRunAt
                 ? new Date(job.lastRunAt).toISOString()
                 : null,
@@ -182,6 +187,7 @@ export async function syncSchedulesToBackend(
               scheduleTime: job.scheduleTime ?? null,
               scheduleInterval: job.scheduleInterval ?? null,
               enabled: job.enabled,
+              llmProviderId: job.providerId ?? null,
               createdAt: new Date(job.createdAt).toISOString(),
               updatedAt: job.updatedAt || new Date().toISOString(),
               lastRunAt: job.lastRunAt

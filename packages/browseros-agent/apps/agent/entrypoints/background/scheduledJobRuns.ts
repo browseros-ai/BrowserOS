@@ -117,6 +117,7 @@ export const scheduledJobRuns = async () => {
       const response = await getChatServerResponse({
         message: job.query,
         signal: abortController.signal,
+        providerId: job.providerId,
       })
 
       await updateJobRun(jobRun.id, {

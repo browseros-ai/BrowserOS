@@ -1216,6 +1216,7 @@ type ScheduledJob implements Node {
   """
   id: ID!
   lastRunAt: Datetime
+  llmProviderId: String
   name: String!
   """
   Reads a single `Profile` that is related to this `ScheduledJob`.
@@ -1324,6 +1325,7 @@ input ScheduledJobInput {
   createdAt: Datetime
   enabled: Boolean
   lastRunAt: Datetime
+  llmProviderId: String
   name: String!
   profileId: String!
   query: String!
@@ -1354,6 +1356,7 @@ input ScheduledJobPatch {
   createdAt: Datetime
   enabled: Boolean
   lastRunAt: Datetime
+  llmProviderId: String
   name: String
   profileId: String
   query: String

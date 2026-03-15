@@ -6,6 +6,7 @@ export interface ScheduledJob {
   scheduleTime?: string
   scheduleInterval?: number
   enabled: boolean
+  providerId?: string
   createdAt: string
   updatedAt: string
   lastRunAt?: string

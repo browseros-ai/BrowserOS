@@ -12,7 +12,7 @@ import {
   Trash2,
   XCircle,
 } from 'lucide-react'
-import { type FC, useMemo, useState } from 'react'
+import { type FC, useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Collapsible,
@@ -20,6 +20,9 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { Switch } from '@/components/ui/switch'
+import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import { providersStorage } from '@/lib/llm-providers/storage'
+import type { ProviderType } from '@/lib/llm-providers/types'
 import { useScheduledJobRuns } from '@/lib/schedules/scheduleStorage'
 import type { ScheduledJob, ScheduledJobRun } from './types'
 
@@ -80,8 +83,24 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
   onRetryRun,
 }) => {
   const [isOpen, setIsOpen] = useState(false)
+  const [providerInfo, setProviderInfo] = useState<{
+    name: string
+    type: ProviderType
+  } | null>(null)
 
   const { jobRuns } = useScheduledJobRuns()
+
+  // Load provider info for display
+  useEffect(() => {
+    if (!job.providerId) {
+      setProviderInfo(null)
+      return
+    }
+    providersStorage.getValue().then((providers) => {
+      const match = providers?.find((p) => p.id === job.providerId)
+      setProviderInfo(match ? { name: match.name, type: match.type } : null)
+    })
+  }, [job.providerId])
 
   const runs = useMemo(
     () =>
@@ -117,6 +136,19 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
           </p>
           <div className="flex items-center gap-2 text-muted-foreground text-xs">
             <span>{formatSchedule(job)}</span>
+            {providerInfo && (
+              <>
+                <span>•</span>
+                <span className="flex items-center gap-1">
+                  {providerInfo.type === 'browseros' ? (
+                    <BrowserOSIcon size={12} />
+                  ) : (
+                    <ProviderIcon type={providerInfo.type} size={12} />
+                  )}
+                  {providerInfo.name}
+                </span>
+              </>
+            )}
             {job.lastRunAt && (
               <>
                 <span>•</span>

@@ -25,6 +25,7 @@ interface ChatServerRequest {
   windowId?: number
   activeTab?: ActiveTab
   signal?: AbortSignal
+  providerId?: string
 }
 
 interface ChatServerResponse {
@@ -75,11 +76,23 @@ const getDefaultProvider = async (): Promise<LlmProviderConfig | null> => {
   return defaultProvider ?? providers[0] ?? null
 }
 
+// Resolve provider by ID, falling back to global default
+const resolveProvider = async (
+  providerId?: string,
+): Promise<LlmProviderConfig> => {
+  if (providerId) {
+    const providers = await providersStorage.getValue()
+    const match = providers?.find((p) => p.id === providerId)
+    if (match) return match
+  }
+  return (await getDefaultProvider()) ?? createDefaultBrowserOSProvider()
+}
+
 export async function getChatServerResponse(
   request: ChatServerRequest,
 ): Promise<ChatServerResponse> {
   const agentServerUrl = await getAgentServerUrl()
-  const provider = (await getDefaultProvider()) ?? createDefaultBrowserOSProvider()
+  const provider = await resolveProvider(request.providerId)
   const conversationId = request.conversationId ?? crypto.randomUUID()
   const personalization = await personalizationStorage.getValue()
 

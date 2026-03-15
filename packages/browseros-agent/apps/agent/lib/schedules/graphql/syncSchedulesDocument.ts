@@ -11,6 +11,7 @@ export const GetScheduledJobsByProfileIdDocument = graphql(`
         scheduleTime
         scheduleInterval
         enabled
+        llmProviderId
         createdAt
         updatedAt
         lastRunAt

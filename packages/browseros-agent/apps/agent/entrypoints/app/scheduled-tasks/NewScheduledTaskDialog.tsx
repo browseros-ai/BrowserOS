@@ -1,8 +1,11 @@
 import { zodResolver } from '@hookform/resolvers/zod'
+import { ChevronDown } from 'lucide-react'
 import type { FC } from 'react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod/v3'
+import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
+import type { Provider } from '@/components/chat/chatComponentTypes'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -31,6 +34,12 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import {
+  defaultProviderIdStorage,
+  providersStorage,
+} from '@/lib/llm-providers/storage'
+import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
 import type { ScheduledJob } from './types'
 
 const formSchema = z
@@ -43,6 +52,7 @@ const formSchema = z
     scheduleType: z.enum(['daily', 'hourly', 'minutes']),
     scheduleTime: z.string().optional(),
     scheduleInterval: z.number().int().min(1).max(60).optional(),
+    providerId: z.string().optional(),
     enabled: z.boolean(),
   })
   .superRefine((data, ctx) => {
@@ -81,6 +91,8 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
   onSave,
 }) => {
   const isEditing = !!initialValues
+  const [providers, setProviders] = useState<LlmProviderConfig[]>([])
+  const [defaultProviderId, setDefaultProviderId] = useState<string>('')
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -90,11 +102,25 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
       scheduleType: 'daily',
       scheduleTime: '09:00',
       scheduleInterval: 1,
+      providerId: undefined,
       enabled: true,
     },
   })
 
   const scheduleType = form.watch('scheduleType')
+  const selectedProviderId = form.watch('providerId')
+
+  // Load providers from storage
+  useEffect(() => {
+    if (!open) return
+    Promise.all([
+      providersStorage.getValue(),
+      defaultProviderIdStorage.getValue(),
+    ]).then(([providerList, defId]) => {
+      setProviders(providerList ?? [])
+      setDefaultProviderId(defId ?? '')
+    })
+  }, [open])
 
   useEffect(() => {
     if (open) {
@@ -105,6 +131,7 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
           scheduleType: initialValues.scheduleType,
           scheduleTime: initialValues.scheduleTime || '09:00',
           scheduleInterval: initialValues.scheduleInterval || 1,
+          providerId: initialValues.providerId,
           enabled: initialValues.enabled,
         })
       } else {
@@ -114,11 +141,32 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
           scheduleType: 'daily',
           scheduleTime: '09:00',
           scheduleInterval: 1,
+          providerId: undefined,
           enabled: true,
         })
       }
     }
   }, [open, initialValues, form])
+
+  // Resolve the currently selected provider for the selector display
+  const resolvedProvider: Provider | null = (() => {
+    const id = selectedProviderId ?? defaultProviderId
+    const found = providers.find((p) => p.id === id)
+    if (found) return { id: found.id, name: found.name, type: found.type }
+    if (providers[0])
+      return {
+        id: providers[0].id,
+        name: providers[0].name,
+        type: providers[0].type,
+      }
+    return null
+  })()
+
+  const providerOptions: Provider[] = providers.map((p) => ({
+    id: p.id,
+    name: p.name,
+    type: p.type,
+  }))
 
   const onSubmit = (values: FormValues) => {
     onSave({
@@ -129,6 +177,7 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
         values.scheduleType === 'daily' ? values.scheduleTime : undefined,
       scheduleInterval:
         values.scheduleType !== 'daily' ? values.scheduleInterval : undefined,
+      providerId: values.providerId,
       enabled: values.enabled,
     })
     form.reset()
@@ -184,6 +233,43 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
                 </FormItem>
               )}
             />
+
+            {providers.length > 0 && resolvedProvider && (
+              <FormItem>
+                <FormLabel>AI Provider</FormLabel>
+                <ChatProviderSelector
+                  providers={providerOptions}
+                  selectedProvider={resolvedProvider}
+                  onSelectProvider={(provider) =>
+                    form.setValue('providerId', provider.id)
+                  }
+                >
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-between"
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="text-muted-foreground">
+                        {resolvedProvider.type === 'browseros' ? (
+                          <BrowserOSIcon size={16} />
+                        ) : (
+                          <ProviderIcon
+                            type={resolvedProvider.type as ProviderType}
+                            size={16}
+                          />
+                        )}
+                      </span>
+                      {resolvedProvider.name}
+                    </span>
+                    <ChevronDown className="h-4 w-4 opacity-50" />
+                  </Button>
+                </ChatProviderSelector>
+                <FormDescription>
+                  The AI provider used to run this task
+                </FormDescription>
+              </FormItem>
+            )}
 
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField
