@@ -254,6 +254,17 @@ enum ConversationMessageOrderBy {
 }
 
 """
+Represents an update to a `ConversationMessage`. Fields that are set will be updated.
+"""
+input ConversationMessagePatch {
+  conversationId: String
+  createdAt: Datetime
+  message: JSON
+  orderIndex: Int
+  rowId: String
+}
+
+"""
 Methods to use when ordering `Conversation`.
 """
 enum ConversationOrderBy {
@@ -408,6 +419,49 @@ type CreateLlmProviderPayload {
 }
 
 """
+All input for the create `Profile` mutation.
+"""
+input CreateProfileInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  The `Profile` to be created by this mutation.
+  """
+  profile: ProfileInput!
+}
+
+"""
+The output of our create `Profile` mutation.
+"""
+type CreateProfilePayload {
+  """
+  The exact same `clientMutationId` that was provided in the mutation input,
+  unchanged and unused. May be used by a client to track mutations.
+  """
+  clientMutationId: String
+  """
+  The `Profile` that was created by this mutation.
+  """
+  profile: Profile
+  """
+  An edge for our `Profile`. May be used by Relay 1.
+  """
+  profileEdge(
+    """
+    The method to use when ordering `Profile`.
+    """
+    orderBy: [ProfileOrderBy!]! = [PRIMARY_KEY_ASC]
+  ): ProfileEdge
+  """
+  Our root query field type. Allows us to run any query from our mutation payload.
+  """
+  query: Query
+}
+
+"""
 All input for the create `ScheduledJob` mutation.
 """
 input CreateScheduledJobInput {
@@ -451,6 +505,49 @@ type CreateScheduledJobPayload {
 }
 
 """
+All input for the create `ScheduledJobRun` mutation.
+"""
+input CreateScheduledJobRunInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  The `ScheduledJobRun` to be created by this mutation.
+  """
+  scheduledJobRun: ScheduledJobRunInput!
+}
+
+"""
+The output of our create `ScheduledJobRun` mutation.
+"""
+type CreateScheduledJobRunPayload {
+  """
+  The exact same `clientMutationId` that was provided in the mutation input,
+  unchanged and unused. May be used by a client to track mutations.
+  """
+  clientMutationId: String
+  """
+  Our root query field type. Allows us to run any query from our mutation payload.
+  """
+  query: Query
+  """
+  The `ScheduledJobRun` that was created by this mutation.
+  """
+  scheduledJobRun: ScheduledJobRun
+  """
+  An edge for our `ScheduledJobRun`. May be used by Relay 1.
+  """
+  scheduledJobRunEdge(
+    """
+    The method to use when ordering `ScheduledJobRun`.
+    """
+    orderBy: [ScheduledJobRunOrderBy!]! = [PRIMARY_KEY_ASC]
+  ): ScheduledJobRunEdge
+}
+
+"""
 A location in a connection that can be used for resuming pagination.
 """
 scalar Cursor
@@ -465,6 +562,21 @@ to unexpected results.
 scalar Datetime
 
 """
+All input for the `deleteConversationById` mutation.
+"""
+input DeleteConversationByIdInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  The globally unique `ID` which will identify a single `Conversation` to be deleted.
+  """
+  id: ID!
+}
+
+"""
 All input for the `deleteConversation` mutation.
 """
 input DeleteConversationInput {
@@ -474,6 +586,62 @@ input DeleteConversationInput {
   """
   clientMutationId: String
   rowId: String!
+}
+
+"""
+All input for the `deleteConversationMessageById` mutation.
+"""
+input DeleteConversationMessageByIdInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  The globally unique `ID` which will identify a single `ConversationMessage` to be deleted.
+  """
+  id: ID!
+}
+
+"""
+All input for the `deleteConversationMessage` mutation.
+"""
+input DeleteConversationMessageInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  rowId: String!
+}
+
+"""
+The output of our delete `ConversationMessage` mutation.
+"""
+type DeleteConversationMessagePayload {
+  """
+  The exact same `clientMutationId` that was provided in the mutation input,
+  unchanged and unused. May be used by a client to track mutations.
+  """
+  clientMutationId: String
+  """
+  The `ConversationMessage` that was deleted by this mutation.
+  """
+  conversationMessage: ConversationMessage
+  """
+  An edge for our `ConversationMessage`. May be used by Relay 1.
+  """
+  conversationMessageEdge(
+    """
+    The method to use when ordering `ConversationMessage`.
+    """
+    orderBy: [ConversationMessageOrderBy!]! = [PRIMARY_KEY_ASC]
+  ): ConversationMessageEdge
+  deletedConversationMessageId: ID
+  """
+  Our root query field type. Allows us to run any query from our mutation payload.
+  """
+  query: Query
 }
 
 """
@@ -503,6 +671,21 @@ type DeleteConversationPayload {
   Our root query field type. Allows us to run any query from our mutation payload.
   """
   query: Query
+}
+
+"""
+All input for the `deleteLlmProviderById` mutation.
+"""
+input DeleteLlmProviderByIdInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  The globally unique `ID` which will identify a single `LlmProvider` to be deleted.
+  """
+  id: ID!
 }
 
 """
@@ -547,6 +730,89 @@ type DeleteLlmProviderPayload {
 }
 
 """
+All input for the `deleteProfileById` mutation.
+"""
+input DeleteProfileByIdInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  The globally unique `ID` which will identify a single `Profile` to be deleted.
+  """
+  id: ID!
+}
+
+"""
+All input for the `deleteProfileByUserId` mutation.
+"""
+input DeleteProfileByUserIdInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  userId: String!
+}
+
+"""
+All input for the `deleteProfile` mutation.
+"""
+input DeleteProfileInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  rowId: String!
+}
+
+"""
+The output of our delete `Profile` mutation.
+"""
+type DeleteProfilePayload {
+  """
+  The exact same `clientMutationId` that was provided in the mutation input,
+  unchanged and unused. May be used by a client to track mutations.
+  """
+  clientMutationId: String
+  deletedProfileId: ID
+  """
+  The `Profile` that was deleted by this mutation.
+  """
+  profile: Profile
+  """
+  An edge for our `Profile`. May be used by Relay 1.
+  """
+  profileEdge(
+    """
+    The method to use when ordering `Profile`.
+    """
+    orderBy: [ProfileOrderBy!]! = [PRIMARY_KEY_ASC]
+  ): ProfileEdge
+  """
+  Our root query field type. Allows us to run any query from our mutation payload.
+  """
+  query: Query
+}
+
+"""
+All input for the `deleteScheduledJobById` mutation.
+"""
+input DeleteScheduledJobByIdInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  The globally unique `ID` which will identify a single `ScheduledJob` to be deleted.
+  """
+  id: ID!
+}
+
+"""
 All input for the `deleteScheduledJob` mutation.
 """
 input DeleteScheduledJobInput {
@@ -585,6 +851,62 @@ type DeleteScheduledJobPayload {
     """
     orderBy: [ScheduledJobOrderBy!]! = [PRIMARY_KEY_ASC]
   ): ScheduledJobEdge
+}
+
+"""
+All input for the `deleteScheduledJobRunById` mutation.
+"""
+input DeleteScheduledJobRunByIdInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  The globally unique `ID` which will identify a single `ScheduledJobRun` to be deleted.
+  """
+  id: ID!
+}
+
+"""
+All input for the `deleteScheduledJobRun` mutation.
+"""
+input DeleteScheduledJobRunInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  rowId: String!
+}
+
+"""
+The output of our delete `ScheduledJobRun` mutation.
+"""
+type DeleteScheduledJobRunPayload {
+  """
+  The exact same `clientMutationId` that was provided in the mutation input,
+  unchanged and unused. May be used by a client to track mutations.
+  """
+  clientMutationId: String
+  deletedScheduledJobRunId: ID
+  """
+  Our root query field type. Allows us to run any query from our mutation payload.
+  """
+  query: Query
+  """
+  The `ScheduledJobRun` that was deleted by this mutation.
+  """
+  scheduledJobRun: ScheduledJobRun
+  """
+  An edge for our `ScheduledJobRun`. May be used by Relay 1.
+  """
+  scheduledJobRunEdge(
+    """
+    The method to use when ordering `ScheduledJobRun`.
+    """
+    orderBy: [ScheduledJobRunOrderBy!]! = [PRIMARY_KEY_ASC]
+  ): ScheduledJobRunEdge
 }
 
 """
@@ -759,6 +1081,15 @@ type Mutation {
     input: CreateLlmProviderInput!
   ): CreateLlmProviderPayload
   """
+  Creates a single `Profile`.
+  """
+  createProfile(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: CreateProfileInput!
+  ): CreateProfilePayload
+  """
   Creates a single `ScheduledJob`.
   """
   createScheduledJob(
@@ -767,6 +1098,15 @@ type Mutation {
     """
     input: CreateScheduledJobInput!
   ): CreateScheduledJobPayload
+  """
+  Creates a single `ScheduledJobRun`.
+  """
+  createScheduledJobRun(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: CreateScheduledJobRunInput!
+  ): CreateScheduledJobRunPayload
   """
   Deletes a single `Conversation` using a unique key.
   """
@@ -777,6 +1117,33 @@ type Mutation {
     input: DeleteConversationInput!
   ): DeleteConversationPayload
   """
+  Deletes a single `Conversation` using its globally unique id.
+  """
+  deleteConversationById(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: DeleteConversationByIdInput!
+  ): DeleteConversationPayload
+  """
+  Deletes a single `ConversationMessage` using a unique key.
+  """
+  deleteConversationMessage(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: DeleteConversationMessageInput!
+  ): DeleteConversationMessagePayload
+  """
+  Deletes a single `ConversationMessage` using its globally unique id.
+  """
+  deleteConversationMessageById(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: DeleteConversationMessageByIdInput!
+  ): DeleteConversationMessagePayload
+  """
   Deletes a single `LlmProvider` using a unique key.
   """
   deleteLlmProvider(
@@ -785,6 +1152,42 @@ type Mutation {
     """
     input: DeleteLlmProviderInput!
   ): DeleteLlmProviderPayload
+  """
+  Deletes a single `LlmProvider` using its globally unique id.
+  """
+  deleteLlmProviderById(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: DeleteLlmProviderByIdInput!
+  ): DeleteLlmProviderPayload
+  """
+  Deletes a single `Profile` using a unique key.
+  """
+  deleteProfile(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: DeleteProfileInput!
+  ): DeleteProfilePayload
+  """
+  Deletes a single `Profile` using its globally unique id.
+  """
+  deleteProfileById(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: DeleteProfileByIdInput!
+  ): DeleteProfilePayload
+  """
+  Deletes a single `Profile` using a unique key.
+  """
+  deleteProfileByUserId(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: DeleteProfileByUserIdInput!
+  ): DeleteProfilePayload
   """
   Deletes a single `ScheduledJob` using a unique key.
   """
@@ -795,6 +1198,33 @@ type Mutation {
     input: DeleteScheduledJobInput!
   ): DeleteScheduledJobPayload
   """
+  Deletes a single `ScheduledJob` using its globally unique id.
+  """
+  deleteScheduledJobById(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: DeleteScheduledJobByIdInput!
+  ): DeleteScheduledJobPayload
+  """
+  Deletes a single `ScheduledJobRun` using a unique key.
+  """
+  deleteScheduledJobRun(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: DeleteScheduledJobRunInput!
+  ): DeleteScheduledJobRunPayload
+  """
+  Deletes a single `ScheduledJobRun` using its globally unique id.
+  """
+  deleteScheduledJobRunById(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: DeleteScheduledJobRunByIdInput!
+  ): DeleteScheduledJobRunPayload
+  """
   Updates a single `Conversation` using a unique key and a patch.
   """
   updateConversation(
@@ -804,6 +1234,33 @@ type Mutation {
     input: UpdateConversationInput!
   ): UpdateConversationPayload
   """
+  Updates a single `Conversation` using its globally unique id and a patch.
+  """
+  updateConversationById(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: UpdateConversationByIdInput!
+  ): UpdateConversationPayload
+  """
+  Updates a single `ConversationMessage` using a unique key and a patch.
+  """
+  updateConversationMessage(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: UpdateConversationMessageInput!
+  ): UpdateConversationMessagePayload
+  """
+  Updates a single `ConversationMessage` using its globally unique id and a patch.
+  """
+  updateConversationMessageById(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: UpdateConversationMessageByIdInput!
+  ): UpdateConversationMessagePayload
+  """
   Updates a single `LlmProvider` using a unique key and a patch.
   """
   updateLlmProvider(
@@ -812,6 +1269,33 @@ type Mutation {
     """
     input: UpdateLlmProviderInput!
   ): UpdateLlmProviderPayload
+  """
+  Updates a single `LlmProvider` using its globally unique id and a patch.
+  """
+  updateLlmProviderById(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: UpdateLlmProviderByIdInput!
+  ): UpdateLlmProviderPayload
+  """
+  Updates a single `Profile` using a unique key and a patch.
+  """
+  updateProfile(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: UpdateProfileInput!
+  ): UpdateProfilePayload
+  """
+  Updates a single `Profile` using its globally unique id and a patch.
+  """
+  updateProfileById(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: UpdateProfileByIdInput!
+  ): UpdateProfilePayload
   """
   Updates a single `Profile` using a unique key and a patch.
   """
@@ -830,6 +1314,33 @@ type Mutation {
     """
     input: UpdateScheduledJobInput!
   ): UpdateScheduledJobPayload
+  """
+  Updates a single `ScheduledJob` using its globally unique id and a patch.
+  """
+  updateScheduledJobById(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: UpdateScheduledJobByIdInput!
+  ): UpdateScheduledJobPayload
+  """
+  Updates a single `ScheduledJobRun` using a unique key and a patch.
+  """
+  updateScheduledJobRun(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: UpdateScheduledJobRunInput!
+  ): UpdateScheduledJobRunPayload
+  """
+  Updates a single `ScheduledJobRun` using its globally unique id and a patch.
+  """
+  updateScheduledJobRunById(
+    """
+    The exclusive input argument for this mutation. An object type, make sure to see documentation for this object’s fields.
+    """
+    input: UpdateScheduledJobRunByIdInput!
+  ): UpdateScheduledJobRunPayload
 }
 
 """
@@ -988,6 +1499,42 @@ type Profile implements Node {
 }
 
 """
+A condition to be used against `Profile` object types. All fields are tested for equality and combined with a logical ‘and.’
+"""
+input ProfileCondition {
+  """
+  Checks for equality with the object’s `rowId` field.
+  """
+  rowId: String
+  """
+  Checks for equality with the object’s `userId` field.
+  """
+  userId: String
+}
+
+"""
+A connection to a list of `Profile` values.
+"""
+type ProfileConnection {
+  """
+  A list of edges which contains the `Profile` and cursor to aid in pagination.
+  """
+  edges: [ProfileEdge]!
+  """
+  A list of `Profile` objects.
+  """
+  nodes: [Profile]!
+  """
+  Information to aid in pagination.
+  """
+  pageInfo: PageInfo!
+  """
+  The count of *all* `Profile` you could get from the connection.
+  """
+  totalCount: Int!
+}
+
+"""
 A `Profile` edge in the connection.
 """
 type ProfileEdge {
@@ -999,6 +1546,20 @@ type ProfileEdge {
   The `Profile` at the end of the edge.
   """
   node: Profile
+}
+
+"""
+An input for mutations affecting `Profile`
+"""
+input ProfileInput {
+  avatarUrl: String
+  createdAt: Datetime
+  firstName: String
+  lastName: String
+  preferences: JSON
+  rowId: String!
+  updatedAt: Datetime
+  userId: String!
 }
 
 """
@@ -1037,9 +1598,31 @@ type Query implements Node {
   """
   conversation(rowId: String!): Conversation
   """
+  Reads a single `Conversation` using its globally unique `ID`.
+  """
+  conversationById(
+    """
+    The globally unique `ID` to be used in selecting a single `Conversation`.
+    """
+    id: ID!
+  ): Conversation
+  """
   Check if a conversation exists and is accessible to the current user.
   """
   conversationExists(pConversationId: String): Boolean
+  """
+  Get a single `ConversationMessage`.
+  """
+  conversationMessage(rowId: String!): ConversationMessage
+  """
+  Reads a single `ConversationMessage` using its globally unique `ID`.
+  """
+  conversationMessageById(
+    """
+    The globally unique `ID` to be used in selecting a single `ConversationMessage`.
+    """
+    id: ID!
+  ): ConversationMessage
   """
   Reads and enables pagination through a set of `ConversationMessage`.
   """
@@ -1117,6 +1700,19 @@ type Query implements Node {
   """
   id: ID!
   """
+  Get a single `LlmProvider`.
+  """
+  llmProvider(rowId: String!): LlmProvider
+  """
+  Reads a single `LlmProvider` using its globally unique `ID`.
+  """
+  llmProviderById(
+    """
+    The globally unique `ID` to be used in selecting a single `LlmProvider`.
+    """
+    id: ID!
+  ): LlmProvider
+  """
   Reads and enables pagination through a set of `LlmProvider`.
   """
   llmProviders(
@@ -1164,12 +1760,123 @@ type Query implements Node {
   """
   Get a single `Profile`.
   """
+  profile(rowId: String!): Profile
+  """
+  Reads a single `Profile` using its globally unique `ID`.
+  """
+  profileById(
+    """
+    The globally unique `ID` to be used in selecting a single `Profile`.
+    """
+    id: ID!
+  ): Profile
+  """
+  Get a single `Profile`.
+  """
   profileByUserId(userId: String!): Profile
+  """
+  Reads and enables pagination through a set of `Profile`.
+  """
+  profiles(
+    """
+    Read all values in the set after (below) this cursor.
+    """
+    after: Cursor
+    """
+    Read all values in the set before (above) this cursor.
+    """
+    before: Cursor
+    """
+    A condition to be used in determining which values should be returned by the collection.
+    """
+    condition: ProfileCondition
+    """
+    Only read the first `n` values of the set.
+    Max: 100
+    """
+    first: Int = 10
+    """
+    Only read the last `n` values of the set.
+    Max: 100
+    """
+    last: Int
+    """
+    Skip the first `n` values from our `after` cursor, an alternative to cursor
+    based pagination. May not be used with `last`.
+    """
+    offset: Int
+    """
+    The method to use when ordering `Profile`.
+    """
+    orderBy: [ProfileOrderBy!] = [PRIMARY_KEY_ASC]
+  ): ProfileConnection
   """
   Exposes the root query type nested one level down. This is helpful for Relay 1
   which can only query top level fields if they are in a particular form.
   """
   query: Query!
+  """
+  Get a single `ScheduledJob`.
+  """
+  scheduledJob(rowId: String!): ScheduledJob
+  """
+  Reads a single `ScheduledJob` using its globally unique `ID`.
+  """
+  scheduledJobById(
+    """
+    The globally unique `ID` to be used in selecting a single `ScheduledJob`.
+    """
+    id: ID!
+  ): ScheduledJob
+  """
+  Get a single `ScheduledJobRun`.
+  """
+  scheduledJobRun(rowId: String!): ScheduledJobRun
+  """
+  Reads a single `ScheduledJobRun` using its globally unique `ID`.
+  """
+  scheduledJobRunById(
+    """
+    The globally unique `ID` to be used in selecting a single `ScheduledJobRun`.
+    """
+    id: ID!
+  ): ScheduledJobRun
+  """
+  Reads and enables pagination through a set of `ScheduledJobRun`.
+  """
+  scheduledJobRuns(
+    """
+    Read all values in the set after (below) this cursor.
+    """
+    after: Cursor
+    """
+    Read all values in the set before (above) this cursor.
+    """
+    before: Cursor
+    """
+    A condition to be used in determining which values should be returned by the collection.
+    """
+    condition: ScheduledJobRunCondition
+    """
+    Only read the first `n` values of the set.
+    Max: 100
+    """
+    first: Int = 10
+    """
+    Only read the last `n` values of the set.
+    Max: 100
+    """
+    last: Int
+    """
+    Skip the first `n` values from our `after` cursor, an alternative to cursor
+    based pagination. May not be used with `last`.
+    """
+    offset: Int
+    """
+    The method to use when ordering `ScheduledJobRun`.
+    """
+    orderBy: [ScheduledJobRunOrderBy!] = [PRIMARY_KEY_ASC]
+  ): ScheduledJobRunConnection
   """
   Reads and enables pagination through a set of `ScheduledJob`.
   """
@@ -1440,6 +2147,22 @@ type ScheduledJobRunEdge {
 }
 
 """
+An input for mutations affecting `ScheduledJobRun`
+"""
+input ScheduledJobRunInput {
+  completedAt: Datetime
+  error: String
+  executionLog: String
+  finalResult: String
+  jobId: String!
+  result: String
+  rowId: String!
+  startedAt: Datetime
+  status: String!
+  toolCalls: JSON
+}
+
+"""
 Methods to use when ordering `ScheduledJobRun`.
 """
 enum ScheduledJobRunOrderBy {
@@ -1450,6 +2173,41 @@ enum ScheduledJobRunOrderBy {
   PRIMARY_KEY_DESC
   ROW_ID_ASC
   ROW_ID_DESC
+}
+
+"""
+Represents an update to a `ScheduledJobRun`. Fields that are set will be updated.
+"""
+input ScheduledJobRunPatch {
+  completedAt: Datetime
+  error: String
+  executionLog: String
+  finalResult: String
+  jobId: String
+  result: String
+  rowId: String
+  startedAt: Datetime
+  status: String
+  toolCalls: JSON
+}
+
+"""
+All input for the `updateConversationById` mutation.
+"""
+input UpdateConversationByIdInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  The globally unique `ID` which will identify a single `Conversation` to be updated.
+  """
+  id: ID!
+  """
+  An object where the defined keys will be set on the `Conversation` being updated.
+  """
+  patch: ConversationPatch!
 }
 
 """
@@ -1466,6 +2224,69 @@ input UpdateConversationInput {
   """
   patch: ConversationPatch!
   rowId: String!
+}
+
+"""
+All input for the `updateConversationMessageById` mutation.
+"""
+input UpdateConversationMessageByIdInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  The globally unique `ID` which will identify a single `ConversationMessage` to be updated.
+  """
+  id: ID!
+  """
+  An object where the defined keys will be set on the `ConversationMessage` being updated.
+  """
+  patch: ConversationMessagePatch!
+}
+
+"""
+All input for the `updateConversationMessage` mutation.
+"""
+input UpdateConversationMessageInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  An object where the defined keys will be set on the `ConversationMessage` being updated.
+  """
+  patch: ConversationMessagePatch!
+  rowId: String!
+}
+
+"""
+The output of our update `ConversationMessage` mutation.
+"""
+type UpdateConversationMessagePayload {
+  """
+  The exact same `clientMutationId` that was provided in the mutation input,
+  unchanged and unused. May be used by a client to track mutations.
+  """
+  clientMutationId: String
+  """
+  The `ConversationMessage` that was updated by this mutation.
+  """
+  conversationMessage: ConversationMessage
+  """
+  An edge for our `ConversationMessage`. May be used by Relay 1.
+  """
+  conversationMessageEdge(
+    """
+    The method to use when ordering `ConversationMessage`.
+    """
+    orderBy: [ConversationMessageOrderBy!]! = [PRIMARY_KEY_ASC]
+  ): ConversationMessageEdge
+  """
+  Our root query field type. Allows us to run any query from our mutation payload.
+  """
+  query: Query
 }
 
 """
@@ -1494,6 +2315,25 @@ type UpdateConversationPayload {
   Our root query field type. Allows us to run any query from our mutation payload.
   """
   query: Query
+}
+
+"""
+All input for the `updateLlmProviderById` mutation.
+"""
+input UpdateLlmProviderByIdInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  The globally unique `ID` which will identify a single `LlmProvider` to be updated.
+  """
+  id: ID!
+  """
+  An object where the defined keys will be set on the `LlmProvider` being updated.
+  """
+  patch: LlmProviderPatch!
 }
 
 """
@@ -1541,6 +2381,25 @@ type UpdateLlmProviderPayload {
 }
 
 """
+All input for the `updateProfileById` mutation.
+"""
+input UpdateProfileByIdInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  The globally unique `ID` which will identify a single `Profile` to be updated.
+  """
+  id: ID!
+  """
+  An object where the defined keys will be set on the `Profile` being updated.
+  """
+  patch: ProfilePatch!
+}
+
+"""
 All input for the `updateProfileByUserId` mutation.
 """
 input UpdateProfileByUserIdInput {
@@ -1554,6 +2413,22 @@ input UpdateProfileByUserIdInput {
   """
   patch: ProfilePatch!
   userId: String!
+}
+
+"""
+All input for the `updateProfile` mutation.
+"""
+input UpdateProfileInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  An object where the defined keys will be set on the `Profile` being updated.
+  """
+  patch: ProfilePatch!
+  rowId: String!
 }
 
 """
@@ -1582,6 +2457,25 @@ type UpdateProfilePayload {
   Our root query field type. Allows us to run any query from our mutation payload.
   """
   query: Query
+}
+
+"""
+All input for the `updateScheduledJobById` mutation.
+"""
+input UpdateScheduledJobByIdInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  The globally unique `ID` which will identify a single `ScheduledJob` to be updated.
+  """
+  id: ID!
+  """
+  An object where the defined keys will be set on the `ScheduledJob` being updated.
+  """
+  patch: ScheduledJobPatch!
 }
 
 """
@@ -1626,4 +2520,67 @@ type UpdateScheduledJobPayload {
     """
     orderBy: [ScheduledJobOrderBy!]! = [PRIMARY_KEY_ASC]
   ): ScheduledJobEdge
+}
+
+"""
+All input for the `updateScheduledJobRunById` mutation.
+"""
+input UpdateScheduledJobRunByIdInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  The globally unique `ID` which will identify a single `ScheduledJobRun` to be updated.
+  """
+  id: ID!
+  """
+  An object where the defined keys will be set on the `ScheduledJobRun` being updated.
+  """
+  patch: ScheduledJobRunPatch!
+}
+
+"""
+All input for the `updateScheduledJobRun` mutation.
+"""
+input UpdateScheduledJobRunInput {
+  """
+  An arbitrary string value with no semantic meaning. Will be included in the
+  payload verbatim. May be used to track mutations by the client.
+  """
+  clientMutationId: String
+  """
+  An object where the defined keys will be set on the `ScheduledJobRun` being updated.
+  """
+  patch: ScheduledJobRunPatch!
+  rowId: String!
+}
+
+"""
+The output of our update `ScheduledJobRun` mutation.
+"""
+type UpdateScheduledJobRunPayload {
+  """
+  The exact same `clientMutationId` that was provided in the mutation input,
+  unchanged and unused. May be used by a client to track mutations.
+  """
+  clientMutationId: String
+  """
+  Our root query field type. Allows us to run any query from our mutation payload.
+  """
+  query: Query
+  """
+  The `ScheduledJobRun` that was updated by this mutation.
+  """
+  scheduledJobRun: ScheduledJobRun
+  """
+  An edge for our `ScheduledJobRun`. May be used by Relay 1.
+  """
+  scheduledJobRunEdge(
+    """
+    The method to use when ordering `ScheduledJobRun`.
+    """
+    orderBy: [ScheduledJobRunOrderBy!]! = [PRIMARY_KEY_ASC]
+  ): ScheduledJobRunEdge
 }
