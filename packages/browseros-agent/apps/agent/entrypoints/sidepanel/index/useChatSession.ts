@@ -209,7 +209,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         })
         const activeTab = activeTabsList?.[0] ?? undefined
         const message = getLastMessageText(messages)
-        const provider = selectedLlmProviderRef.current ?? createDefaultBrowserOSProvider()
+        const provider =
+          selectedLlmProviderRef.current ?? createDefaultBrowserOSProvider()
         const currentMode = modeRef.current
         const enabledMcpServers = enabledMcpServersRef.current
         const customMcpServers = enabledCustomServersRef.current
