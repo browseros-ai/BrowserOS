@@ -1,4 +1,5 @@
-import type { LanguageModelV3 } from '@ai-sdk/provider'
+import { devToolsMiddleware } from '@ai-sdk/devtools'
+import type { LanguageModelV3, LanguageModelV3Middleware } from '@ai-sdk/provider'
 import { AGENT_LIMITS } from '@browseros/shared/constants/limits'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 import {
@@ -39,6 +40,7 @@ export interface AiSdkAgentConfig {
   browserContext?: BrowserContext
   klavisClient?: KlavisClient
   browserosId?: string
+  aiSdkDevtoolsEnabled?: boolean
 }
 
 export class AiSdkAgent {
@@ -54,19 +56,35 @@ export class AiSdkAgent {
       config.resolvedConfig.contextWindowSize ??
       AGENT_LIMITS.DEFAULT_CONTEXT_WINDOW
 
-    // Build language model with overflow protection middleware
+    // Build language model with middleware stack
     const rawModel = createLanguageModel(config.resolvedConfig)
     const isV3Model =
       typeof rawModel === 'object' &&
       rawModel !== null &&
       'specificationVersion' in rawModel &&
       rawModel.specificationVersion === 'v3'
-    const model = isV3Model
-      ? wrapLanguageModel({
-          model: rawModel as LanguageModelV3,
-          middleware: createContextOverflowMiddleware(contextWindow),
+
+    let model = rawModel
+    if (isV3Model) {
+      // Always apply context overflow protection
+      model = wrapLanguageModel({
+        model: rawModel as LanguageModelV3,
+        middleware: createContextOverflowMiddleware(contextWindow),
+      })
+
+      // Optionally add AI SDK DevTools tracing (dev-only)
+      if (config.aiSdkDevtoolsEnabled) {
+        model = wrapLanguageModel({
+          model: model as LanguageModelV3,
+          middleware: devToolsMiddleware() as LanguageModelV3Middleware,
         })
-      : rawModel
+        logger.info('AI SDK DevTools middleware enabled', {
+          conversationId: config.resolvedConfig.conversationId,
+          provider: config.resolvedConfig.provider,
+          model: config.resolvedConfig.model,
+        })
+      }
+    }
 
     // Build browser tools from the unified tool registry
     const allBrowserTools = buildBrowserToolSet(

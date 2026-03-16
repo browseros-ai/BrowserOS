@@ -14,7 +14,8 @@
     "test:integration": "bun run test:cleanup && bun --env-file=.env.development test tests/server.integration.test.ts",
     "test:sdk": "bun run test:cleanup && bun --env-file=.env.development test tests/sdk",
     "test:cleanup": "./tests/__helpers__/cleanup.sh",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "devtools": "bunx @ai-sdk/devtools"
   },
   "exports": {
     ".": {
@@ -43,6 +44,7 @@
     "@ai-sdk/anthropic": "^3.0.46",
     "@ai-sdk/azure": "^3.0.31",
     "@ai-sdk/google": "^3.0.30",
+    "@ai-sdk/devtools": "^0.0.15",
     "@ai-sdk/mcp": "^1.0.21",
     "@ai-sdk/openai": "^3.0.30",
     "@ai-sdk/openai-compatible": "^2.0.30",

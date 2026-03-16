@@ -95,6 +95,7 @@ export interface HttpServerConfig {
   rateLimiter?: RateLimiter
 
   codegenServiceUrl?: string
+  aiSdkDevtoolsEnabled?: boolean
 
   onShutdown?: () => void
 }

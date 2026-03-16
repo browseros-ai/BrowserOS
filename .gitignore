@@ -26,3 +26,6 @@ gclient.json
 **/resources/binaries/
 
 packages/browseros/build/tools/
+
+# AI SDK DevTools traces
+.devtools/

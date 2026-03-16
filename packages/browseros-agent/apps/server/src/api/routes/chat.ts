@@ -18,6 +18,7 @@ interface ChatRouteDeps {
   registry: ToolRegistry
   browserosId?: string
   rateLimiter?: RateLimiter
+  aiSdkDevtoolsEnabled?: boolean
 }
 
 export function createChatRoutes(deps: ChatRouteDeps) {
@@ -31,6 +32,7 @@ export function createChatRoutes(deps: ChatRouteDeps) {
     browser: deps.browser,
     registry: deps.registry,
     browserosId,
+    aiSdkDevtoolsEnabled: deps.aiSdkDevtoolsEnabled,
   })
 
   return new Hono()

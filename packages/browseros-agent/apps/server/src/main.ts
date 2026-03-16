@@ -96,6 +96,7 @@ export class Application {
         resourcesDir: this.config.resourcesDir,
         rateLimiter: new RateLimiter(this.getDb(), dailyRateLimit),
         codegenServiceUrl: this.config.codegenServiceUrl,
+        aiSdkDevtoolsEnabled: this.config.aiSdkDevtoolsEnabled,
 
         onShutdown: () => this.stop('shutdown-endpoint'),
       })

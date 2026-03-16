@@ -27,6 +27,7 @@ describe('loadServerConfig', () => {
     delete process.env.BROWSEROS_EXECUTION_DIR
     delete process.env.BROWSEROS_INSTALL_ID
     delete process.env.BROWSEROS_CLIENT_ID
+    delete process.env.BROWSEROS_AI_SDK_DEVTOOLS
   })
 
   afterEach(() => {
@@ -400,6 +401,57 @@ describe('loadServerConfig', () => {
       assert.strictEqual(result.ok, true)
       if (!result.ok) return
       assert.strictEqual(result.value.agentPort, result.value.serverPort)
+    })
+
+    it('defaults aiSdkDevtoolsEnabled to false', () => {
+      const result = loadServerConfig([
+        'bun',
+        'src/index.ts',
+        '--server-port=3000',
+        '--extension-port=3002',
+      ])
+
+      assert.strictEqual(result.ok, true)
+      if (!result.ok) return
+      assert.strictEqual(result.value.aiSdkDevtoolsEnabled, false)
+    })
+  })
+
+  describe('AI SDK DevTools', () => {
+    it('enables devtools via BROWSEROS_AI_SDK_DEVTOOLS env var', () => {
+      process.env.BROWSEROS_AI_SDK_DEVTOOLS = 'true'
+
+      const result = loadServerConfig([
+        'bun',
+        'src/index.ts',
+        '--server-port=3000',
+        '--extension-port=3002',
+      ])
+
+      assert.strictEqual(result.ok, true)
+      if (!result.ok) return
+      assert.strictEqual(result.value.aiSdkDevtoolsEnabled, true)
+    })
+
+    it('enables devtools via config file flags.ai_sdk_devtools', () => {
+      const configPath = path.join(tempDir, 'config.json')
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          ports: { http_mcp: 3000, extension: 3002 },
+          flags: { ai_sdk_devtools: true },
+        }),
+      )
+
+      const result = loadServerConfig([
+        'bun',
+        'src/index.ts',
+        `--config=${configPath}`,
+      ])
+
+      assert.strictEqual(result.ok, true)
+      if (!result.ok) return
+      assert.strictEqual(result.value.aiSdkDevtoolsEnabled, true)
     })
   })
 })

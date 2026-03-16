@@ -29,6 +29,7 @@ export const ServerConfigSchema = z.object({
   instanceInstallId: z.string().optional(),
   instanceBrowserosVersion: z.string().optional(),
   instanceChromiumVersion: z.string().optional(),
+  aiSdkDevtoolsEnabled: z.boolean(),
 })
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>
@@ -225,6 +226,8 @@ function parseConfigFile(filePath?: string): ConfigResult<PartialConfig> {
         executionDir: parseAbsolutePath(cfg.directories?.execution, configDir),
         mcpAllowRemote:
           cfg.flags?.allow_remote_in_mcp === true ? true : undefined,
+        aiSdkDevtoolsEnabled:
+          cfg.flags?.ai_sdk_devtools === true ? true : undefined,
         instanceClientId:
           typeof cfg.instance?.client_id === 'string'
             ? cfg.instance.client_id
@@ -269,6 +272,8 @@ function parseRuntimeEnv(): PartialConfig {
       : undefined,
     instanceInstallId: process.env.BROWSEROS_INSTALL_ID,
     instanceClientId: process.env.BROWSEROS_CLIENT_ID,
+    aiSdkDevtoolsEnabled:
+      process.env.BROWSEROS_AI_SDK_DEVTOOLS === 'true' ? true : undefined,
   })
 }
 
@@ -300,6 +305,7 @@ function getDefaults(cwd: string): PartialConfig {
     resourcesDir: cwd,
     executionDir: cwd,
     mcpAllowRemote: false,
+    aiSdkDevtoolsEnabled: false,
   }
 }
 

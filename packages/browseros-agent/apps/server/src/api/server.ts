@@ -132,6 +132,7 @@ export async function createHttpServer(config: HttpServerConfig) {
         registry,
         browserosId,
         rateLimiter,
+        aiSdkDevtoolsEnabled: config.aiSdkDevtoolsEnabled,
       }),
     )
     .route(
@@ -193,6 +194,12 @@ export async function createHttpServer(config: HttpServerConfig) {
   })
 
   logger.info('Consolidated HTTP Server started', { port, host })
+
+  if (config.aiSdkDevtoolsEnabled) {
+    logger.info(
+      'AI SDK DevTools enabled — run `npx @ai-sdk/devtools` to open the viewer',
+    )
+  }
 
   return {
     app,
