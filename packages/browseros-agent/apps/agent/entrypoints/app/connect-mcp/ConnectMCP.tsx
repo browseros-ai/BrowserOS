@@ -156,6 +156,7 @@ export const ConnectMCP: FC = () => {
       })
       if (response.success) {
         removeServer(id)
+        mutateUserIntegrations()
       } else {
         failedToRemoveMcp(name, 'Success not returned from server')
       }
