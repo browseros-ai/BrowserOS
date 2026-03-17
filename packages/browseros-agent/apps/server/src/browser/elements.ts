@@ -94,6 +94,23 @@ export async function resolveObjectId(
   return objectId
 }
 
+/** Read the current value/textContent of an input, textarea, or contenteditable element. */
+export async function getInputValue(
+  session: ProtocolApi,
+  backendNodeId: number,
+): Promise<string> {
+  try {
+    const value = await callOnElement(
+      session,
+      backendNodeId,
+      'function(){return this.value??this.textContent??""}',
+    )
+    return (value as string) ?? ''
+  } catch {
+    return ''
+  }
+}
+
 export async function callOnElement(
   session: ProtocolApi,
   backendNodeId: number,

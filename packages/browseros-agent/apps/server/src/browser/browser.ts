@@ -798,25 +798,43 @@ export class Browser {
 
     await elements.scrollIntoView(session, element)
 
+    // Always click to guarantee real keyboard focus.
+    // DOM.focus() is unreliable for shadow DOM, iframes, and custom components.
     let coords: { x: number; y: number } | undefined
     try {
-      await elements.focusElement(session, element)
-      try {
-        coords = await elements.getElementCenter(session, element)
-      } catch {
-        // coordinates are best-effort
-      }
+      const { x, y } = await elements.getElementCenter(session, element)
+      await mouse.dispatchClick(session, x, y, 'left', 1, 0)
+      coords = { x, y }
     } catch {
+      // Fallback to DOM.focus() if we can't get coordinates
       try {
-        const { x, y } = await elements.getElementCenter(session, element)
-        await mouse.dispatchClick(session, x, y, 'left', 1, 0)
-        coords = { x, y }
+        await elements.focusElement(session, element)
       } catch {
-        logger.warn('Could not focus element via click either')
+        logger.warn('Could not focus element via click or DOM.focus()')
       }
     }
 
-    if (clear) await keyboard.clearField(session)
+    if (clear) {
+      // Primary: keyboard select-all + backspace
+      await keyboard.clearField(session)
+
+      // Fallback: if field still has content, triple-click to select all
+      // then typeText will overwrite the selection
+      if (coords) {
+        const value = await elements.getInputValue(session, element)
+        if (value) {
+          await mouse.dispatchClick(
+            session,
+            coords.x,
+            coords.y,
+            'left',
+            3,
+            0,
+          )
+        }
+      }
+    }
+
     await keyboard.typeText(session, text)
     return coords
   }
