@@ -10,6 +10,7 @@ import { useIsMobile } from '@/hooks/use-mobile'
 import { SETTINGS_PAGE_VIEWED_EVENT } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
 import { RpcClientProvider } from '@/lib/rpc/RpcClientProvider'
+import { SettingsDialog } from '../settings-dialog/SettingsDialog'
 
 const COLLAPSE_DELAY = 150
 
@@ -19,10 +20,15 @@ export const SidebarLayout: FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false)
+  const [settingsDialogOpen, setSettingsDialogOpen] = useState(false)
   const collapseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const openShortcuts = useCallback(() => {
     setShortcutsDialogOpen(true)
+  }, [])
+
+  const openSettings = useCallback(() => {
+    setSettingsDialogOpen(true)
   }, [])
 
   useEffect(() => {
@@ -77,12 +83,20 @@ export const SidebarLayout: FC = () => {
           </main>
           <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
             <SheetContent side="left" className="w-72 p-0">
-              <AppSidebar expanded onOpenShortcuts={openShortcuts} />
+              <AppSidebar
+                expanded
+                onOpenShortcuts={openShortcuts}
+                onOpenSettings={openSettings}
+              />
             </SheetContent>
           </Sheet>
           <ShortcutsDialog
             open={shortcutsDialogOpen}
             onOpenChange={setShortcutsDialogOpen}
+          />
+          <SettingsDialog
+            open={settingsDialogOpen}
+            onOpenChange={setSettingsDialogOpen}
           />
         </div>
       </RpcClientProvider>
@@ -99,7 +113,11 @@ export const SidebarLayout: FC = () => {
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >
-          <AppSidebar expanded={sidebarOpen} onOpenShortcuts={openShortcuts} />
+          <AppSidebar
+            expanded={sidebarOpen}
+            onOpenShortcuts={openShortcuts}
+            onOpenSettings={openSettings}
+          />
         </div>
 
         {/* Main content - full width, centered */}
@@ -112,6 +130,10 @@ export const SidebarLayout: FC = () => {
       <ShortcutsDialog
         open={shortcutsDialogOpen}
         onOpenChange={setShortcutsDialogOpen}
+      />
+      <SettingsDialog
+        open={settingsDialogOpen}
+        onOpenChange={setSettingsDialogOpen}
       />
     </RpcClientProvider>
   )

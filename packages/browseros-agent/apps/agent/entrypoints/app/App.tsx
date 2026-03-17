@@ -8,23 +8,17 @@ import { OnboardingDemo } from '../onboarding/demo/OnboardingDemo'
 import { FeaturesPage } from '../onboarding/features/Features'
 import { Onboarding } from '../onboarding/index/Onboarding'
 import { StepsLayout } from '../onboarding/steps/StepsLayout'
-import { AISettingsPage } from './ai-settings/AISettingsPage'
 import { ConnectMCP } from './connect-mcp/ConnectMCP'
 import { CreateGraphWrapper } from './create-graph/CreateGraphWrapper'
-import { CustomizationPage } from './customization/CustomizationPage'
 import { SurveyPage } from './jtbd-agent/SurveyPage'
 import { AuthLayout } from './layout/AuthLayout'
-import { SettingsSidebarLayout } from './layout/SettingsSidebarLayout'
 import { SidebarLayout } from './layout/SidebarLayout'
-import { LlmHubPage } from './llm-hub/LlmHubPage'
 import { LoginPage } from './login/LoginPage'
 import { LogoutPage } from './login/LogoutPage'
 import { MagicLinkCallback } from './login/MagicLinkCallback'
-import { MCPSettingsPage } from './mcp-settings/MCPSettingsPage'
 import { MemoryPage } from './memory/MemoryPage'
 import { ProfilePage } from './profile/ProfilePage'
 import { ScheduledTasksPage } from './scheduled-tasks/ScheduledTasksPage'
-import { SearchProviderPage } from './search-provider/SearchProviderPage'
 import { SkillsPage } from './skills/SkillsPage'
 import { SoulPage } from './soul/SoulPage'
 import { WorkflowsPageWrapper } from './workflows/WorkflowsPageWrapper'
@@ -42,12 +36,12 @@ const OptionsRedirect: FC = () => {
   const path = params['*'] || ''
 
   const routeMap: Record<string, string> = {
-    ai: '/settings/ai',
-    chat: '/settings/chat',
+    ai: '/home',
+    chat: '/home',
     'connect-mcp': '/connect-apps',
-    mcp: '/settings/mcp',
-    customization: '/settings/customization',
-    search: '/settings/search',
+    mcp: '/home',
+    customization: '/home',
+    search: '/home',
     soul: '/home/soul',
     skills: '/home/skills',
     'jtbd-agent': '/settings/survey',
@@ -56,7 +50,7 @@ const OptionsRedirect: FC = () => {
     'create-graph': '/workflows/create-graph',
   }
 
-  const newPath = routeMap[path] || '/settings/ai'
+  const newPath = routeMap[path] || '/home'
   return <Navigate to={newPath} replace />
 }
 
@@ -91,18 +85,11 @@ export const App: FC = () => {
           <Route path="scheduled" element={<ScheduledTasksPage />} />
         </Route>
 
-        {/* Settings with dedicated sidebar */}
-        <Route element={<SettingsSidebarLayout />}>
-          <Route path="settings">
-            <Route index element={<Navigate to="/settings/ai" replace />} />
-            <Route path="ai" element={<AISettingsPage key="ai" />} />
-            <Route path="chat" element={<LlmHubPage />} />
-            <Route path="mcp" element={<MCPSettingsPage />} />
-            <Route path="customization" element={<CustomizationPage />} />
-            <Route path="search" element={<SearchProviderPage />} />
-            <Route path="survey" element={<SurveyPage {...surveyParams} />} />
-          </Route>
-        </Route>
+        {/* Survey page - standalone */}
+        <Route
+          path="settings/survey"
+          element={<SurveyPage {...surveyParams} />}
+        />
 
         {/* Full-screen without sidebar */}
         <Route path="workflows/create-graph" element={<CreateGraphWrapper />} />
@@ -133,6 +120,8 @@ export const App: FC = () => {
           path="/settings/skills"
           element={<Navigate to="/home/skills" replace />}
         />
+        {/* Settings routes now redirect to home (settings are in a dialog) */}
+        <Route path="/settings/*" element={<Navigate to="/home" replace />} />
         <Route path="/options/*" element={<OptionsRedirect />} />
 
         {/* Fallback to home */}

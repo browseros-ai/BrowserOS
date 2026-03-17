@@ -7,11 +7,13 @@ import { SidebarUserFooter } from './SidebarUserFooter'
 interface AppSidebarProps {
   expanded?: boolean
   onOpenShortcuts?: () => void
+  onOpenSettings?: () => void
 }
 
 export const AppSidebar: FC<AppSidebarProps> = ({
   expanded = false,
   onOpenShortcuts,
+  onOpenSettings,
 }) => {
   return (
     <div
@@ -21,7 +23,7 @@ export const AppSidebar: FC<AppSidebarProps> = ({
       )}
     >
       <SidebarBranding expanded={expanded} />
-      <SidebarNavigation expanded={expanded} />
+      <SidebarNavigation expanded={expanded} onOpenSettings={onOpenSettings} />
       <SidebarUserFooter
         expanded={expanded}
         onOpenShortcuts={onOpenShortcuts}
