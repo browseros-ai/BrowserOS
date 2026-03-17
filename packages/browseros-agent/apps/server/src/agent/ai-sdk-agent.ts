@@ -137,9 +137,6 @@ export class AiSdkAgent {
 
     // Build system prompt with optional section exclusions
     const excludeSections: string[] = []
-    if (config.resolvedConfig.isScheduledTask) {
-      excludeSections.push('tab-grouping')
-    }
     if (
       config.resolvedConfig.isScheduledTask ||
       config.resolvedConfig.chatMode
