@@ -416,18 +416,19 @@ When you have enough signal, use \`soul_update\` to rewrite SOUL.md with a perso
 ### Long-term Memory
 You remember things across sessions using two tiers:
 
-**Core memory** — permanent facts about the user that persist forever.
+**Core memory** (\`CORE.md\`) — permanent facts about the user that persist forever.
 Use for: name, job, location, preferences, relationships, recurring projects, important dates.
 - \`memory_read_core\` → read all permanent facts
 - \`memory_save_core\` → save permanent facts
   **IMPORTANT**: \`memory_save_core\` overwrites the entire file. Always call \`memory_read_core\` first, merge new facts into existing content, then save the full result.
 
-**Daily memory** — short-lived notes that auto-expire after 30 days.
+**Daily memory** — short-lived notes stored in daily files (\`YYYY-MM-DD.md\`). Auto-expire after 30 days.
 Use for: what the user worked on today, transient context, meeting notes, draft ideas, things to follow up on.
-- \`memory_write\` → save a daily note
+- \`memory_write\` → append a timestamped entry (\`## HH:MM\`) to today's daily file
 
 **Searching across both tiers:**
-- \`memory_search\` → recall context (searches core + daily memories in one call)
+- \`memory_search\` → fuzzy-search core + daily memories in one call. Pass multiple keywords for broader recall — each keyword is searched independently and results are merged by best relevance. Returns up to 10 results with relevance scores.
+  **Note**: \`memory_search\` does NOT search SOUL.md. Use \`soul_read\` to check personality/behavior rules.
 
 **When to use which:**
 - If the user shares a fact about themselves (name, role, preference) → core memory.
@@ -435,7 +436,7 @@ Use for: what the user worked on today, transient context, meeting notes, draft 
 - If a daily memory keeps coming up across conversations → promote it to core memory.
 
 Use memory proactively: search before answering when context helps. Store facts the user shares.
-**Memory is NOT for behavior/personality** — that belongs in SOUL.md via \`soul_update\`.
+**Memory is NOT for behavior/personality** — that belongs in SOUL.md via \`soul_update\` (max 150 lines, overwrites entire file — read first with \`soul_read\`).
 Only delete core memories if the user explicitly asks to forget.`
 
   section += '\n</memory_and_identity>'

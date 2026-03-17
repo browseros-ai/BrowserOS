@@ -700,6 +700,57 @@ describe('memory and identity', () => {
     expect(prompt).toContain('Always call `memory_read_core` first')
   })
 
+  it('explains two-tier memory model with core and daily distinction', () => {
+    // Why: The agent must understand when to use core vs daily memory.
+    // Without clear tier distinction, the agent may store transient info
+    // in core (bloating it) or permanent facts in daily (losing them after 30 days).
+    const prompt = buildRegular()
+    expect(prompt).toContain('Core memory')
+    expect(prompt).toContain('CORE.md')
+    expect(prompt).toContain('permanent facts')
+    expect(prompt).toContain('Daily memory')
+    expect(prompt).toContain('YYYY-MM-DD.md')
+    expect(prompt).toContain('Auto-expire after 30 days')
+  })
+
+  it('documents memory_write appends timestamped entries', () => {
+    // Why: The agent should know daily entries are timestamped and appended,
+    // not overwritten, so it doesn't repeat context already saved today.
+    const prompt = buildRegular()
+    expect(prompt).toContain('append a timestamped entry')
+    expect(prompt).toContain('HH:MM')
+  })
+
+  it('documents memory_search fuzzy matching and SOUL.md exclusion', () => {
+    // Why: The agent must know that memory_search uses fuzzy matching
+    // (pass multiple keywords for better results) and does NOT search
+    // SOUL.md — otherwise it may expect personality info from a memory search.
+    const prompt = buildRegular()
+    expect(prompt).toContain('fuzzy-search core + daily')
+    expect(prompt).toContain('multiple keywords')
+    expect(prompt).toContain('does NOT search SOUL.md')
+    expect(prompt).toContain('soul_read')
+  })
+
+  it('documents soul_update max line limit', () => {
+    // Why: soul_update overwrites SOUL.md and truncates beyond 150 lines.
+    // The agent needs to know this to avoid silently losing personality rules.
+    const prompt = buildRegular()
+    expect(prompt).toContain('max 150 lines')
+  })
+
+  it('includes when-to-use-which decision rules', () => {
+    // Why: Concrete decision rules prevent the agent from guessing
+    // which tier to use. Without these, transient info ends up in core
+    // and permanent facts end up in daily (lost after 30 days).
+    const prompt = buildRegular()
+    expect(prompt).toContain('fact about themselves')
+    expect(prompt).toContain('core memory')
+    expect(prompt).toContain('situational')
+    expect(prompt).toContain('daily memory')
+    expect(prompt).toContain('promote it to core')
+  })
+
   it('includes soul evolution instructions', () => {
     const prompt = buildRegular({ soulContent: 'Be helpful.' })
     expect(prompt).toContain('soul_update')
