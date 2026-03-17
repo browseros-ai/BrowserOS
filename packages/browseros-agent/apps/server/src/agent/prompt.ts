@@ -193,7 +193,7 @@ You have persistent memory across sessions and an evolving personality. See the 
 
 function getExecution(
   _exclude: Set<string>,
-  options?: BuildSystemPromptOptions,
+  _options?: BuildSystemPromptOptions,
 ): string {
   return `<execution>
 ## Execution

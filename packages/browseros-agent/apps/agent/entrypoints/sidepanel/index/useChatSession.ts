@@ -449,7 +449,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       }
       baseSendMessage({ text: pending.text })
     }
-  }, [isIntegrationsSynced, baseSendMessage, setTextToAction])
+  }, [isIntegrationsSynced, baseSendMessage])
 
   const sendMessage = (params: { text: string; action?: ChatAction }) => {
     track(MESSAGE_SENT_EVENT, {

@@ -1,5 +1,8 @@
 import { devToolsMiddleware } from '@ai-sdk/devtools'
-import type { LanguageModelV3, LanguageModelV3Middleware } from '@ai-sdk/provider'
+import type {
+  LanguageModelV3,
+  LanguageModelV3Middleware,
+} from '@ai-sdk/provider'
 import { AGENT_LIMITS } from '@browseros/shared/constants/limits'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 import {

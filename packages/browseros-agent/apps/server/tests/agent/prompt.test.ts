@@ -55,8 +55,8 @@
 
 import { describe, expect, it } from 'bun:test'
 import {
-  buildSystemPrompt,
   type BuildSystemPromptOptions,
+  buildSystemPrompt,
 } from '../../src/agent/prompt'
 
 // ---------------------------------------------------------------------------
@@ -64,9 +64,7 @@ import {
 // ---------------------------------------------------------------------------
 
 /** Build a prompt with sensible defaults for "regular mode with workspace" */
-function buildRegular(
-  overrides?: Partial<BuildSystemPromptOptions>,
-): string {
+function buildRegular(overrides?: Partial<BuildSystemPromptOptions>): string {
   return buildSystemPrompt({
     workspaceDir: '/home/user/workspace',
     soulContent: 'Be helpful and concise.',
@@ -75,9 +73,7 @@ function buildRegular(
 }
 
 /** Build a prompt for chat mode */
-function buildChatMode(
-  overrides?: Partial<BuildSystemPromptOptions>,
-): string {
+function buildChatMode(overrides?: Partial<BuildSystemPromptOptions>): string {
   return buildSystemPrompt({
     chatMode: true,
     soulContent: 'Be helpful and concise.',
@@ -86,9 +82,7 @@ function buildChatMode(
 }
 
 /** Build a prompt for scheduled tasks */
-function buildScheduled(
-  overrides?: Partial<BuildSystemPromptOptions>,
-): string {
+function buildScheduled(overrides?: Partial<BuildSystemPromptOptions>): string {
   return buildSystemPrompt({
     isScheduledTask: true,
     workspaceDir: '/tmp/scheduled',
@@ -113,19 +107,19 @@ describe('section presence', () => {
 
     // Each section has a unique XML tag or heading that identifies it
     const expectedMarkers = [
-      '<role>',               // role-and-mode
-      '<security>',           // security
-      '<capabilities>',       // capabilities
-      '<execution>',          // execution
-      '<tool_selection>',     // tool-selection
+      '<role>', // role-and-mode
+      '<security>', // security
+      '<capabilities>', // capabilities
+      '<execution>', // execution
+      '<tool_selection>', // tool-selection
       '<external_integrations>', // external-integrations
-      '<error_recovery>',     // error-recovery
+      '<error_recovery>', // error-recovery
       '<memory_and_identity>', // memory-and-identity
-      '<workspace>',          // workspace
-      '<nudge_tools>',        // nudges
-      '<style_rules>',        // style
-      '<page_context>',       // user-context (page context part)
-      '<FINAL_REMINDER>',     // security-reminder
+      '<workspace>', // workspace
+      '<nudge_tools>', // nudges
+      '<style_rules>', // style
+      '<page_context>', // user-context (page context part)
+      '<FINAL_REMINDER>', // security-reminder
     ]
 
     for (const marker of expectedMarkers) {
@@ -173,9 +167,7 @@ describe('workspace gating (P11)', () => {
     it('includes filesystem in role statement', () => {
       const prompt = buildRegular({ workspaceDir: '/home/user/project' })
       expect(prompt).toContain('a filesystem workspace')
-      expect(prompt).not.toContain(
-        'You do not have a filesystem workspace',
-      )
+      expect(prompt).not.toContain('You do not have a filesystem workspace')
     })
 
     it('includes workspace section with correct directory', () => {
@@ -212,7 +204,9 @@ describe('workspace gating (P11)', () => {
 
     it('does not include no-workspace style fallback', () => {
       const prompt = buildRegular({ workspaceDir: '/tmp' })
-      expect(prompt).not.toContain('select a working directory from the chat toolbar')
+      expect(prompt).not.toContain(
+        'select a working directory from the chat toolbar',
+      )
     })
   })
 
@@ -380,10 +374,10 @@ describe('security boundaries', () => {
     const prompt = buildRegular()
     expect(prompt).toContain('<data_handling>')
     expect(prompt).toContain('Never copy sensitive data')
-    expect(prompt).toContain('Never type credentials into a page you navigated to yourself')
     expect(prompt).toContain(
-      'evaluate_script` for data extraction only',
+      'Never type credentials into a page you navigated to yourself',
     )
+    expect(prompt).toContain('evaluate_script` for data extraction only')
   })
 
   it('includes OpenClaw-inspired safety rules', () => {
@@ -660,9 +654,7 @@ describe('external integrations', () => {
     // Why: v5 had no guidance for when execute_action partially succeeds.
     // The agent would either retry silently or give up entirely.
     const prompt = buildRegular()
-    expect(prompt).toContain(
-      'report what you got and explain what\'s missing',
-    )
+    expect(prompt).toContain("report what you got and explain what's missing")
   })
 
   it('includes authentication re-flow', () => {
@@ -712,9 +704,7 @@ describe('memory and identity', () => {
     const prompt = buildRegular({ soulContent: 'Be helpful.' })
     expect(prompt).toContain('soul_update')
     expect(prompt).toContain('soul_read')
-    expect(prompt).toContain(
-      'SOUL.md is NOT for storing facts about the user',
-    )
+    expect(prompt).toContain('SOUL.md is NOT for storing facts about the user')
   })
 
   it('includes soul bootstrap when flag is set', () => {
@@ -826,9 +816,7 @@ describe('user context', () => {
         userSystemPrompt:
           'Always check [your calendar] before scheduling\nRefer to [your notes from yesterday]',
       })
-      expect(prompt).toContain(
-        'Always check [your calendar] before scheduling',
-      )
+      expect(prompt).toContain('Always check [your calendar] before scheduling')
       expect(prompt).toContain('Refer to [your notes from yesterday]')
     })
 
@@ -877,9 +865,7 @@ describe('style and tool call patterns', () => {
 
   it('includes parallel execution guidance', () => {
     const prompt = buildRegular()
-    expect(prompt).toContain(
-      'Execute independent tool calls in parallel',
-    )
+    expect(prompt).toContain('Execute independent tool calls in parallel')
   })
 
   it('includes data-rich response guidance', () => {
@@ -887,9 +873,7 @@ describe('style and tool call patterns', () => {
     // to over-summarize email content, calendar events, and file reads.
     // Users want the actual data, not a 1-line summary.
     const prompt = buildRegular()
-    expect(prompt).toContain(
-      "don't over-summarize",
-    )
+    expect(prompt).toContain("don't over-summarize")
   })
 })
 
@@ -907,7 +891,7 @@ describe('error recovery', () => {
     const prompt = buildRegular()
     expect(prompt).toContain('### Browser interaction errors')
     expect(prompt).toContain('Element not found')
-    expect(prompt).toContain('Page didn\'t load')
+    expect(prompt).toContain("Page didn't load")
   })
 
   it('includes JavaScript/console error patterns', () => {
@@ -1085,9 +1069,7 @@ describe('nudges', () => {
 
   it('includes zero-text instruction for suggest_schedule', () => {
     const prompt = buildRegular()
-    expect(prompt).toContain(
-      'do NOT write any text about it',
-    )
+    expect(prompt).toContain('do NOT write any text about it')
   })
 
   it('includes frequency cap', () => {
