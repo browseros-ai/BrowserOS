@@ -547,7 +547,7 @@ function getUserContext(
   if (options?.userSystemPrompt) {
     const cleaned = options.userSystemPrompt
       .split('\n')
-      .filter((line) => !line.match(/\[.*your.*\]/i))
+      .filter((line) => !line.match(/^\s*\[.*your.*\]\s*$/i))
       .join('\n')
       .trim()
     if (cleaned) {
