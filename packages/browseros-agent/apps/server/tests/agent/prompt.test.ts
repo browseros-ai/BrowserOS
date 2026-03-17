@@ -821,6 +821,17 @@ describe('user context', () => {
       expect(prompt).toContain('Timezone: PST')
     })
 
+    it('preserves lines with bracketed text that include other content', () => {
+      const prompt = buildRegular({
+        userSystemPrompt:
+          'Always check [your calendar] before scheduling\nRefer to [your notes from yesterday]',
+      })
+      expect(prompt).toContain(
+        'Always check [your calendar] before scheduling',
+      )
+      expect(prompt).toContain('Refer to [your notes from yesterday]')
+    })
+
     it('omits user_preferences when all lines are templates', () => {
       const prompt = buildRegular({
         userSystemPrompt: '[Your name]\n[Your role]\n[Your company]',
