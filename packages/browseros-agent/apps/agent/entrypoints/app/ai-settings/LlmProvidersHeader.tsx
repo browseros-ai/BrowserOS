@@ -1,4 +1,4 @@
-import { Plus } from 'lucide-react'
+import { HelpCircle, Plus } from 'lucide-react'
 import type { FC } from 'react'
 import ProductLogoSvg from '@/assets/product_logo.svg'
 import { Button } from '@/components/ui/button'
@@ -9,6 +9,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { bringYourOwnLlmHelpUrl } from '@/lib/constants/productUrls'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 
 interface LlmProvidersHeaderProps {
@@ -34,7 +41,24 @@ export const LlmProvidersHeader: FC<LlmProvidersHeaderProps> = ({
           <img src={ProductLogoSvg} alt="BrowserOS" className="h-8 w-8" />
         </div>
         <div className="flex-1">
-          <h2 className="mb-1 font-semibold text-xl">LLM Providers</h2>
+          <div className="mb-1 flex items-center gap-2">
+            <h2 className="font-semibold text-xl">LLM Providers</h2>
+            <TooltipProvider delayDuration={0}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <a
+                    href={bringYourOwnLlmHelpUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-full p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <HelpCircle className="h-4 w-4" />
+                  </a>
+                </TooltipTrigger>
+                <TooltipContent>Learn more about LLM providers</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
           <p className="mb-6 text-muted-foreground text-sm">
             Add your provider and choose the default LLM
           </p>

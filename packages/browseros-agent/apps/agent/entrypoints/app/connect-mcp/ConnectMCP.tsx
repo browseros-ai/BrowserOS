@@ -1,11 +1,18 @@
-import { Check, Loader2, Plus, Server, Trash2 } from 'lucide-react'
+import { Check, HelpCircle, Loader2, Plus, Server, Trash2 } from 'lucide-react'
 import { type FC, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import {
   CUSTOM_MCP_ADDED_EVENT,
   MANAGED_MCP_ADDED_EVENT,
 } from '@/lib/constants/analyticsEvents'
+import { connectAppsHelpUrl } from '@/lib/constants/productUrls'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import { useSyncRemoteIntegrations } from '@/lib/mcp/useSyncRemoteIntegrations'
 import { track } from '@/lib/metrics/track'
@@ -219,7 +226,24 @@ export const ConnectMCP: FC = () => {
             <Server className="h-6 w-6 text-[var(--accent-orange)]" />
           </div>
           <div className="flex-1">
-            <h2 className="mb-1 font-semibold text-xl">Connected Apps</h2>
+            <div className="mb-1 flex items-center gap-2">
+              <h2 className="font-semibold text-xl">Connected Apps</h2>
+              <TooltipProvider delayDuration={0}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <a
+                      href={connectAppsHelpUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-full p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                      <HelpCircle className="h-4 w-4" />
+                    </a>
+                  </TooltipTrigger>
+                  <TooltipContent>Learn more about Connect Apps</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
             <p className="mb-6 text-muted-foreground text-sm">
               Connect BrowserOS assistant to apps to send email, schedule
               calendar events, write docs, and more

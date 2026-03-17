@@ -1,4 +1,11 @@
-import { AlertCircle, Pencil, Plus, Trash2, Wand2 } from 'lucide-react'
+import {
+  AlertCircle,
+  HelpCircle,
+  Pencil,
+  Plus,
+  Trash2,
+  Wand2,
+} from 'lucide-react'
 import { type FC, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -26,6 +33,13 @@ import { Label } from '@/components/ui/label'
 import { MarkdownEditor } from '@/components/ui/MarkdownEditor'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { skillsHelpUrl } from '@/lib/constants/productUrls'
 import { type SkillDetail, type SkillMeta, useSkills } from './useSkills'
 
 const loadingSkillCards = [
@@ -174,7 +188,24 @@ const SkillsHeader: FC<{
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div>
-        <h1 className="font-semibold text-2xl tracking-tight">Skills</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="font-semibold text-2xl tracking-tight">Skills</h1>
+          <TooltipProvider delayDuration={0}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <a
+                  href={skillsHelpUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-full p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <HelpCircle className="h-4 w-4" />
+                </a>
+              </TooltipTrigger>
+              <TooltipContent>Learn more about skills</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
         <p className="text-muted-foreground text-sm">
           Define reusable instructions that extend how your agent responds.
         </p>

@@ -1,6 +1,7 @@
 import { Check, Copy, ExternalLink, Globe, Server } from 'lucide-react'
 import { type FC, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { mcpClientsHelpUrl } from '@/lib/constants/productUrls'
 
 interface MCPServerHeaderProps {
   serverUrl: string | null
@@ -10,8 +11,6 @@ interface MCPServerHeaderProps {
   description?: string
   remoteAccessEnabled?: boolean
 }
-
-const DOCS_URL = 'https://docs.browseros.com/features/use-with-claude-code'
 
 export const MCPServerHeader: FC<MCPServerHeaderProps> = ({
   serverUrl,
@@ -45,7 +44,7 @@ export const MCPServerHeader: FC<MCPServerHeaderProps> = ({
           <div className="mb-1 flex items-center justify-between">
             <h2 className="font-semibold text-xl">{title}</h2>
             <a
-              href={DOCS_URL}
+              href={mcpClientsHelpUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1 text-muted-foreground text-sm transition-colors hover:text-[var(--accent-orange)]"
