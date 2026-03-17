@@ -70,6 +70,8 @@ export type ChatOrigin = 'sidepanel' | 'newtab'
 
 export interface ChatSessionOptions {
   origin?: ChatOrigin
+  /** When false, messages are queued until integrations finish syncing. */
+  isIntegrationsSynced?: boolean
 }
 
 const NEWTAB_SYSTEM_PROMPT = `IMPORTANT: The user is chatting from the New Tab page. When performing browser actions, ALWAYS open content in a NEW TAB rather than navigating the current tab. The user's new tab page should remain accessible.`
@@ -422,12 +424,46 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     }
   }, [status])
 
+  const isIntegrationsSynced = options?.isIntegrationsSynced ?? true
+  const isIntegrationsSyncedRef = useRef(isIntegrationsSynced)
+  const pendingMessageRef = useRef<{
+    text: string
+    action?: ChatAction
+  } | null>(null)
+
+  useEffect(() => {
+    isIntegrationsSyncedRef.current = isIntegrationsSynced
+  }, [isIntegrationsSynced])
+
+  // Flush pending message when integrations sync completes
+  useEffect(() => {
+    if (isIntegrationsSynced && pendingMessageRef.current) {
+      const pending = pendingMessageRef.current
+      pendingMessageRef.current = null
+      if (pending.action) {
+        setTextToAction((prev) => {
+          const next = new Map(prev)
+          next.set(pending.text, pending.action!)
+          return next
+        })
+      }
+      baseSendMessage({ text: pending.text })
+    }
+  }, [isIntegrationsSynced, baseSendMessage, setTextToAction])
+
   const sendMessage = (params: { text: string; action?: ChatAction }) => {
     track(MESSAGE_SENT_EVENT, {
       mode,
       provider_type: selectedLlmProvider?.type,
       model: selectedLlmProvider?.modelId,
     })
+
+    if (!isIntegrationsSyncedRef.current) {
+      // Queue the message — will be sent when sync completes
+      pendingMessageRef.current = params
+      return
+    }
+
     if (params.action) {
       const action = params.action
       setTextToAction((prev) => {
@@ -504,6 +540,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     providers,
     selectedProvider,
     isLoading: isLoadingProviders || isLoadingAgentUrl,
+    isSyncing: !isIntegrationsSynced,
     isRestoringConversation,
     agentUrlError,
     chatError,

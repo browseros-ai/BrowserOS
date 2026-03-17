@@ -1,4 +1,5 @@
 import { createContext, type FC, type ReactNode, useContext } from 'react'
+import { useSyncRemoteIntegrations } from '@/lib/mcp/useSyncRemoteIntegrations'
 import {
   type ChatSessionOptions,
   useChatSession,
@@ -11,7 +12,11 @@ const ChatSessionContext = createContext<ChatSessionContextValue | null>(null)
 export const ChatSessionProvider: FC<
   { children: ReactNode } & ChatSessionOptions
 > = ({ children, ...options }) => {
-  const session = useChatSession(options)
+  const { hasSynced } = useSyncRemoteIntegrations()
+  const session = useChatSession({
+    ...options,
+    isIntegrationsSynced: hasSynced,
+  })
   return (
     <ChatSessionContext.Provider value={session}>
       {children}
