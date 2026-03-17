@@ -758,6 +758,18 @@ describe('memory and identity', () => {
     expect(prompt).toContain('SOUL.md is NOT for storing facts about the user')
   })
 
+  it('includes soul tool instructions even when soulContent is empty', () => {
+    // Why: When SOUL.md doesn't exist yet (new user, file not created),
+    // soulContent is an empty string. The agent still needs to know about
+    // soul_update and soul_read so it can create the initial personality.
+    // Without this, the agent has zero knowledge of the soul system.
+    const prompt = buildRegular({ soulContent: '' })
+    expect(prompt).toContain('soul_update')
+    expect(prompt).toContain('soul_read')
+    expect(prompt).toContain('SOUL.md defines')
+    expect(prompt).toContain('SOUL.md is NOT for storing facts about the user')
+  })
+
   it('includes soul bootstrap when flag is set', () => {
     const prompt = buildRegular({
       soulContent: 'Template content.',
