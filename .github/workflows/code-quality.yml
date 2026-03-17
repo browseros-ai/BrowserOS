@@ -4,11 +4,16 @@ on:
   pull_request:
     branches:
       - main
+    paths:
+      - 'packages/browseros-agent/**'
 
 jobs:
   biome:
     name: runner / Biome
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/browseros-agent
     permissions:
       contents: read
     steps:
@@ -28,6 +33,9 @@ jobs:
   typecheck:
     name: runner / Typecheck
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/browseros-agent
     permissions:
       contents: read
     steps:

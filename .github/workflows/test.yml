@@ -7,18 +7,21 @@ jobs:
     name: Run Tests
     runs-on: macos-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: packages/browseros-agent
 
     steps:
-      - name: 📥 Checkout code
+      - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: 🧰 Setup Bun
+      - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
-      - name: 📦 Install dependencies
+      - name: Install dependencies
         run: bun ci
 
-      - name: 🧪 Run all tests
+      - name: Run all tests
         run: bun test:all
         env:
           PUPPETEER_EXECUTABLE_PATH: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome

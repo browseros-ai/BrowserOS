@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: packages/agent-sdk
+        working-directory: packages/browseros-agent/packages/agent-sdk
 
     steps:
       - uses: actions/checkout@v6
@@ -23,7 +23,7 @@ jobs:
 
       - name: Install dependencies
         run: bun ci
-        working-directory: .
+        working-directory: packages/browseros-agent
 
       - name: Build
         run: bun run build

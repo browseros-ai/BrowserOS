@@ -5,9 +5,9 @@ on:
     types: [opened, synchronize, reopened, edited]
 
 permissions:
-  pull-requests: write  # Read PR details and add labels
-  issues: write         # Labels are managed via issues API
-  contents: read        # Read repository content
+  pull-requests: write
+  issues: write
+  contents: read
 
 jobs:
   validate-pr-title:

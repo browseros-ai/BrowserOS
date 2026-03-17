@@ -9,6 +9,9 @@ on:
 jobs:
   security-audit:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/browseros-agent
 
     steps:
       - name: Checkout code
