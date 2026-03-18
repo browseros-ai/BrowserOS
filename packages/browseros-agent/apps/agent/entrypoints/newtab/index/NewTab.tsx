@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { AppSelector } from '@/components/elements/AppSelector'
 import {
   GlowingBorder,
@@ -36,7 +37,6 @@ import {
 import {
   NEWTAB_AI_TRIGGERED_EVENT,
   NEWTAB_APPS_OPENED_EVENT,
-  NEWTAB_CHAT_RESET_EVENT,
   NEWTAB_CHAT_STARTED_EVENT,
   NEWTAB_OPENED_EVENT,
   NEWTAB_SEARCH_EXECUTED_EVENT,
@@ -58,7 +58,6 @@ import {
   useSuggestions,
 } from './lib/suggestions/useSuggestions'
 import { NewTabBranding } from './NewTabBranding'
-import { NewTabChat } from './NewTabChat'
 import { NewTabTip } from './NewTabTip'
 import { ScheduleResults } from './ScheduleResults'
 import { SearchSuggestions } from './SearchSuggestions'
@@ -78,13 +77,13 @@ interface MentionState {
  */
 export const NewTab = () => {
   const activeHint = useActiveHint()
+  const navigate = useNavigate()
   const [inputValue, setInputValue] = useState('')
   const [mounted, setMounted] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const tabsDropdownRef = useRef<HTMLDivElement>(null)
   const [selectedTabs, setSelectedTabs] = useState<chrome.tabs.Tab[]>([])
   const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false)
-  const [chatActive, setChatActive] = useState(false)
   const [mentionState, setMentionState] = useState<MentionState>({
     isOpen: false,
     filterText: '',
@@ -96,8 +95,7 @@ export const NewTab = () => {
   const { data: userMCPIntegrations } = useGetUserMCPIntegrations()
   useSyncRemoteIntegrations()
 
-  const { messages, sendMessage, setMode, resetConversation } =
-    useChatSessionContext()
+  const { sendMessage, setMode } = useChatSessionContext()
 
   const connectedManagedServers = mcpServers.filter((s) => {
     if (s.type !== 'managed' || !s.managedServerName) return false
@@ -282,10 +280,10 @@ export const NewTab = () => {
   ) => {
     track(NEWTAB_CHAT_STARTED_EVENT, { mode, tabs_count: selectedTabs.length })
     setMode(mode)
-    setChatActive(true)
     sendMessage({ text: message, action })
     reset()
     setSelectedTabs([])
+    navigate('/home/chat')
   }
 
   const runSelectedAction = (item: SuggestionItem | undefined) => {
@@ -351,12 +349,6 @@ export const NewTab = () => {
     }
   }
 
-  const handleBackToSearch = () => {
-    track(NEWTAB_CHAT_RESET_EVENT, { message_count: messages.length })
-    resetConversation()
-    setChatActive(false)
-  }
-
   const isSuggestionsVisible =
     !mentionState.isOpen &&
     ((isOpen && inputValue.length) ||
@@ -368,10 +360,6 @@ export const NewTab = () => {
     track(NEWTAB_OPENED_EVENT)
   }, [])
 
-  if (chatActive) {
-    return <NewTabChat onBackToSearch={handleBackToSearch} />
-  }
-
   return (
     <div className="pt-[max(25vh,16px)]">
       {/* Main content */}
@@ -379,7 +367,8 @@ export const NewTab = () => {
         {/* Logo and branding */}
         <NewTabBranding />
         {/* Search bar with context */}
-        <div
+        <motion.div
+          layoutId="newtab-input"
           className={cn(
             'relative overflow-hidden bg-border/50 p-[2px]',
             isSuggestionsVisible ||
@@ -644,7 +633,7 @@ export const NewTab = () => {
               </div>
             )}
           </div>
-        </div>
+        </motion.div>
 
         {mounted && !isSuggestionsVisible && <NewTabTip />}
 

@@ -119,6 +119,21 @@ export const NEWTAB_CHAT_SUGGESTION_CLICKED_EVENT =
 export const NEWTAB_CHAT_MODE_CHANGED_EVENT = 'newtab.chat.mode_changed'
 
 /** @public */
+export const NEWTAB_VOICE_RECORDING_STARTED_EVENT =
+  'newtab.voice.recording_started'
+
+/** @public */
+export const NEWTAB_VOICE_RECORDING_STOPPED_EVENT =
+  'newtab.voice.recording_stopped'
+
+/** @public */
+export const NEWTAB_VOICE_TRANSCRIPTION_COMPLETED_EVENT =
+  'newtab.voice.transcription_completed'
+
+/** @public */
+export const NEWTAB_VOICE_ERROR_EVENT = 'newtab.voice.error'
+
+/** @public */
 export const WORKFLOW_DELETED_EVENT = 'settings.workflow.deleted'
 
 /** @public */

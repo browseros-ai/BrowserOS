@@ -1,12 +1,12 @@
 import { Loader2 } from 'lucide-react'
-import { type FC, useEffect, useState } from 'react'
+import { motion } from 'motion/react'
+import type { FC } from 'react'
+import { useNavigate } from 'react-router'
 import { ChatEmptyState } from '@/entrypoints/sidepanel/index/ChatEmptyState'
 import { ChatError } from '@/entrypoints/sidepanel/index/ChatError'
 import { ChatFooter } from '@/entrypoints/sidepanel/index/ChatFooter'
 import { ChatMessages } from '@/entrypoints/sidepanel/index/ChatMessages'
-import type { ChatMode } from '@/entrypoints/sidepanel/index/chatTypes'
-import { useChatSessionContext } from '@/entrypoints/sidepanel/layout/ChatSessionContext'
-import { createBrowserOSAction } from '@/lib/chat-actions/types'
+import { useChatActions } from '@/lib/chat-actions/useChatActions'
 import {
   NEWTAB_CHAT_MODE_CHANGED_EVENT,
   NEWTAB_CHAT_RESET_EVENT,
@@ -14,22 +14,22 @@ import {
   NEWTAB_CHAT_SUGGESTION_CLICKED_EVENT,
   NEWTAB_TAB_REMOVED_EVENT,
   NEWTAB_TAB_TOGGLED_EVENT,
+  NEWTAB_AI_TRIGGERED_EVENT,
+  NEWTAB_VOICE_RECORDING_STARTED_EVENT,
+  NEWTAB_VOICE_RECORDING_STOPPED_EVENT,
+  NEWTAB_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
+  NEWTAB_VOICE_ERROR_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
 import { NewTabChatHeader } from './NewTabChatHeader'
 
-interface NewTabChatProps {
-  onBackToSearch: () => void
-}
+export const NewTabChat: FC = () => {
+  const navigate = useNavigate()
 
-export const NewTabChat: FC<NewTabChatProps> = ({ onBackToSearch }) => {
   const {
     mode,
-    setMode,
     messages,
-    sendMessage,
     status,
-    stop,
     agentUrlError,
     chatError,
     getActionForMessage,
@@ -42,70 +42,37 @@ export const NewTabChat: FC<NewTabChatProps> = ({ onBackToSearch }) => {
     selectedProvider,
     handleSelectProvider,
     resetConversation,
-  } = useChatSessionContext()
+    input,
+    setInput,
+    attachedTabs,
+    mounted,
+    voiceState,
+    handleModeChange,
+    handleStop,
+    toggleTabSelection,
+    removeTab,
+    handleSubmit,
+    handleSuggestionClick,
+  } = useChatActions({
+    origin: 'newtab',
+    events: {
+      modeChanged: NEWTAB_CHAT_MODE_CHANGED_EVENT,
+      stopClicked: NEWTAB_CHAT_STOPPED_EVENT,
+      suggestionClicked: NEWTAB_CHAT_SUGGESTION_CLICKED_EVENT,
+      tabToggled: NEWTAB_TAB_TOGGLED_EVENT,
+      tabRemoved: NEWTAB_TAB_REMOVED_EVENT,
+      aiTriggered: NEWTAB_AI_TRIGGERED_EVENT,
+      voiceRecordingStarted: NEWTAB_VOICE_RECORDING_STARTED_EVENT,
+      voiceRecordingStopped: NEWTAB_VOICE_RECORDING_STOPPED_EVENT,
+      voiceTranscriptionCompleted: NEWTAB_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
+      voiceError: NEWTAB_VOICE_ERROR_EVENT,
+    },
+  })
 
-  const [input, setInput] = useState('')
-  const [attachedTabs, setAttachedTabs] = useState<chrome.tabs.Tab[]>([])
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
-
-  const handleModeChange = (newMode: ChatMode) => {
-    track(NEWTAB_CHAT_MODE_CHANGED_EVENT, { from: mode, to: newMode })
-    setMode(newMode)
-  }
-
-  const handleStop = () => {
-    track(NEWTAB_CHAT_STOPPED_EVENT)
-    stop()
-  }
-
-  const toggleTabSelection = (tab: chrome.tabs.Tab) => {
-    setAttachedTabs((prev) => {
-      const isSelected = prev.some((t) => t.id === tab.id)
-      track(NEWTAB_TAB_TOGGLED_EVENT, {
-        action: isSelected ? 'removed' : 'added',
-      })
-      if (isSelected) {
-        return prev.filter((t) => t.id !== tab.id)
-      }
-      return [...prev, tab]
-    })
-  }
-
-  const removeTab = (tabId?: number) => {
-    track(NEWTAB_TAB_REMOVED_EVENT)
-    setAttachedTabs((prev) => prev.filter((t) => t.id !== tabId))
-  }
-
-  const executeMessage = (customMessageText?: string) => {
-    const messageText = customMessageText ? customMessageText : input.trim()
-    if (!messageText) return
-
-    if (attachedTabs.length) {
-      const action = createBrowserOSAction({
-        mode,
-        message: messageText,
-        tabs: attachedTabs,
-      })
-      sendMessage({ text: messageText, action })
-    } else {
-      sendMessage({ text: messageText })
-    }
-    setInput('')
-    setAttachedTabs([])
-  }
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    executeMessage()
-  }
-
-  const handleSuggestionClick = (suggestion: string) => {
-    track(NEWTAB_CHAT_SUGGESTION_CLICKED_EVENT, { mode })
-    executeMessage(suggestion)
+  const handleBackToSearch = () => {
+    track(NEWTAB_CHAT_RESET_EVENT, { message_count: messages.length })
+    resetConversation()
+    navigate('/home')
   }
 
   const handleNewConversation = () => {
@@ -122,7 +89,7 @@ export const NewTabChat: FC<NewTabChatProps> = ({ onBackToSearch }) => {
         providers={providers}
         onSelectProvider={handleSelectProvider}
         onNewConversation={handleNewConversation}
-        onBackToSearch={onBackToSearch}
+        onBackToSearch={handleBackToSearch}
         hasMessages={messages.length > 0}
       />
 
@@ -156,7 +123,10 @@ export const NewTabChat: FC<NewTabChatProps> = ({ onBackToSearch }) => {
         {chatError && <ChatError error={chatError} />}
       </main>
 
-      <div className="mx-auto w-full max-w-3xl px-4">
+      <motion.div
+        layoutId="newtab-input"
+        className="mx-auto w-full max-w-3xl px-4"
+      >
         <ChatFooter
           mode={mode}
           onModeChange={handleModeChange}
@@ -168,8 +138,9 @@ export const NewTabChat: FC<NewTabChatProps> = ({ onBackToSearch }) => {
           attachedTabs={attachedTabs}
           onToggleTab={toggleTabSelection}
           onRemoveTab={removeTab}
+          voice={voiceState}
         />
-      </div>
+      </motion.div>
     </div>
   )
 }
