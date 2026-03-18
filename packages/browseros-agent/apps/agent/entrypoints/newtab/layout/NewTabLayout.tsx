@@ -15,10 +15,8 @@ export const NewTabLayout: FC = () => {
 
   return (
     <ChatSessionProvider origin="newtab">
-      <div className="h-screen overflow-hidden">
-        {!HIDE_FOCUS_GRID_PATHS.has(location.pathname) && <NewTabFocusGrid />}
-        <Outlet />
-      </div>
+      {!HIDE_FOCUS_GRID_PATHS.has(location.pathname) && <NewTabFocusGrid />}
+      <Outlet />
     </ChatSessionProvider>
   )
 }
