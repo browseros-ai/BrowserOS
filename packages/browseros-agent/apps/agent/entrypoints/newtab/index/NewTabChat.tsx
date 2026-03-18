@@ -8,17 +8,17 @@ import { ChatFooter } from '@/entrypoints/sidepanel/index/ChatFooter'
 import { ChatMessages } from '@/entrypoints/sidepanel/index/ChatMessages'
 import { useChatActions } from '@/lib/chat-actions/useChatActions'
 import {
+  NEWTAB_AI_TRIGGERED_EVENT,
   NEWTAB_CHAT_MODE_CHANGED_EVENT,
   NEWTAB_CHAT_RESET_EVENT,
   NEWTAB_CHAT_STOPPED_EVENT,
   NEWTAB_CHAT_SUGGESTION_CLICKED_EVENT,
   NEWTAB_TAB_REMOVED_EVENT,
   NEWTAB_TAB_TOGGLED_EVENT,
-  NEWTAB_AI_TRIGGERED_EVENT,
+  NEWTAB_VOICE_ERROR_EVENT,
   NEWTAB_VOICE_RECORDING_STARTED_EVENT,
   NEWTAB_VOICE_RECORDING_STOPPED_EVENT,
   NEWTAB_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
-  NEWTAB_VOICE_ERROR_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
 import { NewTabChatHeader } from './NewTabChatHeader'
@@ -93,7 +93,7 @@ export const NewTabChat: FC = () => {
         hasMessages={messages.length > 0}
       />
 
-      <main className="styled-scrollbar mx-auto flex w-full min-h-0 max-w-3xl flex-1 flex-col space-y-4 overflow-x-hidden overflow-y-auto px-4 pt-4 [&_[data-streamdown='code-block']]:!max-w-full [&_[data-streamdown='code-block']]:!w-auto [&_[data-streamdown='code-block']]:overflow-x-auto [&_[data-streamdown='table-wrapper']]:!max-w-full [&_[data-streamdown='table-wrapper']]:!w-auto [&_[data-streamdown='table-wrapper']]:overflow-x-auto">
+      <main className="styled-scrollbar [&_[data-streamdown='code-block']]:!max-w-full [&_[data-streamdown='code-block']]:!w-auto [&_[data-streamdown='table-wrapper']]:!max-w-full [&_[data-streamdown='table-wrapper']]:!w-auto mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col space-y-4 overflow-y-auto overflow-x-hidden px-4 pt-4 [&_[data-streamdown='code-block']]:overflow-x-auto [&_[data-streamdown='table-wrapper']]:overflow-x-auto">
         {isRestoringConversation ? (
           <div className="flex flex-1 items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />

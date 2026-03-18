@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
+import type { ChatMode } from '@/entrypoints/sidepanel/index/chatTypes'
 import { useChatSessionContext } from '@/entrypoints/sidepanel/layout/ChatSessionContext'
 import { track } from '@/lib/metrics/track'
 import { useVoiceInput } from '@/lib/voice/useVoiceInput'
-import type { ChatMode } from '@/entrypoints/sidepanel/index/chatTypes'
 import { createBrowserOSAction } from './types'
 
 interface ChatActionsConfig {
@@ -67,7 +67,7 @@ export function useChatActions(config: ChatActionsConfig) {
     if (voice.error) {
       track(config.events.voiceError, { error: voice.error })
     }
-  }, [voice.error])
+  }, [voice.error, config.events.voiceError])
 
   const handleModeChange = (newMode: ChatMode) => {
     track(config.events.modeChanged, { from: mode, to: newMode })
