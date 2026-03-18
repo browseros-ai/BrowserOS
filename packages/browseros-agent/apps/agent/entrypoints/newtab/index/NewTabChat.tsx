@@ -70,7 +70,10 @@ export const NewTabChat: FC = () => {
     },
   })
 
-  // Send the initial message from query params (from /home search bar)
+  // Send the initial message from query params (from /home search bar).
+  // setMode is async (React state), but sendMessage reads modeRef which is
+  // synced via useDeepCompareEffect (runs after commit). So we set the mode
+  // first, then defer the send to the next frame so the ref is updated.
   // biome-ignore lint/correctness/useExhaustiveDependencies: only run once on mount to read initial query params
   useEffect(() => {
     const query = searchParams.get('q')
@@ -80,8 +83,12 @@ export const NewTabChat: FC = () => {
     if (chatMode === 'chat' || chatMode === 'agent') {
       setMode(chatMode)
     }
-    sendMessage({ text: query })
     setSearchParams({}, { replace: true })
+    // Defer send so React commits the mode state update and
+    // useDeepCompareEffect syncs modeRef before prepareSendMessagesRequest reads it
+    requestAnimationFrame(() => {
+      sendMessage({ text: query })
+    })
   }, [])
 
   const handleNewConversation = () => {
