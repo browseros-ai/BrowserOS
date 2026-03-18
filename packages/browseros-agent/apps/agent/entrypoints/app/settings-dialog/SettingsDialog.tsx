@@ -7,6 +7,7 @@ import {
   RotateCcw,
   Search,
   Server,
+  X,
 } from 'lucide-react'
 import type { FC } from 'react'
 import { useEffect } from 'react'
@@ -125,7 +126,7 @@ export const SettingsDialog: FC = () => {
     >
       <DialogContent
         className="flex h-[85vh] max-h-[85vh] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl"
-        showCloseButton
+        showCloseButton={false}
       >
         <DialogTitle className="sr-only">Settings</DialogTitle>
         <div className="flex h-full min-h-0">
@@ -194,8 +195,20 @@ export const SettingsDialog: FC = () => {
           </div>
 
           {/* Right panel - settings content */}
-          <div className="flex-1 overflow-y-auto p-6">
-            <ActiveComponent />
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <div className="flex justify-end px-4 pt-3">
+              <button
+                type="button"
+                onClick={handleClose}
+                className="rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100"
+              >
+                <X className="size-4" />
+                <span className="sr-only">Close</span>
+              </button>
+            </div>
+            <div className="styled-scrollbar flex-1 overflow-y-auto px-6 pb-6">
+              <ActiveComponent />
+            </div>
           </div>
         </div>
       </DialogContent>
