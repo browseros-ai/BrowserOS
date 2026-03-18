@@ -27,7 +27,6 @@ import {
 } from '@/components/ui/tooltip'
 import { McpServerIcon } from '@/entrypoints/app/connect-mcp/McpServerIcon'
 import { useGetUserMCPIntegrations } from '@/entrypoints/app/connect-mcp/useGetUserMCPIntegrations'
-import { useChatSessionContext } from '@/entrypoints/sidepanel/layout/ChatSessionContext'
 import { Feature } from '@/lib/browseros/capabilities'
 import { useCapabilities } from '@/lib/browseros/useCapabilities'
 import {
@@ -94,8 +93,6 @@ export const NewTab = () => {
   const { servers: mcpServers } = useMcpServers()
   const { data: userMCPIntegrations } = useGetUserMCPIntegrations()
   useSyncRemoteIntegrations()
-
-  const { sendMessage, setMode } = useChatSessionContext()
 
   const connectedManagedServers = mcpServers.filter((s) => {
     if (s.type !== 'managed' || !s.managedServerName) return false
@@ -273,17 +270,17 @@ export const NewTab = () => {
 
   const startInlineChat = (
     message: string,
-    mode: 'chat' | 'agent',
-    action?: ReturnType<
-      typeof createBrowserOSAction | typeof createAITabAction
-    >,
+    chatMode: 'chat' | 'agent',
   ) => {
-    track(NEWTAB_CHAT_STARTED_EVENT, { mode, tabs_count: selectedTabs.length })
-    setMode(mode)
-    sendMessage({ text: message, action })
+    track(NEWTAB_CHAT_STARTED_EVENT, {
+      mode: chatMode,
+      tabs_count: selectedTabs.length,
+    })
     reset()
     setSelectedTabs([])
-    navigate('/home/chat')
+    navigate(
+      `/home/chat?q=${encodeURIComponent(message)}&mode=${chatMode}`,
+    )
   }
 
   const runSelectedAction = (item: SuggestionItem | undefined) => {
@@ -311,7 +308,7 @@ export const NewTab = () => {
         })
         const searchQuery = `${item.name}${item.description ? ` - ${item.description}` : ''}}`
         if (supports(Feature.NEWTAB_CHAT_SUPPORT)) {
-          startInlineChat(searchQuery, 'agent', action)
+          startInlineChat(searchQuery, 'agent')
         } else {
           openSidePanelWithSearch('open', {
             query: searchQuery,
@@ -334,7 +331,7 @@ export const NewTab = () => {
           tabs: selectedTabs,
         })
         if (supports(Feature.NEWTAB_CHAT_SUPPORT)) {
-          startInlineChat(item.message, item.mode, action)
+          startInlineChat(item.message, item.mode)
         } else {
           openSidePanelWithSearch('open', {
             query: item.message,

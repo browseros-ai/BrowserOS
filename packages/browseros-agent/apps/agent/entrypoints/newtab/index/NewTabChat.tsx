@@ -1,7 +1,7 @@
 import { Loader2 } from 'lucide-react'
 import { motion } from 'motion/react'
-import type { FC } from 'react'
-import { useNavigate } from 'react-router'
+import { type FC, useEffect } from 'react'
+import { useNavigate, useSearchParams } from 'react-router'
 import { ChatEmptyState } from '@/entrypoints/sidepanel/index/ChatEmptyState'
 import { ChatError } from '@/entrypoints/sidepanel/index/ChatError'
 import { ChatFooter } from '@/entrypoints/sidepanel/index/ChatFooter'
@@ -25,10 +25,13 @@ import { NewTabChatHeader } from './NewTabChatHeader'
 
 export const NewTabChat: FC = () => {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const {
     mode,
+    setMode,
     messages,
+    sendMessage,
     status,
     agentUrlError,
     chatError,
@@ -68,6 +71,20 @@ export const NewTabChat: FC = () => {
       voiceError: NEWTAB_VOICE_ERROR_EVENT,
     },
   })
+
+  // Send the initial message from query params (from /home search bar)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only run once on mount to read initial query params
+  useEffect(() => {
+    const query = searchParams.get('q')
+    const chatMode = searchParams.get('mode')
+    if (!query) return
+
+    if (chatMode === 'chat' || chatMode === 'agent') {
+      setMode(chatMode)
+    }
+    sendMessage({ text: query })
+    setSearchParams({}, { replace: true })
+  }, [])
 
   const handleBackToSearch = () => {
     track(NEWTAB_CHAT_RESET_EVENT, { message_count: messages.length })
