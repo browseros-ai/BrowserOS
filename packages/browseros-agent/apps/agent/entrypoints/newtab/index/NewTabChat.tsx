@@ -1,7 +1,7 @@
 import { Loader2 } from 'lucide-react'
 import { motion } from 'motion/react'
 import { type FC, useEffect } from 'react'
-import { useNavigate, useSearchParams } from 'react-router'
+import { useSearchParams } from 'react-router'
 import { ChatEmptyState } from '@/entrypoints/sidepanel/index/ChatEmptyState'
 import { ChatError } from '@/entrypoints/sidepanel/index/ChatError'
 import { ChatFooter } from '@/entrypoints/sidepanel/index/ChatFooter'
@@ -21,10 +21,9 @@ import {
   NEWTAB_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
-import { NewTabChatHeader } from './NewTabChatHeader'
+import { ChatHeader } from '@/entrypoints/sidepanel/index/ChatHeader'
 
 export const NewTabChat: FC = () => {
-  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
   const {
@@ -86,12 +85,6 @@ export const NewTabChat: FC = () => {
     setSearchParams({}, { replace: true })
   }, [])
 
-  const handleBackToSearch = () => {
-    track(NEWTAB_CHAT_RESET_EVENT, { message_count: messages.length })
-    resetConversation()
-    navigate('/home')
-  }
-
   const handleNewConversation = () => {
     track(NEWTAB_CHAT_RESET_EVENT, { message_count: messages.length })
     resetConversation()
@@ -101,15 +94,14 @@ export const NewTabChat: FC = () => {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="mx-auto w-full max-w-3xl px-4">
-        <NewTabChatHeader
-        selectedProvider={selectedProvider}
-        providers={providers}
-        onSelectProvider={handleSelectProvider}
-        onNewConversation={handleNewConversation}
-        onBackToSearch={handleBackToSearch}
-        hasMessages={messages.length > 0}
-      />
+      <div className="mx-auto w-full max-w-3xl">
+        <ChatHeader
+          selectedProvider={selectedProvider}
+          providers={providers}
+          onSelectProvider={handleSelectProvider}
+          onNewConversation={handleNewConversation}
+          hasMessages={messages.length > 0}
+        />
       </div>
 
       <main className="styled-scrollbar [&_[data-streamdown='code-block']]:!max-w-full [&_[data-streamdown='code-block']]:!w-auto [&_[data-streamdown='table-wrapper']]:!max-w-full [&_[data-streamdown='table-wrapper']]:!w-auto mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col space-y-4 overflow-y-auto overflow-x-hidden px-4 pt-4 [&_[data-streamdown='code-block']]:overflow-x-auto [&_[data-streamdown='table-wrapper']]:overflow-x-auto">

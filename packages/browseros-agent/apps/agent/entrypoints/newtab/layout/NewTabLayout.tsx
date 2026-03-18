@@ -8,6 +8,7 @@ const HIDE_FOCUS_GRID_PATHS = new Set([
   '/home/memory',
   '/home/skills',
   '/home/chat',
+  '/home/history',
 ])
 
 export const NewTabLayout: FC = () => {
