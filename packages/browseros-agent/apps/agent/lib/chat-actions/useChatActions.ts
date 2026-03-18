@@ -6,7 +6,6 @@ import { useVoiceInput } from '@/lib/voice/useVoiceInput'
 import { createBrowserOSAction } from './types'
 
 interface ChatActionsConfig {
-  origin: 'sidepanel' | 'newtab'
   /** Analytics event names scoped to the origin */
   events: {
     modeChanged: string

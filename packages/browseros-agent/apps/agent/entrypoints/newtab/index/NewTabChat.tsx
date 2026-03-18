@@ -55,7 +55,6 @@ export const NewTabChat: FC = () => {
     handleSubmit,
     handleSuggestionClick,
   } = useChatActions({
-    origin: 'newtab',
     events: {
       modeChanged: NEWTAB_CHAT_MODE_CHANGED_EVENT,
       stopClicked: NEWTAB_CHAT_STOPPED_EVENT,

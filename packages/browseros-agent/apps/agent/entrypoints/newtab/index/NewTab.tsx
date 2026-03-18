@@ -296,15 +296,15 @@ export const NewTab = () => {
           mode: 'agent',
           tabs_count: selectedTabs.length,
         })
-        const action = createAITabAction({
-          name: item.name,
-          description: item.description,
-          tabs: selectedTabs,
-        })
         const searchQuery = `${item.name}${item.description ? ` - ${item.description}` : ''}}`
         if (supports(Feature.NEWTAB_CHAT_SUPPORT)) {
           startInlineChat(searchQuery, 'agent')
         } else {
+          const action = createAITabAction({
+            name: item.name,
+            description: item.description,
+            tabs: selectedTabs,
+          })
           openSidePanelWithSearch('open', {
             query: searchQuery,
             mode: 'agent',
@@ -320,14 +320,14 @@ export const NewTab = () => {
           mode: item.mode,
           tabs_count: selectedTabs.length,
         })
-        const action = createBrowserOSAction({
-          mode: item.mode,
-          message: item.message,
-          tabs: selectedTabs,
-        })
         if (supports(Feature.NEWTAB_CHAT_SUPPORT)) {
           startInlineChat(item.message, item.mode)
         } else {
+          const action = createBrowserOSAction({
+            mode: item.mode,
+            message: item.message,
+            tabs: selectedTabs,
+          })
           openSidePanelWithSearch('open', {
             query: item.message,
             mode: item.mode,
