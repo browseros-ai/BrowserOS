@@ -100,7 +100,15 @@ export const SettingsDialog: FC = () => {
   }, [activeTab])
 
   const handleClose = () => {
-    navigate(backgroundLocation?.pathname ?? '/home', { replace: true })
+    if (backgroundLocation) {
+      const target =
+        backgroundLocation.pathname +
+        (backgroundLocation.search || '') +
+        (backgroundLocation.hash || '')
+      navigate(target, { replace: true })
+    } else {
+      navigate('/home', { replace: true })
+    }
   }
 
   const handleTabChange = (tabId: string) => {

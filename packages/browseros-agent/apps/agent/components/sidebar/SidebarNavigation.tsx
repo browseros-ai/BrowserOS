@@ -9,7 +9,7 @@ import {
   Wand2,
 } from 'lucide-react'
 import type { FC } from 'react'
-import { NavLink, useLocation, useNavigate } from 'react-router'
+import { NavLink, useLocation } from 'react-router'
 import {
   Tooltip,
   TooltipContent,
@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/tooltip'
 import { Feature } from '@/lib/browseros/capabilities'
 import { useCapabilities } from '@/lib/browseros/useCapabilities'
+import { useOpenSettings } from '@/lib/settings/useOpenSettings'
 import { cn } from '@/lib/utils'
 
 interface SidebarNavigationProps {
@@ -75,8 +76,9 @@ export const SidebarNavigation: FC<SidebarNavigationProps> = ({
   expanded = true,
 }) => {
   const location = useLocation()
-  const navigate = useNavigate()
+  const openSettings = useOpenSettings()
   const { supports } = useCapabilities()
+  const isSettingsActive = location.pathname.startsWith('/settings')
 
   const filteredItems = primaryNavItems.filter(
     (item) => !item.feature || supports(item.feature),
@@ -94,12 +96,13 @@ export const SidebarNavigation: FC<SidebarNavigationProps> = ({
               const settingsButton = (
                 <button
                   type="button"
-                  onClick={() =>
-                    navigate('/settings/ai', {
-                      state: { backgroundLocation: location },
-                    })
-                  }
-                  className={cn(navItemClassName, 'w-full')}
+                  onClick={() => openSettings()}
+                  className={cn(
+                    navItemClassName,
+                    'w-full',
+                    isSettingsActive &&
+                      'bg-sidebar-accent text-sidebar-accent-foreground',
+                  )}
                 >
                   <Icon className="size-4 shrink-0" />
                   <span
