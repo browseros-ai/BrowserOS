@@ -84,7 +84,8 @@ export const NewTabChat: FC = () => {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <NewTabChatHeader
+      <div className="mx-auto w-full max-w-3xl px-4">
+        <NewTabChatHeader
         selectedProvider={selectedProvider}
         providers={providers}
         onSelectProvider={handleSelectProvider}
@@ -92,6 +93,7 @@ export const NewTabChat: FC = () => {
         onBackToSearch={handleBackToSearch}
         hasMessages={messages.length > 0}
       />
+      </div>
 
       <main className="styled-scrollbar [&_[data-streamdown='code-block']]:!max-w-full [&_[data-streamdown='code-block']]:!w-auto [&_[data-streamdown='table-wrapper']]:!max-w-full [&_[data-streamdown='table-wrapper']]:!w-auto mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col space-y-4 overflow-y-auto overflow-x-hidden px-4 pt-4 [&_[data-streamdown='code-block']]:overflow-x-auto [&_[data-streamdown='table-wrapper']]:overflow-x-auto">
         {isRestoringConversation ? (
