@@ -9,7 +9,7 @@ import {
   Wand2,
 } from 'lucide-react'
 import type { FC } from 'react'
-import { NavLink, useLocation } from 'react-router'
+import { NavLink, useLocation, useNavigate } from 'react-router'
 import {
   Tooltip,
   TooltipContent,
@@ -22,7 +22,6 @@ import { cn } from '@/lib/utils'
 
 interface SidebarNavigationProps {
   expanded?: boolean
-  onOpenSettings?: () => void
 }
 
 type NavItem = {
@@ -74,9 +73,9 @@ const navItemClassName =
 
 export const SidebarNavigation: FC<SidebarNavigationProps> = ({
   expanded = true,
-  onOpenSettings,
 }) => {
   const location = useLocation()
+  const navigate = useNavigate()
   const { supports } = useCapabilities()
 
   const filteredItems = primaryNavItems.filter(
@@ -95,7 +94,11 @@ export const SidebarNavigation: FC<SidebarNavigationProps> = ({
               const settingsButton = (
                 <button
                   type="button"
-                  onClick={onOpenSettings}
+                  onClick={() =>
+                    navigate('/settings/ai', {
+                      state: { backgroundLocation: location },
+                    })
+                  }
                   className={cn(navItemClassName, 'w-full')}
                 >
                   <Icon className="size-4 shrink-0" />

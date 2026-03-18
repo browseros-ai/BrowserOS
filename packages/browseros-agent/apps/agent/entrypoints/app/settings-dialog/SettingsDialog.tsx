@@ -8,7 +8,14 @@ import {
   Search,
   Server,
 } from 'lucide-react'
-import { type FC, useEffect, useState } from 'react'
+import type { FC } from 'react'
+import { useEffect } from 'react'
+import {
+  type Location,
+  useLocation,
+  useNavigate,
+  useParams,
+} from 'react-router'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Feature } from '@/lib/browseros/capabilities'
 import { useCapabilities } from '@/lib/browseros/useCapabilities'
@@ -71,44 +78,51 @@ const helpItems: HelpItem[] = [
   { name: 'Revisit Onboarding', to: '/onboarding', icon: RotateCcw },
 ]
 
-interface SettingsDialogProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  defaultTab?: string
-}
-
-export const SettingsDialog: FC<SettingsDialogProps> = ({
-  open,
-  onOpenChange,
-  defaultTab = 'ai',
-}) => {
+export const SettingsDialog: FC = () => {
+  const { tab } = useParams<{ tab?: string }>()
+  const location = useLocation()
+  const navigate = useNavigate()
   const { supports } = useCapabilities()
-  const [activeTab, setActiveTab] = useState(defaultTab)
 
-  // Filter tabs by feature support
+  const backgroundLocation = (
+    location.state as { backgroundLocation?: Location } | null
+  )?.backgroundLocation
+
   const visibleTabs = settingsTabs.filter(
-    (tab) => !tab.feature || supports(tab.feature),
+    (tabDef) => !tabDef.feature || supports(tabDef.feature),
   )
 
-  // Track analytics on tab change
-  useEffect(() => {
-    if (open) {
-      track(SETTINGS_PAGE_VIEWED_EVENT, { page: `settings/${activeTab}` })
-    }
-  }, [activeTab, open])
+  const activeTab = visibleTabs.find((t) => t.id === tab) ? tab : 'ai'
 
-  // Reset to default tab when dialog opens
   useEffect(() => {
-    if (open) {
-      setActiveTab(defaultTab)
-    }
-  }, [open, defaultTab])
+    track(SETTINGS_PAGE_VIEWED_EVENT, { page: `settings/${activeTab}` })
+  }, [activeTab])
+
+  const handleClose = () => {
+    navigate(backgroundLocation?.pathname ?? '/home', { replace: true })
+  }
+
+  const handleTabChange = (tabId: string) => {
+    navigate(`/settings/${tabId}`, {
+      state: { backgroundLocation },
+      replace: true,
+    })
+  }
+
+  const handleHelpNavigation = (to: string) => {
+    navigate(to, { replace: true })
+  }
 
   const activeTabConfig = visibleTabs.find((t) => t.id === activeTab)
   const ActiveComponent = activeTabConfig?.component ?? AISettingsPage
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) handleClose()
+      }}
+    >
       <DialogContent
         className="flex h-[85vh] max-h-[85vh] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl"
         showCloseButton
@@ -123,21 +137,21 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
               </span>
             </div>
             <nav className="flex-1 space-y-0.5 overflow-y-auto px-2">
-              {visibleTabs.map((tab) => {
-                const Icon = tab.icon
+              {visibleTabs.map((tabDef) => {
+                const Icon = tabDef.icon
                 return (
                   <button
-                    key={tab.id}
+                    key={tabDef.id}
                     type="button"
-                    onClick={() => setActiveTab(tab.id)}
+                    onClick={() => handleTabChange(tabDef.id)}
                     className={cn(
                       'flex w-full items-center gap-2 rounded-md px-3 py-2 font-medium text-sm transition-colors hover:bg-accent hover:text-accent-foreground',
-                      activeTab === tab.id &&
+                      activeTab === tabDef.id &&
                         'bg-accent text-accent-foreground',
                     )}
                   >
                     <Icon className="size-4 shrink-0" />
-                    <span className="truncate">{tab.name}</span>
+                    <span className="truncate">{tabDef.name}</span>
                   </button>
                 )
               })}
@@ -165,15 +179,15 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
                   )
                 }
                 return (
-                  <a
+                  <button
                     key={item.name}
-                    href={`#${item.to}`}
-                    onClick={() => onOpenChange(false)}
+                    type="button"
+                    onClick={() => handleHelpNavigation(item.to ?? '/home')}
                     className="flex w-full items-center gap-2 rounded-md px-3 py-2 font-medium text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
                   >
                     <Icon className="size-4 shrink-0" />
                     <span className="truncate">{item.name}</span>
-                  </a>
+                  </button>
                 )
               })}
             </div>
@@ -181,7 +195,7 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
 
           {/* Right panel - settings content */}
           <div className="flex-1 overflow-y-auto p-6">
-            <ActiveComponent key={activeTab} />
+            <ActiveComponent />
           </div>
         </div>
       </DialogContent>

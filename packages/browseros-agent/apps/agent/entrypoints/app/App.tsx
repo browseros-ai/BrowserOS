@@ -1,5 +1,13 @@
 import type { FC } from 'react'
-import { HashRouter, Navigate, Route, Routes, useParams } from 'react-router'
+import {
+  HashRouter,
+  type Location,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useParams,
+} from 'react-router'
 
 import { NewTab } from '../newtab/index/NewTab'
 import { NewTabLayout } from '../newtab/layout/NewTabLayout'
@@ -19,6 +27,7 @@ import { MagicLinkCallback } from './login/MagicLinkCallback'
 import { MemoryPage } from './memory/MemoryPage'
 import { ProfilePage } from './profile/ProfilePage'
 import { ScheduledTasksPage } from './scheduled-tasks/ScheduledTasksPage'
+import { SettingsDialog } from './settings-dialog/SettingsDialog'
 import { SkillsPage } from './skills/SkillsPage'
 import { SoulPage } from './soul/SoulPage'
 import { WorkflowsPageWrapper } from './workflows/WorkflowsPageWrapper'
@@ -36,12 +45,12 @@ const OptionsRedirect: FC = () => {
   const path = params['*'] || ''
 
   const routeMap: Record<string, string> = {
-    ai: '/home',
-    chat: '/home',
+    ai: '/settings/ai',
+    chat: '/settings/chat',
     'connect-mcp': '/connect-apps',
-    mcp: '/home',
-    customization: '/home',
-    search: '/home',
+    mcp: '/settings/mcp',
+    customization: '/settings/customization',
+    search: '/settings/search',
     soul: '/home/soul',
     skills: '/home/skills',
     'jtbd-agent': '/settings/survey',
@@ -50,16 +59,33 @@ const OptionsRedirect: FC = () => {
     'create-graph': '/workflows/create-graph',
   }
 
-  const newPath = routeMap[path] || '/home'
+  const newPath = routeMap[path] || '/settings/ai'
   return <Navigate to={newPath} replace />
 }
 
-export const App: FC = () => {
+/** Redirect direct /settings/:tab visits so the dialog has a background page */
+const SettingsRedirect: FC = () => {
+  const { tab } = useParams()
+  return (
+    <Navigate
+      to={`/settings/${tab || 'ai'}`}
+      state={{ backgroundLocation: { pathname: '/home' } }}
+      replace
+    />
+  )
+}
+
+const AppRoutes: FC = () => {
+  const location = useLocation()
   const surveyParams = getSurveyParams()
 
+  const backgroundLocation = (
+    location.state as { backgroundLocation?: Location } | null
+  )?.backgroundLocation
+
   return (
-    <HashRouter>
-      <Routes>
+    <>
+      <Routes location={backgroundLocation || location}>
         {/* Public auth routes */}
         <Route element={<AuthLayout />}>
           <Route path="login" element={<LoginPage />} />
@@ -91,6 +117,9 @@ export const App: FC = () => {
           element={<SurveyPage {...surveyParams} />}
         />
 
+        {/* Direct /settings/:tab access without background location — redirect with one */}
+        <Route path="settings/:tab?" element={<SettingsRedirect />} />
+
         {/* Full-screen without sidebar */}
         <Route path="workflows/create-graph" element={<CreateGraphWrapper />} />
 
@@ -120,13 +149,24 @@ export const App: FC = () => {
           path="/settings/skills"
           element={<Navigate to="/home/skills" replace />}
         />
-        {/* Settings routes now redirect to home (settings are in a dialog) */}
-        <Route path="/settings/*" element={<Navigate to="/home" replace />} />
         <Route path="/options/*" element={<OptionsRedirect />} />
 
         {/* Fallback to home */}
         <Route path="*" element={<Navigate to="/home" replace />} />
       </Routes>
-    </HashRouter>
+
+      {/* Modal overlay — renders settings dialog on top of background page */}
+      {backgroundLocation && (
+        <Routes>
+          <Route path="settings/:tab?" element={<SettingsDialog />} />
+        </Routes>
+      )}
+    </>
   )
 }
+
+export const App: FC = () => (
+  <HashRouter>
+    <AppRoutes />
+  </HashRouter>
+)
