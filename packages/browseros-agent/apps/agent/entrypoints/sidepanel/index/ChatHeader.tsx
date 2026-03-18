@@ -14,6 +14,7 @@ interface ChatHeaderProps {
   onSelectProvider: (provider: Provider) => void
   onNewConversation: () => void
   hasMessages: boolean
+  hideHistory?: boolean
 }
 
 export const ChatHeader: FC<ChatHeaderProps> = ({
@@ -22,6 +23,7 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
   onSelectProvider,
   onNewConversation,
   hasMessages,
+  hideHistory,
 }) => {
   const location = useLocation()
   const navigate = useNavigate()
@@ -73,7 +75,7 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
           </button>
         )}
 
-        {isHistoryPage ? (
+        {!hideHistory && (isHistoryPage ? (
           <button
             type="button"
             onClick={handleNewConversationFromHistory}
@@ -90,7 +92,7 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
           >
             <History className="h-4 w-4" />
           </Link>
-        )}
+        ))}
 
         <a
           href={productRepositoryUrl}

@@ -101,6 +101,7 @@ export const NewTabChat: FC = () => {
           onSelectProvider={handleSelectProvider}
           onNewConversation={handleNewConversation}
           hasMessages={messages.length > 0}
+          hideHistory
         />
       </div>
 

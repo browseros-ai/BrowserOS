@@ -103,8 +103,7 @@ export const SidebarLayout: FC = () => {
         </div>
 
         {/* Main content - full width, centered */}
-        {location.pathname === '/home/chat' ||
-        location.pathname === '/home/history' ? (
+        {location.pathname === '/home/chat' ? (
           <main className="h-screen overflow-hidden">
             <Outlet />
           </main>

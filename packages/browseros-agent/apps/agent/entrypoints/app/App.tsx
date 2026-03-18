@@ -4,9 +4,6 @@ import { HashRouter, Navigate, Route, Routes, useParams } from 'react-router'
 import { NewTab } from '../newtab/index/NewTab'
 import { NewTabChat } from '../newtab/index/NewTabChat'
 import { NewTabLayout } from '../newtab/layout/NewTabLayout'
-import { ChatHeader } from '../sidepanel/index/ChatHeader'
-import { ChatHistory } from '../sidepanel/history/ChatHistory'
-import { useChatSessionContext } from '../sidepanel/layout/ChatSessionContext'
 import { Personalize } from '../newtab/personalize/Personalize'
 import { OnboardingDemo } from '../onboarding/demo/OnboardingDemo'
 import { FeaturesPage } from '../onboarding/features/Features'
@@ -64,35 +61,6 @@ const OptionsRedirect: FC = () => {
   return <Navigate to={newPath} replace />
 }
 
-const NewTabHistoryWrapper: FC = () => {
-  const {
-    providers,
-    selectedProvider,
-    handleSelectProvider,
-    resetConversation,
-    messages,
-  } = useChatSessionContext()
-
-  if (!selectedProvider) return null
-
-  return (
-    <div className="flex h-full flex-col overflow-hidden">
-      <div className="mx-auto w-full max-w-3xl">
-        <ChatHeader
-          selectedProvider={selectedProvider}
-          providers={providers}
-          onSelectProvider={handleSelectProvider}
-          onNewConversation={resetConversation}
-          hasMessages={messages.length > 0}
-        />
-      </div>
-      <div className="styled-scrollbar mx-auto w-full max-w-3xl flex-1 overflow-y-auto px-4 pt-4">
-        <ChatHistory />
-      </div>
-    </div>
-  )
-}
-
 export const App: FC = () => {
   const surveyParams = getSurveyParams()
 
@@ -113,7 +81,6 @@ export const App: FC = () => {
           <Route path="home" element={<NewTabLayout />}>
             <Route index element={<NewTab />} />
             <Route path="chat" element={<NewTabChat />} />
-            <Route path="history" element={<NewTabHistoryWrapper />} />
             <Route path="personalize" element={<Personalize />} />
             <Route path="soul" element={<SoulPage />} />
             <Route path="skills" element={<SkillsPage />} />
@@ -151,7 +118,6 @@ export const App: FC = () => {
         </Route>
 
         {/* Backward compatibility redirects */}
-        <Route path="/history" element={<Navigate to="/home/history" replace />} />
         <Route path="/" element={<Navigate to="/home" replace />} />
         <Route
           path="/personalize"
