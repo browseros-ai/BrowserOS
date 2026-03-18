@@ -83,7 +83,7 @@ export const NewTabChat: FC = () => {
   if (!selectedProvider) return null
 
   return (
-    <div className="flex h-[calc(100vh-2rem)] flex-col">
+    <div className="flex h-full flex-col overflow-hidden">
       <NewTabChatHeader
         selectedProvider={selectedProvider}
         providers={providers}
@@ -93,7 +93,7 @@ export const NewTabChat: FC = () => {
         hasMessages={messages.length > 0}
       />
 
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col space-y-4 overflow-y-auto px-4 pt-4">
+      <main className="styled-scrollbar mx-auto flex w-full min-h-0 max-w-3xl flex-1 flex-col space-y-4 overflow-y-auto px-4 pt-4">
         {isRestoringConversation ? (
           <div className="flex flex-1 items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -125,7 +125,7 @@ export const NewTabChat: FC = () => {
 
       <motion.div
         layoutId="newtab-input"
-        className="mx-auto w-full max-w-3xl px-4"
+        className="mx-auto w-full max-w-3xl flex-shrink-0 px-4 pb-2"
       >
         <ChatFooter
           mode={mode}

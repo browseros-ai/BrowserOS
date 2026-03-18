@@ -103,11 +103,17 @@ export const SidebarLayout: FC = () => {
         </div>
 
         {/* Main content - full width, centered */}
-        <main className="min-h-screen overflow-y-auto">
-          <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+        {location.pathname === '/home/chat' ? (
+          <main className="h-screen overflow-hidden">
             <Outlet />
-          </div>
-        </main>
+          </main>
+        ) : (
+          <main className="min-h-screen overflow-y-auto">
+            <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+              <Outlet />
+            </div>
+          </main>
+        )}
       </div>
       <ShortcutsDialog
         open={shortcutsDialogOpen}
