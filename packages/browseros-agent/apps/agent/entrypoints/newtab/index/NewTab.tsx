@@ -364,8 +364,7 @@ export const NewTab = () => {
         {/* Logo and branding */}
         <NewTabBranding />
         {/* Search bar with context */}
-        <motion.div
-          layoutId="newtab-input"
+        <div
           className={cn(
             'relative overflow-hidden bg-border/50 p-[2px]',
             isSuggestionsVisible ||
@@ -630,7 +629,7 @@ export const NewTab = () => {
               </div>
             )}
           </div>
-        </motion.div>
+        </div>
 
         {mounted && !isSuggestionsVisible && <NewTabTip />}
 

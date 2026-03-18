@@ -1,5 +1,4 @@
 import { Loader2 } from 'lucide-react'
-import { motion } from 'motion/react'
 import { type FC, useEffect } from 'react'
 import { useSearchParams } from 'react-router'
 import { ChatEmptyState } from '@/entrypoints/sidepanel/index/ChatEmptyState'
@@ -135,10 +134,7 @@ export const NewTabChat: FC = () => {
         {chatError && <ChatError error={chatError} />}
       </main>
 
-      <motion.div
-        layoutId="newtab-input"
-        className="mx-auto w-full max-w-3xl flex-shrink-0 px-4 pb-2"
-      >
+      <div className="mx-auto w-full max-w-3xl flex-shrink-0 px-4 pb-2">
         <ChatFooter
           mode={mode}
           onModeChange={handleModeChange}
@@ -152,7 +148,7 @@ export const NewTabChat: FC = () => {
           onRemoveTab={removeTab}
           voice={voiceState}
         />
-      </motion.div>
+      </div>
     </div>
   )
 }
