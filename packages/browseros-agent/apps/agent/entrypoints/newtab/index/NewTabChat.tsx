@@ -93,7 +93,7 @@ export const NewTabChat: FC = () => {
         hasMessages={messages.length > 0}
       />
 
-      <main className="styled-scrollbar mx-auto flex w-full min-h-0 max-w-3xl flex-1 flex-col space-y-4 overflow-y-auto px-4 pt-4">
+      <main className="styled-scrollbar mx-auto flex w-full min-h-0 max-w-3xl flex-1 flex-col space-y-4 overflow-x-hidden overflow-y-auto px-4 pt-4 [&_[data-streamdown='code-block']]:!max-w-full [&_[data-streamdown='code-block']]:!w-auto [&_[data-streamdown='code-block']]:overflow-x-auto [&_[data-streamdown='table-wrapper']]:!max-w-full [&_[data-streamdown='table-wrapper']]:!w-auto [&_[data-streamdown='table-wrapper']]:overflow-x-auto">
         {isRestoringConversation ? (
           <div className="flex flex-1 items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
