@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router'
 import { ChatEmptyState } from '@/entrypoints/sidepanel/index/ChatEmptyState'
 import { ChatError } from '@/entrypoints/sidepanel/index/ChatError'
 import { ChatFooter } from '@/entrypoints/sidepanel/index/ChatFooter'
+import { ChatHeader } from '@/entrypoints/sidepanel/index/ChatHeader'
 import { ChatMessages } from '@/entrypoints/sidepanel/index/ChatMessages'
 import { useChatActions } from '@/lib/chat-actions/useChatActions'
 import {
@@ -20,7 +21,6 @@ import {
   NEWTAB_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
-import { ChatHeader } from '@/entrypoints/sidepanel/index/ChatHeader'
 
 export const NewTabChat: FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()

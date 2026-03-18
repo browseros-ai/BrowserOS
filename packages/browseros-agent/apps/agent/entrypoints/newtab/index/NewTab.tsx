@@ -268,19 +268,14 @@ export const NewTab = () => {
     runSelectedAction(selectedItem)
   }
 
-  const startInlineChat = (
-    message: string,
-    chatMode: 'chat' | 'agent',
-  ) => {
+  const startInlineChat = (message: string, chatMode: 'chat' | 'agent') => {
     track(NEWTAB_CHAT_STARTED_EVENT, {
       mode: chatMode,
       tabs_count: selectedTabs.length,
     })
     reset()
     setSelectedTabs([])
-    navigate(
-      `/home/chat?q=${encodeURIComponent(message)}&mode=${chatMode}`,
-    )
+    navigate(`/home/chat?q=${encodeURIComponent(message)}&mode=${chatMode}`)
   }
 
   const runSelectedAction = (item: SuggestionItem | undefined) => {
