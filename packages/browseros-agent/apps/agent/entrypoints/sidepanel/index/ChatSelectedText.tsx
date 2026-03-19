@@ -24,7 +24,7 @@ export const ChatSelectedText: FC<ChatSelectedTextProps> = ({
         <div className="flex items-start gap-2 px-3 py-2">
           <FileText className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-[var(--accent-orange)]" />
           <div className="min-w-0 flex-1">
-            <div className="mb-0.5 truncate font-medium text-muted-foreground text-[10px]">
+            <div className="mb-0.5 truncate font-medium text-[10px] text-muted-foreground">
               {selectedText.pageTitle}
             </div>
             <div className="line-clamp-3 text-foreground text-xs leading-relaxed">
