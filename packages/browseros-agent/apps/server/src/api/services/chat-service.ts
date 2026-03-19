@@ -171,6 +171,8 @@ export class ChatService {
     const userContent = formatUserMessage(
       request.message,
       resolvedMessageContext,
+      request.selectedText,
+      request.selectedTextSource,
     )
     session.agent.appendUserMessage(userContent)
 

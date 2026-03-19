@@ -27,6 +27,7 @@ import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
 import { useLlmProviders } from '@/lib/llm-providers/useLlmProviders'
 import { track } from '@/lib/metrics/track'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
+import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
 import type { ChatMode } from './chatTypes'
@@ -165,7 +166,26 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const modeRef = useRef<ChatMode>(mode)
   const textToActionRef = useRef<Map<string, ChatAction>>(textToAction)
   const workingDirRef = useRef<string | undefined>(undefined)
+  const selectedTextRef = useRef<{
+    text: string
+    url: string
+    title: string
+  } | null>(null)
   const messagesRef = useRef<UIMessage[]>([])
+
+  useEffect(() => {
+    selectedTextStorage.getValue().then((data) => {
+      selectedTextRef.current = data
+        ? { text: data.text, url: data.pageUrl, title: data.pageTitle }
+        : null
+    })
+    const unwatchText = selectedTextStorage.watch((data) => {
+      selectedTextRef.current = data
+        ? { text: data.text, url: data.pageUrl, title: data.pageTitle }
+        : null
+    })
+    return () => unwatchText()
+  }, [])
 
   useEffect(() => {
     selectedWorkspaceStorage.getValue().then((folder) => {
@@ -287,7 +307,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
             : history.map((m) => `${m.role}: ${m.content}`).join('\n')
           : undefined
 
-        return {
+        const result = {
           api: `${agentUrlRef.current}/chat`,
           body: {
             message,
@@ -322,8 +342,23 @@ export const useChatSession = (options?: ChatSessionOptions) => {
             supportsImages: provider?.supportsImages,
             previousConversation,
             declinedApps: declinedApps.length > 0 ? declinedApps : undefined,
+            selectedText: selectedTextRef.current?.text,
+            selectedTextSource: selectedTextRef.current
+              ? {
+                  url: selectedTextRef.current.url,
+                  title: selectedTextRef.current.title,
+                }
+              : undefined,
           },
         }
+
+        // Clear selected text after building request
+        if (selectedTextRef.current) {
+          selectedTextRef.current = null
+          selectedTextStorage.setValue(null)
+        }
+
+        return result
       },
     }),
   })

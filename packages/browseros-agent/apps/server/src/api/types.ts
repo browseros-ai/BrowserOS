@@ -47,6 +47,13 @@ export const ChatRequestSchema = AgentLLMConfigSchema.extend({
   supportsImages: z.boolean().optional().default(true),
   mode: z.enum(['chat', 'agent']).optional().default('agent'),
   declinedApps: z.array(z.string()).optional(),
+  selectedText: z.string().optional(),
+  selectedTextSource: z
+    .object({
+      url: z.string(),
+      title: z.string(),
+    })
+    .optional(),
   previousConversation: z
     .union([
       z.array(

@@ -66,7 +66,12 @@ export default defineBackground(() => {
     }
   })
 
-  chrome.runtime.onMessage.addListener((message, sender) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type === 'get-tab-id') {
+      sendResponse({ tabId: sender.tab?.id })
+      return true
+    }
+
     if (message?.type === 'AUTH_SUCCESS' && sender.tab?.id) {
       const tabId = sender.tab.id
       authRedirectPathStorage

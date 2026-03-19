@@ -8,12 +8,17 @@ import { useGetUserMCPIntegrations } from '@/entrypoints/app/connect-mcp/useGetU
 import { Feature } from '@/lib/browseros/capabilities'
 import { useCapabilities } from '@/lib/browseros/useCapabilities'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
+import {
+  type SelectedTextData,
+  selectedTextStorage,
+} from '@/lib/selected-text/selectedTextStorage'
 import { cn } from '@/lib/utils'
 import type { VoiceInputState } from '@/lib/voice/useVoiceInput'
 import { useWorkspace } from '@/lib/workspace/use-workspace'
 import { ChatAttachedTabs } from './ChatAttachedTabs'
 import { ChatInput, type ChatInputHandle } from './ChatInput'
 import { ChatModeToggle } from './ChatModeToggle'
+import { ChatSelectedText } from './ChatSelectedText'
 import type { ChatMode } from './chatTypes'
 
 interface ChatFooterProps {
@@ -48,6 +53,32 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   const { servers: mcpServers } = useMcpServers()
   const { data: userMCPIntegrations } = useGetUserMCPIntegrations()
   const chatInputRef = useRef<ChatInputHandle>(null)
+  const [selectedText, setSelectedText] = useState<SelectedTextData | null>(
+    null,
+  )
+  const [activeTabId, setActiveTabId] = useState<number | undefined>()
+
+  // Track active tab for tab-scoped selection display
+  useEffect(() => {
+    chrome.tabs
+      .query({ active: true, currentWindow: true })
+      .then((tabs) => setActiveTabId(tabs[0]?.id))
+    const listener = (activeInfo: { tabId: number }) => {
+      setActiveTabId(activeInfo.tabId)
+    }
+    chrome.tabs.onActivated.addListener(listener)
+    return () => chrome.tabs.onActivated.removeListener(listener)
+  }, [])
+
+  // Watch selected text storage
+  useEffect(() => {
+    selectedTextStorage.getValue().then(setSelectedText)
+    const unwatch = selectedTextStorage.watch(setSelectedText)
+    return () => unwatch()
+  }, [])
+
+  const visibleSelectedText =
+    selectedText && selectedText.tabId === activeTabId ? selectedText : null
   const [isTabMentionOpen, setIsTabMentionOpen] = useState(false)
 
   useEffect(() => {
@@ -81,6 +112,12 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   return (
     <footer className="border-border/40 border-t bg-background/80 backdrop-blur-md">
       <ChatAttachedTabs tabs={attachedTabs} onRemoveTab={onRemoveTab} />
+      {visibleSelectedText && (
+        <ChatSelectedText
+          selectedText={visibleSelectedText}
+          onDismiss={() => selectedTextStorage.setValue(null)}
+        />
+      )}
 
       <div className="p-3">
         <div className="flex items-center gap-2">

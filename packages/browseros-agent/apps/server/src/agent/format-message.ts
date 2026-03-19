@@ -41,7 +41,18 @@ export function formatBrowserContext(browserContext?: BrowserContext): string {
 export function formatUserMessage(
   message: string,
   browserContext?: BrowserContext,
+  selectedText?: string,
+  selectedTextSource?: { url: string; title: string },
 ): string {
   const contextPrefix = formatBrowserContext(browserContext)
-  return `${contextPrefix}<USER_QUERY>\n${message}\n</USER_QUERY>`
+
+  let selectedTextBlock = ''
+  if (selectedText) {
+    const source = selectedTextSource
+      ? ` (from "${selectedTextSource.title}")`
+      : ''
+    selectedTextBlock = `<selected_text${source}>\n${selectedText}\n</selected_text>\n\n`
+  }
+
+  return `${contextPrefix}${selectedTextBlock}<USER_QUERY>\n${message}\n</USER_QUERY>`
 }
