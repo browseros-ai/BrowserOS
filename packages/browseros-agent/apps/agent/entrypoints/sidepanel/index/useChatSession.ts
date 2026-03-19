@@ -169,6 +169,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const selectionMapRef = useRef<
     Record<string, { text: string; url: string; title: string }>
   >({})
+  const pendingSelectionTabKeyRef = useRef<string | null>(null)
   const messagesRef = useRef<UIMessage[]>([])
 
   useEffect(() => {
@@ -361,15 +362,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           },
         }
 
-        // Clear the active tab's selection after building request
-        if (activeTabSelection && activeTab?.id) {
-          const tabKey = String(activeTab.id)
-          delete selectionMapRef.current[tabKey]
-          selectedTextStorage.getValue().then((map) => {
-            const { [tabKey]: _, ...rest } = map
-            selectedTextStorage.setValue(rest)
-          })
-        }
+        // Track which tab's selection was sent so we can clear it on success
+        pendingSelectionTabKeyRef.current =
+          activeTabSelection && activeTab?.id ? String(activeTab.id) : null
 
         return result
       },
@@ -464,6 +459,19 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     previousStatusRef.current = status
 
     if (!justFinished) return
+
+    // Clear the selected text that was sent with this request
+    const tabKey = pendingSelectionTabKeyRef.current
+    if (tabKey) {
+      pendingSelectionTabKeyRef.current = null
+      delete selectionMapRef.current[tabKey]
+      selectedTextStorage.getValue().then((map) => {
+        if (map[tabKey]) {
+          const { [tabKey]: _, ...rest } = map
+          selectedTextStorage.setValue(rest)
+        }
+      })
+    }
 
     const messagesToSave = messages.filter((m) => m.parts?.length > 0)
     if (messagesToSave.length === 0) return
