@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
+// test comment for lefthook verification
 const GATEWAY_URL = 'https://llm.browseros.com'
 const WAVEFORM_BAND_COUNT = 5
 
