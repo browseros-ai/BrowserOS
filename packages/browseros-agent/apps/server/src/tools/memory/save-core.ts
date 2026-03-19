@@ -8,7 +8,7 @@ const TOOL_NAME = 'memory_save_core'
 export function createSaveCoreTool() {
   return tool({
     description:
-      'Write or update core memories. IMPORTANT: This overwrites the entire core memory file. Always call memory_read_core first, merge your changes into the existing content, then save the full result.',
+      'DEPRECATED: Use memory_update_core instead. This tool overwrites the entire core memory file and risks data loss. If you must use it, always call memory_read_core first, merge your changes into the existing content, then save the full result.',
     inputSchema: z.object({
       content: z.string().describe('The full core memory content to save'),
     }),

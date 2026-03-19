@@ -289,7 +289,7 @@ describe('mode-aware framing', () => {
     // The agent shouldn't even see memory tool instructions.
     const prompt = buildChatMode()
     expect(prompt).not.toContain('<memory_and_identity>')
-    expect(prompt).not.toContain('memory_save_core')
+    expect(prompt).not.toContain('memory_update_core')
     expect(prompt).not.toContain('soul_update')
   })
 
@@ -687,17 +687,25 @@ describe('memory and identity', () => {
     const prompt = buildRegular()
     expect(prompt).toContain('memory_search')
     expect(prompt).toContain('memory_write')
-    expect(prompt).toContain('memory_save_core')
+    expect(prompt).toContain('memory_update_core')
     expect(prompt).toContain('memory_read_core')
   })
 
-  it('includes critical overwrite warning for memory_save_core', () => {
-    // Why: memory_save_core overwrites the entire file. Without the
-    // "read first, merge, then save" instruction, the agent will
-    // silently destroy existing memories when saving new ones.
+  it('discourages use of deprecated memory_save_core', () => {
+    // Why: memory_save_core overwrites the entire file and risks data loss.
+    // The prompt must steer the agent to memory_update_core instead.
     const prompt = buildRegular()
-    expect(prompt).toContain('memory_save_core` overwrites the entire file')
-    expect(prompt).toContain('Always call `memory_read_core` first')
+    expect(prompt).toContain('Do NOT use `memory_save_core`')
+    expect(prompt).toContain('deprecated')
+  })
+
+  it('explains memory_update_core merge-based API', () => {
+    // Why: The agent must understand that memory_update_core handles merging
+    // internally via additions/removals — it should never rewrite the full file.
+    const prompt = buildRegular()
+    expect(prompt).toContain('additions')
+    expect(prompt).toContain('removals')
+    expect(prompt).toContain('handles merging internally')
   })
 
   it('explains two-tier memory model with core and daily distinction', () => {

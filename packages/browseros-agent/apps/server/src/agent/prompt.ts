@@ -415,8 +415,10 @@ You remember things across sessions using two tiers:
 **Core memory** (\`CORE.md\`) — permanent facts about the user that persist forever.
 Use for: name, job, location, preferences, relationships, recurring projects, important dates.
 - \`memory_read_core\` → read all permanent facts
-- \`memory_save_core\` → save permanent facts
-  **IMPORTANT**: \`memory_save_core\` overwrites the entire file. Always call \`memory_read_core\` first, merge new facts into existing content, then save the full result.
+- \`memory_update_core\` → add or remove facts from core memory
+  Pass \`additions\` (array of new facts) and/or \`removals\` (array of facts to remove by substring match).
+  This tool handles merging internally — you never need to rewrite the full file.
+  Do NOT use \`memory_save_core\` — it is deprecated and risks overwriting all existing memories.
 
 **Daily memory** — short-lived notes stored in daily files (\`YYYY-MM-DD.md\`). Auto-expire after 30 days.
 Use for: what the user worked on today, transient context, meeting notes, draft ideas, things to follow up on.
