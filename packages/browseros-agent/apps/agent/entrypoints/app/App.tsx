@@ -1,13 +1,5 @@
 import type { FC } from 'react'
-import {
-  HashRouter,
-  type Location,
-  Navigate,
-  Route,
-  Routes,
-  useLocation,
-  useParams,
-} from 'react-router'
+import { HashRouter, Navigate, Route, Routes, useParams } from 'react-router'
 
 import { NewTab } from '../newtab/index/NewTab'
 import { NewTabChat } from '../newtab/index/NewTabChat'
@@ -17,18 +9,23 @@ import { OnboardingDemo } from '../onboarding/demo/OnboardingDemo'
 import { FeaturesPage } from '../onboarding/features/Features'
 import { Onboarding } from '../onboarding/index/Onboarding'
 import { StepsLayout } from '../onboarding/steps/StepsLayout'
+import { AISettingsPage } from './ai-settings/AISettingsPage'
 import { ConnectMCP } from './connect-mcp/ConnectMCP'
 import { CreateGraphWrapper } from './create-graph/CreateGraphWrapper'
+import { CustomizationPage } from './customization/CustomizationPage'
 import { SurveyPage } from './jtbd-agent/SurveyPage'
 import { AuthLayout } from './layout/AuthLayout'
+import { SettingsSidebarLayout } from './layout/SettingsSidebarLayout'
 import { SidebarLayout } from './layout/SidebarLayout'
+import { LlmHubPage } from './llm-hub/LlmHubPage'
 import { LoginPage } from './login/LoginPage'
 import { LogoutPage } from './login/LogoutPage'
 import { MagicLinkCallback } from './login/MagicLinkCallback'
+import { MCPSettingsPage } from './mcp-settings/MCPSettingsPage'
 import { MemoryPage } from './memory/MemoryPage'
 import { ProfilePage } from './profile/ProfilePage'
 import { ScheduledTasksPage } from './scheduled-tasks/ScheduledTasksPage'
-import { SettingsDialog } from './settings-dialog/SettingsDialog'
+import { SearchProviderPage } from './search-provider/SearchProviderPage'
 import { SkillsPage } from './skills/SkillsPage'
 import { SoulPage } from './soul/SoulPage'
 import { WorkflowsPageWrapper } from './workflows/WorkflowsPageWrapper'
@@ -64,29 +61,12 @@ const OptionsRedirect: FC = () => {
   return <Navigate to={newPath} replace />
 }
 
-/** Redirect direct /settings/:tab visits so the dialog has a background page */
-const SettingsRedirect: FC = () => {
-  const { tab } = useParams()
-  return (
-    <Navigate
-      to={`/settings/${tab || 'ai'}`}
-      state={{ backgroundLocation: { pathname: '/home' } }}
-      replace
-    />
-  )
-}
-
-const AppRoutes: FC = () => {
-  const location = useLocation()
+export const App: FC = () => {
   const surveyParams = getSurveyParams()
 
-  const backgroundLocation = (
-    location.state as { backgroundLocation?: Location } | null
-  )?.backgroundLocation
-
   return (
-    <>
-      <Routes location={backgroundLocation || location}>
+    <HashRouter>
+      <Routes>
         {/* Public auth routes */}
         <Route element={<AuthLayout />}>
           <Route path="login" element={<LoginPage />} />
@@ -113,14 +93,18 @@ const AppRoutes: FC = () => {
           <Route path="scheduled" element={<ScheduledTasksPage />} />
         </Route>
 
-        {/* Survey page - standalone */}
-        <Route
-          path="settings/survey"
-          element={<SurveyPage {...surveyParams} />}
-        />
-
-        {/* Direct /settings/:tab access without background location — redirect with one */}
-        <Route path="settings/:tab?" element={<SettingsRedirect />} />
+        {/* Settings with dedicated sidebar */}
+        <Route element={<SettingsSidebarLayout />}>
+          <Route path="settings">
+            <Route index element={<Navigate to="/settings/ai" replace />} />
+            <Route path="ai" element={<AISettingsPage key="ai" />} />
+            <Route path="chat" element={<LlmHubPage />} />
+            <Route path="mcp" element={<MCPSettingsPage />} />
+            <Route path="customization" element={<CustomizationPage />} />
+            <Route path="search" element={<SearchProviderPage />} />
+            <Route path="survey" element={<SurveyPage {...surveyParams} />} />
+          </Route>
+        </Route>
 
         {/* Full-screen without sidebar */}
         <Route path="workflows/create-graph" element={<CreateGraphWrapper />} />
@@ -156,19 +140,6 @@ const AppRoutes: FC = () => {
         {/* Fallback to home */}
         <Route path="*" element={<Navigate to="/home" replace />} />
       </Routes>
-
-      {/* Modal overlay — renders settings dialog on top of background page */}
-      {backgroundLocation && (
-        <Routes>
-          <Route path="settings/:tab?" element={<SettingsDialog />} />
-        </Routes>
-      )}
-    </>
+    </HashRouter>
   )
 }
-
-export const App: FC = () => (
-  <HashRouter>
-    <AppRoutes />
-  </HashRouter>
-)

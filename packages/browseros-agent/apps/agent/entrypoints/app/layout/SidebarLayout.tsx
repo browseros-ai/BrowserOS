@@ -1,7 +1,7 @@
 import { Menu } from 'lucide-react'
 import type { FC } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Outlet } from 'react-router'
+import { Outlet, useLocation } from 'react-router'
 import { AppSidebar } from '@/components/sidebar/AppSidebar'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
@@ -12,6 +12,7 @@ import { RpcClientProvider } from '@/lib/rpc/RpcClientProvider'
 const COLLAPSE_DELAY = 150
 
 export const SidebarLayout: FC = () => {
+  const location = useLocation()
   const isMobile = useIsMobile()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
