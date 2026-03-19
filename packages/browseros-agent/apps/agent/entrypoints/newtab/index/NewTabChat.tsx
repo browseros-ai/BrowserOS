@@ -1,11 +1,12 @@
 import { Loader2 } from 'lucide-react'
-import { type FC, useEffect } from 'react'
+import { type FC, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router'
 import { ChatEmptyState } from '@/entrypoints/sidepanel/index/ChatEmptyState'
 import { ChatError } from '@/entrypoints/sidepanel/index/ChatError'
 import { ChatFooter } from '@/entrypoints/sidepanel/index/ChatFooter'
 import { ChatHeader } from '@/entrypoints/sidepanel/index/ChatHeader'
 import { ChatMessages } from '@/entrypoints/sidepanel/index/ChatMessages'
+import { createBrowserOSAction } from '@/lib/chat-actions/types'
 import { useChatActions } from '@/lib/chat-actions/useChatActions'
 import {
   NEWTAB_AI_TRIGGERED_EVENT,
@@ -24,6 +25,7 @@ import { track } from '@/lib/metrics/track'
 
 export const NewTabChat: FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
+  const hasSentInitialRef = useRef(false)
 
   const {
     mode,
@@ -69,25 +71,41 @@ export const NewTabChat: FC = () => {
     },
   })
 
-  // Send the initial message from query params (from /home search bar).
-  // setMode is async (React state), but sendMessage reads modeRef which is
-  // synced via useDeepCompareEffect (runs after commit). So we set the mode
-  // first, then defer the send to the next frame so the ref is updated.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: only run once on mount to read initial query params
+  // Send the initial message from URL query params (from /home search bar).
+  // Guarded by ref to prevent double-fire in React Strict Mode.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: must only run once on mount
   useEffect(() => {
+    if (hasSentInitialRef.current) return
     const query = searchParams.get('q')
     const chatMode = searchParams.get('mode')
+    const tabIdsParam = searchParams.get('tabs')
     if (!query) return
 
+    hasSentInitialRef.current = true
     if (chatMode === 'chat' || chatMode === 'agent') {
       setMode(chatMode)
     }
     setSearchParams({}, { replace: true })
-    // Defer send so React commits the mode state update and
-    // useDeepCompareEffect syncs modeRef before prepareSendMessagesRequest reads it
-    requestAnimationFrame(() => {
+
+    if (tabIdsParam) {
+      const tabIds = tabIdsParam.split(',').map(Number).filter(Boolean)
+      chrome.tabs.query({}).then((allTabs) => {
+        const matchedTabs = allTabs.filter(
+          (t) => t.id !== undefined && tabIds.includes(t.id),
+        )
+        const action =
+          matchedTabs.length > 0
+            ? createBrowserOSAction({
+                mode: (chatMode as 'chat' | 'agent') ?? 'agent',
+                message: query,
+                tabs: matchedTabs,
+              })
+            : undefined
+        sendMessage({ text: query, action })
+      })
+    } else {
       sendMessage({ text: query })
-    })
+    }
   }, [])
 
   const handleNewConversation = () => {

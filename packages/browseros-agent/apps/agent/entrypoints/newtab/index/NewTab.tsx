@@ -273,9 +273,16 @@ export const NewTab = () => {
       mode: chatMode,
       tabs_count: selectedTabs.length,
     })
+    const tabIds = selectedTabs
+      .map((t) => t.id)
+      .filter((id): id is number => id !== undefined)
     reset()
     setSelectedTabs([])
-    navigate(`/home/chat?q=${encodeURIComponent(message)}&mode=${chatMode}`)
+    const params = new URLSearchParams({ q: message, mode: chatMode })
+    if (tabIds.length > 0) {
+      params.set('tabs', tabIds.join(','))
+    }
+    navigate(`/home/chat?${params.toString()}`)
   }
 
   const runSelectedAction = (item: SuggestionItem | undefined) => {
