@@ -6,7 +6,10 @@ import { ChatError } from '@/entrypoints/sidepanel/index/ChatError'
 import { ChatFooter } from '@/entrypoints/sidepanel/index/ChatFooter'
 import { ChatHeader } from '@/entrypoints/sidepanel/index/ChatHeader'
 import { ChatMessages } from '@/entrypoints/sidepanel/index/ChatMessages'
-import { createBrowserOSAction } from '@/lib/chat-actions/types'
+import {
+  createAITabAction,
+  createBrowserOSAction,
+} from '@/lib/chat-actions/types'
 import { useChatActions } from '@/lib/chat-actions/useChatActions'
 import {
   NEWTAB_AI_TRIGGERED_EVENT,
@@ -87,21 +90,33 @@ export const NewTabChat: FC = () => {
     }
     setSearchParams({}, { replace: true })
 
+    const actionType = searchParams.get('actionType')
+    const tabName = searchParams.get('tabName')
+    const tabDescription = searchParams.get('tabDescription')
+
     if (tabIdsParam) {
       const tabIds = tabIdsParam.split(',').map(Number).filter(Boolean)
       chrome.tabs.query({}).then((allTabs) => {
         const matchedTabs = allTabs.filter(
           (t) => t.id !== undefined && tabIds.includes(t.id),
         )
-        const action =
-          matchedTabs.length > 0
-            ? createBrowserOSAction({
-                mode: (chatMode as 'chat' | 'agent') ?? 'agent',
-                message: query,
-                tabs: matchedTabs,
-              })
-            : undefined
-        sendMessage({ text: query, action })
+        if (matchedTabs.length > 0) {
+          const action =
+            actionType === 'ai-tab' && tabName
+              ? createAITabAction({
+                  name: tabName,
+                  description: tabDescription ?? '',
+                  tabs: matchedTabs,
+                })
+              : createBrowserOSAction({
+                  mode: (chatMode as 'chat' | 'agent') ?? 'agent',
+                  message: query,
+                  tabs: matchedTabs,
+                })
+          sendMessage({ text: query, action })
+        } else {
+          sendMessage({ text: query })
+        }
       })
     } else {
       sendMessage({ text: query })

@@ -268,7 +268,11 @@ export const NewTab = () => {
     runSelectedAction(selectedItem)
   }
 
-  const startInlineChat = (message: string, chatMode: 'chat' | 'agent') => {
+  const startInlineChat = (
+    message: string,
+    chatMode: 'chat' | 'agent',
+    aiTab?: { name: string; description: string },
+  ) => {
     track(NEWTAB_CHAT_STARTED_EVENT, {
       mode: chatMode,
       tabs_count: selectedTabs.length,
@@ -281,6 +285,11 @@ export const NewTab = () => {
     const params = new URLSearchParams({ q: message, mode: chatMode })
     if (tabIds.length > 0) {
       params.set('tabs', tabIds.join(','))
+    }
+    if (aiTab) {
+      params.set('actionType', 'ai-tab')
+      params.set('tabName', aiTab.name)
+      params.set('tabDescription', aiTab.description)
     }
     navigate(`/home/chat?${params.toString()}`)
   }
@@ -305,7 +314,10 @@ export const NewTab = () => {
         })
         const searchQuery = `${item.name}${item.description ? ` - ${item.description}` : ''}}`
         if (supports(Feature.NEWTAB_CHAT_SUPPORT)) {
-          startInlineChat(searchQuery, 'agent')
+          startInlineChat(searchQuery, 'agent', {
+            name: item.name,
+            description: item.description,
+          })
         } else {
           const action = createAITabAction({
             name: item.name,

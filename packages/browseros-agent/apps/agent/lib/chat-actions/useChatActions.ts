@@ -151,8 +151,10 @@ export function useChatActions(config: ChatActionsConfig) {
     onStopRecording: handleStopRecording,
   }
 
+  const { stop: _stop, ...restSession } = session
+
   return {
-    ...session,
+    ...restSession,
     input,
     setInput,
     attachedTabs,
