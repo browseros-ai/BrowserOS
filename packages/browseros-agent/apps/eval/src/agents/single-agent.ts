@@ -90,7 +90,8 @@ export class SingleAgentEvaluator implements AgentEvaluator {
         timeoutMs,
         capture,
         async (signal) => {
-          const result = await agent?.toolLoopAgent.generate({
+          if (!agent) throw new Error('Agent was not initialized')
+          const result = await agent.toolLoopAgent.generate({
             prompt: task.query,
             abortSignal: signal,
 

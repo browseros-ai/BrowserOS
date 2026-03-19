@@ -63,9 +63,9 @@ export class ScreenshotCapture {
   }
 
   private async captureDirect(pageId: number): Promise<string | null> {
+    if (!this.browser) return null
     try {
-      // browser is guaranteed non-null here — captureDirect is only called when this.browser is truthy
-      const result = await this.browser?.screenshot(pageId, {
+      const result = await this.browser.screenshot(pageId, {
         format: 'png',
         fullPage: false,
       })
@@ -74,9 +74,9 @@ export class ScreenshotCapture {
     } catch (error) {
       // If page ID is invalid, try listing pages and use the first one
       try {
-        const pages = await this.browser?.listPages()
+        const pages = await this.browser.listPages()
         if (pages.length > 0) {
-          const result = await this.browser?.screenshot(pages[0].pageId, {
+          const result = await this.browser.screenshot(pages[0].pageId, {
             format: 'png',
             fullPage: false,
           })
