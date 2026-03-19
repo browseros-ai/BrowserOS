@@ -28,9 +28,19 @@ async function loadMemoryEntries(): Promise<MemoryEntry[]> {
   for (const file of mdFiles) {
     try {
       const content = await readFile(join(memoryDir, file), 'utf-8')
+
+      // Section-level entries (## delimited blocks)
       const sections = content.split(/^## /m).filter(Boolean)
       for (const section of sections) {
         entries.push({ source: file, content: `## ${section}`.trim() })
+      }
+
+      // Line-level entries (individual non-empty lines)
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim()
+        if (trimmed && !trimmed.startsWith('#')) {
+          entries.push({ source: file, content: trimmed })
+        }
       }
     } catch {
       // skip unreadable files
@@ -84,11 +94,23 @@ export function createMemorySearchTool() {
           }
         }
 
-        const sorted = [...bestScores.entries()]
-          .sort((a, b) => a[1].score - b[1].score)
-          .slice(0, 10)
+        const sorted = [...bestScores.entries()].sort(
+          (a, b) => a[1].score - b[1].score,
+        )
 
-        const formatted = sorted
+        // Deduplicate: if a line-level match is already contained in a
+        // higher-ranked section-level match from the same file, skip it.
+        const seen = new Set<string>()
+        const deduped: typeof sorted = []
+        for (const item of sorted) {
+          const key = `${item[0].source}::${item[0].content}`
+          if (seen.has(key)) continue
+          seen.add(key)
+          deduped.push(item)
+        }
+
+        const formatted = deduped
+          .slice(0, 10)
           .map(([entry, { score }]) => {
             const relevance = (1 - score).toFixed(2)
             return `[${entry.source}] (relevance: ${relevance})\n${entry.content}`
