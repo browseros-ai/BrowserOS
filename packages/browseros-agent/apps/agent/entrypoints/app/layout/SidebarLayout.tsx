@@ -97,7 +97,7 @@ export const SidebarLayout: FC = () => {
 
         {/* Main content - full width, centered */}
         {location.pathname === '/home/chat' ? (
-          <main className="h-screen overflow-hidden">
+          <main className="relative h-dvh overflow-hidden">
             <Outlet />
           </main>
         ) : (

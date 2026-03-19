@@ -131,7 +131,7 @@ export const NewTabChat: FC = () => {
   if (!selectedProvider) return null
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div className="absolute inset-0 flex flex-col overflow-hidden">
       <div className="mx-auto w-full max-w-3xl">
         <ChatHeader
           selectedProvider={selectedProvider}
