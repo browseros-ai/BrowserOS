@@ -38,6 +38,14 @@ export function formatBrowserContext(browserContext?: BrowserContext): string {
   return `${lines.join('\n')}\n\n---\n\n`
 }
 
+/** Strip XML-like tags that match our prompt delimiters to prevent injection. */
+function sanitizeForPrompt(s: string): string {
+  return s.replace(
+    /<\/?(?:selected_text|USER_QUERY|page_context|AGENT_PROMPT|soul|memory_and_identity|security|workspace)[^>]*>/gi,
+    '',
+  )
+}
+
 export function formatUserMessage(
   message: string,
   browserContext?: BrowserContext,
@@ -48,10 +56,13 @@ export function formatUserMessage(
 
   let selectedTextBlock = ''
   if (selectedText) {
-    const source = selectedTextSource
-      ? ` (from "${selectedTextSource.title}")`
+    const sanitizedText = sanitizeForPrompt(selectedText)
+    const title = selectedTextSource?.title
+      ? sanitizeForPrompt(selectedTextSource.title).replace(/"/g, "'")
       : ''
-    selectedTextBlock = `<selected_text${source}>\n${selectedText}\n</selected_text>\n\n`
+    const url = selectedTextSource?.url ?? ''
+    const source = title ? ` (from "${title}"${url ? ` — ${url}` : ''})` : ''
+    selectedTextBlock = `<selected_text${source}>\n${sanitizedText}\n</selected_text>\n\n`
   }
 
   return `${contextPrefix}${selectedTextBlock}<USER_QUERY>\n${message}\n</USER_QUERY>`
