@@ -98,14 +98,19 @@ export function createMemorySearchTool() {
           (a, b) => a[1].score - b[1].score,
         )
 
-        // Deduplicate: if a line-level match is already contained in a
-        // higher-ranked section-level match from the same file, skip it.
-        const seen = new Set<string>()
+        // Deduplicate: skip line-level hits already covered by a
+        // higher-ranked section from the same file.
+        const seenSections: Array<{ source: string; content: string }> = []
         const deduped: typeof sorted = []
         for (const item of sorted) {
-          const key = `${item[0].source}::${item[0].content}`
-          if (seen.has(key)) continue
-          seen.add(key)
+          const { source, content } = item[0]
+          const coveredBySection = seenSections.some(
+            (s) => s.source === source && s.content.includes(content),
+          )
+          if (coveredBySection) continue
+          if (content.startsWith('## ')) {
+            seenSections.push({ source, content })
+          }
           deduped.push(item)
         }
 

@@ -1,7 +1,6 @@
 import type { ToolSet } from 'ai'
 import { createReadCoreTool } from './read-core'
 import { createSoulReadTool } from './read-soul'
-import { createSaveCoreTool } from './save-core'
 import { createMemorySearchTool } from './search'
 import { createUpdateCoreTool } from './update-core'
 import { createSoulUpdateTool } from './update-soul'
@@ -13,7 +12,6 @@ export function buildMemoryToolSet(): ToolSet {
     memory_write: createMemoryWriteTool(),
     memory_read_core: createReadCoreTool(),
     memory_update_core: createUpdateCoreTool(),
-    memory_save_core: createSaveCoreTool(),
     soul_read: createSoulReadTool(),
     soul_update: createSoulUpdateTool(),
   }

@@ -34,30 +34,39 @@ export function createUpdateCoreTool() {
         let lines = existing.split('\n')
 
         // Remove matching entries
+        let removedCount = 0
         if (params.removals?.length) {
           for (const removal of params.removals) {
             const lower = removal.toLowerCase()
+            const before = lines.length
             lines = lines.filter((line) => !line.toLowerCase().includes(lower))
+            removedCount += before - lines.length
           }
         }
 
-        // Append new facts
+        // Append new facts (skip duplicates)
+        let addedCount = 0
         if (params.additions?.length) {
           if (lines.length > 0 && lines[lines.length - 1].trim() !== '') {
             lines.push('')
           }
           for (const fact of params.additions) {
-            lines.push(`- ${fact}`)
+            const factLower = fact.toLowerCase()
+            const alreadyExists = lines.some((l) =>
+              l.toLowerCase().includes(factLower),
+            )
+            if (!alreadyExists) {
+              lines.push(`- ${fact}`)
+              addedCount++
+            }
           }
         }
 
         const result = `${lines.join('\n').trim()}\n`
         await Bun.write(corePath, result)
 
-        const added = params.additions?.length ?? 0
-        const removed = params.removals?.length ?? 0
         return {
-          text: `Core memory updated. ${added} fact(s) added, ${removed} fact(s) removed.`,
+          text: `Core memory updated. ${addedCount} fact(s) added, ${removedCount} line(s) removed.`,
         }
       }),
     toModelOutput,
