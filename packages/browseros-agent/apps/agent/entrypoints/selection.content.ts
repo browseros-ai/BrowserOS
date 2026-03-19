@@ -10,22 +10,30 @@ export default defineContentScript({
     const tabId: number | undefined = response?.tabId
     if (!tabId) return
 
+    const key = String(tabId)
+
     document.addEventListener('mouseup', () => {
       const text = window.getSelection()?.toString().trim()
 
       if (text && text.length > 0) {
-        selectedTextStorage.setValue({
-          text: text.slice(0, MAX_SELECTED_TEXT_LENGTH),
-          pageUrl: window.location.href,
-          pageTitle: document.title,
-          tabId,
-          timestamp: Date.now(),
+        selectedTextStorage.getValue().then((map) => {
+          selectedTextStorage.setValue({
+            ...map,
+            [key]: {
+              text: text.slice(0, MAX_SELECTED_TEXT_LENGTH),
+              pageUrl: window.location.href,
+              pageTitle: document.title,
+              tabId,
+              timestamp: Date.now(),
+            },
+          })
         })
       } else {
-        // User clicked without selecting — clear stale selection from this tab
-        selectedTextStorage.getValue().then((current) => {
-          if (current?.tabId === tabId) {
-            selectedTextStorage.setValue(null)
+        // User clicked without selecting — clear this tab's entry only
+        selectedTextStorage.getValue().then((map) => {
+          if (map[key]) {
+            const { [key]: _, ...rest } = map
+            selectedTextStorage.setValue(rest)
           }
         })
       }

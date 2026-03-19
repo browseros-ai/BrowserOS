@@ -8,7 +8,7 @@ export interface SelectedTextData {
   timestamp: number
 }
 
-export const selectedTextStorage = storage.defineItem<SelectedTextData | null>(
-  'local:selectedText',
-  { defaultValue: null },
-)
+/** Map of tabId → selected text. Each tab's selection is independent. */
+export const selectedTextStorage = storage.defineItem<
+  Record<string, SelectedTextData>
+>('local:selectedTextMap', { defaultValue: {} })

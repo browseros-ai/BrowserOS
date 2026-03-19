@@ -53,9 +53,9 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   const { servers: mcpServers } = useMcpServers()
   const { data: userMCPIntegrations } = useGetUserMCPIntegrations()
   const chatInputRef = useRef<ChatInputHandle>(null)
-  const [selectedText, setSelectedText] = useState<SelectedTextData | null>(
-    null,
-  )
+  const [selectionMap, setSelectionMap] = useState<
+    Record<string, SelectedTextData>
+  >({})
   const [activeTabId, setActiveTabId] = useState<number | undefined>()
 
   // Track active tab for tab-scoped selection display
@@ -70,15 +70,16 @@ export const ChatFooter: FC<ChatFooterProps> = ({
     return () => chrome.tabs.onActivated.removeListener(listener)
   }, [])
 
-  // Watch selected text storage
+  // Watch selected text storage (per-tab map)
   useEffect(() => {
-    selectedTextStorage.getValue().then(setSelectedText)
-    const unwatch = selectedTextStorage.watch(setSelectedText)
+    selectedTextStorage.getValue().then(setSelectionMap)
+    const unwatch = selectedTextStorage.watch(setSelectionMap)
     return () => unwatch()
   }, [])
 
-  const visibleSelectedText =
-    selectedText && selectedText.tabId === activeTabId ? selectedText : null
+  const visibleSelectedText = activeTabId
+    ? (selectionMap[String(activeTabId)] ?? null)
+    : null
   const [isTabMentionOpen, setIsTabMentionOpen] = useState(false)
 
   useEffect(() => {
@@ -115,7 +116,14 @@ export const ChatFooter: FC<ChatFooterProps> = ({
       {visibleSelectedText && (
         <ChatSelectedText
           selectedText={visibleSelectedText}
-          onDismiss={() => selectedTextStorage.setValue(null)}
+          onDismiss={() => {
+            if (!activeTabId) return
+            const key = String(activeTabId)
+            selectedTextStorage.getValue().then((map) => {
+              const { [key]: _, ...rest } = map
+              selectedTextStorage.setValue(rest)
+            })
+          }}
         />
       )}
 

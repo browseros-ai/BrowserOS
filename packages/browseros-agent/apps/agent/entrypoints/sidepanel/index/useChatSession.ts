@@ -166,23 +166,29 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const modeRef = useRef<ChatMode>(mode)
   const textToActionRef = useRef<Map<string, ChatAction>>(textToAction)
   const workingDirRef = useRef<string | undefined>(undefined)
-  const selectedTextRef = useRef<{
-    text: string
-    url: string
-    title: string
-  } | null>(null)
+  const selectionMapRef = useRef<
+    Record<string, { text: string; url: string; title: string }>
+  >({})
   const messagesRef = useRef<UIMessage[]>([])
 
   useEffect(() => {
-    selectedTextStorage.getValue().then((data) => {
-      selectedTextRef.current = data
-        ? { text: data.text, url: data.pageUrl, title: data.pageTitle }
-        : null
+    const toRef = (
+      map: Record<string, { text: string; pageUrl: string; pageTitle: string }>,
+    ) => {
+      const result: Record<
+        string,
+        { text: string; url: string; title: string }
+      > = {}
+      for (const [k, v] of Object.entries(map)) {
+        result[k] = { text: v.text, url: v.pageUrl, title: v.pageTitle }
+      }
+      return result
+    }
+    selectedTextStorage.getValue().then((map) => {
+      selectionMapRef.current = toRef(map)
     })
-    const unwatchText = selectedTextStorage.watch((data) => {
-      selectedTextRef.current = data
-        ? { text: data.text, url: data.pageUrl, title: data.pageTitle }
-        : null
+    const unwatchText = selectedTextStorage.watch((map) => {
+      selectionMapRef.current = toRef(map)
     })
     return () => unwatchText()
   }, [])
@@ -230,6 +236,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           currentWindow: true,
         })
         const activeTab = activeTabsList?.[0] ?? undefined
+        const activeTabSelection = activeTab?.id
+          ? (selectionMapRef.current[String(activeTab.id)] ?? null)
+          : null
         const message = getLastMessageText(messages)
         const provider =
           selectedLlmProviderRef.current ?? createDefaultBrowserOSProvider()
@@ -342,20 +351,24 @@ export const useChatSession = (options?: ChatSessionOptions) => {
             supportsImages: provider?.supportsImages,
             previousConversation,
             declinedApps: declinedApps.length > 0 ? declinedApps : undefined,
-            selectedText: selectedTextRef.current?.text,
-            selectedTextSource: selectedTextRef.current
+            selectedText: activeTabSelection?.text,
+            selectedTextSource: activeTabSelection
               ? {
-                  url: selectedTextRef.current.url,
-                  title: selectedTextRef.current.title,
+                  url: activeTabSelection.url,
+                  title: activeTabSelection.title,
                 }
               : undefined,
           },
         }
 
-        // Clear selected text after building request
-        if (selectedTextRef.current) {
-          selectedTextRef.current = null
-          selectedTextStorage.setValue(null)
+        // Clear the active tab's selection after building request
+        if (activeTabSelection && activeTab?.id) {
+          const tabKey = String(activeTab.id)
+          delete selectionMapRef.current[tabKey]
+          selectedTextStorage.getValue().then((map) => {
+            const { [tabKey]: _, ...rest } = map
+            selectedTextStorage.setValue(rest)
+          })
         }
 
         return result
