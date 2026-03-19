@@ -76,7 +76,7 @@ export function useOAuthStatus(provider: string): UseOAuthStatusReturn {
   // Cleanup on unmount
   useEffect(() => {
     return () => stopPolling()
-  }, [])
+  }, [stopPolling])
 
   return {
     status,

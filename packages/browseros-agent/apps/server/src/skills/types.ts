@@ -50,4 +50,3 @@ export type RemoteSkillCatalog = {
   version: number
   skills: RemoteSkillEntry[]
 }
-

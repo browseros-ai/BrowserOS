@@ -23,4 +23,4 @@ type ScheduleMessagesProtocol = {
 const { sendMessage, onMessage } =
   defineExtensionMessaging<ScheduleMessagesProtocol>()
 
-export { sendMessage as sendScheduleMessage, onMessage as onScheduleMessage }
+export { onMessage as onScheduleMessage, sendMessage as sendScheduleMessage }

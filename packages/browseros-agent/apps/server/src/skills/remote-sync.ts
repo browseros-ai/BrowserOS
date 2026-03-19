@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
 import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
@@ -55,7 +55,9 @@ export async function fetchRemoteCatalog(): Promise<RemoteSkillCatalog | null> {
       signal: AbortSignal.timeout(TIMEOUTS.SKILLS_FETCH),
     })
     if (!response.ok) {
-      logger.warn('Failed to fetch remote skill catalog', { status: response.status })
+      logger.warn('Failed to fetch remote skill catalog', {
+        status: response.status,
+      })
       return null
     }
     const data: unknown = await response.json()
@@ -77,11 +79,17 @@ export async function syncBuiltinSkills(): Promise<void> {
 
   const contentMap = new Map<string, { version: string; content: string }>()
   for (const skill of DEFAULT_SKILLS) {
-    contentMap.set(skill.id, { version: extractVersion(skill.content), content: skill.content })
+    contentMap.set(skill.id, {
+      version: extractVersion(skill.content),
+      content: skill.content,
+    })
   }
   if (catalog) {
     for (const skill of catalog.skills) {
-      contentMap.set(skill.id, { version: skill.version, content: skill.content })
+      contentMap.set(skill.id, {
+        version: skill.version,
+        content: skill.content,
+      })
     }
   }
 

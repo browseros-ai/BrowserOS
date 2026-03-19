@@ -21,12 +21,12 @@ import type { ToolRegistry } from '../tools/tool-registry'
 
 // Re-export browser context types for consumers
 export {
-  BrowserContextSchema,
-  CustomMcpServerSchema,
-  TabSchema,
   type BrowserContext,
+  BrowserContextSchema,
   type CustomMcpServer,
+  CustomMcpServerSchema,
   type Tab,
+  TabSchema,
 }
 
 export const AgentLLMConfigSchema = LLMConfigSchema.extend({

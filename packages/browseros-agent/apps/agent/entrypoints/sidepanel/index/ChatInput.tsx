@@ -280,7 +280,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
 
       if (voice.isTranscribing) {
         return (
-          <button type="button" disabled className="rounded-full p-2 text-muted-foreground">
+          <button
+            type="button"
+            disabled
+            className="rounded-full p-2 text-muted-foreground"
+          >
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             <span className="sr-only">Transcribing</span>
           </button>
@@ -317,7 +321,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       return (
         <button
           type="submit"
-          disabled={!input.trim() || voice?.isRecording || voice?.isTranscribing}
+          disabled={
+            !input.trim() || voice?.isRecording || voice?.isTranscribing
+          }
           className="cursor-pointer rounded-full bg-[var(--accent-orange)] p-2 text-white shadow-sm transition-all duration-200 hover:bg-[var(--accent-orange-bright)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Send className="h-3.5 w-3.5" />
@@ -341,9 +347,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           anchorRef={textareaRef}
         />
         {voice?.isRecording ? (
-          <div
-            className="flex min-h-[42px] flex-1 items-center justify-center gap-1 rounded-2xl border border-red-500/50 bg-muted/50 px-4 py-2.5 pr-[4.5rem]"
-          >
+          <div className="flex min-h-[42px] flex-1 items-center justify-center gap-1 rounded-2xl border border-red-500/50 bg-muted/50 px-4 py-2.5 pr-[4.5rem]">
             {voice.audioLevels.map((level, i) => (
               <div
                 key={i}

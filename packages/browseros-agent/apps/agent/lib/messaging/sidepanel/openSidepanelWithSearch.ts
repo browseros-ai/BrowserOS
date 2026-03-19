@@ -12,6 +12,6 @@ const { sendMessage, onMessage } =
   defineExtensionMessaging<OpenSidePanelWithSearchParams>()
 
 export {
-  sendMessage as openSidePanelWithSearch,
   onMessage as onOpenSidePanelWithSearch,
+  sendMessage as openSidePanelWithSearch,
 }

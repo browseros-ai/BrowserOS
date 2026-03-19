@@ -62,7 +62,10 @@ metadata:
 describe('loader two-directory scanning', () => {
   it('marks builtin/ skills as builtIn: true', async () => {
     await mkdir(join(builtinDir, 'summarize-page'), { recursive: true })
-    await writeFile(join(builtinDir, 'summarize-page', 'SKILL.md'), BUILTIN_SKILL)
+    await writeFile(
+      join(builtinDir, 'summarize-page', 'SKILL.md'),
+      BUILTIN_SKILL,
+    )
 
     const skills = await loadAllSkills()
     const skill = skills.find((s) => s.id === 'summarize-page')
@@ -82,7 +85,10 @@ describe('loader two-directory scanning', () => {
 
   it('merges skills from both directories', async () => {
     await mkdir(join(builtinDir, 'summarize-page'), { recursive: true })
-    await writeFile(join(builtinDir, 'summarize-page', 'SKILL.md'), BUILTIN_SKILL)
+    await writeFile(
+      join(builtinDir, 'summarize-page', 'SKILL.md'),
+      BUILTIN_SKILL,
+    )
     await mkdir(join(testDir, 'my-workflow'), { recursive: true })
     await writeFile(join(testDir, 'my-workflow', 'SKILL.md'), USER_SKILL)
 
@@ -92,7 +98,10 @@ describe('loader two-directory scanning', () => {
 
   it('skips builtin/ subdirectory when scanning root', async () => {
     await mkdir(join(builtinDir, 'summarize-page'), { recursive: true })
-    await writeFile(join(builtinDir, 'summarize-page', 'SKILL.md'), BUILTIN_SKILL)
+    await writeFile(
+      join(builtinDir, 'summarize-page', 'SKILL.md'),
+      BUILTIN_SKILL,
+    )
 
     const skills = await loadAllSkills()
     const dupes = skills.filter((s) => s.id === 'summarize-page')
@@ -102,9 +111,15 @@ describe('loader two-directory scanning', () => {
 
   it('loadSkills filters out disabled skills', async () => {
     await mkdir(join(builtinDir, 'summarize-page'), { recursive: true })
-    await writeFile(join(builtinDir, 'summarize-page', 'SKILL.md'), BUILTIN_SKILL)
+    await writeFile(
+      join(builtinDir, 'summarize-page', 'SKILL.md'),
+      BUILTIN_SKILL,
+    )
     await mkdir(join(builtinDir, 'deep-research'), { recursive: true })
-    await writeFile(join(builtinDir, 'deep-research', 'SKILL.md'), BUILTIN_DISABLED)
+    await writeFile(
+      join(builtinDir, 'deep-research', 'SKILL.md'),
+      BUILTIN_DISABLED,
+    )
 
     const skills = await loadSkills()
     assert.strictEqual(skills.length, 1)

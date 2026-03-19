@@ -12,4 +12,4 @@ type ServerMessagesProtocol = {
 const { sendMessage, onMessage } =
   defineExtensionMessaging<ServerMessagesProtocol>()
 
-export { sendMessage as sendServerMessage, onMessage as onServerMessage }
+export { onMessage as onServerMessage, sendMessage as sendServerMessage }

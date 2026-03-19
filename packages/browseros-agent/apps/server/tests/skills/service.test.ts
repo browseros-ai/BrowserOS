@@ -40,14 +40,21 @@ metadata:
 describe('getSkill', () => {
   it('finds builtin skill with builtIn: true', async () => {
     await mkdir(join(builtinDir, 'summarize-page'), { recursive: true })
-    await writeFile(join(builtinDir, 'summarize-page', 'SKILL.md'), BUILTIN_SKILL)
+    await writeFile(
+      join(builtinDir, 'summarize-page', 'SKILL.md'),
+      BUILTIN_SKILL,
+    )
     const skill = await getSkill('summarize-page')
     assert.ok(skill)
     assert.strictEqual(skill.builtIn, true)
   })
 
   it('finds user skill with builtIn: false', async () => {
-    await createSkill({ name: 'My Skill', description: 'Custom', content: '# Custom' })
+    await createSkill({
+      name: 'My Skill',
+      description: 'Custom',
+      content: '# Custom',
+    })
     const skill = await getSkill('my-skill')
     assert.ok(skill)
     assert.strictEqual(skill.builtIn, false)
@@ -56,7 +63,11 @@ describe('getSkill', () => {
 
 describe('createSkill', () => {
   it('creates in user directory with builtIn: false', async () => {
-    const skill = await createSkill({ name: 'My Skill', description: 'Custom', content: '# Custom' })
+    const skill = await createSkill({
+      name: 'My Skill',
+      description: 'Custom',
+      content: '# Custom',
+    })
     assert.strictEqual(skill.builtIn, false)
     assert.ok(!skill.location.includes('builtin'))
   })
@@ -65,7 +76,12 @@ describe('createSkill', () => {
     await mkdir(join(builtinDir, 'my-skill'), { recursive: true })
     await writeFile(join(builtinDir, 'my-skill', 'SKILL.md'), BUILTIN_SKILL)
     await assert.rejects(
-      () => createSkill({ name: 'My Skill', description: 'Custom', content: '# Custom' }),
+      () =>
+        createSkill({
+          name: 'My Skill',
+          description: 'Custom',
+          content: '# Custom',
+        }),
       /already exists/,
     )
   })
@@ -74,7 +90,10 @@ describe('createSkill', () => {
 describe('updateSkill', () => {
   it('updates builtin skill in place', async () => {
     await mkdir(join(builtinDir, 'summarize-page'), { recursive: true })
-    await writeFile(join(builtinDir, 'summarize-page', 'SKILL.md'), BUILTIN_SKILL)
+    await writeFile(
+      join(builtinDir, 'summarize-page', 'SKILL.md'),
+      BUILTIN_SKILL,
+    )
     const updated = await updateSkill('summarize-page', { enabled: false })
     assert.strictEqual(updated.enabled, false)
     assert.strictEqual(updated.builtIn, true)
@@ -83,14 +102,24 @@ describe('updateSkill', () => {
 
 describe('deleteSkill', () => {
   it('deletes user skill', async () => {
-    await createSkill({ name: 'My Skill', description: 'Custom', content: '# Custom' })
+    await createSkill({
+      name: 'My Skill',
+      description: 'Custom',
+      content: '# Custom',
+    })
     await deleteSkill('my-skill')
     assert.strictEqual(await getSkill('my-skill'), null)
   })
 
   it('rejects deleting builtin skill', async () => {
     await mkdir(join(builtinDir, 'summarize-page'), { recursive: true })
-    await writeFile(join(builtinDir, 'summarize-page', 'SKILL.md'), BUILTIN_SKILL)
-    await assert.rejects(() => deleteSkill('summarize-page'), /Cannot delete built-in skill/)
+    await writeFile(
+      join(builtinDir, 'summarize-page', 'SKILL.md'),
+      BUILTIN_SKILL,
+    )
+    await assert.rejects(
+      () => deleteSkill('summarize-page'),
+      /Cannot delete built-in skill/,
+    )
   })
 })

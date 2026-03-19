@@ -1,7 +1,10 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
-import type { RemoteSkillCatalog, RemoteSkillEntry } from '../apps/server/src/skills/types'
+import type {
+  RemoteSkillCatalog,
+  RemoteSkillEntry,
+} from '../apps/server/src/skills/types'
 
 const DEFAULTS_DIR = join(import.meta.dir, '../apps/server/src/skills/defaults')
 const R2_KEY = 'skills/v1/catalog.json'

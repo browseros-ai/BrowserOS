@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, it, mock } from 'bun:test'
 import assert from 'node:assert'
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -43,39 +51,56 @@ describe('migrateBuiltinSkills', () => {
 
     await migrateBuiltinSkills()
 
-    const content = await readFile(join(builtinDir, 'summarize-page', 'SKILL.md'), 'utf-8')
+    const content = await readFile(
+      join(builtinDir, 'summarize-page', 'SKILL.md'),
+      'utf-8',
+    )
     assert.strictEqual(content, SKILL_CONTENT)
 
-    const oldExists = await stat(join(testDir, 'summarize-page')).then(() => true).catch(() => false)
+    const oldExists = await stat(join(testDir, 'summarize-page'))
+      .then(() => true)
+      .catch(() => false)
     assert.strictEqual(oldExists, false)
   })
 
   it('does not move user-created skills', async () => {
-    const userContent = '---\nname: my-workflow\ndescription: mine\n---\n# Mine\n'
+    const userContent =
+      '---\nname: my-workflow\ndescription: mine\n---\n# Mine\n'
     await mkdir(join(testDir, 'my-workflow'), { recursive: true })
     await writeFile(join(testDir, 'my-workflow', 'SKILL.md'), userContent)
 
     await migrateBuiltinSkills()
 
-    const content = await readFile(join(testDir, 'my-workflow', 'SKILL.md'), 'utf-8')
+    const content = await readFile(
+      join(testDir, 'my-workflow', 'SKILL.md'),
+      'utf-8',
+    )
     assert.strictEqual(content, userContent)
   })
 
   it('skips if builtin/ already has skills', async () => {
     await mkdir(join(builtinDir, 'summarize-page'), { recursive: true })
-    await writeFile(join(builtinDir, 'summarize-page', 'SKILL.md'), SKILL_CONTENT)
+    await writeFile(
+      join(builtinDir, 'summarize-page', 'SKILL.md'),
+      SKILL_CONTENT,
+    )
     await mkdir(join(testDir, 'deep-research'), { recursive: true })
     await writeFile(join(testDir, 'deep-research', 'SKILL.md'), SKILL_CONTENT)
 
     await migrateBuiltinSkills()
 
-    const stillInRoot = await stat(join(testDir, 'deep-research')).then(() => true).catch(() => false)
+    const stillInRoot = await stat(join(testDir, 'deep-research'))
+      .then(() => true)
+      .catch(() => false)
     assert.strictEqual(stillInRoot, true)
   })
 
   it('is a no-op for fresh installs', async () => {
     await migrateBuiltinSkills()
     const entries = await readdir(builtinDir)
-    assert.strictEqual(entries.filter((e: string) => !e.startsWith('.')).length, 0)
+    assert.strictEqual(
+      entries.filter((e: string) => !e.startsWith('.')).length,
+      0,
+    )
   })
 })

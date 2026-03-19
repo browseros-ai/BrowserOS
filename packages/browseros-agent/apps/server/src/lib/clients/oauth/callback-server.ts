@@ -12,9 +12,9 @@ import { OAUTH_CALLBACK_PORT } from '@browseros/shared/constants/ports'
 import { logger } from '../../logger'
 import type { OAuthTokenManager } from './token-manager'
 
-export function startOAuthCallbackServer(
-  tokenManager: OAuthTokenManager,
-): { stop: () => void } {
+export function startOAuthCallbackServer(tokenManager: OAuthTokenManager): {
+  stop: () => void
+} {
   const server = Bun.serve({
     port: OAUTH_CALLBACK_PORT,
     hostname: '127.0.0.1',
@@ -29,8 +29,7 @@ export function startOAuthCallbackServer(
       const error = url.searchParams.get('error')
 
       if (error) {
-        const description =
-          url.searchParams.get('error_description') || error
+        const description = url.searchParams.get('error_description') || error
         logger.warn('OAuth callback received error', { error, description })
         return htmlResponse(errorPage(description))
       }

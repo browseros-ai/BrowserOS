@@ -40,12 +40,16 @@ async function resolveChatGPTProConfig(
 ): Promise<ResolvedLLMConfig> {
   const tokenManager = getOAuthTokenManager()
   if (!tokenManager || !browserosId) {
-    throw new Error('Not authenticated with ChatGPT Plus/Pro. Please login first.')
+    throw new Error(
+      'Not authenticated with ChatGPT Plus/Pro. Please login first.',
+    )
   }
 
   const tokens = await tokenManager.refreshIfExpired('chatgpt-pro')
   if (!tokens) {
-    throw new Error('Not authenticated with ChatGPT Plus/Pro. Please login first.')
+    throw new Error(
+      'Not authenticated with ChatGPT Plus/Pro. Please login first.',
+    )
   }
 
   return {

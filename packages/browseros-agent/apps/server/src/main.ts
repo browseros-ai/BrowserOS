@@ -29,7 +29,11 @@ import { RateLimiter } from './lib/rate-limiter/rate-limiter'
 import { Sentry } from './lib/sentry'
 import { seedSoulTemplate } from './lib/soul'
 import { migrateBuiltinSkills } from './skills/migrate'
-import { startSkillSync, stopSkillSync, syncBuiltinSkills } from './skills/remote-sync'
+import {
+  startSkillSync,
+  stopSkillSync,
+  syncBuiltinSkills,
+} from './skills/remote-sync'
 import { registry } from './tools/registry'
 import { VERSION } from './version'
 

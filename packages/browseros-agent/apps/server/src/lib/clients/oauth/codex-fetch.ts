@@ -60,9 +60,12 @@ export function createCodexFetch(accountId?: string) {
         }
         body = JSON.stringify(json)
       } catch (err) {
-        logger.warn('Failed to inject Codex-required fields into request body', {
-          error: err instanceof Error ? err.message : String(err),
-        })
+        logger.warn(
+          'Failed to inject Codex-required fields into request body',
+          {
+            error: err instanceof Error ? err.message : String(err),
+          },
+        )
       }
     }
 

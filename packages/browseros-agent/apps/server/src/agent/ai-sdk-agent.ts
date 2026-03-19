@@ -4,8 +4,8 @@ import type {
   LanguageModelV3Middleware,
 } from '@ai-sdk/provider'
 import { AGENT_LIMITS } from '@browseros/shared/constants/limits'
-import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
+import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import {
   type LanguageModel,
   type ModelMessage,
@@ -204,10 +204,8 @@ export class AiSdkAgent {
         providerOptions: {
           openai: {
             store: false,
-            reasoningEffort:
-              config.resolvedConfig.reasoningEffort || 'high',
-            reasoningSummary:
-              config.resolvedConfig.reasoningSummary || 'auto',
+            reasoningEffort: config.resolvedConfig.reasoningEffort || 'high',
+            reasoningSummary: config.resolvedConfig.reasoningSummary || 'auto',
             include: ['reasoning.encrypted_content'],
           },
         },

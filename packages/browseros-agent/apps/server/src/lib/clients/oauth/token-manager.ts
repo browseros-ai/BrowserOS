@@ -27,7 +27,10 @@ interface OAuthTokenResponse {
 
 export class OAuthTokenManager {
   private readonly pendingFlows = new Map<string, PendingOAuthFlow>()
-  private readonly refreshLocks = new Map<string, Promise<StoredOAuthTokens | null>>()
+  private readonly refreshLocks = new Map<
+    string,
+    Promise<StoredOAuthTokens | null>
+  >()
 
   constructor(
     private readonly store: OAuthTokenStore,
@@ -107,9 +110,12 @@ export class OAuthTokenManager {
 
     const data = (await tokenResponse.json()) as OAuthTokenResponse
     if (!data.refresh_token) {
-      logger.warn('OAuth token response missing refresh_token — token refresh will not be available', {
-        provider: flow.provider,
-      })
+      logger.warn(
+        'OAuth token response missing refresh_token — token refresh will not be available',
+        {
+          provider: flow.provider,
+        },
+      )
     }
     const { accountId, email } = parseAccessTokenClaims(data.access_token)
 
@@ -161,7 +167,9 @@ export class OAuthTokenManager {
   ): Promise<StoredOAuthTokens> {
     if (!tokens.refreshToken) {
       this.store.deleteTokens(this.browserosId, provider)
-      throw new Error(`${provider} session expired (no refresh token). Please re-login.`)
+      throw new Error(
+        `${provider} session expired (no refresh token). Please re-login.`,
+      )
     }
 
     const providerConfig = getOAuthProvider(provider)
@@ -269,9 +277,7 @@ function parseAccessTokenClaims(accessToken: string): {
         authClaims?.chatgpt_account_id ??
         payload.chatgpt_account_id ??
         payload.account_id,
-      email:
-        profileClaims?.email ??
-        payload.email,
+      email: profileClaims?.email ?? payload.email,
     }
   } catch {
     return {}

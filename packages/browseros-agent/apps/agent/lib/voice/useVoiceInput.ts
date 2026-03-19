@@ -45,7 +45,9 @@ async function transcribeAudio(audioBlob: Blob): Promise<string> {
     const errorBody: { error?: string } = await response
       .json()
       .catch(() => ({ error: 'Transcription failed' }))
-    throw new Error(errorBody.error || `Transcription failed: ${response.status}`)
+    throw new Error(
+      errorBody.error || `Transcription failed: ${response.status}`,
+    )
   }
 
   const result: TranscribeResponse = await response.json()
@@ -91,7 +93,7 @@ export function useVoiceInput(): UseVoiceInputReturn {
       }
       stopAudioLevelMonitoring()
     }
-  }, [])
+  }, [stopAudioLevelMonitoring])
 
   const startAudioLevelMonitoring = (stream: MediaStream) => {
     const audioContext = new AudioContext()

@@ -3,6 +3,7 @@ import { ChevronDown, Loader2, Sparkles, Undo2 } from 'lucide-react'
 import type { FC } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
+import { toast } from 'sonner'
 import { z } from 'zod/v3'
 import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
 import type { Provider } from '@/components/chat/chatComponentTypes'
@@ -34,16 +35,15 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { SCHEDULED_TASK_PROMPT_REFINED_EVENT } from '@/lib/constants/analyticsEvents'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import {
   defaultProviderIdStorage,
   providersStorage,
 } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
-import { SCHEDULED_TASK_PROMPT_REFINED_EVENT } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
 import { refinePrompt } from '@/lib/schedules/refine-prompt'
-import { toast } from 'sonner'
 import type { ScheduledJob } from './types'
 
 const formSchema = z
@@ -291,7 +291,7 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="h-auto gap-1 px-2 py-1 text-xs text-muted-foreground"
+                      className="h-auto gap-1 px-2 py-1 text-muted-foreground text-xs"
                       disabled={!queryValue?.trim() || isRefining}
                       onClick={handleRefinePrompt}
                     >
@@ -322,7 +322,7 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
                   {!isRefining && originalPromptRef.current !== null ? (
                     <button
                       type="button"
-                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                      className="flex items-center gap-1 text-muted-foreground text-xs hover:text-foreground"
                       onClick={handleUndoRefine}
                     >
                       <Undo2 className="h-3 w-3" />

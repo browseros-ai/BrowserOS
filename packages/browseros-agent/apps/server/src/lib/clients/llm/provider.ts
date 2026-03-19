@@ -16,8 +16,8 @@ import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import type { LanguageModel } from 'ai'
 import { logger } from '../../logger'
-import { createCodexFetch } from '../oauth/codex-fetch'
 import { createOpenRouterCompatibleFetch } from '../../openrouter-fetch'
+import { createCodexFetch } from '../oauth/codex-fetch'
 import type { ResolvedLLMConfig } from './types'
 
 type ProviderFactory = (config: ResolvedLLMConfig) => LanguageModel

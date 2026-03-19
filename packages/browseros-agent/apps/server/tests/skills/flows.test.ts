@@ -50,7 +50,8 @@ describe('Flow tests against live CDN', () => {
 
     const afterSync = await readFile(skillPath, 'utf-8')
     assert.ok(
-      afterSync.includes('enabled: "false"') || afterSync.includes("enabled: 'false'"),
+      afterSync.includes('enabled: "false"') ||
+        afterSync.includes("enabled: 'false'"),
       'disabled state should be preserved',
     )
   })
@@ -58,7 +59,10 @@ describe('Flow tests against live CDN', () => {
   it('reinstalls deleted builtin skill', async () => {
     await rm(join(builtinDir, 'save-page'), { recursive: true })
     await syncBuiltinSkills()
-    const content = await readFile(join(builtinDir, 'save-page', 'SKILL.md'), 'utf-8')
+    const content = await readFile(
+      join(builtinDir, 'save-page', 'SKILL.md'),
+      'utf-8',
+    )
     assert.ok(content.includes('name: save-page'))
   })
 

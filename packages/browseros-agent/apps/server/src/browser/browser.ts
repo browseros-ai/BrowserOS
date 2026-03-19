@@ -823,14 +823,7 @@ export class Browser {
       if (coords) {
         const value = await elements.getInputValue(session, element)
         if (value) {
-          await mouse.dispatchClick(
-            session,
-            coords.x,
-            coords.y,
-            'left',
-            3,
-            0,
-          )
+          await mouse.dispatchClick(session, coords.x, coords.y, 'left', 3, 0)
         }
       }
     }
