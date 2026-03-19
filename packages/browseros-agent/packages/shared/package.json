@@ -11,31 +11,31 @@
   "exports": {
     "./constants/exit-codes": {
       "types": "./src/constants/exit-codes.ts",
-      "default": "./src/constants/exit-codes.ts"
+      "import": "./src/constants/exit-codes.ts"
     },
     "./constants/ports": {
       "types": "./src/constants/ports.ts",
-      "default": "./src/constants/ports.ts"
+      "import": "./src/constants/ports.ts"
     },
     "./constants/timeouts": {
       "types": "./src/constants/timeouts.ts",
-      "default": "./src/constants/timeouts.ts"
+      "import": "./src/constants/timeouts.ts"
     },
     "./constants/limits": {
       "types": "./src/constants/limits.ts",
-      "default": "./src/constants/limits.ts"
+      "import": "./src/constants/limits.ts"
     },
     "./constants/urls": {
       "types": "./src/constants/urls.ts",
-      "default": "./src/constants/urls.ts"
+      "import": "./src/constants/urls.ts"
     },
     "./constants/paths": {
       "types": "./src/constants/paths.ts",
-      "default": "./src/constants/paths.ts"
+      "import": "./src/constants/paths.ts"
     },
     "./types/logger": {
       "types": "./src/types/logger.ts",
-      "default": "./src/types/logger.ts"
+      "import": "./src/types/logger.ts"
     },
     "./types/server-config": {
       "types": "./src/types/server-config.ts",
@@ -43,14 +43,15 @@
     },
     "./schemas/llm": {
       "types": "./src/schemas/llm.ts",
-      "default": "./src/schemas/llm.ts"
+      "import": "./src/schemas/llm.ts"
     },
     "./schemas/ui-stream": {
       "types": "./src/schemas/ui-stream.ts",
-      "default": "./src/schemas/ui-stream.ts"
+      "import": "./src/schemas/ui-stream.ts"
     },
     "./schemas/browser-context": {
       "types": "./src/schemas/browser-context.ts",
+      "import": "./src/schemas/browser-context.ts",
       "default": "./src/schemas/browser-context.ts"
     },
     "./sentry/sanitize": {
