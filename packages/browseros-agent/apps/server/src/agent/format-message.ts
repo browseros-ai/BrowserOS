@@ -60,7 +60,9 @@ export function formatUserMessage(
     const title = selectedTextSource?.title
       ? sanitizeForPrompt(selectedTextSource.title).replace(/"/g, "'")
       : ''
-    const url = selectedTextSource?.url ?? ''
+    const url = selectedTextSource?.url
+      ? sanitizeForPrompt(selectedTextSource.url)
+      : ''
     const source = title ? ` (from "${title}"${url ? ` — ${url}` : ''})` : ''
     selectedTextBlock = `<selected_text${source}>\n${sanitizedText}\n</selected_text>\n\n`
   }
