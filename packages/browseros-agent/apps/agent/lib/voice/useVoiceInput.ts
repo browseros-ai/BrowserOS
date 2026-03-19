@@ -83,6 +83,7 @@ export function useVoiceInput(): UseVoiceInputReturn {
     setAudioLevels(EMPTY_LEVELS)
   }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: cleanup only needs to run on unmount
   useEffect(() => {
     return () => {
       streamRef.current?.getTracks().forEach((track) => {
@@ -93,7 +94,7 @@ export function useVoiceInput(): UseVoiceInputReturn {
       }
       stopAudioLevelMonitoring()
     }
-  }, [stopAudioLevelMonitoring])
+  }, [])
 
   const startAudioLevelMonitoring = (stream: MediaStream) => {
     const audioContext = new AudioContext()
@@ -173,7 +174,9 @@ export function useVoiceInput(): UseVoiceInputReturn {
       setIsRecording(true)
       return true
     } catch (err) {
-      streamRef.current?.getTracks().forEach((track) => track.stop())
+      streamRef.current?.getTracks().forEach((track) => {
+        track.stop()
+      })
       streamRef.current = null
       stopAudioLevelMonitoring()
 

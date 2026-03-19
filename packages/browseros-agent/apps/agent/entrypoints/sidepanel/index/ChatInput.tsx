@@ -350,7 +350,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           <div className="flex min-h-[42px] flex-1 items-center justify-center gap-1 rounded-2xl border border-red-500/50 bg-muted/50 px-4 py-2.5 pr-[4.5rem]">
             {voice.audioLevels.map((level, i) => (
               <div
-                key={i}
+                key={i.toString()}
                 className="w-1 rounded-full bg-red-500 transition-all duration-75"
                 style={{
                   height: `${Math.max(4, Math.min(20, level * 0.6))}px`,

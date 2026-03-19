@@ -22,8 +22,9 @@ mock.module('../../src/lib/browseros-dir', () => ({
   getBuiltinSkillsDir: () => builtinDir,
 }))
 
-const { createSkill, deleteSkill, getSkill, listSkills, updateSkill } =
-  await import('../../src/skills/service')
+const { createSkill, deleteSkill, getSkill, updateSkill } = await import(
+  '../../src/skills/service'
+)
 
 const BUILTIN_SKILL = `---
 name: summarize-page
