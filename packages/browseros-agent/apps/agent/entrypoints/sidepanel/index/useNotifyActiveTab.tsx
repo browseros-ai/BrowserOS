@@ -28,7 +28,7 @@ export const useNotifyActiveTab = ({
   status: ChatStatus
   conversationId: string
 }) => {
-  const lastTabIdRef = useRef<number | null>(null)
+  const activeTabIdsRef = useRef<Set<number>>(new Set())
 
   const lastMessage = messages?.[messages.length - 1]
 
@@ -41,26 +41,32 @@ export const useNotifyActiveTab = ({
 
   useEffect(() => {
     const isStreaming = status === 'streaming'
-    const previousTabId = lastTabIdRef.current
+    const activeIds = activeTabIdsRef.current
 
     if (!isStreaming) {
-      if (previousTabId) {
+      // Deactivate all tracked tabs when streaming stops
+      if (activeIds.size > 0) {
         const deactivate = async () => {
           const alreadyShown = await firstRunConfettiShownStorage.getValue()
-          const deactivateMessage: GlowMessage = {
-            conversationId,
-            isActive: false,
-            showConfetti: !alreadyShown,
+          let showConfetti = !alreadyShown
+
+          for (const tabId of activeIds) {
+            const deactivateMessage: GlowMessage = {
+              conversationId,
+              isActive: false,
+              showConfetti,
+            }
+            chrome.tabs.sendMessage(tabId, deactivateMessage).catch(() => {})
+            // Only show confetti on the first tab
+            showConfetti = false
           }
-          chrome.tabs
-            .sendMessage(previousTabId, deactivateMessage)
-            .catch(() => {})
+
           if (!alreadyShown) {
             await firstRunConfettiShownStorage.setValue(true)
           }
         }
         deactivate()
-        lastTabIdRef.current = null
+        activeIds.clear()
       }
       return
     }
@@ -70,34 +76,31 @@ export const useNotifyActiveTab = ({
     let cancelled = false
 
     const activate = async () => {
-      let targetTabId = toolTabId ?? previousTabId ?? undefined
+      let targetTabId = toolTabId ?? undefined
 
       if (!targetTabId) {
-        const tabs = await chrome.tabs.query({
-          active: true,
-          currentWindow: true,
-        })
-        targetTabId = tabs[0]?.id
+        // Fallback: use the last activated tab, or query the active tab
+        const lastActive = [...activeIds].pop()
+        if (lastActive) {
+          targetTabId = lastActive
+        } else {
+          const tabs = await chrome.tabs.query({
+            active: true,
+            currentWindow: true,
+          })
+          targetTabId = tabs[0]?.id
+        }
       }
 
       if (cancelled || !targetTabId) return
 
-      if (previousTabId && previousTabId !== targetTabId) {
-        const deactivateMessage: GlowMessage = {
-          conversationId,
-          isActive: false,
-        }
-        chrome.tabs
-          .sendMessage(previousTabId, deactivateMessage)
-          .catch(() => {})
-      }
-
+      // Send glow to the target tab (may already be active — idempotent)
       const activateMessage: GlowMessage = {
         conversationId,
         isActive: true,
       }
       chrome.tabs.sendMessage(targetTabId, activateMessage).catch(() => {})
-      lastTabIdRef.current = targetTabId
+      activeIds.add(targetTabId)
     }
 
     activate()

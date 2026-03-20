@@ -55,6 +55,7 @@ export default defineConfig({
     permissions: [
       'topSites',
       'tabs',
+      'tabGroups',
       'storage',
       'sidePanel',
       'browserOS',

@@ -1032,9 +1032,14 @@ describe('execution section', () => {
     expect(prompt).toContain('500')
   })
 
-  it('includes new-tab restriction', () => {
+  it('includes multi-tab workflow guidance', () => {
+    // Why: The agent must know how to handle multi-tab tasks — open background
+    // tabs, create tab groups, narrate progress, and never steal user focus.
     const prompt = buildRegular()
-    expect(prompt).toContain('Only open new tabs when the user explicitly asks')
+    expect(prompt).toContain('Multi-tab workflow')
+    expect(prompt).toContain('background')
+    expect(prompt).toContain('group_tabs')
+    expect(prompt).toContain('Never force-switch')
   })
 })
 
