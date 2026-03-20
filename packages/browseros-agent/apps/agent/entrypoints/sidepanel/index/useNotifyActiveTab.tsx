@@ -19,6 +19,10 @@ function extractTabId(toolPart: ToolUIPart | null): number | undefined {
   return input?.tabId
 }
 
+function sendGlow(tabId: number, message: GlowMessage): void {
+  chrome.tabs.sendMessage(tabId, message).catch(() => {})
+}
+
 export const useNotifyActiveTab = ({
   messages,
   status,
@@ -28,7 +32,10 @@ export const useNotifyActiveTab = ({
   status: ChatStatus
   conversationId: string
 }) => {
-  const activeTabIdsRef = useRef<Set<number>>(new Set())
+  // Track the single tab currently glowing
+  const activeTabIdRef = useRef<number | null>(null)
+  // Track all tabs that have been glowed during this stream (for cleanup)
+  const allGlowedTabsRef = useRef<Set<number>>(new Set())
 
   const lastMessage = messages?.[messages.length - 1]
 
@@ -41,23 +48,21 @@ export const useNotifyActiveTab = ({
 
   useEffect(() => {
     const isStreaming = status === 'streaming'
-    const activeIds = activeTabIdsRef.current
 
     if (!isStreaming) {
-      // Deactivate all tracked tabs when streaming stops
-      if (activeIds.size > 0) {
+      // Deactivate ALL tabs that were glowed during this stream
+      const allGlowed = allGlowedTabsRef.current
+      if (allGlowed.size > 0) {
         const deactivate = async () => {
           const alreadyShown = await firstRunConfettiShownStorage.getValue()
           let showConfetti = !alreadyShown
 
-          for (const tabId of activeIds) {
-            const deactivateMessage: GlowMessage = {
+          for (const tabId of allGlowed) {
+            sendGlow(tabId, {
               conversationId,
               isActive: false,
               showConfetti,
-            }
-            chrome.tabs.sendMessage(tabId, deactivateMessage).catch(() => {})
-            // Only show confetti on the first tab
+            })
             showConfetti = false
           }
 
@@ -66,8 +71,9 @@ export const useNotifyActiveTab = ({
           }
         }
         deactivate()
-        activeIds.clear()
+        allGlowed.clear()
       }
+      activeTabIdRef.current = null
       return
     }
 
@@ -79,10 +85,9 @@ export const useNotifyActiveTab = ({
       let targetTabId = toolTabId ?? undefined
 
       if (!targetTabId) {
-        // Fallback: use the last activated tab, or query the active tab
-        const lastActive = [...activeIds].pop()
-        if (lastActive) {
-          targetTabId = lastActive
+        // Fallback: use the currently active tab, or query browser
+        if (activeTabIdRef.current) {
+          targetTabId = activeTabIdRef.current
         } else {
           const tabs = await chrome.tabs.query({
             active: true,
@@ -94,13 +99,24 @@ export const useNotifyActiveTab = ({
 
       if (cancelled || !targetTabId) return
 
-      // Send glow to the target tab (may already be active — idempotent)
-      const activateMessage: GlowMessage = {
+      const previousTabId = activeTabIdRef.current
+
+      // If the agent moved to a different tab, deactivate the previous one
+      if (previousTabId && previousTabId !== targetTabId) {
+        sendGlow(previousTabId, {
+          conversationId,
+          isActive: false,
+        })
+      }
+
+      // Activate glow on the target tab
+      sendGlow(targetTabId, {
         conversationId,
         isActive: true,
-      }
-      chrome.tabs.sendMessage(targetTabId, activateMessage).catch(() => {})
-      activeIds.add(targetTabId)
+      })
+
+      activeTabIdRef.current = targetTabId
+      allGlowedTabsRef.current.add(targetTabId)
     }
 
     activate()
