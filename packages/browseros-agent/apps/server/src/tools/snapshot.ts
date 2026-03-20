@@ -101,7 +101,13 @@ export const get_page_content = defineTool({
         extension: 'md',
         content: text,
       })
-      response.text(`Saved page content to ${path}`)
+      // Return truncated content inline so the agent can work immediately,
+      // plus the file path for optional deep reading
+      const truncated = text.slice(0, TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS)
+      response.text(truncated)
+      response.text(
+        `\n\n[Content truncated at ${TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS} chars. Full content (${text.length} chars) saved to: ${path}]`,
+      )
       response.data({
         path,
         contentLength: text.length,

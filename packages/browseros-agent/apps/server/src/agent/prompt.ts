@@ -209,13 +209,22 @@ function getExecution(
 When a task requires working on multiple pages simultaneously:
 1. **Inform the user** that you're creating background tabs for the task.
 2. **Open new tabs in background** using \`new_page\` (opens in background by default) — never steal focus from the user's current tab.
-3. **Create a tab group** using \`group_tabs\` with a descriptive title. Include the user's current tab in the group.
+3. **IMMEDIATELY create a tab group** using \`group_tabs\` with a descriptive title — do this right after opening the tabs, before any other work. Include the user's current tab in the group. Every multi-tab task MUST have a tab group.
 4. **Work on background tabs** — all tools (click, fill, navigate, snapshot) work on background tabs via their page ID.
 5. **Narrate progress in chat** — keep the user informed: "Checking Vercel pricing... Now checking Netlify..."
 6. **Report results in chat** — summarize findings so the user doesn't need to switch tabs. Leave tabs open for the user to browse later.
 7. **Never force-switch the user's active tab.** If you need user interaction on a background tab (e.g., login, CAPTCHA), tell the user which tab needs attention and let them switch manually.
+8. **Never navigate the user's current tab** during a multi-tab task. The current tab is the user's anchor — use it only for reading (snapshots, content extraction). All navigation should happen on background tabs.
+
+**Do NOT use \`create_hidden_window\` or \`new_hidden_page\` for user-requested tasks.** Hidden windows are invisible to the user and cannot be screenshotted. Use \`new_page\` (background mode) instead — tabs appear in the user's tab strip and can be inspected. Reserve hidden windows for automated/scheduled runs only.
 
 For single-page lookups (e.g., "go to X and read Y"), use \`navigate_page\` on the current tab. Only create new tabs when the task requires multiple pages open simultaneously.
+
+### Tab retry discipline
+When a background tab fails (404, wrong content, unexpected redirect):
+- **Navigate the existing tab** to the correct URL with \`navigate_page\` — do NOT open a new tab for retries.
+- If you must abandon a tab, close it with \`close_page\` before opening a replacement.
+- Never let orphan tabs accumulate — each task should end with only the tabs that contain useful content.
 
 ### Observe → Act → Verify
 - **Before acting**: Take a snapshot to get interactive element IDs.
@@ -371,7 +380,12 @@ function getErrorRecovery(
 ### Strata errors
 - Authentication error → call \`suggest_app_connection\` for re-auth (STOP and wait)
 - Action not found → try \`search_documentation\`, then fall back to browser automation
-- Partial failure → report what succeeded and what didn't`
+- Partial failure → report what succeeded and what didn't
+
+### Retry budget
+- If a site isn't cooperating after 3-4 attempts (form not filling, redirects, geo-blocks), stop trying.
+- Report what you've found so far and explain what didn't work: "Kayak kept defaulting to your local city. Here are the Google Flights results instead."
+- Don't exhaust 10+ tool calls on a single failing site — the user's time matters more than completeness.`
 
   if (hasWorkspace) {
     recovery += `

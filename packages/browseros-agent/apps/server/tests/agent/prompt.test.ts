@@ -1041,6 +1041,48 @@ describe('execution section', () => {
     expect(prompt).toContain('group_tabs')
     expect(prompt).toContain('Never force-switch')
   })
+
+  it('enforces mandatory tab group creation', () => {
+    // Why: Run 7 showed the agent opening background tabs without creating
+    // a tab group. The prompt must make tab groups mandatory, not optional.
+    const prompt = buildRegular()
+    expect(prompt).toContain('IMMEDIATELY create a tab group')
+    expect(prompt).toContain('MUST have a tab group')
+  })
+
+  it('prohibits navigating user current tab during multi-tab', () => {
+    // Why: Run 7 showed the agent clicking a link on the user's current tab,
+    // navigating away from their starting page. The current tab must be read-only.
+    const prompt = buildRegular()
+    expect(prompt).toContain('Never navigate the user')
+    expect(prompt).toContain('anchor')
+  })
+
+  it('prohibits hidden windows for user tasks', () => {
+    // Why: Run 2 used create_hidden_window instead of background tabs.
+    // Hidden windows are invisible to users and can't be screenshotted.
+    const prompt = buildRegular()
+    expect(prompt).toContain('Do NOT use')
+    expect(prompt).toContain('create_hidden_window')
+    expect(prompt).toContain('new_hidden_page')
+  })
+
+  it('includes tab retry discipline', () => {
+    // Why: Run 7 opened 7+ tabs for a 3-article task because retries
+    // created new tabs instead of navigating existing ones.
+    const prompt = buildRegular()
+    expect(prompt).toContain('Tab retry discipline')
+    expect(prompt).toContain('Navigate the existing tab')
+    expect(prompt).toContain('close_page')
+  })
+
+  it('includes retry budget for failing sites', () => {
+    // Why: Run 8 spent 15+ tool calls fighting Kayak's geo-detection.
+    // The agent should give up after 3-4 attempts and report partial results.
+    const prompt = buildRegular()
+    expect(prompt).toContain('Retry budget')
+    expect(prompt).toContain('3-4 attempts')
+  })
 })
 
 // ---------------------------------------------------------------------------
