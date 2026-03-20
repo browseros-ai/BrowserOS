@@ -54,10 +54,14 @@ export const useNotifyActiveTab = ({
       const allGlowed = allGlowedTabsRef.current
       if (allGlowed.size > 0) {
         const deactivate = async () => {
+          // Capture tab IDs before any async work to avoid race with clear()
+          const tabIds = Array.from(allGlowed)
+          allGlowed.clear()
+
           const alreadyShown = await firstRunConfettiShownStorage.getValue()
           let showConfetti = !alreadyShown
 
-          for (const tabId of allGlowed) {
+          for (const tabId of tabIds) {
             sendGlow(tabId, {
               conversationId,
               isActive: false,
@@ -71,7 +75,6 @@ export const useNotifyActiveTab = ({
           }
         }
         deactivate()
-        allGlowed.clear()
       }
       activeTabIdRef.current = null
       return
