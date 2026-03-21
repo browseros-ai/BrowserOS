@@ -30,7 +30,9 @@ const MONOREPO_ROOT = join(
   '../../../..',
 )
 
-const BROWSEROS_BINARY = '/Applications/BrowserOS.app/Contents/MacOS/BrowserOS'
+const BROWSEROS_BINARY =
+  process.env.BROWSEROS_BINARY ||
+  '/Applications/BrowserOS.app/Contents/MacOS/BrowserOS'
 
 const CONTROLLER_EXT_DIR = join(MONOREPO_ROOT, 'apps/controller-ext/dist')
 

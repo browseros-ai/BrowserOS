@@ -43,6 +43,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BROWSEROS_BINARY: ${{ secrets.BROWSEROS_BINARY }}
           EVAL_CONFIG: ${{ github.event.inputs.config || 'configs/browseros-agent-weekly.json' }}
         run: |
           echo "Running eval with config: $EVAL_CONFIG"
