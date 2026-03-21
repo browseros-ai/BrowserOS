@@ -1,0 +1,33 @@
+{
+  "agent": {
+    "type": "orchestrator-executor",
+    "orchestrator": {
+      "provider": "openai-compatible",
+      "model": "accounts/fireworks/models/kimi-k2p5",
+      "apiKey": "FIREWORKS_API_KEY",
+      "baseUrl": "https://api.fireworks.ai/inference/v1"
+    },
+    "executor": {
+      "provider": "clado-action",
+      "model": "qwen3-vl-30b-a3b-instruct",
+      "apiKey": "",
+      "baseUrl": "https://clado-ai--clado-browseros-action-actionmodel-generate.modal.run"
+    }
+  },
+  "dataset": "../data/webbench-2of4-50.jsonl",
+  "num_workers": 10,
+  "restart_server_per_task": true,
+  "browseros": {
+    "server_url": "http://127.0.0.1:9110",
+    "base_cdp_port": 9010,
+    "base_server_port": 9110,
+    "base_extension_port": 9310,
+    "load_extensions": false,
+    "headless": true
+  },
+  "graders": ["performance_grader"],
+  "grader_api_key_env": "OPENROUTER_API_KEY",
+  "grader_base_url": "https://openrouter.ai/api/v1",
+  "grader_model": "openai/gpt-4.1",
+  "timeout_ms": 1800000
+}

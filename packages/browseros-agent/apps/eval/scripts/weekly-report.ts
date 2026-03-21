@@ -158,8 +158,8 @@ const runs: RunSummary[] = manifests
         : 0
 
     const date = m.uploadedAt
-      ? m.uploadedAt.split('T')[0]
-      : m.runId.slice(0, 10)
+      ? `${m.uploadedAt.split('T')[0]} ${m.uploadedAt.split('T')[1]?.slice(0, 5) || ''}`
+      : m.runId.slice(0, 15)
 
     const model = m.agentConfig?.model || 'unknown'
     const dataset = m.dataset || m.runId

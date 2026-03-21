@@ -20,12 +20,18 @@ permissions:
 
 jobs:
   eval:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 360
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install BrowserOS
+        run: |
+          wget -q https://github.com/browseros-ai/BrowserOS/releases/download/v0.44.0.1/BrowserOS_v0.44.0.1_amd64.deb
+          sudo dpkg -i BrowserOS_v0.44.0.1_amd64.deb
+          browseros --version || echo "BrowserOS installed at $(which browseros)"
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -34,7 +40,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: packages/browseros-agent
-        run: bun install
+        run: bun install --ignore-scripts && bun run build:agent-sdk
 
       - name: Run eval
         working-directory: packages/browseros-agent/apps/eval
@@ -43,7 +49,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          BROWSEROS_BINARY: ${{ secrets.BROWSEROS_BINARY }}
+          BROWSEROS_BINARY: /usr/bin/browseros
           EVAL_CONFIG: ${{ github.event.inputs.config || 'configs/browseros-agent-weekly.json' }}
         run: |
           echo "Running eval with config: $EVAL_CONFIG"
