@@ -16,8 +16,8 @@ import {
   type PerformanceGraderOptions,
 } from './types'
 
-export const DEFAULT_MAX_TURNS = 15
-export const DEFAULT_MAX_BUDGET_USD = 0.5
+export const DEFAULT_MAX_TURNS = 100
+export const DEFAULT_MAX_BUDGET_USD = 100
 export const DEFAULT_PASS_THRESHOLD = 75
 const DEFAULT_MODEL = 'claude-opus-4-5-20251101'
 const GRADER_TIMEOUT_MS = 300_000

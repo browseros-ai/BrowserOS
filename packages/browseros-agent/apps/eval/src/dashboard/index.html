@@ -354,7 +354,7 @@
           </div>
           <div class="config-field">
             <label>Timeout (ms)</label>
-            <input type="number" id="cfg-timeout" value="600000" min="30000" max="3600000">
+            <input type="number" id="cfg-timeout" value="1800000" min="30000" max="3600000">
           </div>
         </div>
         <div class="config-row" style="gap: 16px;">
@@ -454,6 +454,17 @@
         <button class="btn-run" id="btn-run" onclick="submitConfig()">Run Eval</button>
       </div>
 
+      <!-- Load previous run -->
+      <div class="config-actions">
+        <div class="load-config">
+          <label>Load run:</label>
+          <select id="cfg-run-select">
+            <option value="">-- select --</option>
+          </select>
+        </div>
+        <button class="btn-secondary" onclick="loadPreviousRun()">Load Run</button>
+      </div>
+
     </div>
   </div>
 </div>
@@ -529,6 +540,7 @@ async function init() {
 
   // Load saved configs into dropdown
   loadConfigList();
+  loadRunList();
 
   if (mode.configMode) {
     // Config mode — show panel expanded
@@ -654,6 +666,53 @@ async function loadConfigList() {
       sel.appendChild(opt);
     });
   } catch {}
+}
+
+async function loadRunList() {
+  try {
+    const res = await fetch('/api/runs');
+    const runs = await res.json();
+    const sel = document.getElementById('cfg-run-select');
+    sel.innerHTML = '<option value="">-- select --</option>';
+    runs.forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r;
+      opt.textContent = r;
+      sel.appendChild(opt);
+    });
+  } catch {}
+}
+
+async function loadPreviousRun() {
+  const runName = document.getElementById('cfg-run-select').value;
+  if (!runName) return;
+  const errEl = document.getElementById('config-error');
+  errEl.textContent = '';
+  try {
+    const res = await fetch('/api/load-run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runName }),
+    });
+    const result = await res.json();
+    if (!res.ok) {
+      errEl.textContent = result.error || 'Failed to load run';
+      return;
+    }
+    const stateRes = await fetch('/api/state');
+    const state = await stateRes.json();
+    document.getElementById('config-name').textContent =
+      state.configName ? `${state.configName} \u00B7 ${state.agentType}` : '';
+    tasks = state.tasks;
+    setConfigPanelOpen(false);
+    updateConfigSummary(state.configName, state.agentType);
+    selectedTaskId = null;
+    renderTaskList();
+    updateProgress();
+    if (tasks.length > 0) selectTask(tasks[0].queryId);
+  } catch (e) {
+    errEl.textContent = `Network error: ${e.message}`;
+  }
 }
 
 async function loadSavedConfig(name) {
@@ -1055,7 +1114,8 @@ function renderTaskList() {
     if (t.graderResults) {
       const primary = getPrimaryGrader(t.graderResults);
       if (primary) {
-        graderBadge = `<span class="grade-badge ${primary.pass ? 'pass' : 'fail'}">${primary.pass ? 'PASS' : 'FAIL'}</span>`;
+        const pct = typeof primary.score === 'number' ? `${(primary.score * 100).toFixed(0)}%` : (primary.pass ? 'PASS' : 'FAIL');
+        graderBadge = `<span class="grade-badge ${primary.pass ? 'pass' : 'fail'}">${pct}</span>`;
       }
     }
 
@@ -1144,12 +1204,35 @@ function toggleAutoplay() {
 // ============================================================================
 // Agent Stream
 // ============================================================================
-function renderStreamForTask(taskId) {
+async function renderStreamForTask(taskId) {
   const body = document.getElementById('stream-body');
   body.innerHTML = '';
   const events = streamEvents[taskId] || [];
-  events.forEach(e => appendStreamEntry(e, false));
-  body.scrollTop = body.scrollHeight;
+  if (events.length > 0) {
+    events.forEach(e => appendStreamEntry(e, false));
+    body.scrollTop = body.scrollHeight;
+    return;
+  }
+  const task = tasks.find(t => t.queryId === taskId);
+  if (!task || task.status === 'pending' || task.status === 'running') return;
+  body.innerHTML = '<div class="empty-state">Loading events...</div>';
+  try {
+    const res = await fetch(`/api/messages/${taskId}`);
+    if (!res.ok) {
+      body.innerHTML = '<div class="empty-state">No event log available</div>';
+      return;
+    }
+    const text = await res.text();
+    const parsed = text.trim().split('\n').filter(Boolean).map(line => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean);
+    streamEvents[taskId] = parsed;
+    body.innerHTML = '';
+    parsed.forEach(e => appendStreamEntry(e, false));
+    body.scrollTop = body.scrollHeight;
+  } catch {
+    body.innerHTML = '<div class="empty-state">Failed to load events</div>';
+  }
 }
 
 function appendStreamEntry(event, scroll = true) {

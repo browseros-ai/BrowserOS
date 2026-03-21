@@ -1,0 +1,81 @@
+name: Weekly Eval
+
+on:
+  schedule:
+    # Every Saturday at 06:00 UTC
+    - cron: '0 6 * * 6'
+  workflow_dispatch:
+    inputs:
+      config:
+        description: 'Eval config file (relative to apps/eval/)'
+        required: false
+        default: 'configs/browseros-agent-weekly.json'
+
+concurrency:
+  group: eval-runner
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: self-hosted
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        working-directory: packages/browseros-agent
+        run: bun install
+
+      - name: Run eval
+        working-directory: packages/browseros-agent/apps/eval
+        env:
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          CONFIG="${{ github.event.inputs.config || 'configs/browseros-agent-weekly.json' }}"
+          echo "Running eval with config: $CONFIG"
+          bun run src/index.ts -c "$CONFIG"
+
+      - name: Upload runs to R2
+        if: success()
+        working-directory: packages/browseros-agent/apps/eval
+        env:
+          EVAL_R2_ACCOUNT_ID: ${{ secrets.EVAL_R2_ACCOUNT_ID }}
+          EVAL_R2_ACCESS_KEY_ID: ${{ secrets.EVAL_R2_ACCESS_KEY_ID }}
+          EVAL_R2_SECRET_ACCESS_KEY: ${{ secrets.EVAL_R2_SECRET_ACCESS_KEY }}
+          EVAL_R2_BUCKET: ${{ secrets.EVAL_R2_BUCKET }}
+          EVAL_R2_CDN_BASE_URL: ${{ secrets.EVAL_R2_CDN_BASE_URL }}
+        run: |
+          CONFIG="${{ github.event.inputs.config || 'configs/browseros-agent-weekly.json' }}"
+          CONFIG_NAME=$(basename "$CONFIG" .json)
+          bun scripts/upload-run.ts "results/$CONFIG_NAME"
+
+      - name: Generate trend report
+        if: success()
+        working-directory: packages/browseros-agent
+        env:
+          EVAL_R2_ACCOUNT_ID: ${{ secrets.EVAL_R2_ACCOUNT_ID }}
+          EVAL_R2_ACCESS_KEY_ID: ${{ secrets.EVAL_R2_ACCESS_KEY_ID }}
+          EVAL_R2_SECRET_ACCESS_KEY: ${{ secrets.EVAL_R2_SECRET_ACCESS_KEY }}
+          EVAL_R2_BUCKET: ${{ secrets.EVAL_R2_BUCKET }}
+          EVAL_R2_CDN_BASE_URL: ${{ secrets.EVAL_R2_CDN_BASE_URL }}
+        run: bun apps/eval/scripts/weekly-report.ts /tmp/eval-report.html
+
+      - name: Upload report as artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-${{ github.run_id }}
+          path: /tmp/eval-report.html

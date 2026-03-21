@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import {
   dashboardState,
   setActiveExecutor,
@@ -120,16 +120,27 @@ function resolvePaths(
       ? config.dataset
       : resolve(configDir, config.dataset)
 
-  // Resolve output directory: use options.outputDir if provided, otherwise resolve from config
-  const outputDir = options.outputDir
-    ? options.outputDir
-    : config.output_dir
-      ? config.output_dir.startsWith('/')
-        ? config.output_dir
-        : resolve(configDir, config.output_dir)
-      : resolve(configDir, 'results')
+  // Resolve output directory: results/{config-name}/{timestamp}/
+  // Config name derived from config filename (e.g., "browseros-agent-weekly.json" → "browseros-agent-weekly")
+  const configName = basename(resolve(options.configPath), '.json')
+  const timestamp = formatTimestamp(new Date())
+  const resultsBase = config.output_dir
+    ? config.output_dir.startsWith('/')
+      ? config.output_dir
+      : resolve(configDir, config.output_dir)
+    : resolve(configDir, '..', 'results')
+  const outputDir = join(resultsBase, configName, timestamp)
 
   return { dataPath, outputDir }
+}
+
+function formatTimestamp(date: Date): string {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  const h = String(date.getHours()).padStart(2, '0')
+  const min = String(date.getMinutes()).padStart(2, '0')
+  return `${y}-${m}-${d}-${h}${min}`
 }
 
 // ============================================================================

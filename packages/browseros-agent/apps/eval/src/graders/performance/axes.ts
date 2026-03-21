@@ -53,8 +53,8 @@ The raw event stream — one JSON object per line with a "type" field.
 - "tool-output-error" / "tool-input-error" — Tool call failed. Fields: toolCallId, error.
 - "text-delta" — Agent's reasoning text. Field: delta (small text chunk).
 
-**Event types to AVOID reading:**
-- "tool-output-available" — Tool output. The "output" field contains FULL PAGE DOM CONTENT — hundreds of interactive elements, entire page text, etc. These lines are 5-50KB each. NEVER read them. The tool-input-available lines already tell you what the agent did. Screenshots show you the visual result.
+**Event types to handle carefully:**
+- "tool-output-available" — Tool output. The "output" field contains FULL PAGE DOM CONTENT — hundreds of interactive elements, entire page text, etc. These lines are 5-50KB each. NEVER read them in bulk. However, you CAN and SHOULD use Grep to search within these lines for specific keywords when screenshots alone can't verify a claim. For example, if the task asks "find the price of X" and the screenshot is unclear, grep messages.jsonl for the product name or price value to confirm the agent actually saw it in the DOM.
 
 ### 2. screenshots/ directory
 Numbered PNG screenshots (1.png, 2.png, ...) captured after each tool execution.
@@ -94,6 +94,13 @@ Grep for "tool-output-error" or "tool-input-error". If none found, zero errors.
 
 **Step 3: Sample reasoning (only if needed for reasoning_quality)**
 Grep for "text-delta" but LIMIT to the first 10 and last 10 results. Don't read all reasoning text.
+
+**Step 4: Verify claims from DOM content (critical for task_completion)**
+When the agent's final answer contains specific data (prices, names, dates, counts, etc.) that you can't confirm from screenshots alone, use Grep to search messages.jsonl for those specific values or keywords. This searches the tool-output-available lines which contain DOM content the agent actually saw. For example:
+- Task asks "find cheapest flight price" → grep for the dollar amount from the final answer
+- Task asks "list the top 3 articles" → grep for the article titles mentioned in the answer
+- Task asks "extract the email address" → grep for the email pattern
+This is the most reliable way to verify whether the agent actually found the data it claims, since screenshots may be blurry, truncated, or missing the relevant section.
 
 ## How to View Screenshots
 
