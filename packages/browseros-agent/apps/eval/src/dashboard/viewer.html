@@ -1111,7 +1111,7 @@
       var axis = axes[key];
       var score = axis.score || 0;
       var color = score >= 70 ? '#3fb950' : score >= 40 ? '#f0883e' : '#f85149';
-      var name = key.replace(/_/g, ' ');
+      var name = esc(key.replace(/_/g, ' '));
 
       html += '<div class="axis-row" data-axis-idx="' + idx + '">';
       html += '<span class="axis-name">' + name + '</span>';

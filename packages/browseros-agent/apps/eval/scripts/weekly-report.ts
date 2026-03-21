@@ -186,6 +186,14 @@ const runs: RunSummary[] = manifests
 // Step 3: Identify unique config groups
 // runId can be "ci-weekly" (old) or "ci-weekly-2026-03-21-1730" (timestamped)
 // Extract config name by stripping the date-time suffix pattern
+function escHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
 function extractConfigName(runId: string): string {
   // "browseros-agent-weekly-2026-03-21-1730" → "browseros-agent-weekly"
   // "ci-weekly" → "ci-weekly" (no timestamp, old format)
@@ -273,7 +281,7 @@ const html = `<!DOCTYPE html>
 <div class="config-bar">
   <label>Config:</label>
   <select id="config-select">
-    ${configGroups.map((c) => `<option value="${c}"${c === defaultConfig ? ' selected' : ''}>${c}</option>`).join('\n    ')}
+    ${configGroups.map((c) => `<option value="${escHtml(c)}"${c === defaultConfig ? ' selected' : ''}>${escHtml(c)}</option>`).join('\n    ')}
   </select>
 </div>
 
@@ -328,12 +336,12 @@ const html = `<!DOCTYPE html>
               : r.agentType === 'gemini-computer-use'
                 ? 'Gemini CU'
                 : r.agentType || '—'
-        return `<tr data-config="${r.runId}" data-search="${r.date} ${r.runId} ${r.model} ${r.dataset} ${archLabel}">
-      <td>${r.date}</td>
-      <td class="mono">${r.runId}</td>
-      <td class="mono" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.model}">${r.model}</td>
-      <td>${r.dataset}</td>
-      <td>${archLabel}</td>
+        return `<tr data-config="${escHtml(r.runId)}" data-search="${escHtml(r.date + ' ' + r.runId + ' ' + r.model + ' ' + r.dataset + ' ' + archLabel)}">
+      <td>${escHtml(r.date)}</td>
+      <td class="mono">${escHtml(r.runId)}</td>
+      <td class="mono" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(r.model)}">${escHtml(r.model)}</td>
+      <td>${escHtml(r.dataset)}</td>
+      <td>${escHtml(archLabel)}</td>
       <td class="${r.passRate >= 0.7 ? 'pass' : r.passRate >= 0.4 ? 'neutral' : 'fail'}">${(r.passRate * 100).toFixed(1)}% <span style="color:#6e7681;font-size:11px;">(${passed}/${r.total})</span></td>
       <td>${r.total}</td>
       <td class="${r.timeout > 0 ? 'neutral' : ''}">${r.timeout}</td>

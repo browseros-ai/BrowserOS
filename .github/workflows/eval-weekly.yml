@@ -43,10 +43,10 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVAL_CONFIG: ${{ github.event.inputs.config || 'configs/browseros-agent-weekly.json' }}
         run: |
-          CONFIG="${{ github.event.inputs.config || 'configs/browseros-agent-weekly.json' }}"
-          echo "Running eval with config: $CONFIG"
-          bun run src/index.ts -c "$CONFIG"
+          echo "Running eval with config: $EVAL_CONFIG"
+          bun run src/index.ts -c "$EVAL_CONFIG"
 
       - name: Upload runs to R2
         if: success()
@@ -57,9 +57,9 @@ jobs:
           EVAL_R2_SECRET_ACCESS_KEY: ${{ secrets.EVAL_R2_SECRET_ACCESS_KEY }}
           EVAL_R2_BUCKET: ${{ secrets.EVAL_R2_BUCKET }}
           EVAL_R2_CDN_BASE_URL: ${{ secrets.EVAL_R2_CDN_BASE_URL }}
+          EVAL_CONFIG: ${{ github.event.inputs.config || 'configs/browseros-agent-weekly.json' }}
         run: |
-          CONFIG="${{ github.event.inputs.config || 'configs/browseros-agent-weekly.json' }}"
-          CONFIG_NAME=$(basename "$CONFIG" .json)
+          CONFIG_NAME=$(basename "$EVAL_CONFIG" .json)
           bun scripts/upload-run.ts "results/$CONFIG_NAME"
 
       - name: Generate trend report

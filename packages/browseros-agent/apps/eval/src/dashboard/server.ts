@@ -226,10 +226,25 @@ const resultsDir = join(import.meta.dir, '..', '..', 'results')
 
 app.get('/api/runs', async (c) => {
   try {
+    const runs: string[] = []
     const entries = await readdir(resultsDir, { withFileTypes: true })
-    const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name)
-    dirs.sort().reverse()
-    return c.json(dirs)
+    for (const entry of entries.filter((e) => e.isDirectory())) {
+      const subEntries = await readdir(join(resultsDir, entry.name), {
+        withFileTypes: true,
+      }).catch(() => [] as import('node:fs').Dirent[])
+      const hasTimestampDirs = subEntries.some(
+        (s) => s.isDirectory() && /^\d{4}-\d{2}-\d{2}-\d{4}$/.test(s.name),
+      )
+      if (hasTimestampDirs) {
+        for (const sub of subEntries.filter((s) => s.isDirectory())) {
+          runs.push(`${entry.name}/${sub.name}`)
+        }
+      } else {
+        runs.push(entry.name)
+      }
+    }
+    runs.sort().reverse()
+    return c.json(runs)
   } catch {
     return c.json([])
   }
@@ -245,7 +260,10 @@ app.post('/api/load-run', async (c) => {
     return c.json({ error: 'Invalid JSON body' }, 400)
   }
   const runName = body.runName
-  if (!runName || runName.includes('..') || runName.includes('/')) {
+  if (!runName || runName.includes('..')) {
+    return c.json({ error: 'Invalid run name' }, 400)
+  }
+  if ((runName.match(/\//g) || []).length > 1) {
     return c.json({ error: 'Invalid run name' }, 400)
   }
   const outputDir = resolve(resultsDir, runName)
