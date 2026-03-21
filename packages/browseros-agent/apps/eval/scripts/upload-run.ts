@@ -141,9 +141,7 @@ async function isUploaded(
 async function isRunDir(dir: string): Promise<boolean> {
   const entries = await readdir(dir, { withFileTypes: true })
   const subdirs = entries.filter((e) => e.isDirectory())
-  // A run dir has task subdirs (like "Amazon--0", "wb-1234") with metadata.json
-  // A config dir has timestamp subdirs (like "2026-03-21-1730")
-  for (const subdir of subdirs.slice(0, 3)) {
+  for (const subdir of subdirs) {
     const metaPath = join(dir, subdir.name, 'metadata.json')
     const metaStat = await stat(metaPath).catch(() => null)
     if (metaStat?.isFile()) return true

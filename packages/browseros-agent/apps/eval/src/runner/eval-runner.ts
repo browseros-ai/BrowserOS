@@ -122,7 +122,9 @@ function resolvePaths(
 
   // Resolve output directory: results/{config-name}/{timestamp}/
   // Config name derived from config filename (e.g., "browseros-agent-weekly.json" → "browseros-agent-weekly")
-  const configName = basename(resolve(options.configPath), '.json')
+  const configName = options.configPath
+    ? basename(resolve(options.configPath), '.json')
+    : 'eval'
   const timestamp = formatTimestamp(new Date())
   const resultsBase = config.output_dir
     ? config.output_dir.startsWith('/')

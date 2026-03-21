@@ -304,9 +304,7 @@ app.post('/api/load-run', async (c) => {
             ? 'completed'
             : raw.termination_reason === 'timeout'
               ? 'timeout'
-              : raw.termination_reason === 'error'
-                ? 'failed'
-                : 'completed',
+              : 'failed',
         durationMs: raw.total_duration_ms,
         graderResults: raw.grader_results,
         screenshotCount,
