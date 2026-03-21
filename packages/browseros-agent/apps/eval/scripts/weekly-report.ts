@@ -102,7 +102,7 @@ do {
 
   const manifestKeys =
     listRes.Contents?.filter((obj) => obj.Key?.endsWith('/manifest.json')).map(
-      (obj) => obj.Key!,
+      (obj) => obj.Key as string,
     ) ?? []
 
   for (const key of manifestKeys) {
@@ -336,7 +336,7 @@ const html = `<!DOCTYPE html>
               : r.agentType === 'gemini-computer-use'
                 ? 'Gemini CU'
                 : r.agentType || '—'
-        return `<tr data-config="${escHtml(r.runId)}" data-search="${escHtml(r.date + ' ' + r.runId + ' ' + r.model + ' ' + r.dataset + ' ' + archLabel)}">
+        return `<tr data-config="${escHtml(r.runId)}" data-search="${escHtml(`${r.date} ${r.runId} ${r.model} ${r.dataset} ${archLabel}`)}">
       <td>${escHtml(r.date)}</td>
       <td class="mono">${escHtml(r.runId)}</td>
       <td class="mono" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(r.model)}">${escHtml(r.model)}</td>
