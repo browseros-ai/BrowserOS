@@ -35,6 +35,10 @@ const BROWSEROS_BINARY =
   '/Applications/BrowserOS.app/Contents/MacOS/BrowserOS'
 
 const CONTROLLER_EXT_DIR = join(MONOREPO_ROOT, 'apps/controller-ext/dist')
+const CAPTCHA_EXT_DIR = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../extensions/nopecha',
+)
 
 export class BrowserOSAppManager {
   private ports: EvalPorts
@@ -154,8 +158,15 @@ export class BrowserOSAppManager {
       `--user-data-dir=${this.tempDir}`,
     ]
 
+    const extensions: string[] = []
     if (this.loadExtensions && existsSync(CONTROLLER_EXT_DIR)) {
-      chromeArgs.push(`--load-extension=${CONTROLLER_EXT_DIR}`)
+      extensions.push(CONTROLLER_EXT_DIR)
+    }
+    if (existsSync(CAPTCHA_EXT_DIR)) {
+      extensions.push(CAPTCHA_EXT_DIR)
+    }
+    if (extensions.length > 0) {
+      chromeArgs.push(`--load-extension=${extensions.join(',')}`)
     }
 
     chromeArgs.push('about:blank')

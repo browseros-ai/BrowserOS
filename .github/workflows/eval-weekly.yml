@@ -42,6 +42,13 @@ jobs:
         working-directory: packages/browseros-agent
         run: bun install --ignore-scripts && bun run build:agent-sdk
 
+      - name: Install captcha solver extension
+        working-directory: packages/browseros-agent/apps/eval
+        run: |
+          mkdir -p extensions
+          curl -sL -o /tmp/nopecha.zip https://github.com/NopeCHALLC/nopecha-extension/releases/latest/download/chromium_automation.zip
+          unzip -qo /tmp/nopecha.zip -d extensions/nopecha
+
       - name: Run eval
         working-directory: packages/browseros-agent/apps/eval
         env:
