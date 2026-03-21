@@ -12,7 +12,7 @@ on:
         default: 'configs/browseros-agent-weekly.json'
 
 concurrency:
-  group: eval-runner
+  group: eval-${{ github.event.inputs.config || 'browseros-agent-weekly' }}
   cancel-in-progress: false
 
 permissions:
