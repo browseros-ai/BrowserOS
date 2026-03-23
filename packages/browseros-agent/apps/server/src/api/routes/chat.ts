@@ -73,19 +73,7 @@ export function createChatRoutes(deps: ChatRouteDeps) {
           model: request.model,
         })
 
-        try {
-          return await service.processMessage(request, c.req.raw.signal)
-        } catch (error) {
-          Sentry.withScope((scope) => {
-            scope.setTag('route', 'chat')
-            scope.setTag('provider', request.provider)
-            scope.setTag('model', request.model)
-            scope.setExtra('conversationId', request.conversationId)
-            scope.setExtra('isScheduledTask', request.isScheduledTask)
-            Sentry.captureException(error)
-          })
-          throw error
-        }
+        return service.processMessage(request, c.req.raw.signal)
       },
     )
     .delete(
