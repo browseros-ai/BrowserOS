@@ -19,6 +19,7 @@ import { KlavisClient } from '../lib/clients/klavis/klavis-client'
 import { initializeOAuth } from '../lib/clients/oauth'
 import { getDb } from '../lib/db'
 import { logger } from '../lib/logger'
+import { Sentry } from '../lib/sentry'
 import { createChatRoutes } from './routes/chat'
 import { createCreditsRoutes } from './routes/credits'
 import { createGraphRoutes } from './routes/graph'
@@ -195,6 +196,12 @@ export async function createHttpServer(config: HttpServerConfig) {
       })
       return c.json(error.toJSON(), error.statusCode as ContentfulStatusCode)
     }
+
+    Sentry.withScope((scope) => {
+      scope.setTag('route', c.req.path)
+      scope.setTag('method', c.req.method)
+      Sentry.captureException(error)
+    })
 
     logger.error('Unhandled Error', {
       message: error.message,

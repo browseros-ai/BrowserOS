@@ -50,7 +50,11 @@ export function createMcpRoutes(deps: McpRouteDeps) {
       await mcpServer.connect(transport)
       return transport.handleRequest(c)
     } catch (error) {
-      Sentry.captureException(error)
+      Sentry.withScope((scope) => {
+        scope.setTag('route', 'mcp')
+        scope.setTag('scopeId', scopeId)
+        Sentry.captureException(error)
+      })
       logger.error('Error handling MCP request', {
         error: error instanceof Error ? error.message : String(error),
       })

@@ -21,6 +21,15 @@ Sentry.init({
   release: VERSION,
 
   beforeSend(event) {
+    // Group tool execution errors by tool name instead of generic "execute"
+    const message = event.exception?.values?.[0]?.value ?? ''
+    if (message.startsWith('Internal error in ')) {
+      const toolName = message.match(/Internal error in (\S+):/)?.[1]
+      if (toolName) {
+        event.fingerprint = ['tool-execution', toolName]
+      }
+    }
+
     return sanitizeEvent(event)
   },
 })
