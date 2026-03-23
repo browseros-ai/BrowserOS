@@ -254,3 +254,5 @@ export class AiSdkAgent {
     logger.info('Agent disposed', { conversationId: this.conversationId })
   }
 }
+
+export { formatUserMessage } from './format-message'

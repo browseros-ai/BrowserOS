@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { AiSdkAgent } from '@browseros/server/agent/tool-loop'
+import {
+  AiSdkAgent,
+  formatUserMessage,
+} from '@browseros/server/agent/tool-loop'
 import type { ResolvedAgentConfig } from '@browseros/server/agent/types'
 import { Browser } from '@browseros/server/browser'
 import { CdpBackend } from '@browseros/server/browser/backends/cdp'
@@ -91,8 +94,11 @@ export class SingleAgentEvaluator implements AgentEvaluator {
         capture,
         async (signal) => {
           if (!agent) throw new Error('Agent was not initialized')
+          // Format prompt with browser context so the agent knows what page it's on
+          // (same formatting as chat-service.ts → formatUserMessage)
+          const prompt = formatUserMessage(task.query, browserContext)
           const result = await agent.toolLoopAgent.generate({
-            prompt: task.query,
+            prompt,
             abortSignal: signal,
 
             experimental_onToolCallStart: ({ toolCall }) => {
