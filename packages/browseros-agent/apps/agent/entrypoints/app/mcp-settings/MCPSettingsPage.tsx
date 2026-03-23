@@ -4,15 +4,13 @@ import type { McpTool } from '@/lib/mcp/client'
 import { sendServerMessage } from '@/lib/messaging/server/serverMessages'
 import { MCPServerHeader } from './MCPServerHeader'
 import { MCPToolsSection } from './MCPToolsSection'
-import { ServerSettingsCard } from './ServerSettingsCard'
+import { QuickSetupSection } from './QuickSetupSection'
 
 /** @public */
 export const MCPSettingsPage: FC = () => {
   const [serverUrl, setServerUrl] = useState<string | null>(null)
   const [urlLoading, setUrlLoading] = useState(true)
   const [urlError, setUrlError] = useState<string | null>(null)
-
-  const [remoteAccessEnabled, setRemoteAccessEnabled] = useState(false)
 
   const [tools, setTools] = useState<McpTool[]>([])
   const [toolsLoading, setToolsLoading] = useState(false)
@@ -82,13 +80,10 @@ export const MCPSettingsPage: FC = () => {
         serverUrl={serverUrl}
         isLoading={urlLoading}
         error={urlError}
-        remoteAccessEnabled={remoteAccessEnabled}
+        onServerRestart={loadServerUrlAndTools}
       />
 
-      <ServerSettingsCard
-        onServerRestart={loadServerUrlAndTools}
-        onRemoteAccessChange={setRemoteAccessEnabled}
-      />
+      <QuickSetupSection serverUrl={serverUrl} />
 
       <MCPToolsSection
         tools={tools}

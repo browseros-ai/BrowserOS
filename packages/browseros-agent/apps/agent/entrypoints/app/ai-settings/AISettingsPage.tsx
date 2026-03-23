@@ -45,6 +45,7 @@ import {
 import type { IncompleteProvider } from './IncompleteProviderCard'
 import { IncompleteProvidersList } from './IncompleteProvidersList'
 import { LlmProvidersHeader } from './LlmProvidersHeader'
+import { McpPromoBanner } from './McpPromoBanner'
 import { NewProviderDialog } from './NewProviderDialog'
 import { ProviderTemplatesSection } from './ProviderTemplatesSection'
 
@@ -346,6 +347,8 @@ export const AISettingsPage: FC = () => {
         onDefaultProviderChange={setDefaultProvider}
         onAddProvider={handleAddProvider}
       />
+
+      <McpPromoBanner />
 
       <ProviderTemplatesSection onUseTemplate={handleUseTemplate} />
 
