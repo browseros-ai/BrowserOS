@@ -198,6 +198,7 @@ export class Application {
       logger.debug('Sentry disabled: missing SENTRY_DSN')
     }
 
+    Sentry.setUser({ id: browserosId })
     Sentry.setContext('browseros', {
       client_id: this.config.instanceClientId,
       install_id: this.config.instanceInstallId,

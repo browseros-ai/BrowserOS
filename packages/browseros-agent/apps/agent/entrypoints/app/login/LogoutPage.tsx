@@ -10,6 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { resetIdentity } from '@/lib/analytics/identify'
 import { signOut } from '@/lib/auth/auth-client'
 import { providersStorage } from '@/lib/llm-providers/storage'
 import { scheduledJobStorage } from '@/lib/schedules/scheduleStorage'
@@ -26,6 +27,7 @@ export const LogoutPage: FC = () => {
       queryClient.clear()
       await localforage.clear()
 
+      resetIdentity()
       await signOut()
       navigate('/home', { replace: true })
     }
