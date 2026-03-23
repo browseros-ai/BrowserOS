@@ -101,11 +101,23 @@ export const useRunWorkflow = () => {
     setMessages([])
     setWasCancelled(false)
 
-    const backgroundWindow = await chrome.windows.create({
-      url: 'chrome://newtab',
-      focused: true,
-      type: 'normal',
-    })
+    let backgroundWindow: chrome.windows.Window | undefined
+    try {
+      backgroundWindow = await chrome.windows.create({
+        url: 'chrome://newtab',
+        focused: true,
+        type: 'normal',
+      })
+    } catch {
+      // Fallback when no window context is available (e.g. all windows closed)
+      const tab = await chrome.tabs.create({
+        url: 'chrome://newtab',
+        active: true,
+      })
+      if (tab.windowId) {
+        backgroundWindow = await chrome.windows.get(tab.windowId)
+      }
+    }
 
     sendMessage({
       text: 'Run the workflow.',
