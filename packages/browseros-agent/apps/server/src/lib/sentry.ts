@@ -2,6 +2,8 @@
  * @license
  * Copyright 2025 BrowserOS
  */
+
+import { sanitizeEvent } from '@browseros/shared/sentry/sanitize'
 import * as Sentry from '@sentry/bun'
 
 import { INLINED_ENV } from '../env'
@@ -17,6 +19,10 @@ Sentry.init({
   sendDefaultPii: true,
   environment: SENTRY_ENVIRONMENT,
   release: VERSION,
+
+  beforeSend(event) {
+    return sanitizeEvent(event)
+  },
 })
 
 export { Sentry }

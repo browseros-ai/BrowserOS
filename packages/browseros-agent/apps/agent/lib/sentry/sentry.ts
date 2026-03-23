@@ -1,6 +1,7 @@
 import * as Sentry from '@sentry/react'
 import { getBrowserOSAdapter } from '../browseros/adapter'
 import { env } from '../env'
+import { sanitizeEvent } from './sanitize'
 
 /** Errors that are expected during normal operation and should not be reported */
 const SUPPRESSED_ERRORS = ['The browser is shutting down', 'No current window']
@@ -35,7 +36,8 @@ if (env.VITE_PUBLIC_SENTRY_DSN) {
         ...event.tags,
         extensionPage: getExtensionPage(),
       }
-      return event
+
+      return sanitizeEvent(event)
     },
 
     integrations: [

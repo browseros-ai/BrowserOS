@@ -52,6 +52,10 @@
     "./schemas/browser-context": {
       "types": "./src/schemas/browser-context.ts",
       "default": "./src/schemas/browser-context.ts"
+    },
+    "./sentry/sanitize": {
+      "types": "./src/sentry/sanitize.ts",
+      "default": "./src/sentry/sanitize.ts"
     }
   }
 }

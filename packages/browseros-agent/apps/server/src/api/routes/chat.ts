@@ -51,7 +51,15 @@ export function createChatRoutes(deps: ChatRouteDeps) {
         Sentry.setContext('request', {
           provider: request.provider,
           model: request.model,
-          baseUrl: request.baseUrl,
+          baseUrl: request.baseUrl
+            ? (() => {
+                try {
+                  return new URL(request.baseUrl).origin
+                } catch {
+                  return undefined
+                }
+              })()
+            : undefined,
         })
 
         metrics.log('chat.request', {
