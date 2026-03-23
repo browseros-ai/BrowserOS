@@ -144,7 +144,7 @@ export const new_page = defineTool({
   handler: async (args, ctx, response) => {
     const pageId = await ctx.browser.newPage(args.url, {
       hidden: args.hidden ? true : undefined,
-      background: args.background === false ? false : true,
+      background: args.background !== false,
       windowId: args.windowId,
     })
     response.text(`Opened new page: ${args.url}\nPage ID: ${pageId}`)

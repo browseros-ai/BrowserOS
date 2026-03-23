@@ -564,8 +564,8 @@
 (() => {
   'use strict';
 
-  let params = new URLSearchParams(window.location.search);
-  let runId = params.get('run');
+  const params = new URLSearchParams(window.location.search);
+  const runId = params.get('run');
 
   if (!runId) {
     showFatalError('Missing <code>?run=</code> parameter in URL.<br>Usage: <code>viewer.html?run=your-run-id</code>');
@@ -581,7 +581,7 @@
   let totalSteps = 0;
   let autoplayTimer = null;
   let isPlaying = false;
-  let basePath = `runs/${runId}`;
+  const basePath = `runs/${runId}`;
 
   // ── Fetch manifest ────────────────────────────────────────────
   fetch(`${basePath}/manifest.json`)
@@ -601,15 +601,15 @@
 
   // ── Header rendering ──────────────────────────────────────────
   function renderHeader() {
-    let dateEl = document.getElementById('header-date');
-    let dateParts = [];
+    const dateEl = document.getElementById('header-date');
+    const dateParts = [];
     if (manifest.uploadedAt) {
-      let d = new Date(manifest.uploadedAt);
+      const d = new Date(manifest.uploadedAt);
       dateParts.push(d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
         + ' \u00B7 ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }));
     }
     if (manifest.agentConfig) {
-      let model = manifest.agentConfig.model || '';
+      const model = manifest.agentConfig.model || '';
       if (model) dateParts.push(model);
     }
     if (manifest.dataset) {
@@ -617,10 +617,10 @@
     }
     dateEl.textContent = dateParts.join(' \u00B7 ');
 
-    let tasks = manifest.tasks || [];
-    let stats = computeStats(tasks);
-    let el = document.getElementById('header-stats');
-    let parts = [];
+    const tasks = manifest.tasks || [];
+    const stats = computeStats(tasks);
+    const el = document.getElementById('header-stats');
+    const parts = [];
     parts.push(`<span class="stat-total">${stats.total} tasks</span>`);
     parts.push(`<span class="stat-pass">${stats.passed} passed</span>`);
     parts.push(`<span class="stat-fail">${stats.failed} failed</span>`);
@@ -632,10 +632,10 @@
 
   // ── Sidebar rendering ─────────────────────────────────────────
   function renderSidebar() {
-    let tasks = manifest.tasks || [];
-    let stats = computeStats(tasks);
+    const tasks = manifest.tasks || [];
+    const stats = computeStats(tasks);
 
-    let statsEl = document.getElementById('sidebar-stats');
+    const statsEl = document.getElementById('sidebar-stats');
     statsEl.innerHTML =
       '<span>' + stats.total + ' total</span>' +
       '<span class="s-pass">' + stats.passed + ' pass</span>' +
@@ -645,29 +645,29 @@
   }
 
   function renderTaskList(filter) {
-    let list = document.getElementById('task-list');
+    const list = document.getElementById('task-list');
     list.innerHTML = '';
-    let tasks = manifest.tasks || [];
-    let fl = (filter || '').toLowerCase();
+    const tasks = manifest.tasks || [];
+    const fl = (filter || '').toLowerCase();
 
     tasks.forEach((task) => {
       if (fl) {
-        let searchText = (`${task.queryId || ''} ${task.query || ''}`).toLowerCase();
+        const searchText = (`${task.queryId || ''} ${task.query || ''}`).toLowerCase();
         if (searchText.indexOf(fl) === -1) return;
       }
 
-      let item = document.createElement('div');
+      const item = document.createElement('div');
       item.className = `task-item${selectedTask && selectedTask.queryId === task.queryId ? ' active' : ''}`;
 
-      let statusClass = resolveStatus(task);
-      let gradeInfo = resolveGrade(task);
+      const statusClass = resolveStatus(task);
+      const gradeInfo = resolveGrade(task);
 
       let badgeHtml = '';
       if (gradeInfo.label) {
         badgeHtml = `<span class="score-badge ${gradeInfo.cls}">${gradeInfo.label}</span>`;
       }
 
-      let metaParts = [];
+      const metaParts = [];
       if (task.durationMs) metaParts.push(fmtDuration(task.durationMs));
       if (task.screenshotCount) metaParts.push(`${task.screenshotCount} steps`);
 
@@ -696,7 +696,7 @@
     history.replaceState(null, '', `?run=${runId}#${task.queryId}`);
 
     // Re-render sidebar to update active state
-    let filterVal = document.getElementById('filter-input').value;
+    const filterVal = document.getElementById('filter-input').value;
     renderTaskList(filterVal);
 
     renderCenterPanel(task);
@@ -709,17 +709,17 @@
   }
 
   function autoSelectFromHash() {
-    let hash = window.location.hash.replace('#', '');
+    const hash = window.location.hash.replace('#', '');
     if (hash && manifest?.tasks) {
-      let task = manifest.tasks.find((t) => t.queryId === hash);
+      const task = manifest.tasks.find((t) => t.queryId === hash);
       if (task) { selectTask(task); return; }
     }
   }
 
   // ── Center panel: screenshot viewer ────────────────────────────
   function renderCenterPanel(task) {
-    let panel = document.getElementById('center-panel');
-    let count = task.screenshotCount || 0;
+    const panel = document.getElementById('center-panel');
+    const count = task.screenshotCount || 0;
 
     if (count === 0) {
       panel.innerHTML =
@@ -732,7 +732,7 @@
 
     let thumbsHtml = '';
     for (let i = 1; i <= count; i++) {
-      let src = screenshotUrl(task, i);
+      const src = screenshotUrl(task, i);
       thumbsHtml += `<img class="thumb${i === 1 ? ' active' : ''}" src="${src}" data-idx="${i}" alt="Step ${i}" loading="lazy" />`;
     }
 
@@ -753,7 +753,7 @@
     document.getElementById('btn-next').addEventListener('click', () => { goToStep(currentStep + 1); });
     document.getElementById('btn-play').addEventListener('click', toggleAutoplay);
 
-    let thumbs = document.querySelectorAll('#thumb-strip .thumb');
+    const thumbs = document.querySelectorAll('#thumb-strip .thumb');
     thumbs.forEach((th) => {
       th.addEventListener('click', () => {
         goToStep(parseInt(th.getAttribute('data-idx'), 10));
@@ -771,7 +771,7 @@
     if (!selectedTask || n < 1 || n > totalSteps) return;
     currentStep = n;
 
-    let img = document.getElementById('main-screenshot');
+    const img = document.getElementById('main-screenshot');
     if (img) {
       img.classList.add('loading');
       img.src = screenshotUrl(selectedTask, n);
@@ -784,22 +784,22 @@
   }
 
   function updateControls() {
-    let prev = document.getElementById('btn-prev');
-    let next = document.getElementById('btn-next');
-    let counter = document.getElementById('sc-counter');
+    const prev = document.getElementById('btn-prev');
+    const next = document.getElementById('btn-next');
+    const counter = document.getElementById('sc-counter');
 
     if (prev) prev.disabled = currentStep <= 1;
     if (next) next.disabled = currentStep >= totalSteps;
     if (counter) counter.textContent = `${currentStep} / ${totalSteps}`;
 
     // Thumbnails
-    let thumbs = document.querySelectorAll('#thumb-strip .thumb');
+    const thumbs = document.querySelectorAll('#thumb-strip .thumb');
     thumbs.forEach((th) => {
-      let idx = parseInt(th.getAttribute('data-idx'), 10);
+      const idx = parseInt(th.getAttribute('data-idx'), 10);
       th.classList.toggle('active', idx === currentStep);
     });
 
-    let active = document.querySelector('#thumb-strip .thumb.active');
+    const active = document.querySelector('#thumb-strip .thumb.active');
     if (active) active.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
   }
 
@@ -814,7 +814,7 @@
   function startAutoplay() {
     if (!selectedTask || totalSteps <= 1) return;
     isPlaying = true;
-    let btn = document.getElementById('btn-play');
+    const btn = document.getElementById('btn-play');
     if (btn) { btn.innerHTML = '&#9724;'; btn.classList.add('playing'); btn.title = 'Pause (Space)'; }
 
     if (currentStep >= totalSteps) currentStep = 0;
@@ -831,13 +831,13 @@
   function stopAutoplay() {
     isPlaying = false;
     if (autoplayTimer) { clearInterval(autoplayTimer); autoplayTimer = null; }
-    let btn = document.getElementById('btn-play');
+    const btn = document.getElementById('btn-play');
     if (btn) { btn.innerHTML = '&#9654;'; btn.classList.remove('playing'); btn.title = 'Autoplay (Space)'; }
   }
 
   // ── Detail bar (bottom) ────────────────────────────────────────
   function renderDetailBar(task) {
-    let bar = document.getElementById('detail-bar');
+    const bar = document.getElementById('detail-bar');
     let html = '';
 
     // Query
@@ -863,16 +863,16 @@
     }
 
     // Grader results
-    let graders = task.graderResults || {};
-    let gKeys = Object.keys(graders);
+    const graders = task.graderResults || {};
+    const gKeys = Object.keys(graders);
     if (gKeys.length > 0) {
       html += '<div class="db-section" style="flex-basis: 100%;">';
       html += '<span class="db-label">Graders <span style="font-weight:400;text-transform:none;letter-spacing:0;">(click for reasoning)</span></span>';
       html += '<div class="grader-badges">';
       gKeys.forEach((key, idx) => {
-        let g = graders[key];
-        let cls = g.pass ? 'pass' : 'fail';
-        let label = g.pass ? 'PASS' : 'FAIL';
+        const g = graders[key];
+        const cls = g.pass ? 'pass' : 'fail';
+        const label = g.pass ? 'PASS' : 'FAIL';
         let scoreText = '';
         if (typeof g.score === 'number') {
           scoreText = ` <span class="pill-score">${Math.round(g.score * 100)}%</span>`;
@@ -888,13 +888,13 @@
     bar.innerHTML = html;
 
     // Wire up grader pill clicks to show reasoning
-    let pills = bar.querySelectorAll('.grader-pill');
-    let reasoningEl = document.getElementById('grader-reasoning');
+    const pills = bar.querySelectorAll('.grader-pill');
+    const reasoningEl = document.getElementById('grader-reasoning');
     pills.forEach((pill) => {
       pill.addEventListener('click', () => {
-        let idx = parseInt(pill.getAttribute('data-grader-idx'), 10);
-        let key = gKeys[idx];
-        let g = graders[key];
+        const idx = parseInt(pill.getAttribute('data-grader-idx'), 10);
+        const key = gKeys[idx];
+        const g = graders[key];
         if (!g || !g.reasoning) return;
         if (reasoningEl.classList.contains('visible') && reasoningEl.getAttribute('data-active') === key) {
           reasoningEl.classList.remove('visible');
@@ -909,12 +909,12 @@
 
   // ── Agent stream (right panel) ─────────────────────────────────
   function loadAgentStream(task) {
-    let body = document.getElementById('stream-body');
-    let countEl = document.getElementById('stream-count');
+    const body = document.getElementById('stream-body');
+    const countEl = document.getElementById('stream-count');
     body.innerHTML = '<div class="placeholder"><div class="ph-text" style="color: #6e7681;">Loading messages...</div></div>';
     countEl.textContent = '';
 
-    let msgUrl = `${basePath}/${task.queryId || task.id}/messages.jsonl`;
+    const msgUrl = `${basePath}/${task.queryId || task.id}/messages.jsonl`;
 
     fetch(msgUrl)
       .then((res) => {
@@ -922,8 +922,8 @@
         return res.text();
       })
       .then((text) => {
-        let lines = text.trim().split('\n').filter(Boolean);
-        let events = [];
+        const lines = text.trim().split('\n').filter(Boolean);
+        const events = [];
         lines.forEach((line) => {
           try { events.push(JSON.parse(line)); } catch(e) { /* skip malformed */ }
         });
@@ -935,12 +935,12 @@
   }
 
   function renderStream(events) {
-    let body = document.getElementById('stream-body');
-    let countEl = document.getElementById('stream-count');
+    const body = document.getElementById('stream-body');
+    const countEl = document.getElementById('stream-count');
     body.innerHTML = '';
 
     // Process events into display cards
-    let cards = [];
+    const cards = [];
     let textBuffer = '';
 
     function flushText() {
@@ -951,7 +951,7 @@
     }
 
     events.forEach((evt) => {
-      let eventType = evt.type || evt.event || '';
+      const eventType = evt.type || evt.event || '';
 
       if (eventType === 'user') {
         flushText();
@@ -997,7 +997,7 @@
     }
 
     cards.forEach((card) => {
-      let el = document.createElement('div');
+      const el = document.createElement('div');
       el.className = 'stream-card';
 
       if (card.type === 'user-query') {
@@ -1021,9 +1021,9 @@
 
       } else if (card.type === 'tool-output') {
         el.classList.add('tool-output');
-        let outputStr = typeof card.content === 'string' ? card.content : JSON.stringify(card.content, null, 2);
-        let truncated = truncate(outputStr, 500);
-        let needsExpand = outputStr.length > 500;
+        const outputStr = typeof card.content === 'string' ? card.content : JSON.stringify(card.content, null, 2);
+        const truncated = truncate(outputStr, 500);
+        const needsExpand = outputStr.length > 500;
 
         el.innerHTML =
           '<div class="card-label"><span class="icon">\uD83D\uDCE4</span> Output</div>' +
@@ -1031,12 +1031,12 @@
           (needsExpand ? '<div class="expand-hint">Click to expand</div>' : '');
 
         if (needsExpand) {
-          let bodyEl = el.querySelector('.card-body');
-          let hintEl = el.querySelector('.expand-hint');
-          let fullOutput = outputStr;
+          const bodyEl = el.querySelector('.card-body');
+          const hintEl = el.querySelector('.expand-hint');
+          const fullOutput = outputStr;
           let isExpanded = false;
 
-          let toggleExpand = function() {
+          const toggleExpand = () => {
             isExpanded = !isExpanded;
             if (isExpanded) {
               bodyEl.textContent = fullOutput;
@@ -1054,7 +1054,7 @@
 
       } else if (card.type === 'tool-error') {
         el.classList.add('tool-error');
-        let errStr = typeof card.content === 'string' ? card.content : JSON.stringify(card.content);
+        const errStr = typeof card.content === 'string' ? card.content : JSON.stringify(card.content);
         el.innerHTML =
           '<div class="card-label"><span class="icon">\u26A0\uFE0F</span> Error</div>' +
           '<div class="card-body">' + esc(truncate(errStr, 500)) + '</div>';
@@ -1075,12 +1075,12 @@
 
   // ── Load task metadata for rich grader details ──────────────────
   function loadTaskMetadata(task) {
-    let metaUrl = `${basePath}/${task.queryId || task.id}/metadata.json`;
+    const metaUrl = `${basePath}/${task.queryId || task.id}/metadata.json`;
     fetch(metaUrl)
       .then((res) => res.ok ? res.json() : null)
       .then((meta) => {
         if (!meta || !meta.grader_results) return;
-        let perfGrader = meta.grader_results.performance_grader;
+        const perfGrader = meta.grader_results.performance_grader;
         if (perfGrader?.details?.axes) {
           renderAxesBreakdown(perfGrader.details.axes, perfGrader.details);
         }
@@ -1089,14 +1089,14 @@
   }
 
   function renderAxesBreakdown(axes, details) {
-    let container = document.getElementById('axes-breakdown');
+    const container = document.getElementById('axes-breakdown');
     if (!container) return;
 
     let html = '';
 
     // Composite score header
-    let composite = details.compositeScore || 0;
-    let threshold = details.passThreshold || 75;
+    const composite = details.compositeScore || 0;
+    const threshold = details.passThreshold || 75;
     html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #30363d;">';
     html += '<span style="font-size:12px;color:#8b949e;">Composite Score</span>';
     html += `<span style="font-size:18px;font-weight:700;color:${composite >= threshold ? '#3fb950' : '#f85149'};">${composite.toFixed(1)}</span>`;
@@ -1106,12 +1106,12 @@
     html += '</div>';
 
     // Per-axis bars
-    let axisKeys = Object.keys(axes);
+    const axisKeys = Object.keys(axes);
     axisKeys.forEach((key, idx) => {
-      let axis = axes[key];
-      let score = axis.score || 0;
-      let color = score >= 70 ? '#3fb950' : score >= 40 ? '#f0883e' : '#f85149';
-      let name = esc(key.replace(/_/g, ' '));
+      const axis = axes[key];
+      const score = axis.score || 0;
+      const color = score >= 70 ? '#3fb950' : score >= 40 ? '#f0883e' : '#f85149';
+      const name = esc(key.replace(/_/g, ' '));
 
       html += `<div class="axis-row" data-axis-idx="${idx}">`;
       html += `<span class="axis-name">${name}</span>`;
@@ -1125,11 +1125,11 @@
     container.classList.add('visible');
 
     // Wire click handlers for axis reasoning toggle
-    let rows = container.querySelectorAll('.axis-row');
+    const rows = container.querySelectorAll('.axis-row');
     rows.forEach((row) => {
       row.addEventListener('click', () => {
-        let idx = row.getAttribute('data-axis-idx');
-        let reasoningEl = document.getElementById(`axis-reasoning-${idx}`);
+        const idx = row.getAttribute('data-axis-idx');
+        const reasoningEl = document.getElementById(`axis-reasoning-${idx}`);
         if (reasoningEl) reasoningEl.classList.toggle('visible');
       });
     });
@@ -1165,13 +1165,13 @@
 
   function navigateTask(dir) {
     if (!manifest || !manifest.tasks) return;
-    let tasks = manifest.tasks;
+    const tasks = manifest.tasks;
     if (!selectedTask) {
       if (tasks.length > 0) selectTask(tasks[0]);
       return;
     }
-    let idx = tasks.findIndex((t) => t.queryId === selectedTask.queryId);
-    let next = idx + dir;
+    const idx = tasks.findIndex((t) => t.queryId === selectedTask.queryId);
+    const next = idx + dir;
     if (next >= 0 && next < tasks.length) selectTask(tasks[next]);
   }
 
@@ -1182,14 +1182,14 @@
 
   // ── Utility functions ──────────────────────────────────────────
   function computeStats(tasks) {
-    let total = tasks.length;
+    const total = tasks.length;
     let passed = 0, failed = 0, totalScore = 0, scoredCount = 0;
 
     tasks.forEach((t) => {
-      let graders = t.graderResults || {};
-      let keys = Object.keys(graders);
+      const graders = t.graderResults || {};
+      const keys = Object.keys(graders);
       if (keys.length > 0) {
-        let anyPass = keys.some((k) => graders[k].pass);
+        const anyPass = keys.some((k) => graders[k].pass);
         if (anyPass) passed++; else failed++;
         keys.forEach((k) => {
           if (typeof graders[k].score === 'number') {
@@ -1210,24 +1210,24 @@
 
   function resolveStatus(task) {
     if (task.status === 'timeout') return 'timeout';
-    let graders = task.graderResults || {};
-    let keys = Object.keys(graders);
+    const graders = task.graderResults || {};
+    const keys = Object.keys(graders);
     if (keys.length === 0) return task.status || 'pending';
-    let anyPass = keys.some((k) => graders[k].pass);
+    const anyPass = keys.some((k) => graders[k].pass);
     return anyPass ? 'pass' : 'fail';
   }
 
   function resolveGrade(task) {
-    let graders = task.graderResults || {};
-    let keys = Object.keys(graders);
+    const graders = task.graderResults || {};
+    const keys = Object.keys(graders);
     if (keys.length === 0) return { label: '', cls: '' };
-    let anyPass = keys.some((k) => graders[k].pass);
+    const anyPass = keys.some((k) => graders[k].pass);
     return { label: anyPass ? 'PASS' : 'FAIL', cls: anyPass ? 'pass' : 'fail' };
   }
 
   function esc(str) {
     if (!str) return '';
-    let d = document.createElement('div');
+    const d = document.createElement('div');
     d.appendChild(document.createTextNode(String(str)));
     return d.innerHTML;
   }
@@ -1244,13 +1244,13 @@
 
   function fmtDuration(ms) {
     if (ms < 1000) return `${ms}ms`;
-    let s = Math.floor(ms / 1000);
+    const s = Math.floor(ms / 1000);
     if (s < 60) return `${s}s`;
-    let m = Math.floor(s / 60);
-    let rem = s % 60;
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
     if (m < 60) return `${m}m ${rem}s`;
-    let h = Math.floor(m / 60);
-    let remM = m % 60;
+    const h = Math.floor(m / 60);
+    const remM = m % 60;
     return `${h}h ${remM}m`;
   }
 
