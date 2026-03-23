@@ -57,6 +57,7 @@ export default defineConfig({
       'tabs',
       'tabGroups',
       'storage',
+      'unlimitedStorage',
       'sidePanel',
       'browserOS',
       'alarms',
