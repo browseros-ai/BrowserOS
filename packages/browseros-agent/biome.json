@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!**/apps/eval/src/dashboard/index.html"]
+    "includes": ["**", "!**/apps/eval/src/dashboard/index.html", "!!**/vendor"]
   },
   "formatter": {
     "enabled": true,

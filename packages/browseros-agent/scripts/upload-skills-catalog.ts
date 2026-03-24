@@ -6,7 +6,10 @@ import type {
   RemoteSkillEntry,
 } from '../apps/server/src/skills/types'
 
-const DEFAULTS_DIR = join(import.meta.dir, '../apps/server/src/skills/defaults')
+const DEFAULTS_DIR = join(
+  import.meta.dir,
+  '../vendor/sup-agent/apps/server/src/skills/defaults',
+)
 const R2_KEY = 'skills/v1/catalog.json'
 
 function extractVersion(content: string): string {

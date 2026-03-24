@@ -43,6 +43,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -107,8 +109,10 @@ jobs:
           bun --env-file=.env.development test "${{ matrix.test_path }}" --reporter=junit --reporter-outfile="../../${{ matrix.junit_path }}"
           exit_code=$?
           cd ../..
-          if [ ! -f "${{ matrix.junit_path }}" ]; then
-            cat > "${{ matrix.junit_path }}" <<EOF
+          junit_file="packages/browseros-agent/${{ matrix.junit_path }}"
+          if [ ! -f "$junit_file" ]; then
+            mkdir -p "$(dirname "$junit_file")"
+            cat > "$junit_file" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <testsuites tests="1" failures="1">
             <testsuite name="${{ matrix.suite }}" tests="1" failures="1">
