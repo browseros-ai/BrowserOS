@@ -1,3 +1,3 @@
-[submodule "Sup-agent"]
-	path = Sup-agent
+[submodule "packages/browseros-agent/vendor/sup-agent"]
+	path = packages/browseros-agent/vendor/sup-agent
 	url = https://github.com/Karthikprasadm/Sup-agent.git
