@@ -569,6 +569,15 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     baseSendMessage({ text: params.text })
   }
 
+  const deleteServerSession = (conversationId: string) => {
+    const serverUrl = agentUrlRef.current
+    if (!serverUrl) return
+
+    fetch(`${serverUrl}/chat/${conversationId}`, {
+      method: 'DELETE',
+    }).catch(() => null)
+  }
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: only need to run this once
   useEffect(() => {
     const unwatch = searchActionsStorage.watch((storageAction) => {
@@ -615,8 +624,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
   const resetConversation = () => {
     track(CONVERSATION_RESET_EVENT, { message_count: messages.length })
+    const previousConversationId = conversationIdRef.current
+    const nextConversationId = crypto.randomUUID()
     stop()
-    setConversationId(crypto.randomUUID())
+    conversationIdRef.current = nextConversationId
+    setConversationId(nextConversationId)
     setMessages([])
     sessionSourceRef.current = options?.origin ?? DEFAULT_CHAT_SOURCE
     setSessionSource(options?.origin ?? DEFAULT_CHAT_SOURCE)
@@ -625,6 +637,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     setDisliked({})
     setRestoredConversationId(null)
     resetRemoteConversation()
+    deleteServerSession(previousConversationId)
   }
 
   const isRestoringConversation =

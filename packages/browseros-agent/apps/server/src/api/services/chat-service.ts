@@ -129,7 +129,7 @@ export class ChatService {
             url: NEWTAB_EXECUTION_URL,
           })
           hiddenWindowId = win.windowId
-          const pageId = await this.getOrCreateWindowPageId(
+          const target = await this.getOrCreateWindowTarget(
             win.windowId,
             win.activeTabId,
           )
@@ -137,8 +137,8 @@ export class ChatService {
             ...browserContext,
             windowId: hiddenWindowId,
             activeTab: {
-              id: win.activeTabId ?? pageId,
-              pageId,
+              id: target.tabId,
+              pageId: target.pageId,
               url: NEWTAB_EXECUTION_URL,
               title: 'Scheduled Task',
             },
@@ -146,7 +146,7 @@ export class ChatService {
           logger.info('Created hidden window for scheduled task', {
             conversationId: request.conversationId,
             windowId: hiddenWindowId,
-            pageId,
+            pageId: target.pageId,
           })
         } catch (error) {
           logger.warn('Failed to create hidden window, using default', {
@@ -330,7 +330,7 @@ export class ChatService {
     const win = await this.deps.browser.createWindow({
       url: NEWTAB_EXECUTION_URL,
     })
-    const pageId = await this.getOrCreateWindowPageId(
+    const target = await this.getOrCreateWindowTarget(
       win.windowId,
       win.activeTabId,
     )
@@ -349,7 +349,7 @@ export class ChatService {
 
     logger.info('Created execution window for new-tab chat', {
       windowId: win.windowId,
-      pageId,
+      pageId: target.pageId,
       previousWindowId,
     })
 
@@ -357,29 +357,34 @@ export class ChatService {
       ...requestContext,
       windowId: win.windowId,
       activeTab: {
-        id: win.activeTabId ?? pageId,
-        pageId,
+        id: target.tabId,
+        pageId: target.pageId,
         url: NEWTAB_EXECUTION_URL,
         title: NEWTAB_EXECUTION_TITLE,
       },
     }
   }
 
-  private async getOrCreateWindowPageId(
+  private async getOrCreateWindowTarget(
     windowId: number,
     tabId?: number,
-  ): Promise<number> {
+  ): Promise<{ pageId: number; tabId: number }> {
     if (tabId !== undefined) {
       const pageId = (await this.deps.browser.resolveTabIds([tabId])).get(tabId)
       if (pageId !== undefined) {
-        return pageId
+        return { pageId, tabId }
       }
     }
 
-    return this.deps.browser.newPage(NEWTAB_EXECUTION_URL, {
+    const pageId = await this.deps.browser.newPage(NEWTAB_EXECUTION_URL, {
       windowId,
       background: true,
     })
+    const resolvedTabId = this.deps.browser.getTabIdForPage(pageId)
+    if (resolvedTabId === undefined) {
+      throw new Error(`Could not resolve tab ID for page ${pageId}`)
+    }
+    return { pageId, tabId: resolvedTabId }
   }
 
   private closeHiddenWindow(windowId: number, conversationId: string): void {
