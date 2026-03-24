@@ -24,16 +24,22 @@ import { track } from '@/lib/metrics/track'
 interface ChatErrorProps {
   error: Error
   onRetry?: () => void
+  providerType?: string
 }
 
-function parseErrorMessage(message: string): {
+function parseErrorMessage(
+  message: string,
+  providerType?: string,
+): {
   text: string
   url?: string
   isRateLimit?: boolean
   isCreditsExhausted?: boolean
   isConnectionError?: boolean
 } {
-  // Detect MCP server connection failures
+  const isBrowserosProvider = providerType === 'browseros'
+
+  // Detect MCP server connection failures (universal — affects all providers)
   if (
     (message.includes('Failed to fetch') || message.includes('fetch failed')) &&
     message.includes('127.0.0.1')
@@ -45,10 +51,11 @@ function parseErrorMessage(message: string): {
     }
   }
 
-  // Detect credit exhaustion from gateway
+  // Detect credit exhaustion from gateway (BrowserOS provider only)
   if (
-    message.includes('CREDITS_EXHAUSTED') ||
-    message.includes('Daily credits exhausted')
+    isBrowserosProvider &&
+    (message.includes('CREDITS_EXHAUSTED') ||
+      message.includes('Daily credits exhausted'))
   ) {
     return {
       text: 'Daily credits exhausted. Credits reset at midnight UTC.',
@@ -58,8 +65,11 @@ function parseErrorMessage(message: string): {
     }
   }
 
-  // Detect BrowserOS rate limit (unique pattern, no provider uses this)
-  if (message.includes('BrowserOS LLM daily limit reached')) {
+  // Detect BrowserOS rate limit (BrowserOS provider only)
+  if (
+    isBrowserosProvider &&
+    message.includes('BrowserOS LLM daily limit reached')
+  ) {
     return {
       text: 'Add your own API key for unlimited usage.',
       url: 'https://dub.sh/browseros-usage-limit',
@@ -83,9 +93,13 @@ function parseErrorMessage(message: string): {
   return { text: text || 'An unexpected error occurred', url }
 }
 
-export const ChatError: FC<ChatErrorProps> = ({ error, onRetry }) => {
+export const ChatError: FC<ChatErrorProps> = ({
+  error,
+  onRetry,
+  providerType,
+}) => {
   const { text, url, isRateLimit, isCreditsExhausted, isConnectionError } =
-    parseErrorMessage(error.message)
+    parseErrorMessage(error.message, providerType)
 
   // --- Commented out for Kimi partnership launch (restore after) ---
   // const surveyUrl = useMemo(
@@ -151,7 +165,7 @@ export const ChatError: FC<ChatErrorProps> = ({ error, onRetry }) => {
           View Usage & Billing
         </a>
       )}
-      {isRateLimit && !isCreditsExhausted && (
+      {isRateLimit && !isCreditsExhausted && providerType === 'browseros' && (
         <div className="flex flex-col items-center gap-1">
           <p className="text-muted-foreground text-xs">
             {/* biome-ignore lint/a11y/useValidAnchor: link with click tracking */}

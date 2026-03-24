@@ -36,6 +36,7 @@ export const Chat = () => {
     stop,
     agentUrlError,
     chatError,
+    selectedProvider,
     getActionForMessage,
     liked,
     onClickLike,
@@ -224,7 +225,9 @@ export const Chat = () => {
           />
         )}
         {agentUrlError && <ChatError error={agentUrlError} />}
-        {chatError && <ChatError error={chatError} />}
+        {chatError && (
+          <ChatError error={chatError} providerType={selectedProvider?.type} />
+        )}
       </main>
 
       <ChatFooter
