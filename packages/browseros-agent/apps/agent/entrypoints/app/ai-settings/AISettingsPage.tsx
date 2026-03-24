@@ -38,6 +38,7 @@ import {
 } from '@/lib/llm-providers/useOAuthProviderFlow'
 import { track } from '@/lib/metrics/track'
 import { ConfiguredProvidersList } from './ConfiguredProvidersList'
+import { DeviceCodeDialog } from './DeviceCodeDialog'
 import {
   DeleteRemoteLlmProviderDocument,
   GetRemoteLlmProvidersDocument,
@@ -173,6 +174,16 @@ export const AISettingsPage: FC = () => {
     providers,
     saveProvider,
   )
+
+  const activeDeviceCode =
+    chatgptPro.pendingDeviceCode ??
+    copilot.pendingDeviceCode ??
+    qwenCode.pendingDeviceCode
+  const clearActiveDeviceCode = () => {
+    chatgptPro.clearDeviceCode()
+    copilot.clearDeviceCode()
+    qwenCode.clearDeviceCode()
+  }
 
   const oauthFlows: Record<
     string,
@@ -424,6 +435,11 @@ export const AISettingsPage: FC = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <DeviceCodeDialog
+        deviceCode={activeDeviceCode}
+        onClose={clearActiveDeviceCode}
+      />
     </div>
   )
 }

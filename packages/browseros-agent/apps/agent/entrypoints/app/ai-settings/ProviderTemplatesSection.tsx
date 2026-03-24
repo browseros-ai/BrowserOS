@@ -58,14 +58,21 @@ export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
 
         <CollapsibleContent>
           <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {filteredTemplates.map((template) => (
-              <ProviderTemplateCard
-                key={template.id}
-                template={template}
-                highlighted={template.id === 'moonshot'}
-                onUseTemplate={onUseTemplate}
-              />
-            ))}
+            {filteredTemplates.map((template) => {
+              const isNew =
+                template.id === 'chatgpt-pro' ||
+                template.id === 'github-copilot' ||
+                template.id === 'qwen-code'
+              return (
+                <ProviderTemplateCard
+                  key={template.id}
+                  template={template}
+                  highlighted={template.id === 'moonshot'}
+                  isNew={isNew}
+                  onUseTemplate={onUseTemplate}
+                />
+              )
+            })}
           </div>
         </CollapsibleContent>
       </div>

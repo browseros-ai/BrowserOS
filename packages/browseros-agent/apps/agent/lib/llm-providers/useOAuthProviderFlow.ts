@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { track } from '@/lib/metrics/track'
 import {
@@ -20,10 +20,17 @@ export interface OAuthProviderFlowConfig {
   clientAuth?: ClientAuthConfig
 }
 
+export interface PendingDeviceCode {
+  userCode: string
+  providerName: string
+}
+
 interface OAuthProviderFlowReturn {
   status: { authenticated: boolean; email?: string } | null
   disconnect: () => Promise<void>
   startOAuthFlow: (agentServerUrl: string | undefined) => Promise<void>
+  pendingDeviceCode: PendingDeviceCode | null
+  clearDeviceCode: () => void
 }
 
 export function useOAuthProviderFlow(
@@ -35,6 +42,8 @@ export function useOAuthProviderFlow(
     config.providerType,
   )
   const flowStartedRef = useRef(false)
+  const [pendingDeviceCode, setPendingDeviceCode] =
+    useState<PendingDeviceCode | null>(null)
 
   // Auto-create provider when OAuth completes
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — only trigger on auth status change
@@ -57,6 +66,7 @@ export function useOAuthProviderFlow(
         createdAt: now,
         updatedAt: now,
       })
+      setPendingDeviceCode(null)
       track(config.completedEvent, { email: status.email })
       toast.success(`${config.displayName} Connected`, {
         description: status.email
@@ -104,9 +114,9 @@ export function useOAuthProviderFlow(
       deviceData.verification_uri_complete ?? deviceData.verification_uri
     window.open(verificationUri, '_blank')
     track(config.startedEvent)
-    toast.info(`Enter code: ${deviceData.user_code}`, {
-      description: `Paste this code on the ${config.displayName} page that just opened.`,
-      duration: 60_000,
+    setPendingDeviceCode({
+      userCode: deviceData.user_code,
+      providerName: config.displayName,
     })
 
     startTokenPolling(auth, deviceData, codeVerifier, async (token) => {
@@ -142,9 +152,9 @@ export function useOAuthProviderFlow(
       window.open(data.verificationUri, '_blank')
       startPolling()
       track(config.startedEvent)
-      toast.info(`Enter code: ${data.userCode}`, {
-        description: `Paste this code on the ${config.displayName} page that just opened.`,
-        duration: 60_000,
+      setPendingDeviceCode({
+        userCode: data.userCode,
+        providerName: config.displayName,
       })
       return
     }
@@ -163,5 +173,7 @@ export function useOAuthProviderFlow(
     status,
     disconnect,
     startOAuthFlow,
+    pendingDeviceCode,
+    clearDeviceCode: () => setPendingDeviceCode(null),
   }
 }

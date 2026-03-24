@@ -7,12 +7,14 @@ import { cn } from '@/lib/utils'
 interface ProviderTemplateCardProps {
   template: ProviderTemplate
   highlighted?: boolean
+  isNew?: boolean
   onUseTemplate: (template: ProviderTemplate) => void
 }
 
 export const ProviderTemplateCard: FC<ProviderTemplateCardProps> = ({
   template,
   highlighted = false,
+  isNew = false,
   onUseTemplate,
 }) => {
   return (
@@ -20,12 +22,19 @@ export const ProviderTemplateCard: FC<ProviderTemplateCardProps> = ({
       type="button"
       onClick={() => onUseTemplate(template)}
       className={cn(
-        'group flex w-full items-center gap-3 rounded-lg border bg-background p-4 text-left transition-all hover:border-[var(--accent-orange)] hover:shadow-md',
+        'group relative flex w-full items-center gap-3 rounded-lg border bg-background p-4 text-left transition-all hover:border-[var(--accent-orange)] hover:shadow-md',
         highlighted
           ? 'border-orange-300/80 bg-orange-50/30 shadow-sm ring-1 ring-orange-300/45 dark:bg-orange-500/5'
-          : 'border-border',
+          : isNew
+            ? 'border-2 border-[var(--accent-orange)]/50'
+            : 'border-border',
       )}
     >
+      {isNew && (
+        <span className="absolute -top-2 left-3 rounded-full bg-[var(--accent-orange)] px-2 py-0.5 font-semibold text-[9px] text-white uppercase tracking-wider">
+          New
+        </span>
+      )}
       <div className="flex min-w-0 flex-1 items-center gap-3">
         <ProviderIcon
           type={template.id}
