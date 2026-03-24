@@ -9,6 +9,19 @@ import { QueryProvider } from '@/lib/graphql/QueryProvider'
 import { sentryRootErrorHandler } from '@/lib/sentry/sentryRootErrorHandler'
 import { App } from './App'
 
+// HashRouter matches the `/#/...` portion. An empty hash can leave the panel blank.
+if (
+  window.location.hash === '' ||
+  window.location.hash === '#' ||
+  window.location.hash === '#/'
+) {
+  window.history.replaceState(
+    null,
+    '',
+    `${window.location.pathname}${window.location.search}#/`,
+  )
+}
+
 const $root = document.getElementById('root')
 
 if ($root) {

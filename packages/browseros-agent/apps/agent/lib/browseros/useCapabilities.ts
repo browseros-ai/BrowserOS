@@ -38,28 +38,31 @@ export function useCapabilities(): UseCapabilitiesResult {
     let cancelled = false
 
     async function init() {
-      const [browserOSVersion, serverVersion] = await Promise.all([
-        Capabilities.getBrowserOSVersion(),
-        Capabilities.getServerVersion(),
-      ])
+      try {
+        const [browserOSVersion, serverVersion] = await Promise.all([
+          Capabilities.getBrowserOSVersion(),
+          Capabilities.getServerVersion(),
+        ])
 
-      // Pre-check all features
-      const featureChecks = await Promise.all(
-        Object.values(Feature)
-          .filter((v) => typeof v === 'string')
-          .map(async (feature) => {
-            const supported = await Capabilities.supports(feature as Feature)
-            return [feature as Feature, supported] as const
-          }),
-      )
+        // Pre-check all features
+        const featureChecks = await Promise.all(
+          Object.values(Feature)
+            .filter((v) => typeof v === 'string')
+            .map(async (feature) => {
+              const supported = await Capabilities.supports(feature as Feature)
+              return [feature as Feature, supported] as const
+            }),
+        )
 
-      if (!cancelled) {
-        setState({
-          browserOSVersion,
-          serverVersion,
-          supportedFeatures: new Map(featureChecks),
-        })
-        setIsLoading(false)
+        if (!cancelled) {
+          setState({
+            browserOSVersion,
+            serverVersion,
+            supportedFeatures: new Map(featureChecks),
+          })
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false)
       }
     }
 

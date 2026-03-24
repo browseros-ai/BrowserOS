@@ -16,10 +16,25 @@ const ChatLayoutContent: FC = () => {
     isLoading,
   } = useChatSessionContext()
 
-  if (isLoading || !selectedProvider) {
+  if (isLoading) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-background">
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+      <div className="flex h-screen w-screen flex-col items-center justify-center gap-3 bg-background px-4 text-center">
+        <div
+          className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent"
+          aria-hidden
+        />
+        <p className="text-muted-foreground text-sm">Loading assistant…</p>
+      </div>
+    )
+  }
+
+  if (!selectedProvider) {
+    return (
+      <div className="flex h-screen w-screen flex-col items-center justify-center gap-3 bg-background px-6 text-center">
+        <p className="text-foreground text-sm">
+          No model provider is available. Open AI Settings and add or select a
+          provider.
+        </p>
       </div>
     )
   }

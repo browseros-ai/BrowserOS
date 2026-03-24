@@ -212,8 +212,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     textToActionRef.current = textToAction
   }, [mode, textToAction])
 
-  const selectedProvider = selectedLlmProvider
-    ? {
+  const selectedProvider: Provider = (() => {
+    if (selectedLlmProvider) {
+      return {
         id: selectedLlmProvider.id,
         name: selectedLlmProvider.name,
         type:
@@ -221,7 +222,17 @@ export const useChatSession = (options?: ChatSessionOptions) => {
             ? ('browseros' as const)
             : selectedLlmProvider.type,
       }
-    : providers[0]
+    }
+    const fromList = providers[0]
+    if (fromList) return fromList
+    const fallback = createDefaultBrowserOSProvider()
+    return {
+      id: fallback.id,
+      name: fallback.name,
+      type:
+        fallback.id === 'browseros' ? ('browseros' as const) : fallback.type,
+    }
+  })()
 
   const {
     messages,

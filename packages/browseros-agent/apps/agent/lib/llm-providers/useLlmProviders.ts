@@ -73,6 +73,13 @@ export function useLlmProviders(): UseLlmProvidersReturn {
         setDefaultProviderId(loadedDefaultId)
       } catch {
         // TODO: Record error to error recording service
+        const fallback = createDefaultProvidersConfig()
+        setProviders(fallback)
+        setDefaultProviderId(DEFAULT_PROVIDER_ID)
+        await providersStorage.setValue(fallback).catch(() => {})
+        await defaultProviderIdStorage
+          .setValue(DEFAULT_PROVIDER_ID)
+          .catch(() => {})
       } finally {
         setIsLoading(false)
       }
