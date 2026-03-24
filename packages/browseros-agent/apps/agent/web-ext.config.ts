@@ -13,6 +13,8 @@ const chromiumArgs = [
   '--show-component-extension-options',
   '--disable-browseros-server',
   '--disable-browseros-extensions',
+  '--hide-crash-restore-bubble',
+  '--disable-session-crashed-bubble',
   `--load-extension=${CONTROLLER_EXT_DIR}`,
 ]
 

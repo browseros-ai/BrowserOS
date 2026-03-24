@@ -52,7 +52,12 @@ export const SidebarLayout: FC = () => {
   if (isMobile) {
     return (
       <RpcClientProvider>
-        <div className="flex min-h-screen flex-col bg-background">
+        <div className="flex min-h-screen flex-col bg-background pl-[60px]">
+          {/* Always show the left sidebar (collapsed) so it doesn't "disappear" when the
+              window is not wide enough for the desktop layout. */}
+          <div className="fixed inset-y-0 left-0 z-50">
+            <AppSidebar expanded={false} onOpenShortcuts={openShortcuts} />
+          </div>
           <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
             <Button
               variant="ghost"
@@ -65,7 +70,12 @@ export const SidebarLayout: FC = () => {
             <span className="font-semibold">BrowserOS</span>
           </header>
           <main className="flex-1 overflow-y-auto">
-            <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+            <div
+              className={[
+                'mx-auto max-w-4xl px-4 py-8 transition-all duration-200 ease-in-out sm:px-6 lg:px-8',
+                mobileOpen ? 'pr-[420px]' : '',
+              ].join(' ')}
+            >
               <Outlet />
             </div>
           </main>
@@ -89,7 +99,8 @@ export const SidebarLayout: FC = () => {
         {/* Sidebar - fixed overlay */}
         {/* biome-ignore lint/a11y/noStaticElementInteractions: hover interactions needed */}
         <div
-          className="fixed inset-y-0 left-0 z-40"
+          // Keep the left sidebar above any Home search/glow layers.
+          className="fixed inset-y-0 left-0 z-50"
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >
@@ -102,8 +113,16 @@ export const SidebarLayout: FC = () => {
             <Outlet />
           </main>
         ) : (
-          <main className="min-h-screen overflow-y-auto">
-            <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+          <main
+            className="min-h-screen overflow-y-auto transition-all duration-200 ease-in-out"
+            style={{
+              // Keep content centered within the usable viewport area
+              // (full width minus fixed left sidebar and optional right panel space).
+              paddingLeft: sidebarOpen ? 260 : 60,
+              paddingRight: sidebarOpen ? 420 : 0,
+            }}
+          >
+            <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
               <Outlet />
             </div>
           </main>

@@ -28,6 +28,7 @@ import {
   GRAPH_UPDATED_EVENT,
   NEW_GRAPH_CREATED_EVENT,
 } from '@/lib/constants/analyticsEvents'
+import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
 import { useLlmProviders } from '@/lib/llm-providers/useLlmProviders'
 import { track } from '@/lib/metrics/track'
 import { useRpcClient } from '@/lib/rpc/RpcClientProvider'
@@ -210,7 +211,8 @@ export const CreateGraph: FC = () => {
         }
 
         if (metadata?.messageType === 'run-graph' && codeIdRef.current) {
-          const provider = selectedLlmProviderRef.current
+          const provider =
+            selectedLlmProviderRef.current ?? createDefaultBrowserOSProvider()
           const enabledMcpServers = enabledMcpServersRef.current
           const customMcpServers = enabledCustomServersRef.current
 
@@ -220,7 +222,7 @@ export const CreateGraph: FC = () => {
               provider: provider?.type,
               providerType: provider?.type,
               providerName: provider?.name,
-              model: provider?.modelId ?? 'browseros',
+              model: provider.modelId,
               contextWindowSize: provider?.contextWindow,
               temperature: provider?.temperature,
               resourceName: provider?.resourceName,

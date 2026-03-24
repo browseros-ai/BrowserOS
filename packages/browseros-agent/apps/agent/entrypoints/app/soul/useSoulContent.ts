@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import { useRpcClient } from '@/lib/rpc/RpcClientProvider'
 
 export const SOUL_QUERY_KEY = 'soul'
+let soulCache: string | null = null
 
 export function useSoulContent() {
   const rpcClient = useRpcClient()
@@ -14,11 +16,19 @@ export function useSoulContent() {
       const result = await response.json()
       return result.content || ''
     },
+    placeholderData: () => soulCache ?? undefined,
   })
 
+  useEffect(() => {
+    if (data === undefined) return
+    soulCache = data
+  }, [data])
+
+  const content = data ?? soulCache ?? null
+
   return {
-    content: data ?? null,
-    isLoading,
+    content,
+    isLoading: isLoading && content === null,
     error,
     refetch,
   }

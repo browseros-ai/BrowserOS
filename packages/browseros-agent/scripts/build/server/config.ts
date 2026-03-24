@@ -80,7 +80,8 @@ export function loadBuildConfig(rootDir: string): BuildConfig {
   validateProductionEnv(envVars)
 
   const processEnv: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH ?? '',
+    // Windows commonly exposes the executable search path as `Path`.
+    PATH: process.env.PATH ?? process.env.Path ?? '',
     ...fileEnv,
     ...process.env,
   }

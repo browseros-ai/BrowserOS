@@ -52,6 +52,10 @@ async function getAgentPort(): Promise<number> {
 }
 
 async function getMcpPort(): Promise<number> {
+  if (env.VITE_BROWSEROS_SERVER_PORT) {
+    return env.VITE_BROWSEROS_SERVER_PORT
+  }
+
   try {
     const adapter = getBrowserOSAdapter()
     const pref = await adapter.getPref(BROWSEROS_PREFS.MCP_PORT)
@@ -87,6 +91,10 @@ export class ProxyPortError extends Error {
 }
 
 async function getProxyPort(): Promise<number> {
+  if (env.VITE_BROWSEROS_SERVER_PORT) {
+    return env.VITE_BROWSEROS_SERVER_PORT
+  }
+
   try {
     const adapter = getBrowserOSAdapter()
     const pref = await adapter.getPref(BROWSEROS_PREFS.PROXY_PORT)

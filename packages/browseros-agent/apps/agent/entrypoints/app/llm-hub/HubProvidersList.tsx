@@ -19,7 +19,7 @@ export const HubProvidersList: FC<HubProvidersListProps> = ({
   onDeleteProvider,
   onAddProvider,
 }) => {
-  if (isLoading) {
+  if (isLoading && providers.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
         <div className="flex items-center justify-center gap-3 py-8 text-muted-foreground">

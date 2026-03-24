@@ -5,12 +5,14 @@ import { Switch } from '@/components/ui/switch'
 import { getBrowserOSAdapter } from '@/lib/browseros/adapter'
 import { Capabilities, Feature } from '@/lib/browseros/capabilities'
 import { BROWSEROS_PREFS } from '@/lib/browseros/prefs'
+import { openBrowserOSHomeOnStartupStorage } from '@/lib/startup/startup-storage'
 
 export const ToolbarSettingsCard: FC = () => {
   const [showLlmChat, setShowLlmChat] = useState(true)
   const [showLlmHub, setShowLlmHub] = useState(true)
   const [showToolbarLabels, setShowToolbarLabels] = useState(true)
   const [verticalTabsEnabled, setVerticalTabsEnabled] = useState(true)
+  const [openHomeOnStartup, setOpenHomeOnStartup] = useState(true)
   const [supportsVerticalTabs, setSupportsVerticalTabs] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
 
@@ -26,6 +28,7 @@ export const ToolbarSettingsCard: FC = () => {
         setShowLlmChat(chatPref?.value !== false)
         setShowLlmHub(hubPref?.value !== false)
         setShowToolbarLabels(labelsPref?.value !== false)
+        setOpenHomeOnStartup(await openBrowserOSHomeOnStartupStorage.getValue())
 
         const hasVerticalTabsSupport = await Capabilities.supports(
           Feature.VERTICAL_TABS_SUPPORT,
@@ -60,6 +63,15 @@ export const ToolbarSettingsCard: FC = () => {
         throw new Error('Failed to update setting')
       }
       setter(value)
+    } catch {
+      toast.error('Failed to update setting')
+    }
+  }
+
+  const handleStartupToggle = async (value: boolean) => {
+    try {
+      await openBrowserOSHomeOnStartupStorage.setValue(value)
+      setOpenHomeOnStartup(value)
     } catch {
       toast.error('Failed to update setting')
     }
@@ -134,6 +146,26 @@ export const ToolbarSettingsCard: FC = () => {
                 setShowToolbarLabels,
               )
             }
+            disabled={isLoading}
+          />
+        </div>
+
+        <div className="flex items-center justify-between border-border border-t pt-4">
+          <div className="space-y-0.5">
+            <Label
+              htmlFor="open-home-on-startup"
+              className="font-medium text-sm"
+            >
+              Open BrowserOS Home on Startup
+            </Label>
+            <p className="text-muted-foreground text-xs">
+              Start with the BrowserOS interface instead of a plain new tab
+            </p>
+          </div>
+          <Switch
+            id="open-home-on-startup"
+            checked={openHomeOnStartup}
+            onCheckedChange={handleStartupToggle}
             disabled={isLoading}
           />
         </div>

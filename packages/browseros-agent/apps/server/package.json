@@ -13,7 +13,7 @@
     "test:tools": "bun run test:cleanup && bun --env-file=.env.development test tests/tools",
     "test:integration": "bun run test:cleanup && bun --env-file=.env.development test tests/server.integration.test.ts",
     "test:sdk": "bun run test:cleanup && bun --env-file=.env.development test tests/sdk",
-    "test:cleanup": "./tests/__helpers__/cleanup.sh",
+    "test:cleanup": "bun tests/__helpers__/cleanup.ts",
     "typecheck": "tsc --noEmit",
     "devtools": "bunx @ai-sdk/devtools"
   },

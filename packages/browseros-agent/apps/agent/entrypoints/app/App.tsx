@@ -1,5 +1,6 @@
-import type { FC } from 'react'
+import { type FC, type ReactNode, useEffect, useState } from 'react'
 import { HashRouter, Navigate, Route, Routes, useParams } from 'react-router'
+import { onboardingShownOnceStorage } from '@/lib/onboarding/onboardingStorage'
 
 import { NewTab } from '../newtab/index/NewTab'
 import { NewTabChat } from '../newtab/index/NewTabChat'
@@ -113,10 +114,38 @@ export const App: FC = () => {
 
         {/* Onboarding routes - no sidebar, no auth required */}
         <Route path="onboarding">
-          <Route index element={<Onboarding />} />
-          <Route path="steps/:stepId" element={<StepsLayout />} />
-          <Route path="demo" element={<OnboardingDemo />} />
-          <Route path="features" element={<FeaturesPage />} />
+          <Route
+            index
+            element={
+              <OnboardingRouteGuard>
+                <Onboarding />
+              </OnboardingRouteGuard>
+            }
+          />
+          <Route
+            path="steps/:stepId"
+            element={
+              <OnboardingRouteGuard>
+                <StepsLayout />
+              </OnboardingRouteGuard>
+            }
+          />
+          <Route
+            path="demo"
+            element={
+              <OnboardingRouteGuard>
+                <OnboardingDemo />
+              </OnboardingRouteGuard>
+            }
+          />
+          <Route
+            path="features"
+            element={
+              <OnboardingRouteGuard>
+                <FeaturesPage />
+              </OnboardingRouteGuard>
+            }
+          />
         </Route>
 
         {/* Backward compatibility redirects */}
@@ -144,4 +173,27 @@ export const App: FC = () => {
       </Routes>
     </HashRouter>
   )
+}
+
+const OnboardingRouteGuard: FC<{ children: ReactNode }> = ({ children }) => {
+  const [allowOnboarding, setAllowOnboarding] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    onboardingShownOnceStorage
+      .getValue()
+      .then((shownOnce) => {
+        if (!cancelled) setAllowOnboarding(!shownOnce)
+      })
+      .catch(() => {
+        if (!cancelled) setAllowOnboarding(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (allowOnboarding === null) return null
+  if (!allowOnboarding) return <Navigate to="/home" replace />
+  return <>{children}</>
 }

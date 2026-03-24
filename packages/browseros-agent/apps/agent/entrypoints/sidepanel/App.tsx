@@ -11,6 +11,7 @@ export const App: FC = () => {
         <Route element={<ChatLayout />}>
           <Route index element={<Chat />} />
           <Route path="history" element={<ChatHistory />} />
+          <Route path="*" element={<Chat />} />
         </Route>
       </Routes>
     </HashRouter>

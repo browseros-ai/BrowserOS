@@ -91,7 +91,7 @@ export const SkillsPage: FC = () => {
   }
 
   return (
-    <div className="fade-in slide-in-from-bottom-5 animate-in space-y-6 duration-500">
+    <div className="fade-in slide-in-from-bottom-5 animate-in space-y-6 duration-200">
       <SkillsHeader
         skillCount={skills.length}
         enabledCount={enabledCount}

@@ -22,7 +22,7 @@ export const ProviderTemplateCard: FC<ProviderTemplateCardProps> = ({
       type="button"
       onClick={() => onUseTemplate(template)}
       className={cn(
-        'group relative flex w-full items-center gap-3 rounded-lg border bg-background p-4 text-left transition-all hover:border-[var(--accent-orange)] hover:shadow-md',
+        'group pointer-events-auto relative z-10 flex w-full cursor-pointer items-center gap-3 rounded-lg border bg-background p-4 text-left transition-all hover:border-[var(--accent-orange)] hover:shadow-md',
         highlighted
           ? 'border-orange-300/80 bg-orange-50/30 shadow-sm ring-1 ring-orange-300/45 dark:bg-orange-500/5'
           : isNew

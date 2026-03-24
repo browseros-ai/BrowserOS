@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { type LlmHubProvider, loadProviders, saveProviders } from './storage'
 
+let providersCache: LlmHubProvider[] | null = null
+
 /** @public */
 export interface UseLlmHubProvidersReturn {
   providers: LlmHubProvider[]
@@ -11,22 +13,38 @@ export interface UseLlmHubProvidersReturn {
 
 /** @public */
 export function useLlmHubProviders(): UseLlmHubProvidersReturn {
-  const [providers, setProviders] = useState<LlmHubProvider[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  const [providers, setProviders] = useState<LlmHubProvider[]>(
+    providersCache ?? [],
+  )
+  const [isLoading, setIsLoading] = useState(providersCache === null)
 
   useEffect(() => {
+    let isMounted = true
     const load = async () => {
-      setIsLoading(true)
+      if (providersCache === null) {
+        setIsLoading(true)
+      }
       try {
         const data = await loadProviders()
-        setProviders(data)
+        providersCache = data
+        if (isMounted) {
+          setProviders(data)
+        }
       } catch {
-        setProviders([])
+        providersCache = []
+        if (isMounted) {
+          setProviders([])
+        }
       } finally {
-        setIsLoading(false)
+        if (isMounted) {
+          setIsLoading(false)
+        }
       }
     }
     load()
+    return () => {
+      isMounted = false
+    }
   }, [])
 
   const saveProvider = async (provider: LlmHubProvider, editIndex?: number) => {
@@ -36,10 +54,12 @@ export function useLlmHubProviders(): UseLlmHubProvidersReturn {
       ? currentProviders.map((p, i) => (i === editIndex ? provider : p))
       : [...currentProviders, provider]
 
+    providersCache = updatedProviders
     setProviders(updatedProviders)
     const success = await saveProviders(updatedProviders)
     if (!success) {
       const reloaded = await loadProviders()
+      providersCache = reloaded
       setProviders(reloaded)
     }
   }
@@ -50,10 +70,12 @@ export function useLlmHubProviders(): UseLlmHubProvidersReturn {
 
     const updatedProviders = currentProviders.filter((_, i) => i !== index)
 
+    providersCache = updatedProviders
     setProviders(updatedProviders)
     const success = await saveProviders(updatedProviders)
     if (!success) {
       const reloaded = await loadProviders()
+      providersCache = reloaded
       setProviders(reloaded)
     }
   }

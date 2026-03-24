@@ -1,7 +1,6 @@
 import { ChevronDown, LogIn, LogOut, User } from 'lucide-react'
 import type { FC } from 'react'
 import { useNavigate } from 'react-router'
-import ProductLogo from '@/assets/product_logo.svg'
 import { ThemeToggle } from '@/components/elements/theme-toggle'
 import {
   DropdownMenu,
@@ -13,9 +12,12 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { GetProfileByUserIdDocument } from '@/entrypoints/app/profile/graphql/profileDocument'
 import { useSessionInfo } from '@/lib/auth/sessionStorage'
+import { getProductLogoUrl } from '@/lib/branding/logo'
 import { useGraphqlQuery } from '@/lib/graphql/useGraphqlQuery'
 import { cn } from '@/lib/utils'
 import { useWorkspace } from '@/lib/workspace/use-workspace'
+
+const PRODUCT_LOGO_URL = getProductLogoUrl()
 
 interface SidebarBrandingProps {
   expanded?: boolean
@@ -68,7 +70,7 @@ export const SidebarBranding: FC<SidebarBrandingProps> = ({
       </div>
     )
   ) : (
-    <img src={ProductLogo} alt="BrowserOS" className="size-8" />
+    <img src={PRODUCT_LOGO_URL} alt="BrowserOS" className="size-8" />
   )
 
   return (

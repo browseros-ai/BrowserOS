@@ -1,17 +1,35 @@
 import { ArrowRight } from 'lucide-react'
 import { type FC, useEffect, useState } from 'react'
-import { NavLink } from 'react-router'
+import { NavLink, useNavigate } from 'react-router'
 import { PillIndicator } from '@/components/elements/pill-indicator'
 import { Button } from '@/components/ui/button'
 import { ONBOARDING_STARTED_EVENT } from '@/lib/constants/analyticsEvents'
 import { productRepositoryShortUrl } from '@/lib/constants/productUrls'
 import { getCurrentYear } from '@/lib/getCurrentYear'
 import { track } from '@/lib/metrics/track'
+import { onboardingShownOnceStorage } from '@/lib/onboarding/onboardingStorage'
 import { FocusGrid } from './FocusGrid'
 import { OnboardingHeader } from './OnboardingHeader'
 
 export const Onboarding: FC = () => {
   const [mounted, setMounted] = useState(false)
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    let cancelled = false
+    onboardingShownOnceStorage
+      .getValue()
+      .then((shownOnce) => {
+        if (!cancelled && shownOnce) {
+          navigate('/home', { replace: true })
+        }
+      })
+      .catch(() => null)
+
+    return () => {
+      cancelled = true
+    }
+  }, [navigate])
 
   useEffect(() => {
     setMounted(true)

@@ -1,6 +1,7 @@
-import { FileText, Loader2 } from 'lucide-react'
+import { FileText, Loader2, RefreshCw } from 'lucide-react'
 import type { FC } from 'react'
 import { MessageResponse } from '@/components/ai-elements/message'
+import { Button } from '@/components/ui/button'
 import { useSoulContent } from './useSoulContent'
 
 export const SoulViewer: FC = () => {
@@ -8,8 +9,25 @@ export const SoulViewer: FC = () => {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center rounded-xl border border-border bg-card p-12">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      <div className="rounded-xl border border-border bg-card p-6">
+        <div className="flex flex-col items-center gap-3 py-6 text-center">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <div>
+            <p className="font-medium text-sm">Loading your soul...</p>
+            <p className="mt-1 text-muted-foreground text-xs">
+              Fetching SOUL.md from the local BrowserOS agent.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-2 gap-1.5"
+            onClick={() => refetch()}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Retry
+          </Button>
+        </div>
       </div>
     )
   }
@@ -18,8 +36,20 @@ export const SoulViewer: FC = () => {
     return (
       <div className="rounded-xl border border-destructive/50 bg-destructive/5 p-6">
         <p className="text-destructive text-sm">
-          Could not load soul file. Make sure BrowserOS server is running.
+          Could not load soul file. BrowserOS server may be disconnected.
         </p>
+        <p className="mt-1 text-muted-foreground text-xs">
+          Try restarting BrowserOS agent/server, then click retry.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-3 gap-1.5"
+          onClick={() => refetch()}
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          Retry
+        </Button>
       </div>
     )
   }

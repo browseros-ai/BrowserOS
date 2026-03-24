@@ -9,6 +9,7 @@ import {
   WORKFLOW_RUN_RETRIED_EVENT,
   WORKFLOW_RUN_STOPPED_EVENT,
 } from '@/lib/constants/analyticsEvents'
+import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
 import { track } from '@/lib/metrics/track'
 
 type WorkflowMessageMetadata = {
@@ -43,7 +44,8 @@ export const useRunWorkflow = () => {
         const metadata = lastMessage.metadata as
           | WorkflowMessageMetadata
           | undefined
-        const provider = selectedLlmProviderRef.current
+        const provider =
+          selectedLlmProviderRef.current ?? createDefaultBrowserOSProvider()
         const enabledMcpServers = enabledMcpServersRef.current
         const customMcpServers = enabledCustomServersRef.current
 
@@ -53,7 +55,7 @@ export const useRunWorkflow = () => {
             provider: provider?.type,
             providerType: provider?.type,
             providerName: provider?.name,
-            model: provider?.modelId ?? 'browseros',
+            model: provider.modelId,
             contextWindowSize: provider?.contextWindow,
             temperature: provider?.temperature,
             resourceName: provider?.resourceName,

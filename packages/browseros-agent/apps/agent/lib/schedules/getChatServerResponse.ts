@@ -122,7 +122,7 @@ export async function getChatServerResponse(
       apiKey: provider?.apiKey,
       baseUrl: provider?.baseUrl,
       conversationId,
-      model: provider?.modelId ?? 'default',
+      model: provider?.modelId,
       mode: request.mode ?? 'agent',
       contextWindowSize: provider?.contextWindow,
       temperature: provider?.temperature,

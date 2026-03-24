@@ -329,7 +329,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
             apiKey: provider?.apiKey,
             baseUrl: provider?.baseUrl,
             conversationId: conversationIdRef.current,
-            model: provider?.modelId ?? 'default',
+            model: provider?.modelId,
             mode: currentMode,
             contextWindowSize: provider?.contextWindow,
             temperature: provider?.temperature,

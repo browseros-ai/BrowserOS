@@ -29,3 +29,7 @@ packages/browseros/build/tools/
 
 # AI SDK DevTools traces
 .devtools/
+
+# Local generated repository snapshot docs
+all_i_know.md
+generate_all_i_know.py

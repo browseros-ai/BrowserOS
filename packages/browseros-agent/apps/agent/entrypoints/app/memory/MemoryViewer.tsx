@@ -1,4 +1,4 @@
-import { Brain, Check, Loader2, Pencil, Plus, X } from 'lucide-react'
+import { Brain, Check, Loader2, Pencil, Plus, RefreshCw, X } from 'lucide-react'
 import type { FC } from 'react'
 import { useState } from 'react'
 import { MessageResponse } from '@/components/ai-elements/message'
@@ -49,8 +49,25 @@ export const MemoryViewer: FC = () => {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center rounded-xl border border-border bg-card p-12">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      <div className="rounded-xl border border-border bg-card p-6">
+        <div className="flex flex-col items-center gap-3 py-6 text-center">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <div>
+            <p className="font-medium text-sm">Loading your memory...</p>
+            <p className="mt-1 text-muted-foreground text-xs">
+              Fetching your latest CORE.md from the BrowserOS server.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-2 gap-1.5"
+            onClick={() => refetch()}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Retry
+          </Button>
+        </div>
       </div>
     )
   }
@@ -59,8 +76,20 @@ export const MemoryViewer: FC = () => {
     return (
       <div className="rounded-xl border border-destructive/50 bg-destructive/5 p-6">
         <p className="text-destructive text-sm">
-          Could not load memory. Make sure BrowserOS server is running.
+          Could not load memory. BrowserOS server may be disconnected.
         </p>
+        <p className="mt-1 text-muted-foreground text-xs">
+          Try restarting BrowserOS agent/server, then click retry.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-3 gap-1.5"
+          onClick={() => refetch()}
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          Retry
+        </Button>
       </div>
     )
   }

@@ -63,11 +63,11 @@ async function compileTarget(
     `--target=${target.bunTarget}`,
     '--external=node-pty',
   ]
-  await runCommand('bun', args, env)
+  await runCommand(process.execPath, args, env)
 
   if (target.os === 'windows') {
     await runCommand(
-      'bun',
+      process.execPath,
       ['scripts/patch-windows-exe.ts', binaryPath],
       process.env,
     )

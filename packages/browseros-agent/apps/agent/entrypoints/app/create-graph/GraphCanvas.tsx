@@ -16,15 +16,17 @@ import type { FC } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import useDeepCompareEffect from 'use-deep-compare-effect'
-import ProductLogo from '@/assets/product_logo.svg'
 import { Button } from '@/components/ui/button'
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { getProductLogoUrl } from '@/lib/branding/logo'
 import type { GraphData } from './CreateGraph'
 import type { NodeType } from './CustomNode'
+
+const PRODUCT_LOGO_URL = getProductLogoUrl()
 
 cytoscape.use(dagre)
 nodeHtmlLabel(cytoscape)
@@ -393,7 +395,11 @@ export const GraphCanvas: FC<GraphCanvasProps> = ({
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <img src={ProductLogo} alt="BrowserOS" className="h-8 w-8 shrink-0" />
+          <img
+            src={PRODUCT_LOGO_URL}
+            alt="BrowserOS"
+            className="h-8 w-8 shrink-0"
+          />
           {isEditingName ? (
             <input
               type="text"

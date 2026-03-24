@@ -1,5 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import { useAgentServerUrl } from '@/lib/browseros/useBrowserOSProviders'
+
+const memoryCache = new Map<string, string>()
 
 async function fetchMemory(baseUrl: string): Promise<string> {
   const response = await fetch(`${baseUrl}/memory`)
@@ -28,23 +31,36 @@ async function saveMemory(baseUrl: string, content: string): Promise<void> {
 export function useMemoryContent() {
   const { baseUrl, isLoading: urlLoading } = useAgentServerUrl()
   const queryClient = useQueryClient()
+  const cacheKey = baseUrl ?? '__pending__'
+  const cachedMemory = memoryCache.get(cacheKey)
 
   const { data, isLoading, error, refetch } = useQuery<string, Error>({
     queryKey: ['memory', baseUrl],
     queryFn: () => fetchMemory(baseUrl as string),
     enabled: !!baseUrl && !urlLoading,
+    placeholderData: () => cachedMemory,
   })
+
+  const resolvedContent = data ?? cachedMemory ?? null
+
+  useEffect(() => {
+    if (!baseUrl || data === undefined) return
+    memoryCache.set(baseUrl, data)
+  }, [baseUrl, data])
 
   const saveMutation = useMutation({
     mutationFn: (content: string) => saveMemory(baseUrl as string, content),
     onSuccess: (_data, content) => {
       queryClient.setQueryData(['memory', baseUrl], content)
+      if (baseUrl) {
+        memoryCache.set(baseUrl, content)
+      }
     },
   })
 
   return {
-    content: data ?? null,
-    isLoading: isLoading || urlLoading,
+    content: resolvedContent,
+    isLoading: (isLoading || urlLoading) && !resolvedContent,
     error,
     refetch,
     save: saveMutation.mutateAsync,

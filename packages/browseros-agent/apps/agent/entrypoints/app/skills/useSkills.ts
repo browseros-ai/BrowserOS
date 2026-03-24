@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import { useAgentServerUrl } from '@/lib/browseros/useBrowserOSProviders'
 
 export type SkillMeta = {
@@ -25,6 +26,7 @@ type UpdateSkillInput = Partial<CreateSkillInput> & {
 }
 
 const SKILLS_QUERY_KEY = 'skills'
+const skillsCache = new Map<string, SkillMeta[]>()
 
 async function fetchSkills(baseUrl: string): Promise<SkillMeta[]> {
   const res = await fetch(`${baseUrl}/skills`)
@@ -83,12 +85,20 @@ async function removeSkill(baseUrl: string, id: string): Promise<void> {
 export function useSkills() {
   const { baseUrl, isLoading: urlLoading } = useAgentServerUrl()
   const queryClient = useQueryClient()
+  const cacheKey = baseUrl ?? '__pending__'
+  const cachedSkills = skillsCache.get(cacheKey)
 
   const { data, isLoading, error, refetch } = useQuery<SkillMeta[], Error>({
     queryKey: [SKILLS_QUERY_KEY, baseUrl],
     queryFn: () => fetchSkills(baseUrl as string),
     enabled: !!baseUrl && !urlLoading,
+    placeholderData: () => cachedSkills,
   })
+
+  useEffect(() => {
+    if (!baseUrl || data === undefined) return
+    skillsCache.set(baseUrl, data)
+  }, [baseUrl, data])
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: [SKILLS_QUERY_KEY] })
@@ -111,8 +121,9 @@ export function useSkills() {
   })
 
   return {
-    skills: data ?? [],
-    isLoading: isLoading || urlLoading,
+    skills: data ?? cachedSkills ?? [],
+    isLoading:
+      (isLoading || urlLoading) && (data ?? cachedSkills) === undefined,
     error,
     refetch,
     createSkill: createMutation.mutateAsync,

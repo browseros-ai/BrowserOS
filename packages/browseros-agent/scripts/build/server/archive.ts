@@ -22,6 +22,19 @@ export async function zipArtifactRoot(
     ? outputZipPath
     : resolve(outputZipPath)
   await rm(absoluteOutputZipPath, { force: true })
+  if (process.platform === 'win32') {
+    await runCommand(
+      'powershell',
+      [
+        '-NoProfile',
+        '-Command',
+        `Compress-Archive -Path * -DestinationPath '${absoluteOutputZipPath.replace(/'/g, "''")}' -Force`,
+      ],
+      process.env,
+      artifactRoot,
+    )
+    return
+  }
   await runCommand(
     'zip',
     ['-r', '-q', absoluteOutputZipPath, '.'],

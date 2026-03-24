@@ -22,7 +22,7 @@ const TARGETS: Record<TargetId, BuildTarget> = {
     name: 'Windows x64',
     os: 'windows',
     arch: 'x64',
-    bunTarget: 'bun-windows-x64-baseline',
+    bunTarget: 'bun-windows-x64',
     serverBinaryName: 'browseros_server.exe',
   },
   'darwin-arm64': {
