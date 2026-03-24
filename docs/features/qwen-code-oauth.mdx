@@ -1,0 +1,39 @@
+---
+title: "Qwen Code"
+description: "Use your Qwen Code account to power BrowserOS"
+---
+
+Connect your Qwen Code account to BrowserOS and access Alibaba's coding models with up to a **1 million token context window** — the largest of any provider we support. No API keys needed.
+
+## Setup
+
+**1.** Open BrowserOS and go to **Settings** (`chrome://browseros/settings`). You'll see the AI Providers section.
+
+![AI Settings screen](/images/setting-up-qwen/llm-screen.png)
+
+**2.** Click **USE** on the **Qwen Code** card. You'll be prompted to sign in with your Qwen account.
+
+![Select Qwen Code](/images/setting-up-qwen/select-qwen.png)
+
+**3.** Sign in with your Alibaba Cloud / Qwen account to authorize BrowserOS.
+
+![Qwen sign in](/images/setting-up-qwen/qwen-signin.png)
+
+**4.** Once authorized, Qwen Code will appear as a provider in your settings. Select a model and start using it.
+
+## Available Models
+
+| Model | Context Window |
+|-------|---------------|
+| `coder-model` | 1M |
+| `qwen3-coder-plus` | 1M |
+| `qwen3-coder-flash` | 1M |
+| `qwen3.5-plus` | 1M |
+
+<Tip>
+Qwen Code's 1 million token context window is ideal for tasks that involve long documents, entire documentation sites, or working across many browser tabs simultaneously — the agent can hold everything in context at once.
+</Tip>
+
+## Disconnecting
+
+To disconnect your Qwen account, go to **Settings**, find the Qwen Code provider, and click **Disconnect**. Your OAuth tokens will be immediately deleted from your machine.

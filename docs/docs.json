@@ -23,6 +23,9 @@
         "group": "Core Features",
         "pages": [
           "features/bring-your-own-llm",
+          "features/chatgpt-pro-oauth",
+          "features/github-copilot-oauth",
+          "features/qwen-code-oauth",
           "features/local-models",
           "features/workflows",
           "features/scheduled-tasks",

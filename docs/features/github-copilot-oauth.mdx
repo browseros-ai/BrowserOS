@@ -1,0 +1,60 @@
+---
+title: "GitHub Copilot"
+description: "Use your GitHub Copilot subscription to power BrowserOS"
+---
+
+Connect your GitHub Copilot subscription to BrowserOS and access 19+ models — including Claude, GPT-5, and Gemini — through a single GitHub sign-in. No API keys needed.
+
+<Info>
+**Free tier** includes GPT-5 Mini, Claude Haiku 4.5, GPT-4o, and GPT-4.1. **Copilot Pro** ($10/month) unlocks Claude Sonnet 4.6, Claude Opus 4.6, Gemini 3 Pro, GPT-5.4, and more.
+</Info>
+
+## Setup
+
+**1.** Open BrowserOS and go to **Settings** (`chrome://browseros/settings`). You'll see the AI Providers section.
+
+![AI Settings screen](/images/setting-up-copilot/llm-screen.png)
+
+**2.** Click **USE** on the **GitHub Copilot** card. A device code will appear — copy it, then click the link to open GitHub's device authorization page.
+
+![Device code displayed](/images/setting-up-copilot/device-code.png)
+
+**3.** Select your GitHub account to authorize.
+
+![Select GitHub account](/images/setting-up-copilot/select-account.png)
+
+**4.** Paste the device code and authorize BrowserOS to access your Copilot subscription.
+
+![Authorize device](/images/setting-up-copilot/authorize-device.png)
+
+**5.** Once authorized, GitHub Copilot will appear as a provider in your settings. Select a model and start using it.
+
+## Available Models
+
+### Free Tier
+| Model | Context Window |
+|-------|---------------|
+| `gpt-5-mini` | 128K |
+| `claude-haiku-4.5` | 128K |
+| `gpt-4o` | 64K |
+| `gpt-4.1` | 64K |
+
+### Copilot Pro / Pro+
+| Model | Context Window |
+|-------|---------------|
+| `claude-sonnet-4.6` | 200K |
+| `claude-opus-4.6` | 200K |
+| `gemini-2.5-pro` | 1M |
+| `gemini-3-pro-preview` | 1M |
+| `gpt-5.4` | 400K |
+| `gpt-5.3-codex` | 400K |
+| `gpt-5.2-codex` | 400K |
+| `grok-code-fast-1` | 128K |
+
+<Tip>
+GitHub Copilot is the most versatile provider — one subscription gives you access to models from OpenAI, Anthropic, Google, and xAI. Great if you want to switch between models for different tasks.
+</Tip>
+
+## Disconnecting
+
+To disconnect your GitHub account, go to **Settings**, find the GitHub Copilot provider, and click **Disconnect**. Your OAuth tokens will be immediately deleted from your machine.
