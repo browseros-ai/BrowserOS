@@ -5,7 +5,7 @@
   "version": "0.0.52",
   "type": "module",
   "scripts": {
-    "dev": "test -d generated/graphql || bun run codegen; mkdir -p /tmp/browseros-dev; bun --env-file=.env.development wxt",
+    "dev": "bun run codegen && bun --env-file=.env.development wxt",
     "build": "bun run codegen && wxt build",
     "build:dev": "bun --env-file=.env.development wxt build --mode development",
     "zip": "wxt zip",
