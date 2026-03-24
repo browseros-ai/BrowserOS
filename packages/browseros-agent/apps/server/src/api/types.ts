@@ -12,6 +12,10 @@ import {
   type Tab,
   TabSchema,
 } from '@browseros/shared/schemas/browser-context'
+import {
+  type ChatSource,
+  ChatSourceSchema,
+} from '@browseros/shared/schemas/chat-source'
 import { LLMConfigSchema } from '@browseros/shared/schemas/llm'
 import { z } from 'zod'
 import type { ControllerBackend } from '../browser/backends/controller'
@@ -22,6 +26,8 @@ import type { ToolRegistry } from '../tools/tool-registry'
 export {
   type BrowserContext,
   BrowserContextSchema,
+  type ChatSource,
+  ChatSourceSchema,
   type CustomMcpServer,
   CustomMcpServerSchema,
   type Tab,
@@ -42,6 +48,7 @@ export const ChatRequestSchema = AgentLLMConfigSchema.extend({
   browserContext: BrowserContextSchema.optional(),
   userSystemPrompt: z.string().optional(),
   isScheduledTask: z.boolean().optional().default(false),
+  source: ChatSourceSchema.optional().default('sidepanel'),
   userWorkingDir: z.string().min(1).optional(),
   supportsImages: z.boolean().optional().default(true),
   mode: z.enum(['chat', 'agent']).optional().default('agent'),

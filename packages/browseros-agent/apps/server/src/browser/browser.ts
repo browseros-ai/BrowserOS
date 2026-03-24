@@ -1112,9 +1112,13 @@ export class Browser {
     return result.windows as WindowInfo[]
   }
 
-  async createWindow(opts?: { hidden?: boolean }): Promise<WindowInfo> {
+  async createWindow(opts?: {
+    hidden?: boolean
+    url?: string
+  }): Promise<WindowInfo> {
     const result = await this.cdp.Browser.createWindow({
       ...(opts?.hidden !== undefined && { hidden: opts.hidden }),
+      ...(opts?.url !== undefined && { url: opts.url }),
     })
     return result.window as WindowInfo
   }

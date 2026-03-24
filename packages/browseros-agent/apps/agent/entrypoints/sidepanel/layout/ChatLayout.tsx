@@ -42,7 +42,7 @@ const ChatLayoutContent: FC = () => {
 
 export const ChatLayout: FC = () => {
   return (
-    <ChatSessionProvider>
+    <ChatSessionProvider origin="sidepanel">
       <ChatLayoutContent />
     </ChatSessionProvider>
   )

@@ -20,6 +20,9 @@ import { logger } from '../../lib/logger'
 import type { ToolRegistry } from '../../tools/tool-registry'
 import type { BrowserContext, ChatRequest } from '../types'
 
+const NEWTAB_EXECUTION_URL = 'about:blank'
+const NEWTAB_EXECUTION_TITLE = 'New Tab Task'
+
 export interface ChatServiceDeps {
   sessionStore: SessionStore
   klavisClient: KlavisClient
@@ -39,6 +42,9 @@ export class ChatService {
     const { sessionStore } = this.deps
 
     const llmConfig = await resolveLLMConfig(request, this.deps.browserosId)
+    const resolvedRequestContext = request.isScheduledTask
+      ? request.browserContext
+      : await this.resolvePageIds(request.browserContext)
 
     const workingDir = await this.resolveSessionDir(request)
 
@@ -84,7 +90,11 @@ export class ChatService {
       await session.agent.dispose()
       sessionStore.remove(request.conversationId)
 
-      const browserContext = await this.resolvePageIds(request.browserContext)
+      const browserContext = await this.resolveSessionBrowserContext(
+        { ...request, source: session.source },
+        resolvedRequestContext,
+        session.browserContext,
+      )
       const agent = await AiSdkAgent.create({
         resolvedConfig: agentConfig,
         browser: this.deps.browser,
@@ -94,7 +104,13 @@ export class ChatService {
         browserosId: this.deps.browserosId,
         aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
       })
-      session = { agent, browserContext, mcpServerKey }
+      session = {
+        agent,
+        source: session.source,
+        hiddenWindowId: session.hiddenWindowId,
+        browserContext,
+        mcpServerKey,
+      }
       session.agent.messages = previousMessages
       sessionStore.set(request.conversationId, session)
     }
@@ -102,21 +118,28 @@ export class ChatService {
     if (!session) {
       isNewSession = true
       let hiddenWindowId: number | undefined
-      let browserContext = await this.resolvePageIds(request.browserContext)
+      let browserContext = await this.resolveSessionBrowserContext(
+        request,
+        resolvedRequestContext,
+      )
       if (request.isScheduledTask) {
         try {
-          const win = await this.deps.browser.createWindow({ hidden: true })
-          hiddenWindowId = win.windowId
-          const pageId = await this.deps.browser.newPage('about:blank', {
-            windowId: hiddenWindowId,
+          const win = await this.deps.browser.createWindow({
+            hidden: true,
+            url: NEWTAB_EXECUTION_URL,
           })
+          hiddenWindowId = win.windowId
+          const pageId = await this.getOrCreateWindowPageId(
+            win.windowId,
+            win.activeTabId,
+          )
           browserContext = {
             ...browserContext,
             windowId: hiddenWindowId,
             activeTab: {
-              id: pageId,
+              id: win.activeTabId ?? pageId,
               pageId,
-              url: 'about:blank',
+              url: NEWTAB_EXECUTION_URL,
               title: 'Scheduled Task',
             },
           }
@@ -141,7 +164,13 @@ export class ChatService {
         browserosId: this.deps.browserosId,
         aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
       })
-      session = { agent, hiddenWindowId, browserContext, mcpServerKey }
+      session = {
+        agent,
+        source: request.source,
+        hiddenWindowId,
+        browserContext,
+        mcpServerKey,
+      }
       sessionStore.set(request.conversationId, session)
     }
 
@@ -160,15 +189,11 @@ export class ChatService {
       })
     }
 
-    const messageContext = request.isScheduledTask
-      ? (session.browserContext ?? request.browserContext)
-      : request.browserContext
-    // Scheduled tasks already have correct internal pageIds from browser.newPage();
-    // calling resolvePageIds would pass those to resolveTabIds (which expects Chrome
-    // tab IDs), corrupting them back to undefined.
-    const resolvedMessageContext = request.isScheduledTask
-      ? messageContext
-      : await this.resolvePageIds(messageContext)
+    const resolvedMessageContext = this.buildMessageBrowserContext(
+      { ...request, source: session.source },
+      resolvedRequestContext,
+      session.browserContext,
+    )
     const userContent = formatUserMessage(
       request.message,
       resolvedMessageContext,
@@ -208,6 +233,50 @@ export class ChatService {
     }
     const deleted = await this.deps.sessionStore.delete(conversationId)
     return { deleted, sessionCount: this.deps.sessionStore.count() }
+  }
+
+  private buildMessageBrowserContext(
+    request: ChatRequest,
+    requestContext: BrowserContext | undefined,
+    sessionContext?: BrowserContext,
+  ): BrowserContext | undefined {
+    if (request.isScheduledTask) {
+      return sessionContext ?? requestContext
+    }
+    if (request.source === 'newtab') {
+      return this.mergeExecutionContext(sessionContext, requestContext)
+    }
+    return requestContext
+  }
+
+  private async resolveSessionBrowserContext(
+    request: ChatRequest,
+    requestContext: BrowserContext | undefined,
+    existingSessionContext?: BrowserContext,
+  ): Promise<BrowserContext | undefined> {
+    if (request.isScheduledTask) {
+      return existingSessionContext ?? requestContext
+    }
+    if (request.source !== 'newtab') {
+      return requestContext
+    }
+    if (existingSessionContext) {
+      return this.mergeExecutionContext(existingSessionContext, requestContext)
+    }
+    return this.createNewTabExecutionContext(requestContext)
+  }
+
+  private mergeExecutionContext(
+    executionContext?: BrowserContext,
+    requestContext?: BrowserContext,
+  ): BrowserContext | undefined {
+    if (!executionContext) return requestContext
+    if (!requestContext) return executionContext
+    return {
+      ...requestContext,
+      windowId: executionContext.windowId ?? requestContext.windowId,
+      activeTab: executionContext.activeTab ?? requestContext.activeTab,
+    }
   }
 
   // Browser context arrives with Chrome tab IDs, but tools expect internal page IDs.
@@ -250,6 +319,67 @@ export class ChatService {
       selectedTabs: browserContext.selectedTabs?.map(addPageId),
       tabs: browserContext.tabs?.map(addPageId),
     }
+  }
+
+  private async createNewTabExecutionContext(
+    requestContext?: BrowserContext,
+  ): Promise<BrowserContext | undefined> {
+    const previousWindowId =
+      requestContext?.windowId ??
+      (await this.deps.browser.getActivePage())?.windowId
+    const win = await this.deps.browser.createWindow({
+      url: NEWTAB_EXECUTION_URL,
+    })
+    const pageId = await this.getOrCreateWindowPageId(
+      win.windowId,
+      win.activeTabId,
+    )
+
+    if (previousWindowId !== undefined && previousWindowId !== win.windowId) {
+      await this.deps.browser
+        .activateWindow(previousWindowId)
+        .catch((error) => {
+          logger.warn('Failed to restore previous window focus', {
+            previousWindowId,
+            newWindowId: win.windowId,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        })
+    }
+
+    logger.info('Created execution window for new-tab chat', {
+      windowId: win.windowId,
+      pageId,
+      previousWindowId,
+    })
+
+    return {
+      ...requestContext,
+      windowId: win.windowId,
+      activeTab: {
+        id: win.activeTabId ?? pageId,
+        pageId,
+        url: NEWTAB_EXECUTION_URL,
+        title: NEWTAB_EXECUTION_TITLE,
+      },
+    }
+  }
+
+  private async getOrCreateWindowPageId(
+    windowId: number,
+    tabId?: number,
+  ): Promise<number> {
+    if (tabId !== undefined) {
+      const pageId = (await this.deps.browser.resolveTabIds([tabId])).get(tabId)
+      if (pageId !== undefined) {
+        return pageId
+      }
+    }
+
+    return this.deps.browser.newPage(NEWTAB_EXECUTION_URL, {
+      windowId,
+      background: true,
+    })
   }
 
   private closeHiddenWindow(windowId: number, conversationId: string): void {

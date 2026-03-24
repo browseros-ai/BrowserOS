@@ -7,6 +7,7 @@
  */
 
 import { BrowserContextSchema } from '@browseros/shared/schemas/browser-context'
+import { ChatSourceSchema } from '@browseros/shared/schemas/chat-source'
 import { LLMConfigSchema } from '@browseros/shared/schemas/llm'
 import { z } from 'zod'
 import type { Browser } from '../../../browser/browser'
@@ -24,6 +25,7 @@ export const ActRequestSchema = z.object({
   context: z.record(z.unknown()).optional(),
   maxSteps: z.number().optional(),
   browserContext: BrowserContextSchema.optional(),
+  source: ChatSourceSchema.optional(),
   llm: LLMConfigSchema.optional(),
   /** Session ID for state persistence. If provided, reuses existing session. */
   sessionId: z.string().uuid().optional(),

@@ -87,12 +87,13 @@ export function createSdkRoutes(deps: SdkDeps) {
       }
     })
     .post('/act', zValidator('json', ActRequestSchema), async (c) => {
-      const { instruction, context, browserContext, llm, sessionId } =
+      const { instruction, context, browserContext, llm, sessionId, source } =
         c.req.valid('json')
       logger.info('SDK act request', {
         instruction,
         windowId: browserContext?.windowId,
         hasSessionId: !!sessionId,
+        source,
       })
 
       const llmConfig = llm ?? { provider: LLM_PROVIDERS.BROWSEROS }
@@ -121,6 +122,7 @@ export function createSdkRoutes(deps: SdkDeps) {
             instruction,
             context,
             browserContext,
+            source,
             llmConfig,
             signal: c.req.raw.signal,
             sessionId,

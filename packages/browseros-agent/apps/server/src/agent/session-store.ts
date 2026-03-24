@@ -1,11 +1,13 @@
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
+import type { ChatSource } from '@browseros/shared/schemas/chat-source'
 import { logger } from '../lib/logger'
 import type { AiSdkAgent } from './ai-sdk-agent'
 
 export interface AgentSession {
   agent: AiSdkAgent
+  source: ChatSource
   hiddenWindowId?: number
-  /** Browser context scoped to the hidden window (scheduled tasks only) */
+  /** Browser context the session should keep using for agent execution. */
   browserContext?: BrowserContext
   /** MCP server names used when the session was created, for change detection. */
   mcpServerKey?: string

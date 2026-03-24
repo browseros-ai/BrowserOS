@@ -58,12 +58,14 @@ export function createChatRoutes(deps: ChatRouteDeps) {
       metrics.log('chat.request', {
         provider: request.provider,
         model: request.model,
+        source: request.source,
       })
 
       logger.info('Chat request received', {
         conversationId: request.conversationId,
         provider: request.provider,
         model: request.model,
+        source: request.source,
       })
 
       return service.processMessage(request, c.req.raw.signal)

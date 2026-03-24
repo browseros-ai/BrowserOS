@@ -7,6 +7,7 @@
  */
 
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
+import type { ChatSource } from '@browseros/shared/schemas/chat-source'
 import type { LLMConfig } from '@browseros/shared/schemas/llm'
 import type { UIMessageStreamEvent } from '@browseros/shared/schemas/ui-stream'
 import { createParser, type EventSourceMessage } from 'eventsource-parser'
@@ -16,6 +17,7 @@ export interface ExecuteActionOptions {
   instruction: string
   context?: Record<string, unknown>
   browserContext?: BrowserContext
+  source?: ChatSource
   llmConfig: LLMConfig
   signal?: AbortSignal
   onSSEEvent?: (event: UIMessageStreamEvent) => Promise<void>
@@ -35,6 +37,7 @@ export class ChatService {
       instruction,
       context,
       browserContext,
+      source,
       llmConfig,
       signal,
       onSSEEvent,
@@ -70,6 +73,7 @@ export class ChatService {
         secretAccessKey: llmConfig.secretAccessKey,
         sessionToken: llmConfig.sessionToken,
         browserContext,
+        source,
       }),
       signal,
     })

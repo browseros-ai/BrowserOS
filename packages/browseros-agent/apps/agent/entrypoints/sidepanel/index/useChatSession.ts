@@ -1,4 +1,5 @@
 import { useChat } from '@ai-sdk/react'
+import type { ChatSource } from '@browseros/shared/schemas/chat-source'
 import { DefaultChatTransport, type UIMessage } from 'ai'
 import { compact } from 'es-toolkit/array'
 import { useEffect, useRef, useState } from 'react'
@@ -68,7 +69,9 @@ export const getResponseAndQueryFromMessageId = (
   }
 }
 
-export type ChatOrigin = 'sidepanel' | 'newtab'
+export type ChatOrigin = ChatSource
+
+const DEFAULT_CHAT_SOURCE: ChatSource = 'sidepanel'
 
 export interface ChatSessionOptions {
   origin?: ChatOrigin
@@ -120,6 +123,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   }))
 
   const [mode, setMode] = useState<ChatMode>('agent')
+  const [sessionSource, setSessionSource] = useState<ChatSource>(
+    options?.origin ?? DEFAULT_CHAT_SOURCE,
+  )
   const [textToAction, setTextToAction] = useState<Map<string, ChatAction>>(
     new Map(),
   )
@@ -166,6 +172,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   }
 
   const modeRef = useRef<ChatMode>(mode)
+  const sessionSourceRef = useRef<ChatSource>(sessionSource)
   const textToActionRef = useRef<Map<string, ChatAction>>(textToAction)
   const workingDirRef = useRef<string | undefined>(undefined)
   const selectionMapRef = useRef<
@@ -211,6 +218,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     modeRef.current = mode
     textToActionRef.current = textToAction
   }, [mode, textToAction])
+
+  useEffect(() => {
+    sessionSourceRef.current = sessionSource
+  }, [sessionSource])
 
   const selectedProvider = selectedLlmProvider
     ? {
@@ -343,9 +354,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
             // ChatGPT Pro (Codex)
             reasoningEffort: provider?.reasoningEffort,
             reasoningSummary: provider?.reasoningSummary,
+            source: sessionSourceRef.current,
             browserContext,
             userSystemPrompt:
-              options?.origin === 'newtab'
+              sessionSourceRef.current === 'newtab'
                 ? [personalizationRef.current, NEWTAB_SYSTEM_PROMPT]
                     .filter(Boolean)
                     .join('\n\n')
@@ -496,6 +508,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const pendingMessageRef = useRef<{
     text: string
     action?: ChatAction
+    source?: ChatSource
   } | null>(null)
 
   useEffect(() => {
@@ -515,11 +528,19 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           return next
         })
       }
+      if (pending.source) {
+        sessionSourceRef.current = pending.source
+        setSessionSource(pending.source)
+      }
       baseSendMessage({ text: pending.text })
     }
   }, [isIntegrationsSynced, baseSendMessage])
 
-  const sendMessage = (params: { text: string; action?: ChatAction }) => {
+  const sendMessage = (params: {
+    text: string
+    action?: ChatAction
+    source?: ChatSource
+  }) => {
     track(MESSAGE_SENT_EVENT, {
       mode,
       provider_type: selectedLlmProvider?.type,
@@ -530,6 +551,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       // Queue the message — will be sent when sync completes
       pendingMessageRef.current = params
       return
+    }
+
+    if (params.source) {
+      sessionSourceRef.current = params.source
+      setSessionSource(params.source)
     }
 
     if (params.action) {
@@ -548,7 +574,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     const unwatch = searchActionsStorage.watch((storageAction) => {
       if (storageAction) {
         setMode(storageAction.mode)
-        sendMessage({ text: storageAction.query, action: storageAction.action })
+        sendMessage({
+          text: storageAction.query,
+          action: storageAction.action,
+          source: storageAction.source,
+        })
       }
     })
     return () => unwatch()
@@ -588,6 +618,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     stop()
     setConversationId(crypto.randomUUID())
     setMessages([])
+    sessionSourceRef.current = options?.origin ?? DEFAULT_CHAT_SOURCE
+    setSessionSource(options?.origin ?? DEFAULT_CHAT_SOURCE)
     setTextToAction(new Map())
     setLiked({})
     setDisliked({})

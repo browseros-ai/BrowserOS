@@ -53,6 +53,10 @@
       "types": "./src/schemas/browser-context.ts",
       "default": "./src/schemas/browser-context.ts"
     },
+    "./schemas/chat-source": {
+      "types": "./src/schemas/chat-source.ts",
+      "default": "./src/schemas/chat-source.ts"
+    },
     "./sentry/sanitize": {
       "types": "./src/sentry/sanitize.ts",
       "default": "./src/sentry/sanitize.ts"

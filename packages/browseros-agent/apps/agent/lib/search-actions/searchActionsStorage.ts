@@ -1,3 +1,4 @@
+import type { ChatSource } from '@browseros/shared/schemas/chat-source'
 import { storage } from '@wxt-dev/storage'
 import type { ChatAction } from '@/lib/chat-actions/types'
 
@@ -7,6 +8,7 @@ import type { ChatAction } from '@/lib/chat-actions/types'
 export interface SearchActionStorage {
   query: string
   mode: 'chat' | 'agent'
+  source?: ChatSource
   action?: ChatAction
 }
 

@@ -371,6 +371,7 @@ export const NewTab = () => {
           openSidePanelWithSearch('open', {
             query: searchQuery,
             mode: 'agent',
+            source: 'newtab',
             action,
           })
           reset()
@@ -394,6 +395,7 @@ export const NewTab = () => {
           openSidePanelWithSearch('open', {
             query: item.message,
             mode: item.mode,
+            source: 'newtab',
             action,
           })
           reset()
