@@ -32,7 +32,7 @@ import {
 import { McpServerIcon } from '@/entrypoints/app/connect-mcp/McpServerIcon'
 import { useGetUserMCPIntegrations } from '@/entrypoints/app/connect-mcp/useGetUserMCPIntegrations'
 import { useChatSessionContext } from '@/entrypoints/sidepanel/layout/ChatSessionContext'
-import { Feature } from '@/lib/browseros/capabilities'
+import { Capabilities, Feature } from '@/lib/browseros/capabilities'
 import { useCapabilities } from '@/lib/browseros/useCapabilities'
 import {
   createAITabAction,
@@ -338,8 +338,13 @@ export const NewTab = () => {
     navigate(`/home/chat?${params.toString()}`)
   }
 
-  const runSelectedAction = (item: SuggestionItem | undefined) => {
+  const runSelectedAction = async (item: SuggestionItem | undefined) => {
     if (!item) return
+
+    const supportsChatSource = await Capabilities.supports(
+      Feature.CHAT_SOURCE_SUPPORT,
+    )
+    const source = supportsChatSource ? 'newtab' : undefined
 
     switch (item.type) {
       case 'search':
@@ -371,7 +376,7 @@ export const NewTab = () => {
           openSidePanelWithSearch('open', {
             query: searchQuery,
             mode: 'agent',
-            source: 'newtab',
+            source,
             action,
           })
           reset()
@@ -395,7 +400,7 @@ export const NewTab = () => {
           openSidePanelWithSearch('open', {
             query: item.message,
             mode: item.mode,
-            source: 'newtab',
+            source,
             action,
           })
           reset()

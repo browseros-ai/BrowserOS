@@ -318,6 +318,12 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         const supportsArrayConversation = await Capabilities.supports(
           Feature.PREVIOUS_CONVERSATION_ARRAY,
         )
+        const supportsChatSource = await Capabilities.supports(
+          Feature.CHAT_SOURCE_SUPPORT,
+        )
+        const effectiveSource = supportsChatSource
+          ? sessionSourceRef.current
+          : DEFAULT_CHAT_SOURCE
 
         const previousMessages = messagesRef.current
         const history =
@@ -354,10 +360,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
             // ChatGPT Pro (Codex)
             reasoningEffort: provider?.reasoningEffort,
             reasoningSummary: provider?.reasoningSummary,
-            source: sessionSourceRef.current,
+            source: effectiveSource,
             browserContext,
             userSystemPrompt:
-              sessionSourceRef.current === 'newtab'
+              effectiveSource === 'newtab'
                 ? [personalizationRef.current, NEWTAB_SYSTEM_PROMPT]
                     .filter(Boolean)
                     .join('\n\n')

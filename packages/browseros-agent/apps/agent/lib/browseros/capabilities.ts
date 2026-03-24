@@ -53,6 +53,8 @@ export enum Feature {
   QWEN_CODE_SUPPORT = 'QWEN_CODE_SUPPORT',
   // Credit-based usage tracking
   CREDITS_SUPPORT = 'CREDITS_SUPPORT',
+  // Chat request source metadata for new-tab execution routing
+  CHAT_SOURCE_SUPPORT = 'CHAT_SOURCE_SUPPORT',
 }
 
 /**
@@ -84,6 +86,7 @@ const FEATURE_CONFIG: { [K in Feature]: FeatureConfig } = {
   [Feature.GITHUB_COPILOT_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.QWEN_CODE_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.CREDITS_SUPPORT]: { minServerVersion: '0.0.78' },
+  [Feature.CHAT_SOURCE_SUPPORT]: { minServerVersion: '0.0.79' },
 }
 
 function parseVersion(version: string): number[] {

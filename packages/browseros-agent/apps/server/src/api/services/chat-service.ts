@@ -20,8 +20,8 @@ import { logger } from '../../lib/logger'
 import type { ToolRegistry } from '../../tools/tool-registry'
 import type { BrowserContext, ChatRequest } from '../types'
 
-const NEWTAB_EXECUTION_URL = 'about:blank'
-const NEWTAB_EXECUTION_TITLE = 'New Tab Task'
+const NEWTAB_EXECUTION_URL = 'chrome://newtab'
+const NEWTAB_EXECUTION_TITLE = 'New Tab'
 
 export interface ChatServiceDeps {
   sessionStore: SessionStore
