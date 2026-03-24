@@ -130,11 +130,38 @@ function resolveTarget(targets: TargetInfo[], query: string): TargetInfo {
     return targets[idx]
   }
   const q = query.toLowerCase()
-  const match = targets.find(
-    (t) => t.url.toLowerCase().includes(q) || t.title.toLowerCase().includes(q),
+  const candidates = query.includes(',')
+    ? query.split(',').map((s) => s.trim().toLowerCase())
+    : [q]
+  for (const c of candidates) {
+    const match = targets.find(
+      (t) =>
+        t.url.toLowerCase().includes(c) || t.title.toLowerCase().includes(c),
+    )
+    if (match) return match
+  }
+  throw new Error(`No target matching "${query}"`)
+}
+
+async function waitForTargetUrl(
+  cdp: CDPClient,
+  urlSubstring: string,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  const sub = urlSubstring.toLowerCase()
+  while (Date.now() < deadline) {
+    const targets = await getTargets(cdp)
+    if (targets.some((t) => t.url.toLowerCase().includes(sub))) return
+    await new Promise((r) => setTimeout(r, 400))
+  }
+  throw new Error(`Timeout waiting for target URL containing "${urlSubstring}"`)
+}
+
+function findSidepanelTargetIndex(targets: TargetInfo[]): number {
+  return targets.findIndex((t) =>
+    t.url.toLowerCase().includes('sidepanel.html'),
   )
-  if (!match) throw new Error(`No target matching "${query}"`)
-  return match
 }
 
 // ─── Session helpers ─────────────────────────────────────────────────
@@ -583,11 +610,11 @@ async function cmdFill(
   }
 }
 
-async function cmdEval(
+async function evalReturn(
   cdp: CDPClient,
   targetQuery: string,
   expression: string,
-): Promise<void> {
+): Promise<unknown> {
   const targets = await getTargets(cdp)
   const target = resolveTarget(targets, targetQuery)
   const sessionId = await attachSession(cdp, target.targetId)
@@ -616,16 +643,205 @@ async function cmdEval(
         `JS exception: ${exnDetails.exception?.description ?? 'unknown error'}`,
       )
     }
-    if (evalResult?.type === 'undefined') {
-      console.log('undefined')
-    } else if (evalResult?.value !== undefined) {
-      console.log(JSON.stringify(evalResult.value, null, 2))
-    } else {
-      console.log(evalResult?.description ?? evalResult?.type ?? 'null')
-    }
+    if (evalResult?.type === 'undefined') return undefined
+    if (evalResult?.value !== undefined) return evalResult.value
+    return evalResult?.description ?? evalResult?.type ?? null
   } finally {
     await detachSession(cdp, sessionId)
   }
+}
+
+async function cmdEval(
+  cdp: CDPClient,
+  targetQuery: string,
+  expression: string,
+): Promise<void> {
+  const value = await evalReturn(cdp, targetQuery, expression)
+  console.log(
+    value === undefined ? 'undefined' : JSON.stringify(value, null, 2),
+  )
+}
+
+async function reloadTarget(
+  cdp: CDPClient,
+  targetQuery: string,
+): Promise<void> {
+  const targets = await getTargets(cdp)
+  const target = resolveTarget(targets, targetQuery)
+  const sessionId = await attachSession(cdp, target.targetId)
+  try {
+    await enableDomains(cdp, sessionId, ['Page'])
+    await cdp.send('Page.reload', { ignoreCache: false }, sessionId)
+  } finally {
+    await detachSession(cdp, sessionId)
+  }
+}
+
+async function cmdE2eSidepanelPersist(cdp: CDPClient): Promise<void> {
+  await cmdOpenSidepanel(cdp)
+
+  const refreshSidepanelIndex = async (): Promise<string> => {
+    const targets = await getTargets(cdp)
+    const idx = findSidepanelTargetIndex(targets)
+    if (idx < 0) throw new Error('sidepanel target not in CDP list')
+    return String(idx)
+  }
+
+  const deadlineSp = Date.now() + 30_000
+  let sp: string | undefined
+  while (Date.now() < deadlineSp) {
+    try {
+      sp = await refreshSidepanelIndex()
+      break
+    } catch {
+      await new Promise((r) => setTimeout(r, 400))
+    }
+  }
+  if (!sp) {
+    console.error('[e2e] FAIL: sidepanel tab never appeared in CDP targets')
+    process.exitCode = 1
+    return
+  }
+  await new Promise((r) => setTimeout(r, 2000))
+
+  const marker = `STRICT-PERSIST-${Date.now()}`
+  const sendExpr = `(async() => {
+    const marker = ${JSON.stringify(marker)};
+    const ta = document.querySelector('textarea');
+    if (!ta) return { step: 'no-textarea' };
+    const desc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+    if (desc?.set) desc.set.call(ta, marker);
+    else ta.value = marker;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    ta.dispatchEvent(new Event('change', { bubbles: true }));
+    const send = [...document.querySelectorAll('button')].find(
+      (b) => (b.textContent || '').trim() === 'Send',
+    );
+    if (!send) return { step: 'no-send' };
+    if (send.disabled) return { step: 'send-disabled' };
+    send.click();
+    return { step: 'sent', marker };
+  })()`
+
+  const sendRes = (await evalReturn(cdp, sp, sendExpr)) as {
+    step?: string
+    marker?: string
+  }
+  console.log('[e2e] send:', JSON.stringify(sendRes))
+  if (sendRes?.step !== 'sent') {
+    console.error('[e2e] FAIL: could not send message', sendRes)
+    process.exitCode = 1
+    return
+  }
+
+  const deadlineAssist = Date.now() + 90_000
+  let assistantOk = false
+  while (Date.now() < deadlineAssist) {
+    const check = (await evalReturn(
+      cdp,
+      sp,
+      `(async() => {
+        const t = document.body?.innerText || '';
+        const m = ${JSON.stringify(marker)};
+        const hasUser = t.includes(m);
+        const hasAssistant =
+          /Thought for|I'm here|How can I help|functioning normally/i.test(t) &&
+          hasUser;
+        return { hasAssistant, len: t.length };
+      })()`,
+    )) as { hasAssistant?: boolean; len?: number }
+    if (check?.hasAssistant) {
+      assistantOk = true
+      break
+    }
+    await new Promise((r) => setTimeout(r, 2000))
+  }
+  if (!assistantOk) {
+    console.error('[e2e] FAIL: assistant reply not detected within timeout')
+    process.exitCode = 1
+    return
+  }
+
+  const findExpr = `(async() => {
+    const marker = ${JSON.stringify(marker)};
+    const all = await chrome.storage.local.get(null);
+    for (const [k, v] of Object.entries(all)) {
+      if (!Array.isArray(v)) continue;
+      for (const c of v) {
+        if (!c || typeof c !== 'object') continue;
+        const msgs = c.messages;
+        if (!Array.isArray(msgs)) continue;
+        if (JSON.stringify(msgs).includes(marker)) {
+          return {
+            id: c.id,
+            storageKey: k,
+            messageCount: msgs.length,
+          };
+        }
+      }
+    }
+    return {
+      error: 'conversation not in storage',
+      keysSample: Object.keys(all)
+        .filter((x) => /conv|local/i.test(x))
+        .slice(0, 25),
+    };
+  })()`
+
+  const found = (await evalReturn(cdp, sp, findExpr)) as {
+    id?: string
+    error?: string
+    keysSample?: string[]
+  }
+  console.log('[e2e] storage:', JSON.stringify(found))
+  if (!found?.id) {
+    console.error(
+      '[e2e] FAIL: no conversation id in chrome.storage.local',
+      found,
+    )
+    process.exitCode = 1
+    return
+  }
+
+  const convId = found.id
+  await reloadTarget(cdp, sp)
+  await waitForTargetUrl(cdp, 'sidepanel.html', 30_000)
+  await new Promise((r) => setTimeout(r, 4000))
+  sp = await refreshSidepanelIndex()
+
+  const restoreExpr = `(async() => {
+    const id = ${JSON.stringify(convId)};
+    window.location.hash = '#/?conversationId=' + encodeURIComponent(id);
+    return window.location.hash;
+  })()`
+  const afterHash = await evalReturn(cdp, sp, restoreExpr)
+  console.log('[e2e] after restore hash:', afterHash)
+  await new Promise((r) => setTimeout(r, 5000))
+
+  const verify = (await evalReturn(
+    cdp,
+    sp,
+    `(async() => {
+      const marker = ${JSON.stringify(marker)};
+      const t = document.body?.innerText || '';
+      return {
+        ok: t.includes(marker),
+        hash: location.hash,
+        len: t.length,
+      };
+    })()`,
+  )) as { ok?: boolean; hash?: string; len?: number }
+
+  console.log('[e2e] verify after reload:', JSON.stringify(verify))
+  if (!verify?.ok) {
+    console.error(
+      '[e2e] FAIL: expected user message missing after reload + restore',
+    )
+    process.exitCode = 1
+    return
+  }
+
+  console.log('[e2e] PASS: sidepanel persist + reload + restore')
 }
 
 // ─── press_key ────────────────────────────────────────────────────────
@@ -1089,7 +1305,8 @@ Examples:
   bun scripts/dev/inspect-ui.ts wait_for app.html text "Scheduled Tasks"
   bun scripts/dev/inspect-ui.ts wait_for sidepanel selector ".chat-message"
   bun scripts/dev/inspect-ui.ts eval app.html "window.location.hash = '#/settings'"
-  bun scripts/dev/inspect-ui.ts open-sidepanel`)
+  bun scripts/dev/inspect-ui.ts open-sidepanel
+  e2e-sidepanel-persist                Strict E2E: send chat, reload sidepanel, restore via ?conversationId=`)
 }
 
 // ─── Main ────────────────────────────────────────────────────────────
@@ -1242,6 +1459,10 @@ async function main(): Promise<void> {
 
       case 'open-sidepanel':
         await cmdOpenSidepanel(cdp)
+        break
+
+      case 'e2e-sidepanel-persist':
+        await cmdE2eSidepanelPersist(cdp)
         break
 
       default:

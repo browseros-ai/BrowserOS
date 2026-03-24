@@ -37,6 +37,7 @@
     "lint": "bun x @biomejs/biome check",
     "lint:fix": "bun x @biomejs/biome check --write --unsafe",
     "gen:cdp": "bun scripts/codegen/cdp-protocol.ts",
+    "e2e:sidepanel-persist": "bun scripts/dev/inspect-ui.ts e2e-sidepanel-persist",
     "clean": "rimraf dist"
   },
   "repository": "browseros-ai/BrowserOS-server",
