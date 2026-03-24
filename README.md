@@ -123,6 +123,7 @@ Your browsing data could be used for ads or to train their models. We keep your 
 
 We'd love your help making BrowserOS better!
 
+- Submodule contributors: see `docs/submodule-workflow.md` for `Sup-agent` workflow and sync rules.
 - 🐛 [Report bugs](https://github.com/browseros-ai/BrowserOS/issues)
 - 💡 [Suggest features](https://github.com/browseros-ai/BrowserOS/issues/99)
 - 💬 [Join Discord](https://discord.gg/YKwjt5vuKr)
