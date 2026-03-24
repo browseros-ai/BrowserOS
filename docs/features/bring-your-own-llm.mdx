@@ -17,17 +17,23 @@ See how to connect your own LLM in under a minute:
 
 Already paying for ChatGPT Pro, GitHub Copilot, or Qwen Code? Connect your existing account to BrowserOS with a single sign-in — no API keys, no extra cost.
 
-<CardGroup cols={3}>
-  <Card title="ChatGPT Pro / Plus" icon="message-bot" href="/features/chatgpt-pro-oauth">
-    Sign in with your OpenAI account. Access GPT-5 Codex, GPT-5.4, and the full Codex lineup with up to 400K context.
-  </Card>
-  <Card title="GitHub Copilot" icon="github" href="/features/github-copilot-oauth">
-    Sign in with your GitHub account. Access 19+ models including Claude, GPT-5, and Gemini through one subscription.
-  </Card>
-  <Card title="Qwen Code" icon="code" href="/features/qwen-code-oauth">
-    Sign in with your Qwen account. Access Qwen 3 Coder with a 1 million token context window.
-  </Card>
-</CardGroup>
+<div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+  <a href="/features/chatgpt-pro-oauth" style={{ display: 'block', padding: '20px', borderRadius: '12px', border: '1px solid var(--border-color)', textDecoration: 'none', color: 'inherit', transition: 'border-color 0.2s' }}>
+    <img src="/images/icons/openai.svg" alt="OpenAI" width="28" height="28" style={{ marginBottom: '12px' }} />
+    <div style={{ fontWeight: 600, fontSize: '15px', marginBottom: '6px' }}>ChatGPT Pro / Plus</div>
+    <div style={{ fontSize: '13px', opacity: 0.7, lineHeight: 1.5 }}>Sign in with your OpenAI account. Access GPT-5 Codex, GPT-5.4, and the full Codex lineup with up to 400K context.</div>
+  </a>
+  <a href="/features/github-copilot-oauth" style={{ display: 'block', padding: '20px', borderRadius: '12px', border: '1px solid var(--border-color)', textDecoration: 'none', color: 'inherit', transition: 'border-color 0.2s' }}>
+    <img src="/images/icons/githubcopilot.svg" alt="GitHub Copilot" width="28" height="28" style={{ marginBottom: '12px' }} />
+    <div style={{ fontWeight: 600, fontSize: '15px', marginBottom: '6px' }}>GitHub Copilot</div>
+    <div style={{ fontSize: '13px', opacity: 0.7, lineHeight: 1.5 }}>Sign in with your GitHub account. Access 19+ models including Claude, GPT-5, and Gemini through one subscription.</div>
+  </a>
+  <a href="/features/qwen-code-oauth" style={{ display: 'block', padding: '20px', borderRadius: '12px', border: '1px solid var(--border-color)', textDecoration: 'none', color: 'inherit', transition: 'border-color 0.2s' }}>
+    <img src="/images/icons/qwen.svg" alt="Qwen" width="28" height="28" style={{ marginBottom: '12px' }} />
+    <div style={{ fontWeight: 600, fontSize: '15px', marginBottom: '6px' }}>Qwen Code</div>
+    <div style={{ fontSize: '13px', opacity: 0.7, lineHeight: 1.5 }}>Sign in with your Qwen account. Access Qwen 3 Coder with a 1 million token context window.</div>
+  </a>
+</div>
 
 ---
 
