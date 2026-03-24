@@ -23,6 +23,7 @@ export interface OAuthProviderFlowConfig {
 export interface PendingDeviceCode {
   userCode: string
   providerName: string
+  verificationUri: string
 }
 
 interface OAuthProviderFlowReturn {
@@ -117,6 +118,7 @@ export function useOAuthProviderFlow(
     setPendingDeviceCode({
       userCode: deviceData.user_code,
       providerName: config.displayName,
+      verificationUri,
     })
 
     startTokenPolling(auth, deviceData, codeVerifier, async (token) => {
@@ -155,6 +157,7 @@ export function useOAuthProviderFlow(
       setPendingDeviceCode({
         userCode: data.userCode,
         providerName: config.displayName,
+        verificationUri: data.verificationUri,
       })
       return
     }

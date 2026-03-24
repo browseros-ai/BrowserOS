@@ -1,4 +1,4 @@
-import { Check, Copy } from 'lucide-react'
+import { Check, Copy, ExternalLink } from 'lucide-react'
 import { type FC, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
@@ -63,6 +63,17 @@ export const DeviceCodeDialog: FC<DeviceCodeDialogProps> = ({
           <p className="text-center text-muted-foreground text-xs">
             This dialog will close automatically once authentication completes.
           </p>
+          {deviceCode?.verificationUri && (
+            <a
+              href={deviceCode.verificationUri}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-[var(--accent-orange)] text-xs transition-colors hover:underline"
+            >
+              Open verification page
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
         </div>
       </DialogContent>
     </Dialog>
