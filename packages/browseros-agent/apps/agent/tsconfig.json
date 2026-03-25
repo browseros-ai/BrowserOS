@@ -3,6 +3,7 @@
   "compilerOptions": {
     "types": ["chrome", "bun"],
     "allowImportingTsExtensions": true,
+    "noEmit": true,
     "jsx": "react-jsx",
     "paths": {
       "@/*": ["./*"]

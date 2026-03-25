@@ -148,6 +148,15 @@ function createMoonshotModel(config: ResolvedLLMConfig): LanguageModel {
   })(config.model)
 }
 
+function createLiteLLMModel(config: ResolvedLLMConfig): LanguageModel {
+  if (!config.baseUrl) throw new Error('LiteLLM provider requires baseUrl')
+  return createOpenAICompatible({
+    name: 'litellm',
+    baseURL: config.baseUrl,
+    ...(config.apiKey && { apiKey: config.apiKey }),
+  })(config.model)
+}
+
 function createQwenCodeModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('Qwen Code requires OAuth authentication')
   return createOpenAICompatible({
@@ -192,6 +201,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProModel,
   [LLM_PROVIDERS.GITHUB_COPILOT]: createGitHubCopilotModel,
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeModel,
+  [LLM_PROVIDERS.LITELLM]: createLiteLLMModel,
 }
 
 export function createLLMProvider(config: ResolvedLLMConfig): LanguageModel {

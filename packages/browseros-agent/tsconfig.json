@@ -23,7 +23,10 @@
     "useUnknownInCatchVariables": false,
     "composite": true,
     "declaration": true,
-    "declarationMap": true
+    "declarationMap": true,
+    "paths": {
+      "@browseros/shared/*": ["./packages/shared/src/*"]
+    }
   },
   "references": [
     { "path": "./apps/server" },

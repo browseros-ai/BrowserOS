@@ -26,7 +26,7 @@ function enrichTemplate(
   },
 ): ProviderTemplate {
   const provider = getModelsDevProvider(providerId)
-  const model = provider?.models.find((m) => m.id === overrides.defaultModelId)
+  const model = provider?.models.filter((m) => m.id === overrides.defaultModelId)[0]
 
   return {
     id: providerId,
@@ -140,6 +140,14 @@ export const providerTemplates: ProviderTemplate[] = [
     setupGuideUrl:
       'https://docs.aws.amazon.com/bedrock/latest/userguide/getting-started.html',
   }),
+  {
+    id: 'litellm',
+    name: 'LiteLLM',
+    defaultBaseUrl: 'http://localhost:4000/v1',
+    defaultModelId: 'gpt-4',
+    supportsImages: true,
+    contextWindow: 128000,
+  },
 ]
 
 /**
@@ -161,6 +169,7 @@ export const providerTypeOptions: { value: ProviderType; label: string }[] = [
   { value: 'lmstudio', label: 'LM Studio' },
   { value: 'bedrock', label: 'AWS Bedrock' },
   { value: 'browseros', label: 'BrowserOS' },
+  { value: 'litellm', label: 'LiteLLM' },
 ]
 
 /**
@@ -170,7 +179,7 @@ export const providerTypeOptions: { value: ProviderType; label: string }[] = [
 export const getProviderTemplate = (
   type: ProviderType,
 ): ProviderTemplate | undefined => {
-  return providerTemplates.find((t) => t.id === type)
+  return providerTemplates.filter((t) => t.id === type)[0]
 }
 
 /**
@@ -192,6 +201,7 @@ export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   lmstudio: 'http://localhost:1234/v1',
   bedrock: '',
   browseros: '',
+  litellm: 'http://localhost:4000/v1',
 }
 
 /**

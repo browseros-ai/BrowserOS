@@ -52,6 +52,16 @@ export async function resolveLLMConfig(
     return resolveBrowserOSConfig(config, browserosId)
   }
 
+  // LiteLLM "Maxed Out" provider: resolution with bridge defaults
+  if (config.provider === LLM_PROVIDERS.LITELLM) {
+    return {
+      ...config,
+      model: config.model || 'gpt-4',
+      baseUrl: config.baseUrl || 'http://localhost:4000/v1',
+      apiKey: config.apiKey,
+    } as ResolvedLLMConfig
+  }
+
   // All other providers: passthrough with model validation
   if (!config.model) {
     throw new Error(`model is required for ${config.provider} provider`)
