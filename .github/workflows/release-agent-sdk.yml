@@ -79,27 +79,14 @@ jobs:
                 # Find associated PR number
                 PR_NUM=$(gh api "/repos/${{ github.repository }}/commits/${SHA}/pulls" --jq '.[0].number // empty' 2>/dev/null)
 
-                # Format line
-                if [ -n "$PR_NUM" ]; then
-                  echo "- ${SUBJECT} (#${PR_NUM}) @${GITHUB_USER:-$AUTHOR}" >> /tmp/release-notes.md
+                # Format line: skip PR number if already in the commit subject
+                # (squash merges include "(#123)" in the subject automatically)
+                if [ -n "$PR_NUM" ] && ! echo "$SUBJECT" | grep -qF "(#${PR_NUM})"; then
+                  echo "- ${SUBJECT} (#${PR_NUM})" >> /tmp/release-notes.md
                 else
-                  echo "- ${SUBJECT} (${SHA:0:7}) @${GITHUB_USER:-$AUTHOR}" >> /tmp/release-notes.md
-                fi
-
-                # Collect unique contributors (exact word match to avoid substring collisions)
-                HANDLE="${GITHUB_USER:-$AUTHOR}"
-                if ! echo "$CONTRIBUTORS" | grep -qw "$HANDLE"; then
-                  CONTRIBUTORS="${CONTRIBUTORS} ${HANDLE}"
+                  echo "- ${SUBJECT}" >> /tmp/release-notes.md
                 fi
               done <<< "$COMMITS"
-
-              # Add contributors section
-              echo "" >> /tmp/release-notes.md
-              echo "## Contributors" >> /tmp/release-notes.md
-              echo "" >> /tmp/release-notes.md
-              for CONTRIB in $CONTRIBUTORS; do
-                echo "- @${CONTRIB}" >> /tmp/release-notes.md
-              done
             fi
           fi
         working-directory: ${{ github.workspace }}
