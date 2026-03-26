@@ -231,7 +231,6 @@ export class Application {
     console.error(
       `[FATAL] Failed to start ${serverName} on port ${port}: ${errorMsg}`,
     )
-    Sentry.captureException(error)
 
     if (isPortInUseError(error)) {
       console.error(
@@ -240,6 +239,7 @@ export class Application {
       process.exit(EXIT_CODES.PORT_CONFLICT)
     }
 
+    Sentry.captureException(error)
     process.exit(EXIT_CODES.GENERAL_ERROR)
   }
 
@@ -255,7 +255,9 @@ export class Application {
         { port },
       )
     }
-    Sentry.captureException(error)
+    if (!isPortInUseError(error)) {
+      Sentry.captureException(error)
+    }
   }
 
   private logStartupSummary(controllerServerStarted: boolean): void {
