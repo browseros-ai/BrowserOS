@@ -224,7 +224,12 @@ export const Chat = () => {
             onDismissJtbdPopup={onDismissJtbdPopup}
           />
         )}
-        {agentUrlError && <ChatError error={agentUrlError} />}
+        {agentUrlError && (
+          <ChatError
+            error={agentUrlError}
+            providerType={selectedProvider?.type}
+          />
+        )}
         {chatError && (
           <ChatError error={chatError} providerType={selectedProvider?.type} />
         )}
