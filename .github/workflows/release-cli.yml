@@ -1,15 +1,19 @@
 name: Release CLI
 
 on:
-  push:
-    tags:
-      - "cli/v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.1.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   release:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -29,6 +33,13 @@ jobs:
 
       - name: Run vet
         run: go vet ./...
+
+      - name: Create tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "cli/v${{ inputs.version }}" -m "browseros-cli v${{ inputs.version }}"
+          git push origin "cli/v${{ inputs.version }}"
 
       - uses: goreleaser/goreleaser-action@v6
         with:
