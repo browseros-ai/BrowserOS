@@ -38,12 +38,9 @@ jobs:
 
       - name: Get version
         id: version
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-
-      - name: Publish
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
         env:
@@ -100,6 +97,27 @@ jobs:
           fi
         working-directory: ${{ github.workspace }}
 
+      - name: Publish
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="agent-sdk-v${{ steps.version.outputs.version }}"
+          RELEASE_SHA="${{ steps.version.outputs.release_sha }}"
+          git tag "$TAG" "$RELEASE_SHA" 2>/dev/null || true
+          git push origin "$TAG" || true
+          gh release create "$TAG" \
+            --title "@browseros-ai/agent-sdk v${{ steps.version.outputs.version }}" \
+            --notes-file /tmp/release-notes.md \
+            2>/dev/null || gh release edit "$TAG" \
+              --title "@browseros-ai/agent-sdk v${{ steps.version.outputs.version }}" \
+              --notes-file /tmp/release-notes.md
+        working-directory: ${{ github.workspace }}
+
       - name: Update CHANGELOG.md via PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -108,6 +126,9 @@ jobs:
           DATE=$(date -u +"%Y-%m-%d")
           BRANCH="docs/agent-sdk-changelog-v${VERSION}"
           CHANGELOG="packages/browseros-agent/packages/agent-sdk/CHANGELOG.md"
+
+          # Return to main before branching
+          git checkout main
 
           # Use head/tail to safely insert without sed quoting issues
           {
@@ -134,17 +155,5 @@ jobs:
             --base main \
             --head "$BRANCH"
 
-          gh pr merge "$BRANCH" --squash --auto
-        working-directory: ${{ github.workspace }}
-
-      - name: Create GitHub release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="agent-sdk-v${{ steps.version.outputs.version }}"
-          git tag "$TAG" 2>/dev/null || true
-          git push origin "$TAG"
-          gh release create "$TAG" \
-            --title "@browseros-ai/agent-sdk v${{ steps.version.outputs.version }}" \
-            --notes-file /tmp/release-notes.md
+          gh pr merge "$BRANCH" --squash --auto || true
         working-directory: ${{ github.workspace }}
