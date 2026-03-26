@@ -8,13 +8,17 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: write
+concurrency:
+  group: release-cli
+  cancel-in-progress: false
 
 jobs:
   release:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     defaults:
       run:
         working-directory: packages/browseros-agent/apps/cli
@@ -34,17 +38,106 @@ jobs:
       - name: Run vet
         run: go vet ./...
 
+      - name: Save release SHA
+        id: version
+        run: echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        working-directory: ${{ github.workspace }}
+
+      - name: Generate release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CLI_PATH="packages/browseros-agent/apps/cli"
+          CURRENT_TAG="cli/v${{ inputs.version }}"
+          PREV_TAG=$(git tag -l "cli/v*" --sort=-v:refname | grep -v "^${CURRENT_TAG}$" | head -n 1)
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "Initial release" > /tmp/release-notes.md
+          else
+            COMMITS=$(git log "$PREV_TAG"..HEAD --pretty=format:"%H" -- "$CLI_PATH")
+
+            if [ -z "$COMMITS" ]; then
+              echo "No notable changes." > /tmp/release-notes.md
+            else
+              echo "## What's Changed" > /tmp/release-notes.md
+              echo "" >> /tmp/release-notes.md
+
+              while IFS= read -r SHA; do
+                SUBJECT=$(git log -1 --pretty=format:"%s" "$SHA")
+                PR_NUM=$(gh api "/repos/${{ github.repository }}/commits/${SHA}/pulls" --jq '.[0].number // empty' 2>/dev/null)
+
+                if [ -n "$PR_NUM" ] && ! echo "$SUBJECT" | grep -qF "(#${PR_NUM})"; then
+                  echo "- ${SUBJECT} (#${PR_NUM})" >> /tmp/release-notes.md
+                else
+                  echo "- ${SUBJECT}" >> /tmp/release-notes.md
+                fi
+              done <<< "$COMMITS"
+            fi
+          fi
+        working-directory: ${{ github.workspace }}
+
       - name: Create tag
         run: |
+          TAG="cli/v${{ inputs.version }}"
+          RELEASE_SHA="${{ steps.version.outputs.release_sha }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "cli/v${{ inputs.version }}" -m "browseros-cli v${{ inputs.version }}"
-          git push origin "cli/v${{ inputs.version }}"
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping"
+          else
+            git tag -a "$TAG" "$RELEASE_SHA" -m "browseros-cli v${{ inputs.version }}"
+          fi
+
+          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+            echo "Tag $TAG already on remote, skipping push"
+          else
+            git push origin "$TAG"
+          fi
+        working-directory: ${{ github.workspace }}
 
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-notes /tmp/release-notes.md
           workdir: packages/browseros-agent/apps/cli
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update CHANGELOG.md via PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          DATE=$(date -u +"%Y-%m-%d")
+          BRANCH="docs/cli-changelog-v${VERSION}"
+          CHANGELOG="packages/browseros-agent/apps/cli/CHANGELOG.md"
+
+          git checkout main
+
+          {
+            head -n 1 "$CHANGELOG"
+            echo ""
+            echo "## v${VERSION} (${DATE})"
+            echo ""
+            cat /tmp/release-notes.md
+            echo ""
+            tail -n +2 "$CHANGELOG"
+          } > /tmp/new-changelog.md
+          mv /tmp/new-changelog.md "$CHANGELOG"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add "$CHANGELOG"
+          git commit -m "docs: update CLI changelog for v${VERSION}"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "docs: update CLI changelog for v${VERSION}" \
+            --body "Auto-generated changelog update for browseros-cli v${VERSION}." \
+            --base main \
+            --head "$BRANCH"
+
+          gh pr merge "$BRANCH" --squash --auto || true
+        working-directory: ${{ github.workspace }}
