@@ -13,6 +13,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
 
@@ -31,7 +33,40 @@ jobs:
       - name: Test
         run: bun test
 
+      - name: Get version
+        id: version
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
       - name: Publish
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          SDK_PATH="packages/browseros-agent/packages/agent-sdk"
+          TAG="agent-sdk-v${{ steps.version.outputs.version }}"
+          # Find the previous agent-sdk release tag
+          PREV_TAG=$(git tag -l "agent-sdk-v*" --sort=-v:refname | head -n 1)
+          if [ -n "$PREV_TAG" ]; then
+            # Get commits that modified the agent-sdk directory since last release
+            NOTES=$(git log "$PREV_TAG"..HEAD --pretty=format:"- %s (%h)" -- "$SDK_PATH")
+          else
+            NOTES="Initial release"
+          fi
+          # Write to file to handle multiline
+          echo "$NOTES" > /tmp/release-notes.md
+        working-directory: ${{ github.workspace }}
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="agent-sdk-v${{ steps.version.outputs.version }}"
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" \
+            --title "@browseros-ai/agent-sdk v${{ steps.version.outputs.version }}" \
+            --notes-file /tmp/release-notes.md
+        working-directory: ${{ github.workspace }}
