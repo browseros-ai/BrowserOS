@@ -9,6 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     defaults:
       run:
         working-directory: packages/browseros-agent/packages/agent-sdk
@@ -60,10 +61,13 @@ jobs:
           echo "$NOTES" > /tmp/release-notes.md
         working-directory: ${{ github.workspace }}
 
-      - name: Update CHANGELOG.md
+      - name: Update CHANGELOG.md via PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           DATE=$(date -u +"%Y-%m-%d")
+          BRANCH="docs/agent-sdk-changelog-v${VERSION}"
           CHANGELOG="packages/browseros-agent/packages/agent-sdk/CHANGELOG.md"
 
           # Use head/tail to safely insert without sed quoting issues
@@ -80,9 +84,18 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
           git add "$CHANGELOG"
           git commit -m "docs: update agent-sdk changelog for v${VERSION}"
-          git push origin main
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "docs: update agent-sdk changelog for v${VERSION}" \
+            --body "Auto-generated changelog update for @browseros-ai/agent-sdk v${VERSION}." \
+            --base main \
+            --head "$BRANCH"
+
+          gh pr merge "$BRANCH" --squash --auto
         working-directory: ${{ github.workspace }}
 
       - name: Create GitHub release
