@@ -17,8 +17,10 @@ import (
 )
 
 func init() {
+	var autoDiscover bool
+
 	cmd := &cobra.Command{
-		Use:   "init",
+		Use:   "init [url]",
 		Short: "Configure the BrowserOS server connection",
 		Long: `Set up the CLI by providing the MCP server URL from BrowserOS.
 
@@ -26,33 +28,59 @@ Open BrowserOS → Settings → BrowserOS MCP to find your Server URL.
 The URL looks like: http://127.0.0.1:9004/mcp
 
 The port varies per installation, so this step is required on first use.
-Run again if your port changes.`,
+Run again if your port changes.
+
+Three modes:
+  browseros-cli init <url>    Non-interactive, use the provided URL
+  browseros-cli init --auto   Auto-discover from ~/.browseros/server.json
+  browseros-cli init          Interactive prompt`,
 		Annotations: map[string]string{"group": "Setup:"},
-		Args:        cobra.NoArgs,
+		Args:        cobra.MaximumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			bold := color.New(color.Bold)
 			green := color.New(color.FgGreen)
 			dim := color.New(color.Faint)
 
-			fmt.Println()
-			bold.Println("BrowserOS CLI Setup")
-			fmt.Println()
-			fmt.Println("Open BrowserOS → Settings → BrowserOS MCP")
-			fmt.Println("Copy the Server URL shown there.")
-			fmt.Println()
-			dim.Println("It looks like: http://127.0.0.1:9004/mcp")
-			fmt.Println()
+			var input string
 
-			reader := bufio.NewReader(os.Stdin)
-			fmt.Print("Server URL: ")
-			input, err := reader.ReadString('\n')
-			if err != nil {
-				output.Error("failed to read input", 1)
-			}
-			input = strings.TrimSpace(input)
+			switch {
+			case len(args) == 1:
+				// Non-interactive: URL provided as argument
+				input = args[0]
 
-			if input == "" {
-				output.Error("no URL provided", 1)
+			case autoDiscover:
+				// Auto-discover: server.json → config → probe common ports
+				discovered := probeRunningServer()
+				if discovered == "" {
+					output.Error("auto-discovery failed: no running BrowserOS found.\n\n"+
+						"  If not running:    browseros-cli launch\n"+
+						"  If not installed:  browseros-cli install", 1)
+				}
+				input = discovered
+				fmt.Printf("Auto-discovered server at %s\n", input)
+
+			default:
+				// Interactive prompt (original behavior)
+				fmt.Println()
+				bold.Println("BrowserOS CLI Setup")
+				fmt.Println()
+				fmt.Println("Open BrowserOS → Settings → BrowserOS MCP")
+				fmt.Println("Copy the Server URL shown there.")
+				fmt.Println()
+				dim.Println("It looks like: http://127.0.0.1:9004/mcp")
+				fmt.Println()
+
+				reader := bufio.NewReader(os.Stdin)
+				fmt.Print("Server URL: ")
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					output.Error("failed to read input", 1)
+				}
+				input = strings.TrimSpace(line)
+
+				if input == "" {
+					output.Error("no URL provided", 1)
+				}
 			}
 
 			baseURL := normalizeServerURL(input)
@@ -88,5 +116,6 @@ Run again if your port changes.`,
 		},
 	}
 
+	cmd.Flags().BoolVar(&autoDiscover, "auto", false, "Auto-discover server URL from ~/.browseros/server.json")
 	rootCmd.AddCommand(cmd)
 }

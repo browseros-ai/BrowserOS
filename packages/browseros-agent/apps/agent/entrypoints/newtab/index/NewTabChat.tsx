@@ -169,8 +169,15 @@ export const NewTabChat: FC = () => {
             onDismissJtbdPopup={() => {}}
           />
         )}
-        {agentUrlError && <ChatError error={agentUrlError} />}
-        {chatError && <ChatError error={chatError} />}
+        {agentUrlError && (
+          <ChatError
+            error={agentUrlError}
+            providerType={selectedProvider?.type}
+          />
+        )}
+        {chatError && (
+          <ChatError error={chatError} providerType={selectedProvider?.type} />
+        )}
       </main>
 
       <div className="mx-auto w-full max-w-3xl flex-shrink-0 px-4 pb-2">

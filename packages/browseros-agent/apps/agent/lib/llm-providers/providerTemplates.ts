@@ -1,3 +1,4 @@
+import { getModelsDevProvider } from './models-dev'
 import type { ProviderType } from './types'
 
 /**
@@ -13,6 +14,30 @@ export interface ProviderTemplate {
   contextWindow: number
   setupGuideUrl?: string
   apiKeyUrl?: string
+}
+
+function enrichTemplate(
+  providerId: ProviderType,
+  overrides: {
+    defaultModelId: string
+    defaultBaseUrl?: string
+    apiKeyUrl?: string
+    setupGuideUrl?: string
+  },
+): ProviderTemplate {
+  const provider = getModelsDevProvider(providerId)
+  const model = provider?.models.find((m) => m.id === overrides.defaultModelId)
+
+  return {
+    id: providerId,
+    name: provider?.name ?? providerId,
+    defaultBaseUrl: overrides.defaultBaseUrl ?? provider?.api ?? '',
+    defaultModelId: overrides.defaultModelId,
+    supportsImages: model?.supportsImages ?? true,
+    contextWindow: model?.contextWindow ?? 128000,
+    ...(overrides.apiKeyUrl && { apiKeyUrl: overrides.apiKeyUrl }),
+    ...(overrides.setupGuideUrl && { setupGuideUrl: overrides.setupGuideUrl }),
+  }
 }
 
 /**
@@ -57,17 +82,12 @@ export const providerTemplates: ProviderTemplate[] = [
     apiKeyUrl: 'https://platform.moonshot.ai/console/api-keys',
     setupGuideUrl: 'https://platform.moonshot.ai/console/api-keys',
   },
-  {
-    id: 'openai',
-    name: 'OpenAI',
-    defaultBaseUrl: 'https://api.openai.com/v1',
-    defaultModelId: 'gpt-4',
-    supportsImages: true,
-    contextWindow: 128000,
+  enrichTemplate('openai', {
+    defaultModelId: 'gpt-5',
     apiKeyUrl: 'https://platform.openai.com/api-keys',
     setupGuideUrl:
       'https://docs.browseros.com/features/bring-your-own-llm#openai',
-  },
+  }),
   {
     id: 'openai-compatible',
     name: 'OpenAI Compatible',
@@ -76,28 +96,18 @@ export const providerTemplates: ProviderTemplate[] = [
     supportsImages: true,
     contextWindow: 128000,
   },
-  {
-    id: 'anthropic',
-    name: 'Anthropic',
-    defaultBaseUrl: 'https://api.anthropic.com/v1',
-    defaultModelId: 'claude-3-5-sonnet-20241022',
-    supportsImages: true,
-    contextWindow: 200000,
+  enrichTemplate('anthropic', {
+    defaultModelId: 'claude-sonnet-4-6',
     apiKeyUrl: 'https://console.anthropic.com/settings/keys',
     setupGuideUrl:
       'https://docs.browseros.com/features/bring-your-own-llm#claude',
-  },
-  {
-    id: 'google',
-    name: 'Gemini',
-    defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    defaultModelId: 'gemini-1.5-pro',
-    supportsImages: true,
-    contextWindow: 1000000,
+  }),
+  enrichTemplate('google', {
+    defaultModelId: 'gemini-2.5-flash',
     apiKeyUrl: 'https://aistudio.google.com/app/apikey',
     setupGuideUrl:
       'https://docs.browseros.com/features/bring-your-own-llm#gemini',
-  },
+  }),
   {
     id: 'ollama',
     name: 'Ollama',
@@ -108,47 +118,28 @@ export const providerTemplates: ProviderTemplate[] = [
     setupGuideUrl:
       'https://docs.browseros.com/features/bring-your-own-llm#ollama',
   },
-  {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    defaultBaseUrl: 'https://openrouter.ai/api/v1',
-    defaultModelId: 'openai/gpt-4-turbo',
-    supportsImages: true,
-    contextWindow: 128000,
+  enrichTemplate('openrouter', {
+    defaultModelId: 'anthropic/claude-sonnet-4.5',
     apiKeyUrl: 'https://openrouter.ai/keys',
     setupGuideUrl:
       'https://docs.browseros.com/features/bring-your-own-llm#openrouter',
-  },
-  {
-    id: 'lmstudio',
-    name: 'LM Studio',
+  }),
+  enrichTemplate('lmstudio', {
+    defaultModelId: 'openai/gpt-oss-20b',
     defaultBaseUrl: 'http://localhost:1234/v1',
-    defaultModelId: 'local-model',
-    supportsImages: false,
-    contextWindow: 32000,
     setupGuideUrl:
       'https://docs.browseros.com/features/bring-your-own-llm#lmstudio',
-  },
-  {
-    id: 'azure',
-    name: 'Azure',
-    defaultBaseUrl: '',
+  }),
+  enrichTemplate('azure', {
     defaultModelId: '',
-    supportsImages: true,
-    contextWindow: 128000,
     apiKeyUrl:
       'https://portal.azure.com/#view/Microsoft_Azure_ProjectOxford/CognitiveServicesHub/~/OpenAI',
-  },
-  {
-    id: 'bedrock',
-    name: 'AWS Bedrock',
-    defaultBaseUrl: '',
-    defaultModelId: '',
-    supportsImages: true,
-    contextWindow: 200000,
+  }),
+  enrichTemplate('bedrock', {
+    defaultModelId: 'anthropic.claude-sonnet-4-6',
     setupGuideUrl:
       'https://docs.aws.amazon.com/bedrock/latest/userguide/getting-started.html',
-  },
+  }),
 ]
 
 /**

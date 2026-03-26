@@ -1225,7 +1225,7 @@
     const score = graders[firstKey].score;
     if (typeof score === 'number') {
       const pct = Math.round(score * 100);
-      return { label: pct + '%', cls: pct >= 75 ? 'pass' : 'fail' };
+      return { label: `${pct}%`, cls: pct >= 75 ? 'pass' : 'fail' };
     }
     const anyPass = keys.some((k) => graders[k].pass);
     return { label: anyPass ? 'PASS' : 'FAIL', cls: anyPass ? 'pass' : 'fail' };

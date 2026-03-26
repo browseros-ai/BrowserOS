@@ -34,11 +34,9 @@ function parseErrorMessage(
 } {
   const isBrowserosProvider = providerType === 'browseros'
 
-  // Detect MCP server connection failures (universal — affects all providers)
-  if (
-    (message.includes('Failed to fetch') || message.includes('fetch failed')) &&
-    message.includes('127.0.0.1')
-  ) {
+  // All chat requests go through the local BrowserOS agent server, so any
+  // fetch failure is always a local connection issue.
+  if (message.includes('Failed to fetch') || message.includes('fetch failed')) {
     return {
       text: 'Unable to connect to BrowserOS agent. Follow below instructions.',
       url: 'https://docs.browseros.com/troubleshooting/connection-issues',

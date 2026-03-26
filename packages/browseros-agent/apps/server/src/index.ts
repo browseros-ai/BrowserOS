@@ -20,6 +20,7 @@ import './lib/polyfill'
 import { EXIT_CODES } from '@browseros/shared/constants/exit-codes'
 import { CommanderError } from 'commander'
 import { loadServerConfig } from './config'
+import { isPortInUseError } from './lib/port-binding'
 import { Sentry } from './lib/sentry'
 import { Application } from './main'
 
@@ -38,6 +39,9 @@ try {
 } catch (error) {
   if (error instanceof CommanderError) {
     process.exit(error.exitCode)
+  }
+  if (isPortInUseError(error)) {
+    process.exit(EXIT_CODES.PORT_CONFLICT)
   }
   Sentry.captureException(error)
   console.error('Failed to start server:', error)

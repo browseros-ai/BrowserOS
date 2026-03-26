@@ -167,19 +167,22 @@ func envBool(key string) bool {
 }
 
 func defaultServerURL() string {
+	// 1. Explicit env var always wins
 	if env := normalizeServerURL(os.Getenv("BROWSEROS_URL")); env != "" {
 		return env
 	}
 
+	// 2. Live discovery file from running BrowserOS (most current)
+	if url := loadBrowserosServerURL(); url != "" {
+		return url
+	}
+
+	// 3. Saved config (may be stale if port changed)
 	cfg, err := config.Load()
 	if err == nil {
 		if url := normalizeServerURL(cfg.ServerURL); url != "" {
 			return url
 		}
-	}
-
-	if url := loadBrowserosServerURL(); url != "" {
-		return url
 	}
 
 	return ""
@@ -225,6 +228,9 @@ func validateServerURL(raw string) (string, error) {
 	}
 
 	return "", fmt.Errorf(
-		"BrowserOS server URL is not configured.\n  Open BrowserOS -> Settings -> BrowserOS MCP and copy the Server URL.\n  Then run: browseros-cli init",
+		"BrowserOS server URL is not configured.\n\n" +
+			"  If BrowserOS is running:  browseros-cli init --auto\n" +
+			"  If BrowserOS is closed:   browseros-cli launch\n" +
+			"  If not installed:         browseros-cli install",
 	)
 }

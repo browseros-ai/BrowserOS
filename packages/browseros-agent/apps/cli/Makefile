@@ -18,3 +18,9 @@ vet:
 
 test:
 	go test -tags integration -v -timeout 120s ./...
+
+release-dry:
+	goreleaser release --snapshot --clean
+
+release:
+	goreleaser release --clean

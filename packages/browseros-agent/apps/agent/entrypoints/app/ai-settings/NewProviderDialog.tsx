@@ -1,6 +1,13 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { CheckCircle2, ExternalLink, Loader2, XCircle } from 'lucide-react'
-import { type FC, useEffect, useState } from 'react'
+import {
+  CheckCircle2,
+  ChevronDown,
+  ExternalLink,
+  Loader2,
+  SearchIcon,
+  XCircle,
+} from 'lucide-react'
+import { type FC, useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod/v3'
 import { Button } from '@/components/ui/button'
@@ -47,7 +54,12 @@ import {
 import { type TestResult, testProvider } from '@/lib/llm-providers/testProvider'
 import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
-import { getModelContextLength, getModelOptions } from './models'
+import { cn } from '@/lib/utils'
+import {
+  getModelContextLength,
+  getModelsForProvider,
+  type ModelInfo,
+} from './models'
 
 const providerTypeEnum = z.enum([
   'moonshot',
@@ -163,6 +175,107 @@ export const providerFormSchema = z
  */
 export type ProviderFormValues = z.infer<typeof providerFormSchema>
 
+function formatContextWindow(tokens: number): string {
+  if (tokens >= 1000000)
+    return `${(tokens / 1000000).toFixed(tokens % 1000000 === 0 ? 0 : 1)}M`
+  if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`
+  return `${tokens}`
+}
+
+function ModelPickerList({
+  models,
+  selectedModelId,
+  onSelect,
+  onCustomSubmit,
+  onClose,
+}: {
+  models: ModelInfo[]
+  selectedModelId: string
+  onSelect: (modelId: string) => void
+  onCustomSubmit: (modelId: string) => void
+  onClose: () => void
+}) {
+  const [search, setSearch] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
+        onClose()
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [onClose])
+
+  const query = search.toLowerCase()
+  const filtered = query
+    ? models.filter((m) => m.modelId.toLowerCase().includes(query))
+    : models
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && search) {
+      e.preventDefault()
+      onCustomSubmit(search)
+    }
+    if (e.key === 'Escape') {
+      onClose()
+    }
+  }
+
+  return (
+    <div ref={containerRef} className="rounded-md border">
+      <div className="flex items-center gap-2 border-b px-3">
+        <SearchIcon className="h-4 w-4 shrink-0 text-muted-foreground opacity-50" />
+        <input
+          ref={inputRef}
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Search or type a custom model ID..."
+          className="flex h-9 w-full bg-transparent py-2 text-sm outline-none placeholder:text-muted-foreground"
+        />
+      </div>
+      <div className="max-h-[200px] overflow-y-auto">
+        {filtered.length > 0 ? (
+          filtered.map((model) => {
+            const isSelected = selectedModelId === model.modelId
+            return (
+              <button
+                key={model.modelId}
+                type="button"
+                onClick={() => onSelect(model.modelId)}
+                className={cn(
+                  'flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors hover:bg-accent',
+                  isSelected && 'bg-accent font-medium',
+                )}
+              >
+                <span className="truncate">{model.modelId}</span>
+                <span className="ml-2 shrink-0 rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                  {formatContextWindow(model.contextLength)}
+                </span>
+              </button>
+            )
+          })
+        ) : (
+          <div className="px-3 py-6 text-center text-muted-foreground text-sm">
+            No models match. Press Enter to use &quot;{search}&quot;
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 /**
  * Props for NewProviderDialog
  * @public
@@ -188,9 +301,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   initialValues,
   onSave,
 }) => {
-  const [isCustomModel, setIsCustomModel] = useState(false)
   const [isTesting, setIsTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestResult | null>(null)
+  const [modelListOpen, setModelListOpen] = useState(false)
   const { supports } = useCapabilities()
   const { baseUrl: agentServerUrl } = useAgentServerUrl()
   const kimiLaunch = useKimiLaunch()
@@ -261,8 +374,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     watchedSessionToken,
   ])
 
-  // Get model options for current provider type
-  const modelOptions = getModelOptions(watchedType as ProviderType)
+  const modelInfoList = getModelsForProvider(watchedType as ProviderType)
 
   // Handle provider type change (user-initiated via Select)
   const handleTypeChange = (newType: ProviderType) => {
@@ -272,14 +384,13 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       form.setValue('baseUrl', defaultUrl)
     }
     form.setValue('modelId', '')
-    setIsCustomModel(false)
   }
 
   // Auto-fill context window when model changes (only for new providers)
   useEffect(() => {
     if (initialValues?.id) return
 
-    if (watchedModelId && watchedModelId !== 'custom') {
+    if (watchedModelId) {
       const contextLength = getModelContextLength(
         watchedType as ProviderType,
         watchedModelId,
@@ -289,17 +400,6 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       }
     }
   }, [watchedModelId, watchedType, form, initialValues?.id])
-
-  // Handle model selection (including custom option)
-  const handleModelChange = (value: string) => {
-    if (value === 'custom') {
-      setIsCustomModel(true)
-      form.setValue('modelId', '')
-    } else {
-      setIsCustomModel(false)
-      form.setValue('modelId', value)
-    }
-  }
 
   // Reset form when initialValues change
   useEffect(() => {
@@ -325,7 +425,6 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         reasoningEffort: initialValues.reasoningEffort || 'high',
         reasoningSummary: initialValues.reasoningSummary || 'auto',
       })
-      setIsCustomModel(false)
     }
   }, [initialValues, form])
 
@@ -352,7 +451,6 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         reasoningEffort: 'high',
         reasoningSummary: 'auto',
       })
-      setIsCustomModel(false)
     }
     // Clear test result when dialog opens/closes
     setTestResult(null)
@@ -811,52 +909,51 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
               control={form.control}
               name="modelId"
               render={({ field }) => (
-                <FormItem>
+                <FormItem className="flex flex-col">
                   <FormLabel>Model *</FormLabel>
-                  {isCustomModel || modelOptions.length === 1 ? (
-                    <>
-                      <FormControl>
-                        <Input
-                          placeholder={
-                            watchedType === 'azure'
-                              ? 'Enter your deployment name'
-                              : watchedType === 'bedrock'
-                                ? 'e.g., anthropic.claude-3-5-sonnet-20241022-v2:0'
-                                : 'Enter custom model ID'
-                          }
-                          {...field}
-                        />
-                      </FormControl>
-                      {modelOptions.length > 1 && (
-                        <Button
-                          type="button"
-                          variant="link"
-                          size="sm"
-                          className="h-auto p-0 text-xs"
-                          onClick={() => setIsCustomModel(false)}
-                        >
-                          ← Back to model list
-                        </Button>
-                      )}
-                    </>
+                  {modelInfoList.length === 0 ? (
+                    <FormControl>
+                      <Input
+                        placeholder={
+                          watchedType === 'azure'
+                            ? 'Enter your deployment name'
+                            : watchedType === 'bedrock'
+                              ? 'e.g., anthropic.claude-3-5-sonnet-20241022-v2:0'
+                              : 'Enter model ID'
+                        }
+                        {...field}
+                      />
+                    </FormControl>
+                  ) : modelListOpen ? (
+                    <ModelPickerList
+                      models={modelInfoList}
+                      selectedModelId={field.value}
+                      onSelect={(modelId) => {
+                        form.setValue('modelId', modelId)
+                        setModelListOpen(false)
+                      }}
+                      onCustomSubmit={(modelId) => {
+                        form.setValue('modelId', modelId)
+                        setModelListOpen(false)
+                      }}
+                      onClose={() => setModelListOpen(false)}
+                    />
                   ) : (
-                    <Select
-                      onValueChange={handleModelChange}
-                      value={field.value}
+                    <button
+                      type="button"
+                      onClick={() => setModelListOpen(true)}
+                      className={cn(
+                        'flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs',
+                        field.value
+                          ? 'text-foreground'
+                          : 'text-muted-foreground',
+                      )}
                     >
-                      <FormControl>
-                        <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Select a model" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {modelOptions.map((modelId) => (
-                          <SelectItem key={modelId} value={modelId}>
-                            {modelId === 'custom' ? '+ Custom model' : modelId}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                      <span className="truncate">
+                        {field.value || 'Select a model...'}
+                      </span>
+                      <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </button>
                   )}
                   <FormMessage />
                 </FormItem>

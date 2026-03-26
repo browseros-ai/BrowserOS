@@ -66,7 +66,7 @@ export const RunResultDialog: FC<RunResultDialogProps> = ({
 
   return (
     <Dialog open={!!run} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="sm:w-[70vw] sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {run.status === 'completed' ? (
@@ -94,7 +94,7 @@ export const RunResultDialog: FC<RunResultDialogProps> = ({
               <p className="text-destructive text-sm">{run.result}</p>
             </div>
           ) : run.result ? (
-            <div className="prose prose-sm dark:prose-invert [&_[data-streamdown='code-block']]:!w-full [&_[data-streamdown='table-wrapper']]:!w-full max-w-none break-words rounded-lg border border-border bg-muted/50 p-4">
+            <div className="prose prose-sm dark:prose-invert [&_[data-streamdown='code-block']]:!w-full [&_[data-streamdown='table-wrapper']]:!w-full max-w-none break-words rounded-lg border border-border bg-muted/50 p-4 [&_[data-streamdown='table-wrapper']]:overflow-x-auto">
               <MessageResponse>{run.result}</MessageResponse>
             </div>
           ) : (

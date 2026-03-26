@@ -81,6 +81,9 @@ bun run dev:server               # Build server for development
 bun run dev:ext                  # Build extension for development
 bun run dist:server              # Build server for production (all targets)
 bun run dist:ext                 # Build extension for production
+
+# Refresh models.dev data
+bun run generate:models          # Fetches latest from models.dev/api.json
 ```
 
 ## Architecture
