@@ -3,6 +3,10 @@ name: Release Agent SDK
 on:
   workflow_dispatch:
 
+concurrency:
+  group: release-agent-sdk
+  cancel-in-progress: false
+
 jobs:
   publish:
     if: github.ref == 'refs/heads/main'
