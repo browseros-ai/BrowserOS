@@ -79,9 +79,9 @@ jobs:
                   echo "- ${SUBJECT} (${SHA:0:7}) @${GITHUB_USER:-$AUTHOR}" >> /tmp/release-notes.md
                 fi
 
-                # Collect unique contributors
+                # Collect unique contributors (exact word match to avoid substring collisions)
                 HANDLE="${GITHUB_USER:-$AUTHOR}"
-                if ! echo "$CONTRIBUTORS" | grep -qF "$HANDLE"; then
+                if ! echo "$CONTRIBUTORS" | grep -qw "$HANDLE"; then
                   CONTRIBUTORS="${CONTRIBUTORS} ${HANDLE}"
                 fi
               done <<< "$COMMITS"
@@ -108,14 +108,29 @@ jobs:
         run: |
           TAG="agent-sdk-v${{ steps.version.outputs.version }}"
           RELEASE_SHA="${{ steps.version.outputs.release_sha }}"
-          git tag "$TAG" "$RELEASE_SHA" 2>/dev/null || true
-          git push origin "$TAG" || true
-          gh release create "$TAG" \
-            --title "@browseros-ai/agent-sdk v${{ steps.version.outputs.version }}" \
-            --notes-file /tmp/release-notes.md \
-            2>/dev/null || gh release edit "$TAG" \
-              --title "@browseros-ai/agent-sdk v${{ steps.version.outputs.version }}" \
-              --notes-file /tmp/release-notes.md
+          TITLE="@browseros-ai/agent-sdk v${{ steps.version.outputs.version }}"
+
+          # Create or reuse tag (idempotent for re-runs)
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping tag creation"
+          else
+            git tag "$TAG" "$RELEASE_SHA"
+          fi
+
+          # Push tag (skip if already on remote)
+          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+            echo "Tag $TAG already on remote, skipping push"
+          else
+            git push origin "$TAG"
+          fi
+
+          # Create or update release
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, updating"
+            gh release edit "$TAG" --title "$TITLE" --notes-file /tmp/release-notes.md
+          else
+            gh release create "$TAG" --title "$TITLE" --notes-file /tmp/release-notes.md
+          fi
         working-directory: ${{ github.workspace }}
 
       - name: Update CHANGELOG.md via PR
