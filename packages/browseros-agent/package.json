@@ -29,7 +29,7 @@
     "build:agent-sdk": "bun run --filter @browseros-ai/agent-sdk build",
     "codegen:agent": "bun run --filter @browseros/agent codegen",
     "build:ext": "FORCE_COLOR=1 bun run --filter browseros-controller build",
-    "test": "FORCE_COLOR=1 bun run --filter @browseros/server test:tools",
+    "test": "FORCE_COLOR=1 bun run --filter @browseros/server --elide-lines=0 test:tools",
     "test:tools": "bun run --filter @browseros/server test:tools",
     "test:integration": "bun run --filter @browseros/server test:integration",
     "test:sdk": "bun run --filter @browseros/server test:sdk",
