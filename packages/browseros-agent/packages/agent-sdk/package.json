@@ -1,6 +1,6 @@
 {
   "name": "@browseros-ai/agent-sdk",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Browser automation SDK for BrowserOS - navigate, interact, extract data with natural language",
   "type": "module",
   "license": "AGPL-3.0-or-later",
