@@ -48,8 +48,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           CLI_PATH="packages/browseros-agent/apps/cli"
-          CURRENT_TAG="cli/v${{ inputs.version }}"
-          PREV_TAG=$(git tag -l "cli/v*" --sort=-v:refname | grep -v "^${CURRENT_TAG}$" | head -n 1)
+          CURRENT_TAG="browseros-cli-v${{ inputs.version }}"
+          PREV_TAG=$(git tag -l "browseros-cli-v*" --sort=-v:refname | grep -v "^${CURRENT_TAG}$" | head -n 1)
 
           if [ -z "$PREV_TAG" ]; then
             echo "Initial release" > /tmp/release-notes.md
@@ -78,7 +78,7 @@ jobs:
 
       - name: Create tag
         run: |
-          TAG="cli/v${{ inputs.version }}"
+          TAG="browseros-cli-v${{ inputs.version }}"
           RELEASE_SHA="${{ steps.version.outputs.release_sha }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

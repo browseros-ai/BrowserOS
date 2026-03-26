@@ -2,9 +2,6 @@ version: 2
 
 project_name: browseros-cli
 
-monorepo:
-  tag_prefix: cli/
-
 builds:
   - main: .
     binary: browseros-cli
