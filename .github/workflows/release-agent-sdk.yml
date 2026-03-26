@@ -47,7 +47,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           SDK_PATH="packages/browseros-agent/packages/agent-sdk"
-          PREV_TAG=$(git tag -l "agent-sdk-v*" --sort=-v:refname | head -n 1)
+          CURRENT_TAG="agent-sdk-v${{ steps.version.outputs.version }}"
+          # Find the previous tag, excluding the current version's tag
+          # (which may already exist from a prior failed run)
+          PREV_TAG=$(git tag -l "agent-sdk-v*" --sort=-v:refname | grep -v "^${CURRENT_TAG}$" | head -n 1)
 
           if [ -z "$PREV_TAG" ]; then
             echo "Initial release" > /tmp/release-notes.md
