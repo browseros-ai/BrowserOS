@@ -191,7 +191,11 @@ export class AiSdkAgent {
     // Load skills catalog for prompt injection
     const skills = await loadSkills()
     const skillsCatalog =
-      skills.length > 0 ? buildSkillsCatalog(skills) : undefined
+      skills.length > 0
+        ? buildSkillsCatalog(skills, {
+            chatMode: config.resolvedConfig.chatMode,
+          })
+        : undefined
 
     const instructions = buildSystemPrompt({
       userSystemPrompt: config.resolvedConfig.userSystemPrompt,

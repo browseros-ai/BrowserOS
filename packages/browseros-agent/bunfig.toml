@@ -1,6 +1,9 @@
 # Bun configuration
 
 [test]
+# Sup-agent is a git submodule under vendor/; its own apps/server tests expect that
+# repo's install layout and must not run inside the parent monorepo test run.
+pathIgnorePatterns = ["**/vendor/**"]
 # Increase timeout to 30 seconds to account for:
 # - BrowserOS cold start (10-15 seconds)
 # - Slow integration tests

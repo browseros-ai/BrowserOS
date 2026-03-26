@@ -35,8 +35,8 @@
  *    unconnected) is battle-tested but fragile. Tests verify the dynamic app
  *    lists render correctly.
  *
- * 7. MEMORY & IDENTITY — Conditional on mode. Must appear in regular mode,
- *    must be absent in chat mode. Soul bootstrap is a separate conditional.
+ * 7. MEMORY & IDENTITY — Full section in regular mode; chat mode injects
+ *    SOUL.md only when non-empty (no memory tools). Soul bootstrap: regular only.
  *
  * 8. SECTION EXCLUSION — The exclude mechanism lets ai-sdk-agent.ts remove
  *    sections at runtime (e.g., nudges for scheduled tasks). Tests verify
@@ -284,17 +284,25 @@ describe('mode-aware framing', () => {
     expect(prompt).toContain('cannot interact with them')
   })
 
-  it('chat mode excludes memory-and-identity section', () => {
-    // Why: chat mode is read-only — no memory writes, no soul updates.
-    // The agent shouldn't even see memory tool instructions.
-    const prompt = buildChatMode()
-    expect(prompt).not.toContain('<memory_and_identity>')
+  it('chat mode includes read-only personality when SOUL.md has content', () => {
+    const prompt = buildChatMode({ soulContent: 'Be concise.' })
+    expect(prompt).toContain('<memory_and_identity>')
+    expect(prompt).toContain('Be concise.')
+    expect(prompt).toContain('read-only in chat mode')
     expect(prompt).not.toContain('memory_update_core')
-    expect(prompt).not.toContain('soul_update')
+    expect(prompt).not.toContain('memory_search')
+    expect(prompt).not.toContain('<soul_bootstrap>')
   })
 
-  it('chat mode excludes Memory & Identity from capabilities', () => {
+  it('chat mode omits memory-and-identity when SOUL.md is empty', () => {
+    const prompt = buildChatMode({ soulContent: '' })
+    expect(prompt).not.toContain('<memory_and_identity>')
+    expect(prompt).not.toContain('memory_search')
+  })
+
+  it('chat mode uses Personality capability line instead of Memory & Identity', () => {
     const prompt = buildChatMode()
+    expect(prompt).toContain('### Personality (read-only)')
     expect(prompt).not.toContain('### Memory & Identity')
   })
 
@@ -672,7 +680,7 @@ describe('external integrations', () => {
 // coherent section. The section is conditional:
 //
 // - Regular mode: full section with soul + memory
-// - Chat mode: omitted entirely (read-only, no writes)
+// - Chat mode: SOUL.md text only (read-only); no memory tools or soul_update workflow
 // - Soul bootstrap: adds first-meeting instructions
 // ---------------------------------------------------------------------------
 
@@ -795,11 +803,14 @@ describe('memory and identity', () => {
     expect(prompt).not.toContain('<soul_bootstrap>')
   })
 
-  it('is fully omitted in chat mode', () => {
-    const prompt = buildChatMode()
-    expect(prompt).not.toContain('<memory_and_identity>')
+  it('omits memory tools and bootstrap in chat mode (personality-only block)', () => {
+    const prompt = buildChatMode({ soulContent: 'Tone: friendly.' })
+    expect(prompt).toContain('<memory_and_identity>')
+    expect(prompt).toContain('Tone: friendly.')
     expect(prompt).not.toContain('memory_search')
-    expect(prompt).not.toContain('soul_update')
+    expect(prompt).not.toContain('memory_write')
+    expect(prompt).not.toContain('CORE.md')
+    expect(prompt).not.toContain('<soul_bootstrap>')
   })
 })
 

@@ -5,6 +5,15 @@ from datetime import datetime, timezone
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_MD = os.path.join(ROOT_DIR, "all_i_know.md")
+SKIP_DIR_NAMES = {
+    ".git",
+    "node_modules",
+    "dist",
+    ".wxt",
+    ".output",
+    ".cache",
+    "__pycache__",
+}
 
 # If a file is detected as "text-like", we will embed full contents if it's small enough.
 MAX_EMBED_TEXT_BYTES = 200_000
@@ -140,6 +149,10 @@ def format_dt(epoch_seconds: float) -> str:
 def main() -> None:
     all_files: list[str] = []
     for dirpath, _, filenames in os.walk(ROOT_DIR):
+        rel_dir = os.path.relpath(dirpath, ROOT_DIR)
+        parts = [] if rel_dir == "." else rel_dir.replace("\\", "/").split("/")
+        if any(part in SKIP_DIR_NAMES for part in parts):
+            continue
         for name in filenames:
             full = os.path.join(dirpath, name)
             # Avoid self-referential generation.

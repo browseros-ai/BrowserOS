@@ -42,3 +42,7 @@ When intentionally updating submodule to newer remote state:
 - Parent repo stores only a pinned submodule commit SHA.
 - Submodule code changes do not affect parent until the parent pointer is committed.
 - Pulling parent can move submodule checkout to the SHA pinned by that parent commit.
+
+## Tests in This Monorepo
+
+`packages/browseros-agent` runs Bun tests only for the parent tree. Test discovery ignores `**/vendor/**` so Sup-agent’s own `apps/server/tests` are not executed here (they assume Sup-agent’s standalone install and dependencies). Built-in skill **content** is still loaded from `vendor/sup-agent/.../skills/defaults` at build and runtime via `DEFAULT_SKILLS`.

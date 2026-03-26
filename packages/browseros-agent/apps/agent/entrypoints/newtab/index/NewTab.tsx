@@ -416,9 +416,9 @@ export const NewTab = () => {
   }, [])
 
   return (
-    <div className="pt-[max(25vh,16px)]">
+    <div className="px-3 pt-[max(25vh,16px)] sm:px-4">
       {/* Main content */}
-      <div className={'relative w-full space-y-8 md:w-3xl'}>
+      <div className="relative mx-auto w-full max-w-3xl space-y-8">
         {/* Logo and branding */}
         <NewTabBranding />
         {/* Search bar with context */}
@@ -455,7 +455,7 @@ export const NewTab = () => {
             style={{ borderRadius: 'calc(1.5rem - 2px)' }}
           >
             {/* Main search input */}
-            <div className="flex items-center gap-3 px-5 py-4">
+            <div className="flex min-w-0 items-center gap-2 px-3 py-3 sm:gap-3 sm:px-5 sm:py-4">
               <Search className="h-5 w-5 flex-shrink-0 text-muted-foreground" />
 
               <TabPickerPopover
@@ -487,7 +487,7 @@ export const NewTab = () => {
                     voice.isTranscribing ? 'Transcribing...' : searchPlaceholder
                   }
                   disabled={voice.isTranscribing}
-                  className="flex-1 border-none bg-transparent text-base text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
+                  className="min-w-0 flex-1 border-none bg-transparent text-base text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
                   {...getInputProps({
                     ref: inputRef,
                     onChange: (e) => handleInputChange(e.currentTarget.value),
@@ -622,8 +622,8 @@ export const NewTab = () => {
             </AnimatePresence>
 
             {mounted && (
-              <div className="flex items-center justify-between border-border/50 border-t px-5 py-3">
-                <div className="flex items-center gap-1">
+              <div className="flex flex-wrap items-center justify-between gap-y-2 border-border/50 border-t px-3 py-2.5 sm:px-5 sm:py-3">
+                <div className="flex min-w-0 flex-wrap items-center gap-1">
                   {selectedProvider && (
                     <ChatProviderSelector
                       providers={providers}
@@ -664,7 +664,9 @@ export const NewTab = () => {
                         )}
                       >
                         <Folder className="h-4 w-4" />
-                        <span>{selectedFolder?.name || 'Add workspace'}</span>
+                        <span className="max-w-28 truncate sm:max-w-44">
+                          {selectedFolder?.name || 'Add workspace'}
+                        </span>
                         <ChevronDown className="h-3 w-3" />
                       </Button>
                     </WorkspaceSelector>

@@ -4,25 +4,44 @@ const SKILL_BEHAVIORAL_INSTRUCTION = `The following skills provide specialized i
 When a task matches a skill's description, use filesystem_read to load the SKILL.md at the listed location before proceeding.
 When a skill references relative paths (e.g., scripts/), resolve them against the skill's directory (the parent of SKILL.md) and use absolute paths in tool calls.`
 
+const SKILL_CHAT_MODE_INSTRUCTION = `The following skills describe specialized workflows. In read-only chat mode you cannot read SKILL.md from disk (no filesystem tools). Use each skill's name and description as optional high-level guidance when relevant — do not claim you followed detailed steps from a file you did not load.`
+
 function escapeXml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-export function buildSkillsCatalog(skills: SkillMeta[]): string {
+export interface BuildSkillsCatalogOptions {
+  chatMode?: boolean
+}
+
+export function buildSkillsCatalog(
+  skills: SkillMeta[],
+  options?: BuildSkillsCatalogOptions,
+): string {
   if (skills.length === 0) return ''
 
+  const chatMode = options?.chatMode ?? false
+  const instruction = chatMode
+    ? SKILL_CHAT_MODE_INSTRUCTION
+    : SKILL_BEHAVIORAL_INSTRUCTION
+
   const skillEntries = skills
-    .map(
-      (s) =>
-        `<skill>
+    .map((s) => {
+      if (chatMode) {
+        return `<skill>
+<name>${escapeXml(s.name)}</name>
+<description>${escapeXml(s.description)}</description>
+</skill>`
+      }
+      return `<skill>
 <name>${escapeXml(s.name)}</name>
 <description>${escapeXml(s.description)}</description>
 <location>${escapeXml(s.location)}</location>
-</skill>`,
-    )
+</skill>`
+    })
     .join('\n')
 
-  return `${SKILL_BEHAVIORAL_INSTRUCTION}
+  return `${instruction}
 
 <available_skills>
 ${skillEntries}

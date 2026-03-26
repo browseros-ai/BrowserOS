@@ -176,7 +176,12 @@ For connected apps, you can read and write data via direct API access (faster an
 You have a session workspace for reading, writing, and executing files. See the Workspace section for tools and guidance.`
   }
 
-  if (!options?.chatMode) {
+  if (options?.chatMode) {
+    capabilities += `
+
+### Personality (read-only)
+Your behavior follows SOUL.md when that section is present. Persistent memory and soul-update tools are not available in this mode — see Memory & Identity for your personality text (if any).`
+  } else {
     capabilities += `
 
 ### Memory & Identity
@@ -414,7 +419,18 @@ function getMemoryAndIdentity(
   _exclude: Set<string>,
   options?: BuildSystemPromptOptions,
 ): string {
-  if (options?.chatMode) return ''
+  if (options?.chatMode) {
+    const soul = options.soulContent?.trim()
+    if (!soul) return ''
+
+    return `<memory_and_identity>
+## Personality (SOUL.md) — read-only in chat mode
+
+The following defines how you should behave — tone, style, boundaries, and communication preferences. **This mode has no** \`soul_read\`, \`soul_update\`, or memory tools: apply SOUL.md consistently in your replies without offering to persist changes to disk.
+
+${soul}
+</memory_and_identity>`
+  }
 
   let section = '<memory_and_identity>\n## Memory & Identity'
 

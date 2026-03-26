@@ -64,7 +64,27 @@ function isBrowserOSInternalUrl(url?: string): boolean {
   return url?.startsWith(BROWSEROS_INTERNAL_URL_PREFIX) ?? false
 }
 
-async function enforceSingleBrowserOSHomeTab() {
+/** Cold start: session restore may reopen only a deep link (e.g. workflows). Land on home instead. */
+function shouldResetAppTabToHomeOnStartup(url?: string): boolean {
+  if (!isBrowserOSAppUrl(url)) return false
+  if (isBrowserOSHomeUrl(url)) return false
+  if (isBrowserOSOnboardingUrl(url)) return false
+  return true
+}
+
+/** Tabs opened via + / Ctrl+T (child of another tab) or initial about:blank — must not be auto-closed. */
+function isLikelyUserInitiatedBlankOrChildTab(tab: chrome.tabs.Tab): boolean {
+  if (tab.openerTabId != null) return true
+  const url = tab.url ?? tab.pendingUrl ?? ''
+  if (url === 'about:blank' || url === '') return true
+  return false
+}
+
+async function enforceSingleBrowserOSHomeTab(options?: {
+  /** When false, do not steal focus (e.g. user opened a new tab with +). */
+  activatePreferred?: boolean
+}) {
+  const activatePreferred = options?.activatePreferred ?? true
   const shouldOpenHome = await openBrowserOSHomeOnStartupStorage.getValue()
   if (!shouldOpenHome) return
 
@@ -78,16 +98,19 @@ async function enforceSingleBrowserOSHomeTab() {
     if (replaceableTab?.id) {
       await chrome.tabs.update(replaceableTab.id, {
         url: BROWSEROS_HOME_URL,
-        active: true,
+        active: activatePreferred,
       })
-      if (replaceableTab.windowId !== undefined) {
+      if (activatePreferred && replaceableTab.windowId !== undefined) {
         await chrome.windows
           .update(replaceableTab.windowId, { focused: true })
           .catch(() => null)
       }
       return
     }
-    await chrome.tabs.create({ url: BROWSEROS_HOME_URL, active: true })
+    await chrome.tabs.create({
+      url: BROWSEROS_HOME_URL,
+      active: activatePreferred,
+    })
     return
   }
 
@@ -97,17 +120,35 @@ async function enforceSingleBrowserOSHomeTab() {
   // If only onboarding is open, convert it to home so startup always lands on main UI.
   if (isBrowserOSOnboardingUrl(preferredTab.url) && preferredTab.id) {
     await chrome.tabs
-      .update(preferredTab.id, { url: BROWSEROS_HOME_URL, active: true })
+      .update(preferredTab.id, {
+        url: BROWSEROS_HOME_URL,
+        active: activatePreferred,
+      })
       .catch(() => null)
     preferredTab = { ...preferredTab, url: BROWSEROS_HOME_URL }
   }
 
-  if (preferredTab.id) {
+  // Session restore can leave the active tab on workflows/settings/etc. with no #/home tab.
+  if (
+    activatePreferred &&
+    preferredTab.id &&
+    shouldResetAppTabToHomeOnStartup(preferredTab.url)
+  ) {
+    await chrome.tabs
+      .update(preferredTab.id, {
+        url: BROWSEROS_HOME_URL,
+        active: true,
+      })
+      .catch(() => null)
+    preferredTab = { ...preferredTab, url: BROWSEROS_HOME_URL }
+  }
+
+  if (activatePreferred && preferredTab.id) {
     await chrome.tabs
       .update(preferredTab.id, { active: true })
       .catch(() => null)
   }
-  if (preferredTab.windowId !== undefined) {
+  if (activatePreferred && preferredTab.windowId !== undefined) {
     await chrome.windows
       .update(preferredTab.windowId, { focused: true })
       .catch(() => null)
@@ -115,6 +156,7 @@ async function enforceSingleBrowserOSHomeTab() {
 
   const redundantTabs = allTabs
     .filter((tab) => {
+      if (isLikelyUserInitiatedBlankOrChildTab(tab)) return false
       if (shouldReplaceWithBrowserOSHome(tab.url)) return true
       return (
         isBrowserOSOnboardingUrl(tab.url) &&
@@ -234,7 +276,13 @@ export default defineBackground(() => {
     if (!shouldOpenHome) return
 
     const currentTab = await chrome.tabs.get(tabId).catch(() => null)
-    if (!currentTab || !shouldReplaceWithBrowserOSHome(currentTab.url)) return
+    if (
+      !currentTab ||
+      isLikelyUserInitiatedBlankOrChildTab(currentTab) ||
+      !shouldReplaceWithBrowserOSHome(currentTab.url)
+    ) {
+      return
+    }
 
     const allTabs = await chrome.tabs.query({})
     const hasBrowserOSHome = allTabs.some((tab) => isBrowserOSAppUrl(tab.url))
@@ -251,7 +299,9 @@ export default defineBackground(() => {
         () => null,
       )
       closeRedundantNewTabIfNeeded(tab.id as number).catch(() => null)
-      enforceSingleBrowserOSHomeTab().catch(() => null)
+      enforceSingleBrowserOSHomeTab({ activatePreferred: false }).catch(
+        () => null,
+      )
     }, 300)
   })
 
@@ -260,7 +310,9 @@ export default defineBackground(() => {
     redirectOnboardingToHomeIfCompleted(tabId, changeInfo.url).catch(() => null)
     normalizeStaleOnboardingTabs().catch(() => null)
     closeRedundantNewTabIfNeeded(tabId).catch(() => null)
-    enforceSingleBrowserOSHomeTab().catch(() => null)
+    enforceSingleBrowserOSHomeTab({ activatePreferred: false }).catch(
+      () => null,
+    )
   })
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

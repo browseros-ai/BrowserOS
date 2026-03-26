@@ -109,7 +109,7 @@ jobs:
           bun --env-file=.env.development test "${{ matrix.test_path }}" --reporter=junit --reporter-outfile="../../${{ matrix.junit_path }}"
           exit_code=$?
           cd ../..
-          junit_file="packages/browseros-agent/${{ matrix.junit_path }}"
+          junit_file="${{ matrix.junit_path }}"
           if [ ! -f "$junit_file" ]; then
             mkdir -p "$(dirname "$junit_file")"
             cat > "$junit_file" <<EOF
