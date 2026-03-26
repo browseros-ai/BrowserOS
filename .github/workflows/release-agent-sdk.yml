@@ -7,6 +7,8 @@ jobs:
   publish:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: packages/browseros-agent/packages/agent-sdk
@@ -43,19 +45,18 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Generate release notes
-        id: notes
         run: |
           SDK_PATH="packages/browseros-agent/packages/agent-sdk"
-          TAG="agent-sdk-v${{ steps.version.outputs.version }}"
           # Find the previous agent-sdk release tag
           PREV_TAG=$(git tag -l "agent-sdk-v*" --sort=-v:refname | head -n 1)
           if [ -n "$PREV_TAG" ]; then
-            # Get commits that modified the agent-sdk directory since last release
             NOTES=$(git log "$PREV_TAG"..HEAD --pretty=format:"- %s (%h)" -- "$SDK_PATH")
+            if [ -z "$NOTES" ]; then
+              NOTES="No notable changes."
+            fi
           else
             NOTES="Initial release"
           fi
-          # Write to file to handle multiline
           echo "$NOTES" > /tmp/release-notes.md
         working-directory: ${{ github.workspace }}
 
@@ -64,17 +65,19 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           DATE=$(date -u +"%Y-%m-%d")
           CHANGELOG="packages/browseros-agent/packages/agent-sdk/CHANGELOG.md"
-          NOTES=$(cat /tmp/release-notes.md)
 
-          # Build new entry
-          ENTRY="## v${VERSION} (${DATE})\n\n${NOTES}\n"
+          # Use head/tail to safely insert without sed quoting issues
+          {
+            head -n 1 "$CHANGELOG"
+            echo ""
+            echo "## v${VERSION} (${DATE})"
+            echo ""
+            cat /tmp/release-notes.md
+            echo ""
+            tail -n +2 "$CHANGELOG"
+          } > /tmp/new-changelog.md
+          mv /tmp/new-changelog.md "$CHANGELOG"
 
-          # Insert after the header line
-          sed -i "1 a\\
-          \\
-          ${ENTRY}" "$CHANGELOG"
-
-          # Commit the changelog update
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$CHANGELOG"
@@ -87,7 +90,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="agent-sdk-v${{ steps.version.outputs.version }}"
-          git tag "$TAG"
+          git tag "$TAG" 2>/dev/null || true
           git push origin "$TAG"
           gh release create "$TAG" \
             --title "@browseros-ai/agent-sdk v${{ steps.version.outputs.version }}" \
