@@ -34,11 +34,17 @@ function parseErrorMessage(
 } {
   const isBrowserosProvider = providerType === 'browseros'
 
-  // Detect MCP server connection failures (universal — affects all providers)
-  if (
-    (message.includes('Failed to fetch') || message.includes('fetch failed')) &&
-    message.includes('127.0.0.1')
-  ) {
+  // Detect MCP server connection failures (universal — affects all providers).
+  // The error may or may not include the URL depending on browser context
+  // (sidepanel vs main page), so match broadly on fetch failures to local targets.
+  const isFetchFailure =
+    message.includes('Failed to fetch') || message.includes('fetch failed')
+  const isLocalTarget =
+    message.includes('127.0.0.1') ||
+    message.includes('localhost') ||
+    // Bare "Failed to fetch" with no external URL is a local connection issue
+    (isFetchFailure && !/https?:\/\/(?!127\.0\.0\.1|localhost)/.test(message))
+  if (isFetchFailure && isLocalTarget) {
     return {
       text: 'Unable to connect to BrowserOS agent. Follow below instructions.',
       url: 'https://docs.browseros.com/troubleshooting/connection-issues',

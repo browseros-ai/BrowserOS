@@ -170,7 +170,9 @@ export const NewTabChat: FC = () => {
           />
         )}
         {agentUrlError && <ChatError error={agentUrlError} />}
-        {chatError && <ChatError error={chatError} />}
+        {chatError && (
+          <ChatError error={chatError} providerType={selectedProvider?.type} />
+        )}
       </main>
 
       <div className="mx-auto w-full max-w-3xl flex-shrink-0 px-4 pb-2">
