@@ -114,8 +114,9 @@ jobs:
             git push origin "$TAG"
           fi
 
+          CLI_DIST="packages/browseros-agent/apps/cli/dist"
           gh release create "$TAG" \
             --title "browseros-cli v${{ inputs.version }}" \
             --notes-file /tmp/release-notes.md \
-            dist/*
+            ${CLI_DIST}/*
         working-directory: ${{ github.workspace }}
