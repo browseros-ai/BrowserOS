@@ -68,6 +68,7 @@ export class ChatService {
 
     let session = sessionStore.get(request.conversationId)
     let isNewSession = false
+    const contextChanges: string[] = []
 
     // Build a stable key from enabled MCP servers for change detection
     const mcpServerKey = this.buildMcpServerKey(request.browserContext)
@@ -104,6 +105,9 @@ export class ChatService {
         agent.toolNames,
       )
       sessionStore.set(request.conversationId, session)
+      contextChanges.push(
+        'Connected app integrations changed during this conversation. Some tools from previous integrations may no longer be available. Use only tools that are currently registered.',
+      )
     }
 
     // Detect workspace change mid-conversation → rebuild session
@@ -113,6 +117,7 @@ export class ChatService {
         previous: session.workingDir ?? '(none)',
         current: request.userWorkingDir ?? '(none)',
       })
+      const previousWorkingDir = session.workingDir
       const previousMessages = session.agent.messages
       await session.agent.dispose()
       sessionStore.remove(request.conversationId)
@@ -138,6 +143,20 @@ export class ChatService {
         agent.toolNames,
       )
       sessionStore.set(request.conversationId, session)
+
+      if (!request.userWorkingDir) {
+        contextChanges.push(
+          'The user disconnected the workspace during this conversation. Filesystem tools (filesystem_read, filesystem_write, filesystem_edit, filesystem_bash, filesystem_grep, filesystem_find, filesystem_ls) are no longer available. Return all output directly in chat. If the user asks for file operations, suggest they select a working directory from the chat toolbar.',
+        )
+      } else if (!previousWorkingDir) {
+        contextChanges.push(
+          `The user connected a workspace during this conversation. Filesystem tools are now available. Working directory: ${request.userWorkingDir}`,
+        )
+      } else {
+        contextChanges.push(
+          `The user switched workspace during this conversation. Filesystem tools now use the new working directory: ${request.userWorkingDir}`,
+        )
+      }
     }
 
     if (!session) {
@@ -222,7 +241,13 @@ export class ChatService {
       request.selectedText,
       request.selectedTextSource,
     )
-    session.agent.appendUserMessage(userContent)
+
+    // Prepend tool-change context when session was rebuilt mid-conversation
+    const contextPrefix =
+      contextChanges.length > 0
+        ? `${contextChanges.map((c) => `[Context: ${c}]`).join('\n')}\n\n`
+        : ''
+    session.agent.appendUserMessage(contextPrefix + userContent)
 
     return createAgentUIStreamResponse({
       agent: session.agent.toolLoopAgent,
