@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import localforage from 'localforage'
+import { clear } from 'idb-keyval'
 import { Loader2 } from 'lucide-react'
 import type { FC } from 'react'
 import { useEffect } from 'react'
@@ -25,7 +25,7 @@ export const LogoutPage: FC = () => {
       await providersStorage.removeValue()
       await scheduledJobStorage.removeValue()
       queryClient.clear()
-      await localforage.clear()
+      await clear()
 
       resetIdentity()
       await signOut()
