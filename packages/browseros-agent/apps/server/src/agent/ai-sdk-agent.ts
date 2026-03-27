@@ -54,7 +54,13 @@ export class AiSdkAgent {
     private _messages: UIMessage[],
     private _mcpClients: Array<{ close(): Promise<void> }>,
     private conversationId: string,
+    private _toolNames: Set<string>,
   ) {}
+
+  /** Tool names registered on this agent — used to sanitize messages during session rebuilds. */
+  get toolNames(): Set<string> {
+    return this._toolNames
+  }
 
   static async create(config: AiSdkAgentConfig): Promise<AiSdkAgent> {
     const contextWindow =
@@ -270,6 +276,7 @@ export class AiSdkAgent {
       [],
       clients,
       config.resolvedConfig.conversationId,
+      new Set(Object.keys(tools)),
     )
   }
 

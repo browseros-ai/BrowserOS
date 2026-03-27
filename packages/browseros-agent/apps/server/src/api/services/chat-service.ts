@@ -7,7 +7,10 @@
 import { createAgentUIStreamResponse, type UIMessage } from 'ai'
 import { AiSdkAgent } from '../../agent/ai-sdk-agent'
 import { formatUserMessage } from '../../agent/format-message'
-import { filterValidMessages } from '../../agent/message-validation'
+import {
+  filterValidMessages,
+  sanitizeMessagesForToolset,
+} from '../../agent/message-validation'
 import type { SessionStore } from '../../agent/session-store'
 import type { ResolvedAgentConfig } from '../../agent/types'
 import type { Browser } from '../../browser/browser'
@@ -96,7 +99,10 @@ export class ChatService {
         mcpServerKey,
         workingDir: request.userWorkingDir,
       }
-      session.agent.messages = previousMessages
+      session.agent.messages = sanitizeMessagesForToolset(
+        previousMessages,
+        agent.toolNames,
+      )
       sessionStore.set(request.conversationId, session)
     }
 
@@ -127,7 +133,10 @@ export class ChatService {
         mcpServerKey,
         workingDir: request.userWorkingDir,
       }
-      session.agent.messages = previousMessages
+      session.agent.messages = sanitizeMessagesForToolset(
+        previousMessages,
+        agent.toolNames,
+      )
       sessionStore.set(request.conversationId, session)
     }
 
