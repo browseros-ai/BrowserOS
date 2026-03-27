@@ -12,6 +12,7 @@ interface ConversationListProps {
   hasNextPage?: boolean
   isFetchingNextPage?: boolean
   onLoadMore?: () => void
+  isRefreshing?: boolean
 }
 
 export const ConversationList: FC<ConversationListProps> = ({
@@ -21,6 +22,7 @@ export const ConversationList: FC<ConversationListProps> = ({
   hasNextPage,
   isFetchingNextPage,
   onLoadMore,
+  isRefreshing,
 }) => {
   const loadMoreRef = useRef<HTMLDivElement>(null)
 
@@ -57,6 +59,12 @@ export const ConversationList: FC<ConversationListProps> = ({
   return (
     <main className="mt-4 flex h-full flex-1 flex-col space-y-4 overflow-y-auto">
       <div className="w-full p-3">
+        {isRefreshing && (
+          <div className="flex items-center justify-center gap-2 pb-3 text-muted-foreground text-xs">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            <span>Fetching latest conversations</span>
+          </div>
+        )}
         {!hasConversations ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <MessageSquare className="mb-3 h-10 w-10 text-muted-foreground/50" />
