@@ -81,7 +81,12 @@ export class ChatService {
         current: mcpServerKey,
       })
       const previousMcpKey = session.mcpServerKey
-      session = await this.rebuildSession(session, request, agentConfig, mcpServerKey)
+      session = await this.rebuildSession(
+        session,
+        request,
+        agentConfig,
+        mcpServerKey,
+      )
 
       const oldServers = new Set(
         (previousMcpKey ?? '').split(',').filter(Boolean),
@@ -117,7 +122,12 @@ export class ChatService {
         current: request.userWorkingDir ?? '(none)',
       })
       const previousWorkingDir = session.workingDir
-      session = await this.rebuildSession(session, request, agentConfig, mcpServerKey)
+      session = await this.rebuildSession(
+        session,
+        request,
+        agentConfig,
+        mcpServerKey,
+      )
 
       if (!request.userWorkingDir) {
         contextChanges.push(
