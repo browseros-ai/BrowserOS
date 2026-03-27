@@ -11,7 +11,7 @@ import {
   filterValidMessages,
   sanitizeMessagesForToolset,
 } from '../../agent/message-validation'
-import type { SessionStore } from '../../agent/session-store'
+import type { AgentSession, SessionStore } from '../../agent/session-store'
 import type { ResolvedAgentConfig } from '../../agent/types'
 import type { Browser } from '../../browser/browser'
 import type { KlavisClient } from '../../lib/clients/klavis/klavis-client'
@@ -81,31 +81,7 @@ export class ChatService {
         current: mcpServerKey,
       })
       const previousMcpKey = session.mcpServerKey
-      const previousMessages = session.agent.messages
-      await session.agent.dispose()
-      sessionStore.remove(request.conversationId)
-
-      const browserContext = await this.resolvePageIds(request.browserContext)
-      const agent = await AiSdkAgent.create({
-        resolvedConfig: agentConfig,
-        browser: this.deps.browser,
-        registry: this.deps.registry,
-        browserContext,
-        klavisClient: this.deps.klavisClient,
-        browserosId: this.deps.browserosId,
-        aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
-      })
-      session = {
-        agent,
-        browserContext,
-        mcpServerKey,
-        workingDir: request.userWorkingDir,
-      }
-      session.agent.messages = sanitizeMessagesForToolset(
-        previousMessages,
-        agent.toolNames,
-      )
-      sessionStore.set(request.conversationId, session)
+      session = await this.rebuildSession(session, request, agentConfig, mcpServerKey)
 
       const oldServers = new Set(
         (previousMcpKey ?? '').split(',').filter(Boolean),
@@ -141,31 +117,7 @@ export class ChatService {
         current: request.userWorkingDir ?? '(none)',
       })
       const previousWorkingDir = session.workingDir
-      const previousMessages = session.agent.messages
-      await session.agent.dispose()
-      sessionStore.remove(request.conversationId)
-
-      const browserContext = await this.resolvePageIds(request.browserContext)
-      const agent = await AiSdkAgent.create({
-        resolvedConfig: agentConfig,
-        browser: this.deps.browser,
-        registry: this.deps.registry,
-        browserContext,
-        klavisClient: this.deps.klavisClient,
-        browserosId: this.deps.browserosId,
-        aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
-      })
-      session = {
-        agent,
-        browserContext,
-        mcpServerKey,
-        workingDir: request.userWorkingDir,
-      }
-      session.agent.messages = sanitizeMessagesForToolset(
-        previousMessages,
-        agent.toolNames,
-      )
-      sessionStore.set(request.conversationId, session)
+      session = await this.rebuildSession(session, request, agentConfig, mcpServerKey)
 
       if (!request.userWorkingDir) {
         contextChanges.push(
@@ -355,6 +307,40 @@ export class ChatService {
         error: error instanceof Error ? error.message : String(error),
       })
     })
+  }
+
+  private async rebuildSession(
+    session: AgentSession,
+    request: ChatRequest,
+    agentConfig: ResolvedAgentConfig,
+    mcpServerKey: string,
+  ): Promise<AgentSession> {
+    const previousMessages = session.agent.messages
+    await session.agent.dispose()
+    this.deps.sessionStore.remove(request.conversationId)
+
+    const browserContext = await this.resolvePageIds(request.browserContext)
+    const agent = await AiSdkAgent.create({
+      resolvedConfig: agentConfig,
+      browser: this.deps.browser,
+      registry: this.deps.registry,
+      browserContext,
+      klavisClient: this.deps.klavisClient,
+      browserosId: this.deps.browserosId,
+      aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
+    })
+    const newSession: AgentSession = {
+      agent,
+      browserContext,
+      mcpServerKey,
+      workingDir: request.userWorkingDir,
+    }
+    newSession.agent.messages = sanitizeMessagesForToolset(
+      previousMessages,
+      agent.toolNames,
+    )
+    this.deps.sessionStore.set(request.conversationId, newSession)
+    return newSession
   }
 
   private buildMcpServerKey(browserContext?: BrowserContext): string {
