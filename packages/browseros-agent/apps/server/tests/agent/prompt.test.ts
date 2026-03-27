@@ -1195,3 +1195,120 @@ describe('nudges', () => {
     expect(prompt).toContain('at most once')
   })
 })
+
+// ---------------------------------------------------------------------------
+// 15. NEW-TAB ORIGIN
+//
+// Why: When the user chats from the new-tab page, the active tab IS the chat
+// UI. The agent must never navigate or close it. The prompt must adapt its
+// execution and tool-selection sections to prohibit origin tab navigation
+// and default all lookups to new_page (background).
+// ---------------------------------------------------------------------------
+
+describe('new-tab origin', () => {
+  /** Build a prompt with newtab origin */
+  function buildNewTab(overrides?: Partial<BuildSystemPromptOptions>): string {
+    return buildSystemPrompt({
+      workspaceDir: '/home/user/workspace',
+      soulContent: 'Be helpful and concise.',
+      origin: 'newtab',
+      ...overrides,
+    })
+  }
+
+  // --- Execution section ---
+
+  it('includes New-Tab Origin Rules when origin is newtab', () => {
+    const prompt = buildNewTab()
+    expect(prompt).toContain('New-Tab Origin Rules')
+    expect(prompt).toContain('New Tab page')
+    expect(prompt).toContain('chat UI itself')
+  })
+
+  it('prohibits navigate_page on active tab in newtab mode', () => {
+    const prompt = buildNewTab()
+    expect(prompt).toContain('NEVER call `navigate_page` on the active tab')
+  })
+
+  it('prohibits close_page on active tab in newtab mode', () => {
+    const prompt = buildNewTab()
+    expect(prompt).toContain('NEVER call `close_page` on the active tab')
+  })
+
+  it('requires new_page for all browsing in newtab mode', () => {
+    const prompt = buildNewTab()
+    expect(prompt).toContain(
+      'For ALL browsing tasks (including single-page lookups), use `new_page`',
+    )
+  })
+
+  it('does NOT include single-tab navigate_page guidance in newtab mode', () => {
+    // The sidepanel prompt says "use navigate_page on the current tab" for
+    // single-page lookups. This must NOT appear in newtab mode.
+    const prompt = buildNewTab()
+    expect(prompt).not.toContain(
+      'For single-page lookups (e.g., "go to X and read Y"), use `navigate_page` on the current tab',
+    )
+  })
+
+  it('does NOT include "Stay on the current page" in newtab mode', () => {
+    const prompt = buildNewTab()
+    expect(prompt).not.toContain(
+      'Stay on the current page for single-page tasks',
+    )
+  })
+
+  it('still includes common execution sections in newtab mode', () => {
+    // Newtab mode should still have multi-tab workflow, observe-act-verify, etc.
+    const prompt = buildNewTab()
+    expect(prompt).toContain('Multi-tab workflow')
+    expect(prompt).toContain('Observe → Act → Verify')
+    expect(prompt).toContain('Tab retry discipline')
+    expect(prompt).toContain('CAPTCHA')
+  })
+
+  // --- Sidepanel (default) should NOT have newtab rules ---
+
+  it('does NOT include New-Tab Origin Rules in sidepanel mode', () => {
+    const prompt = buildRegular({ origin: 'sidepanel' })
+    expect(prompt).not.toContain('New-Tab Origin Rules')
+  })
+
+  it('does NOT include New-Tab Origin Rules when origin is undefined', () => {
+    const prompt = buildRegular()
+    expect(prompt).not.toContain('New-Tab Origin Rules')
+  })
+
+  it('includes single-tab navigate_page guidance in sidepanel mode', () => {
+    const prompt = buildRegular({ origin: 'sidepanel' })
+    expect(prompt).toContain(
+      'For single-page lookups (e.g., "go to X and read Y"), use `navigate_page` on the current tab',
+    )
+  })
+
+  // --- Tool selection section ---
+
+  it('tool selection table uses new_page for lookups in newtab mode', () => {
+    const prompt = buildNewTab()
+    expect(prompt).toContain(
+      '`new_page` (background) → extract data → `close_page`',
+    )
+  })
+
+  it('tool selection includes reminder about active tab in newtab mode', () => {
+    const prompt = buildNewTab()
+    expect(prompt).toContain(
+      'The active tab is the New Tab chat UI. Never navigate or close it.',
+    )
+  })
+
+  it('tool selection table uses navigate_page for lookups in sidepanel mode', () => {
+    const prompt = buildRegular({ origin: 'sidepanel' })
+    expect(prompt).toContain('`navigate_page` on current tab')
+  })
+
+  it('tool selection does NOT have newtab reminder in sidepanel mode', () => {
+    const prompt = buildRegular({ origin: 'sidepanel' })
+    expect(prompt).not.toContain('The active tab is the New Tab chat UI')
+  })
+})
