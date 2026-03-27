@@ -80,6 +80,7 @@ export class ChatService {
         previous: session.mcpServerKey,
         current: mcpServerKey,
       })
+      const previousMcpKey = session.mcpServerKey
       const previousMessages = session.agent.messages
       await session.agent.dispose()
       sessionStore.remove(request.conversationId)
@@ -105,9 +106,31 @@ export class ChatService {
         agent.toolNames,
       )
       sessionStore.set(request.conversationId, session)
-      contextChanges.push(
-        'Connected app integrations changed during this conversation. Some tools from previous integrations may no longer be available. Use only tools that are currently registered.',
+
+      const oldServers = new Set(
+        (previousMcpKey ?? '').split(',').filter(Boolean),
       )
+      const newServers = new Set(mcpServerKey.split(',').filter(Boolean))
+      const added = [...newServers].filter((s) => !oldServers.has(s))
+      const removed = [...oldServers].filter((s) => !newServers.has(s))
+
+      const parts: string[] = []
+      if (removed.length > 0) {
+        parts.push(
+          `The following app integrations were disconnected: ${removed.join(', ')}. Their tools are no longer available.`,
+        )
+      }
+      if (added.length > 0) {
+        parts.push(
+          `The following app integrations were connected: ${added.join(', ')}. Their tools are now available.`,
+        )
+      }
+      if (parts.length === 0) {
+        parts.push(
+          'Connected app integrations changed during this conversation. Use only tools that are currently registered.',
+        )
+      }
+      contextChanges.push(parts.join(' '))
     }
 
     // Detect workspace change mid-conversation → rebuild session
