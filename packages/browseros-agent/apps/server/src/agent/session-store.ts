@@ -9,6 +9,8 @@ export interface AgentSession {
   browserContext?: BrowserContext
   /** MCP server names used when the session was created, for change detection. */
   mcpServerKey?: string
+  /** Workspace directory when the session was created, for change detection. */
+  workingDir?: string
 }
 
 export class SessionStore {

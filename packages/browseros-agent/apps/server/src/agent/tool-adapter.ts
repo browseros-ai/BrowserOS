@@ -38,7 +38,7 @@ function contentToModelOutput(
 export function buildBrowserToolSet(
   registry: ToolRegistry,
   browser: Browser,
-  workingDir: string,
+  workingDir: string | undefined,
   session?: { origin?: 'sidepanel' | 'newtab'; originPageId?: number },
 ): ToolSet {
   const toolSet: ToolSet = {}

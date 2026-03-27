@@ -160,10 +160,11 @@ export class AiSdkAgent {
       }
     }
 
-    // Add filesystem tools (Pi coding agent) — skip in chat mode (read-only)
-    const filesystemTools = config.resolvedConfig.chatMode
-      ? {}
-      : buildFilesystemToolSet(config.resolvedConfig.workingDir)
+    // Add filesystem tools — skip in chat mode (read-only) and when no workspace is selected
+    const filesystemTools =
+      !config.resolvedConfig.chatMode && config.resolvedConfig.workingDir
+        ? buildFilesystemToolSet(config.resolvedConfig.workingDir)
+        : {}
     const memoryTools = config.resolvedConfig.chatMode
       ? {}
       : buildMemoryToolSet()

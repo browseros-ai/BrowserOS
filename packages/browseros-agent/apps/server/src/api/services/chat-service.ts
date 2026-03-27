@@ -4,8 +4,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { mkdir, utimes } from 'node:fs/promises'
-import path from 'node:path'
 import { createAgentUIStreamResponse, type UIMessage } from 'ai'
 import { AiSdkAgent } from '../../agent/ai-sdk-agent'
 import { formatUserMessage } from '../../agent/format-message'
@@ -13,7 +11,6 @@ import { filterValidMessages } from '../../agent/message-validation'
 import type { SessionStore } from '../../agent/session-store'
 import type { ResolvedAgentConfig } from '../../agent/types'
 import type { Browser } from '../../browser/browser'
-import { getSessionsDir } from '../../lib/browseros-dir'
 import type { KlavisClient } from '../../lib/clients/klavis/klavis-client'
 import { resolveLLMConfig } from '../../lib/clients/llm/config'
 import { logger } from '../../lib/logger'
@@ -40,8 +37,6 @@ export class ChatService {
 
     const llmConfig = await resolveLLMConfig(request, this.deps.browserosId)
 
-    const workingDir = await this.resolveSessionDir(request)
-
     const agentConfig: ResolvedAgentConfig = {
       conversationId: request.conversationId,
       provider: llmConfig.provider,
@@ -59,7 +54,7 @@ export class ChatService {
       reasoningSummary: request.reasoningSummary,
       contextWindowSize: request.contextWindowSize,
       userSystemPrompt: request.userSystemPrompt,
-      workingDir,
+      workingDir: request.userWorkingDir,
       supportsImages: request.supportsImages,
       chatMode: request.mode === 'chat',
       isScheduledTask: request.isScheduledTask,
@@ -95,7 +90,43 @@ export class ChatService {
         browserosId: this.deps.browserosId,
         aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
       })
-      session = { agent, browserContext, mcpServerKey }
+      session = {
+        agent,
+        browserContext,
+        mcpServerKey,
+        workingDir: request.userWorkingDir,
+      }
+      session.agent.messages = previousMessages
+      sessionStore.set(request.conversationId, session)
+    }
+
+    // Detect workspace change mid-conversation → rebuild session
+    if (session && session.workingDir !== request.userWorkingDir) {
+      logger.info('Workspace changed mid-conversation, rebuilding session', {
+        conversationId: request.conversationId,
+        previous: session.workingDir ?? '(none)',
+        current: request.userWorkingDir ?? '(none)',
+      })
+      const previousMessages = session.agent.messages
+      await session.agent.dispose()
+      sessionStore.remove(request.conversationId)
+
+      const browserContext = await this.resolvePageIds(request.browserContext)
+      const agent = await AiSdkAgent.create({
+        resolvedConfig: agentConfig,
+        browser: this.deps.browser,
+        registry: this.deps.registry,
+        browserContext,
+        klavisClient: this.deps.klavisClient,
+        browserosId: this.deps.browserosId,
+        aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
+      })
+      session = {
+        agent,
+        browserContext,
+        mcpServerKey,
+        workingDir: request.userWorkingDir,
+      }
       session.agent.messages = previousMessages
       sessionStore.set(request.conversationId, session)
     }
@@ -142,7 +173,13 @@ export class ChatService {
         browserosId: this.deps.browserosId,
         aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
       })
-      session = { agent, hiddenWindowId, browserContext, mcpServerKey }
+      session = {
+        agent,
+        hiddenWindowId,
+        browserContext,
+        mcpServerKey,
+        workingDir: request.userWorkingDir,
+      }
       sessionStore.set(request.conversationId, session)
     }
 
@@ -268,17 +305,5 @@ export class ChatService {
     const custom =
       browserContext?.customMcpServers?.map((s) => s.url).sort() ?? []
     return [...managed, ...custom].join(',')
-  }
-
-  private async resolveSessionDir(request: ChatRequest): Promise<string> {
-    const dir = request.userWorkingDir
-      ? request.userWorkingDir
-      : path.join(getSessionsDir(), request.conversationId)
-    await mkdir(dir, { recursive: true })
-    if (!request.userWorkingDir) {
-      const now = new Date()
-      await utimes(dir, now, now).catch(() => {})
-    }
-    return dir
   }
 }

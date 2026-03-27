@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import type { z } from 'zod'
 import type { Browser } from '../browser/browser'
@@ -18,7 +19,7 @@ export type ToolHandler = (
 ) => Promise<void>
 
 export interface ToolDirectories {
-  workingDir: string
+  workingDir?: string
   resourcesDir?: string
 }
 
@@ -38,7 +39,7 @@ export function resolveWorkingPath(
   targetPath: string,
   cwd?: string,
 ): string {
-  return resolve(cwd ?? ctx.directories.workingDir, targetPath)
+  return resolve(cwd ?? ctx.directories.workingDir ?? tmpdir(), targetPath)
 }
 
 export function defineTool<
