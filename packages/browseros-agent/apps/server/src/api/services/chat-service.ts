@@ -63,6 +63,7 @@ export class ChatService {
       supportsImages: request.supportsImages,
       chatMode: request.mode === 'chat',
       isScheduledTask: request.isScheduledTask,
+      origin: request.origin,
       declinedApps: request.declinedApps,
       browserosId: this.deps.browserosId,
     }

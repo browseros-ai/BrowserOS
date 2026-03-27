@@ -46,6 +46,8 @@ export interface ResolvedAgentConfig {
   isScheduledTask?: boolean
   /** Apps the user previously declined to connect via MCP (chose "do it manually"). */
   declinedApps?: string[]
+  /** Where the chat session originates from — determines navigation behavior. */
+  origin?: 'sidepanel' | 'newtab'
   /** BrowserOS installation ID for credit-based tracking. */
   browserosId?: string
 }

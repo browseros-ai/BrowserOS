@@ -45,6 +45,7 @@ export const ChatRequestSchema = AgentLLMConfigSchema.extend({
   userWorkingDir: z.string().min(1).optional(),
   supportsImages: z.boolean().optional().default(true),
   mode: z.enum(['chat', 'agent']).optional().default('agent'),
+  origin: z.enum(['sidepanel', 'newtab']).optional().default('sidepanel'),
   declinedApps: z.array(z.string()).optional(),
   selectedText: z.string().optional(),
   selectedTextSource: z

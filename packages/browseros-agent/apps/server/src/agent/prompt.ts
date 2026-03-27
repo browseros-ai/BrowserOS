@@ -193,19 +193,41 @@ You have persistent memory across sessions and an evolving personality. See the 
 
 function getExecution(
   _exclude: Set<string>,
-  _options?: BuildSystemPromptOptions,
+  options?: BuildSystemPromptOptions,
 ): string {
-  return `<execution>
+  const isNewTab = options?.origin === 'newtab'
+
+  let executionContent = `<execution>
 ## Execution
 
 ### Philosophy
 - Execute tasks end-to-end. Don't delegate ("I found the button, you can click it").
 - Don't ask permission for routine steps. Act, then report.
 - Do not refuse by default, attempt tasks even when outcomes are uncertain.
-- For ambiguous/unclear requests, ask one targeted clarifying question.
+- For ambiguous/unclear requests, ask one targeted clarifying question.`
+
+  if (isNewTab) {
+    executionContent += `
+
+### New-Tab Origin Rules
+You are operating from the user's **New Tab page**. The active tab (Page ID from Browser Context) is the chat UI itself.
+
+**CRITICAL RULES:**
+1. **NEVER call \`navigate_page\` on the active tab** — this would destroy the chat UI and navigate the user away.
+2. **NEVER call \`close_page\` on the active tab** — same reason.
+3. For ALL browsing tasks (including single-page lookups), use \`new_page\` (background) to open URLs.
+4. For single-page lookups, open a background tab, extract data, then close it.
+5. For multi-page research, open background tabs and group them with \`group_tabs\`.
+
+### Multi-tab workflow`
+  } else {
+    executionContent += `
 - Stay on the current page for single-page tasks. Use \`navigate_page\` to move within one tab.
 
-### Multi-tab workflow
+### Multi-tab workflow`
+  }
+
+  executionContent += `
 When a task requires working on multiple pages simultaneously:
 1. **Inform the user** that you're creating background tabs for the task.
 2. **Open new tabs in background** using \`new_page\` (opens in background by default) — never steal focus from the user's current tab.
@@ -216,15 +238,23 @@ When a task requires working on multiple pages simultaneously:
 7. **Never force-switch the user's active tab.** If you need user interaction on a background tab (e.g., login, CAPTCHA), tell the user which tab needs attention and let them switch manually.
 8. **Never navigate the user's current tab** during a multi-tab task. The current tab is the user's anchor — use it only for reading (snapshots, content extraction). All navigation should happen on background tabs.
 
-**Do NOT use \`create_hidden_window\` or \`new_hidden_page\` for user-requested tasks.** Hidden windows are invisible to the user and cannot be screenshotted. Use \`new_page\` (background mode) instead — tabs appear in the user's tab strip and can be inspected. Reserve hidden windows for automated/scheduled runs only.
+**Do NOT use \`create_hidden_window\` or \`new_hidden_page\` for user-requested tasks.** Hidden windows are invisible to the user and cannot be screenshotted. Use \`new_page\` (background mode) instead — tabs appear in the user's tab strip and can be inspected. Reserve hidden windows for automated/scheduled runs only.`
 
-For single-page lookups (e.g., "go to X and read Y"), use \`navigate_page\` on the current tab. Only create new tabs when the task requires multiple pages open simultaneously.
+  if (!isNewTab) {
+    executionContent += `
+
+For single-page lookups (e.g., "go to X and read Y"), use \`navigate_page\` on the current tab. Only create new tabs when the task requires multiple pages open simultaneously.`
+  }
+
+  executionContent += `
 
 ### Tab retry discipline
 When a background tab fails (404, wrong content, unexpected redirect):
 - **Navigate the existing tab** to the correct URL with \`navigate_page\` — do NOT open a new tab for retries.
 - If you must abandon a tab, close it with \`close_page\` before opening a replacement.
-- Never let orphan tabs accumulate — each task should end with only the tabs that contain useful content.
+- Never let orphan tabs accumulate — each task should end with only the tabs that contain useful content.`
+
+  executionContent += `
 
 ### Observe → Act → Verify
 - **Before acting**: Take a snapshot to get interactive element IDs.
@@ -241,13 +271,38 @@ Some tools automatically include a fresh snapshot in their response (labeled "Ad
 - 2FA → notify user, pause for completion
 - Page not found (404) or server error (500) → report the error to the user
 </execution>`
+
+  return executionContent
 }
 
 // -----------------------------------------------------------------------------
 // section: tool-selection
 // -----------------------------------------------------------------------------
 
-function getToolSelection(): string {
+function getToolSelection(
+  _exclude: Set<string>,
+  options?: BuildSystemPromptOptions,
+): string {
+  const isNewTab = options?.origin === 'newtab'
+
+  const navTable = isNewTab
+    ? `### Navigation: single-tab vs multi-tab
+| Task | Approach |
+|------|----------|
+| Look up one page | \`new_page\` (background) → extract data → \`close_page\` |
+| Research across multiple sites | \`new_page\` (background) for each site + \`group_tabs\` |
+| Compare two pages side by side | \`new_page\` (background) × 2 + \`group_tabs\` |
+| User says "open a new tab" | \`new_page\` (background) |
+
+**Remember:** The active tab is the New Tab chat UI. Never navigate or close it.`
+    : `### Navigation: single-tab vs multi-tab
+| Task | Approach |
+|------|----------|
+| Look up one page | \`navigate_page\` on current tab |
+| Research across multiple sites | \`new_page\` (background) for each site + \`group_tabs\` |
+| Compare two pages side by side | \`new_page\` (background) × 2 + \`group_tabs\` |
+| User says "open a new tab" | \`new_page\` (background) — don't steal focus |`
+
   return `<tool_selection>
 ## Tool Selection
 
@@ -268,13 +323,7 @@ function getToolSelection(): string {
 - Prefer \`fill\` over \`press_key\` for text input. Use \`press_key\` for keyboard shortcuts (Enter, Escape, Tab, Ctrl+A, etc.).
 - Prefer clicking links over \`navigate_page\` when the link is visible. Use \`navigate_page\` for direct URL access, back/forward, or reload.
 
-### Navigation: single-tab vs multi-tab
-| Task | Approach |
-|------|----------|
-| Look up one page | \`navigate_page\` on current tab |
-| Research across multiple sites | \`new_page\` (background) for each site + \`group_tabs\` |
-| Compare two pages side by side | \`new_page\` (background) × 2 + \`group_tabs\` |
-| User says "open a new tab" | \`new_page\` (background) — don't steal focus |
+${navTable}
 
 ### Connected apps: Strata vs browser
 When an app is Connected, prefer Strata tools over browser automation. Strata is faster, more reliable, and works without navigating away from the user's current page.
@@ -668,7 +717,10 @@ const promptSections: Record<string, PromptSectionFn> = {
   security: getSecurity,
   capabilities: getCapabilities,
   execution: getExecution,
-  'tool-selection': getToolSelection,
+  'tool-selection': (
+    _exclude: Set<string>,
+    options?: BuildSystemPromptOptions,
+  ) => getToolSelection(_exclude, options),
   'external-integrations': getExternalIntegrations,
   'error-recovery': getErrorRecovery,
   'memory-and-identity': getMemoryAndIdentity,
@@ -695,6 +747,8 @@ export interface BuildSystemPromptOptions {
   /** Apps the user previously declined to connect (chose "do it manually"). */
   declinedApps?: string[]
   skillsCatalog?: string
+  /** Where the chat session originates from — determines navigation behavior. */
+  origin?: 'sidepanel' | 'newtab'
 }
 
 export function buildSystemPrompt(options?: BuildSystemPromptOptions): string {

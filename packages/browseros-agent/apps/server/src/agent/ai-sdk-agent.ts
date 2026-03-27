@@ -92,10 +92,15 @@ export class AiSdkAgent {
     }
 
     // Build browser tools from the unified tool registry
+    const originPageId = config.browserContext?.activeTab?.pageId
     const allBrowserTools = buildBrowserToolSet(
       config.registry,
       config.browser,
       config.resolvedConfig.workingDir,
+      {
+        origin: config.resolvedConfig.origin,
+        originPageId,
+      },
     )
     const browserTools = config.resolvedConfig.chatMode
       ? Object.fromEntries(
@@ -205,6 +210,7 @@ export class AiSdkAgent {
       connectedApps: config.browserContext?.enabledMcpServers,
       declinedApps: config.resolvedConfig.declinedApps,
       skillsCatalog,
+      origin: config.resolvedConfig.origin,
     })
 
     // Configure compaction for context window management

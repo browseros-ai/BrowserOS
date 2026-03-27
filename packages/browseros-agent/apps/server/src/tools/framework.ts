@@ -22,9 +22,15 @@ export interface ToolDirectories {
   resourcesDir?: string
 }
 
+export interface ToolSessionContext {
+  origin?: 'sidepanel' | 'newtab'
+  originPageId?: number
+}
+
 export type ToolContext = {
   browser: Browser
   directories: ToolDirectories
+  session?: ToolSessionContext
 }
 
 export function resolveWorkingPath(

@@ -76,8 +76,6 @@ export interface ChatSessionOptions {
   isIntegrationsSynced?: boolean
 }
 
-const NEWTAB_SYSTEM_PROMPT = `IMPORTANT: The user is chatting from the New Tab page. When performing browser actions, ALWAYS open content in a NEW TAB rather than navigating the current tab. The user's new tab page should remain accessible.`
-
 export const useChatSession = (options?: ChatSessionOptions) => {
   const {
     selectedLlmProviderRef,
@@ -344,12 +342,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
             reasoningEffort: provider?.reasoningEffort,
             reasoningSummary: provider?.reasoningSummary,
             browserContext,
-            userSystemPrompt:
-              options?.origin === 'newtab'
-                ? [personalizationRef.current, NEWTAB_SYSTEM_PROMPT]
-                    .filter(Boolean)
-                    .join('\n\n')
-                : personalizationRef.current,
+            origin: options?.origin ?? 'sidepanel',
+            userSystemPrompt: personalizationRef.current,
             userWorkingDir: workingDirRef.current,
             supportsImages: provider?.supportsImages,
             previousConversation,
