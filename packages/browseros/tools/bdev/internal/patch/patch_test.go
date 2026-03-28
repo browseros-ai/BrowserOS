@@ -114,6 +114,47 @@ func TestBuildRangePatchSetUsesLatestBaseScopedPatch(t *testing.T) {
 	}
 }
 
+func TestSignatureForBinaryPatchWithContent(t *testing.T) {
+	// Create a binary patch with content
+	p := FilePatch{
+		Path:     "chrome/binary.bin",
+		Op:       OpBinary,
+		IsBinary: true,
+		Content:  []byte("GIT binary patch\nliteral 5\nabcde\n"),
+	}
+	
+	sig := signature(p)
+	
+	// The signature should handle binary patches with content
+	// With our fix, it should always use "binary:" prefix for OpBinary
+	if !strings.HasPrefix(sig, "binary:") {
+		t.Errorf("Expected signature for binary patch with content to start with 'binary:', got %q", sig)
+	}
+	// Check the path is included
+	expectedPath := "binary:chrome/binary.bin"
+	if sig != expectedPath {
+		t.Errorf("Expected signature %q, got %q", expectedPath, sig)
+	}
+}
+
+func TestSignatureForBinaryPatchWithoutContent(t *testing.T) {
+	// Create a binary patch without content
+	p := FilePatch{
+		Path:     "chrome/empty.bin",
+		Op:       OpBinary,
+		IsBinary: true,
+		Content:  []byte{},
+	}
+	
+	sig := signature(p)
+	
+	// Should still use "binary:" prefix
+	expectedPath := "binary:chrome/empty.bin"
+	if sig != expectedPath {
+		t.Errorf("Expected signature %q, got %q", expectedPath, sig)
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)

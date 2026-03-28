@@ -44,7 +44,7 @@ func signature(p FilePatch) string {
 		return "delete:" + NormalizeChromiumPath(p.Path)
 	case p.IsPureRename():
 		return strings.Join([]string{"rename", NormalizeChromiumPath(p.OldPath), NormalizeChromiumPath(p.Path)}, ":")
-	case p.Op == OpBinary && len(p.Content) == 0:
+	case p.Op == OpBinary:
 		return "binary:" + NormalizeChromiumPath(p.Path)
 	default:
 		lines := strings.Split(strings.ReplaceAll(string(p.Content), "\r\n", "\n"), "\n")
