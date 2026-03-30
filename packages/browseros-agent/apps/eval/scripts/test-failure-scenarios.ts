@@ -14,7 +14,6 @@ import { type Subprocess, spawn, spawnSync } from 'bun'
 const EVAL_PORTS = {
   cdp: 9005,
   server: 9105, // http_mcp in config.dev.json
-  extension: 9305,
 } as const
 const MONOREPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 
@@ -61,7 +60,7 @@ async function killBrowserOSApp(): Promise<void> {
 async function launchBrowserOSApp(): Promise<boolean> {
   log(
     'BROWSEROS',
-    `Launching BrowserOS (server disabled, CDP=${EVAL_PORTS.cdp}, Extension=${EVAL_PORTS.extension})...`,
+    `Launching BrowserOS (server disabled, CDP=${EVAL_PORTS.cdp})...`,
   )
   spawnSync({
     cmd: [
@@ -71,7 +70,6 @@ async function launchBrowserOSApp(): Promise<boolean> {
       '--args',
       '--disable-browseros-server',
       `--browseros-cdp-port=${EVAL_PORTS.cdp}`,
-      `--browseros-extension-port=${EVAL_PORTS.extension}`,
     ],
   })
   for (let i = 0; i < 30; i++) {
@@ -123,19 +121,19 @@ async function waitForServerHealth(
   return false
 }
 
-async function waitForExtension(
+async function waitForBrowserReady(
   port: number,
   maxAttempts = 60,
 ): Promise<boolean> {
   let connectedCount = 0
   for (let i = 0; i < maxAttempts; i++) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/extension-status`, {
+      const res = await fetch(`http://127.0.0.1:${port}/health`, {
         signal: AbortSignal.timeout(2000),
       })
       if (res.ok) {
-        const data = (await res.json()) as { extensionConnected?: boolean }
-        if (data.extensionConnected) {
+        const data = (await res.json()) as { cdpConnected?: boolean }
+        if (data.cdpConnected) {
           connectedCount++
           if (connectedCount >= 3) return true
         } else {
@@ -150,14 +148,14 @@ async function waitForExtension(
   return false
 }
 
-async function checkExtensionConnected(port: number): Promise<boolean> {
+async function checkBrowserReady(port: number): Promise<boolean> {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/extension-status`, {
+    const res = await fetch(`http://127.0.0.1:${port}/health`, {
       signal: AbortSignal.timeout(3000),
     })
     if (res.ok) {
-      const data = (await res.json()) as { extensionConnected?: boolean }
-      return data.extensionConnected === true
+      const data = (await res.json()) as { cdpConnected?: boolean }
+      return data.cdpConnected === true
     }
   } catch {
     /* failed */
@@ -174,9 +172,7 @@ let serverProc: Subprocess | null = null
 async function startServer(): Promise<Subprocess> {
   log('SERVER', 'Cleaning up ports...')
   killPort(EVAL_PORTS.server)
-  killPort(EVAL_PORTS.extension)
   await waitForPortFree(EVAL_PORTS.server, 30)
-  await waitForPortFree(EVAL_PORTS.extension, 30)
 
   log('SERVER', 'Starting server process...')
   const proc = spawn({
@@ -185,8 +181,6 @@ async function startServer(): Promise<Subprocess> {
       'apps/server/src/index.ts',
       '--server-port',
       String(EVAL_PORTS.server),
-      '--extension-port',
-      String(EVAL_PORTS.extension),
       '--cdp-port',
       String(EVAL_PORTS.cdp),
     ],
@@ -250,9 +244,9 @@ async function scenario1_AppNotRunningAtStart(): Promise<void> {
   log('RESULT', 'SUCCESS - App is now running, can proceed with server start')
 }
 
-async function scenario2_ExtensionNotConnecting(): Promise<void> {
+async function scenario2_BrowserNotReady(): Promise<void> {
   console.log(`\n${'='.repeat(70)}`)
-  console.log('SCENARIO 2: Extension Does Not Connect Within 30 Seconds')
+  console.log('SCENARIO 2: Browser Does Not Become Ready Within 30 Seconds')
   console.log('='.repeat(70))
   console.log(
     'Expected: Wait 30s → Restart BrowserOS app → Retry → Success or fail after 3 attempts\n',
@@ -280,11 +274,11 @@ async function scenario2_ExtensionNotConnecting(): Promise<void> {
       }
       log('HEALTH', 'Server health OK')
 
-      log('WAIT', 'Waiting for extension to connect (30s timeout)...')
-      const extConnected = await waitForExtension(EVAL_PORTS.server, 60) // 60 * 500ms = 30s
+      log('WAIT', 'Waiting for browser readiness (30s timeout)...')
+      const browserReady = await waitForBrowserReady(EVAL_PORTS.server, 60)
 
-      if (!extConnected) {
-        log('TIMEOUT', 'Extension did not connect within 30 seconds')
+      if (!browserReady) {
+        log('TIMEOUT', 'Browser did not become ready within 30 seconds')
         await stopServer(proc)
 
         if (!browserOSRestartAttempted) {
@@ -302,10 +296,10 @@ async function scenario2_ExtensionNotConnecting(): Promise<void> {
           }
         }
 
-        throw new Error('Extension did not connect')
+        throw new Error('Browser did not become ready')
       }
 
-      log('CONNECTED', 'Extension connected!')
+      log('CONNECTED', 'Browser ready!')
       await stopServer(proc)
       log('RESULT', 'SUCCESS - Would proceed with task execution')
       return
@@ -342,14 +336,14 @@ async function scenario3_ServerCrashesMidTask(): Promise<void> {
     return
   }
 
-  const extConnected = await waitForExtension(EVAL_PORTS.server, 60)
-  if (!extConnected) {
-    log('SETUP', 'Extension failed to connect')
+  const browserReady = await waitForBrowserReady(EVAL_PORTS.server, 60)
+  if (!browserReady) {
+    log('SETUP', 'Browser did not become ready')
     await stopServer(proc)
     return
   }
 
-  log('READY', 'Server and extension ready')
+  log('READY', 'Server and browser ready')
   log('SIMULATE', 'Simulating server crash by killing the process...')
 
   // Kill the server to simulate crash
@@ -361,9 +355,9 @@ async function scenario3_ServerCrashesMidTask(): Promise<void> {
   const stillHealthy = await waitForServerHealth(EVAL_PORTS.server, 5)
   log('CHECK', `Server health: ${stillHealthy ? 'OK' : 'FAILED'}`)
 
-  log('CHECK', 'Checking extension status...')
-  const stillConnected = await checkExtensionConnected(EVAL_PORTS.server)
-  log('CHECK', `Extension connected: ${stillConnected}`)
+  log('CHECK', 'Checking browser readiness...')
+  const stillConnected = await checkBrowserReady(EVAL_PORTS.server)
+  log('CHECK', `Browser ready: ${stillConnected}`)
 
   if (!stillHealthy || !stillConnected) {
     log('DETECTED', '→ Infrastructure failure detected!')
@@ -373,7 +367,6 @@ async function scenario3_ServerCrashesMidTask(): Promise<void> {
     )
 
     killPort(EVAL_PORTS.server)
-    killPort(EVAL_PORTS.extension)
     log('CLEANUP', 'Ports cleaned')
 
     log('RESULT', 'Task would FAIL, but next task gets clean environment')
@@ -394,7 +387,6 @@ async function scenario4_ToolTimeout(): Promise<void> {
   log('ERROR', `Received error: "${errorMessage}"`)
 
   const isInfraError =
-    errorMessage.includes('Extension') ||
     errorMessage.includes('BrowserOS') ||
     errorMessage.includes('server') ||
     errorMessage.includes('not connected') ||
@@ -415,9 +407,9 @@ async function scenario4_ToolTimeout(): Promise<void> {
   }
 }
 
-async function scenario5_ExtensionDisconnectsMidTask(): Promise<void> {
+async function scenario5_BrowserUnavailableMidTask(): Promise<void> {
   console.log(`\n${'='.repeat(70)}`)
-  console.log('SCENARIO 5: Extension Disconnects Mid-Task (App Crashes)')
+  console.log('SCENARIO 5: Browser Becomes Unavailable Mid-Task (App Crashes)')
   console.log('='.repeat(70))
   console.log(
     'Expected: Tool call fails → "not connected" error → Kill app → Restart for next task\n',
@@ -432,20 +424,20 @@ async function scenario5_ExtensionDisconnectsMidTask(): Promise<void> {
 
   log('WAIT', 'Waiting for server to be ready...')
   await waitForServerHealth(EVAL_PORTS.server, 30)
-  await waitForExtension(EVAL_PORTS.server, 60)
-  log('READY', 'Server and extension ready')
+  await waitForBrowserReady(EVAL_PORTS.server, 60)
+  log('READY', 'Server and browser ready')
 
   log('SIMULATE', 'Simulating BrowserOS crash by killing the app...')
   await killBrowserOSApp()
   await sleep(2000)
 
-  // Check extension status
-  log('CHECK', 'Checking extension status after app crash...')
-  const stillConnected = await checkExtensionConnected(EVAL_PORTS.server)
-  log('CHECK', `Extension connected: ${stillConnected}`)
+  // Check browser status
+  log('CHECK', 'Checking browser readiness after app crash...')
+  const stillConnected = await checkBrowserReady(EVAL_PORTS.server)
+  log('CHECK', `Browser ready: ${stillConnected}`)
 
   if (!stillConnected) {
-    log('DETECTED', '→ Extension disconnected!')
+    log('DETECTED', '→ Browser became unavailable!')
 
     const errorMessage = 'BrowserOS helper service not connected'
     log('ERROR', `Tool call would fail with: "${errorMessage}"`)
@@ -457,7 +449,6 @@ async function scenario5_ExtensionDisconnectsMidTask(): Promise<void> {
       log('RECOVERY', '→ Cleaning up for next task...')
       await stopServer(proc)
       killPort(EVAL_PORTS.server)
-      killPort(EVAL_PORTS.extension)
 
       log('RECOVERY', '→ Next task would check if BrowserOS is running...')
       const appRunning = isBrowserOSAppRunning()
@@ -517,12 +508,12 @@ async function scenario7_ConsecutiveFailures(): Promise<void> {
     // Simulate infrastructure check before task
     log('FLOW', '→ Start server')
     log('FLOW', '→ Wait for health')
-    log('FLOW', '→ Wait for extension')
+    log('FLOW', '→ Wait for browser readiness')
 
     // Simulate task failure
     const failureReason =
       taskId === 'task-1'
-        ? 'Extension did not connect'
+        ? 'Browser did not become ready'
         : taskId === 'task-2'
           ? 'Tool timed out after 65000ms'
           : 'BrowserOS helper service not connected'
@@ -530,14 +521,12 @@ async function scenario7_ConsecutiveFailures(): Promise<void> {
     log('ERROR', `Task failed: ${failureReason}`)
 
     const isInfraError =
-      failureReason.includes('Extension') ||
       failureReason.includes('timeout') ||
       failureReason.includes('not connected')
 
     if (isInfraError) {
       log('CLEANUP', '→ Detected infra error, cleaning ports')
       log('CLEANUP', '→ killPort(9110)')
-      log('CLEANUP', '→ killPort(9310)')
     }
 
     log('CLEANUP', '→ Stop server')
@@ -558,7 +547,6 @@ async function main() {
   console.log('Failure Scenario Test Suite')
   console.log('='.repeat(70))
   console.log(`Server Port: ${EVAL_PORTS.server}`)
-  console.log(`Extension Port: ${EVAL_PORTS.extension}`)
   console.log(`CDP Port: ${EVAL_PORTS.cdp}`)
   console.log()
 
@@ -570,8 +558,8 @@ async function main() {
     },
     {
       num: 2,
-      name: 'Extension Does Not Connect (30s timeout)',
-      fn: scenario2_ExtensionNotConnecting,
+      name: 'Browser Does Not Become Ready (30s timeout)',
+      fn: scenario2_BrowserNotReady,
     },
     {
       num: 3,
@@ -585,8 +573,8 @@ async function main() {
     },
     {
       num: 5,
-      name: 'Extension Disconnects Mid-Task (App Crash)',
-      fn: scenario5_ExtensionDisconnectsMidTask,
+      name: 'Browser Becomes Unavailable Mid-Task (App Crash)',
+      fn: scenario5_BrowserUnavailableMidTask,
     },
     {
       num: 6,
@@ -627,7 +615,6 @@ async function main() {
       } catch {}
     }
     killPort(EVAL_PORTS.server)
-    killPort(EVAL_PORTS.extension)
     process.exit(0)
   }
   process.on('SIGINT', cleanup)

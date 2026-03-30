@@ -13,4 +13,5 @@ export interface ServerDiscoveryConfig {
   server_version: string
   browseros_version?: string
   chromium_version?: string
+  browseros_id?: string
 }

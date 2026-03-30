@@ -4,16 +4,16 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { mkdir, utimes } from 'node:fs/promises'
-import path from 'node:path'
 import { createAgentUIStreamResponse, type UIMessage } from 'ai'
 import { AiSdkAgent } from '../../agent/ai-sdk-agent'
 import { formatUserMessage } from '../../agent/format-message'
-import { filterValidMessages } from '../../agent/message-validation'
-import type { SessionStore } from '../../agent/session-store'
+import {
+  filterValidMessages,
+  sanitizeMessagesForToolset,
+} from '../../agent/message-validation'
+import type { AgentSession, SessionStore } from '../../agent/session-store'
 import type { ResolvedAgentConfig } from '../../agent/types'
 import type { Browser } from '../../browser/browser'
-import { getSessionsDir } from '../../lib/browseros-dir'
 import type { KlavisClient } from '../../lib/clients/klavis/klavis-client'
 import { resolveLLMConfig } from '../../lib/clients/llm/config'
 import { logger } from '../../lib/logger'
@@ -40,8 +40,6 @@ export class ChatService {
 
     const llmConfig = await resolveLLMConfig(request, this.deps.browserosId)
 
-    const workingDir = await this.resolveSessionDir(request)
-
     const agentConfig: ResolvedAgentConfig = {
       conversationId: request.conversationId,
       provider: llmConfig.provider,
@@ -59,16 +57,18 @@ export class ChatService {
       reasoningSummary: request.reasoningSummary,
       contextWindowSize: request.contextWindowSize,
       userSystemPrompt: request.userSystemPrompt,
-      workingDir,
+      workingDir: request.userWorkingDir,
       supportsImages: request.supportsImages,
       chatMode: request.mode === 'chat',
       isScheduledTask: request.isScheduledTask,
+      origin: request.origin,
       declinedApps: request.declinedApps,
       browserosId: this.deps.browserosId,
     }
 
     let session = sessionStore.get(request.conversationId)
     let isNewSession = false
+    const contextChanges: string[] = []
 
     // Build a stable key from enabled MCP servers for change detection
     const mcpServerKey = this.buildMcpServerKey(request.browserContext)
@@ -80,23 +80,68 @@ export class ChatService {
         previous: session.mcpServerKey,
         current: mcpServerKey,
       })
-      const previousMessages = session.agent.messages
-      await session.agent.dispose()
-      sessionStore.remove(request.conversationId)
+      const previousMcpKey = session.mcpServerKey
+      session = await this.rebuildSession(
+        session,
+        request,
+        agentConfig,
+        mcpServerKey,
+      )
 
-      const browserContext = await this.resolvePageIds(request.browserContext)
-      const agent = await AiSdkAgent.create({
-        resolvedConfig: agentConfig,
-        browser: this.deps.browser,
-        registry: this.deps.registry,
-        browserContext,
-        klavisClient: this.deps.klavisClient,
-        browserosId: this.deps.browserosId,
-        aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
+      const oldServers = new Set(
+        (previousMcpKey ?? '').split(',').filter(Boolean),
+      )
+      const newServers = new Set(mcpServerKey.split(',').filter(Boolean))
+      const added = [...newServers].filter((s) => !oldServers.has(s))
+      const removed = [...oldServers].filter((s) => !newServers.has(s))
+
+      const parts: string[] = []
+      if (removed.length > 0) {
+        parts.push(
+          `The following app integrations were disconnected: ${removed.join(', ')}. Their tools are no longer available.`,
+        )
+      }
+      if (added.length > 0) {
+        parts.push(
+          `The following app integrations were connected: ${added.join(', ')}. Their tools are now available.`,
+        )
+      }
+      if (parts.length === 0) {
+        parts.push(
+          'Connected app integrations changed during this conversation. Use only tools that are currently registered.',
+        )
+      }
+      contextChanges.push(parts.join(' '))
+    }
+
+    // Detect workspace change mid-conversation → rebuild session
+    if (session && session.workingDir !== request.userWorkingDir) {
+      logger.info('Workspace changed mid-conversation, rebuilding session', {
+        conversationId: request.conversationId,
+        previous: session.workingDir ?? '(none)',
+        current: request.userWorkingDir ?? '(none)',
       })
-      session = { agent, browserContext, mcpServerKey }
-      session.agent.messages = previousMessages
-      sessionStore.set(request.conversationId, session)
+      const previousWorkingDir = session.workingDir
+      session = await this.rebuildSession(
+        session,
+        request,
+        agentConfig,
+        mcpServerKey,
+      )
+
+      if (!request.userWorkingDir) {
+        contextChanges.push(
+          'The user disconnected the workspace during this conversation. Filesystem tools (filesystem_read, filesystem_write, filesystem_edit, filesystem_bash, filesystem_grep, filesystem_find, filesystem_ls) are no longer available. Return all output directly in chat. If the user asks for file operations, suggest they select a working directory from the chat toolbar.',
+        )
+      } else if (!previousWorkingDir) {
+        contextChanges.push(
+          `The user connected a workspace during this conversation. Filesystem tools are now available. Working directory: ${request.userWorkingDir}`,
+        )
+      } else {
+        contextChanges.push(
+          `The user switched workspace during this conversation. Filesystem tools now use the new working directory: ${request.userWorkingDir}`,
+        )
+      }
     }
 
     if (!session) {
@@ -141,7 +186,13 @@ export class ChatService {
         browserosId: this.deps.browserosId,
         aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
       })
-      session = { agent, hiddenWindowId, browserContext, mcpServerKey }
+      session = {
+        agent,
+        hiddenWindowId,
+        browserContext,
+        mcpServerKey,
+        workingDir: request.userWorkingDir,
+      }
       sessionStore.set(request.conversationId, session)
     }
 
@@ -175,7 +226,13 @@ export class ChatService {
       request.selectedText,
       request.selectedTextSource,
     )
-    session.agent.appendUserMessage(userContent)
+
+    // Prepend tool-change context when session was rebuilt mid-conversation
+    const contextPrefix =
+      contextChanges.length > 0
+        ? `${contextChanges.map((c) => `[Context: ${c}]`).join('\n')}\n\n`
+        : ''
+    session.agent.appendUserMessage(contextPrefix + userContent)
 
     return createAgentUIStreamResponse({
       agent: session.agent.toolLoopAgent,
@@ -262,22 +319,44 @@ export class ChatService {
     })
   }
 
+  private async rebuildSession(
+    session: AgentSession,
+    request: ChatRequest,
+    agentConfig: ResolvedAgentConfig,
+    mcpServerKey: string,
+  ): Promise<AgentSession> {
+    const previousMessages = session.agent.messages
+    await session.agent.dispose()
+    this.deps.sessionStore.remove(request.conversationId)
+
+    const browserContext = await this.resolvePageIds(request.browserContext)
+    const agent = await AiSdkAgent.create({
+      resolvedConfig: agentConfig,
+      browser: this.deps.browser,
+      registry: this.deps.registry,
+      browserContext,
+      klavisClient: this.deps.klavisClient,
+      browserosId: this.deps.browserosId,
+      aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
+    })
+    const newSession: AgentSession = {
+      agent,
+      browserContext,
+      mcpServerKey,
+      workingDir: request.userWorkingDir,
+    }
+    newSession.agent.messages = sanitizeMessagesForToolset(
+      previousMessages,
+      agent.toolNames,
+    )
+    this.deps.sessionStore.set(request.conversationId, newSession)
+    return newSession
+  }
+
   private buildMcpServerKey(browserContext?: BrowserContext): string {
     const managed = browserContext?.enabledMcpServers?.slice().sort() ?? []
     const custom =
       browserContext?.customMcpServers?.map((s) => s.url).sort() ?? []
     return [...managed, ...custom].join(',')
-  }
-
-  private async resolveSessionDir(request: ChatRequest): Promise<string> {
-    const dir = request.userWorkingDir
-      ? request.userWorkingDir
-      : path.join(getSessionsDir(), request.conversationId)
-    await mkdir(dir, { recursive: true })
-    if (!request.userWorkingDir) {
-      const now = new Date()
-      await utimes(dir, now, now).catch(() => {})
-    }
-    return dir
   }
 }

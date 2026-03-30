@@ -1,6 +1,6 @@
 import type { ProtocolApi } from '@browseros/cdp-protocol/protocol-api'
 import { logger } from '../lib/logger'
-import type { CdpBackend, ControllerBackend } from './backends/types'
+import type { CdpBackend } from './backends/types'
 import type { BookmarkNode } from './bookmarks'
 import * as bookmarks from './bookmarks'
 import {
@@ -87,16 +87,13 @@ const EXCLUDED_URL_PREFIXES = [
 
 export class Browser {
   private cdp: CdpBackend
-  // biome-ignore lint/correctness/noUnusedPrivateClassMembers: kept for later removal
-  private controller: ControllerBackend
   private consoleCollector: ConsoleCollector
   private pages = new Map<number, PageInfo>()
   private sessions = new Map<string, string>()
   private nextPageId = 1
 
-  constructor(cdp: CdpBackend, controller: ControllerBackend) {
+  constructor(cdp: CdpBackend) {
     this.cdp = cdp
-    this.controller = controller
     this.consoleCollector = new ConsoleCollector(cdp)
     this.setupEventHandlers()
   }

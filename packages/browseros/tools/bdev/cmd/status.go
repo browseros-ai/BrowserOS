@@ -1,96 +1,45 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 
-	"bdev/internal/config"
-	"bdev/internal/engine"
-	"bdev/internal/ui"
-
+	"github.com/browseros-ai/BrowserOS/packages/browseros/tools/bdev/internal/engine"
+	"github.com/browseros-ai/BrowserOS/packages/browseros/tools/bdev/internal/ui"
 	"github.com/spf13/cobra"
 )
 
-var statusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show sync state between checkout and patches repo",
-	RunE:  runStatus,
-}
-
-var (
-	statusJSON  bool
-	statusFiles bool
-)
-
 func init() {
-	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "output as JSON")
-	statusCmd.Flags().BoolVar(&statusFiles, "files", false, "list individual files per category")
-	rootCmd.AddCommand(statusCmd)
-}
-
-func runStatus(cmd *cobra.Command, args []string) error {
-	ctx, err := config.LoadContext()
-	if err != nil {
-		return err
+	var src string
+	command := &cobra.Command{
+		Use:         "status [workspace]",
+		Annotations: map[string]string{"group": "Core:"},
+		Short:       "Show workspace sync state",
+		Args:        cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ws, err := resolveWorkspace(args, src)
+			if err != nil {
+				return err
+			}
+			info, err := repoInfo()
+			if err != nil {
+				return err
+			}
+			status, err := engine.InspectWorkspace(cmd.Context(), ws, info)
+			if err != nil {
+				return err
+			}
+			return renderResult(status, func() {
+				fmt.Println(ui.Title(fmt.Sprintf("%s (%s)", ws.Name, status.SyncState)))
+				fmt.Printf("%s  %s\n", ui.Muted("path:"), ws.Path)
+				fmt.Printf("%s  %s\n", ui.Muted("repo head:"), status.RepoHead)
+				fmt.Printf("%s  %s\n", ui.Muted("last sync:"), status.LastSyncRev)
+				fmt.Printf("%s  %s\n", ui.Muted("last apply:"), status.LastApplyRev)
+				fmt.Printf("%s  %d\n", ui.Muted("needs apply:"), len(status.NeedsApply))
+				fmt.Printf("%s  %d\n", ui.Muted("needs update:"), len(status.NeedsUpdate))
+				fmt.Printf("%s  %d\n", ui.Muted("orphaned:"), len(status.Orphaned))
+			})
+		},
 	}
-
-	result, err := engine.Status(ctx, statusFiles)
-	if err != nil {
-		return err
-	}
-
-	if statusJSON {
-		data, err := json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
-	}
-
-	renderStatus(result)
-	return nil
-}
-
-func renderStatus(r *engine.StatusResult) {
-	fmt.Println(ui.TitleStyle.Render("bdev status"))
-	fmt.Println()
-
-	fmt.Printf("  %s %s\n", ui.LabelStyle.Render("Checkout:"), ui.ValueStyle.Render(r.CheckoutName))
-	fmt.Printf("  %s %s\n", ui.LabelStyle.Render("Base commit:"), r.BaseCommit[:min(12, len(r.BaseCommit))])
-	if r.ChromiumVersion != "" {
-		fmt.Printf("  %s %s\n", ui.LabelStyle.Render("Chromium:"), r.ChromiumVersion)
-	}
-	fmt.Printf("  %s %s\n", ui.LabelStyle.Render("Patches repo:"), r.PatchesRepo)
-
-	fmt.Println()
-	fmt.Println("  Sync status:")
-
-	if r.Ahead > 0 {
-		fmt.Printf("    %s %s\n",
-			ui.WarningStyle.Render(fmt.Sprintf("ahead:  %3d files", r.Ahead)),
-			ui.MutedStyle.Render("(local changes not in patches repo)"))
-	}
-	if r.Behind > 0 {
-		fmt.Printf("    %s %s\n",
-			ui.WarningStyle.Render(fmt.Sprintf("behind: %3d files", r.Behind)),
-			ui.MutedStyle.Render("(patches in repo not applied locally)"))
-	}
-	fmt.Printf("    %s\n",
-		ui.SuccessStyle.Render(fmt.Sprintf("synced: %3d files", r.Synced)))
-
-	if len(r.AheadFiles) > 0 {
-		fmt.Println()
-		fmt.Println("  Ahead files:")
-		for _, f := range r.AheadFiles {
-			fmt.Printf("    %s %s\n", ui.AddedPrefix, f)
-		}
-	}
-	if len(r.BehindFiles) > 0 {
-		fmt.Println()
-		fmt.Println("  Behind files:")
-		for _, f := range r.BehindFiles {
-			fmt.Printf("    %s %s\n", ui.WarningStyle.Render(">"), f)
-		}
-	}
+	command.Flags().StringVar(&src, "src", "", "Chromium checkout path to operate on directly")
+	rootCmd.AddCommand(command)
 }

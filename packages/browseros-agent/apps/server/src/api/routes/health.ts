@@ -13,7 +13,11 @@ interface HealthDeps {
 
 export function createHealthRoute(deps: HealthDeps = {}) {
   return new Hono().get('/', (c) => {
-    const cdpConnected = deps.browser?.isCdpConnected() ?? true
-    return c.json({ status: 'ok', cdpConnected })
+    const cdpConnected = deps.browser?.isCdpConnected()
+    return c.json(
+      cdpConnected === undefined
+        ? { status: 'ok' }
+        : { status: 'ok', cdpConnected },
+    )
   })
 }

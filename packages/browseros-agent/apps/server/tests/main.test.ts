@@ -9,10 +9,11 @@ const config = {
   cdpPort: 9222,
   serverPort: 9100,
   agentPort: 9100,
-  extensionPort: 9300,
+  extensionPort: null,
   resourcesDir: '/tmp/browseros-resources',
   executionDir: '/tmp/browseros-execution',
   mcpAllowRemote: false,
+  aiSdkDevtoolsEnabled: false,
 }
 
 describe('Application.start', () => {
@@ -20,140 +21,96 @@ describe('Application.start', () => {
     mock.restore()
   })
 
-  it('continues when controller startup fails', async () => {
-    const controllerError = Object.assign(new Error('bind failed'), {
-      code: 'EADDRINUSE',
-    })
+  it('starts with the CDP backend only', async () => {
     const createHttpServer = mock(async () => ({}))
-    const controllerStart = mock(async () => {
-      throw controllerError
-    })
     const cdpConnect = mock(async () => {})
-    const sentryCaptureException = mock(() => {})
+    const browserCtor = mock(() => {})
     const loggerInfo = mock(() => {})
     const loggerWarn = mock(() => {})
     const loggerDebug = mock(() => {})
     const loggerError = mock(() => {})
-    const processExit = mock((() => {
-      throw new Error('process.exit called')
-    }) as typeof process.exit)
-    const originalExit = process.exit
-    process.exit = processExit
+    mock.module('../src/api/server', () => ({
+      createHttpServer,
+    }))
+    mock.module('../src/browser/backends/cdp', () => ({
+      CdpBackend: class {
+        async connect(): Promise<void> {
+          await cdpConnect()
+        }
+      },
+    }))
+    mock.module('../src/browser/browser', () => ({
+      Browser: class {
+        constructor(cdp: unknown) {
+          browserCtor(cdp)
+        }
+      },
+    }))
+    mock.module('../src/lib/browseros-dir', () => ({
+      cleanOldSessions: mock(async () => {}),
+      ensureBrowserosDir: mock(async () => {}),
+      removeServerConfigSync: mock(() => {}),
+      writeServerConfig: mock(async () => {}),
+    }))
+    mock.module('../src/lib/db', () => ({
+      initializeDb: mock(() => ({})),
+    }))
+    mock.module('../src/lib/identity', () => ({
+      identity: {
+        initialize: mock(() => {}),
+        getBrowserOSId: mock(() => 'browseros-id'),
+      },
+    }))
+    mock.module('../src/lib/logger', () => ({
+      logger: {
+        setLogFile: mock(() => {}),
+        info: loggerInfo,
+        warn: loggerWarn,
+        debug: loggerDebug,
+        error: loggerError,
+      },
+    }))
+    mock.module('../src/lib/metrics', () => ({
+      metrics: {
+        initialize: mock(() => {}),
+        isEnabled: mock(() => true),
+        log: mock(() => {}),
+      },
+    }))
+    mock.module('../src/lib/sentry', () => ({
+      Sentry: {
+        setContext: mock(() => {}),
+        setUser: mock(() => {}),
+        captureException: mock(() => {}),
+      },
+    }))
+    mock.module('../src/lib/soul', () => ({
+      seedSoulTemplate: mock(async () => {}),
+    }))
+    mock.module('../src/skills/migrate', () => ({
+      migrateBuiltinSkills: mock(async () => {}),
+    }))
+    mock.module('../src/skills/remote-sync', () => ({
+      startSkillSync: mock(() => {}),
+      stopSkillSync: mock(() => {}),
+      syncBuiltinSkills: mock(async () => {}),
+    }))
+    mock.module('../src/tools/registry', () => ({
+      registry: {
+        names: () => ['test_tool'],
+      },
+    }))
 
-    try {
-      mock.module('../src/api/server', () => ({
-        createHttpServer,
-      }))
-      mock.module('../src/browser/backends/controller', () => ({
-        ControllerBackend: class {
-          async start(): Promise<void> {
-            await controllerStart()
-          }
+    const { Application } = await import('../src/main')
+    const app = new Application(config)
 
-          async stop(): Promise<void> {}
+    await app.start()
 
-          isConnected(): boolean {
-            return false
-          }
-
-          async send(): Promise<never> {
-            throw new Error('BrowserOS helper service not connected')
-          }
-        },
-      }))
-      mock.module('../src/browser/backends/cdp', () => ({
-        CdpBackend: class {
-          async connect(): Promise<void> {
-            await cdpConnect()
-          }
-        },
-      }))
-      mock.module('../src/browser/browser', () => ({
-        Browser: class {},
-      }))
-      mock.module('../src/lib/browseros-dir', () => ({
-        ensureBrowserosDir: mock(async () => {}),
-      }))
-      mock.module('../src/lib/db', () => ({
-        initializeDb: mock(() => ({})),
-      }))
-      mock.module('../src/lib/identity', () => ({
-        identity: {
-          initialize: mock(() => {}),
-          getBrowserOSId: mock(() => 'browseros-id'),
-        },
-      }))
-      mock.module('../src/lib/logger', () => ({
-        logger: {
-          setLogFile: mock(() => {}),
-          info: loggerInfo,
-          warn: loggerWarn,
-          debug: loggerDebug,
-          error: loggerError,
-        },
-      }))
-      mock.module('../src/lib/metrics', () => ({
-        metrics: {
-          initialize: mock(() => {}),
-          isEnabled: mock(() => true),
-          log: mock(() => {}),
-        },
-      }))
-      mock.module('../src/lib/sentry', () => ({
-        Sentry: {
-          setContext: mock(() => {}),
-          captureException: sentryCaptureException,
-        },
-      }))
-      mock.module('../src/lib/soul', () => ({
-        seedSoulTemplate: mock(async () => {}),
-      }))
-      mock.module('../src/tools/registry', () => ({
-        registry: {
-          names: () => ['test_tool'],
-        },
-      }))
-
-      const { Application } = await import('../src/main')
-      const app = new Application(config)
-
-      await app.start()
-
-      expect(controllerStart).toHaveBeenCalledTimes(1)
-      expect(cdpConnect).toHaveBeenCalledTimes(1)
-      expect(createHttpServer).toHaveBeenCalledTimes(1)
-      expect(sentryCaptureException).toHaveBeenCalledTimes(1)
-      expect(sentryCaptureException).toHaveBeenCalledWith(controllerError)
-      expect(processExit).not.toHaveBeenCalled()
-
-      const warningCall = loggerWarn.mock.calls.find(
-        ([message]) =>
-          message ===
-          'Controller WebSocket server unavailable, continuing without controller bridge',
-      )
-      expect(warningCall).toBeDefined()
-      expect(warningCall?.[1]).toEqual({
-        port: config.extensionPort,
-        error: 'bind failed',
-      })
-
-      const portConflictCall = loggerWarn.mock.calls.find(
-        ([message]) =>
-          message ===
-          'Controller WebSocket port is already in use, continuing without controller bridge',
-      )
-      expect(portConflictCall).toBeDefined()
-      expect(portConflictCall?.[1]).toEqual({
-        port: config.extensionPort,
-      })
-      expect(
-        loggerInfo.mock.calls.some(
-          ([message]) => message === '  Controller Server: unavailable',
-        ),
-      ).toBe(true)
-      expect(loggerError).not.toHaveBeenCalled()
-    } finally {
-      process.exit = originalExit
-    }
+    expect(cdpConnect).toHaveBeenCalledTimes(1)
+    expect(browserCtor).toHaveBeenCalledTimes(1)
+    expect(createHttpServer).toHaveBeenCalledTimes(1)
+    expect(createHttpServer.mock.calls[0]?.[0]).not.toHaveProperty('controller')
+    expect(loggerWarn).not.toHaveBeenCalled()
+    expect(loggerError).not.toHaveBeenCalled()
   })
 })

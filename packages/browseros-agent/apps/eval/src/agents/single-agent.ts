@@ -14,13 +14,6 @@ import { resolveProviderConfig } from '../utils/resolve-provider-config'
 import { withEvalTimeout } from '../utils/with-eval-timeout'
 import type { AgentContext, AgentEvaluator, AgentResult } from './types'
 
-const CONTROLLER_STUB = {
-  start: async () => {},
-  stop: async () => {},
-  isConnected: () => false,
-  send: async () => ({}),
-} as any
-
 function extractCdpPort(config: EvalConfig): number {
   const serverUrl = config.browseros.server_url
   const match = serverUrl.match(/:(\d+)$/)
@@ -62,7 +55,7 @@ export class SingleAgentEvaluator implements AgentEvaluator {
     const cdp = new CdpBackend({ port: cdpPort })
     await cdp.connect()
 
-    const browser = new Browser(cdp, CONTROLLER_STUB)
+    const browser = new Browser(cdp)
     capture.screenshot.setBrowser(browser)
 
     // Build browser context so the agent knows the correct starting page ID

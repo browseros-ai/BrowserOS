@@ -20,7 +20,7 @@ export const ServerConfigSchema = z.object({
   cdpPort: portSchema.nullable(),
   serverPort: portSchema,
   agentPort: portSchema,
-  extensionPort: portSchema,
+  extensionPort: portSchema.nullable(),
   resourcesDir: z.string(),
   executionDir: z.string(),
   mcpAllowRemote: z.boolean(),
@@ -120,7 +120,7 @@ function parseCliArgs(argv: string[]): ConfigResult<ParsedCliArgs> {
       )
       .option(
         '--extension-port <port>',
-        'Extension WebSocket port',
+        '[DEPRECATED] No-op, kept for backwards compatibility',
         parsePortArg,
       )
       .option('--resources-dir <path>', 'Resources directory path')
@@ -151,12 +151,6 @@ function parseCliArgs(argv: string[]): ConfigResult<ParsedCliArgs> {
 
   const opts = program.opts()
 
-  if (opts.disableMcpServer) {
-    console.warn(
-      'Warning: --disable-mcp-server is deprecated and has no effect',
-    )
-  }
-
   if (opts.httpMcpPort !== undefined) {
     console.warn('Warning: --http-mcp-port is deprecated. Use --server-port.')
   }
@@ -165,6 +159,10 @@ function parseCliArgs(argv: string[]): ConfigResult<ParsedCliArgs> {
     console.warn(
       'Warning: --agent-port is deprecated and has no effect. Use --server-port.',
     )
+  }
+
+  if (opts.extensionPort !== undefined) {
+    console.warn('Warning: --extension-port is deprecated and has no effect.')
   }
 
   const cwd = process.cwd()
@@ -302,6 +300,7 @@ function validateInlinedEnv(): ConfigResult<void> {
 function getDefaults(cwd: string): PartialConfig {
   return {
     cdpPort: null,
+    extensionPort: null,
     resourcesDir: cwd,
     executionDir: cwd,
     mcpAllowRemote: false,

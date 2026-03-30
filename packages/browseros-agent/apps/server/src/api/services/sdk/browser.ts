@@ -6,7 +6,7 @@
  * Browser Service - Direct browser operations for SDK
  */
 
-import type { Browser } from '../../../browser/browser'
+import type { Browser, PageInfo } from '../../../browser/browser'
 import type {
   ActiveTab,
   InteractiveElements,
@@ -19,6 +19,65 @@ import { SdkError } from './types'
 export class BrowserService {
   constructor(private browser: Browser) {}
 
+  private selectPage(pages: PageInfo[], windowId?: number): PageInfo | null {
+    const scopedPages =
+      windowId === undefined
+        ? pages
+        : pages.filter((page) => page.windowId === windowId)
+    if (scopedPages.length === 0) {
+      return null
+    }
+    return (
+      scopedPages.find((page) => page.isActive) ??
+      scopedPages.find((page) => !page.isHidden) ??
+      scopedPages[0]
+    )
+  }
+
+  private async findExistingPage(windowId?: number): Promise<PageInfo | null> {
+    if (windowId === undefined) {
+      const activePage = await this.browser.getActivePage()
+      if (activePage) {
+        return activePage
+      }
+    }
+
+    return this.selectPage(await this.browser.listPages(), windowId)
+  }
+
+  private async resolveExistingPage(windowId?: number): Promise<PageInfo> {
+    const page = await this.findExistingPage(windowId)
+    if (!page) {
+      throw new SdkError(
+        windowId === undefined
+          ? 'No active tab found'
+          : 'No tab found in specified window',
+      )
+    }
+    return page
+  }
+
+  private async resolveNavigationPage(windowId?: number): Promise<PageInfo> {
+    const existingPage = await this.findExistingPage(windowId)
+    if (existingPage) {
+      return existingPage
+    }
+    if (windowId !== undefined) {
+      throw new SdkError('No tab found in specified window')
+    }
+
+    const pageId = await this.browser.newPage('about:blank', {
+      background: false,
+    })
+    const createdPage = (await this.browser.listPages()).find(
+      (page) => page.pageId === pageId,
+    )
+    if (!createdPage) {
+      throw new SdkError('Failed to create a tab for navigation')
+    }
+    return createdPage
+  }
+
   private async getPageIdForTab(tabId: number): Promise<number> {
     const resolved = await this.browser.resolveTabIds([tabId])
     const pageId = resolved.get(tabId)
@@ -29,26 +88,7 @@ export class BrowserService {
   }
 
   async getActiveTab(windowId?: number): Promise<ActiveTab> {
-    if (windowId !== undefined) {
-      // Find the active tab in the specified window
-      const pages = await this.browser.listPages()
-      const page = pages.find((p) => p.windowId === windowId && p.isActive)
-      if (!page) {
-        throw new SdkError('No active tab found in specified window')
-      }
-      return {
-        tabId: page.tabId,
-        url: page.url,
-        title: page.title,
-        windowId: page.windowId ?? 0,
-      }
-    }
-
-    const page = await this.browser.getActivePage()
-    if (!page) {
-      throw new SdkError('No active tab found')
-    }
-
+    const page = await this.resolveExistingPage(windowId)
     return {
       tabId: page.tabId,
       url: page.url,
@@ -89,20 +129,7 @@ export class BrowserService {
       return { tabId, windowId: page.windowId ?? 0 }
     }
 
-    if (windowId !== undefined) {
-      const pages = await this.browser.listPages()
-      const page = pages.find((p) => p.windowId === windowId && p.isActive)
-      if (!page) {
-        throw new SdkError('No active tab in specified window')
-      }
-      await this.browser.goto(page.pageId, url)
-      return { tabId: page.tabId, windowId }
-    }
-
-    const activePage = await this.browser.getActivePage()
-    if (!activePage) {
-      throw new SdkError('No active tab to navigate')
-    }
+    const activePage = await this.resolveNavigationPage(windowId)
     await this.browser.goto(activePage.pageId, url)
     return {
       tabId: activePage.tabId,

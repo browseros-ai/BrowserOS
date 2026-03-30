@@ -38,12 +38,14 @@ function contentToModelOutput(
 export function buildBrowserToolSet(
   registry: ToolRegistry,
   browser: Browser,
-  workingDir: string,
+  workingDir: string | undefined,
+  session?: { origin?: 'sidepanel' | 'newtab'; originPageId?: number },
 ): ToolSet {
   const toolSet: ToolSet = {}
   const ctx: ToolContext = {
     browser,
     directories: { workingDir },
+    session,
   }
 
   for (const def of registry.all()) {

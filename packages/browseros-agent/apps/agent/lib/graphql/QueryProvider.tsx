@@ -1,7 +1,10 @@
 import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister'
 import { QueryClient } from '@tanstack/react-query'
-import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client'
-import localforage from 'localforage'
+import {
+  type AsyncStorage,
+  PersistQueryClientProvider,
+} from '@tanstack/react-query-persist-client'
+import { del, get, set } from 'idb-keyval'
 import type { FC, ReactNode } from 'react'
 
 const queryClient = new QueryClient({
@@ -12,8 +15,14 @@ const queryClient = new QueryClient({
   },
 })
 
+const idbStorage: AsyncStorage<string> = {
+  getItem: (key: string) => get<string>(key).then((v) => v ?? null),
+  setItem: (key: string, value: string) => set(key, value),
+  removeItem: (key: string) => del(key),
+}
+
 const asyncStoragePersister = createAsyncStoragePersister({
-  storage: localforage,
+  storage: idbStorage,
 })
 
 export const QueryProvider: FC<{ children: ReactNode }> = ({ children }) => {

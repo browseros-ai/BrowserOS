@@ -76,8 +76,6 @@ export async function spawnServer(config: ServerConfig): Promise<ServerState> {
       config.cdpPort.toString(),
       '--server-port',
       config.serverPort.toString(),
-      '--extension-port',
-      config.extensionPort.toString(),
     ],
     {
       stdio: ['ignore', 'pipe', 'pipe'],

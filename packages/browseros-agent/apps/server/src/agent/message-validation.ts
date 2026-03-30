@@ -44,3 +44,37 @@ export function hasMessageContent(message: UIMessage): boolean {
 export function filterValidMessages(messages: UIMessage[]): UIMessage[] {
   return messages.filter(hasMessageContent)
 }
+
+/**
+ * Remove tool parts that reference tools not present in the given toolset.
+ *
+ * When a session is rebuilt with a different set of tools (e.g., workspace
+ * removed mid-conversation or MCP server disconnected), the carried-over
+ * message history may contain tool parts for tools that no longer exist.
+ * The AI SDK validates messages against the current toolset and rejects
+ * parts with no matching schema.
+ *
+ * Tool parts use the type format `tool-${toolName}` (static tools) or
+ * `dynamic-tool` (dynamic tools). This function filters out static tool
+ * parts whose tool name is not in the provided set.
+ */
+export function sanitizeMessagesForToolset(
+  messages: UIMessage[],
+  toolNames: Set<string>,
+): UIMessage[] {
+  return messages
+    .map((msg) => {
+      const filteredParts = msg.parts.filter((part) => {
+        // Static tool parts have type `tool-${toolName}`
+        if (typeof part.type === 'string' && part.type.startsWith('tool-')) {
+          const toolName = part.type.slice(5)
+          if (!toolNames.has(toolName)) return false
+        }
+        return true
+      })
+
+      if (filteredParts.length === msg.parts.length) return msg
+      return { ...msg, parts: filteredParts }
+    })
+    .filter(hasMessageContent)
+}

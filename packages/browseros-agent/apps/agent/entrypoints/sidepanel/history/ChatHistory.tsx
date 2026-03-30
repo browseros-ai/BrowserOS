@@ -32,6 +32,7 @@ const RemoteChatHistory: FC<{ userId: string }> = ({ userId }) => {
   const {
     data: graphqlData,
     isLoading: isLoadingConversations,
+    isFetching,
     hasNextPage,
     isFetchingNextPage,
     fetchNextPage,
@@ -112,6 +113,7 @@ const RemoteChatHistory: FC<{ userId: string }> = ({ userId }) => {
       hasNextPage={hasNextPage}
       isFetchingNextPage={isFetchingNextPage}
       onLoadMore={fetchNextPage}
+      isRefreshing={isFetching && !isLoadingConversations}
     />
   )
 }

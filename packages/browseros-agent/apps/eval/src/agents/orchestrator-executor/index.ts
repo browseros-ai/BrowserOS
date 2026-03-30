@@ -30,21 +30,6 @@ import { Executor, type ExecutorCallbacks } from './executor'
 import { OrchestratorAgent } from './orchestrator-agent'
 import type { ExecutorFactory, ExecutorResult } from './types'
 
-/** Stub controller for eval — CDP handles all browser interaction */
-interface ControllerStub {
-  start(): Promise<void>
-  stop(): Promise<void>
-  isConnected(): boolean
-  send(action: string, payload?: Record<string, unknown>): Promise<unknown>
-}
-
-const CONTROLLER_STUB: ControllerStub = {
-  start: async () => {},
-  stop: async () => {},
-  isConnected: () => false,
-  send: async () => ({}),
-}
-
 function extractCdpPort(config: EvalConfig): number {
   const serverUrl = config.browseros.server_url
   const match = serverUrl.match(/:(\d+)$/)
@@ -159,7 +144,7 @@ export class OrchestratorExecutorEvaluator implements AgentEvaluator {
     const cdpPort = extractCdpPort(config)
     const cdp = new CdpBackend({ port: cdpPort })
     await cdp.connect()
-    const browser = new Browser(cdp, CONTROLLER_STUB)
+    const browser = new Browser(cdp)
     capture.screenshot.setBrowser(browser)
 
     const captchaWaiter = config.captcha

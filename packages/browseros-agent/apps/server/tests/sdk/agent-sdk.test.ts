@@ -6,20 +6,46 @@
  * Tests the SDK against a real BrowserOS server.
  */
 
-import { beforeAll, describe, it } from 'bun:test'
+import { afterAll, beforeAll, describe, it } from 'bun:test'
 import assert from 'node:assert'
 import { Agent } from '@browseros-ai/agent-sdk'
 
+import { CdpBackend } from '../../src/browser/backends/cdp'
+import { Browser } from '../../src/browser/browser'
 import {
   ensureBrowserOS,
   type TestEnvironmentConfig,
 } from '../__helpers__/setup'
 
 let config: TestEnvironmentConfig
+let cdp: CdpBackend | null = null
+let runtimeWindowId: number
+
+async function getRuntimeWindow(
+  testConfig: TestEnvironmentConfig,
+): Promise<number> {
+  const runtimeCdp = new CdpBackend({ port: testConfig.cdpPort })
+  await runtimeCdp.connect()
+  cdp = runtimeCdp
+
+  const browser = new Browser(runtimeCdp)
+  const pages = await browser.listPages()
+  const page =
+    pages.find((entry) => !entry.isHidden && entry.windowId !== undefined) ??
+    pages.find((entry) => entry.windowId !== undefined)
+
+  assert.ok(page?.windowId !== undefined, 'Expected a runtime window ID')
+  return page.windowId
+}
 
 beforeAll(async () => {
   config = await ensureBrowserOS()
+  runtimeWindowId = await getRuntimeWindow(config)
 }, 60000)
+
+afterAll(async () => {
+  await cdp?.disconnect()
+})
 
 function createAgent(browserContext?: {
   windowId?: number
@@ -177,20 +203,17 @@ describe('Agent SDK Integration', () => {
 
   describe('browserContext', () => {
     it('passes windowId through nav()', async () => {
-      const testWindowId = 12345
+      const testWindowId = runtimeWindowId
       const agent = createAgent({ windowId: testWindowId })
       const events: unknown[] = []
       agent.onProgress((event) => events.push(event))
 
-      // This will use the windowId from browserContext
-      // Server logs should show the windowId being passed
       const result = await agent.nav('data:text/html,<h1>Window Test</h1>')
 
       console.log('\n=== nav() with windowId ===')
       console.log('windowId:', testWindowId)
       console.log('result:', JSON.stringify(result, null, 2))
 
-      // Navigation may fail if window doesn't exist, but we're testing the flow
       assert.ok(
         typeof result.success === 'boolean',
         'Should return a result with success boolean',
@@ -198,14 +221,12 @@ describe('Agent SDK Integration', () => {
     }, 30000)
 
     it('passes windowId through act()', async () => {
-      const testWindowId = 12345
+      const testWindowId = runtimeWindowId
       const agent = createAgent({ windowId: testWindowId })
 
-      // First navigate without windowId constraint to set up the page
       const plainAgent = createAgent()
       await plainAgent.nav('data:text/html,<button id="btn">Click</button>')
 
-      // Now act with windowId - server logs should show windowId being passed
       const result = await agent.act('describe what you see')
 
       console.log('\n=== act() with windowId ===')
@@ -220,14 +241,12 @@ describe('Agent SDK Integration', () => {
 
     it('passes windowId through extract()', async () => {
       const { z } = await import('zod')
-      const testWindowId = 12345
+      const testWindowId = runtimeWindowId
       const agent = createAgent({ windowId: testWindowId })
 
-      // Set up a page first
       const plainAgent = createAgent()
       await plainAgent.nav('data:text/html,<h1>Extract Test</h1>')
 
-      // Extract with windowId - server logs should show windowId
       const result = await agent.extract('get the page heading', {
         schema: z.object({ heading: z.string() }),
       })
@@ -240,14 +259,12 @@ describe('Agent SDK Integration', () => {
     }, 60000)
 
     it('passes windowId through verify()', async () => {
-      const testWindowId = 12345
+      const testWindowId = runtimeWindowId
       const agent = createAgent({ windowId: testWindowId })
 
-      // Set up a page first
       const plainAgent = createAgent()
       await plainAgent.nav('data:text/html,<h1>Verify Test</h1>')
 
-      // Verify with windowId - server logs should show windowId
       const result = await agent.verify('the page has some content')
 
       console.log('\n=== verify() with windowId ===')

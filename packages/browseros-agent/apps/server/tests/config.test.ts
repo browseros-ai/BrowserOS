@@ -60,7 +60,6 @@ describe('loadServerConfig', () => {
         'bun',
         'src/index.ts',
         '--server-port=9223',
-        '--extension-port=9224',
         '--allow-remote-in-mcp',
       ])
 
@@ -74,12 +73,36 @@ describe('loadServerConfig', () => {
         'bun',
         'src/index.ts',
         '--server-port=9223',
-        '--extension-port=9224',
       ])
 
       assert.strictEqual(result.ok, true)
       if (!result.ok) return
       assert.strictEqual(result.value.cdpPort, null)
+      assert.strictEqual(result.value.extensionPort, null)
+    })
+
+    it('warns when --extension-port is provided', () => {
+      const warnings: string[] = []
+      const originalWarn = console.warn
+      console.warn = (message?: unknown) => {
+        warnings.push(String(message))
+      }
+
+      try {
+        const result = loadServerConfig([
+          'bun',
+          'src/index.ts',
+          '--server-port=9223',
+          '--extension-port=9224',
+        ])
+
+        assert.strictEqual(result.ok, true)
+        assert.deepStrictEqual(warnings, [
+          'Warning: --extension-port is deprecated and has no effect.',
+        ])
+      } finally {
+        console.warn = originalWarn
+      }
     })
   })
 
@@ -268,7 +291,6 @@ describe('loadServerConfig', () => {
       assert.strictEqual(result.ok, false)
       if (result.ok) return
       assert.ok(result.error.includes('serverPort'))
-      assert.ok(result.error.includes('extensionPort'))
     })
 
     it('returns error for missing config file', () => {
@@ -355,7 +377,6 @@ describe('loadServerConfig', () => {
         'bun',
         'src/index.ts',
         '--server-port=3000',
-        '--extension-port=3002',
       ])
 
       assert.strictEqual(result.ok, true)
@@ -369,7 +390,6 @@ describe('loadServerConfig', () => {
         'bun',
         'src/index.ts',
         '--server-port=3000',
-        '--extension-port=3002',
       ])
 
       assert.strictEqual(result.ok, true)
@@ -382,7 +402,6 @@ describe('loadServerConfig', () => {
         'bun',
         'src/index.ts',
         '--server-port=3000',
-        '--extension-port=3002',
       ])
 
       assert.strictEqual(result.ok, true)
@@ -395,7 +414,6 @@ describe('loadServerConfig', () => {
         'bun',
         'src/index.ts',
         '--server-port=3000',
-        '--extension-port=3002',
       ])
 
       assert.strictEqual(result.ok, true)
@@ -403,12 +421,23 @@ describe('loadServerConfig', () => {
       assert.strictEqual(result.value.agentPort, result.value.serverPort)
     })
 
+    it('defaults extensionPort to null', () => {
+      const result = loadServerConfig([
+        'bun',
+        'src/index.ts',
+        '--server-port=3000',
+      ])
+
+      assert.strictEqual(result.ok, true)
+      if (!result.ok) return
+      assert.strictEqual(result.value.extensionPort, null)
+    })
+
     it('defaults aiSdkDevtoolsEnabled to false', () => {
       const result = loadServerConfig([
         'bun',
         'src/index.ts',
         '--server-port=3000',
-        '--extension-port=3002',
       ])
 
       assert.strictEqual(result.ok, true)
@@ -425,7 +454,6 @@ describe('loadServerConfig', () => {
         'bun',
         'src/index.ts',
         '--server-port=3000',
-        '--extension-port=3002',
       ])
 
       assert.strictEqual(result.ok, true)

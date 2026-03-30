@@ -14,7 +14,6 @@ import path from 'node:path'
 import { EXIT_CODES } from '@browseros/shared/constants/exit-codes'
 import { createHttpServer } from './api/server'
 import { CdpBackend } from './browser/backends/cdp'
-import { ControllerBackend } from './browser/backends/controller'
 import { Browser } from './browser/browser'
 import type { ServerConfig } from './config'
 import { INLINED_ENV } from './env'
@@ -57,20 +56,6 @@ export class Application {
 
     await this.initCoreServices()
 
-    const controller = new ControllerBackend({
-      port: this.config.extensionPort,
-    })
-    let controllerServerStarted = false
-    try {
-      logger.debug(
-        `Starting WebSocket server on port ${this.config.extensionPort}`,
-      )
-      await controller.start()
-      controllerServerStarted = true
-    } catch (error) {
-      this.handleControllerStartupError(this.config.extensionPort, error)
-    }
-
     if (!this.config.cdpPort) {
       logger.error('CDP port is required (--cdp-port)')
       process.exit(EXIT_CODES.GENERAL_ERROR)
@@ -85,7 +70,7 @@ export class Application {
       return this.handleStartupError('CDP', this.config.cdpPort, error)
     }
 
-    const browser = new Browser(cdp, controller)
+    const browser = new Browser(cdp)
 
     logger.info(`Loaded ${registry.names().length} unified tools`)
 
@@ -95,7 +80,6 @@ export class Application {
         host: '0.0.0.0',
         version: VERSION,
         browser,
-        controller,
         registry,
         browserosId: identity.getBrowserOSId(),
         executionDir: this.config.executionDir,
@@ -116,6 +100,7 @@ export class Application {
         server_version: VERSION,
         browseros_version: this.config.instanceBrowserosVersion,
         chromium_version: this.config.instanceChromiumVersion,
+        browseros_id: identity.getBrowserOSId(),
       })
     } catch (error) {
       logger.warn('Failed to write server config for auto-discovery', {
@@ -130,7 +115,7 @@ export class Application {
       `Health endpoint: http://127.0.0.1:${this.config.serverPort}/health`,
     )
 
-    this.logStartupSummary(controllerServerStarted)
+    this.logStartupSummary()
     startSkillSync()
 
     metrics.log('http_server.started', { version: VERSION })
@@ -243,31 +228,9 @@ export class Application {
     process.exit(EXIT_CODES.GENERAL_ERROR)
   }
 
-  private handleControllerStartupError(port: number, error: unknown): void {
-    const errorMsg = error instanceof Error ? error.message : String(error)
-    logger.warn(
-      'Controller WebSocket server unavailable, continuing without controller bridge',
-      { port, error: errorMsg },
-    )
-    if (isPortInUseError(error)) {
-      logger.warn(
-        'Controller WebSocket port is already in use, continuing without controller bridge',
-        { port },
-      )
-    }
-    if (!isPortInUseError(error)) {
-      Sentry.captureException(error)
-    }
-  }
-
-  private logStartupSummary(controllerServerStarted: boolean): void {
+  private logStartupSummary(): void {
     logger.info('')
     logger.info('Services running:')
-    logger.info(
-      controllerServerStarted
-        ? `  Controller Server: ws://127.0.0.1:${this.config.extensionPort}`
-        : '  Controller Server: unavailable',
-    )
     logger.info(`  HTTP Server: http://127.0.0.1:${this.config.serverPort}`)
     logger.info('')
   }

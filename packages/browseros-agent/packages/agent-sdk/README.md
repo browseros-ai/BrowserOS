@@ -1,6 +1,16 @@
 # @browseros-ai/agent-sdk
 
+[![npm version](https://img.shields.io/npm/v/@browseros-ai/agent-sdk)](https://www.npmjs.com/package/@browseros-ai/agent-sdk)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](../../../../LICENSE)
+
 Browser automation SDK for BrowserOS — navigate, interact, extract data, and verify page state using natural language.
+
+Build automations that describe *what* to do, not *how* to do it. The SDK connects to a running BrowserOS instance and translates natural language instructions into browser actions using your choice of LLM provider.
+
+## Prerequisites
+
+- A running [BrowserOS](https://browseros.com) instance
+- An API key for at least one [supported LLM provider](#llm-providers)
 
 ## Installation
 
@@ -17,7 +27,7 @@ import { Agent } from '@browseros-ai/agent-sdk'
 import { z } from 'zod'
 
 const agent = new Agent({
-  url: 'http://localhost:3000',
+  url: 'http://localhost:9100',
   llm: {
     provider: 'openai',
     apiKey: process.env.OPENAI_API_KEY,
@@ -40,6 +50,40 @@ const { data } = await agent.extract('get all product names and prices', {
 
 // Verify page state
 const { success, reason } = await agent.verify('user is logged in')
+```
+
+## Multi-Step Example
+
+Combine navigation, actions, extraction, and verification for end-to-end automation:
+
+```typescript
+import { Agent } from '@browseros-ai/agent-sdk'
+import { z } from 'zod'
+
+const agent = new Agent({
+  url: 'http://localhost:9100',
+  llm: { provider: 'anthropic', apiKey: process.env.ANTHROPIC_API_KEY },
+})
+
+// 1. Navigate
+await agent.nav('https://news.ycombinator.com')
+
+// 2. Extract data
+const { data: stories } = await agent.extract('get the top 5 stories with title, points, and link', {
+  schema: z.array(z.object({
+    title: z.string(),
+    points: z.number(),
+    link: z.string(),
+  })),
+})
+
+// 3. Act on extracted data
+await agent.act(`click on the story titled "${stories[0].title}"`)
+
+// 4. Verify the result
+const { success } = await agent.verify('the story page or external link has loaded')
+
+console.log({ stories, navigationSuccess: success })
 ```
 
 ## API Reference
@@ -105,8 +149,6 @@ const { success, reason } = await agent.verify('the form was submitted successfu
 
 ## LLM Providers
 
-Supported providers:
-
 | Provider | Config |
 |----------|--------|
 | OpenAI | `{ provider: 'openai', apiKey: '...' }` |
@@ -121,11 +163,11 @@ Supported providers:
 
 ## Progress Events
 
-Track agent operations:
+Track agent operations in real time:
 
 ```typescript
 const agent = new Agent({
-  url: 'http://localhost:3000',
+  url: 'http://localhost:9100',
   onProgress: (event) => {
     console.log(`[${event.type}] ${event.message}`)
   },
@@ -154,6 +196,13 @@ try {
 }
 ```
 
+## Links
+
+- [Documentation](https://docs.browseros.com)
+- [GitHub](https://github.com/browseros-ai/BrowserOS)
+- [Changelog](./CHANGELOG.md)
+- [Discord](https://discord.gg/YKwjt5vuKr)
+
 ## License
 
-AGPL-3.0-or-later
+[AGPL-3.0-or-later](../../../../LICENSE)

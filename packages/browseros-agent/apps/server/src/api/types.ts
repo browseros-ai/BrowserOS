@@ -14,7 +14,6 @@ import {
 } from '@browseros/shared/schemas/browser-context'
 import { LLMConfigSchema } from '@browseros/shared/schemas/llm'
 import { z } from 'zod'
-import type { ControllerBackend } from '../browser/backends/controller'
 import type { Browser } from '../browser/browser'
 import type { ToolRegistry } from '../tools/tool-registry'
 
@@ -45,6 +44,7 @@ export const ChatRequestSchema = AgentLLMConfigSchema.extend({
   userWorkingDir: z.string().min(1).optional(),
   supportsImages: z.boolean().optional().default(true),
   mode: z.enum(['chat', 'agent']).optional().default('agent'),
+  origin: z.enum(['sidepanel', 'newtab']).optional().default('sidepanel'),
   declinedApps: z.array(z.string()).optional(),
   selectedText: z.string().optional(),
   selectedTextSource: z
@@ -92,7 +92,6 @@ export interface HttpServerConfig {
 
   version: string
   browser: Browser
-  controller: ControllerBackend
   registry: ToolRegistry
 
   browserosId?: string

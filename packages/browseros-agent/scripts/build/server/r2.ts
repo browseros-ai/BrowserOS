@@ -10,6 +10,10 @@ import {
 
 import type { R2Config } from './types'
 
+export interface UploadFileOptions {
+  contentType?: string
+}
+
 function createClientConfig(r2: R2Config): S3ClientConfig {
   return {
     region: 'auto',
@@ -81,6 +85,7 @@ export async function uploadFileToObject(
   r2: R2Config,
   key: string,
   filePath: string,
+  options: UploadFileOptions = {},
 ): Promise<void> {
   const data = await readFile(filePath)
   await client.send(
@@ -88,7 +93,7 @@ export async function uploadFileToObject(
       Bucket: r2.bucket,
       Key: key,
       Body: data,
-      ContentType: 'application/zip',
+      ContentType: options.contentType ?? 'application/zip',
     }),
   )
 }

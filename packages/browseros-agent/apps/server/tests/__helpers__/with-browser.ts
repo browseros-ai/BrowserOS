@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs'
 import { Mutex } from 'async-mutex'
 import { CdpBackend } from '../../src/browser/backends/cdp'
-import type { ControllerBackend } from '../../src/browser/backends/types'
 import { Browser } from '../../src/browser/browser'
 import type { ToolDefinition } from '../../src/tools/framework'
 import { executeTool } from '../../src/tools/framework'
@@ -14,15 +13,6 @@ const mutex = new Mutex()
 let cachedCdp: CdpBackend | null = null
 let cachedBrowser: Browser | null = null
 let runtimePlan: TestRuntimePlan | null = null
-
-const stubController: ControllerBackend = {
-  start: async () => {},
-  stop: async () => {},
-  isConnected: () => false,
-  send: async () => {
-    throw new Error('Controller not available in test mode')
-  },
-}
 
 async function getOrCreateBrowser(): Promise<Browser> {
   if (cachedBrowser && cachedCdp?.isConnected()) return cachedBrowser
@@ -53,7 +43,7 @@ async function getOrCreateBrowser(): Promise<Browser> {
   cachedCdp = new CdpBackend({ port: runtimePlan.ports.cdp })
   await cachedCdp.connect()
 
-  cachedBrowser = new Browser(cachedCdp, stubController)
+  cachedBrowser = new Browser(cachedCdp)
   return cachedBrowser
 }
 

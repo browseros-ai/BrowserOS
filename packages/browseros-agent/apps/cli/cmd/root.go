@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,9 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"browseros-cli/analytics"
 	"browseros-cli/config"
 	"browseros-cli/mcp"
 	"browseros-cli/output"
+	"browseros-cli/update"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -26,6 +29,8 @@ var (
 	timeout   time.Duration
 	version   = "dev"
 )
+
+const automaticUpdateDrainTimeout = 150 * time.Millisecond
 
 func SetVersion(v string) {
 	version = v
@@ -113,9 +118,38 @@ var rootCmd = &cobra.Command{
 }
 
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	automaticUpdater := newAutomaticUpdateManager(os.Args[1:])
+	automaticNotice := ""
+	var automaticCheckDone <-chan struct{}
+	if automaticUpdater != nil {
+		automaticNotice = automaticUpdater.CachedNotice()
+		automaticCheckDone = automaticUpdater.StartBackgroundCheck(context.Background())
+	}
+
+	analytics.Init(version)
+	start := time.Now()
+
+	err := rootCmd.Execute()
+
+	if automaticNotice != "" && err == nil {
+		fmt.Fprintln(os.Stderr, automaticNotice)
+	}
+	drainAutomaticUpdateCheck(automaticCheckDone)
+
+	analytics.Track(commandName(os.Args[1:]), err == nil, time.Since(start))
+	analytics.Close()
+
+	if err != nil {
 		os.Exit(1)
 	}
+}
+
+func commandName(args []string) string {
+	cmd, _, err := rootCmd.Find(args)
+	if err != nil || cmd == rootCmd {
+		return "unknown"
+	}
+	return cmd.CommandPath()
 }
 
 func init() {
@@ -164,6 +198,93 @@ func resolvePageID(c *mcp.Client) (int, error) {
 func envBool(key string) bool {
 	v := os.Getenv(key)
 	return v == "1" || v == "true"
+}
+
+func newAutomaticUpdateManager(args []string) *update.Manager {
+	if shouldSkipAutomaticUpdates(args) {
+		return nil
+	}
+
+	return update.NewManager(update.Options{
+		CurrentVersion: version,
+		JSONOutput:     requestedBoolFlag(args, "--json", jsonOut),
+		Debug:          requestedBoolFlag(args, "--debug", debug),
+		Automatic:      true,
+	})
+}
+
+func shouldSkipAutomaticUpdates(args []string) bool {
+	if hasHelpFlag(args) || requestedBoolFlag(args, "--version", false) {
+		return true
+	}
+
+	switch primaryCommand(args) {
+	case "help", "completion", "update", "self-update", "upgrade":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasHelpFlag(args []string) bool {
+	if requestedBoolFlag(args, "--help", false) {
+		return true
+	}
+
+	for _, arg := range args {
+		if arg == "-h" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func primaryCommand(args []string) string {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return arg
+	}
+	return ""
+}
+
+func requestedBoolFlag(args []string, flagName string, current bool) bool {
+	if current {
+		return true
+	}
+
+	prefix := flagName + "="
+	for _, arg := range args {
+		if arg == flagName {
+			return true
+		}
+		if strings.HasPrefix(arg, prefix) {
+			value, err := strconv.ParseBool(strings.TrimPrefix(arg, prefix))
+			return err == nil && value
+		}
+	}
+
+	return false
+}
+
+func drainAutomaticUpdateCheck(done <-chan struct{}) {
+	drainAutomaticUpdateCheckWithTimeout(done, automaticUpdateDrainTimeout)
+}
+
+func drainAutomaticUpdateCheckWithTimeout(done <-chan struct{}, timeout time.Duration) {
+	if done == nil {
+		return
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+	case <-timer.C:
+	}
 }
 
 func defaultServerURL() string {

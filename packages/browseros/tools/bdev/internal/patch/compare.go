@@ -1,66 +1,65 @@
 package patch
 
 import (
-	"bytes"
+	"slices"
 	"strings"
 )
 
-type Delta struct {
-	NeedsUpdate []string // In both, but content differs
-	NeedsApply  []string // In repo only
-	UpToDate    []string // In both, content matches
-	Orphaned    []string // Local only, no repo patch
-	Deleted     []string // .deleted markers in repo
-}
-
-// Compare computes the delta between local patch set and repo patch set.
-func Compare(local, repo *PatchSet) *Delta {
-	d := &Delta{}
-
-	for path, repoPatch := range repo.Patches {
-		if repoPatch.Op == OpDeleted {
-			d.Deleted = append(d.Deleted, path)
-			continue
-		}
-
-		localPatch, exists := local.Patches[path]
-		if !exists {
-			d.NeedsApply = append(d.NeedsApply, path)
-			continue
-		}
-
-		if patchContentEqual(localPatch.Content, repoPatch.Content) {
-			d.UpToDate = append(d.UpToDate, path)
-		} else {
-			d.NeedsUpdate = append(d.NeedsUpdate, path)
+func Compare(repo PatchSet, local PatchSet) []Delta {
+	seen := map[string]bool{}
+	var deltas []Delta
+	for rel, repoPatch := range repo {
+		seen[rel] = true
+		localPatch, ok := local[rel]
+		switch {
+		case !ok:
+			deltas = append(deltas, Delta{Path: rel, Kind: NeedsApply, Repo: ptr(repoPatch)})
+		case signature(repoPatch) == signature(localPatch):
+			deltas = append(deltas, Delta{Path: rel, Kind: UpToDate, Repo: ptr(repoPatch), Local: ptr(localPatch)})
+		default:
+			deltas = append(deltas, Delta{Path: rel, Kind: NeedsUpdate, Repo: ptr(repoPatch), Local: ptr(localPatch)})
 		}
 	}
-
-	for path := range local.Patches {
-		if _, exists := repo.Patches[path]; !exists {
-			d.Orphaned = append(d.Orphaned, path)
-		}
-	}
-
-	return d
-}
-
-func patchContentEqual(a, b []byte) bool {
-	return bytes.Equal(
-		normalizePatch(a),
-		normalizePatch(b),
-	)
-}
-
-func normalizePatch(content []byte) []byte {
-	lines := strings.Split(string(content), "\n")
-	var normalized []string
-	for _, line := range lines {
-		// Skip index lines (they contain hashes that may differ)
-		if strings.HasPrefix(line, "index ") {
+	for rel, localPatch := range local {
+		if seen[rel] {
 			continue
 		}
-		normalized = append(normalized, strings.TrimRight(line, " \t"))
+		deltas = append(deltas, Delta{Path: rel, Kind: Orphaned, Local: ptr(localPatch)})
 	}
-	return []byte(strings.Join(normalized, "\n"))
+	slices.SortFunc(deltas, func(a, b Delta) int {
+		if a.Path < b.Path {
+			return -1
+		}
+		if a.Path > b.Path {
+			return 1
+		}
+		return 0
+	})
+	return deltas
+}
+
+func signature(p FilePatch) string {
+	switch {
+	case p.Op == OpDelete:
+		return "delete:" + NormalizeChromiumPath(p.Path)
+	case p.IsPureRename():
+		return strings.Join([]string{"rename", NormalizeChromiumPath(p.OldPath), NormalizeChromiumPath(p.Path)}, ":")
+	case p.Op == OpBinary && len(p.Content) == 0:
+		return "binary:" + NormalizeChromiumPath(p.Path)
+	default:
+		lines := strings.Split(strings.ReplaceAll(string(p.Content), "\r\n", "\n"), "\n")
+		normalized := make([]string, 0, len(lines))
+		for _, line := range lines {
+			if strings.HasPrefix(line, "index ") {
+				continue
+			}
+			normalized = append(normalized, strings.TrimRight(line, " \t"))
+		}
+		return strings.Join(append([]string{string(p.Op), NormalizeChromiumPath(p.Path), NormalizeChromiumPath(p.OldPath)}, normalized...), "\n")
+	}
+}
+
+func ptr(p FilePatch) *FilePatch {
+	copy := p
+	return &copy
 }

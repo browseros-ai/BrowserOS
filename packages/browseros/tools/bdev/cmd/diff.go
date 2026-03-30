@@ -2,113 +2,52 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
-	"bdev/internal/config"
-	"bdev/internal/git"
-	"bdev/internal/patch"
-	"bdev/internal/ui"
-
+	"github.com/browseros-ai/BrowserOS/packages/browseros/tools/bdev/internal/engine"
+	"github.com/browseros-ai/BrowserOS/packages/browseros/tools/bdev/internal/ui"
 	"github.com/spf13/cobra"
 )
 
-var diffCmd = &cobra.Command{
-	Use:   "diff",
-	Short: "Preview what push or pull would do",
-	RunE:  runDiff,
-}
-
-var diffDirection string
-
 func init() {
-	diffCmd.Flags().StringVar(&diffDirection, "direction", "push", "\"push\" or \"pull\"")
-	rootCmd.AddCommand(diffCmd)
+	var src string
+	command := &cobra.Command{
+		Use:         "diff [workspace]",
+		Annotations: map[string]string{"group": "Core:"},
+		Short:       "Preview patch differences for a workspace",
+		Args:        cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ws, err := resolveWorkspace(args, src)
+			if err != nil {
+				return err
+			}
+			info, err := repoInfo()
+			if err != nil {
+				return err
+			}
+			status, err := engine.InspectWorkspace(cmd.Context(), ws, info)
+			if err != nil {
+				return err
+			}
+			return renderResult(status, func() {
+				fmt.Println(ui.Title(fmt.Sprintf("%s patch diff", ws.Name)))
+				printGroup("Needs apply", status.NeedsApply)
+				printGroup("Needs update", status.NeedsUpdate)
+				printGroup("Orphaned", status.Orphaned)
+			})
+		},
+	}
+	command.Flags().StringVar(&src, "src", "", "Chromium checkout path to operate on directly")
+	rootCmd.AddCommand(command)
 }
 
-func runDiff(cmd *cobra.Command, args []string) error {
-	ctx, err := config.LoadContext()
-	if err != nil {
-		return err
+func printGroup(title string, items []string) {
+	if len(items) == 0 {
+		fmt.Printf("%s  %s\n", ui.Muted(title+":"), ui.Muted("none"))
+		return
 	}
-
-	switch diffDirection {
-	case "push":
-		return diffPush(ctx)
-	case "pull":
-		return diffPull(ctx)
-	default:
-		return fmt.Errorf("invalid direction %q — use \"push\" or \"pull\"", diffDirection)
+	fmt.Printf("%s\n", ui.Header(title+":"))
+	for _, item := range items {
+		fmt.Printf("  %s\n", strings.TrimSpace(item))
 	}
-}
-
-func diffPush(ctx *config.Context) error {
-	nameStatus, err := git.DiffNameStatus(ctx.ChromiumDir, ctx.BaseCommit)
-	if err != nil {
-		return err
-	}
-
-	if len(nameStatus) == 0 {
-		fmt.Println(ui.MutedStyle.Render("No local changes to push."))
-		return nil
-	}
-
-	fmt.Println(ui.TitleStyle.Render("bdev diff --direction push"))
-	fmt.Println()
-
-	for path, op := range nameStatus {
-		prefix := ui.ModifiedPrefix
-		switch op {
-		case patch.OpAdded:
-			prefix = ui.AddedPrefix
-		case patch.OpDeleted:
-			prefix = ui.DeletedPrefix
-		}
-		fmt.Printf("  %s %s\n", prefix, path)
-	}
-	fmt.Println()
-	fmt.Println(ui.MutedStyle.Render(fmt.Sprintf("%d files would be pushed", len(nameStatus))))
-
-	return nil
-}
-
-func diffPull(ctx *config.Context) error {
-	repoPatchSet, err := patch.ReadPatchSet(ctx.PatchesDir)
-	if err != nil {
-		return err
-	}
-
-	diffOutput, err := git.DiffFull(ctx.ChromiumDir, ctx.BaseCommit)
-	if err != nil {
-		return err
-	}
-
-	localPatchSet, err := patch.ParseUnifiedDiff(diffOutput)
-	if err != nil {
-		return err
-	}
-
-	delta := patch.Compare(localPatchSet, repoPatchSet)
-
-	total := len(delta.NeedsUpdate) + len(delta.NeedsApply)
-	if total == 0 && len(delta.Deleted) == 0 {
-		fmt.Println(ui.MutedStyle.Render("Already up to date."))
-		return nil
-	}
-
-	fmt.Println(ui.TitleStyle.Render("bdev diff --direction pull"))
-	fmt.Println()
-
-	for _, f := range delta.NeedsUpdate {
-		fmt.Printf("  %s %s %s\n", ui.ModifiedPrefix, f, ui.MutedStyle.Render("(update)"))
-	}
-	for _, f := range delta.NeedsApply {
-		fmt.Printf("  %s %s %s\n", ui.AddedPrefix, f, ui.MutedStyle.Render("(new)"))
-	}
-	for _, f := range delta.Deleted {
-		fmt.Printf("  %s %s %s\n", ui.DeletedPrefix, f, ui.MutedStyle.Render("(delete)"))
-	}
-
-	fmt.Println()
-	fmt.Println(ui.MutedStyle.Render(fmt.Sprintf("%d files would be changed", total+len(delta.Deleted))))
-
-	return nil
 }

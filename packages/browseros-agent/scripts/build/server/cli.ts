@@ -21,16 +21,24 @@ export function parseBuildArgs(argv: string[]): BuildArgs {
     )
     .option('--upload', 'Upload artifact zips to R2')
     .option('--no-upload', 'Skip zip upload to R2')
+    .option(
+      '--compile-only',
+      'Compile binaries only (skip R2 staging and upload)',
+    )
   program.parse(argv, { from: 'user' })
   const options = program.opts<{
     target: string
     manifest: string
     upload: boolean
+    compileOnly: boolean
   }>()
+
+  const compileOnly = options.compileOnly ?? false
 
   return {
     targets: resolveTargets(options.target),
     manifestPath: options.manifest,
-    upload: options.upload ?? true,
+    upload: compileOnly ? false : (options.upload ?? true),
+    compileOnly,
   }
 }

@@ -15,19 +15,14 @@ export async function runProdResourceBuild(argv: string[]): Promise<void> {
   process.chdir(rootDir)
 
   const args = parseBuildArgs(argv)
-  const manifestPath = resolve(rootDir, args.manifestPath)
-  if (!existsSync(manifestPath)) {
-    throw new Error(`Manifest not found: ${manifestPath}`)
-  }
 
-  const buildConfig = loadBuildConfig(rootDir)
-  const manifest = loadManifest(manifestPath)
-  const distRoot = getDistProdRoot()
+  const buildConfig = loadBuildConfig(rootDir, {
+    compileOnly: args.compileOnly,
+  })
 
   log.header(`Building BrowserOS server artifacts v${buildConfig.version}`)
   log.info(`Targets: ${args.targets.map((target) => target.id).join(', ')}`)
-  log.info(`Manifest: ${manifestPath}`)
-  log.info(`Upload: ${args.upload ? 'enabled' : 'disabled'}`)
+  log.info(`Mode: ${args.compileOnly ? 'compile-only' : 'full'}`)
 
   const compiled = await compileServerBinaries(
     args.targets,
@@ -36,7 +31,26 @@ export async function runProdResourceBuild(argv: string[]): Promise<void> {
     buildConfig.version,
   )
 
-  const client = createR2Client(buildConfig.r2)
+  if (args.compileOnly) {
+    log.done('Compile-only build completed')
+    for (const binary of compiled) {
+      log.info(`${binary.target.id}: ${binary.binaryPath}`)
+    }
+    return
+  }
+
+  const manifestPath = resolve(rootDir, args.manifestPath)
+  if (!existsSync(manifestPath)) {
+    throw new Error(`Manifest not found: ${manifestPath}`)
+  }
+
+  const manifest = loadManifest(manifestPath)
+  const distRoot = getDistProdRoot()
+  const r2 = buildConfig.r2
+  if (!r2) {
+    throw new Error('R2 configuration is required for full builds')
+  }
+  const client = createR2Client(r2)
   const stagedArtifacts = []
 
   try {
@@ -51,7 +65,7 @@ export async function runProdResourceBuild(argv: string[]): Promise<void> {
         binary.target,
         rules,
         client,
-        buildConfig.r2,
+        r2,
         buildConfig.version,
       )
       stagedArtifacts.push(staged)
@@ -62,7 +76,7 @@ export async function runProdResourceBuild(argv: string[]): Promise<void> {
       stagedArtifacts,
       buildConfig.version,
       client,
-      buildConfig.r2,
+      r2,
       args.upload,
     )
 

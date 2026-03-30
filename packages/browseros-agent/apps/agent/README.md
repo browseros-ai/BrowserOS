@@ -1,15 +1,23 @@
-# BrowserOS Agent Chrome Extension
+# BrowserOS Agent Extension
 
-The official Chrome extension for BrowserOS Agent, providing the UI layer for interacting with BrowserOS Core and Controllers. This extension enables intelligent browser automation, AI-powered search, and seamless integration with multiple LLM providers.
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](../../../../LICENSE)
+
+The built-in browser extension that powers BrowserOS's AI interface — new tab with unified search, side panel chat, onboarding, and settings. Built with [WXT](https://wxt.dev) and React.
+
+> For user-facing feature documentation, see [docs.browseros.com](https://docs.browseros.com).
 
 ## Features
 
 - **AI-Powered New Tab**: Custom new tab page with unified search across Google and AI assistants
-- **Side Panel Chat**: Full-featured chat interface for interacting with BrowserOS Core
+- **Side Panel Chat**: Full-featured chat interface for interacting with BrowserOS
 - **Multi-Provider Support**: Connect to various LLM providers (OpenAI, Anthropic, Azure, Bedrock, and more)
 - **MCP Integration**: Model Context Protocol support for extending AI capabilities
 - **Visual Feedback**: Animated glow effect on tabs during AI agent operations
 - **Privacy-First**: Local data handling with configurable provider settings
+
+## How It Connects
+
+The extension communicates with the [BrowserOS Server](../../apps/server/) running locally. The server handles the AI agent loop, MCP tools, and CDP connections — the extension provides the UI layer.
 
 ## Project Structure
 
@@ -80,47 +88,20 @@ Settings dashboard with multiple sections:
 
 Content script that creates a visual indicator (pulsing orange glow) around the browser viewport when an AI agent is actively working on a tab.
 
-## How Tools Are Used
-
-### Bun
-
-Bun is the exclusive runtime and package manager:
-- All scripts use `bun run <script>` instead of npm
-- Package installation via `bun install`
-- Environment files automatically loaded (no dotenv needed)
-- Enforced via `engines` field in `package.json`
-
-```bash
-bun install          # Install dependencies
-bun run dev          # Development mode
-bun run build        # Production build
-bun run lint         # Run Biome linting
-```
-
-### Biome
-
-Unified linter and formatter configured in `biome.json`:
-- **Formatting**: 2-space indentation, single quotes, no semicolons
-- **Linting**: Recommended rules plus custom rules for unused imports/variables
-- **CSS Support**: Tailwind directives parsing enabled
-- **Import Organization**: Automatic import sorting via assist actions
-
-```bash
-bun run lint         # Check for issues
-bun run lint:fix     # Auto-fix issues
-```
-
 ## Development
 
 ### Prerequisites
 
 - [Bun](https://bun.sh) installed
 - Chrome or Chromium-based browser
-- BrowserOS Core running locally (for full functionality)
+- BrowserOS Server running locally (for full functionality)
 
 ### Setup
 
 ```bash
+# Copy environment file
+cp .env.example .env.development
+
 # Install dependencies
 bun install
 
@@ -153,11 +134,29 @@ SENTRY_AUTH_TOKEN=your-token
 
 ### GraphQL Schema
 
-Codegen requires a GraphQL schema. By default it uses the bundled `schema/schema.graphql`, so no extra setup is needed. If you have access to the original API source, you can set the following environment variable
+Codegen requires a GraphQL schema. By default it uses the bundled `schema/schema.graphql`, so no extra setup is needed. If you have access to the original API source, you can set the following environment variable:
 
 ```env
 GRAPHQL_SCHEMA_PATH=/path/to/api-repo/.../schema.graphql
 ```
+
+## Development Tooling
+
+### Bun
+
+Bun is the exclusive runtime and package manager:
+- All scripts use `bun run <script>` instead of npm
+- Package installation via `bun install`
+- Environment files automatically loaded (no dotenv needed)
+- Enforced via `engines` field in `package.json`
+
+### Biome
+
+Unified linter and formatter configured in `biome.json`:
+- **Formatting**: 2-space indentation, single quotes, no semicolons
+- **Linting**: Recommended rules plus custom rules for unused imports/variables
+- **CSS Support**: Tailwind directives parsing enabled
+- **Import Organization**: Automatic import sorting via assist actions
 
 ## Scripts
 
@@ -169,4 +168,5 @@ GRAPHQL_SCHEMA_PATH=/path/to/api-repo/.../schema.graphql
 | `bun run lint` | Run Biome linter |
 | `bun run lint:fix` | Auto-fix linting issues |
 | `bun run typecheck` | Run TypeScript type checking |
+| `bun run codegen` | Generate GraphQL types |
 | `bun run clean:cache` | Clear build caches |

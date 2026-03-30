@@ -21,6 +21,7 @@ export interface BuildArgs {
   targets: BuildTarget[]
   manifestPath: string
   upload: boolean
+  compileOnly: boolean
 }
 
 export interface R2Config {
@@ -36,7 +37,7 @@ export interface BuildConfig {
   version: string
   envVars: Record<string, string>
   processEnv: NodeJS.ProcessEnv
-  r2: R2Config
+  r2?: R2Config
 }
 
 export interface ResourceSource {

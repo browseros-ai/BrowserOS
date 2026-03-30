@@ -1,27 +1,27 @@
 BINARY := bdev
-VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS := -ldflags "-X main.version=$(VERSION)"
+PREFIX ?= /usr/local/bin
+VERSION ?= dev
 
-.PHONY: build install clean test
+.PHONY: build install clean test fmt
 
 build:
-	go build $(LDFLAGS) -o $(BINARY) .
+	go build -ldflags "-X github.com/browseros-ai/BrowserOS/packages/browseros/tools/bdev/cmd.Version=$(VERSION)" -o $(BINARY) .
 
-install:
-	go install $(LDFLAGS) .
-
-clean:
-	rm -f $(BINARY)
+install: build
+	mkdir -p $(PREFIX)
+	cp $(BINARY) $(PREFIX)/$(BINARY)
+ifneq ($(shell uname -s),Darwin)
+	@echo "Skipping codesign on non-macOS host"
+else
+	codesign --force --sign - $(PREFIX)/$(BINARY)
+endif
+	@echo "Installed $(BINARY) to $(PREFIX)/$(BINARY)"
 
 test:
 	go test ./...
 
-build-linux:
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY)-linux-amd64 .
+fmt:
+	gofmt -w $$(find . -name '*.go' -not -path './vendor/*')
 
-build-linux-arm:
-	GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o $(BINARY)-linux-arm64 .
-
-build-darwin:
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY)-darwin-amd64 .
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BINARY)-darwin-arm64 .
+clean:
+	rm -f $(BINARY)

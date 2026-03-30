@@ -1,25 +1,68 @@
 # browseros-cli
 
-Command-line interface for controlling BrowserOS via MCP. Talks to the BrowserOS MCP server over JSON-RPC 2.0 / StreamableHTTP.
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](../../../../LICENSE)
 
-## Setup
+Command-line interface for controlling BrowserOS — launch and automate the browser from the terminal or from AI coding agents like Claude Code and Gemini CLI.
+
+Communicates with the BrowserOS MCP server over JSON-RPC 2.0 / StreamableHTTP. All 53+ MCP tools are mapped to CLI commands.
+
+## Install
+
+### macOS / Linux
+
+```bash
+curl -fsSL https://cdn.browseros.com/cli/install.sh | bash
+```
+
+### Windows
+
+```powershell
+irm https://cdn.browseros.com/cli/install.ps1 | iex
+```
+
+### Build from Source
 
 Requires Go 1.25+.
 
 ```bash
-# Build
-make
-
-# First run — configure server connection
-./browseros-cli init
+make            # Build binary
+make install    # Install to $GOPATH/bin
 ```
 
-The `init` command prompts for your MCP server URL. Find it in:
-**BrowserOS → Settings → BrowserOS MCP → Server URL**
+## Quick Start
 
-The port varies per installation (e.g., `http://127.0.0.1:9004/mcp`).
+```bash
+# If BrowserOS is not installed yet
+browseros-cli install                # downloads BrowserOS for your platform
 
-Config is saved to `~/.config/browseros-cli/config.yaml`.
+# If BrowserOS is installed but not running
+browseros-cli launch                 # opens BrowserOS, waits for server
+
+# Configure the CLI (auto-discovers running BrowserOS)
+browseros-cli init --auto            # detects server URL and saves config
+
+# Verify connection
+browseros-cli health
+```
+
+### Other init modes
+
+```bash
+browseros-cli init <url>             # non-interactive — pass URL directly
+browseros-cli init                   # interactive — prompts for URL
+```
+
+Config is saved to `~/.config/browseros-cli/config.yaml`. The CLI also auto-discovers the server from `~/.browseros/server.json` (written by BrowserOS on startup).
+
+### CLI updates
+
+The CLI checks for a newer BrowserOS CLI release in the background about once per day and will suggest an update on a later run when one is available.
+
+```bash
+browseros-cli update         # check and apply the latest CLI release
+browseros-cli update --check # check only
+browseros-cli update --yes   # apply without prompting
+```
 
 ## Usage
 
@@ -67,6 +110,12 @@ browseros-cli history recent
 browseros-cli group list
 ```
 
+## Use as MCP Server
+
+BrowserOS exposes an MCP server that AI coding agents can connect to directly. The CLI is the easiest way to verify the connection and interact with tools from the terminal.
+
+To connect Claude Code, Gemini CLI, or any MCP client, see the [MCP setup guide](https://docs.browseros.com/features/use-with-claude-code).
+
 ## Global Flags
 
 | Flag | Env Var | Description |
@@ -77,9 +126,9 @@ browseros-cli group list
 | `--debug` | `BOS_DEBUG=1` | Debug output |
 | `--timeout, -t` | | Request timeout (default: 2m) |
 
-Priority for server URL: `--server` flag > `BROWSEROS_URL` env > config file
+Priority for server URL: `--server` flag > `BROWSEROS_URL` env > `~/.browseros/server.json` > config file
 
-If no server URL is configured, the CLI exits with setup instructions instead of assuming a localhost port.
+If no server URL is configured, the CLI exits with setup instructions pointing to `install`, `launch`, and `init`.
 
 ## Testing
 
@@ -130,7 +179,9 @@ apps/cli/
 │   └── config.go       # Config file (~/.config/browseros-cli/config.yaml)
 ├── cmd/
 │   ├── root.go         # Root command, global flags
-│   ├── init.go         # Server URL configuration
+│   ├── init.go         # Server URL configuration (URL arg, --auto, interactive)
+│   ├── install.go      # install (download BrowserOS for current platform)
+│   ├── launch.go       # launch (find and start BrowserOS, wait for server)
 │   ├── open.go         # open (new_page / new_hidden_page)
 │   ├── nav.go          # nav, back, forward, reload
 │   ├── pages.go        # pages, active, close
@@ -163,4 +214,8 @@ The CLI communicates with BrowserOS via two HTTP POST requests per command:
 1. `initialize` — MCP handshake
 2. `tools/call` — execute the actual tool
 
-All 54 MCP tools are mapped to CLI commands.
+## Links
+
+- [Documentation](https://docs.browseros.com)
+- [MCP Setup Guide](https://docs.browseros.com/features/use-with-claude-code)
+- [Changelog](./CHANGELOG.md)

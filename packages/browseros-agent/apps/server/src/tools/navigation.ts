@@ -88,6 +88,17 @@ export const navigate_page = defineTool({
       return
     }
 
+    if (
+      ctx.session?.origin === 'newtab' &&
+      ctx.session.originPageId !== undefined &&
+      args.page === ctx.session.originPageId
+    ) {
+      response.error(
+        'Cannot navigate the origin tab in new-tab mode — this would destroy the chat UI. Use `new_page` to open a background tab instead.',
+      )
+      return
+    }
+
     switch (args.action) {
       case 'url':
         await ctx.browser.goto(args.page, args.url as string)
@@ -266,6 +277,17 @@ export const close_page = defineTool({
     action: z.literal('close_page'),
   }),
   handler: async (args, ctx, response) => {
+    if (
+      ctx.session?.origin === 'newtab' &&
+      ctx.session.originPageId !== undefined &&
+      args.page === ctx.session.originPageId
+    ) {
+      response.error(
+        'Cannot close the origin tab in new-tab mode — this would destroy the chat UI.',
+      )
+      return
+    }
+
     await ctx.browser.closePage(args.page)
     response.text(`Closed page ${args.page}`)
     response.data({ page: args.page, action: 'close_page' })

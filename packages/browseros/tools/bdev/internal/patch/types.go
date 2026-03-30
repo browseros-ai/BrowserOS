@@ -1,79 +1,80 @@
 package patch
 
-type FileOp int
-
-const (
-	OpModified FileOp = iota
-	OpAdded
-	OpDeleted
-	OpRenamed
-	OpBinary
+import (
+	"bytes"
+	"path"
+	"path/filepath"
+	"strings"
 )
 
-func (op FileOp) String() string {
-	switch op {
-	case OpModified:
-		return "M"
-	case OpAdded:
-		return "A"
-	case OpDeleted:
-		return "D"
-	case OpRenamed:
-		return "R"
-	case OpBinary:
-		return "B"
-	default:
-		return "?"
-	}
-}
+type FileOp string
+
+const (
+	OpAdd    FileOp = "ADD"
+	OpModify FileOp = "MODIFY"
+	OpDelete FileOp = "DELETE"
+	OpRename FileOp = "RENAME"
+	OpCopy   FileOp = "COPY"
+	OpBinary FileOp = "BINARY"
+)
 
 type FilePatch struct {
-	Path       string
-	Op         FileOp
-	Content    []byte
-	OldPath    string // for renames
-	Similarity int    // for renames
-	IsBinary   bool
+	Path       string `json:"path"`
+	Op         FileOp `json:"op"`
+	OldPath    string `json:"old_path,omitempty"`
+	Similarity int    `json:"similarity,omitempty"`
+	Content    []byte `json:"-"`
+	IsBinary   bool   `json:"is_binary,omitempty"`
 }
 
-type PatchSet struct {
-	Base    string
-	Patches map[string]*FilePatch // keyed by chromium path
+type PatchSet map[string]FilePatch
+
+type DeltaKind string
+
+const (
+	NeedsApply  DeltaKind = "needs_apply"
+	NeedsUpdate DeltaKind = "needs_update"
+	UpToDate    DeltaKind = "up_to_date"
+	Orphaned    DeltaKind = "orphaned"
+)
+
+type Delta struct {
+	Path  string     `json:"path"`
+	Kind  DeltaKind  `json:"kind"`
+	Repo  *FilePatch `json:"repo,omitempty"`
+	Local *FilePatch `json:"local,omitempty"`
 }
 
-func NewPatchSet(base string) *PatchSet {
-	return &PatchSet{
-		Base:    base,
-		Patches: make(map[string]*FilePatch),
+func NormalizeChromiumPath(raw string) string {
+	clean := filepath.ToSlash(raw)
+	return strings.TrimPrefix(path.Clean(clean), "./")
+}
+
+func PathMatches(rel string, filters []string) bool {
+	if IsInternalPath(rel) {
+		return false
 	}
+	if len(filters) == 0 {
+		return true
+	}
+	candidate := NormalizeChromiumPath(rel)
+	for _, filter := range filters {
+		scope := NormalizeChromiumPath(filter)
+		if candidate == scope || strings.HasPrefix(candidate, scope+"/") {
+			return true
+		}
+	}
+	return false
 }
 
-type PushResult struct {
-	Modified  []string
-	Added     []string
-	Deleted   []string
-	Stale     []string
-	Unchanged []string
+func IsInternalPath(rel string) bool {
+	candidate := NormalizeChromiumPath(rel)
+	return candidate == ".bdev" || strings.HasPrefix(candidate, ".bdev/")
 }
 
-func (r *PushResult) Total() int {
-	return len(r.Modified) + len(r.Added) + len(r.Deleted)
-}
-
-type PullResult struct {
-	Applied   []string
-	Skipped   []string
-	Reverted  []string
-	LocalOnly []string
-	Conflicts []ConflictInfo
-	Deleted   []string
-}
-
-type ConflictInfo struct {
-	File        string
-	RejectFile  string
-	PatchFile   string
-	HunksTotal  int
-	HunksFailed int
-	Error       string
+func (p FilePatch) IsPureRename() bool {
+	if p.Op != OpRename {
+		return false
+	}
+	return !bytes.Contains(p.Content, []byte("\n@@")) && !bytes.Contains(p.Content, []byte("GIT binary patch"))
 }

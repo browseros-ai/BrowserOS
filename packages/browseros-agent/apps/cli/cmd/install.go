@@ -148,7 +148,7 @@ func runPostInstall(path string, deb bool, dim *color.Color) {
 // installMacOS mounts the DMG and copies BrowserOS.app to /Applications.
 func installMacOS(dmgPath string, dim *color.Color) {
 	fmt.Println("Mounting disk image...")
-	mountOut, err := exec.Command("hdiutil", "attach", dmgPath, "-nobrowse", "-quiet").Output()
+	mountOut, err := exec.Command("hdiutil", "attach", dmgPath, "-nobrowse").Output()
 	if err != nil {
 		dim.Println("Could not mount DMG automatically.")
 		dim.Printf("  Open it manually: open %s\n", dmgPath)

@@ -69,16 +69,16 @@ describe('HTTP Server Integration Tests', () => {
   })
 
   describe('Status endpoint', () => {
-    it('reports extension as connected', async () => {
+    it('reports CDP as connected', async () => {
       const response = await fetch(`${getBaseUrl()}/status`)
       assert.strictEqual(response.status, 200)
 
       const json = (await response.json()) as {
         status: string
-        extensionConnected: boolean
+        cdpConnected: boolean
       }
       assert.strictEqual(json.status, 'ok')
-      assert.strictEqual(json.extensionConnected, true)
+      assert.strictEqual(json.cdpConnected, true)
     })
   })
 

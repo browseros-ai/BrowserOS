@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -22,34 +21,6 @@ func WaitForHealth(ctx context.Context, port int, maxAttempts int) bool {
 			if resp.StatusCode == 200 {
 				return true
 			}
-		}
-		select {
-		case <-ctx.Done():
-			return false
-		case <-time.After(500 * time.Millisecond):
-		}
-	}
-	return false
-}
-
-func WaitForExtension(ctx context.Context, port int, maxAttempts int) bool {
-	client := &http.Client{Timeout: time.Second}
-	url := fmt.Sprintf("http://127.0.0.1:%d/status", port)
-
-	for range maxAttempts {
-		if ctx.Err() != nil {
-			return false
-		}
-		resp, err := client.Get(url)
-		if err == nil {
-			var status struct {
-				ExtensionConnected bool `json:"extensionConnected"`
-			}
-			if err := json.NewDecoder(resp.Body).Decode(&status); err == nil && status.ExtensionConnected {
-				resp.Body.Close()
-				return true
-			}
-			resp.Body.Close()
 		}
 		select {
 		case <-ctx.Done():

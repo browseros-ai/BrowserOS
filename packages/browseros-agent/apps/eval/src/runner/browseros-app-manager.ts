@@ -5,11 +5,10 @@
  * Mirrors scripts/dev/start.ts --manual mode with per-worker isolation:
  *
  *   1. Kill ports
- *   2. Build extensions (once, shared across workers)
- *   3. Launch Chrome directly with per-worker user-data-dir and ports
- *   4. Wait for CDP
- *   5. Start server with port env vars
- *   6. Wait for server health
+ *   2. Launch Chrome directly with per-worker user-data-dir and ports
+ *   3. Wait for CDP
+ *   4. Start server with port env vars
+ *   5. Wait for server health
  *
  * Each worker gets isolated ports: base + workerIndex offset.
  */
@@ -40,7 +39,6 @@ const BROWSEROS_BINARY =
   process.env.BROWSEROS_BINARY ||
   '/Applications/BrowserOS.app/Contents/MacOS/BrowserOS'
 
-const CONTROLLER_EXT_DIR = join(MONOREPO_ROOT, 'apps/controller-ext/dist')
 const CAPTCHA_EXT_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
   '../../extensions/nopecha',
@@ -81,24 +79,6 @@ export class BrowserOSAppManager {
   }
 
   /**
-   * Build extensions (call once before starting workers).
-   * Builds controller-ext — same as start.ts buildExtension('controller-ext', 'build:ext')
-   */
-  static buildExtensions(): void {
-    console.log(`[BROWSEROS] Building controller extension...`)
-    const result = spawnSync({
-      cmd: ['bun', 'run', 'build:ext'],
-      cwd: MONOREPO_ROOT,
-      stdout: 'inherit',
-      stderr: 'inherit',
-    })
-    if (result.exitCode !== 0) {
-      throw new Error('Failed to build controller extension')
-    }
-    console.log(`[BROWSEROS] Controller extension built`)
-  }
-
-  /**
    * Restart: kill existing, then start fresh
    */
   async restart(): Promise<void> {
@@ -135,7 +115,7 @@ export class BrowserOSAppManager {
    *   --disable-browseros-extensions  (we load them explicitly if needed)
    *   --remote-debugging-port, --browseros-mcp-port, --browseros-extension-port
    *   --user-data-dir (unique per worker)
-   *   --load-extension (optional, controller-ext)
+   *   --load-extension (optional, unpacked helper extensions)
    */
   private async startAll(): Promise<void> {
     const { cdp, server, extension } = this.ports
@@ -164,10 +144,7 @@ export class BrowserOSAppManager {
     ]
 
     const extensions: string[] = []
-    if (this.loadExtensions && existsSync(CONTROLLER_EXT_DIR)) {
-      extensions.push(CONTROLLER_EXT_DIR)
-    }
-    if (existsSync(CAPTCHA_EXT_DIR)) {
+    if (this.loadExtensions && existsSync(CAPTCHA_EXT_DIR)) {
       extensions.push(CAPTCHA_EXT_DIR)
     }
     if (extensions.length > 0) {

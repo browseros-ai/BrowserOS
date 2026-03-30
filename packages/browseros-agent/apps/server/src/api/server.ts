@@ -74,7 +74,6 @@ export async function createHttpServer(config: HttpServerConfig) {
     resourcesDir,
     version,
     browser,
-    controller,
     registry,
   } = config
 
@@ -120,7 +119,7 @@ export async function createHttpServer(config: HttpServerConfig) {
         },
       }),
     )
-    .route('/status', createStatusRoute({ controller }))
+    .route('/status', createStatusRoute({ browser }))
     .route('/soul', createSoulRoutes())
     .route('/memory', createMemoryRoutes())
     .route('/skills', createSkillsRoutes())

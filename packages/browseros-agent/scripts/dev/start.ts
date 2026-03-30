@@ -12,7 +12,6 @@ type Mode = 'watch' | 'manual'
 
 const MONOREPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..')
 const BROWSEROS_BINARY = '/Applications/BrowserOS.app/Contents/MacOS/BrowserOS'
-const CONTROLLER_EXT_DIR = join(MONOREPO_ROOT, 'apps/controller-ext/dist')
 const AGENT_EXT_DIR = join(MONOREPO_ROOT, 'apps/agent/dist/chrome-mv3-dev')
 let USER_DATA_DIR = '/tmp/browseros-dev'
 
@@ -201,7 +200,7 @@ function startManualBrowser(ports: Ports): ReturnType<typeof spawn> {
     `--browseros-mcp-port=${ports.server}`,
     `--browseros-extension-port=${ports.extension}`,
     `--user-data-dir=${USER_DATA_DIR}`,
-    `--load-extension=${CONTROLLER_EXT_DIR},${AGENT_EXT_DIR}`,
+    `--load-extension=${AGENT_EXT_DIR}`,
     'chrome://newtab',
   ]
 
@@ -262,8 +261,6 @@ async function main() {
   const env = createEnv(ports)
   const procs: ReturnType<typeof spawn>[] = []
   const streams: Promise<void>[] = []
-
-  buildExtension('controller-ext', 'build:ext')
 
   if (args.mode === 'manual') {
     buildExtension('agent', 'build:agent:dev')

@@ -17,7 +17,7 @@ export const McpPromoBanner: FC = () => {
   }
 
   return (
-    <div className="relative flex items-center gap-4 rounded-xl border border-border bg-card p-4 shadow-sm transition-all hover:shadow-md">
+    <div className="flex items-center gap-4 rounded-xl border border-border bg-card p-4 shadow-sm transition-all hover:shadow-md">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--accent-orange)]/10">
         <Server className="h-5 w-5 text-[var(--accent-orange)]" />
       </div>
@@ -48,7 +48,7 @@ export const McpPromoBanner: FC = () => {
       <button
         type="button"
         onClick={() => setDismissed(true)}
-        className="absolute top-2 right-2 rounded-sm p-1 text-muted-foreground opacity-50 transition-opacity hover:opacity-100"
+        className="shrink-0 rounded-sm p-1 text-muted-foreground opacity-50 transition-opacity hover:opacity-100"
       >
         <X className="h-3.5 w-3.5" />
       </button>

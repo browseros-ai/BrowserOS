@@ -87,11 +87,7 @@ export class ParallelExecutor {
 
     const cleanup = this.setupSignalHandlers()
 
-    // Build extensions once if needed (shared across workers)
     const loadExtensions = this.config.config.browseros.load_extensions ?? false
-    if (loadExtensions) {
-      BrowserOSAppManager.buildExtensions()
-    }
 
     // Patch NopeCHA API key before launching any workers
     const captchaConfig = this.config.config.captcha

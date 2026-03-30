@@ -1,18 +1,7 @@
 package main
 
-import (
-	"fmt"
-	"os"
-
-	"bdev/cmd"
-)
-
-var version = "dev"
+import "github.com/browseros-ai/BrowserOS/packages/browseros/tools/bdev/cmd"
 
 func main() {
-	cmd.SetVersion(version)
-	if err := cmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
-	}
+	cmd.Execute()
 }

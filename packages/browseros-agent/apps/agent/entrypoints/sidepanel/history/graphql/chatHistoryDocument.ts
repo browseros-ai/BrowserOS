@@ -11,7 +11,7 @@ export const GetConversationsForHistoryDocument = graphql(`
       nodes {
         rowId
         lastMessagedAt
-        conversationMessages(last: 5, orderBy: ORDER_INDEX_ASC) {
+        conversationMessages(first: 2, orderBy: ORDER_INDEX_DESC) {
           nodes {
             message
           }

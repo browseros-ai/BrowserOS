@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { defineTool, resolveWorkingPath } from './framework'
@@ -121,10 +122,9 @@ export const download_file = defineTool({
   }),
   handler: async (args, ctx, response) => {
     const resolvedDir = resolveWorkingPath(ctx, args.path, args.cwd)
-    await mkdir(ctx.directories.workingDir, { recursive: true })
-    const tempDir = await mkdtemp(
-      join(ctx.directories.workingDir, 'browseros-dl-'),
-    )
+    const baseDir = ctx.directories.workingDir ?? tmpdir()
+    await mkdir(baseDir, { recursive: true })
+    const tempDir = await mkdtemp(join(baseDir, 'browseros-dl-'))
 
     try {
       const { filePath, suggestedFilename } =

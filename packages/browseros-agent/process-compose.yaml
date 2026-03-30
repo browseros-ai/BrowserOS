@@ -6,20 +6,12 @@ processes:
     availability:
       restart: no
 
-  build-ext:
-    command: bun --cwd apps/controller-ext build
-    availability:
-      restart: no
-    depends_on:
-      install:
-        condition: process_completed_successfully
-
   server:
     command: bun --cwd apps/server start
     availability:
       restart: always
     depends_on:
-      build-ext:
+      install:
         condition: process_completed_successfully
 
   agent-codegen:

@@ -74,7 +74,14 @@ function validateProductionEnv(envVars: Record<string, string>): void {
   }
 }
 
-export function loadBuildConfig(rootDir: string): BuildConfig {
+export interface LoadBuildConfigOptions {
+  compileOnly?: boolean
+}
+
+export function loadBuildConfig(
+  rootDir: string,
+  options: LoadBuildConfigOptions = {},
+): BuildConfig {
   const fileEnv = loadProdEnv(rootDir)
   const envVars = buildInlineEnv(fileEnv)
   validateProductionEnv(envVars)
@@ -84,6 +91,10 @@ export function loadBuildConfig(rootDir: string): BuildConfig {
     PATH: process.env.PATH ?? process.env.Path ?? '',
     ...fileEnv,
     ...process.env,
+  }
+
+  if (options.compileOnly) {
+    return { version: readServerVersion(rootDir), envVars, processEnv }
   }
 
   return {

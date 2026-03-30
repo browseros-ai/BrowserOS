@@ -1,17 +1,26 @@
 import { zodResolver } from '@hookform/resolvers/zod'
+import Fuse from 'fuse.js'
 import {
+  Check,
   CheckCircle2,
   ChevronDown,
   ExternalLink,
   Loader2,
-  SearchIcon,
   XCircle,
 } from 'lucide-react'
-import { type FC, useEffect, useRef, useState } from 'react'
+import { type FC, useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod/v3'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command'
 import {
   Dialog,
   DialogContent,
@@ -31,6 +40,11 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -42,8 +56,10 @@ import { useAgentServerUrl } from '@/lib/browseros/useBrowserOSProviders'
 import { useCapabilities } from '@/lib/browseros/useCapabilities'
 import {
   AI_PROVIDER_ADDED_EVENT,
+  AI_PROVIDER_UPDATED_EVENT,
   KIMI_API_KEY_CONFIGURED_EVENT,
   KIMI_API_KEY_GUIDE_CLICKED_EVENT,
+  MODEL_SELECTED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { useKimiLaunch } from '@/lib/feature-flags/useKimiLaunch'
 import {
@@ -55,11 +71,7 @@ import { type TestResult, testProvider } from '@/lib/llm-providers/testProvider'
 import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
 import { cn } from '@/lib/utils'
-import {
-  getModelContextLength,
-  getModelsForProvider,
-  type ModelInfo,
-} from './models'
+import { getModelContextLength, getModelsForProvider } from './models'
 
 const providerTypeEnum = z.enum([
   'moonshot',
@@ -182,100 +194,6 @@ function formatContextWindow(tokens: number): string {
   return `${tokens}`
 }
 
-function ModelPickerList({
-  models,
-  selectedModelId,
-  onSelect,
-  onCustomSubmit,
-  onClose,
-}: {
-  models: ModelInfo[]
-  selectedModelId: string
-  onSelect: (modelId: string) => void
-  onCustomSubmit: (modelId: string) => void
-  onClose: () => void
-}) {
-  const [search, setSearch] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    inputRef.current?.focus()
-  }, [])
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
-      ) {
-        onClose()
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [onClose])
-
-  const query = search.toLowerCase()
-  const filtered = query
-    ? models.filter((m) => m.modelId.toLowerCase().includes(query))
-    : models
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && search) {
-      e.preventDefault()
-      onCustomSubmit(search)
-    }
-    if (e.key === 'Escape') {
-      onClose()
-    }
-  }
-
-  return (
-    <div ref={containerRef} className="rounded-md border">
-      <div className="flex items-center gap-2 border-b px-3">
-        <SearchIcon className="h-4 w-4 shrink-0 text-muted-foreground opacity-50" />
-        <input
-          ref={inputRef}
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Search or type a custom model ID..."
-          className="flex h-9 w-full bg-transparent py-2 text-sm outline-none placeholder:text-muted-foreground"
-        />
-      </div>
-      <div className="max-h-[200px] overflow-y-auto">
-        {filtered.length > 0 ? (
-          filtered.map((model) => {
-            const isSelected = selectedModelId === model.modelId
-            return (
-              <button
-                key={model.modelId}
-                type="button"
-                onClick={() => onSelect(model.modelId)}
-                className={cn(
-                  'flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors hover:bg-accent',
-                  isSelected && 'bg-accent font-medium',
-                )}
-              >
-                <span className="truncate">{model.modelId}</span>
-                <span className="ml-2 shrink-0 rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                  {formatContextWindow(model.contextLength)}
-                </span>
-              </button>
-            )
-          })
-        ) : (
-          <div className="px-3 py-6 text-center text-muted-foreground text-sm">
-            No models match. Press Enter to use &quot;{search}&quot;
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 /**
  * Props for NewProviderDialog
  * @public
@@ -303,7 +221,8 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 }) => {
   const [isTesting, setIsTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestResult | null>(null)
-  const [modelListOpen, setModelListOpen] = useState(false)
+  const [modelPickerOpen, setModelPickerOpen] = useState(false)
+  const [modelSearch, setModelSearch] = useState('')
   const { supports } = useCapabilities()
   const { baseUrl: agentServerUrl } = useAgentServerUrl()
   const kimiLaunch = useKimiLaunch()
@@ -375,6 +294,20 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   ])
 
   const modelInfoList = getModelsForProvider(watchedType as ProviderType)
+
+  const modelFuse = useMemo(
+    () =>
+      new Fuse(modelInfoList, {
+        keys: ['modelId'],
+        threshold: 0.4,
+        distance: 100,
+      }),
+    [modelInfoList],
+  )
+
+  const filteredModels = modelSearch
+    ? modelFuse.search(modelSearch).map((r) => r.item)
+    : modelInfoList
 
   // Handle provider type change (user-initiated via Select)
   const handleTypeChange = (newType: ProviderType) => {
@@ -468,6 +401,11 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     await onSave(provider)
     if (isNewProvider) {
       track(AI_PROVIDER_ADDED_EVENT, {
+        provider_type: values.type,
+        model: values.modelId,
+      })
+    } else {
+      track(AI_PROVIDER_UPDATED_EVENT, {
         provider_type: values.type,
         model: values.modelId,
       })
@@ -924,36 +862,95 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                         {...field}
                       />
                     </FormControl>
-                  ) : modelListOpen ? (
-                    <ModelPickerList
-                      models={modelInfoList}
-                      selectedModelId={field.value}
-                      onSelect={(modelId) => {
-                        form.setValue('modelId', modelId)
-                        setModelListOpen(false)
-                      }}
-                      onCustomSubmit={(modelId) => {
-                        form.setValue('modelId', modelId)
-                        setModelListOpen(false)
-                      }}
-                      onClose={() => setModelListOpen(false)}
-                    />
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => setModelListOpen(true)}
-                      className={cn(
-                        'flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs',
-                        field.value
-                          ? 'text-foreground'
-                          : 'text-muted-foreground',
-                      )}
+                    <Popover
+                      open={modelPickerOpen}
+                      onOpenChange={(isOpen) => {
+                        setModelPickerOpen(isOpen)
+                        if (!isOpen) setModelSearch('')
+                      }}
                     >
-                      <span className="truncate">
-                        {field.value || 'Select a model...'}
-                      </span>
-                      <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </button>
+                      <PopoverTrigger asChild>
+                        <button
+                          type="button"
+                          className={cn(
+                            'flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs',
+                            field.value
+                              ? 'text-foreground'
+                              : 'text-muted-foreground',
+                          )}
+                        >
+                          <span className="truncate">
+                            {field.value || 'Select a model...'}
+                          </span>
+                          <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        className="w-[var(--radix-popover-trigger-width)] p-0"
+                        align="start"
+                      >
+                        <Command shouldFilter={false}>
+                          <CommandInput
+                            placeholder="Search models..."
+                            value={modelSearch}
+                            onValueChange={setModelSearch}
+                            onKeyDown={(e) => {
+                              if (
+                                e.key === 'Enter' &&
+                                modelSearch &&
+                                filteredModels.length === 0
+                              ) {
+                                e.preventDefault()
+                                form.setValue('modelId', modelSearch)
+                                track(MODEL_SELECTED_EVENT, {
+                                  provider_type: watchedType,
+                                  model_id: modelSearch,
+                                  is_custom_model: true,
+                                })
+                                setModelPickerOpen(false)
+                                setModelSearch('')
+                              }
+                            }}
+                          />
+                          <CommandList>
+                            <CommandEmpty>
+                              No models found. Press Enter to use &quot;
+                              {modelSearch}&quot;
+                            </CommandEmpty>
+                            <CommandGroup>
+                              {filteredModels.map((model) => (
+                                <CommandItem
+                                  key={model.modelId}
+                                  value={model.modelId}
+                                  onSelect={() => {
+                                    form.setValue('modelId', model.modelId)
+                                    track(MODEL_SELECTED_EVENT, {
+                                      provider_type: watchedType,
+                                      model_id: model.modelId,
+                                      context_window: model.contextLength,
+                                      is_custom_model: false,
+                                    })
+                                    setModelPickerOpen(false)
+                                    setModelSearch('')
+                                  }}
+                                >
+                                  <span className="flex-1 truncate">
+                                    {model.modelId}
+                                  </span>
+                                  <span className="ml-2 shrink-0 rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                                    {formatContextWindow(model.contextLength)}
+                                  </span>
+                                  {field.value === model.modelId && (
+                                    <Check className="ml-2 h-4 w-4 shrink-0" />
+                                  )}
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
                   )}
                   <FormMessage />
                 </FormItem>

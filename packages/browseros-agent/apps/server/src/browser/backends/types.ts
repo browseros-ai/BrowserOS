@@ -12,13 +12,6 @@ export interface CdpBackend extends ProtocolApi {
   ): () => void
 }
 
-export interface ControllerBackend {
-  start(): Promise<void>
-  stop(): Promise<void>
-  isConnected(): boolean
-  send(action: string, payload?: Record<string, unknown>): Promise<unknown>
-}
-
 export interface CdpTarget {
   id: string
   type: string

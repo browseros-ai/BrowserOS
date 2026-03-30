@@ -35,7 +35,7 @@ export interface ResolvedAgentConfig {
   reasoningSummary?: string
   contextWindowSize?: number
   userSystemPrompt?: string
-  workingDir: string
+  workingDir?: string
   /** Whether the model supports image inputs (vision). Defaults to true. */
   supportsImages?: boolean
   /** Eval mode - enables window management tools. Defaults to false. */
@@ -46,6 +46,8 @@ export interface ResolvedAgentConfig {
   isScheduledTask?: boolean
   /** Apps the user previously declined to connect via MCP (chose "do it manually"). */
   declinedApps?: string[]
+  /** Where the chat session originates from — determines navigation behavior. */
+  origin?: 'sidepanel' | 'newtab'
   /** BrowserOS installation ID for credit-based tracking. */
   browserosId?: string
 }

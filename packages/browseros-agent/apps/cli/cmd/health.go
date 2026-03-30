@@ -49,7 +49,7 @@ func init() {
 	statusCmd := &cobra.Command{
 		Use:         "status",
 		Annotations: map[string]string{"group": "Setup:"},
-		Short:       "Check extension connection status",
+		Short:       "Check BrowserOS runtime status",
 		Args:        cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			c := newClient()
@@ -64,12 +64,12 @@ func init() {
 			green := color.New(color.FgGreen).SprintFunc()
 			red := color.New(color.FgRed).SprintFunc()
 
-			ext := data["extensionConnected"]
-			extStr := red("disconnected")
-			if b, ok := ext.(bool); ok && b {
-				extStr = green("connected")
+			cdp := data["cdpConnected"]
+			cdpStr := red("disconnected")
+			if b, ok := cdp.(bool); ok && b {
+				cdpStr = green("connected")
 			}
-			fmt.Printf("Extension: %s\n", extStr)
+			fmt.Printf("Browser: %s\n", cdpStr)
 		},
 	}
 

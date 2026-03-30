@@ -1,6 +1,8 @@
 # BrowserOS Eval
 
-Evaluation framework for benchmarking BrowserOS browser automation agents. Runs tasks from standard datasets (WebVoyager, Mind2Web), captures trajectories with screenshots, and grades results automatically.
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](../../../../LICENSE)
+
+Evaluation framework for benchmarking BrowserOS browser automation agents. Runs tasks from standard datasets ([WebVoyager](https://arxiv.org/abs/2401.13919), [Mind2Web](https://arxiv.org/abs/2306.06070)), captures trajectories with screenshots, and grades results automatically.
 
 ## Prerequisites
 
@@ -177,7 +179,7 @@ The `apiKey` field supports two formats:
 }
 ```
 
-Each worker gets its own Chrome instance. Worker N uses `base_port + N` for CDP, server, and extension ports.
+Each worker gets its own Chrome instance. Worker N uses `base_port + N` for CDP and server ports. `base_extension_port` is still reserved as a legacy BrowserOS launch argument for compatibility with Chromium builds that still pass it.
 
 ### Execution settings
 

@@ -32,7 +32,7 @@ Use **kebab-case** for all file and folder names:
 | Multi-word files | kebab-case | `gemini-agent.ts`, `mcp-context.ts` |
 | Single-word files | lowercase | `types.ts`, `browser.ts`, `index.ts` |
 | Test files | `.test.ts` suffix | `mcp-context.test.ts` |
-| Folders | kebab-case | `controller-server/`, `rate-limiter/` |
+| Folders | kebab-case | `rate-limiter/`, `browser-tools/` |
 
 Classes remain PascalCase in code, but live in kebab-case files:
 ```typescript
@@ -97,21 +97,16 @@ The main MCP server that exposes browser automation tools via HTTP/SSE.
 
 **Key components:**
 - `src/tools/` - MCP tool definitions, split into:
-  - `cdp-based/` - Tools using Chrome DevTools Protocol (network, console, emulation, input, etc.)
-  - `controller-based/` - Tools using the browser extension (navigation, clicks, screenshots, tabs, history, bookmarks)
-- `src/controller-server/` - WebSocket server that bridges to the browser extension
-  - `ControllerBridge` handles WebSocket connections with extension clients
-  - `ControllerContext` wraps the bridge for tool handlers
+  - `cdp-based/` - Tools using Chrome DevTools Protocol (navigation, DOM interaction, network, console, emulation, input, etc.)
 - `src/common/` - Shared utilities (McpContext, PageCollector, browser connection, identity, db)
 - `src/agent/` - AI agent functionality (Gemini adapter, rate limiting, session management)
 - `src/http/` - Hono HTTP server with MCP, health, and provider routes
 
 **Tool types:**
 - CDP tools require a direct CDP connection (`--cdp-port`)
-- Controller tools work via the browser extension over WebSocket
 
 ### Shared (`packages/shared`)
-Shared constants, types, and configuration used by both server and extension. Avoids magic numbers.
+Shared constants, types, and configuration used across packages. Avoids magic numbers.
 
 **Structure:**
 - `src/constants/` - Configuration values (ports, timeouts, limits, urls, paths)
@@ -119,22 +114,12 @@ Shared constants, types, and configuration used by both server and extension. Av
 
 **Exports:** `@browseros/shared/constants/*`, `@browseros/shared/types/*`
 
-### Controller Extension (`apps/controller-ext`)
-Chrome extension that receives commands from the server via WebSocket.
-
-**Entry point:** `src/background/index.ts` → `BrowserOSController`
-
-**Structure:**
-- `src/actions/` - Action handlers organized by domain (browser/, tab/, bookmark/, history/)
-- `src/adapters/` - Chrome API adapters (TabAdapter, BookmarkAdapter, HistoryAdapter)
-- `src/websocket/` - WebSocket client that connects to the server
-
 ### Communication Flow
 
 ```
 AI Agent/MCP Client → HTTP Server (Hono) → Tool Handler
                                               ↓
-                        CDP (direct) ←── or ──→ WebSocket → Extension → Chrome APIs
+                                   CDP → BrowserOS / Chrome APIs
 ```
 
 ## Creating Packages

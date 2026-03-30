@@ -25,10 +25,7 @@
     "declaration": true,
     "declarationMap": true
   },
-  "references": [
-    { "path": "./apps/server" },
-    { "path": "./apps/controller-ext" }
-  ],
+  "references": [{ "path": "./apps/server" }],
   "include": [],
   "exclude": ["node_modules", "dist", "build", "*.config.js"]
 }

@@ -29,14 +29,14 @@ async function checkHealth(): Promise<boolean> {
   }
 }
 
-async function checkExtension(): Promise<boolean> {
+async function checkBrowserReady(): Promise<boolean> {
   try {
-    const res = await fetch(`${SERVER_URL}/extension-status`, {
+    const res = await fetch(`${SERVER_URL}/health`, {
       signal: AbortSignal.timeout(5000),
     })
     if (!res.ok) return false
-    const data = (await res.json()) as { extensionConnected?: boolean }
-    return data.extensionConnected === true
+    const data = (await res.json()) as { cdpConnected?: boolean }
+    return data.cdpConnected === true
   } catch {
     return false
   }
@@ -124,9 +124,9 @@ async function main() {
     if (!healthy) throw new Error('Server not healthy')
   })
 
-  await runTest('Extension status', async () => {
-    const connected = await checkExtension()
-    if (!connected) throw new Error('Extension not connected')
+  await runTest('Browser status', async () => {
+    const connected = await checkBrowserReady()
+    if (!connected) throw new Error('Browser not ready')
   })
 
   // Phase 2: List tools
@@ -208,10 +208,10 @@ async function main() {
       console.log(`  Screenshot ${i}: ❌ ${res.error} (${res.duration}ms)`)
     }
 
-    // Check extension status between screenshots
-    const extConnected = await checkExtension()
+    // Check browser status between screenshots
+    const extConnected = await checkBrowserReady()
     if (!extConnected) {
-      console.log(`  ⚠️  Extension disconnected after screenshot ${i}!`)
+      console.log(`  ⚠️  Browser became unavailable after screenshot ${i}!`)
     }
 
     // Small delay between screenshots
@@ -270,10 +270,10 @@ async function main() {
     })
   }
 
-  // Final extension check
-  await runTest('Final extension status', async () => {
-    const connected = await checkExtension()
-    if (!connected) throw new Error('Extension not connected')
+  // Final browser readiness check
+  await runTest('Final browser status', async () => {
+    const connected = await checkBrowserReady()
+    if (!connected) throw new Error('Browser not ready')
   })
 
   // Summary

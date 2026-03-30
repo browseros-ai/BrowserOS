@@ -54,7 +54,13 @@ export class AiSdkAgent {
     private _messages: UIMessage[],
     private _mcpClients: Array<{ close(): Promise<void> }>,
     private conversationId: string,
+    private _toolNames: Set<string>,
   ) {}
+
+  /** Tool names registered on this agent — used to sanitize messages during session rebuilds. */
+  get toolNames(): Set<string> {
+    return this._toolNames
+  }
 
   static async create(config: AiSdkAgentConfig): Promise<AiSdkAgent> {
     const contextWindow =
@@ -92,10 +98,15 @@ export class AiSdkAgent {
     }
 
     // Build browser tools from the unified tool registry
+    const originPageId = config.browserContext?.activeTab?.pageId
     const allBrowserTools = buildBrowserToolSet(
       config.registry,
       config.browser,
       config.resolvedConfig.workingDir,
+      {
+        origin: config.resolvedConfig.origin,
+        originPageId,
+      },
     )
     const browserTools = config.resolvedConfig.chatMode
       ? Object.fromEntries(
@@ -155,10 +166,11 @@ export class AiSdkAgent {
       }
     }
 
-    // Add filesystem tools (Pi coding agent) — skip in chat mode (read-only)
-    const filesystemTools = config.resolvedConfig.chatMode
-      ? {}
-      : buildFilesystemToolSet(config.resolvedConfig.workingDir)
+    // Add filesystem tools — skip in chat mode (read-only) and when no workspace is selected
+    const filesystemTools =
+      !config.resolvedConfig.chatMode && config.resolvedConfig.workingDir
+        ? buildFilesystemToolSet(config.resolvedConfig.workingDir)
+        : {}
     const memoryTools = config.resolvedConfig.chatMode
       ? {}
       : buildMemoryToolSet()
@@ -209,6 +221,7 @@ export class AiSdkAgent {
       connectedApps: config.browserContext?.enabledMcpServers,
       declinedApps: config.resolvedConfig.declinedApps,
       skillsCatalog,
+      origin: config.resolvedConfig.origin,
     })
 
     // Configure compaction for context window management
@@ -267,6 +280,7 @@ export class AiSdkAgent {
       [],
       clients,
       config.resolvedConfig.conversationId,
+      new Set(Object.keys(tools)),
     )
   }
 

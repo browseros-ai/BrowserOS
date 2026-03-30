@@ -18,7 +18,7 @@ import (
 var watchCmd = &cobra.Command{
 	Use:   "watch",
 	Short: "Start the dev environment with process supervision",
-	Long:  "Builds controller-ext, starts agent (WXT HMR or static), waits for CDP, then starts the server.",
+	Long:  "Starts the agent (WXT HMR or static), waits for CDP, then starts the server.",
 	RunE:  runWatch,
 }
 
@@ -99,13 +99,6 @@ func runWatch(cmd *cobra.Command, args []string) error {
 
 	var wg sync.WaitGroup
 	var procs []*proc.ManagedProc
-
-	// Pre-build controller-ext
-	proc.LogMsg(proc.TagBuild, "Building controller-ext...")
-	if err := proc.RunBlocking(ctx, root, proc.TagBuild, "bun", "--cwd", "apps/controller-ext", "build"); err != nil {
-		return fmt.Errorf("controller-ext build failed: %w", err)
-	}
-	proc.LogMsg(proc.TagBuild, "controller-ext built")
 
 	// Run agent codegen if generated files don't exist
 	agentDir := filepath.Join(root, "apps/agent")
