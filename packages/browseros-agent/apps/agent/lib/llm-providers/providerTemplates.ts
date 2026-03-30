@@ -140,6 +140,12 @@ export const providerTemplates: ProviderTemplate[] = [
     setupGuideUrl:
       'https://docs.aws.amazon.com/bedrock/latest/userguide/getting-started.html',
   }),
+  enrichTemplate('minimax', {
+    defaultModelId: 'MiniMax-M2.7',
+    apiKeyUrl:
+      'https://platform.minimaxi.com/user-center/basic-information/interface-key',
+    setupGuideUrl: 'https://platform.minimaxi.com/document',
+  }),
 ]
 
 /**
@@ -161,6 +167,7 @@ export const providerTypeOptions: { value: ProviderType; label: string }[] = [
   { value: 'lmstudio', label: 'LM Studio' },
   { value: 'bedrock', label: 'AWS Bedrock' },
   { value: 'browseros', label: 'BrowserOS' },
+  { value: 'minimax', label: 'MiniMax' },
 ]
 
 /**
@@ -192,6 +199,7 @@ export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   lmstudio: 'http://localhost:1234/v1',
   bedrock: '',
   browseros: '',
+  minimax: 'https://api.minimaxi.com',
 }
 
 /**

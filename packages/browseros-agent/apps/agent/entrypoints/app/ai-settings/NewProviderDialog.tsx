@@ -88,6 +88,7 @@ const providerTypeEnum = z.enum([
   'chatgpt-pro',
   'github-copilot',
   'qwen-code',
+  'minimax',
 ])
 
 /**
