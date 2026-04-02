@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/devtools/protocol/history_handler.cc b/chrome/browser/devtools/protocol/history_handler.cc
 new file mode 100644
-index 0000000000000..689f6e900a968
+index 0000000000000..4087a679a527f
 --- /dev/null
 +++ b/chrome/browser/devtools/protocol/history_handler.cc
 @@ -0,0 +1,188 @@
@@ -36,7 +36,7 @@ index 0000000000000..689f6e900a968
 +      .SetId(base::NumberToString(result.id()))
 +      .SetUrl(result.url().spec())
 +      .SetTitle(base::UTF16ToUTF8(result.title()))
-+      .SetLastVisitTime(result.last_visit().InMillisecondsFSinceUnixEpoch())
++      .SetLastVisitTime(result.visit_time().InMillisecondsFSinceUnixEpoch())
 +      .SetVisitCount(result.visit_count())
 +      .SetTypedCount(result.typed_count())
 +      .Build();

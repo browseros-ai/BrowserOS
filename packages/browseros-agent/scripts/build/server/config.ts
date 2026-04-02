@@ -76,6 +76,7 @@ function validateProductionEnv(envVars: Record<string, string>): void {
 
 export interface LoadBuildConfigOptions {
   compileOnly?: boolean
+  ci?: boolean
 }
 
 export function loadBuildConfig(
@@ -84,7 +85,9 @@ export function loadBuildConfig(
 ): BuildConfig {
   const fileEnv = loadProdEnv(rootDir)
   const envVars = buildInlineEnv(fileEnv)
-  validateProductionEnv(envVars)
+  if (!options.ci) {
+    validateProductionEnv(envVars)
+  }
 
   const processEnv: NodeJS.ProcessEnv = {
     // Windows commonly exposes the executable search path as `Path`.
@@ -93,7 +96,7 @@ export function loadBuildConfig(
     ...process.env,
   }
 
-  if (options.compileOnly) {
+  if (options.compileOnly || options.ci) {
     return { version: readServerVersion(rootDir), envVars, processEnv }
   }
 

@@ -25,13 +25,17 @@ func init() {
 		Long: `Set up the CLI by providing the MCP server URL from BrowserOS.
 
 Open BrowserOS → Settings → BrowserOS MCP to find your Server URL.
-The URL looks like: http://127.0.0.1:9004/mcp
+The URL looks like: http://127.0.0.1:9000/mcp
 
 The port varies per installation, so this step is required on first use.
 Run again if your port changes.
 
+You can provide the full URL or just the port number:
+  browseros-cli init http://127.0.0.1:9000/mcp
+  browseros-cli init 9000
+
 Three modes:
-  browseros-cli init <url>    Non-interactive, use the provided URL
+  browseros-cli init <url>    Non-interactive (full URL or port number)
   browseros-cli init --auto   Auto-discover from ~/.browseros/server.json
   browseros-cli init          Interactive prompt`,
 		Annotations: map[string]string{"group": "Setup:"},
@@ -65,13 +69,14 @@ Three modes:
 				bold.Println("BrowserOS CLI Setup")
 				fmt.Println()
 				fmt.Println("Open BrowserOS → Settings → BrowserOS MCP")
-				fmt.Println("Copy the Server URL shown there.")
+				fmt.Println("Copy the Server URL or port number shown there.")
 				fmt.Println()
-				dim.Println("It looks like: http://127.0.0.1:9004/mcp")
+				dim.Println("Examples:  http://127.0.0.1:9000/mcp")
+				dim.Println("           9000")
 				fmt.Println()
 
 				reader := bufio.NewReader(os.Stdin)
-				fmt.Print("Server URL: ")
+				fmt.Print("Server URL or port: ")
 				line, err := reader.ReadString('\n')
 				if err != nil {
 					output.Error("failed to read input", 1)

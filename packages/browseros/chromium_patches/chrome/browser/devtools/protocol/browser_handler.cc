@@ -1,8 +1,13 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler.cc b/chrome/browser/devtools/protocol/browser_handler.cc
-index 30bd52d09c3fc..33c7d6d8455fc 100644
+index 30bd52d09c3fc..dd9ef4e3b7cbb 100644
 --- a/chrome/browser/devtools/protocol/browser_handler.cc
 +++ b/chrome/browser/devtools/protocol/browser_handler.cc
-@@ -8,19 +8,32 @@
+@@ -4,23 +4,37 @@
+ 
+ #include "chrome/browser/devtools/protocol/browser_handler.h"
+ 
++#include <algorithm>
+ #include <set>
  #include <vector>
  
  #include "base/functional/bind.h"
@@ -35,7 +40,7 @@ index 30bd52d09c3fc..33c7d6d8455fc 100644
  #include "content/public/browser/browser_task_traits.h"
  #include "content/public/browser/browser_thread.h"
  #include "content/public/browser/devtools_agent_host.h"
-@@ -30,10 +43,21 @@
+@@ -30,10 +44,21 @@
  #include "ui/gfx/image/image.h"
  #include "ui/gfx/image/image_png_rep.h"
  
@@ -57,7 +62,7 @@ index 30bd52d09c3fc..33c7d6d8455fc 100644
  BrowserWindow* GetBrowserWindow(int window_id) {
    BrowserWindow* result = nullptr;
    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-@@ -72,17 +96,411 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
+@@ -72,17 +97,419 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
        .Build();
  }
  
@@ -437,6 +442,14 @@ index 30bd52d09c3fc..33c7d6d8455fc 100644
 +    out_indices->push_back(found_index);
 +  }
 +
++  if (!(*out_bwi)->GetTabStripModel()->SupportsTabGroups()) {
++    return Response::ServerError("Tab grouping not supported for this window");
++  }
++
++  std::ranges::sort(*out_indices);
++  out_indices->erase(std::ranges::unique(*out_indices).begin(),
++                     out_indices->end());
++
 +  return Response::Success();
 +}
 +
@@ -471,7 +484,7 @@ index 30bd52d09c3fc..33c7d6d8455fc 100644
  
  Response BrowserHandler::GetWindowForTarget(
      std::optional<std::string> target_id,
-@@ -120,6 +538,65 @@ Response BrowserHandler::GetWindowForTarget(
+@@ -120,6 +547,65 @@ Response BrowserHandler::GetWindowForTarget(
    return Response::Success();
  }
  
@@ -537,7 +550,7 @@ index 30bd52d09c3fc..33c7d6d8455fc 100644
  Response BrowserHandler::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -297,3 +774,910 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
+@@ -297,3 +783,909 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
        net::SchemefulSite(url_to_add));
    return Response::Success();
  }
@@ -1447,4 +1460,3 @@ index 30bd52d09c3fc..33c7d6d8455fc 100644
 +bool BrowserHandler::IsHiddenWindow(int window_id) const {
 +  return hidden_window_ids_.contains(window_id);
 +}
-+

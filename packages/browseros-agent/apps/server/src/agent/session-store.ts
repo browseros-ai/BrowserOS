@@ -4,8 +4,8 @@ import type { AiSdkAgent } from './ai-sdk-agent'
 
 export interface AgentSession {
   agent: AiSdkAgent
-  hiddenWindowId?: number
-  /** Browser context scoped to the hidden window (scheduled tasks only) */
+  hiddenPageId?: number
+  /** Browser context scoped to the scheduled hidden page. */
   browserContext?: BrowserContext
   /** MCP server names used when the session was created, for change detection. */
   mcpServerKey?: string

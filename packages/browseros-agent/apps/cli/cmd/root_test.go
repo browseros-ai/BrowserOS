@@ -5,6 +5,24 @@ import (
 	"time"
 )
 
+func TestSetVersionUpdatesRootCommand(t *testing.T) {
+	originalVersion := version
+	originalRootVersion := rootCmd.Version
+	t.Cleanup(func() {
+		version = originalVersion
+		rootCmd.Version = originalRootVersion
+	})
+
+	SetVersion("1.2.3")
+
+	if version != "1.2.3" {
+		t.Fatalf("version = %q, want %q", version, "1.2.3")
+	}
+	if rootCmd.Version != "1.2.3" {
+		t.Fatalf("rootCmd.Version = %q, want %q", rootCmd.Version, "1.2.3")
+	}
+}
+
 func TestCommandName(t *testing.T) {
 	tests := []struct {
 		name string

@@ -49,7 +49,7 @@ You do not have a filesystem workspace in this session. Return all results direc
   // Mode-aware framing
   if (options?.isScheduledTask) {
     role +=
-      '\n\nYou are running as a scheduled background task in a dedicated hidden browser window. Complete the task autonomously and report results.'
+      '\n\nYou are running as a scheduled background task on a system-managed hidden page. Complete the task autonomously and report results.'
   } else if (options?.chatMode) {
     role +=
       '\n\nYou are in read-only chat mode. You can observe pages but cannot interact with them, modify files, or store memories.'
@@ -243,7 +243,7 @@ When a task requires working on multiple pages simultaneously:
 7. **Never force-switch the user's active tab.** If you need user interaction on a background tab (e.g., login, CAPTCHA), tell the user which tab needs attention and let them switch manually.
 8. **Never navigate the user's current tab** during a multi-tab task. The current tab is the user's anchor — use it only for reading (snapshots, content extraction). All navigation should happen on background tabs.
 
-**Do NOT use \`create_hidden_window\` or \`new_hidden_page\` for user-requested tasks.** Hidden windows are invisible to the user and cannot be screenshotted. Use \`new_page\` (background mode) instead — tabs appear in the user's tab strip and can be inspected. Reserve hidden windows for automated/scheduled runs only.`
+**Do NOT use \`create_hidden_window\` or \`new_hidden_page\` for user-requested tasks.** Hidden pages are invisible to the user and do not appear in the user's tab strip. Use \`new_page\` (background mode) instead — tabs appear in the user's tab strip and can be inspected. Reserve hidden pages for automated/scheduled runs only.`
 
   if (!isNewTab) {
     executionContent += `
@@ -677,22 +677,24 @@ function getUserContext(
 
     if (options?.isScheduledTask) {
       pageCtx +=
-        '\nYou are running as a **scheduled background task** in a dedicated hidden browser window.'
+        '\nYou are running as a **scheduled background task** on a system-managed hidden page.'
     }
 
     pageCtx +=
       '\n\n**CRITICAL RULES:**\n1. **Do NOT call `get_active_page` or `list_pages` to find your starting page.** Use the **page ID from the Browser Context** directly.'
 
     if (options?.isScheduledTask) {
-      const windowRef = options.scheduledTaskWindowId
-        ? `\`windowId: ${options.scheduledTaskWindowId}\``
-        : 'the `windowId` from the Browser Context'
-      pageCtx += `\n2. **Always pass ${windowRef}** when calling \`new_page\` or \`new_hidden_page\`. Never omit the \`windowId\` parameter.`
+      const pageRef = options.scheduledTaskPageId
+        ? `\`${options.scheduledTaskPageId}\``
+        : 'the page ID from the Browser Context'
+      pageCtx += `\n2. **Use starting page ID ${pageRef} directly.** For additional browsing, prefer \`new_hidden_page\` so the work stays invisible to the user.`
       pageCtx +=
-        '\n3. **Do NOT close your dedicated hidden window** (via `close_window`). It is managed by the system and will be cleaned up automatically.'
+        '\n3. **Do NOT close your starting hidden page** (via `close_page` on that page ID). It is managed by the system and will be cleaned up automatically.'
       pageCtx +=
-        '\n4. **Do NOT create new windows** (via `create_window` or `create_hidden_window`). Use your existing hidden window for all pages.'
-      pageCtx += '\n5. Complete the task end-to-end and report results.'
+        '\n4. **Do NOT create new windows** (via `create_window` or `create_hidden_window`). Use hidden pages instead.'
+      pageCtx +=
+        '\n5. **Close extra hidden pages when you are done with them** unless you explicitly reveal them with `show_page`.'
+      pageCtx += '\n6. Complete the task end-to-end and report results.'
     }
 
     pageCtx += '\n</page_context>'
@@ -753,7 +755,7 @@ export interface BuildSystemPromptOptions {
   userSystemPrompt?: string
   exclude?: string[]
   isScheduledTask?: boolean
-  scheduledTaskWindowId?: number
+  scheduledTaskPageId?: number
   workspaceDir?: string
   soulContent?: string
   isSoulBootstrap?: boolean

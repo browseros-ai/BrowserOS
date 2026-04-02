@@ -50,28 +50,38 @@ export async function archiveAndUploadArtifacts(
   r2: R2Config,
   upload: boolean,
 ): Promise<UploadResult[]> {
+  const results = await archiveArtifacts(artifacts)
+  if (!upload) {
+    return results
+  }
+
+  const uploadedResults: UploadResult[] = []
+  for (const result of results) {
+    const fileName = basename(result.zipPath)
+    const latestR2Key = joinObjectKey(r2.uploadPrefix, 'latest', fileName)
+    const versionR2Key = joinObjectKey(r2.uploadPrefix, version, fileName)
+    await uploadFileToObject(client, r2, latestR2Key, result.zipPath)
+    await uploadFileToObject(client, r2, versionR2Key, result.zipPath)
+    uploadedResults.push({
+      targetId: result.targetId,
+      zipPath: result.zipPath,
+      latestR2Key,
+      versionR2Key,
+    })
+  }
+
+  return uploadedResults
+}
+
+export async function archiveArtifacts(
+  artifacts: StagedArtifact[],
+): Promise<UploadResult[]> {
   const results: UploadResult[] = []
 
   for (const artifact of artifacts) {
     const zipPath = zipPathForArtifact(artifact)
     await zipArtifactRoot(artifact.rootDir, zipPath)
-
-    if (!upload) {
-      results.push({ targetId: artifact.target.id, zipPath })
-      continue
-    }
-
-    const fileName = basename(zipPath)
-    const latestR2Key = joinObjectKey(r2.uploadPrefix, 'latest', fileName)
-    const versionR2Key = joinObjectKey(r2.uploadPrefix, version, fileName)
-    await uploadFileToObject(client, r2, latestR2Key, zipPath)
-    await uploadFileToObject(client, r2, versionR2Key, zipPath)
-    results.push({
-      targetId: artifact.target.id,
-      zipPath,
-      latestR2Key,
-      versionR2Key,
-    })
+    results.push({ targetId: artifact.target.id, zipPath })
   }
 
   return results

@@ -173,7 +173,7 @@ export const new_page = defineTool({
 export const new_hidden_page = defineTool({
   name: 'new_hidden_page',
   description:
-    'Open a new hidden page (tab) and navigate to a URL. Hidden pages are not visible to the user and useful for background data fetching or automation. Note: take_screenshot is not supported on hidden tabs — use show_page first to make it visible.',
+    'Open a new hidden page (tab) and navigate to a URL. Hidden pages are not visible to the user and useful for background data fetching or automation.',
   input: z.object({
     url: z.string().describe('URL to open'),
     windowId: z.number().optional().describe('Window ID to create tab in'),
@@ -206,7 +206,7 @@ export const new_hidden_page = defineTool({
 export const show_page = defineTool({
   name: 'show_page',
   description:
-    'Restore a hidden page back into a visible browser window. Use after new_hidden_page when you need to make the page visible (e.g. for screenshots). Errors if the page is already visible.',
+    'Restore a hidden page back into a visible browser window. Use after new_hidden_page when you want the user to inspect or interact with it. Errors if the page is already visible.',
   input: z.object({
     page: pageParam,
     windowId: z

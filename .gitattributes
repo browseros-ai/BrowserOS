@@ -9,4 +9,6 @@ packages/browseros/chromium_patches/**/*.py linguist-generated
 scripts/*.py linguist-generated
 # Mark build directories as generated
 build/* linguist-generated
+# Mark eval/test framework as vendored so it's excluded from language stats
+packages/browseros-agent/apps/eval/** linguist-vendored
 docs/videos/** filter=lfs diff=lfs merge=lfs -text

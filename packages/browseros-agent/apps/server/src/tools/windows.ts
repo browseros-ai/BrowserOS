@@ -79,7 +79,7 @@ export const create_window = defineTool({
 export const create_hidden_window = defineTool({
   name: 'create_hidden_window',
   description:
-    'Create a new hidden browser window. Hidden windows are not visible to the user and useful for background automation. Note: take_screenshot is not supported on hidden windows.',
+    'Create a new hidden browser window. Hidden windows are not visible to the user and useful for background automation.',
   input: z.object({}),
   output: z.object({
     window: windowInfoSchema,

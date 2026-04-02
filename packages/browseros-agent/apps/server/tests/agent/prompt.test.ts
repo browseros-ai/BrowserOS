@@ -86,7 +86,7 @@ function buildScheduled(overrides?: Partial<BuildSystemPromptOptions>): string {
   return buildSystemPrompt({
     isScheduledTask: true,
     workspaceDir: '/tmp/scheduled',
-    scheduledTaskWindowId: 42,
+    scheduledTaskPageId: 42,
     exclude: ['nudges'],
     ...overrides,
   })
@@ -258,7 +258,7 @@ describe('workspace gating (P11)', () => {
 // from subtle cues (missing sections, restricted tools), which is unreliable.
 //
 // - Regular: no extra framing (default behavior)
-// - Scheduled: must know it's autonomous, in a hidden window, no user interaction
+// - Scheduled: must know it's autonomous, on a hidden page, no user interaction
 // - Chat: must know it's read-only, cannot click/fill/write
 //
 // If mode framing breaks, scheduled tasks may try to ask the user questions,
@@ -318,20 +318,21 @@ describe('mode-aware framing', () => {
     expect(prompt).not.toContain('<page_context>')
   })
 
-  it('scheduled task includes windowId in page context', () => {
-    const prompt = buildScheduled({ scheduledTaskWindowId: 99 })
-    expect(prompt).toContain('windowId: 99')
+  it('scheduled task includes starting pageId in page context', () => {
+    const prompt = buildScheduled({ scheduledTaskPageId: 99 })
+    expect(prompt).toContain('starting page ID `99`')
   })
 
-  it('scheduled task without windowId uses Browser Context reference', () => {
-    const prompt = buildScheduled({ scheduledTaskWindowId: undefined })
-    expect(prompt).toContain('the `windowId` from the Browser Context')
+  it('scheduled task without pageId uses Browser Context reference', () => {
+    const prompt = buildScheduled({ scheduledTaskPageId: undefined })
+    expect(prompt).toContain('the page ID from the Browser Context')
   })
 
-  it('scheduled task includes hidden window management rules', () => {
+  it('scheduled task includes hidden page management rules', () => {
     const prompt = buildScheduled()
-    expect(prompt).toContain('Do NOT close your dedicated hidden window')
+    expect(prompt).toContain('Do NOT close your starting hidden page')
     expect(prompt).toContain('Do NOT create new windows')
+    expect(prompt).toContain('Close extra hidden pages')
   })
 })
 
@@ -1071,11 +1072,12 @@ describe('execution section', () => {
 
   it('prohibits hidden windows for user tasks', () => {
     // Why: Run 2 used create_hidden_window instead of background tabs.
-    // Hidden windows are invisible to users and can't be screenshotted.
+    // Hidden pages are invisible to users, so user-requested work must stay on visible tabs.
     const prompt = buildRegular()
     expect(prompt).toContain('Do NOT use')
     expect(prompt).toContain('create_hidden_window')
     expect(prompt).toContain('new_hidden_page')
+    expect(prompt).not.toContain('cannot be screenshotted')
   })
 
   it('includes tab retry discipline', () => {

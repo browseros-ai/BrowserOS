@@ -2,13 +2,20 @@ import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { log } from '../log'
-import { archiveAndUploadArtifacts } from './archive'
+import { archiveAndUploadArtifacts, archiveArtifacts } from './archive'
 import { parseBuildArgs } from './cli'
 import { compileServerBinaries, getDistProdRoot } from './compile'
 import { loadBuildConfig } from './config'
 import { getTargetRules, loadManifest } from './manifest'
 import { createR2Client } from './r2'
-import { stageTargetArtifact } from './stage'
+import { stageCompiledArtifact, stageTargetArtifact } from './stage'
+
+function buildModeLabel(argv: { compileOnly: boolean; ci: boolean }): string {
+  if (argv.ci) {
+    return 'ci'
+  }
+  return argv.compileOnly ? 'compile-only' : 'full'
+}
 
 export async function runProdResourceBuild(argv: string[]): Promise<void> {
   const rootDir = resolve(import.meta.dir, '../../..')
@@ -18,11 +25,12 @@ export async function runProdResourceBuild(argv: string[]): Promise<void> {
 
   const buildConfig = loadBuildConfig(rootDir, {
     compileOnly: args.compileOnly,
+    ci: args.ci,
   })
 
   log.header(`Building BrowserOS server artifacts v${buildConfig.version}`)
   log.info(`Targets: ${args.targets.map((target) => target.id).join(', ')}`)
-  log.info(`Mode: ${args.compileOnly ? 'compile-only' : 'full'}`)
+  log.info(`Mode: ${buildModeLabel(args)}`)
 
   const compiled = await compileServerBinaries(
     args.targets,
@@ -30,6 +38,30 @@ export async function runProdResourceBuild(argv: string[]): Promise<void> {
     buildConfig.processEnv,
     buildConfig.version,
   )
+
+  if (args.ci) {
+    const distRoot = getDistProdRoot()
+    const localArtifacts = []
+
+    for (const binary of compiled) {
+      log.step(`Packaging ${binary.target.name}`)
+      const staged = await stageCompiledArtifact(
+        distRoot,
+        binary.binaryPath,
+        binary.target,
+        buildConfig.version,
+      )
+      localArtifacts.push(staged)
+      log.success(`Packaged ${binary.target.id}`)
+    }
+
+    const archiveResults = await archiveArtifacts(localArtifacts)
+    log.done('CI build completed')
+    for (const result of archiveResults) {
+      log.info(`${result.targetId}: ${result.zipPath}`)
+    }
+    return
+  }
 
   if (args.compileOnly) {
     log.done('Compile-only build completed')

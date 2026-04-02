@@ -15,6 +15,7 @@ const (
 	DefaultHTTPTimeout     = 2 * time.Second
 	DefaultDownloadTimeout = 5 * time.Minute
 	SkipCheckEnv           = "BROWSEROS_SKIP_UPDATE_CHECK"
+	InstallMethodEnv       = "BROWSEROS_INSTALL_METHOD"
 )
 
 type Options struct {
@@ -95,7 +96,19 @@ func (m *Manager) AutomaticEnabled() bool {
 	if os.Getenv(SkipCheckEnv) != "" {
 		return false
 	}
+	if installedViaPackageManager() {
+		return false
+	}
 	return IsReleaseVersion(m.options.CurrentVersion)
+}
+
+func installedViaPackageManager() bool {
+	method := os.Getenv(InstallMethodEnv)
+	switch method {
+	case "npm", "brew", "homebrew":
+		return true
+	}
+	return false
 }
 
 func (m *Manager) ShouldCheck() bool {
@@ -210,11 +223,22 @@ func (m *Manager) Apply(ctx context.Context, result *CheckResult) error {
 }
 
 func FormatNotice(currentVersion, latestVersion string) string {
-	return fmt.Sprintf(
-		"Update available: browseros-cli v%s (current v%s)\nRun `browseros-cli update` to upgrade.",
+	notice := fmt.Sprintf(
+		"Update available: browseros-cli v%s (current v%s)",
 		latestVersion,
 		currentVersion,
 	)
+
+	switch os.Getenv(InstallMethodEnv) {
+	case "npm":
+		notice += "\nRun `npm update -g browseros-cli` to upgrade."
+	case "brew", "homebrew":
+		notice += "\nRun `brew upgrade browseros-cli` to upgrade."
+	default:
+		notice += "\nRun `browseros-cli update` to upgrade."
+	}
+
+	return notice
 }
 
 func (m *Manager) recordError(err error) {

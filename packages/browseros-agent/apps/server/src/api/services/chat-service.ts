@@ -146,34 +146,51 @@ export class ChatService {
 
     if (!session) {
       isNewSession = true
-      let hiddenWindowId: number | undefined
+      let hiddenPageId: number | undefined
       let browserContext = await this.resolvePageIds(request.browserContext)
       if (request.isScheduledTask) {
         try {
-          const win = await this.deps.browser.createWindow({ hidden: true })
-          hiddenWindowId = win.windowId
-          const pageId = await this.deps.browser.newPage('about:blank', {
-            windowId: hiddenWindowId,
+          hiddenPageId = await this.deps.browser.newPage('about:blank', {
+            hidden: true,
+            background: true,
           })
+          let hiddenWindowId: number | undefined
+          try {
+            const hiddenPage = (await this.deps.browser.listPages()).find(
+              (page) => page.pageId === hiddenPageId,
+            )
+            hiddenWindowId = hiddenPage?.windowId
+          } catch (error) {
+            logger.warn('Failed to look up hidden page metadata', {
+              conversationId: request.conversationId,
+              pageId: hiddenPageId,
+              error: error instanceof Error ? error.message : String(error),
+            })
+          }
           browserContext = {
             ...browserContext,
             windowId: hiddenWindowId,
+            selectedTabs: undefined,
+            tabs: undefined,
             activeTab: {
-              id: pageId,
-              pageId,
+              id: hiddenPageId,
+              pageId: hiddenPageId,
               url: 'about:blank',
               title: 'Scheduled Task',
             },
           }
-          logger.info('Created hidden window for scheduled task', {
+          logger.info('Created hidden page for scheduled task', {
             conversationId: request.conversationId,
+            pageId: hiddenPageId,
             windowId: hiddenWindowId,
-            pageId,
           })
         } catch (error) {
-          logger.warn('Failed to create hidden window, using default', {
-            error: error instanceof Error ? error.message : String(error),
-          })
+          logger.warn(
+            'Failed to create hidden page, using default browser context',
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          )
         }
       }
 
@@ -188,7 +205,7 @@ export class ChatService {
       })
       session = {
         agent,
-        hiddenWindowId,
+        hiddenPageId,
         browserContext,
         mcpServerKey,
         workingDir: request.userWorkingDir,
@@ -245,10 +262,10 @@ export class ChatService {
           totalMessages: messages.length,
         })
 
-        if (session?.hiddenWindowId) {
-          const windowId = session.hiddenWindowId
-          session.hiddenWindowId = undefined
-          this.closeHiddenWindow(windowId, request.conversationId)
+        if (session?.hiddenPageId) {
+          const pageId = session.hiddenPageId
+          session.hiddenPageId = undefined
+          this.closeHiddenPage(pageId, request.conversationId)
         }
       },
     })
@@ -258,10 +275,10 @@ export class ChatService {
     conversationId: string,
   ): Promise<{ deleted: boolean; sessionCount: number }> {
     const session = this.deps.sessionStore.get(conversationId)
-    if (session?.hiddenWindowId) {
-      const windowId = session.hiddenWindowId
-      session.hiddenWindowId = undefined
-      this.closeHiddenWindow(windowId, conversationId)
+    if (session?.hiddenPageId) {
+      const pageId = session.hiddenPageId
+      session.hiddenPageId = undefined
+      this.closeHiddenPage(pageId, conversationId)
     }
     const deleted = await this.deps.sessionStore.delete(conversationId)
     return { deleted, sessionCount: this.deps.sessionStore.count() }
@@ -309,10 +326,10 @@ export class ChatService {
     }
   }
 
-  private closeHiddenWindow(windowId: number, conversationId: string): void {
-    this.deps.browser.closeWindow(windowId).catch((error) => {
-      logger.warn('Failed to close hidden window', {
-        windowId,
+  private closeHiddenPage(pageId: number, conversationId: string): void {
+    this.deps.browser.closePage(pageId).catch((error) => {
+      logger.warn('Failed to close hidden page', {
+        pageId,
         conversationId,
         error: error instanceof Error ? error.message : String(error),
       })
@@ -329,7 +346,10 @@ export class ChatService {
     await session.agent.dispose()
     this.deps.sessionStore.remove(request.conversationId)
 
-    const browserContext = await this.resolvePageIds(request.browserContext)
+    const browserContext = agentConfig.isScheduledTask
+      ? (session.browserContext ??
+        (await this.resolvePageIds(request.browserContext)))
+      : await this.resolvePageIds(request.browserContext)
     const agent = await AiSdkAgent.create({
       resolvedConfig: agentConfig,
       browser: this.deps.browser,
@@ -341,6 +361,7 @@ export class ChatService {
     })
     const newSession: AgentSession = {
       agent,
+      hiddenPageId: session.hiddenPageId,
       browserContext,
       mcpServerKey,
       workingDir: request.userWorkingDir,

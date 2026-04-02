@@ -32,6 +32,36 @@ async function copyServerBinary(
   }
 }
 
+async function createArtifactRoot(
+  distRoot: string,
+  compiledBinaryPath: string,
+  target: BuildTarget,
+): Promise<string> {
+  const rootDir = artifactRoot(distRoot, target)
+  await rm(rootDir, { recursive: true, force: true })
+  await mkdir(rootDir, { recursive: true })
+  await copyServerBinary(
+    compiledBinaryPath,
+    serverDestinationPath(rootDir, target),
+    target,
+  )
+  return rootDir
+}
+
+async function finalizeArtifact(
+  rootDir: string,
+  target: BuildTarget,
+  version: string,
+): Promise<StagedArtifact> {
+  const metadataPath = await writeArtifactMetadata(rootDir, target, version)
+  return {
+    target,
+    rootDir,
+    resourcesDir: join(rootDir, 'resources'),
+    metadataPath,
+  }
+}
+
 function resolveDestination(rootDir: string, destination: string): string {
   const outputPath = join(rootDir, destination)
   const relativePath = relative(rootDir, outputPath)
@@ -67,25 +97,21 @@ export async function stageTargetArtifact(
   r2: R2Config,
   version: string,
 ): Promise<StagedArtifact> {
-  const rootDir = artifactRoot(distRoot, target)
-  await rm(rootDir, { recursive: true, force: true })
-  await mkdir(rootDir, { recursive: true })
-
-  await copyServerBinary(
-    compiledBinaryPath,
-    serverDestinationPath(rootDir, target),
-    target,
-  )
+  const rootDir = await createArtifactRoot(distRoot, compiledBinaryPath, target)
 
   for (const rule of rules) {
     await stageRule(rootDir, rule, target, client, r2)
   }
 
-  const metadataPath = await writeArtifactMetadata(rootDir, target, version)
-  return {
-    target,
-    rootDir,
-    resourcesDir: join(rootDir, 'resources'),
-    metadataPath,
-  }
+  return finalizeArtifact(rootDir, target, version)
+}
+
+export async function stageCompiledArtifact(
+  distRoot: string,
+  compiledBinaryPath: string,
+  target: BuildTarget,
+  version: string,
+): Promise<StagedArtifact> {
+  const rootDir = await createArtifactRoot(distRoot, compiledBinaryPath, target)
+  return finalizeArtifact(rootDir, target, version)
 }

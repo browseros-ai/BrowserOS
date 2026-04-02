@@ -2,13 +2,17 @@ BINARY := browseros-cli
 SOURCES := $(shell find . -name '*.go')
 VERSION ?= dev
 POSTHOG_API_KEY ?=
+DIST := dist
 LDFLAGS := -X main.version=$(VERSION) -X browseros-cli/analytics.posthogAPIKey=$(POSTHOG_API_KEY)
+HOST_OS := $(shell go env GOOS)
+HOST_ARCH := $(shell go env GOARCH)
+HOST_EXT := $(if $(filter windows,$(HOST_OS)),.exe,)
+HOST_BINARY = $(DIST)/$(BINARY)_$(HOST_OS)_$(HOST_ARCH)$(HOST_EXT)
 
 $(BINARY): $(SOURCES)
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
 PLATFORMS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
-DIST := dist
 
 .PHONY: install clean vet test release
 
@@ -45,6 +49,21 @@ release:
 		fi; \
 		mv "$(DIST)/$(BINARY)$$EXT" "$(DIST)/$(BINARY)_$${OS}_$${ARCH}$$EXT"; \
 	done
+	@ACTUAL_VERSION=$$($(HOST_BINARY) --version | awk '{print $$3}'); \
+		if [ "$$ACTUAL_VERSION" != "$(VERSION)" ]; then \
+			echo "Error: expected $(HOST_BINARY) to report version $(VERSION), got $$ACTUAL_VERSION" >&2; \
+			exit 1; \
+		fi
 	@cd $(DIST) && (command -v sha256sum >/dev/null 2>&1 && sha256sum *.tar.gz *.zip || shasum -a 256 *.tar.gz *.zip) > checksums.txt
 	@echo "=== Built artifacts ==="
 	@ls -lh $(DIST)
+
+.PHONY: npm-version npm-publish
+
+npm-version:
+	@if [ "$(VERSION)" = "dev" ]; then echo "Error: VERSION required" >&2; exit 1; fi
+	@node -e "const p=require('./npm/package.json');p.version='$(VERSION)';require('fs').writeFileSync('./npm/package.json',JSON.stringify(p,null,2)+'\n')"
+	@echo "npm/package.json version set to $(VERSION)"
+
+npm-publish: npm-version
+	cd npm && npm publish

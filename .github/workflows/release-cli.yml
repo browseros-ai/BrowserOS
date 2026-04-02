@@ -103,6 +103,13 @@ jobs:
 
           ## Install `browseros-cli`
 
+          ### npm / npx
+
+          ```bash
+          npx browseros-cli --help
+          npm install -g browseros-cli
+          ```
+
           ### macOS / Linux
 
           ```bash
@@ -138,3 +145,17 @@ jobs:
             --notes-file /tmp/release-notes.md \
             ${CLI_DIST}/*
         working-directory: ${{ github.workspace }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          make npm-version VERSION=${{ inputs.version }}
+          cd npm
+          npm publish --access public

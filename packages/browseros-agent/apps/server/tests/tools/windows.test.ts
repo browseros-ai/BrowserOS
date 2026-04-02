@@ -24,6 +24,14 @@ function structuredOf<T>(result: { structuredContent?: unknown }): T {
 }
 
 describe('window tools', () => {
+  it('create_hidden_window description does not claim screenshots are unsupported', () => {
+    assert.ok(
+      !create_hidden_window.description.includes(
+        'take_screenshot is not supported',
+      ),
+    )
+  })
+
   it('list_windows returns at least one window', async () => {
     await withBrowser(async ({ execute }) => {
       const result = await execute(list_windows, {})

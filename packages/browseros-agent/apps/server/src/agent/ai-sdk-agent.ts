@@ -213,7 +213,7 @@ export class AiSdkAgent {
       userSystemPrompt: config.resolvedConfig.userSystemPrompt,
       exclude: excludeSections,
       isScheduledTask: config.resolvedConfig.isScheduledTask,
-      scheduledTaskWindowId: config.browserContext?.windowId,
+      scheduledTaskPageId: config.browserContext?.activeTab?.pageId,
       workspaceDir: config.resolvedConfig.workingDir,
       soulContent,
       isSoulBootstrap: isBootstrap,

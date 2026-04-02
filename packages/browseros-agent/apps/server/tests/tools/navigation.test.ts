@@ -29,6 +29,13 @@ function structuredOf<T>(result: { structuredContent?: unknown }): T {
 }
 
 describe('navigation tools', () => {
+  it('hidden-page tool descriptions do not claim screenshots are unsupported', () => {
+    assert.ok(
+      !new_hidden_page.description.includes('take_screenshot is not supported'),
+    )
+    assert.ok(!show_page.description.includes('for screenshots'))
+  })
+
   it('list_pages returns at least one page', async () => {
     await withBrowser(async ({ execute }) => {
       const result = await execute(list_pages, {})

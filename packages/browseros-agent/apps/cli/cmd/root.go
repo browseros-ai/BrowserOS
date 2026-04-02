@@ -34,6 +34,7 @@ const automaticUpdateDrainTimeout = 150 * time.Millisecond
 
 func SetVersion(v string) {
 	version = v
+	rootCmd.Version = v
 }
 
 var (
@@ -338,8 +339,25 @@ func loadBrowserosServerURL() string {
 
 func normalizeServerURL(raw string) string {
 	normalized := strings.TrimSpace(raw)
+
+	if isPortOnly(normalized) {
+		normalized = "http://127.0.0.1:" + normalized
+	}
+
 	normalized = strings.TrimSuffix(normalized, "/mcp")
 	return strings.TrimSuffix(normalized, "/")
+}
+
+func isPortOnly(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func validateServerURL(raw string) (string, error) {

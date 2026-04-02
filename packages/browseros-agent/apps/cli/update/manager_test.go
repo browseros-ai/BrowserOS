@@ -144,6 +144,32 @@ func TestManagerSaveAppliedState(t *testing.T) {
 	}
 }
 
+func TestAutomaticEnabledSkipsForPackageManagerInstall(t *testing.T) {
+	t.Setenv("BROWSEROS_INSTALL_METHOD", "npm")
+
+	manager := NewManager(Options{
+		CurrentVersion: "1.0.0",
+		Automatic:      true,
+	})
+
+	if manager.AutomaticEnabled() {
+		t.Fatal("AutomaticEnabled() = true, want false when BROWSEROS_INSTALL_METHOD=npm")
+	}
+}
+
+func TestAutomaticEnabledAllowsNormalInstall(t *testing.T) {
+	t.Setenv("BROWSEROS_INSTALL_METHOD", "")
+
+	manager := NewManager(Options{
+		CurrentVersion: "1.0.0",
+		Automatic:      true,
+	})
+
+	if !manager.AutomaticEnabled() {
+		t.Fatal("AutomaticEnabled() = false, want true when BROWSEROS_INSTALL_METHOD is empty")
+	}
+}
+
 func runtimePlatformKey(t *testing.T) string {
 	t.Helper()
 	key, err := PlatformKey(runtimeGOOS(), runtimeGOARCH())
