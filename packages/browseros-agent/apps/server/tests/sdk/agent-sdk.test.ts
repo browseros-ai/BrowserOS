@@ -6,7 +6,7 @@
  * Tests the SDK against a real BrowserOS server.
  */
 
-import { afterAll, beforeAll, describe, it } from 'bun:test'
+import { afterAll, beforeAll, beforeEach, describe, it } from 'bun:test'
 import assert from 'node:assert'
 import { Agent } from '@browseros-ai/agent-sdk'
 
@@ -41,6 +41,11 @@ async function getRuntimeWindow(
 beforeAll(async () => {
   config = await ensureBrowserOS()
   runtimeWindowId = await getRuntimeWindow(config)
+}, 60000)
+
+beforeEach(async () => {
+  // Keep the test server/browser alive across longer SDK suites.
+  config = await ensureBrowserOS(config)
 }, 60000)
 
 afterAll(async () => {

@@ -1,21 +1,14 @@
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { defineWebExtConfig } from 'wxt'
 
 // biome-ignore lint/style/noProcessEnv: config file needs env access
 const env = process.env
 
-const MONOREPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..')
-const CONTROLLER_EXT_DIR = join(MONOREPO_ROOT, 'apps/controller-ext/dist')
-
 const chromiumArgs = [
   '--use-mock-keychain',
   '--show-component-extension-options',
   '--disable-browseros-server',
-  '--disable-browseros-extensions',
   '--hide-crash-restore-bubble',
   '--disable-session-crashed-bubble',
-  `--load-extension=${CONTROLLER_EXT_DIR}`,
 ]
 
 if (env.BROWSEROS_CDP_PORT) {

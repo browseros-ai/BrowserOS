@@ -50,7 +50,8 @@ export const ConnectMCP: FC = () => {
   const { trigger: submitApiKeyMutation, isMutating: isSubmittingApiKey } =
     useSubmitApiKey()
 
-  const { data: serversList } = useGetMCPServersList()
+  const { data: serversList, isLoading: isServersListLoading } =
+    useGetMCPServersList()
 
   const {
     data: userMCPIntegrations,
@@ -337,7 +338,7 @@ export const ConnectMCP: FC = () => {
       <AvailableManagedServers
         availableServers={availableServers}
         onAddServer={addManagedServer}
-        isLoading={false}
+        isLoading={isServersListLoading}
       />
 
       <AddManagedMCPDialog

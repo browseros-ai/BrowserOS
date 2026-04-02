@@ -622,8 +622,8 @@ export const NewTab = () => {
             </AnimatePresence>
 
             {mounted && (
-              <div className="flex flex-wrap items-center justify-between gap-y-2 border-border/50 border-t px-3 py-2.5 sm:px-5 sm:py-3">
-                <div className="flex min-w-0 flex-wrap items-center gap-1">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-border/50 border-t px-3 py-2.5 sm:justify-between sm:px-5 sm:py-3">
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
                   {selectedProvider && (
                     <ChatProviderSelector
                       providers={providers}
@@ -696,7 +696,7 @@ export const NewTab = () => {
                 </div>
 
                 {supports(Feature.MANAGED_MCP_SUPPORT) && (
-                  <div className="ml-auto flex items-center gap-1.5">
+                  <div className="flex w-full flex-wrap items-center justify-end gap-1.5 sm:ml-auto sm:w-auto sm:flex-nowrap">
                     {connectedManagedServers.length === 0 && (
                       <span className="flex items-center gap-1 font-semibold text-[var(--accent-orange)] text-sm">
                         New!

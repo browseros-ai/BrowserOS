@@ -37,37 +37,43 @@ async function createFileTree() {
 }
 
 describe('filesystem_find', () => {
+  const normalize = (text: string) => text.replaceAll('\\', '/')
+
   it('finds files matching a glob pattern', async () => {
     await createFileTree()
     const result = await exec({ pattern: '*.ts' })
+    const text = normalize(result.text)
     expect(result.isError).toBeUndefined()
-    expect(result.text).toContain('index.ts')
-    expect(result.text).toContain('utils.ts')
-    expect(result.text).toContain('index.test.ts')
+    expect(text).toContain('index.ts')
+    expect(text).toContain('utils.ts')
+    expect(text).toContain('index.test.ts')
   })
 
   it('finds tsx files', async () => {
     await createFileTree()
     const result = await exec({ pattern: '*.tsx' })
-    expect(result.text).toContain('button.tsx')
-    expect(result.text).toContain('modal.tsx')
-    expect(result.text).not.toContain('.ts\n')
+    const text = normalize(result.text)
+    expect(text).toContain('button.tsx')
+    expect(text).toContain('modal.tsx')
+    expect(text).not.toContain('.ts\n')
   })
 
   it('uses ** automatically for simple patterns', async () => {
     await createFileTree()
     const result = await exec({ pattern: '*.ts' })
+    const text = normalize(result.text)
     // Should find nested files too
-    expect(result.text).toContain('src/index.ts')
-    expect(result.text).toContain('tests/index.test.ts')
+    expect(text).toContain('src/index.ts')
+    expect(text).toContain('tests/index.test.ts')
   })
 
   it('supports explicit recursive patterns', async () => {
     await createFileTree()
     const result = await exec({ pattern: 'src/**/*.ts' })
-    expect(result.text).toContain('src/index.ts')
-    expect(result.text).toContain('src/utils.ts')
-    expect(result.text).not.toContain('tests/')
+    const text = normalize(result.text)
+    expect(text).toContain('src/index.ts')
+    expect(text).toContain('src/utils.ts')
+    expect(text).not.toContain('tests/')
   })
 
   it('limits results', async () => {

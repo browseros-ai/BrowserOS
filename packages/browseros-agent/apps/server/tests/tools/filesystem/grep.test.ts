@@ -45,12 +45,15 @@ async function createTestFiles() {
 }
 
 describe('filesystem_grep', () => {
+  const normalize = (text: string) => text.replaceAll('\\', '/')
+
   it('finds matches across files', async () => {
     await createTestFiles()
     const result = await exec({ pattern: 'foo' })
+    const text = normalize(result.text)
     expect(result.isError).toBeUndefined()
-    expect(result.text).toContain('src/main.ts')
-    expect(result.text).toContain('src/utils.ts')
+    expect(text).toContain('src/main.ts')
+    expect(text).toContain('src/utils.ts')
   })
 
   it('returns line numbers', async () => {

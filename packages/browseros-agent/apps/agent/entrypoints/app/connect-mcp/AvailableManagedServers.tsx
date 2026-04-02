@@ -30,7 +30,7 @@ export const AvailableManagedServers: FC<AvailableManagedServersProps> = ({
             <p className="text-muted-foreground text-sm">
               {isLoading
                 ? 'Loading...'
-                : `${availableServers?.length} apps available`}
+                : `${availableServers?.length ?? 0} apps available`}
             </p>
           </div>
           <ChevronDown

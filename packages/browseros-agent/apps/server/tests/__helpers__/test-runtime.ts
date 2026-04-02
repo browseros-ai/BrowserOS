@@ -1,12 +1,59 @@
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TEST_PORTS } from '@browseros/shared/constants/ports'
 
-const DEFAULT_BINARY_PATH =
-  process.env.BROWSEROS_BINARY ??
-  '/Applications/BrowserOS.app/Contents/MacOS/BrowserOS'
+function getDefaultBinaryPath(): string {
+  if (process.env.BROWSEROS_BINARY) {
+    return process.env.BROWSEROS_BINARY
+  }
+
+  if (process.platform === 'win32') {
+    const candidates = [
+      process.env.LOCALAPPDATA
+        ? join(
+            process.env.LOCALAPPDATA,
+            'Chromium',
+            'Application',
+            'chrome.exe',
+          )
+        : '',
+      process.env.LOCALAPPDATA
+        ? join(
+            process.env.LOCALAPPDATA,
+            'BrowserOS',
+            'Application',
+            'BrowserOS.exe',
+          )
+        : '',
+      'C:\\Program Files\\BrowserOS\\BrowserOS.exe',
+      'C:\\Program Files (x86)\\BrowserOS\\BrowserOS.exe',
+    ].filter(Boolean)
+
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) {
+        return candidate
+      }
+    }
+
+    // Fall back to the commonly used dev Chromium path.
+    return join(
+      process.env.LOCALAPPDATA ?? 'C:\\Users\\Public\\AppData\\Local',
+      'Chromium',
+      'Application',
+      'chrome.exe',
+    )
+  }
+
+  if (process.platform === 'darwin') {
+    return '/Applications/BrowserOS.app/Contents/MacOS/BrowserOS'
+  }
+
+  return '/usr/bin/browseros'
+}
+
+const DEFAULT_BINARY_PATH = getDefaultBinaryPath()
 const PORT_SCAN_RANGE = 100
 
 export interface RuntimePorts {

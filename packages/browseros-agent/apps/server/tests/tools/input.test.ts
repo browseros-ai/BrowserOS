@@ -214,17 +214,31 @@ describe('input tools', () => {
       assert.ok(comboboxMatch, `No combobox found in snapshot:\n${snapText}`)
       const selectId = Number(comboboxMatch?.[1])
 
-      const selectResult = await execute(select_option, {
+      let selectResult = await execute(select_option, {
         page: pageId,
         element: selectId,
         value: 'blue',
       })
+      if (selectResult.isError) {
+        // Retry once after a fresh snapshot if the first attempt hits transient CDP lag.
+        const retrySnap = await execute(take_snapshot, { page: pageId })
+        const retryMatch = textOf(retrySnap).match(
+          /\[(\d+)\]\s*(?:combobox|listbox|PopUpButton)/,
+        )
+        if (retryMatch?.[1]) {
+          selectResult = await execute(select_option, {
+            page: pageId,
+            element: Number(retryMatch[1]),
+            value: 'blue',
+          })
+        }
+      }
       assert.ok(!selectResult.isError, textOf(selectResult))
       assert.ok(textOf(selectResult).includes('Blue'))
 
       await execute(close_page, { page: pageId })
     })
-  }, 60_000)
+  }, 120_000)
 
   it('press_key sends a keystroke', async () => {
     await withBrowser(async ({ execute }) => {

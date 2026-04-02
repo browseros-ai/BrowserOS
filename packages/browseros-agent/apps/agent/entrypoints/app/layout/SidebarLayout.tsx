@@ -116,13 +116,21 @@ export const SidebarLayout: FC = () => {
           <main
             className="min-h-screen overflow-y-auto transition-all duration-200 ease-in-out"
             style={{
-              // Keep content centered within the usable viewport area
-              // (full width minus fixed left sidebar and optional right panel space).
-              paddingLeft: sidebarOpen ? 260 : 60,
-              paddingRight: sidebarOpen ? 420 : 0,
+              // Keep content width stable while the sidebar expands.
+              // Expanded sidebar overlays content instead of shrinking the center panel.
+              paddingLeft: 60,
+              paddingRight: 0,
             }}
           >
-            <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+            <div
+              className="mx-auto w-full max-w-4xl px-4 py-8 transition-transform duration-200 ease-in-out sm:px-6 lg:px-8"
+              style={{
+                // Shift content right without reducing layout width.
+                transform: sidebarOpen
+                  ? 'translateX(clamp(0px, 12vw, 200px))'
+                  : 'translateX(0px)',
+              }}
+            >
               <Outlet />
             </div>
           </main>

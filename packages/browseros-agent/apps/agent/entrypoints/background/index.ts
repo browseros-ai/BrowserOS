@@ -33,6 +33,11 @@ const BROWSEROS_INTERNAL_URL_PREFIX = 'chrome://browseros/'
 
 function shouldReplaceWithBrowserOSHome(url?: string): boolean {
   if (!url) return true
+  if (url.startsWith('chrome-extension://') && !isBrowserOSAppUrl(url)) {
+    // Stale/foreign extension pages can show ERR_BLOCKED_BY_CLIENT at startup.
+    // Treat them like replaceable new-tab placeholders.
+    return true
+  }
   return (
     url.startsWith(BROWSEROS_INTERNAL_URL_PREFIX) ||
     url === 'about:blank' ||

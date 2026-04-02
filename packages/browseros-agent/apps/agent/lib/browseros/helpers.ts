@@ -3,6 +3,34 @@ import { getBrowserOSAdapter } from './adapter'
 import { Capabilities, Feature } from './capabilities'
 import { BROWSEROS_PREFS } from './prefs'
 
+/**
+ * Prefer the port embedded in VITE_PUBLIC_BROWSEROS_API so chat/MCP/health use the
+ * same origin as GraphQL without keeping VITE_BROWSEROS_SERVER_PORT in sync manually.
+ */
+function getPortFromPublicBrowserosApi(): number | undefined {
+  const raw = env.VITE_PUBLIC_BROWSEROS_API?.trim()
+  if (!raw) return undefined
+  try {
+    const u = new URL(raw)
+    if (u.port !== '') {
+      const n = Number.parseInt(u.port, 10)
+      return Number.isNaN(n) ? undefined : n
+    }
+  } catch {
+    return undefined
+  }
+  return undefined
+}
+
+function getConfiguredLocalServerPort(): number | undefined {
+  const fromApi = getPortFromPublicBrowserosApi()
+  if (fromApi !== undefined) return fromApi
+  if (env.VITE_BROWSEROS_SERVER_PORT !== undefined) {
+    return env.VITE_BROWSEROS_SERVER_PORT
+  }
+  return undefined
+}
+
 export class AgentPortError extends Error {
   constructor() {
     super('Agent server port not configured.')
@@ -33,8 +61,9 @@ export async function getAgentServerUrl(): Promise<string> {
 }
 
 async function getAgentPort(): Promise<number> {
-  if (env.VITE_BROWSEROS_SERVER_PORT) {
-    return env.VITE_BROWSEROS_SERVER_PORT
+  const configured = getConfiguredLocalServerPort()
+  if (configured !== undefined) {
+    return configured
   }
 
   try {
@@ -52,8 +81,9 @@ async function getAgentPort(): Promise<number> {
 }
 
 async function getMcpPort(): Promise<number> {
-  if (env.VITE_BROWSEROS_SERVER_PORT) {
-    return env.VITE_BROWSEROS_SERVER_PORT
+  const configured = getConfiguredLocalServerPort()
+  if (configured !== undefined) {
+    return configured
   }
 
   try {
@@ -91,8 +121,9 @@ export class ProxyPortError extends Error {
 }
 
 async function getProxyPort(): Promise<number> {
-  if (env.VITE_BROWSEROS_SERVER_PORT) {
-    return env.VITE_BROWSEROS_SERVER_PORT
+  const configured = getConfiguredLocalServerPort()
+  if (configured !== undefined) {
+    return configured
   }
 
   try {

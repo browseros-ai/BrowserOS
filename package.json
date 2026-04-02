@@ -1,0 +1,8 @@
+{
+  "name": "shimmy-browser",
+  "private": true,
+  "scripts": {
+    "dev": "bun packages/browseros-agent/scripts/dev/stack.ts",
+    "start": "bun packages/browseros-agent/scripts/dev/stack.ts"
+  }
+}
