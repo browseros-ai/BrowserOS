@@ -145,6 +145,7 @@ export const AISettingsPage: FC = () => {
 
   const [isNewDialogOpen, setIsNewDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [isCloningAction, setIsCloningAction] = useState(false)
   const [templateValues, setTemplateValues] = useState<
     Partial<LlmProviderConfig> | undefined
   >()
@@ -210,9 +211,14 @@ export const AISettingsPage: FC = () => {
     },
   }
 
+  const setIsNewDialogOpenAndCloning = (_isNew: boolean, _isCloning: boolean) => {
+    setIsCloningAction(_isCloning)
+    setIsNewDialogOpen(_isNew)
+  }
+
   const handleAddProvider = () => {
     setTemplateValues(undefined)
-    setIsNewDialogOpen(true)
+    setIsNewDialogOpenAndCloning(true, false)
   }
 
   const handleUseTemplate = (template: ProviderTemplate) => {
@@ -232,7 +238,7 @@ export const AISettingsPage: FC = () => {
       contextWindow: template.contextWindow,
       temperature: 0.2,
     })
-    setIsNewDialogOpen(true)
+    setIsNewDialogOpenAndCloning(true, false)
   }
 
   const handleEditProvider = (
@@ -242,12 +248,12 @@ export const AISettingsPage: FC = () => {
     if (isCloning) {
       setTemplateValues({
         ...provider,
-        name: `${provider.name} Copy`,
+        name: `${provider.name.replace(/\s+Copy$/g, '')} Copy`,
         id: undefined,
         createdAt: undefined,
         updatedAt: undefined,
       })
-      setIsNewDialogOpen(true)
+      setIsNewDialogOpenAndCloning(true, true)
       return
     }
 
@@ -290,7 +296,7 @@ export const AISettingsPage: FC = () => {
       createdAt: timestamp,
       updatedAt: timestamp,
     })
-    setIsNewDialogOpen(true)
+    setIsNewDialogOpenAndCloning(true, false)
   }
 
   const handleDeleteIncompleteProvider = (provider: IncompleteProvider) => {
@@ -396,9 +402,13 @@ export const AISettingsPage: FC = () => {
 
       <NewProviderDialog
         open={isNewDialogOpen}
-        onOpenChange={setIsNewDialogOpen}
+        onOpenChange={(open) => {
+          setIsCloningAction(false)
+          setIsNewDialogOpen(open)
+        }}
         initialValues={templateValues}
         onSave={handleSaveProvider}
+        isCloningAction={isCloningAction}
       />
 
       <NewProviderDialog

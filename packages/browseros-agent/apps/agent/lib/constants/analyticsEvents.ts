@@ -33,6 +33,9 @@ export const AI_PROVIDER_ADDED_EVENT = 'settings.ai_provider.added'
 export const AI_PROVIDER_UPDATED_EVENT = 'settings.ai_provider.updated'
 
 /** @public */
+export const AI_PROVIDER_CLONED_EVENT = 'settings.ai_provider.cloned'
+
+/** @public */
 export const MODEL_SELECTED_EVENT = 'settings.model.selected'
 
 /** @public */

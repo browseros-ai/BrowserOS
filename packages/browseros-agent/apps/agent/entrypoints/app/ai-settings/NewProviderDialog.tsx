@@ -57,6 +57,7 @@ import { useCapabilities } from '@/lib/browseros/useCapabilities'
 import {
   AI_PROVIDER_ADDED_EVENT,
   AI_PROVIDER_UPDATED_EVENT,
+  AI_PROVIDER_CLONED_EVENT,
   KIMI_API_KEY_CONFIGURED_EVENT,
   KIMI_API_KEY_GUIDE_CLICKED_EVENT,
   MODEL_SELECTED_EVENT,
@@ -207,6 +208,8 @@ export interface NewProviderDialogProps {
   initialValues?: Partial<LlmProviderConfig>
   /** Callback when provider is saved */
   onSave: (provider: LlmProviderConfig) => Promise<void>
+  /** Whether the dialog is for cloning an existing provider */
+  isCloningAction?: boolean
 }
 
 /**
@@ -218,6 +221,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   onOpenChange,
   initialValues,
   onSave,
+  isCloningAction,
 }) => {
   const [isTesting, setIsTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestResult | null>(null)
@@ -400,7 +404,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 
     await onSave(provider)
     if (isNewProvider) {
-      track(AI_PROVIDER_ADDED_EVENT, {
+      track(isCloningAction ? AI_PROVIDER_CLONED_EVENT : AI_PROVIDER_ADDED_EVENT, {
         provider_type: values.type,
         model: values.modelId,
       })
