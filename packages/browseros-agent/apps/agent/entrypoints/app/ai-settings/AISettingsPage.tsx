@@ -235,7 +235,22 @@ export const AISettingsPage: FC = () => {
     setIsNewDialogOpen(true)
   }
 
-  const handleEditProvider = (provider: LlmProviderConfig) => {
+  const handleEditProvider = (
+    provider: LlmProviderConfig,
+    isCloning = false,
+  ) => {
+    if (isCloning) {
+      setTemplateValues({
+        ...provider,
+        name: `${provider.name} Copy`,
+        id: undefined,
+        createdAt: undefined,
+        updatedAt: undefined,
+      })
+      setIsNewDialogOpen(true)
+      return
+    }
+
     setEditingProvider(provider)
     setIsEditDialogOpen(true)
   }

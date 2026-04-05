@@ -13,7 +13,7 @@ interface ProviderCardProps {
   isBuiltIn: boolean
   onSelect: () => void
   onTest?: () => void
-  onEdit?: () => void
+  onEdit?: (isCloning?: boolean) => void
   onDelete?: () => void
   isTesting?: boolean
 }
@@ -112,6 +112,9 @@ export const ProviderCard: FC<ProviderCardProps> = ({
       </div>
       {!isBuiltIn && (
         <div className="flex shrink-0 items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => onEdit?.(true)}>
+            Clone
+          </Button>
           <Button
             variant="outline"
             size="sm"

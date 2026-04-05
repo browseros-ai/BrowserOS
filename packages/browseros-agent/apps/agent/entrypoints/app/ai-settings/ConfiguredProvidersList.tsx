@@ -8,7 +8,7 @@ interface ConfiguredProvidersListProps {
   testingProviderId: string | null
   onSelectProvider: (providerId: string) => void
   onTestProvider: (provider: LlmProviderConfig) => void
-  onEditProvider: (provider: LlmProviderConfig) => void
+  onEditProvider: (provider: LlmProviderConfig, isCloning?: boolean) => void
   onDeleteProvider: (provider: LlmProviderConfig) => void
 }
 
@@ -38,7 +38,7 @@ export const ConfiguredProvidersList: FC<ConfiguredProvidersListProps> = ({
             isTesting={testingProviderId === provider.id}
             onSelect={() => onSelectProvider(provider.id)}
             onTest={() => onTestProvider(provider)}
-            onEdit={() => onEditProvider(provider)}
+            onEdit={(isCloning) => onEditProvider(provider, isCloning)}
             onDelete={() => onDeleteProvider(provider)}
           />
         )
