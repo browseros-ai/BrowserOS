@@ -45,7 +45,7 @@ export const TIPS: Tip[] = [
   },
   {
     id: 'mcp-servers',
-    text: 'Add MCP servers for Google Calendar, Gmail, Notion, and more to build multi-service workflows.',
+    text: 'Add MCP servers for Google Calendar, Gmail, Notion, and more to power multi-service automations.',
   },
   {
     id: 'skills',
@@ -74,10 +74,6 @@ export const TIPS: Tip[] = [
   {
     id: 'at-mention-tabs',
     text: 'Type @ in the search bar to mention and attach open tabs as context for your AI queries.',
-  },
-  {
-    id: 'workflows',
-    text: 'For complex repeatable tasks, build visual Workflows instead of one-off prompts for consistent results.',
   },
   {
     id: 'mode-selection',

@@ -141,21 +141,6 @@ Prefix: `browseros.native.extension.`
 | `settings.scheduled_task.cancelled` | — | Running task was cancelled |
 | `settings.scheduled_task.retried` | — | Task run was retried |
 
-### Settings — Workflows
-
-| Event | Properties | Description |
-|-------|-----------|-------------|
-| `settings.graph.created` | — | New workflow graph created |
-| `settings.graph.saved` | — | Workflow graph saved |
-| `settings.graph.updated` | — | Workflow graph updated |
-| `settings.graph.message.like` | — | Workflow message liked |
-| `settings.graph.message.dislike` | — | Workflow message disliked |
-| `settings.workflow.deleted` | — | Workflow deleted |
-| `settings.workflow.run_started` | — | Workflow run started |
-| `settings.workflow.run_stopped` | — | Workflow run stopped |
-| `settings.workflow.run_retried` | — | Workflow run retried |
-| `settings.workflow.run_completed` | — | Workflow run completed |
-
 ### Onboarding
 
 | Event | Properties | Description |

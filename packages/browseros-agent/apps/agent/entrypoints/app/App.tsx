@@ -11,7 +11,6 @@ import { Onboarding } from '../onboarding/index/Onboarding'
 import { StepsLayout } from '../onboarding/steps/StepsLayout'
 import { AISettingsPage } from './ai-settings/AISettingsPage'
 import { ConnectMCP } from './connect-mcp/ConnectMCP'
-import { CreateGraphWrapper } from './create-graph/CreateGraphWrapper'
 import { CustomizationPage } from './customization/CustomizationPage'
 import { SurveyPage } from './jtbd-agent/SurveyPage'
 import { AuthLayout } from './layout/AuthLayout'
@@ -29,7 +28,6 @@ import { SearchProviderPage } from './search-provider/SearchProviderPage'
 import { SkillsPage } from './skills/SkillsPage'
 import { SoulPage } from './soul/SoulPage'
 import { UsagePage } from './usage/UsagePage'
-import { WorkflowsPageWrapper } from './workflows/WorkflowsPageWrapper'
 
 function getSurveyParams(): { maxTurns?: number; experimentId?: string } {
   const params = new URLSearchParams(window.location.search)
@@ -53,9 +51,7 @@ const OptionsRedirect: FC = () => {
     soul: '/home/soul',
     skills: '/home/skills',
     'jtbd-agent': '/settings/survey',
-    workflows: '/workflows',
     scheduled: '/scheduled',
-    'create-graph': '/workflows/create-graph',
   }
 
   const newPath = routeMap[path] || '/settings/ai'
@@ -90,7 +86,6 @@ export const App: FC = () => {
 
           {/* Primary nav routes */}
           <Route path="connect-apps" element={<ConnectMCP />} />
-          <Route path="workflows" element={<WorkflowsPageWrapper />} />
           <Route path="scheduled" element={<ScheduledTasksPage />} />
         </Route>
 
@@ -107,9 +102,6 @@ export const App: FC = () => {
             <Route path="usage" element={<UsagePage />} />
           </Route>
         </Route>
-
-        {/* Full-screen without sidebar */}
-        <Route path="workflows/create-graph" element={<CreateGraphWrapper />} />
 
         {/* Onboarding routes - no sidebar, no auth required */}
         <Route path="onboarding">
