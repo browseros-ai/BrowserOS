@@ -1,0 +1,30 @@
+{
+  "tool_name": "click",
+  "page_url": "https://shop.example.com/checkout",
+  "element": {
+    "tagName": "button",
+    "textContent": "Place Order",
+    "attributes": {
+      "id": "submit-btn",
+      "class": "primary checkout",
+      "name": "place-order"
+    },
+    "labelText": "",
+    "ariaLabel": "Place Order",
+    "role": "button"
+  },
+  "rules": [
+    {
+      "id": "checkout-submit",
+      "sitePattern": "*",
+      "description": "block checkout submit button",
+      "enabled": true
+    },
+    {
+      "id": "profile-save",
+      "sitePattern": "example.com/account",
+      "description": "save profile changes",
+      "enabled": true
+    }
+  ]
+}
