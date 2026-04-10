@@ -148,7 +148,7 @@ When creating new packages in this monorepo:
 ## Test Organization
 
 Tests are in `apps/server/tests/`:
-- `tools/` - Tool tests (require BrowserOS running with CDP)
+- `tools/` - Tool tests (require BrowserOS running with CDP), plus ACL scorer tests (standalone)
 - `browser/` - Browser backend tests
 - `agent/` - Agent tests (compaction, rate limiter)
 - `sdk/` - Agent SDK tests

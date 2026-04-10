@@ -1,8 +1,8 @@
-import { matchesElement, matchesSitePattern } from '@browseros/shared/acl/match'
+import { matchesSitePattern } from '@browseros/shared/acl/match'
 import type { AclRule } from '@browseros/shared/types/acl'
-import type { Browser } from '../browser/browser'
-import { logger } from '../lib/logger'
-import { checkAclWithPython } from './acl-python-client'
+import type { Browser } from '../../browser/browser'
+import { logger } from '../../lib/logger'
+import { scoreFixture } from './acl-scorer'
 
 const GUARDED_TOOLS = new Set([
   'click',
@@ -84,7 +84,7 @@ export async function checkAcl(
     (r) => !r.selector && !r.textMatch && !r.description,
   )
   if (siteOnlyRule) {
-    logger.info('ACL blocked by TypeScript site-only rule', {
+    logger.info('ACL blocked by site-only rule', {
       toolName,
       pageId,
       pageUrl: pageInfo.url,
@@ -105,51 +105,22 @@ export async function checkAcl(
   const props = await browser.resolveElementProperties(pageId, elementId)
   if (!props) return { blocked: false }
 
-  const pythonCheck = await checkAclWithPython({
-    toolName,
-    pageUrl: pageInfo.url,
-    element: props,
-    rules,
-  })
-  if (pythonCheck) {
-    logger.info('ACL Python decision', {
+  const decision = await scoreFixture(toolName, pageInfo.url, props, siteRules)
+
+  if (decision.blocked) {
+    const matchedRule = decision.matchedRuleId
+      ? rules.find((rule) => rule.id === decision.matchedRuleId)
+      : undefined
+    logger.info('ACL blocked by scorer', {
       toolName,
       pageId,
       pageUrl: pageInfo.url,
       elementId,
-      blocked: pythonCheck.blocked,
-      matchedRuleId: pythonCheck.matchedRuleId,
-      confidence: pythonCheck.confidence,
-      semanticScore: pythonCheck.semanticScore,
-      semanticBackend: pythonCheck.semanticBackend,
+      ruleId: decision.matchedRuleId,
+      confidence: decision.confidence,
+      reason: decision.reason,
     })
-    const matchedRule = pythonCheck.matchedRuleId
-      ? rules.find((rule) => rule.id === pythonCheck.matchedRuleId)
-      : undefined
-    return pythonCheck.blocked
-      ? { blocked: true, rule: matchedRule, pageId, elementId }
-      : { blocked: false }
-  }
-
-  logger.info('ACL Python matcher disabled; using TypeScript matcher', {
-    toolName,
-    pageId,
-    pageUrl: pageInfo.url,
-    elementId,
-  })
-
-  for (const rule of siteRules) {
-    if (matchesElement(props, rule)) {
-      logger.info('ACL blocked by TypeScript matcher', {
-        toolName,
-        pageId,
-        pageUrl: pageInfo.url,
-        elementId,
-        ruleId: rule.id,
-        sitePattern: rule.sitePattern,
-      })
-      return { blocked: true, rule, pageId, elementId }
-    }
+    return { blocked: true, rule: matchedRule, pageId, elementId }
   }
 
   return { blocked: false }

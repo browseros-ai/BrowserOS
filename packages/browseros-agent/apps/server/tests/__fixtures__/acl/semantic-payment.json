@@ -1,0 +1,22 @@
+{
+  "tool_name": "click",
+  "page_url": "https://store.example.com/cart",
+  "element": {
+    "tagName": "button",
+    "textContent": "Proceed to Checkout",
+    "attributes": {
+      "id": "checkout-btn",
+      "class": "btn-primary cart-action"
+    },
+    "ariaLabel": "Proceed to Checkout",
+    "role": "button"
+  },
+  "rules": [
+    {
+      "id": "block-payments",
+      "sitePattern": "*",
+      "description": "prevent any purchase or payment actions",
+      "enabled": true
+    }
+  ]
+}

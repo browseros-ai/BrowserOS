@@ -1,0 +1,28 @@
+{
+  "tool_name": "click",
+  "page_url": "https://app.example.com/dashboard",
+  "element": {
+    "tagName": "button",
+    "textContent": "View Report",
+    "attributes": {
+      "id": "view-report",
+      "class": "btn-secondary"
+    },
+    "ariaLabel": "View Report",
+    "role": "button"
+  },
+  "rules": [
+    {
+      "id": "block-payments",
+      "sitePattern": "*",
+      "description": "prevent any purchase or payment actions",
+      "enabled": true
+    },
+    {
+      "id": "block-delete",
+      "sitePattern": "*",
+      "description": "block account deletion or destruction",
+      "enabled": true
+    }
+  ]
+}
