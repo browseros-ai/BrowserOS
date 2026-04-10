@@ -18,17 +18,26 @@ async function generateCatalog(): Promise<RemoteSkillCatalog> {
   const entries = await readdir(DEFAULTS_DIR)
   const skills: RemoteSkillEntry[] = []
 
-  for (const entry of entries) {
+  const skillPromises = entries.map(async (entry) => {
     const entryPath = join(DEFAULTS_DIR, entry)
     const info = await stat(entryPath)
-    if (!info.isDirectory()) continue
+    if (!info.isDirectory()) return null
 
     const skillPath = join(entryPath, 'SKILL.md')
     try {
       const content = await readFile(skillPath, 'utf-8')
-      skills.push({ id: entry, version: extractVersion(content), content })
+      return { id: entry, version: extractVersion(content), content }
     } catch {
       console.error(`Skipping ${entry}: no SKILL.md found`)
+      return null
+    }
+  })
+
+  const resolvedSkills = await Promise.all(skillPromises)
+
+  for (const skill of resolvedSkills) {
+    if (skill !== null) {
+      skills.push(skill)
     }
   }
 
