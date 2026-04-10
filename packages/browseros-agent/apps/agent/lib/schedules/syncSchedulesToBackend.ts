@@ -80,26 +80,9 @@ function getRemoteUpdatedAt(remote: RemoteScheduledJob): Date {
   return new Date(normalizeTimestamp(remote.updatedAt))
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: TODO(dani) refactor to reduce complexity
-export async function syncSchedulesToBackend(
-  localJobs: ScheduledJob[],
-  userId: string,
+async function handlePendingDeletions(
+  remoteJobs: Map<string, RemoteScheduledJob>,
 ): Promise<void> {
-  const profileResult = await execute(GetProfileIdByUserIdDocument, { userId })
-  const profileId = profileResult.profileByUserId?.rowId
-  if (!profileId) return
-
-  const remoteResult = await execute(GetScheduledJobsByProfileIdDocument, {
-    profileId,
-  })
-
-  const remoteJobs = new Map<string, RemoteScheduledJob>()
-  for (const node of remoteResult.scheduledJobs?.nodes ?? []) {
-    if (node) {
-      remoteJobs.set(node.rowId, node as RemoteScheduledJob)
-    }
-  }
-
   const pendingDeletions = new Set(
     (await pendingDeletionStorage.getValue()) ?? [],
   )
@@ -125,8 +108,12 @@ export async function syncSchedulesToBackend(
   await pendingDeletionStorage.setValue(
     latestPending.filter((id) => !resolvedDeletions.has(id)),
   )
+}
 
-  const localJobsMap = new Map(localJobs.map((j) => [j.id, j]))
+async function syncRemoteToLocal(
+  remoteJobs: Map<string, RemoteScheduledJob>,
+  localJobsMap: Map<string, ScheduledJob>,
+): Promise<void> {
   const jobsToAddLocally: ScheduledJob[] = []
   const jobsToUpdateLocally: ScheduledJob[] = []
 
@@ -171,7 +158,13 @@ export async function syncSchedulesToBackend(
       }
     }
   }
+}
 
+async function syncLocalToRemote(
+  localJobs: ScheduledJob[],
+  remoteJobs: Map<string, RemoteScheduledJob>,
+  profileId: string,
+): Promise<void> {
   for (const job of localJobs) {
     try {
       const remote = remoteJobs.get(job.id)
@@ -233,4 +226,32 @@ export async function syncSchedulesToBackend(
       })
     }
   }
+}
+
+export async function syncSchedulesToBackend(
+  localJobs: ScheduledJob[],
+  userId: string,
+): Promise<void> {
+  const profileResult = await execute(GetProfileIdByUserIdDocument, { userId })
+  const profileId = profileResult.profileByUserId?.rowId
+  if (!profileId) return
+
+  const remoteResult = await execute(GetScheduledJobsByProfileIdDocument, {
+    profileId,
+  })
+
+  const remoteJobs = new Map<string, RemoteScheduledJob>()
+  for (const node of remoteResult.scheduledJobs?.nodes ?? []) {
+    if (node) {
+      remoteJobs.set(node.rowId, node as RemoteScheduledJob)
+    }
+  }
+
+  await handlePendingDeletions(remoteJobs)
+
+  const localJobsMap = new Map(localJobs.map((j) => [j.id, j]))
+
+  await syncRemoteToLocal(remoteJobs, localJobsMap)
+
+  await syncLocalToRemote(localJobs, remoteJobs, profileId)
 }
