@@ -260,28 +260,32 @@ export class OAuthTokenManager {
     const deadline = Date.now() + expiresIn * 1000
     const useForm = provider.deviceCodeContentType === 'form'
 
+    const params: Record<string, string> = {
+      client_id: provider.clientId,
+      device_code: deviceCode,
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+    }
+    if (codeVerifier) params.code_verifier = codeVerifier
+
+    const requestBody = useForm
+      ? new URLSearchParams(params).toString()
+      : JSON.stringify(params)
+
+    const requestHeaders = {
+      Accept: 'application/json',
+      'Content-Type': useForm
+        ? 'application/x-www-form-urlencoded'
+        : 'application/json',
+    }
+
     while (Date.now() < deadline) {
       await sleep(interval * 1000 + TIMEOUTS.DEVICE_CODE_POLL_SAFETY_MARGIN)
 
       try {
-        const params: Record<string, string> = {
-          client_id: provider.clientId,
-          device_code: deviceCode,
-          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-        }
-        if (codeVerifier) params.code_verifier = codeVerifier
-
         const response = await fetch(provider.tokenEndpoint, {
           method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': useForm
-              ? 'application/x-www-form-urlencoded'
-              : 'application/json',
-          },
-          body: useForm
-            ? new URLSearchParams(params).toString()
-            : JSON.stringify(params),
+          headers: requestHeaders,
+          body: requestBody,
         })
 
         // WAF returned HTML instead of JSON — retry later
