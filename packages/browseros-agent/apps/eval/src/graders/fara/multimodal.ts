@@ -191,17 +191,26 @@ export class FaraMultimodalGrader implements Grader {
       indices.sort((a, b) => a - b)
     }
 
-    for (const i of indices) {
-      try {
-        const filepath = join(outputDir, 'screenshots', `${i}.png`)
-        const buffer = await readFile(filepath)
-        const base64 = buffer.toString('base64')
-        screenshots.push({
-          index: i,
-          data: `data:image/png;base64,${base64}`,
-        })
-      } catch {
-        // Skip missing files
+    const loadedScreenshots = await Promise.all(
+      indices.map(async (i) => {
+        try {
+          const filepath = join(outputDir, 'screenshots', `${i}.png`)
+          const buffer = await readFile(filepath)
+          const base64 = buffer.toString('base64')
+          return {
+            index: i,
+            data: `data:image/png;base64,${base64}`,
+          }
+        } catch {
+          // Skip missing files
+          return null
+        }
+      }),
+    )
+
+    for (const screenshot of loadedScreenshots) {
+      if (screenshot) {
+        screenshots.push(screenshot)
       }
     }
 
