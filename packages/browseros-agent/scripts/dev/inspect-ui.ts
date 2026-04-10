@@ -735,19 +735,21 @@ async function cmdPressKey(
     for (const mod of modifiers) modBitmask |= MODIFIER_BIT[mod] ?? 0
 
     // Press modifier keys down
-    for (const mod of modifiers) {
-      const info = getKeyInfo(mod)
-      await cdp.send(
-        'Input.dispatchKeyEvent',
-        {
-          type: 'keyDown',
-          key: mod,
-          code: info.code,
-          windowsVirtualKeyCode: info.keyCode,
-        },
-        sessionId,
-      )
-    }
+    await Promise.all(
+      modifiers.map((mod) => {
+        const info = getKeyInfo(mod)
+        return cdp.send(
+          'Input.dispatchKeyEvent',
+          {
+            type: 'keyDown',
+            key: mod,
+            code: info.code,
+            windowsVirtualKeyCode: info.keyCode,
+          },
+          sessionId,
+        )
+      }),
+    )
 
     const mainInfo = getKeyInfo(mainKey)
     const suppressChar = modifiers.some(
@@ -783,18 +785,20 @@ async function cmdPressKey(
     )
 
     // Release modifier keys
-    for (const mod of modifiers.reverse()) {
-      const info = getKeyInfo(mod)
-      await cdp.send(
-        'Input.dispatchKeyEvent',
-        {
-          type: 'keyUp',
-          key: mod,
-          code: info.code,
-        },
-        sessionId,
-      )
-    }
+    await Promise.all(
+      modifiers.reverse().map((mod) => {
+        const info = getKeyInfo(mod)
+        return cdp.send(
+          'Input.dispatchKeyEvent',
+          {
+            type: 'keyUp',
+            key: mod,
+            code: info.code,
+          },
+          sessionId,
+        )
+      }),
+    )
 
     console.log(`Pressed ${keyCombo}`)
   } finally {
