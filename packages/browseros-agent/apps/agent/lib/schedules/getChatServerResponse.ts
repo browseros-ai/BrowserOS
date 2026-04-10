@@ -8,6 +8,7 @@ import {
 } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { mcpServerStorage } from '@/lib/mcp/mcpServerStorage'
+import { buildChatRequestBody } from '@/lib/messaging/server/buildChatRequestBody'
 import { personalizationStorage } from '../personalization/personalizationStorage'
 import { scheduleSystemPrompt } from './scheduleSystemPrompt'
 import type { ToolCallExecution } from './scheduleTypes'
@@ -112,42 +113,31 @@ export async function getChatServerResponse(
     headers: {
       'Content-Type': 'application/json',
     },
-    // Important: this chat logic is also used in apps/agent/entrypoints/sidepanel/index/useChatSession.ts for sidepanel conversation. Make sure to keep them in sync for any future changes.
     body: JSON.stringify({
       messages: [{ role: 'user', content: request.message }],
-      message: request.message,
-      provider: provider?.type,
-      providerType: provider?.type,
-      providerName: provider?.name,
-      apiKey: provider?.apiKey,
-      baseUrl: provider?.baseUrl,
-      conversationId,
-      model: provider?.modelId ?? 'default',
-      mode: request.mode ?? 'agent',
-      contextWindowSize: provider?.contextWindow,
-      temperature: provider?.temperature,
-      resourceName: provider?.resourceName,
-      accessKeyId: provider?.accessKeyId,
-      secretAccessKey: provider?.secretAccessKey,
-      region: provider?.region,
-      sessionToken: provider?.sessionToken,
-      browserContext:
-        request.activeTab ||
-        request.windowId ||
-        enabledMcpServers.length ||
-        customMcpServers.length
-          ? {
-              windowId: request.windowId,
-              activeTab: request.activeTab,
-              enabledMcpServers:
-                enabledMcpServers.length > 0 ? enabledMcpServers : undefined,
-              customMcpServers:
-                customMcpServers.length > 0 ? customMcpServers : undefined,
-            }
-          : undefined,
-      userSystemPrompt: `${personalization}\n${scheduleSystemPrompt}`,
-      isScheduledTask: true,
-      supportsImages: provider?.supportsImages,
+      ...buildChatRequestBody({
+        message: request.message,
+        conversationId,
+        provider,
+        mode: request.mode ?? 'agent',
+        browserContext:
+          request.activeTab ||
+          request.windowId ||
+          enabledMcpServers.length ||
+          customMcpServers.length
+            ? {
+                windowId: request.windowId,
+                activeTab: request.activeTab,
+                enabledMcpServers:
+                  enabledMcpServers.length > 0 ? enabledMcpServers : undefined,
+                customMcpServers:
+                  customMcpServers.length > 0 ? customMcpServers : undefined,
+              }
+            : undefined,
+        userSystemPrompt: `${personalization}\n${scheduleSystemPrompt}`,
+        supportsImages: provider.supportsImages,
+        isScheduledTask: true,
+      }),
     }),
   })
 

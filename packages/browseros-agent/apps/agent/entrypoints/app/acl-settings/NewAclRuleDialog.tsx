@@ -76,8 +76,8 @@ export const NewAclRuleDialog: FC<NewAclRuleDialogProps> = ({
               onChange={(e) => setIntent(e.target.value)}
             />
             <p className="text-muted-foreground text-xs">
-              Use plain English. BrowserOS will apply broad protections for this
-              page during the demo.
+              Use plain English. BrowserOS will block matching actions on this
+              site.
             </p>
           </div>
         </div>

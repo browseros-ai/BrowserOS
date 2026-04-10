@@ -8,6 +8,9 @@ export type ToolInvocationState =
   | 'input-available'
   | 'output-available'
   | 'output-error'
+  | 'approval-requested'
+  | 'approval-responded'
+  | 'output-denied'
 
 export interface ToolInvocationInfo {
   state: ToolInvocationState
@@ -15,6 +18,7 @@ export interface ToolInvocationInfo {
   toolName: string
   input: Record<string, unknown>
   output: unknown[]
+  approval?: { id: string; approved?: boolean; reason?: string }
 }
 
 export type NudgeType = 'schedule_suggestion' | 'app_connection'
@@ -106,6 +110,7 @@ export const getMessageSegments = (
         state: ToolInvocationState
         input: Record<string, unknown>
         output: unknown
+        approval?: { id: string; approved?: boolean; reason?: string }
       }
       const toolName = toolPart.type?.replace('tool-', '')
 
@@ -127,6 +132,7 @@ export const getMessageSegments = (
           toolName,
           input: toolPart?.input ?? {},
           output: (toolPart?.output as unknown[]) ?? [],
+          approval: toolPart?.approval,
         })
       }
     }

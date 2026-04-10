@@ -33,6 +33,10 @@
       "types": "./src/constants/paths.ts",
       "default": "./src/constants/paths.ts"
     },
+    "./constants/tool-approval": {
+      "types": "./src/constants/tool-approval.ts",
+      "default": "./src/constants/tool-approval.ts"
+    },
     "./types/logger": {
       "types": "./src/types/logger.ts",
       "default": "./src/types/logger.ts"

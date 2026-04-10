@@ -27,6 +27,7 @@
       "dependencies": {
         "@ai-sdk/react": "^3.0.96",
         "@browseros/server": "workspace:*",
+        "@browseros/shared": "workspace:*",
         "@hookform/resolvers": "^5.2.2",
         "@lobehub/icons": "^2.44.0",
         "@mdxeditor/editor": "^3.52.4",

@@ -1,7 +1,8 @@
 import { z } from 'zod'
-import { defineTool } from './framework'
+import { defineToolWithCategory } from './framework'
 
 const pageParam = z.number().describe('Page ID (from list_pages)')
+const defineNavigationTool = defineToolWithCategory('navigation')
 const pageInfoSchema = z.object({
   pageId: z.number(),
   targetId: z.string(),
@@ -18,7 +19,7 @@ const pageInfoSchema = z.object({
   groupId: z.string().optional(),
 })
 
-export const get_active_page = defineTool({
+export const get_active_page = defineNavigationTool({
   name: 'get_active_page',
   description: 'Get the currently active (focused) page in the browser',
   input: z.object({}),
@@ -36,7 +37,7 @@ export const get_active_page = defineTool({
   },
 })
 
-export const list_pages = defineTool({
+export const list_pages = defineNavigationTool({
   name: 'list_pages',
   description: 'List all pages (tabs) currently open in the browser',
   input: z.object({}),
@@ -61,7 +62,7 @@ export const list_pages = defineTool({
   },
 })
 
-export const navigate_page = defineTool({
+export const navigate_page = defineNavigationTool({
   name: 'navigate_page',
   description: 'Navigate a page to a URL, or go back/forward/reload',
   input: z.object({
@@ -130,7 +131,7 @@ export const navigate_page = defineTool({
   },
 })
 
-export const new_page = defineTool({
+export const new_page = defineNavigationTool({
   name: 'new_page',
   description:
     'Open a new page (tab) and navigate to a URL. Opens in background by default to keep the user on their current page. Use group_tabs to organize related tabs.',
@@ -170,7 +171,7 @@ export const new_page = defineTool({
   },
 })
 
-export const new_hidden_page = defineTool({
+export const new_hidden_page = defineNavigationTool({
   name: 'new_hidden_page',
   description:
     'Open a new hidden page (tab) and navigate to a URL. Hidden pages are not visible to the user and useful for background data fetching or automation.',
@@ -203,7 +204,7 @@ export const new_hidden_page = defineTool({
   },
 })
 
-export const show_page = defineTool({
+export const show_page = defineNavigationTool({
   name: 'show_page',
   description:
     'Restore a hidden page back into a visible browser window. Use after new_hidden_page when you want the user to inspect or interact with it. Errors if the page is already visible.',
@@ -237,7 +238,7 @@ export const show_page = defineTool({
   },
 })
 
-export const move_page = defineTool({
+export const move_page = defineNavigationTool({
   name: 'move_page',
   description:
     'Move a page (tab) to a different window or position within a window.',
@@ -266,7 +267,7 @@ export const move_page = defineTool({
   },
 })
 
-export const close_page = defineTool({
+export const close_page = defineNavigationTool({
   name: 'close_page',
   description: 'Close a page (tab)',
   input: z.object({
@@ -295,7 +296,7 @@ export const close_page = defineTool({
   },
 })
 
-export const wait_for = defineTool({
+export const wait_for = defineNavigationTool({
   name: 'wait_for',
   description:
     'Wait for text or a CSS selector to appear on the page. Polls periodically up to a timeout.',

@@ -11,6 +11,8 @@ export interface AgentSession {
   mcpServerKey?: string
   /** Workspace directory when the session was created, for change detection. */
   workingDir?: string
+  /** Tool approval category key for change detection. */
+  approvalConfigKey?: string
 }
 
 export class SessionStore {

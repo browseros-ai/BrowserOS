@@ -1,5 +1,5 @@
 import type { AclRule } from '@browseros/shared/types/acl'
-import { Globe, Sparkles, Trash2 } from 'lucide-react'
+import { Globe, Trash2 } from 'lucide-react'
 import type { FC } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -40,10 +40,6 @@ export const AclRuleCard: FC<AclRuleCardProps> = ({
           <Badge variant="secondary" className="gap-1 font-mono text-xs">
             <Globe className="size-3" />
             {rule.sitePattern}
-          </Badge>
-          <Badge variant="outline" className="gap-1 text-xs">
-            <Sparkles className="size-3" />
-            Broad demo protection
           </Badge>
         </div>
       </div>

@@ -1,6 +1,7 @@
 import { z } from 'zod'
-import { defineTool } from './framework'
+import { defineToolWithCategory } from './framework'
 
+const defineManagementTool = defineToolWithCategory('data-modification')
 const windowInfoSchema = z.object({
   windowId: z.number(),
   windowType: z.enum([
@@ -26,7 +27,7 @@ const windowInfoSchema = z.object({
   activeTabId: z.number().optional(),
 })
 
-export const list_windows = defineTool({
+export const list_windows = defineManagementTool({
   name: 'list_windows',
   description: 'List all browser windows',
   input: z.object({}),
@@ -59,7 +60,7 @@ export const list_windows = defineTool({
   },
 })
 
-export const create_window = defineTool({
+export const create_window = defineManagementTool({
   name: 'create_window',
   description: 'Create a new browser window',
   input: z.object({
@@ -76,7 +77,7 @@ export const create_window = defineTool({
   },
 })
 
-export const create_hidden_window = defineTool({
+export const create_hidden_window = defineManagementTool({
   name: 'create_hidden_window',
   description:
     'Create a new hidden browser window. Hidden windows are not visible to the user and useful for background automation.',
@@ -91,7 +92,7 @@ export const create_hidden_window = defineTool({
   },
 })
 
-export const close_window = defineTool({
+export const close_window = defineManagementTool({
   name: 'close_window',
   description: 'Close a browser window',
   input: z.object({
@@ -109,7 +110,7 @@ export const close_window = defineTool({
   },
 })
 
-export const activate_window = defineTool({
+export const activate_window = defineManagementTool({
   name: 'activate_window',
   description: 'Activate (focus) a browser window',
   input: z.object({

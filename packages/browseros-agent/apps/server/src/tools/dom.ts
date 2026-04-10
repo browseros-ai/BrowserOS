@@ -1,11 +1,12 @@
 import { z } from 'zod'
 import { formatSearchResult } from '../browser/dom'
-import { defineTool } from './framework'
+import { defineToolWithCategory } from './framework'
 import { writeTempToolOutputFile } from './output-file'
 
 const pageParam = z.number().describe('Page ID (from list_pages)')
+const defineObservationTool = defineToolWithCategory('observation')
 
-export const get_dom = defineTool({
+export const get_dom = defineObservationTool({
   name: 'get_dom',
   description:
     'Get the raw HTML DOM structure of a page or a specific element. Writes outer HTML to a local file and returns the file path. Use a CSS selector to scope to a specific part of the page. For readable text content, prefer get_page_content instead.',
@@ -55,7 +56,7 @@ export const get_dom = defineTool({
   },
 })
 
-export const search_dom = defineTool({
+export const search_dom = defineObservationTool({
   name: 'search_dom',
   description:
     'Search the DOM using plain text, CSS selectors, or XPath queries. Uses the browser\'s native DOM search. Returns matching elements with tag name and attributes. Examples: "Login" (text search), "input[type=email]" (CSS), "//button[@aria-label]" (XPath).',

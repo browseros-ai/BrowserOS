@@ -43,6 +43,7 @@ export const Chat = () => {
     disliked,
     onClickDislike,
     isRestoringConversation,
+    addToolApprovalResponse,
   } = useChatSessionContext()
 
   const {
@@ -222,6 +223,12 @@ export const Chat = () => {
             showDontShowAgain={showDontShowAgain}
             onTakeSurvey={onTakeSurvey}
             onDismissJtbdPopup={onDismissJtbdPopup}
+            onToolApprove={(id) =>
+              addToolApprovalResponse({ id, approved: true })
+            }
+            onToolDeny={(id) =>
+              addToolApprovalResponse({ id, approved: false })
+            }
           />
         )}
         {agentUrlError && (

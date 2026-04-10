@@ -2,14 +2,15 @@ import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { defineTool, resolveWorkingPath } from './framework'
+import { defineToolWithCategory, resolveWorkingPath } from './framework'
 
 const pageParam = z.number().describe('Page ID (from list_pages)')
+const defineCaptureTool = defineToolWithCategory('screenshots')
 const elementParam = z
   .number()
   .describe('Element ID from snapshot (the number in [N])')
 
-export const save_pdf = defineTool({
+export const save_pdf = defineCaptureTool({
   name: 'save_pdf',
   description: 'Save the current page as a PDF file',
   input: z.object({
@@ -40,7 +41,7 @@ export const save_pdf = defineTool({
   },
 })
 
-export const save_screenshot = defineTool({
+export const save_screenshot = defineCaptureTool({
   name: 'save_screenshot',
   description: 'Take a screenshot of a page and save it to a file on disk',
   input: z.object({
@@ -97,7 +98,7 @@ export const save_screenshot = defineTool({
   },
 })
 
-export const download_file = defineTool({
+export const download_file = defineCaptureTool({
   name: 'download_file',
   description:
     'Click an element to trigger a file download and save it to disk',

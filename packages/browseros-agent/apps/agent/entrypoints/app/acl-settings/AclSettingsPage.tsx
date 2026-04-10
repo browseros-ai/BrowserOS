@@ -39,7 +39,7 @@ export const AclSettingsPage: FC = () => {
           <h1 className="font-semibold text-xl">ACL Rules</h1>
           <p className="mt-1 text-muted-foreground text-sm">
             Describe what the agent should avoid on a site and BrowserOS will
-            block matching actions during the demo.
+            block matching actions.
           </p>
         </div>
         <NewAclRuleDialog onSave={handleAddRule}>

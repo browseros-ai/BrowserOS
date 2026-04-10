@@ -1,6 +1,7 @@
 import { z } from 'zod'
-import { defineTool } from './framework'
+import { defineToolWithCategory } from './framework'
 
+const defineManagementTool = defineToolWithCategory('data-modification')
 const historyItemSchema = z.object({
   id: z.string(),
   url: z.string(),
@@ -10,7 +11,7 @@ const historyItemSchema = z.object({
   typedCount: z.number().optional(),
 })
 
-export const search_history = defineTool({
+export const search_history = defineManagementTool({
   name: 'search_history',
   description: 'Search browser history by text query',
   input: z.object({
@@ -61,7 +62,7 @@ export const search_history = defineTool({
   },
 })
 
-export const get_recent_history = defineTool({
+export const get_recent_history = defineManagementTool({
   name: 'get_recent_history',
   description: 'Get most recent browser history items',
   input: z.object({
@@ -109,7 +110,7 @@ export const get_recent_history = defineTool({
   },
 })
 
-export const delete_history_url = defineTool({
+export const delete_history_url = defineManagementTool({
   name: 'delete_history_url',
   description: 'Delete a specific URL from browser history',
   input: z.object({
@@ -126,7 +127,7 @@ export const delete_history_url = defineTool({
   },
 })
 
-export const delete_history_range = defineTool({
+export const delete_history_range = defineManagementTool({
   name: 'delete_history_range',
   description: 'Delete browser history within a time range',
   input: z.object({

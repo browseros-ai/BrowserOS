@@ -1,12 +1,13 @@
 import { z } from 'zod'
-import { defineTool } from './framework'
+import { defineToolWithCategory } from './framework'
 
 const pageParam = z.number().describe('Page ID (from list_pages)')
+const defineInputTool = defineToolWithCategory('input')
 const elementParam = z
   .number()
   .describe('Element ID from snapshot (the number in [N])')
 
-export const click = defineTool({
+export const click = defineInputTool({
   name: 'click',
   description: 'Click an element by its ID from the last snapshot',
   input: z.object({
@@ -48,7 +49,7 @@ export const click = defineTool({
   },
 })
 
-export const click_at = defineTool({
+export const click_at = defineInputTool({
   name: 'click_at',
   description: 'Click at specific page coordinates',
   input: z.object({
@@ -87,7 +88,7 @@ export const click_at = defineTool({
   },
 })
 
-export const hover_at = defineTool({
+export const hover_at = defineInputTool({
   name: 'hover_at',
   description: 'Hover at specific page coordinates',
   input: z.object({
@@ -102,7 +103,7 @@ export const hover_at = defineTool({
   },
 })
 
-export const type_at = defineTool({
+export const type_at = defineInputTool({
   name: 'type_at',
   description:
     'Click at specific coordinates then type text. Use for typing into inputs at known positions.',
@@ -120,7 +121,7 @@ export const type_at = defineTool({
   },
 })
 
-export const drag_at = defineTool({
+export const drag_at = defineInputTool({
   name: 'drag_at',
   description: 'Drag from one coordinate to another',
   input: z.object({
@@ -143,7 +144,7 @@ export const drag_at = defineTool({
   },
 })
 
-export const hover = defineTool({
+export const hover = defineInputTool({
   name: 'hover',
   description: 'Hover over an element by its ID',
   input: z.object({
@@ -164,7 +165,7 @@ export const hover = defineTool({
   },
 })
 
-export const clear = defineTool({
+export const clear = defineInputTool({
   name: 'clear',
   description: 'Clear the text content of an input or textarea element',
   input: z.object({
@@ -184,7 +185,7 @@ export const clear = defineTool({
   },
 })
 
-export const fill = defineTool({
+export const fill = defineInputTool({
   name: 'fill',
   description:
     'Type text into an input or textarea element. Focuses the element, optionally clears existing text, then types character by character.',
@@ -228,7 +229,7 @@ export const fill = defineTool({
   },
 })
 
-export const press_key = defineTool({
+export const press_key = defineInputTool({
   name: 'press_key',
   description:
     "Press a key or key combination (e.g. 'Enter', 'Escape', 'Control+A', 'Meta+Shift+P'). Sent to the currently focused element.",
@@ -250,7 +251,7 @@ export const press_key = defineTool({
   },
 })
 
-export const drag = defineTool({
+export const drag = defineInputTool({
   name: 'drag',
   description:
     'Drag from one element to another element or to specific coordinates',
@@ -300,7 +301,7 @@ export const drag = defineTool({
   },
 })
 
-export const scroll = defineTool({
+export const scroll = defineInputTool({
   name: 'scroll',
   description: 'Scroll the page or a specific element',
   input: z.object({
@@ -340,7 +341,7 @@ export const scroll = defineTool({
   },
 })
 
-export const handle_dialog = defineTool({
+export const handle_dialog = defineInputTool({
   name: 'handle_dialog',
   description: 'Accept or dismiss a JavaScript dialog (alert, confirm, prompt)',
   input: z.object({
@@ -369,7 +370,7 @@ export const handle_dialog = defineTool({
   },
 })
 
-export const focus = defineTool({
+export const focus = defineInputTool({
   name: 'focus',
   description: 'Focus an element by its ID. Scrolls into view first.',
   input: z.object({
@@ -388,7 +389,7 @@ export const focus = defineTool({
   },
 })
 
-export const check = defineTool({
+export const check = defineInputTool({
   name: 'check',
   description: 'Check a checkbox or radio button. No-op if already checked.',
   input: z.object({
@@ -408,7 +409,7 @@ export const check = defineTool({
   },
 })
 
-export const uncheck = defineTool({
+export const uncheck = defineInputTool({
   name: 'uncheck',
   description: 'Uncheck a checkbox. No-op if already unchecked.',
   input: z.object({
@@ -428,7 +429,7 @@ export const uncheck = defineTool({
   },
 })
 
-export const upload_file = defineTool({
+export const upload_file = defineInputTool({
   name: 'upload_file',
   description:
     'Set file(s) on a file input element. Files must be absolute paths on disk.',
@@ -460,7 +461,7 @@ export const upload_file = defineTool({
   },
 })
 
-export const select_option = defineTool({
+export const select_option = defineInputTool({
   name: 'select_option',
   description:
     'Select an option in a <select> dropdown by value or visible text',
