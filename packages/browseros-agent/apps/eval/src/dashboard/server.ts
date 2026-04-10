@@ -276,41 +276,56 @@ app.post('/api/load-run', async (c) => {
   }
   const entries = await readdir(outputDir, { withFileTypes: true })
   const taskDirs = entries.filter((e) => e.isDirectory())
-  const loadedTasks: DashboardTask[] = []
   let agentType = ''
-  for (const taskDir of taskDirs) {
-    const metaPath = join(outputDir, taskDir.name, 'metadata.json')
-    try {
-      const raw = JSON.parse(await readFile(metaPath, 'utf-8'))
-      if (!agentType && raw.agent_config?.type) {
-        agentType = raw.agent_config.type
+
+  const tasksData = await Promise.all(
+    taskDirs.map(async (taskDir) => {
+      const metaPath = join(outputDir, taskDir.name, 'metadata.json')
+      try {
+        const raw = JSON.parse(await readFile(metaPath, 'utf-8'))
+        const screenshotDir = join(outputDir, taskDir.name, 'screenshots')
+        let screenshotCount = raw.screenshot_count ?? 0
+        if (!screenshotCount) {
+          try {
+            const files = await readdir(screenshotDir)
+            screenshotCount = files.filter((f: string) =>
+              f.endsWith('.png'),
+            ).length
+          } catch {}
+        }
+        return {
+          agentType: raw.agent_config?.type,
+          task: {
+            queryId: raw.query_id || taskDir.name,
+            query: raw.query || '',
+            startUrl: raw.start_url,
+            status:
+              raw.termination_reason === 'completed'
+                ? 'completed'
+                : raw.termination_reason === 'timeout'
+                  ? 'timeout'
+                  : 'failed',
+            durationMs: raw.total_duration_ms,
+            graderResults: raw.grader_results,
+            screenshotCount,
+          } as DashboardTask,
+        }
+      } catch {
+        return null
       }
-      const screenshotDir = join(outputDir, taskDir.name, 'screenshots')
-      let screenshotCount = raw.screenshot_count ?? 0
-      if (!screenshotCount) {
-        try {
-          const files = await readdir(screenshotDir)
-          screenshotCount = files.filter((f: string) =>
-            f.endsWith('.png'),
-          ).length
-        } catch {}
+    }),
+  )
+
+  const loadedTasks: DashboardTask[] = []
+  for (const t of tasksData) {
+    if (t) {
+      if (!agentType && t.agentType) {
+        agentType = t.agentType
       }
-      loadedTasks.push({
-        queryId: raw.query_id || taskDir.name,
-        query: raw.query || '',
-        startUrl: raw.start_url,
-        status:
-          raw.termination_reason === 'completed'
-            ? 'completed'
-            : raw.termination_reason === 'timeout'
-              ? 'timeout'
-              : 'failed',
-        durationMs: raw.total_duration_ms,
-        graderResults: raw.grader_results,
-        screenshotCount,
-      })
-    } catch {}
+      loadedTasks.push(t.task)
+    }
   }
+
   if (loadedTasks.length === 0) {
     return c.json({ error: 'No completed tasks found in this run' }, 404)
   }
