@@ -198,6 +198,7 @@ export class BrowserOSAppManager {
 
   private async waitForCdp(): Promise<boolean> {
     const startTime = Date.now()
+    let delay = 100
     while (Date.now() - startTime < CDP_WAIT_TIMEOUT_MS) {
       try {
         const res = await fetch(
@@ -208,13 +209,15 @@ export class BrowserOSAppManager {
       } catch {
         // not ready
       }
-      await sleep(500)
+      await sleep(Math.floor(delay))
+      delay = Math.min(delay * 1.5, 2000)
     }
     return false
   }
 
   private async waitForServerHealth(): Promise<boolean> {
     const startTime = Date.now()
+    let delay = 100
     while (Date.now() - startTime < SERVER_HEALTH_TIMEOUT_MS) {
       try {
         const res = await fetch(
@@ -225,7 +228,8 @@ export class BrowserOSAppManager {
       } catch {
         // not ready
       }
-      await sleep(500)
+      await sleep(Math.floor(delay))
+      delay = Math.min(delay * 1.5, 2000)
     }
     return false
   }

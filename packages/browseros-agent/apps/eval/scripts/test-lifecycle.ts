@@ -87,6 +87,7 @@ async function waitForPortFree(
   port: number,
   maxAttempts = 30,
 ): Promise<boolean> {
+  let delay = 100
   for (let i = 0; i < maxAttempts; i++) {
     const result = spawnSync({
       cmd: ['sh', '-c', `lsof -ti:${port} 2>/dev/null`],
@@ -94,7 +95,8 @@ async function waitForPortFree(
     if (!result.stdout || result.stdout.toString().trim() === '') {
       return true
     }
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    await new Promise((resolve) => setTimeout(resolve, Math.floor(delay)))
+    delay = Math.min(delay * 1.5, 2000)
   }
   return false
 }
@@ -103,6 +105,7 @@ async function waitForServerHealth(
   serverPort: number,
   maxAttempts = 60,
 ): Promise<boolean> {
+  let delay = 100
   for (let i = 0; i < maxAttempts; i++) {
     try {
       const response = await fetch(`http://127.0.0.1:${serverPort}/health`, {
@@ -112,7 +115,8 @@ async function waitForServerHealth(
     } catch {
       /* not ready */
     }
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    await new Promise((resolve) => setTimeout(resolve, Math.floor(delay)))
+    delay = Math.min(delay * 1.5, 2000)
   }
   return false
 }
@@ -122,6 +126,7 @@ async function waitForBrowserReady(
   maxAttempts = 90,
 ): Promise<boolean> {
   let connectedCount = 0
+  let delay = 100
   for (let i = 0; i < maxAttempts; i++) {
     try {
       const response = await fetch(`http://127.0.0.1:${serverPort}/health`, {
@@ -139,7 +144,8 @@ async function waitForBrowserReady(
     } catch {
       connectedCount = 0
     }
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    await new Promise((resolve) => setTimeout(resolve, Math.floor(delay)))
+    delay = Math.min(delay * 1.5, 2000)
   }
   return false
 }

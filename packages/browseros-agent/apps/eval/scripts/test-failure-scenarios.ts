@@ -107,6 +107,7 @@ async function waitForServerHealth(
   port: number,
   maxAttempts = 60,
 ): Promise<boolean> {
+  let delay = 100
   for (let i = 0; i < maxAttempts; i++) {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/health`, {
@@ -116,7 +117,8 @@ async function waitForServerHealth(
     } catch {
       /* not ready */
     }
-    await sleep(500)
+    await sleep(Math.floor(delay))
+    delay = Math.min(delay * 1.5, 2000)
   }
   return false
 }
@@ -126,6 +128,7 @@ async function waitForBrowserReady(
   maxAttempts = 60,
 ): Promise<boolean> {
   let connectedCount = 0
+  let delay = 100
   for (let i = 0; i < maxAttempts; i++) {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/health`, {
@@ -143,7 +146,8 @@ async function waitForBrowserReady(
     } catch {
       connectedCount = 0
     }
-    await sleep(500)
+    await sleep(Math.floor(delay))
+    delay = Math.min(delay * 1.5, 2000)
   }
   return false
 }
