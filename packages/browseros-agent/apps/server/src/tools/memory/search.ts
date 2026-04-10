@@ -24,29 +24,33 @@ async function loadMemoryEntries(): Promise<MemoryEntry[]> {
 
   const mdFiles = files.filter((f) => f.endsWith('.md'))
 
-  const entries: MemoryEntry[] = []
-  for (const file of mdFiles) {
+  const filePromises = mdFiles.map(async (file) => {
     try {
       const content = await readFile(join(memoryDir, file), 'utf-8')
+      const fileEntries: MemoryEntry[] = []
 
       // Section-level entries (## delimited blocks)
       const sections = content.split(/^## /m).filter(Boolean)
       for (const section of sections) {
-        entries.push({ source: file, content: `## ${section}`.trim() })
+        fileEntries.push({ source: file, content: `## ${section}`.trim() })
       }
 
       // Line-level entries (individual non-empty lines)
       for (const line of content.split('\n')) {
         const trimmed = line.trim()
         if (trimmed && !trimmed.startsWith('#')) {
-          entries.push({ source: file, content: trimmed })
+          fileEntries.push({ source: file, content: trimmed })
         }
       }
+      return fileEntries
     } catch {
       // skip unreadable files
+      return []
     }
-  }
-  return entries
+  })
+
+  const results = await Promise.all(filePromises)
+  return results.flat()
 }
 
 export function createMemorySearchTool() {
