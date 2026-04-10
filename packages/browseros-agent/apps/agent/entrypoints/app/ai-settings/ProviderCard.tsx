@@ -2,7 +2,6 @@ import { Check, Loader2, Trash2 } from 'lucide-react'
 import type { FC } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { useKimiLaunch } from '@/lib/feature-flags/useKimiLaunch'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { cn } from '@/lib/utils'
@@ -30,7 +29,6 @@ export const ProviderCard: FC<ProviderCardProps> = ({
   isTesting = false,
 }) => {
   const inputId = `provider-${provider.id}`
-  const kimiLaunch = useKimiLaunch()
 
   return (
     <label
@@ -79,30 +77,21 @@ export const ProviderCard: FC<ProviderCardProps> = ({
             </Badge>
           )}
         </div>
-        {isBuiltIn && provider.type === 'browseros' && kimiLaunch && (
-          <span className="mb-1 inline-block rounded-full border border-orange-300/60 bg-orange-100/70 px-3 py-0.5 font-semibold text-orange-700 text-xs dark:border-orange-400/40 dark:bg-orange-500/15 dark:text-orange-300">
-            In partnership with Moonshot AI
-          </span>
-        )}
         <p className="truncate text-muted-foreground text-sm">
           {isBuiltIn ? (
-            kimiLaunch ? (
-              'Extended usage limits for the next 2 weeks!'
-            ) : (
-              <>
-                BrowserOS-hosted model with strict rate limits.{' '}
-                <a
-                  href="https://docs.browseros.com/features/bring-your-own-llm"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline hover:text-foreground"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  Bring your own key
-                </a>{' '}
-                for better performance.
-              </>
-            )
+            <>
+              BrowserOS-hosted model with strict rate limits.{' '}
+              <a
+                href="https://docs.browseros.com/features/bring-your-own-llm"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-foreground"
+                onClick={(e) => e.stopPropagation()}
+              >
+                Bring your own key
+              </a>{' '}
+              for better performance.
+            </>
           ) : provider.baseUrl ? (
             `${provider.modelId} • ${provider.baseUrl}`
           ) : (

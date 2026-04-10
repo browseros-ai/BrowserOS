@@ -17,9 +17,63 @@ from ...common.utils import (
     run_command,
     safe_rmtree,
     join_paths,
+    get_platform_arch,
     IS_LINUX,
 )
 from ...common.notify import get_notifier, COLOR_GREEN
+
+# Target-arch packaging metadata. These describe the artifact we're
+# producing, not the build machine. `appimage_arch` is passed to
+# appimagetool via the ARCH env var; `deb_arch` is written into the
+# .deb control file.
+LINUX_ARCHITECTURE_CONFIG = {
+    "x64": {
+        "appimage_arch": "x86_64",
+        "deb_arch": "amd64",
+    },
+    "arm64": {
+        "appimage_arch": "aarch64",
+        "deb_arch": "arm64",
+    },
+}
+
+# Host-arch tool selection. appimagetool is a normal binary that runs on
+# the build machine — when cross-compiling arm64 from an x64 host, we
+# still need the x86_64 tool to actually execute. Keyed on
+# get_platform_arch() (BUILD machine arch), NOT ctx.architecture.
+LINUX_HOST_APPIMAGETOOL = {
+    "x64": (
+        "appimagetool-x86_64.AppImage",
+        "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage",
+    ),
+    "arm64": (
+        "appimagetool-aarch64.AppImage",
+        "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage",
+    ),
+}
+
+
+def get_linux_architecture_config(architecture: str) -> dict[str, str]:
+    config = LINUX_ARCHITECTURE_CONFIG.get(architecture)
+    if not config:
+        supported = ", ".join(sorted(LINUX_ARCHITECTURE_CONFIG))
+        raise ValueError(
+            f"Unsupported Linux architecture: {architecture}. Supported: {supported}"
+        )
+    return config
+
+
+def get_host_appimagetool() -> tuple[str, str]:
+    """Return (filename, url) for the appimagetool binary that runs on
+    the current build machine. Critical for cross-compile correctness."""
+    host_arch = get_platform_arch()
+    tool = LINUX_HOST_APPIMAGETOOL.get(host_arch)
+    if not tool:
+        supported = ", ".join(sorted(LINUX_HOST_APPIMAGETOOL))
+        raise ValueError(
+            f"No appimagetool binary for host arch '{host_arch}'. Supported: {supported}"
+        )
+    return tool
 
 
 class LinuxPackageModule(CommandModule):
@@ -30,6 +84,10 @@ class LinuxPackageModule(CommandModule):
     def validate(self, ctx: Context) -> None:
         if not IS_LINUX():
             raise ValidationError("Linux packaging requires Linux")
+        try:
+            get_linux_architecture_config(ctx.architecture)
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
 
         out_dir = join_paths(ctx.chromium_src, ctx.out_dir)
         chrome_binary = join_paths(out_dir, ctx.BROWSEROS_APP_NAME)
@@ -73,7 +131,7 @@ class LinuxPackageModule(CommandModule):
             artifacts.append(deb_path.name)
         notifier.notify(
             "📦 Package Created",
-            f"Linux packages created successfully",
+            "Linux packages created successfully",
             {
                 "Artifacts": ", ".join(artifacts),
                 "Version": ctx.semantic_version,
@@ -284,25 +342,30 @@ export CHROME_WRAPPER="${{THIS}}"
 
 
 def download_appimagetool(ctx: Context) -> Optional[Path]:
-    """Download appimagetool if not available"""
+    """Download the appimagetool binary that runs on the build machine.
+
+    Note: this is keyed on the HOST arch, not ctx.architecture. When
+    cross-compiling arm64 packages from an x64 host, we still need the
+    x86_64 appimagetool because the tool executes locally; the target
+    arch is communicated via the ARCH env var in create_appimage().
+    """
     tool_dir = Path(join_paths(ctx.root_dir, "build", "tools"))
     tool_dir.mkdir(exist_ok=True)
 
-    tool_path = Path(join_paths(tool_dir, "appimagetool-x86_64.AppImage"))
+    tool_filename, url = get_host_appimagetool()
+    tool_path = Path(join_paths(tool_dir, tool_filename))
 
     if tool_path.exists():
-        log_info("✓ appimagetool already available")
+        log_info(f"✓ appimagetool already available ({tool_filename})")
         return tool_path
 
-    log_info("📥 Downloading appimagetool...")
-    url = "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
-
+    log_info(f"📥 Downloading {tool_filename}...")
     cmd = ["wget", "-O", str(tool_path), url]
     result = run_command(cmd, check=False)
 
     if result.returncode == 0:
         tool_path.chmod(0o755)
-        log_success("✓ Downloaded appimagetool")
+        log_success(f"✓ Downloaded {tool_filename}")
         return tool_path
     else:
         log_error("Failed to download appimagetool")
@@ -312,6 +375,7 @@ def download_appimagetool(ctx: Context) -> Optional[Path]:
 def create_appimage(ctx: Context, appdir: Path, output_path: Path) -> bool:
     """Create AppImage from AppDir"""
     log_info("📦 Creating AppImage...")
+    arch_config = get_linux_architecture_config(ctx.architecture)
 
     # Download appimagetool if needed
     appimagetool = download_appimagetool(ctx)
@@ -319,7 +383,7 @@ def create_appimage(ctx: Context, appdir: Path, output_path: Path) -> bool:
         return False
 
     # Set architecture environment variable (required by appimagetool)
-    arch = "x86_64" if ctx.architecture == "x64" else "aarch64"
+    arch = arch_config["appimage_arch"]
 
     # Create AppImage with ARCH env var set for this command only
     cmd = [
@@ -384,7 +448,7 @@ def create_control_file(ctx: Context, debian_dir: Path) -> None:
     version = version.lstrip("v").replace(" ", "").replace("_", ".")
 
     # Architecture mapping
-    deb_arch = "amd64" if ctx.architecture == "x64" else "arm64"
+    deb_arch = get_linux_architecture_config(ctx.architecture)["deb_arch"]
 
     control_content = f"""Package: browseros
 Version: {version}
@@ -653,7 +717,9 @@ def package_appimage(ctx: Context, package_dir: Path) -> Optional[Path]:
     """
     log_info("🖼️  Building AppImage...")
 
-    appdir = Path(join_paths(package_dir, f"{ctx.BROWSEROS_APP_BASE_NAME}.AppDir"))
+    appdir = Path(
+        join_paths(package_dir, f"{ctx.BROWSEROS_APP_BASE_NAME}-{ctx.architecture}.AppDir")
+    )
     if appdir.exists():
         safe_rmtree(appdir)
 
@@ -683,7 +749,9 @@ def package_deb(ctx: Context, package_dir: Path) -> Optional[Path]:
     """
     log_info("📦 Building .deb package...")
 
-    debdir = Path(join_paths(package_dir, f"{ctx.BROWSEROS_APP_BASE_NAME}_deb"))
+    debdir = Path(
+        join_paths(package_dir, f"{ctx.BROWSEROS_APP_BASE_NAME}_{ctx.architecture}_deb")
+    )
     if debdir.exists():
         safe_rmtree(debdir)
 
@@ -703,6 +771,8 @@ def package_deb(ctx: Context, package_dir: Path) -> Optional[Path]:
         return output_path
 
     return None
+
+
 def package_universal(contexts: List[Context]) -> bool:
     """Linux doesn't support universal binaries"""
     log_warning("Universal binaries are not supported on Linux")

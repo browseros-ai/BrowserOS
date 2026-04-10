@@ -156,28 +156,6 @@ describe('server build', () => {
     assert.strictEqual(versionOutput.trim(), expectedVersion)
   }, 300_000)
 
-  it('keeps compile-only on the strict production validation path', async () => {
-    resetProdEnvToTemplate()
-
-    const build = Bun.spawn(
-      ['bun', buildScript, `--target=${target.id}`, '--compile-only'],
-      {
-        cwd: rootDir,
-        stdout: 'pipe',
-        stderr: 'pipe',
-        env: buildEnv({}, PROD_SECRET_KEYS),
-      },
-    )
-    const buildExit = await build.exited
-    const stderr = await new Response(build.stderr).text()
-
-    assert.notStrictEqual(buildExit, 0, 'Compile-only build should fail')
-    assert.match(stderr, /Production build requires variables:/)
-    assert.match(stderr, /CODEGEN_SERVICE_URL/)
-    assert.match(stderr, /POSTHOG_API_KEY/)
-    assert.match(stderr, /SENTRY_DSN/)
-  }, 300_000)
-
   it('archives CI builds without R2 config or production env secrets', async () => {
     resetProdEnvToTemplate()
     rmSync(zipPath, { force: true })

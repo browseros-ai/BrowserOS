@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_loader.cc b/chrome/browser/browseros/extensions/browseros_extension_loader.cc
 new file mode 100644
-index 0000000000000..e61b45d08b7e2
+index 0000000000000..fdb6be443f25b
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_loader.cc
-@@ -0,0 +1,226 @@
+@@ -0,0 +1,269 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -89,8 +89,51 @@ index 0000000000000..e61b45d08b7e2
 +  extension_ids_.merge(result.extension_ids);
 +  last_config_ = std::move(result.config);
 +
-+  LoadFinished(std::move(result.prefs));
++  base::DictValue prefs_to_load = std::move(result.prefs);
++
++  if (prefs_to_load.empty()) {
++    LOG(WARNING) << "browseros: Install returned empty prefs, "
++                 << "reconstructing from installed extensions";
++    prefs_to_load = ReconstructPrefsFromInstalledExtensions();
++    LOG(INFO) << "browseros: Reconstructed prefs for "
++              << prefs_to_load.size() << " installed extensions";
++  }
++
++  LoadFinished(std::move(prefs_to_load));
 +  OnStartupComplete(result.from_bundled);
++}
++
++base::DictValue
++BrowserOSExtensionLoader::ReconstructPrefsFromInstalledExtensions() {
++  base::DictValue prefs;
++
++  extensions::ExtensionRegistry* registry =
++      extensions::ExtensionRegistry::Get(profile_);
++  if (!registry) {
++    return prefs;
++  }
++
++  const std::string update_url =
++      base::FeatureList::IsEnabled(features::kBrowserOsAlphaFeatures)
++          ? kBrowserOSAlphaUpdateUrl
++          : kBrowserOSUpdateUrl;
++
++  for (const std::string& id : GetBrowserOSExtensionIds()) {
++    const extensions::Extension* ext = registry->GetInstalledExtension(id);
++    if (!ext) {
++      continue;
++    }
++
++    base::DictValue ext_pref;
++    ext_pref.Set(extensions::ExternalProviderImpl::kExternalUpdateUrl,
++                 update_url);
++    prefs.Set(id, std::move(ext_pref));
++
++    LOG(INFO) << "browseros: Reconstructed pref for installed extension "
++              << id << " v" << ext->version().GetString();
++  }
++
++  return prefs;
 +}
 +
 +const base::FilePath BrowserOSExtensionLoader::GetBaseCrxFilePath() {

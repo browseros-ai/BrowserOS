@@ -145,16 +145,14 @@ export class KlavisClient {
     })
   }
 
-  /**
-   * Remove a server from a Strata instance
-   * Flow: createStrata(server) to get strataId → DELETE /strata/{strataId}/servers?servers=X
-   */
-  async removeServer(userId: string, serverName: string): Promise<void> {
-    // createStrata to get strataId (passing same server ensures it exists)
-    const strata = await this.createStrata(userId, [serverName])
+  async deleteServersFromStrata(
+    strataId: string,
+    servers: string[],
+  ): Promise<void> {
+    const query = servers.map(encodeURIComponent).join(',')
     await this.request(
       'DELETE',
-      `/mcp-server/strata/${strata.strataId}/servers?servers=${encodeURIComponent(serverName)}`,
+      `/mcp-server/strata/${strataId}/servers?servers=${query}`,
     )
   }
 }

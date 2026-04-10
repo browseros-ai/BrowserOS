@@ -238,7 +238,7 @@ const EmptyState: FC<{ onCreateClick: () => void }> = ({ onCreateClick }) => (
       <h3 className="mb-1 font-medium text-lg">No skills yet</h3>
       <p className="mb-5 max-w-sm text-muted-foreground text-sm leading-6">
         Skills teach your agent how to handle repeatable tasks like research,
-        extraction, and structured workflows.
+        extraction, and repeatable browser tasks.
       </p>
       <Button onClick={onCreateClick} size="sm">
         <Plus className="mr-1.5 size-4" />

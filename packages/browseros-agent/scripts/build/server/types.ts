@@ -21,7 +21,6 @@ export interface BuildArgs {
   targets: BuildTarget[]
   manifestPath: string
   upload: boolean
-  compileOnly: boolean
   ci: boolean
 }
 

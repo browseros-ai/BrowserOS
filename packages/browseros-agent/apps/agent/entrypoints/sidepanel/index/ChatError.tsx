@@ -1,20 +1,18 @@
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import type { FC } from 'react'
-// import { useMemo } from 'react'
+import { useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 
-// --- Commented out for Kimi partnership launch (restore after) ---
-// const SURVEY_DIRECTIONS = [
-//   'competitor',
-//   'switching',
-//   'workflow',
-//   'activation',
-// ] as const
-//
-// function pickRandomDirection(): string {
-//   return SURVEY_DIRECTIONS[Math.floor(Math.random() * SURVEY_DIRECTIONS.length)]
-// }
-// --- End commented out survey code ---
+const SURVEY_DIRECTIONS = [
+  'competitor',
+  'switching',
+  'workflow',
+  'activation',
+] as const
+
+function pickRandomDirection(): string {
+  return SURVEY_DIRECTIONS[Math.floor(Math.random() * SURVEY_DIRECTIONS.length)]
+}
 
 interface ChatErrorProps {
   error: Error
@@ -95,13 +93,11 @@ export const ChatError: FC<ChatErrorProps> = ({
   const { text, url, isRateLimit, isCreditsExhausted, isConnectionError } =
     parseErrorMessage(error.message, providerType)
 
-  // --- Commented out for Kimi partnership launch (restore after) ---
-  // const surveyUrl = useMemo(
-  //   () =>
-  //     `/app.html?page=survey&maxTurns=20&experimentId=daily_limit_${pickRandomDirection()}#/settings/survey`,
-  //   [],
-  // )
-  // --- End commented out survey code ---
+  const surveyUrl = useMemo(
+    () =>
+      `/app.html?page=survey&maxTurns=20&experimentId=daily_limit_${pickRandomDirection()}#/settings/survey`,
+    [],
+  )
 
   const getTitle = () => {
     if (isRateLimit) return 'Daily limit reached'
@@ -126,8 +122,17 @@ export const ChatError: FC<ChatErrorProps> = ({
           View troubleshooting guide
         </a>
       )}
-      {/* --- Commented out for Kimi partnership launch (restore after) ---
-      {isRateLimit && (
+      {isCreditsExhausted && url && (
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-muted-foreground text-xs underline hover:text-foreground"
+        >
+          View Usage & Billing
+        </a>
+      )}
+      {isRateLimit && !isCreditsExhausted && (
         <p className="text-muted-foreground text-xs">
           <a
             href={url}
@@ -147,27 +152,6 @@ export const ChatError: FC<ChatErrorProps> = ({
             take a quick survey
           </a>
         </p>
-      )}
-      --- End commented out survey code --- */}
-      {isCreditsExhausted && url && (
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-muted-foreground text-xs underline hover:text-foreground"
-        >
-          View Usage & Billing
-        </a>
-      )}
-      {isRateLimit && providerType === 'browseros' && (
-        <a
-          href="/app.html#/settings/ai"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 rounded-md border border-[var(--accent-orange)] bg-[var(--accent-orange)]/10 px-3 py-1.5 font-medium text-[var(--accent-orange)] text-xs transition-colors hover:bg-[var(--accent-orange)]/20"
-        >
-          Add your own provider for unlimited usage
-        </a>
       )}
       {onRetry && (
         <Button

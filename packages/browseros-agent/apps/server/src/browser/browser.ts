@@ -392,9 +392,48 @@ export class Browser {
 
   // --- Observation ---
 
+  private async getFrameIds(session: ProtocolApi): Promise<string[]> {
+    try {
+      const result = await session.Page.getFrameTree()
+      const ids: string[] = []
+      type Tree = { frame: { id: string }; childFrames?: Tree[] }
+      function collect(tree: Tree) {
+        ids.push(tree.frame.id)
+        if (tree.childFrames)
+          for (const child of tree.childFrames) collect(child)
+      }
+      collect(result.frameTree as Tree)
+      return ids
+    } catch {
+      return []
+    }
+  }
+
   private async fetchAXTree(session: ProtocolApi): Promise<AXNode[]> {
-    const result = await session.Accessibility.getFullAXTree()
-    return (result.nodes as AXNode[]) ?? []
+    const frameIds = await this.getFrameIds(session)
+
+    if (frameIds.length <= 1) {
+      const result = await session.Accessibility.getFullAXTree()
+      return (result.nodes as AXNode[]) ?? []
+    }
+
+    const allNodes: AXNode[] = []
+    for (const frameId of frameIds) {
+      try {
+        const result = await session.Accessibility.getFullAXTree({ frameId })
+        const nodes = (result.nodes as AXNode[]) ?? []
+        for (const node of nodes) {
+          allNodes.push({
+            ...node,
+            nodeId: `${frameId}:${node.nodeId}`,
+            childIds: node.childIds?.map((id) => `${frameId}:${id}`),
+          })
+        }
+      } catch {
+        // Cross-origin or detached frames may fail — skip
+      }
+    }
+    return allNodes
   }
 
   async snapshot(page: number): Promise<string> {

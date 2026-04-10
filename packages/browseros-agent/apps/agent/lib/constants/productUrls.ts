@@ -52,10 +52,5 @@ export const productRepositoryShortUrl = 'https://git.new/browseros'
 /**
  * @public
  */
-export const workflowsHelpUrl = 'https://docs.browseros.com/features/workflows'
-
-/**
- * @public
- */
 export const scheduledTasksHelpUrl =
   'https://docs.browseros.com/features/scheduled-tasks'

@@ -22,10 +22,6 @@ export function parseBuildArgs(argv: string[]): BuildArgs {
     .option('--upload', 'Upload artifact zips to R2')
     .option('--no-upload', 'Skip zip upload to R2')
     .option(
-      '--compile-only',
-      'Compile binaries only (skip artifact packaging, R2 staging, and upload)',
-    )
-    .option(
       '--ci',
       'Build local release zip artifacts for CI without R2 and without requiring production env secrets',
     )
@@ -34,15 +30,10 @@ export function parseBuildArgs(argv: string[]): BuildArgs {
     target: string
     manifest: string
     upload: boolean
-    compileOnly: boolean
     ci: boolean
   }>()
 
-  const compileOnly = options.compileOnly ?? false
   const ci = options.ci ?? false
-  if (ci && compileOnly) {
-    throw new Error('--ci cannot be combined with --compile-only')
-  }
   if (ci && options.upload) {
     throw new Error('--ci cannot be combined with --upload')
   }
@@ -50,8 +41,7 @@ export function parseBuildArgs(argv: string[]): BuildArgs {
   return {
     targets: resolveTargets(options.target),
     manifestPath: options.manifest,
-    upload: ci || compileOnly ? false : (options.upload ?? true),
-    compileOnly,
+    upload: ci ? false : (options.upload ?? true),
     ci,
   }
 }

@@ -1,19 +1,6 @@
 /** @public */
 export const MESSAGE_LIKE_EVENT = 'ui.message.like'
 
-export const GRAPH_MESSAGE_LIKE_EVENT = 'settings.graph.message.like'
-
-export const GRAPH_MESSAGE_DISLIKE_EVENT = 'settings.graph.message.dislike'
-
-/** @public */
-export const NEW_GRAPH_CREATED_EVENT = 'settings.graph.created'
-
-/** @public */
-export const GRAPH_SAVED_EVENT = 'settings.graph.saved'
-
-/** @public */
-export const GRAPH_UPDATED_EVENT = 'settings.graph.updated'
-
 /** @public */
 export const MESSAGE_DISLIKE_EVENT = 'ui.message.dislike'
 
@@ -179,21 +166,6 @@ export const NEWTAB_VOICE_TRANSCRIPTION_COMPLETED_EVENT =
 export const NEWTAB_VOICE_ERROR_EVENT = 'newtab.voice.error'
 
 /** @public */
-export const WORKFLOW_DELETED_EVENT = 'settings.workflow.deleted'
-
-/** @public */
-export const WORKFLOW_RUN_STARTED_EVENT = 'settings.workflow.run_started'
-
-/** @public */
-export const WORKFLOW_RUN_STOPPED_EVENT = 'settings.workflow.run_stopped'
-
-/** @public */
-export const WORKFLOW_RUN_RETRIED_EVENT = 'settings.workflow.run_retried'
-
-/** @public */
-export const WORKFLOW_RUN_COMPLETED_EVENT = 'settings.workflow.run_completed'
-
-/** @public */
 export const SIDEPANEL_AI_TRIGGERED_EVENT = 'sidepanel.ai.triggered'
 
 /** @public */
@@ -307,14 +279,6 @@ export const KIMI_API_KEY_CONFIGURED_EVENT = 'settings.kimi.api_key_configured'
 /** @public */
 export const KIMI_API_KEY_GUIDE_CLICKED_EVENT =
   'settings.kimi.api_key_guide_clicked'
-
-/** @public */
-export const KIMI_RATE_LIMIT_DOCS_CLICKED_EVENT =
-  'ui.rate_limit.kimi_docs_clicked'
-
-/** @public */
-export const KIMI_RATE_LIMIT_PLATFORM_CLICKED_EVENT =
-  'ui.rate_limit.moonshot_platform_clicked'
 
 /** @public */
 export const SIDEPANEL_VOICE_RECORDING_STARTED_EVENT =

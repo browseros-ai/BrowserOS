@@ -4,7 +4,7 @@
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from ...common.module import CommandModule, ValidationError
 from ...common.context import Context
@@ -21,6 +21,7 @@ from ...common.notify import get_notifier, COLOR_GREEN
 from .r2 import (
     BOTO3_AVAILABLE,
     get_r2_client,
+    get_release_json,
     upload_file_to_r2,
 )
 
@@ -58,7 +59,10 @@ class UploadModule(CommandModule):
         log_info("\nUploading package artifacts to R2...")
 
         extra_metadata = {}
-        sparkle_signatures = ctx.artifacts.get("sparkle_signatures")
+        sparkle_signatures = cast(
+            Optional[dict[str, tuple[str, int]]],
+            ctx.artifacts.get("sparkle_signatures"),
+        )
         if sparkle_signatures:
             for filename, (sig, length) in sparkle_signatures.items():
                 extra_metadata[filename] = {
@@ -120,6 +124,36 @@ def generate_release_json(
     return release_data
 
 
+def merge_release_metadata(existing: Optional[Dict], new: Dict) -> Dict:
+    if not existing:
+        return new
+
+    merged = dict(existing)
+    merged.update({key: value for key, value in new.items() if key != "artifacts"})
+
+    artifacts = dict(existing.get("artifacts", {}))
+    artifacts.update(new.get("artifacts", {}))
+    merged["artifacts"] = artifacts
+    return merged
+
+
+def _get_linux_artifact_key(filename: str) -> Optional[str]:
+    lower = filename.lower()
+
+    if ".appimage" in lower:
+        if "arm64" in lower or "aarch64" in lower:
+            return "arm64_appimage"
+        if "x64" in lower or "x86_64" in lower:
+            return "x64_appimage"
+    elif ".deb" in lower:
+        if "arm64" in lower or "aarch64" in lower:
+            return "arm64_deb"
+        if "amd64" in lower or "x64" in lower or "x86_64" in lower:
+            return "x64_deb"
+
+    return None
+
+
 def _get_artifact_key(filename: str, platform: str) -> str:
     """Get artifact key name from filename
 
@@ -147,10 +181,10 @@ def _get_artifact_key(filename: str, platform: str) -> str:
             return "x64_zip"
 
     elif platform == "linux":
-        if ".appimage" in lower:
-            return "x64_appimage"
-        elif ".deb" in lower:
-            return "x64_deb"
+        artifact_key = _get_linux_artifact_key(filename)
+        if artifact_key:
+            return artifact_key
+        log_warning(f"Unrecognized Linux artifact name: {filename}; using stem key")
 
     return Path(filename).stem
 
@@ -181,7 +215,7 @@ def detect_artifacts(ctx: Context) -> List[Path]:
 
 def upload_release_artifacts(
     ctx: Context,
-    extra_metadata: Optional[Dict[str, Dict[str, any]]] = None,
+    extra_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Tuple[bool, Optional[Dict]]:
     """Upload release artifacts to R2 and generate release.json
 
@@ -240,6 +274,13 @@ def upload_release_artifacts(
         artifact_metadata.append(metadata)
 
     release_data = generate_release_json(ctx, artifact_metadata, platform)
+    if platform == "linux":
+        # Linux x64 and arm64 release jobs must be sequenced. A parallel
+        # fetch-merge-upload flow can still race and drop one architecture.
+        existing_release_data = get_release_json(
+            ctx.get_semantic_version(), platform, env
+        )
+        release_data = merge_release_metadata(existing_release_data, release_data)
     release_json_path = ctx.get_dist_dir() / "release.json"
     release_json_path.write_text(json.dumps(release_data, indent=2))
 
@@ -248,7 +289,7 @@ def upload_release_artifacts(
         return False, None
 
     log_success(f"\nSuccessfully uploaded {len(artifacts)} artifact(s) to R2")
-    log_info(f"\nRelease metadata:")
+    log_info("\nRelease metadata:")
     log_info(f"  Version: {release_data['version']}")
     if platform == "macos":
         log_info(f"  Sparkle version: {release_data.get('sparkle_version', 'N/A')}")

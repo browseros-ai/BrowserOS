@@ -8,11 +8,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { SetLevelRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { Browser } from '../../../browser/browser'
 import type { ToolRegistry } from '../../../tools/tool-registry'
-import { MCP_INSTRUCTIONS } from './mcp-prompt'
 import {
   type KlavisProxyHandle,
   registerKlavisTools,
-} from './register-klavis-mcp'
+} from '../klavis/strata-proxy'
+import { MCP_INSTRUCTIONS } from './mcp-prompt'
 import { registerTools } from './register-mcp'
 
 export interface McpServiceDeps {

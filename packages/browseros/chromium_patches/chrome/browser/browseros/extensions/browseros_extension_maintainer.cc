@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc b/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc
 new file mode 100644
-index 0000000000000..bb33ae5d3b156
+index 0000000000000..5804d54696e8f
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc
 @@ -0,0 +1,395 @@

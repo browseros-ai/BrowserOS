@@ -23,7 +23,7 @@
     },
     "apps/agent": {
       "name": "@browseros/agent",
-      "version": "0.0.98",
+      "version": "0.0.99",
       "dependencies": {
         "@ai-sdk/react": "^3.0.96",
         "@browseros/server": "workspace:*",
@@ -152,7 +152,7 @@
     },
     "apps/server": {
       "name": "@browseros/server",
-      "version": "0.0.80",
+      "version": "0.0.82",
       "bin": {
         "browseros-server": "./src/index.ts",
       },

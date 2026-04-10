@@ -10,11 +10,8 @@ import { getTargetRules, loadManifest } from './manifest'
 import { createR2Client } from './r2'
 import { stageCompiledArtifact, stageTargetArtifact } from './stage'
 
-function buildModeLabel(argv: { compileOnly: boolean; ci: boolean }): string {
-  if (argv.ci) {
-    return 'ci'
-  }
-  return argv.compileOnly ? 'compile-only' : 'full'
+function buildModeLabel(ci: boolean): string {
+  return ci ? 'ci' : 'full'
 }
 
 export async function runProdResourceBuild(argv: string[]): Promise<void> {
@@ -23,20 +20,18 @@ export async function runProdResourceBuild(argv: string[]): Promise<void> {
 
   const args = parseBuildArgs(argv)
 
-  const buildConfig = loadBuildConfig(rootDir, {
-    compileOnly: args.compileOnly,
-    ci: args.ci,
-  })
+  const buildConfig = loadBuildConfig(rootDir, { ci: args.ci })
 
   log.header(`Building BrowserOS server artifacts v${buildConfig.version}`)
   log.info(`Targets: ${args.targets.map((target) => target.id).join(', ')}`)
-  log.info(`Mode: ${buildModeLabel(args)}`)
+  log.info(`Mode: ${buildModeLabel(args.ci)}`)
 
   const compiled = await compileServerBinaries(
     args.targets,
     buildConfig.envVars,
     buildConfig.processEnv,
     buildConfig.version,
+    { ci: args.ci },
   )
 
   if (args.ci) {
@@ -59,14 +54,6 @@ export async function runProdResourceBuild(argv: string[]): Promise<void> {
     log.done('CI build completed')
     for (const result of archiveResults) {
       log.info(`${result.targetId}: ${result.zipPath}`)
-    }
-    return
-  }
-
-  if (args.compileOnly) {
-    log.done('Compile-only build completed')
-    for (const binary of compiled) {
-      log.info(`${binary.target.id}: ${binary.binaryPath}`)
     }
     return
   }

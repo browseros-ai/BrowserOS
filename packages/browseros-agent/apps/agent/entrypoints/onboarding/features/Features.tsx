@@ -5,7 +5,6 @@ import {
   Bot,
   Code2,
   FolderOpen,
-  GitBranch,
   LinkIcon,
   Plug,
   SplitSquareHorizontal,
@@ -23,7 +22,6 @@ import {
   COWORK_DEMO_URL,
   MCP_SERVER_DEMO_URL,
   SPLIT_VIEW_GIF_URL,
-  WORKFLOWS_DEMO_URL,
 } from '@/lib/constants/mediaUrls'
 import {
   discordUrl,
@@ -44,7 +42,7 @@ const features: Feature[] = [
     description:
       'Describe any task and watch BrowserOS execute it—clicking, typing, and navigating for you.',
     detailedDescription:
-      'The BrowserOS Agent turns your words into browser actions. Describe what you need in plain English—fill out this form, extract data from that page, navigate through these steps—and the agent handles the rest. It clicks buttons, types text, navigates between pages, and completes multi-step workflows automatically. Everything runs locally on your machine with your own API keys, so your data stays private.',
+      'The BrowserOS Agent turns your words into browser actions. Describe what you need in plain English—fill out this form, extract data from that page, navigate through these steps—and the agent handles the rest. It clicks buttons, types text, navigates between pages, and completes multi-step browser tasks automatically. Everything runs locally on your machine with your own API keys, so your data stays private.',
     highlights: [
       'Multi-tab execution — run agents in multiple tabs simultaneously',
       'Smart navigation — automatically finds and interacts with page elements',
@@ -74,24 +72,6 @@ const features: Feature[] = [
     videoDuration: '1:40',
     gridClass: 'md:col-span-1',
     videoUrl: MCP_SERVER_DEMO_URL,
-  },
-  {
-    id: 'workflows',
-    Icon: GitBranch,
-    tag: 'AUTOMATION',
-    title: 'Visual Workflows',
-    description:
-      'Build reliable, repeatable automations with a visual graph builder.',
-    detailedDescription:
-      'Workflows turn complex browser tasks into reliable, reusable automations. Instead of hoping the agent figures out the right steps each time, you define the exact sequence in a visual graph. Describe what you want in chat, and the workflow agent generates the graph. Add loops, conditionals, and parallel branches. Save workflows and run them on-demand whenever you need.',
-    highlights: [
-      'Chat-to-graph — describe your automation and get a visual workflow',
-      'Parallel execution — run multiple branches simultaneously',
-      'Loops & conditionals — handle complex logic with flow control',
-      'Save & reuse — run saved workflows on-demand, daily, or weekly',
-    ],
-    gridClass: 'md:col-span-1',
-    videoUrl: WORKFLOWS_DEMO_URL || undefined,
   },
   {
     id: 'cowork',

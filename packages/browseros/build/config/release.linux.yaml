@@ -1,17 +1,24 @@
 # BrowserOS Linux Release Build Configuration
 #
+# Pinned to arm64-only to validate the cross-compile sysroot bootstrap
+# end-to-end on a Linux x64 host. Flip back to `[x64, arm64]` once arm64
+# is green.
+#
+# Run:
+#   browseros build --config build/config/release.linux.yaml
+#
 # Environment Variables:
 #   Use !env tag to reference environment variables:
 #     Example: chromium_src: !env CHROMIUM_SRC
 
 build:
   type: release
-  architecture: x64  # Linux x64
+  architecture: arm64
 
 gn_flags:
   file: build/config/gn/flags.linux.release.gn
 
-# Explicit module execution order
+# Explicit module execution order. Runs once per architecture above.
 modules:
   # Phase 1: Setup
   - clean

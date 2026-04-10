@@ -6,7 +6,6 @@ const EnvSchema = z.object({
   VITE_PUBLIC_POSTHOG_HOST: z.string().optional(),
   VITE_PUBLIC_SENTRY_DSN: z.string().optional(),
   VITE_PUBLIC_BROWSEROS_API: z.string().optional(),
-  VITE_PUBLIC_KIMI_LAUNCH: z.string().optional(),
   PROD: z.boolean(),
 })
 

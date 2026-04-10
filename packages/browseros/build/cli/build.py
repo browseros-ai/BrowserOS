@@ -402,9 +402,11 @@ def main(
         "upload": upload,
     }
 
-    # Resolve build context (CONFIG mode or DIRECT mode)
+    # Resolve build context (CONFIG mode or DIRECT mode).
+    # Returns one Context per architecture — single-element for normal
+    # builds, multi-element when YAML declares `architecture: [x64, arm64]`.
     try:
-        ctx = resolve_config(cli_args, config_data)
+        arch_ctxs = resolve_config(cli_args, config_data)
     except ValueError as e:
         log_error(str(e))
         raise typer.Exit(1)
@@ -459,20 +461,40 @@ def main(
         os.environ["DEPOT_TOOLS_WIN_TOOLCHAIN"] = "0"
         log_info("Set DEPOT_TOOLS_WIN_TOOLCHAIN=0 for Windows build")
 
+    # Print build summary using the first context — versions and paths
+    # are identical across per-arch contexts. Architecture is logged again
+    # inside the loop below for multi-arch runs.
+    summary_ctx = arch_ctxs[0]
     log_info(f"📍 Root: {root_dir}")
-    log_info(f"📍 Chromium: {ctx.chromium_src}")
-    log_info(f"📍 Architecture: {ctx.architecture}")
-    log_info(f"📍 Build type: {ctx.build_type}")
-    log_info(f"📍 Output: {ctx.out_dir}")
-    log_info(f"📍 Semantic version: {ctx.semantic_version}")
-    log_info(f"📍 Chromium version: {ctx.chromium_version}")
-    log_info(f"📍 Build offset: {ctx.browseros_build_offset}")
+    log_info(f"📍 Chromium: {summary_ctx.chromium_src}")
+    if len(arch_ctxs) > 1:
+        log_info(
+            f"📍 Architectures: {[c.architecture for c in arch_ctxs]} (multi-arch loop)"
+        )
+    else:
+        log_info(f"📍 Architecture: {summary_ctx.architecture}")
+    log_info(f"📍 Build type: {summary_ctx.build_type}")
+    log_info(f"📍 Semantic version: {summary_ctx.semantic_version}")
+    log_info(f"📍 Chromium version: {summary_ctx.chromium_version}")
+    log_info(f"📍 Build offset: {summary_ctx.browseros_build_offset}")
     log_info(f"📍 Pipeline: {' → '.join(pipeline)}")
     log_info("=" * 70)
 
-    # Set notification context for OS and architecture
     os_name = "macOS" if IS_MACOS() else "Windows" if IS_WINDOWS() else "Linux"
-    set_build_context(os_name, ctx.architecture)
 
-    # Execute pipeline
-    execute_pipeline(ctx, pipeline, AVAILABLE_MODULES, pipeline_name="build")
+    # Execute the pipeline once per architecture. Modules see a normal
+    # single-arch ctx; the runner is the only thing that knows about the
+    # multi-arch loop.
+    for i, arch_ctx in enumerate(arch_ctxs, start=1):
+        if len(arch_ctxs) > 1:
+            log_info("\n" + "#" * 70)
+            log_info(
+                f"# Architecture {i}/{len(arch_ctxs)}: {arch_ctx.architecture}"
+            )
+            log_info(f"# Output: {arch_ctx.out_dir}")
+            log_info("#" * 70)
+
+        set_build_context(os_name, arch_ctx.architecture)
+        execute_pipeline(
+            arch_ctx, pipeline, AVAILABLE_MODULES, pipeline_name="build"
+        )

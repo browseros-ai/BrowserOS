@@ -26,11 +26,13 @@ from .context import Context
 from .env import EnvConfig
 from .utils import get_platform_arch, log_info
 
+VALID_ARCHITECTURES = {"x64", "arm64", "universal"}
+
 
 def resolve_config(
     cli_args: Dict[str, Any],
     yaml_config: Optional[Dict[str, Any]] = None,
-) -> Context:
+) -> List[Context]:
     """Resolve build configuration - single entry point.
 
     Args:
@@ -38,7 +40,9 @@ def resolve_config(
         yaml_config: Optional YAML configuration (triggers CONFIG mode)
 
     Returns:
-        Fully resolved Context object
+        List of fully resolved Context objects. Single-element for the
+        common single-arch case; multi-element when YAML declares
+        `architecture: [x64, arm64]` (Linux multi-arch).
 
     Raises:
         ValueError: If required fields missing or invalid
@@ -59,7 +63,7 @@ def resolve_config(
 
 def _resolve_config_mode(
     yaml_config: Dict[str, Any], cli_args: Dict[str, Any]
-) -> Context:
+) -> List[Context]:
     """CONFIG MODE: YAML is base, CLI can override.
 
     Args:
@@ -67,7 +71,7 @@ def _resolve_config_mode(
         cli_args: CLI arguments (can override YAML values)
 
     Returns:
-        Context with values from YAML, optionally overridden by CLI
+        List of Contexts. One per architecture when YAML provides a list.
 
     Raises:
         ValueError: If required fields missing from both YAML and CLI
@@ -94,41 +98,66 @@ def _resolve_config_mode(
             f"Expected directory with Chromium source code"
         )
 
-    # architecture: CLI override > YAML > platform default
-    architecture = (
-        cli_args.get("arch")
-        or build_section.get("architecture")
-        or build_section.get("arch")
-    )
-    arch_source = "cli" if cli_args.get("arch") else "yaml"
-    if not architecture:
-        architecture = get_platform_arch()
+    # architecture: CLI override > YAML > platform default.
+    # YAML may be a string OR a list (e.g. [x64, arm64]) — list form runs
+    # the entire pipeline once per arch.
+    cli_arch = cli_args.get("arch")
+    yaml_arch = build_section.get("architecture") or build_section.get("arch")
+
+    if cli_arch:
+        architectures = [cli_arch]
+        arch_source = "cli"
+    elif yaml_arch is not None:
+        architectures = yaml_arch if isinstance(yaml_arch, list) else [yaml_arch]
+        arch_source = "yaml"
+    else:
+        architectures = [get_platform_arch()]
         arch_source = "default"
-        log_info(f"CONFIG MODE: Using platform default architecture: {architecture}")
+        log_info(
+            f"CONFIG MODE: Using platform default architecture: {architectures[0]}"
+        )
+
+    for arch in architectures:
+        if arch not in VALID_ARCHITECTURES:
+            raise ValueError(
+                f"CONFIG MODE: invalid architecture '{arch}'. "
+                f"Valid: {sorted(VALID_ARCHITECTURES)}"
+            )
 
     # build_type: CLI override > YAML > debug
     build_type = cli_args.get("build_type") or build_section.get("type", "debug")
     build_type_source = "cli" if cli_args.get("build_type") else "yaml"
 
     log_info(f"✓ CONFIG MODE: chromium_src={chromium_src} ({chromium_src_source})")
-    log_info(f"✓ CONFIG MODE: architecture={architecture} ({arch_source})")
+    if len(architectures) > 1:
+        log_info(
+            f"✓ CONFIG MODE: architectures={architectures} ({arch_source}, multi-arch loop)"
+        )
+    else:
+        log_info(
+            f"✓ CONFIG MODE: architecture={architectures[0]} ({arch_source})"
+        )
     log_info(f"✓ CONFIG MODE: build_type={build_type} ({build_type_source})")
 
-    return Context(
-        chromium_src=chromium_src,
-        architecture=architecture,
-        build_type=build_type,
-    )
+    return [
+        Context(
+            chromium_src=chromium_src,
+            architecture=arch,
+            build_type=build_type,
+        )
+        for arch in architectures
+    ]
 
 
-def _resolve_direct_mode(cli_args: Dict[str, Any]) -> Context:
+def _resolve_direct_mode(cli_args: Dict[str, Any]) -> List[Context]:
     """DIRECT MODE: CLI > Env > Defaults.
 
     Args:
         cli_args: CLI arguments (None if not provided by user)
 
     Returns:
-        Context with resolved values
+        Single-element list with the resolved Context. DIRECT mode is
+        always single-arch (CLI --arch is a scalar).
 
     Raises:
         ValueError: If chromium_src not provided
@@ -160,6 +189,12 @@ def _resolve_direct_mode(cli_args: Dict[str, Any]) -> Context:
         architecture = get_platform_arch()
         log_info(f"DIRECT MODE: Using platform default architecture: {architecture}")
 
+    if architecture not in VALID_ARCHITECTURES:
+        raise ValueError(
+            f"DIRECT MODE: invalid architecture '{architecture}'. "
+            f"Valid: {sorted(VALID_ARCHITECTURES)}"
+        )
+
     # build_type: CLI > Default
     build_type = cli_args.get("build_type") or "debug"
 
@@ -167,11 +202,13 @@ def _resolve_direct_mode(cli_args: Dict[str, Any]) -> Context:
     log_info(f"✓ DIRECT MODE: architecture={architecture} (cli/env/default)")
     log_info(f"✓ DIRECT MODE: build_type={build_type} (cli/default)")
 
-    return Context(
-        chromium_src=chromium_src,
-        architecture=architecture,
-        build_type=build_type,
-    )
+    return [
+        Context(
+            chromium_src=chromium_src,
+            architecture=architecture,
+            build_type=build_type,
+        )
+    ]
 
 
 def resolve_pipeline(

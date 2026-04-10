@@ -100,11 +100,16 @@ export function buildInteractiveTree(nodes: AXNode[]): string[] {
     if (node.childIds) for (const childId of node.childIds) walk(childId)
   }
 
-  const root =
-    nodes.find(
-      (n) => n.role?.value === 'RootWebArea' || n.role?.value === 'WebArea',
-    ) ?? nodes[0]
-  if (root?.childIds) for (const childId of root.childIds) walk(childId)
+  const roots = nodes.filter(
+    (n) => n.role?.value === 'RootWebArea' || n.role?.value === 'WebArea',
+  )
+  if (roots.length === 0 && nodes[0]?.childIds) {
+    for (const childId of nodes[0].childIds) walk(childId)
+  } else {
+    for (const root of roots) {
+      if (root.childIds) for (const childId of root.childIds) walk(childId)
+    }
+  }
 
   return lines
 }
@@ -160,11 +165,16 @@ export function buildEnhancedTree(nodes: AXNode[]): string[] {
       for (const childId of node.childIds) walk(childId, depth + 1)
   }
 
-  const root =
-    nodes.find(
-      (n) => n.role?.value === 'RootWebArea' || n.role?.value === 'WebArea',
-    ) ?? nodes[0]
-  if (root?.childIds) for (const childId of root.childIds) walk(childId, 0)
+  const roots = nodes.filter(
+    (n) => n.role?.value === 'RootWebArea' || n.role?.value === 'WebArea',
+  )
+  if (roots.length === 0 && nodes[0]?.childIds) {
+    for (const childId of nodes[0].childIds) walk(childId, 0)
+  } else {
+    for (const root of roots) {
+      if (root.childIds) for (const childId of root.childIds) walk(childId, 0)
+    }
+  }
 
   return lines
 }
@@ -292,11 +302,16 @@ export function extractLinkNodes(nodes: AXNode[]): LinkNode[] {
     if (node.childIds) for (const childId of node.childIds) walk(childId)
   }
 
-  const root =
-    nodes.find(
-      (n) => n.role?.value === 'RootWebArea' || n.role?.value === 'WebArea',
-    ) ?? nodes[0]
-  if (root?.childIds) for (const childId of root.childIds) walk(childId)
+  const roots = nodes.filter(
+    (n) => n.role?.value === 'RootWebArea' || n.role?.value === 'WebArea',
+  )
+  if (roots.length === 0 && nodes[0]?.childIds) {
+    for (const childId of nodes[0].childIds) walk(childId)
+  } else {
+    for (const root of roots) {
+      if (root.childIds) for (const childId of root.childIds) walk(childId)
+    }
+  }
 
   return links
 }

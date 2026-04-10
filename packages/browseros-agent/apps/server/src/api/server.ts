@@ -22,7 +22,6 @@ import { logger } from '../lib/logger'
 import { Sentry } from '../lib/sentry'
 import { createChatRoutes } from './routes/chat'
 import { createCreditsRoutes } from './routes/credits'
-import { createGraphRoutes } from './routes/graph'
 import { createHealthRoute } from './routes/health'
 import { createKlavisRoutes } from './routes/klavis'
 import { createMcpRoutes } from './routes/mcp'
@@ -38,7 +37,7 @@ import { createStatusRoute } from './routes/status'
 import {
   connectKlavisProxy,
   type KlavisProxyHandle,
-} from './services/mcp/register-klavis-mcp'
+} from './services/klavis/strata-proxy'
 import type { Env, HttpServerConfig } from './types'
 import { defaultCorsConfig } from './utils/cors'
 
@@ -169,14 +168,6 @@ export async function createHttpServer(config: HttpServerConfig) {
         port,
         browser,
         browserosId,
-      }),
-    )
-    .route(
-      '/graph',
-      createGraphRoutes({
-        port,
-        tempDir: executionDir,
-        codegenServiceUrl: config.codegenServiceUrl,
       }),
     )
 

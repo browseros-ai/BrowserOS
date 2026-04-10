@@ -11,8 +11,8 @@ import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
 import type { ToolRegistry } from '../../tools/tool-registry'
+import type { KlavisProxyHandle } from '../services/klavis/strata-proxy'
 import { createMcpServer } from '../services/mcp/mcp-server'
-import type { KlavisProxyHandle } from '../services/mcp/register-klavis-mcp'
 import type { Env } from '../types'
 
 interface McpRouteDeps {

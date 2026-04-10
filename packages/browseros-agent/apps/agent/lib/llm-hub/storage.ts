@@ -1,24 +1,10 @@
 import { getBrowserOSAdapter } from '@/lib/browseros/adapter'
 import { BROWSEROS_PREFS } from '@/lib/browseros/prefs'
-import { isKimiLaunchEnabled } from '@/lib/feature-flags/kimi-launch'
 
 /** @public */
 export interface LlmHubProvider {
   name: string
   url: string
-}
-
-const KIMI_PROVIDER: LlmHubProvider = {
-  name: 'Kimi',
-  url: 'https://www.kimi.com',
-}
-
-function ensureKimiFirst(providers: LlmHubProvider[]): LlmHubProvider[] {
-  if (!isKimiLaunchEnabled()) return providers
-  const hasKimi = providers.some(
-    (p) => p.name === 'Kimi' || p.url.includes('kimi.com'),
-  )
-  return hasKimi ? providers : [KIMI_PROVIDER, ...providers]
 }
 
 export async function loadProviders(): Promise<LlmHubProvider[]> {
@@ -27,24 +13,9 @@ export async function loadProviders(): Promise<LlmHubProvider[]> {
     const providersPref = await adapter.getPref(
       BROWSEROS_PREFS.THIRD_PARTY_LLM_PROVIDERS,
     )
-    const providers = (providersPref?.value as LlmHubProvider[]) || []
-
-    if (providers.length === 0) {
-      if (isKimiLaunchEnabled()) {
-        const defaults = [KIMI_PROVIDER]
-        await saveProviders(defaults)
-        return defaults
-      }
-      return []
-    }
-
-    const normalized = ensureKimiFirst(providers)
-    if (normalized !== providers) {
-      await saveProviders(normalized)
-    }
-    return normalized
+    return (providersPref?.value as LlmHubProvider[]) || []
   } catch {
-    return isKimiLaunchEnabled() ? [KIMI_PROVIDER] : []
+    return []
   }
 }
 

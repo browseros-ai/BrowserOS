@@ -92,10 +92,6 @@ Skills are custom instruction sets that shape agent behavior:
 - **Loader** (`src/skills/loader.ts`) — loads skills from local and remote sources
 - **Remote sync** (`src/skills/remote-sync.ts`) — syncs skills from the BrowserOS cloud
 
-## Graph Executor (Workflows)
-
-The graph executor (`src/graph/executor.ts`) runs visual workflow graphs built in the BrowserOS workflow editor. Each node in the graph maps to agent actions, conditionals, or data transformations.
-
 ## Directory Structure
 
 ```
@@ -120,14 +116,12 @@ apps/server/
 │   │   ├── filesystem/
 │   │   └── ...
 │   ├── skills/                # Skills system
-│   ├── graph/                 # Workflow graph executor
 │   ├── lib/                   # Shared utilities
 │   └── rpc.ts                 # JSON-RPC type definitions
 ├── tests/
 │   ├── tools/                 # Tool-level tests
 │   ├── sdk/                   # SDK integration tests
 │   └── server.integration.test.ts
-├── graph/                     # Workflow graph definitions
 └── package.json
 ```
 

@@ -12,8 +12,7 @@ BrowserOS is an AI-native browser built on Chromium that turns plain English int
 ## Modes
 
 - **Chat Mode** — Ask questions about any webpage: summarize articles, extract data, translate content. Activate with Option+K. Works with any LLM, including local models.
-- **Agent Mode** — Describe a task and the agent executes it: clicking, typing, navigating, filling forms, extracting data, multi-step workflows. Best with Claude Opus 4.5 or Kimi K2.5.
-- **Graph Mode (Workflows)** — Build visual workflow graphs for repeatable, reliable automations with parallel execution, loops, and conditionals.
+- **Agent Mode** — Describe a task and the agent executes it: clicking, typing, navigating, filling forms, extracting data, and multi-step browser tasks. Best with Claude Opus 4.5 or Kimi K2.5.
 
 ---
 
@@ -23,16 +22,12 @@ BrowserOS is an AI-native browser built on Chromium that turns plain English int
 Connect your preferred AI provider or run models locally. Supported providers: Gemini (free tier), Claude/Anthropic, OpenAI, OpenRouter (500+ models). Local options: Ollama, LM Studio. Configure at chrome://browseros/settings.
 Learn more: https://docs.browseros.com/features/bring-your-own-llm
 
-### Workflows
-Convert complex browser tasks into repeatable visual automations. Describe the task, the agent generates a workflow graph, refine it through conversation, then run it on demand. Ideal for data entry, outreach, price monitoring, bulk operations.
-Learn more: https://docs.browseros.com/features/workflows
-
 ### Scheduled Tasks
 Automate tasks on a schedule — daily, hourly, or every few minutes. Runs in a background window without interrupting your work. Use cases: morning briefings, LinkedIn automation, price monitoring. Requires BrowserOS to be open.
 Learn more: https://docs.browseros.com/features/scheduled-tasks
 
 ### Filesystem Access
-Grant the agent controlled access to a local folder to read files, write reports, and run shell commands. Sandboxed — cannot access parent directories. Combine web research with local file creation in a single workflow.
+Grant the agent controlled access to a local folder to read files, write reports, and run shell commands. Sandboxed — cannot access parent directories. Combine web research with local file creation in a single task.
 Learn more: https://docs.browseros.com/features/cowork
 
 ### Connect Apps (MCPs)
@@ -54,7 +49,6 @@ Learn more: https://docs.browseros.com/features/ad-blocking`
 const VALID_TOPICS = [
   'overview',
   'bring-your-own-llm',
-  'workflows',
   'scheduled-tasks',
   'filesystem-access',
   'connect-apps',
@@ -67,9 +61,8 @@ const TOPIC_SECTIONS: Record<string, { start: string; end?: string }> = {
   overview: { start: '# BrowserOS', end: '## Core Features' },
   'bring-your-own-llm': {
     start: '### Bring Your Own LLM',
-    end: '### Workflows',
+    end: '### Scheduled Tasks',
   },
-  workflows: { start: '### Workflows', end: '### Scheduled Tasks' },
   'scheduled-tasks': {
     start: '### Scheduled Tasks',
     end: '### Filesystem Access',

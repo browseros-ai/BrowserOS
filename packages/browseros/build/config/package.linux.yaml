@@ -3,7 +3,10 @@
 # This config packages an already-built Linux application.
 # Use this when you have a pre-built app and only need to package it.
 #
-# Expects: out/Default/chrome (Linux binary)
+# Expects: out/Default_<arch>/browseros
+# Invoke with:
+#   browseros build --config build/config/package.linux.yaml --arch x64
+#   browseros build --config build/config/package.linux.yaml --arch arm64
 #
 # Environment Variables:
 #   Use !env tag to reference environment variables:
@@ -11,7 +14,6 @@
 
 build:
   type: release
-  architecture: x64  # Linux x64
 
 gn_flags:
   file: build/config/gn/flags.linux.release.gn

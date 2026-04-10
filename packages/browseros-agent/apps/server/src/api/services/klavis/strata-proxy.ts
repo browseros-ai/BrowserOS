@@ -14,6 +14,7 @@ import type { KlavisClient } from '../../../lib/clients/klavis/klavis-client'
 import { OAUTH_MCP_SERVERS } from '../../../lib/clients/klavis/oauth-mcp-servers'
 import { logger } from '../../../lib/logger'
 import { metrics } from '../../../lib/metrics'
+import { klavisStrataCache } from './strata-cache'
 
 function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   let timerId: ReturnType<typeof setTimeout> | undefined
@@ -49,7 +50,8 @@ export async function connectKlavisProxy(
   // even unauthenticated ones (Klavis handles auth prompts on call)
   const allServers = OAUTH_MCP_SERVERS.map((s) => s.name)
 
-  const strata = await deps.klavisClient.createStrata(
+  const strata = await klavisStrataCache.getOrFetch(
+    deps.klavisClient,
     deps.browserosId,
     allServers,
   )

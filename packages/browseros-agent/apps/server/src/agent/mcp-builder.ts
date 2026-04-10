@@ -2,6 +2,7 @@ import { createMCPClient } from '@ai-sdk/mcp'
 import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 import type { ToolSet } from 'ai'
+import { klavisStrataCache } from '../api/services/klavis/strata-cache'
 import type { KlavisClient } from '../lib/clients/klavis/klavis-client'
 import { logger } from '../lib/logger'
 import {
@@ -40,7 +41,8 @@ export async function buildMcpServerSpecs(
     deps.browserContext?.enabledMcpServers?.length
   ) {
     try {
-      const result = await deps.klavisClient.createStrata(
+      const result = await klavisStrataCache.getOrFetch(
+        deps.klavisClient,
         deps.browserosId,
         deps.browserContext.enabledMcpServers,
       )

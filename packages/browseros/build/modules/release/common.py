@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from ...common.env import EnvConfig
-from ...common.utils import log_warning
 from ..storage import get_release_json, get_r2_client, BOTO3_AVAILABLE
 
 PLATFORMS = ["macos", "win", "linux"]
@@ -24,6 +23,8 @@ DOWNLOAD_PATH_MAPPING = {
     "linux": {
         "x64_appimage": "download/BrowserOS.AppImage",
         "x64_deb": "download/BrowserOS.deb",
+        "arm64_appimage": "download/BrowserOS-arm64.AppImage",
+        "arm64_deb": "download/BrowserOS-arm64.deb",
     },
 }
 

@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |------|------------|---------|
 | Folders | kebab-case | `ai-settings/`, `jtbd-popup/`, `llm-hub/` |
 | React components (.tsx) | PascalCase | `AISettingsPage.tsx`, `SurveyHeader.tsx` |
-| Hooks (.ts) | camelCase with `use` prefix | `useRunWorkflow.ts`, `useVoiceInput.ts` |
+| Hooks (.ts) | camelCase with `use` prefix | `useVoiceInput.ts`, `useMessageTree.ts` |
 | Non-component files (.ts) | lowercase | `types.ts`, `models.ts`, `storage.ts` |
 
 ## Project Overview

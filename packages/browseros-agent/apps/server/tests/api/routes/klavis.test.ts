@@ -3,11 +3,16 @@
  * Copyright 2025 BrowserOS
  */
 
-import { afterEach, describe, it } from 'bun:test'
+import { afterEach, beforeEach, describe, it } from 'bun:test'
 import assert from 'node:assert'
 import { createKlavisRoutes } from '../../../src/api/routes/klavis'
+import { klavisStrataCache } from '../../../src/api/services/klavis/strata-cache'
 
 const originalFetch = globalThis.fetch
+
+beforeEach(() => {
+  klavisStrataCache.clear()
+})
 
 afterEach(() => {
   globalThis.fetch = originalFetch

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_loader.h b/chrome/browser/browseros/extensions/browseros_extension_loader.h
 new file mode 100644
-index 0000000000000..2a14e9068156e
+index 0000000000000..ea2c856556f5f
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_loader.h
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,86 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -61,6 +61,11 @@ index 0000000000000..2a14e9068156e
 +
 +  // Convergence point for both startup paths.
 +  void OnStartupComplete(bool from_bundled);
++
++  // Reconstructs minimal prefs from already-installed BrowserOS extensions.
++  // Used as a fallback when both bundled CRX and remote config fail,
++  // preventing orphan detection from uninstalling existing extensions.
++  base::DictValue ReconstructPrefsFromInstalledExtensions();
 +
 +  // Installs remote extensions immediately via PendingExtensionManager + updater.
 +  void InstallRemoteExtensionsNow(base::DictValue config);

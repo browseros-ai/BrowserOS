@@ -8,7 +8,7 @@ import {
   Loader2,
   XCircle,
 } from 'lucide-react'
-import { type FC, useEffect, useMemo, useState } from 'react'
+import { type FC, useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod/v3'
 import { Button } from '@/components/ui/button'
@@ -61,7 +61,6 @@ import {
   KIMI_API_KEY_GUIDE_CLICKED_EVENT,
   MODEL_SELECTED_EVENT,
 } from '@/lib/constants/analyticsEvents'
-import { useKimiLaunch } from '@/lib/feature-flags/useKimiLaunch'
 import {
   getDefaultBaseUrlForProviders,
   getProviderTemplate,
@@ -223,9 +222,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   const [testResult, setTestResult] = useState<TestResult | null>(null)
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [modelSearch, setModelSearch] = useState('')
+  const modelListRef = useRef<HTMLDivElement>(null)
   const { supports } = useCapabilities()
   const { baseUrl: agentServerUrl } = useAgentServerUrl()
-  const kimiLaunch = useKimiLaunch()
 
   const filteredProviderTypeOptions = providerTypeOptions.filter((opt) => {
     if (opt.value === 'chatgpt-pro')
@@ -233,8 +232,6 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     if (opt.value === 'github-copilot')
       return supports(Feature.GITHUB_COPILOT_SUPPORT)
     if (opt.value === 'qwen-code') return supports(Feature.QWEN_CODE_SUPPORT)
-    if (opt.value === 'moonshot')
-      return kimiLaunch || initialValues?.type === 'moonshot'
     if (opt.value === 'openai-compatible') {
       return supports(Feature.OPENAI_COMPATIBLE_SUPPORT)
     }
@@ -308,6 +305,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   const filteredModels = modelSearch
     ? modelFuse.search(modelSearch).map((r) => r.item)
     : modelInfoList
+
+  const showCustomEntry =
+    modelSearch && !filteredModels.some((m) => m.modelId === modelSearch)
 
   // Handle provider type change (user-initiated via Select)
   const handleTypeChange = (newType: ProviderType) => {
@@ -894,59 +894,96 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                           <CommandInput
                             placeholder="Search models..."
                             value={modelSearch}
-                            onValueChange={setModelSearch}
+                            onValueChange={(v) => {
+                              setModelSearch(v)
+                              requestAnimationFrame(() => {
+                                modelListRef.current?.scrollTo(0, 0)
+                              })
+                            }}
                             onKeyDown={(e) => {
-                              if (
-                                e.key === 'Enter' &&
-                                modelSearch &&
-                                filteredModels.length === 0
-                              ) {
+                              if (e.key === 'Enter' && modelSearch) {
                                 e.preventDefault()
+                                e.stopPropagation()
                                 form.setValue('modelId', modelSearch)
                                 track(MODEL_SELECTED_EVENT, {
                                   provider_type: watchedType,
                                   model_id: modelSearch,
-                                  is_custom_model: true,
+                                  is_custom_model: !modelInfoList.some(
+                                    (m) => m.modelId === modelSearch,
+                                  ),
                                 })
                                 setModelPickerOpen(false)
                                 setModelSearch('')
                               }
                             }}
                           />
-                          <CommandList>
+                          <CommandList ref={modelListRef}>
                             <CommandEmpty>
                               No models found. Press Enter to use &quot;
                               {modelSearch}&quot;
                             </CommandEmpty>
-                            <CommandGroup>
-                              {filteredModels.map((model) => (
+                            {showCustomEntry && (
+                              <CommandGroup forceMount>
                                 <CommandItem
-                                  key={model.modelId}
-                                  value={model.modelId}
+                                  forceMount
+                                  value={`custom:${modelSearch}`}
                                   onSelect={() => {
-                                    form.setValue('modelId', model.modelId)
+                                    form.setValue('modelId', modelSearch)
                                     track(MODEL_SELECTED_EVENT, {
                                       provider_type: watchedType,
-                                      model_id: model.modelId,
-                                      context_window: model.contextLength,
-                                      is_custom_model: false,
+                                      model_id: modelSearch,
+                                      is_custom_model: true,
                                     })
                                     setModelPickerOpen(false)
                                     setModelSearch('')
                                   }}
                                 >
                                   <span className="flex-1 truncate">
-                                    {model.modelId}
+                                    {modelSearch}
                                   </span>
-                                  <span className="ml-2 shrink-0 rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                                    {formatContextWindow(model.contextLength)}
-                                  </span>
-                                  {field.value === model.modelId && (
+                                  {field.value === modelSearch && (
                                     <Check className="ml-2 h-4 w-4 shrink-0" />
                                   )}
                                 </CommandItem>
-                              ))}
-                            </CommandGroup>
+                              </CommandGroup>
+                            )}
+                            {filteredModels.length > 0 && (
+                              <CommandGroup>
+                                {filteredModels.map((model) => (
+                                  <CommandItem
+                                    key={model.modelId}
+                                    value={model.modelId}
+                                    onSelect={() => {
+                                      form.setValue('modelId', model.modelId)
+                                      track(MODEL_SELECTED_EVENT, {
+                                        provider_type: watchedType,
+                                        model_id: model.modelId,
+                                        context_window: model.contextLength,
+                                        is_custom_model: !modelInfoList.some(
+                                          (m) => m.modelId === model.modelId,
+                                        ),
+                                      })
+                                      setModelPickerOpen(false)
+                                      setModelSearch('')
+                                    }}
+                                  >
+                                    <span className="flex-1 truncate">
+                                      {model.modelId}
+                                    </span>
+                                    {model.contextLength > 0 && (
+                                      <span className="ml-2 shrink-0 rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                                        {formatContextWindow(
+                                          model.contextLength,
+                                        )}
+                                      </span>
+                                    )}
+                                    {field.value === model.modelId && (
+                                      <Check className="ml-2 h-4 w-4 shrink-0" />
+                                    )}
+                                  </CommandItem>
+                                ))}
+                              </CommandGroup>
+                            )}
                           </CommandList>
                         </Command>
                       </PopoverContent>

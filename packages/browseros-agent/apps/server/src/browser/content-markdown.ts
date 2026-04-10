@@ -20,7 +20,7 @@ export function buildContentMarkdownExpression(
 // Uses var + ES5 style for consistency with other injected scripts.
 // Context object: { pre: bool, ld: listDepth, lt: listType, td: tableDepth }
 const DOM_WALKER_SCRIPT = `(function(o) {
-var SKIP = {SCRIPT:1,STYLE:1,NOSCRIPT:1,SVG:1,TEMPLATE:1,IFRAME:1,CANVAS:1,VIDEO:1,AUDIO:1,OBJECT:1,EMBED:1};
+var SKIP = {SCRIPT:1,STYLE:1,NOSCRIPT:1,SVG:1,TEMPLATE:1,CANVAS:1,VIDEO:1,AUDIO:1,OBJECT:1,EMBED:1};
 var FORM = {INPUT:1,SELECT:1,TEXTAREA:1,BUTTON:1};
 var vh = window.innerHeight, vw = window.innerWidth;
 var root = o.selector ? document.querySelector(o.selector) : document.body;
@@ -218,6 +218,15 @@ function walk(node, ctx) {
     case 'FIGCAPTION':
       t = kids(el, ctx).trim();
       return t ? '\\n*' + t + '*\\n' : '';
+
+    case 'IFRAME':
+      try {
+        var idoc = el.contentDocument;
+        if (idoc && idoc.body) return walk(idoc.body, ctx);
+      } catch(e) {}
+      var isrc = el.src || el.getAttribute('src');
+      if (isrc) return '\\n\\n[iframe: ' + isrc + ']\\n\\n';
+      return '';
 
     default:
       return kids(el, ctx);

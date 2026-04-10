@@ -1,6 +1,7 @@
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { log } from '../log'
 import { wasmBinaryPlugin } from '../plugins/wasm-binary'
 import { runCommand } from './command'
 import type { BuildTarget, CompiledServerBinary } from './types'
@@ -52,6 +53,7 @@ async function bundleServer(
 async function compileTarget(
   target: BuildTarget,
   env: NodeJS.ProcessEnv,
+  ci: boolean,
 ): Promise<string> {
   const binaryPath = compiledBinaryPath(target)
   const args = [
@@ -63,14 +65,18 @@ async function compileTarget(
     `--target=${target.bunTarget}`,
     '--external=node-pty',
   ]
-  await runCommand(process.execPath, args, env)
+  await runCommand('bun', args, env)
 
   if (target.os === 'windows') {
-    await runCommand(
-      process.execPath,
-      ['scripts/patch-windows-exe.ts', binaryPath],
-      process.env,
-    )
+    if (ci) {
+      log.warn('Skipping Windows exe metadata patching in CI mode')
+    } else {
+      await runCommand(
+        'bun',
+        ['scripts/patch-windows-exe.ts', binaryPath],
+        process.env,
+      )
+    }
   }
 
   return binaryPath
@@ -81,14 +87,16 @@ export async function compileServerBinaries(
   envVars: Record<string, string>,
   processEnv: NodeJS.ProcessEnv,
   version: string,
+  options?: { ci?: boolean },
 ): Promise<CompiledServerBinary[]> {
+  const ci = options?.ci ?? false
   rmSync(TMP_ROOT, { recursive: true, force: true })
   mkdirSync(BINARIES_DIR, { recursive: true })
   await bundleServer(envVars, version)
 
   const compiled: CompiledServerBinary[] = []
   for (const target of targets) {
-    const binaryPath = await compileTarget(target, processEnv)
+    const binaryPath = await compileTarget(target, processEnv, ci)
     compiled.push({ target, binaryPath })
   }
 
