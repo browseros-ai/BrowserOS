@@ -53,18 +53,30 @@ export class WebVoyagerGrader implements Grader {
     const images: { type: 'image_url'; image_url: { url: string } }[] = []
     const loadedScreenshots: number[] = []
 
+    const loadPromises = []
     for (let i = startNum; i <= endNum; i++) {
-      try {
-        const filepath = join(input.outputDir, 'screenshots', `${i}.png`)
-        const buffer = await readFile(filepath)
-        const base64 = buffer.toString('base64')
-        images.push({
-          type: 'image_url',
-          image_url: { url: `data:image/png;base64,${base64}` },
-        })
-        loadedScreenshots.push(i)
-      } catch {
-        // Skip missing files
+      const filepath = join(input.outputDir, 'screenshots', `${i}.png`)
+      loadPromises.push(
+        readFile(filepath)
+          .then((buffer) => {
+            const base64 = buffer.toString('base64')
+            return {
+              index: i,
+              image: {
+                type: 'image_url' as const,
+                image_url: { url: `data:image/png;base64,${base64}` },
+              },
+            }
+          })
+          .catch(() => null), // Skip missing files
+      )
+    }
+
+    const results = await Promise.all(loadPromises)
+    for (const result of results) {
+      if (result) {
+        images.push(result.image)
+        loadedScreenshots.push(result.index)
       }
     }
 
