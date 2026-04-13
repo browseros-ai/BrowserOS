@@ -101,7 +101,7 @@ export async function executeTool(
   }
 
   if (ctx.aclRules?.length) {
-    const { checkAcl } = await import('./acl-guard')
+    const { checkAcl } = await import('./acl/acl-guard')
     const check = await checkAcl(
       tool.name,
       args as Record<string, unknown>,

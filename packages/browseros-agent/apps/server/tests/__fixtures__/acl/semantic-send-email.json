@@ -1,0 +1,23 @@
+{
+  "tool_name": "click",
+  "page_url": "https://mail.example.com/compose",
+  "element": {
+    "tagName": "button",
+    "textContent": "Send",
+    "attributes": {
+      "id": "send-btn",
+      "class": "compose-send",
+      "name": "send-message"
+    },
+    "ariaLabel": "Send message",
+    "role": "button"
+  },
+  "rules": [
+    {
+      "id": "block-outbound-email",
+      "sitePattern": "mail.example.com",
+      "description": "do not send or dispatch any emails or messages",
+      "enabled": true
+    }
+  ]
+}

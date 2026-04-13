@@ -1,6 +1,8 @@
-import { matchesElement, matchesSitePattern } from '@browseros/shared/acl/match'
+import { matchesSitePattern } from '@browseros/shared/acl/match'
 import type { AclRule } from '@browseros/shared/types/acl'
-import type { Browser } from '../browser/browser'
+import type { Browser } from '../../browser/browser'
+import { logger } from '../../lib/logger'
+import { scoreFixture } from './acl-scorer'
 
 const GUARDED_TOOLS = new Set([
   'click',
@@ -82,6 +84,13 @@ export async function checkAcl(
     (r) => !r.selector && !r.textMatch && !r.description,
   )
   if (siteOnlyRule) {
+    logger.info('ACL blocked by site-only rule', {
+      toolName,
+      pageId,
+      pageUrl: pageInfo.url,
+      ruleId: siteOnlyRule.id,
+      sitePattern: siteOnlyRule.sitePattern,
+    })
     return { blocked: true, rule: siteOnlyRule, pageId }
   }
 
@@ -96,10 +105,22 @@ export async function checkAcl(
   const props = await browser.resolveElementProperties(pageId, elementId)
   if (!props) return { blocked: false }
 
-  for (const rule of siteRules) {
-    if (matchesElement(props, rule)) {
-      return { blocked: true, rule, pageId, elementId }
-    }
+  const decision = await scoreFixture(toolName, pageInfo.url, props, siteRules)
+
+  if (decision.blocked) {
+    const matchedRule = decision.matchedRuleId
+      ? rules.find((rule) => rule.id === decision.matchedRuleId)
+      : undefined
+    logger.info('ACL blocked by scorer', {
+      toolName,
+      pageId,
+      pageUrl: pageInfo.url,
+      elementId,
+      ruleId: decision.matchedRuleId,
+      confidence: decision.confidence,
+      reason: decision.reason,
+    })
+    return { blocked: true, rule: matchedRule, pageId, elementId }
   }
 
   return { blocked: false }

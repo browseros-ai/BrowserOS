@@ -1,0 +1,21 @@
+{
+  "tool_name": "click",
+  "page_url": "https://app.example.com/settings",
+  "element": {
+    "tagName": "button",
+    "textContent": "Remove my account permanently",
+    "attributes": {
+      "class": "btn-danger"
+    },
+    "ariaLabel": "Remove my account permanently",
+    "role": "button"
+  },
+  "rules": [
+    {
+      "id": "block-delete",
+      "sitePattern": "*",
+      "description": "block account deletion or destruction",
+      "enabled": true
+    }
+  ]
+}
