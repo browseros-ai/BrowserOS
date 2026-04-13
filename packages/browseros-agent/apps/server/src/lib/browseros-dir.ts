@@ -34,6 +34,10 @@ export function getBuiltinSkillsDir(): string {
   return join(getSkillsDir(), PATHS.BUILTIN_DIR_NAME)
 }
 
+export function getOpenClawDir(): string {
+  return join(getBrowserosDir(), PATHS.OPENCLAW_DIR_NAME)
+}
+
 export function getServerConfigPath(): string {
   return join(getBrowserosDir(), PATHS.SERVER_CONFIG_FILE_NAME)
 }

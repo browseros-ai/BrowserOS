@@ -11,6 +11,7 @@ import { Onboarding } from '../onboarding/index/Onboarding'
 import { StepsLayout } from '../onboarding/steps/StepsLayout'
 import { AclSettingsPage } from './acl-settings/AclSettingsPage'
 import { AdminDashboardPage } from './admin-dashboard/AdminDashboardPage'
+import { AgentsPage } from './agents/AgentsPage'
 import { AISettingsPage } from './ai-settings/AISettingsPage'
 import { ConnectMCP } from './connect-mcp/ConnectMCP'
 import { CustomizationPage } from './customization/CustomizationPage'
@@ -91,6 +92,7 @@ export const App: FC = () => {
           <Route path="connect-apps" element={<ConnectMCP />} />
           <Route path="scheduled" element={<ScheduledTasksPage />} />
           <Route path="admin" element={<AdminDashboardPage />} />
+          <Route path="agents" element={<AgentsPage />} />
         </Route>
 
         {/* Settings with dedicated sidebar */}

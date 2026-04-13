@@ -17,6 +17,7 @@ export const PATHS = {
   SKILLS_DIR_NAME: 'skills',
   BUILTIN_DIR_NAME: 'builtin',
   SERVER_CONFIG_FILE_NAME: 'server.json',
+  OPENCLAW_DIR_NAME: 'openclaw',
   SOUL_MAX_LINES: 150,
   MEMORY_RETENTION_DAYS: 30,
   SESSION_RETENTION_DAYS: 30,

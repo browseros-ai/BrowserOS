@@ -30,6 +30,7 @@ import { metrics } from './lib/metrics'
 import { isPortInUseError } from './lib/port-binding'
 import { Sentry } from './lib/sentry'
 import { seedSoulTemplate } from './lib/soul'
+import { getOpenClawService } from './services/openclaw/openclaw-service'
 import { migrateBuiltinSkills } from './skills/migrate'
 import {
   startSkillSync,
@@ -118,12 +119,23 @@ export class Application {
     this.logStartupSummary()
     startSkillSync()
 
+    getOpenClawService(this.config.serverPort)
+      .tryAutoStart()
+      .catch((err) =>
+        logger.warn('OpenClaw auto-start failed', {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      )
+
     metrics.log('http_server.started', { version: VERSION })
   }
 
   stop(reason?: string): void {
     logger.info('Shutting down server...', { reason })
     stopSkillSync()
+    getOpenClawService()
+      .shutdown()
+      .catch(() => {})
     removeServerConfigSync()
 
     // Immediate exit without graceful shutdown. Chromium may kill us on update/restart,

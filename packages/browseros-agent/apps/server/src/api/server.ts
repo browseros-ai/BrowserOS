@@ -27,6 +27,7 @@ import { createKlavisRoutes } from './routes/klavis'
 import { createMcpRoutes } from './routes/mcp'
 import { createMemoryRoutes } from './routes/memory'
 import { createOAuthRoutes } from './routes/oauth'
+import { createOpenClawRoutes } from './routes/openclaw'
 import { createProviderRoutes } from './routes/provider'
 import { createRefinePromptRoutes } from './routes/refine-prompt'
 import { createSdkRoutes } from './routes/sdk'
@@ -170,6 +171,7 @@ export async function createHttpServer(config: HttpServerConfig) {
         browserosId,
       }),
     )
+    .route('/claw', createOpenClawRoutes())
 
   // Error handler
   app.onError((err, c) => {
