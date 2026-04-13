@@ -101,7 +101,7 @@ function selectorMatchesProps(
     if (part.startsWith('#') && id && part === `#${id}`) return true
     if (part.startsWith('.') && classes.some((c) => part === `.${c}`))
       return true
-    const match = part.match(/^(\w+)/)
+    const match = part.match(/^(\w+)$/)
     if (match && match[1].toLowerCase() === tag) return true
   }
   return false
@@ -160,13 +160,16 @@ function buildSearchFields(props: ElementProperties): string[] {
     attrs.name ?? '',
     attrs.value ?? '',
     attrs.id ?? '',
-    props.role ?? '',
   ]
   return dedupe(rawFields.filter(Boolean).map(normalizeTerm))
 }
 
 function buildSearchText(props: ElementProperties): string {
-  return dedupeTextTokens(buildSearchFields(props).join(' '))
+  return dedupeTextTokens(
+    [...buildSearchFields(props), normalizeTerm(props.role ?? '')]
+      .filter(Boolean)
+      .join(' '),
+  )
 }
 
 function buildRuleMatchInputs(

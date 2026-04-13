@@ -11,7 +11,8 @@ type FeatureExtractionPipeline = (
 ) => Promise<{ tolist: () => number[][] }>
 
 let pipelineInstance: FeatureExtractionPipeline | null = null
-let loadFailed = false
+const LOAD_RETRY_MS = 60_000
+let lastLoadFailedAt = 0
 
 function getModelName(): string {
   return process.env.ACL_EMBEDDING_MODEL ?? 'Xenova/bge-small-en-v1.5'
@@ -19,7 +20,9 @@ function getModelName(): string {
 
 async function ensurePipeline(): Promise<FeatureExtractionPipeline | null> {
   if (pipelineInstance) return pipelineInstance
-  if (loadFailed) return null
+  if (lastLoadFailedAt > 0 && Date.now() - lastLoadFailedAt < LOAD_RETRY_MS) {
+    return null
+  }
 
   try {
     const { pipeline } = await import('@huggingface/transformers')
@@ -27,10 +30,11 @@ async function ensurePipeline(): Promise<FeatureExtractionPipeline | null> {
       dtype: 'fp32',
     })
     pipelineInstance = extractor as unknown as FeatureExtractionPipeline
+    lastLoadFailedAt = 0
     logger.info('ACL embedding model loaded', { model: getModelName() })
     return pipelineInstance
   } catch (error) {
-    loadFailed = true
+    lastLoadFailedAt = Date.now()
     logger.warn(
       'ACL embedding model failed to load, semantic scoring disabled',
       {

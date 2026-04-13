@@ -145,6 +145,17 @@ describe('scoreFixture', () => {
     assert.strictEqual(decision.candidates[0].reason, 'selector-mismatch')
   })
 
+  it('does not match unsupported compound selectors by tag alone', async () => {
+    const decision = await scoreFixture(
+      'click',
+      'https://example.com',
+      makeElement({ attributes: { id: 'safe-btn' } }),
+      [makeRule({ selector: 'button.primary' })],
+    )
+    assert.strictEqual(decision.blocked, false)
+    assert.strictEqual(decision.reason, 'selector-mismatch')
+  })
+
   it('sorts candidates by confidence descending', async () => {
     const decision = await scoreFixture(
       'click',
@@ -159,6 +170,22 @@ describe('scoreFixture', () => {
     assert.ok(
       decision.candidates[0].confidence >= decision.candidates[1].confidence,
     )
+  })
+
+  it('does not exact-match generic button terms from the role field', async () => {
+    const decision = await scoreFixture(
+      'click',
+      'https://example.com',
+      makeElement({
+        textContent: 'View Report',
+        ariaLabel: 'View Report',
+        role: 'button',
+      }),
+      [makeRule({ description: 'block dangerous button' })],
+    )
+    assert.strictEqual(decision.blocked, false)
+    assert.strictEqual(decision.candidates[0].exactScore, 0)
+    assert.deepStrictEqual(decision.candidates[0].matchedTerms, [])
   })
 })
 
