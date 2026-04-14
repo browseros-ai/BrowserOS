@@ -170,7 +170,7 @@ export function createOpenClawRoutes() {
       const sessionKey = body.sessionKey ?? crypto.randomUUID()
 
       try {
-        const eventStream = getOpenClawService().chatStream(
+        const eventStream = await getOpenClawService().chatStream(
           id,
           sessionKey,
           body.message,
