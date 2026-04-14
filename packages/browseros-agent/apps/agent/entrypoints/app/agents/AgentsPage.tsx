@@ -135,7 +135,10 @@ const StatusBadge: FC<{ status: OpenClawStatus['status'] }> = ({ status }) => {
     error: { variant: 'destructive', label: 'Error' },
     uninitialized: { variant: 'outline', label: 'Not Set Up' },
   }
-  const current = variants[status]
+  const current = variants[status] ?? {
+    variant: 'outline' as const,
+    label: 'Unknown',
+  }
   return <Badge variant={current.variant}>{current.label}</Badge>
 }
 
