@@ -9,7 +9,10 @@
 
 import { OPENCLAW_GATEWAY_PORT } from '@browseros/shared/constants/openclaw'
 import { BROWSEROS_ROLE_TEMPLATES } from '@browseros/shared/constants/role-aware-agents'
-import type { BrowserOSAgentRoleId } from '@browseros/shared/types/role-aware-agents'
+import type {
+  BrowserOSAgentRoleId,
+  BrowserOSCustomRoleInput,
+} from '@browseros/shared/types/role-aware-agents'
 import { Hono } from 'hono'
 import { stream } from 'hono/streaming'
 import {
@@ -121,6 +124,7 @@ export function createOpenClawRoutes() {
       const body = await c.req.json<{
         name: string
         roleId?: BrowserOSAgentRoleId
+        customRole?: BrowserOSCustomRoleInput
         providerType?: string
         providerName?: string
         baseUrl?: string
@@ -132,11 +136,32 @@ export function createOpenClawRoutes() {
       if (!name) {
         return c.json({ error: 'Name is required' }, 400)
       }
+      if (body.roleId && body.customRole) {
+        return c.json(
+          { error: 'Provide either roleId or customRole, not both' },
+          400,
+        )
+      }
+      if (
+        body.customRole &&
+        (!body.customRole.name?.trim() ||
+          !body.customRole.shortDescription?.trim() ||
+          !body.customRole.longDescription?.trim())
+      ) {
+        return c.json(
+          {
+            error:
+              'Custom roles require name, shortDescription, and longDescription',
+          },
+          400,
+        )
+      }
 
       try {
         const agent = await getOpenClawService().createAgent({
           name,
           roleId: body.roleId,
+          customRole: body.customRole,
           providerType: body.providerType,
           providerName: body.providerName,
           baseUrl: body.baseUrl,

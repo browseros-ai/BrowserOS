@@ -16,6 +16,7 @@ import { DEFAULT_PORTS } from '@browseros/shared/constants/ports'
 import type {
   BrowserOSAgentRoleId,
   BrowserOSAgentRoleSummary,
+  BrowserOSCustomRoleInput,
 } from '@browseros/shared/types/role-aware-agents'
 import { getOpenClawDir } from '../../../lib/browseros-dir'
 import { logger } from '../../../lib/logger'
@@ -326,6 +327,7 @@ export class OpenClawService {
   async createAgent(input: {
     name: string
     roleId?: BrowserOSAgentRoleId
+    customRole?: BrowserOSCustomRoleInput
     providerType?: string
     providerName?: string
     baseUrl?: string
@@ -340,6 +342,7 @@ export class OpenClawService {
     logger.debug('Creating OpenClaw agent', {
       name,
       roleId: input.roleId,
+      roleSource: input.customRole ? 'custom' : input.roleId ? 'builtin' : null,
       providerType: input.providerType,
       providerName: input.providerName,
       hasBaseUrl: !!input.baseUrl,
@@ -380,20 +383,28 @@ export class OpenClawService {
       throw error
     }
 
-    if (input.roleId) {
-      await this.writeRoleBootstrapFiles(name, input.roleId)
+    if (input.roleId || input.customRole) {
+      await this.writeRoleBootstrapFiles(
+        name,
+        input.roleId ? resolveRoleTemplate(input.roleId) : input.customRole!,
+      )
     }
+
+    const roleSummary = input.roleId
+      ? toRoleSummary(resolveRoleTemplate(input.roleId))
+      : input.customRole
+        ? toRoleSummary(input.customRole)
+        : undefined
 
     logger.info('Agent created via WS RPC', {
       agentId: agent.agentId,
       roleId: input.roleId,
+      roleSource: roleSummary?.roleSource,
       providerType: input.providerType,
     })
     return {
       ...agent,
-      role: input.roleId
-        ? toRoleSummary(resolveRoleTemplate(input.roleId))
-        : undefined,
+      role: roleSummary,
     }
   }
 
@@ -661,9 +672,8 @@ export class OpenClawService {
 
   private async writeRoleBootstrapFiles(
     agentName: string,
-    roleId: BrowserOSAgentRoleId,
+    role: ReturnType<typeof resolveRoleTemplate> | BrowserOSCustomRoleInput,
   ): Promise<void> {
-    const role = resolveRoleTemplate(roleId)
     const workspaceDir = this.getHostWorkspaceDir(agentName)
     const files = buildRoleBootstrapFiles({ role, agentName })
 
@@ -676,7 +686,8 @@ export class OpenClawService {
 
     logger.info('Wrote BrowserOS role bootstrap files', {
       agentName,
-      roleId,
+      roleSource: 'id' in role ? 'builtin' : 'custom',
+      roleId: 'id' in role ? role.id : undefined,
       workspaceDir,
     })
   }
@@ -691,9 +702,24 @@ export class OpenClawService {
 
     try {
       const content = await readFile(roleMetadataPath, 'utf-8')
-      const json = JSON.parse(content) as { roleId?: BrowserOSAgentRoleId }
+      const json = JSON.parse(content) as {
+        roleSource?: 'builtin' | 'custom'
+        roleId?: BrowserOSAgentRoleId
+        roleName?: string
+        shortDescription?: string
+      }
+      if (
+        json.roleSource === 'custom' &&
+        json.roleName &&
+        json.shortDescription
+      ) {
+        return {
+          roleSource: 'custom',
+          roleName: json.roleName,
+          shortDescription: json.shortDescription,
+        }
+      }
       if (!json.roleId) return undefined
-
       const role = resolveRoleTemplate(json.roleId)
       return toRoleSummary(role)
     } catch {

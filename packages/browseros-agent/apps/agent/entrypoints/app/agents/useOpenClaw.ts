@@ -1,4 +1,7 @@
-import type { BrowserOSAgentRoleId } from '@browseros/shared/types/role-aware-agents'
+import type {
+  BrowserOSAgentRoleId,
+  BrowserOSCustomRoleInput,
+} from '@browseros/shared/types/role-aware-agents'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
 import { useAgentServerUrl } from '@/lib/browseros/useBrowserOSProviders'
@@ -9,7 +12,8 @@ export interface AgentEntry {
   workspace: string
   model?: unknown
   role?: {
-    roleId: BrowserOSAgentRoleId
+    roleSource: 'builtin' | 'custom'
+    roleId?: BrowserOSAgentRoleId
     roleName: string
     shortDescription: string
   }
@@ -147,6 +151,7 @@ export function useInvalidateOpenClawQueries() {
 export interface OpenClawAgentMutationInput {
   name: string
   roleId?: BrowserOSAgentRoleId
+  customRole?: BrowserOSCustomRoleInput
   providerType?: string
   providerName?: string
   baseUrl?: string

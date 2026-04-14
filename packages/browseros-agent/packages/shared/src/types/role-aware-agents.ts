@@ -22,9 +22,23 @@ export interface BrowserOSRoleTemplate {
   boundaries: BrowserOSRoleBoundary[]
 }
 
+export interface BrowserOSCustomRoleInput {
+  name: string
+  shortDescription: string
+  longDescription: string
+  recommendedApps: string[]
+  boundaries: BrowserOSRoleBoundary[]
+  bootstrap?: {
+    agentsMd?: string
+    soulMd?: string
+    toolsMd?: string
+  }
+}
+
 export interface RoleAwareCreateAgentInput {
   name: string
   roleId?: BrowserOSAgentRoleId
+  customRole?: BrowserOSCustomRoleInput
   providerType?: string
   providerName?: string
   baseUrl?: string
@@ -33,7 +47,8 @@ export interface RoleAwareCreateAgentInput {
 }
 
 export interface BrowserOSAgentRoleSummary {
-  roleId: BrowserOSAgentRoleId
+  roleSource: 'builtin' | 'custom'
+  roleId?: BrowserOSAgentRoleId
   roleName: string
   shortDescription: string
 }

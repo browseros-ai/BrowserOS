@@ -5,10 +5,19 @@ import {
 import type {
   BrowserOSAgentRoleId,
   BrowserOSAgentRoleSummary,
+  BrowserOSCustomRoleInput,
   BrowserOSRoleTemplate,
 } from '@browseros/shared/types/role-aware-agents'
 
 type RoleTemplate = (typeof BROWSEROS_ROLE_TEMPLATES)[number]
+interface BootstrapRenderableRole {
+  name: string
+  shortDescription: string
+  longDescription: string
+  recommendedApps: string[]
+  boundaries: BrowserOSRoleTemplate['boundaries']
+  bootstrap: BrowserOSRoleTemplate['bootstrap']
+}
 
 export interface RoleBootstrapFiles {
   'AGENTS.md': string
@@ -28,18 +37,22 @@ export function resolveRoleTemplate(
 }
 
 export function buildRoleBootstrapFiles(input: {
-  role: BrowserOSRoleTemplate
+  role: BrowserOSRoleTemplate | BrowserOSCustomRoleInput
   agentName: string
 }): RoleBootstrapFiles {
+  const normalizedRole = normalizeRoleForBootstrap(input.role)
+  const roleId = 'id' in input.role ? input.role.id : undefined
   return {
-    'AGENTS.md': input.role.bootstrap.agentsMd,
-    'SOUL.md': input.role.bootstrap.soulMd,
-    'TOOLS.md': input.role.bootstrap.toolsMd,
+    'AGENTS.md': normalizedRole.bootstrap.agentsMd,
+    'SOUL.md': normalizedRole.bootstrap.soulMd,
+    'TOOLS.md': normalizedRole.bootstrap.toolsMd,
     '.browseros-role.json': `${JSON.stringify(
       {
         version: 1,
-        roleId: input.role.id,
-        roleName: input.role.name,
+        roleSource: roleId ? 'builtin' : 'custom',
+        roleId,
+        roleName: normalizedRole.name,
+        shortDescription: normalizedRole.shortDescription,
         createdBy: 'browseros',
         agentName: input.agentName,
       },
@@ -50,11 +63,131 @@ export function buildRoleBootstrapFiles(input: {
 }
 
 export function toRoleSummary(
-  role: BrowserOSRoleTemplate,
+  role: BrowserOSRoleTemplate | BrowserOSCustomRoleInput,
 ): BrowserOSAgentRoleSummary {
+  const normalizedRole = normalizeRoleForBootstrap(role)
   return {
-    roleId: role.id,
-    roleName: role.name,
-    shortDescription: role.shortDescription,
+    roleSource: 'id' in role ? 'builtin' : 'custom',
+    roleId: 'id' in role ? role.id : undefined,
+    roleName: normalizedRole.name,
+    shortDescription: normalizedRole.shortDescription,
   }
+}
+
+export function normalizeCustomRole(
+  role: BrowserOSCustomRoleInput,
+): BootstrapRenderableRole {
+  return {
+    name: role.name,
+    shortDescription: role.shortDescription,
+    longDescription: role.longDescription,
+    recommendedApps: role.recommendedApps,
+    boundaries: role.boundaries,
+    bootstrap: {
+      agentsMd:
+        role.bootstrap?.agentsMd?.trim() ||
+        buildAgentsMd({
+          name: role.name,
+          longDescription: role.longDescription,
+          boundaries: role.boundaries,
+        }),
+      soulMd:
+        role.bootstrap?.soulMd?.trim() ||
+        buildSoulMd({
+          name: role.name,
+          shortDescription: role.shortDescription,
+          longDescription: role.longDescription,
+        }),
+      toolsMd:
+        role.bootstrap?.toolsMd?.trim() ||
+        buildToolsMd({
+          boundaries: role.boundaries,
+          recommendedApps: role.recommendedApps,
+        }),
+    },
+  }
+}
+
+function normalizeRoleForBootstrap(
+  role: BrowserOSRoleTemplate | BrowserOSCustomRoleInput,
+): BootstrapRenderableRole {
+  return 'id' in role ? role : normalizeCustomRole(role)
+}
+
+function buildAgentsMd(input: {
+  name: string
+  longDescription: string
+  boundaries: BrowserOSRoleTemplate['boundaries']
+}): string {
+  const boundaryLines = input.boundaries
+    .map(
+      (boundary) =>
+        `- ${boundary.label}: ${boundary.description} Default mode: ${boundary.defaultMode}.`,
+    )
+    .join('\n')
+
+  return `# ${input.name}
+
+You are the ${input.name} specialist for this workspace.
+
+## Core Purpose
+${input.longDescription}
+
+## Operating Rules
+${boundaryLines}
+
+## Default Output Style
+- concise
+- action-oriented
+- explicit about blockers and approvals
+`
+}
+
+function buildSoulMd(input: {
+  name: string
+  shortDescription: string
+  longDescription: string
+}): string {
+  return `# Operating Style
+
+You act like a trusted ${input.name}.
+
+## Working Posture
+- calm
+- structured
+- direct
+- explicit about tradeoffs
+
+## Role Framing
+${input.shortDescription}
+
+${input.longDescription}
+`
+}
+
+function buildToolsMd(input: {
+  boundaries: BrowserOSRoleTemplate['boundaries']
+  recommendedApps: string[]
+}): string {
+  const boundaryLines = input.boundaries
+    .map((boundary) => `- ${boundary.label}: ${boundary.defaultMode}`)
+    .join('\n')
+
+  const appsLine =
+    input.recommendedApps.length > 0
+      ? input.recommendedApps.join(', ')
+      : 'No specific apps configured yet.'
+
+  return `# Tooling Guidelines
+
+- Use BrowserOS MCP for browser and connected SaaS tasks.
+- Prefer read, summarize, and draft flows.
+- Keep outputs in the workspace when possible so work remains inspectable.
+
+## Recommended Apps
+${appsLine}
+
+## Boundary Defaults
+${boundaryLines}
+`
 }
