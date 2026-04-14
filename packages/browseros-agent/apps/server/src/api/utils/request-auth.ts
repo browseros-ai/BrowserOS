@@ -1,4 +1,5 @@
 import type { MiddlewareHandler } from 'hono'
+import { isLocalhostRequest } from './security'
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
 const EXTENSION_PROTOCOLS = new Set(['chrome-extension:', 'moz-extension:'])
@@ -33,15 +34,15 @@ export function requireTrustedAppOrigin(): MiddlewareHandler {
       return next()
     }
 
-    // Chrome extensions cannot set the Origin header (forbidden header).
-    // When Origin is absent, allow if the request targets a loopback address
-    // — the server only binds to loopback so only local processes can reach it.
-    const host = c.req.header('host') ?? ''
-    const hostname = host.split(':')[0]
-    if (!LOOPBACK_HOSTS.has(hostname)) {
-      return c.json({ error: 'Forbidden' }, 403)
+    // Some local reads arrive without an Origin header. Allow those only when
+    // the actual client socket is loopback. This avoids Host-header spoofing.
+    if (
+      ['GET', 'HEAD', 'OPTIONS'].includes(c.req.method) &&
+      isLocalhostRequest(c)
+    ) {
+      return next()
     }
 
-    return next()
+    return c.json({ error: 'Forbidden' }, 403)
   }
 }
