@@ -24,7 +24,21 @@ export function isTrustedAppOrigin(origin: string | undefined): boolean {
 
 export function requireTrustedAppOrigin(): MiddlewareHandler {
   return async (c, next) => {
-    if (!isTrustedAppOrigin(c.req.header('origin'))) {
+    const origin = c.req.header('origin')
+
+    if (origin) {
+      if (!isTrustedAppOrigin(origin)) {
+        return c.json({ error: 'Forbidden' }, 403)
+      }
+      return next()
+    }
+
+    // Chrome extensions cannot set the Origin header (forbidden header).
+    // When Origin is absent, allow if the request targets a loopback address
+    // — the server only binds to loopback so only local processes can reach it.
+    const host = c.req.header('host') ?? ''
+    const hostname = host.split(':')[0]
+    if (!LOOPBACK_HOSTS.has(hostname)) {
       return c.json({ error: 'Forbidden' }, 403)
     }
 
