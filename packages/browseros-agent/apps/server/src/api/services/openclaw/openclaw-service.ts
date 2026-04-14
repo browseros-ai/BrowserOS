@@ -37,7 +37,7 @@ import { getPodmanRuntime } from './podman-runtime'
 
 const COMPOSE_RESOURCE = resolve(
   import.meta.dir,
-  '../../../resources/openclaw-compose.yml',
+  '../../../../resources/openclaw-compose.yml',
 )
 const OPENCLAW_CONFIG_FILE = 'openclaw.json'
 const READY_TIMEOUT_MS = 30_000

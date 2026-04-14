@@ -7,7 +7,7 @@ processes:
       restart: no
 
   server:
-    command: bun --cwd apps/server start
+    command: bun --cwd apps/server --watch start
     availability:
       restart: always
     depends_on:
