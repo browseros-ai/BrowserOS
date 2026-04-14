@@ -16,7 +16,7 @@ interface AgentCommandContextValue {
 
 export const AgentCommandLayout: FC = () => {
   const { status, loading: statusLoading } = useOpenClawStatus(5000)
-  const { agents, loading: agentsLoading } = useOpenClawAgents(0)
+  const { agents, loading: agentsLoading } = useOpenClawAgents()
 
   return (
     <Outlet

@@ -8,6 +8,8 @@
  */
 
 import { OPENCLAW_GATEWAY_PORT } from '@browseros/shared/constants/openclaw'
+import { BROWSEROS_ROLE_TEMPLATES } from '@browseros/shared/constants/role-aware-agents'
+import type { BrowserOSAgentRoleId } from '@browseros/shared/types/role-aware-agents'
 import { Hono } from 'hono'
 import { stream } from 'hono/streaming'
 import {
@@ -101,9 +103,24 @@ export function createOpenClawRoutes() {
       }
     })
 
+    .get('/roles', async (c) => {
+      return c.json({
+        roles: BROWSEROS_ROLE_TEMPLATES.map((role) => ({
+          id: role.id,
+          name: role.name,
+          shortDescription: role.shortDescription,
+          longDescription: role.longDescription,
+          recommendedApps: role.recommendedApps,
+          boundaries: role.boundaries,
+          defaultAgentName: role.defaultAgentName,
+        })),
+      })
+    })
+
     .post('/agents', async (c) => {
       const body = await c.req.json<{
         name: string
+        roleId?: BrowserOSAgentRoleId
         providerType?: string
         providerName?: string
         baseUrl?: string
@@ -119,6 +136,7 @@ export function createOpenClawRoutes() {
       try {
         const agent = await getOpenClawService().createAgent({
           name,
+          roleId: body.roleId,
           providerType: body.providerType,
           providerName: body.providerName,
           baseUrl: body.baseUrl,

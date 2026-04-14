@@ -32,14 +32,17 @@ import { AgentChat } from './AgentChat'
 import { AgentTerminal } from './AgentTerminal'
 import {
   type AgentEntry,
-  createAgent,
-  deleteAgent,
-  restartOpenClaw,
-  setupOpenClaw,
-  startOpenClaw,
-  stopOpenClaw,
+  type RoleTemplateSummary,
+  useCreateOpenClawAgentMutation,
+  useDeleteOpenClawAgentMutation,
+  useInvalidateOpenClawQueries,
   useOpenClawAgents,
+  useOpenClawRoles,
   useOpenClawStatus,
+  useRestartOpenClawMutation,
+  useSetupOpenClawMutation,
+  useStartOpenClawMutation,
+  useStopOpenClawMutation,
 } from './useOpenClaw'
 
 const OAUTH_ONLY_TYPES = new Set(['chatgpt-pro', 'github-copilot', 'qwen-code'])
@@ -65,26 +68,40 @@ const StatusBadge: FC<{ status: string }> = ({ status }) => {
 export const AgentsPage: FC = () => {
   const { status, loading: statusLoading } = useOpenClawStatus()
   const { providers, defaultProviderId } = useLlmProviders()
-  const [refreshKey, setRefreshKey] = useState(0)
-  const { agents, loading: agentsLoading } = useOpenClawAgents(refreshKey)
+  const { agents, loading: agentsLoading } = useOpenClawAgents()
+  const { roles, loading: rolesLoading } = useOpenClawRoles()
+  const invalidateOpenClawQueries = useInvalidateOpenClawQueries()
 
   const [setupOpen, setSetupOpen] = useState(false)
   const [setupProviderId, setSetupProviderId] = useState('')
-  const [settingUp, setSettingUp] = useState(false)
 
   const [createOpen, setCreateOpen] = useState(false)
+  const [selectedRoleId, setSelectedRoleId] =
+    useState<RoleTemplateSummary['id']>('chief-of-staff')
   const [newName, setNewName] = useState('')
   const [createProviderId, setCreateProviderId] = useState('')
-  const [creating, setCreating] = useState(false)
 
-  const [actionInProgress, setActionInProgress] = useState(false)
   const [chatAgent, setChatAgent] = useState<AgentEntry | null>(null)
   const [showTerminal, setShowTerminal] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const setupMutation = useSetupOpenClawMutation()
+  const createAgentMutation = useCreateOpenClawAgentMutation()
+  const deleteAgentMutation = useDeleteOpenClawAgentMutation()
+  const startMutation = useStartOpenClawMutation()
+  const stopMutation = useStopOpenClawMutation()
+  const restartMutation = useRestartOpenClawMutation()
+
   const compatibleProviders = providers.filter(
     (p) => p.apiKey && !OAUTH_ONLY_TYPES.has(p.type),
   )
+  const selectedRole =
+    roles.find((role) => role.id === selectedRoleId) ?? roles[0] ?? null
+  const actionInProgress =
+    deleteAgentMutation.isPending ||
+    startMutation.isPending ||
+    stopMutation.isPending ||
+    restartMutation.isPending
 
   // Pre-select default provider when dialogs open
   useEffect(() => {
@@ -96,14 +113,24 @@ export const AgentsPage: FC = () => {
     if (createOpen) setCreateProviderId(fallbackId)
   }, [setupOpen, createOpen, compatibleProviders, defaultProviderId])
 
-  const refresh = () => setRefreshKey((k) => k + 1)
+  useEffect(() => {
+    if (!createOpen || roles.length === 0) return
+
+    const defaultRole = roles.find((role) => role.id === 'chief-of-staff')
+    const nextRole = defaultRole ?? roles[0]
+
+    setSelectedRoleId((current) => {
+      const hasCurrent = roles.some((role) => role.id === current)
+      return hasCurrent ? current : nextRole.id
+    })
+    setNewName((current) => current || nextRole.defaultAgentName)
+  }, [createOpen, roles])
 
   const handleSetup = async () => {
     const provider = compatibleProviders.find((p) => p.id === setupProviderId)
-    setSettingUp(true)
     setError(null)
     try {
-      await setupOpenClaw({
+      await setupMutation.mutateAsync({
         providerType: provider?.type,
         providerName: provider?.name,
         baseUrl: provider?.baseUrl,
@@ -111,22 +138,20 @@ export const AgentsPage: FC = () => {
         modelId: provider?.modelId,
       })
       setSetupOpen(false)
-      refresh()
+      await invalidateOpenClawQueries()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setSettingUp(false)
     }
   }
 
   const handleCreate = async () => {
-    if (!newName.trim()) return
+    if (!newName.trim() || !selectedRole) return
     const provider = compatibleProviders.find((p) => p.id === createProviderId)
-    setCreating(true)
     setError(null)
     try {
-      await createAgent({
+      await createAgentMutation.mutateAsync({
         name: newName.trim().toLowerCase().replace(/\s+/g, '-'),
+        roleId: selectedRole.id,
         providerType: provider?.type,
         providerName: provider?.name,
         baseUrl: provider?.baseUrl,
@@ -135,60 +160,46 @@ export const AgentsPage: FC = () => {
       })
       setCreateOpen(false)
       setNewName('')
-      refresh()
+      await invalidateOpenClawQueries()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setCreating(false)
     }
   }
 
   const handleDelete = async (id: string) => {
-    setActionInProgress(true)
     try {
-      await deleteAgent(id)
-      refresh()
+      await deleteAgentMutation.mutateAsync(id)
+      await invalidateOpenClawQueries()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setActionInProgress(false)
     }
   }
 
   const handleStop = async () => {
-    setActionInProgress(true)
     try {
-      await stopOpenClaw()
-      refresh()
+      await stopMutation.mutateAsync()
+      await invalidateOpenClawQueries()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setActionInProgress(false)
     }
   }
 
   const handleStart = async () => {
-    setActionInProgress(true)
     setError(null)
     try {
-      await startOpenClaw()
-      refresh()
+      await startMutation.mutateAsync()
+      await invalidateOpenClawQueries()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setActionInProgress(false)
     }
   }
 
   const handleRestart = async () => {
-    setActionInProgress(true)
     try {
-      await restartOpenClaw()
-      refresh()
+      await restartMutation.mutateAsync()
+      await invalidateOpenClawQueries()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setActionInProgress(false)
     }
   }
 
@@ -357,10 +368,24 @@ export const AgentsPage: FC = () => {
                   <div className="flex items-center gap-3">
                     <Cpu className="size-5 text-muted-foreground" />
                     <div>
-                      <CardTitle className="text-base">{agent.name}</CardTitle>
+                      <div className="flex items-center gap-2">
+                        <CardTitle className="text-base">
+                          {agent.name}
+                        </CardTitle>
+                        {agent.role && (
+                          <Badge variant="secondary">
+                            {agent.role.roleName}
+                          </Badge>
+                        )}
+                      </div>
                       <p className="font-mono text-muted-foreground text-xs">
                         {agent.workspace}
                       </p>
+                      {agent.role && (
+                        <p className="text-muted-foreground text-xs">
+                          {agent.role.shortDescription}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
@@ -405,10 +430,10 @@ export const AgentsPage: FC = () => {
             />
             <Button
               onClick={handleSetup}
-              disabled={settingUp}
+              disabled={setupMutation.isPending}
               className="w-full"
             >
-              {settingUp ? (
+              {setupMutation.isPending ? (
                 <>
                   <Loader2 className="mr-2 size-4 animate-spin" />
                   Setting up...
@@ -428,6 +453,70 @@ export const AgentsPage: FC = () => {
             <DialogTitle>Create Agent</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <label className="font-medium text-sm" htmlFor="agent-role">
+                Agent Role
+              </label>
+              <Select
+                value={selectedRole?.id}
+                onValueChange={(value) => {
+                  const role = roles.find((item) => item.id === value)
+                  if (!role) return
+                  setSelectedRoleId(role.id)
+                  setNewName(role.defaultAgentName)
+                }}
+                disabled={rolesLoading}
+              >
+                <SelectTrigger id="agent-role">
+                  <SelectValue
+                    placeholder={
+                      rolesLoading ? 'Loading roles...' : 'Select a role'
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {roles.map((role) => (
+                    <SelectItem key={role.id} value={role.id}>
+                      {role.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedRole && (
+                <Card>
+                  <CardContent className="space-y-3 py-4">
+                    <div>
+                      <div className="font-medium text-sm">
+                        {selectedRole.name}
+                      </div>
+                      <p className="text-muted-foreground text-xs">
+                        {selectedRole.shortDescription}
+                      </p>
+                    </div>
+                    <div>
+                      <div className="font-medium text-xs">
+                        Recommended Apps
+                      </div>
+                      <p className="text-muted-foreground text-xs">
+                        {selectedRole.recommendedApps.join(', ')}
+                      </p>
+                    </div>
+                    <div>
+                      <div className="font-medium text-xs">
+                        Default Boundaries
+                      </div>
+                      <ul className="space-y-1 text-muted-foreground text-xs">
+                        {selectedRole.boundaries.map((boundary) => (
+                          <li key={boundary.key}>
+                            {boundary.label}: {boundary.defaultMode}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
             <div>
               <label
                 htmlFor="agent-name"
@@ -456,10 +545,15 @@ export const AgentsPage: FC = () => {
             />
             <Button
               onClick={handleCreate}
-              disabled={!newName.trim() || creating}
+              disabled={
+                !newName.trim() ||
+                createAgentMutation.isPending ||
+                rolesLoading ||
+                !selectedRole
+              }
               className="w-full"
             >
-              {creating ? (
+              {createAgentMutation.isPending ? (
                 <>
                   <Loader2 className="mr-2 size-4 animate-spin" />
                   Creating...

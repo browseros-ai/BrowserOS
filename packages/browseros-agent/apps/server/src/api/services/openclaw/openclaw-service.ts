@@ -13,6 +13,10 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { OPENCLAW_GATEWAY_PORT } from '@browseros/shared/constants/openclaw'
 import { DEFAULT_PORTS } from '@browseros/shared/constants/ports'
+import type {
+  BrowserOSAgentRoleId,
+  BrowserOSAgentRoleSummary,
+} from '@browseros/shared/types/role-aware-agents'
 import { getOpenClawDir } from '../../../lib/browseros-dir'
 import { logger } from '../../../lib/logger'
 import { ContainerRuntime } from './container-runtime'
@@ -38,6 +42,11 @@ import {
   resolveProviderModel,
 } from './openclaw-config'
 import { getPodmanRuntime } from './podman-runtime'
+import {
+  buildRoleBootstrapFiles,
+  resolveRoleTemplate,
+  toRoleSummary,
+} from './role-bootstrap'
 
 const COMPOSE_RESOURCE = resolve(
   import.meta.dir,
@@ -61,6 +70,10 @@ export interface OpenClawStatusResponse {
   port: number | null
   agentCount: number
   error: string | null
+}
+
+export interface OpenClawAgentEntry extends GatewayAgentEntry {
+  role?: BrowserOSAgentRoleSummary
 }
 
 export interface SetupInput {
@@ -312,12 +325,13 @@ export class OpenClawService {
 
   async createAgent(input: {
     name: string
+    roleId?: BrowserOSAgentRoleId
     providerType?: string
     providerName?: string
     baseUrl?: string
     apiKey?: string
     modelId?: string
-  }): Promise<GatewayAgentEntry> {
+  }): Promise<OpenClawAgentEntry> {
     const { name } = input
     if (!AGENT_NAME_PATTERN.test(name)) {
       throw new OpenClawInvalidAgentNameError()
@@ -325,6 +339,7 @@ export class OpenClawService {
 
     logger.debug('Creating OpenClaw agent', {
       name,
+      roleId: input.roleId,
       providerType: input.providerType,
       providerName: input.providerName,
       hasBaseUrl: !!input.baseUrl,
@@ -365,11 +380,21 @@ export class OpenClawService {
       throw error
     }
 
+    if (input.roleId) {
+      await this.writeRoleBootstrapFiles(name, input.roleId)
+    }
+
     logger.info('Agent created via WS RPC', {
       agentId: agent.agentId,
+      roleId: input.roleId,
       providerType: input.providerType,
     })
-    return agent
+    return {
+      ...agent,
+      role: input.roleId
+        ? toRoleSummary(resolveRoleTemplate(input.roleId))
+        : undefined,
+    }
   }
 
   async removeAgent(agentId: string): Promise<void> {
@@ -391,11 +416,17 @@ export class OpenClawService {
     logger.info('Agent removed via WS RPC', { agentId })
   }
 
-  async listAgents(): Promise<GatewayAgentEntry[]> {
+  async listAgents(): Promise<OpenClawAgentEntry[]> {
     this.ensureGatewayConnected()
     logger.debug('Listing OpenClaw agents')
     // biome-ignore lint/style/noNonNullAssertion: ensureGatewayConnected() guards above
-    return this.gateway!.listAgents()
+    const agents = await this.gateway!.listAgents()
+    return Promise.all(
+      agents.map(async (agent) => ({
+        ...agent,
+        role: await this.readRoleSummary(agent.name),
+      })),
+    )
   }
 
   // ── Chat Stream (WS) ─────────────────────────────────────────────────
@@ -619,6 +650,55 @@ export class OpenClawService {
   ): Promise<void> {
     const configPath = join(this.openclawDir, OPENCLAW_CONFIG_FILE)
     await writeFile(configPath, JSON.stringify(config, null, 2))
+  }
+
+  private getHostWorkspaceDir(agentName: string): string {
+    return join(
+      this.openclawDir,
+      agentName === 'main' ? 'workspace' : `workspace-${agentName}`,
+    )
+  }
+
+  private async writeRoleBootstrapFiles(
+    agentName: string,
+    roleId: BrowserOSAgentRoleId,
+  ): Promise<void> {
+    const role = resolveRoleTemplate(roleId)
+    const workspaceDir = this.getHostWorkspaceDir(agentName)
+    const files = buildRoleBootstrapFiles({ role, agentName })
+
+    await mkdir(workspaceDir, { recursive: true })
+    await Promise.all(
+      Object.entries(files).map(([filename, content]) =>
+        writeFile(join(workspaceDir, filename), content),
+      ),
+    )
+
+    logger.info('Wrote BrowserOS role bootstrap files', {
+      agentName,
+      roleId,
+      workspaceDir,
+    })
+  }
+
+  private async readRoleSummary(
+    agentName: string,
+  ): Promise<BrowserOSAgentRoleSummary | undefined> {
+    const roleMetadataPath = join(
+      this.getHostWorkspaceDir(agentName),
+      '.browseros-role.json',
+    )
+
+    try {
+      const content = await readFile(roleMetadataPath, 'utf-8')
+      const json = JSON.parse(content) as { roleId?: BrowserOSAgentRoleId }
+      if (!json.roleId) return undefined
+
+      const role = resolveRoleTemplate(json.roleId)
+      return toRoleSummary(role)
+    } catch {
+      return undefined
+    }
   }
 
   /**
