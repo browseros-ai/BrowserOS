@@ -250,6 +250,27 @@ export class OpenClawService {
     logger.info('OpenClaw gateway restarted', { port: this.port })
   }
 
+  async reconnectControlPlane(onLog?: (msg: string) => void): Promise<void> {
+    const logProgress = this.createProgressLogger(onLog)
+
+    logProgress('Checking gateway readiness...')
+    const ready = await this.runtime.isReady(this.port)
+    if (!ready) {
+      this.controlPlaneStatus = 'failed'
+      this.lastGatewayError = 'OpenClaw gateway is not ready'
+      this.lastRecoveryReason = 'container_not_ready'
+      throw new Error('OpenClaw gateway is not ready')
+    }
+
+    logProgress('Reloading gateway auth token...')
+    await this.loadTokenFromEnv()
+    this.disconnectGateway()
+
+    logProgress('Reconnecting control plane...')
+    await this.ensureGatewayReady()
+    logProgress('Control plane connected')
+  }
+
   async shutdown(): Promise<void> {
     this.disconnectGateway()
     try {
