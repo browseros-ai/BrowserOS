@@ -56,6 +56,7 @@ var groupOrder = []string{
 	"Observe:",
 	"Input:",
 	"Resources:",
+	"Integrations:",
 	"Setup:",
 }
 

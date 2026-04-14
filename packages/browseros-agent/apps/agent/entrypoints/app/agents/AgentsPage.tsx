@@ -1,5 +1,4 @@
 import type {
-  BrowserOSAgentRoleId,
   BrowserOSCustomRoleInput,
   BrowserOSRoleBoundary,
 } from '@browseros/shared/types/role-aware-agents'
@@ -10,11 +9,15 @@ import {
   MessageSquare,
   Plus,
   RefreshCw,
+  ShieldAlert,
   Square,
   TerminalSquare,
   Trash2,
+  WifiOff,
+  Wrench,
 } from 'lucide-react'
-import { type FC, useEffect, useState } from 'react'
+import { type FC, useEffect, useMemo, useState } from 'react'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -38,17 +41,12 @@ import { AgentChat } from './AgentChat'
 import { AgentTerminal } from './AgentTerminal'
 import {
   type AgentEntry,
+  type OpenClawStatus,
   type RoleTemplateSummary,
-  useCreateOpenClawAgentMutation,
-  useDeleteOpenClawAgentMutation,
-  useInvalidateOpenClawQueries,
   useOpenClawAgents,
+  useOpenClawMutations,
   useOpenClawRoles,
   useOpenClawStatus,
-  useRestartOpenClawMutation,
-  useSetupOpenClawMutation,
-  useStartOpenClawMutation,
-  useStopOpenClawMutation,
 } from './useOpenClaw'
 
 const OAUTH_ONLY_TYPES = new Set(['chatgpt-pro', 'github-copilot', 'qwen-code'])
@@ -84,9 +82,86 @@ function parseCommaSeparatedList(input: string): string[] {
     .filter(Boolean)
 }
 
-const StatusBadge: FC<{ status: string }> = ({ status }) => {
+const CONTROL_PLANE_COPY: Record<
+  OpenClawStatus['controlPlaneStatus'],
+  {
+    badgeVariant: 'default' | 'secondary' | 'outline' | 'destructive'
+    badgeLabel: string
+    title: string
+    description: string
+  }
+> = {
+  connected: {
+    badgeVariant: 'default',
+    badgeLabel: 'Control Plane Ready',
+    title: 'Gateway Connected',
+    description: 'OpenClaw can create, manage, and chat with agents normally.',
+  },
+  connecting: {
+    badgeVariant: 'secondary',
+    badgeLabel: 'Connecting',
+    title: 'Connecting to Gateway',
+    description:
+      'BrowserOS is establishing the OpenClaw control channel for agent operations.',
+  },
+  reconnecting: {
+    badgeVariant: 'secondary',
+    badgeLabel: 'Reconnecting',
+    title: 'Reconnecting Control Plane',
+    description:
+      'The gateway process is up, but BrowserOS is restoring the control channel.',
+  },
+  recovering: {
+    badgeVariant: 'secondary',
+    badgeLabel: 'Recovering',
+    title: 'Recovering Gateway Connection',
+    description:
+      'BrowserOS detected a control-plane fault and is trying a safe recovery path.',
+  },
+  disconnected: {
+    badgeVariant: 'outline',
+    badgeLabel: 'Disconnected',
+    title: 'Gateway Disconnected',
+    description: 'The gateway process is not available to BrowserOS right now.',
+  },
+  failed: {
+    badgeVariant: 'destructive',
+    badgeLabel: 'Needs Attention',
+    title: 'Gateway Recovery Failed',
+    description:
+      'BrowserOS could not restore the OpenClaw control channel automatically.',
+  },
+}
+
+const FALLBACK_CONTROL_PLANE_COPY = {
+  badgeVariant: 'outline' as const,
+  badgeLabel: 'Unknown',
+  title: 'Gateway State Unknown',
+  description:
+    'BrowserOS received a gateway status it does not recognize yet. Refreshing or reconnecting should restore a known state.',
+}
+
+const RECOVERY_REASON_COPY: Record<
+  NonNullable<OpenClawStatus['lastRecoveryReason']>,
+  string
+> = {
+  transient_disconnect:
+    'The control channel dropped briefly and BrowserOS is retrying it.',
+  signature_expired:
+    'The gateway rejected the signed device handshake because its clock drifted.',
+  pairing_required:
+    'The gateway asked BrowserOS to approve its local device identity again.',
+  token_mismatch:
+    'BrowserOS had to reload the gateway token before reconnecting.',
+  container_not_ready:
+    'The OpenClaw gateway process is not ready yet, so control-plane recovery cannot start.',
+  unknown:
+    'BrowserOS hit an unexpected gateway error and could not classify it cleanly.',
+}
+
+const StatusBadge: FC<{ status: OpenClawStatus['status'] }> = ({ status }) => {
   const variants: Record<
-    string,
+    OpenClawStatus['status'],
     {
       variant: 'default' | 'secondary' | 'outline' | 'destructive'
       label: string
@@ -98,16 +173,127 @@ const StatusBadge: FC<{ status: string }> = ({ status }) => {
     error: { variant: 'destructive', label: 'Error' },
     uninitialized: { variant: 'outline', label: 'Not Set Up' },
   }
-  const v = variants[status] ?? { variant: 'outline' as const, label: status }
-  return <Badge variant={v.variant}>{v.label}</Badge>
+  const current = variants[status] ?? {
+    variant: 'outline' as const,
+    label: 'Unknown',
+  }
+  return <Badge variant={current.variant}>{current.label}</Badge>
+}
+
+const ControlPlaneBadge: FC<{
+  status: OpenClawStatus['controlPlaneStatus']
+}> = ({ status }) => {
+  const current = CONTROL_PLANE_COPY[status] ?? FALLBACK_CONTROL_PLANE_COPY
+  return <Badge variant={current.badgeVariant}>{current.badgeLabel}</Badge>
+}
+
+function getControlPlaneCopy(status: OpenClawStatus['controlPlaneStatus']) {
+  return CONTROL_PLANE_COPY[status] ?? FALLBACK_CONTROL_PLANE_COPY
+}
+
+function getRecoveryDetail(status: OpenClawStatus): string | null {
+  if (!status.lastRecoveryReason && !status.lastGatewayError) return null
+
+  const detail = status.lastRecoveryReason
+    ? RECOVERY_REASON_COPY[status.lastRecoveryReason]
+    : null
+
+  if (status.lastGatewayError && detail) {
+    return `${detail} Latest gateway error: ${status.lastGatewayError}`
+  }
+
+  return status.lastGatewayError ?? detail
+}
+
+interface ProviderSelectorProps {
+  providers: Array<{
+    id: string
+    type: string
+    name: string
+    modelId: string
+    baseUrl?: string
+  }>
+  defaultProviderId: string
+  selectedId: string
+  onSelect: (id: string) => void
+}
+
+const ProviderSelector: FC<ProviderSelectorProps> = ({
+  providers,
+  defaultProviderId,
+  selectedId,
+  onSelect,
+}) => {
+  if (providers.length === 0) {
+    return (
+      <div className="space-y-2">
+        <p className="font-medium text-sm">LLM Provider</p>
+        <p className="text-muted-foreground text-sm">
+          No compatible LLM providers configured.{' '}
+          <a href="#/settings/ai" className="underline">
+            Add one in AI settings
+          </a>{' '}
+          first.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      <label className="font-medium text-sm" htmlFor="provider-select">
+        LLM Provider
+      </label>
+      <Select value={selectedId} onValueChange={onSelect}>
+        <SelectTrigger id="provider-select">
+          <SelectValue placeholder="Select a provider" />
+        </SelectTrigger>
+        <SelectContent>
+          {providers.map((provider) => (
+            <SelectItem key={provider.id} value={provider.id}>
+              {provider.name} — {provider.modelId}
+              {provider.id === defaultProviderId ? ' (default)' : ''}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="text-muted-foreground text-xs">
+        Uses your existing API key from BrowserOS settings. The key is passed to
+        the container and never leaves your machine.
+      </p>
+    </div>
+  )
 }
 
 export const AgentsPage: FC = () => {
-  const { status, loading: statusLoading } = useOpenClawStatus()
+  const {
+    status,
+    loading: statusLoading,
+    error: statusError,
+  } = useOpenClawStatus()
   const { providers, defaultProviderId } = useLlmProviders()
-  const { agents, loading: agentsLoading } = useOpenClawAgents()
-  const { roles, loading: rolesLoading } = useOpenClawRoles()
-  const invalidateOpenClawQueries = useInvalidateOpenClawQueries()
+  const agentsQueryEnabled =
+    status?.status === 'running' && status.controlPlaneStatus === 'connected'
+  const {
+    agents,
+    loading: agentsLoading,
+    error: agentsError,
+  } = useOpenClawAgents(agentsQueryEnabled)
+  const { roles, loading: rolesLoading, error: rolesError } = useOpenClawRoles()
+  const {
+    setupOpenClaw,
+    createAgent,
+    deleteAgent,
+    startOpenClaw,
+    stopOpenClaw,
+    restartOpenClaw,
+    reconnectOpenClaw,
+    actionInProgress,
+    settingUp,
+    creating,
+    deleting,
+    reconnecting,
+  } = useOpenClawMutations()
 
   const [setupOpen, setSetupOpen] = useState(false)
   const [setupProviderId, setSetupProviderId] = useState('')
@@ -130,35 +316,30 @@ export const AgentsPage: FC = () => {
   const [showTerminal, setShowTerminal] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const setupMutation = useSetupOpenClawMutation()
-  const createAgentMutation = useCreateOpenClawAgentMutation()
-  const deleteAgentMutation = useDeleteOpenClawAgentMutation()
-  const startMutation = useStartOpenClawMutation()
-  const stopMutation = useStopOpenClawMutation()
-  const restartMutation = useRestartOpenClawMutation()
-
   const compatibleProviders = providers.filter(
-    (p) => p.apiKey && !OAUTH_ONLY_TYPES.has(p.type),
+    (provider) => provider.apiKey && !OAUTH_ONLY_TYPES.has(provider.type),
   )
   const isCustomRole = selectedRoleValue === CUSTOM_ROLE_VALUE
   const selectedRole = !isCustomRole
     ? (roles.find((role) => role.id === selectedRoleValue) ?? roles[0] ?? null)
     : null
-  const actionInProgress =
-    deleteAgentMutation.isPending ||
-    startMutation.isPending ||
-    stopMutation.isPending ||
-    restartMutation.isPending
 
-  // Pre-select default provider when dialogs open
   useEffect(() => {
     if (compatibleProviders.length === 0) return
     const fallbackId =
-      compatibleProviders.find((p) => p.id === defaultProviderId)?.id ??
-      compatibleProviders[0].id
-    if (setupOpen) setSetupProviderId(fallbackId)
-    if (createOpen) setCreateProviderId(fallbackId)
-  }, [setupOpen, createOpen, compatibleProviders, defaultProviderId])
+      compatibleProviders.find((provider) => provider.id === defaultProviderId)
+        ?.id ?? compatibleProviders[0].id
+
+    if (setupOpen && !setupProviderId) setSetupProviderId(fallbackId)
+    if (createOpen && !createProviderId) setCreateProviderId(fallbackId)
+  }, [
+    setupOpen,
+    createOpen,
+    setupProviderId,
+    createProviderId,
+    compatibleProviders,
+    defaultProviderId,
+  ])
 
   useEffect(() => {
     if (!createOpen || roles.length === 0) return
@@ -176,6 +357,7 @@ export const AgentsPage: FC = () => {
 
   useEffect(() => {
     if (!createOpen) return
+
     if (isCustomRole) {
       setNewName(
         (current) =>
@@ -183,16 +365,67 @@ export const AgentsPage: FC = () => {
       )
       return
     }
+
     if (selectedRole) {
       setNewName((current) => current || selectedRole.defaultAgentName)
     }
   }, [createOpen, isCustomRole, customRole.name, selectedRole])
 
-  const handleSetup = async () => {
-    const provider = compatibleProviders.find((p) => p.id === setupProviderId)
+  const inlineError =
+    error ??
+    statusError?.message ??
+    agentsError?.message ??
+    rolesError?.message ??
+    null
+
+  const gatewayUiState = useMemo(() => {
+    if (!status) {
+      return {
+        canManageAgents: false,
+        controlPlaneDegraded: false,
+        controlPlaneBusy: false,
+      }
+    }
+
+    const controlPlaneBusy =
+      status.controlPlaneStatus === 'connecting' ||
+      status.controlPlaneStatus === 'reconnecting' ||
+      status.controlPlaneStatus === 'recovering'
+
+    const canManageAgents =
+      status.status === 'running' && status.controlPlaneStatus === 'connected'
+
+    const controlPlaneDegraded =
+      status.status === 'running' && status.controlPlaneStatus !== 'connected'
+
+    return {
+      canManageAgents,
+      controlPlaneBusy,
+      controlPlaneDegraded,
+    }
+  }, [status])
+
+  const recoveryDetail = status ? getRecoveryDetail(status) : null
+  const controlPlaneCopy = status
+    ? getControlPlaneCopy(status.controlPlaneStatus)
+    : null
+
+  const runWithErrorHandling = async (fn: () => Promise<unknown>) => {
     setError(null)
     try {
-      await setupMutation.mutateAsync({
+      await fn()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const handleSetup = async () => {
+    const provider = compatibleProviders.find(
+      (item) => item.id === setupProviderId,
+    )
+
+    await runWithErrorHandling(async () => {
+      await setupOpenClaw({
         providerType: provider?.type,
         providerName: provider?.name,
         baseUrl: provider?.baseUrl,
@@ -200,16 +433,14 @@ export const AgentsPage: FC = () => {
         modelId: provider?.modelId,
       })
       setSetupOpen(false)
-      await invalidateOpenClawQueries()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
+    })
   }
 
   const handleCreate = async () => {
     if (!newName.trim()) return
-    const provider = compatibleProviders.find((p) => p.id === createProviderId)
-    setError(null)
+    const provider = compatibleProviders.find(
+      (item) => item.id === createProviderId,
+    )
     const normalizedName = newName.trim().toLowerCase().replace(/\s+/g, '-')
     const customRolePayload = isCustomRole
       ? {
@@ -231,14 +462,13 @@ export const AgentsPage: FC = () => {
       )
       return
     }
+
     if (!isCustomRole && !selectedRole) return
 
-    try {
-      await createAgentMutation.mutateAsync({
+    await runWithErrorHandling(async () => {
+      await createAgent({
         name: normalizedName,
-        roleId: !isCustomRole
-          ? (selectedRole?.id as BrowserOSAgentRoleId)
-          : undefined,
+        roleId: !isCustomRole ? selectedRole?.id : undefined,
         customRole: isCustomRole ? customRolePayload : undefined,
         providerType: provider?.type,
         providerName: provider?.name,
@@ -255,47 +485,37 @@ export const AgentsPage: FC = () => {
         recommendedApps: [],
         boundaries: createDefaultCustomRoleBoundaries(),
       })
-      await invalidateOpenClawQueries()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
+    })
   }
 
   const handleDelete = async (id: string) => {
-    try {
-      await deleteAgentMutation.mutateAsync(id)
-      await invalidateOpenClawQueries()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
+    await runWithErrorHandling(async () => {
+      await deleteAgent(id)
+    })
   }
 
   const handleStop = async () => {
-    try {
-      await stopMutation.mutateAsync()
-      await invalidateOpenClawQueries()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
+    await runWithErrorHandling(async () => {
+      await stopOpenClaw()
+    })
   }
 
   const handleStart = async () => {
-    setError(null)
-    try {
-      await startMutation.mutateAsync()
-      await invalidateOpenClawQueries()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
+    await runWithErrorHandling(async () => {
+      await startOpenClaw()
+    })
   }
 
   const handleRestart = async () => {
-    try {
-      await restartMutation.mutateAsync()
-      await invalidateOpenClawQueries()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
+    await runWithErrorHandling(async () => {
+      await restartOpenClaw()
+    })
+  }
+
+  const handleReconnect = async () => {
+    await runWithErrorHandling(async () => {
+      await reconnectOpenClaw()
+    })
   }
 
   if (showTerminal) {
@@ -312,7 +532,7 @@ export const AgentsPage: FC = () => {
     )
   }
 
-  if (statusLoading) {
+  if (statusLoading && !status) {
     return (
       <div className="flex items-center justify-center py-20">
         <Loader2 className="size-6 animate-spin text-muted-foreground" />
@@ -322,7 +542,6 @@ export const AgentsPage: FC = () => {
 
   return (
     <div className="fade-in slide-in-from-bottom-5 animate-in space-y-6 duration-500">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-bold text-2xl">Agents</h1>
@@ -330,60 +549,130 @@ export const AgentsPage: FC = () => {
             OpenClaw agents running in a local container
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {status?.status === 'running' && (
-            <>
-              <StatusBadge status="running" />
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleRestart}
-                disabled={actionInProgress}
-                title="Restart gateway"
-              >
-                <RefreshCw className="size-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleStop}
-                disabled={actionInProgress}
-                title="Stop gateway"
-              >
-                <Square className="size-4" />
-              </Button>
-              <Button variant="outline" onClick={() => setShowTerminal(true)}>
-                <TerminalSquare className="mr-1 size-4" />
-                Terminal
-              </Button>
-              <Button onClick={() => setCreateOpen(true)}>
-                <Plus className="mr-1 size-4" />
-                New Agent
-              </Button>
-            </>
-          )}
-        </div>
+
+        {status && (
+          <div className="flex items-center gap-2">
+            <StatusBadge status={status.status} />
+            {status.status !== 'uninitialized' && (
+              <ControlPlaneBadge status={status.controlPlaneStatus} />
+            )}
+
+            {status.status === 'running' && (
+              <>
+                {status.controlPlaneStatus !== 'connected' && (
+                  <Button
+                    variant="outline"
+                    onClick={handleReconnect}
+                    disabled={
+                      actionInProgress || gatewayUiState.controlPlaneBusy
+                    }
+                  >
+                    {reconnecting ? (
+                      <Loader2 className="mr-2 size-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="mr-2 size-4" />
+                    )}
+                    Retry Connection
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleRestart}
+                  disabled={actionInProgress}
+                  title="Restart gateway"
+                >
+                  <RefreshCw className="size-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleStop}
+                  disabled={actionInProgress}
+                  title="Stop gateway"
+                >
+                  <Square className="size-4" />
+                </Button>
+                <Button variant="outline" onClick={() => setShowTerminal(true)}>
+                  <TerminalSquare className="mr-1 size-4" />
+                  Terminal
+                </Button>
+                <Button
+                  onClick={() => setCreateOpen(true)}
+                  disabled={!gatewayUiState.canManageAgents}
+                >
+                  <Plus className="mr-1 size-4" />
+                  New Agent
+                </Button>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Error banner */}
-      {error && (
-        <Card className="border-destructive">
-          <CardContent className="flex items-center gap-2 py-3">
-            <AlertCircle className="size-4 text-destructive" />
-            <p className="text-destructive text-sm">{error}</p>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-auto"
-              onClick={() => setError(null)}
-            >
-              Dismiss
-            </Button>
-          </CardContent>
-        </Card>
+      {inlineError && (
+        <Alert variant="destructive">
+          <AlertCircle />
+          <AlertTitle>OpenClaw action failed</AlertTitle>
+          <AlertDescription>
+            <p>{inlineError}</p>
+            <div className="mt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setError(null)}
+              >
+                Dismiss
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
       )}
 
-      {/* Uninitialized state */}
+      {status && gatewayUiState.controlPlaneDegraded && (
+        <Alert
+          variant={
+            status.controlPlaneStatus === 'failed' ? 'destructive' : 'default'
+          }
+        >
+          {status.controlPlaneStatus === 'failed' ? (
+            <ShieldAlert />
+          ) : status.controlPlaneStatus === 'recovering' ? (
+            <Wrench />
+          ) : (
+            <WifiOff />
+          )}
+          <AlertTitle>{controlPlaneCopy?.title}</AlertTitle>
+          <AlertDescription>
+            <p>{controlPlaneCopy?.description}</p>
+            {recoveryDetail && <p>{recoveryDetail}</p>}
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleReconnect}
+                disabled={actionInProgress || gatewayUiState.controlPlaneBusy}
+              >
+                {reconnecting ? (
+                  <Loader2 className="mr-2 size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 size-4" />
+                )}
+                Retry Connection
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRestart}
+                disabled={actionInProgress}
+              >
+                Restart Gateway
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
+
       {status?.status === 'uninitialized' && (
         <Card>
           <CardContent className="flex flex-col items-center gap-4 py-12">
@@ -403,7 +692,6 @@ export const AgentsPage: FC = () => {
         </Card>
       )}
 
-      {/* Stopped state */}
       {status?.status === 'stopped' && (
         <Card>
           <CardContent className="flex flex-col items-center gap-4 py-12">
@@ -421,23 +709,32 @@ export const AgentsPage: FC = () => {
         </Card>
       )}
 
-      {/* Error state */}
       {status?.status === 'error' && (
         <Card className="border-destructive">
           <CardContent className="flex flex-col items-center gap-4 py-12">
             <AlertCircle className="size-12 text-destructive" />
             <div className="text-center">
               <h3 className="font-semibold text-lg">Gateway Error</h3>
-              <p className="text-muted-foreground text-sm">{status.error}</p>
+              <p className="text-muted-foreground text-sm">
+                {status.error ?? status.lastGatewayError}
+              </p>
             </div>
-            <Button onClick={handleRestart} disabled={actionInProgress}>
-              Retry
-            </Button>
+            <div className="flex gap-2">
+              <Button onClick={handleStart} disabled={actionInProgress}>
+                Start Gateway
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleRestart}
+                disabled={actionInProgress}
+              >
+                Restart Gateway
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}
 
-      {/* Agent list */}
       {status?.status === 'running' && (
         <div className="space-y-3">
           {agentsLoading ? (
@@ -450,7 +747,11 @@ export const AgentsPage: FC = () => {
                 <p className="text-muted-foreground text-sm">
                   No agents yet. Create one to get started.
                 </p>
-                <Button variant="outline" onClick={() => setCreateOpen(true)}>
+                <Button
+                  variant="outline"
+                  onClick={() => setCreateOpen(true)}
+                  disabled={!gatewayUiState.canManageAgents}
+                >
                   <Plus className="mr-1 size-4" />
                   Create Agent
                 </Button>
@@ -488,6 +789,7 @@ export const AgentsPage: FC = () => {
                       variant="ghost"
                       size="sm"
                       onClick={() => setChatAgent(agent)}
+                      disabled={!gatewayUiState.canManageAgents}
                     >
                       <MessageSquare className="mr-1 size-4" />
                       Chat
@@ -497,7 +799,7 @@ export const AgentsPage: FC = () => {
                         variant="ghost"
                         size="icon"
                         onClick={() => handleDelete(agent.agentId)}
-                        disabled={actionInProgress}
+                        disabled={!gatewayUiState.canManageAgents || deleting}
                       >
                         <Trash2 className="size-4 text-destructive" />
                       </Button>
@@ -510,7 +812,6 @@ export const AgentsPage: FC = () => {
         </div>
       )}
 
-      {/* Setup Dialog (with provider selector) */}
       <Dialog open={setupOpen} onOpenChange={setSetupOpen}>
         <DialogContent>
           <DialogHeader>
@@ -525,10 +826,10 @@ export const AgentsPage: FC = () => {
             />
             <Button
               onClick={handleSetup}
-              disabled={setupMutation.isPending}
+              disabled={settingUp || compatibleProviders.length === 0}
               className="w-full"
             >
-              {setupMutation.isPending ? (
+              {settingUp ? (
                 <>
                   <Loader2 className="mr-2 size-4 animate-spin" />
                   Setting up...
@@ -541,7 +842,6 @@ export const AgentsPage: FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Create Agent Dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
@@ -565,8 +865,10 @@ export const AgentsPage: FC = () => {
                     )
                     return
                   }
+
                   const role = roles.find((item) => item.id === value)
                   if (!role) return
+
                   setSelectedRoleValue(role.id)
                   setNewName(role.defaultAgentName)
                 }}
@@ -623,6 +925,7 @@ export const AgentsPage: FC = () => {
                 </Card>
               )}
             </div>
+
             {isCustomRole && (
               <Card>
                 <CardContent className="space-y-4 py-4">
@@ -636,8 +939,8 @@ export const AgentsPage: FC = () => {
                     <Input
                       id="custom-role-name"
                       value={customRole.name}
-                      onChange={(e) => {
-                        const name = e.target.value
+                      onChange={(event) => {
+                        const name = event.target.value
                         setCustomRole((current) => ({ ...current, name }))
                         setNewName(
                           name.trim().toLowerCase().replace(/\s+/g, '-') ||
@@ -657,10 +960,10 @@ export const AgentsPage: FC = () => {
                     <Input
                       id="custom-role-short-description"
                       value={customRole.shortDescription}
-                      onChange={(e) =>
+                      onChange={(event) =>
                         setCustomRole((current) => ({
                           ...current,
-                          shortDescription: e.target.value,
+                          shortDescription: event.target.value,
                         }))
                       }
                       placeholder="Prepares executive briefs and weekly follow-ups."
@@ -676,10 +979,10 @@ export const AgentsPage: FC = () => {
                     <Textarea
                       id="custom-role-long-description"
                       value={customRole.longDescription}
-                      onChange={(e) =>
+                      onChange={(event) =>
                         setCustomRole((current) => ({
                           ...current,
-                          longDescription: e.target.value,
+                          longDescription: event.target.value,
                         }))
                       }
                       placeholder="Describe the role, purpose, and what kinds of outcomes this agent should produce."
@@ -696,11 +999,11 @@ export const AgentsPage: FC = () => {
                     <Input
                       id="custom-role-apps"
                       value={customRole.recommendedApps.join(', ')}
-                      onChange={(e) =>
+                      onChange={(event) =>
                         setCustomRole((current) => ({
                           ...current,
                           recommendedApps: parseCommaSeparatedList(
-                            e.target.value,
+                            event.target.value,
                           ),
                         }))
                       }
@@ -766,6 +1069,7 @@ export const AgentsPage: FC = () => {
                 </CardContent>
               </Card>
             )}
+
             <div>
               <label
                 htmlFor="agent-name"
@@ -776,33 +1080,37 @@ export const AgentsPage: FC = () => {
               <Input
                 id="agent-name"
                 value={newName}
-                onChange={(e) => setNewName(e.target.value)}
+                onChange={(event) => setNewName(event.target.value)}
                 placeholder="research-agent"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleCreate()
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void handleCreate()
                 }}
               />
               <p className="mt-1 text-muted-foreground text-xs">
                 Lowercase letters, numbers, and hyphens only.
               </p>
             </div>
+
             <ProviderSelector
               providers={compatibleProviders}
               defaultProviderId={defaultProviderId}
               selectedId={createProviderId}
               onSelect={setCreateProviderId}
             />
+
             <Button
               onClick={handleCreate}
               disabled={
                 !newName.trim() ||
-                createAgentMutation.isPending ||
+                creating ||
                 rolesLoading ||
+                !gatewayUiState.canManageAgents ||
+                compatibleProviders.length === 0 ||
                 (!isCustomRole && !selectedRole)
               }
               className="w-full"
             >
-              {createAgentMutation.isPending ? (
+              {creating ? (
                 <>
                   <Loader2 className="mr-2 size-4 animate-spin" />
                   Creating...
@@ -814,66 +1122,6 @@ export const AgentsPage: FC = () => {
           </div>
         </DialogContent>
       </Dialog>
-    </div>
-  )
-}
-
-interface ProviderSelectorProps {
-  providers: Array<{
-    id: string
-    type: string
-    name: string
-    modelId: string
-    baseUrl?: string
-  }>
-  defaultProviderId: string
-  selectedId: string
-  onSelect: (id: string) => void
-}
-
-const ProviderSelector: FC<ProviderSelectorProps> = ({
-  providers,
-  defaultProviderId,
-  selectedId,
-  onSelect,
-}) => {
-  if (providers.length === 0) {
-    return (
-      <div className="space-y-2">
-        <p className="font-medium text-sm">LLM Provider</p>
-        <p className="text-muted-foreground text-sm">
-          No compatible LLM providers configured.{' '}
-          <a href="#/settings/ai" className="underline">
-            Add one in AI settings
-          </a>{' '}
-          first.
-        </p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="space-y-2">
-      <label className="font-medium text-sm" htmlFor="provider-select">
-        LLM Provider
-      </label>
-      <Select value={selectedId} onValueChange={onSelect}>
-        <SelectTrigger id="provider-select">
-          <SelectValue placeholder="Select a provider" />
-        </SelectTrigger>
-        <SelectContent>
-          {providers.map((p) => (
-            <SelectItem key={p.id} value={p.id}>
-              {p.name} — {p.modelId}
-              {p.id === defaultProviderId ? ' (default)' : ''}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <p className="text-muted-foreground text-xs">
-        Uses your existing API key from BrowserOS settings. The key is passed to
-        the container and never leaves your machine.
-      </p>
     </div>
   )
 }

@@ -96,6 +96,16 @@ export function createOpenClawRoutes() {
       }
     })
 
+    .post('/reconnect', async (c) => {
+      try {
+        await getOpenClawService().reconnectControlPlane()
+        return c.json({ status: 'connected' })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return c.json({ error: message }, 500)
+      }
+    })
+
     .get('/agents', async (c) => {
       try {
         const agents = await getOpenClawService().listAgents()
@@ -213,7 +223,7 @@ export function createOpenClawRoutes() {
       const sessionKey = body.sessionKey ?? crypto.randomUUID()
 
       try {
-        const eventStream = getOpenClawService().chatStream(
+        const eventStream = await getOpenClawService().chatStream(
           id,
           sessionKey,
           body.message,

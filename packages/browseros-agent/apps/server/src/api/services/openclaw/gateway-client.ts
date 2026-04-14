@@ -16,8 +16,6 @@ import { OPENCLAW_CONTAINER_HOME } from '@browseros/shared/constants/openclaw'
 import { logger } from '../../../lib/logger'
 
 const RPC_TIMEOUT_MS = 15_000
-const RECONNECT_DELAY_MS = 2_000
-const MAX_RECONNECT_RETRIES = 5
 const SCOPES = [
   'operator.read',
   'operator.write',
@@ -47,6 +45,18 @@ interface WsFrame {
   payload?: Record<string, unknown>
   error?: { message: string; code?: string }
   event?: string
+}
+
+export type GatewayClientConnectionState =
+  | 'idle'
+  | 'connecting'
+  | 'connected'
+  | 'closed'
+  | 'failed'
+
+export interface GatewayHandshakeError {
+  code?: string
+  message: string
 }
 
 export interface OpenClawStreamEvent {
@@ -167,9 +177,9 @@ export class GatewayClient {
   private ws: WebSocket | null = null
   private _connected = false
   private pendingRequests = new Map<string, PendingRequest>()
-  private reconnectAttempts = 0
-  private shouldReconnect = true
   private device: DeviceIdentity | null = null
+  private connectionState: GatewayClientConnectionState = 'idle'
+  private lastHandshakeError: GatewayHandshakeError | null = null
 
   constructor(
     private readonly port: number,
@@ -189,8 +199,18 @@ export class GatewayClient {
     return this._connected
   }
 
+  get state(): GatewayClientConnectionState {
+    return this.connectionState
+  }
+
+  get lastError(): GatewayHandshakeError | null {
+    return this.lastHandshakeError
+  }
+
   async connect(): Promise<void> {
     return new Promise((resolve, reject) => {
+      this.connectionState = 'connecting'
+      this.lastHandshakeError = null
       const url = `ws://127.0.0.1:${this.port}`
       this.ws = new WebSocket(url, {
         headers: { Origin: `http://127.0.0.1:${this.port}` },
@@ -254,11 +274,16 @@ export class GatewayClient {
             if (frame.ok) {
               handshakeComplete = true
               this._connected = true
-              this.reconnectAttempts = 0
+              this.connectionState = 'connected'
               logger.info('Gateway WS connected')
               resolve()
             } else {
               const msg = frame.error?.message ?? 'Handshake failed'
+              this.connectionState = 'failed'
+              this.lastHandshakeError = {
+                message: msg,
+                code: frame.error?.code,
+              }
               logger.error('Gateway WS handshake rejected', {
                 error: msg,
                 code: frame.error?.code,
@@ -275,6 +300,7 @@ export class GatewayClient {
 
       this.ws.onerror = (err) => {
         if (!handshakeComplete) {
+          this.connectionState = 'failed'
           reject(
             new Error(
               `WS connection error: ${err instanceof Error ? err.message : 'unknown'}`,
@@ -285,18 +311,19 @@ export class GatewayClient {
 
       this.ws.onclose = () => {
         this._connected = false
+        this.connectionState = 'closed'
         this.rejectAllPending('WebSocket closed')
         if (handshakeComplete) {
           logger.info('Gateway WS disconnected')
-          this.tryReconnect()
         }
+        this.ws = null
       }
     })
   }
 
   disconnect(): void {
-    this.shouldReconnect = false
     this._connected = false
+    this.connectionState = 'closed'
     this.rejectAllPending('Client disconnecting')
     if (this.ws) {
       this.ws.onclose = null
@@ -534,28 +561,6 @@ export class GatewayClient {
     } catch {
       return null
     }
-  }
-
-  private tryReconnect(): void {
-    if (!this.shouldReconnect) return
-    if (this.reconnectAttempts >= MAX_RECONNECT_RETRIES) {
-      logger.warn('Gateway WS max reconnect attempts reached')
-      return
-    }
-
-    this.reconnectAttempts++
-    logger.info('Gateway WS reconnecting...', {
-      attempt: this.reconnectAttempts,
-    })
-
-    setTimeout(() => {
-      this.connect().catch((err) => {
-        logger.warn('Gateway WS reconnect failed', {
-          error: err instanceof Error ? err.message : String(err),
-          attempt: this.reconnectAttempts,
-        })
-      })
-    }, RECONNECT_DELAY_MS)
   }
 
   private rejectAllPending(reason: string): void {

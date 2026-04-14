@@ -16,7 +16,9 @@ interface AgentCommandContextValue {
 
 export const AgentCommandLayout: FC = () => {
   const { status, loading: statusLoading } = useOpenClawStatus(5000)
-  const { agents, loading: agentsLoading } = useOpenClawAgents()
+  const { agents, loading: agentsLoading } = useOpenClawAgents(
+    status?.status === 'running' && status.controlPlaneStatus === 'connected',
+  )
 
   return (
     <Outlet

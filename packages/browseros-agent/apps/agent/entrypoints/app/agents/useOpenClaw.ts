@@ -34,11 +34,6 @@ export interface RoleTemplateSummary {
   }>
 }
 
-export function getModelDisplayName(model: unknown): string | undefined {
-  if (typeof model === 'string') return model.split('/').pop()
-  return undefined
-}
-
 export interface OpenClawStatus {
   status: 'uninitialized' | 'starting' | 'running' | 'stopped' | 'error'
   podmanAvailable: boolean
@@ -46,106 +41,22 @@ export interface OpenClawStatus {
   port: number | null
   agentCount: number
   error: string | null
-}
-
-export const OPENCLAW_QUERY_KEYS = {
-  status: 'openclaw-status',
-  agents: 'openclaw-agents',
-  roles: 'openclaw-roles',
-} as const
-
-async function clawFetch<T>(baseUrl: string, path: string, init?: RequestInit) {
-  const res = await fetch(`${baseUrl}/claw${path}`, init)
-  if (!res.ok) {
-    let message = `Request failed with status ${res.status}`
-    try {
-      const body = (await res.json()) as { error?: string }
-      if (body.error) {
-        message = body.error
-      }
-    } catch {}
-    throw new Error(message)
-  }
-  return res.json() as Promise<T>
-}
-
-async function fetchOpenClawStatus(baseUrl: string): Promise<OpenClawStatus> {
-  return clawFetch<OpenClawStatus>(baseUrl, '/status')
-}
-
-async function fetchOpenClawAgents(
-  baseUrl: string,
-): Promise<{ agents: AgentEntry[] }> {
-  return clawFetch<{ agents: AgentEntry[] }>(baseUrl, '/agents')
-}
-
-async function fetchOpenClawRoles(
-  baseUrl: string,
-): Promise<{ roles: RoleTemplateSummary[] }> {
-  return clawFetch<{ roles: RoleTemplateSummary[] }>(baseUrl, '/roles')
-}
-
-export function useOpenClawStatus(pollMs = 5000) {
-  const { baseUrl, isLoading: urlLoading } = useAgentServerUrl()
-  const query = useQuery<OpenClawStatus, Error>({
-    queryKey: [OPENCLAW_QUERY_KEYS.status, baseUrl],
-    queryFn: () => fetchOpenClawStatus(baseUrl as string),
-    enabled: !!baseUrl && !urlLoading,
-    refetchInterval: pollMs,
-    refetchOnWindowFocus: true,
-  })
-
-  return {
-    status: query.data ?? null,
-    loading: query.isLoading || urlLoading,
-    error: query.error,
-    refetch: query.refetch,
-  }
-}
-
-export function useOpenClawAgents() {
-  const { baseUrl, isLoading: urlLoading } = useAgentServerUrl()
-  const query = useQuery<{ agents: AgentEntry[] }, Error>({
-    queryKey: [OPENCLAW_QUERY_KEYS.agents, baseUrl],
-    queryFn: () => fetchOpenClawAgents(baseUrl as string),
-    enabled: !!baseUrl && !urlLoading,
-    refetchOnWindowFocus: true,
-  })
-
-  return {
-    agents: query.data?.agents ?? [],
-    loading: query.isLoading || urlLoading,
-    error: query.error,
-    refetch: query.refetch,
-  }
-}
-
-export function useOpenClawRoles() {
-  const { baseUrl, isLoading: urlLoading } = useAgentServerUrl()
-  const query = useQuery<{ roles: RoleTemplateSummary[] }, Error>({
-    queryKey: [OPENCLAW_QUERY_KEYS.roles, baseUrl],
-    queryFn: () => fetchOpenClawRoles(baseUrl as string),
-    enabled: !!baseUrl && !urlLoading,
-    staleTime: 60_000,
-  })
-
-  return {
-    roles: query.data?.roles ?? [],
-    loading: query.isLoading || urlLoading,
-    error: query.error,
-    refetch: query.refetch,
-  }
-}
-
-export function useInvalidateOpenClawQueries() {
-  const queryClient = useQueryClient()
-
-  return async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: [OPENCLAW_QUERY_KEYS.status] }),
-      queryClient.invalidateQueries({ queryKey: [OPENCLAW_QUERY_KEYS.agents] }),
-    ])
-  }
+  controlPlaneStatus:
+    | 'disconnected'
+    | 'connecting'
+    | 'connected'
+    | 'reconnecting'
+    | 'recovering'
+    | 'failed'
+  lastGatewayError: string | null
+  lastRecoveryReason:
+    | 'transient_disconnect'
+    | 'signature_expired'
+    | 'pairing_required'
+    | 'token_mismatch'
+    | 'container_not_ready'
+    | 'unknown'
+    | null
 }
 
 export interface OpenClawAgentMutationInput {
@@ -167,12 +78,146 @@ export interface OpenClawSetupInput {
   modelId?: string
 }
 
-export function useSetupOpenClawMutation() {
-  const { baseUrl } = useAgentServerUrl()
-  return useMutation({
-    mutationFn: (input: OpenClawSetupInput) =>
+export function getModelDisplayName(model: unknown): string | undefined {
+  if (typeof model === 'string') return model.split('/').pop()
+  return undefined
+}
+
+export const OPENCLAW_QUERY_KEYS = {
+  status: 'openclaw-status',
+  agents: 'openclaw-agents',
+  roles: 'openclaw-roles',
+} as const
+
+async function clawFetch<T>(
+  baseUrl: string,
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await fetch(`${baseUrl}/claw${path}`, init)
+  if (!res.ok) {
+    let message = `Request failed with status ${res.status}`
+    try {
+      const body = (await res.json()) as { error?: string }
+      if (body.error) {
+        message = body.error
+      }
+    } catch {}
+    throw new Error(message)
+  }
+  return res.json() as Promise<T>
+}
+
+async function fetchOpenClawStatus(baseUrl: string): Promise<OpenClawStatus> {
+  return clawFetch<OpenClawStatus>(baseUrl, '/status')
+}
+
+async function fetchOpenClawAgents(baseUrl: string): Promise<AgentEntry[]> {
+  const data = await clawFetch<{ agents: AgentEntry[] }>(baseUrl, '/agents')
+  return data.agents ?? []
+}
+
+async function fetchOpenClawRoles(
+  baseUrl: string,
+): Promise<RoleTemplateSummary[]> {
+  const data = await clawFetch<{ roles: RoleTemplateSummary[] }>(
+    baseUrl,
+    '/roles',
+  )
+  return data.roles ?? []
+}
+
+async function invalidateOpenClawQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: [OPENCLAW_QUERY_KEYS.status] }),
+    queryClient.invalidateQueries({ queryKey: [OPENCLAW_QUERY_KEYS.agents] }),
+  ])
+}
+
+export function useOpenClawStatus(pollMs = 5000) {
+  const {
+    baseUrl,
+    isLoading: urlLoading,
+    error: urlError,
+  } = useAgentServerUrl()
+
+  const query = useQuery<OpenClawStatus, Error>({
+    queryKey: [OPENCLAW_QUERY_KEYS.status, baseUrl],
+    queryFn: () => fetchOpenClawStatus(baseUrl as string),
+    enabled: !!baseUrl && !urlLoading,
+    refetchInterval: pollMs,
+  })
+
+  return {
+    status: query.data ?? null,
+    loading: query.isLoading || urlLoading,
+    error: query.error ?? urlError,
+    refetch: query.refetch,
+  }
+}
+
+export function useOpenClawAgents(enabled = true) {
+  const {
+    baseUrl,
+    isLoading: urlLoading,
+    error: urlError,
+  } = useAgentServerUrl()
+
+  const query = useQuery<AgentEntry[], Error>({
+    queryKey: [OPENCLAW_QUERY_KEYS.agents, baseUrl],
+    queryFn: () => fetchOpenClawAgents(baseUrl as string),
+    enabled: !!baseUrl && !urlLoading && enabled,
+  })
+
+  return {
+    agents: query.data ?? [],
+    loading: query.isLoading || urlLoading,
+    error: query.error ?? urlError,
+    refetch: query.refetch,
+  }
+}
+
+export function useOpenClawRoles() {
+  const {
+    baseUrl,
+    isLoading: urlLoading,
+    error: urlError,
+  } = useAgentServerUrl()
+
+  const query = useQuery<RoleTemplateSummary[], Error>({
+    queryKey: [OPENCLAW_QUERY_KEYS.roles, baseUrl],
+    queryFn: () => fetchOpenClawRoles(baseUrl as string),
+    enabled: !!baseUrl && !urlLoading,
+    staleTime: 60_000,
+  })
+
+  return {
+    roles: query.data ?? [],
+    loading: query.isLoading || urlLoading,
+    error: query.error ?? urlError,
+    refetch: query.refetch,
+  }
+}
+
+export function useOpenClawMutations() {
+  const { baseUrl, isLoading: urlLoading } = useAgentServerUrl()
+  const queryClient = useQueryClient()
+
+  const ensureBaseUrl = () => {
+    if (!baseUrl || urlLoading) {
+      throw new Error('BrowserOS agent server URL is not ready')
+    }
+    return baseUrl
+  }
+
+  const onSuccess = () => invalidateOpenClawQueries(queryClient)
+
+  const setupMutation = useMutation({
+    mutationFn: async (input: OpenClawSetupInput) =>
       clawFetch<{ status: string; agents: AgentEntry[] }>(
-        baseUrl as string,
+        ensureBaseUrl(),
         '/setup',
         {
           method: 'POST',
@@ -180,59 +225,80 @@ export function useSetupOpenClawMutation() {
           body: JSON.stringify(input),
         },
       ),
+    onSuccess,
   })
-}
 
-export function useCreateOpenClawAgentMutation() {
-  const { baseUrl } = useAgentServerUrl()
-  return useMutation({
-    mutationFn: (input: OpenClawAgentMutationInput) =>
-      clawFetch<{ agent: AgentEntry }>(baseUrl as string, '/agents', {
+  const createMutation = useMutation({
+    mutationFn: async (input: OpenClawAgentMutationInput) =>
+      clawFetch<{ agent: AgentEntry }>(ensureBaseUrl(), '/agents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),
       }),
+    onSuccess,
   })
-}
 
-export function useDeleteOpenClawAgentMutation() {
-  const { baseUrl } = useAgentServerUrl()
-  return useMutation({
-    mutationFn: (id: string) =>
-      clawFetch<{ success: boolean }>(baseUrl as string, `/agents/${id}`, {
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) =>
+      clawFetch<{ success: boolean }>(ensureBaseUrl(), `/agents/${id}`, {
         method: 'DELETE',
       }),
+    onSuccess,
   })
-}
 
-export function useStartOpenClawMutation() {
-  const { baseUrl } = useAgentServerUrl()
-  return useMutation({
-    mutationFn: () =>
-      clawFetch<{ status: string }>(baseUrl as string, '/start', {
+  const startMutation = useMutation({
+    mutationFn: async () =>
+      clawFetch<{ status: string }>(ensureBaseUrl(), '/start', {
         method: 'POST',
       }),
+    onSuccess,
   })
-}
 
-export function useStopOpenClawMutation() {
-  const { baseUrl } = useAgentServerUrl()
-  return useMutation({
-    mutationFn: () =>
-      clawFetch<{ status: string }>(baseUrl as string, '/stop', {
+  const stopMutation = useMutation({
+    mutationFn: async () =>
+      clawFetch<{ status: string }>(ensureBaseUrl(), '/stop', {
         method: 'POST',
       }),
+    onSuccess,
   })
-}
 
-export function useRestartOpenClawMutation() {
-  const { baseUrl } = useAgentServerUrl()
-  return useMutation({
-    mutationFn: () =>
-      clawFetch<{ status: string }>(baseUrl as string, '/restart', {
+  const restartMutation = useMutation({
+    mutationFn: async () =>
+      clawFetch<{ status: string }>(ensureBaseUrl(), '/restart', {
         method: 'POST',
       }),
+    onSuccess,
   })
+
+  const reconnectMutation = useMutation({
+    mutationFn: async () =>
+      clawFetch<{ status: string }>(ensureBaseUrl(), '/reconnect', {
+        method: 'POST',
+      }),
+    onSuccess,
+  })
+
+  return {
+    setupOpenClaw: setupMutation.mutateAsync,
+    createAgent: createMutation.mutateAsync,
+    deleteAgent: deleteMutation.mutateAsync,
+    startOpenClaw: startMutation.mutateAsync,
+    stopOpenClaw: stopMutation.mutateAsync,
+    restartOpenClaw: restartMutation.mutateAsync,
+    reconnectOpenClaw: reconnectMutation.mutateAsync,
+    actionInProgress:
+      setupMutation.isPending ||
+      createMutation.isPending ||
+      deleteMutation.isPending ||
+      startMutation.isPending ||
+      stopMutation.isPending ||
+      restartMutation.isPending ||
+      reconnectMutation.isPending,
+    settingUp: setupMutation.isPending,
+    creating: createMutation.isPending,
+    deleting: deleteMutation.isPending,
+    reconnecting: reconnectMutation.isPending,
+  }
 }
 
 export interface OpenClawStreamEvent {

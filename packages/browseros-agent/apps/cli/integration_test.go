@@ -270,3 +270,84 @@ func TestInvalidPage(t *testing.T) {
 		t.Errorf("expected snap with invalid page ID to exit non-zero")
 	}
 }
+
+func TestStrataCheck(t *testing.T) {
+	r := run(t, "--json", "strata", "check", "Gmail")
+	// Klavis may not be configured — accept success or structured error
+	out := strings.TrimSpace(r.Stdout + r.Stderr)
+	if out == "" {
+		t.Fatal("strata check produced no output")
+	}
+	if r.ExitCode == 0 {
+		var data map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(r.Stdout)), &data); err != nil {
+			t.Fatalf("strata check returned non-JSON: %s", r.Stdout)
+		}
+	}
+}
+
+func TestStrataDiscover(t *testing.T) {
+	r := run(t, "--json", "strata", "discover", "send email", "Gmail")
+	out := strings.TrimSpace(r.Stdout + r.Stderr)
+	if out == "" {
+		t.Fatal("strata discover produced no output")
+	}
+	if r.ExitCode == 0 {
+		var data map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(r.Stdout)), &data); err != nil {
+			t.Fatalf("strata discover returned non-JSON: %s", r.Stdout)
+		}
+	}
+}
+
+func TestStrataSearch(t *testing.T) {
+	r := run(t, "--json", "strata", "search", "send email", "Gmail")
+	out := strings.TrimSpace(r.Stdout + r.Stderr)
+	if out == "" {
+		t.Fatal("strata search produced no output")
+	}
+	if r.ExitCode == 0 {
+		var data map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(r.Stdout)), &data); err != nil {
+			t.Fatalf("strata search returned non-JSON: %s", r.Stdout)
+		}
+	}
+}
+
+func TestStrataActions(t *testing.T) {
+	r := run(t, "--json", "strata", "actions", "Gmail")
+	out := strings.TrimSpace(r.Stdout + r.Stderr)
+	if out == "" {
+		t.Fatal("strata actions produced no output")
+	}
+}
+
+func TestStrataDetails(t *testing.T) {
+	r := run(t, "--json", "strata", "details", "Gmail", "send_email")
+	out := strings.TrimSpace(r.Stdout + r.Stderr)
+	if out == "" {
+		t.Fatal("strata details produced no output")
+	}
+}
+
+func TestStrataAuth(t *testing.T) {
+	r := run(t, "--json", "strata", "auth", "Gmail")
+	out := strings.TrimSpace(r.Stdout + r.Stderr)
+	if out == "" {
+		t.Fatal("strata auth produced no output")
+	}
+}
+
+func TestStrataExecMissingArgs(t *testing.T) {
+	r := run(t, "strata", "exec")
+	if r.ExitCode == 0 {
+		t.Error("expected strata exec without args to exit non-zero")
+	}
+}
+
+func TestStrataCheckMissingArgs(t *testing.T) {
+	r := run(t, "strata", "check")
+	if r.ExitCode == 0 {
+		t.Error("expected strata check without args to exit non-zero")
+	}
+}

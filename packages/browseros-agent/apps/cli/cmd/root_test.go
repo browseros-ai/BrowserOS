@@ -33,6 +33,7 @@ func TestCommandName(t *testing.T) {
 		{"known command", []string{"health"}, "browseros-cli health"},
 		{"unknown command", []string{"nonexistent"}, "unknown"},
 		{"subcommand", []string{"bookmark", "search"}, "browseros-cli bookmark search"},
+		{"strata subcommand", []string{"strata", "check"}, "browseros-cli strata check"},
 		{"known with extra args", []string{"snap", "--enhanced"}, "browseros-cli snap"},
 	}
 	for _, tt := range tests {
