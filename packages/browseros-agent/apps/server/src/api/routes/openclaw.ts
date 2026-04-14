@@ -23,6 +23,23 @@ import {
 } from '../services/openclaw/errors'
 import { getOpenClawService } from '../services/openclaw/openclaw-service'
 
+function isValidBoundaryMode(
+  value: unknown,
+): value is BrowserOSCustomRoleInput['boundaries'][number]['defaultMode'] {
+  return value === 'allow' || value === 'ask' || value === 'block'
+}
+
+function isValidCustomRoleBoundary(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const boundary = value as Record<string, unknown>
+  return (
+    typeof boundary.key === 'string' &&
+    typeof boundary.label === 'string' &&
+    typeof boundary.description === 'string' &&
+    isValidBoundaryMode(boundary.defaultMode)
+  )
+}
+
 export function createOpenClawRoutes() {
   return new Hono()
     .get('/status', async (c) => {
@@ -162,6 +179,41 @@ export function createOpenClawRoutes() {
           {
             error:
               'Custom roles require name, shortDescription, and longDescription',
+          },
+          400,
+        )
+      }
+      if (
+        body.customRole &&
+        (!Array.isArray(body.customRole.recommendedApps) ||
+          !Array.isArray(body.customRole.boundaries))
+      ) {
+        return c.json(
+          {
+            error: 'Custom roles require recommendedApps and boundaries arrays',
+          },
+          400,
+        )
+      }
+      if (
+        body.customRole &&
+        !body.customRole.recommendedApps.every((app) => typeof app === 'string')
+      ) {
+        return c.json(
+          {
+            error: 'Custom role recommendedApps must be an array of strings',
+          },
+          400,
+        )
+      }
+      if (
+        body.customRole &&
+        !body.customRole.boundaries.every(isValidCustomRoleBoundary)
+      ) {
+        return c.json(
+          {
+            error:
+              'Custom role boundaries must include key, label, description, and a valid defaultMode',
           },
           400,
         )

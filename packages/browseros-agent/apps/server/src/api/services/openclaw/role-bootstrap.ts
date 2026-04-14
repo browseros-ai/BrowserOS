@@ -77,19 +77,26 @@ export function toRoleSummary(
 export function normalizeCustomRole(
   role: BrowserOSCustomRoleInput,
 ): BootstrapRenderableRole {
+  const recommendedApps = Array.isArray(role.recommendedApps)
+    ? role.recommendedApps.filter(
+        (app): app is string => typeof app === 'string',
+      )
+    : []
+  const boundaries = Array.isArray(role.boundaries) ? role.boundaries : []
+
   return {
     name: role.name,
     shortDescription: role.shortDescription,
     longDescription: role.longDescription,
-    recommendedApps: role.recommendedApps,
-    boundaries: role.boundaries,
+    recommendedApps,
+    boundaries,
     bootstrap: {
       agentsMd:
         role.bootstrap?.agentsMd?.trim() ||
         buildAgentsMd({
           name: role.name,
           longDescription: role.longDescription,
-          boundaries: role.boundaries,
+          boundaries,
         }),
       soulMd:
         role.bootstrap?.soulMd?.trim() ||
@@ -101,8 +108,8 @@ export function normalizeCustomRole(
       toolsMd:
         role.bootstrap?.toolsMd?.trim() ||
         buildToolsMd({
-          boundaries: role.boundaries,
-          recommendedApps: role.recommendedApps,
+          boundaries,
+          recommendedApps,
         }),
     },
   }
