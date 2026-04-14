@@ -221,7 +221,7 @@ export const AgentsPage: FC = () => {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {status?.status === 'running' && (
+          {status?.status === 'running' ? (
             <>
               <StatusBadge status="running" />
               <Button
@@ -251,6 +251,11 @@ export const AgentsPage: FC = () => {
                 New Agent
               </Button>
             </>
+          ) : (
+            <Button onClick={() => setSetupOpen(true)}>
+              <Plus className="mr-1 size-4" />
+              Setup OpenClaw
+            </Button>
           )}
         </div>
       </div>

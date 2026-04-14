@@ -13,6 +13,7 @@ import {
   OPENCLAW_COMPOSE_PROJECT_NAME,
   OPENCLAW_GATEWAY_CONTAINER_NAME,
 } from '@browseros/shared/constants/openclaw'
+import { logger } from '../../../lib/logger'
 import type { LogFn, PodmanRuntime } from './podman-runtime'
 
 const COMPOSE_FILE_NAME = 'docker-compose.yml'
@@ -141,10 +142,25 @@ export class ContainerRuntime {
   }
 
   private async compose(args: string[], onLog?: LogFn): Promise<number> {
-    return this.podman.runCommand(['compose', ...args], {
+    const lines: string[] = []
+    const code = await this.podman.runCommand(['compose', ...args], {
       cwd: this.projectDir,
       env: { COMPOSE_PROJECT_NAME: OPENCLAW_COMPOSE_PROJECT_NAME },
-      onOutput: onLog,
+      onOutput: (line) => {
+        lines.push(line)
+        onLog?.(line)
+      },
     })
+
+    if (code !== 0) {
+      logger.error('OpenClaw compose command failed', {
+        command: ['podman', 'compose', ...args].join(' '),
+        projectDir: this.projectDir,
+        exitCode: code,
+        output: lines,
+      })
+    }
+
+    return code
   }
 }

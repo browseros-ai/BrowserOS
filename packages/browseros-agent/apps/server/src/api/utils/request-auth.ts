@@ -26,7 +26,6 @@ export function isTrustedAppOrigin(origin: string | undefined): boolean {
 export function requireTrustedAppOrigin(): MiddlewareHandler {
   return async (c, next) => {
     const origin = c.req.header('origin')
-
     if (origin) {
       if (!isTrustedAppOrigin(origin)) {
         return c.json({ error: 'Forbidden' }, 403)
