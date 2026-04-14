@@ -51,6 +51,8 @@ import {
 
 const OAUTH_ONLY_TYPES = new Set(['chatgpt-pro', 'github-copilot', 'qwen-code'])
 const CUSTOM_ROLE_VALUE = '__custom__'
+const PLAIN_AGENT_VALUE = '__plain__'
+type AgentCreationMode = 'builtin' | 'custom' | 'plain'
 
 function createDefaultCustomRoleBoundaries(): BrowserOSRoleBoundary[] {
   return [
@@ -300,7 +302,9 @@ export const AgentsPage: FC = () => {
 
   const [createOpen, setCreateOpen] = useState(false)
   const [selectedRoleValue, setSelectedRoleValue] = useState<
-    RoleTemplateSummary['id'] | typeof CUSTOM_ROLE_VALUE
+    | RoleTemplateSummary['id']
+    | typeof CUSTOM_ROLE_VALUE
+    | typeof PLAIN_AGENT_VALUE
   >('chief-of-staff')
   const [newName, setNewName] = useState('')
   const [createProviderId, setCreateProviderId] = useState('')
@@ -319,10 +323,20 @@ export const AgentsPage: FC = () => {
   const compatibleProviders = providers.filter(
     (provider) => provider.apiKey && !OAUTH_ONLY_TYPES.has(provider.type),
   )
-  const isCustomRole = selectedRoleValue === CUSTOM_ROLE_VALUE
-  const selectedRole = !isCustomRole
-    ? (roles.find((role) => role.id === selectedRoleValue) ?? roles[0] ?? null)
-    : null
+  const creationMode: AgentCreationMode =
+    selectedRoleValue === CUSTOM_ROLE_VALUE
+      ? 'custom'
+      : selectedRoleValue === PLAIN_AGENT_VALUE
+        ? 'plain'
+        : 'builtin'
+  const isCustomRole = creationMode === 'custom'
+  const isPlainAgent = creationMode === 'plain'
+  const selectedRole =
+    creationMode === 'builtin'
+      ? (roles.find((role) => role.id === selectedRoleValue) ??
+        roles[0] ??
+        null)
+      : null
 
   useEffect(() => {
     if (compatibleProviders.length === 0) return
@@ -348,7 +362,8 @@ export const AgentsPage: FC = () => {
     const nextRole = defaultRole ?? roles[0]
 
     setSelectedRoleValue((current) => {
-      if (current === CUSTOM_ROLE_VALUE) return current
+      if (current === CUSTOM_ROLE_VALUE || current === PLAIN_AGENT_VALUE)
+        return current
       const hasCurrent = roles.some((role) => role.id === current)
       return hasCurrent ? current : nextRole.id
     })
@@ -366,10 +381,15 @@ export const AgentsPage: FC = () => {
       return
     }
 
+    if (isPlainAgent) {
+      setNewName((current) => current || 'agent')
+      return
+    }
+
     if (selectedRole) {
       setNewName((current) => current || selectedRole.defaultAgentName)
     }
-  }, [createOpen, isCustomRole, customRole.name, selectedRole])
+  }, [createOpen, isCustomRole, isPlainAgent, customRole.name, selectedRole])
 
   const inlineError =
     error ??
@@ -463,12 +483,12 @@ export const AgentsPage: FC = () => {
       return
     }
 
-    if (!isCustomRole && !selectedRole) return
+    if (creationMode === 'builtin' && !selectedRole) return
 
     await runWithErrorHandling(async () => {
       await createAgent({
         name: normalizedName,
-        roleId: !isCustomRole ? selectedRole?.id : undefined,
+        roleId: creationMode === 'builtin' ? selectedRole?.id : undefined,
         customRole: isCustomRole ? customRolePayload : undefined,
         providerType: provider?.type,
         providerName: provider?.name,
@@ -866,6 +886,12 @@ export const AgentsPage: FC = () => {
                     return
                   }
 
+                  if (value === PLAIN_AGENT_VALUE) {
+                    setSelectedRoleValue(PLAIN_AGENT_VALUE)
+                    setNewName('agent')
+                    return
+                  }
+
                   const role = roles.find((item) => item.id === value)
                   if (!role) return
 
@@ -887,6 +913,7 @@ export const AgentsPage: FC = () => {
                       {role.name}
                     </SelectItem>
                   ))}
+                  <SelectItem value={PLAIN_AGENT_VALUE}>Plain Agent</SelectItem>
                   <SelectItem value={CUSTOM_ROLE_VALUE}>Custom Role</SelectItem>
                 </SelectContent>
               </Select>
@@ -921,6 +948,17 @@ export const AgentsPage: FC = () => {
                         ))}
                       </ul>
                     </div>
+                  </CardContent>
+                </Card>
+              )}
+              {isPlainAgent && (
+                <Card>
+                  <CardContent className="space-y-2 py-4">
+                    <div className="font-medium text-sm">Plain Agent</div>
+                    <p className="text-muted-foreground text-xs">
+                      No role bootstrap or defaults. Intended for temporary
+                      development and testing only.
+                    </p>
                   </CardContent>
                 </Card>
               )}
@@ -1106,7 +1144,7 @@ export const AgentsPage: FC = () => {
                 rolesLoading ||
                 !gatewayUiState.canManageAgents ||
                 compatibleProviders.length === 0 ||
-                (!isCustomRole && !selectedRole)
+                (creationMode === 'builtin' && !selectedRole)
               }
               className="w-full"
             >
