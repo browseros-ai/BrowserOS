@@ -28,6 +28,8 @@ export function createOpenClawRoutes() {
     .post('/setup', async (c) => {
       const body = await c.req.json<{
         providerType?: string
+        providerName?: string
+        baseUrl?: string
         apiKey?: string
         modelId?: string
       }>()
@@ -103,6 +105,8 @@ export function createOpenClawRoutes() {
       const body = await c.req.json<{
         name: string
         providerType?: string
+        providerName?: string
+        baseUrl?: string
         apiKey?: string
         modelId?: string
       }>()
@@ -116,6 +120,8 @@ export function createOpenClawRoutes() {
         const agent = await getOpenClawService().createAgent({
           name,
           providerType: body.providerType,
+          providerName: body.providerName,
+          baseUrl: body.baseUrl,
           apiKey: body.apiKey,
           modelId: body.modelId,
         })
@@ -210,6 +216,8 @@ export function createOpenClawRoutes() {
       const body = await c.req.json<{
         providerType: string
         apiKey: string
+        providerName?: string
+        baseUrl?: string
         modelId?: string
       }>()
 
@@ -218,10 +226,7 @@ export function createOpenClawRoutes() {
       }
 
       try {
-        await getOpenClawService().updateProviderKeys(
-          body.providerType,
-          body.apiKey,
-        )
+        await getOpenClawService().updateProviderKeys(body)
         return c.json({
           status: 'restarting',
           message: 'Provider updated, restarting gateway',

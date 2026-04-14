@@ -105,6 +105,8 @@ export const AgentsPage: FC = () => {
     try {
       await setupOpenClaw({
         providerType: provider?.type,
+        providerName: provider?.name,
+        baseUrl: provider?.baseUrl,
         apiKey: provider?.apiKey,
         modelId: provider?.modelId,
       })
@@ -126,6 +128,8 @@ export const AgentsPage: FC = () => {
       await createAgent({
         name: newName.trim().toLowerCase().replace(/\s+/g, '-'),
         providerType: provider?.type,
+        providerName: provider?.name,
+        baseUrl: provider?.baseUrl,
         apiKey: provider?.apiKey,
         modelId: provider?.modelId,
       })
@@ -472,7 +476,13 @@ export const AgentsPage: FC = () => {
 }
 
 interface ProviderSelectorProps {
-  providers: Array<{ id: string; type: string; name: string; modelId: string }>
+  providers: Array<{
+    id: string
+    type: string
+    name: string
+    modelId: string
+    baseUrl?: string
+  }>
   defaultProviderId: string
   selectedId: string
   onSelect: (id: string) => void

@@ -31,7 +31,11 @@ import {
 import {
   buildBootstrapConfig,
   buildEnvFile,
+  deriveOpenClawApiKeyEnvVar,
+  deriveOpenClawProviderId,
+  PROVIDER_ENV_MAP,
   resolveProviderKeys,
+  resolveProviderModel,
 } from './openclaw-config'
 import { getPodmanRuntime } from './podman-runtime'
 
@@ -61,6 +65,8 @@ export interface OpenClawStatusResponse {
 
 export interface SetupInput {
   providerType?: string
+  providerName?: string
+  baseUrl?: string
   apiKey?: string
   modelId?: string
 }
@@ -104,7 +110,7 @@ export class OpenClawService {
     await this.runtime.copyComposeFile(COMPOSE_RESOURCE)
 
     this.token = crypto.randomUUID()
-    const providerKeys = resolveProviderKeys(input.providerType, input.apiKey)
+    const providerKeys = resolveProviderKeys(input)
     const envContent = buildEnvFile({
       token: this.token,
       configDir: this.openclawDir,
@@ -118,6 +124,8 @@ export class OpenClawService {
       gatewayToken: this.token,
       browserosServerPort: this.browserosServerPort,
       providerType: input.providerType,
+      providerName: input.providerName,
+      baseUrl: input.baseUrl,
       modelId: input.modelId,
     })
     await this.writeBootstrapConfig(config)
@@ -169,10 +177,7 @@ export class OpenClawService {
     const hasMain = existingAgents.some((a) => a.agentId === 'main')
     if (!hasMain) {
       logProgress('Creating main agent...')
-      const model =
-        input.providerType && input.modelId
-          ? `${input.providerType}/${input.modelId}`
-          : undefined
+      const model = resolveProviderModel(input)
       // biome-ignore lint/style/noNonNullAssertion: gateway is connected
       await this.gateway!.createAgent({
         name: 'main',
@@ -308,6 +313,8 @@ export class OpenClawService {
   async createAgent(input: {
     name: string
     providerType?: string
+    providerName?: string
+    baseUrl?: string
     apiKey?: string
     modelId?: string
   }): Promise<GatewayAgentEntry> {
@@ -319,27 +326,24 @@ export class OpenClawService {
     logger.debug('Creating OpenClaw agent', {
       name,
       providerType: input.providerType,
+      providerName: input.providerName,
+      hasBaseUrl: !!input.baseUrl,
       hasModel: !!input.modelId,
       hasApiKey: !!input.apiKey,
     })
     this.ensureGatewayConnected()
 
-    let needsRestart = false
-    if (input.providerType && input.apiKey) {
-      needsRestart = await this.mergeProviderKeyIfNew(
-        input.providerType,
-        input.apiKey,
-      )
-    }
+    const configChanged = await this.mergeProviderConfigIfChanged(input)
+    const keysChanged =
+      input.providerType && input.apiKey
+        ? await this.mergeProviderKeyIfChanged(input)
+        : false
 
-    if (needsRestart) {
+    if (configChanged || keysChanged) {
       await this.restart()
     }
 
-    const model =
-      input.providerType && input.modelId
-        ? `${input.providerType}/${input.modelId}`
-        : undefined
+    const model = resolveProviderModel(input)
 
     const gateway = this.gateway
     if (!gateway) {
@@ -409,13 +413,17 @@ export class OpenClawService {
 
   // ── Provider Keys ────────────────────────────────────────────────────
 
-  async updateProviderKeys(
-    providerType: string,
-    apiKey: string,
-  ): Promise<void> {
-    await this.mergeProviderKeyIfNew(providerType, apiKey)
+  async updateProviderKeys(input: {
+    providerType: string
+    providerName?: string
+    baseUrl?: string
+    apiKey: string
+    modelId?: string
+  }): Promise<void> {
+    await this.mergeProviderConfigIfChanged(input)
+    await this.mergeProviderKeyIfChanged(input)
     await this.restart()
-    logger.info('Provider keys updated', { providerType })
+    logger.info('Provider keys updated', { providerType: input.providerType })
   }
 
   // ── Logs ─────────────────────────────────────────────────────────────
@@ -614,15 +622,17 @@ export class OpenClawService {
   }
 
   /**
-   * Merges a provider API key into .env. Returns true if the key was NEW
-   * (not previously present), meaning a container restart is needed to
-   * pick up the new env var.
+   * Merges provider credentials into .env. Returns true when the env file
+   * changed, meaning the container should restart to pick up the update.
    */
-  private async mergeProviderKeyIfNew(
-    providerType: string,
-    apiKey: string,
-  ): Promise<boolean> {
-    const newKeys = resolveProviderKeys(providerType, apiKey)
+  private async mergeProviderKeyIfChanged(input: {
+    providerType?: string
+    providerName?: string
+    baseUrl?: string
+    apiKey?: string
+    modelId?: string
+  }): Promise<boolean> {
+    const newKeys = resolveProviderKeys(input)
     if (Object.keys(newKeys).length === 0) return false
 
     const envPath = join(this.openclawDir, '.env')
@@ -649,11 +659,92 @@ export class OpenClawService {
 
     await writeFile(envPath, content, { mode: 0o600 })
     logger.debug('Updated OpenClaw provider credentials', {
-      providerType,
+      providerType: input.providerType,
       addedNew,
       updatedExisting,
     })
-    return addedNew
+    return addedNew || updatedExisting
+  }
+
+  private async mergeProviderConfigIfChanged(input: {
+    providerType?: string
+    providerName?: string
+    baseUrl?: string
+    modelId?: string
+  }): Promise<boolean> {
+    if (
+      !input.providerType ||
+      !input.baseUrl ||
+      input.providerType in PROVIDER_ENV_MAP
+    ) {
+      return false
+    }
+
+    const configPath = join(this.openclawDir, OPENCLAW_CONFIG_FILE)
+    let content = ''
+    try {
+      content = await readFile(configPath, 'utf-8')
+    } catch {
+      return false
+    }
+
+    const config = JSON.parse(content) as Record<string, unknown>
+    const models = (config.models ?? {}) as Record<string, unknown>
+    const providers = ((models.providers as
+      | Record<string, unknown>
+      | undefined) ?? {}) as Record<string, Record<string, unknown>>
+
+    const providerId = deriveOpenClawProviderId(input)
+    const existingProvider = providers[providerId] ?? {}
+    const nextProvider: Record<string, unknown> = {
+      ...existingProvider,
+      baseUrl: input.baseUrl,
+      apiKey:
+        existingProvider.apiKey ??
+        `\${${deriveOpenClawApiKeyEnvVar(providerId)}}`,
+    }
+
+    if (!existingProvider.api) {
+      nextProvider.api = 'openai-completions'
+    }
+
+    if (input.modelId) {
+      const existingModels = Array.isArray(existingProvider.models)
+        ? (existingProvider.models as Array<Record<string, unknown>>)
+        : []
+      const hasModel = existingModels.some(
+        (model) => model.id === input.modelId || model.name === input.modelId,
+      )
+      if (!hasModel) {
+        nextProvider.models = [
+          ...existingModels,
+          { id: input.modelId, name: input.modelId },
+        ]
+      }
+    }
+
+    if (
+      JSON.stringify(existingProvider) === JSON.stringify(nextProvider) &&
+      models.mode === 'merge'
+    ) {
+      return false
+    }
+
+    config.models = {
+      ...models,
+      mode: 'merge',
+      providers: {
+        ...providers,
+        [providerId]: nextProvider,
+      },
+    }
+    await this.writeBootstrapConfig(config)
+    logger.debug('Updated OpenClaw provider config', {
+      providerId,
+      providerType: input.providerType,
+      hasModel: !!input.modelId,
+    })
+    return true
   }
 
   private async loadTokenFromEnv(): Promise<void> {

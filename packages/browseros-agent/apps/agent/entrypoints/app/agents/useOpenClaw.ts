@@ -90,6 +90,8 @@ export function useOpenClawAgents(refreshKey: number) {
 
 export async function setupOpenClaw(input: {
   providerType?: string
+  providerName?: string
+  baseUrl?: string
   apiKey?: string
   modelId?: string
 }) {
@@ -103,6 +105,8 @@ export async function setupOpenClaw(input: {
 export async function createAgent(input: {
   name: string
   providerType?: string
+  providerName?: string
+  baseUrl?: string
   apiKey?: string
   modelId?: string
 }) {
