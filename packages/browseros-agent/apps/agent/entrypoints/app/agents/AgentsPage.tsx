@@ -95,6 +95,14 @@ const CONTROL_PLANE_COPY: Record<
   },
 }
 
+const FALLBACK_CONTROL_PLANE_COPY = {
+  badgeVariant: 'outline' as const,
+  badgeLabel: 'Unknown',
+  title: 'Gateway State Unknown',
+  description:
+    'BrowserOS received a gateway status it does not recognize yet. Refreshing or reconnecting should restore a known state.',
+}
+
 const RECOVERY_REASON_COPY: Record<
   NonNullable<OpenClawStatus['lastRecoveryReason']>,
   string
@@ -134,8 +142,12 @@ const StatusBadge: FC<{ status: OpenClawStatus['status'] }> = ({ status }) => {
 const ControlPlaneBadge: FC<{
   status: OpenClawStatus['controlPlaneStatus']
 }> = ({ status }) => {
-  const current = CONTROL_PLANE_COPY[status]
+  const current = CONTROL_PLANE_COPY[status] ?? FALLBACK_CONTROL_PLANE_COPY
   return <Badge variant={current.badgeVariant}>{current.badgeLabel}</Badge>
+}
+
+function getControlPlaneCopy(status: OpenClawStatus['controlPlaneStatus']) {
+  return CONTROL_PLANE_COPY[status] ?? FALLBACK_CONTROL_PLANE_COPY
 }
 
 function getRecoveryDetail(status: OpenClawStatus): string | null {
@@ -304,6 +316,9 @@ export const AgentsPage: FC = () => {
   }, [status])
 
   const recoveryDetail = status ? getRecoveryDetail(status) : null
+  const controlPlaneCopy = status
+    ? getControlPlaneCopy(status.controlPlaneStatus)
+    : null
 
   const runWithErrorHandling = async (fn: () => Promise<unknown>) => {
     setError(null)
@@ -501,11 +516,9 @@ export const AgentsPage: FC = () => {
           ) : (
             <WifiOff />
           )}
-          <AlertTitle>
-            {CONTROL_PLANE_COPY[status.controlPlaneStatus].title}
-          </AlertTitle>
+          <AlertTitle>{controlPlaneCopy?.title}</AlertTitle>
           <AlertDescription>
-            <p>{CONTROL_PLANE_COPY[status.controlPlaneStatus].description}</p>
+            <p>{controlPlaneCopy?.description}</p>
             {recoveryDetail && <p>{recoveryDetail}</p>}
             <div className="mt-2 flex flex-wrap gap-2">
               <Button
