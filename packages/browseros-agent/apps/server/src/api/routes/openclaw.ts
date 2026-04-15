@@ -15,6 +15,7 @@ import type {
 } from '@browseros/shared/types/role-aware-agents'
 import { Hono } from 'hono'
 import { stream } from 'hono/streaming'
+import { logger } from '../../lib/logger'
 import {
   OpenClawAgentAlreadyExistsError,
   OpenClawAgentNotFoundError,
@@ -57,6 +58,13 @@ export function createOpenClawRoutes() {
       }>()
 
       try {
+        logger.info('OpenClaw setup requested', {
+          providerType: body.providerType,
+          providerName: body.providerName,
+          hasBaseUrl: !!body.baseUrl,
+          hasModel: !!body.modelId,
+          hasApiKey: !!body.apiKey,
+        })
         const logs: string[] = []
         await getOpenClawService().setup(body, (msg) => logs.push(msg))
 
@@ -76,6 +84,11 @@ export function createOpenClawRoutes() {
         )
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
+        logger.error('OpenClaw setup failed', {
+          error: message,
+          providerType: body.providerType,
+          providerName: body.providerName,
+        })
         if (message.includes('Podman is not available')) {
           return c.json({ error: message }, 503)
         }
@@ -85,40 +98,48 @@ export function createOpenClawRoutes() {
 
     .post('/start', async (c) => {
       try {
+        logger.info('OpenClaw start requested')
         await getOpenClawService().start()
         return c.json({ status: 'running' })
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
+        logger.error('OpenClaw start failed', { error: message })
         return c.json({ error: message }, 500)
       }
     })
 
     .post('/stop', async (c) => {
       try {
+        logger.info('OpenClaw stop requested')
         await getOpenClawService().stop()
         return c.json({ status: 'stopped' })
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
+        logger.error('OpenClaw stop failed', { error: message })
         return c.json({ error: message }, 500)
       }
     })
 
     .post('/restart', async (c) => {
       try {
+        logger.info('OpenClaw restart requested')
         await getOpenClawService().restart()
         return c.json({ status: 'running' })
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
+        logger.error('OpenClaw restart failed', { error: message })
         return c.json({ error: message }, 500)
       }
     })
 
     .post('/reconnect', async (c) => {
       try {
+        logger.info('OpenClaw reconnect requested')
         await getOpenClawService().reconnectControlPlane()
         return c.json({ status: 'connected' })
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
+        logger.error('OpenClaw reconnect failed', { error: message })
         return c.json({ error: message }, 500)
       }
     })

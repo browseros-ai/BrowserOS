@@ -26,6 +26,7 @@ export class ContainerRuntime {
   ) {}
 
   async ensureReady(onLog?: LogFn): Promise<void> {
+    logger.info('Ensuring Podman runtime readiness')
     return this.podman.ensureReady(onLog)
   }
 
@@ -92,11 +93,22 @@ export class ContainerRuntime {
   }
 
   async waitForReady(port: number, timeoutMs = 30_000): Promise<boolean> {
+    logger.info('Waiting for OpenClaw gateway readiness', { port, timeoutMs })
     const start = Date.now()
     while (Date.now() - start < timeoutMs) {
-      if (await this.isReady(port)) return true
+      if (await this.isReady(port)) {
+        logger.info('OpenClaw gateway became ready', {
+          port,
+          waitMs: Date.now() - start,
+        })
+        return true
+      }
       await Bun.sleep(1000)
     }
+    logger.error('Timed out waiting for OpenClaw gateway readiness', {
+      port,
+      timeoutMs,
+    })
     return false
   }
 
@@ -143,6 +155,10 @@ export class ContainerRuntime {
 
   private async compose(args: string[], onLog?: LogFn): Promise<number> {
     const lines: string[] = []
+    const command = ['podman', 'compose', ...args].join(' ')
+    logger.info('Running OpenClaw compose command', {
+      command,
+    })
     const code = await this.podman.runCommand(['compose', ...args], {
       cwd: this.projectDir,
       env: { COMPOSE_PROJECT_NAME: OPENCLAW_COMPOSE_PROJECT_NAME },
@@ -154,10 +170,13 @@ export class ContainerRuntime {
 
     if (code !== 0) {
       logger.error('OpenClaw compose command failed', {
-        command: ['podman', 'compose', ...args].join(' '),
-        projectDir: this.projectDir,
+        command,
         exitCode: code,
         output: lines,
+      })
+    } else {
+      logger.info('OpenClaw compose command succeeded', {
+        command,
       })
     }
 

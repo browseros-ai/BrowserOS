@@ -211,8 +211,11 @@ export class GatewayClient {
     return new Promise((resolve, reject) => {
       this.connectionState = 'connecting'
       this.lastHandshakeError = null
-      const url = `ws://127.0.0.1:${this.port}`
-      this.ws = new WebSocket(url, {
+      logger.info('Connecting to OpenClaw Gateway WS', {
+        port: this.port,
+        hasDeviceIdentity: !!this.device,
+      })
+      this.ws = new WebSocket(`ws://127.0.0.1:${this.port}`, {
         headers: { Origin: `http://127.0.0.1:${this.port}` },
       } as unknown as string[])
 
@@ -227,6 +230,10 @@ export class GatewayClient {
           if (frame.type === 'event' && frame.event === 'connect.challenge') {
             const nonce = (frame.payload as Record<string, unknown>)
               ?.nonce as string
+            logger.info('Received OpenClaw Gateway challenge', {
+              hasNonce: !!nonce,
+              hasDeviceIdentity: !!this.device,
+            })
             connectReqId = globalThis.crypto.randomUUID()
 
             const params: Record<string, unknown> = {
@@ -299,6 +306,10 @@ export class GatewayClient {
       }
 
       this.ws.onerror = (err) => {
+        logger.error('Gateway WS socket error', {
+          error: err instanceof Error ? err.message : 'unknown',
+          handshakeComplete,
+        })
         if (!handshakeComplete) {
           this.connectionState = 'failed'
           reject(
@@ -341,7 +352,6 @@ export class GatewayClient {
     if (!this._connected || !this.ws) {
       throw new Error('Gateway WS not connected')
     }
-
     const id = globalThis.crypto.randomUUID()
 
     return new Promise<T>((resolve, reject) => {

@@ -128,6 +128,15 @@ export class OpenClawService {
 
   async setup(input: SetupInput, onLog?: (msg: string) => void): Promise<void> {
     const logProgress = this.createProgressLogger(onLog)
+    logger.info('Starting OpenClaw setup', {
+      port: this.port,
+      browserosServerPort: this.browserosServerPort,
+      providerType: input.providerType,
+      providerName: input.providerName,
+      hasBaseUrl: !!input.baseUrl,
+      hasModel: !!input.modelId,
+      hasApiKey: !!input.apiKey,
+    })
 
     logProgress('Checking container runtime...')
     const available = await this.runtime.isPodmanAvailable()
@@ -155,6 +164,9 @@ export class OpenClawService {
     })
     await this.runtime.writeEnvFile(envContent)
     logProgress('Generated .env file')
+    logger.info('Wrote OpenClaw env file', {
+      providerKeyCount: Object.keys(providerKeys).length,
+    })
 
     const config = buildBootstrapConfig({
       gatewayPort: this.port,
@@ -167,6 +179,7 @@ export class OpenClawService {
     })
     await this.writeBootstrapConfig(config)
     logProgress('Generated openclaw.json')
+    logger.info('Generated OpenClaw bootstrap config')
 
     logProgress('Pulling OpenClaw image...')
     await this.runtime.composePull(logProgress)
@@ -194,6 +207,10 @@ export class OpenClawService {
     // Ensure main agent exists (gateway may auto-create it)
     // biome-ignore lint/style/noNonNullAssertion: gateway is guaranteed connected after connectGateway()
     const existingAgents = await this.gateway!.listAgents()
+    logger.info('Fetched existing OpenClaw agents after setup', {
+      count: existingAgents.length,
+      names: existingAgents.map((agent) => agent.name),
+    })
     const hasMain = existingAgents.some((a) => a.agentId === 'main')
     if (!hasMain) {
       logProgress('Creating main agent...')
@@ -215,6 +232,9 @@ export class OpenClawService {
 
   async start(onLog?: (msg: string) => void): Promise<void> {
     const logProgress = this.createProgressLogger(onLog)
+    logger.info('Starting OpenClaw service', {
+      port: this.port,
+    })
 
     logProgress('Loading gateway auth token...')
     await this.loadTokenFromEnv()
@@ -236,6 +256,7 @@ export class OpenClawService {
   }
 
   async stop(): Promise<void> {
+    logger.info('Stopping OpenClaw service', { port: this.port })
     this.disconnectGateway()
     await this.runtime.composeStop()
     logger.info('OpenClaw container stopped')
@@ -243,6 +264,9 @@ export class OpenClawService {
 
   async restart(onLog?: (msg: string) => void): Promise<void> {
     const logProgress = this.createProgressLogger(onLog)
+    logger.info('Restarting OpenClaw service', {
+      port: this.port,
+    })
 
     this.disconnectGateway()
     logProgress('Loading gateway auth token...')
@@ -266,6 +290,7 @@ export class OpenClawService {
 
   async reconnectControlPlane(onLog?: (msg: string) => void): Promise<void> {
     const logProgress = this.createProgressLogger(onLog)
+    logger.info('Reconnecting OpenClaw control plane', { port: this.port })
 
     logProgress('Checking gateway readiness...')
     const ready = await this.runtime.isReady(this.port)
@@ -398,6 +423,11 @@ export class OpenClawService {
         : false
 
     if (configChanged || keysChanged) {
+      logger.info('OpenClaw provider config changed while creating agent', {
+        name,
+        configChanged,
+        keysChanged,
+      })
       await this.restart()
     }
 
@@ -449,6 +479,7 @@ export class OpenClawService {
   }
 
   async removeAgent(agentId: string): Promise<void> {
+    logger.info('Removing OpenClaw agent', { agentId })
     if (agentId === 'main') {
       throw new OpenClawProtectedAgentError('Cannot delete the main agent')
     }
@@ -488,7 +519,11 @@ export class OpenClawService {
     message: string,
   ): Promise<ReadableStream<OpenClawStreamEvent>> {
     await this.ensureGatewayReady()
-    logger.debug('Starting OpenClaw chat stream', { agentId, sessionKey })
+    logger.info('Starting OpenClaw chat stream', {
+      agentId,
+      sessionKey,
+      messageLength: message.length,
+    })
     // biome-ignore lint/style/noNonNullAssertion: ensureGatewayReady() guarantees a connected client
     return this.gateway!.chatStream(agentId, sessionKey, message)
   }
@@ -523,6 +558,9 @@ export class OpenClawService {
 
     const available = await this.runtime.isPodmanAvailable()
     if (!available) return
+    logger.info('Attempting OpenClaw auto-start', {
+      port: this.port,
+    })
 
     try {
       await this.loadTokenFromEnv()
@@ -560,6 +598,10 @@ export class OpenClawService {
     this.lastRecoveryReason = null
 
     try {
+      logger.info('Connecting OpenClaw control plane', {
+        port: this.port,
+        status: this.controlPlaneStatus,
+      })
       await this.connectGateway()
       this.controlPlaneStatus = 'connected'
       this.lastGatewayError = null
@@ -617,6 +659,7 @@ export class OpenClawService {
   private async approvePendingDevice(
     logProgress: (msg: string) => void,
   ): Promise<void> {
+    logger.info('Approving pending OpenClaw device pairing')
     // List pending devices to get the request ID
     const output: string[] = []
     const listCode = await this.runtime.execInContainer(
@@ -690,7 +733,9 @@ export class OpenClawService {
 
   private async connectGateway(): Promise<void> {
     this.disconnectGateway()
-    logger.debug('Connecting OpenClaw gateway client', { port: this.port })
+    logger.info('Connecting OpenClaw gateway client', {
+      port: this.port,
+    })
     const gateway = new GatewayClient(this.port, this.token, this.openclawDir)
     await gateway.connect()
     this.gateway = gateway
@@ -711,6 +756,12 @@ export class OpenClawService {
     }
 
     const portReady = await this.runtime.isReady(this.port)
+    logger.info('Checking OpenClaw gateway readiness before WS use', {
+      port: this.port,
+      portReady,
+      hasGatewayClient: !!this.gateway,
+      gatewayConnected: !!this.gateway?.isConnected,
+    })
     if (!portReady) {
       this.controlPlaneStatus = 'failed'
       this.lastGatewayError = 'OpenClaw gateway is not ready'
@@ -795,6 +846,7 @@ export class OpenClawService {
   ): Promise<void> {
     const configPath = join(this.openclawDir, OPENCLAW_CONFIG_FILE)
     await writeFile(configPath, JSON.stringify(config, null, 2))
+    logger.info('Persisted OpenClaw bootstrap config')
   }
 
   private getHostWorkspaceDir(agentName: string): string {
@@ -994,10 +1046,10 @@ export class OpenClawService {
       const match = content.match(/^OPENCLAW_GATEWAY_TOKEN=(.+)$/m)
       if (match) {
         this.token = match[1]
-        logger.debug('Loaded OpenClaw gateway token from env')
+        logger.info('Loaded OpenClaw gateway token from env')
       }
     } catch {
-      logger.debug('OpenClaw env file not available while loading token')
+      logger.warn('OpenClaw env file not available while loading token')
     }
   }
 
