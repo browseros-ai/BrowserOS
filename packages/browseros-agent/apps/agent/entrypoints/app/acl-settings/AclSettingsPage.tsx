@@ -1,13 +1,17 @@
 import type { AclRule } from '@browseros/shared/types/acl'
 import { Plus, ShieldAlert } from 'lucide-react'
 import { type FC, useEffect, useState } from 'react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { fetchServerAclRules, updateServerAclRules } from '@/lib/acl/api'
 import { aclRulesStorage } from '@/lib/acl/storage'
+import { useAgentServerUrl } from '@/lib/browseros/useBrowserOSProviders'
 import { AclRuleCard } from './AclRuleCard'
 import { NewAclRuleDialog } from './NewAclRuleDialog'
 
 export const AclSettingsPage: FC = () => {
   const [rules, setRules] = useState<AclRule[]>([])
+  const { baseUrl, isLoading: urlLoading } = useAgentServerUrl()
 
   useEffect(() => {
     aclRulesStorage.getValue().then(setRules)
@@ -15,21 +19,68 @@ export const AclSettingsPage: FC = () => {
     return () => unwatch()
   }, [])
 
-  const saveRules = (next: AclRule[]) => {
+  useEffect(() => {
+    if (!baseUrl || urlLoading) return
+
+    const resolvedBaseUrl = baseUrl
+    let cancelled = false
+
+    async function bootstrapServerAcl() {
+      try {
+        const [localRules, serverRules] = await Promise.all([
+          aclRulesStorage.getValue(),
+          fetchServerAclRules(resolvedBaseUrl),
+        ])
+
+        if (cancelled) return
+
+        if (
+          serverRules.length === 0 &&
+          localRules.some((rule) => rule.enabled)
+        ) {
+          await updateServerAclRules(resolvedBaseUrl, localRules)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          void error
+        }
+      }
+    }
+
+    void bootstrapServerAcl()
+
+    return () => {
+      cancelled = true
+    }
+  }, [baseUrl, urlLoading])
+
+  const saveRules = async (next: AclRule[]) => {
     setRules(next)
-    aclRulesStorage.setValue(next)
+    await aclRulesStorage.setValue(next)
+
+    if (!baseUrl) return
+
+    try {
+      await updateServerAclRules(baseUrl, next)
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : 'Failed to sync ACL rules to the server',
+      )
+    }
   }
 
   const handleAddRule = (rule: AclRule) => {
-    saveRules([...rules, rule])
+    void saveRules([...rules, rule])
   }
 
   const handleToggle = (id: string, enabled: boolean) => {
-    saveRules(rules.map((r) => (r.id === id ? { ...r, enabled } : r)))
+    void saveRules(rules.map((r) => (r.id === id ? { ...r, enabled } : r)))
   }
 
   const handleDelete = (id: string) => {
-    saveRules(rules.filter((r) => r.id !== id))
+    void saveRules(rules.filter((r) => r.id !== id))
   }
 
   return (

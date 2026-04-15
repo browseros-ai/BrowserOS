@@ -22,6 +22,7 @@ import { initializeOAuth } from '../lib/clients/oauth'
 import { getDb } from '../lib/db'
 import { logger } from '../lib/logger'
 import { Sentry } from '../lib/sentry'
+import { createAclRoutes } from './routes/acl'
 import { createChatRoutes } from './routes/chat'
 import { createCreditsRoutes } from './routes/credits'
 import { createHealthRoute } from './routes/health'
@@ -38,6 +39,7 @@ import { createSkillsRoutes } from './routes/skills'
 import { createSoulRoutes } from './routes/soul'
 import { createStatusRoute } from './routes/status'
 import { createTerminalRoutes } from './routes/terminal'
+import { GlobalAclPolicyService } from './services/acl/global-acl-policy'
 import {
   connectKlavisProxy,
   type KlavisProxyHandle,
@@ -91,6 +93,8 @@ export async function createHttpServer(config: HttpServerConfig) {
 
   // Connect Klavis proxy (non-blocking: browser tools still work if this fails)
   let klavisProxy: KlavisProxyHandle | null = null
+  const aclPolicyService = new GlobalAclPolicyService()
+  await aclPolicyService.load()
   if (browserosId) {
     try {
       klavisProxy = await connectKlavisProxy({
@@ -121,6 +125,10 @@ export async function createHttpServer(config: HttpServerConfig) {
       }),
     )
 
+  const aclRoutes = new Hono<Env>()
+    .use('/*', requireTrustedAppOrigin())
+    .route('/', createAclRoutes({ policyService: aclPolicyService }))
+
   const app = new Hono<Env>()
     .use('/*', cors(defaultCorsConfig))
     .route('/health', createHealthRoute({ browser }))
@@ -142,6 +150,7 @@ export async function createHttpServer(config: HttpServerConfig) {
     .route('/soul', createSoulRoutes())
     .route('/memory', createMemoryRoutes())
     .route('/skills', createSkillsRoutes())
+    .route('/acl-rules', aclRoutes)
     .route('/test-provider', createProviderRoutes({ browserosId }))
     .route('/refine-prompt', createRefinePromptRoutes({ browserosId }))
     .route(
@@ -170,6 +179,7 @@ export async function createHttpServer(config: HttpServerConfig) {
         browser,
         executionDir,
         resourcesDir,
+        policyService: aclPolicyService,
         klavisProxy,
       }),
     )
