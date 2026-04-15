@@ -10,7 +10,7 @@ import { SetLevelRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { Browser } from '../../../browser/browser'
 import type { ToolRegistry } from '../../../tools/tool-registry'
 import {
-  type KlavisProxyHandle,
+  type KlavisProxyRef,
   registerKlavisTools,
 } from '../klavis/strata-proxy'
 import { MCP_INSTRUCTIONS } from './mcp-prompt'
@@ -23,7 +23,7 @@ export interface McpServiceDeps {
   executionDir: string
   resourcesDir: string
   aclRules?: AclRule[]
-  klavisProxy?: KlavisProxyHandle | null
+  klavisRef?: KlavisProxyRef
 }
 
 export function createMcpServer(deps: McpServiceDeps): McpServer {
@@ -50,9 +50,9 @@ export function createMcpServer(deps: McpServiceDeps): McpServer {
     aclRules: deps.aclRules,
   })
 
-  // Register Klavis proxy tools (if connected)
-  if (deps.klavisProxy) {
-    registerKlavisTools(server, deps.klavisProxy)
+  // Register Klavis proxy tools (if connected via background init)
+  if (deps.klavisRef?.handle) {
+    registerKlavisTools(server, deps.klavisRef.handle)
   }
 
   return server

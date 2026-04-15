@@ -13,7 +13,7 @@ import { Sentry } from '../../lib/sentry'
 import type { ToolRegistry } from '../../tools/tool-registry'
 import type { GlobalAclPolicyService } from '../services/acl/global-acl-policy'
 import { resolveAclPolicyForMcpRequest } from '../services/acl/resolve-acl-policy'
-import type { KlavisProxyHandle } from '../services/klavis/strata-proxy'
+import type { KlavisProxyRef } from '../services/klavis/strata-proxy'
 import { createMcpServer } from '../services/mcp/mcp-server'
 import type { Env } from '../types'
 
@@ -24,7 +24,7 @@ interface McpRouteDeps {
   executionDir: string
   resourcesDir: string
   policyService: GlobalAclPolicyService
-  klavisProxy?: KlavisProxyHandle | null
+  klavisRef?: KlavisProxyRef
 }
 
 export function createMcpRoutes(deps: McpRouteDeps) {

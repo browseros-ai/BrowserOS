@@ -4,11 +4,16 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
+import type { JSONValue } from '@ai-sdk/provider'
+import {
+  KLAVIS_PROXY_RETRY_BACKOFF_MS,
+  TIMEOUTS,
+} from '@browseros/shared/constants/timeouts'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js'
+import type { ToolSet } from 'ai'
 import { z } from 'zod'
 import { jsonSchemaObjectToZodRawShape } from 'zod-from-json-schema'
 import { KlavisClient } from '../../../lib/clients/klavis/klavis-client'
@@ -39,17 +44,23 @@ export interface KlavisProxyHandle {
   close: () => Promise<void>
 }
 
+export interface KlavisProxyRef {
+  handle: KlavisProxyHandle | null
+}
+
 interface ConnectDeps {
   klavisClient: KlavisClient
   browserosId: string
 }
 
-// One-time async setup: connect to Klavis Strata and discover tools
+interface BackgroundConnectOptions {
+  connect?: (deps: ConnectDeps) => Promise<KlavisProxyHandle>
+  retryDelaysMs?: readonly number[]
+}
+
 export async function connectKlavisProxy(
   deps: ConnectDeps,
 ): Promise<KlavisProxyHandle> {
-  // Use the full curated OAuth server list so all tools are exposed,
-  // even unauthenticated ones (Klavis handles auth prompts on call)
   const allServers = OAUTH_MCP_SERVERS.map((s) => s.name)
 
   const strata = await klavisStrataCache.getOrFetch(
@@ -58,7 +69,6 @@ export async function connectKlavisProxy(
     allServers,
   )
 
-  // Connect MCP client to Strata endpoint
   const client = new Client({
     name: 'browseros-klavis-proxy',
     version: '1.0.0',
@@ -70,8 +80,6 @@ export async function connectKlavisProxy(
 
   const { tools } = await withTimeout(client.listTools(), 'listTools')
 
-  // Pre-compute Zod schemas once so registerKlavisTools avoids per-request conversion.
-  // Double cast works around TS2589 in registerTool's recursive generics.
   const inputSchemas = new Map(
     tools.map((t) => [
       t.name,
@@ -81,17 +89,15 @@ export async function connectKlavisProxy(
     ]),
   )
 
-  logger.info('Klavis proxy connected', {
-    toolCount: tools.length,
-    serverCount: allServers.length,
-  })
-
   return {
     browserosId: deps.browserosId,
     tools,
     inputSchemas,
     callTool: (name, args) =>
-      client.callTool({ name, arguments: args }) as Promise<CallToolResult>,
+      withTimeout(
+        client.callTool({ name, arguments: args }) as Promise<CallToolResult>,
+        `callTool(${name})`,
+      ),
     close: () => client.close(),
   }
 }
@@ -105,7 +111,6 @@ const serverDescriptions = OAUTH_MCP_SERVERS.map(
   (s) => `${s.name} (${s.description})`,
 ).join(', ')
 
-// Double cast works around TS2589 in registerTool's recursive generics.
 const connectorInputSchema = {
   server_name: z
     .enum(serverNames)
@@ -113,12 +118,126 @@ const connectorInputSchema = {
       `The name of the service to check. Available: ${serverDescriptions}`,
     ),
 } as unknown as Record<string, never>
+function klavisResultToModelOutput(output: unknown) {
+  const result = output as CallToolResult
+
+  if (!('content' in result) || !Array.isArray(result.content)) {
+    return {
+      type: 'json' as const,
+      value: (result as JSONValue | undefined) ?? null,
+    }
+  }
+
+  return {
+    type: 'content' as const,
+    value: result.content.map((part) => {
+      if (part.type === 'text') {
+        return {
+          type: 'text' as const,
+          text: part.text,
+        }
+      }
+      if (part.type === 'image') {
+        return {
+          type: 'image-data' as const,
+          data: part.data,
+          mediaType: part.mimeType ?? 'image/png',
+        }
+      }
+      return {
+        type: 'text' as const,
+        text: JSON.stringify(part),
+      }
+    }),
+  }
+}
+
+export function connectKlavisInBackground(
+  ref: KlavisProxyRef,
+  deps: ConnectDeps,
+  options: BackgroundConnectOptions = {},
+): () => void {
+  const connect = options.connect ?? connectKlavisProxy
+  const retryDelaysMs = options.retryDelaysMs ?? KLAVIS_PROXY_RETRY_BACKOFF_MS
+  let stopped = false
+  let retryTimer: ReturnType<typeof setTimeout> | undefined
+
+  async function attempt(n: number): Promise<void> {
+    if (stopped) return
+
+    try {
+      const handle = await connect(deps)
+      if (stopped) {
+        await handle.close().catch((error) => {
+          logger.warn('Failed to close Klavis proxy transport after stop', {
+            error: error instanceof Error ? error.message : String(error),
+          })
+        })
+        return
+      }
+      ref.handle = handle
+      logger.info('Klavis proxy connected', {
+        attempt: n + 1,
+        toolCount: handle.tools.length,
+      })
+    } catch (error) {
+      if (stopped) return
+
+      const msg = error instanceof Error ? error.message : String(error)
+      if (n < retryDelaysMs.length) {
+        const delay = retryDelaysMs[n]
+        logger.info('Retrying Klavis proxy connection', {
+          attempt: n + 1,
+          nextRetryMs: delay,
+          error: msg,
+        })
+        retryTimer = setTimeout(() => {
+          retryTimer = undefined
+          void attempt(n + 1)
+        }, delay)
+      } else {
+        logger.warn(
+          'Klavis proxy connection failed after all retries, MCP will serve browser tools only',
+          { attempts: n + 1, error: msg },
+        )
+      }
+    }
+  }
+
+  void attempt(0)
+
+  return () => {
+    stopped = true
+    if (retryTimer) {
+      clearTimeout(retryTimer)
+      retryTimer = undefined
+    }
+  }
+}
+
+export function buildKlavisToolSet(handle: KlavisProxyHandle): ToolSet {
+  const toolSet: ToolSet = {}
+
+  for (const t of handle.tools) {
+    const rawShape = handle.inputSchemas.get(t.name)
+    const name = t.name
+    toolSet[name] = {
+      description: t.description ?? '',
+      inputSchema: z.object((rawShape ?? {}) as z.ZodRawShape),
+      execute: async (args: Record<string, unknown>) =>
+        handle.callTool(name, args),
+      toModelOutput: ({ output }: { output: unknown }) =>
+        klavisResultToModelOutput(output),
+    } satisfies ToolSet[string]
+  }
+
+  return toolSet
+}
 
 export function registerKlavisTools(
   mcpServer: McpServer,
   handle: KlavisProxyHandle,
 ): void {
-  // Register the connector discovery tool
   mcpServer.registerTool(
     'connector_mcp_servers',
     {
@@ -160,7 +279,6 @@ export function registerKlavisTools(
           }
         }
 
-        // Not connected — get auth URL
         const strata = await klavisClient.createStrata(handle.browserosId, [
           server_name,
         ])
@@ -210,7 +328,6 @@ export function registerKlavisTools(
     },
   )
 
-  // Register Strata proxy tools
   for (const tool of handle.tools) {
     const inputSchema = handle.inputSchemas.get(tool.name)
 

@@ -2,8 +2,6 @@ import { createMCPClient } from '@ai-sdk/mcp'
 import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 import type { ToolSet } from 'ai'
-import { klavisStrataCache } from '../api/services/klavis/strata-cache'
-import type { KlavisClient } from '../lib/clients/klavis/klavis-client'
 import { logger } from '../lib/logger'
 import {
   detectMcpTransport,
@@ -19,8 +17,6 @@ export interface McpServerSpec {
 
 export interface McpServerSpecDeps {
   browserContext?: BrowserContext
-  klavisClient?: KlavisClient
-  browserosId?: string
 }
 
 export interface McpClientBundle {
@@ -28,39 +24,12 @@ export interface McpClientBundle {
   tools: ToolSet
 }
 
-// Build list of MCP server specs from config + browser context
+// Build list of custom MCP server specs from browser context
+// (Klavis Strata is handled separately via shared background connection)
 export async function buildMcpServerSpecs(
   deps: McpServerSpecDeps,
 ): Promise<McpServerSpec[]> {
   const specs: McpServerSpec[] = []
-
-  // Klavis Strata MCP servers
-  if (
-    deps.browserosId &&
-    deps.klavisClient &&
-    deps.browserContext?.enabledMcpServers?.length
-  ) {
-    try {
-      const result = await klavisStrataCache.getOrFetch(
-        deps.klavisClient,
-        deps.browserosId,
-        deps.browserContext.enabledMcpServers,
-      )
-      specs.push({
-        name: 'klavis-strata',
-        url: result.strataServerUrl,
-        transport: 'streamable-http',
-      })
-      logger.info('Added Klavis Strata MCP server', {
-        browserosId: deps.browserosId.slice(0, 12),
-        servers: deps.browserContext.enabledMcpServers,
-      })
-    } catch (error) {
-      logger.error('Failed to create Klavis Strata MCP server', {
-        error: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
 
   // User-provided custom MCP servers
   if (deps.browserContext?.customMcpServers?.length) {

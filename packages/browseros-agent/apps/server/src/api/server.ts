@@ -41,8 +41,8 @@ import { createStatusRoute } from './routes/status'
 import { createTerminalRoutes } from './routes/terminal'
 import { GlobalAclPolicyService } from './services/acl/global-acl-policy'
 import {
-  connectKlavisProxy,
-  type KlavisProxyHandle,
+  connectKlavisInBackground,
+  type KlavisProxyRef,
 } from './services/klavis/strata-proxy'
 import { getPodmanRuntime } from './services/openclaw/podman-runtime'
 import type { Env, HttpServerConfig } from './types'
@@ -91,25 +91,17 @@ export async function createHttpServer(config: HttpServerConfig) {
     ? initializeOAuth(getDb(), browserosId)
     : null
 
-  // Connect Klavis proxy (non-blocking: browser tools still work if this fails)
-  let klavisProxy: KlavisProxyHandle | null = null
   const aclPolicyService = new GlobalAclPolicyService()
   await aclPolicyService.load()
-  if (browserosId) {
-    try {
-      klavisProxy = await connectKlavisProxy({
+
+  // Connect Klavis proxy in background with retry — browser tools available immediately
+  const klavisRef: KlavisProxyRef = { handle: null }
+  const stopKlavisBackground = browserosId
+    ? connectKlavisInBackground(klavisRef, {
         klavisClient: new KlavisClient(),
         browserosId,
       })
-    } catch (error) {
-      logger.warn(
-        'Failed to connect Klavis proxy, MCP will serve browser tools only',
-        {
-          error: error instanceof Error ? error.message : String(error),
-        },
-      )
-    }
-  }
+    : () => {}
 
   const clawRoutes = new Hono<Env>()
     .use('/*', requireTrustedAppOrigin())
@@ -137,7 +129,8 @@ export async function createHttpServer(config: HttpServerConfig) {
       createShutdownRoute({
         onShutdown: () => {
           tokenManager?.stopCallbackServer()
-          klavisProxy?.close().catch((err) =>
+          stopKlavisBackground()
+          klavisRef.handle?.close().catch((err) =>
             logger.warn('Failed to close Klavis proxy transport', {
               error: err instanceof Error ? err.message : String(err),
             }),
@@ -180,7 +173,7 @@ export async function createHttpServer(config: HttpServerConfig) {
         executionDir,
         resourcesDir,
         policyService: aclPolicyService,
-        klavisProxy,
+        klavisRef,
       }),
     )
     .route(
@@ -189,6 +182,7 @@ export async function createHttpServer(config: HttpServerConfig) {
         browser,
         registry,
         browserosId,
+        klavisRef,
         aiSdkDevtoolsEnabled: config.aiSdkDevtoolsEnabled,
       }),
     )

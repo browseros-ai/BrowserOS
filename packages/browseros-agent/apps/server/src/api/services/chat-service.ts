@@ -14,15 +14,15 @@ import {
 import type { AgentSession, SessionStore } from '../../agent/session-store'
 import type { ResolvedAgentConfig } from '../../agent/types'
 import type { Browser } from '../../browser/browser'
-import type { KlavisClient } from '../../lib/clients/klavis/klavis-client'
 import { resolveLLMConfig } from '../../lib/clients/llm/config'
 import { logger } from '../../lib/logger'
 import type { ToolRegistry } from '../../tools/tool-registry'
+import type { KlavisProxyRef } from '../services/klavis/strata-proxy'
 import type { BrowserContext, ChatRequest } from '../types'
 
 export interface ChatServiceDeps {
   sessionStore: SessionStore
-  klavisClient: KlavisClient
+  klavisRef?: KlavisProxyRef
   browser: Browser
   registry: ToolRegistry
   browserosId?: string
@@ -92,10 +92,16 @@ export class ChatService {
         mcpServerKey,
       )
 
+      const oldParts = (previousMcpKey ?? '').split(',').filter(Boolean)
+      const newParts = mcpServerKey.split(',').filter(Boolean)
+      const oldKlavisState = oldParts.find((s) => s.startsWith('klavis:'))
+      const newKlavisState = newParts.find((s) => s.startsWith('klavis:'))
       const oldServers = new Set(
-        (previousMcpKey ?? '').split(',').filter(Boolean),
+        oldParts.filter((s) => !s.startsWith('klavis:')),
       )
-      const newServers = new Set(mcpServerKey.split(',').filter(Boolean))
+      const newServers = new Set(
+        newParts.filter((s) => !s.startsWith('klavis:')),
+      )
       const added = [...newServers].filter((s) => !oldServers.has(s))
       const removed = [...oldServers].filter((s) => !newServers.has(s))
 
@@ -111,9 +117,19 @@ export class ChatService {
         )
       }
       if (parts.length === 0) {
-        parts.push(
-          'Connected app integrations changed during this conversation. Use only tools that are currently registered.',
-        )
+        if (
+          oldKlavisState === 'klavis:pending' &&
+          newKlavisState === 'klavis:connected' &&
+          newServers.size > 0
+        ) {
+          parts.push(
+            `Klavis app integration tools are now available for the following connected apps: ${[...newServers].join(', ')}.`,
+          )
+        } else {
+          parts.push(
+            'Connected app integrations changed during this conversation. Use only tools that are currently registered.',
+          )
+        }
       }
       contextChanges.push(parts.join(' '))
     }
@@ -217,7 +233,7 @@ export class ChatService {
         browser: this.deps.browser,
         registry: this.deps.registry,
         browserContext,
-        klavisClient: this.deps.klavisClient,
+        klavisRef: this.deps.klavisRef,
         browserosId: this.deps.browserosId,
         aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
         aclRules: request.aclRules,
@@ -397,7 +413,7 @@ export class ChatService {
       browser: this.deps.browser,
       registry: this.deps.registry,
       browserContext,
-      klavisClient: this.deps.klavisClient,
+      klavisRef: this.deps.klavisRef,
       browserosId: this.deps.browserosId,
       aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
       aclRules: request.aclRules,
@@ -469,6 +485,12 @@ export class ChatService {
     const managed = browserContext?.enabledMcpServers?.slice().sort() ?? []
     const custom =
       browserContext?.customMcpServers?.map((s) => s.url).sort() ?? []
-    return [...managed, ...custom].join(',')
+    const klavisState =
+      managed.length > 0
+        ? this.deps.klavisRef?.handle
+          ? 'klavis:connected'
+          : 'klavis:pending'
+        : null
+    return [klavisState, ...managed, ...custom].filter(Boolean).join(',')
   }
 }

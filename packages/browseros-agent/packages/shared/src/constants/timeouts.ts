@@ -6,6 +6,10 @@
  * Centralized timeout configuration.
  */
 
+export const KLAVIS_PROXY_RETRY_BACKOFF_MS = [
+  5_000, 10_000, 20_000, 40_000, 60_000,
+] as const
+
 export const TIMEOUTS = {
   // Agent/Tool execution
   TOOL_CALL: 120_000,

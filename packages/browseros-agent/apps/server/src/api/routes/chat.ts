@@ -2,12 +2,12 @@ import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { SessionStore } from '../../agent/session-store'
 import type { Browser } from '../../browser/browser'
-import { KlavisClient } from '../../lib/clients/klavis/klavis-client'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
 import type { ToolRegistry } from '../../tools/tool-registry'
 import { ChatService } from '../services/chat-service'
+import type { KlavisProxyRef } from '../services/klavis/strata-proxy'
 import { ChatRequestSchema } from '../types'
 import { ConversationIdParamSchema } from '../utils/validation'
 
@@ -15,6 +15,7 @@ interface ChatRouteDeps {
   browser: Browser
   registry: ToolRegistry
   browserosId?: string
+  klavisRef?: KlavisProxyRef
   aiSdkDevtoolsEnabled?: boolean
 }
 
@@ -22,10 +23,9 @@ export function createChatRoutes(deps: ChatRouteDeps) {
   const { browserosId } = deps
 
   const sessionStore = new SessionStore()
-  const klavisClient = new KlavisClient()
   const service = new ChatService({
     sessionStore,
-    klavisClient,
+    klavisRef: deps.klavisRef,
     browser: deps.browser,
     registry: deps.registry,
     browserosId,
