@@ -1,5 +1,6 @@
-import { AlertCircle, Clock, Coins, CreditCard, Zap } from 'lucide-react'
+import { AlertCircle, Clock, Coins, Gift, Zap } from 'lucide-react'
 import type { FC } from 'react'
+import { ShareForCredits } from '@/components/referral/ShareForCredits'
 import { Button } from '@/components/ui/button'
 import {
   getCreditBarColor,
@@ -105,20 +106,11 @@ export const UsagePage: FC = () => {
       </div>
 
       <div className="rounded-xl border p-5">
-        <div className="flex items-center gap-3">
-          <CreditCard className="h-5 w-5 text-muted-foreground" />
-          <div>
-            <p className="flex items-center gap-2 font-semibold text-sm">
-              Need more credits?
-              <span className="rounded-full bg-muted px-2 py-0.5 font-medium text-[10px] text-muted-foreground uppercase tracking-wide">
-                Coming soon
-              </span>
-            </p>
-            <p className="text-muted-foreground text-xs">
-              Additional credit packages will be available soon
-            </p>
-          </div>
+        <div className="mb-4 flex items-center gap-2">
+          <Gift className="h-5 w-5 text-muted-foreground" />
+          <span className="font-semibold text-sm">Earn More Credits</span>
         </div>
+        <ShareForCredits />
       </div>
 
       <div className="rounded-xl border border-[var(--accent-orange)]/30 bg-[var(--accent-orange)]/5 p-5">

@@ -1,6 +1,7 @@
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import type { FC } from 'react'
 import { useMemo } from 'react'
+import { ShareForCredits } from '@/components/referral/ShareForCredits'
 import { Button } from '@/components/ui/button'
 
 const SURVEY_DIRECTIONS = [
@@ -122,15 +123,22 @@ export const ChatError: FC<ChatErrorProps> = ({
           View troubleshooting guide
         </a>
       )}
-      {isCreditsExhausted && url && (
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-muted-foreground text-xs underline hover:text-foreground"
-        >
-          View Usage & Billing
-        </a>
+      {isCreditsExhausted && (
+        <>
+          <div className="w-full border-border/50 border-t pt-3">
+            <ShareForCredits compact />
+          </div>
+          {url && (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-muted-foreground text-xs underline hover:text-foreground"
+            >
+              View Usage & Billing
+            </a>
+          )}
+        </>
       )}
       {isRateLimit && !isCreditsExhausted && (
         <p className="text-muted-foreground text-xs">

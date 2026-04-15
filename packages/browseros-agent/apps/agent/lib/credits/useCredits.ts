@@ -5,6 +5,7 @@ export interface CreditsInfo {
   credits: number
   dailyLimit: number
   lastResetAt?: string
+  browserosId?: string
 }
 
 const CREDITS_QUERY_KEY = ['credits']
