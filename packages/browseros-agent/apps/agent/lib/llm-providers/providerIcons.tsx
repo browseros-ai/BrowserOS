@@ -22,6 +22,7 @@ interface IconProps extends SVGProps<SVGSVGElement> {
 type IconComponent = FC<IconProps>
 
 const providerIconMap: Record<ProviderType, IconComponent | null> = {
+  'zai-glm': Bot,
   anthropic: Anthropic,
   openai: OpenAI,
   'openai-compatible': OpenAI,
