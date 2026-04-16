@@ -3,6 +3,7 @@
  * @public
  */
 export type ProviderType =
+  | 'zai-glm'
   | 'anthropic'
   | 'openai'
   | 'openai-compatible'
