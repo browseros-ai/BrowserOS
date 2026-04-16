@@ -513,13 +513,16 @@ function parseAccessTokenClaims(accessToken: string): {
     const payload = JSON.parse(
       atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')),
     )
+    // OpenAI/ChatGPT claims
     const authClaims = payload['https://api.openai.com/auth']
     const profileClaims = payload['https://api.openai.com/profile']
+    // Google claims
     return {
       accountId:
         authClaims?.chatgpt_account_id ??
         payload.chatgpt_account_id ??
-        payload.account_id,
+        payload.account_id ??
+        payload.sub, // Google sub
       email: profileClaims?.email ?? payload.email,
     }
   } catch {

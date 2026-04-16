@@ -59,7 +59,8 @@ export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
               const isNew =
                 template.id === 'chatgpt-pro' ||
                 template.id === 'github-copilot' ||
-                template.id === 'qwen-code'
+                template.id === 'qwen-code' ||
+                template.id === 'google'
               return (
                 <ProviderTemplateCard
                   key={template.id}

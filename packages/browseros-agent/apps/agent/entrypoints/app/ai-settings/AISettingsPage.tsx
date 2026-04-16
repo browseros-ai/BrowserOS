@@ -20,6 +20,9 @@ import {
   GITHUB_COPILOT_OAUTH_COMPLETED_EVENT,
   GITHUB_COPILOT_OAUTH_DISCONNECTED_EVENT,
   GITHUB_COPILOT_OAUTH_STARTED_EVENT,
+  GOOGLE_OAUTH_COMPLETED_EVENT,
+  GOOGLE_OAUTH_DISCONNECTED_EVENT,
+  GOOGLE_OAUTH_STARTED_EVENT,
   QWEN_CODE_OAUTH_COMPLETED_EVENT,
   QWEN_CODE_OAUTH_DISCONNECTED_EVENT,
   QWEN_CODE_OAUTH_STARTED_EVENT,
@@ -88,6 +91,14 @@ const OAUTH_PROVIDERS_CONFIG: Record<string, OAuthProviderFlowConfig> = {
       requiresPKCE: true,
       contentType: 'form',
     },
+  },
+  // Google OAuth - ล็อกอินด้วย Google สำหรับใช้ Gemini
+  google: {
+    providerType: 'google',
+    displayName: 'Google (Gemini)',
+    startedEvent: GOOGLE_OAUTH_STARTED_EVENT,
+    completedEvent: GOOGLE_OAUTH_COMPLETED_EVENT,
+    disconnectedEvent: GOOGLE_OAUTH_DISCONNECTED_EVENT,
   },
 }
 

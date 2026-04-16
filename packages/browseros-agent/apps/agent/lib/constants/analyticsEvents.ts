@@ -57,6 +57,16 @@ export const QWEN_CODE_OAUTH_COMPLETED_EVENT =
 export const QWEN_CODE_OAUTH_DISCONNECTED_EVENT =
   'settings.qwen_code.oauth_disconnected'
 
+// Google OAuth events
+/** @public */
+export const GOOGLE_OAUTH_STARTED_EVENT = 'settings.google.oauth_started'
+/** @public */
+export const GOOGLE_OAUTH_COMPLETED_EVENT =
+  'settings.google.oauth_completed'
+/** @public */
+export const GOOGLE_OAUTH_DISCONNECTED_EVENT =
+  'settings.google.oauth_disconnected'
+
 /** @public */
 export const HUB_PROVIDER_ADDED_EVENT = 'settings.hub_provider.added'
 

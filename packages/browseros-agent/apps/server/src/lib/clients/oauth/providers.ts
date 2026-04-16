@@ -23,6 +23,25 @@ export interface OAuthProviderConfig {
 }
 
 export const OAUTH_PROVIDERS: Record<string, OAuthProviderConfig> = {
+  // Google OAuth - ล็อกอินด้วย Google สำหรับใช้ Gemini
+  google: {
+    id: 'google',
+    name: 'Google (Gemini)',
+    clientId: 'project-a8112f3e-ee8c-45af-b73',
+    authEndpoint: EXTERNAL_URLS.GOOGLE_AUTH,
+    tokenEndpoint: EXTERNAL_URLS.GOOGLE_TOKEN,
+    scopes: [
+      'openid',
+      'profile',
+      'email',
+      'https://www.googleapis.com/auth/generative-language',
+    ],
+    extraAuthParams: {
+      access_type: 'offline',
+      prompt: 'consent',
+    },
+    upstreamLLMProvider: 'google',
+  },
   'chatgpt-pro': {
     id: 'chatgpt-pro',
     name: 'ChatGPT Plus/Pro',
