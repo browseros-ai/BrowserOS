@@ -25,7 +25,7 @@ const getYahooIndiaSuggestions = async (query: string): Promise<string[]> => {
     `https://in.search.yahoo.com/sugg/gossip/gossip-in-loc/?command=${encodeURIComponent(query)}&output=json`,
   )
   const data = await response.json()
-  return data.gossip.results.map((item: YahooSuggestionItem) => item.key) || []
+  return data?.gossip?.results?.map((item: YahooSuggestionItem) => item.key) ?? []
 }
 
 const getDuckDuckGoSuggestions = async (query: string): Promise<string[]> => {
