@@ -46,6 +46,16 @@ function enrichTemplate(
  */
 export const providerTemplates: ProviderTemplate[] = [
   {
+    id: 'zai-glm',
+    name: 'Z.AI GLM',
+    defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4/',
+    defaultModelId: 'glm-5',
+    supportsImages: true,
+    contextWindow: 202752,
+    apiKeyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
+    setupGuideUrl: 'https://open.bigmodel.cn/',
+  },
+  {
     id: 'chatgpt-pro',
     name: 'ChatGPT Plus/Pro',
     defaultBaseUrl: 'https://chatgpt.com/backend-api',
@@ -147,6 +157,7 @@ export const providerTemplates: ProviderTemplate[] = [
  * @public
  */
 export const providerTypeOptions: { value: ProviderType; label: string }[] = [
+  { value: 'zai-glm', label: 'Z.AI GLM' },
   { value: 'chatgpt-pro', label: 'ChatGPT Plus/Pro' },
   { value: 'github-copilot', label: 'GitHub Copilot' },
   { value: 'qwen-code', label: 'Qwen Code' },
@@ -178,6 +189,7 @@ export const getProviderTemplate = (
  * Auto-fills when user selects a provider type
  */
 export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
+  'zai-glm': 'https://open.bigmodel.cn/api/paas/v4/',
   'chatgpt-pro': 'https://chatgpt.com/backend-api',
   'github-copilot': 'https://api.githubcopilot.com',
   'qwen-code': 'https://portal.qwen.ai/v1',
