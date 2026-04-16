@@ -33,12 +33,12 @@ const PROVIDER_DISPLAY_NAMES: Record<ProviderType, string> = {
   'qwen-code': 'Qwen Code',
 }
 
-const UPSTREAM_RATE_LIMIT_PATTERNS = [
+const UPSTREAM_RATE_LIMIT_PATTERNS: Array<string | RegExp> = [
   'usage limit',
   'rate limit',
   'rate-limit',
   'quota',
-  '429',
+  /\b429\b/,
   'too many requests',
   'insufficient_quota',
 ]
@@ -117,10 +117,14 @@ function parseErrorMessage(
   if (!isBrowserosProvider && providerType) {
     const lower = message.toLowerCase()
     const matchesRateLimit = UPSTREAM_RATE_LIMIT_PATTERNS.some((p) =>
-      lower.includes(p),
+      typeof p === 'string' ? lower.includes(p) : p.test(lower),
     )
     if (matchesRateLimit) {
-      const stripped = stripRetryPrefix(message).trim()
+      let stripped = stripRetryPrefix(message).trim()
+      try {
+        const parsed = JSON.parse(stripped)
+        if (parsed?.error?.message) stripped = parsed.error.message
+      } catch {}
       return {
         text: stripped || message,
         isUpstreamRateLimit: true,
