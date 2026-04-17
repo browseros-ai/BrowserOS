@@ -43,7 +43,7 @@ import { resolveSupportedOpenClawProvider } from './openclaw-provider-map'
 import type { OpenClawStreamEvent } from './openclaw-types'
 import { getPodmanRuntime } from './podman-runtime'
 
-const SOURCE_COMPOSE_RESOURCE = resolve(
+export const SOURCE_COMPOSE_RESOURCE = resolve(
   import.meta.dir,
   '../../../../resources/openclaw-compose.yml',
 )
@@ -56,6 +56,10 @@ export function resolveComposeResourcePath(resourcesDir?: string): string {
     if (existsSync(bundledComposePath)) {
       return bundledComposePath
     }
+    logger.warn(
+      'Bundled openclaw-compose.yml not found in resourcesDir, falling back to source tree',
+      { resourcesDir },
+    )
   }
   return SOURCE_COMPOSE_RESOURCE
 }

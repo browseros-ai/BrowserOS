@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { resolveComposeResourcePath } from '../../../../src/api/services/openclaw/openclaw-service'
+import { join } from 'node:path'
+import {
+  resolveComposeResourcePath,
+  SOURCE_COMPOSE_RESOURCE,
+} from '../../../../src/api/services/openclaw/openclaw-service'
 
 describe('resolveComposeResourcePath', () => {
   let tempDir: string | null = null
@@ -24,8 +27,6 @@ describe('resolveComposeResourcePath', () => {
   })
 
   it('falls back to the source tree when no packaged copy exists', () => {
-    expect(resolveComposeResourcePath(undefined)).toBe(
-      resolve(import.meta.dir, '../../../../resources/openclaw-compose.yml'),
-    )
+    expect(resolveComposeResourcePath(undefined)).toBe(SOURCE_COMPOSE_RESOURCE)
   })
 })

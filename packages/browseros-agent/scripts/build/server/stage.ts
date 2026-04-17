@@ -104,6 +104,7 @@ async function stageLocalRule(
     throw new Error(`Expected local source rule, got ${rule.source.type}`)
   }
 
+  await mkdir(dirname(destinationPath), { recursive: true })
   const sourcePath = isAbsolute(rule.source.path)
     ? rule.source.path
     : resolve(sourceRoot, rule.source.path)
