@@ -14,6 +14,8 @@
     "typecheck": "bun --env-file=.env.development wxt prepare && tsgo --noEmit",
     "lint:fix": "bunx biome check --write --unsafe",
     "clean:cache": "rm -rf node_modules/.cache && rm -rf .output/ && rm -rf .wxt/",
+    "server": "bun --env-file=.env.server ../headless-server/index.ts",
+    "server:dev": "HEADLESS_DEBUG=true bun --env-file=.env.server ../headless-server/index.ts",
     "codegen": "bun --env-file=.env.development graphql-codegen --config codegen.ts",
     "codegen:watch": "graphql-codegen --config codegen.ts --watch"
   },
