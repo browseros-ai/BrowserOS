@@ -20,4 +20,5 @@ export const EXTERNAL_URLS = {
   QWEN_OAUTH_TOKEN: 'https://chat.qwen.ai/api/v1/oauth2/token',
   QWEN_CODE_API: 'https://portal.qwen.ai/v1',
   REFERRAL_SERVICE: 'https://browseros-referral.fly.dev',
+  CREDITS_GATEWAY: 'https://llm.browseros.com',
 } as const

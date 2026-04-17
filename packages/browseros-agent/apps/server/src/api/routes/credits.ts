@@ -25,7 +25,7 @@ export function createCreditsRoutes(deps: CreditsDeps) {
   return new Hono().get('/', async (c) => {
     try {
       const credits = await fetchCredits(gatewayBaseUrl, browserosId)
-      return c.json({ ...credits, browserosId })
+      return c.json(credits)
     } catch (error) {
       logger.error('Failed to fetch credits', {
         error: error instanceof Error ? error.message : String(error),
