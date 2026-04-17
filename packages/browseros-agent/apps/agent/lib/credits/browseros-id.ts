@@ -7,5 +7,9 @@ import { BROWSEROS_PREFS } from '@/lib/browseros/prefs'
 export async function getBrowserosId(): Promise<string> {
   const adapter = getBrowserOSAdapter()
   const pref = await adapter.getPref(BROWSEROS_PREFS.INSTALL_ID)
-  return pref.value as string
+  const id = pref.value
+  if (typeof id !== 'string' || id.length === 0) {
+    throw new Error('browseros.metrics_install_id is not set')
+  }
+  return id
 }
