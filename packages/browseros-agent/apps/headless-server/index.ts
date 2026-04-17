@@ -67,6 +67,12 @@ const server = Bun.serve({
       return new Response('WebSocket upgrade failed', { status: 500 })
     }
 
+    // Serve dashboard static files
+    if (url.pathname === '/' || url.pathname === '/index.html') {
+      const file = Bun.file(import.meta.dir + '/dashboard/index.html')
+      return new Response(file)
+    }
+
     // HTTP API
     return router(req)
   },

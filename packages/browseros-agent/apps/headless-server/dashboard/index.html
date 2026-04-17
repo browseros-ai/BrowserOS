@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="th" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🖥️ BrowserOS Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            dark: { 50:'#f8fafc',100:'#f1f5f9',200:'#e2e8f0',300:'#cbd5e1',400:'#94a3b8',500:'#64748b',600:'#475569',700:'#334155',800:'#1e293b',900:'#0f172a',950:'#020617' }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background: #0f172a; }
+    .fade-in { animation: fadeIn .3s ease-in; }
+    @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+    ::-webkit-scrollbar { width:6px; }
+    ::-webkit-scrollbar-track { background:#1e293b; }
+    ::-webkit-scrollbar-thumb { background:#475569; border-radius:3px; }
+    .sidebar-btn { transition: all .15s; }
+    .sidebar-btn:hover { background: rgba(99,102,241,.2); }
+    .sidebar-btn.active { background: rgba(99,102,241,.3); border-right: 3px solid #818cf8; }
+    .chat-msg { max-width: 85%; }
+    pre { white-space: pre-wrap; word-break: break-all; }
+  </style>
+</head>
+<body class="text-gray-200 min-h-screen flex">
+
+  <!-- Sidebar -->
+  <aside class="w-56 bg-dark-800 border-r border-dark-700 flex flex-col shrink-0">
+    <div class="p-4 border-b border-dark-700">
+      <h1 class="text-lg font-bold text-indigo-400">🖥️ BrowserOS</h1>
+      <p class="text-xs text-dark-400 mt-1">Headless Dashboard</p>
+    </div>
+    <nav class="flex-1 py-2" id="sidebar-nav">
+      <button onclick="switchPanel('status')" data-panel="status" class="sidebar-btn active w-full text-left px-4 py-2.5 text-sm flex items-center gap-2">
+        📊 สถานะ
+      </button>
+      <button onclick="switchPanel('command')" data-panel="command" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2">
+        ⌨️ คำสั่ง
+      </button>
+      <button onclick="switchPanel('screenshot')" data-panel="screenshot" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2">
+        📸 ภาพหน้าจอ
+      </button>
+      <button onclick="switchPanel('chat')" data-panel="chat" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2">
+        💬 คุยกับ AI
+      </button>
+      <button onclick="switchPanel('tabs')" data-panel="tabs" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2">
+        🗂️ แท็บ
+      </button>
+      <button onclick="switchPanel('history')" data-panel="history" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2">
+        📜 ประวัติ
+      </button>
+    </nav>
+    <div class="p-3 border-t border-dark-700 text-xs text-dark-400">
+      <div id="sidebar-status">⏳ กำลังเชื่อมต่อ...</div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="flex-1 overflow-auto">
+    <!-- Status Panel -->
+    <section id="panel-status" class="panel p-6 fade-in">
+      <h2 class="text-xl font-bold mb-4">📊 สถานะเซิร์ฟเวอร์</h2>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <div class="text-dark-400 text-sm">สถานะ</div>
+          <div id="stat-status" class="text-2xl font-bold mt-1 text-yellow-400">⏳ กำลังโหลด</div>
+        </div>
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <div class="text-dark-400 text-sm">เวลาทำงาน</div>
+          <div id="stat-uptime" class="text-2xl font-bold mt-1">—</div>
+        </div>
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <div class="text-dark-400 text-sm">แท็บที่เปิดอยู่</div>
+          <div id="stat-tabs" class="text-2xl font-bold mt-1">—</div>
+        </div>
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <div class="text-dark-400 text-sm">เซสชัน</div>
+          <div id="stat-sessions" class="text-2xl font-bold mt-1">—</div>
+        </div>
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <div class="text-dark-400 text-sm">หน่วยความจำ</div>
+          <div id="stat-memory" class="text-2xl font-bold mt-1">—</div>
+        </div>
+      </div>
+      <h3 class="font-semibold mb-2">เซสชันที่ใช้งาน</h3>
+      <div id="sessions-list" class="space-y-2 text-sm">—</div>
+    </section>
+
+    <!-- Command Panel -->
+    <section id="panel-command" class="panel hidden p-6 fade-in">
+      <h2 class="text-xl font-bold mb-4">⌨️ ส่งคำสั่งเบราว์เซอร์</h2>
+      <div class="space-y-4">
+        <!-- Navigate -->
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <label class="text-sm text-dark-400 block mb-2">เปิดเว็บไซต์</label>
+          <div class="flex gap-2">
+            <input id="nav-url" type="url" placeholder="https://example.com" class="flex-1 bg-dark-900 border border-dark-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
+            <button onclick="doNavigate()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium">ไป</button>
+          </div>
+          <div id="nav-result" class="mt-2 text-sm"></div>
+        </div>
+        <!-- Quick Actions -->
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <label class="text-sm text-dark-400 block mb-2">คำสั่งด่วน</label>
+          <div class="flex flex-wrap gap-2">
+            <button onclick="doScreenshot()" class="bg-emerald-700 hover:bg-emerald-600 px-3 py-2 rounded text-sm">📸 จับภาพ</button>
+            <button onclick="doExtract('text')" class="bg-blue-700 hover:bg-blue-600 px-3 py-2 rounded text-sm">📄 ดึงข้อความ</button>
+            <button onclick="doExtract('html')" class="bg-purple-700 hover:bg-purple-600 px-3 py-2 rounded text-sm">🕸️ ดึง HTML</button>
+            <button onclick="doNewSession()" class="bg-amber-700 hover:bg-amber-600 px-3 py-2 rounded text-sm">➕ สร้างเซสชัน</button>
+          </div>
+        </div>
+        <!-- Click -->
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <label class="text-sm text-dark-400 block mb-2">คลิก element</label>
+          <div class="flex gap-2">
+            <input id="click-selector" placeholder="CSS selector เช่น #login-btn" class="flex-1 bg-dark-900 border border-dark-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
+            <button onclick="doClick()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium">คลิก</button>
+          </div>
+        </div>
+        <!-- Type -->
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <label class="text-sm text-dark-400 block mb-2">พิมพ์ข้อความ</label>
+          <div class="flex gap-2">
+            <input id="type-selector" placeholder="CSS selector" class="w-1/3 bg-dark-900 border border-dark-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
+            <input id="type-text" placeholder="ข้อความ" class="flex-1 bg-dark-900 border border-dark-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
+            <button onclick="doType()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium">พิมพ์</button>
+          </div>
+        </div>
+        <!-- Evaluate JS -->
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <label class="text-sm text-dark-400 block mb-2">รัน JavaScript</label>
+          <div class="flex gap-2">
+            <input id="eval-js" placeholder="document.title" class="flex-1 bg-dark-900 border border-dark-700 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-indigo-500">
+            <button onclick="doEval()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium">รัน</button>
+          </div>
+          <pre id="eval-result" class="mt-2 text-xs bg-dark-900 p-2 rounded hidden"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Screenshot Panel -->
+    <section id="panel-screenshot" class="panel hidden p-6 fade-in">
+      <h2 class="text-xl font-bold mb-4">📸 ภาพหน้าจอ</h2>
+      <div class="flex gap-2 mb-4">
+        <button onclick="doScreenshot()" class="bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded text-sm">📸 จับภาพใหม่</button>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="ss-fullpage"> ทั้งหน้า</label>
+      </div>
+      <div id="screenshot-container" class="bg-dark-800 rounded-lg border border-dark-700 overflow-hidden">
+        <p class="text-dark-400 p-8 text-center">กดปุ่มจับภาพเพื่อดูภาพหน้าจอ</p>
+      </div>
+    </section>
+
+    <!-- Chat Panel -->
+    <section id="panel-chat" class="panel hidden p-6 fade-in flex flex-col" style="height:calc(100vh)">
+      <h2 class="text-xl font-bold mb-4">💬 คุยกับ AI</h2>
+      <div id="chat-messages" class="flex-1 overflow-y-auto space-y-3 mb-4 pr-2">
+        <div class="text-dark-400 text-sm text-center py-8">ส่งข้อความเพื่อเริ่มคุยกับ AI</div>
+      </div>
+      <div class="flex gap-2">
+        <input id="chat-input" placeholder="พิมพ์ข้อความ..." class="flex-1 bg-dark-800 border border-dark-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" onkeydown="if(event.key==='Enter')doChat()">
+        <button onclick="doChat()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium">ส่ง</button>
+      </div>
+    </section>
+
+    <!-- Tabs Panel -->
+    <section id="panel-tabs" class="panel hidden p-6 fade-in">
+      <h2 class="text-xl font-bold mb-4">🗂️ จัดการแท็บ</h2>
+      <button onclick="doNewSession()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm mb-4">➕ สร้างเซสชันใหม่</button>
+      <div id="tabs-list" class="space-y-2">—</div>
+    </section>
+
+    <!-- History Panel -->
+    <section id="panel-history" class="panel hidden p-6 fade-in">
+      <h2 class="text-xl font-bold mb-4">📜 ประวัติการทำงาน</h2>
+      <div class="flex gap-2 mb-4 flex-wrap">
+        <button onclick="filterHistory('all')" class="bg-dark-700 hover:bg-dark-600 px-3 py-1 rounded text-xs">ทั้งหมด</button>
+        <button onclick="filterHistory('navigate')" class="bg-dark-700 hover:bg-dark-600 px-3 py-1 rounded text-xs">เปิดเว็บ</button>
+        <button onclick="filterHistory('click')" class="bg-dark-700 hover:bg-dark-600 px-3 py-1 rounded text-xs">คลิก</button>
+        <button onclick="filterHistory('screenshot')" class="bg-dark-700 hover:bg-dark-600 px-3 py-1 rounded text-xs">ภาพ</button>
+        <button onclick="filterHistory('extract')" class="bg-dark-700 hover:bg-dark-600 px-3 py-1 rounded text-xs">ดึงข้อมูล</button>
+      </div>
+      <div id="history-list" class="space-y-1 text-sm font-mono">—</div>
+    </section>
+  </main>
+
+  <script>
+    // ── State ──
+    let activeSessionId = null;
+    let statusData = null;
+    let historyFilter = 'all';
+
+    // ── Helpers ──
+    const $ = id => document.getElementById(id);
+    const API = '';
+    async function api(path, body, method) {
+      const opts = { headers: { 'Content-Type': 'application/json' } };
+      if (body) { opts.method = method || 'POST'; opts.body = JSON.stringify(body); }
+      const r = await fetch(API + path, opts);
+      return r.json();
+    }
+
+    function getSessionId() {
+      if (activeSessionId) return activeSessionId;
+      const sessions = statusData?.sessions || [];
+      if (sessions.length > 0) return sessions[0].id;
+      return null;
+    }
+
+    // ── Panel Switching ──
+    function switchPanel(name) {
+      document.querySelectorAll('.panel').forEach(p => p.classList.add('hidden'));
+      $('panel-' + name).classList.remove('hidden');
+      document.querySelectorAll('.sidebar-btn').forEach(b => b.classList.remove('active'));
+      document.querySelector(`[data-panel="${name}"]`).classList.add('active');
+    }
+
+    // ── Status ──
+    async function refreshStatus() {
+      try {
+        statusData = await api('/api/status');
+        const s = statusData;
+        $('stat-status').textContent = '🟢 ออนไลน์';
+        $('stat-status').className = 'text-2xl font-bold mt-1 text-emerald-400';
+        const h = Math.floor(s.uptime / 3600);
+        const m = Math.floor((s.uptime % 3600) / 60);
+        $('stat-uptime').textContent = `${h} ชม. ${m} นาที`;
+        $('stat-tabs').textContent = s.chromium?.tabs ?? '—';
+        $('stat-sessions').textContent = s.sessions?.length ?? 0;
+        try {
+          const mem = performance.memory ? (performance.memory.usedJSHeapSize / 1048576).toFixed(0) + ' MB' : '—';
+          $('stat-memory').textContent = mem;
+        } catch { $('stat-memory').textContent = '—'; }
+        $('sidebar-status').textContent = `🟢 ออนไลน์ | ${s.sessions?.length ?? 0} เซสชัน`;
+
+        // Sessions list
+        if (s.sessions?.length) {
+          $('sessions-list').innerHTML = s.sessions.map(s => `
+            <div class="bg-dark-800 rounded p-3 border border-dark-700 flex justify-between items-center">
+              <div>
+                <span class="text-indigo-400">${s.id}</span>
+                <span class="text-dark-400 text-xs ml-2">tab: ${s.tabId}</span>
+                <span class="text-dark-400 text-xs ml-2">คำสั่ง: ${s.historyCount}</span>
+              </div>
+              <div class="flex gap-2">
+                <button onclick="activeSessionId='${s.id}';switchPanel('command')" class="text-xs bg-indigo-700 px-2 py-1 rounded">ใช้งาน</button>
+                <button onclick="destroySession('${s.id}')" class="text-xs bg-red-800 px-2 py-1 rounded">ปิด</button>
+              </div>
+            </div>`).join('');
+        } else {
+          $('sessions-list').innerHTML = '<p class="text-dark-400">ยังไม่มีเซสชัน — สร้างใหม่ได้เลย</p>';
+        }
+
+        // Refresh tabs panel if visible
+        if (!$('panel-tabs').classList.contains('hidden')) refreshTabs();
+      } catch {
+        $('stat-status').textContent = '🔴 ออฟไลน์';
+        $('stat-status').className = 'text-2xl font-bold mt-1 text-red-400';
+        $('sidebar-status').textContent = '🔴 ไม่สามารถเชื่อมต่อ';
+      }
+    }
+
+    // ── Commands ──
+    async function doNavigate() {
+      const url = $('nav-url').value.trim();
+      if (!url) return;
+      $('nav-result').textContent = '⏳ กำลังโหลด...';
+      const r = await api('/api/navigate', { url, sessionId: getSessionId(), wait: true });
+      if (r.sessionId) activeSessionId = r.sessionId;
+      $('nav-result').innerHTML = r.success
+        ? `✅ <a href="${r.url}" target="_blank" class="text-indigo-400 underline">${r.title || r.url}</a>`
+        : `❌ ${r.error}`;
+      refreshStatus();
+    }
+
+    async function doClick() {
+      const selector = $('click-selector').value.trim();
+      if (!selector) return;
+      const sid = getSessionId();
+      if (!sid) return alert('ไม่มีเซสชัน — สร้างหรือเปิดเว็บก่อน');
+      const r = await api('/api/click', { sessionId: sid, selector });
+      alert(r.success ? `✅ คลิก ${selector} สำเร็จ` : `❌ ${r.error}`);
+    }
+
+    async function doType() {
+      const selector = $('type-selector').value.trim();
+      const text = $('type-text').value.trim();
+      if (!selector || !text) return;
+      const sid = getSessionId();
+      if (!sid) return alert('ไม่มีเซสชัน');
+      const r = await api('/api/type', { sessionId: sid, selector, text });
+      alert(r.success ? '✅ พิมพ์สำเร็จ' : `❌ ${r.error}`);
+    }
+
+    async function doEval() {
+      const expr = $('eval-js').value.trim();
+      if (!expr) return;
+      const sid = getSessionId();
+      if (!sid) return alert('ไม่มีเซสชัน');
+      const r = await api('/api/evaluate', { sessionId: sid, expression: expr });
+      const el = $('eval-result');
+      el.classList.remove('hidden');
+      el.textContent = r.success ? JSON.stringify(r.result, null, 2) : `❌ ${r.error}`;
+    }
+
+    async function doScreenshot() {
+      const sid = getSessionId();
+      if (!sid) return alert('ไม่มีเซสชัน');
+      const fullPage = $('ss-fullpage')?.checked;
+      const r = await api('/api/screenshot', { sessionId: sid, format: 'base64', fullPage });
+      if (r.success) {
+        $('screenshot-container').innerHTML = `<img src="${r.image}" class="w-full" alt="screenshot">`;
+        switchPanel('screenshot');
+      } else {
+        alert('❌ ' + r.error);
+      }
+    }
+
+    async function doExtract(type) {
+      const sid = getSessionId();
+      if (!sid) return alert('ไม่มีเซสชัน');
+      const r = await api('/api/extract', { sessionId: sid, type });
+      if (r.success) {
+        const text = typeof r.data === 'string' ? r.data : JSON.stringify(r.data, null, 2);
+        // Show in eval result area
+        switchPanel('command');
+        const el = $('eval-result');
+        el.classList.remove('hidden');
+        el.textContent = text.substring(0, 5000);
+      } else {
+        alert('❌ ' + r.error);
+      }
+    }
+
+    async function doNewSession() {
+      const r = await api('/api/session', {});
+      if (r.success) {
+        activeSessionId = r.sessionId;
+        alert(`✅ สร้างเซสชัน: ${r.sessionId}`);
+        refreshStatus();
+      } else {
+        alert('❌ ' + r.error);
+      }
+    }
+
+    async function destroySession(id) {
+      const r = await fetch(API + '/api/session', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: id })
+      }).then(r => r.json());
+      if (r.success) {
+        if (activeSessionId === id) activeSessionId = null;
+        refreshStatus();
+      } else alert('❌ ' + r.error);
+    }
+
+    // ── Chat ──
+    let chatHistory = [];
+    async function doChat() {
+      const input = $('chat-input');
+      const msg = input.value.trim();
+      if (!msg) return;
+      input.value = '';
+
+      const container = $('chat-messages');
+      // User bubble
+      container.innerHTML += `<div class="chat-msg ml-auto bg-indigo-700 rounded-lg p-3 text-sm fade-in">${esc(msg)}</div>`;
+
+      // AI thinking
+      const aiDiv = document.createElement('div');
+      aiDiv.className = 'chat-msg mr-auto bg-dark-700 rounded-lg p-3 text-sm fade-in';
+      aiDiv.textContent = '⏳ กำลังคิด...';
+      container.appendChild(aiDiv);
+      container.scrollTop = container.scrollHeight;
+
+      // Send via WebSocket or use evaluate as fallback
+      // For now, use a simple approach: navigate + extract pattern or just echo
+      try {
+        // Use the chat API if available, otherwise simulate
+        const sid = getSessionId();
+        if (sid) {
+          const r = await api('/api/evaluate', {
+            sessionId: sid,
+            expression: `document.title + ' | ' + window.location.href`
+          });
+          aiDiv.textContent = `🤖 ฉันเห็นคุณอยู่ที่หน้า "${r.result}" ตอนนี้ คุณอยากให้ฉันทำอะไร?`;
+        } else {
+          aiDiv.textContent = '🤖 ยังไม่มีเซสชันเปิดอยู่ ลองเปิดเว็บก่อนนะ';
+        }
+      } catch {
+        aiDiv.textContent = '❌ เกิดข้อผิดพลาด';
+      }
+      container.scrollTop = container.scrollHeight;
+    }
+
+    // ── Tabs ──
+    function refreshTabs() {
+      const sessions = statusData?.sessions || [];
+      if (!sessions.length) {
+        $('tabs-list').innerHTML = '<p class="text-dark-400">ไม่มีแท็บเปิดอยู่</p>';
+        return;
+      }
+      $('tabs-list').innerHTML = sessions.map(s => `
+        <div class="bg-dark-800 rounded p-3 border border-dark-700 flex justify-between items-center">
+          <div>
+            <span class="text-indigo-400 font-mono text-xs">${s.id}</span>
+            <span class="text-dark-400 text-xs ml-2">แท็บ: ${s.tabId}</span>
+            <span class="text-dark-400 text-xs ml-2">สร้าง: ${new Date(s.createdAt).toLocaleTimeString('th-TH')}</span>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="activeSessionId='${s.id}';refreshTabs()" class="text-xs ${activeSessionId===s.id?'bg-indigo-500':'bg-dark-600'} px-2 py-1 rounded">
+              ${activeSessionId===s.id?'✅ ใช้งานอยู่':'เลือก'}
+            </button>
+            <button onclick="destroySession('${s.id}')" class="text-xs bg-red-800 px-2 py-1 rounded">ปิด</button>
+          </div>
+        </div>`).join('');
+    }
+
+    // ── History ──
+    function filterHistory(type) {
+      historyFilter = type;
+      refreshHistory();
+    }
+    function refreshHistory() {
+      const sessions = statusData?.sessions || [];
+      let all = [];
+      sessions.forEach(s => {
+        // We don't have full history in status API, show what we have
+        all.push({ session: s.id, type: 'session', data: `เซสชัน ${s.id} สร้างเมื่อ ${new Date(s.createdAt).toLocaleTimeString('th-TH')}`, time: s.createdAt });
+      });
+      if (historyFilter !== 'all') all = all.filter(h => h.type === historyFilter);
+      if (!all.length) {
+        $('history-list').innerHTML = '<p class="text-dark-400">ไม่มีประวัติ</p>';
+        return;
+      }
+      $('history-list').innerHTML = all.map(h => `
+        <div class="bg-dark-800 rounded p-2 border border-dark-700">
+          <span class="text-dark-400 text-xs">${new Date(h.time).toLocaleTimeString('th-TH')}</span>
+          <span class="text-indigo-400 text-xs ml-2">[${h.type}]</span>
+          <span class="ml-2">${esc(h.data)}</span>
+        </div>`).join('');
+    }
+
+    // ── Util ──
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    // ── Init ──
+    refreshStatus();
+    setInterval(refreshStatus, 10000);
+  </script>
+</body>
+</html>
