@@ -40,10 +40,17 @@ export interface BuildConfig {
   r2?: R2Config
 }
 
-export interface ResourceSource {
+export interface R2ResourceSource {
   type: 'r2'
   key: string
 }
+
+export interface LocalResourceSource {
+  type: 'local'
+  path: string
+}
+
+export type ResourceSource = R2ResourceSource | LocalResourceSource
 
 export interface ResourceRule {
   name: string

@@ -1,5 +1,5 @@
 import { chmod, cp, mkdir, rm } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 import type { S3Client } from '@aws-sdk/client-s3'
 
@@ -75,13 +75,39 @@ function resolveDestination(rootDir: string, destination: string): string {
 
 async function stageRule(
   rootDir: string,
+  sourceRoot: string,
   rule: ResourceRule,
   target: BuildTarget,
   client: S3Client,
   r2: R2Config,
 ): Promise<void> {
   const destinationPath = resolveDestination(rootDir, rule.destination)
-  await downloadObjectToFile(client, r2, rule.source.key, destinationPath)
+  await mkdir(dirname(destinationPath), { recursive: true })
+
+  if (rule.source.type === 'local') {
+    await stageLocalRule(destinationPath, sourceRoot, rule, target)
+  } else {
+    await downloadObjectToFile(client, r2, rule.source.key, destinationPath)
+    if (rule.executable && target.os !== 'windows') {
+      await chmod(destinationPath, 0o755)
+    }
+  }
+}
+
+async function stageLocalRule(
+  destinationPath: string,
+  sourceRoot: string,
+  rule: ResourceRule,
+  target: BuildTarget,
+): Promise<void> {
+  if (rule.source.type !== 'local') {
+    throw new Error(`Expected local source rule, got ${rule.source.type}`)
+  }
+
+  const sourcePath = isAbsolute(rule.source.path)
+    ? rule.source.path
+    : resolve(sourceRoot, rule.source.path)
+  await cp(sourcePath, destinationPath)
 
   if (rule.executable && target.os !== 'windows') {
     await chmod(destinationPath, 0o755)
@@ -93,6 +119,7 @@ export async function stageTargetArtifact(
   compiledBinaryPath: string,
   target: BuildTarget,
   rules: ResourceRule[],
+  sourceRoot: string,
   client: S3Client,
   r2: R2Config,
   version: string,
@@ -100,7 +127,7 @@ export async function stageTargetArtifact(
   const rootDir = await createArtifactRoot(distRoot, compiledBinaryPath, target)
 
   for (const rule of rules) {
-    await stageRule(rootDir, rule, target, client, r2)
+    await stageRule(rootDir, sourceRoot, rule, target, client, r2)
   }
 
   return finalizeArtifact(rootDir, target, version)
@@ -111,7 +138,22 @@ export async function stageCompiledArtifact(
   compiledBinaryPath: string,
   target: BuildTarget,
   version: string,
+  rules: ResourceRule[] = [],
+  sourceRoot = process.cwd(),
 ): Promise<StagedArtifact> {
   const rootDir = await createArtifactRoot(distRoot, compiledBinaryPath, target)
+
+  for (const rule of rules) {
+    if (rule.source.type !== 'local') {
+      continue
+    }
+    await stageLocalRule(
+      resolveDestination(rootDir, rule.destination),
+      sourceRoot,
+      rule,
+      target,
+    )
+  }
+
   return finalizeArtifact(rootDir, target, version)
 }

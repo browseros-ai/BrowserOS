@@ -12,9 +12,12 @@ function validateRule(rule: ResourceRule): void {
   if (!rule.name || rule.name.trim().length === 0) {
     throw new Error('Manifest rule is missing name')
   }
-  if (!rule.source.key || !rule.destination) {
+  const hasSourcePath =
+    (rule.source.type === 'r2' && rule.source.key) ||
+    (rule.source.type === 'local' && rule.source.path)
+  if (!hasSourcePath || !rule.destination) {
     throw new Error(
-      `Manifest rule ${rule.name} is missing source key or destination`,
+      `Manifest rule ${rule.name} is missing source path or destination`,
     )
   }
 }
@@ -24,16 +27,21 @@ function parseSource(raw: unknown): ResourceRule['source'] {
     throw new Error('Manifest source must be an object')
   }
   const source = raw as Record<string, unknown>
-  if (source.type !== 'r2') {
-    throw new Error(
-      `Unsupported source type in manifest: ${String(source.type)}`,
-    )
+  if (source.type === 'r2') {
+    const key = source.key
+    if (typeof key !== 'string' || key.length === 0) {
+      throw new Error('Manifest source key is required')
+    }
+    return { type: 'r2', key }
   }
-  const key = source.key
-  if (typeof key !== 'string' || key.length === 0) {
-    throw new Error('Manifest source key is required')
+  if (source.type === 'local') {
+    const path = source.path
+    if (typeof path !== 'string' || path.length === 0) {
+      throw new Error('Manifest source path is required')
+    }
+    return { type: 'local', path }
   }
-  return { type: 'r2', key }
+  throw new Error(`Unsupported source type in manifest: ${String(source.type)}`)
 }
 
 function parseRule(raw: unknown): ResourceRule {

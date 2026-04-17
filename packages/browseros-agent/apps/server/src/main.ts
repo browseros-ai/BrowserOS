@@ -13,7 +13,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { EXIT_CODES } from '@browseros/shared/constants/exit-codes'
 import { createHttpServer } from './api/server'
-import { getOpenClawService } from './api/services/openclaw/openclaw-service'
+import {
+  configureOpenClawService,
+  getOpenClawService,
+} from './api/services/openclaw/openclaw-service'
 import { configurePodmanRuntime } from './api/services/openclaw/podman-runtime'
 import { CdpBackend } from './browser/backends/cdp'
 import { Browser } from './browser/browser'
@@ -123,7 +126,10 @@ export class Application {
     this.logStartupSummary()
     startSkillSync()
 
-    getOpenClawService(this.config.serverPort)
+    configureOpenClawService({
+      browserosServerPort: this.config.serverPort,
+      resourcesDir: path.resolve(this.config.resourcesDir),
+    })
       .tryAutoStart()
       .catch((err) =>
         logger.warn('OpenClaw auto-start failed', {

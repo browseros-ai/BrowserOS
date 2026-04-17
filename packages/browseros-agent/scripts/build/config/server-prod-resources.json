@@ -1,6 +1,14 @@
 {
   "resources": [
     {
+      "name": "OpenClaw compose file",
+      "source": {
+        "type": "local",
+        "path": "apps/server/resources/openclaw-compose.yml"
+      },
+      "destination": "resources/openclaw-compose.yml"
+    },
+    {
       "name": "Podman CLI - macOS ARM64",
       "source": {
         "type": "r2",

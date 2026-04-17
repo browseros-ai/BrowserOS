@@ -34,17 +34,28 @@ export async function runProdResourceBuild(argv: string[]): Promise<void> {
     { ci: args.ci },
   )
 
+  const manifestPath = resolve(rootDir, args.manifestPath)
+  if (!existsSync(manifestPath)) {
+    throw new Error(`Manifest not found: ${manifestPath}`)
+  }
+  const manifest = loadManifest(manifestPath)
+
   if (args.ci) {
     const distRoot = getDistProdRoot()
     const localArtifacts = []
 
     for (const binary of compiled) {
       log.step(`Packaging ${binary.target.name}`)
+      const rules = getTargetRules(manifest, binary.target).filter(
+        (rule) => rule.source.type === 'local',
+      )
       const staged = await stageCompiledArtifact(
         distRoot,
         binary.binaryPath,
         binary.target,
         buildConfig.version,
+        rules,
+        rootDir,
       )
       localArtifacts.push(staged)
       log.success(`Packaged ${binary.target.id}`)
@@ -58,12 +69,6 @@ export async function runProdResourceBuild(argv: string[]): Promise<void> {
     return
   }
 
-  const manifestPath = resolve(rootDir, args.manifestPath)
-  if (!existsSync(manifestPath)) {
-    throw new Error(`Manifest not found: ${manifestPath}`)
-  }
-
-  const manifest = loadManifest(manifestPath)
   const distRoot = getDistProdRoot()
   const r2 = buildConfig.r2
   if (!r2) {
@@ -76,13 +81,14 @@ export async function runProdResourceBuild(argv: string[]): Promise<void> {
     for (const binary of compiled) {
       const rules = getTargetRules(manifest, binary.target)
       log.step(
-        `Staging ${binary.target.name} (${rules.length} download rule(s))`,
+        `Staging ${binary.target.name} (${rules.length} resource rule(s))`,
       )
       const staged = await stageTargetArtifact(
         distRoot,
         binary.binaryPath,
         binary.target,
         rules,
+        rootDir,
         client,
         r2,
         buildConfig.version,
