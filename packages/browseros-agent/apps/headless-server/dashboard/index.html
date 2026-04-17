@@ -29,6 +29,10 @@
     .sidebar-btn.active { background: rgba(99,102,241,.3); border-right: 3px solid #818cf8; }
     .chat-msg { max-width: 85%; }
     pre { white-space: pre-wrap; word-break: break-all; }
+    .step-done { border-left: 3px solid #10b981; }
+    .step-error { border-left: 3px solid #ef4444; }
+    .step-running { border-left: 3px solid #6366f1; }
+    .step-pending { border-left: 3px solid #64748b; }
   </style>
 </head>
 <body class="text-gray-200 min-h-screen flex">
@@ -36,31 +40,42 @@
   <!-- Sidebar -->
   <aside class="w-56 bg-dark-800 border-r border-dark-700 flex flex-col shrink-0">
     <div class="p-4 border-b border-dark-700">
-      <h1 class="text-lg font-bold text-indigo-400">🖥️ BrowserOS</h1>
-      <p class="text-xs text-dark-400 mt-1">Headless Dashboard</p>
+      <h1 class="text-lg font-bold text-indigo-400" data-i18n="app.title">🖥️ BrowserOS</h1>
+      <p class="text-xs text-dark-400 mt-1" data-i18n="app.subtitle">แดชบอร์ดควบคุมเบราว์เซอร์</p>
     </div>
     <nav class="flex-1 py-2" id="sidebar-nav">
       <button onclick="switchPanel('status')" data-panel="status" class="sidebar-btn active w-full text-left px-4 py-2.5 text-sm flex items-center gap-2">
-        📊 สถานะ
+        📊 <span data-i18n="nav.status">สถานะ</span>
       </button>
       <button onclick="switchPanel('command')" data-panel="command" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2">
-        ⌨️ คำสั่ง
+        ⌨️ <span data-i18n="nav.command">คำสั่ง</span>
       </button>
       <button onclick="switchPanel('screenshot')" data-panel="screenshot" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2">
-        📸 ภาพหน้าจอ
+        📸 <span data-i18n="nav.screenshot">ภาพหน้าจอ</span>
       </button>
       <button onclick="switchPanel('chat')" data-panel="chat" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2">
-        💬 คุยกับ AI
+        💬 <span data-i18n="nav.chat">คุยกับ AI</span>
       </button>
       <button onclick="switchPanel('tabs')" data-panel="tabs" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2">
-        🗂️ แท็บ
+        🗂️ <span data-i18n="nav.tabs">แท็บ</span>
       </button>
       <button onclick="switchPanel('history')" data-panel="history" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2">
-        📜 ประวัติ
+        📜 <span data-i18n="nav.history">ประวัติ</span>
+      </button>
+      <div class="border-t border-dark-700 my-2 mx-4"></div>
+      <button onclick="switchPanel('planner')" data-panel="planner" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 text-indigo-300">
+        🧠 <span data-i18n="nav.planner">แผนงาน</span>
+      </button>
+      <button onclick="switchPanel('context')" data-panel="context" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 text-indigo-300">
+        🔍 <span data-i18n="nav.context">บริบท</span>
+      </button>
+      <div class="border-t border-dark-700 my-2 mx-4"></div>
+      <button onclick="toggleLang()" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 text-amber-400">
+        <span>🌐</span> <span id="lang-label">ไทย / English</span>
       </button>
     </nav>
     <div class="p-3 border-t border-dark-700 text-xs text-dark-400">
-      <div id="sidebar-status">⏳ กำลังเชื่อมต่อ...</div>
+      <div id="sidebar-status" data-i18n="common.connecting">⏳ กำลังเชื่อมต่อ...</div>
     </div>
   </aside>
 
@@ -68,79 +83,74 @@
   <main class="flex-1 overflow-auto">
     <!-- Status Panel -->
     <section id="panel-status" class="panel p-6 fade-in">
-      <h2 class="text-xl font-bold mb-4">📊 สถานะเซิร์ฟเวอร์</h2>
+      <h2 class="text-xl font-bold mb-4" data-i18n="status.title">📊 สถานะเซิร์ฟเวอร์</h2>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
-          <div class="text-dark-400 text-sm">สถานะ</div>
+          <div class="text-dark-400 text-sm" data-i18n="status.state">สถานะ</div>
           <div id="stat-status" class="text-2xl font-bold mt-1 text-yellow-400">⏳ กำลังโหลด</div>
         </div>
         <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
-          <div class="text-dark-400 text-sm">เวลาทำงาน</div>
+          <div class="text-dark-400 text-sm" data-i18n="status.uptime">เวลาทำงาน</div>
           <div id="stat-uptime" class="text-2xl font-bold mt-1">—</div>
         </div>
         <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
-          <div class="text-dark-400 text-sm">แท็บที่เปิดอยู่</div>
+          <div class="text-dark-400 text-sm" data-i18n="status.tabs">แท็บที่เปิดอยู่</div>
           <div id="stat-tabs" class="text-2xl font-bold mt-1">—</div>
         </div>
         <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
-          <div class="text-dark-400 text-sm">เซสชัน</div>
+          <div class="text-dark-400 text-sm" data-i18n="status.sessions">เซสชัน</div>
           <div id="stat-sessions" class="text-2xl font-bold mt-1">—</div>
         </div>
         <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
-          <div class="text-dark-400 text-sm">หน่วยความจำ</div>
+          <div class="text-dark-400 text-sm" data-i18n="status.memory">หน่วยความจำ</div>
           <div id="stat-memory" class="text-2xl font-bold mt-1">—</div>
         </div>
       </div>
-      <h3 class="font-semibold mb-2">เซสชันที่ใช้งาน</h3>
+      <h3 class="font-semibold mb-2" data-i18n="status.active_sessions">เซสชันที่ใช้งาน</h3>
       <div id="sessions-list" class="space-y-2 text-sm">—</div>
     </section>
 
     <!-- Command Panel -->
     <section id="panel-command" class="panel hidden p-6 fade-in">
-      <h2 class="text-xl font-bold mb-4">⌨️ ส่งคำสั่งเบราว์เซอร์</h2>
+      <h2 class="text-xl font-bold mb-4" data-i18n="cmd.title">⌨️ ส่งคำสั่งเบราว์เซอร์</h2>
       <div class="space-y-4">
-        <!-- Navigate -->
         <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
-          <label class="text-sm text-dark-400 block mb-2">เปิดเว็บไซต์</label>
+          <label class="text-sm text-dark-400 block mb-2" data-i18n="cmd.open_site">เปิดเว็บไซต์</label>
           <div class="flex gap-2">
             <input id="nav-url" type="url" placeholder="https://example.com" class="flex-1 bg-dark-900 border border-dark-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
-            <button onclick="doNavigate()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium">ไป</button>
+            <button onclick="doNavigate()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium" data-i18n="cmd.go">ไป</button>
           </div>
           <div id="nav-result" class="mt-2 text-sm"></div>
         </div>
-        <!-- Quick Actions -->
         <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
-          <label class="text-sm text-dark-400 block mb-2">คำสั่งด่วน</label>
+          <label class="text-sm text-dark-400 block mb-2" data-i18n="cmd.quick_actions">คำสั่งด่วน</label>
           <div class="flex flex-wrap gap-2">
-            <button onclick="doScreenshot()" class="bg-emerald-700 hover:bg-emerald-600 px-3 py-2 rounded text-sm">📸 จับภาพ</button>
-            <button onclick="doExtract('text')" class="bg-blue-700 hover:bg-blue-600 px-3 py-2 rounded text-sm">📄 ดึงข้อความ</button>
-            <button onclick="doExtract('html')" class="bg-purple-700 hover:bg-purple-600 px-3 py-2 rounded text-sm">🕸️ ดึง HTML</button>
-            <button onclick="doNewSession()" class="bg-amber-700 hover:bg-amber-600 px-3 py-2 rounded text-sm">➕ สร้างเซสชัน</button>
+            <button onclick="doScreenshot()" class="bg-emerald-700 hover:bg-emerald-600 px-3 py-2 rounded text-sm">📸 <span data-i18n="cmd.capture">จับภาพ</span></button>
+            <button onclick="doExtract('text')" class="bg-blue-700 hover:bg-blue-600 px-3 py-2 rounded text-sm">📄 <span data-i18n="cmd.extract_text">ดึงข้อความ</span></button>
+            <button onclick="doExtract('html')" class="bg-purple-700 hover:bg-purple-600 px-3 py-2 rounded text-sm">🕸️ <span data-i18n="cmd.extract_html">ดึง HTML</span></button>
+            <button onclick="doNewSession()" class="bg-amber-700 hover:bg-amber-600 px-3 py-2 rounded text-sm">➕ <span data-i18n="cmd.new_session">สร้างเซสชัน</span></button>
           </div>
         </div>
-        <!-- Click -->
         <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
-          <label class="text-sm text-dark-400 block mb-2">คลิก element</label>
+          <label class="text-sm text-dark-400 block mb-2" data-i18n="cmd.click_element">คลิก element</label>
           <div class="flex gap-2">
             <input id="click-selector" placeholder="CSS selector เช่น #login-btn" class="flex-1 bg-dark-900 border border-dark-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
-            <button onclick="doClick()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium">คลิก</button>
+            <button onclick="doClick()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium" data-i18n="cmd.click_btn">คลิก</button>
           </div>
         </div>
-        <!-- Type -->
         <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
-          <label class="text-sm text-dark-400 block mb-2">พิมพ์ข้อความ</label>
+          <label class="text-sm text-dark-400 block mb-2" data-i18n="cmd.type_text">พิมพ์ข้อความ</label>
           <div class="flex gap-2">
             <input id="type-selector" placeholder="CSS selector" class="w-1/3 bg-dark-900 border border-dark-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
             <input id="type-text" placeholder="ข้อความ" class="flex-1 bg-dark-900 border border-dark-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
-            <button onclick="doType()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium">พิมพ์</button>
+            <button onclick="doType()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium" data-i18n="cmd.type_btn">พิมพ์</button>
           </div>
         </div>
-        <!-- Evaluate JS -->
         <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
-          <label class="text-sm text-dark-400 block mb-2">รัน JavaScript</label>
+          <label class="text-sm text-dark-400 block mb-2" data-i18n="cmd.run_js">รัน JavaScript</label>
           <div class="flex gap-2">
             <input id="eval-js" placeholder="document.title" class="flex-1 bg-dark-900 border border-dark-700 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-indigo-500">
-            <button onclick="doEval()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium">รัน</button>
+            <button onclick="doEval()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium" data-i18n="cmd.run_btn">รัน</button>
           </div>
           <pre id="eval-result" class="mt-2 text-xs bg-dark-900 p-2 rounded hidden"></pre>
         </div>
@@ -149,54 +159,178 @@
 
     <!-- Screenshot Panel -->
     <section id="panel-screenshot" class="panel hidden p-6 fade-in">
-      <h2 class="text-xl font-bold mb-4">📸 ภาพหน้าจอ</h2>
+      <h2 class="text-xl font-bold mb-4" data-i18n="ss.title">📸 ภาพหน้าจอ</h2>
       <div class="flex gap-2 mb-4">
-        <button onclick="doScreenshot()" class="bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded text-sm">📸 จับภาพใหม่</button>
-        <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="ss-fullpage"> ทั้งหน้า</label>
+        <button onclick="doScreenshot()" class="bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded text-sm">📸 <span data-i18n="ss.new_capture">จับภาพใหม่</span></button>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="ss-fullpage"> <span data-i18n="ss.full_page">ทั้งหน้า</span></label>
       </div>
       <div id="screenshot-container" class="bg-dark-800 rounded-lg border border-dark-700 overflow-hidden">
-        <p class="text-dark-400 p-8 text-center">กดปุ่มจับภาพเพื่อดูภาพหน้าจอ</p>
+        <p class="text-dark-400 p-8 text-center" data-i18n="ss.placeholder">กดปุ่มจับภาพเพื่อดูภาพหน้าจอ</p>
       </div>
     </section>
 
     <!-- Chat Panel -->
     <section id="panel-chat" class="panel hidden p-6 fade-in flex flex-col" style="height:calc(100vh)">
-      <h2 class="text-xl font-bold mb-4">💬 คุยกับ AI</h2>
+      <h2 class="text-xl font-bold mb-4" data-i18n="chat.title">💬 คุยกับ AI</h2>
       <div id="chat-messages" class="flex-1 overflow-y-auto space-y-3 mb-4 pr-2">
-        <div class="text-dark-400 text-sm text-center py-8">ส่งข้อความเพื่อเริ่มคุยกับ AI</div>
+        <div class="text-dark-400 text-sm text-center py-8" data-i18n="chat.start">ส่งข้อความเพื่อเริ่มคุยกับ AI</div>
       </div>
       <div class="flex gap-2">
         <input id="chat-input" placeholder="พิมพ์ข้อความ..." class="flex-1 bg-dark-800 border border-dark-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" onkeydown="if(event.key==='Enter')doChat()">
-        <button onclick="doChat()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium">ส่ง</button>
+        <button onclick="doChat()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium" data-i18n="chat.send">ส่ง</button>
       </div>
     </section>
 
     <!-- Tabs Panel -->
     <section id="panel-tabs" class="panel hidden p-6 fade-in">
-      <h2 class="text-xl font-bold mb-4">🗂️ จัดการแท็บ</h2>
-      <button onclick="doNewSession()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm mb-4">➕ สร้างเซสชันใหม่</button>
+      <h2 class="text-xl font-bold mb-4" data-i18n="tabs.title">🗂️ จัดการแท็บ</h2>
+      <button onclick="doNewSession()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm mb-4" data-i18n="tabs.new">➕ สร้างเซสชันใหม่</button>
       <div id="tabs-list" class="space-y-2">—</div>
     </section>
 
     <!-- History Panel -->
     <section id="panel-history" class="panel hidden p-6 fade-in">
-      <h2 class="text-xl font-bold mb-4">📜 ประวัติการทำงาน</h2>
+      <h2 class="text-xl font-bold mb-4" data-i18n="hist.title">📜 ประวัติการทำงาน</h2>
       <div class="flex gap-2 mb-4 flex-wrap">
-        <button onclick="filterHistory('all')" class="bg-dark-700 hover:bg-dark-600 px-3 py-1 rounded text-xs">ทั้งหมด</button>
-        <button onclick="filterHistory('navigate')" class="bg-dark-700 hover:bg-dark-600 px-3 py-1 rounded text-xs">เปิดเว็บ</button>
-        <button onclick="filterHistory('click')" class="bg-dark-700 hover:bg-dark-600 px-3 py-1 rounded text-xs">คลิก</button>
-        <button onclick="filterHistory('screenshot')" class="bg-dark-700 hover:bg-dark-600 px-3 py-1 rounded text-xs">ภาพ</button>
-        <button onclick="filterHistory('extract')" class="bg-dark-700 hover:bg-dark-600 px-3 py-1 rounded text-xs">ดึงข้อมูล</button>
+        <button onclick="filterHistory('all')" class="bg-dark-700 hover:bg-dark-600 px-3 py-1 rounded text-xs" data-i18n="hist.all">ทั้งหมด</button>
+        <button onclick="filterHistory('navigate')" class="bg-dark-700 hover:bg-dark-600 px-3 py-1 rounded text-xs" data-i18n="hist.navigate">เปิดเว็บ</button>
+        <button onclick="filterHistory('click')" class="bg-dark-700 hover:bg-dark-600 px-3 py-1 rounded text-xs" data-i18n="hist.click">คลิก</button>
+        <button onclick="filterHistory('screenshot')" class="bg-dark-700 hover:bg-dark-600 px-3 py-1 rounded text-xs" data-i18n="hist.screenshot">ภาพ</button>
+        <button onclick="filterHistory('extract')" class="bg-dark-700 hover:bg-dark-600 px-3 py-1 rounded text-xs" data-i18n="hist.extract">ดึงข้อมูล</button>
       </div>
       <div id="history-list" class="space-y-1 text-sm font-mono">—</div>
+    </section>
+
+    <!-- Planner Panel (ใหม่) -->
+    <section id="panel-planner" class="panel hidden p-6 fade-in">
+      <h2 class="text-xl font-bold mb-4">🧠 <span data-i18n="plan.title">แผนงาน AI</span></h2>
+      <div class="bg-dark-800 rounded-lg p-4 border border-dark-700 mb-4">
+        <label class="text-sm text-dark-400 block mb-2">🎯 ภารกิจ</label>
+        <div class="flex gap-2">
+          <input id="plan-goal" placeholder='บอก AI ว่าอยากทำอะไร เช่น "ไปหาสินค้าราคาถูกที่สุดใน shopee"' class="flex-1 bg-dark-900 border border-dark-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" onkeydown="if(event.key==='Enter')createPlan()">
+          <button onclick="createPlan()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium" data-i18n="plan.create">สร้างแผน</button>
+        </div>
+      </div>
+      <div id="plan-container" class="space-y-3">
+        <p class="text-dark-400 text-center py-8" data-i18n="plan.no_plan">ยังไม่มีแผนงาน — พิมพ์ภารกิจด้านบนเพื่อเริ่ม</p>
+      </div>
+    </section>
+
+    <!-- Context Panel (ใหม่) -->
+    <section id="panel-context" class="panel hidden p-6 fade-in">
+      <h2 class="text-xl font-bold mb-4">🔍 <span data-i18n="ctx.title">บริบทหน้าเว็บ</span></h2>
+      <div class="flex gap-2 mb-4">
+        <button onclick="refreshContext()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm" data-i18n="ctx.refresh">🔄 อ่านใหม่</button>
+      </div>
+      <div id="context-container" class="space-y-3">
+        <p class="text-dark-400 text-center py-8" data-i18n="ctx.no_context">ยังไม่มีข้อมูล — เปิดเว็บก่อนแล้วกดอ่านใหม่</p>
+      </div>
     </section>
   </main>
 
   <script>
+    // ── i18n ──
+    const i18n = {
+      th: {
+        'app.title': '🖥️ BrowserOS', 'app.subtitle': 'แดชบอร์ดควบคุมเบราว์เซอร์',
+        'nav.status': 'สถานะ', 'nav.command': 'คำสั่ง', 'nav.screenshot': 'ภาพหน้าจอ',
+        'nav.chat': 'คุยกับ AI', 'nav.tabs': 'แท็บ', 'nav.history': 'ประวัติ',
+        'nav.planner': 'แผนงาน', 'nav.context': 'บริบท',
+        'status.title': '📊 สถานะเซิร์ฟเวอร์', 'status.state': 'สถานะ', 'status.uptime': 'เวลาทำงาน',
+        'status.tabs': 'แท็บที่เปิดอยู่', 'status.sessions': 'เซสชัน', 'status.memory': 'หน่วยความจำ',
+        'status.active_sessions': 'เซสชันที่ใช้งาน', 'status.no_session': 'ยังไม่มีเซสชัน — สร้างใหม่ได้เลย',
+        'status.use': 'ใช้งาน', 'status.close': 'ปิด', 'status.commands': 'คำสั่ง',
+        'cmd.title': '⌨️ ส่งคำสั่งเบราว์เซอร์', 'cmd.open_site': 'เปิดเว็บไซต์',
+        'cmd.go': 'ไป', 'cmd.quick_actions': 'คำสั่งด่วน', 'cmd.capture': 'จับภาพ',
+        'cmd.extract_text': 'ดึงข้อความ', 'cmd.extract_html': 'ดึง HTML',
+        'cmd.new_session': 'สร้างเซสชัน', 'cmd.click_element': 'คลิก element',
+        'cmd.click_btn': 'คลิก', 'cmd.type_text': 'พิมพ์ข้อความ', 'cmd.type_btn': 'พิมพ์',
+        'cmd.run_js': 'รัน JavaScript', 'cmd.run_btn': 'รัน',
+        'ss.title': '📸 ภาพหน้าจอ', 'ss.new_capture': 'จับภาพใหม่', 'ss.full_page': 'ทั้งหน้า',
+        'ss.placeholder': 'กดปุ่มจับภาพเพื่อดูภาพหน้าจอ',
+        'chat.title': '💬 คุยกับ AI', 'chat.send': 'ส่ง',
+        'chat.start': 'ส่งข้อความเพื่อเริ่มคุยกับ AI',
+        'chat.placeholder': 'พิมพ์ข้อความ...', 'chat.thinking': '⏳ กำลังคิด...',
+        'chat.no_session': '🤖 ยังไม่มีเซสชันเปิดอยู่ ลองเปิดเว็บก่อนนะ',
+        'tabs.title': '🗂️ จัดการแท็บ', 'tabs.new': '➕ สร้างเซสชันใหม่', 'tabs.none': 'ไม่มีแท็บเปิดอยู่',
+        'tabs.in_use': '✅ ใช้งานอยู่', 'tabs.select': 'เลือก',
+        'hist.title': '📜 ประวัติการทำงาน', 'hist.all': 'ทั้งหมด', 'hist.navigate': 'เปิดเว็บ',
+        'hist.click': 'คลิก', 'hist.screenshot': 'ภาพ', 'hist.extract': 'ดึงข้อมูล', 'hist.none': 'ไม่มีประวัติ',
+        'plan.title': 'แผนงาน AI', 'plan.create': 'สร้างแผน', 'plan.confirm': '✅ ยืนยันและเริ่มทำ',
+        'plan.cancel': '❌ ยกเลิก', 'plan.creating': '⏳ กำลังวางแผน...',
+        'plan.no_plan': 'ยังไม่มีแผนงาน — พิมพ์ภารกิจด้านบนเพื่อเริ่ม',
+        'plan.execute_ok': '✅ ทำสำเร็จ', 'plan.execute_fail': '❌ ล้มเหลว',
+        'ctx.title': 'บริบทหน้าเว็บ', 'ctx.refresh': '🔄 อ่านใหม่',
+        'ctx.no_context': 'ยังไม่มีข้อมูล — เปิดเว็บก่อนแล้วกดอ่านใหม่',
+        'ctx.url': 'URL', 'ctx.title_label': 'ชื่อหน้า', 'ctx.description': 'คำอธิบาย',
+        'ctx.headings': 'หัวข้อ', 'ctx.links': 'ลิงก์', 'ctx.images': 'รูปภาพ',
+        'ctx.forms': 'ฟอร์ม', 'ctx.interactive': 'อิลิเมนต์ที่กดได้', 'ctx.summary': 'สรุปเนื้อหา',
+        'ctx.history': 'ประวัติหน้าเว็บ', 'ctx.count': 'รายการ',
+        'common.no_session': 'ไม่มีเซสชัน — สร้างหรือเปิดเว็บก่อน',
+        'common.connecting': '⏳ กำลังเชื่อมต่อ...', 'common.cannot_connect': '🔴 ไม่สามารถเชื่อมต่อ',
+      },
+      en: {
+        'app.title': '🖥️ BrowserOS', 'app.subtitle': 'Browser Control Dashboard',
+        'nav.status': 'Status', 'nav.command': 'Commands', 'nav.screenshot': 'Screenshot',
+        'nav.chat': 'Chat AI', 'nav.tabs': 'Tabs', 'nav.history': 'History',
+        'nav.planner': 'Planner', 'nav.context': 'Context',
+        'status.title': '📊 Server Status', 'status.state': 'Status', 'status.uptime': 'Uptime',
+        'status.tabs': 'Open Tabs', 'status.sessions': 'Sessions', 'status.memory': 'Memory',
+        'status.active_sessions': 'Active Sessions', 'status.no_session': 'No sessions — create one to start',
+        'status.use': 'Use', 'status.close': 'Close', 'status.commands': 'Commands',
+        'cmd.title': '⌨️ Browser Commands', 'cmd.open_site': 'Open Website',
+        'cmd.go': 'Go', 'cmd.quick_actions': 'Quick Actions', 'cmd.capture': 'Capture',
+        'cmd.extract_text': 'Extract Text', 'cmd.extract_html': 'Extract HTML',
+        'cmd.new_session': 'New Session', 'cmd.click_element': 'Click Element',
+        'cmd.click_btn': 'Click', 'cmd.type_text': 'Type Text', 'cmd.type_btn': 'Type',
+        'cmd.run_js': 'Run JavaScript', 'cmd.run_btn': 'Run',
+        'ss.title': '📸 Screenshot', 'ss.new_capture': 'New Capture', 'ss.full_page': 'Full page',
+        'ss.placeholder': 'Click capture to see screenshot',
+        'chat.title': '💬 Chat with AI', 'chat.send': 'Send',
+        'chat.start': 'Send a message to start chatting with AI',
+        'chat.placeholder': 'Type a message...', 'chat.thinking': '⏳ Thinking...',
+        'chat.no_session': '🤖 No active session. Try opening a website first.',
+        'tabs.title': '🗂️ Tab Management', 'tabs.new': '➕ New Session', 'tabs.none': 'No open tabs',
+        'tabs.in_use': '✅ Active', 'tabs.select': 'Select',
+        'hist.title': '📜 Activity History', 'hist.all': 'All', 'hist.navigate': 'Navigate',
+        'hist.click': 'Click', 'hist.screenshot': 'Screenshot', 'hist.extract': 'Extract', 'hist.none': 'No history',
+        'plan.title': 'AI Planner', 'plan.create': 'Create Plan', 'plan.confirm': '✅ Confirm & Execute',
+        'plan.cancel': '❌ Cancel', 'plan.creating': '⏳ Planning...',
+        'plan.no_plan': 'No plan yet — type a goal above to start',
+        'plan.execute_ok': '✅ Completed', 'plan.execute_fail': '❌ Failed',
+        'ctx.title': 'Page Context', 'ctx.refresh': '🔄 Refresh',
+        'ctx.no_context': 'No data — open a website first then click refresh',
+        'ctx.url': 'URL', 'ctx.title_label': 'Page Title', 'ctx.description': 'Description',
+        'ctx.headings': 'Headings', 'ctx.links': 'Links', 'ctx.images': 'Images',
+        'ctx.forms': 'Forms', 'ctx.interactive': 'Interactive Elements', 'ctx.summary': 'Content Summary',
+        'ctx.history': 'Page History', 'ctx.count': 'items',
+        'common.no_session': 'No session — create or open a website first',
+        'common.connecting': '⏳ Connecting...', 'common.cannot_connect': '🔴 Cannot connect',
+      }
+    };
+    let currentLang = localStorage.getItem('browseros-lang') || 'th';
+    function t(k) { return (i18n[currentLang] && i18n[currentLang][k]) || (i18n.th[k]) || k; }
+    function applyLang() {
+      document.querySelectorAll('[data-i18n]').forEach(el => {
+        const k = el.getAttribute('data-i18n');
+        const v = t(k);
+        if (v && v !== k) el.textContent = v;
+      });
+      const ci = $('chat-input'); if (ci) ci.placeholder = t('chat.placeholder');
+      const pg = $('plan-goal'); if (pg) pg.placeholder = t('plan.goal_placeholder') || 'บอก AI ว่าอยากทำอะไร';
+    }
+    function toggleLang() {
+      currentLang = currentLang === 'th' ? 'en' : 'th';
+      localStorage.setItem('browseros-lang', currentLang);
+      $('lang-label').textContent = currentLang === 'th' ? 'ไทย / English' : 'English / ไทย';
+      applyLang();
+    }
+
     // ── State ──
     let activeSessionId = null;
     let statusData = null;
     let historyFilter = 'all';
+    let currentPlanId = null;
 
     // ── Helpers ──
     const $ = id => document.getElementById(id);
@@ -220,7 +354,8 @@
       document.querySelectorAll('.panel').forEach(p => p.classList.add('hidden'));
       $('panel-' + name).classList.remove('hidden');
       document.querySelectorAll('.sidebar-btn').forEach(b => b.classList.remove('active'));
-      document.querySelector(`[data-panel="${name}"]`).classList.add('active');
+      const btn = document.querySelector(`[data-panel="${name}"]`);
+      if (btn) btn.classList.add('active');
     }
 
     // ── Status ──
@@ -228,43 +363,40 @@
       try {
         statusData = await api('/api/status');
         const s = statusData;
-        $('stat-status').textContent = '🟢 ออนไลน์';
+        $('stat-status').textContent = t('status.online');
         $('stat-status').className = 'text-2xl font-bold mt-1 text-emerald-400';
         const h = Math.floor(s.uptime / 3600);
         const m = Math.floor((s.uptime % 3600) / 60);
-        $('stat-uptime').textContent = `${h} ชม. ${m} นาที`;
+        $('stat-uptime').textContent = `${h}${t('status.hour')} ${m}${t('status.minute')}`;
         $('stat-tabs').textContent = s.chromium?.tabs ?? '—';
         $('stat-sessions').textContent = s.sessions?.length ?? 0;
         try {
           const mem = performance.memory ? (performance.memory.usedJSHeapSize / 1048576).toFixed(0) + ' MB' : '—';
           $('stat-memory').textContent = mem;
         } catch { $('stat-memory').textContent = '—'; }
-        $('sidebar-status').textContent = `🟢 ออนไลน์ | ${s.sessions?.length ?? 0} เซสชัน`;
+        $('sidebar-status').textContent = `🟢 ${t('status.online').replace('🟢 ','')} | ${s.sessions?.length ?? 0} ${t('status.sessions')}`;
 
-        // Sessions list
         if (s.sessions?.length) {
           $('sessions-list').innerHTML = s.sessions.map(s => `
             <div class="bg-dark-800 rounded p-3 border border-dark-700 flex justify-between items-center">
               <div>
                 <span class="text-indigo-400">${s.id}</span>
-                <span class="text-dark-400 text-xs ml-2">tab: ${s.tabId}</span>
-                <span class="text-dark-400 text-xs ml-2">คำสั่ง: ${s.historyCount}</span>
+                <span class="text-dark-400 text-xs ml-2">${t('status.tab')}: ${s.tabId}</span>
+                <span class="text-dark-400 text-xs ml-2">${t('status.commands')}: ${s.historyCount}</span>
               </div>
               <div class="flex gap-2">
-                <button onclick="activeSessionId='${s.id}';switchPanel('command')" class="text-xs bg-indigo-700 px-2 py-1 rounded">ใช้งาน</button>
-                <button onclick="destroySession('${s.id}')" class="text-xs bg-red-800 px-2 py-1 rounded">ปิด</button>
+                <button onclick="activeSessionId='${s.id}';switchPanel('command')" class="text-xs bg-indigo-700 px-2 py-1 rounded">${t('status.use')}</button>
+                <button onclick="destroySession('${s.id}')" class="text-xs bg-red-800 px-2 py-1 rounded">${t('status.close')}</button>
               </div>
             </div>`).join('');
         } else {
-          $('sessions-list').innerHTML = '<p class="text-dark-400">ยังไม่มีเซสชัน — สร้างใหม่ได้เลย</p>';
+          $('sessions-list').innerHTML = `<p class="text-dark-400">${t('status.no_session')}</p>`;
         }
-
-        // Refresh tabs panel if visible
         if (!$('panel-tabs').classList.contains('hidden')) refreshTabs();
       } catch {
-        $('stat-status').textContent = '🔴 ออฟไลน์';
+        $('stat-status').textContent = t('status.offline');
         $('stat-status').className = 'text-2xl font-bold mt-1 text-red-400';
-        $('sidebar-status').textContent = '🔴 ไม่สามารถเชื่อมต่อ';
+        $('sidebar-status').textContent = t('common.cannot_connect');
       }
     }
 
@@ -272,22 +404,24 @@
     async function doNavigate() {
       const url = $('nav-url').value.trim();
       if (!url) return;
-      $('nav-result').textContent = '⏳ กำลังโหลด...';
+      $('nav-result').textContent = t('cmd.loading');
       const r = await api('/api/navigate', { url, sessionId: getSessionId(), wait: true });
       if (r.sessionId) activeSessionId = r.sessionId;
       $('nav-result').innerHTML = r.success
         ? `✅ <a href="${r.url}" target="_blank" class="text-indigo-400 underline">${r.title || r.url}</a>`
         : `❌ ${r.error}`;
       refreshStatus();
+      // Auto-refresh context
+      setTimeout(() => refreshContext(), 1000);
     }
 
     async function doClick() {
       const selector = $('click-selector').value.trim();
       if (!selector) return;
       const sid = getSessionId();
-      if (!sid) return alert('ไม่มีเซสชัน — สร้างหรือเปิดเว็บก่อน');
+      if (!sid) return alert(t('common.no_session'));
       const r = await api('/api/click', { sessionId: sid, selector });
-      alert(r.success ? `✅ คลิก ${selector} สำเร็จ` : `❌ ${r.error}`);
+      alert(r.success ? `✅ ${selector}` : `❌ ${r.error}`);
     }
 
     async function doType() {
@@ -295,16 +429,16 @@
       const text = $('type-text').value.trim();
       if (!selector || !text) return;
       const sid = getSessionId();
-      if (!sid) return alert('ไม่มีเซสชัน');
+      if (!sid) return alert(t('common.no_session'));
       const r = await api('/api/type', { sessionId: sid, selector, text });
-      alert(r.success ? '✅ พิมพ์สำเร็จ' : `❌ ${r.error}`);
+      alert(r.success ? '✅' : `❌ ${r.error}`);
     }
 
     async function doEval() {
       const expr = $('eval-js').value.trim();
       if (!expr) return;
       const sid = getSessionId();
-      if (!sid) return alert('ไม่มีเซสชัน');
+      if (!sid) return alert(t('common.no_session'));
       const r = await api('/api/evaluate', { sessionId: sid, expression: expr });
       const el = $('eval-result');
       el.classList.remove('hidden');
@@ -313,135 +447,280 @@
 
     async function doScreenshot() {
       const sid = getSessionId();
-      if (!sid) return alert('ไม่มีเซสชัน');
+      if (!sid) return alert(t('common.no_session'));
       const fullPage = $('ss-fullpage')?.checked;
       const r = await api('/api/screenshot', { sessionId: sid, format: 'base64', fullPage });
       if (r.success) {
         $('screenshot-container').innerHTML = `<img src="${r.image}" class="w-full" alt="screenshot">`;
         switchPanel('screenshot');
-      } else {
-        alert('❌ ' + r.error);
-      }
+      } else alert('❌ ' + r.error);
     }
 
     async function doExtract(type) {
       const sid = getSessionId();
-      if (!sid) return alert('ไม่มีเซสชัน');
+      if (!sid) return alert(t('common.no_session'));
       const r = await api('/api/extract', { sessionId: sid, type });
       if (r.success) {
         const text = typeof r.data === 'string' ? r.data : JSON.stringify(r.data, null, 2);
-        // Show in eval result area
         switchPanel('command');
         const el = $('eval-result');
         el.classList.remove('hidden');
         el.textContent = text.substring(0, 5000);
-      } else {
-        alert('❌ ' + r.error);
-      }
+      } else alert('❌ ' + r.error);
     }
 
     async function doNewSession() {
       const r = await api('/api/session', {});
       if (r.success) {
         activeSessionId = r.sessionId;
-        alert(`✅ สร้างเซสชัน: ${r.sessionId}`);
-        refreshStatus();
-      } else {
-        alert('❌ ' + r.error);
-      }
-    }
-
-    async function destroySession(id) {
-      const r = await fetch(API + '/api/session', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: id })
-      }).then(r => r.json());
-      if (r.success) {
-        if (activeSessionId === id) activeSessionId = null;
+        alert(`✅ ${r.sessionId}`);
         refreshStatus();
       } else alert('❌ ' + r.error);
     }
 
+    async function destroySession(id) {
+      const r = await fetch(API + '/api/session', {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: id })
+      }).then(r => r.json());
+      if (r.success) { if (activeSessionId === id) activeSessionId = null; refreshStatus(); }
+      else alert('❌ ' + r.error);
+    }
+
     // ── Chat ──
-    let chatHistory = [];
     async function doChat() {
       const input = $('chat-input');
       const msg = input.value.trim();
       if (!msg) return;
       input.value = '';
-
       const container = $('chat-messages');
-      // User bubble
       container.innerHTML += `<div class="chat-msg ml-auto bg-indigo-700 rounded-lg p-3 text-sm fade-in">${esc(msg)}</div>`;
-
-      // AI thinking
       const aiDiv = document.createElement('div');
       aiDiv.className = 'chat-msg mr-auto bg-dark-700 rounded-lg p-3 text-sm fade-in';
-      aiDiv.textContent = '⏳ กำลังคิด...';
+      aiDiv.textContent = t('chat.thinking');
       container.appendChild(aiDiv);
       container.scrollTop = container.scrollHeight;
-
-      // Send via WebSocket or use evaluate as fallback
-      // For now, use a simple approach: navigate + extract pattern or just echo
       try {
-        // Use the chat API if available, otherwise simulate
         const sid = getSessionId();
         if (sid) {
-          const r = await api('/api/evaluate', {
-            sessionId: sid,
-            expression: `document.title + ' | ' + window.location.href`
-          });
-          aiDiv.textContent = `🤖 ฉันเห็นคุณอยู่ที่หน้า "${r.result}" ตอนนี้ คุณอยากให้ฉันทำอะไร?`;
+          // ใช้ context + plan API
+          await api('/api/context', { sessionId: sid });
+          const r = await api('/api/plan', { sessionId: sid, goal: msg });
+          if (r.success && r.plan) {
+            currentPlanId = r.plan.id;
+            const stepsHtml = r.plan.steps.map((s, i) =>
+              `${i+1}. ${s.description}`
+            ).join('\n');
+            aiDiv.textContent = `🧠 ${currentLang === 'th' ? 'แผนของฉัน' : 'My plan'}:\n${stepsHtml}\n\n${currentLang === 'th' ? 'ไปที่แผง "แผนงาน" เพื่อยืนยัน' : 'Go to Planner panel to confirm'}`;
+          } else {
+            aiDiv.textContent = `❌ ${r.error || 'ไม่สามารถวางแผนได้'}`;
+          }
         } else {
-          aiDiv.textContent = '🤖 ยังไม่มีเซสชันเปิดอยู่ ลองเปิดเว็บก่อนนะ';
+          aiDiv.textContent = t('chat.no_session');
         }
-      } catch {
-        aiDiv.textContent = '❌ เกิดข้อผิดพลาด';
-      }
+      } catch { aiDiv.textContent = '❌'; }
       container.scrollTop = container.scrollHeight;
+    }
+
+    // ── Planner ──
+    async function createPlan() {
+      const goal = $('plan-goal').value.trim();
+      if (!goal) return;
+      const sid = getSessionId();
+      if (!sid) return alert(t('common.no_session'));
+
+      $('plan-container').innerHTML = `<div class="text-center py-8 text-indigo-400">${t('plan.creating')}</div>`;
+
+      const r = await api('/api/plan', { sessionId: sid, goal });
+      if (!r.success) {
+        $('plan-container').innerHTML = `<div class="text-red-400 text-center py-4">❌ ${r.error}</div>`;
+        return;
+      }
+
+      currentPlanId = r.plan.id;
+      renderPlan(r.plan);
+    }
+
+    function renderPlan(plan) {
+      const statusIcons = { draft: '📝', running: '🔄', completed: '✅', failed: '❌', cancelled: '🚫' };
+      const stepIcons = { pending: '⏳', running: '🔄', done: '✅', error: '❌', skipped: '⏭️' };
+
+      let html = `
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <div class="flex justify-between items-center mb-3">
+            <div>
+              <span class="text-lg">${statusIcons[plan.status] || ''}</span>
+              <span class="ml-2 font-semibold">${esc(plan.goal)}</span>
+            </div>
+            <span class="text-xs text-dark-400">${plan.id}</span>
+          </div>
+          <div class="text-sm text-dark-400 mb-3">
+            สถานะ: ${plan.status === 'draft' ? '📝 รอยืนยัน' : plan.status === 'running' ? '🔄 กำลังทำ...' : plan.status === 'completed' ? '✅ เสร็จ' : plan.status === 'failed' ? '❌ ล้มเหลว' : '🚫 ยกเลิก'}
+          </div>
+      `;
+
+      plan.steps.forEach((step, i) => {
+        const stepClass = `step-${step.status}`;
+        html += `
+          <div class="bg-dark-900 rounded p-3 mb-2 ${stepClass}">
+            <div class="flex items-start gap-2">
+              <span class="text-lg">${stepIcons[step.status] || '⏳'}</span>
+              <div class="flex-1">
+                <div class="font-medium">${step.id}. ${esc(step.description)}</div>
+                <div class="text-xs text-dark-400 mt-1">${step.action} ${step.params.selector || step.params.url || step.params.text || ''}</div>
+                ${step.error ? `<div class="text-red-400 text-xs mt-1">❌ ${esc(step.error)} (ลอง ${step.retries} ครั้ง)</div>` : ''}
+                ${step.result ? `<div class="text-emerald-400 text-xs mt-1">✅ ${esc(JSON.stringify(step.result).substring(0, 200))}</div>` : ''}
+              </div>
+            </div>
+          </div>`;
+      });
+
+      if (plan.status === 'draft') {
+        html += `
+          <div class="flex gap-2 mt-3">
+            <button onclick="executePlan()" class="bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded text-sm font-medium">${t('plan.confirm')}</button>
+            <button onclick="cancelPlan()" class="bg-red-800 hover:bg-red-700 px-4 py-2 rounded text-sm font-medium">${t('plan.cancel')}</button>
+          </div>`;
+      }
+
+      html += '</div>';
+      $('plan-container').innerHTML = html;
+    }
+
+    async function executePlan() {
+      if (!currentPlanId) return;
+      $('plan-container').innerHTML = `<div class="text-center py-8 text-indigo-400">🔄 ${currentLang === 'th' ? 'กำลัง execute...' : 'Executing...'}</div>`;
+
+      const r = await api('/api/plan/execute', { planId: currentPlanId });
+      if (r.success) {
+        renderPlan(r.plan);
+      } else {
+        $('plan-container').innerHTML = `<div class="text-red-400 text-center py-4">❌ ${r.error}</div>`;
+      }
+    }
+
+    async function cancelPlan() {
+      if (!currentPlanId) return;
+      const r = await api('/api/plan/cancel', { planId: currentPlanId });
+      if (r.success) renderPlan(r.plan);
+    }
+
+    // ── Context ──
+    async function refreshContext() {
+      const sid = getSessionId();
+      if (!sid) {
+        $('context-container').innerHTML = `<p class="text-dark-400 text-center py-8">${t('common.no_session')}</p>`;
+        return;
+      }
+
+      $('context-container').innerHTML = `<div class="text-center py-8 text-indigo-400">🔄 ${currentLang === 'th' ? 'กำลังอ่าน...' : 'Reading...'}</div>`;
+
+      const r = await api('/api/context', { sessionId: sid });
+      if (!r.success) {
+        $('context-container').innerHTML = `<div class="text-red-400 text-center py-4">❌ ${r.error}</div>`;
+        return;
+      }
+
+      const ctx = r.context;
+      let html = '';
+
+      // URL & Title
+      html += `<div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+        <div class="grid grid-cols-2 gap-4">
+          <div><div class="text-dark-400 text-xs">${t('ctx.title_label')}</div><div class="font-semibold">${esc(ctx.title || '—')}</div></div>
+          <div><div class="text-dark-400 text-xs">${t('ctx.url')}</div><div class="text-indigo-400 text-xs break-all">${esc(ctx.url || '—')}</div></div>
+        </div>
+        ${ctx.meta?.description ? `<div class="mt-2"><div class="text-dark-400 text-xs">${t('ctx.description')}</div><div class="text-sm">${esc(ctx.meta.description)}</div></div>` : ''}
+      </div>`;
+
+      // Headings
+      if (ctx.headings?.length) {
+        html += `<div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <div class="text-dark-400 text-xs mb-2">${t('ctx.headings')} (${ctx.headings.length})</div>
+          ${ctx.headings.map(h => `<div class="text-sm ml-${h.level * 2}"><span class="text-dark-500">H${h.level}</span> ${esc(h.text)}</div>`).join('')}
+        </div>`;
+      }
+
+      // Interactive elements
+      if (ctx.interactiveElements?.length) {
+        html += `<div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <div class="text-dark-400 text-xs mb-2">${t('ctx.interactive')} (${ctx.interactiveElements.length})</div>
+          <div class="grid grid-cols-1 gap-1 max-h-48 overflow-y-auto">
+          ${ctx.interactiveElements.slice(0, 30).map(el => `
+            <div class="text-xs flex gap-2 ${el.visible ? '' : 'text-dark-500 line-through'}">
+              <span class="text-indigo-400">&lt;${el.tag}&gt;</span>
+              <span>${esc(el.text || el.ariaLabel || el.selector)}</span>
+              ${el.type ? `<span class="text-dark-500">[${el.type}]</span>` : ''}
+            </div>`).join('')}
+          </div>
+        </div>`;
+      }
+
+      // Forms
+      if (ctx.forms?.length) {
+        html += `<div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <div class="text-dark-400 text-xs mb-2">${t('ctx.forms')} (${ctx.forms.length})</div>
+          ${ctx.forms.map((f, i) => `
+            <div class="mb-2">
+              <div class="text-sm font-medium">${t('ctx.forms')} ${i+1}: ${f.inputs.length} ${currentLang === 'th' ? 'ช่องกรอก' : 'fields'}</div>
+              ${f.inputs.map(inp => `<div class="text-xs ml-4 text-dark-300">${inp.type} name="${inp.name}" ${inp.label ? `label="${inp.label}"` : ''} ${inp.placeholder ? `placeholder="${inp.placeholder}"` : ''}</div>`).join('')}
+            </div>`).join('')}
+        </div>`;
+      }
+
+      // Links summary
+      if (ctx.links?.length) {
+        html += `<div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <div class="text-dark-400 text-xs mb-2">${t('ctx.links')} (${ctx.links.length})</div>
+          <div class="grid grid-cols-1 gap-1 max-h-32 overflow-y-auto">
+          ${ctx.links.slice(0, 15).map(l => `<div class="text-xs"><span class="text-indigo-400">${esc(l.text)}</span> → <span class="text-dark-500">${esc(l.href).substring(0, 80)}</span></div>`).join('')}
+          </div>
+        </div>`;
+      }
+
+      // Text summary
+      if (ctx.textSummary) {
+        html += `<div class="bg-dark-800 rounded-lg p-4 border border-dark-700">
+          <div class="text-dark-400 text-xs mb-2">${t('ctx.summary')}</div>
+          <div class="text-sm text-dark-300 max-h-40 overflow-y-auto">${esc(ctx.textSummary.substring(0, 2000))}</div>
+        </div>`;
+      }
+
+      $('context-container').innerHTML = html;
     }
 
     // ── Tabs ──
     function refreshTabs() {
       const sessions = statusData?.sessions || [];
       if (!sessions.length) {
-        $('tabs-list').innerHTML = '<p class="text-dark-400">ไม่มีแท็บเปิดอยู่</p>';
+        $('tabs-list').innerHTML = `<p class="text-dark-400">${t('tabs.none')}</p>`;
         return;
       }
       $('tabs-list').innerHTML = sessions.map(s => `
         <div class="bg-dark-800 rounded p-3 border border-dark-700 flex justify-between items-center">
           <div>
             <span class="text-indigo-400 font-mono text-xs">${s.id}</span>
-            <span class="text-dark-400 text-xs ml-2">แท็บ: ${s.tabId}</span>
-            <span class="text-dark-400 text-xs ml-2">สร้าง: ${new Date(s.createdAt).toLocaleTimeString('th-TH')}</span>
+            <span class="text-dark-400 text-xs ml-2">${t('status.tab')}: ${s.tabId}</span>
           </div>
           <div class="flex gap-2">
             <button onclick="activeSessionId='${s.id}';refreshTabs()" class="text-xs ${activeSessionId===s.id?'bg-indigo-500':'bg-dark-600'} px-2 py-1 rounded">
-              ${activeSessionId===s.id?'✅ ใช้งานอยู่':'เลือก'}
+              ${activeSessionId===s.id ? t('tabs.in_use') : t('tabs.select')}
             </button>
-            <button onclick="destroySession('${s.id}')" class="text-xs bg-red-800 px-2 py-1 rounded">ปิด</button>
+            <button onclick="destroySession('${s.id}')" class="text-xs bg-red-800 px-2 py-1 rounded">${t('status.close')}</button>
           </div>
         </div>`).join('');
     }
 
     // ── History ──
-    function filterHistory(type) {
-      historyFilter = type;
-      refreshHistory();
-    }
+    function filterHistory(type) { historyFilter = type; refreshHistory(); }
     function refreshHistory() {
       const sessions = statusData?.sessions || [];
       let all = [];
       sessions.forEach(s => {
-        // We don't have full history in status API, show what we have
-        all.push({ session: s.id, type: 'session', data: `เซสชัน ${s.id} สร้างเมื่อ ${new Date(s.createdAt).toLocaleTimeString('th-TH')}`, time: s.createdAt });
+        all.push({ session: s.id, type: 'session', data: `${t('hist.session')} ${s.id}`, time: s.createdAt });
       });
       if (historyFilter !== 'all') all = all.filter(h => h.type === historyFilter);
-      if (!all.length) {
-        $('history-list').innerHTML = '<p class="text-dark-400">ไม่มีประวัติ</p>';
-        return;
-      }
+      if (!all.length) { $('history-list').innerHTML = `<p class="text-dark-400">${t('hist.none')}</p>`; return; }
       $('history-list').innerHTML = all.map(h => `
         <div class="bg-dark-800 rounded p-2 border border-dark-700">
           <span class="text-dark-400 text-xs">${new Date(h.time).toLocaleTimeString('th-TH')}</span>
@@ -454,6 +733,8 @@
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
     // ── Init ──
+    $('lang-label').textContent = currentLang === 'th' ? 'ไทย / English' : 'English / ไทย';
+    applyLang();
     refreshStatus();
     setInterval(refreshStatus, 10000);
   </script>

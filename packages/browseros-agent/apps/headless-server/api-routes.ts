@@ -3,17 +3,21 @@
 
 import { HeadlessBrowser } from './headless-browser'
 import { SessionManager } from './session-manager'
+import { ContextEngine } from './context-engine'
+import { SmartPlanner } from './smart-planner'
 import type { HeadlessServerConfig } from './config'
 
 interface RouteContext {
   browser: HeadlessBrowser
   sessions: SessionManager
   config: HeadlessServerConfig
+  contextEngine: ContextEngine
+  smartPlanner: SmartPlanner
 }
 
 /** สร้าง API routes ทั้งหมด */
 export function createRoutes(ctx: RouteContext) {
-  const { browser, sessions, config } = ctx
+  const { browser, sessions, config, contextEngine, smartPlanner } = ctx
 
   return {
     /** GET /api/status — สถานะ server */
@@ -259,6 +263,57 @@ export function createRoutes(ctx: RouteContext) {
         return Response.json({ error: err.message }, { status: 500 })
       }
     },
+
+    // ── Context API ──
+
+    /** POST /api/context — ดึง context หน้าเว็บปัจจุบัน */
+    context: async (body: { sessionId: string }) => {
+      try {
+        const ctx = await contextEngine.extractContext(body.sessionId)
+        return Response.json({ success: true, context: ctx })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    // ── Plan API ──
+
+    /** POST /api/plan — สร้าง plan จากคำสั่ง */
+    createPlan: async (body: { sessionId: string; goal: string }) => {
+      try {
+        const plan = await smartPlanner.createPlan(body.sessionId, body.goal)
+        return Response.json({ success: true, plan })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    /** POST /api/plan/execute — execute plan */
+    executePlan: async (body: { planId: string }) => {
+      try {
+        const plan = await smartPlanner.executePlan(body.planId)
+        return Response.json({ success: true, plan })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    /** POST /api/plan/cancel — ยกเลิก plan */
+    cancelPlan: async (body: { planId: string }) => {
+      try {
+        const plan = smartPlanner.cancelPlan(body.planId)
+        return Response.json({ success: true, plan })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    /** GET plan status */
+    planStatus: async (planId: string) => {
+      const plan = smartPlanner.getPlan(planId)
+      if (!plan) return Response.json({ error: 'ไม่พบแผน' }, { status: 404 })
+      return Response.json({ success: true, plan })
+    },
   }
 }
 
@@ -286,6 +341,14 @@ export function createRouter(routes: ReturnType<typeof createRoutes>, config: He
           const sessionId = path.split('/').pop()!
           return await routes.getCookies(sessionId)
         }
+        if (path === '/api/plan/status') {
+          const planId = url.searchParams.get('planId') || ''
+          return await routes.planStatus(planId)
+        }
+        if (path.startsWith('/api/context/')) {
+          const sessionId = path.split('/').pop()!
+          return await routes.context({ sessionId })
+        }
       }
 
       // POST / DELETE routes
@@ -302,6 +365,12 @@ export function createRouter(routes: ReturnType<typeof createRoutes>, config: He
         if (path === '/api/fill-form') return await routes.fillForm(body)
         if (path === '/api/evaluate') return await routes.evaluate(body)
         if (path === '/api/cookies' && method === 'POST') return await routes.setCookies(body)
+
+        // Context & Planner API
+        if (path === '/api/context') return await routes.context(body)
+        if (path === '/api/plan' && method === 'POST') return await routes.createPlan(body)
+        if (path === '/api/plan/execute') return await routes.executePlan(body)
+        if (path === '/api/plan/cancel') return await routes.cancelPlan(body)
       }
 
       return Response.json({ error: 'ไม่พบ endpoint', path }, { status: 404 })

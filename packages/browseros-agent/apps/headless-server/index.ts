@@ -15,6 +15,8 @@
 import { loadConfig } from './config'
 import { HeadlessBrowser } from './headless-browser'
 import { SessionManager } from './session-manager'
+import { ContextEngine } from './context-engine'
+import { SmartPlanner } from './smart-planner'
 import { createRoutes, createRouter } from './api-routes'
 import { createWebSocketHandler } from './websocket-handler'
 
@@ -35,13 +37,15 @@ console.log('══════════════════════�
 // สร้าง browser controller และ session manager
 const browser = new HeadlessBrowser(config)
 const sessions = new SessionManager(browser)
+const contextEngine = new ContextEngine(browser, sessions)
+const smartPlanner = new SmartPlanner(browser, sessions, contextEngine)
 
 // เริ่ม Chromium
 console.log('\n⏳ กำลังเริ่ม Chromium...')
 await browser.start()
 
 // สร้าง API routes
-const routes = createRoutes({ browser, sessions, config })
+const routes = createRoutes({ browser, sessions, config, contextEngine, smartPlanner })
 const router = createRouter(routes, config)
 
 // สร้าง WebSocket handler
