@@ -1,6 +1,6 @@
 import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getOrCreateBrowserosId } from './browseros-id'
+import { getBrowserosId } from './browseros-id'
 
 export interface CreditsInfo {
   credits: number
@@ -12,7 +12,7 @@ export interface CreditsInfo {
 const CREDITS_QUERY_KEY = ['credits']
 
 async function fetchCredits(): Promise<CreditsInfo> {
-  const browserosId = await getOrCreateBrowserosId()
+  const browserosId = await getBrowserosId()
   const response = await fetch(
     `${EXTERNAL_URLS.CREDITS_GATEWAY}/credits/${browserosId}`,
   )
