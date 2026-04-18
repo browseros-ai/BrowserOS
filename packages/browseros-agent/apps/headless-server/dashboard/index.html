@@ -70,6 +70,22 @@
         🔍 <span data-i18n="nav.context">บริบท</span>
       </button>
       <div class="border-t border-dark-700 my-2 mx-4"></div>
+      <button onclick="switchPanel('agents')" data-panel="agents" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 text-emerald-300">
+        🤖 <span data-i18n="nav.agents">หลาย Agent</span>
+      </button>
+      <button onclick="switchPanel('workflow')" data-panel="workflow" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 text-emerald-300">
+        🔄 <span data-i18n="nav.workflow">Workflow</span>
+      </button>
+      <button onclick="switchPanel('learning')" data-panel="learning" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 text-emerald-300">
+        📚 <span data-i18n="nav.learning">เรียนรู้</span>
+      </button>
+      <button onclick="switchPanel('files')" data-panel="files" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 text-emerald-300">
+        📁 <span data-i18n="nav.files">ไฟล์</span>
+      </button>
+      <button onclick="switchPanel('costs')" data-panel="costs" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 text-emerald-300">
+        💰 <span data-i18n="nav.costs">ค่าใช้จ่าย</span>
+      </button>
+      <div class="border-t border-dark-700 my-2 mx-4"></div>
       <button onclick="toggleLang()" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 text-amber-400">
         <span>🌐</span> <span id="lang-label">ไทย / English</span>
       </button>
@@ -225,6 +241,110 @@
       <div id="context-container" class="space-y-3">
         <p class="text-dark-400 text-center py-8" data-i18n="ctx.no_context">ยังไม่มีข้อมูล — เปิดเว็บก่อนแล้วกดอ่านใหม่</p>
       </div>
+    </section>
+
+    <!-- ── Phase 3 Panels ── -->
+
+    <!-- Multi-Agent Panel -->
+    <section id="panel-agents" class="panel hidden p-6 fade-in">
+      <h2 class="text-xl font-bold mb-4" data-i18n="agents.title">🤖 ระบบหลาย Agent</h2>
+      <div class="bg-dark-800 rounded-lg p-4 border border-dark-700 mb-4">
+        <label class="text-sm text-dark-400 block mb-2" data-i18n="agents.goal_placeholder">บอกเป้าหมาย</label>
+        <div class="flex gap-2">
+          <input id="agent-goal" type="text" placeholder="ค้นหาสินค้า 3 เว็บ เปรียบเทียบราคา" class="flex-1 bg-dark-900 border border-dark-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
+          <button onclick="submitAgentTask()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium" data-i18n="agents.submit">ส่งงาน</button>
+        </div>
+        <div id="agent-result" class="mt-2 text-sm"></div>
+      </div>
+      <h3 class="font-semibold mb-2" data-i18n="agents.agents_info">ข้อมูล Agent</h3>
+      <div id="agents-info" class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4"></div>
+      <h3 class="font-semibold mb-2" data-i18n="agents.active_jobs">งานที่กำลังทำ</h3>
+      <div id="agent-jobs" class="space-y-2 text-sm">
+        <p class="text-dark-400 text-center py-4" data-i18n="agents.no_jobs">ยังไม่มีงาน</p>
+      </div>
+    </section>
+
+    <!-- Workflow Panel -->
+    <section id="panel-workflow" class="panel hidden p-6 fade-in">
+      <h2 class="text-xl font-bold mb-4" data-i18n="wf.title">🔄 ระบบ Workflow</h2>
+      <div class="bg-dark-800 rounded-lg p-4 border border-dark-700 mb-4">
+        <label class="text-sm text-dark-400 block mb-2" data-i18n="wf.name">ชื่อ Workflow</label>
+        <div class="flex gap-2 mb-2">
+          <input id="wf-name" type="text" placeholder="ชื่อ workflow" class="flex-1 bg-dark-900 border border-dark-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
+          <button onclick="createWorkflow()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium" data-i18n="wf.create">สร้าง</button>
+        </div>
+        <textarea id="wf-steps" rows="4" placeholder='[{"type":"navigate","label":"เปิดเว็บ","params":{"url":"https://example.com"}}]' class="w-full bg-dark-900 border border-dark-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 font-mono"></textarea>
+      </div>
+      <div id="wf-list" class="space-y-3">
+        <p class="text-dark-400 text-center py-8" data-i18n="wf.no_workflows">ยังไม่มี workflow</p>
+      </div>
+    </section>
+
+    <!-- Learning Panel -->
+    <section id="panel-learning" class="panel hidden p-6 fade-in">
+      <h2 class="text-xl font-bold mb-4" data-i18n="learn.title">📚 ระบบเรียนรู้</h2>
+      <div class="flex gap-2 mb-4">
+        <button onclick="loadLearningRules()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm" data-i18n="learn.rules">กฎที่เรียนรู้</button>
+        <button onclick="loadLearningHistory()" class="bg-dark-700 hover:bg-dark-600 px-4 py-2 rounded text-sm" data-i18n="learn.history">ประวัติการใช้งาน</button>
+      </div>
+      <div id="learning-content" class="space-y-2 text-sm">
+        <p class="text-dark-400 text-center py-8" data-i18n="learn.no_rules">ยังไม่มีกฎ</p>
+      </div>
+    </section>
+
+    <!-- Files Panel -->
+    <section id="panel-files" class="panel hidden p-6 fade-in">
+      <h2 class="text-xl font-bold mb-4" data-i18n="files.title">📁 จัดการไฟล์</h2>
+      <div class="bg-dark-800 rounded-lg p-4 border border-dark-700 mb-4">
+        <div class="flex gap-2 mb-2">
+          <input id="file-url" type="url" placeholder="https://example.com/file.pdf" class="flex-1 bg-dark-900 border border-dark-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
+          <button onclick="downloadFile()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm" data-i18n="files.download">ดาวน์โหลด</button>
+        </div>
+        <button onclick="organizeFiles()" class="bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded text-sm" data-i18n="files.organize">📂 จัดโฟลเดอร์</button>
+      </div>
+      <div id="file-list" class="space-y-2 text-sm"></div>
+    </section>
+
+    <!-- Costs Panel -->
+    <section id="panel-costs" class="panel hidden p-6 fade-in">
+      <h2 class="text-xl font-bold mb-4" data-i18n="costs.title">💰 สรุปค่าใช้จ่าย</h2>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700 text-center">
+          <div class="text-dark-400 text-xs" data-i18n="costs.today">วันนี้</div>
+          <div id="cost-today" class="text-xl font-bold text-emerald-400">$0</div>
+        </div>
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700 text-center">
+          <div class="text-dark-400 text-xs" data-i18n="costs.week">สัปดาห์นี้</div>
+          <div id="cost-week" class="text-xl font-bold text-blue-400">$0</div>
+        </div>
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700 text-center">
+          <div class="text-dark-400 text-xs" data-i18n="costs.month">เดือนนี้</div>
+          <div id="cost-month" class="text-xl font-bold text-purple-400">$0</div>
+        </div>
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700 text-center">
+          <div class="text-dark-400 text-xs" data-i18n="costs.total">ทั้งหมด</div>
+          <div id="cost-total" class="text-xl font-bold text-amber-400">$0</div>
+        </div>
+      </div>
+      <div class="bg-dark-800 rounded-lg p-4 border border-dark-700 mb-4">
+        <h3 class="font-semibold mb-3" data-i18n="costs.budget">งบประมาณ</h3>
+        <div class="grid grid-cols-3 gap-2">
+          <div>
+            <label class="text-xs text-dark-400" data-i18n="costs.daily_limit">งบรายวัน ($)</label>
+            <input id="budget-daily" type="number" step="0.5" class="w-full bg-dark-900 border border-dark-700 rounded px-2 py-1 text-sm mt-1">
+          </div>
+          <div>
+            <label class="text-xs text-dark-400" data-i18n="costs.monthly_limit">งบรายเดือน ($)</label>
+            <input id="budget-monthly" type="number" step="1" class="w-full bg-dark-900 border border-dark-700 rounded px-2 py-1 text-sm mt-1">
+          </div>
+          <div class="flex items-end">
+            <button onclick="setBudget()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-1 rounded text-sm w-full" data-i18n="costs.set_budget">ตั้งงบ</button>
+          </div>
+        </div>
+        <div id="budget-info" class="mt-2 text-sm text-dark-400"></div>
+      </div>
+      <h3 class="font-semibold mb-2" data-i18n="costs.history">ประวัติการใช้จ่าย</h3>
+      <div id="cost-history" class="space-y-1 text-sm max-h-64 overflow-auto"></div>
     </section>
   </main>
 
@@ -737,6 +857,123 @@
     applyLang();
     refreshStatus();
     setInterval(refreshStatus, 10000);
+
+    // ── Phase 3: Multi-Agent ──
+    async function submitAgentTask() {
+      const goal = $('agent-goal').value.trim();
+      if (!goal) return;
+      $('agent-result').innerHTML = '<span class="text-indigo-400">⏳ กำลังส่งงาน...</span>';
+      const r = await api('/api/agents/task', 'POST', { goal });
+      if (r.success) {
+        $('agent-result').innerHTML = '<span class="text-emerald-400">✅ ส่งงานแล้ว Job: ' + esc(r.job?.id || '') + '</span>';
+        loadAgentStatus();
+      } else {
+        $('agent-result').innerHTML = '<span class="text-red-400">❌ ' + esc(r.error || 'ผิดพลาด') + '</span>';
+      }
+    }
+    async function loadAgentStatus() {
+      const r = await api('/api/agents/status');
+      if (!r.success) return;
+      const info = $('agents-info');
+      info.innerHTML = (r.agents || []).map(a => '<div class="bg-dark-800 border border-dark-700 rounded p-2 text-center"><div class="text-xs text-dark-400">' + esc(a.type) + '</div><div class="text-sm font-medium">' + (a.status === 'idle' ? '🟢 ว่าง' : '🔴 ทำงาน') + '</div></div>').join('');
+      const jobs = $('agent-jobs');
+      if (!r.activeJobs?.length) { jobs.innerHTML = '<p class="text-dark-400 text-center py-4">ยังไม่มีงาน</p>'; return; }
+      jobs.innerHTML = r.activeJobs.map(j => '<div class="bg-dark-800 border border-dark-700 rounded p-3"><div class="font-medium">' + esc(j.goal) + '</div><div class="text-xs text-dark-400 mt-1">สถานะ: ' + esc(j.status) + ' | งานย่อย: ' + (j.tasks?.length || 0) + '</div></div>').join('');
+    }
+
+    // ── Phase 3: Workflow ──
+    async function createWorkflow() {
+      const name = $('wf-name').value.trim();
+      const stepsRaw = $('wf-steps').value.trim();
+      if (!name) return;
+      let steps = [];
+      try { steps = JSON.parse(stepsRaw); } catch { steps = []; }
+      const r = await api('/api/workflow', 'POST', { name, steps });
+      if (r.success) { loadWorkflows(); $('wf-name').value = ''; $('wf-steps').value = ''; }
+    }
+    async function loadWorkflows() {
+      const r = await api('/api/workflow');
+      if (!r.success) return;
+      const el = $('wf-list');
+      if (!r.workflows?.length) { el.innerHTML = '<p class="text-dark-400 text-center py-8">ยังไม่มี workflow</p>'; return; }
+      el.innerHTML = r.workflows.map(w => '<div class="bg-dark-800 border border-dark-700 rounded p-4"><div class="flex justify-between items-center mb-2"><span class="font-medium">' + esc(w.name) + '</span><div class="flex gap-1"><button onclick="runWf(\'' + w.id + '\')" class="bg-emerald-700 hover:bg-emerald-600 px-2 py-1 rounded text-xs">▶️</button><button onclick="stopWf(\'' + w.id + '\')" class="bg-amber-700 hover:bg-amber-600 px-2 py-1 rounded text-xs">⏹️</button><button onclick="deleteWf(\'' + w.id + '\')" class="bg-red-800 hover:bg-red-700 px-2 py-1 rounded text-xs">🗑️</button></div></div><div class="text-xs text-dark-400">ขั้นตอน: ' + (w.steps?.length || 0) + ' | สถานะ: ' + esc(w.status) + '</div></div>').join('');
+    }
+    async function runWf(id) { await api('/api/workflow/' + id + '/run', 'POST'); loadWorkflows(); }
+    async function stopWf(id) { await api('/api/workflow/' + id + '/stop', 'POST'); loadWorkflows(); }
+    async function deleteWf(id) { await api('/api/workflow/' + id, 'DELETE'); loadWorkflows(); }
+
+    // ── Phase 3: Learning ──
+    async function loadLearningRules() {
+      const r = await api('/api/learning/rules');
+      if (!r.success) return;
+      const el = $('learning-content');
+      if (!r.rules?.length) { el.innerHTML = '<p class="text-dark-400 text-center py-8">ยังไม่มีกฎ</p>'; return; }
+      el.innerHTML = r.rules.map(rule => '<div class="bg-dark-800 border border-dark-700 rounded p-3 flex justify-between items-start"><div><div class="font-medium">' + esc(rule.context) + '</div><div class="text-xs text-dark-400 mt-1">' + esc(rule.correction) + '</div><div class="text-xs text-dark-500 mt-1">ความมั่นใจ: ' + (rule.confidence * 100).toFixed(0) + '% | ' + rule.occurrences + ' ครั้ง</div></div><button onclick="deleteRule(\'' + rule.id + '\')" class="text-red-400 text-xs">🗑️</button></div>').join('');
+    }
+    async function loadLearningHistory() {
+      const r = await api('/api/learning/history');
+      if (!r.success) return;
+      const el = $('learning-content');
+      if (!r.history?.length) { el.innerHTML = '<p class="text-dark-400 text-center py-4">ยังไม่มีประวัติ</p>'; return; }
+      el.innerHTML = r.history.slice(-20).reverse().map(h => '<div class="bg-dark-800 border border-dark-700 rounded p-2 text-xs"><span class="text-dark-400">' + new Date(h.timestamp).toLocaleTimeString() + '</span> ' + esc(h.action) + ' → ' + esc(h.result?.substring(0, 60)) + (h.success ? ' ✅' : ' ❌') + '</div>').join('');
+    }
+    async function deleteRule(id) { await api('/api/learning/rules/' + id, 'DELETE'); loadLearningRules(); }
+
+    // ── Phase 3: Files ──
+    async function downloadFile() {
+      const url = $('file-url').value.trim(); if (!url) return;
+      await api('/api/files/download', 'POST', { url });
+      loadFiles();
+    }
+    async function organizeFiles() { await api('/api/files/organize', 'POST'); loadFiles(); }
+    async function loadFiles() {
+      const r = await api('/api/files/list');
+      if (!r.success) return;
+      const el = $('file-list');
+      if (!r.files?.length) { el.innerHTML = '<p class="text-dark-400 text-center py-4">ยังไม่มีไฟล์</p>'; return; }
+      el.innerHTML = r.files.map(f => '<div class="bg-dark-800 border border-dark-700 rounded p-2 flex justify-between items-center"><div><span class="font-medium">' + esc(f.name) + '</span> <span class="text-dark-400 text-xs">(' + (f.size / 1024).toFixed(1) + ' KB)</span></div><button onclick="deleteFile(\'' + encodeURIComponent(f.path) + '\')" class="text-red-400 text-xs">🗑️</button></div>').join('');
+    }
+    async function deleteFile(p) { await api('/api/files/' + p, 'DELETE'); loadFiles(); }
+
+    // ── Phase 3: Costs ──
+    async function loadCosts() {
+      const [summary, budget] = await Promise.all([api('/api/costs/summary'), api('/api/costs/budget')]);
+      if (summary.success) {
+        $('cost-today').textContent = '$' + (summary.summary?.today || 0).toFixed(4);
+        $('cost-week').textContent = '$' + (summary.summary?.week || 0).toFixed(4);
+        $('cost-month').textContent = '$' + (summary.summary?.month || 0).toFixed(4);
+        $('cost-total').textContent = '$' + (summary.summary?.total || 0).toFixed(4);
+      }
+      if (budget.success) {
+        $('budget-daily').value = budget.budget?.dailyLimit || 5;
+        $('budget-monthly').value = budget.budget?.monthlyLimit || 100;
+        $('budget-info').textContent = 'แจ้งเตือนเมื่อถึง ' + ((budget.budget?.alertThreshold || 0.8) * 100) + '%';
+      }
+      loadCostHistory();
+    }
+    async function loadCostHistory() {
+      const r = await api('/api/costs/history');
+      if (!r.success) return;
+      const el = $('cost-history');
+      el.innerHTML = (r.history || []).reverse().slice(0, 30).map(h => '<div class="bg-dark-800 border border-dark-700 rounded px-3 py-1.5 flex justify-between"><span class="text-dark-400">' + new Date(h.timestamp).toLocaleString() + '</span><span>' + esc(h.provider) + '/' + esc(h.model) + '</span><span class="text-emerald-400">$' + (h.costUsd || 0).toFixed(6) + '</span></div>').join('');
+    }
+    async function setBudget() {
+      const daily = parseFloat($('budget-daily').value) || 5;
+      const monthly = parseFloat($('budget-monthly').value) || 100;
+      await api('/api/costs/budget', 'POST', { dailyLimit: daily, monthlyLimit: monthly });
+      loadCosts();
+    }
+
+    // Auto-load panel data on switch
+    const _origSwitch = switchPanel;
+    // We need to reassign - use a wrapper approach
+    document.querySelectorAll('[data-panel]').forEach(btn => {
+      const panel = btn.dataset.panel;
+      if (['agents','workflow','learning','files','costs'].includes(panel)) {
+        const origClick = btn.getAttribute('onclick');
+        btn.setAttribute('onclick', origClick + '; if("' + panel + '"==="agents")loadAgentStatus(); if("' + panel + '"==="workflow")loadWorkflows(); if("' + panel + '"==="learning")loadLearningRules(); if("' + panel + '"==="files")loadFiles(); if("' + panel + '"==="costs")loadCosts();');
+      }
+    });
   </script>
 </body>
 </html>

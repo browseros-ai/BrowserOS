@@ -17,6 +17,11 @@ import { HeadlessBrowser } from './headless-browser'
 import { SessionManager } from './session-manager'
 import { ContextEngine } from './context-engine'
 import { SmartPlanner } from './smart-planner'
+import { MultiAgentOrchestrator } from './multi-agent'
+import { WorkflowEngine } from './workflow-engine'
+import { LearningEngine } from './learning-engine'
+import { FileManager } from './file-manager'
+import { CostTracker } from './cost-tracker'
 import { createRoutes, createRouter } from './api-routes'
 import { createWebSocketHandler } from './websocket-handler'
 
@@ -39,13 +44,18 @@ const browser = new HeadlessBrowser(config)
 const sessions = new SessionManager(browser)
 const contextEngine = new ContextEngine(browser, sessions)
 const smartPlanner = new SmartPlanner(browser, sessions, contextEngine)
+const costTracker = new CostTracker()
+const multiAgent = new MultiAgentOrchestrator(browser, sessions, contextEngine, smartPlanner)
+const workflowEngine = new WorkflowEngine(browser, sessions)
+const learningEngine = new LearningEngine()
+const fileManager = new FileManager(browser, sessions)
 
 // เริ่ม Chromium
 console.log('\n⏳ กำลังเริ่ม Chromium...')
 await browser.start()
 
 // สร้าง API routes
-const routes = createRoutes({ browser, sessions, config, contextEngine, smartPlanner })
+const routes = createRoutes({ browser, sessions, config, contextEngine, smartPlanner, multiAgent, workflowEngine, learningEngine, fileManager, costTracker })
 const router = createRouter(routes, config)
 
 // สร้าง WebSocket handler

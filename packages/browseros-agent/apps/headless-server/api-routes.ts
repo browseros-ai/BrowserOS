@@ -5,6 +5,11 @@ import { HeadlessBrowser } from './headless-browser'
 import { SessionManager } from './session-manager'
 import { ContextEngine } from './context-engine'
 import { SmartPlanner } from './smart-planner'
+import { MultiAgentOrchestrator } from './multi-agent'
+import { WorkflowEngine } from './workflow-engine'
+import { LearningEngine } from './learning-engine'
+import { FileManager } from './file-manager'
+import { CostTracker } from './cost-tracker'
 import type { HeadlessServerConfig } from './config'
 
 interface RouteContext {
@@ -13,11 +18,16 @@ interface RouteContext {
   config: HeadlessServerConfig
   contextEngine: ContextEngine
   smartPlanner: SmartPlanner
+  multiAgent: MultiAgentOrchestrator
+  workflowEngine: WorkflowEngine
+  learningEngine: LearningEngine
+  fileManager: FileManager
+  costTracker: CostTracker
 }
 
 /** สร้าง API routes ทั้งหมด */
 export function createRoutes(ctx: RouteContext) {
-  const { browser, sessions, config, contextEngine, smartPlanner } = ctx
+  const { browser, sessions, config, contextEngine, smartPlanner, multiAgent, workflowEngine, learningEngine, fileManager, costTracker } = ctx
 
   return {
     /** GET /api/status — สถานะ server */
@@ -314,6 +324,208 @@ export function createRoutes(ctx: RouteContext) {
       if (!plan) return Response.json({ error: 'ไม่พบแผน' }, { status: 404 })
       return Response.json({ success: true, plan })
     },
+
+    // ── Multi-Agent API ──
+
+    /** POST /api/agents/task — ส่ง task complex */
+    agentTask: async (body: { goal: string; sessionId?: string }) => {
+      try {
+        const job = await multiAgent.submitTask(body.goal, body.sessionId)
+        return Response.json({ success: true, job })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    /** GET agents status */
+    agentStatus: async () => {
+      try {
+        const agents = multiAgent.getAgentsStatus()
+        const jobs = Array.from((multiAgent as any).activeJobs?.values?.() || [])
+        return Response.json({ success: true, agents, activeJobs: jobs })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    /** POST /api/agents/cancel — ยกเลิก job */
+    agentCancel: async (body: { jobId: string }) => {
+      try {
+        const ok = multiAgent.cancelJob(body.jobId)
+        return Response.json({ success: ok })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    // ── Workflow API ──
+
+    /** POST /api/workflow — สร้าง workflow */
+    workflowCreate: async (body: { name: string; description?: string; steps: any[]; trigger?: any; variables?: Record<string, any> }) => {
+      try {
+        const wf = workflowEngine.createWorkflow({
+          name: body.name,
+          description: body.description || '',
+          trigger: body.trigger || { type: 'manual' },
+          steps: body.steps,
+          variables: body.variables,
+        })
+        return Response.json({ success: true, workflow: wf })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    /** GET all workflows */
+    workflowList: async () => {
+      try {
+        const workflows = workflowEngine.getAllWorkflows()
+        return Response.json({ success: true, workflows })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    /** GET workflow by id */
+    workflowGet: async (id: string) => {
+      try {
+        const wf = workflowEngine.getWorkflow(id)
+        if (!wf) return Response.json({ error: 'ไม่พบ workflow' }, { status: 404 })
+        return Response.json({ success: true, workflow: wf })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    /** POST /api/workflow/:id/run — รัน workflow */
+    workflowRun: async (id: string) => {
+      try {
+        const run = await workflowEngine.runWorkflow(id)
+        return Response.json({ success: true, run })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    /** POST /api/workflow/:id/stop — หยุด workflow */
+    workflowStop: async (id: string) => {
+      try {
+        workflowEngine.stopWorkflow(id)
+        return Response.json({ success: true })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    /** DELETE workflow */
+    workflowDelete: async (id: string) => {
+      try {
+        workflowEngine.deleteWorkflow(id)
+        return Response.json({ success: true })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    // ── Learning API ──
+
+    /** GET /api/learning/rules */
+    learningRules: async () => {
+      try {
+        const rules = learningEngine.getRules()
+        return Response.json({ success: true, rules })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    /** DELETE /api/learning/rules/:id */
+    learningRuleDelete: async (id: string) => {
+      try {
+        learningEngine.deleteRule(id)
+        return Response.json({ success: true })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    /** GET /api/learning/history */
+    learningHistory: async () => {
+      try {
+        const history = learningEngine.getHistory()
+        return Response.json({ success: true, history })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    // ── Files API ──
+
+    /** POST /api/files/download — ดาวน์โหลดไฟล์ */
+    fileDownload: async (body: { url: string; filename?: string; subdir?: string }) => {
+      try {
+        const result = await fileManager.downloadFile(body.url, body.filename, body.subdir)
+        return Response.json({ success: true, result })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    /** GET /api/files/list */
+    fileList: async () => {
+      try {
+        const files = await fileManager.listFiles()
+        return Response.json({ success: true, files })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    /** POST /api/files/organize — จัดโฟลเดอร์ */
+    fileOrganize: async (body: { subdir?: string }) => {
+      try {
+        const result = await fileManager.organizeFiles(body.subdir)
+        return Response.json({ success: true, result })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    /** DELETE /api/files/:path */
+    fileDelete: async (filePath: string) => {
+      try {
+        await fileManager.deleteFile(decodeURIComponent(filePath))
+        return Response.json({ success: true })
+      } catch (err: any) {
+        return Response.json({ error: err.message }, { status: 500 })
+      }
+    },
+
+    // ── Costs API ──
+
+    /** GET /api/costs/summary */
+    costSummary: async () => {
+      const summary = costTracker.getSummary()
+      return Response.json({ success: true, summary })
+    },
+
+    /** GET /api/costs/history */
+    costHistory: async (limit?: number) => {
+      const history = costTracker.getHistory(limit || 100)
+      return Response.json({ success: true, history })
+    },
+
+    /** POST /api/costs/budget — ตั้งงบ */
+    costSetBudget: async (body: { dailyLimit?: number; monthlyLimit?: number; alertThreshold?: number }) => {
+      const budget = costTracker.setBudget(body)
+      return Response.json({ success: true, budget })
+    },
+
+    /** GET /api/costs/budget */
+    costGetBudget: async () => {
+      const budget = costTracker.getBudget()
+      return Response.json({ success: true, budget })
+    },
   }
 }
 
@@ -349,6 +561,28 @@ export function createRouter(routes: ReturnType<typeof createRoutes>, config: He
           const sessionId = path.split('/').pop()!
           return await routes.context({ sessionId })
         }
+
+        // ── Phase 3 GET routes ──
+        if (path === '/api/agents/status') return await routes.agentStatus()
+        if (path === '/api/workflow') return await routes.workflowList()
+        if (path.match(/^\/api\/workflow\/[^/]+$/)) {
+          const id = path.split('/').pop()!
+          return await routes.workflowGet(id)
+        }
+        if (path === '/api/learning/rules') return await routes.learningRules()
+        if (path.startsWith('/api/learning/rules/')) {
+          const id = path.split('/').pop()!
+          return await routes.learningRuleDelete(id)
+        }
+        if (path === '/api/learning/history') return await routes.learningHistory()
+        if (path === '/api/files/list') return await routes.fileList()
+        if (path.startsWith('/api/files/') && path !== '/api/files/download' && path !== '/api/files/organize' && path !== '/api/files/list') {
+          const filePath = path.replace('/api/files/', '')
+          return await routes.fileDelete(filePath)
+        }
+        if (path === '/api/costs/summary') return await routes.costSummary()
+        if (path === '/api/costs/history') return await routes.costHistory()
+        if (path === '/api/costs/budget') return await routes.costGetBudget()
       }
 
       // POST / DELETE routes
@@ -371,6 +605,48 @@ export function createRouter(routes: ReturnType<typeof createRoutes>, config: He
         if (path === '/api/plan' && method === 'POST') return await routes.createPlan(body)
         if (path === '/api/plan/execute') return await routes.executePlan(body)
         if (path === '/api/plan/cancel') return await routes.cancelPlan(body)
+
+        // ── Multi-Agent API ──
+        if (path === '/api/agents/task') return await routes.agentTask(body)
+        if (path === '/api/agents/cancel') return await routes.agentCancel(body)
+
+        // ── Workflow API ──
+        if (path === '/api/workflow' && method === 'POST') return await routes.workflowCreate(body)
+        if (path.match(/^\/api\/workflow\/[^/]+\/run$/)) {
+          const id = path.split('/')[3]
+          return await routes.workflowRun(id)
+        }
+        if (path.match(/^\/api\/workflow\/[^/]+\/stop$/)) {
+          const id = path.split('/')[3]
+          return await routes.workflowStop(id)
+        }
+
+        // ── Learning API ──
+        // (GET routes handled above)
+
+        // ── Files API ──
+        if (path === '/api/files/download') return await routes.fileDownload(body)
+        if (path === '/api/files/organize') return await routes.fileOrganize(body)
+
+        // ── Costs API ──
+        if (path === '/api/costs/budget' && method === 'POST') return await routes.costSetBudget(body)
+      }
+
+      // DELETE method routes
+      if (method === 'DELETE') {
+        if (path === '/api/session') return await routes.destroySession(await req.json().catch(() => ({})))
+        if (path.match(/^\/api\/workflow\/[^/]+$/)) {
+          const id = path.split('/').pop()!
+          return await routes.workflowDelete(id)
+        }
+        if (path.startsWith('/api/learning/rules/')) {
+          const id = path.split('/').pop()!
+          return await routes.learningRuleDelete(id)
+        }
+        if (path.startsWith('/api/files/') && path !== '/api/files/list' && path !== '/api/files/download' && path !== '/api/files/organize') {
+          const filePath = path.replace('/api/files/', '')
+          return await routes.fileDelete(filePath)
+        }
       }
 
       return Response.json({ error: 'ไม่พบ endpoint', path }, { status: 404 })
