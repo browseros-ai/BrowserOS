@@ -216,7 +216,7 @@ export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   lmstudio: 'http://localhost:1234/v1',
   bedrock: '',
   browseros: '',
-  minimax: MINIMAX_REGIONS.chinese,
+  minimax: MINIMAX_REGIONS.chinese.api,
 }
 
 /**

@@ -166,6 +166,30 @@ export const providerFormSchema = z
     ) {
       // No validation needed — OAuth tokens are on the server
     }
+    // MiniMax: require baseUrl + apiKey
+    else if (data.type === 'minimax') {
+      if (!data.baseUrl) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Base URL is required',
+          path: ['baseUrl'],
+        })
+      } else if (!/^https?:\/\/.+/.test(data.baseUrl)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Must be a valid URL',
+          path: ['baseUrl'],
+        })
+      }
+
+      if (!data.apiKey?.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'API Key is required',
+          path: ['apiKey'],
+        })
+      }
+    }
     // Other providers: require baseUrl
     else if (!data.baseUrl) {
       ctx.addIssue({
@@ -742,7 +766,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                     field.onChange(v)
                     form.setValue(
                       'baseUrl',
-                      MINIMAX_REGIONS[v as keyof typeof MINIMAX_REGIONS],
+                      MINIMAX_REGIONS[v as keyof typeof MINIMAX_REGIONS].api,
                     )
                   }}
                   value={field.value || 'chinese'}
