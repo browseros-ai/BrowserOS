@@ -5416,8 +5416,8 @@
         "supportsImages": false,
         "supportsReasoning": true,
         "supportsToolCall": true,
-        "inputCost": 0,
-        "outputCost": 0
+        "inputCost": 0.3,
+        "outputCost": 1.2
       },
       {
         "id": "MiniMax-M2.7-highspeed",
@@ -5427,8 +5427,8 @@
         "supportsImages": false,
         "supportsReasoning": true,
         "supportsToolCall": true,
-        "inputCost": 0,
-        "outputCost": 0
+        "inputCost": 0.6,
+        "outputCost": 2.4
       },
       {
         "id": "MiniMax-M2.5",
@@ -5438,8 +5438,8 @@
         "supportsImages": false,
         "supportsReasoning": true,
         "supportsToolCall": true,
-        "inputCost": 0,
-        "outputCost": 0
+        "inputCost": 0.3,
+        "outputCost": 1.2
       },
       {
         "id": "MiniMax-M2.5-highspeed",
@@ -5449,8 +5449,8 @@
         "supportsImages": false,
         "supportsReasoning": true,
         "supportsToolCall": true,
-        "inputCost": 0,
-        "outputCost": 0
+        "inputCost": 0.6,
+        "outputCost": 2.4
       },
       {
         "id": "MiniMax-M2.1",
@@ -5460,8 +5460,8 @@
         "supportsImages": false,
         "supportsReasoning": true,
         "supportsToolCall": true,
-        "inputCost": 0,
-        "outputCost": 0
+        "inputCost": 0.3,
+        "outputCost": 1.2
       },
       {
         "id": "MiniMax-M2.1-highspeed",
@@ -5471,8 +5471,8 @@
         "supportsImages": false,
         "supportsReasoning": true,
         "supportsToolCall": true,
-        "inputCost": 0,
-        "outputCost": 0
+        "inputCost": 0.6,
+        "outputCost": 2.4
       },
       {
         "id": "M2-her",
@@ -5482,8 +5482,8 @@
         "supportsImages": false,
         "supportsReasoning": false,
         "supportsToolCall": true,
-        "inputCost": 0,
-        "outputCost": 0
+        "inputCost": 0.3,
+        "outputCost": 1.2
       }
     ]
   }

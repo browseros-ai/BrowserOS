@@ -107,7 +107,7 @@ export const providerFormSchema = z
     temperature: z.number().min(0).max(2),
     // Azure-specific
     resourceName: z.string().optional(),
-    // Bedrock-specific
+    // Bedrock-specific / MiniMax region
     accessKeyId: z.string().optional(),
     secretAccessKey: z.string().optional(),
     region: z.string().optional(),

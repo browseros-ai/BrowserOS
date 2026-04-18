@@ -149,8 +149,18 @@ export const providerTemplates: ProviderTemplate[] = [
 ]
 
 export const MINIMAX_REGIONS = {
-  chinese: 'https://api.minimaxi.com/v1',
-  international: 'https://api.minimax.io/v1',
+  chinese: {
+    api: 'https://api.minimaxi.com/v1',
+    apiKeyUrl:
+      'https://platform.minimaxi.com/user-center/basic-information/interface-key',
+    setupGuideUrl: 'https://platform.minimaxi.com/document',
+  },
+  international: {
+    api: 'https://api.minimax.io/v1',
+    apiKeyUrl:
+      'https://platform.minimax.io/user-center/basic-information/interface-key',
+    setupGuideUrl: 'https://platform.minimax.io/docs/guides/models-intro',
+  },
 } as const
 
 export type MinimaxRegion = keyof typeof MINIMAX_REGIONS
@@ -206,7 +216,7 @@ export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   lmstudio: 'http://localhost:1234/v1',
   bedrock: '',
   browseros: '',
-  minimax: 'https://api.minimaxi.com/v1',
+  minimax: MINIMAX_REGIONS.chinese,
 }
 
 /**
