@@ -10,6 +10,8 @@ import { WorkflowEngine } from './workflow-engine'
 import { LearningEngine } from './learning-engine'
 import { FileManager } from './file-manager'
 import { CostTracker } from './cost-tracker'
+import { BrowserHermes } from './browser-hermes'
+import { BrowserSkills } from './browser-skills'
 import type { HeadlessServerConfig } from './config'
 
 interface RouteContext {
@@ -23,11 +25,13 @@ interface RouteContext {
   learningEngine: LearningEngine
   fileManager: FileManager
   costTracker: CostTracker
+  hermes: BrowserHermes
+  skills: BrowserSkills
 }
 
 /** สร้าง API routes ทั้งหมด */
 export function createRoutes(ctx: RouteContext) {
-  const { browser, sessions, config, contextEngine, smartPlanner, multiAgent, workflowEngine, learningEngine, fileManager, costTracker } = ctx
+  const { browser, sessions, config, contextEngine, smartPlanner, multiAgent, workflowEngine, learningEngine, fileManager, costTracker, hermes, skills } = ctx
 
   return {
     /** GET /api/status — สถานะ server */
@@ -526,6 +530,52 @@ export function createRoutes(ctx: RouteContext) {
       const budget = costTracker.getBudget()
       return Response.json({ success: true, budget })
     },
+
+       // ── Hermes API ──
+
+    /** GET /api/hermes/status — สถานะ BrowserHermes ทั้งหมด */
+    hermesStatus: async () => {
+      return Response.json({ success: true, ...hermes.getStatus() })
+    },
+
+    /** GET /api/hermes/bug-patterns — ดู bug patterns */
+    hermesBugPatterns: async () => {
+      return Response.json({ success: true, patterns: hermes.bugDB.getAll() })
+    },
+
+    /** GET /api/hermes/strategies — ดู strategies */
+    hermesStrategies: async () => {
+      return Response.json({ success: true, strategies: hermes.strategyDB.getAll() })
+    },
+
+    /** GET /api/hermes/skills — ดู skills ทั้งหมด */
+    hermesSkills: async () => {
+      return Response.json({ success: true, skills: skills.getAll(), stats: skills.getStats() })
+    },
+
+    /** POST /api/hermes/skills/:name/execute — รัน skill */
+    hermesSkillExecute: async (skillName: string, body: { sessionId: string; params?: Record<string, any> }) => {
+      const result = await skills.execute(skillName, {
+        sessionId: body.sessionId,
+        browser,
+        params: body.params || {},
+        hermes,
+      })
+      return Response.json({ success: result.success, result })
+    },
+
+    /** GET /api/hermes/rules — ดู rules ที่สร้างอัตโนมัติ */
+    hermesRules: async () => {
+      return Response.json({ success: true, rules: hermes.selfEvolution.getAll() })
+    },
+
+    /** GET /api/hermes/stats — สถิติการเรียนรู้ */
+    hermesStats: async () => {
+      const hermesStats = hermes.getStats()
+      const learningStats = learningEngine.getStats()
+      const skillStats = skills.getStats()
+      return Response.json({ success: true, hermes: hermesStats, learning: learningStats, skills: skillStats })
+    },
   }
 }
 
@@ -583,6 +633,14 @@ export function createRouter(routes: ReturnType<typeof createRoutes>, config: He
         if (path === '/api/costs/summary') return await routes.costSummary()
         if (path === '/api/costs/history') return await routes.costHistory()
         if (path === '/api/costs/budget') return await routes.costGetBudget()
+
+               // ── Hermes GET routes ──
+        if (path === '/api/hermes/status') return await routes.hermesStatus()
+        if (path === '/api/hermes/bug-patterns') return await routes.hermesBugPatterns()
+        if (path === '/api/hermes/strategies') return await routes.hermesStrategies()
+        if (path === '/api/hermes/skills') return await routes.hermesSkills()
+        if (path === '/api/hermes/rules') return await routes.hermesRules()
+        if (path === '/api/hermes/stats') return await routes.hermesStats()
       }
 
       // POST / DELETE routes
@@ -630,6 +688,12 @@ export function createRouter(routes: ReturnType<typeof createRoutes>, config: He
 
         // ── Costs API ──
         if (path === '/api/costs/budget' && method === 'POST') return await routes.costSetBudget(body)
+
+               // ── Hermes Skill Execute ──
+        if (path.match(/^\/api\/hermes\/skills\/[^/]+\/execute$/)) {
+          const skillName = path.split('/')[4]
+          return await routes.hermesSkillExecute(skillName, body)
+        }
       }
 
       // DELETE method routes

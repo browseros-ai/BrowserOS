@@ -24,6 +24,8 @@ import { FileManager } from './file-manager'
 import { CostTracker } from './cost-tracker'
 import { createRoutes, createRouter } from './api-routes'
 import { createWebSocketHandler } from './websocket-handler'
+import { BrowserHermes } from './browser-hermes'
+import { BrowserSkills } from './browser-skills'
 
 // โหลดการตั้งค่า
 const config = loadConfig()
@@ -49,13 +51,15 @@ const multiAgent = new MultiAgentOrchestrator(browser, sessions, contextEngine, 
 const workflowEngine = new WorkflowEngine(browser, sessions)
 const learningEngine = new LearningEngine()
 const fileManager = new FileManager(browser, sessions)
+const hermes = new BrowserHermes()
+const skills = new BrowserSkills()
 
 // เริ่ม Chromium
 console.log('\n⏳ กำลังเริ่ม Chromium...')
 await browser.start()
 
 // สร้าง API routes
-const routes = createRoutes({ browser, sessions, config, contextEngine, smartPlanner, multiAgent, workflowEngine, learningEngine, fileManager, costTracker })
+const routes = createRoutes({ browser, sessions, config, contextEngine, smartPlanner, multiAgent, workflowEngine, learningEngine, fileManager, costTracker, hermes, skills })
 const router = createRouter(routes, config)
 
 // สร้าง WebSocket handler

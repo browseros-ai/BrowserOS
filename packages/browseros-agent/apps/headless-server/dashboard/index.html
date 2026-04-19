@@ -85,6 +85,9 @@
       <button onclick="switchPanel('costs')" data-panel="costs" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 text-emerald-300">
         💰 <span data-i18n="nav.costs">ค่าใช้จ่าย</span>
       </button>
+      <button onclick="switchPanel('hermes')" data-panel="hermes" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 text-amber-300">
+        🧠 <span data-i18n="nav.hermes">สมองเสริม</span>
+      </button>
       <div class="border-t border-dark-700 my-2 mx-4"></div>
       <button onclick="toggleLang()" class="sidebar-btn w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 text-amber-400">
         <span>🌐</span> <span id="lang-label">ไทย / English</span>
@@ -345,6 +348,61 @@
       </div>
       <h3 class="font-semibold mb-2" data-i18n="costs.history">ประวัติการใช้จ่าย</h3>
       <div id="cost-history" class="space-y-1 text-sm max-h-64 overflow-auto"></div>
+    </section>
+
+    <!-- Hermes Panel -->
+    <section id="panel-hermes" class="panel hidden p-6 fade-in">
+      <h2 class="text-xl font-bold mb-4" data-i18n="hermes.title">🧠 สมองเสริม (Hermes)</h2>
+
+      <!-- Stats -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700 text-center">
+          <div class="text-dark-400 text-xs" data-i18n="hermes.bug_patterns">🐛 Bug Patterns</div>
+          <div id="hermes-stat-bugs" class="text-xl font-bold text-red-400">0</div>
+        </div>
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700 text-center">
+          <div class="text-dark-400 text-xs" data-i18n="hermes.strategies">📋 Strategies</div>
+          <div id="hermes-stat-strats" class="text-xl font-bold text-blue-400">0</div>
+        </div>
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700 text-center">
+          <div class="text-dark-400 text-xs" data-i18n="hermes.rules">📜 กฎอัตโนมัติ</div>
+          <div id="hermes-stat-rules" class="text-xl font-bold text-purple-400">0</div>
+        </div>
+        <div class="bg-dark-800 rounded-lg p-4 border border-dark-700 text-center">
+          <div class="text-dark-400 text-xs" data-i18n="hermes.skills">⚡ สกิล</div>
+          <div id="hermes-stat-skills" class="text-xl font-bold text-emerald-400">0</div>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="flex gap-2 mb-4">
+        <button onclick="hermesTab('bugs')" id="hermes-tab-bugs" class="px-3 py-1 bg-red-900/50 border border-red-700 rounded text-sm text-red-300">🐛 Bug Patterns</button>
+        <button onclick="hermesTab('strats')" id="hermes-tab-strats" class="px-3 py-1 bg-blue-900/50 border border-blue-700 rounded text-sm text-blue-300">📋 Strategies</button>
+        <button onclick="hermesTab('skills')" id="hermes-tab-skills" class="px-3 py-1 bg-emerald-900/50 border border-emerald-700 rounded text-sm text-emerald-300">⚡ Skills</button>
+        <button onclick="hermesTab('rules')" id="hermes-tab-rules" class="px-3 py-1 bg-purple-900/50 border border-purple-700 rounded text-sm text-purple-300">📜 Rules</button>
+        <button onclick="hermesTab('shadow')" id="hermes-tab-shadow" class="px-3 py-1 bg-amber-900/50 border border-amber-700 rounded text-sm text-amber-300">👁️ Shadow</button>
+      </div>
+
+      <!-- Bug Patterns -->
+      <div id="hermes-bugs" class="space-y-2">
+        <div id="hermes-bugs-list" class="space-y-2 text-sm max-h-96 overflow-auto"></div>
+      </div>
+      <!-- Strategies -->
+      <div id="hermes-strats" class="space-y-2 hidden">
+        <div id="hermes-strats-list" class="space-y-2 text-sm max-h-96 overflow-auto"></div>
+      </div>
+      <!-- Skills -->
+      <div id="hermes-skills" class="space-y-2 hidden">
+        <div id="hermes-skills-list" class="space-y-2 text-sm max-h-96 overflow-auto"></div>
+      </div>
+      <!-- Rules -->
+      <div id="hermes-rules" class="space-y-2 hidden">
+        <div id="hermes-rules-list" class="space-y-2 text-sm max-h-96 overflow-auto"></div>
+      </div>
+      <!-- Shadow Log -->
+      <div id="hermes-shadow" class="space-y-2 hidden">
+        <div id="hermes-shadow-list" class="space-y-2 text-sm max-h-96 overflow-auto"></div>
+      </div>
     </section>
   </main>
 
@@ -964,14 +1022,92 @@
       loadCosts();
     }
 
+    // ── Hermes Panel ──
+    let _hermesData = null;
+
+    function hermesTab(tab) {
+      ['bugs','strats','skills','rules','shadow'].forEach(t => {
+        $('hermes-'+t).classList.toggle('hidden', t !== tab);
+        const btn = $('hermes-tab-'+t);
+        if (btn) btn.style.opacity = t === tab ? '1' : '0.5';
+      });
+    }
+
+    async function loadHermes() {
+      const r = await api('/api/hermes/status');
+      if (!r.success) return;
+      _hermesData = r;
+      $('hermes-stat-bugs').textContent = (r.patterns || []).length;
+      $('hermes-stat-strats').textContent = (r.strategies || []).length;
+      $('hermes-stat-rules').textContent = (r.evolutionRules || []).length;
+      const skillR = await api('/api/hermes/skills');
+      $('hermes-stat-skills').textContent = skillR.success ? (skillR.skills || []).length : 0;
+
+      // Bug Patterns
+      const bugs = (r.patterns || []).sort((a,b) => b.lastSeen - a.lastSeen);
+      $('hermes-bugs-list').innerHTML = bugs.length === 0
+        ? '<div class="text-dark-400 text-center py-4">' + esc(t('hermes.no_bug_patterns')) + '</div>'
+        : bugs.map(p => '<div class="bg-dark-800 border border-dark-700 rounded p-3"><div class="flex justify-between items-start"><span class="text-red-400 font-mono text-xs">' + esc(p.errorType) + '</span><span class="text-dark-400 text-xs">' + new Date(p.lastSeen).toLocaleString() + '</span></div><div class="mt-1 text-sm">' + esc(p.context) + '</div><div class="text-xs text-dark-400 mt-1">ข้อผิดพลาด: ' + esc(p.error) + '</div>' + (p.solution ? '<div class="text-xs text-emerald-400 mt-1">วิธีแก้: ' + esc(p.solution) + '</div>' : '') + '<div class="text-xs text-dark-500 mt-1">สำเร็จ ' + p.successCount + ' / ล้มเหลว ' + p.failCount + '</div></div>').join('');
+
+      // Strategies
+      const strats = (r.strategies || []).sort((a,b) => b.successRate - a.successRate);
+      $('hermes-strats-list').innerHTML = strats.length === 0
+        ? '<div class="text-dark-400 text-center py-4">' + esc(t('hermes.no_strategies')) + '</div>'
+        : strats.map(s => '<div class="bg-dark-800 border border-dark-700 rounded p-3"><div class="flex justify-between"><span class="text-blue-400 text-sm font-semibold">' + esc(s.domain) + '</span><span class="text-xs">' + (s.successRate * 100).toFixed(0) + '% สำเร็จ</span></div><div class="text-sm mt-1">' + esc(s.task) + ' → <code class="text-xs bg-dark-900 px-1 rounded">' + esc(s.selector) + '</code></div><div class="text-xs text-dark-400 mt-1">' + s.successCount + '/' + s.totalCount + ' ครั้ง | ใช้ล่าสุด: ' + new Date(s.lastUsed).toLocaleString() + '</div></div>').join('');
+
+      // Skills
+      if (skillR.success) {
+        const skList = (skillR.skills || []);
+        const skStats = skillR.stats || [];
+        $('hermes-skills-list').innerHTML = skList.length === 0
+          ? '<div class="text-dark-400 text-center py-4">' + esc(t('hermes.no_skills')) + '</div>'
+          : skList.map(sk => {
+            const st = skStats.find(x => x.name === sk.name);
+            const rate = st ? (st.successRate * 100).toFixed(0) + '%' : '-';
+            const runs = st ? st.totalRuns : 0;
+            return '<div class="bg-dark-800 border border-dark-700 rounded p-3"><div class="flex justify-between items-center"><div><span class="text-emerald-400 font-semibold">' + esc(sk.name) + '</span> <span class="text-dark-400 text-xs">' + esc(sk.description) + '</span></div><div class="flex items-center gap-2"><span class="text-xs text-dark-400">' + rate + ' (' + runs + ')</span><button onclick="hermesRunSkill(\'' + sk.name + '\')" class="text-xs bg-emerald-700 hover:bg-emerald-600 px-2 py-1 rounded">▶️ รัน</button></div></div></div>';
+          }).join('');
+      }
+
+      // Evolution Rules
+      const rules = (r.evolutionRules || []).sort((a,b) => b.createdAt - a.createdAt);
+      $('hermes-rules-list').innerHTML = rules.length === 0
+        ? '<div class="text-dark-400 text-center py-4">' + esc(t('hermes.no_rules')) + '</div>'
+        : rules.map(r => '<div class="bg-dark-800 border border-dark-700 rounded p-3"><div class="flex justify-between"><span class="text-xs ' + (r.source === 'auto' ? 'text-purple-400' : 'text-blue-400') + '">' + (r.source === 'auto' ? '🤖 อัตโนมัติ' : '👤 มือ') + '</span><span class="text-dark-400 text-xs">' + new Date(r.createdAt).toLocaleString() + '</span></div><div class="text-sm mt-1"><span class="text-dark-400">ถ้า:</span> ' + esc(r.trigger) + '</div><div class="text-sm"><span class="text-dark-400">ให้:</span> <span class="text-emerald-400">' + esc(r.action) + '</span></div><div class="text-xs text-dark-500 mt-1">เกิด ' + r.occurrences + ' ครั้ง</div></div>').join('');
+
+      // Shadow Log
+      const logs = (r.shadowLog || []).reverse().slice(0, 30);
+      $('hermes-shadow-list').innerHTML = logs.length === 0
+        ? '<div class="text-dark-400 text-center py-4">' + esc(t('hermes.no_shadow_log')) + '</div>'
+        : logs.map(l => {
+          const riskColors = { low: 'text-green-400', medium: 'text-yellow-400', high: 'text-orange-400', critical: 'text-red-400' };
+          const outcomeColors = { executed: 'text-green-400', blocked: 'text-red-400', modified: 'text-yellow-400' };
+          return '<div class="bg-dark-800 border border-dark-700 rounded p-2 text-xs"><div class="flex justify-between"><span class="' + (riskColors[l.riskLevel] || '') + '">' + esc(l.riskLevel) + '</span><span class="' + (outcomeColors[l.outcome] || '') + '">' + esc(l.outcome) + '</span><span class="text-dark-500">ความมั่นใจ: ' + (l.confidence * 100).toFixed(0) + '%</span><span class="text-dark-500">' + new Date(l.timestamp).toLocaleString() + '</span></div>' + (l.warnings && l.warnings.length ? '<div class="text-amber-400 mt-1">⚠️ ' + l.warnings.map(w => esc(w)).join(', ') + '</div>' : '') + '</div>';
+        }).join('');
+
+      hermesTab('bugs');
+    }
+
+    async function hermesRunSkill(name) {
+      if (!activeSessionId) { alert('กรุณาเปิดเว็บหรือสร้าง session ก่อน'); return; }
+      const params = prompt('พารามิเตอร์ (JSON):', '{}');
+      if (!params) return;
+      try {
+        const p = JSON.parse(params);
+        const r = await api('/api/hermes/skills/' + name + '/execute', 'POST', { sessionId: activeSessionId, params: p });
+        alert(r.success ? '✅ สำเร็จ: ' + JSON.stringify(r.result?.data) : '❌ ล้มเหลว: ' + (r.result?.error || 'ไม่ทราบ'));
+        loadHermes();
+      } catch(e) { alert('JSON ไม่ถูกต้อง'); }
+    }
+
     // Auto-load panel data on switch
     const _origSwitch = switchPanel;
     // We need to reassign - use a wrapper approach
     document.querySelectorAll('[data-panel]').forEach(btn => {
       const panel = btn.dataset.panel;
-      if (['agents','workflow','learning','files','costs'].includes(panel)) {
+      if (['agents','workflow','learning','files','costs','hermes'].includes(panel)) {
         const origClick = btn.getAttribute('onclick');
-        btn.setAttribute('onclick', origClick + '; if("' + panel + '"==="agents")loadAgentStatus(); if("' + panel + '"==="workflow")loadWorkflows(); if("' + panel + '"==="learning")loadLearningRules(); if("' + panel + '"==="files")loadFiles(); if("' + panel + '"==="costs")loadCosts();');
+        btn.setAttribute('onclick', origClick + '; if("' + panel + '"==="agents")loadAgentStatus(); if("' + panel + '"==="workflow")loadWorkflows(); if("' + panel + '"==="learning")loadLearningRules(); if("' + panel + '"==="files")loadFiles(); if("' + panel + '"==="costs")loadCosts(); if("' + panel + '"==="hermes")loadHermes();');
       }
     });
   </script>

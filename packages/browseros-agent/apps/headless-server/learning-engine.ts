@@ -27,7 +27,7 @@ export interface InteractionRecord {
   timestamp: number
 }
 
-const STORAGE_PATH = '/tmp/browseros-learning.json'
+const STORAGE_PATH = './data/browseros-learning.json'
 
 function ruleId(): string {
   return `rule_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`
@@ -232,9 +232,50 @@ export class LearningEngine {
     }
   }
 
+  /** สถิติการเรียนรู้ */
+  getStats() {
+    const successHistory = this.history.filter(h => h.success)
+    const failHistory = this.history.filter(h => !h.success)
+    return {
+      totalRules: this.rules.length,
+      totalHistory: this.history.length,
+      successRate: this.history.length > 0 ? successHistory.length / this.history.length : 0,
+      successCount: successHistory.length,
+      failCount: failHistory.length,
+      autoApplyRules: this.rules.filter(r => r.autoApply).length,
+      topContexts: this.getTopContexts(),
+    }
+  }
+
+  /** export rules เป็น JSON */
+  exportRules(): string {
+    return JSON.stringify({
+      rules: this.rules,
+      exportedAt: new Date().toISOString(),
+      totalRules: this.rules.length,
+    }, null, 2)
+  }
+
+  /** บริบทยอดนิยม */
+  private getTopContexts(): { context: string; count: number }[] {
+    const counts: Record<string, number> = {}
+    for (const rule of this.rules) {
+      counts[rule.context] = (counts[rule.context] || 0) + rule.occurrences
+    }
+    return Object.entries(counts)
+      .map(([context, count]) => ({ context, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10)
+  }
+
   private loadFromStorage(): void {
     try {
       const fs = require('fs')
+      const path = require('path')
+      const dir = path.dirname(STORAGE_PATH)
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true })
+      }
       if (fs.existsSync(STORAGE_PATH)) {
         const raw = fs.readFileSync(STORAGE_PATH, 'utf-8')
         const data = JSON.parse(raw)
