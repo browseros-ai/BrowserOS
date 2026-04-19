@@ -67,15 +67,24 @@ async function exec(
   args: string[],
   timeout = 10000,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const { execFile } = await import('child_process')
+  const { execFile } = await import('node:child_process')
   return new Promise((resolve) => {
-    const child = execFile(command, args, { timeout }, (error, stdout, stderr) => {
-      resolve({
-        stdout: stdout ?? '',
-        stderr: stderr ?? '',
-        exitCode: error ? (error as NodeJS.ErrnoException).code === 'ETIMEDOUT' ? -1 : (error as any).status ?? 1 : 0,
-      })
-    })
+    const child = execFile(
+      command,
+      args,
+      { timeout },
+      (error, stdout, stderr) => {
+        resolve({
+          stdout: stdout ?? '',
+          stderr: stderr ?? '',
+          exitCode: error
+            ? (error as NodeJS.ErrnoException).code === 'ETIMEDOUT'
+              ? -1
+              : ((error as any).status ?? 1)
+            : 0,
+        })
+      },
+    )
     // Ensure child is properly cleaned up
     child.on('error', () => {
       resolve({ stdout: '', stderr: 'Command not found', exitCode: 127 })
@@ -90,52 +99,57 @@ async function exec(
  * This is a best-effort mapping; users can also pass the exact binary name.
  */
 const APP_ALIASES: Record<string, Record<Platform, string[]>> = {
-  'chrome': {
+  chrome: {
     darwin: ['Google Chrome'],
-    linux: ['google-chrome', 'google-chrome-stable', 'chromium-browser', 'chromium'],
+    linux: [
+      'google-chrome',
+      'google-chrome-stable',
+      'chromium-browser',
+      'chromium',
+    ],
     win32: ['chrome'],
   },
-  'chromium': {
+  chromium: {
     darwin: ['Chromium'],
     linux: ['chromium-browser', 'chromium'],
     win32: ['chromium'],
   },
-  'firefox': {
+  firefox: {
     darwin: ['Firefox'],
     linux: ['firefox', 'firefox-esr'],
     win32: ['firefox'],
   },
-  'vscode': {
+  vscode: {
     darwin: ['Visual Studio Code'],
     linux: ['code', 'code-oss'],
     win32: ['Code'],
   },
-  'terminal': {
+  terminal: {
     darwin: ['Terminal'],
     linux: ['gnome-terminal', 'konsole', 'xterm', 'alacritty'],
     win32: ['cmd'],
   },
-  'finder': {
+  finder: {
     darwin: ['Finder'],
     linux: ['nautilus', 'dolphin', 'thunar', 'pcmanfm'],
     win32: ['explorer'],
   },
-  'spotify': {
+  spotify: {
     darwin: ['Spotify'],
     linux: ['spotify'],
     win32: ['Spotify'],
   },
-  'slack': {
+  slack: {
     darwin: ['Slack'],
     linux: ['slack'],
     win32: ['slack'],
   },
-  'discord': {
+  discord: {
     darwin: ['Discord'],
     linux: ['discord'],
     win32: ['Discord'],
   },
-  'steam': {
+  steam: {
     darwin: ['Steam'],
     linux: ['steam'],
     win32: ['steam'],
@@ -251,17 +265,21 @@ export class AppLauncher {
     try {
       if (platform === 'darwin') {
         // Use osascript to bring app to front
-        const { execFile } = await import('child_process')
+        const { execFile } = await import('node:child_process')
         await new Promise<void>((resolve, reject) => {
-          execFile('osascript', ['-e', `tell application "${resolved}" to activate`], (error) => {
-            if (error) reject(error)
-            else resolve()
-          })
+          execFile(
+            'osascript',
+            ['-e', `tell application "${resolved}" to activate`],
+            (error) => {
+              if (error) reject(error)
+              else resolve()
+            },
+          )
         })
         return { success: true, appName: resolved }
       } else if (platform === 'linux') {
         // Try wmctrl
-        const { execFile } = await import('child_process')
+        const { execFile } = await import('node:child_process')
         await new Promise<void>((resolve, reject) => {
           execFile('wmctrl', ['-a', resolved], (error) => {
             if (error) reject(error)
@@ -271,12 +289,15 @@ export class AppLauncher {
         return { success: true, appName: resolved }
       } else {
         // Windows: use PowerShell
-        const { exec } = await import('child_process')
+        const { exec } = await import('node:child_process')
         await new Promise<void>((resolve, reject) => {
-          exec(`powershell -Command "(New-Object -ComObject WScript.Shell).AppActivate('${resolved}')"`, (error) => {
-            if (error) reject(error)
-            else resolve()
-          })
+          exec(
+            `powershell -Command "(New-Object -ComObject WScript.Shell).AppActivate('${resolved}')"`,
+            (error) => {
+              if (error) reject(error)
+              else resolve()
+            },
+          )
         })
         return { success: true, appName: resolved }
       }
@@ -292,7 +313,7 @@ export class AppLauncher {
   // ─── Private: macOS ──────────────────────────────────────────────
 
   private async launchMacOS(appName: string): Promise<LaunchResult> {
-    const { execFile } = await import('child_process')
+    const { execFile } = await import('node:child_process')
 
     return new Promise((resolve) => {
       execFile('open', ['-a', appName], (error) => {
@@ -312,7 +333,7 @@ export class AppLauncher {
   // ─── Private: Windows ────────────────────────────────────────────
 
   private async launchWindows(appName: string): Promise<LaunchResult> {
-    const { exec } = await import('child_process')
+    const { exec } = await import('node:child_process')
 
     return new Promise((resolve) => {
       exec(`start "" "${appName}"`, { shell: 'cmd.exe' }, (error) => {
@@ -345,9 +366,7 @@ export class AppLauncher {
         if (result) {
           return { success: true, appName }
         }
-      } catch {
-        continue
-      }
+      } catch {}
     }
 
     return {
@@ -362,7 +381,7 @@ export class AppLauncher {
     args: string[],
     options?: { detached?: boolean },
   ): Promise<boolean> {
-    const { execFile } = await import('child_process')
+    const { execFile } = await import('node:child_process')
 
     return new Promise((resolve) => {
       const child = execFile(cmd, args, (error) => {
@@ -378,14 +397,21 @@ export class AppLauncher {
   private async tryFlatpakLaunch(appName: string): Promise<boolean> {
     // Try to find a flatpak app ID matching the name
     try {
-      const { execFile } = await import('child_process')
+      const { execFile } = await import('node:child_process')
       const listOutput = await new Promise<string>((resolve) => {
-        execFile('flatpak', ['list', '--app', '--columns=application'], (_, stdout) => {
-          resolve(stdout ?? '')
-        })
+        execFile(
+          'flatpak',
+          ['list', '--app', '--columns=application'],
+          (_, stdout) => {
+            resolve(stdout ?? '')
+          },
+        )
       })
 
-      const lines = listOutput.split('\n').map((l) => l.trim()).filter(Boolean)
+      const lines = listOutput
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
       const match = lines.find((l) =>
         l.toLowerCase().includes(appName.toLowerCase()),
       )
@@ -410,7 +436,7 @@ export class AppLauncher {
         const found = result.stdout
           .split('\n')
           .map((l) => parseInt(l.trim(), 10))
-          .filter((n) => !isNaN(n))
+          .filter((n) => !Number.isNaN(n))
         pids.push(...found)
       }
     }
@@ -505,9 +531,9 @@ export class AppLauncher {
       if (parts.length < 11) continue
 
       const cpu = parseFloat(parts[2]) || 0
-      const mem = parseFloat(parts[3]) || 0
+      const _mem = parseFloat(parts[3]) || 0
       const pid = parseInt(parts[1], 10)
-      const command = parts.slice(10).join(' ')
+      const _command = parts.slice(10).join(' ')
       const name = parts[10] ?? ''
 
       // Skip kernel threads and very short names

@@ -101,15 +101,20 @@ async function execCommand(
   args: string[],
   timeout = 15000,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const { execFile } = await import('child_process')
+  const { execFile } = await import('node:child_process')
   return new Promise((resolve) => {
-    const child = execFile(command, args, { timeout }, (error, stdout, stderr) => {
-      resolve({
-        stdout: stdout ?? '',
-        stderr: stderr ?? '',
-        exitCode: error ? (error as any).status ?? 1 : 0,
-      })
-    })
+    const child = execFile(
+      command,
+      args,
+      { timeout },
+      (error, stdout, stderr) => {
+        resolve({
+          stdout: stdout ?? '',
+          stderr: stderr ?? '',
+          exitCode: error ? ((error as any).status ?? 1) : 0,
+        })
+      },
+    )
     child.on('error', () => {
       resolve({ stdout: '', stderr: 'Command not found', exitCode: 127 })
     })
@@ -142,7 +147,7 @@ export class OSCommands {
 
     try {
       const platform = getPlatform()
-      const { execFile } = await import('child_process')
+      const { execFile } = await import('node:child_process')
 
       await new Promise<void>((resolve, reject) => {
         let cmd: string
@@ -180,10 +185,13 @@ export class OSCommands {
   /**
    * Copy a file or directory.
    */
-  async copyFile(source: string, destination: string): Promise<FileTransferResult> {
+  async copyFile(
+    source: string,
+    destination: string,
+  ): Promise<FileTransferResult> {
     try {
-      const fs = await import('fs/promises')
-      const path = await import('path')
+      const fs = await import('node:fs/promises')
+      const path = await import('node:path')
 
       // Ensure destination directory exists
       const destDir = path.dirname(destination)
@@ -211,10 +219,13 @@ export class OSCommands {
   /**
    * Move a file or directory.
    */
-  async moveFile(source: string, destination: string): Promise<FileTransferResult> {
+  async moveFile(
+    source: string,
+    destination: string,
+  ): Promise<FileTransferResult> {
     try {
-      const fs = await import('fs/promises')
-      const path = await import('path')
+      const fs = await import('node:fs/promises')
+      const path = await import('node:path')
 
       const destDir = path.dirname(destination)
       await fs.mkdir(destDir, { recursive: true })
@@ -222,13 +233,13 @@ export class OSCommands {
       await fs.rename(source, destination)
 
       return { success: true, source, destination }
-    } catch (error) {
+    } catch (_error) {
       // Fall back to copy + delete if rename fails (cross-device)
       try {
         const copyResult = await this.copyFile(source, destination)
         if (!copyResult.success) return copyResult
 
-        const fs = await import('fs/promises')
+        const fs = await import('node:fs/promises')
         await fs.rm(source, { recursive: true, force: true })
 
         return { success: true, source, destination }
@@ -249,10 +260,13 @@ export class OSCommands {
    * Extract an archive (zip, tar.gz, tar.bz2, tar.xz).
    * The target directory defaults to the archive's parent directory.
    */
-  async extract(archivePath: string, targetDir?: string): Promise<ExtractResult> {
+  async extract(
+    archivePath: string,
+    targetDir?: string,
+  ): Promise<ExtractResult> {
     try {
-      const fs = await import('fs/promises')
-      const path = await import('path')
+      const fs = await import('node:fs/promises')
+      const path = await import('node:path')
 
       // Verify archive exists
       try {
@@ -307,7 +321,7 @@ export class OSCommands {
    * Get current system information.
    */
   async getSystemInfo(): Promise<SystemInfo> {
-    const os = await import('os')
+    const os = await import('node:os')
 
     const diskInfo = await this.getDiskInfo()
 
@@ -353,7 +367,11 @@ export class OSCommands {
         return { success: true, text: result.stdout }
       } else if (platform === 'linux') {
         // Try xclip first, then xsel
-        let result = await execCommand('xclip', ['-selection', 'clipboard', '-o'])
+        let result = await execCommand('xclip', [
+          '-selection',
+          'clipboard',
+          '-o',
+        ])
         if (result.exitCode !== 0) {
           result = await execCommand('xsel', ['--clipboard', '--output'])
         }
@@ -363,7 +381,10 @@ export class OSCommands {
         return { success: true, text: result.stdout }
       } else {
         // Windows
-        const result = await execCommand('powershell', ['-Command', 'Get-Clipboard'])
+        const result = await execCommand('powershell', [
+          '-Command',
+          'Get-Clipboard',
+        ])
         if (result.exitCode !== 0) {
           return { success: false, error: 'PowerShell Get-Clipboard failed' }
         }
@@ -385,7 +406,7 @@ export class OSCommands {
 
     try {
       if (platform === 'darwin') {
-        const { execFile } = await import('child_process')
+        const { execFile } = await import('node:child_process')
         await new Promise<void>((resolve, reject) => {
           const child = execFile('pbcopy', [], (error) => {
             if (error) reject(error)
@@ -397,22 +418,30 @@ export class OSCommands {
         return { success: true }
       } else if (platform === 'linux') {
         // Try xclip first, then xsel
-        const { execFile } = await import('child_process')
+        const { execFile } = await import('node:child_process')
         const tryXclip = (): Promise<void> =>
           new Promise((resolve, reject) => {
-            const child = execFile('xclip', ['-selection', 'clipboard'], (error) => {
-              if (error) reject(error)
-              else resolve()
-            })
+            const child = execFile(
+              'xclip',
+              ['-selection', 'clipboard'],
+              (error) => {
+                if (error) reject(error)
+                else resolve()
+              },
+            )
             child.stdin?.write(text)
             child.stdin?.end()
           })
         const tryXsel = (): Promise<void> =>
           new Promise((resolve, reject) => {
-            const child = execFile('xsel', ['--clipboard', '--input'], (error) => {
-              if (error) reject(error)
-              else resolve()
-            })
+            const child = execFile(
+              'xsel',
+              ['--clipboard', '--input'],
+              (error) => {
+                if (error) reject(error)
+                else resolve()
+              },
+            )
             child.stdin?.write(text)
             child.stdin?.end()
           })
@@ -425,13 +454,16 @@ export class OSCommands {
         return { success: true }
       } else {
         // Windows
-        const { exec } = await import('child_process')
+        const { exec } = await import('node:child_process')
         await new Promise<void>((resolve, reject) => {
           const escaped = text.replace(/'/g, "''")
-          exec(`powershell -Command "Set-Clipboard -Value '${escaped}'"`, (error) => {
-            if (error) reject(error)
-            else resolve()
-          })
+          exec(
+            `powershell -Command "Set-Clipboard -Value '${escaped}'"`,
+            (error) => {
+              if (error) reject(error)
+              else resolve()
+            },
+          )
         })
         return { success: true }
       }
@@ -456,13 +488,24 @@ export class OSCommands {
       if (platform === 'linux') {
         if (level !== undefined) {
           const pct = Math.max(0, Math.min(100, level))
-          const result = await execCommand('amixer', ['set', 'Master', `${pct}%`])
+          const result = await execCommand('amixer', [
+            'set',
+            'Master',
+            `${pct}%`,
+          ])
           if (result.exitCode !== 0) {
             // Try pactl
-            const vol = Math.round(pct / 100 * 65535)
-            const presult = await execCommand('pactl', ['set-sink-volume', '@DEFAULT_SINK@', `${vol}`])
+            const vol = Math.round((pct / 100) * 65535)
+            const presult = await execCommand('pactl', [
+              'set-sink-volume',
+              '@DEFAULT_SINK@',
+              `${vol}`,
+            ])
             if (presult.exitCode !== 0) {
-              return { success: false, error: 'Neither amixer nor pactl available' }
+              return {
+                success: false,
+                error: 'Neither amixer nor pactl available',
+              }
             }
           }
           return { success: true, level }
@@ -480,10 +523,16 @@ export class OSCommands {
       } else if (platform === 'darwin') {
         if (level !== undefined) {
           const pct = Math.max(0, Math.min(100, level))
-          await execCommand('osascript', ['-e', `set volume output volume ${pct}`])
+          await execCommand('osascript', [
+            '-e',
+            `set volume output volume ${pct}`,
+          ])
           return { success: true, level: pct }
         } else {
-          const result = await execCommand('osascript', ['-e', 'output volume of (get volume settings)'])
+          const result = await execCommand('osascript', [
+            '-e',
+            'output volume of (get volume settings)',
+          ])
           if (result.exitCode === 0) {
             const vol = parseInt(result.stdout.trim(), 10)
             return { success: true, level: vol }
@@ -491,7 +540,10 @@ export class OSCommands {
           return { success: false, error: 'Could not read volume' }
         }
       } else {
-        return { success: false, error: 'Volume control not implemented for Windows' }
+        return {
+          success: false,
+          error: 'Volume control not implemented for Windows',
+        }
       }
     } catch (error) {
       return {
@@ -533,12 +585,21 @@ export class OSCommands {
       } else if (platform === 'darwin') {
         if (level !== undefined) {
           const pct = Math.max(0, Math.min(100, level))
-          await execCommand('osascript', ['-e', `tell application "System Events" to tell appearance preferences to set brightness to ${pct / 100}`])
+          await execCommand('osascript', [
+            '-e',
+            `tell application "System Events" to tell appearance preferences to set brightness to ${pct / 100}`,
+          ])
           return { success: true, level: pct }
         }
-        return { success: false, error: 'Brightness read not supported on macOS via osascript' }
+        return {
+          success: false,
+          error: 'Brightness read not supported on macOS via osascript',
+        }
       } else {
-        return { success: false, error: 'Brightness control not implemented for Windows' }
+        return {
+          success: false,
+          error: 'Brightness control not implemented for Windows',
+        }
       }
     } catch (error) {
       return {
@@ -551,9 +612,12 @@ export class OSCommands {
   // ─── Private Helpers ─────────────────────────────────────────────
 
   /** Recursively copy a directory. */
-  private async copyDirRecursive(source: string, destination: string): Promise<void> {
-    const fs = await import('fs/promises')
-    const path = await import('path')
+  private async copyDirRecursive(
+    source: string,
+    destination: string,
+  ): Promise<void> {
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
 
     await fs.mkdir(destination, { recursive: true })
     const entries = await fs.readdir(source, { withFileTypes: true })
@@ -571,8 +635,17 @@ export class OSCommands {
   }
 
   /** Extract a ZIP archive using the `unzip` command. */
-  private async extractZip(archivePath: string, targetDir: string): Promise<ExtractResult> {
-    const result = await execCommand('unzip', ['-o', '-q', archivePath, '-d', targetDir])
+  private async extractZip(
+    archivePath: string,
+    targetDir: string,
+  ): Promise<ExtractResult> {
+    const result = await execCommand('unzip', [
+      '-o',
+      '-q',
+      archivePath,
+      '-d',
+      targetDir,
+    ])
 
     if (result.exitCode !== 0) {
       // Try python3 as fallback
@@ -595,8 +668,16 @@ export class OSCommands {
   }
 
   /** Extract a TAR archive. */
-  private async extractTar(archivePath: string, targetDir: string): Promise<ExtractResult> {
-    const result = await execCommand('tar', ['xf', archivePath, '-C', targetDir])
+  private async extractTar(
+    archivePath: string,
+    targetDir: string,
+  ): Promise<ExtractResult> {
+    const result = await execCommand('tar', [
+      'xf',
+      archivePath,
+      '-C',
+      targetDir,
+    ])
 
     if (result.exitCode !== 0) {
       return {
@@ -613,12 +694,16 @@ export class OSCommands {
   /** Get disk space info for the root/home volume. */
   private async getDiskInfo(): Promise<DiskInfo> {
     try {
-      const os = await import('os')
+      const os = await import('node:os')
       const platform = getPlatform()
 
       if (platform === 'win32') {
         // Use Node.js built-in approach for Windows
-        const result = await execCommand('wmic', ['logicaldisk', 'get', 'size,freespace', '/format:csv'], 10000)
+        const result = await execCommand(
+          'wmic',
+          ['logicaldisk', 'get', 'size,freespace', '/format:csv'],
+          10000,
+        )
         if (result.exitCode === 0) {
           const lines = result.stdout.split('\n').filter((l) => l.trim())
           for (const line of lines.slice(1)) {

@@ -19,12 +19,12 @@
  */
 
 import type { ToolDefinition } from '../../../server/src/tools/framework'
+import type { DesktopToolServices } from './desktop-agent-tools'
 import {
-  getDesktopServices,
   desktopTools,
+  getDesktopServices,
   resetDesktopServices,
 } from './desktop-agent-tools'
-import type { DesktopToolServices } from './desktop-agent-tools'
 import type { DesktopControlService } from './types'
 
 // ─── Health Check Types ────────────────────────────────────────────
@@ -53,7 +53,10 @@ export interface DesktopHealthReport {
 
 export type PluginEvent = 'activated' | 'deactivated' | 'health-check'
 
-export type PluginEventListener = (event: PluginEvent, plugin: DesktopPlugin) => void
+export type PluginEventListener = (
+  event: PluginEvent,
+  plugin: DesktopPlugin,
+) => void
 
 // ─── DesktopPlugin ─────────────────────────────────────────────────
 
@@ -81,7 +84,6 @@ export class DesktopPlugin {
    */
   async activate(service?: DesktopControlService): Promise<void> {
     if (this._enabled) {
-      console.debug('[DesktopPlugin] Already activated.')
       return
     }
 
@@ -89,11 +91,7 @@ export class DesktopPlugin {
       this._services = getDesktopServices(service)
       this._enabled = true
       this.emit('activated')
-      console.info('[DesktopPlugin] Activated — desktop control is available.')
     } catch (error) {
-      console.error(
-        `[DesktopPlugin] Activation failed: ${error instanceof Error ? error.message : String(error)}`,
-      )
       throw error
     }
   }
@@ -103,7 +101,6 @@ export class DesktopPlugin {
    */
   async deactivate(): Promise<void> {
     if (!this._enabled) {
-      console.debug('[DesktopPlugin] Not active — nothing to deactivate.')
       return
     }
 
@@ -111,17 +108,12 @@ export class DesktopPlugin {
       if (this._services?.service) {
         await this._services.service.dispose()
       }
-    } catch (error) {
-      console.warn(
-        `[DesktopPlugin] Error during dispose: ${error instanceof Error ? error.message : String(error)}`,
-      )
-    }
+    } catch (_error) {}
 
     resetDesktopServices()
     this._services = null
     this._enabled = false
     this.emit('deactivated')
-    console.info('[DesktopPlugin] Deactivated — desktop control disabled.')
   }
 
   /**
@@ -138,7 +130,6 @@ export class DesktopPlugin {
    */
   getTools(): ToolDefinition[] {
     if (!this._enabled) {
-      console.warn('[DesktopPlugin] getTools() called while plugin is not active.')
       return []
     }
     return desktopTools
@@ -226,7 +217,8 @@ export class DesktopPlugin {
       capabilities.push({
         name: 'keyboard',
         available: true,
-        detail: 'Keyboard service instantiated (native backend check deferred to first use).',
+        detail:
+          'Keyboard service instantiated (native backend check deferred to first use).',
       })
     } catch (error) {
       capabilities.push({
@@ -275,7 +267,9 @@ export class DesktopPlugin {
       capabilities.push({
         name: 'clipboard',
         available: clip.success,
-        detail: clip.success ? `Read ${clip.text?.length ?? 0} chars` : (clip.error ?? 'Unknown error'),
+        detail: clip.success
+          ? `Read ${clip.text?.length ?? 0} chars`
+          : (clip.error ?? 'Unknown error'),
       })
     } catch (error) {
       capabilities.push({
@@ -329,11 +323,7 @@ export class DesktopPlugin {
     for (const listener of this._listeners) {
       try {
         listener(event, this)
-      } catch (error) {
-        console.warn(
-          `[DesktopPlugin] Listener error on "${event}": ${error instanceof Error ? error.message : String(error)}`,
-        )
-      }
+      } catch (_error) {}
     }
   }
 }

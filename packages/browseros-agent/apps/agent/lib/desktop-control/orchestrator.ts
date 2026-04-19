@@ -65,7 +65,10 @@ export class DesktopOrchestrator {
   /**
    * Run the vision-action loop until the task is done or maxIterations is reached.
    */
-  async run(task: string, config?: OrchestratorConfig): Promise<OrchestratorResult> {
+  async run(
+    task: string,
+    config?: OrchestratorConfig,
+  ): Promise<OrchestratorResult> {
     const maxIterations = config?.maxIterations ?? 20
     const iterationDelay = config?.iterationDelay ?? 1000
     const actionDelay = config?.actionDelay ?? 500
@@ -217,9 +220,7 @@ export class DesktopOrchestrator {
 
     switch (action.type) {
       case 'mouse_move':
-        await this.service.mouseMove(
-          { x: p.x as number, y: p.y as number },
-        )
+        await this.service.mouseMove({ x: p.x as number, y: p.y as number })
         break
 
       case 'mouse_click':
@@ -262,29 +263,31 @@ export class DesktopOrchestrator {
           { x: p.x as number, y: p.y as number },
           {
             amount: (p.amount as number) ?? 3,
-            direction: (p.direction as 'up' | 'down' | 'left' | 'right') ?? 'down',
+            direction:
+              (p.direction as 'up' | 'down' | 'left' | 'right') ?? 'down',
           },
         )
         break
 
       case 'keyboard_type':
-        await this.service.typeText(
-          (p.text as string) ?? '',
-          { keyDelay: (p.keyDelay as number) ?? 10 },
-        )
+        await this.service.typeText((p.text as string) ?? '', {
+          keyDelay: (p.keyDelay as number) ?? 10,
+        })
         break
 
       case 'keyboard_key':
         await this.service.pressKey({
           key: (p.key as string) ?? 'enter',
-          modifiers: (p.modifiers as Array<'alt' | 'control' | 'shift' | 'meta'>) ?? [],
+          modifiers:
+            (p.modifiers as Array<'alt' | 'control' | 'shift' | 'meta'>) ?? [],
         })
         break
 
       case 'keyboard_hotkey':
         await this.service.pressKey({
           key: (p.key as string) ?? '',
-          modifiers: (p.modifiers as Array<'alt' | 'control' | 'shift' | 'meta'>) ?? [],
+          modifiers:
+            (p.modifiers as Array<'alt' | 'control' | 'shift' | 'meta'>) ?? [],
         })
         break
 

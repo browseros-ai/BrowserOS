@@ -12,8 +12,12 @@
  * @module desktop-control/desktop-explorer
  */
 
+import type {
+  FileInfo,
+  FileSearchResult,
+  ListFilesOptions,
+} from './file-manager'
 import { FileManager } from './file-manager'
-import type { FileInfo, ListFilesOptions, FileSearchResult } from './file-manager'
 import type { DesktopControlService } from './types'
 
 // ─── Explorer-specific types ───────────────────────────────────────
@@ -76,7 +80,6 @@ function getPlatform(): Platform {
  */
 export class DesktopExplorer {
   private fileManager: FileManager
-  private service: DesktopControlService
 
   constructor(service: DesktopControlService) {
     this.service = service
@@ -89,7 +92,10 @@ export class DesktopExplorer {
    * List files and folders in a directory.
    * Accepts a QuickDir name or an absolute path.
    */
-  async listFiles(dirOrQuickDir: string, options?: ListFilesOptions): Promise<FileInfo[]> {
+  async listFiles(
+    dirOrQuickDir: string,
+    options?: ListFilesOptions,
+  ): Promise<FileInfo[]> {
     const resolved = await this.resolveDir(dirOrQuickDir)
     return this.fileManager.listFiles(resolved, options)
   }
@@ -97,10 +103,13 @@ export class DesktopExplorer {
   /**
    * List files with extended info (MIME type, symlink detection).
    */
-  async listDetailed(dirOrQuickDir: string, options?: ListFilesOptions): Promise<DetailedFileInfo[]> {
+  async listDetailed(
+    dirOrQuickDir: string,
+    options?: ListFilesOptions,
+  ): Promise<DetailedFileInfo[]> {
     const resolved = await this.resolveDir(dirOrQuickDir)
     const files = await this.fileManager.listFiles(resolved, options)
-    const path = await import('path')
+    const path = await import('node:path')
 
     return Promise.all(
       files.map(async (f): Promise<DetailedFileInfo> => {
@@ -119,7 +128,9 @@ export class DesktopExplorer {
    * Get the list of quick-access directories.
    */
   async getQuickDirs(): Promise<Record<QuickDir, string>> {
-    return this.fileManager.getCommonDirectories() as Promise<Record<QuickDir, string>>
+    return this.fileManager.getCommonDirectories() as Promise<
+      Record<QuickDir, string>
+    >
   }
 
   /**
@@ -140,8 +151,8 @@ export class DesktopExplorer {
     const exists = await this.fileManager.fileExists(resolved)
     if (!exists) return null
 
-    const fs = await import('fs/promises')
-    const path = await import('path')
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
     const stat = await fs.stat(resolved)
     const name = path.basename(resolved)
     const ext = stat.isDirectory() ? '' : path.extname(name).replace(/^\./, '')
@@ -230,11 +241,15 @@ export class DesktopExplorer {
     const resolved = await this.fileManager.resolvePath(filePath)
     const exists = await this.fileManager.fileExists(resolved)
     if (!exists) {
-      return { success: false, path: resolved, error: `File not found: ${resolved}` }
+      return {
+        success: false,
+        path: resolved,
+        error: `File not found: ${resolved}`,
+      }
     }
 
     try {
-      const { execFile } = await import('child_process')
+      const { execFile } = await import('node:child_process')
       const platform = getPlatform()
 
       await new Promise<void>((resolve, reject) => {
@@ -275,11 +290,15 @@ export class DesktopExplorer {
     const resolved = await this.fileManager.resolvePath(dirPath)
     const exists = await this.fileManager.fileExists(resolved)
     if (!exists) {
-      return { success: false, path: resolved, error: `Directory not found: ${resolved}` }
+      return {
+        success: false,
+        path: resolved,
+        error: `Directory not found: ${resolved}`,
+      }
     }
 
     try {
-      const { execFile } = await import('child_process')
+      const { execFile } = await import('node:child_process')
       const platform = getPlatform()
 
       await new Promise<void>((resolve, reject) => {
@@ -318,12 +337,15 @@ export class DesktopExplorer {
   /**
    * Create a new file with optional content.
    */
-  async createFile(filePath: string, content?: string): Promise<FileOperationResult> {
+  async createFile(
+    filePath: string,
+    content?: string,
+  ): Promise<FileOperationResult> {
     const resolved = await this.fileManager.resolvePath(filePath)
 
     try {
-      const fs = await import('fs/promises')
-      const path = await import('path')
+      const fs = await import('node:fs/promises')
+      const path = await import('node:path')
 
       // Ensure parent directory exists
       const parent = path.dirname(resolved)
@@ -347,7 +369,7 @@ export class DesktopExplorer {
     const resolved = await this.fileManager.resolvePath(dirPath)
 
     try {
-      const fs = await import('fs/promises')
+      const fs = await import('node:fs/promises')
       await fs.mkdir(resolved, { recursive: true })
       return { success: true, paths: [resolved] }
     } catch (error) {
@@ -368,11 +390,15 @@ export class DesktopExplorer {
     const exists = await this.fileManager.fileExists(resolved)
 
     if (!exists) {
-      return { success: false, paths: [resolved], error: `Not found: ${resolved}` }
+      return {
+        success: false,
+        paths: [resolved],
+        error: `Not found: ${resolved}`,
+      }
     }
 
     try {
-      const fs = await import('fs/promises')
+      const fs = await import('node:fs/promises')
       const stat = await fs.stat(resolved)
 
       if (stat.isDirectory()) {
@@ -396,12 +422,12 @@ export class DesktopExplorer {
    */
   async rename(oldPath: string, newName: string): Promise<FileOperationResult> {
     const oldResolved = await this.fileManager.resolvePath(oldPath)
-    const path = await import('path')
+    const path = await import('node:path')
     const parent = path.dirname(oldResolved)
     const newResolved = path.join(parent, newName)
 
     try {
-      const fs = await import('fs/promises')
+      const fs = await import('node:fs/promises')
       await fs.rename(oldResolved, newResolved)
       return { success: true, paths: [oldResolved, newResolved] }
     } catch (error) {
@@ -429,7 +455,7 @@ export class DesktopExplorer {
   /** Check if a path is a symlink. */
   private async isSymlink(filePath: string): Promise<boolean> {
     try {
-      const fs = await import('fs/promises')
+      const fs = await import('node:fs/promises')
       const stat = await fs.lstat(filePath)
       return stat.isSymbolicLink()
     } catch {

@@ -14,15 +14,10 @@
  */
 
 import { DialogDetector, DialogState } from './dialog-detector'
-import { FileManager } from './file-manager'
 import { FileDialogService } from './file-dialog'
+import { FileManager } from './file-manager'
 import { DesktopOrchestrator } from './orchestrator'
-import type {
-  DesktopControlService,
-  OrchestratorConfig,
-  OrchestratorResult,
-  Point,
-} from './types'
+import type { DesktopControlService, OrchestratorConfig, Point } from './types'
 
 // ─── Task Types ────────────────────────────────────────────────────
 
@@ -178,11 +173,13 @@ export class UnifiedCoordinator {
     browserControl: BrowserControl
   }): Promise<CoordinatorResult> {
     const steps: CoordinatorStep[] = []
-    const startTime = Date.now()
+    const _startTime = Date.now()
 
     try {
       // Step 1: Validate the file path
-      const resolvedPath = await this.fileManager.validateFilePath(params.filePath)
+      const resolvedPath = await this.fileManager.validateFilePath(
+        params.filePath,
+      )
       if (!resolvedPath) {
         return {
           success: false,
@@ -273,7 +270,8 @@ export class UnifiedCoordinator {
         } else {
           steps.push({
             mode: CoordinatorMode.BROWSER,
-            action: 'No native file dialog detected — browser may have handled the file picker',
+            action:
+              'No native file dialog detected — browser may have handled the file picker',
             success: true,
             timestamp: Date.now(),
           })
@@ -351,7 +349,9 @@ export class UnifiedCoordinator {
         if (detection.detected) {
           this.setMode(CoordinatorMode.FILE_DIALOG)
 
-          const resolvedSavePath = await this.fileManager.resolvePath(params.savePath)
+          const resolvedSavePath = await this.fileManager.resolvePath(
+            params.savePath,
+          )
           const dialogResult = await this.fileDialog.handleFileDialog({
             filePath: resolvedSavePath,
             confirm: true,
@@ -521,9 +521,6 @@ export class UnifiedCoordinator {
     const prev = this.currentMode
     this.currentMode = mode
     if (prev !== mode) {
-      console.debug(
-        `[UnifiedCoordinator] Mode changed: ${prev} → ${mode}`,
-      )
     }
   }
 

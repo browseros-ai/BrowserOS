@@ -86,7 +86,9 @@ export class DialogDetector {
    * @param options — Detection timing and threshold options.
    * @returns Detection result with confidence and dialog state.
    */
-  async detect(options?: DialogDetectionOptions): Promise<DialogDetectionResult> {
+  async detect(
+    options?: DialogDetectionOptions,
+  ): Promise<DialogDetectionResult> {
     const waitMs = options?.waitMs ?? 500
     const threshold = options?.differenceThreshold ?? 0.02
     const retryWait = options?.retryWaitMs ?? 300

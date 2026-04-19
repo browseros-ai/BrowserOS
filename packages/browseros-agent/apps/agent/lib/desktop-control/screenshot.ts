@@ -7,11 +7,7 @@
  * @module desktop-control/screenshot
  */
 
-import type {
-  DisplayInfo,
-  ScreenshotOptions,
-  ScreenshotResult,
-} from './types'
+import type { DisplayInfo, ScreenshotOptions, ScreenshotResult } from './types'
 
 /** Lazy-loaded screenshot-desktop module (ESM-compatible). */
 let screenshotDesktop: (() => Promise<Buffer>) | null = null
@@ -24,10 +20,11 @@ async function loadScreenshotDesktop(): Promise<
   }
   try {
     const mod = await import('screenshot-desktop')
-    screenshotDesktop = (mod as { default?: () => Promise<Buffer> }).default ?? mod as unknown as (() => Promise<Buffer>) | null
+    screenshotDesktop =
+      (mod as { default?: () => Promise<Buffer> }).default ??
+      (mod as unknown as (() => Promise<Buffer>) | null)
     return screenshotDesktop
   } catch {
-    console.warn('[DesktopScreenshot] screenshot-desktop not available — screenshots will be stubbed')
     screenshotDesktop = null
     return null
   }
@@ -41,7 +38,9 @@ export class DesktopScreenshotService {
   /**
    * Capture a screenshot of the primary display (or a specific display).
    */
-  async captureScreenshot(options?: ScreenshotOptions): Promise<ScreenshotResult> {
+  async captureScreenshot(
+    options?: ScreenshotOptions,
+  ): Promise<ScreenshotResult> {
     const capture = await loadScreenshotDesktop()
 
     if (!capture) {

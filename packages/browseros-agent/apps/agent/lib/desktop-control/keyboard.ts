@@ -18,7 +18,6 @@ async function loadRobot() {
     robot = await import('@jitsi/robotjs')
     return robot
   } catch {
-    console.warn('[DesktopKeyboard] @jitsi/robotjs not available — keyboard operations will be no-ops')
     robot = null
     return null
   }
@@ -110,9 +109,7 @@ export class DesktopKeyboardService {
     if (!r) return
 
     const robotKey = this.resolveKeyName(combination.key)
-    const modifiers = (combination.modifiers ?? []).map(
-      (m) => MODIFIER_MAP[m],
-    )
+    const modifiers = (combination.modifiers ?? []).map((m) => MODIFIER_MAP[m])
 
     r.keyTap(robotKey, modifiers)
   }

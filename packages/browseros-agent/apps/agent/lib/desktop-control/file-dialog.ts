@@ -34,7 +34,9 @@ export class FileDialogService {
    * dialogs steal focus immediately on most OSes, so keyboard input
    * goes to the correct field.
    */
-  async handleFileDialog(options: FileDialogOptions): Promise<FileDialogResult> {
+  async handleFileDialog(
+    options: FileDialogOptions,
+  ): Promise<FileDialogResult> {
     const timeout = options.timeout ?? 5000
     const confirm = options.confirm ?? true
 

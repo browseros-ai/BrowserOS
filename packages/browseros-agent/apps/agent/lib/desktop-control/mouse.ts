@@ -24,7 +24,6 @@ async function loadRobot() {
     robot = await import('@jitsi/robotjs')
     return robot
   } catch {
-    console.warn('[DesktopMouse] @jitsi/robotjs not available — mouse operations will be no-ops')
     robot = null
     return null
   }
@@ -128,10 +127,7 @@ export class DesktopMouseService {
   /**
    * Scroll at a given position.
    */
-  async mouseScroll(
-    point: Point,
-    options?: MouseScrollOptions,
-  ): Promise<void> {
+  async mouseScroll(point: Point, options?: MouseScrollOptions): Promise<void> {
     const r = await loadRobot()
     if (!r) return
 

@@ -55,8 +55,6 @@ export interface FileSearchResult {
  * @public
  */
 export class FileManager {
-  private service: DesktopControlService
-
   constructor(_service: DesktopControlService) {
     this.service = _service
   }
@@ -68,7 +66,10 @@ export class FileManager {
    * @param options — Listing options (hidden files, max results).
    * @returns Array of file info objects.
    */
-  async listFiles(dirPath: string, options?: ListFilesOptions): Promise<FileInfo[]> {
+  async listFiles(
+    dirPath: string,
+    options?: ListFilesOptions,
+  ): Promise<FileInfo[]> {
     const fs = await this.loadFs()
     const path = await this.loadPath()
     const includeHidden = options?.includeHidden ?? false
@@ -241,16 +242,16 @@ export class FileManager {
 
   /** Lazy-load Node.js fs/promises. */
   private async loadFs() {
-    return import('fs/promises') as Promise<typeof import('fs/promises')>
+    return import('node:fs/promises') as Promise<typeof import('fs/promises')>
   }
 
   /** Lazy-load Node.js path module. */
   private async loadPath() {
-    return import('path') as Promise<typeof import('path')>
+    return import('node:path') as Promise<typeof import('path')>
   }
 
   /** Lazy-load Node.js os module. */
   private async loadOs() {
-    return import('os') as Promise<typeof import('os')>
+    return import('node:os') as Promise<typeof import('os')>
   }
 }

@@ -56,6 +56,8 @@ export enum Feature {
   QWEN_CODE_SUPPORT = 'QWEN_CODE_SUPPORT',
   // Credit-based usage tracking
   CREDITS_SUPPORT = 'CREDITS_SUPPORT',
+  // Native desktop control (mouse, keyboard, screenshots, file dialogs)
+  DESKTOP_CONTROL_SUPPORT = 'DESKTOP_CONTROL_SUPPORT',
 }
 
 /**
@@ -88,6 +90,7 @@ const FEATURE_CONFIG: { [K in Feature]: FeatureConfig } = {
   [Feature.GITHUB_COPILOT_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.QWEN_CODE_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.CREDITS_SUPPORT]: { minServerVersion: '0.0.78' },
+  [Feature.DESKTOP_CONTROL_SUPPORT]: { requiresAlphaFlag: true },
 }
 
 function parseVersion(version: string): number[] {

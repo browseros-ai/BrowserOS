@@ -13,21 +13,16 @@
  */
 
 import { z } from 'zod'
-import { defineToolWithCategory } from '../../../server/src/tools/framework'
 import type { ToolDefinition } from '../../../server/src/tools/framework'
-import type { ToolContext } from '../../../server/src/tools/framework'
-import { ToolResponse } from '../../../server/src/tools/response'
-
+import { defineToolWithCategory } from '../../../server/src/tools/framework'
 import { AppLauncher } from './app-launcher'
-import type { RunningAppInfo } from './app-launcher'
 import { DesktopExplorer } from './desktop-explorer'
+import { FileManager } from './file-manager'
 import { DesktopKeyboardService } from './keyboard'
 import { DesktopMouseService } from './mouse'
 import { OSCommands } from './os-commands'
 import { DesktopScreenshotService } from './screenshot'
-import { UnifiedCoordinator } from './unified-coordinator'
 import type { DesktopControlService } from './types'
-import { FileManager } from './file-manager'
 
 // ─── Approval Category ─────────────────────────────────────────────
 // Desktop tools are classified under 'input' since they perform
@@ -81,7 +76,11 @@ export function getDesktopServices(
       typeText: (t, o) => keyboard.typeText(t, o),
       pressKey: (c) => keyboard.pressKey(c),
       handleFileDialog: () =>
-        Promise.resolve({ detected: false, pathEntered: false, confirmed: false }),
+        Promise.resolve({
+          detected: false,
+          pathEntered: false,
+          confirmed: false,
+        }),
       dispose: () => Promise.resolve(),
     }
 
@@ -125,7 +124,9 @@ export const desktop_screenshot = defineDesktopTool({
   handler: async (args, _ctx, response) => {
     const svc = getDesktopServices()
     try {
-      const result = await svc.screenshot.captureScreenshot({ displayId: args.displayId })
+      const result = await svc.screenshot.captureScreenshot({
+        displayId: args.displayId,
+      })
       response.text(
         `Desktop screenshot captured (${result.width}×${result.height}, display ${result.displayId}).`,
       )
@@ -172,8 +173,15 @@ export const desktop_click = defineDesktopTool({
         { x: args.x, y: args.y },
         { button: args.button, clickType: args.clickType },
       )
-      response.text(`Clicked at (${args.x}, ${args.y}) with ${args.button} button (${args.clickType}).`)
-      response.data({ x: args.x, y: args.y, button: args.button, clickType: args.clickType })
+      response.text(
+        `Clicked at (${args.x}, ${args.y}) with ${args.button} button (${args.clickType}).`,
+      )
+      response.data({
+        x: args.x,
+        y: args.y,
+        button: args.button,
+        clickType: args.clickType,
+      })
     } catch (error) {
       response.error(
         `Click failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -232,9 +240,10 @@ export const desktop_hotkey = defineDesktopTool({
     const svc = getDesktopServices()
     try {
       await svc.keyboard.pressKey({ key: args.key, modifiers: args.modifiers })
-      const combo = args.modifiers.length > 0
-        ? `${args.modifiers.join('+')}+${args.key}`
-        : args.key
+      const combo =
+        args.modifiers.length > 0
+          ? `${args.modifiers.join('+')}+${args.key}`
+          : args.key
       response.text(`Pressed hotkey: ${combo}`)
       response.data({ key: args.key, modifiers: args.modifiers })
     } catch (error) {
@@ -249,8 +258,7 @@ export const desktop_hotkey = defineDesktopTool({
 
 export const desktop_scroll = defineDesktopTool({
   name: 'desktop_scroll',
-  description:
-    'Scroll at a position on the desktop.',
+  description: 'Scroll at a position on the desktop.',
   input: z.object({
     x: z.number().describe('X coordinate.'),
     y: z.number().describe('Y coordinate.'),
@@ -272,8 +280,15 @@ export const desktop_scroll = defineDesktopTool({
         { x: args.x, y: args.y },
         { direction: args.direction, amount: args.amount },
       )
-      response.text(`Scrolled ${args.direction} by ${args.amount} at (${args.x}, ${args.y}).`)
-      response.data({ x: args.x, y: args.y, direction: args.direction, amount: args.amount })
+      response.text(
+        `Scrolled ${args.direction} by ${args.amount} at (${args.x}, ${args.y}).`,
+      )
+      response.data({
+        x: args.x,
+        y: args.y,
+        direction: args.direction,
+        amount: args.amount,
+      })
     } catch (error) {
       response.error(
         `Scroll failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -428,7 +443,10 @@ export const desktop_close_app = defineDesktopTool({
         response.text(
           `Quit ${args.appName} (${result.terminatedCount} process(es) terminated).`,
         )
-        response.data({ appName: args.appName, terminatedCount: result.terminatedCount })
+        response.data({
+          appName: args.appName,
+          terminatedCount: result.terminatedCount,
+        })
       } else {
         response.error(`Failed to quit "${args.appName}": ${result.error}`)
       }
@@ -540,7 +558,9 @@ export const desktop_list_files = defineDesktopTool({
         const size = f.isDirectory ? '' : ` (${formatBytes(f.size)})`
         return `  ${icon} ${f.name}${size}`
       })
-      response.text(`Files in "${args.path}" (${files.length}):\n${lines.join('\n')}`)
+      response.text(
+        `Files in "${args.path}" (${files.length}):\n${lines.join('\n')}`,
+      )
       response.data({
         files: files.map((f) => ({
           name: f.name,
@@ -567,7 +587,9 @@ export const desktop_search_files = defineDesktopTool({
     'Set recursive to true for depth-limited recursive search.',
   input: z.object({
     path: z.string().default('home').describe('Directory to search in.'),
-    pattern: z.string().describe('File name pattern (e.g. "*.pdf", "report*").'),
+    pattern: z
+      .string()
+      .describe('File name pattern (e.g. "*.pdf", "report*").'),
     recursive: z
       .boolean()
       .optional()
@@ -588,7 +610,9 @@ export const desktop_search_files = defineDesktopTool({
           })
 
       if (result.matches.length === 0) {
-        response.text(`No files matching "${args.pattern}" found in "${args.path}".`)
+        response.text(
+          `No files matching "${args.pattern}" found in "${args.path}".`,
+        )
         response.data({ matches: [], total: 0, truncated: result.truncated })
         return
       }
@@ -628,7 +652,10 @@ export const desktop_copy_file = defineDesktopTool({
   handler: async (args, _ctx, response) => {
     const svc = getDesktopServices()
     try {
-      const result = await svc.osCommands.copyFile(args.source, args.destination)
+      const result = await svc.osCommands.copyFile(
+        args.source,
+        args.destination,
+      )
       if (result.success) {
         response.text(`Copied: ${args.source} → ${args.destination}`)
         response.data({ source: args.source, destination: args.destination })
@@ -655,7 +682,10 @@ export const desktop_move_file = defineDesktopTool({
   handler: async (args, _ctx, response) => {
     const svc = getDesktopServices()
     try {
-      const result = await svc.osCommands.moveFile(args.source, args.destination)
+      const result = await svc.osCommands.moveFile(
+        args.source,
+        args.destination,
+      )
       if (result.success) {
         response.text(`Moved: ${args.source} → ${args.destination}`)
         response.data({ source: args.source, destination: args.destination })
@@ -691,7 +721,7 @@ export const desktop_delete_file = defineDesktopTool({
     // If useTrash is requested, attempt `trash-put` / `trash` command
     if (args.useTrash) {
       try {
-        const { execFile } = await import('child_process')
+        const { execFile } = await import('node:child_process')
         const resolved = await svc.fileManager.resolvePath(args.path)
 
         // Try trash-put (Linux), trash (macOS via homebrew), or moveToTrash
@@ -708,9 +738,7 @@ export const desktop_delete_file = defineDesktopTool({
             })
             trashed = true
             break
-          } catch {
-            continue
-          }
+          } catch {}
         }
 
         if (trashed) {
@@ -800,20 +828,25 @@ export const desktop_system_info = defineDesktopTool({
     const svc = getDesktopServices()
     try {
       const info = await svc.osCommands.getSystemInfo()
-      const memUsedPct = ((info.totalMemoryBytes - info.freeMemoryBytes) / info.totalMemoryBytes * 100).toFixed(1)
-      const diskUsedPct = info.disk.totalBytes > 0
-        ? (info.disk.usedBytes / info.disk.totalBytes * 100).toFixed(1)
-        : '?'
+      const memUsedPct = (
+        ((info.totalMemoryBytes - info.freeMemoryBytes) /
+          info.totalMemoryBytes) *
+        100
+      ).toFixed(1)
+      const diskUsedPct =
+        info.disk.totalBytes > 0
+          ? ((info.disk.usedBytes / info.disk.totalBytes) * 100).toFixed(1)
+          : '?'
 
       response.text(
         `System Info:\n` +
-        `  Platform: ${info.platform} (${info.arch})\n` +
-        `  OS: ${info.release}\n` +
-        `  Hostname: ${info.hostname}\n` +
-        `  CPU: ${info.cpuModel} (${info.cpuCores} cores)\n` +
-        `  Memory: ${formatBytes(info.freeMemoryBytes)} free / ${formatBytes(info.totalMemoryBytes)} total (${memUsedPct}% used)\n` +
-        `  Disk: ${formatBytes(info.disk.availableBytes)} free / ${formatBytes(info.disk.totalBytes)} total (${diskUsedPct}% used)\n` +
-        `  Uptime: ${formatDuration(info.uptimeSeconds)}`,
+          `  Platform: ${info.platform} (${info.arch})\n` +
+          `  OS: ${info.release}\n` +
+          `  Hostname: ${info.hostname}\n` +
+          `  CPU: ${info.cpuModel} (${info.cpuCores} cores)\n` +
+          `  Memory: ${formatBytes(info.freeMemoryBytes)} free / ${formatBytes(info.totalMemoryBytes)} total (${memUsedPct}% used)\n` +
+          `  Disk: ${formatBytes(info.disk.availableBytes)} free / ${formatBytes(info.disk.totalBytes)} total (${diskUsedPct}% used)\n` +
+          `  Uptime: ${formatDuration(info.uptimeSeconds)}`,
       )
       response.data({
         platform: info.platform,
@@ -892,7 +925,11 @@ export const desktop_file_upload = defineDesktopTool({
       await sleep(500)
 
       response.text(`File upload initiated: ${resolvedPath}`)
-      response.data({ filePath: resolvedPath, page: args.page, elementId: args.uploadElementId })
+      response.data({
+        filePath: resolvedPath,
+        page: args.page,
+        elementId: args.uploadElementId,
+      })
     } catch (error) {
       response.error(
         `File upload failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -917,7 +954,9 @@ export const desktop_file_download = defineDesktopTool({
     savePath: z
       .string()
       .optional()
-      .describe('Desired save path. If omitted, uses default download location.'),
+      .describe(
+        'Desired save path. If omitted, uses default download location.',
+      ),
   }),
   handler: async (args, ctx, response) => {
     const svc = getDesktopServices()
@@ -973,7 +1012,7 @@ function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   const i = Math.floor(Math.log(bytes) / Math.log(1024))
-  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`
+  return `${(bytes / 1024 ** i).toFixed(1)} ${units[i]}`
 }
 
 /** Format seconds into a human-readable duration. */
