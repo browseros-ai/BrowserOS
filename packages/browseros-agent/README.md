@@ -78,7 +78,7 @@ packages/
 Requires [process-compose](https://github.com/F1bonacc1/process-compose):
 
 ```bash
-brew install process-compose
+brew install f1bonacc1/tap/process-compose
 ```
 
 ```bash
