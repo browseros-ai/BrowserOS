@@ -8,6 +8,7 @@ import type { AclRule } from '@browseros/shared/types/acl'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { SetLevelRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { Browser } from '../../../browser/browser'
+import type { ToolExecutionObserver } from '../../../monitoring/observer'
 import type { ToolRegistry } from '../../../tools/tool-registry'
 import {
   type KlavisProxyRef,
@@ -24,6 +25,7 @@ export interface McpServiceDeps {
   resourcesDir: string
   aclRules?: AclRule[]
   klavisRef?: KlavisProxyRef
+  observer?: ToolExecutionObserver
 }
 
 export function createMcpServer(deps: McpServiceDeps): McpServer {
@@ -48,11 +50,12 @@ export function createMcpServer(deps: McpServiceDeps): McpServer {
       resourcesDir: deps.resourcesDir,
     },
     aclRules: deps.aclRules,
+    observer: deps.observer,
   })
 
   // Register Klavis proxy tools (if connected via background init)
   if (deps.klavisRef?.handle) {
-    registerKlavisTools(server, deps.klavisRef.handle)
+    registerKlavisTools(server, deps.klavisRef.handle, deps.observer)
   }
 
   return server

@@ -10,6 +10,7 @@ import type { Browser } from '../../browser/browser'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
+import { getMonitoringService } from '../../monitoring/service'
 import type { ToolRegistry } from '../../tools/tool-registry'
 import type { GlobalAclPolicyService } from '../services/acl/global-acl-policy'
 import { resolveAclPolicyForMcpRequest } from '../services/acl/resolve-acl-policy'
@@ -39,16 +40,28 @@ export function createMcpRoutes(deps: McpRouteDeps) {
 
   app.post('/', async (c) => {
     const scopeId = c.req.header('X-BrowserOS-Scope-Id') || 'ephemeral'
+    const agentId =
+      c.req.query('agentId') ??
+      c.req.header('X-BrowserOS-Agent-Id') ??
+      undefined
     metrics.log('mcp.request', { scopeId })
     const aclRules = await resolveAclPolicyForMcpRequest({
       policyService: deps.policyService,
     })
+    const monitoringSessionId = agentId
+      ? getMonitoringService().getActiveSessionId(agentId)
+      : undefined
+    const observer =
+      monitoringSessionId && agentId
+        ? getMonitoringService().createObserver(monitoringSessionId, agentId)
+        : undefined
 
     // Per-request server + transport: no shared state, no race conditions,
     // no ID collisions. Required by MCP SDK 1.26.0+ security fix (GHSA-345p-7cg4-v4c7).
     const mcpServer = createMcpServer({
       ...deps,
       aclRules,
+      observer,
     })
     const transport = new StreamableHTTPTransport({
       sessionIdGenerator: undefined,
@@ -62,6 +75,9 @@ export function createMcpRoutes(deps: McpRouteDeps) {
       Sentry.withScope((scope) => {
         scope.setTag('route', 'mcp')
         scope.setTag('scopeId', scopeId)
+        if (agentId) {
+          scope.setTag('agentId', agentId)
+        }
         Sentry.captureException(error)
       })
       logger.error('Error handling MCP request', {

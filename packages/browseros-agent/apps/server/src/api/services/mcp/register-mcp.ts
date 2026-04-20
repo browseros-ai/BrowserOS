@@ -1,13 +1,14 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { logger } from '../../../lib/logger'
 import { metrics } from '../../../lib/metrics'
+import type { ToolExecutionObserver } from '../../../monitoring/observer'
 import { executeTool, type ToolContext } from '../../../tools/framework'
 import type { ToolRegistry } from '../../../tools/tool-registry'
 
 export function registerTools(
   mcpServer: McpServer,
   registry: ToolRegistry,
-  ctx: ToolContext,
+  ctx: ToolContext & { observer?: ToolExecutionObserver },
 ): void {
   for (const tool of registry.all()) {
     const handler = async (
@@ -15,9 +16,16 @@ export function registerTools(
       extra: { signal: AbortSignal },
     ) => {
       const startTime = performance.now()
+      const toolCallId = crypto.randomUUID()
 
       try {
         logger.info(`${tool.name} request: ${JSON.stringify(args, null, '  ')}`)
+        await ctx.observer?.onToolStart({
+          toolCallId,
+          toolName: tool.name,
+          source: 'browser-tool',
+          args,
+        })
 
         const result = await executeTool(tool, args, ctx, extra.signal)
 
@@ -26,6 +34,12 @@ export function registerTools(
           duration_ms: Math.round(performance.now() - startTime),
           success: !result.isError,
           source: 'mcp',
+        })
+
+        await ctx.observer?.onToolEnd({
+          toolCallId,
+          output: result.structuredContent ?? result.content,
+          error: result.isError ? 'Tool returned isError=true' : undefined,
         })
 
         return {
@@ -42,6 +56,11 @@ export function registerTools(
           success: false,
           error_message: errorText,
           source: 'mcp',
+        })
+
+        await ctx.observer?.onToolEnd({
+          toolCallId,
+          error: errorText,
         })
 
         return {

@@ -49,6 +49,18 @@ export function getOpenClawDir(): string {
   return join(getBrowserosDir(), PATHS.OPENCLAW_DIR_NAME)
 }
 
+export function getLazyMonitoringDir(): string {
+  return join(getBrowserosDir(), 'lazy-monitoring')
+}
+
+export function getLazyMonitoringRunsDir(): string {
+  return join(getLazyMonitoringDir(), 'runs')
+}
+
+export function getLazyMonitoringRunDir(runId: string): string {
+  return join(getLazyMonitoringRunsDir(), runId)
+}
+
 export function getServerConfigPath(): string {
   return join(getBrowserosDir(), PATHS.SERVER_CONFIG_FILE_NAME)
 }
@@ -73,6 +85,7 @@ export async function ensureBrowserosDir(): Promise<void> {
   await mkdir(getSkillsDir(), { recursive: true })
   await mkdir(getBuiltinSkillsDir(), { recursive: true })
   await mkdir(getSessionsDir(), { recursive: true })
+  await mkdir(getLazyMonitoringRunsDir(), { recursive: true })
 }
 
 export async function cleanOldSessions(): Promise<void> {

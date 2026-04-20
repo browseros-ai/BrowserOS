@@ -29,6 +29,7 @@ import { createHealthRoute } from './routes/health'
 import { createKlavisRoutes } from './routes/klavis'
 import { createMcpRoutes } from './routes/mcp'
 import { createMemoryRoutes } from './routes/memory'
+import { createMonitoringRoutes } from './routes/monitoring'
 import { createOAuthRoutes } from './routes/oauth'
 import { createOpenClawRoutes } from './routes/openclaw'
 import { createProviderRoutes } from './routes/provider'
@@ -121,6 +122,10 @@ export async function createHttpServer(config: HttpServerConfig) {
     .use('/*', requireTrustedAppOrigin())
     .route('/', createAclRoutes({ policyService: aclPolicyService }))
 
+  const monitoringRoutes = new Hono<Env>()
+    .use('/*', requireTrustedAppOrigin())
+    .route('/', createMonitoringRoutes())
+
   const app = new Hono<Env>()
     .use('/*', cors(defaultCorsConfig))
     .route('/health', createHealthRoute({ browser }))
@@ -143,6 +148,7 @@ export async function createHttpServer(config: HttpServerConfig) {
     .route('/soul', createSoulRoutes())
     .route('/memory', createMemoryRoutes())
     .route('/skills', createSkillsRoutes())
+    .route('/monitoring', monitoringRoutes)
     .route('/acl-rules', aclRoutes)
     .route('/test-provider', createProviderRoutes({ browserosId }))
     .route('/refine-prompt', createRefinePromptRoutes({ browserosId }))
