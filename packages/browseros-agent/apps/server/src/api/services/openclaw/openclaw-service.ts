@@ -991,13 +991,19 @@ export class OpenClawService {
             model.name === desiredModelEntry.name,
         )
       : true
+    const mergedModels =
+      desiredModelEntry && !hasDesiredModel
+        ? [...existingModels, desiredModelEntry]
+        : existingModels.length > 0
+          ? existingModels
+          : Array.isArray(provider.customProvider.config.models)
+            ? provider.customProvider.config.models
+            : undefined
 
     const nextProvider: Record<string, unknown> = {
       ...existingProvider,
       ...provider.customProvider.config,
-      ...(desiredModelEntry && !hasDesiredModel
-        ? { models: [...existingModels, desiredModelEntry] }
-        : {}),
+      ...(mergedModels ? { models: mergedModels } : {}),
     }
     const nextModels: Record<string, unknown> = {
       ...models,

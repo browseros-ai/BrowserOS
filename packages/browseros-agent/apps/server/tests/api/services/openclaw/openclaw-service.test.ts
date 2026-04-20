@@ -991,6 +991,94 @@ describe('OpenClawService', () => {
     })
   })
 
+  it('preserves previously-registered custom provider models when re-registering an existing model', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
+    await mkdir(join(tempDir, '.openclaw'), { recursive: true })
+    await writeFile(
+      join(tempDir, '.openclaw', 'openclaw.json'),
+      JSON.stringify({
+        gateway: {
+          auth: {
+            token: 'cli-token',
+          },
+        },
+        models: {
+          mode: 'merge',
+          providers: {
+            'kimi-k2-5': {
+              api: 'openai-completions',
+              baseUrl: 'https://api.fireworks.ai/inference/v1',
+              apiKey: `\${KIMI_K2_5_API_KEY}`,
+              models: [
+                {
+                  id: 'accounts/fireworks/models/kimi-k2p5',
+                  name: 'accounts/fireworks/models/kimi-k2p5',
+                },
+                {
+                  id: 'accounts/fireworks/models/kimi-k2p5-thinking',
+                  name: 'accounts/fireworks/models/kimi-k2p5-thinking',
+                },
+              ],
+            },
+          },
+        },
+      }),
+      'utf-8',
+    )
+    await writeFile(join(tempDir, '.openclaw', '.env'), '', 'utf-8')
+
+    const createAgent = mock(async () => ({
+      agentId: 'research',
+      name: 'research',
+      workspace: `${OPENCLAW_CONTAINER_HOME}/workspace-research`,
+      model: 'kimi-k2-5/accounts/fireworks/models/kimi-k2p5',
+    }))
+    const restart = mock(async () => {})
+    const service = new OpenClawService() as MutableOpenClawService
+
+    service.openclawDir = tempDir
+    service.restart = restart
+    service.runtime = {
+      isReady: async () => true,
+    }
+    service.cliClient = {
+      createAgent,
+    }
+
+    await service.createAgent({
+      name: 'research',
+      providerType: 'openai-compatible',
+      providerName: 'Kimi K2.5',
+      baseUrl: 'https://api.fireworks.ai/inference/v1',
+      apiKey: 'custom-key',
+      modelId: 'accounts/fireworks/models/kimi-k2p5',
+    })
+
+    expect(
+      JSON.parse(
+        await readFile(join(tempDir, '.openclaw', 'openclaw.json'), 'utf-8'),
+      ),
+    ).toMatchObject({
+      models: {
+        mode: 'merge',
+        providers: {
+          'kimi-k2-5': {
+            models: [
+              {
+                id: 'accounts/fireworks/models/kimi-k2p5',
+                name: 'accounts/fireworks/models/kimi-k2p5',
+              },
+              {
+                id: 'accounts/fireworks/models/kimi-k2p5-thinking',
+                name: 'accounts/fireworks/models/kimi-k2p5-thinking',
+              },
+            ],
+          },
+        },
+      },
+    })
+  })
+
   it('updateProviderKeys rejects unsupported providers without restarting', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
     const restart = mock(async () => {})
