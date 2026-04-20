@@ -14,6 +14,19 @@ export const SUPPORTED_OPENCLAW_PROVIDERS = [
 export type SupportedOpenClawProvider =
   (typeof SUPPORTED_OPENCLAW_PROVIDERS)[number]
 
+export interface CustomOpenClawProviderConfig {
+  providerId: string
+  apiKeyEnvVar: string
+  config: Record<string, unknown>
+}
+
+export interface ResolvedOpenClawProviderConfig {
+  envValues: Record<string, string>
+  model?: string
+  providerType?: SupportedOpenClawProvider
+  customProvider?: CustomOpenClawProviderConfig
+}
+
 const PROVIDER_ENV_VARS: Record<SupportedOpenClawProvider, string> = {
   anthropic: 'ANTHROPIC_API_KEY',
   moonshot: 'MOONSHOT_API_KEY',
@@ -65,6 +78,30 @@ export function buildOpenClawModelRef(
   return modelId ? `${providerType}/${modelId}` : undefined
 }
 
+export function deriveOpenClawProviderId(input: {
+  providerType?: string
+  providerName?: string
+  baseUrl?: string
+}): string {
+  const source =
+    input.providerName?.trim() ||
+    input.baseUrl?.trim() ||
+    input.providerType?.trim() ||
+    'custom-provider'
+
+  const candidate = source
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+
+  return candidate || 'custom-provider'
+}
+
+export function deriveOpenClawApiKeyEnvVar(providerId: string): string {
+  return `${providerId.toUpperCase().replace(/-/g, '_')}_API_KEY`
+}
+
 export function getOpenClawProviderEnvVar(
   providerType: SupportedOpenClawProvider,
 ): string {
@@ -77,20 +114,44 @@ export function resolveSupportedOpenClawProvider(input: {
   baseUrl?: string
   apiKey?: string
   modelId?: string
-}): {
-  envValues: Record<string, string>
-  model?: string
-  providerType?: SupportedOpenClawProvider
-} {
-  const providerType = assertSupportedOpenClawProvider(input.providerType)
-  if (!providerType) {
+}): ResolvedOpenClawProviderConfig {
+  if (!input.providerType) {
     return { envValues: {} }
   }
 
-  const envVar = getOpenClawProviderEnvVar(providerType)
+  if (isSupportedOpenClawProvider(input.providerType)) {
+    const providerType = input.providerType
+    const envVar = getOpenClawProviderEnvVar(providerType)
+    return {
+      envValues: input.apiKey ? { [envVar]: input.apiKey } : {},
+      model: buildOpenClawModelRef(providerType, input.modelId),
+      providerType,
+    }
+  }
+
+  if (!input.baseUrl) {
+    throw new UnsupportedOpenClawProviderError(input.providerType)
+  }
+
+  const providerId = deriveOpenClawProviderId(input)
+  const apiKeyEnvVar = deriveOpenClawApiKeyEnvVar(providerId)
+
   return {
-    envValues: input.apiKey ? { [envVar]: input.apiKey } : {},
-    model: buildOpenClawModelRef(providerType, input.modelId),
-    providerType,
+    envValues: input.apiKey ? { [apiKeyEnvVar]: input.apiKey } : {},
+    model: input.modelId ? `${providerId}/${input.modelId}` : undefined,
+    customProvider: {
+      providerId,
+      apiKeyEnvVar,
+      config: {
+        api: 'openai-completions',
+        baseUrl: input.baseUrl,
+        apiKey: `\${${apiKeyEnvVar}}`,
+        ...(input.modelId
+          ? {
+              models: [{ id: input.modelId, name: input.modelId }],
+            }
+          : {}),
+      },
+    },
   }
 }
