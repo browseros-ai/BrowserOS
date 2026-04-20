@@ -40,20 +40,27 @@ export function createMcpRoutes(deps: McpRouteDeps) {
 
   app.post('/', async (c) => {
     const scopeId = c.req.header('X-BrowserOS-Scope-Id') || 'ephemeral'
-    const agentId =
+    const monitoringService = getMonitoringService()
+    const explicitAgentId =
       c.req.query('agentId') ??
       c.req.header('X-BrowserOS-Agent-Id') ??
       undefined
+    const activeSession = explicitAgentId
+      ? {
+          agentId: explicitAgentId,
+          monitoringSessionId:
+            monitoringService.getActiveSessionId(explicitAgentId),
+        }
+      : monitoringService.getSingleActiveSession()
+    const agentId = activeSession?.agentId
     metrics.log('mcp.request', { scopeId })
     const aclRules = await resolveAclPolicyForMcpRequest({
       policyService: deps.policyService,
     })
-    const monitoringSessionId = agentId
-      ? getMonitoringService().getActiveSessionId(agentId)
-      : undefined
+    const monitoringSessionId = activeSession?.monitoringSessionId
     const observer =
       monitoringSessionId && agentId
-        ? getMonitoringService().createObserver(monitoringSessionId, agentId)
+        ? monitoringService.createObserver(monitoringSessionId, agentId)
         : undefined
 
     // Per-request server + transport: no shared state, no race conditions,

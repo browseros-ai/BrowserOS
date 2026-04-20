@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  buildChatHistoryFromTurns,
   chatWithAgent,
   type OpenClawStreamEvent,
 } from '@/entrypoints/app/agents/useOpenClaw'
@@ -187,6 +188,7 @@ export function useAgentConversation(agentId: string, agentName: string) {
 
   const send = async (text: string) => {
     if (!text.trim() || streaming) return
+    const history = buildChatHistoryFromTurns(turns)
 
     const turn: AgentConversationTurn = {
       id: crypto.randomUUID(),
@@ -207,6 +209,7 @@ export function useAgentConversation(agentId: string, agentName: string) {
         agentId,
         text.trim(),
         sessionKeyRef.current,
+        history,
         abortController.signal,
       )
       if (!response.ok) {

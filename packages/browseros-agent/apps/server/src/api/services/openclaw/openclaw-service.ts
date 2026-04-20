@@ -17,6 +17,7 @@ import {
 import { DEFAULT_PORTS } from '@browseros/shared/constants/ports'
 import { getOpenClawDir } from '../../../lib/browseros-dir'
 import { logger } from '../../../lib/logger'
+import type { MonitoringChatTurn } from '../../../monitoring/types'
 import {
   ContainerRuntime,
   type GatewayContainerSpec,
@@ -513,18 +514,21 @@ export class OpenClawService {
     agentId: string,
     sessionKey: string,
     message: string,
+    history: MonitoringChatTurn[] = [],
   ): Promise<ReadableStream<OpenClawStreamEvent>> {
     await this.assertGatewayReady()
     logger.info('Starting OpenClaw chat stream', {
       agentId,
       sessionKey,
       messageLength: message.length,
+      historyLength: history.length,
     })
     return this.runControlPlaneCall(() =>
       this.chatClient.streamChat({
         agentId,
         sessionKey,
         message,
+        history,
       }),
     )
   }

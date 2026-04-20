@@ -7,10 +7,16 @@
 import { createParser, type EventSourceMessage } from 'eventsource-parser'
 import type { OpenClawStreamEvent } from './openclaw-types'
 
+export interface OpenClawChatHistoryMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 export interface OpenClawChatRequest {
   agentId: string
   sessionKey: string
   message: string
+  history?: OpenClawChatHistoryMessage[]
   signal?: AbortSignal
 }
 
@@ -46,7 +52,10 @@ export class OpenClawHttpChatClient {
         body: JSON.stringify({
           model: resolveAgentModel(input.agentId),
           stream: true,
-          messages: [{ role: 'user', content: input.message }],
+          messages: [
+            ...(input.history ?? []),
+            { role: 'user', content: input.message },
+          ],
           user: `browseros:${input.agentId}:${input.sessionKey}`,
         }),
         signal: input.signal,

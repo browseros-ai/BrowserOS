@@ -20,7 +20,11 @@ import {
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { consumeSSEStream } from '@/lib/sse'
-import { chatWithAgent, type OpenClawStreamEvent } from './useOpenClaw'
+import {
+  buildChatHistoryFromTurns,
+  chatWithAgent,
+  type OpenClawStreamEvent,
+} from './useOpenClaw'
 
 interface ToolEntry {
   id: string
@@ -204,6 +208,7 @@ export const AgentChat: FC<AgentChatProps> = ({
   const handleSend = async () => {
     const text = input.trim()
     if (!text || streaming) return
+    const history = buildChatHistoryFromTurns(turns)
 
     const turn: ChatTurn = {
       id: crypto.randomUUID(),
@@ -225,6 +230,7 @@ export const AgentChat: FC<AgentChatProps> = ({
         agentId,
         text,
         sessionKeyRef.current,
+        history,
         abortController.signal,
       )
 

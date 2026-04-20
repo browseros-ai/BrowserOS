@@ -56,6 +56,7 @@ describe('OpenClawHttpChatClient', () => {
       agentId: 'research',
       sessionKey: 'session-123',
       message: 'hi',
+      history: [{ role: 'assistant', content: 'Earlier reply' }],
     })
 
     const events = await readEvents(stream)
@@ -72,7 +73,10 @@ describe('OpenClawHttpChatClient', () => {
     expect(JSON.parse(String(call?.[1]?.body))).toEqual({
       model: 'openclaw/research',
       stream: true,
-      messages: [{ role: 'user', content: 'hi' }],
+      messages: [
+        { role: 'assistant', content: 'Earlier reply' },
+        { role: 'user', content: 'hi' },
+      ],
       user: 'browseros:research:session-123',
     })
     expect(events).toEqual([

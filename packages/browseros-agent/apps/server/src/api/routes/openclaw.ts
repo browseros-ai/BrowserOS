@@ -13,6 +13,8 @@ import { OPENCLAW_GATEWAY_PORT } from '@browseros/shared/constants/openclaw'
 import { Hono } from 'hono'
 import { stream } from 'hono/streaming'
 import { logger } from '../../lib/logger'
+import { getMonitoringService } from '../../monitoring/service'
+import type { MonitoringChatTurn } from '../../monitoring/types'
 import {
   OpenClawAgentAlreadyExistsError,
   OpenClawAgentNotFoundError,
@@ -228,6 +230,7 @@ export function createOpenClawRoutes() {
       const body = await c.req.json<{
         message: string
         sessionKey?: string
+        history?: MonitoringChatTurn[]
       }>()
 
       if (!body.message?.trim()) {
@@ -235,12 +238,28 @@ export function createOpenClawRoutes() {
       }
 
       const sessionKey = body.sessionKey ?? crypto.randomUUID()
+      const history = Array.isArray(body.history)
+        ? body.history.filter((entry): entry is MonitoringChatTurn =>
+            Boolean(
+              entry &&
+                (entry.role === 'user' || entry.role === 'assistant') &&
+                typeof entry.content === 'string',
+            ),
+          )
+        : []
+      const monitoringContext = await getMonitoringService().startSession({
+        agentId: id,
+        sessionKey,
+        originalPrompt: body.message.trim(),
+        chatHistory: history,
+      })
 
       try {
         const eventStream = await getOpenClawService().chatStream(
           id,
           sessionKey,
           body.message,
+          history,
         )
 
         c.header('Content-Type', 'text/event-stream')
@@ -250,20 +269,65 @@ export function createOpenClawRoutes() {
         return stream(c, async (s) => {
           const reader = eventStream.getReader()
           const encoder = new TextEncoder()
+          let finalAssistantMessage: string | undefined
+          let status: 'completed' | 'failed' | 'aborted' | 'incomplete' =
+            'incomplete'
+          let finalError: string | undefined
           try {
             while (true) {
               const { done, value } = await reader.read()
               if (done) break
+              if (
+                value.type === 'done' &&
+                typeof value.data.text === 'string' &&
+                value.data.text.trim()
+              ) {
+                finalAssistantMessage = value.data.text
+                status = 'completed'
+              }
+              if (value.type === 'error') {
+                finalError =
+                  (typeof value.data.message === 'string'
+                    ? value.data.message
+                    : typeof value.data.error === 'string'
+                      ? value.data.error
+                      : undefined) ?? 'Unknown chat stream error'
+                status = 'failed'
+              }
               await s.write(
                 encoder.encode(`data: ${JSON.stringify(value)}\n\n`),
               )
             }
             await s.write(encoder.encode('data: [DONE]\n\n'))
+          } catch (error) {
+            if (c.req.raw.signal.aborted) {
+              status = 'aborted'
+            } else {
+              status = 'failed'
+              finalError =
+                error instanceof Error ? error.message : String(error)
+            }
+            throw error
           } finally {
             await reader.cancel()
+            await getMonitoringService().finalizeSession({
+              monitoringSessionId: monitoringContext.monitoringSessionId,
+              agentId: id,
+              sessionKey,
+              status,
+              finalAssistantMessage,
+              error: finalError,
+            })
           }
         })
       } catch (err) {
+        await getMonitoringService().finalizeSession({
+          monitoringSessionId: monitoringContext.monitoringSessionId,
+          agentId: id,
+          sessionKey,
+          status: c.req.raw.signal.aborted ? 'aborted' : 'failed',
+          error: err instanceof Error ? err.message : String(err),
+        })
         if (isUnsupportedOpenClawProviderError(err)) {
           return c.json({ error: err.message }, 400)
         }

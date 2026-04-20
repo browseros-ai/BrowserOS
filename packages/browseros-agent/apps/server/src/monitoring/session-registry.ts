@@ -9,6 +9,23 @@ export class MonitoringSessionRegistry {
     return this.activeSessionsByAgent.get(agentId)
   }
 
+  getSingleActive():
+    | { agentId: string; monitoringSessionId: string }
+    | undefined {
+    if (this.activeSessionsByAgent.size !== 1) {
+      return undefined
+    }
+
+    const [agentId, monitoringSessionId] =
+      this.activeSessionsByAgent.entries().next().value ?? []
+
+    if (!agentId || !monitoringSessionId) {
+      return undefined
+    }
+
+    return { agentId, monitoringSessionId }
+  }
+
   clearIfMatches(agentId: string, monitoringSessionId: string): void {
     if (this.activeSessionsByAgent.get(agentId) !== monitoringSessionId) {
       return
