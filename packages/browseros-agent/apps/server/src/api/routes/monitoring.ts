@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { getMonitoringService } from '../../monitoring/service'
+import { isValidMonitoringRunId } from '../../monitoring/storage'
 
 export function createMonitoringRoutes() {
   return new Hono()
@@ -14,6 +15,9 @@ export function createMonitoringRoutes() {
     })
     .get('/runs/:id', async (c) => {
       const runId = c.req.param('id')
+      if (!isValidMonitoringRunId(runId)) {
+        return c.json({ error: 'Invalid monitoring run id' }, 400)
+      }
       const envelope = await getMonitoringService().getRunEnvelope(runId)
 
       if (!envelope) {
@@ -65,6 +69,9 @@ export function createMonitoringRoutes() {
     })
     .post('/debug/runs/:id/finalize', async (c) => {
       const runId = c.req.param('id')
+      if (!isValidMonitoringRunId(runId)) {
+        return c.json({ error: 'Invalid monitoring run id' }, 400)
+      }
       const body = await c.req.json<{
         agentId?: string
         sessionKey?: string
