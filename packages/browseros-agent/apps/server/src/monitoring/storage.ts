@@ -21,6 +21,25 @@ const CONTEXT_FILE_NAME = 'context.json'
 const TOOL_CALLS_FILE_NAME = 'tool-calls.jsonl'
 const FINALIZATION_FILE_NAME = 'finalization.json'
 const AUDIT_ENVELOPE_FILE_NAME = 'audit-envelope.json'
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+export class InvalidMonitoringRunIdError extends Error {
+  constructor(runId: string) {
+    super(`Invalid monitoring run id: ${runId}`)
+    this.name = 'InvalidMonitoringRunIdError'
+  }
+}
+
+export function isValidMonitoringRunId(runId: string): boolean {
+  return UUID_PATTERN.test(runId)
+}
+
+function assertValidMonitoringRunId(runId: string): void {
+  if (!isValidMonitoringRunId(runId)) {
+    throw new InvalidMonitoringRunIdError(runId)
+  }
+}
 
 export class MonitoringStorage {
   async writeContext(context: MonitoringSessionContext): Promise<void> {
@@ -76,7 +95,13 @@ export class MonitoringStorage {
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean)
-        .map((line) => JSON.parse(line) as MonitoringToolCallRecord)
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line) as MonitoringToolCallRecord]
+          } catch {
+            return []
+          }
+        })
     } catch {
       return []
     }
@@ -87,7 +112,9 @@ export class MonitoringStorage {
       const entries = await readdir(getLazyMonitoringRunsDir(), {
         withFileTypes: true,
       })
-      const directories = entries.filter((entry) => entry.isDirectory())
+      const directories = entries.filter(
+        (entry) => entry.isDirectory() && isValidMonitoringRunId(entry.name),
+      )
       const runStats = await Promise.all(
         directories.map(async (entry) => ({
           runId: entry.name,
@@ -103,6 +130,7 @@ export class MonitoringStorage {
   }
 
   private async ensureRunDir(runId: string): Promise<void> {
+    assertValidMonitoringRunId(runId)
     await mkdir(getLazyMonitoringRunsDir(), { recursive: true })
     await mkdir(getLazyMonitoringRunDir(runId), { recursive: true })
   }
@@ -126,18 +154,22 @@ export class MonitoringStorage {
   }
 
   private getContextPath(runId: string): string {
+    assertValidMonitoringRunId(runId)
     return join(getLazyMonitoringRunDir(runId), CONTEXT_FILE_NAME)
   }
 
   private getToolCallsPath(runId: string): string {
+    assertValidMonitoringRunId(runId)
     return join(getLazyMonitoringRunDir(runId), TOOL_CALLS_FILE_NAME)
   }
 
   private getFinalizationPath(runId: string): string {
+    assertValidMonitoringRunId(runId)
     return join(getLazyMonitoringRunDir(runId), FINALIZATION_FILE_NAME)
   }
 
   private getAuditEnvelopePath(runId: string): string {
+    assertValidMonitoringRunId(runId)
     return join(getLazyMonitoringRunDir(runId), AUDIT_ENVELOPE_FILE_NAME)
   }
 }

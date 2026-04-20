@@ -46,6 +46,7 @@ type MutableOpenClawService = OpenClawService & {
     createAgent?: ReturnType<typeof mock>
     getConfig?: ReturnType<typeof mock>
     listAgents?: ReturnType<typeof mock>
+    setDefaultModel?: ReturnType<typeof mock>
   }
   bootstrapCliClient: {
     runOnboard?: ReturnType<typeof mock>
@@ -458,6 +459,98 @@ describe('OpenClawService', () => {
     ).toContain('OPENAI_API_KEY=sk-test')
   })
 
+  it('merges custom openai-compatible providers into config during setup', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
+    const openclawTempDir = tempDir
+    const runOnboard = mock(async () => {
+      await mkdir(join(openclawTempDir, '.openclaw'), { recursive: true })
+      await writeFile(
+        join(openclawTempDir, '.openclaw', 'openclaw.json'),
+        JSON.stringify({
+          gateway: {
+            auth: {
+              token: 'cli-token',
+            },
+          },
+        }),
+        'utf-8',
+      )
+    })
+    const setConfigBatch = mock(async () => {})
+    const setDefaultModel = mock(async () => {})
+    const validateConfig = mock(async () => ({ ok: true }))
+    const createAgent = mock(async () => ({
+      agentId: 'main',
+      name: 'main',
+      workspace: `${OPENCLAW_CONTAINER_HOME}/workspace`,
+    }))
+    const service = new OpenClawService() as MutableOpenClawService
+
+    service.openclawDir = tempDir
+    service.runtime = {
+      isPodmanAvailable: async () => true,
+      ensureReady: async () => {},
+      isReady: async () => true,
+      pullImage: async () => {},
+      restartGateway: async () => {},
+      startGateway: async () => {},
+      waitForReady: async () => true,
+    }
+    service.cliClient = {
+      probe: mock(async () => {}),
+      listAgents: mock(async () => []),
+      createAgent,
+    }
+    service.bootstrapCliClient = {
+      runOnboard,
+      setConfigBatch,
+      setDefaultModel,
+      validateConfig,
+    }
+
+    await service.setup({
+      providerType: 'openai-compatible',
+      providerName: 'Kimi K2.5',
+      baseUrl: 'https://api.fireworks.ai/inference/v1',
+      apiKey: 'custom-key',
+      modelId: 'accounts/fireworks/models/kimi-k2p5',
+    })
+
+    expect(setDefaultModel).toHaveBeenCalledWith(
+      'kimi-k2-5/accounts/fireworks/models/kimi-k2p5',
+    )
+    expect(
+      await readFile(join(tempDir, '.openclaw', '.env'), 'utf-8'),
+    ).toContain('KIMI_K2_5_API_KEY=custom-key')
+    expect(
+      JSON.parse(
+        await readFile(join(tempDir, '.openclaw', 'openclaw.json'), 'utf-8'),
+      ),
+    ).toMatchObject({
+      gateway: {
+        auth: {
+          token: 'cli-token',
+        },
+      },
+      models: {
+        mode: 'merge',
+        providers: {
+          'kimi-k2-5': {
+            api: 'openai-completions',
+            baseUrl: 'https://api.fireworks.ai/inference/v1',
+            apiKey: `\${KIMI_K2_5_API_KEY}`,
+            models: [
+              {
+                id: 'accounts/fireworks/models/kimi-k2p5',
+                name: 'accounts/fireworks/models/kimi-k2p5',
+              },
+            ],
+          },
+        },
+      },
+    })
+  })
+
   it('start uses the direct runtime startGateway flow', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
     await mkdir(join(tempDir, '.openclaw'), { recursive: true })
@@ -677,7 +770,7 @@ describe('OpenClawService', () => {
     })
   })
 
-  it('only resolves env vars for the supported bootstrap providers', () => {
+  it('resolves builtin and custom providers into OpenClaw config inputs', () => {
     expect(
       resolveSupportedOpenClawProvider({
         providerType: 'anthropic',
@@ -706,6 +799,36 @@ describe('OpenClawService', () => {
       providerType: 'moonshot',
     })
 
+    expect(
+      resolveSupportedOpenClawProvider({
+        providerType: 'openai-compatible',
+        providerName: 'Kimi K2.5',
+        baseUrl: 'https://api.fireworks.ai/inference/v1',
+        apiKey: 'custom-key',
+        modelId: 'accounts/fireworks/models/kimi-k2p5',
+      }),
+    ).toEqual({
+      envValues: {
+        KIMI_K2_5_API_KEY: 'custom-key',
+      },
+      model: 'kimi-k2-5/accounts/fireworks/models/kimi-k2p5',
+      customProvider: {
+        providerId: 'kimi-k2-5',
+        apiKeyEnvVar: 'KIMI_K2_5_API_KEY',
+        config: {
+          api: 'openai-completions',
+          baseUrl: 'https://api.fireworks.ai/inference/v1',
+          apiKey: `\${KIMI_K2_5_API_KEY}`,
+          models: [
+            {
+              id: 'accounts/fireworks/models/kimi-k2p5',
+              name: 'accounts/fireworks/models/kimi-k2p5',
+            },
+          ],
+        },
+      },
+    })
+
     expect(() =>
       resolveSupportedOpenClawProvider({
         providerType: 'google',
@@ -713,15 +836,6 @@ describe('OpenClawService', () => {
         modelId: 'gemini-2.5-pro',
       }),
     ).toThrow(new UnsupportedOpenClawProviderError('google'))
-
-    expect(() =>
-      resolveSupportedOpenClawProvider({
-        providerType: 'custom-api-key',
-        baseUrl: 'https://example.test/v1',
-        apiKey: 'custom-key',
-        modelId: 'custom-model',
-      }),
-    ).toThrow(new UnsupportedOpenClawProviderError('custom-api-key'))
   })
 
   it('rejects unsupported providers before mutating env or creating agents', async () => {
@@ -797,6 +911,174 @@ describe('OpenClawService', () => {
     expect(restart).not.toHaveBeenCalled()
   })
 
+  it('merges custom openai-compatible providers before creating agents', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
+    await mkdir(join(tempDir, '.openclaw'), { recursive: true })
+    await writeFile(
+      join(tempDir, '.openclaw', 'openclaw.json'),
+      JSON.stringify({
+        gateway: {
+          auth: {
+            token: 'cli-token',
+          },
+        },
+      }),
+      'utf-8',
+    )
+    await writeFile(join(tempDir, '.openclaw', '.env'), '', 'utf-8')
+
+    const createAgent = mock(async () => ({
+      agentId: 'research',
+      name: 'research',
+      workspace: `${OPENCLAW_CONTAINER_HOME}/workspace-research`,
+      model: 'kimi-k2-5/accounts/fireworks/models/kimi-k2p5',
+    }))
+    const restart = mock(async () => {})
+    const service = new OpenClawService() as MutableOpenClawService
+
+    service.openclawDir = tempDir
+    service.restart = restart
+    service.runtime = {
+      isReady: async () => true,
+    }
+    service.cliClient = {
+      createAgent,
+    }
+
+    await service.createAgent({
+      name: 'research',
+      providerType: 'openai-compatible',
+      providerName: 'Kimi K2.5',
+      baseUrl: 'https://api.fireworks.ai/inference/v1',
+      apiKey: 'custom-key',
+      modelId: 'accounts/fireworks/models/kimi-k2p5',
+    })
+
+    expect(restart).toHaveBeenCalledTimes(1)
+    expect(createAgent).toHaveBeenCalledWith({
+      name: 'research',
+      model: 'kimi-k2-5/accounts/fireworks/models/kimi-k2p5',
+    })
+    expect(
+      await readFile(join(tempDir, '.openclaw', '.env'), 'utf-8'),
+    ).toContain('KIMI_K2_5_API_KEY=custom-key')
+    expect(
+      JSON.parse(
+        await readFile(join(tempDir, '.openclaw', 'openclaw.json'), 'utf-8'),
+      ),
+    ).toMatchObject({
+      gateway: {
+        auth: {
+          token: 'cli-token',
+        },
+      },
+      models: {
+        mode: 'merge',
+        providers: {
+          'kimi-k2-5': {
+            api: 'openai-completions',
+            baseUrl: 'https://api.fireworks.ai/inference/v1',
+            apiKey: `\${KIMI_K2_5_API_KEY}`,
+            models: [
+              {
+                id: 'accounts/fireworks/models/kimi-k2p5',
+                name: 'accounts/fireworks/models/kimi-k2p5',
+              },
+            ],
+          },
+        },
+      },
+    })
+  })
+
+  it('preserves previously-registered custom provider models when re-registering an existing model', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
+    await mkdir(join(tempDir, '.openclaw'), { recursive: true })
+    await writeFile(
+      join(tempDir, '.openclaw', 'openclaw.json'),
+      JSON.stringify({
+        gateway: {
+          auth: {
+            token: 'cli-token',
+          },
+        },
+        models: {
+          mode: 'merge',
+          providers: {
+            'kimi-k2-5': {
+              api: 'openai-completions',
+              baseUrl: 'https://api.fireworks.ai/inference/v1',
+              apiKey: `\${KIMI_K2_5_API_KEY}`,
+              models: [
+                {
+                  id: 'accounts/fireworks/models/kimi-k2p5',
+                  name: 'accounts/fireworks/models/kimi-k2p5',
+                },
+                {
+                  id: 'accounts/fireworks/models/kimi-k2p5-thinking',
+                  name: 'accounts/fireworks/models/kimi-k2p5-thinking',
+                },
+              ],
+            },
+          },
+        },
+      }),
+      'utf-8',
+    )
+    await writeFile(join(tempDir, '.openclaw', '.env'), '', 'utf-8')
+
+    const createAgent = mock(async () => ({
+      agentId: 'research',
+      name: 'research',
+      workspace: `${OPENCLAW_CONTAINER_HOME}/workspace-research`,
+      model: 'kimi-k2-5/accounts/fireworks/models/kimi-k2p5',
+    }))
+    const restart = mock(async () => {})
+    const service = new OpenClawService() as MutableOpenClawService
+
+    service.openclawDir = tempDir
+    service.restart = restart
+    service.runtime = {
+      isReady: async () => true,
+    }
+    service.cliClient = {
+      createAgent,
+    }
+
+    await service.createAgent({
+      name: 'research',
+      providerType: 'openai-compatible',
+      providerName: 'Kimi K2.5',
+      baseUrl: 'https://api.fireworks.ai/inference/v1',
+      apiKey: 'custom-key',
+      modelId: 'accounts/fireworks/models/kimi-k2p5',
+    })
+
+    expect(
+      JSON.parse(
+        await readFile(join(tempDir, '.openclaw', 'openclaw.json'), 'utf-8'),
+      ),
+    ).toMatchObject({
+      models: {
+        mode: 'merge',
+        providers: {
+          'kimi-k2-5': {
+            models: [
+              {
+                id: 'accounts/fireworks/models/kimi-k2p5',
+                name: 'accounts/fireworks/models/kimi-k2p5',
+              },
+              {
+                id: 'accounts/fireworks/models/kimi-k2p5-thinking',
+                name: 'accounts/fireworks/models/kimi-k2p5-thinking',
+              },
+            ],
+          },
+        },
+      },
+    })
+  })
+
   it('updateProviderKeys rejects unsupported providers without restarting', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
     const restart = mock(async () => {})
@@ -814,6 +1096,73 @@ describe('OpenClawService', () => {
     ).rejects.toThrow('Unsupported OpenClaw provider')
 
     expect(restart).not.toHaveBeenCalled()
+  })
+
+  it('updateProviderKeys restores custom openai-compatible providers and restarts once', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
+    await mkdir(join(tempDir, '.openclaw'), { recursive: true })
+    await writeFile(
+      join(tempDir, '.openclaw', 'openclaw.json'),
+      JSON.stringify({
+        gateway: {
+          auth: {
+            token: 'cli-token',
+          },
+        },
+      }),
+      'utf-8',
+    )
+    await writeFile(join(tempDir, '.openclaw', '.env'), '', 'utf-8')
+
+    const restart = mock(async () => {})
+    const setDefaultModel = mock(async () => {})
+    const service = new OpenClawService() as MutableOpenClawService
+
+    service.openclawDir = tempDir
+    service.restart = restart
+    service.runtime = {
+      isReady: async () => true,
+      waitForReady: mock(async () => true),
+    }
+    service.cliClient = {
+      setDefaultModel,
+    }
+
+    const result = await service.updateProviderKeys({
+      providerType: 'openai-compatible',
+      providerName: 'Kimi K2.5',
+      baseUrl: 'https://api.fireworks.ai/inference/v1',
+      apiKey: 'custom-key',
+      modelId: 'accounts/fireworks/models/kimi-k2p5',
+    })
+
+    expect(result).toEqual({
+      restarted: true,
+      modelUpdated: true,
+    })
+    expect(restart).toHaveBeenCalledTimes(1)
+    expect(setDefaultModel).toHaveBeenCalledWith(
+      'kimi-k2-5/accounts/fireworks/models/kimi-k2p5',
+    )
+    expect(
+      await readFile(join(tempDir, '.openclaw', '.env'), 'utf-8'),
+    ).toContain('KIMI_K2_5_API_KEY=custom-key')
+    expect(
+      JSON.parse(
+        await readFile(join(tempDir, '.openclaw', 'openclaw.json'), 'utf-8'),
+      ),
+    ).toMatchObject({
+      models: {
+        mode: 'merge',
+        providers: {
+          'kimi-k2-5': {
+            api: 'openai-completions',
+            baseUrl: 'https://api.fireworks.ai/inference/v1',
+            apiKey: `\${KIMI_K2_5_API_KEY}`,
+          },
+        },
+      },
+    })
   })
 
   it('does not restart when provider env content is unchanged', async () => {
@@ -883,7 +1232,7 @@ describe('OpenClawService', () => {
     )
   })
 
-  it('does not persist env updates when setting the default model fails', async () => {
+  it('persists env updates before surfacing default-model failures', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
     await mkdir(join(tempDir, '.openclaw'), { recursive: true })
 
@@ -908,8 +1257,10 @@ describe('OpenClawService', () => {
     ).rejects.toThrow('container unavailable')
 
     expect(setDefaultModel).toHaveBeenCalledWith('openai/gpt-5.4-mini')
-    expect(restart).not.toHaveBeenCalled()
-    expect(existsSync(join(tempDir, '.openclaw', '.env'))).toBe(false)
+    expect(restart).toHaveBeenCalledTimes(1)
+    expect(await readFile(join(tempDir, '.openclaw', '.env'), 'utf-8')).toBe(
+      'OPENAI_API_KEY=sk-test\n',
+    )
   })
 
   it('applyPodmanOverrides persists the override and refreshes the runtime', async () => {

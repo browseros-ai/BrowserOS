@@ -25,7 +25,6 @@ export class MonitoringSessionRegistry {
 
     return { agentId, monitoringSessionId }
   }
-
   clearIfMatches(agentId: string, monitoringSessionId: string): void {
     if (this.activeSessionsByAgent.get(agentId) !== monitoringSessionId) {
       return

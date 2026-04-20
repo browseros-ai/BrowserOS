@@ -50,7 +50,6 @@ export class MonitoringService {
     | undefined {
     return this.registry.getSingleActive()
   }
-
   clearActiveSession(agentId: string, monitoringSessionId: string): void {
     this.registry.clearIfMatches(agentId, monitoringSessionId)
   }

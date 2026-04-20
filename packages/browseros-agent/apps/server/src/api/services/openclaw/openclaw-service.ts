@@ -41,7 +41,10 @@ import {
   mergeEnvContent,
 } from './openclaw-env'
 import { OpenClawHttpChatClient } from './openclaw-http-chat-client'
-import { resolveSupportedOpenClawProvider } from './openclaw-provider-map'
+import {
+  type ResolvedOpenClawProviderConfig,
+  resolveSupportedOpenClawProvider,
+} from './openclaw-provider-map'
 import type { OpenClawStreamEvent } from './openclaw-types'
 import { loadPodmanOverrides, savePodmanOverrides } from './podman-overrides'
 import { configurePodmanRuntime, getPodmanRuntime } from './podman-runtime'
@@ -205,6 +208,7 @@ export class OpenClawService {
       skipHealth: true,
     })
     await this.applyBrowserosConfig()
+    await this.mergeProviderConfigIfChanged(provider)
     if (provider.model) {
       await this.bootstrapCliClient.setDefaultModel(provider.model)
     }
@@ -449,11 +453,13 @@ export class OpenClawService {
     await this.assertGatewayReady()
 
     const provider = resolveSupportedOpenClawProvider(input)
+    const configChanged = await this.mergeProviderConfigIfChanged(provider)
     const keysChanged = await this.writeStateEnv(provider.envValues)
 
-    if (keysChanged) {
+    if (configChanged || keysChanged) {
       logger.info('OpenClaw provider config changed while creating agent', {
         name,
+        configChanged,
         keysChanged,
       })
       await this.restart()
@@ -581,21 +587,23 @@ export class OpenClawService {
     modelId?: string
   }): Promise<OpenClawProviderUpdateResult> {
     const provider = resolveSupportedOpenClawProvider(input)
+    const configChanged = await this.mergeProviderConfigIfChanged(provider)
+    const envChanged = await this.writeStateEnv(provider.envValues)
+    const restarted = configChanged || envChanged
+    if (restarted) {
+      await this.restart()
+    }
     if (provider.model) {
       const model = provider.model
       await this.applyCliMutation(() => this.cliClient.setDefaultModel(model))
     }
-    const changed = await this.writeStateEnv(provider.envValues)
-    if (changed) {
-      await this.restart()
-    }
     logger.info('Provider keys updated', {
       providerType: input.providerType,
       modelUpdated: !!provider.model,
-      restarted: changed,
+      restarted,
     })
     return {
-      restarted: changed,
+      restarted,
       modelUpdated: !!provider.model,
     }
   }
@@ -949,6 +957,82 @@ export class OpenClawService {
     await writeFile(envPath, next.content, { mode: 0o600 })
     logger.debug('Updated OpenClaw provider credentials', {
       keys: Object.keys(values),
+    })
+    return true
+  }
+
+  private async mergeProviderConfigIfChanged(
+    provider: ResolvedOpenClawProviderConfig,
+  ): Promise<boolean> {
+    if (!provider.customProvider) {
+      return false
+    }
+
+    const configPath = this.getStateConfigPath()
+    const content = await readFile(configPath, 'utf-8')
+    const config = JSON.parse(content) as Record<string, unknown>
+    const models =
+      config.models && typeof config.models === 'object'
+        ? (config.models as Record<string, unknown>)
+        : {}
+    const providers =
+      models.providers && typeof models.providers === 'object'
+        ? (models.providers as Record<string, Record<string, unknown>>)
+        : {}
+    const existingProvider = providers[provider.customProvider.providerId] ?? {}
+    const existingModels = Array.isArray(existingProvider.models)
+      ? (existingProvider.models as Array<Record<string, unknown>>)
+      : []
+    const desiredModelEntry =
+      Array.isArray(provider.customProvider.config.models) &&
+      provider.customProvider.config.models.length > 0
+        ? (provider.customProvider.config.models[0] as Record<string, unknown>)
+        : null
+    const hasDesiredModel = desiredModelEntry
+      ? existingModels.some(
+          (model) =>
+            model.id === desiredModelEntry.id ||
+            model.name === desiredModelEntry.name,
+        )
+      : true
+    const mergedModels =
+      desiredModelEntry && !hasDesiredModel
+        ? [...existingModels, desiredModelEntry]
+        : existingModels.length > 0
+          ? existingModels
+          : Array.isArray(provider.customProvider.config.models)
+            ? provider.customProvider.config.models
+            : undefined
+
+    const nextProvider: Record<string, unknown> = {
+      ...existingProvider,
+      ...provider.customProvider.config,
+      ...(mergedModels ? { models: mergedModels } : {}),
+    }
+    const nextModels: Record<string, unknown> = {
+      ...models,
+      mode: 'merge',
+      providers: {
+        ...providers,
+        [provider.customProvider.providerId]: nextProvider,
+      },
+    }
+    const nextConfig: Record<string, unknown> = {
+      ...config,
+      models: nextModels,
+    }
+
+    if (JSON.stringify(config) === JSON.stringify(nextConfig)) {
+      return false
+    }
+
+    await writeFile(
+      configPath,
+      `${JSON.stringify(nextConfig, null, 2)}\n`,
+      'utf-8',
+    )
+    logger.debug('Updated OpenClaw custom provider config', {
+      providerId: provider.customProvider.providerId,
     })
     return true
   }
