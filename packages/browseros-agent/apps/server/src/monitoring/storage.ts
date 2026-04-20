@@ -95,7 +95,13 @@ export class MonitoringStorage {
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean)
-        .map((line) => JSON.parse(line) as MonitoringToolCallRecord)
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line) as MonitoringToolCallRecord]
+          } catch {
+            return []
+          }
+        })
     } catch {
       return []
     }
@@ -106,7 +112,9 @@ export class MonitoringStorage {
       const entries = await readdir(getLazyMonitoringRunsDir(), {
         withFileTypes: true,
       })
-      const directories = entries.filter((entry) => entry.isDirectory())
+      const directories = entries.filter(
+        (entry) => entry.isDirectory() && isValidMonitoringRunId(entry.name),
+      )
       const runStats = await Promise.all(
         directories.map(async (entry) => ({
           runId: entry.name,
