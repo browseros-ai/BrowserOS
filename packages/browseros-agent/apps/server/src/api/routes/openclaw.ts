@@ -247,6 +247,15 @@ export function createOpenClawRoutes() {
             ),
           )
         : []
+      if (getMonitoringService().getActiveSessionId(id)) {
+        return c.json(
+          {
+            error:
+              'A monitored chat session is already active for this agent. Wait for it to finish before starting another.',
+          },
+          409,
+        )
+      }
       const monitoringContext = await getMonitoringService().startSession({
         agentId: id,
         sessionKey,

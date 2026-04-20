@@ -121,6 +121,54 @@ describe('createOpenClawRoutes', () => {
     )
   })
 
+  it('rejects concurrent monitored chat requests for the same agent', async () => {
+    const actualOpenClawService = await import(
+      '../../../src/api/services/openclaw/openclaw-service'
+    )
+    const actualMonitoringService = await import(
+      '../../../src/monitoring/service'
+    )
+    const chatStream = mock(async () => new ReadableStream())
+
+    mock.module('../../../src/api/services/openclaw/openclaw-service', () => ({
+      ...actualOpenClawService,
+      getOpenClawService: () =>
+        ({
+          chatStream,
+        }) as never,
+    }))
+
+    mock.module('../../../src/monitoring/service', () => ({
+      ...actualMonitoringService,
+      getMonitoringService: () =>
+        ({
+          getActiveSessionId: (agentId: string) =>
+            agentId === 'research' ? 'existing-run' : undefined,
+        }) as never,
+    }))
+
+    const { createOpenClawRoutes } = await import(
+      '../../../src/api/routes/openclaw'
+    )
+    const route = createOpenClawRoutes()
+
+    const response = await route.request('/agents/research/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: 'hi',
+        sessionKey: 'session-789',
+      }),
+    })
+
+    expect(response.status).toBe(409)
+    expect(chatStream).not.toHaveBeenCalled()
+    expect(await response.json()).toEqual({
+      error:
+        'A monitored chat session is already active for this agent. Wait for it to finish before starting another.',
+    })
+  })
+
   it('returns 400 for unsupported provider payloads', async () => {
     const actualOpenClawService = await import(
       '../../../src/api/services/openclaw/openclaw-service'
