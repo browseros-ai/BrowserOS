@@ -270,6 +270,63 @@ export function createOpenClawRoutes() {
       }
     })
 
+    .get('/dashboard/stream', (c) => {
+      c.header('Content-Type', 'text/event-stream')
+      c.header('Cache-Control', 'no-cache')
+      c.header('Connection', 'keep-alive')
+
+      return stream(c, async (s) => {
+        const encoder = new TextEncoder()
+
+        // Send initial snapshot
+        try {
+          const dashboard = getOpenClawService().getDashboard()
+          await s.write(
+            encoder.encode(
+              `event: snapshot\ndata: ${JSON.stringify(dashboard)}\n\n`,
+            ),
+          )
+        } catch {}
+
+        // Subscribe to live status changes
+        const unsubscribe = getOpenClawService().onAgentStatusChange(
+          (agentId, entry) => {
+            const event = {
+              agentId,
+              status: entry.status,
+              currentTool: entry.currentTool,
+              error: entry.error,
+              timestamp: entry.lastEventAt,
+            }
+            s.write(
+              encoder.encode(
+                `event: status\ndata: ${JSON.stringify(event)}\n\n`,
+              ),
+            ).catch(() => {})
+          },
+        )
+
+        // Heartbeat every 15s to keep connection alive
+        const heartbeat = setInterval(() => {
+          s.write(
+            encoder.encode(
+              `event: heartbeat\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`,
+            ),
+          ).catch(() => {})
+        }, 15_000)
+
+        // Wait until client disconnects
+        try {
+          await new Promise<void>((resolve) => {
+            s.onAbort(() => resolve())
+          })
+        } finally {
+          unsubscribe()
+          clearInterval(heartbeat)
+        }
+      })
+    })
+
     .post('/agents/:id/chat', async (c) => {
       const { id } = c.req.param()
       const body = await c.req.json<{

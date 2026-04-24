@@ -420,6 +420,16 @@ export class OpenClawService {
     return this.hostPort
   }
 
+  /** Subscribe to real-time agent status changes from the WS observer. */
+  onAgentStatusChange(
+    listener: (
+      agentId: string,
+      status: import('./openclaw-observer').AgentStatusEntry,
+    ) => void,
+  ): () => void {
+    return this.observer.onStatusChange(listener)
+  }
+
   // ── Lifecycle ────────────────────────────────────────────────────────
 
   async setup(input: SetupInput, onLog?: (msg: string) => void): Promise<void> {
