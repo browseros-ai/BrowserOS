@@ -1337,6 +1337,10 @@ export class OpenClawService {
         value: true,
       },
       {
+        path: 'gateway.controlUi.dangerouslyDisableDeviceAuth',
+        value: true,
+      },
+      {
         path: 'gateway.controlUi.allowedOrigins',
         value: [
           `http://127.0.0.1:${this.hostPort}`,

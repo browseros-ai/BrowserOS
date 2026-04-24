@@ -143,34 +143,44 @@ export class OpenClawObserver {
       ws.terminate()
     }, CONNECT_TIMEOUT_MS)
 
-    ws.on('open', () => {
-      const connectReq: RequestFrame = {
-        type: 'req',
-        id: HANDSHAKE_REQUEST_ID,
-        method: 'connect',
-        params: {
-          minProtocol: PROTOCOL_VERSION,
-          maxProtocol: PROTOCOL_VERSION,
-          client: {
-            id: 'openclaw-tui',
-            displayName: 'browseros-observer',
-            version: '1.0.0',
-            platform: 'node',
-            mode: 'ui',
-          },
-          role: 'operator',
-          scopes: ['operator.read'],
-          auth: { token: this.gatewayToken },
-        },
-      }
-      ws.send(JSON.stringify(connectReq))
-    })
+    let handshakeSent = false
 
     ws.on('message', (raw) => {
       let frame: IncomingFrame
       try {
         frame = JSON.parse(raw.toString('utf8')) as IncomingFrame
       } catch {
+        return
+      }
+
+      // The gateway sends a connect.challenge event before accepting
+      // the connect request. Send the handshake after receiving it.
+      if (
+        frame.type === 'event' &&
+        frame.event === 'connect.challenge' &&
+        !handshakeSent
+      ) {
+        handshakeSent = true
+        const connectReq: RequestFrame = {
+          type: 'req',
+          id: HANDSHAKE_REQUEST_ID,
+          method: 'connect',
+          params: {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: {
+              id: 'openclaw-tui',
+              displayName: 'browseros-observer',
+              version: '1.0.0',
+              platform: 'node',
+              mode: 'ui',
+            },
+            role: 'operator',
+            scopes: ['operator.read'],
+            auth: { token: this.gatewayToken },
+          },
+        }
+        ws.send(JSON.stringify(connectReq))
         return
       }
 
@@ -189,8 +199,8 @@ export class OpenClawObserver {
         return
       }
 
-      // Broadcast events
-      if (frame.type === 'event') {
+      // Broadcast events (only process after handshake completes)
+      if (frame.type === 'event' && this.connected) {
         this.handleEvent(frame.event, frame.payload)
       }
     })
