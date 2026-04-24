@@ -113,7 +113,22 @@ export const App: FC = () => {
           <Route path="connect-apps" element={<ConnectMCP />} />
           <Route path="scheduled" element={<ScheduledTasksPage />} />
           {alphaEnabled ? (
-            <Route path="agents" element={<AgentsPage />} />
+            <>
+              <Route path="agents" element={<AgentsPage />} />
+              <Route element={<AgentCommandLayout />}>
+                <Route
+                  path="agents/:agentId"
+                  element={
+                    <AgentCommandConversation
+                      variant="page"
+                      backPath="/agents"
+                      agentPathPrefix="/agents"
+                      createAgentPath="/agents"
+                    />
+                  }
+                />
+              </Route>
+            </>
           ) : null}
           {alphaEnabled ? (
             <Route path="admin" element={<AdminDashboardPage />} />

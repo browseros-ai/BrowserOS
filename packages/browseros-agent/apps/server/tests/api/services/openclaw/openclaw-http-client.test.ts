@@ -130,6 +130,42 @@ describe('OpenClawHttpClient', () => {
     ).rejects.toThrow('Unauthorized')
   })
 
+  it('checks gateway authentication with the current bearer token', async () => {
+    const fetchMock = mock(() => Promise.resolve(new Response('{}')))
+    globalThis.fetch = fetchMock as typeof globalThis.fetch
+    const client = new OpenClawHttpClient(18789, async () => 'gateway-token')
+
+    await expect(client.isAuthenticated()).resolves.toBe(true)
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'http://127.0.0.1:18789/v1/models',
+    )
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: 'GET',
+      headers: {
+        Authorization: 'Bearer gateway-token',
+      },
+    })
+  })
+
+  it('treats rejected gateway authentication as unavailable', async () => {
+    globalThis.fetch = mock(() =>
+      Promise.resolve(new Response('Unauthorized', { status: 401 })),
+    ) as typeof globalThis.fetch
+    const client = new OpenClawHttpClient(18789, async () => 'gateway-token')
+
+    await expect(client.isAuthenticated()).resolves.toBe(false)
+  })
+
+  it('treats failed gateway authentication probes as unavailable', async () => {
+    globalThis.fetch = mock(() =>
+      Promise.reject(new Error('connect ECONNREFUSED')),
+    ) as typeof globalThis.fetch
+    const client = new OpenClawHttpClient(18789, async () => 'gateway-token')
+
+    await expect(client.isAuthenticated()).resolves.toBe(false)
+  })
+
   it('surfaces an error when OpenClaw finishes without assistant text', async () => {
     globalThis.fetch = mock(() =>
       Promise.resolve(

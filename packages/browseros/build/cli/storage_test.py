@@ -168,8 +168,18 @@ class ProcessArchTest(unittest.TestCase):
 
         self.assertEqual(tarball_sha, self.expected_tarball_sha)
         self.assertEqual(object_sha, self.expected_object_sha)
-        self.assertEqual(r2_key, "third_party/lima/limactl-darwin-arm64")
-        self.assertEqual(uploads, [("third_party/lima/limactl-darwin-arm64", "browseros")])
+        self.assertEqual(
+            r2_key, "artifacts/vendor/third_party/lima/limactl-darwin-arm64"
+        )
+        self.assertEqual(
+            uploads,
+            [
+                (
+                    "artifacts/vendor/third_party/lima/limactl-darwin-arm64",
+                    "browseros",
+                )
+            ],
+        )
 
     def test_sha_mismatch_aborts_before_upload(self) -> None:
         uploads: List[Tuple[str, str]] = []
@@ -239,7 +249,9 @@ class ProcessArchTest(unittest.TestCase):
                 )
 
         self.assertEqual(uploads, [])
-        self.assertEqual(r2_key, "third_party/lima/limactl-darwin-arm64")
+        self.assertEqual(
+            r2_key, "artifacts/vendor/third_party/lima/limactl-darwin-arm64"
+        )
 
 
 if __name__ == "__main__":

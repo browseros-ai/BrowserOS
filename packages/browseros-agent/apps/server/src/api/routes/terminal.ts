@@ -16,7 +16,9 @@ export const TERMINAL_WS_PATH = '/terminal/ws'
 
 interface TerminalRouteDeps {
   containerName: string
-  podmanPath: string
+  limaHome: string
+  limactlPath: string
+  vmName: string
 }
 
 function safeSend(ws: { send(data: string): void }, data: string): void {
@@ -45,7 +47,9 @@ function createSocketEvents(deps: TerminalRouteDeps) {
       try {
         session = createTerminalSession({
           containerName: deps.containerName,
-          podmanPath: deps.podmanPath,
+          limaHome: deps.limaHome,
+          limactlPath: deps.limactlPath,
+          vmName: deps.vmName,
           workingDir: TERMINAL_HOME_DIR,
           onOutput(data) {
             sendOutput(ws, data)

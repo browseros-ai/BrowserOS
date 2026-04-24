@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sync"
@@ -37,6 +38,12 @@ func init() {
 func runWatch(cmd *cobra.Command, args []string) error {
 	root, err := proc.FindMonorepoRoot()
 	if err != nil {
+		return err
+	}
+	if err := ensureDevCachePresent(); err != nil {
+		return err
+	}
+	if err := ensureLimactlPresent(); err != nil {
 		return err
 	}
 
@@ -103,16 +110,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	var wg sync.WaitGroup
 	var procs []*proc.ManagedProc
 
-	// Run agent codegen if generated files don't exist
 	agentDir := filepath.Join(root, "apps/agent")
-	if _, err := os.Stat(filepath.Join(agentDir, "generated/graphql")); os.IsNotExist(err) {
-		proc.LogMsg(proc.TagBuild, "Running agent codegen...")
-		if err := proc.RunBlocking(ctx, agentDir, proc.TagBuild,
-			"bun", "--env-file=.env.development", "graphql-codegen", "--config", "codegen.ts"); err != nil {
-			return fmt.Errorf("agent codegen failed: %w", err)
-		}
-		proc.LogMsg(proc.TagBuild, "agent codegen done")
-	}
 
 	if watchManual {
 		proc.LogMsg(proc.TagBuild, "Building agent (dev)...")
@@ -187,5 +185,30 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	}
 	wg.Wait()
 	proc.LogMsg(proc.TagInfo, "All processes stopped")
+	return nil
+}
+
+func ensureDevCachePresent() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	manifestPath := filepath.Join(home, ".browseros-dev", "cache", "vm", "manifest.json")
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		return fmt.Errorf("%s %s",
+			proc.ErrorColor.Sprint("VM cache is missing."),
+			proc.DimColor.Sprintf("Run %s once.", proc.BoldColor.Sprint("bun run dev:setup")),
+		)
+	}
+	return nil
+}
+
+func ensureLimactlPresent() error {
+	if _, err := exec.LookPath("limactl"); err != nil {
+		return fmt.Errorf("%s %s",
+			proc.ErrorColor.Sprint("Lima is not installed."),
+			proc.DimColor.Sprintf("Install with %s.", proc.BoldColor.Sprint("brew install lima")),
+		)
+	}
 	return nil
 }

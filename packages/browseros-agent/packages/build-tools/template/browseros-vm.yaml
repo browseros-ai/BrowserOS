@@ -1,36 +1,29 @@
 # BrowserOS VM -- consumed directly by limactl, no build step.
-# Based on Lima's built-in podman.yaml + _images/debian-12 templates.
-# https://github.com/lima-vm/lima/tree/master/templates
 
 minimumLimaVersion: 2.0.0
 
 vmType: vz
-cpus: 2
-memory: 2GiB
-disk: 10GiB
+cpus: 4
+memory: 4GiB
+disk: 20GiB
 
-# Pinned Debian 12 genericcloud -- matches the deprecated disk pipeline pin.
-# Bump in lockstep with upstream when provisioning changes.
 images:
-- location: "https://cloud.debian.org/images/cloud/bookworm/20260413-2447/debian-12-genericcloud-arm64-20260413-2447.qcow2"
+- location: "https://cloud-images.ubuntu.com/minimal/releases/noble/release-20260415/ubuntu-24.04-minimal-cloudimg-arm64.img"
   arch: aarch64
-  digest: "sha512:15ad6c52e255c84eb0e91001c5907b27199d8a7164d8ac172cfe9c92850dfaf606a6c3161d6af7f0fd5a5fef2aa8dcd9a23c2eb0fedbfcddb38e2bc306cba98f"
-- location: "https://cloud.debian.org/images/cloud/bookworm/20260413-2447/debian-12-genericcloud-amd64-20260413-2447.qcow2"
+  digest: "sha256:0cc0a529a52109b52bf697a0d90bdd0f252e7ad91b3a67f70879d56d1f64e240"
+- location: "https://cloud-images.ubuntu.com/minimal/releases/noble/release-20260415/ubuntu-24.04-minimal-cloudimg-amd64.img"
   arch: x86_64
-  digest: "sha512:db11b13c4efcc37828ffadae521d101e85079d349e1418074087bb7d306f11caccdc2b0b539d6fd50d623d40a898f83c6137268a048d7700397dc35b7dcbc927"
-# Fallbacks for when Debian rotates the dated snapshot.
-- location: https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-arm64.qcow2
+  digest: "sha256:7cbfa215a3774c46c6dc29b457f4e9667acda85fc04c7971e1e592b5056e7573"
+- location: https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-arm64.img
   arch: aarch64
-- location: https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2
+- location: https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img
   arch: x86_64
 
-# Host-state isolation -- matches spec D5 / D7 defaults.
 mounts: []
 
-# We run podman, not containerd.
 containerd:
   system: false
-  user: false
+  user: true
 
 provision:
 - mode: system
@@ -40,41 +33,22 @@ provision:
 
     if [ -e /etc/browseros-vm-provisioned ]; then exit 0; fi
 
-    DEBIAN_FRONTEND=noninteractive apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      podman crun fuse-overlayfs slirp4netns ca-certificates
+    systemctl disable --now unattended-upgrades.service apt-daily.timer apt-daily-upgrade.timer || true
+    systemctl disable --now snapd.service snapd.socket snapd.seeded.service || true
 
-    systemctl enable --now podman.socket
-
-    # Keep Docker config out of the image pull path (spec D7).
-    mkdir -p /etc/containers
-    containers_auth=/etc/containers/auth
-    printf '{}\n' > "${containers_auth}.json"
-
-    # Single-tenant appliance user (spec D7).
-    id browseros >/dev/null 2>&1 || useradd --create-home --uid 1000 --shell /bin/bash browseros
-    usermod -aG sudo browseros
-
-    # Version marker consumed by the runtime (WS4).
-    printf 'provisioned:%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /etc/browseros-vm-version
-
-    apt-get clean
-    rm -rf /var/lib/apt/lists/*
-
+    printf 'runtime:containerd-rootless\nprovisioned:%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /etc/browseros-vm-version
     touch /etc/browseros-vm-provisioned
 
-# Block `limactl start` until podman is ready.
 probes:
 - script: |
     #!/bin/bash
     set -eux -o pipefail
-    if ! timeout 60s bash -c 'until systemctl is-active podman.socket >/dev/null; do sleep 2; done'; then
-      echo >&2 "podman.socket not active after 60s"
+    if ! timeout 60s bash -c 'until nerdctl info >/dev/null 2>&1; do sleep 2; done'; then
+      echo >&2 "nerdctl is not ready after 60s"
       exit 1
     fi
   hint: See /var/log/cloud-init-output.log inside the guest
 
-# Expose guest podman socket to host for the TypeScript runtime to dial.
 portForwards:
-- guestSocket: "/run/podman/podman.sock"
-  hostSocket: "{{.Dir}}/sock/podman.sock"
+- guestSocket: "/run/user/{{.UID}}/containerd-rootless/containerd.sock"
+  hostSocket: "{{.Dir}}/sock/containerd.sock"

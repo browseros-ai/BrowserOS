@@ -10,6 +10,7 @@ import {
 } from '../scripts/cache-sync'
 import type { AgentManifest } from '../scripts/common/manifest'
 import { sha256File } from '../scripts/common/sha256'
+import { buildDevManifest } from '../scripts/seed-dev-agent-tarball'
 
 const openclaw = {
   image: 'ghcr.io/openclaw/openclaw',
@@ -137,6 +138,38 @@ describe('readLocalManifest', () => {
     await writeFile(manifestPath, '{not json')
 
     await expect(readLocalManifest(manifestPath)).rejects.toThrow()
+  })
+})
+
+describe('buildDevManifest', () => {
+  it('builds an arm64-only dev manifest from freshly built artifacts', () => {
+    const manifest = buildDevManifest(
+      [
+        {
+          agent: {
+            name: 'openclaw',
+            image: openclaw.image,
+            version: openclaw.version,
+          },
+          key: 'vm/images/openclaw-2026.4.12-arm64.tar.gz',
+          path: '/tmp/openclaw.tar.gz',
+          sha256: 'fresh-arm64',
+          sizeBytes: 404,
+        },
+      ],
+      new Date('2026-04-23T00:00:00.000Z'),
+    )
+
+    expect(manifest.schemaVersion).toBe(2)
+    expect(manifest.updatedAt).toBe('2026-04-23T00:00:00.000Z')
+    expect(manifest.agents.openclaw.image).toBe(openclaw.image)
+    expect(manifest.agents.openclaw.version).toBe(openclaw.version)
+    expect(manifest.agents.openclaw.tarballs.arm64).toEqual({
+      key: 'vm/images/openclaw-2026.4.12-arm64.tar.gz',
+      sha256: 'fresh-arm64',
+      sizeBytes: 404,
+    })
+    expect(Object.hasOwn(manifest.agents.openclaw.tarballs, 'x64')).toBe(false)
   })
 })
 

@@ -22,6 +22,7 @@ import { initializeOAuth } from '../lib/clients/oauth'
 import { getDb } from '../lib/db'
 import { logger } from '../lib/logger'
 import { Sentry } from '../lib/sentry'
+import { getLimaHomeDir, resolveBundledLimactl, VM_NAME } from '../lib/vm'
 import { createAclRoutes } from './routes/acl'
 import { createChatRoutes } from './routes/chat'
 import { createCreditsRoutes } from './routes/credits'
@@ -45,7 +46,6 @@ import {
   connectKlavisInBackground,
   type KlavisProxyRef,
 } from './services/klavis/strata-proxy'
-import { getPodmanRuntime } from './services/openclaw/podman-runtime'
 import type { Env, HttpServerConfig } from './types'
 import { defaultCorsConfig } from './utils/cors'
 import { requireTrustedAppOrigin } from './utils/request-auth'
@@ -114,7 +114,9 @@ export async function createHttpServer(config: HttpServerConfig) {
       '/',
       createTerminalRoutes({
         containerName: OPENCLAW_GATEWAY_CONTAINER_NAME,
-        podmanPath: getPodmanRuntime().getPodmanPath(),
+        limaHome: getLimaHomeDir(),
+        limactlPath: resolveBundledLimactl(resourcesDir),
+        vmName: VM_NAME,
       }),
     )
 

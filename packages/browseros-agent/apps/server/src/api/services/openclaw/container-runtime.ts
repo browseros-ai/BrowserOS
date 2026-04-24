@@ -2,19 +2,23 @@
  * @license
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * OpenClaw container lifecycle abstraction over PodmanRuntime.
  */
 
 import {
   OPENCLAW_GATEWAY_CONTAINER_NAME,
   OPENCLAW_GATEWAY_CONTAINER_PORT,
 } from '@browseros/shared/constants/openclaw'
+import type { ContainerCli, ContainerSpec, LogFn } from '../../../lib/container'
 import { logger } from '../../../lib/logger'
-import type { LogFn, PodmanRuntime } from './podman-runtime'
+import {
+  GUEST_VM_STATE,
+  hostPathToGuest,
+  type VmRuntime,
+} from '../../../lib/vm'
 
 const GATEWAY_CONTAINER_HOME = '/home/node'
 const GATEWAY_STATE_DIR = `${GATEWAY_CONTAINER_HOME}/.openclaw`
+const GUEST_OPENCLAW_HOME = `${GUEST_VM_STATE}/openclaw`
 
 export type GatewayContainerSpec = {
   image: string
@@ -25,78 +29,63 @@ export type GatewayContainerSpec = {
   timezone: string
 }
 
+export interface ContainerRuntimeConfig {
+  vm: VmRuntime
+  shell: ContainerCli
+  loader: { ensureImageLoaded(ref: string, onLog?: LogFn): Promise<void> }
+  projectDir: string
+}
+
 export class ContainerRuntime {
-  constructor(
-    private podman: PodmanRuntime,
-    private projectDir: string,
-  ) {}
+  private readonly vm: VmRuntime
+  private readonly shell: ContainerCli
+  private readonly loader: {
+    ensureImageLoaded(ref: string, onLog?: LogFn): Promise<void>
+  }
+  private readonly projectDir: string
+
+  constructor(config: ContainerRuntimeConfig) {
+    this.vm = config.vm
+    this.shell = config.shell
+    this.loader = config.loader
+    this.projectDir = config.projectDir
+  }
 
   async ensureReady(onLog?: LogFn): Promise<void> {
-    logger.info('Ensuring Podman runtime readiness')
-    return this.podman.ensureReady(onLog)
+    logger.info('Ensuring BrowserOS VM runtime readiness')
+    await this.vm.ensureReady(onLog)
+    await this.vm.getDefaultGateway()
   }
 
   async isPodmanAvailable(): Promise<boolean> {
-    return this.podman.isPodmanAvailable()
+    return true
   }
 
   async getMachineStatus(): Promise<{
     initialized: boolean
     running: boolean
   }> {
-    return this.podman.getMachineStatus()
+    const running = await this.vm.isReady()
+    return { initialized: running, running }
   }
 
   async pullImage(image: string, onLog?: LogFn): Promise<void> {
-    const code = await this.runPodmanCommand(['pull', image], onLog)
-    if (code !== 0) throw new Error(`image pull failed with code ${code}`)
+    await this.loader.ensureImageLoaded(image, onLog)
   }
 
   async startGateway(
     input: GatewayContainerSpec,
     onLog?: LogFn,
   ): Promise<void> {
-    await this.ensureGatewayRemoved(onLog)
-    const containerPort = String(OPENCLAW_GATEWAY_CONTAINER_PORT)
-    const code = await this.runPodmanCommand(
-      [
-        'run',
-        '-d',
-        '--name',
-        OPENCLAW_GATEWAY_CONTAINER_NAME,
-        '--restart',
-        'unless-stopped',
-        '-p',
-        `127.0.0.1:${input.hostPort}:${containerPort}`,
-        ...this.buildGatewayContainerRuntimeArgs(input),
-        '--health-cmd',
-        `curl -sf http://127.0.0.1:${containerPort}/healthz`,
-        '--health-interval',
-        '30s',
-        '--health-timeout',
-        '10s',
-        '--health-retries',
-        '3',
-        input.image,
-        'node',
-        'dist/index.js',
-        'gateway',
-        '--bind',
-        'lan',
-        '--port',
-        containerPort,
-        '--allow-unconfigured',
-      ],
-      onLog,
-    )
-    if (code !== 0) throw new Error(`gateway start failed with code ${code}`)
+    await this.removeGatewayContainer(onLog)
+    await this.loader.ensureImageLoaded(input.image, onLog)
+    const container = await this.buildGatewayContainerSpec(input)
+    await this.shell.createContainer(container, onLog)
+    await this.shell.startContainer(container.name)
   }
 
   async stopGateway(onLog?: LogFn): Promise<void> {
-    const code = await this.removeGatewayContainer(onLog)
-    if (code !== 0) {
-      throw new Error(`gateway stop failed with code ${code}`)
-    }
+    await this.removeGatewayContainer(onLog)
   }
 
   async restartGateway(
@@ -108,8 +97,8 @@ export class ContainerRuntime {
 
   async getGatewayLogs(tail = 50): Promise<string[]> {
     const lines: string[] = []
-    await this.runPodmanCommand(
-      ['logs', '--tail', String(tail), OPENCLAW_GATEWAY_CONTAINER_NAME],
+    await this.shell.runCommand(
+      ['logs', '-n', String(tail), OPENCLAW_GATEWAY_CONTAINER_NAME],
       (line) => lines.push(line),
     )
     return lines
@@ -140,13 +129,7 @@ export class ContainerRuntime {
     })
     const start = Date.now()
     while (Date.now() - start < timeoutMs) {
-      if (await this.isReady(hostPort)) {
-        logger.info('OpenClaw gateway became ready', {
-          hostPort,
-          waitMs: Date.now() - start,
-        })
-        return true
-      }
+      if (await this.isReady(hostPort)) return true
       await Bun.sleep(1000)
     }
     logger.error('Timed out waiting for OpenClaw gateway readiness', {
@@ -156,35 +139,12 @@ export class ContainerRuntime {
     return false
   }
 
-  /**
-   * Stops the Podman machine only if no non-BrowserOS containers are running.
-   * Prevents killing the user's own Podman workloads.
-   */
-  async stopMachineIfSafe(): Promise<void> {
-    const status = await this.podman.getMachineStatus()
-    if (!status.running) return
-
-    try {
-      const containers = await this.podman.listRunningContainers()
-      const allOurs = containers.every(
-        (name) => name === OPENCLAW_GATEWAY_CONTAINER_NAME,
-      )
-
-      if (containers.length === 0 || allOurs) {
-        await this.podman.stopMachine()
-      }
-    } catch {
-      // Best effort — don't stop machine if we can't check
-    }
+  async stopVm(): Promise<void> {
+    await this.vm.stopVm()
   }
 
   async execInContainer(command: string[], onLog?: LogFn): Promise<number> {
-    return this.podman.runCommand(
-      ['exec', OPENCLAW_GATEWAY_CONTAINER_NAME, ...command],
-      {
-        onOutput: onLog,
-      },
-    )
+    return this.shell.exec(OPENCLAW_GATEWAY_CONTAINER_NAME, command, onLog)
   }
 
   async runGatewaySetupCommand(
@@ -193,103 +153,134 @@ export class ContainerRuntime {
     onLog?: LogFn,
   ): Promise<number> {
     const setupContainerName = `${OPENCLAW_GATEWAY_CONTAINER_NAME}-setup`
-    await this.runPodmanCommand(
-      ['rm', '-f', '--ignore', setupContainerName],
-      onLog,
-    )
+    await this.shell.removeContainer(setupContainerName, { force: true }, onLog)
+    await this.loader.ensureImageLoaded(spec.image, onLog)
     const setupArgs = command[0] === 'node' ? command.slice(1) : command
-    return this.runPodmanCommand(
+    const createResult = await this.shell.runCommand(
       [
-        'run',
-        '--rm',
+        'create',
         '--name',
         setupContainerName,
-        ...this.buildGatewayContainerRuntimeArgs(spec),
+        ...(await this.buildGatewayRunArgs(spec)),
         spec.image,
         'node',
         ...setupArgs,
       ],
       onLog,
     )
+    if (createResult.exitCode !== 0) {
+      await this.shell.removeContainer(
+        setupContainerName,
+        { force: true },
+        onLog,
+      )
+      return createResult.exitCode
+    }
+
+    try {
+      const startResult = await this.shell.runCommand(
+        ['start', '-a', setupContainerName],
+        onLog,
+      )
+      return startResult.exitCode
+    } finally {
+      await this.shell.removeContainer(
+        setupContainerName,
+        { force: true },
+        onLog,
+      )
+    }
   }
 
   tailGatewayLogs(onLine: LogFn): () => void {
-    return this.podman.tailContainerLogs(
+    return this.shell.tailLogs(OPENCLAW_GATEWAY_CONTAINER_NAME, onLine)
+  }
+
+  private async removeGatewayContainer(onLog?: LogFn): Promise<void> {
+    await this.shell.removeContainer(
       OPENCLAW_GATEWAY_CONTAINER_NAME,
-      onLine,
-    )
-  }
-
-  private async runPodmanCommand(
-    args: string[],
-    onLog?: LogFn,
-  ): Promise<number> {
-    const lines: string[] = []
-    const command = ['podman', ...args].join(' ')
-    logger.info('Running OpenClaw podman command', {
-      command,
-    })
-    const code = await this.podman.runCommand(args, {
-      cwd: this.projectDir,
-      onOutput: (line) => {
-        lines.push(line)
-        onLog?.(line)
-      },
-    })
-
-    if (code !== 0) {
-      logger.error('OpenClaw podman command failed', {
-        command,
-        exitCode: code,
-        output: lines,
-      })
-    } else {
-      logger.info('OpenClaw podman command succeeded', {
-        command,
-      })
-    }
-
-    return code
-  }
-
-  private async ensureGatewayRemoved(onLog?: LogFn): Promise<void> {
-    await this.removeGatewayContainer(onLog)
-  }
-
-  private async removeGatewayContainer(onLog?: LogFn): Promise<number> {
-    return this.runPodmanCommand(
-      ['rm', '-f', '--ignore', OPENCLAW_GATEWAY_CONTAINER_NAME],
+      { force: true },
       onLog,
     )
   }
 
-  private buildGatewayContainerRuntimeArgs(
+  private async buildGatewayContainerSpec(
     input: GatewayContainerSpec,
-  ): string[] {
-    return [
+  ): Promise<ContainerSpec> {
+    return {
+      name: OPENCLAW_GATEWAY_CONTAINER_NAME,
+      image: input.image,
+      restart: 'unless-stopped',
+      ports: [
+        {
+          hostIp: '127.0.0.1',
+          hostPort: input.hostPort,
+          containerPort: OPENCLAW_GATEWAY_CONTAINER_PORT,
+        },
+      ],
+      envFile: this.translateHostPath(input.envFilePath, input.hostHome),
+      env: this.buildGatewayEnv(input),
+      mounts: [{ source: GUEST_OPENCLAW_HOME, target: GATEWAY_CONTAINER_HOME }],
+      addHosts: [await this.hostContainersInternalEntry()],
+      health: {
+        cmd: `curl -sf http://127.0.0.1:${OPENCLAW_GATEWAY_CONTAINER_PORT}/healthz`,
+        interval: '30s',
+        timeout: '10s',
+        retries: 3,
+      },
+      command: [
+        'node',
+        'dist/index.js',
+        'gateway',
+        '--bind',
+        'lan',
+        '--port',
+        String(OPENCLAW_GATEWAY_CONTAINER_PORT),
+        '--allow-unconfigured',
+      ],
+    }
+  }
+
+  private async buildGatewayRunArgs(
+    input: GatewayContainerSpec,
+  ): Promise<string[]> {
+    const args = [
       '--env-file',
-      input.envFilePath,
-      '-e',
-      `HOME=${GATEWAY_CONTAINER_HOME}`,
-      '-e',
-      `OPENCLAW_HOME=${GATEWAY_CONTAINER_HOME}`,
-      '-e',
-      `OPENCLAW_STATE_DIR=${GATEWAY_STATE_DIR}`,
-      '-e',
-      'OPENCLAW_NO_RESPAWN=1',
-      '-e',
-      'NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache',
-      '-e',
-      'NODE_ENV=production',
-      '-e',
-      `TZ=${input.timezone}`,
+      this.translateHostPath(input.envFilePath, input.hostHome),
       '-v',
-      `${input.hostHome}:${GATEWAY_CONTAINER_HOME}`,
-      '--add-host',
-      'host.containers.internal:host-gateway',
-      ...(input.gatewayToken
-        ? ['-e', `OPENCLAW_GATEWAY_TOKEN=${input.gatewayToken}`]
-        : []),
+      `${GUEST_OPENCLAW_HOME}:${GATEWAY_CONTAINER_HOME}`,
     ]
+    for (const [key, value] of Object.entries(this.buildGatewayEnv(input))) {
+      args.push('-e', `${key}=${value}`)
+    }
+    args.push('--add-host', await this.hostContainersInternalEntry())
+    return args
+  }
+
+  private async hostContainersInternalEntry(): Promise<string> {
+    return `host.containers.internal:${await this.vm.getDefaultGateway()}`
+  }
+
+  private buildGatewayEnv(input: GatewayContainerSpec): Record<string, string> {
+    return {
+      HOME: GATEWAY_CONTAINER_HOME,
+      OPENCLAW_HOME: GATEWAY_CONTAINER_HOME,
+      OPENCLAW_STATE_DIR: GATEWAY_STATE_DIR,
+      OPENCLAW_NO_RESPAWN: '1',
+      NODE_COMPILE_CACHE: '/var/tmp/openclaw-compile-cache',
+      NODE_ENV: 'production',
+      TZ: input.timezone,
+      ...(input.gatewayToken
+        ? { OPENCLAW_GATEWAY_TOKEN: input.gatewayToken }
+        : {}),
+    }
+  }
+
+  private translateHostPath(path: string, openclawHostDir: string): string {
+    if (path === openclawHostDir) return GUEST_OPENCLAW_HOME
+    if (path.startsWith(`${openclawHostDir}/`)) {
+      return `${GUEST_OPENCLAW_HOME}${path.slice(openclawHostDir.length)}`
+    }
+    return hostPathToGuest(path)
   }
 }

@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Bot } from 'lucide-react'
+import { ArrowLeft, Bot, Home } from 'lucide-react'
 import { type FC, useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
 import { Button } from '@/components/ui/button'
@@ -65,13 +65,19 @@ function ConversationHeader({
   agentName,
   agentMeta,
   status,
+  backLabel,
+  backTarget,
   onGoHome,
 }: {
   agentName: string
   agentMeta: string
   status: string
+  backLabel: string
+  backTarget: 'home' | 'page'
   onGoHome: () => void
 }) {
+  const BackIcon = backTarget === 'home' ? Home : ArrowLeft
+
   return (
     <div className="flex h-14 items-center justify-between gap-4 border-border/50 border-b px-5">
       <div className="flex min-w-0 items-center gap-3">
@@ -80,9 +86,9 @@ function ConversationHeader({
           size="icon"
           onClick={onGoHome}
           className="size-8 rounded-xl lg:hidden"
-          title="Back to home"
+          title={backLabel}
         >
-          <ArrowLeft className="size-4" />
+          <BackIcon className="size-4" />
         </Button>
         <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
           <Bot className="size-4" />
@@ -179,12 +185,16 @@ function AgentConversationController({
   onInitialMessageConsumed,
   status,
   agents,
+  agentPathPrefix,
+  createAgentPath,
 }: {
   agentId: string
   initialMessage: string | null
   onInitialMessageConsumed: () => void
   status: ReturnType<typeof useAgentCommandData>['status']
   agents: AgentEntry[]
+  agentPathPrefix: string
+  createAgentPath: string
 }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -267,7 +277,7 @@ function AgentConversationController({
   ])
 
   const handleSelectAgent = (entry: AgentEntry) => {
-    navigate(`/home/agents/${entry.agentId}`)
+    navigate(`${agentPathPrefix}/${entry.agentId}`)
   }
 
   return (
@@ -300,7 +310,7 @@ function AgentConversationController({
             onSend={(text) => {
               void send(text)
             }}
-            onCreateAgent={() => navigate('/agents')}
+            onCreateAgent={() => navigate(createAgentPath)}
             streaming={streaming}
             disabled={disabled}
             status={status?.status}
@@ -312,7 +322,19 @@ function AgentConversationController({
   )
 }
 
-export const AgentCommandConversation: FC = () => {
+interface AgentCommandConversationProps {
+  variant?: 'command' | 'page'
+  backPath?: string
+  agentPathPrefix?: string
+  createAgentPath?: string
+}
+
+export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
+  variant = 'command',
+  backPath = '/home',
+  agentPathPrefix = '/home/agents',
+  createAgentPath = '/agents',
+}) => {
   const { agentId } = useParams<{ agentId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -323,13 +345,15 @@ export const AgentCommandConversation: FC = () => {
   const agentName = agent?.name || resolvedAgentId || 'Agent'
   const agentMeta = getModelDisplayName(agent?.model) ?? 'OpenClaw agent'
   const initialMessage = searchParams.get('q')
+  const isPageVariant = variant === 'page'
+  const backLabel = isPageVariant ? 'Back to agents' : 'Back to home'
 
   if (shouldRedirectHome) {
     return <Navigate to="/home" replace />
   }
 
   const handleSelectAgent = (entry: AgentEntry) => {
-    navigate(`/home/agents/${entry.agentId}`)
+    navigate(`${agentPathPrefix}/${entry.agentId}`)
   }
 
   const statusCopy = getConversationStatusCopy(status?.status)
@@ -337,13 +361,15 @@ export const AgentCommandConversation: FC = () => {
   return (
     <div className="absolute inset-0 overflow-hidden bg-background md:pl-[theme(spacing.14)]">
       <div className="mx-auto grid h-full w-full max-w-[1480px] lg:grid-cols-[288px_minmax(0,1fr)] lg:grid-rows-[3.5rem_minmax(0,1fr)]">
-        <AgentRailHeader onGoHome={() => navigate('/home')} />
+        <AgentRailHeader onGoHome={() => navigate(backPath)} />
 
         <ConversationHeader
           agentName={agentName}
           agentMeta={agentMeta}
           status={statusCopy}
-          onGoHome={() => navigate('/home')}
+          backLabel={backLabel}
+          backTarget={isPageVariant ? 'page' : 'home'}
+          onGoHome={() => navigate(backPath)}
         />
 
         <AgentRailList
@@ -361,6 +387,8 @@ export const AgentCommandConversation: FC = () => {
           onInitialMessageConsumed={() =>
             setSearchParams({}, { replace: true })
           }
+          agentPathPrefix={agentPathPrefix}
+          createAgentPath={createAgentPath}
         />
       </div>
     </div>

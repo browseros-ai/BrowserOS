@@ -142,7 +142,7 @@ cp .env.example .env.development
 bun run start
 ```
 
-See the [agent monorepo README](../../README.md) for full environment variable reference and `process-compose` setup.
+See the [agent monorepo README](../../README.md) for full environment variable reference and `dev:watch` setup.
 
 ### Testing
 

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Main orchestrator for OpenClaw integration.
- * Container lifecycle via Podman, agent CRUD via in-container CLI,
+ * Container lifecycle via the VM runtime, agent CRUD via in-container CLI,
  * chat via HTTP /v1/chat/completions proxy.
  */
 
@@ -18,10 +18,11 @@ import { DEFAULT_PORTS } from '@browseros/shared/constants/ports'
 import { getOpenClawDir } from '../../../lib/browseros-dir'
 import { logger } from '../../../lib/logger'
 import type { MonitoringChatTurn } from '../../../monitoring/types'
-import {
+import type {
   ContainerRuntime,
-  type GatewayContainerSpec,
+  GatewayContainerSpec,
 } from './container-runtime'
+import { buildContainerRuntime } from './container-runtime-factory'
 import {
   OpenClawAgentAlreadyExistsError,
   OpenClawAgentNotFoundError,
@@ -52,8 +53,6 @@ import {
   resolveSupportedOpenClawProvider,
 } from './openclaw-provider-map'
 import type { OpenClawStreamEvent } from './openclaw-types'
-import { loadPodmanOverrides, savePodmanOverrides } from './podman-overrides'
-import { configurePodmanRuntime, getPodmanRuntime } from './podman-runtime'
 import { allocateGatewayPort, readPersistedGatewayPort } from './runtime-state'
 
 const READY_TIMEOUT_MS = 30_000
@@ -116,11 +115,7 @@ export interface OpenClawProviderUpdateResult {
 export interface OpenClawServiceConfig {
   browserosServerPort?: number
   resourcesDir?: string
-}
-
-export interface OpenClawPodmanOverridesResponse {
-  podmanPath: string | null
-  effectivePodmanPath: string
+  browserosDir?: string
 }
 
 export type OpenClawSessionSource =
@@ -344,6 +339,7 @@ export class OpenClawService {
   private lastError: string | null = null
   private browserosServerPort: number
   private resourcesDir: string | null
+  private browserosDir: string | undefined
   private controlPlaneStatus: OpenClawControlPlaneStatus = 'disconnected'
   private lastGatewayError: string | null = null
   private lastRecoveryReason: OpenClawGatewayRecoveryReason | null = null
@@ -352,7 +348,11 @@ export class OpenClawService {
 
   constructor(config: OpenClawServiceConfig = {}) {
     this.openclawDir = getOpenClawDir()
-    this.runtime = new ContainerRuntime(getPodmanRuntime(), this.openclawDir)
+    this.runtime = buildContainerRuntime({
+      resourcesDir: config.resourcesDir,
+      projectDir: this.openclawDir,
+      browserosRoot: config.browserosDir,
+    })
     this.token = crypto.randomUUID()
     this.cliClient = new OpenClawCliClient(this.runtime)
     this.bootstrapCliClient = this.buildBootstrapCliClient()
@@ -363,14 +363,31 @@ export class OpenClawService {
     this.browserosServerPort =
       config.browserosServerPort ?? DEFAULT_PORTS.server
     this.resourcesDir = config.resourcesDir ?? null
+    this.browserosDir = config.browserosDir
   }
 
   configure(config: OpenClawServiceConfig): void {
     if (config.browserosServerPort !== undefined) {
       this.browserosServerPort = config.browserosServerPort
     }
-    if (config.resourcesDir !== undefined) {
+
+    let runtimeChanged = false
+    if (
+      config.resourcesDir !== undefined &&
+      config.resourcesDir !== this.resourcesDir
+    ) {
       this.resourcesDir = config.resourcesDir
+      runtimeChanged = true
+    }
+    if (
+      config.browserosDir !== undefined &&
+      config.browserosDir !== this.browserosDir
+    ) {
+      this.browserosDir = config.browserosDir
+      runtimeChanged = true
+    }
+    if (runtimeChanged) {
+      this.rebuildRuntimeClients()
     }
   }
 
@@ -394,14 +411,6 @@ export class OpenClawService {
         hasApiKey: !!input.apiKey,
       })
 
-      logProgress('Checking container runtime...')
-      const available = await this.runtime.isPodmanAvailable()
-      if (!available) {
-        throw new Error(
-          'Podman is not available. Install Podman to use OpenClaw agents.',
-        )
-      }
-
       await this.runtime.ensureReady(logProgress)
       logProgress('Container runtime ready')
 
@@ -415,10 +424,7 @@ export class OpenClawService {
         providerKeyCount: Object.keys(provider.envValues).length,
       })
 
-      logProgress('Pulling OpenClaw image...')
-      await this.runtime.pullImage(this.getGatewayImage(), logProgress)
-      logProgress('Image ready')
-
+      await this.refreshGatewayAuthToken()
       await this.ensureGatewayPortAllocated(logProgress)
 
       logProgress('Bootstrapping OpenClaw config...')
@@ -442,8 +448,7 @@ export class OpenClawService {
       logProgress('Validating OpenClaw config...')
       await this.assertConfigValid(this.bootstrapCliClient)
 
-      this.tokenLoaded = false
-      await this.loadTokenFromConfig()
+      await this.refreshGatewayAuthToken()
 
       logProgress('Starting OpenClaw gateway...')
       await this.runtime.startGateway(
@@ -502,8 +507,7 @@ export class OpenClawService {
       await this.runtime.ensureReady(logProgress)
 
       logProgress('Refreshing gateway auth token...')
-      this.tokenLoaded = false
-      await this.loadTokenFromConfig()
+      await this.refreshGatewayAuthToken()
       await this.ensureStateEnvFile()
 
       await this.ensureGatewayPortAllocated(logProgress)
@@ -570,10 +574,10 @@ export class OpenClawService {
       })
 
       this.controlPlaneStatus = 'reconnecting'
+      await this.runtime.ensureReady(logProgress)
       this.stopGatewayLogTail()
       logProgress('Refreshing gateway auth token...')
-      this.tokenLoaded = false
-      await this.loadTokenFromConfig()
+      await this.refreshGatewayAuthToken()
       await this.ensureStateEnvFile()
       await this.ensureGatewayPortAllocated(logProgress)
       logProgress('Restarting OpenClaw gateway...')
@@ -618,8 +622,7 @@ export class OpenClawService {
       }
 
       logProgress('Reloading gateway auth token...')
-      this.tokenLoaded = false
-      await this.loadTokenFromConfig()
+      await this.refreshGatewayAuthToken()
       this.controlPlaneStatus = 'reconnecting'
       logProgress('Reconnecting control plane...')
       await this.runControlPlaneCall(() => this.cliClient.probe())
@@ -635,28 +638,13 @@ export class OpenClawService {
     } catch {
       // Best effort during shutdown
     }
-    await this.runtime.stopMachineIfSafe()
+    await this.runtime.stopVm()
     logger.info('OpenClaw shutdown complete')
   }
 
   // ── Status ───────────────────────────────────────────────────────────
 
   async getStatus(): Promise<OpenClawStatusResponse> {
-    const podmanAvailable = await this.runtime.isPodmanAvailable()
-    if (!podmanAvailable) {
-      return {
-        status: 'uninitialized',
-        podmanAvailable: false,
-        machineReady: false,
-        port: null,
-        agentCount: 0,
-        error: null,
-        controlPlaneStatus: 'disconnected',
-        lastGatewayError: null,
-        lastRecoveryReason: null,
-      }
-    }
-
     const isSetUp = existsSync(this.getStateConfigPath())
     if (!isSetUp) {
       const machineStatus = await this.runtime.getMachineStatus()
@@ -985,46 +973,7 @@ export class OpenClawService {
     )
   }
 
-  // ── Podman Overrides ─────────────────────────────────────────────────
-
-  async applyPodmanOverrides(input: {
-    podmanPath: string | null
-  }): Promise<OpenClawPodmanOverridesResponse> {
-    await savePodmanOverrides(this.openclawDir, {
-      podmanPath: input.podmanPath,
-    })
-
-    // Intentionally mutates the module-level PodmanRuntime singleton so every
-    // consumer (including future service instances) sees the new path.
-    configurePodmanRuntime({
-      resourcesDir: this.resourcesDir ?? undefined,
-      podmanPath: input.podmanPath ?? undefined,
-    })
-
-    this.rebuildRuntimeClients()
-    const effectivePodmanPath = getPodmanRuntime().getPodmanPath()
-
-    logger.info('Applied Podman overrides', {
-      podmanPath: input.podmanPath,
-      effectivePodmanPath,
-    })
-
-    return {
-      podmanPath: input.podmanPath,
-      effectivePodmanPath,
-    }
-  }
-
-  async getPodmanOverrides(): Promise<OpenClawPodmanOverridesResponse> {
-    const { podmanPath } = await loadPodmanOverrides(this.openclawDir)
-    return {
-      podmanPath,
-      effectivePodmanPath: getPodmanRuntime().getPodmanPath(),
-    }
-  }
-
   // ── Provider Keys ────────────────────────────────────────────────────
-
   async updateProviderKeys(input: {
     providerType: string
     providerName?: string
@@ -1068,8 +1017,6 @@ export class OpenClawService {
       const isSetUp = existsSync(this.getStateConfigPath())
       if (!isSetUp) return
 
-      const available = await this.runtime.isPodmanAvailable()
-      if (!available) return
       logger.info('Attempting OpenClaw auto-start', {
         hostPort: this.hostPort,
       })
@@ -1077,8 +1024,7 @@ export class OpenClawService {
       try {
         await this.runtime.ensureReady()
 
-        this.tokenLoaded = false
-        await this.loadTokenFromConfig()
+        await this.refreshGatewayAuthToken()
         await this.ensureStateEnvFile()
 
         const persistedPort = await readPersistedGatewayPort(this.openclawDir)
@@ -1086,7 +1032,7 @@ export class OpenClawService {
           this.setPort(persistedPort)
         }
 
-        if (!(await this.runtime.isReady(this.hostPort))) {
+        if (!(await this.isGatewayAvailable(this.hostPort))) {
           await this.ensureGatewayPortAllocated()
           await this.runtime.startGateway(this.buildGatewayRuntimeSpec())
           const ready = await this.runtime.waitForReady(
@@ -1124,7 +1070,11 @@ export class OpenClawService {
 
   private rebuildRuntimeClients(): void {
     this.stopGatewayLogTail()
-    this.runtime = new ContainerRuntime(getPodmanRuntime(), this.openclawDir)
+    this.runtime = buildContainerRuntime({
+      resourcesDir: this.resourcesDir ?? undefined,
+      projectDir: this.openclawDir,
+      browserosRoot: this.browserosDir,
+    })
     this.cliClient = new OpenClawCliClient(this.runtime)
     this.bootstrapCliClient = this.buildBootstrapCliClient()
   }
@@ -1157,9 +1107,34 @@ export class OpenClawService {
   }
 
   private async isGatewayAvailable(hostPort: number): Promise<boolean> {
-    if (await this.runtime.isReady(hostPort)) {
-      return true
+    if (!(await this.isGatewayPortReady(hostPort))) return false
+
+    if (!this.tokenLoaded) {
+      logger.debug(
+        'OpenClaw gateway port is ready before auth token is loaded',
+        {
+          hostPort,
+        },
+      )
+      return false
     }
+
+    const client =
+      hostPort === this.hostPort
+        ? this.httpClient
+        : new OpenClawHttpClient(hostPort, async () => this.token)
+    const authenticated = await client.isAuthenticated()
+    if (!authenticated) {
+      logger.warn('OpenClaw gateway port rejected current auth token', {
+        hostPort,
+      })
+    }
+    return authenticated
+  }
+
+  private async isGatewayPortReady(hostPort: number): Promise<boolean> {
+    if (await this.runtime.isReady(hostPort)) return true
+
     const runtime = this.runtime as {
       isHealthy?: (port: number) => Promise<boolean>
     }
@@ -1545,6 +1520,15 @@ export class OpenClawService {
     await this.loadTokenFromConfig()
   }
 
+  private async refreshGatewayAuthToken(): Promise<void> {
+    this.tokenLoaded = false
+    if (!existsSync(this.getStateConfigPath())) {
+      return
+    }
+
+    await this.loadTokenFromConfig()
+  }
+
   private async loadTokenFromConfig(): Promise<void> {
     try {
       const config = JSON.parse(
@@ -1609,6 +1593,13 @@ export function configureOpenClawService(
 
   service.configure(config)
   return service
+}
+
+export function configureVmRuntime(config: {
+  resourcesDir?: string
+  browserosDir?: string
+}): OpenClawService {
+  return configureOpenClawService(config)
 }
 
 export function getOpenClawService(): OpenClawService {

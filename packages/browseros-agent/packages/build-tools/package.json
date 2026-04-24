@@ -10,7 +10,7 @@
     "upload": "bun run scripts/upload-to-r2.ts",
     "download": "bun run scripts/download-from-r2.ts",
     "cache:sync": "bun run scripts/cache-sync.ts",
-    "cache:sync:dev": "bun run scripts/cache-sync-dev.ts",
+    "dev:seed:tarball": "bun run scripts/seed-dev-agent-tarball.ts",
     "smoke:tarball": "bun run scripts/smoke-tarball.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"

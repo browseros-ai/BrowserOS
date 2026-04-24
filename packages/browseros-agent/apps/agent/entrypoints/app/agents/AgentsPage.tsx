@@ -1,7 +1,5 @@
 import {
   AlertCircle,
-  ChevronDown,
-  ChevronRight,
   Cpu,
   Loader2,
   MessageSquare,
@@ -15,6 +13,7 @@ import {
   Wrench,
 } from 'lucide-react'
 import { type FC, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -34,7 +33,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useLlmProviders } from '@/lib/llm-providers/useLlmProviders'
-import { AgentChat } from './AgentChat'
 import { AgentTerminal } from './AgentTerminal'
 import { getOpenClawSupportedProviders } from './openclaw-supported-providers'
 import {
@@ -44,7 +42,6 @@ import {
   useOpenClawAgents,
   useOpenClawMutations,
   useOpenClawStatus,
-  usePodmanOverrides,
 } from './useOpenClaw'
 
 const LIFECYCLE_BANNER_COPY: Record<GatewayLifecycleAction, string> = {
@@ -238,123 +235,366 @@ const ProviderSelector: FC<ProviderSelectorProps> = ({
   )
 }
 
-const PodmanOverridesCard: FC = () => {
-  const { overrides, loading, saving, error, saveOverrides, clearOverrides } =
-    usePodmanOverrides()
+interface AgentsPageHeaderProps {
+  actionInProgress: boolean
+  canManageAgents: boolean
+  controlPlaneBusy: boolean
+  reconnecting: boolean
+  status: OpenClawStatus | null
+  onCreateAgent: () => void
+  onOpenTerminal: () => void
+  onReconnect: () => void
+  onRestart: () => void
+  onStop: () => void
+}
 
-  const [value, setValue] = useState('')
-  const [touched, setTouched] = useState(false)
-  const [collapsed, setCollapsed] = useState(true)
-  const [localError, setLocalError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!touched && overrides) setValue(overrides.podmanPath ?? '')
-  }, [overrides, touched])
-
-  const handleSave = async () => {
-    const trimmed = value.trim()
-    if (!trimmed) return
-    setLocalError(null)
-    try {
-      await saveOverrides(trimmed)
-      setTouched(false)
-    } catch (err) {
-      setLocalError(err instanceof Error ? err.message : String(err))
-    }
-  }
-
-  const handleClear = async () => {
-    setLocalError(null)
-    try {
-      await clearOverrides()
-      setValue('')
-      setTouched(false)
-    } catch (err) {
-      setLocalError(err instanceof Error ? err.message : String(err))
-    }
-  }
-
-  const hasOverride = !!overrides?.podmanPath
-  const effective = overrides?.effectivePodmanPath ?? null
-  const inlineErrorMessage = localError ?? error?.message ?? null
-
-  const body = (
-    <div className="space-y-3">
-      <div className="space-y-1">
-        <label htmlFor="podman-path" className="font-medium text-sm">
-          Podman binary path
-        </label>
-        <Input
-          id="podman-path"
-          value={value}
-          onChange={(event) => {
-            setTouched(true)
-            setValue(event.target.value)
-          }}
-          placeholder="/opt/homebrew/bin/podman"
-          spellCheck={false}
-          autoCapitalize="none"
-          autoCorrect="off"
-        />
-        <p className="text-muted-foreground text-xs">
-          Install Podman yourself (e.g. <code>brew install podman</code>) and
-          paste the absolute path to the binary. Restart the gateway after
-          saving.
-        </p>
-      </div>
-
-      {effective && (
-        <p className="text-muted-foreground text-xs">
-          Currently using: <code className="break-all">{effective}</code>
-        </p>
-      )}
-
-      {inlineErrorMessage && (
-        <p className="text-destructive text-xs">{inlineErrorMessage}</p>
-      )}
-
-      <div className="flex flex-wrap gap-2">
-        <Button
-          size="sm"
-          onClick={handleSave}
-          disabled={saving || loading || !value.trim()}
-        >
-          {saving ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
-          Save
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={handleClear}
-          disabled={saving || loading || !hasOverride}
-        >
-          Clear
-        </Button>
-      </div>
+const AgentsPageHeader: FC<AgentsPageHeaderProps> = ({
+  actionInProgress,
+  canManageAgents,
+  controlPlaneBusy,
+  reconnecting,
+  status,
+  onCreateAgent,
+  onOpenTerminal,
+  onReconnect,
+  onRestart,
+  onStop,
+}) => (
+  <div className="flex items-center justify-between">
+    <div>
+      <h1 className="font-bold text-2xl">Agents</h1>
+      <p className="text-muted-foreground text-sm">
+        OpenClaw agents running in a local container
+      </p>
     </div>
+
+    {status && (
+      <div className="flex items-center gap-2">
+        <StatusBadge status={status.status} />
+        {status.status !== 'uninitialized' && (
+          <ControlPlaneBadge status={status.controlPlaneStatus} />
+        )}
+
+        {status.status === 'running' && (
+          <>
+            {status.controlPlaneStatus !== 'connected' && (
+              <Button
+                variant="outline"
+                onClick={onReconnect}
+                disabled={actionInProgress || controlPlaneBusy}
+              >
+                {reconnecting ? (
+                  <Loader2 className="mr-2 size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 size-4" />
+                )}
+                Retry Connection
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onRestart}
+              disabled={actionInProgress}
+              title="Restart gateway"
+            >
+              <RefreshCw className="size-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onStop}
+              disabled={actionInProgress}
+              title="Stop gateway"
+            >
+              <Square className="size-4" />
+            </Button>
+            <Button variant="outline" onClick={onOpenTerminal}>
+              <TerminalSquare className="mr-1 size-4" />
+              Terminal
+            </Button>
+            <Button onClick={onCreateAgent} disabled={!canManageAgents}>
+              <Plus className="mr-1 size-4" />
+              New Agent
+            </Button>
+          </>
+        )}
+      </div>
+    )}
+  </div>
+)
+
+function LifecycleAlert({ message }: { message: string }) {
+  return (
+    <Alert>
+      <Loader2 className="animate-spin" />
+      <AlertTitle>{message}</AlertTitle>
+    </Alert>
   )
+}
+
+function InlineErrorAlert({
+  message,
+  onDismiss,
+}: {
+  message: string
+  onDismiss: () => void
+}) {
+  return (
+    <Alert variant="destructive">
+      <AlertCircle />
+      <AlertTitle>OpenClaw action failed</AlertTitle>
+      <AlertDescription>
+        <p>{message}</p>
+        <div className="mt-2">
+          <Button variant="outline" size="sm" onClick={onDismiss}>
+            Dismiss
+          </Button>
+        </div>
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+interface ControlPlaneAlertProps {
+  actionInProgress: boolean
+  controlPlaneBusy: boolean
+  controlPlaneCopy: ReturnType<typeof getControlPlaneCopy>
+  reconnecting: boolean
+  recoveryDetail: string | null
+  status: OpenClawStatus
+  onReconnect: () => void
+  onRestart: () => void
+}
+
+const ControlPlaneAlert: FC<ControlPlaneAlertProps> = ({
+  actionInProgress,
+  controlPlaneBusy,
+  controlPlaneCopy,
+  reconnecting,
+  recoveryDetail,
+  status,
+  onReconnect,
+  onRestart,
+}) => (
+  <Alert
+    variant={status.controlPlaneStatus === 'failed' ? 'destructive' : 'default'}
+  >
+    {status.controlPlaneStatus === 'failed' ? (
+      <ShieldAlert />
+    ) : status.controlPlaneStatus === 'recovering' ? (
+      <Wrench />
+    ) : (
+      <WifiOff />
+    )}
+    <AlertTitle>{controlPlaneCopy.title}</AlertTitle>
+    <AlertDescription>
+      <p>{controlPlaneCopy.description}</p>
+      {recoveryDetail && <p>{recoveryDetail}</p>}
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onReconnect}
+          disabled={actionInProgress || controlPlaneBusy}
+        >
+          {reconnecting ? (
+            <Loader2 className="mr-2 size-4 animate-spin" />
+          ) : (
+            <RefreshCw className="mr-2 size-4" />
+          )}
+          Retry Connection
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onRestart}
+          disabled={actionInProgress}
+        >
+          Restart Gateway
+        </Button>
+      </div>
+    </AlertDescription>
+  </Alert>
+)
+
+interface GatewayStateCardsProps {
+  actionInProgress: boolean
+  status: OpenClawStatus | null
+  onOpenSetup: () => void
+  onRestart: () => void
+  onStart: () => void
+}
+
+const GatewayStateCards: FC<GatewayStateCardsProps> = ({
+  actionInProgress,
+  status,
+  onOpenSetup,
+  onRestart,
+  onStart,
+}) => (
+  <>
+    {status?.status === 'uninitialized' && (
+      <Card>
+        <CardContent className="flex flex-col items-center gap-4 py-12">
+          <Cpu className="size-12 text-muted-foreground" />
+          <div className="text-center">
+            <h3 className="font-semibold text-lg">Set Up OpenClaw</h3>
+            <p className="text-muted-foreground text-sm">
+              {status.podmanAvailable
+                ? 'Create a local BrowserOS VM to run autonomous agents with full tool access.'
+                : 'BrowserOS VM runtime is unavailable on this system.'}
+            </p>
+          </div>
+          {status.podmanAvailable && (
+            <Button onClick={onOpenSetup}>Set Up Now</Button>
+          )}
+        </CardContent>
+      </Card>
+    )}
+
+    {status?.status === 'stopped' && (
+      <Card>
+        <CardContent className="flex flex-col items-center gap-4 py-12">
+          <Cpu className="size-12 text-muted-foreground" />
+          <div className="text-center">
+            <h3 className="font-semibold text-lg">Gateway Stopped</h3>
+            <p className="text-muted-foreground text-sm">
+              The OpenClaw gateway is not running.
+            </p>
+          </div>
+          <Button onClick={onStart} disabled={actionInProgress}>
+            Start Gateway
+          </Button>
+        </CardContent>
+      </Card>
+    )}
+
+    {status?.status === 'error' && (
+      <Card className="border-destructive">
+        <CardContent className="flex flex-col items-center gap-4 py-12">
+          <AlertCircle className="size-12 text-destructive" />
+          <div className="text-center">
+            <h3 className="font-semibold text-lg">Gateway Error</h3>
+            <p className="text-muted-foreground text-sm">
+              {status.error ?? status.lastGatewayError}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={onStart} disabled={actionInProgress}>
+              Start Gateway
+            </Button>
+            <Button
+              variant="outline"
+              onClick={onRestart}
+              disabled={actionInProgress}
+            >
+              Restart Gateway
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    )}
+  </>
+)
+
+interface RunningAgentsSectionProps {
+  agents: AgentEntry[]
+  agentsLoading: boolean
+  canManageAgents: boolean
+  deleting: boolean
+  status: OpenClawStatus | null
+  onChatAgent: (agentId: string) => void
+  onCreateAgent: () => void
+  onDeleteAgent: (agentId: string) => void
+}
+
+const RunningAgentsSection: FC<RunningAgentsSectionProps> = ({
+  agents,
+  agentsLoading,
+  canManageAgents,
+  deleting,
+  status,
+  onChatAgent,
+  onCreateAgent,
+  onDeleteAgent,
+}) => {
+  if (status?.status !== 'running') return null
+
+  if (agentsLoading) {
+    return (
+      <div className="flex justify-center py-8">
+        <Loader2 className="size-5 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  if (agents.length === 0) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center gap-3 py-8">
+          <p className="text-muted-foreground text-sm">
+            No agents yet. Create one to get started.
+          </p>
+          <Button
+            variant="outline"
+            onClick={onCreateAgent}
+            disabled={!canManageAgents}
+          >
+            <Plus className="mr-1 size-4" />
+            Create Agent
+          </Button>
+        </CardContent>
+      </Card>
+    )
+  }
 
   return (
-    <Card>
-      <CardHeader
-        className="cursor-pointer py-3"
-        onClick={() => setCollapsed((prev) => !prev)}
-      >
-        <CardTitle className="flex items-center gap-2 text-base">
-          {collapsed ? (
-            <ChevronRight className="size-4" />
-          ) : (
-            <ChevronDown className="size-4" />
-          )}
-          Advanced: Podman binary path
-        </CardTitle>
-      </CardHeader>
-      {!collapsed && <CardContent className="pt-0">{body}</CardContent>}
-    </Card>
+    <div className="space-y-3">
+      {agents.map((agent) => (
+        <Card key={agent.agentId}>
+          <CardHeader className="flex flex-row items-center justify-between py-3">
+            <div className="flex items-center gap-3">
+              <Cpu className="size-5 text-muted-foreground" />
+              <div>
+                <div className="flex items-center gap-2">
+                  <CardTitle className="text-base">{agent.name}</CardTitle>
+                </div>
+                <p className="font-mono text-muted-foreground text-xs">
+                  {agent.workspace}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onChatAgent(agent.agentId)}
+                disabled={!canManageAgents}
+              >
+                <MessageSquare className="mr-1 size-4" />
+                Chat
+              </Button>
+              {agent.agentId !== 'main' && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => onDeleteAgent(agent.agentId)}
+                  disabled={!canManageAgents || deleting}
+                >
+                  <Trash2 className="size-4 text-destructive" />
+                </Button>
+              )}
+            </div>
+          </CardHeader>
+        </Card>
+      ))}
+    </div>
   )
 }
 
 export const AgentsPage: FC = () => {
+  const navigate = useNavigate()
   const {
     status,
     loading: statusLoading,
@@ -390,7 +630,6 @@ export const AgentsPage: FC = () => {
   const [newName, setNewName] = useState('')
   const [createProviderId, setCreateProviderId] = useState('')
 
-  const [chatAgent, setChatAgent] = useState<AgentEntry | null>(null)
   const [showTerminal, setShowTerminal] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -460,7 +699,7 @@ export const AgentsPage: FC = () => {
   const recoveryDetail = status ? getRecoveryDetail(status) : null
   const controlPlaneCopy = status
     ? getControlPlaneCopy(status.controlPlaneStatus)
-    : null
+    : FALLBACK_CONTROL_PLANE_COPY
 
   const runWithErrorHandling = async (fn: () => Promise<unknown>) => {
     setError(null)
@@ -543,16 +782,6 @@ export const AgentsPage: FC = () => {
     return <AgentTerminal onBack={() => setShowTerminal(false)} />
   }
 
-  if (chatAgent) {
-    return (
-      <AgentChat
-        agentId={chatAgent.agentId}
-        agentName={chatAgent.name}
-        onBack={() => setChatAgent(null)}
-      />
-    )
-  }
-
   if (statusLoading && !status) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -563,274 +792,61 @@ export const AgentsPage: FC = () => {
 
   return (
     <div className="fade-in slide-in-from-bottom-5 animate-in space-y-6 duration-500">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="font-bold text-2xl">Agents</h1>
-          <p className="text-muted-foreground text-sm">
-            OpenClaw agents running in a local container
-          </p>
-        </div>
+      <AgentsPageHeader
+        actionInProgress={actionInProgress}
+        canManageAgents={canManageAgents}
+        controlPlaneBusy={gatewayUiState.controlPlaneBusy}
+        reconnecting={reconnecting}
+        status={status}
+        onCreateAgent={() => setCreateOpen(true)}
+        onOpenTerminal={() => setShowTerminal(true)}
+        onReconnect={handleReconnect}
+        onRestart={handleRestart}
+        onStop={handleStop}
+      />
 
-        {status && (
-          <div className="flex items-center gap-2">
-            <StatusBadge status={status.status} />
-            {status.status !== 'uninitialized' && (
-              <ControlPlaneBadge status={status.controlPlaneStatus} />
-            )}
-
-            {status.status === 'running' && (
-              <>
-                {status.controlPlaneStatus !== 'connected' && (
-                  <Button
-                    variant="outline"
-                    onClick={handleReconnect}
-                    disabled={
-                      actionInProgress || gatewayUiState.controlPlaneBusy
-                    }
-                  >
-                    {reconnecting ? (
-                      <Loader2 className="mr-2 size-4 animate-spin" />
-                    ) : (
-                      <RefreshCw className="mr-2 size-4" />
-                    )}
-                    Retry Connection
-                  </Button>
-                )}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleRestart}
-                  disabled={actionInProgress}
-                  title="Restart gateway"
-                >
-                  <RefreshCw className="size-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleStop}
-                  disabled={actionInProgress}
-                  title="Stop gateway"
-                >
-                  <Square className="size-4" />
-                </Button>
-                <Button variant="outline" onClick={() => setShowTerminal(true)}>
-                  <TerminalSquare className="mr-1 size-4" />
-                  Terminal
-                </Button>
-                <Button
-                  onClick={() => setCreateOpen(true)}
-                  disabled={!canManageAgents}
-                >
-                  <Plus className="mr-1 size-4" />
-                  New Agent
-                </Button>
-              </>
-            )}
-          </div>
-        )}
-      </div>
-
-      {lifecycleBanner && (
-        <Alert>
-          <Loader2 className="animate-spin" />
-          <AlertTitle>{lifecycleBanner}</AlertTitle>
-        </Alert>
-      )}
+      {lifecycleBanner && <LifecycleAlert message={lifecycleBanner} />}
 
       {inlineError && (
-        <Alert variant="destructive">
-          <AlertCircle />
-          <AlertTitle>OpenClaw action failed</AlertTitle>
-          <AlertDescription>
-            <p>{inlineError}</p>
-            <div className="mt-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setError(null)}
-              >
-                Dismiss
-              </Button>
-            </div>
-          </AlertDescription>
-        </Alert>
+        <InlineErrorAlert
+          message={inlineError}
+          onDismiss={() => setError(null)}
+        />
       )}
 
       {status && showControlPlaneDegraded && (
-        <Alert
-          variant={
-            status.controlPlaneStatus === 'failed' ? 'destructive' : 'default'
-          }
-        >
-          {status.controlPlaneStatus === 'failed' ? (
-            <ShieldAlert />
-          ) : status.controlPlaneStatus === 'recovering' ? (
-            <Wrench />
-          ) : (
-            <WifiOff />
-          )}
-          <AlertTitle>{controlPlaneCopy?.title}</AlertTitle>
-          <AlertDescription>
-            <p>{controlPlaneCopy?.description}</p>
-            {recoveryDetail && <p>{recoveryDetail}</p>}
-            <div className="mt-2 flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleReconnect}
-                disabled={actionInProgress || gatewayUiState.controlPlaneBusy}
-              >
-                {reconnecting ? (
-                  <Loader2 className="mr-2 size-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="mr-2 size-4" />
-                )}
-                Retry Connection
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleRestart}
-                disabled={actionInProgress}
-              >
-                Restart Gateway
-              </Button>
-            </div>
-          </AlertDescription>
-        </Alert>
+        <ControlPlaneAlert
+          actionInProgress={actionInProgress}
+          controlPlaneBusy={gatewayUiState.controlPlaneBusy}
+          controlPlaneCopy={controlPlaneCopy}
+          reconnecting={reconnecting}
+          recoveryDetail={recoveryDetail}
+          status={status}
+          onReconnect={handleReconnect}
+          onRestart={handleRestart}
+        />
       )}
 
-      {status?.status === 'uninitialized' && (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-4 py-12">
-            <Cpu className="size-12 text-muted-foreground" />
-            <div className="text-center">
-              <h3 className="font-semibold text-lg">Set Up OpenClaw</h3>
-              <p className="text-muted-foreground text-sm">
-                {status.podmanAvailable
-                  ? 'Create a local container to run autonomous agents with full tool access.'
-                  : 'Podman is required to run OpenClaw agents. Install Podman first.'}
-              </p>
-            </div>
-            {status.podmanAvailable && (
-              <Button onClick={() => setSetupOpen(true)}>Set Up Now</Button>
-            )}
-          </CardContent>
-        </Card>
-      )}
+      <GatewayStateCards
+        actionInProgress={actionInProgress}
+        status={status}
+        onOpenSetup={() => setSetupOpen(true)}
+        onRestart={handleRestart}
+        onStart={handleStart}
+      />
 
-      {status?.status === 'stopped' && (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-4 py-12">
-            <Cpu className="size-12 text-muted-foreground" />
-            <div className="text-center">
-              <h3 className="font-semibold text-lg">Gateway Stopped</h3>
-              <p className="text-muted-foreground text-sm">
-                The OpenClaw gateway is not running.
-              </p>
-            </div>
-            <Button onClick={handleStart} disabled={actionInProgress}>
-              Start Gateway
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
-      {status?.status === 'error' && (
-        <Card className="border-destructive">
-          <CardContent className="flex flex-col items-center gap-4 py-12">
-            <AlertCircle className="size-12 text-destructive" />
-            <div className="text-center">
-              <h3 className="font-semibold text-lg">Gateway Error</h3>
-              <p className="text-muted-foreground text-sm">
-                {status.error ?? status.lastGatewayError}
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <Button onClick={handleStart} disabled={actionInProgress}>
-                Start Gateway
-              </Button>
-              <Button
-                variant="outline"
-                onClick={handleRestart}
-                disabled={actionInProgress}
-              >
-                Restart Gateway
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {status?.status === 'running' && (
-        <div className="space-y-3">
-          {agentsLoading ? (
-            <div className="flex justify-center py-8">
-              <Loader2 className="size-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : agents.length === 0 ? (
-            <Card>
-              <CardContent className="flex flex-col items-center gap-3 py-8">
-                <p className="text-muted-foreground text-sm">
-                  No agents yet. Create one to get started.
-                </p>
-                <Button
-                  variant="outline"
-                  onClick={() => setCreateOpen(true)}
-                  disabled={!canManageAgents}
-                >
-                  <Plus className="mr-1 size-4" />
-                  Create Agent
-                </Button>
-              </CardContent>
-            </Card>
-          ) : (
-            agents.map((agent) => (
-              <Card key={agent.agentId}>
-                <CardHeader className="flex flex-row items-center justify-between py-3">
-                  <div className="flex items-center gap-3">
-                    <Cpu className="size-5 text-muted-foreground" />
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <CardTitle className="text-base">
-                          {agent.name}
-                        </CardTitle>
-                      </div>
-                      <p className="font-mono text-muted-foreground text-xs">
-                        {agent.workspace}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setChatAgent(agent)}
-                      disabled={!canManageAgents}
-                    >
-                      <MessageSquare className="mr-1 size-4" />
-                      Chat
-                    </Button>
-                    {agent.agentId !== 'main' && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleDelete(agent.agentId)}
-                        disabled={!canManageAgents || deleting}
-                      >
-                        <Trash2 className="size-4 text-destructive" />
-                      </Button>
-                    )}
-                  </div>
-                </CardHeader>
-              </Card>
-            ))
-          )}
-        </div>
-      )}
-
-      <PodmanOverridesCard />
+      <RunningAgentsSection
+        agents={agents}
+        agentsLoading={agentsLoading}
+        canManageAgents={canManageAgents}
+        deleting={deleting}
+        status={status}
+        onChatAgent={(agentId) => navigate(`/agents/${agentId}`)}
+        onCreateAgent={() => setCreateOpen(true)}
+        onDeleteAgent={(agentId) => {
+          void handleDelete(agentId)
+        }}
+      />
 
       <Dialog open={setupOpen} onOpenChange={setSetupOpen}>
         <DialogContent>

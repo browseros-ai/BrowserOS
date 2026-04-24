@@ -36,9 +36,6 @@ describe('Application.start', () => {
     const openclawService = await import(
       '../src/api/services/openclaw/openclaw-service'
     )
-    const podmanRuntime = await import(
-      '../src/api/services/openclaw/podman-runtime'
-    )
     const migrateModule = await import('../src/skills/migrate')
     const remoteSyncModule = await import('../src/skills/remote-sync')
 
@@ -91,7 +88,12 @@ describe('Application.start', () => {
     spyOn(remoteSyncModule, 'startSkillSync').mockImplementation(() => {})
     spyOn(remoteSyncModule, 'stopSkillSync').mockImplementation(() => {})
 
-    spyOn(podmanRuntime, 'configurePodmanRuntime').mockImplementation(() => {})
+    spyOn(openclawService, 'configureVmRuntime').mockImplementation(
+      () =>
+        ({
+          tryAutoStart: async () => {},
+        }) as never,
+    )
     spyOn(openclawService, 'configureOpenClawService').mockImplementation(
       () =>
         ({

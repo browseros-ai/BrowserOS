@@ -15,10 +15,9 @@ import { EXIT_CODES } from '@browseros/shared/constants/exit-codes'
 import { createHttpServer } from './api/server'
 import {
   configureOpenClawService,
+  configureVmRuntime,
   getOpenClawService,
 } from './api/services/openclaw/openclaw-service'
-import { loadPodmanOverrides } from './api/services/openclaw/podman-overrides'
-import { configurePodmanRuntime } from './api/services/openclaw/podman-runtime'
 import { CdpBackend } from './browser/backends/cdp'
 import { Browser } from './browser/browser'
 import type { ServerConfig } from './config'
@@ -26,7 +25,6 @@ import { INLINED_ENV } from './env'
 import {
   cleanOldSessions,
   ensureBrowserosDir,
-  getOpenClawDir,
   removeServerConfigSync,
   writeServerConfig,
 } from './lib/browseros-dir'
@@ -62,16 +60,7 @@ export class Application {
     })
 
     const resourcesDir = path.resolve(this.config.resourcesDir)
-    const podmanOverrides = await loadPodmanOverrides(getOpenClawDir())
-    configurePodmanRuntime({
-      resourcesDir,
-      podmanPath: podmanOverrides.podmanPath ?? undefined,
-    })
-    if (podmanOverrides.podmanPath) {
-      logger.info('Using user-overridden Podman binary', {
-        podmanPath: podmanOverrides.podmanPath,
-      })
-    }
+    configureVmRuntime({ resourcesDir })
     await this.initCoreServices()
 
     if (!this.config.cdpPort) {

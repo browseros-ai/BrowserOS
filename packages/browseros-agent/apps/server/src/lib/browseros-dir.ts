@@ -44,6 +44,10 @@ export function getBuiltinSkillsDir(): string {
 }
 
 export function getOpenClawDir(): string {
+  return join(getVmStateDir(), PATHS.OPENCLAW_DIR_NAME)
+}
+
+export function getLegacyOpenClawDir(): string {
   return join(getBrowserosDir(), PATHS.OPENCLAW_DIR_NAME)
 }
 
@@ -53,6 +57,18 @@ export function getCacheDir(): string {
 
 export function getVmCacheDir(): string {
   return join(getCacheDir(), 'vm')
+}
+
+export function getLimaHomeDir(): string {
+  return join(getBrowserosDir(), 'lima')
+}
+
+export function getVmStateDir(): string {
+  return join(getBrowserosDir(), 'vm')
+}
+
+export function getVmDisksDir(): string {
+  return getVmCacheDir()
 }
 
 export function getAgentCacheDir(): string {

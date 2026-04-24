@@ -74,6 +74,18 @@ const primaryNavItems: NavItem[] = [
   { name: 'Settings', to: '/settings/ai', icon: Settings },
 ]
 
+function isNavItemActive(item: NavItem, pathname: string): boolean {
+  if (item.to === '/settings/ai') {
+    return pathname.startsWith('/settings')
+  }
+
+  if (item.to === '/agents') {
+    return pathname === '/agents' || pathname.startsWith('/agents/')
+  }
+
+  return pathname === item.to
+}
+
 export const SidebarNavigation: FC<SidebarNavigationProps> = ({
   expanded = true,
 }) => {
@@ -90,10 +102,7 @@ export const SidebarNavigation: FC<SidebarNavigationProps> = ({
         <nav className="space-y-1">
           {filteredItems.map((item) => {
             const Icon = item.icon
-            const isActive =
-              item.to === '/settings/ai'
-                ? location.pathname.startsWith('/settings')
-                : location.pathname === item.to
+            const isActive = isNavItemActive(item, location.pathname)
 
             const navItem = (
               <NavLink

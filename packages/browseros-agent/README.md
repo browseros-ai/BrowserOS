@@ -75,26 +75,20 @@ packages/
 
 ### Setup
 
-Requires [process-compose](https://github.com/F1bonacc1/process-compose):
-
-```bash
-brew install process-compose
-```
-
 ```bash
 # Copy environment files for each package
 cp apps/server/.env.example apps/server/.env.development
 cp apps/agent/.env.example apps/agent/.env.development
 cp apps/server/.env.production.example apps/server/.env.production
 
+# Install deps, generate agent code, and sync the VM cache
+bun run dev:setup
+
 # Start the full dev environment
-process-compose up
+bun run dev:watch
 ```
 
-The `process-compose up` command runs the following in order:
-1. `bun install` — installs dependencies
-2. `bun --cwd apps/agent codegen` — generates agent code
-3. `bun --cwd apps/server start` and `bun --cwd apps/agent dev` — starts server and agent in parallel
+`dev:watch` exits when the VM cache manifest is missing, but setup stays in `dev:setup`.
 
 ### Environment Variables
 

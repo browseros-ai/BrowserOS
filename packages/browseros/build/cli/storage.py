@@ -23,7 +23,7 @@ from ..modules.storage.r2 import (
 )
 
 LIMA_RELEASE_BASE = "https://github.com/lima-vm/lima/releases/download"
-LIMA_R2_PREFIX = "third_party/lima"
+LIMA_R2_PREFIX = "artifacts/vendor/third_party/lima"
 LIMA_MANIFEST_KEY = f"{LIMA_R2_PREFIX}/manifest.json"
 LIMA_HTTP_TIMEOUT_S = 60
 

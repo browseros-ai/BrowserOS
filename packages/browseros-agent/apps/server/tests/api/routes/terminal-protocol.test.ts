@@ -10,6 +10,7 @@ import {
   serializeTerminalServerMessage,
 } from '../../../src/api/services/terminal/terminal-protocol'
 import {
+  buildTerminalEnv,
   buildTerminalExecCommand,
   TERMINAL_HOME_DIR,
 } from '../../../src/api/services/terminal/terminal-session'
@@ -50,15 +51,20 @@ describe('terminal protocol', () => {
     ).toBe('{"type":"output","data":"hello"}')
   })
 
-  it('builds a podman exec command rooted in the container home dir', () => {
+  it('builds a limactl shell command rooted in the container home dir', () => {
     expect(
       buildTerminalExecCommand(
-        'podman',
+        'limactl',
+        'browseros-vm',
         OPENCLAW_GATEWAY_CONTAINER_NAME,
         TERMINAL_HOME_DIR,
       ),
     ).toEqual([
-      'podman',
+      'limactl',
+      'shell',
+      'browseros-vm',
+      '--',
+      'nerdctl',
       'exec',
       '-it',
       '-w',
@@ -66,5 +72,14 @@ describe('terminal protocol', () => {
       OPENCLAW_GATEWAY_CONTAINER_NAME,
       '/bin/sh',
     ])
+  })
+
+  it('sets LIMA_HOME for terminal limactl sessions', () => {
+    expect(buildTerminalEnv('/tmp/browseros-lima')).toEqual(
+      expect.objectContaining({
+        LIMA_HOME: '/tmp/browseros-lima',
+        TERM: 'xterm-256color',
+      }),
+    )
   })
 })

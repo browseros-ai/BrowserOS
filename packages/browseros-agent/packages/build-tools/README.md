@@ -24,20 +24,20 @@ limactl start \
   --name browseros-vm-dev \
   packages/browseros-agent/packages/build-tools/template/browseros-vm.yaml
 
-limactl shell browseros-vm-dev podman info
+limactl shell browseros-vm-dev nerdctl info
 
-SOCK="$(limactl list browseros-vm-dev --format '{{.Dir}}')/sock/podman.sock"
-curl --unix-socket "$SOCK" http://d/v5.0.0/libpod/_ping
+SOCK="$(limactl list browseros-vm-dev --format '{{.Dir}}')/sock/containerd.sock"
+test -S "$SOCK"
 
 bun run --filter @browseros/build-tools build:tarball -- --agent openclaw --arch arm64
-limactl shell browseros-vm-dev podman load -i "$(ls dist/images/openclaw-*-arm64.tar.gz | head -1)"
+limactl shell browseros-vm-dev nerdctl load -i "$(ls dist/images/openclaw-*-arm64.tar.gz | head -1)"
 
 limactl delete --force browseros-vm-dev
 ```
 
 ## Build an agent tarball
 
-Requires `podman`.
+The BrowserOS VM uses containerd + nerdctl. This host-side tarball builder still requires `podman` to pull and save OCI archives for release packaging.
 
 ```bash
 bun run --filter @browseros/build-tools build:tarball -- --agent openclaw --arch arm64
@@ -72,8 +72,7 @@ Pulls the published manifest and tarballs from R2 (`cdn.browseros.com/vm/`). Dev
 ## Seed the dev cache from a local build
 
 ```bash
-bun run --filter @browseros/build-tools build:tarball -- --agent openclaw --arch arm64
-NODE_ENV=development bun run --filter @browseros/build-tools cache:sync:dev
+NODE_ENV=development bun run --filter @browseros/build-tools dev:seed:tarball
 ```
 
-`cache:sync:dev` hardcodes `arm64` (all devs are on Apple Silicon), skips R2 entirely, and writes an arm64-only manifest + tarball into `~/.browseros-dev/cache/vm/` from `./dist/`. It refuses to run unless `NODE_ENV=development`. Use this when you want to test the server against a local tarball without publishing.
+`dev:seed:tarball` hardcodes `arm64` (all devs are on Apple Silicon), builds the configured agent tarball, skips R2 entirely, and writes an arm64-only manifest + tarball into `~/.browseros-dev/cache/vm/`. It refuses to run unless `NODE_ENV=development`. Use this when you want to test the server against the latest configured agent tarball without publishing.

@@ -97,6 +97,24 @@ export class OpenClawHttpClient {
     return createHistoryEventStream(body, input.signal)
   }
 
+  async isAuthenticated(): Promise<boolean> {
+    try {
+      const token = await this.getToken()
+      const response = await fetch(
+        `http://127.0.0.1:${this.hostPort}/v1/models`,
+        {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      )
+      return response.ok
+    } catch {
+      return false
+    }
+  }
+
   private async fetchChat(input: OpenClawChatRequest): Promise<Response> {
     const token = await this.getToken()
     const response = await fetch(

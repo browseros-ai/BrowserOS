@@ -2,6 +2,7 @@ import {
   OPENCLAW_CONTAINER_HOME,
   OPENCLAW_TERMINAL_SHELL,
 } from '@browseros/shared/constants/openclaw'
+import { buildNerdctlCommand } from '../../../lib/container'
 import { logger } from '../../../lib/logger'
 
 export const TERMINAL_HOME_DIR = OPENCLAW_CONTAINER_HOME
@@ -11,7 +12,9 @@ const TERMINAL_NAME = 'xterm-256color'
 
 interface TerminalSessionDeps {
   containerName: string
-  podmanPath: string
+  limaHome: string
+  limactlPath: string
+  vmName: string
   workingDir: string
   onExit: (exitCode: number) => void
   onOutput: (data: string) => void
@@ -24,19 +27,29 @@ export interface TerminalSession {
 }
 
 export function buildTerminalExecCommand(
-  podmanPath: string,
+  limactlPath: string,
+  vmName: string,
   containerName: string,
   workingDir: string,
 ): string[] {
   return [
-    podmanPath,
-    'exec',
-    '-it',
-    '-w',
-    workingDir,
-    containerName,
-    OPENCLAW_TERMINAL_SHELL,
+    limactlPath,
+    'shell',
+    vmName,
+    '--',
+    ...buildNerdctlCommand([
+      'exec',
+      '-it',
+      '-w',
+      workingDir,
+      containerName,
+      OPENCLAW_TERMINAL_SHELL,
+    ]),
   ]
+}
+
+export function buildTerminalEnv(limaHome: string): NodeJS.ProcessEnv {
+  return { ...process.env, LIMA_HOME: limaHome, TERM: TERMINAL_NAME }
 }
 
 export function createTerminalSession(
@@ -45,11 +58,13 @@ export function createTerminalSession(
   const decoder = new TextDecoder()
   const proc = Bun.spawn(
     buildTerminalExecCommand(
-      deps.podmanPath,
+      deps.limactlPath,
+      deps.vmName,
       deps.containerName,
       deps.workingDir,
     ),
     {
+      cwd: '/',
       terminal: {
         cols: DEFAULT_COLS,
         rows: DEFAULT_ROWS,
@@ -58,7 +73,7 @@ export function createTerminalSession(
           if (chunk) deps.onOutput(chunk)
         },
       },
-      env: { ...process.env, TERM: TERMINAL_NAME },
+      env: buildTerminalEnv(deps.limaHome),
     },
   )
   let closed = false
