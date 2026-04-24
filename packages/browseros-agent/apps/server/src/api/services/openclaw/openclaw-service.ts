@@ -336,8 +336,14 @@ export class OpenClawService {
   private stopLogTail: (() => void) | null = null
   private lifecycleLock: Promise<void> = Promise.resolve()
 
+  private _jsonlReader: OpenClawJsonlReader | null = null
   private get jsonlReader(): OpenClawJsonlReader {
-    return new OpenClawJsonlReader(getOpenClawStateDir(this.openclawDir))
+    if (!this._jsonlReader) {
+      this._jsonlReader = new OpenClawJsonlReader(
+        getOpenClawStateDir(this.openclawDir),
+      )
+    }
+    return this._jsonlReader
   }
 
   constructor(config: OpenClawServiceConfig = {}) {
@@ -905,22 +911,23 @@ export class OpenClawService {
       normalizedSessionKey,
     )
     const sessions = this.listSessions(agentId)
-    const session = sessions.find(
-      (entry) => entry.key === canonicalSessionKey,
-    ) ??
+    const session =
+      sessions.find((entry) => entry.key === canonicalSessionKey) ??
       sessions.find((entry) => entry.key === sessionKey) ??
       sessions.find(
         (entry) =>
           normalizeBrowserOSChatSessionKey(agentId, entry.key) ===
           normalizedSessionKey,
-      ) ?? {
-        key: canonicalSessionKey,
-        updatedAt: 0,
-        sessionId: '',
+      )
+
+    if (!session) {
+      return {
         agentId,
-        kind: 'chat',
-        source: classifySessionSource(canonicalSessionKey),
+        exists: false,
+        sessionKey: normalizedSessionKey,
+        session: null,
       }
+    }
 
     return {
       agentId,
@@ -1056,6 +1063,7 @@ export class OpenClawService {
     })
     this.cliClient = new OpenClawCliClient(this.runtime)
     this.bootstrapCliClient = this.buildBootstrapCliClient()
+    this._jsonlReader = null
   }
 
   private setPort(hostPort: number): void {

@@ -5,7 +5,7 @@
  */
 
 import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { resolve } from 'node:path'
 
 // ---------------------------------------------------------------------------
 // Types for raw JSONL line parsing (matches OpenClaw's internal format)
@@ -139,7 +139,7 @@ export class OpenClawJsonlReader {
   /** List all agent IDs by scanning the agents directory. */
   listAgents(): string[] {
     try {
-      const entries = readdirSync(join(this.stateRoot, 'agents'), {
+      const entries = readdirSync(this.safePath('agents'), {
         withFileTypes: true,
       })
       return entries.filter((e) => e.isDirectory()).map((e) => e.name)
@@ -227,9 +227,21 @@ export class OpenClawJsonlReader {
 
   // ── Private helpers ─────────────────────────────────────────────────
 
+  /**
+   * Ensure a resolved path stays within stateRoot to prevent path traversal
+   * via crafted agentId or sessionId values containing ".." segments.
+   */
+  private safePath(...segments: string[]): string {
+    const resolved = resolve(this.stateRoot, ...segments)
+    const root = resolve(this.stateRoot)
+    if (!resolved.startsWith(`${root}/`) && resolved !== root) {
+      throw new Error(`Path traversal blocked: ${segments.join('/')}`)
+    }
+    return resolved
+  }
+
   private readSessionsJson(agentId: string): SessionsJson | null {
-    const filePath = join(
-      this.stateRoot,
+    const filePath = this.safePath(
       'agents',
       agentId,
       'sessions',
@@ -267,13 +279,7 @@ export class OpenClawJsonlReader {
   }
 
   private jsonlPath(agentId: string, piSessionId: string): string {
-    return join(
-      this.stateRoot,
-      'agents',
-      agentId,
-      'sessions',
-      `${piSessionId}.jsonl`,
-    )
+    return this.safePath('agents', agentId, 'sessions', `${piSessionId}.jsonl`)
   }
 }
 
