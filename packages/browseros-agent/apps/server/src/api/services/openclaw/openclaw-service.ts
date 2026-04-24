@@ -33,7 +33,6 @@ import {
   type OpenClawAgentRecord,
   OpenClawCliClient,
   type OpenClawConfigBatchEntry,
-  type OpenClawSessionEntry,
 } from './openclaw-cli-client'
 import {
   getHostWorkspaceDir,
@@ -46,8 +45,8 @@ import {
   OpenClawHttpClient,
   type OpenClawSessionHistory,
   type OpenClawSessionHistoryEvent,
-  type OpenClawSessionHistoryMessage,
 } from './openclaw-http-client'
+import { type ClawEvent, OpenClawJsonlReader } from './openclaw-jsonl-reader'
 import {
   type ResolvedOpenClawProviderConfig,
   resolveSupportedOpenClawProvider,
@@ -215,15 +214,6 @@ function normalizeHistoryLimit(limit?: number): number {
   return Math.max(1, Math.min(100, Math.trunc(limit)))
 }
 
-function toBrowserOSSession(
-  session: OpenClawSessionEntry,
-): BrowserOSOpenClawSession {
-  return {
-    ...session,
-    source: classifySessionSource(session.key),
-  }
-}
-
 function classifySessionSource(key: string): OpenClawSessionSource {
   if (key.includes(':cron:')) return 'cron'
   if (key.includes(':hook:')) return 'hook'
@@ -232,68 +222,68 @@ function classifySessionSource(key: string): OpenClawSessionSource {
   return 'other'
 }
 
-function filterHttpSessionHistoryMessages(
-  messages: OpenClawSessionHistoryMessage[],
-): OpenClawSessionHistoryMessage[] {
-  const result: OpenClawSessionHistoryMessage[] = []
+/**
+ * Convert JSONL events to BrowserOS chat history items, applying the same
+ * filtering rules as the old HTTP-based pipeline (filterHttpSessionHistoryMessages).
+ */
+function jsonlEventsToHistoryItems(
+  events: ClawEvent[],
+  sessionKey: string,
+  source: OpenClawSessionSource,
+): BrowserOSChatHistoryItem[] {
+  const items: BrowserOSChatHistoryItem[] = []
+  let seq = 0
 
-  for (const message of messages) {
-    const text = (message.content ?? '').trim()
+  for (const event of events) {
+    if (event.type !== 'user.message' && event.type !== 'agent.message') {
+      continue
+    }
 
-    if (message.role === 'assistant' && text.startsWith('HEARTBEAT')) continue
+    let text = event.content.trim()
+    if (!text) continue
+
+    // Filter assistant heartbeats
+    if (event.type === 'agent.message' && text.startsWith('HEARTBEAT')) continue
+
+    // Filter internal reminders
     if (
-      message.role === 'user' &&
+      event.type === 'user.message' &&
       text.includes('Handle this reminder internally')
     ) {
       continue
     }
 
+    // Extract actual user text from context-replay wrappers
     if (
-      message.role === 'user' &&
+      event.type === 'user.message' &&
       text.startsWith('[Chat messages since your last reply')
     ) {
       const marker = '[Current message - respond to this]'
       const index = text.indexOf(marker)
       if (index >= 0) {
-        const actual = text
+        text = text
           .slice(index + marker.length)
           .trim()
           .replace(/^User:\s*/i, '')
-        if (actual) {
-          result.push({ ...message, content: actual })
-        }
+      } else {
+        continue
       }
-      continue
+      if (!text) continue
     }
 
-    result.push(message)
+    items.push({
+      id: `${sessionKey}:${seq}`,
+      role: event.type === 'user.message' ? 'user' : 'assistant',
+      text,
+      timestamp: event.createdAt,
+      messageSeq: seq,
+      sessionKey,
+      source,
+    })
+    seq++
   }
 
-  return result
-}
-
-function normalizeHttpHistoryMessages(input: {
-  sessionKey: string
-  source: OpenClawSessionSource
-  messages: OpenClawSessionHistoryMessage[]
-}): BrowserOSChatHistoryItem[] {
-  return input.messages
-    .map((message, index): BrowserOSChatHistoryItem | null => {
-      if (message.role !== 'user' && message.role !== 'assistant') return null
-      const text = (message.content ?? '').trim()
-      if (!text) return null
-
-      return {
-        id: `${input.sessionKey}:${message.messageSeq ?? index}`,
-        role: message.role,
-        text,
-        timestamp: message.timestamp,
-        messageSeq: message.messageSeq ?? index,
-        sessionKey: input.sessionKey,
-        source: input.source,
-      }
-    })
-    .filter((item): item is BrowserOSChatHistoryItem => item !== null)
+  return items
 }
 
 function encodeHistoryCursor(input: {
@@ -345,6 +335,10 @@ export class OpenClawService {
   private lastRecoveryReason: OpenClawGatewayRecoveryReason | null = null
   private stopLogTail: (() => void) | null = null
   private lifecycleLock: Promise<void> = Promise.resolve()
+
+  private get jsonlReader(): OpenClawJsonlReader {
+    return new OpenClawJsonlReader(getOpenClawStateDir(this.openclawDir))
+  }
 
   constructor(config: OpenClawServiceConfig = {}) {
     this.openclawDir = getOpenClawDir()
@@ -778,18 +772,29 @@ export class OpenClawService {
     return this.runControlPlaneCall(() => this.cliClient.listAgents())
   }
 
-  async listSessions(agentId?: string): Promise<BrowserOSOpenClawSession[]> {
+  listSessions(agentId?: string): BrowserOSOpenClawSession[] {
     logger.debug('Listing OpenClaw sessions', { agentId })
-    const sessions = await this.cliClient.listSessions(agentId)
-    return sessions
-      .map(toBrowserOSSession)
-      .sort((a, b) => b.updatedAt - a.updatedAt)
+
+    const agentIds = agentId ? [agentId] : this.jsonlReader.listAgents()
+
+    const sessions: BrowserOSOpenClawSession[] = []
+    for (const id of agentIds) {
+      for (const entry of this.jsonlReader.listSessions(id)) {
+        sessions.push({
+          key: entry.key,
+          updatedAt: entry.updatedAt,
+          sessionId: entry.sessionId,
+          agentId: id,
+          kind: 'chat',
+          source: classifySessionSource(entry.key),
+        })
+      }
+    }
+    return sessions.sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
-  async resolveAgentSession(
-    agentId: string,
-  ): Promise<BrowserOSOpenClawAgentSessionResponse> {
-    const sessions = await this.listSessions(agentId)
+  resolveAgentSession(agentId: string): BrowserOSOpenClawAgentSessionResponse {
+    const sessions = this.listSessions(agentId)
     const session =
       sessions.find((entry) => entry.source === 'user-chat') ??
       sessions.find((entry) => entry.kind.toLowerCase().includes('chat')) ??
@@ -808,17 +813,17 @@ export class OpenClawService {
     }
   }
 
-  async getAgentHistoryPage(
+  getAgentHistoryPage(
     agentId: string,
     input: HistoryPageInput = {},
-  ): Promise<BrowserOSOpenClawHistoryPageResponse> {
+  ): BrowserOSOpenClawHistoryPageResponse {
     const limit = normalizeHistoryLimit(input.limit)
     const cursor = decodeHistoryCursor(input.cursor)
     const resolved = cursor?.sessionKey
-      ? await this.resolveSpecificAgentSession(agentId, cursor.sessionKey)
+      ? this.resolveSpecificAgentSession(agentId, cursor.sessionKey)
       : input.sessionKey
-        ? await this.resolveSpecificAgentSession(agentId, input.sessionKey)
-        : await this.resolveAgentSession(agentId)
+        ? this.resolveSpecificAgentSession(agentId, input.sessionKey)
+        : this.resolveAgentSession(agentId)
 
     const session = resolved.session
     if (!session) {
@@ -834,12 +839,11 @@ export class OpenClawService {
     const sessionKey =
       resolved.sessionKey ??
       normalizeBrowserOSChatSessionKey(agentId, session.key)
-    const allMessages = await this.fetchAllSessionMessages(session.key)
-    const items = normalizeHttpHistoryMessages({
-      sessionKey,
-      source: session.source,
-      messages: filterHttpSessionHistoryMessages(allMessages),
-    })
+
+    // Read JSONL directly from the host filesystem via Lima virtiofs mount
+    const events = this.jsonlReader.listBySession(agentId, session.key)
+    const items = jsonlEventsToHistoryItems(events, sessionKey, session.source)
+
     const end = Math.min(cursor?.end ?? items.length, items.length)
     const start = Math.max(0, end - limit)
     const pageItems = items.slice(start, end)
@@ -857,32 +861,6 @@ export class OpenClawService {
         limit,
       },
     }
-  }
-
-  /**
-   * Fetch all messages for a session by iterating through OpenClaw's
-   * paginated HTTP history endpoint. OpenClaw returns a limited page by
-   * default, so we follow the cursor until hasMore is false.
-   */
-  private async fetchAllSessionMessages(
-    sessionKey: string,
-  ): Promise<OpenClawSessionHistoryMessage[]> {
-    const allMessages: OpenClawSessionHistoryMessage[] = []
-    let cursor: string | undefined
-    const pageSize = 200
-
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const page = await this.getSessionHistory(sessionKey, {
-        limit: pageSize,
-        cursor,
-      })
-      allMessages.push(...page.messages)
-      if (!page.hasMore || !page.cursor) break
-      cursor = page.cursor
-    }
-
-    return allMessages
   }
 
   // ── Chat Stream (HTTP) ───────────────────────────────────────────────
@@ -914,10 +892,10 @@ export class OpenClawService {
     )
   }
 
-  private async resolveSpecificAgentSession(
+  private resolveSpecificAgentSession(
     agentId: string,
     sessionKey: string,
-  ): Promise<BrowserOSOpenClawAgentSessionResponse> {
+  ): BrowserOSOpenClawAgentSessionResponse {
     const normalizedSessionKey = normalizeBrowserOSChatSessionKey(
       agentId,
       sessionKey,
@@ -926,22 +904,23 @@ export class OpenClawService {
       agentId,
       normalizedSessionKey,
     )
-    const sessions = await this.listSessions(agentId)
-    const session =
-      sessions.find((entry) => entry.key === canonicalSessionKey) ??
+    const sessions = this.listSessions(agentId)
+    const session = sessions.find(
+      (entry) => entry.key === canonicalSessionKey,
+    ) ??
       sessions.find((entry) => entry.key === sessionKey) ??
       sessions.find(
         (entry) =>
           normalizeBrowserOSChatSessionKey(agentId, entry.key) ===
           normalizedSessionKey,
-      ) ??
-      toBrowserOSSession({
+      ) ?? {
         key: canonicalSessionKey,
         updatedAt: 0,
         sessionId: '',
         agentId,
         kind: 'chat',
-      })
+        source: classifySessionSource(canonicalSessionKey),
+      }
 
     return {
       agentId,

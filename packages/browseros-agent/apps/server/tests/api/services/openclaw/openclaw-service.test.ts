@@ -159,28 +159,27 @@ describe('OpenClawService', () => {
   })
 
   it('resolves the latest user-chat session for an agent', async () => {
-    const service = new OpenClawService() as MutableOpenClawService
-
-    service.cliClient = {
-      listSessions: mock(async () => [
-        {
-          key: 'agent:main:cron:daily',
-          updatedAt: 30,
+    tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
+    await mkdir(join(tempDir, '.openclaw', 'agents', 'main', 'sessions'), {
+      recursive: true,
+    })
+    await writeFile(
+      join(tempDir, '.openclaw', 'agents', 'main', 'sessions', 'sessions.json'),
+      JSON.stringify({
+        'agent:main:cron:daily': {
           sessionId: 'cron-session',
-          agentId: 'main',
-          kind: 'cron',
+          updatedAt: 30,
         },
-        {
-          key: 'openai-user:browseros:main:chat-session',
-          updatedAt: 20,
+        'openai-user:browseros:main:chat-session': {
           sessionId: 'chat-session',
-          agentId: 'main',
-          kind: 'chat',
+          updatedAt: 20,
         },
-      ]),
-    }
+      }),
+    )
+    const service = new OpenClawService() as MutableOpenClawService
+    service.openclawDir = tempDir
 
-    await expect(service.resolveAgentSession('main')).resolves.toEqual({
+    expect(service.resolveAgentSession('main')).toEqual({
       agentId: 'main',
       exists: true,
       sessionKey: 'openai-user:browseros:main:chat-session',
@@ -211,21 +210,24 @@ describe('OpenClawService', () => {
   })
 
   it('returns the raw BrowserOS session id while retaining the OpenClaw key for diagnostics', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
+    await mkdir(join(tempDir, '.openclaw', 'agents', 'main', 'sessions'), {
+      recursive: true,
+    })
+    await writeFile(
+      join(tempDir, '.openclaw', 'agents', 'main', 'sessions', 'sessions.json'),
+      JSON.stringify({
+        'agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00':
+          {
+            sessionId: 'chat-session',
+            updatedAt: 20,
+          },
+      }),
+    )
     const service = new OpenClawService() as MutableOpenClawService
+    service.openclawDir = tempDir
 
-    service.cliClient = {
-      listSessions: mock(async () => [
-        {
-          key: 'agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00',
-          updatedAt: 20,
-          sessionId: 'chat-session',
-          agentId: 'main',
-          kind: 'chat',
-        },
-      ]),
-    }
-
-    await expect(service.resolveAgentSession('main')).resolves.toEqual({
+    expect(service.resolveAgentSession('main')).toEqual({
       agentId: 'main',
       exists: true,
       sessionKey: 'e1ee8e17-4fdb-4072-99ce-8f680853ec00',
@@ -241,28 +243,29 @@ describe('OpenClawService', () => {
   })
 
   it('resolves recursive active sessions back to the canonical OpenClaw transcript key', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
+    await mkdir(join(tempDir, '.openclaw', 'agents', 'main', 'sessions'), {
+      recursive: true,
+    })
+    await writeFile(
+      join(tempDir, '.openclaw', 'agents', 'main', 'sessions', 'sessions.json'),
+      JSON.stringify({
+        'agent:main:openai-user:browseros:main:agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00':
+          {
+            sessionId: 'nested-session',
+            updatedAt: 30,
+          },
+        'agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00':
+          {
+            sessionId: 'canonical-session',
+            updatedAt: 20,
+          },
+      }),
+    )
     const service = new OpenClawService() as MutableOpenClawService
+    service.openclawDir = tempDir
 
-    service.cliClient = {
-      listSessions: mock(async () => [
-        {
-          key: 'agent:main:openai-user:browseros:main:agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00',
-          updatedAt: 30,
-          sessionId: 'nested-session',
-          agentId: 'main',
-          kind: 'chat',
-        },
-        {
-          key: 'agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00',
-          updatedAt: 20,
-          sessionId: 'canonical-session',
-          agentId: 'main',
-          kind: 'chat',
-        },
-      ]),
-    }
-
-    await expect(service.resolveAgentSession('main')).resolves.toEqual({
+    expect(service.resolveAgentSession('main')).toEqual({
       agentId: 'main',
       exists: true,
       sessionKey: 'e1ee8e17-4fdb-4072-99ce-8f680853ec00',
@@ -278,54 +281,42 @@ describe('OpenClawService', () => {
   })
 
   it('uses the canonical OpenClaw key when history is requested with a recursive session key', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
+    await mkdir(join(tempDir, '.openclaw', 'agents', 'main', 'sessions'), {
+      recursive: true,
+    })
+    await writeFile(
+      join(tempDir, '.openclaw', 'agents', 'main', 'sessions', 'sessions.json'),
+      JSON.stringify({
+        'agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00':
+          {
+            sessionId: 'chat-session',
+            updatedAt: 20,
+          },
+      }),
+    )
+    await writeFile(
+      join(
+        tempDir,
+        '.openclaw',
+        'agents',
+        'main',
+        'sessions',
+        'chat-session.jsonl',
+      ),
+      [
+        '{"type":"message","id":"m1","timestamp":"1970-01-01T00:00:00.001Z","message":{"role":"user","content":[{"type":"text","text":"Old question"}]}}',
+        '{"type":"message","id":"m2","timestamp":"1970-01-01T00:00:00.002Z","message":{"role":"assistant","content":[{"type":"text","text":"Old answer"}]}}',
+      ].join('\n'),
+    )
     const service = new OpenClawService() as MutableOpenClawService
-    const getSessionHistory = mock(async () => ({
-      sessionKey:
-        'agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00',
-      messages: [
-        {
-          role: 'user',
-          content: 'Old question',
-          messageSeq: 0,
-          timestamp: 1,
-        },
-        {
-          role: 'assistant',
-          content: 'Old answer',
-          messageSeq: 1,
-          timestamp: 2,
-        },
-      ],
-      hasMore: false,
-    }))
+    service.openclawDir = tempDir
 
-    service.runtime = {
-      isReady: async () => true,
-    }
-    service.cliClient = {
-      listSessions: mock(async () => [
-        {
-          key: 'agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00',
-          updatedAt: 20,
-          sessionId: 'chat-session',
-          agentId: 'main',
-          kind: 'chat',
-        },
-      ]),
-    }
-    service.httpClient = {
-      getSessionHistory,
-    }
-
-    const page = await service.getAgentHistoryPage('main', {
+    const page = service.getAgentHistoryPage('main', {
       sessionKey:
         'agent:main:openai-user:browseros:main:agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00',
     })
 
-    expect(getSessionHistory).toHaveBeenCalledWith(
-      'agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00',
-      { limit: 200, cursor: undefined },
-    )
     expect(page.sessionKey).toBe('e1ee8e17-4fdb-4072-99ce-8f680853ec00')
     expect(page.items).toEqual([
       {
@@ -350,77 +341,58 @@ describe('OpenClawService', () => {
   })
 
   it('returns normalized paginated chat history for an agent session', async () => {
-    const service = new OpenClawService() as MutableOpenClawService
-
-    service.runtime = {
-      isReady: async () => true,
-    }
-    service.cliClient = {
-      listSessions: mock(async () => [
-        {
-          key: 'openai-user:browseros:main:chat-session',
+    tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
+    await mkdir(join(tempDir, '.openclaw', 'agents', 'main', 'sessions'), {
+      recursive: true,
+    })
+    await writeFile(
+      join(tempDir, '.openclaw', 'agents', 'main', 'sessions', 'sessions.json'),
+      JSON.stringify({
+        'openai-user:browseros:main:chat-session': {
+          sessionId: 'pi-session',
           updatedAt: 20,
-          sessionId: 'chat-session',
-          agentId: 'main',
-          kind: 'chat',
         },
-      ]),
-    }
-    service.httpClient = {
-      getSessionHistory: mock(async () => ({
-        sessionKey: 'openai-user:browseros:main:chat-session',
-        messages: [
-          {
-            role: 'assistant',
-            content: 'HEARTBEAT_OK',
-            messageSeq: 0,
-          },
-          {
-            role: 'user',
-            content: 'First question',
-            messageSeq: 1,
-            timestamp: 1,
-          },
-          {
-            role: 'assistant',
-            content: 'First answer',
-            messageSeq: 2,
-            timestamp: 2,
-          },
-          {
-            role: 'user',
-            content:
-              '[Chat messages since your last reply]\n' +
-              '[Current message - respond to this]\n' +
-              'User: Second question',
-            messageSeq: 3,
-            timestamp: 3,
-          },
-        ],
-        hasMore: false,
-      })),
-    }
+      }),
+    )
+    await writeFile(
+      join(
+        tempDir,
+        '.openclaw',
+        'agents',
+        'main',
+        'sessions',
+        'pi-session.jsonl',
+      ),
+      [
+        '{"type":"message","id":"m0","timestamp":"1970-01-01T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"HEARTBEAT_OK"}]}}',
+        '{"type":"message","id":"m1","timestamp":"1970-01-01T00:00:00.001Z","message":{"role":"user","content":[{"type":"text","text":"First question"}]}}',
+        '{"type":"message","id":"m2","timestamp":"1970-01-01T00:00:00.002Z","message":{"role":"assistant","content":[{"type":"text","text":"First answer"}]}}',
+        '{"type":"message","id":"m3","timestamp":"1970-01-01T00:00:00.003Z","message":{"role":"user","content":[{"type":"text","text":"[Chat messages since your last reply]\\n[Current message - respond to this]\\nUser: Second question"}]}}',
+      ].join('\n'),
+    )
+    const service = new OpenClawService() as MutableOpenClawService
+    service.openclawDir = tempDir
 
-    const page = await service.getAgentHistoryPage('main', { limit: 2 })
+    const page = service.getAgentHistoryPage('main', { limit: 2 })
 
     expect(page.agentId).toBe('main')
     expect(page.sessionKey).toBe('openai-user:browseros:main:chat-session')
     expect(page.items).toEqual([
       {
-        id: 'openai-user:browseros:main:chat-session:2',
+        id: 'openai-user:browseros:main:chat-session:1',
         role: 'assistant',
         text: 'First answer',
         timestamp: 2,
-        messageSeq: 2,
+        messageSeq: 1,
         sessionKey: 'openai-user:browseros:main:chat-session',
         source: 'user-chat',
       },
       {
-        id: 'openai-user:browseros:main:chat-session:3',
+        id: 'openai-user:browseros:main:chat-session:2',
         role: 'user',
         text: 'Second question',
         timestamp: 3,
-        messageSeq: 3,
+        messageSeq: 2,
         sessionKey: 'openai-user:browseros:main:chat-session',
         source: 'user-chat',
       },
