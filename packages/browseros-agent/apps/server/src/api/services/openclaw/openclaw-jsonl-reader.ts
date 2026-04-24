@@ -439,3 +439,51 @@ function combineModel(
   if (!model) return undefined
   return provider ? `${provider}/${model}` : model
 }
+
+// ---------------------------------------------------------------------------
+// Tool activity summary
+// ---------------------------------------------------------------------------
+
+const TOOL_DESCRIPTIONS: Record<string, (count: number) => string> = {
+  browser_navigate: (n) => `Browsed ${n} page${n !== 1 ? 's' : ''}`,
+  browser_take_screenshot: (n) => `Took ${n} screenshot${n !== 1 ? 's' : ''}`,
+  browser_click: (n) => `Clicked ${n} element${n !== 1 ? 's' : ''}`,
+  browser_fill: (n) => `Filled ${n} field${n !== 1 ? 's' : ''}`,
+  browser_type: (n) => `Typed in ${n} field${n !== 1 ? 's' : ''}`,
+  google_calendar_list_events: (n) =>
+    n > 1 ? `Checked calendar ${n} times` : 'Checked calendar',
+  gmail_search: (n) => (n > 1 ? `Searched email ${n} times` : 'Searched email'),
+  gmail_send: (n) => `Sent ${n} email${n !== 1 ? 's' : ''}`,
+  slack_post_message: (n) => `Sent ${n} Slack message${n !== 1 ? 's' : ''}`,
+  file_write: (n) => `Wrote ${n} file${n !== 1 ? 's' : ''}`,
+  file_read: (n) => `Read ${n} file${n !== 1 ? 's' : ''}`,
+}
+
+function defaultToolDescription(toolName: string, count: number): string {
+  const short = toolName
+    .replace(/^(browser_|google_|mcp_)/, '')
+    .replaceAll('_', ' ')
+  return count > 1 ? `Used ${short} ${count} times` : `Used ${short}`
+}
+
+/**
+ * Convert raw tool-use events into a human-readable activity summary.
+ *
+ * Example output: "Browsed 3 pages, took 2 screenshots"
+ */
+export function summarizeToolActivity(events: ClawEvent[]): string | null {
+  const toolCounts = new Map<string, number>()
+  for (const e of events) {
+    if (e.type === 'agent.tool_use' && e.toolName) {
+      toolCounts.set(e.toolName, (toolCounts.get(e.toolName) ?? 0) + 1)
+    }
+  }
+  if (toolCounts.size === 0) return null
+
+  const parts: string[] = []
+  for (const [tool, count] of toolCounts) {
+    const describe = TOOL_DESCRIPTIONS[tool]
+    parts.push(describe ? describe(count) : defaultToolDescription(tool, count))
+  }
+  return parts.join(', ')
+}

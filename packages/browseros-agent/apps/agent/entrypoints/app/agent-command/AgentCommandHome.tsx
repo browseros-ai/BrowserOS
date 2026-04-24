@@ -8,10 +8,12 @@ import type { AgentEntry } from '@/entrypoints/app/agents/useOpenClaw'
 import { ImportDataHint } from '@/entrypoints/newtab/index/ImportDataHint'
 import { SignInHint } from '@/entrypoints/newtab/index/SignInHint'
 import { useActiveHint } from '@/entrypoints/newtab/index/useActiveHint'
+import type { AgentCardData } from '@/lib/agent-conversations/types'
 import { AgentCardDock } from './AgentCardDock'
 import { useAgentCommandData } from './agent-command-layout'
 import { ConversationInput } from './ConversationInput'
-import { useAgentCardData } from './useAgentCardData'
+import { buildAgentCardData } from './useAgentCardData'
+import { useAgentDashboard } from './useAgentDashboard'
 
 function AgentCommandSetupState({
   onOpenAgents,
@@ -95,7 +97,7 @@ function RecentThreads({
   onSelectAgent,
 }: {
   activeAgentId?: string | null
-  agents: ReturnType<typeof useAgentCardData>
+  agents: AgentCardData[]
   onOpenAgents: () => void
   onSelectAgent: (agentId: string) => void
 }) {
@@ -134,7 +136,8 @@ export const AgentCommandHome: FC = () => {
   const activeHint = useActiveHint()
   const { status, agents } = useAgentCommandData()
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
-  const cardData = useAgentCardData(agents, status?.status)
+  const { data: dashboard } = useAgentDashboard(status?.status === 'running')
+  const cardData = buildAgentCardData(agents, status?.status, dashboard?.agents)
 
   useEffect(() => {
     if (agents.length === 0) {

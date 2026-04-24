@@ -260,6 +260,16 @@ export function createOpenClawRoutes() {
       }
     })
 
+    .get('/dashboard', (c) => {
+      try {
+        const dashboard = getOpenClawService().getDashboard()
+        return c.json(dashboard)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return c.json({ error: message }, 500)
+      }
+    })
+
     .post('/agents/:id/chat', async (c) => {
       const { id } = c.req.param()
       const body = await c.req.json<{

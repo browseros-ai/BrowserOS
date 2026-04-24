@@ -1,11 +1,10 @@
-import { useEffect, useState } from 'react'
 import {
   type AgentEntry,
   getModelDisplayName,
   type OpenClawStatus,
 } from '@/entrypoints/app/agents/useOpenClaw'
-import { getLatestConversation } from '@/lib/agent-conversations/storage'
 import type { AgentCardData } from '@/lib/agent-conversations/types'
+import type { AgentOverview } from './useAgentDashboard'
 
 function getAgentStatusTone(
   status: OpenClawStatus['status'] | undefined,
@@ -15,55 +14,29 @@ function getAgentStatusTone(
   return 'idle'
 }
 
-async function getAgentCardData(
-  agent: AgentEntry,
-  status: OpenClawStatus['status'] | undefined,
-): Promise<AgentCardData> {
-  const conversation = await getLatestConversation(agent.agentId)
-  const lastTurn = conversation?.turns[conversation.turns.length - 1]
-  const lastTextPart = lastTurn?.parts.findLast((part) => part.kind === 'text')
-
-  return {
-    agentId: agent.agentId,
-    name: agent.name,
-    model: getModelDisplayName(agent.model),
-    status: getAgentStatusTone(status),
-    lastMessage:
-      lastTextPart?.kind === 'text'
-        ? lastTextPart.text.slice(0, 120)
-        : undefined,
-    lastMessageTimestamp: lastTurn?.timestamp,
-  }
-}
-
-export function useAgentCardData(
+/**
+ * Build agent card display data by merging the raw agent entries from
+ * the gateway with enriched overview data from the dashboard API.
+ *
+ * Pure function — no hooks, no IndexedDB, no async.
+ */
+export function buildAgentCardData(
   agents: AgentEntry[],
   status: OpenClawStatus['status'] | undefined,
-) {
-  const [cardData, setCardData] = useState<AgentCardData[]>([])
+  dashboard: AgentOverview[] | undefined,
+): AgentCardData[] {
+  return agents.map((agent) => {
+    const overview = dashboard?.find((d) => d.agentId === agent.agentId)
 
-  useEffect(() => {
-    let active = true
-
-    const loadCardData = async () => {
-      const nextCardData = await Promise.all(
-        agents.map((agent) => getAgentCardData(agent, status)),
-      )
-      if (active) {
-        setCardData(nextCardData)
-      }
+    return {
+      agentId: agent.agentId,
+      name: agent.name,
+      model: getModelDisplayName(agent.model),
+      status: getAgentStatusTone(status),
+      lastMessage: overview?.latestMessage?.slice(0, 200) ?? undefined,
+      lastMessageTimestamp: overview?.latestMessageAt ?? undefined,
+      activitySummary: overview?.activitySummary ?? undefined,
+      costUsd: overview?.totalCostUsd ?? undefined,
     }
-
-    if (agents.length > 0) {
-      void loadCardData()
-    } else {
-      setCardData([])
-    }
-
-    return () => {
-      active = false
-    }
-  }, [agents, status])
-
-  return cardData
+  })
 }

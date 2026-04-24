@@ -46,7 +46,11 @@ import {
   type OpenClawSessionHistory,
   type OpenClawSessionHistoryEvent,
 } from './openclaw-http-client'
-import { type ClawEvent, OpenClawJsonlReader } from './openclaw-jsonl-reader'
+import {
+  type ClawEvent,
+  OpenClawJsonlReader,
+  summarizeToolActivity,
+} from './openclaw-jsonl-reader'
 import {
   type ResolvedOpenClawProviderConfig,
   resolveSupportedOpenClawProvider,
@@ -170,6 +174,23 @@ interface HistoryPageInput {
   sessionKey?: string
   cursor?: string
   limit?: number
+}
+
+export interface AgentOverview {
+  agentId: string
+  latestMessage: string | null
+  latestMessageAt: number | null
+  activitySummary: string | null
+  totalCostUsd: number
+  sessionCount: number
+}
+
+export interface DashboardResponse {
+  agents: AgentOverview[]
+  summary: {
+    totalAgents: number
+    totalCostUsd: number
+  }
 }
 
 export function normalizeBrowserOSChatSessionKey(
@@ -866,6 +887,57 @@ export class OpenClawService {
         hasMore: start > 0,
         limit,
       },
+    }
+  }
+
+  // ── Dashboard ──────────────────────────────────────────────────────
+
+  getDashboard(): DashboardResponse {
+    const agentIds = this.jsonlReader.listAgents()
+    const agentOverviews: AgentOverview[] = []
+    let totalCostUsd = 0
+
+    for (const agentId of agentIds) {
+      const sessions = this.jsonlReader.listSessions(agentId)
+      if (sessions.length === 0) {
+        agentOverviews.push({
+          agentId,
+          latestMessage: null,
+          latestMessageAt: null,
+          activitySummary: null,
+          totalCostUsd: 0,
+          sessionCount: 0,
+        })
+        continue
+      }
+
+      const latestSession = sessions[0]
+      const events = this.jsonlReader.listBySession(agentId, latestSession.key)
+      const latestMsg = this.jsonlReader.latestAgentMessage(
+        agentId,
+        latestSession.key,
+      )
+
+      let agentCost = 0
+      for (const session of sessions) {
+        const stats = this.jsonlReader.getSessionStats(agentId, session.key)
+        agentCost += stats.totalCostUsd
+      }
+      totalCostUsd += agentCost
+
+      agentOverviews.push({
+        agentId,
+        latestMessage: latestMsg?.content?.slice(0, 200) ?? null,
+        latestMessageAt: latestMsg?.createdAt ?? latestSession.updatedAt,
+        activitySummary: summarizeToolActivity(events),
+        totalCostUsd: agentCost,
+        sessionCount: sessions.length,
+      })
+    }
+
+    return {
+      agents: agentOverviews,
+      summary: { totalAgents: agentIds.length, totalCostUsd },
     }
   }
 
