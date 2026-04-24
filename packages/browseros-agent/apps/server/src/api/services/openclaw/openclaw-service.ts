@@ -51,6 +51,7 @@ import {
   OpenClawJsonlReader,
   summarizeToolActivity,
 } from './openclaw-jsonl-reader'
+import { type AgentLiveStatus, OpenClawObserver } from './openclaw-observer'
 import {
   type ResolvedOpenClawProviderConfig,
   resolveSupportedOpenClawProvider,
@@ -178,9 +179,11 @@ interface HistoryPageInput {
 
 export interface AgentOverview {
   agentId: string
+  status: AgentLiveStatus
   latestMessage: string | null
   latestMessageAt: number | null
   activitySummary: string | null
+  currentTool: string | null
   totalCostUsd: number
   sessionCount: number
 }
@@ -356,6 +359,7 @@ export class OpenClawService {
   private lastRecoveryReason: OpenClawGatewayRecoveryReason | null = null
   private stopLogTail: (() => void) | null = null
   private lifecycleLock: Promise<void> = Promise.resolve()
+  private observer = new OpenClawObserver()
 
   private _jsonlReader: OpenClawJsonlReader | null = null
   private get jsonlReader(): OpenClawJsonlReader {
@@ -581,6 +585,7 @@ export class OpenClawService {
     return this.withLifecycleLock('stop', async () => {
       logger.info('Stopping OpenClaw service', { hostPort: this.hostPort })
       this.controlPlaneStatus = 'disconnected'
+      this.observer.disconnect()
       this.stopGatewayLogTail()
       await this.runtime.stopGateway()
       logger.info('OpenClaw container stopped')
@@ -653,6 +658,7 @@ export class OpenClawService {
 
   async shutdown(): Promise<void> {
     this.controlPlaneStatus = 'disconnected'
+    this.observer.disconnect()
     this.stopGatewayLogTail()
     try {
       await this.runtime.stopGateway()
@@ -898,13 +904,17 @@ export class OpenClawService {
     let totalCostUsd = 0
 
     for (const agentId of agentIds) {
+      const liveStatus = this.observer.getStatus(agentId)
       const sessions = this.jsonlReader.listSessions(agentId)
+
       if (sessions.length === 0) {
         agentOverviews.push({
           agentId,
+          status: liveStatus.status,
           latestMessage: null,
           latestMessageAt: null,
           activitySummary: null,
+          currentTool: liveStatus.currentTool,
           totalCostUsd: 0,
           sessionCount: 0,
         })
@@ -927,9 +937,11 @@ export class OpenClawService {
 
       agentOverviews.push({
         agentId,
+        status: liveStatus.status,
         latestMessage: latestMsg?.content?.slice(0, 200) ?? null,
         latestMessageAt: latestMsg?.createdAt ?? latestSession.updatedAt,
         activitySummary: summarizeToolActivity(events),
+        currentTool: liveStatus.currentTool,
         totalCostUsd: agentCost,
         sessionCount: sessions.length,
       })
@@ -1227,6 +1239,7 @@ export class OpenClawService {
       this.controlPlaneStatus = 'connected'
       this.lastGatewayError = null
       this.lastRecoveryReason = null
+      this.ensureObserverConnected()
       return result
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -1236,6 +1249,12 @@ export class OpenClawService {
       this.lastRecoveryReason = reason
       throw error
     }
+  }
+
+  private ensureObserverConnected(): void {
+    if (this.observer.isConnected()) return
+    const url = `http://127.0.0.1:${this.hostPort}`
+    this.observer.connect(url, this.token)
   }
 
   private classifyControlPlaneError(

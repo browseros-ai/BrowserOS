@@ -1,4 +1,4 @@
-import { Bot, Wrench } from 'lucide-react'
+import { Bot, Loader2, Wrench } from 'lucide-react'
 import type { FC } from 'react'
 import type { AgentCardData } from '@/lib/agent-conversations/types'
 import { cn } from '@/lib/utils'
@@ -95,7 +95,12 @@ export const AgentCardExpanded: FC<AgentCardProps> = ({
           </span>
         ) : null}
       </div>
-      {agent.activitySummary ? (
+      {agent.status === 'working' && agent.currentTool ? (
+        <div className="flex items-center gap-1.5 text-[var(--accent-orange)]/70">
+          <Loader2 className="size-3 shrink-0 animate-spin" />
+          <span className="truncate">{agent.currentTool}</span>
+        </div>
+      ) : agent.activitySummary ? (
         <div className="flex items-center gap-1.5 text-muted-foreground/60">
           <Wrench className="size-3 shrink-0" />
           <span className="truncate">{agent.activitySummary}</span>

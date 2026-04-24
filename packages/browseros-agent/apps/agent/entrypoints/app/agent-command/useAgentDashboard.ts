@@ -3,9 +3,11 @@ import { useAgentServerUrl } from '@/lib/browseros/useBrowserOSProviders'
 
 export interface AgentOverview {
   agentId: string
+  status: 'working' | 'idle' | 'error' | 'unknown'
   latestMessage: string | null
   latestMessageAt: number | null
   activitySummary: string | null
+  currentTool: string | null
   totalCostUsd: number
   sessionCount: number
 }

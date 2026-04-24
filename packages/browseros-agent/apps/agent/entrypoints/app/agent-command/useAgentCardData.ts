@@ -6,11 +6,18 @@ import {
 import type { AgentCardData } from '@/lib/agent-conversations/types'
 import type { AgentOverview } from './useAgentDashboard'
 
-function getAgentStatusTone(
-  status: OpenClawStatus['status'] | undefined,
+function resolveAgentStatus(
+  gatewayStatus: OpenClawStatus['status'] | undefined,
+  liveStatus: AgentOverview['status'] | undefined,
 ): AgentCardData['status'] {
-  if (status === 'error') return 'error'
-  if (status === 'starting') return 'working'
+  // Gateway-level errors take precedence
+  if (gatewayStatus === 'error') return 'error'
+  if (gatewayStatus === 'starting') return 'working'
+
+  // Per-agent live status from the WS observer
+  if (liveStatus === 'working') return 'working'
+  if (liveStatus === 'error') return 'error'
+
   return 'idle'
 }
 
@@ -32,10 +39,11 @@ export function buildAgentCardData(
       agentId: agent.agentId,
       name: agent.name,
       model: getModelDisplayName(agent.model),
-      status: getAgentStatusTone(status),
+      status: resolveAgentStatus(status, overview?.status),
       lastMessage: overview?.latestMessage?.slice(0, 200) ?? undefined,
       lastMessageTimestamp: overview?.latestMessageAt ?? undefined,
       activitySummary: overview?.activitySummary ?? undefined,
+      currentTool: overview?.currentTool ?? undefined,
       costUsd: overview?.totalCostUsd ?? undefined,
     }
   })

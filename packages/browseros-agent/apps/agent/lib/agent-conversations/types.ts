@@ -51,5 +51,6 @@ export interface AgentCardData {
   lastMessage?: string
   lastMessageTimestamp?: number
   activitySummary?: string
+  currentTool?: string
   costUsd?: number
 }
