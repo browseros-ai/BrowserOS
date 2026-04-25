@@ -309,6 +309,14 @@ function jsonlEventsToHistoryItems(
   return items
 }
 
+function sumCostFromEvents(events: ClawEvent[]): number {
+  let cost = 0
+  for (const e of events) {
+    if (e.type === 'agent.message' && e.costUsd) cost += e.costUsd
+  }
+  return cost
+}
+
 function encodeHistoryCursor(input: {
   sessionKey: string
   end: number
@@ -962,15 +970,27 @@ export class OpenClawService {
       }
 
       const latestSession = sessions[0]
+      // Read the latest session's JSONL once and derive everything from
+      // the loaded events array — avoids re-reading the same file for
+      // latestAgentMessage() and getSessionStats() individually.
       const events = this.jsonlReader.listBySession(agentId, latestSession.key)
-      const latestMsg = this.jsonlReader.latestAgentMessage(
-        agentId,
-        latestSession.key,
-      )
 
-      let agentCost = 0
-      for (const session of sessions) {
-        const stats = this.jsonlReader.getSessionStats(agentId, session.key)
+      let latestMsg: ClawEvent | undefined
+      for (let i = events.length - 1; i >= 0; i--) {
+        if (events[i]?.type === 'agent.message') {
+          latestMsg = events[i]
+          break
+        }
+      }
+
+      // Accumulate cost: derive from the already-loaded events for the
+      // latest session, read remaining sessions separately.
+      let agentCost = sumCostFromEvents(events)
+      for (let i = 1; i < sessions.length; i++) {
+        const stats = this.jsonlReader.getSessionStats(
+          agentId,
+          sessions[i]!.key,
+        )
         agentCost += stats.totalCostUsd
       }
       totalCostUsd += agentCost

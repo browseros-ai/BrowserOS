@@ -165,6 +165,17 @@ export class OpenClawObserver {
       clearTimeout(connectTimeout)
       this.connected = false
       this.ws = null
+
+      // Reset any agents stuck in "working" to "unknown" — we missed
+      // the final/end event because the WS closed mid-task. The
+      // ClawSession will re-infer correct state from JSONL when the
+      // observer reconnects and ensureObserverConnected() re-seeds.
+      for (const [agentId, state] of this.session.getAllStates()) {
+        if (state.status === 'working') {
+          this.session.transition(agentId, 'unknown')
+        }
+      }
+
       if (!this.closed) {
         logger.debug('OpenClaw observer disconnected, scheduling reconnect')
         this.scheduleReconnect()
