@@ -18,6 +18,11 @@ import { DEFAULT_PORTS } from '@browseros/shared/constants/ports'
 import { getOpenClawDir } from '../../../lib/browseros-dir'
 import { logger } from '../../../lib/logger'
 import type { MonitoringChatTurn } from '../../../monitoring/types'
+import {
+  type AgentLiveStatus,
+  type AgentSessionState,
+  ClawSession,
+} from './claw-session'
 import type {
   ContainerRuntime,
   GatewayContainerSpec,
@@ -51,7 +56,7 @@ import {
   OpenClawJsonlReader,
   summarizeToolActivity,
 } from './openclaw-jsonl-reader'
-import { type AgentLiveStatus, OpenClawObserver } from './openclaw-observer'
+import { OpenClawObserver } from './openclaw-observer'
 import {
   type ResolvedOpenClawProviderConfig,
   resolveSupportedOpenClawProvider,
@@ -359,7 +364,8 @@ export class OpenClawService {
   private lastRecoveryReason: OpenClawGatewayRecoveryReason | null = null
   private stopLogTail: (() => void) | null = null
   private lifecycleLock: Promise<void> = Promise.resolve()
-  private observer = new OpenClawObserver()
+  private clawSession = new ClawSession()
+  private observer = new OpenClawObserver(this.clawSession)
 
   private _jsonlReader: OpenClawJsonlReader | null = null
   private get jsonlReader(): OpenClawJsonlReader {
@@ -420,14 +426,11 @@ export class OpenClawService {
     return this.hostPort
   }
 
-  /** Subscribe to real-time agent status changes from the WS observer. */
+  /** Subscribe to real-time agent status changes from the ClawSession state machine. */
   onAgentStatusChange(
-    listener: (
-      agentId: string,
-      status: import('./openclaw-observer').AgentStatusEntry,
-    ) => void,
+    listener: (agentId: string, state: AgentSessionState) => void,
   ): () => void {
-    return this.observer.onStatusChange(listener)
+    return this.clawSession.onStateChange(listener)
   }
 
   // ── Lifecycle ────────────────────────────────────────────────────────
@@ -914,7 +917,7 @@ export class OpenClawService {
     let totalCostUsd = 0
 
     for (const agentId of agentIds) {
-      const liveStatus = this.observer.getStatus(agentId)
+      const liveStatus = this.clawSession.getState(agentId)
       const sessions = this.jsonlReader.listSessions(agentId)
 
       if (sessions.length === 0) {
@@ -1262,6 +1265,13 @@ export class OpenClawService {
   }
 
   private ensureObserverConnected(): void {
+    // Seed the ClawSession state machine from JSONL on first control plane
+    // call. This gives every agent a correct initial status (working/idle)
+    // before the WS observer has seen any events.
+    if (!this.clawSession.isSeeded()) {
+      this.clawSession.seedFromJsonl(this.jsonlReader)
+    }
+
     if (this.observer.isConnected()) return
     const url = `http://127.0.0.1:${this.hostPort}`
     this.observer.connect(url, this.token)

@@ -3,16 +3,16 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Connects to the OpenClaw gateway's WebSocket control plane and tracks
- * per-agent session status in real time. The observer subscribes to `chat`
- * broadcast events — when an agent starts streaming, finishes a turn, or
- * hits an error, the status map updates immediately.
- *
- * This is a read-only listener. It does not issue any RPC commands.
+ * Connects to the OpenClaw gateway's WebSocket control plane and pipes
+ * chat broadcast events into a ClawSession state machine. The observer
+ * is a transport layer only — it handles the WS connection lifecycle
+ * (connect, handshake, reconnect) and delegates all state management
+ * to ClawSession.
  */
 
 import WebSocket from 'ws'
 import { logger } from '../../../lib/logger'
+import type { ClawSession } from './claw-session'
 
 // ---------------------------------------------------------------------------
 // Protocol types (subset of OpenClaw gateway protocol v3)
@@ -41,25 +41,6 @@ type IncomingFrame =
   | { type: 'event'; event: string; payload?: unknown }
 
 // ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
-export type AgentLiveStatus = 'working' | 'idle' | 'error' | 'unknown'
-
-export interface AgentStatusEntry {
-  status: AgentLiveStatus
-  sessionKey: string | null
-  lastEventAt: number
-  currentTool: string | null
-  error: string | null
-}
-
-export type StatusChangeListener = (
-  agentId: string,
-  entry: AgentStatusEntry,
-) => void
-
-// ---------------------------------------------------------------------------
 // Observer
 // ---------------------------------------------------------------------------
 
@@ -71,8 +52,7 @@ export class OpenClawObserver {
   private gatewayUrl: string | null = null
   private gatewayToken: string | null = null
 
-  private readonly agentStatuses = new Map<string, AgentStatusEntry>()
-  private readonly listeners = new Set<StatusChangeListener>()
+  constructor(private readonly session: ClawSession) {}
 
   /** Start observing the gateway at the given URL with the given token. */
   connect(gatewayUrl: string, token: string): void {
@@ -95,33 +75,9 @@ export class OpenClawObserver {
     this.connected = false
   }
 
-  /** Get the live status of a specific agent. */
-  getStatus(agentId: string): AgentStatusEntry {
-    return (
-      this.agentStatuses.get(agentId) ?? {
-        status: 'unknown',
-        sessionKey: null,
-        lastEventAt: 0,
-        currentTool: null,
-        error: null,
-      }
-    )
-  }
-
-  /** Get live statuses for all tracked agents. */
-  getAllStatuses(): Map<string, AgentStatusEntry> {
-    return this.agentStatuses
-  }
-
   /** Whether the observer has an active WS connection. */
   isConnected(): boolean {
     return this.connected
-  }
-
-  /** Subscribe to status changes. Returns unsubscribe function. */
-  onStatusChange(listener: StatusChangeListener): () => void {
-    this.listeners.add(listener)
-    return () => this.listeners.delete(listener)
   }
 
   // ── Private ─────────────────────────────────────────────────────────
@@ -224,13 +180,15 @@ export class OpenClawObserver {
   }
 
   private handleEvent(eventName: string, payload: unknown): void {
-    if (eventName === 'connect.challenge') return
-
     if (eventName === 'chat') {
       this.handleChatEvent(payload)
     }
   }
 
+  /**
+   * Parse a gateway chat broadcast event and transition the ClawSession
+   * state machine accordingly.
+   */
   private handleChatEvent(payload: unknown): void {
     if (!payload || typeof payload !== 'object') return
     const p = payload as Record<string, unknown>
@@ -240,34 +198,16 @@ export class OpenClawObserver {
 
     if (!sessionKey || !state) return
 
-    // Extract agentId from session key: "agent:<agentId>:..."
     const agentId = extractAgentId(sessionKey)
     if (!agentId) return
 
-    const now = Date.now()
-    const prev = this.agentStatuses.get(agentId)
-
     if (state === 'delta' || state === 'streaming') {
-      // Agent is actively streaming a response
-      const toolName = extractToolName(p)
-      const entry: AgentStatusEntry = {
-        status: 'working',
+      this.session.transition(agentId, 'working', {
         sessionKey,
-        lastEventAt: now,
-        currentTool: toolName ?? prev?.currentTool ?? null,
-        error: null,
-      }
-      this.updateStatus(agentId, entry)
+        currentTool: extractToolName(p),
+      })
     } else if (state === 'final' || state === 'end') {
-      // Agent finished its turn
-      const entry: AgentStatusEntry = {
-        status: 'idle',
-        sessionKey,
-        lastEventAt: now,
-        currentTool: null,
-        error: null,
-      }
-      this.updateStatus(agentId, entry)
+      this.session.transition(agentId, 'idle', { sessionKey })
     } else if (state === 'error') {
       const errorMsg =
         typeof p.errorMessage === 'string'
@@ -275,23 +215,7 @@ export class OpenClawObserver {
           : typeof p.error === 'string'
             ? p.error
             : 'Unknown error'
-      const entry: AgentStatusEntry = {
-        status: 'error',
-        sessionKey,
-        lastEventAt: now,
-        currentTool: null,
-        error: errorMsg,
-      }
-      this.updateStatus(agentId, entry)
-    }
-  }
-
-  private updateStatus(agentId: string, entry: AgentStatusEntry): void {
-    this.agentStatuses.set(agentId, entry)
-    for (const listener of this.listeners) {
-      try {
-        listener(agentId, entry)
-      } catch {}
+      this.session.transition(agentId, 'error', { sessionKey, error: errorMsg })
     }
   }
 
@@ -328,7 +252,6 @@ function extractAgentId(sessionKey: string): string | null {
 
 /**
  * Try to extract a tool name from a chat event payload.
- * OpenClaw may include tool info in delta events when the agent is mid-tool-call.
  */
 function extractToolName(payload: Record<string, unknown>): string | null {
   if (typeof payload.toolName === 'string') return payload.toolName
