@@ -34,11 +34,12 @@ class LimaArch:
 
     internal: str  # "arm64" | "x64" — how our R2 keys name it
     upstream: str  # "Darwin-arm64" | "Darwin-x86_64" — Lima's tarball suffix
+    linux_guest_arch: str  # "aarch64" | "x86_64" — Lima guest agent arch
 
 
 LIMA_ARCHES: Tuple[LimaArch, ...] = (
-    LimaArch(internal="arm64", upstream="Darwin-arm64"),
-    LimaArch(internal="x64", upstream="Darwin-x86_64"),
+    LimaArch(internal="arm64", upstream="Darwin-arm64", linux_guest_arch="aarch64"),
+    LimaArch(internal="x64", upstream="Darwin-x86_64", linux_guest_arch="x86_64"),
 )
 
 
@@ -86,18 +87,23 @@ def upload_lima(
         tmp_dir = Path(tmp)
         checksums = _fetch_checksums(tag, tmp_dir)
         uploaded_keys: List[str] = []
-        object_shas: Dict[str, str] = {}
+        object_shas: Dict[str, Dict[str, str]] = {}
         tarball_shas: Dict[str, str] = {}
 
         try:
             for arch in LIMA_ARCHES:
-                tarball_sha, object_sha, r2_key = _process_arch(
-                    tag, arch, tmp_dir, checksums, client, env, dry_run
+                tarball_sha, arch_object_shas, _ = _process_arch(
+                    tag,
+                    arch,
+                    tmp_dir,
+                    checksums,
+                    client,
+                    env,
+                    dry_run,
+                    uploaded_keys,
                 )
                 tarball_shas[arch.internal] = tarball_sha
-                object_shas[arch.internal] = object_sha
-                if not dry_run:
-                    uploaded_keys.append(r2_key)
+                object_shas[arch.internal] = arch_object_shas
 
             manifest = _build_manifest(tag, tarball_shas, object_shas)
             _upload_manifest(client, env, manifest, tmp_dir, dry_run)
@@ -150,7 +156,8 @@ def _process_arch(
     client: Any,
     env: EnvConfig,
     dry_run: bool,
-) -> Tuple[str, str, str]:
+    uploaded_keys: Optional[List[str]] = None,
+) -> Tuple[str, Dict[str, str], List[str]]:
     version_num = tag.lstrip("v")
     tarball_name = f"lima-{version_num}-{arch.upstream}.tar.gz"
     expected_sha = checksums.get(tarball_name)
@@ -171,47 +178,71 @@ def _process_arch(
             f"expected {expected_sha}, got {actual_sha}"
         )
 
-    limactl_path = tmp_dir / f"limactl-darwin-{arch.internal}"
-    _extract_limactl(tarball_path, limactl_path)
-    object_sha = _sha256_file(limactl_path)
+    guest_agent_name = f"lima-guestagent.Linux-{arch.linux_guest_arch}.gz"
+    runtime_files = [
+        (
+            "limactl",
+            "bin/limactl",
+            tmp_dir / f"limactl-darwin-{arch.internal}",
+            f"{LIMA_R2_PREFIX}/limactl-darwin-{arch.internal}",
+        ),
+        (
+            "guest_agent",
+            f"share/lima/{guest_agent_name}",
+            tmp_dir / guest_agent_name,
+            f"{LIMA_R2_PREFIX}/{guest_agent_name}",
+        ),
+    ]
 
-    r2_key = f"{LIMA_R2_PREFIX}/limactl-darwin-{arch.internal}"
-    if dry_run:
-        log_info(f"[dry-run] skipped upload of {r2_key}")
-    else:
-        if not upload_file_to_r2(client, limactl_path, r2_key, env.r2_bucket):
-            raise RuntimeError(f"Failed to upload {r2_key}")
+    object_shas: Dict[str, str] = {}
+    r2_keys: List[str] = []
+    for name, logical_path, local_path, r2_key in runtime_files:
+        _extract_lima_file(tarball_path, logical_path, local_path)
+        object_shas[name] = _sha256_file(local_path)
+        r2_keys.append(r2_key)
 
-    return actual_sha, object_sha, r2_key
-
-
-def _extract_limactl(tarball_path: Path, dest: Path) -> None:
-    """Extract the single `bin/limactl` entry to dest."""
-    with tarfile.open(tarball_path, "r:gz") as tar:
-        member = _find_limactl_member(tar)
-        extracted = tar.extractfile(member)
-        if extracted is None:
-            raise RuntimeError(f"{member.name} is not a regular file")
-        with extracted as src, open(dest, "wb") as out:
-            while chunk := src.read(1024 * 1024):
-                out.write(chunk)
-    dest.chmod(0o755)
-
-
-def _find_limactl_member(tar: tarfile.TarFile) -> tarfile.TarInfo:
-    for member in tar.getmembers():
-        if not member.isfile():
+    for _, _, local_path, r2_key in runtime_files:
+        if dry_run:
+            log_info(f"[dry-run] skipped upload of {r2_key}")
             continue
-        parts = Path(member.name).parts
-        if len(parts) >= 2 and parts[-2:] == ("bin", "limactl"):
-            return member
-    raise RuntimeError("bin/limactl not found in Lima tarball")
+        if not upload_file_to_r2(client, local_path, r2_key, env.r2_bucket):
+            raise RuntimeError(f"Failed to upload {r2_key}")
+        if uploaded_keys is not None:
+            uploaded_keys.append(r2_key)
+
+    return actual_sha, object_shas, r2_keys
+
+
+def _extract_lima_file(tarball_path: Path, logical_path: str, dest: Path) -> None:
+    with tarfile.open(tarball_path, "r:gz") as tar:
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+            if _logical_lima_path(member.name) != logical_path:
+                continue
+            extracted = tar.extractfile(member)
+            if extracted is None:
+                raise RuntimeError(f"{member.name} is not a regular file")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with extracted as src, open(dest, "wb") as out:
+                while chunk := src.read(1024 * 1024):
+                    out.write(chunk)
+            dest.chmod(member.mode & 0o777)
+            return
+    raise RuntimeError(f"{logical_path} not found in Lima tarball")
+
+
+def _logical_lima_path(member_name: str) -> str:
+    parts = Path(member_name.lstrip("./")).parts
+    if len(parts) > 1 and parts[0].startswith("lima-"):
+        parts = parts[1:]
+    return "/".join(parts)
 
 
 def _build_manifest(
     tag: str,
     tarball_shas: Dict[str, str],
-    object_shas: Dict[str, str],
+    object_shas: Dict[str, Dict[str, str]],
 ) -> Dict[str, Any]:
     return {
         "lima_version": tag,

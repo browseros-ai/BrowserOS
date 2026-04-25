@@ -6,10 +6,20 @@
         "type": "r2",
         "key": "third_party/lima/limactl-darwin-arm64"
       },
-      "destination": "resources/bin/third_party/lima/limactl",
+      "destination": "resources/bin/third_party/lima/bin/limactl",
       "os": ["macos"],
       "arch": ["arm64"],
       "executable": true
+    },
+    {
+      "name": "Lima guest agent - Linux ARM64",
+      "source": {
+        "type": "r2",
+        "key": "third_party/lima/lima-guestagent.Linux-aarch64.gz"
+      },
+      "destination": "resources/bin/third_party/lima/share/lima/lima-guestagent.Linux-aarch64.gz",
+      "os": ["macos"],
+      "arch": ["arm64"]
     },
     {
       "name": "Lima limactl - macOS x64",
@@ -17,10 +27,20 @@
         "type": "r2",
         "key": "third_party/lima/limactl-darwin-x64"
       },
-      "destination": "resources/bin/third_party/lima/limactl",
+      "destination": "resources/bin/third_party/lima/bin/limactl",
       "os": ["macos"],
       "arch": ["x64"],
       "executable": true
+    },
+    {
+      "name": "Lima guest agent - Linux x64",
+      "source": {
+        "type": "r2",
+        "key": "third_party/lima/lima-guestagent.Linux-x86_64.gz"
+      },
+      "destination": "resources/bin/third_party/lima/share/lima/lima-guestagent.Linux-x86_64.gz",
+      "os": ["macos"],
+      "arch": ["x64"]
     },
     {
       "name": "BrowserOS VM Lima template",

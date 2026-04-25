@@ -8,7 +8,12 @@ import {
   OPENCLAW_GATEWAY_CONTAINER_NAME,
   OPENCLAW_GATEWAY_CONTAINER_PORT,
 } from '@browseros/shared/constants/openclaw'
-import type { ContainerCli, ContainerSpec, LogFn } from '../../../lib/container'
+import type {
+  ContainerCli,
+  ContainerCommandResult,
+  ContainerSpec,
+  LogFn,
+} from '../../../lib/container'
 import { logger } from '../../../lib/logger'
 import {
   GUEST_VM_STATE,
@@ -19,6 +24,19 @@ import {
 const GATEWAY_CONTAINER_HOME = '/home/node'
 const GATEWAY_STATE_DIR = `${GATEWAY_CONTAINER_HOME}/.openclaw`
 const GUEST_OPENCLAW_HOME = `${GUEST_VM_STATE}/openclaw`
+const GATEWAY_NPM_PREFIX = `${GATEWAY_CONTAINER_HOME}/.npm-global`
+// Prepend user-installed bin so tools like `claude` / `gemini` CLI that
+// are installed via npm into the mounted home are discoverable by
+// OpenClaw's child-process spawns (no login shell is involved).
+const GATEWAY_PATH = [
+  `${GATEWAY_NPM_PREFIX}/bin`,
+  '/usr/local/sbin',
+  '/usr/local/bin',
+  '/usr/sbin',
+  '/usr/bin',
+  '/sbin',
+  '/bin',
+].join(':')
 
 export type GatewayContainerSpec = {
   image: string
@@ -147,6 +165,17 @@ export class ContainerRuntime {
     return this.shell.exec(OPENCLAW_GATEWAY_CONTAINER_NAME, command, onLog)
   }
 
+  // Unlike execInContainer, this returns stdout and stderr separately
+  // so callers that need to parse program output (e.g. JSON status
+  // commands) aren't forced to untangle it from nerdctl's stderr.
+  async runInContainer(command: string[]): Promise<ContainerCommandResult> {
+    return this.shell.runCommand([
+      'exec',
+      OPENCLAW_GATEWAY_CONTAINER_NAME,
+      ...command,
+    ])
+  }
+
   async runGatewaySetupCommand(
     command: string[],
     spec: GatewayContainerSpec,
@@ -270,6 +299,8 @@ export class ContainerRuntime {
       NODE_COMPILE_CACHE: '/var/tmp/openclaw-compile-cache',
       NODE_ENV: 'production',
       TZ: input.timezone,
+      PATH: GATEWAY_PATH,
+      NPM_CONFIG_PREFIX: GATEWAY_NPM_PREFIX,
       ...(input.gatewayToken
         ? { OPENCLAW_GATEWAY_TOKEN: input.gatewayToken }
         : {}),

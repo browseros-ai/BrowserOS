@@ -3,7 +3,7 @@
  * Copyright 2025 BrowserOS
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import {
   chmod,
   mkdir,
@@ -94,6 +94,49 @@ describe('VmRuntime', () => {
     await expect(
       readFile(join(limaHome, `${VM_NAME}.yaml`), 'utf8'),
     ).resolves.toContain('mountPoint: "/mnt/browseros/vm"')
+  })
+
+  it('fills a missing VM cache before reading the cached manifest', async () => {
+    await rm(getCachedManifestPath(root), { force: true })
+    const limactlPath = await fakeLimactl(
+      { list: { stdout: '' }, create: {}, start: {} },
+      logPath,
+    )
+    const sshPath = await prepareReadySsh(limaHome, logPath)
+    const ensureCacheAvailable = mock(async () => {
+      await writeCachedManifest(root)
+    })
+    const runtime = new VmRuntime({
+      limactlPath,
+      limaHome,
+      sshPath,
+      templatePath,
+      browserosRoot: root,
+      ensureCacheAvailable,
+    })
+
+    await runtime.ensureReady()
+
+    expect(ensureCacheAvailable).toHaveBeenCalledTimes(1)
+    await expect(
+      readFile(getInstalledManifestPath(root), 'utf8'),
+    ).resolves.toContain(manifest.updatedAt)
+  })
+
+  it('surfaces cache sync failures before reading a missing manifest', async () => {
+    await rm(getCachedManifestPath(root), { force: true })
+    const ensureCacheAvailable = mock(async () => {
+      throw new Error('cache offline')
+    })
+    const runtime = new VmRuntime({
+      limactlPath: 'unused',
+      limaHome,
+      browserosRoot: root,
+      ensureCacheAvailable,
+    })
+
+    await expect(runtime.ensureReady()).rejects.toThrow('cache offline')
+    expect(ensureCacheAvailable).toHaveBeenCalledTimes(1)
   })
 
   it('returns fast when the VM is already running and manifests match', async () => {

@@ -27,7 +27,10 @@ import type {
   ContainerRuntime,
   GatewayContainerSpec,
 } from './container-runtime'
-import { buildContainerRuntime } from './container-runtime-factory'
+import {
+  buildContainerRuntime,
+  type VmCacheRuntimeConfig,
+} from './container-runtime-factory'
 import {
   OpenClawAgentAlreadyExistsError,
   OpenClawAgentNotFoundError,
@@ -39,6 +42,15 @@ import {
   OpenClawCliClient,
   type OpenClawConfigBatchEntry,
 } from './openclaw-cli-client'
+import {
+  buildOpenClawCliProviderModelRef,
+  getOpenClawCliProvider,
+  OPENCLAW_CLI_PROVIDERS,
+} from './openclaw-cli-providers/registry'
+import type {
+  OpenClawCliProvider,
+  OpenClawCliProviderAuthStatus,
+} from './openclaw-cli-providers/types'
 import {
   getHostWorkspaceDir,
   getOpenClawStateConfigPath,
@@ -125,6 +137,7 @@ export interface OpenClawServiceConfig {
   browserosServerPort?: number
   resourcesDir?: string
   browserosDir?: string
+  vmCache?: VmCacheRuntimeConfig
 }
 
 export type OpenClawSessionSource =
@@ -180,25 +193,6 @@ interface HistoryPageInput {
   sessionKey?: string
   cursor?: string
   limit?: number
-}
-
-export interface AgentOverview {
-  agentId: string
-  status: AgentLiveStatus
-  latestMessage: string | null
-  latestMessageAt: number | null
-  activitySummary: string | null
-  currentTool: string | null
-  totalCostUsd: number
-  sessionCount: number
-}
-
-export interface DashboardResponse {
-  agents: AgentOverview[]
-  summary: {
-    totalAgents: number
-    totalCostUsd: number
-  }
 }
 
 export function normalizeBrowserOSChatSessionKey(
@@ -346,6 +340,25 @@ function decodeHistoryCursor(
   }
 }
 
+export interface AgentOverview {
+  agentId: string
+  status: AgentLiveStatus
+  latestMessage: string | null
+  latestMessageAt: number | null
+  activitySummary: string | null
+  currentTool: string | null
+  totalCostUsd: number
+  sessionCount: number
+}
+
+export interface DashboardResponse {
+  agents: AgentOverview[]
+  summary: {
+    totalAgents: number
+    totalCostUsd: number
+  }
+}
+
 export class OpenClawService {
   private runtime: ContainerRuntime
   private cliClient: OpenClawCliClient
@@ -359,6 +372,7 @@ export class OpenClawService {
   private browserosServerPort: number
   private resourcesDir: string | null
   private browserosDir: string | undefined
+  private vmCache: VmCacheRuntimeConfig | undefined
   private controlPlaneStatus: OpenClawControlPlaneStatus = 'disconnected'
   private lastGatewayError: string | null = null
   private lastRecoveryReason: OpenClawGatewayRecoveryReason | null = null
@@ -383,6 +397,7 @@ export class OpenClawService {
       resourcesDir: config.resourcesDir,
       projectDir: this.openclawDir,
       browserosRoot: config.browserosDir,
+      vmCache: config.vmCache,
     })
     this.token = crypto.randomUUID()
     this.cliClient = new OpenClawCliClient(this.runtime)
@@ -395,6 +410,7 @@ export class OpenClawService {
       config.browserosServerPort ?? DEFAULT_PORTS.server
     this.resourcesDir = config.resourcesDir ?? null
     this.browserosDir = config.browserosDir
+    this.vmCache = config.vmCache
   }
 
   configure(config: OpenClawServiceConfig): void {
@@ -415,6 +431,13 @@ export class OpenClawService {
       config.browserosDir !== this.browserosDir
     ) {
       this.browserosDir = config.browserosDir
+      runtimeChanged = true
+    }
+    if (
+      config.vmCache !== undefined &&
+      !sameVmCacheRuntimeConfig(config.vmCache, this.vmCache)
+    ) {
+      this.vmCache = config.vmCache
       runtimeChanged = true
     }
     if (runtimeChanged) {
@@ -438,7 +461,7 @@ export class OpenClawService {
   async setup(input: SetupInput, onLog?: (msg: string) => void): Promise<void> {
     return this.withLifecycleLock('setup', async () => {
       const logProgress = this.createProgressLogger(onLog)
-      const provider = resolveSupportedOpenClawProvider(input)
+      const provider = this.resolveProviderForAgent(input)
       logger.info('Starting OpenClaw setup', {
         hostPort: this.hostPort,
         browserosServerPort: this.browserosServerPort,
@@ -509,6 +532,8 @@ export class OpenClawService {
       this.controlPlaneStatus = 'connecting'
       logProgress('Probing OpenClaw control plane...')
       await this.runControlPlaneCall(() => this.cliClient.probe())
+
+      await this.ensureAllCliProvidersInstalled(logProgress)
 
       const existingAgents = await this.listAgents()
       logger.info('Fetched existing OpenClaw agents after setup', {
@@ -589,6 +614,7 @@ export class OpenClawService {
       this.controlPlaneStatus = 'connecting'
       logProgress('Probing OpenClaw control plane...')
       await this.runControlPlaneCall(() => this.cliClient.probe())
+      await this.ensureAllCliProvidersInstalled(logProgress)
       this.lastError = null
       logger.info('OpenClaw gateway started', { hostPort: this.hostPort })
     })
@@ -638,6 +664,7 @@ export class OpenClawService {
 
       logProgress('Probing OpenClaw control plane...')
       await this.runControlPlaneCall(() => this.cliClient.probe())
+      await this.ensureAllCliProvidersInstalled(logProgress)
       this.lastError = null
       logProgress('Gateway restarted successfully')
       logger.info('OpenClaw gateway restarted', { hostPort: this.hostPort })
@@ -756,7 +783,7 @@ export class OpenClawService {
     })
     await this.assertGatewayReady()
 
-    const provider = resolveSupportedOpenClawProvider(input)
+    const provider = this.resolveProviderForAgent(input)
     const configChanged = await this.mergeProviderConfigIfChanged(provider)
     const keysChanged = await this.writeStateEnv(provider.envValues)
 
@@ -1064,7 +1091,7 @@ export class OpenClawService {
     apiKey: string
     modelId?: string
   }): Promise<OpenClawProviderUpdateResult> {
-    const provider = resolveSupportedOpenClawProvider(input)
+    const provider = this.resolveProviderForAgent(input)
     const configChanged = await this.mergeProviderConfigIfChanged(provider)
     const envChanged = await this.writeStateEnv(provider.envValues)
     const restarted = configChanged || envChanged
@@ -1084,6 +1111,17 @@ export class OpenClawService {
       restarted,
       modelUpdated: !!provider.model,
     }
+  }
+
+  // ── CLI-backed Providers ─────────────────────────────────────────────
+
+  async getCliProviderAuthStatus(
+    provider: OpenClawCliProvider,
+  ): Promise<OpenClawCliProviderAuthStatus> {
+    const { stdout, exitCode } = await this.runtime.runInContainer(
+      provider.authStatusCommand,
+    )
+    return provider.parseAuthStatus(stdout, exitCode)
   }
 
   // ── Logs ─────────────────────────────────────────────────────────────
@@ -1129,6 +1167,7 @@ export class OpenClawService {
         }
 
         await this.runControlPlaneCall(() => this.cliClient.probe())
+        await this.ensureAllCliProvidersInstalled()
         logger.info('OpenClaw gateway auto-started')
       } catch (err) {
         logger.warn('OpenClaw auto-start failed', {
@@ -1139,6 +1178,77 @@ export class OpenClawService {
   }
 
   // ── Internal ─────────────────────────────────────────────────────────
+
+  // CLI-provider short-circuit: skip env writes and custom-provider merges,
+  // just build the `<id>/<model>` ref that OpenClaw's own plugin routes to.
+  private resolveProviderForAgent(
+    input: SetupInput,
+  ): ResolvedOpenClawProviderConfig {
+    const cliProvider = input.providerType
+      ? getOpenClawCliProvider(input.providerType)
+      : undefined
+    if (cliProvider) {
+      return {
+        envValues: {},
+        model: input.modelId
+          ? buildOpenClawCliProviderModelRef(cliProvider.id, input.modelId)
+          : undefined,
+      }
+    }
+    return resolveSupportedOpenClawProvider(input)
+  }
+
+  private async ensureAllCliProvidersInstalled(
+    onLog?: (msg: string) => void,
+  ): Promise<void> {
+    // Test mocks may swap `this.runtime` for a partial stub without
+    // execInContainer. Skip silently — production ContainerRuntime always
+    // provides it.
+    if (typeof this.runtime.execInContainer !== 'function') return
+    for (const provider of OPENCLAW_CLI_PROVIDERS) {
+      await this.ensureCliProviderInstalled(provider, onLog)
+    }
+  }
+
+  private async ensureCliProviderInstalled(
+    provider: OpenClawCliProvider,
+    onLog?: (msg: string) => void,
+  ): Promise<void> {
+    // argv probe — no shell, no interpolation: `which` returns 0 if the
+    // binary is on PATH in the container, non-zero otherwise.
+    const probe = await this.runtime.execInContainer(['which', provider.binary])
+    if (probe === 0) {
+      logger.info('CLI-backed provider already present', {
+        providerId: provider.id,
+      })
+      return
+    }
+
+    // argv install — registry values flow straight through nerdctl exec,
+    // never through a shell. Version is pinned in the provider registry.
+    const lines: string[] = []
+    const exitCode = await this.runtime.execInContainer(
+      [
+        'npm',
+        'install',
+        '-g',
+        `${provider.npmPackage}@${provider.npmPackageVersion}`,
+      ],
+      (line) => {
+        lines.push(line)
+        onLog?.(line)
+      },
+    )
+    if (exitCode !== 0) {
+      logger.warn('CLI-backed provider install failed', {
+        providerId: provider.id,
+        exitCode,
+        tail: lines.slice(-5),
+      })
+      return
+    }
+    logger.info('CLI-backed provider installed', { providerId: provider.id })
+  }
 
   private buildBootstrapCliClient(): OpenClawCliClient {
     return new OpenClawCliClient({
@@ -1157,6 +1267,7 @@ export class OpenClawService {
       resourcesDir: this.resourcesDir ?? undefined,
       projectDir: this.openclawDir,
       browserosRoot: this.browserosDir,
+      vmCache: this.vmCache,
     })
     this.cliClient = new OpenClawCliClient(this.runtime)
     this.bootstrapCliClient = this.buildBootstrapCliClient()
@@ -1700,6 +1811,7 @@ export function configureOpenClawService(
 export function configureVmRuntime(config: {
   resourcesDir?: string
   browserosDir?: string
+  vmCache?: VmCacheRuntimeConfig
 }): OpenClawService {
   return configureOpenClawService(config)
 }
@@ -1707,4 +1819,15 @@ export function configureVmRuntime(config: {
 export function getOpenClawService(): OpenClawService {
   if (!service) service = new OpenClawService()
   return service
+}
+
+function sameVmCacheRuntimeConfig(
+  left: VmCacheRuntimeConfig | undefined,
+  right: VmCacheRuntimeConfig | undefined,
+): boolean {
+  return (
+    left?.manifestUrl === right?.manifestUrl &&
+    left?.ensureAvailable === right?.ensureAvailable &&
+    left?.ensureSynced === right?.ensureSynced
+  )
 }

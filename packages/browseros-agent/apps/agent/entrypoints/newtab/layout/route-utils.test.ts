@@ -18,8 +18,8 @@ describe('route-utils', () => {
     expect(shouldUseChatSession('/home/chat')).toBe(true)
   })
 
-  it('keeps the focus grid on home while hiding it on dedicated full-screen routes', () => {
-    expect(shouldHideFocusGrid('/home')).toBe(false)
+  it('hides the focus grid on full-screen routes', () => {
+    expect(shouldHideFocusGrid('/home')).toBe(true)
     expect(shouldHideFocusGrid('/home/agents/main')).toBe(true)
     expect(shouldHideFocusGrid('/home/chat')).toBe(true)
     expect(shouldHideFocusGrid('/home/skills')).toBe(true)

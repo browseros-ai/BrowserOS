@@ -32,8 +32,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { useLlmProviders } from '@/lib/llm-providers/useLlmProviders'
 import { AgentTerminal } from './AgentTerminal'
+import {
+  buildOpenClawCliProviderOptions,
+  findOpenClawCliProviderById,
+  OpenClawCliProviderStatusPanel,
+  useOpenClawCliProviderAuthStatus,
+} from './openclaw-cli-providers'
 import { getOpenClawSupportedProviders } from './openclaw-supported-providers'
 import {
   type AgentEntry,
@@ -186,6 +193,9 @@ interface ProviderSelectorProps {
   defaultProviderId: string
   selectedId: string
   onSelect: (id: string) => void
+  // When the selection is a CLI-backed provider, the "uses your API key"
+  // hint is misleading — hide it and let the status panel speak instead.
+  hideApiKeyHint?: boolean
 }
 
 const ProviderSelector: FC<ProviderSelectorProps> = ({
@@ -193,6 +203,7 @@ const ProviderSelector: FC<ProviderSelectorProps> = ({
   defaultProviderId,
   selectedId,
   onSelect,
+  hideApiKeyHint,
 }) => {
   if (providers.length === 0) {
     return (
@@ -227,10 +238,12 @@ const ProviderSelector: FC<ProviderSelectorProps> = ({
           ))}
         </SelectContent>
       </Select>
-      <p className="text-muted-foreground text-xs">
-        Uses your existing API key from BrowserOS settings. The key is passed to
-        the container and never leaves your machine.
-      </p>
+      {!hideApiKeyHint && (
+        <p className="text-muted-foreground text-xs">
+          Uses your existing API key from BrowserOS settings. The key is passed
+          to the container and never leaves your machine.
+        </p>
+      )}
     </div>
   )
 }
@@ -631,26 +644,79 @@ export const AgentsPage: FC = () => {
   const [createProviderId, setCreateProviderId] = useState('')
 
   const [showTerminal, setShowTerminal] = useState(false)
+  const [cliAuthModalOpen, setCliAuthModalOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const compatibleProviders = getOpenClawSupportedProviders(providers)
+  const cliProviderOptions = useMemo(
+    () => buildOpenClawCliProviderOptions(),
+    [],
+  )
+  const selectableCreateProviders = useMemo(
+    () => [...compatibleProviders, ...cliProviderOptions],
+    [compatibleProviders, cliProviderOptions],
+  )
+
+  const selectedCreateOption = selectableCreateProviders.find(
+    (provider) => provider.id === createProviderId,
+  )
+  const selectedCliProvider = selectedCreateOption
+    ? findOpenClawCliProviderById(selectedCreateOption.type)
+    : undefined
+
+  const selectedSetupOption = selectableCreateProviders.find(
+    (provider) => provider.id === setupProviderId,
+  )
+  const selectedSetupCliProvider = selectedSetupOption
+    ? findOpenClawCliProviderById(selectedSetupOption.type)
+    : undefined
+
+  // Whichever dialog is currently open drives the auth status poll and the
+  // auth-terminal handoff. Only one dialog is open at a time.
+  const activeCliProvider =
+    (setupOpen && selectedSetupCliProvider) ||
+    (createOpen && selectedCliProvider) ||
+    undefined
+  const {
+    data: cliAuthStatus,
+    isLoading: cliAuthLoading,
+    error: cliAuthError,
+  } = useOpenClawCliProviderAuthStatus(
+    activeCliProvider?.id ?? '',
+    !!activeCliProvider,
+  )
 
   useEffect(() => {
-    if (compatibleProviders.length === 0) return
+    if (selectableCreateProviders.length === 0) return
     const fallbackId =
-      compatibleProviders.find((provider) => provider.id === defaultProviderId)
-        ?.id ?? compatibleProviders[0].id
+      selectableCreateProviders.find(
+        (provider) => provider.id === defaultProviderId,
+      )?.id ?? selectableCreateProviders[0].id
 
-    if (setupOpen && !setupProviderId) setSetupProviderId(fallbackId)
     if (createOpen && !createProviderId) setCreateProviderId(fallbackId)
   }, [
-    setupOpen,
     createOpen,
-    setupProviderId,
     createProviderId,
-    compatibleProviders,
+    selectableCreateProviders,
     defaultProviderId,
   ])
+
+  useEffect(() => {
+    if (selectableCreateProviders.length === 0) return
+    const fallbackId =
+      selectableCreateProviders.find(
+        (provider) => provider.id === defaultProviderId,
+      )?.id ?? selectableCreateProviders[0].id
+
+    if (setupOpen && !setupProviderId) setSetupProviderId(fallbackId)
+  }, [setupOpen, setupProviderId, selectableCreateProviders, defaultProviderId])
+
+  // Auto-close the auth modal once login succeeds.
+  useEffect(() => {
+    if (cliAuthModalOpen && cliAuthStatus?.loggedIn) {
+      setCliAuthModalOpen(false)
+    }
+  }, [cliAuthModalOpen, cliAuthStatus?.loggedIn])
 
   useEffect(() => {
     if (!createOpen) return
@@ -711,37 +777,49 @@ export const AgentsPage: FC = () => {
   }
 
   const handleSetup = async () => {
-    const provider = compatibleProviders.find(
+    const option = selectableCreateProviders.find(
       (item) => item.id === setupProviderId,
     )
+    const isCli = !!option && !!findOpenClawCliProviderById(option.type)
+    // CLI-backed providers have no apiKey/baseUrl — the gateway boots
+    // bare-bones and we hop straight into the auth terminal. The Create
+    // Agent flow uses the post-setup status panel instead.
+    const llmOption =
+      !isCli && option ? (option as LlmProviderConfig) : undefined
 
     await runWithErrorHandling(async () => {
       await setupOpenClaw({
-        providerType: provider?.type,
-        providerName: provider?.name,
-        baseUrl: provider?.baseUrl,
-        apiKey: provider?.apiKey,
-        modelId: provider?.modelId,
+        providerType: option?.type,
+        providerName: isCli ? undefined : option?.name,
+        baseUrl: llmOption?.baseUrl,
+        apiKey: llmOption?.apiKey,
+        modelId: option?.modelId,
       })
       setSetupOpen(false)
+      if (isCli) setCliAuthModalOpen(true)
     })
   }
 
   const handleCreate = async () => {
     if (!newName.trim()) return
-    const provider = compatibleProviders.find(
+    const option = selectableCreateProviders.find(
       (item) => item.id === createProviderId,
     )
     const normalizedName = newName.trim().toLowerCase().replace(/\s+/g, '-')
+    const isCli = !!option && !!findOpenClawCliProviderById(option.type)
+    // LlmProviderConfig carries apiKey/baseUrl; CLI synthetic options don't —
+    // once we know isCli=false, narrow to the config type for property access.
+    const llmOption =
+      !isCli && option ? (option as LlmProviderConfig) : undefined
 
     await runWithErrorHandling(async () => {
       await createAgent({
         name: normalizedName,
-        providerType: provider?.type,
-        providerName: provider?.name,
-        baseUrl: provider?.baseUrl,
-        apiKey: provider?.apiKey,
-        modelId: provider?.modelId,
+        providerType: option?.type,
+        providerName: isCli ? undefined : option?.name,
+        baseUrl: llmOption?.baseUrl,
+        apiKey: llmOption?.apiKey,
+        modelId: option?.modelId,
       })
       setCreateOpen(false)
       setNewName('')
@@ -780,6 +858,21 @@ export const AgentsPage: FC = () => {
 
   if (showTerminal) {
     return <AgentTerminal onBack={() => setShowTerminal(false)} />
+  }
+
+  // Auth terminal is driven by whichever dialog triggered it — Setup or
+  // Create. Prefer the setup selection when the setup dialog is open, so
+  // clicking "Connect" from Setup doesn't accidentally launch for a
+  // different provider picked earlier in Create.
+  const authTerminalProvider = selectedSetupCliProvider ?? selectedCliProvider
+  if (cliAuthModalOpen && authTerminalProvider) {
+    return (
+      <AgentTerminal
+        onBack={() => setCliAuthModalOpen(false)}
+        initialCommand={authTerminalProvider.authLoginCommand}
+        onSessionExit={() => setCliAuthModalOpen(false)}
+      />
+    )
   }
 
   if (statusLoading && !status) {
@@ -855,14 +948,24 @@ export const AgentsPage: FC = () => {
           </DialogHeader>
           <div className="space-y-4 py-2">
             <ProviderSelector
-              providers={compatibleProviders}
+              providers={selectableCreateProviders}
               defaultProviderId={defaultProviderId}
               selectedId={setupProviderId}
               onSelect={setSetupProviderId}
+              hideApiKeyHint={!!selectedSetupCliProvider}
             />
+
+            {selectedSetupCliProvider && (
+              <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-muted-foreground text-xs">
+                {selectedSetupCliProvider.description}. Clicking{' '}
+                <span className="font-medium">Set Up &amp; Start</span> starts
+                the gateway and opens a terminal to sign in.
+              </p>
+            )}
+
             <Button
               onClick={handleSetup}
-              disabled={settingUp || compatibleProviders.length === 0}
+              disabled={settingUp || selectableCreateProviders.length === 0}
               className="w-full"
             >
               {settingUp ? (
@@ -906,11 +1009,22 @@ export const AgentsPage: FC = () => {
             </div>
 
             <ProviderSelector
-              providers={compatibleProviders}
+              providers={selectableCreateProviders}
               defaultProviderId={defaultProviderId}
               selectedId={createProviderId}
               onSelect={setCreateProviderId}
+              hideApiKeyHint={!!selectedCliProvider}
             />
+
+            {selectedCliProvider && (
+              <OpenClawCliProviderStatusPanel
+                provider={selectedCliProvider}
+                status={cliAuthStatus}
+                loading={cliAuthLoading}
+                fetchError={cliAuthError ?? null}
+                onConnect={() => setCliAuthModalOpen(true)}
+              />
+            )}
 
             <Button
               onClick={handleCreate}
@@ -918,7 +1032,8 @@ export const AgentsPage: FC = () => {
                 !newName.trim() ||
                 creating ||
                 !canManageAgents ||
-                compatibleProviders.length === 0
+                selectableCreateProviders.length === 0 ||
+                (!!selectedCliProvider && !cliAuthStatus?.loggedIn)
               }
               className="w-full"
             >

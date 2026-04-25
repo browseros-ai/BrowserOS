@@ -123,13 +123,92 @@ describe('VM paths', () => {
       'bin',
       'third_party',
       'lima',
+      'bin',
+      'limactl',
+    )
+    const armGuestAgentPath = join(
+      resourcesDir,
+      'bin',
+      'third_party',
+      'lima',
+      'share',
+      'lima',
+      'lima-guestagent.Linux-aarch64.gz',
+    )
+    const x64GuestAgentPath = join(
+      resourcesDir,
+      'bin',
+      'third_party',
+      'lima',
+      'share',
+      'lima',
+      'lima-guestagent.Linux-x86_64.gz',
+    )
+    await mkdir(dirname(limactlPath), { recursive: true })
+    await mkdir(dirname(armGuestAgentPath), { recursive: true })
+    await writeFile(limactlPath, '#!/bin/sh\n')
+    await writeFile(armGuestAgentPath, 'guest-agent\n')
+    await writeFile(x64GuestAgentPath, 'guest-agent\n')
+
+    try {
+      expect(resolveBundledLimactl(resourcesDir)).toBe(limactlPath)
+    } finally {
+      await rm(resourcesDir, { recursive: true, force: true })
+    }
+  })
+
+  it('validates the x64 bundled Lima guest agent path', async () => {
+    process.env.NODE_ENV = 'production'
+    const resourcesDir = await mkdtemp(join(tmpdir(), 'limactl-x64-resources-'))
+    const limactlPath = join(
+      resourcesDir,
+      'bin',
+      'third_party',
+      'lima',
+      'bin',
+      'limactl',
+    )
+    const guestAgentPath = join(
+      resourcesDir,
+      'bin',
+      'third_party',
+      'lima',
+      'share',
+      'lima',
+      'lima-guestagent.Linux-x86_64.gz',
+    )
+    await mkdir(dirname(limactlPath), { recursive: true })
+    await mkdir(dirname(guestAgentPath), { recursive: true })
+    await writeFile(limactlPath, '#!/bin/sh\n')
+    await writeFile(guestAgentPath, 'guest-agent\n')
+
+    try {
+      expect(resolveBundledLimactl(resourcesDir, 'x64')).toBe(limactlPath)
+    } finally {
+      await rm(resourcesDir, { recursive: true, force: true })
+    }
+  })
+
+  it('throws with a runtime packaging hint when the bundled Lima guest agent is missing', async () => {
+    process.env.NODE_ENV = 'production'
+    const resourcesDir = await mkdtemp(
+      join(tmpdir(), 'missing-lima-guest-agent-'),
+    )
+    const limactlPath = join(
+      resourcesDir,
+      'bin',
+      'third_party',
+      'lima',
+      'bin',
       'limactl',
     )
     await mkdir(dirname(limactlPath), { recursive: true })
     await writeFile(limactlPath, '#!/bin/sh\n')
 
     try {
-      expect(resolveBundledLimactl(resourcesDir)).toBe(limactlPath)
+      expect(() => resolveBundledLimactl(resourcesDir)).toThrow(
+        'bundled Lima guest agent not found',
+      )
     } finally {
       await rm(resourcesDir, { recursive: true, force: true })
     }

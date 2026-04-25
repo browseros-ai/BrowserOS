@@ -96,16 +96,45 @@ export function decompressedDiskPath(
   )
 }
 
-export function resolveBundledLimactl(resourcesDir: string): string {
+export function resolveBundledLimactl(
+  resourcesDir: string,
+  hostArch: Arch = detectArch(),
+): string {
   if (usesHostVmTools()) return resolveHostLimactl()
 
-  const candidate = join(resourcesDir, 'bin', 'third_party', 'lima', 'limactl')
+  const limaRoot = resolveBundledLimaRoot(resourcesDir)
+  const candidate = join(limaRoot, 'bin', 'limactl')
   if (!existsSync(candidate)) {
     throw new Error(
       `bundled limactl not found at ${candidate}; see the build-tools README and run bun run cache:sync`,
     )
   }
+  assertBundledLimaGuestAgent(limaRoot, hostArch)
   return candidate
+}
+
+function resolveBundledLimaRoot(resourcesDir: string): string {
+  return join(resourcesDir, 'bin', 'third_party', 'lima')
+}
+
+function nativeLinuxGuestAgentName(arch: Arch): string {
+  return arch === 'arm64'
+    ? 'lima-guestagent.Linux-aarch64.gz'
+    : 'lima-guestagent.Linux-x86_64.gz'
+}
+
+function assertBundledLimaGuestAgent(limaRoot: string, hostArch: Arch): void {
+  const guestAgent = join(
+    limaRoot,
+    'share',
+    'lima',
+    nativeLinuxGuestAgentName(hostArch),
+  )
+  if (!existsSync(guestAgent)) {
+    throw new Error(
+      `bundled Lima guest agent not found at ${guestAgent}; upload Lima runtime files and refresh server resources`,
+    )
+  }
 }
 
 function resolveHostLimactl(): string {

@@ -8,6 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
 import { Command, InvalidArgumentError } from 'commander'
 import { z } from 'zod'
 
@@ -30,6 +31,8 @@ export const ServerConfigSchema = z.object({
   instanceBrowserosVersion: z.string().optional(),
   instanceChromiumVersion: z.string().optional(),
   aiSdkDevtoolsEnabled: z.boolean(),
+  vmCachePrefetch: z.boolean(),
+  vmCacheManifestUrl: z.string().url(),
 })
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>
@@ -226,6 +229,11 @@ function parseConfigFile(filePath?: string): ConfigResult<PartialConfig> {
           cfg.flags?.allow_remote_in_mcp === true ? true : undefined,
         aiSdkDevtoolsEnabled:
           cfg.flags?.ai_sdk_devtools === true ? true : undefined,
+        vmCachePrefetch:
+          typeof cfg.vm_cache?.prefetch === 'boolean'
+            ? cfg.vm_cache.prefetch
+            : undefined,
+        vmCacheManifestUrl: parseTrimmedString(cfg.vm_cache?.manifest_url),
         instanceClientId:
           typeof cfg.instance?.client_id === 'string'
             ? cfg.instance.client_id
@@ -272,6 +280,10 @@ function parseRuntimeEnv(): PartialConfig {
     instanceClientId: process.env.BROWSEROS_CLIENT_ID,
     aiSdkDevtoolsEnabled:
       process.env.BROWSEROS_AI_SDK_DEVTOOLS === 'true' ? true : undefined,
+    vmCachePrefetch: parseBooleanEnv(process.env.BROWSEROS_VM_CACHE_PREFETCH),
+    vmCacheManifestUrl: parseTrimmedString(
+      process.env.BROWSEROS_VM_CACHE_MANIFEST_URL,
+    ),
   })
 }
 
@@ -305,6 +317,8 @@ function getDefaults(cwd: string): PartialConfig {
     executionDir: cwd,
     mcpAllowRemote: false,
     aiSdkDevtoolsEnabled: false,
+    vmCachePrefetch: true,
+    vmCacheManifestUrl: EXTERNAL_URLS.VM_CACHE_MANIFEST,
   }
 }
 
@@ -323,6 +337,18 @@ function mergeConfigs(...configs: PartialConfig[]): PartialConfig {
 function safeParseInt(value: string): number | undefined {
   const num = parseInt(value, 10)
   return Number.isNaN(num) ? undefined : num
+}
+
+function parseBooleanEnv(value: string | undefined): boolean | undefined {
+  if (value === 'true') return true
+  if (value === 'false') return false
+  return undefined
+}
+
+function parseTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
 }
 
 function omitUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {

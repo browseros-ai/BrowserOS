@@ -5,14 +5,16 @@ import {
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal } from '@xterm/xterm'
-import { ArrowLeft } from 'lucide-react'
-import { type FC, useEffect, useRef } from 'react'
+import { ArrowLeft, Check, Copy } from 'lucide-react'
+import { type FC, useEffect, useRef, useState } from 'react'
 import '@xterm/xterm/css/xterm.css'
 import { Button } from '@/components/ui/button'
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
 
 interface AgentTerminalProps {
   onBack: () => void
+  initialCommand?: string
+  onSessionExit?: () => void
 }
 
 type TerminalServerMessage =
@@ -36,26 +38,22 @@ function resolveCssColor(variableName: string): string {
   return color
 }
 
-function withAlpha(color: string, alpha: number): string {
-  const channels = color.match(/[\d.]+/g)
-  if (!channels || channels.length < 3) return color
-  const [red, green, blue] = channels
-  return `rgb(${red} ${green} ${blue} / ${alpha})`
-}
-
 function createTerminalTheme() {
   const isDark = document.documentElement.classList.contains('dark')
   const background = resolveCssColor('--background')
   const foreground = resolveCssColor('--foreground')
   const muted = resolveCssColor('--muted-foreground')
-  const accent = resolveCssColor('--accent-orange')
 
   return {
     background,
     foreground,
     cursor: foreground,
     cursorAccent: background,
-    selectionBackground: withAlpha(accent, isDark ? 0.3 : 0.2),
+    // Solid terminal-standard selection colors. Deriving from a CSS var
+    // with alpha composed against the background produced near-white
+    // rectangles on light mode, making selection invisible.
+    selectionBackground: isDark ? '#3a4463' : '#b4d4f4',
+    selectionInactiveBackground: isDark ? '#2b3348' : '#d9e5f3',
     selectionForeground: foreground,
     black: isDark ? '#16131a' : '#1f1b22',
     red: isDark ? '#ef8c7c' : '#c25544',
@@ -118,8 +116,38 @@ function parseTerminalMessage(data: unknown): TerminalServerMessage | null {
   return null
 }
 
-export const AgentTerminal: FC<AgentTerminalProps> = ({ onBack }) => {
+export const AgentTerminal: FC<AgentTerminalProps> = ({
+  onBack,
+  initialCommand,
+  onSessionExit,
+}) => {
   const containerRef = useRef<HTMLDivElement>(null)
+  const terminalRef = useRef<Terminal | null>(null)
+  // Refs keep the mount-once effect from tearing down the PTY when the
+  // parent re-renders with new inline callbacks.
+  const initialCommandRef = useRef(initialCommand)
+  const onSessionExitRef = useRef(onSessionExit)
+  initialCommandRef.current = initialCommand
+  onSessionExitRef.current = onSessionExit
+
+  const [copied, setCopied] = useState(false)
+
+  // Copy the current xterm selection to the browser clipboard. No-op
+  // if nothing is selected — users who want the whole buffer can
+  // Cmd+A first. Uses the browser clipboard, not the container's, so
+  // it works even when the running TUI has mouse tracking enabled
+  // (Opt+drag forces a selection regardless, see terminal config).
+  const handleCopy = async (): Promise<void> => {
+    const text = terminalRef.current?.getSelection()
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // clipboard permission denied or unavailable — swallow, user will retry
+    }
+  }
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -132,6 +160,34 @@ export const AgentTerminal: FC<AgentTerminalProps> = ({ onBack }) => {
       lineHeight: 1.25,
       scrollback: 8000,
       theme: createTerminalTheme(),
+      // Opt+click+drag forces a native text selection even when the
+      // running TUI has mouse-tracking enabled (xterm would otherwise
+      // forward every click to the app and selection wouldn't work).
+      macOptionClickForcesSelection: true,
+    })
+    terminalRef.current = terminal
+
+    // Cmd+A → select all, Cmd+C → copy selection via the browser
+    // clipboard. Return false so xterm doesn't also forward the keys
+    // to the running program.
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown') return true
+      const isMac = navigator.platform.toUpperCase().includes('MAC')
+      const mod = isMac ? event.metaKey : event.ctrlKey
+      if (!mod) return true
+      const key = event.key.toLowerCase()
+      if (key === 'a') {
+        terminal.selectAll()
+        return false
+      }
+      if (key === 'c') {
+        const sel = terminal.getSelection()
+        if (sel) {
+          void navigator.clipboard.writeText(sel)
+          return false
+        }
+      }
+      return true
     })
 
     const fitAddon = new FitAddon()
@@ -139,6 +195,12 @@ export const AgentTerminal: FC<AgentTerminalProps> = ({ onBack }) => {
     terminal.loadAddon(new WebLinksAddon())
     terminal.open(containerRef.current)
 
+    // React 18 StrictMode double-invokes effects in dev. Everything
+    // async inside this effect is scoped to an AbortController; the
+    // cleanup aborts it and any pending awaits bail out, so we never
+    // leak a second live WebSocket or duplicate xterm listeners.
+    const ac = new AbortController()
+    const cleanups: Array<() => void> = []
     let ws: WebSocket | null = null
     let sawExit = false
 
@@ -159,17 +221,28 @@ export const AgentTerminal: FC<AgentTerminalProps> = ({ onBack }) => {
       sendMessage({ type: 'resize', cols, rows })
     }
 
-    const connect = async () => {
+    const connect = async (): Promise<void> => {
       const baseUrl = await getAgentServerUrl()
+      if (ac.signal.aborted) return
       const wsUrl = new URL('/terminal/ws', baseUrl)
       wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:'
 
       ws = new WebSocket(wsUrl)
+      // If the effect was cleaned up between the await above and now,
+      // close the socket we just opened and bail.
+      if (ac.signal.aborted) {
+        ws.close()
+        ws = null
+        return
+      }
+      cleanups.push(() => ws?.close())
 
       ws.onopen = () => {
         fitAddon.fit()
         terminal.focus()
         sendResize()
+        const cmd = initialCommandRef.current
+        if (cmd) sendMessage({ type: 'input', data: `${cmd}\n` })
       }
 
       ws.onmessage = (event) => {
@@ -185,6 +258,7 @@ export const AgentTerminal: FC<AgentTerminalProps> = ({ onBack }) => {
           terminal.write(
             `\r\n\x1b[90m[session ended with exit ${message.exitCode}]\x1b[0m\r\n`,
           )
+          onSessionExitRef.current?.()
         }
       }
 
@@ -200,49 +274,41 @@ export const AgentTerminal: FC<AgentTerminalProps> = ({ onBack }) => {
       const inputDisposable = terminal.onData((data) => {
         sendMessage({ type: 'input', data })
       })
-
       const resizeDisposable = terminal.onResize(({ cols, rows }) => {
         sendResize(cols, rows)
       })
-
-      return () => {
-        inputDisposable.dispose()
-        resizeDisposable.dispose()
-      }
+      cleanups.push(() => inputDisposable.dispose())
+      cleanups.push(() => resizeDisposable.dispose())
     }
 
-    let disposeSocketBindings: (() => void) | undefined
-    void connect().then((disposeBindings) => {
-      disposeSocketBindings = disposeBindings
-    })
+    void connect()
 
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit()
       sendResize()
     })
     resizeObserver.observe(containerRef.current)
+    cleanups.push(() => resizeObserver.disconnect())
 
-    const themeObserver = new MutationObserver(() => {
-      applyTheme()
-    })
+    const themeObserver = new MutationObserver(() => applyTheme())
     themeObserver.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ['class'],
     })
+    cleanups.push(() => themeObserver.disconnect())
 
     return () => {
-      resizeObserver.disconnect()
-      themeObserver.disconnect()
-      disposeSocketBindings?.()
-      ws?.close()
+      ac.abort()
+      for (const dispose of cleanups) dispose()
       terminal.dispose()
+      terminalRef.current = null
     }
   }, [])
 
   return (
     <div className="flex h-[calc(100dvh-10rem)] min-h-[32rem] w-full flex-col py-2 sm:min-h-[42rem] sm:py-4">
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-        <div className="flex items-center gap-3 border-border border-b px-4 py-3 sm:px-6">
+        <div className="flex items-center justify-between gap-3 border-border border-b px-4 py-3 sm:px-6">
           <div className="flex min-w-0 items-center gap-3">
             <Button variant="ghost" size="icon" onClick={onBack}>
               <ArrowLeft className="size-4" />
@@ -256,6 +322,14 @@ export const AgentTerminal: FC<AgentTerminalProps> = ({ onBack }) => {
               </div>
             </div>
           </div>
+          <Button variant="outline" size="sm" onClick={handleCopy}>
+            {copied ? (
+              <Check className="mr-1 size-3.5" />
+            ) : (
+              <Copy className="mr-1 size-3.5" />
+            )}
+            {copied ? 'Copied' : 'Copy'}
+          </Button>
         </div>
 
         <div className="min-h-0 flex-1 p-4 sm:p-6">
@@ -269,7 +343,7 @@ export const AgentTerminal: FC<AgentTerminalProps> = ({ onBack }) => {
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 px-4 py-4 sm:px-5 sm:py-5">
+            <div className="min-h-0 flex-1 cursor-text px-4 py-4 sm:px-5 sm:py-5">
               <div ref={containerRef} className="h-full w-full" />
             </div>
           </div>

@@ -19,6 +19,7 @@ import {
   OpenClawProtectedAgentError,
   OpenClawSessionNotFoundError,
 } from '../services/openclaw/errors'
+import { getOpenClawCliProvider } from '../services/openclaw/openclaw-cli-providers/registry'
 import { isUnsupportedOpenClawProviderError } from '../services/openclaw/openclaw-provider-map'
 import {
   getOpenClawService,
@@ -47,6 +48,29 @@ export function createOpenClawRoutes() {
     .get('/status', async (c) => {
       const status = await getOpenClawService().getStatus()
       return c.json(status)
+    })
+
+    .get('/providers/:providerId/auth-status', async (c) => {
+      const { providerId } = c.req.param()
+      const provider = getOpenClawCliProvider(providerId)
+      if (!provider) {
+        return c.json({ error: `Unknown CLI provider: ${providerId}` }, 404)
+      }
+      try {
+        const status =
+          await getOpenClawService().getCliProviderAuthStatus(provider)
+        return c.json(status)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        logger.warn('CLI provider auth-status failed', {
+          providerId,
+          error: message,
+        })
+        return c.json(
+          { installed: false, loggedIn: false, error: message },
+          500,
+        )
+      }
     })
 
     .post('/setup', async (c) => {
@@ -326,7 +350,6 @@ export function createOpenClawRoutes() {
         }
       })
     })
-
     .post('/agents/:id/chat', async (c) => {
       const { id } = c.req.param()
       const body = await c.req.json<{

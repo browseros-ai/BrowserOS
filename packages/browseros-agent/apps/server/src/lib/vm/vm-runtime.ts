@@ -7,6 +7,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { logger } from '../logger'
+import { ensureVmCacheAvailable } from './cache-sync'
 import { LimaCommandError, VmError, VmNotReadyError } from './errors'
 import { LimaCli } from './lima-cli'
 import { renderLimaTemplate } from './lima-config'
@@ -30,6 +31,7 @@ export interface VmRuntimeDeps {
   browserosRoot?: string
   readinessTimeoutMs?: number
   readinessPollMs?: number
+  ensureCacheAvailable?: () => Promise<void>
 }
 
 export class VmRuntime {
@@ -57,6 +59,7 @@ export class VmRuntime {
       limactlPath: this.deps.limactlPath,
     })
 
+    await this.ensureCacheAvailable()
     const cached = await readCachedManifest(this.deps.browserosRoot)
     const installed = await readInstalledManifest(this.deps.browserosRoot)
     const versionComparison = compareVersions(installed, cached)
@@ -215,6 +218,14 @@ export class VmRuntime {
     logger.info(VM_TELEMETRY_EVENTS.provisionStartOk, {
       durationMs: Date.now() - startStarted,
     })
+  }
+
+  private async ensureCacheAvailable(): Promise<void> {
+    if (this.deps.ensureCacheAvailable) {
+      await this.deps.ensureCacheAvailable()
+      return
+    }
+    await ensureVmCacheAvailable({ browserosRoot: this.deps.browserosRoot })
   }
 
   private async recreateForContainerd(onLog?: LogFn): Promise<void> {

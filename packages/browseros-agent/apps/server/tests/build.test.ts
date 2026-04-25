@@ -34,6 +34,8 @@ const REQUIRED_INLINE_ENV_KEYS = [
   'CODEGEN_SERVICE_URL',
   'POSTHOG_API_KEY',
   'SENTRY_DSN',
+  'BROWSEROS_VM_CACHE_PREFETCH',
+  'BROWSEROS_VM_CACHE_MANIFEST_URL',
 ] as const
 
 const R2_ENV_KEYS = [
@@ -50,6 +52,8 @@ const INLINE_ENV_STUBS: Record<string, string> = {
   CODEGEN_SERVICE_URL: 'https://stub.test/codegen',
   POSTHOG_API_KEY: 'phc_test_stub',
   SENTRY_DSN: 'https://stub@sentry.test/0',
+  BROWSEROS_VM_CACHE_PREFETCH: 'true',
+  BROWSEROS_VM_CACHE_MANIFEST_URL: 'https://stub.test/vm/manifest.json',
 }
 
 const R2_ENV_STUBS: Record<string, string> = {

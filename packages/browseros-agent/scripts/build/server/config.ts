@@ -10,12 +10,16 @@ const REQUIRED_PROD_VARS = [
   'CODEGEN_SERVICE_URL',
   'POSTHOG_API_KEY',
   'SENTRY_DSN',
+  'BROWSEROS_VM_CACHE_PREFETCH',
+  'BROWSEROS_VM_CACHE_MANIFEST_URL',
 ]
 const INLINED_ENV_VARS = [
   ...REQUIRED_PROD_VARS,
   'NODE_ENV',
   'LOG_LEVEL',
 ] as const
+const BOOLEAN_PROD_VARS = ['BROWSEROS_VM_CACHE_PREFETCH'] as const
+const URL_PROD_VARS = ['BROWSEROS_VM_CACHE_MANIFEST_URL'] as const
 const PROD_ENV_PATH = join('apps', 'server', '.env.production')
 const PROD_ENV_TEMPLATE_PATH = join('apps', 'server', '.env.production.example')
 
@@ -70,6 +74,28 @@ function validateProductionEnv(envVars: Record<string, string>): void {
   if (missing.length > 0) {
     throw new Error(
       `Production build requires variables: ${missing.join(', ')} (set them in ${PROD_ENV_PATH} or process env).`,
+    )
+  }
+  const invalidBooleans = BOOLEAN_PROD_VARS.filter((name) => {
+    const value = envVars[name]
+    return value !== 'true' && value !== 'false'
+  })
+  if (invalidBooleans.length > 0) {
+    throw new Error(
+      `Production build requires boolean variables to be "true" or "false": ${invalidBooleans.join(', ')}.`,
+    )
+  }
+  const invalidUrls = URL_PROD_VARS.filter((name) => {
+    try {
+      new URL(envVars[name])
+      return false
+    } catch {
+      return true
+    }
+  })
+  if (invalidUrls.length > 0) {
+    throw new Error(
+      `Production build requires absolute URL variables: ${invalidUrls.join(', ')}.`,
     )
   }
 }
