@@ -46,8 +46,6 @@ export function useAgentDashboard(enabled: boolean) {
       return response.json()
     },
     enabled: ready,
-    refetchInterval: 30_000, // Slow fallback — SSE handles real-time
-    staleTime: 10_000,
   })
 
   // SSE subscription for real-time status patches
