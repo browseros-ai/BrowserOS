@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 // ---------------------------------------------------------------------------
@@ -148,12 +148,19 @@ export class OpenClawJsonlReader {
     }
   }
 
-  /** Read and parse all events from a session's JSONL file. */
+  /**
+   * Read and parse all events from a session's JSONL file.
+   *
+   * Uses resolveJsonlPath() which handles a known OpenClaw quirk: the
+   * Pi session ID recorded in sessions.json can drift from the actual
+   * JSONL filename after context compaction or session restart. When the
+   * mapped ID doesn't match a file on disk, we fall back to the most
+   * recently modified JSONL in the agent's sessions directory.
+   */
   listBySession(agentId: string, sessionKey: string): ClawEvent[] {
-    const piSessionId = this.resolvePiSessionId(agentId, sessionKey)
-    if (!piSessionId) return []
+    const filePath = this.resolveJsonlPath(agentId, sessionKey)
+    if (!filePath) return []
 
-    const filePath = this.jsonlPath(agentId, piSessionId)
     let raw: string
     try {
       raw = readFileSync(filePath, 'utf8')
@@ -255,31 +262,91 @@ export class OpenClawJsonlReader {
     }
   }
 
-  private resolvePiSessionId(
-    agentId: string,
-    sessionKey: string,
-  ): string | undefined {
+  /**
+   * Resolve the path to a session's JSONL file. Tries the sessions.json
+   * mapping first (fast), then falls back to scanning the directory for
+   * the most recently modified JSONL file when the mapped ID doesn't
+   * match an actual file on disk.
+   *
+   * This fallback handles a known OpenClaw behavior where the Pi session
+   * ID in sessions.json can become stale after context compaction or
+   * session restart — the JSONL file on disk has a different UUID than
+   * what sessions.json records.
+   */
+  private resolveJsonlPath(agentId: string, sessionKey: string): string | null {
     const sessionsJson = this.readSessionsJson(agentId)
-    if (!sessionsJson) return undefined
+    if (!sessionsJson) return null
 
-    // Try exact key match first
+    // Try exact key match in sessions.json
+    let resolvedId: string | undefined
     const entry = sessionsJson[sessionKey]
     if (entry && typeof entry.sessionId === 'string') {
-      return entry.sessionId
+      resolvedId = entry.sessionId
     }
 
     // Try matching by scanning all keys (handles key format variations)
-    for (const [key, value] of Object.entries(sessionsJson)) {
-      if (key === sessionKey || key.endsWith(`:${sessionKey}`)) {
-        if (typeof value.sessionId === 'string') return value.sessionId
+    if (!resolvedId) {
+      for (const [key, value] of Object.entries(sessionsJson)) {
+        if (key === sessionKey || key.endsWith(`:${sessionKey}`)) {
+          if (typeof value.sessionId === 'string') {
+            resolvedId = value.sessionId
+            break
+          }
+        }
       }
     }
 
-    return undefined
+    // If we found a sessionId and the file exists, use it
+    if (resolvedId) {
+      const path = this.safePath(
+        'agents',
+        agentId,
+        'sessions',
+        `${resolvedId}.jsonl`,
+      )
+      if (existsSync(path)) return path
+    }
+
+    // Fallback: scan the sessions directory for the most recent JSONL
+    // file. This handles stale sessions.json entries where the Pi
+    // session ID doesn't match the actual file on disk.
+    return this.findMostRecentJsonl(agentId)
   }
 
-  private jsonlPath(agentId: string, piSessionId: string): string {
-    return this.safePath('agents', agentId, 'sessions', `${piSessionId}.jsonl`)
+  /**
+   * Scan the sessions directory and return the path to the most recently
+   * modified JSONL file. Used as a fallback when sessions.json points to
+   * a non-existent file.
+   */
+  private findMostRecentJsonl(agentId: string): string | null {
+    let sessionsDir: string
+    try {
+      sessionsDir = this.safePath('agents', agentId, 'sessions')
+    } catch {
+      return null
+    }
+
+    let names: string[]
+    try {
+      names = readdirSync(sessionsDir).filter(
+        (n): n is string => typeof n === 'string' && n.endsWith('.jsonl'),
+      )
+    } catch {
+      return null
+    }
+
+    let best: { path: string; mtime: number } | null = null
+    for (const name of names) {
+      const fullPath = this.safePath('agents', agentId, 'sessions', name)
+      try {
+        const st = statSync(fullPath)
+        if (!best || st.mtimeMs > best.mtime) {
+          best = { path: fullPath, mtime: st.mtimeMs }
+        }
+      } catch {}
+    }
+
+    return best?.path ?? null
   }
 }
 
