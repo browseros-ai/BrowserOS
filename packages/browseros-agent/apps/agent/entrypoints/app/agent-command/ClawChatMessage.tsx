@@ -16,11 +16,6 @@ import {
 import { cn } from '@/lib/utils'
 import type { ClawChatMessage as ClawChatMessageType } from './claw-chat-types'
 
-function formatTokenCount(tokens: number): string {
-  if (tokens < 1000) return String(tokens)
-  return `${(tokens / 1000).toFixed(1)}K`
-}
-
 function formatCost(usd: number): string {
   if (usd < 0.005) return `$${usd.toFixed(4)}`
   return `$${usd.toFixed(2)}`
@@ -39,10 +34,6 @@ export const ClawChatMessage: FC<ClawChatMessageProps> = ({ message }) => {
   const handleCopy = useCallback(() => {
     if (messageText) navigator.clipboard.writeText(messageText)
   }, [messageText])
-
-  const hasCostData =
-    message.role === 'assistant' &&
-    (message.costUsd || message.tokensIn || message.tokensOut)
 
   return (
     <Message
@@ -113,25 +104,17 @@ export const ClawChatMessage: FC<ClawChatMessageProps> = ({ message }) => {
           }
         })}
 
-        {messageText ? (
-          <MessageToolbar className="opacity-0 transition-opacity group-hover:opacity-100">
+        {message.role === 'assistant' && messageText ? (
+          <MessageToolbar>
             <MessageActions>
               <MessageAction tooltip="Copy" onClick={handleCopy}>
                 <Copy className="size-3.5" />
               </MessageAction>
             </MessageActions>
-            {hasCostData ? (
-              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/50 tabular-nums">
-                {message.tokensIn != null && message.tokensOut != null ? (
-                  <span>
-                    {formatTokenCount(message.tokensIn)} →{' '}
-                    {formatTokenCount(message.tokensOut)}
-                  </span>
-                ) : null}
-                {message.costUsd ? (
-                  <span>{formatCost(message.costUsd)}</span>
-                ) : null}
-              </div>
+            {message.costUsd ? (
+              <span className="text-[11px] text-muted-foreground/50 tabular-nums">
+                {formatCost(message.costUsd)}
+              </span>
             ) : null}
           </MessageToolbar>
         ) : null}
