@@ -32,6 +32,9 @@ export interface BrowserOSChatHistoryItem {
   messageSeq: number
   sessionKey: string
   source: ClawChatSource
+  costUsd?: number
+  tokensIn?: number
+  tokensOut?: number
 }
 
 export interface AgentHistoryPageResponse {
@@ -74,6 +77,9 @@ export interface ClawChatMessage {
   messageSeq?: number
   status?: ClawChatMessageStatus
   parts: ClawChatMessagePart[]
+  costUsd?: number
+  tokensIn?: number
+  tokensOut?: number
 }
 
 export function mapHistoryItemToClawMessage(
@@ -88,6 +94,9 @@ export function mapHistoryItemToClawMessage(
     messageSeq: item.messageSeq,
     status: 'historical',
     parts: [{ type: 'text', text: item.text }],
+    costUsd: item.costUsd,
+    tokensIn: item.tokensIn,
+    tokensOut: item.tokensOut,
   }
 }
 

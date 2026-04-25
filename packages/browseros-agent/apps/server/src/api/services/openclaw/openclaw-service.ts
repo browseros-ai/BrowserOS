@@ -175,6 +175,9 @@ export interface BrowserOSChatHistoryItem {
   messageSeq: number
   sessionKey: string
   source: OpenClawSessionSource
+  costUsd?: number
+  tokensIn?: number
+  tokensOut?: number
 }
 
 export interface BrowserOSOpenClawHistoryPageResponse {
@@ -294,7 +297,7 @@ function jsonlEventsToHistoryItems(
       if (!text) continue
     }
 
-    items.push({
+    const item: BrowserOSChatHistoryItem = {
       id: `${sessionKey}:${seq}`,
       role: event.type === 'user.message' ? 'user' : 'assistant',
       text,
@@ -302,7 +305,16 @@ function jsonlEventsToHistoryItems(
       messageSeq: seq,
       sessionKey,
       source,
-    })
+    }
+
+    // Pass through per-turn cost and token data for assistant messages
+    if (event.type === 'agent.message') {
+      if (event.costUsd) item.costUsd = event.costUsd
+      if (event.tokensIn) item.tokensIn = event.tokensIn
+      if (event.tokensOut) item.tokensOut = event.tokensOut
+    }
+
+    items.push(item)
     seq++
   }
 
