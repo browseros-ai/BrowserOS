@@ -36,6 +36,7 @@ const providerIconMap: Record<ProviderType, IconComponent | null> = {
   'chatgpt-pro': OpenAI,
   'github-copilot': Github,
   'qwen-code': Qwen,
+  'nvidia-nim': Bot,
 }
 
 interface ProviderIconProps {

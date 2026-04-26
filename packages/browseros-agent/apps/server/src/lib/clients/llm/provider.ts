@@ -161,6 +161,15 @@ function createQwenCodeModel(config: ResolvedLLMConfig): LanguageModel {
   })(config.model)
 }
 
+function createNvidiaNimModel(config: ResolvedLLMConfig): LanguageModel {
+  if (!config.apiKey) throw new Error('NVIDIA NIM requires apiKey')
+  return createOpenAICompatible({
+    name: 'nvidia-nim',
+    baseURL: EXTERNAL_URLS.NVIDIA_NIM_API,
+    apiKey: config.apiKey,
+  })(config.model)
+}
+
 function createGitHubCopilotModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey)
     throw new Error('GitHub Copilot requires OAuth authentication')
@@ -196,6 +205,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProModel,
   [LLM_PROVIDERS.GITHUB_COPILOT]: createGitHubCopilotModel,
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeModel,
+  [LLM_PROVIDERS.NVIDIA_NIM]: createNvidiaNimModel,
 }
 
 export function createLLMProvider(config: ResolvedLLMConfig): LanguageModel {

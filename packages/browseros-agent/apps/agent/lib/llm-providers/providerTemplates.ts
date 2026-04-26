@@ -73,6 +73,16 @@ export const providerTemplates: ProviderTemplate[] = [
     setupGuideUrl: 'https://docs.browseros.com/features/qwen-code-oauth',
   },
   {
+    id: 'nvidia-nim',
+    name: 'NVIDIA NIM',
+    defaultBaseUrl: 'https://integrate.api.nvidia.com/v1',
+    defaultModelId: 'nvidia/llama-3.1-nemotron-nano-8b-instruct',
+    supportsImages: true,
+    contextWindow: 128000,
+    apiKeyUrl: 'https://build.nvidia.com/settings/api-keys',
+    setupGuideUrl: 'https://docs.nvidia.com/nim/',
+  },
+  {
     id: 'moonshot',
     name: 'Moonshot AI',
     defaultBaseUrl: 'https://api.moonshot.ai/v1',
@@ -161,6 +171,7 @@ export const providerTypeOptions: { value: ProviderType; label: string }[] = [
   { value: 'lmstudio', label: 'LM Studio' },
   { value: 'bedrock', label: 'AWS Bedrock' },
   { value: 'browseros', label: 'BrowserOS' },
+  { value: 'nvidia-nim', label: 'NVIDIA NIM' },
 ]
 
 /**
@@ -192,6 +203,7 @@ export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   lmstudio: 'http://localhost:1234/v1',
   bedrock: '',
   browseros: '',
+  'nvidia-nim': 'https://integrate.api.nvidia.com/v1',
 }
 
 /**

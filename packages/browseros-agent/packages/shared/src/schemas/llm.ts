@@ -27,6 +27,7 @@ export const LLM_PROVIDERS = {
   CHATGPT_PRO: 'chatgpt-pro',
   GITHUB_COPILOT: 'github-copilot',
   QWEN_CODE: 'qwen-code',
+  NVIDIA_NIM: 'nvidia-nim',
 } as const
 
 /**
@@ -48,6 +49,7 @@ export const LLMProviderSchema: z.ZodEnum<
     'chatgpt-pro',
     'github-copilot',
     'qwen-code',
+    'nvidia-nim',
   ]
 > = z.enum([
   LLM_PROVIDERS.ANTHROPIC,
@@ -64,6 +66,7 @@ export const LLMProviderSchema: z.ZodEnum<
   LLM_PROVIDERS.CHATGPT_PRO,
   LLM_PROVIDERS.GITHUB_COPILOT,
   LLM_PROVIDERS.QWEN_CODE,
+  LLM_PROVIDERS.NVIDIA_NIM,
 ])
 
 export type LLMProvider = z.infer<typeof LLMProviderSchema>

@@ -179,6 +179,17 @@ function createQwenCodeFactory(
   })
 }
 
+function createNvidiaNimFactory(
+  config: ResolvedAgentConfig,
+): (modelId: string) => unknown {
+  if (!config.apiKey) throw new Error('NVIDIA NIM requires apiKey')
+  return createOpenAICompatible({
+    name: 'nvidia-nim',
+    baseURL: EXTERNAL_URLS.NVIDIA_NIM_API,
+    apiKey: config.apiKey,
+  })
+}
+
 function createGitHubCopilotFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
@@ -218,6 +229,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProFactory,
   [LLM_PROVIDERS.GITHUB_COPILOT]: createGitHubCopilotFactory,
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeFactory,
+  [LLM_PROVIDERS.NVIDIA_NIM]: createNvidiaNimFactory,
 }
 
 export function createLanguageModel(

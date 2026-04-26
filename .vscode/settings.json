@@ -1,4 +1,5 @@
 {
   "terminal.integrated.tabs.title": "${sequence} ${process}",
-  "terminal.integrated.tabs.description": "${cwd}"
+  "terminal.integrated.tabs.description": "${cwd}",
+  "snyk.advanced.autoSelectOrganization": true
 }
