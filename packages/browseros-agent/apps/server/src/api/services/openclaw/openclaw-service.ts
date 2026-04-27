@@ -18,6 +18,7 @@ import { DEFAULT_PORTS } from '@browseros/shared/constants/ports'
 import { getOpenClawDir } from '../../../lib/browseros-dir'
 import { logger } from '../../../lib/logger'
 import type { MonitoringChatTurn } from '../../../monitoring/types'
+import { buildToolLabel } from '../../../tools/tool-label-registry'
 import {
   type AgentLiveStatus,
   type AgentSessionState,
@@ -170,6 +171,8 @@ export interface BrowserOSOpenClawAgentSessionResponse {
 export interface BrowserOSChatHistoryToolCall {
   toolCallId?: string
   toolName: string
+  label: string
+  subject?: string
   status: 'completed' | 'failed'
   input?: Record<string, unknown>
   output?: string
@@ -285,9 +288,13 @@ function jsonlEventsToHistoryItems(
       }
       // Keep order — record the tool call now with status pending; we'll
       // patch the result/error/duration when the matching tool_result arrives.
+      const rawName = event.toolName ?? event.content
+      const { label, subject } = buildToolLabel(rawName, event.toolArguments)
       pendingToolCalls.push({
         toolCallId: event.toolCallId,
-        toolName: event.toolName ?? event.content,
+        toolName: rawName,
+        label,
+        subject,
         status: 'completed', // optimistic; downgraded if a failed result arrives
         input: event.toolArguments,
       })

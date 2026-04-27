@@ -27,6 +27,8 @@ export interface AgentSessionResponse {
 export interface BrowserOSChatHistoryToolCall {
   toolCallId?: string
   toolName: string
+  label: string
+  subject?: string
   status: 'completed' | 'failed'
   input?: Record<string, unknown>
   output?: string
@@ -72,6 +74,8 @@ export type ClawChatMessagePart =
   | {
       type: 'tool-call'
       name: string
+      label: string
+      subject?: string
       status: 'pending' | 'running' | 'completed' | 'failed'
       input?: unknown
       output?: unknown
@@ -106,6 +110,8 @@ export function mapHistoryItemToClawMessage(
       parts.push({
         type: 'tool-call',
         name: tc.toolName,
+        label: tc.label,
+        subject: tc.subject,
         status: tc.status,
         input: tc.input,
         output: tc.output,

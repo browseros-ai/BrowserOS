@@ -143,7 +143,14 @@ export const ConversationMessage: FC<ConversationMessageProps> = ({
                         className="flex items-center gap-2"
                       >
                         <ToolStatusIcon status={tool.status} />
-                        <span className="font-mono text-xs">{tool.name}</span>
+                        <span className="text-foreground text-xs">
+                          {tool.label}
+                        </span>
+                        {tool.subject ? (
+                          <span className="ml-1.5 truncate text-muted-foreground/70 text-xs">
+                            · {tool.subject}
+                          </span>
+                        ) : null}
                         {tool.durationMs != null && (
                           <span className="ml-auto text-muted-foreground/60 text-xs tabular-nums">
                             {(tool.durationMs / 1000).toFixed(1)}s

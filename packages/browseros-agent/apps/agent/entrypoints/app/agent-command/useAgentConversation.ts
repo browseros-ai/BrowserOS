@@ -9,6 +9,7 @@ import type {
   AssistantPart,
 } from '@/lib/agent-conversations/types'
 import { consumeSSEStream } from '@/lib/sse'
+import { buildToolLabel } from '@/lib/tool-labels'
 
 interface UseAgentConversationOptions {
   sessionKey?: string | null
@@ -92,9 +93,14 @@ export function useAgentConversation(
       }
 
       case 'tool-start': {
+        const rawName = (event.data.toolName as string) ?? 'unknown'
+        const args = event.data.args as Record<string, unknown> | undefined
+        const { label, subject } = buildToolLabel(rawName, args)
         const tool = {
           id: (event.data.toolCallId as string) ?? crypto.randomUUID(),
-          name: (event.data.toolName as string) ?? 'unknown',
+          name: rawName,
+          label,
+          subject,
           status: 'running' as const,
         }
         updateCurrentTurnParts((parts) => {

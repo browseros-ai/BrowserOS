@@ -12,6 +12,8 @@ export interface AssistantThinkingPart {
 export interface ToolEntry {
   id: string
   name: string
+  label: string
+  subject?: string
   status: 'running' | 'completed' | 'error'
   durationMs?: number
 }
