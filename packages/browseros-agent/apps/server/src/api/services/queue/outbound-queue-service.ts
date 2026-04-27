@@ -78,6 +78,13 @@ interface OutboundQueueServiceDeps {
   onAgentStatusChange(listener: SessionStateListener): () => void
   /** Read the current ClawSession state for an agent. */
   getAgentState(agentId: string): AgentSessionState
+  /**
+   * Look up the agent's existing user-chat sessionKey, if any. The worker
+   * uses this to keep queued sends on the same conversation thread —
+   * generating a fresh UUID per queued message would orphan the prior
+   * conversation by spawning a brand-new session each time.
+   */
+  resolveExistingSessionKey(agentId: string): string | null
   /** Send a chat — wraps OpenClawService.chatStream. */
   chatStream: ChatStreamFn
 }
@@ -191,9 +198,17 @@ export class OutboundQueueService {
     this.workerInflight.set(agentId, abort)
 
     try {
+      // Resolution order: explicit sessionKey on the queued item ➜
+      // the agent's existing user-chat session ➜ a fresh UUID for the
+      // first-ever message. This prevents the queue from inadvertently
+      // splintering an active conversation into a new session.
+      const targetSessionKey =
+        head.sessionKey ??
+        this.deps.resolveExistingSessionKey(agentId) ??
+        randomUUID()
       const stream = await this.deps.chatStream({
         agentId,
-        sessionKey: head.sessionKey ?? randomUUID(),
+        sessionKey: targetSessionKey,
         message: head.message,
         history: head.history,
         messageParts: head.messageParts,

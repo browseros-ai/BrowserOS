@@ -224,7 +224,10 @@ function AgentConversationController({
       setStreamSessionKey(sessionKey)
     },
   })
-  const outboundQueue = useOutboundQueue({ agentId })
+  const outboundQueue = useOutboundQueue({
+    agentId,
+    sessionKey: resolvedSessionKey,
+  })
   onInitialMessageConsumedRef.current = onInitialMessageConsumed
 
   // Refetch history whenever a server-dispatched queue item completes.

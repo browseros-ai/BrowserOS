@@ -21,6 +21,13 @@ export function getOutboundQueueService(): OutboundQueueService {
     service = new OutboundQueueService({
       onAgentStatusChange: (listener) => openclaw.onAgentStatusChange(listener),
       getAgentState: (agentId) => openclaw.getAgentState(agentId),
+      // Resolve the agent's existing user-chat session for queued sends
+      // so we don't accidentally orphan the conversation by spawning a
+      // fresh session per queued message. Only the very first message
+      // for an agent (no prior session at all) falls back to a new key,
+      // which mirrors what the existing /chat route does.
+      resolveExistingSessionKey: (agentId) =>
+        openclaw.resolveAgentSession(agentId).sessionKey ?? null,
       chatStream: ({ agentId, sessionKey, message, history, messageParts }) =>
         openclaw.chatStream(agentId, sessionKey, message, history, {
           messageParts,

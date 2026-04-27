@@ -36,6 +36,13 @@ export interface OutboundQueueApi {
 
 interface UseOutboundQueueOptions {
   agentId: string | null | undefined
+  /**
+   * Current resolved sessionKey for the active conversation. The hook
+   * forwards it to the server on every enqueue so the queue worker
+   * targets the same OpenClaw session the user is actively viewing.
+   * Null means "no session yet" — the server will allocate one.
+   */
+  sessionKey?: string | null
 }
 
 interface ServerQueuedItem {
@@ -73,8 +80,12 @@ function makeLocalId(): string {
 export function useOutboundQueue(
   options: UseOutboundQueueOptions,
 ): OutboundQueueApi {
-  const { agentId } = options
+  const { agentId, sessionKey } = options
   const { baseUrl } = useAgentServerUrl()
+  // Keep the latest sessionKey in a ref so enqueue's closure always sees
+  // the freshest value without re-creating the callback on every change.
+  const sessionKeyRef = useRef<string | null | undefined>(sessionKey)
+  sessionKeyRef.current = sessionKey
   const [serverItems, setServerItems] = useState<OutboundMessage[]>([])
   const [localItems, setLocalItems] = useState<OutboundMessage[]>([])
 
@@ -168,6 +179,7 @@ export function useOutboundQueue(
               body: JSON.stringify({
                 message: trimmed,
                 attachments: attachments.length > 0 ? attachments : undefined,
+                sessionKey: sessionKeyRef.current ?? undefined,
               }),
             },
           )
