@@ -377,9 +377,11 @@ function jsonlEventsToHistoryItems(
           .trim()
           .replace(/^User:\s*/i, '')
       } else {
-        // Reset pending tool calls — they belong to a discarded turn
+        // Reset all per-turn buffers — they belong to a discarded turn
         pendingToolCalls = []
         pendingToolStarts.clear()
+        pendingReasoningTexts = []
+        pendingReasoningFirstAt = null
         continue
       }
       if (!text) continue

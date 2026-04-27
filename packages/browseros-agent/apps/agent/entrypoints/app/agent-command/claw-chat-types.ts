@@ -17,13 +17,6 @@ export interface BrowserOSOpenClawSession {
   modelProvider?: string
 }
 
-export interface AgentSessionResponse {
-  agentId: string
-  exists: boolean
-  sessionKey: string | null
-  session: BrowserOSOpenClawSession | null
-}
-
 export interface BrowserOSChatHistoryToolCall {
   toolCallId?: string
   toolName: string
