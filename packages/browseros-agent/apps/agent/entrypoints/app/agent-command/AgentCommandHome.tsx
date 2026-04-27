@@ -155,9 +155,16 @@ export const AgentCommandHome: FC = () => {
     }
   }, [agents, selectedAgentId])
 
-  const handleSend = (text: string) => {
+  const handleSend = (input: { text: string }) => {
     if (!selectedAgentId) return
-    navigate(`/home/agents/${selectedAgentId}?q=${encodeURIComponent(text)}`)
+    // Home composer navigates to the conversation page with the prompt in
+    // the query string. Attachments are dropped at this boundary in v1 —
+    // the conversation page (where staging UX is most useful anyway) is
+    // where users can attach. A future iteration can stash staged files
+    // in chrome.storage.session and replay them on first mount there.
+    navigate(
+      `/home/agents/${selectedAgentId}?q=${encodeURIComponent(input.text)}`,
+    )
   }
 
   const handleSelectAgent = (agent: AgentEntry) => {

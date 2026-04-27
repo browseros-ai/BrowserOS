@@ -2,6 +2,8 @@ import { Bot, CheckCircle2, Loader2, Wrench, XCircle } from 'lucide-react'
 import { type FC, useMemo } from 'react'
 import {
   Message,
+  MessageAttachment,
+  MessageAttachments,
   MessageContent,
   MessageResponse,
 } from '@/components/ai-elements/message'
@@ -93,9 +95,26 @@ export const ConversationMessage: FC<ConversationMessageProps> = ({
     <div className="space-y-3">
       <Message from="user">
         <MessageContent>
-          <pre className="whitespace-pre-wrap font-sans text-sm">
-            {turn.userText}
-          </pre>
+          {turn.userAttachments && turn.userAttachments.length > 0 && (
+            <MessageAttachments>
+              {turn.userAttachments.map((attachment) => (
+                <MessageAttachment
+                  key={attachment.id}
+                  data={{
+                    type: 'file',
+                    url: attachment.dataUrl ?? '',
+                    mediaType: attachment.mediaType,
+                    filename: attachment.name,
+                  }}
+                />
+              ))}
+            </MessageAttachments>
+          )}
+          {turn.userText && (
+            <pre className="whitespace-pre-wrap font-sans text-sm">
+              {turn.userText}
+            </pre>
+          )}
         </MessageContent>
       </Message>
 

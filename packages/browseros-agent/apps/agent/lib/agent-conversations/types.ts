@@ -28,9 +28,24 @@ export type AssistantPart =
   | AssistantThinkingPart
   | AssistantToolBatchPart
 
+/**
+ * Attachments rendered alongside the user's text on the optimistic turn
+ * — populated when the composer staged any images/files. The dataUrl is
+ * the same one the server received; we keep it in memory only for the
+ * lifetime of the live turn (history reload re-fetches via the JSONL).
+ */
+export interface UserAttachmentPreview {
+  id: string
+  kind: 'image' | 'file'
+  mediaType: string
+  name: string
+  dataUrl?: string
+}
+
 export interface AgentConversationTurn {
   id: string
   userText: string
+  userAttachments?: UserAttachmentPreview[]
   parts: AssistantPart[]
   done: boolean
   timestamp: number

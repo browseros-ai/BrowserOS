@@ -4,6 +4,8 @@ import {
   Message,
   MessageAction,
   MessageActions,
+  MessageAttachment,
+  MessageAttachments,
   MessageContent,
   MessageResponse,
   MessageToolbar,
@@ -31,22 +33,27 @@ function formatCost(usd: number): string {
 }
 
 type ToolCallPart = Extract<ClawChatMessagePart, { type: 'tool-call' }>
+type AttachmentPart = Extract<ClawChatMessagePart, { type: 'attachment' }>
 
 interface RenderEntry {
-  kind: 'text' | 'reasoning' | 'meta' | 'task'
+  kind: 'text' | 'reasoning' | 'meta' | 'task' | 'attachments'
   partIndex: number
   part?: ClawChatMessagePart
   tools?: ToolCallPart[]
+  attachments?: AttachmentPart[]
 }
 
 /**
  * Build a render plan that groups all tool-call parts into a single Task
- * collapsible at their first appearance position. Other parts render in place.
+ * collapsible and all attachment parts into a single attachment strip at
+ * their respective first-appearance positions. Other parts render in place.
  */
 function buildRenderEntries(parts: ClawChatMessagePart[]): RenderEntry[] {
   const entries: RenderEntry[] = []
   const tools: ToolCallPart[] = []
+  const attachments: AttachmentPart[] = []
   let taskInserted = false
+  let attachmentsInserted = false
 
   parts.forEach((part, partIndex) => {
     if (part.type === 'tool-call') {
@@ -54,6 +61,12 @@ function buildRenderEntries(parts: ClawChatMessagePart[]): RenderEntry[] {
       if (!taskInserted) {
         entries.push({ kind: 'task', partIndex, tools })
         taskInserted = true
+      }
+    } else if (part.type === 'attachment') {
+      attachments.push(part)
+      if (!attachmentsInserted) {
+        entries.push({ kind: 'attachments', partIndex, attachments })
+        attachmentsInserted = true
       }
     } else if (part.type === 'text') {
       entries.push({ kind: 'text', partIndex, part })
@@ -106,6 +119,25 @@ export const ClawChatMessage: FC<ClawChatMessageProps> = ({ message }) => {
       <MessageContent className="max-w-full overflow-hidden group-[.is-assistant]:w-full group-[.is-user]:max-w-full">
         {entries.map((entry) => {
           const key = `${message.id}-entry-${entry.partIndex}`
+
+          if (entry.kind === 'attachments' && entry.attachments) {
+            return (
+              <MessageAttachments key={key}>
+                {entry.attachments.map((attachment, idx) => (
+                  <MessageAttachment
+                    // biome-ignore lint/suspicious/noArrayIndexKey: attachment order is stable within a finalized message
+                    key={`${attachment.kind}-${idx}`}
+                    data={{
+                      type: 'file',
+                      url: attachment.dataUrl ?? '',
+                      mediaType: attachment.mediaType,
+                      filename: attachment.name,
+                    }}
+                  />
+                ))}
+              </MessageAttachments>
+            )
+          }
 
           if (entry.kind === 'text' && entry.part?.type === 'text') {
             return (

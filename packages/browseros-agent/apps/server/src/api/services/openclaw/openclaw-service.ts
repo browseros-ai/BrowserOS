@@ -60,6 +60,7 @@ import {
   mergeEnvContent,
 } from './openclaw-env'
 import {
+  type OpenClawChatContentPart,
   OpenClawHttpClient,
   type OpenClawSessionHistory,
   type OpenClawSessionHistoryEvent,
@@ -185,6 +186,16 @@ export interface BrowserOSChatHistoryReasoning {
   durationMs?: number
 }
 
+export interface BrowserOSChatHistoryAttachment {
+  kind: 'image' | 'file'
+  mediaType: string
+  // Images carry the full data: URL so the client can render directly.
+  // Files (text / pdf / etc) currently round-trip via inline text in the
+  // message body and don't reach this field — kept on the type for v2.
+  dataUrl?: string
+  name?: string
+}
+
 export interface BrowserOSChatHistoryItem {
   id: string
   role: 'user' | 'assistant'
@@ -198,6 +209,7 @@ export interface BrowserOSChatHistoryItem {
   tokensOut?: number
   toolCalls?: BrowserOSChatHistoryToolCall[]
   reasoning?: BrowserOSChatHistoryReasoning
+  attachments?: BrowserOSChatHistoryAttachment[]
 }
 
 export interface BrowserOSOpenClawHistoryPageResponse {
@@ -294,7 +306,25 @@ function jsonlEventsToHistoryItems(
   let pendingReasoningTexts: string[] = []
   let pendingReasoningFirstAt: number | null = null
 
+  // Accumulate user-side attachments. The reader emits them as separate
+  // `user.attachment` events ordered immediately before the user.message
+  // they belong to (same JSONL line). We flush them onto the next user
+  // history item and reset the buffer alongside the per-turn buffers.
+  let pendingAttachments: BrowserOSChatHistoryAttachment[] = []
+
   for (const event of events) {
+    if (event.type === 'user.attachment') {
+      if (event.attachment) {
+        pendingAttachments.push({
+          kind: event.attachment.kind,
+          mediaType: event.attachment.mediaType,
+          dataUrl: event.attachment.dataUrl,
+          name: event.attachment.name,
+        })
+      }
+      continue
+    }
+
     if (event.type === 'agent.thinking') {
       const text = event.content.trim()
       if (text) pendingReasoningTexts.push(text)
@@ -351,7 +381,15 @@ function jsonlEventsToHistoryItems(
     }
 
     let text = event.content.trim()
-    if (!text) continue
+    // Allow user messages with no text body when attachments are present —
+    // the user can attach an image and rely on the model to describe it.
+    if (!text) {
+      if (event.type === 'user.message' && pendingAttachments.length > 0) {
+        // fall through; the empty text is acceptable when paired with media
+      } else {
+        continue
+      }
+    }
 
     // Filter assistant heartbeats
     if (event.type === 'agent.message' && text.startsWith('HEARTBEAT')) continue
@@ -382,6 +420,7 @@ function jsonlEventsToHistoryItems(
         pendingToolStarts.clear()
         pendingReasoningTexts = []
         pendingReasoningFirstAt = null
+        pendingAttachments = []
         continue
       }
       if (!text) continue
@@ -434,6 +473,12 @@ function jsonlEventsToHistoryItems(
       pendingToolStarts.clear()
       pendingReasoningTexts = []
       pendingReasoningFirstAt = null
+
+      // Flush accumulated attachments onto this user message.
+      if (pendingAttachments.length > 0) {
+        item.attachments = pendingAttachments
+        pendingAttachments = []
+      }
     }
 
     items.push(item)
@@ -1154,6 +1199,7 @@ export class OpenClawService {
     sessionKey: string,
     message: string,
     history: MonitoringChatTurn[] = [],
+    options: { messageParts?: OpenClawChatContentPart[] } = {},
   ): Promise<ReadableStream<OpenClawStreamEvent>> {
     await this.assertGatewayReady()
     const normalizedSessionKey = normalizeBrowserOSChatSessionKey(
@@ -1165,12 +1211,14 @@ export class OpenClawService {
       sessionKey: normalizedSessionKey,
       messageLength: message.length,
       historyLength: history.length,
+      contentPartCount: options.messageParts?.length ?? 0,
     })
     return this.runControlPlaneCall(() =>
       this.httpClient.streamChat({
         agentId,
         sessionKey: normalizedSessionKey,
         message,
+        messageParts: options.messageParts,
         history,
       }),
     )

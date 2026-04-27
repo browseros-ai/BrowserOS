@@ -7,9 +7,20 @@ import {
 import type {
   AgentConversationTurn,
   AssistantPart,
+  UserAttachmentPreview,
 } from '@/lib/agent-conversations/types'
+import type { ServerAttachmentPayload } from '@/lib/attachments'
 import { consumeSSEStream } from '@/lib/sse'
 import { buildToolLabel } from '@/lib/tool-labels'
+
+export interface SendInput {
+  text: string
+  attachments?: ServerAttachmentPayload[]
+  // Optional preview metadata used to render the optimistic user turn.
+  // Built by the composer at staging time; the server only sees the
+  // payload array.
+  attachmentPreviews?: UserAttachmentPreview[]
+}
 
 interface UseAgentConversationOptions {
   sessionKey?: string | null
@@ -171,12 +182,22 @@ export function useAgentConversation(
     }
   }
 
-  const send = async (text: string) => {
-    if (!text.trim() || streaming) return
+  const send = async (input: string | SendInput) => {
+    const normalized: SendInput =
+      typeof input === 'string' ? { text: input } : input
+    const trimmed = normalized.text.trim()
+    const attachments = normalized.attachments ?? []
+    if (streaming) return
+    if (!trimmed && attachments.length === 0) return
 
     const turn: AgentConversationTurn = {
       id: crypto.randomUUID(),
-      userText: text.trim(),
+      userText: trimmed,
+      userAttachments:
+        normalized.attachmentPreviews &&
+        normalized.attachmentPreviews.length > 0
+          ? normalized.attachmentPreviews
+          : undefined,
       parts: [],
       done: false,
       timestamp: Date.now(),
@@ -191,10 +212,11 @@ export function useAgentConversation(
     try {
       const response = await chatWithAgent(
         agentId,
-        text.trim(),
+        trimmed,
         sessionKeyRef.current || undefined,
         historyRef.current,
         abortController.signal,
+        attachments,
       )
       const responseSessionKey = response.headers.get('X-Session-Key')
       if (responseSessionKey) {

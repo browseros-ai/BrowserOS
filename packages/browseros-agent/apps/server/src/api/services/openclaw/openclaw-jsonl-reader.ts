@@ -20,6 +20,16 @@ interface PiContentBlock {
   id?: string
   name?: string
   arguments?: Record<string, unknown>
+  // OpenAI-shaped image blocks: { type: 'image_url', image_url: { url } }.
+  // The data: URL carries mediaType + base64 in one string.
+  image_url?: { url?: string; detail?: string }
+  // Anthropic-shaped image blocks: { type: 'image', source: { type:
+  // 'base64', media_type, data } } and the simpler { type: 'image', data }
+  // variant the gateway emits on tool results.
+  source?: { type?: string; media_type?: string; data?: string }
+  data?: string
+  media_type?: string
+  mediaType?: string
 }
 
 interface PiMessage {
@@ -68,6 +78,7 @@ type SessionsJson = Record<string, SessionsJsonEntry>
 
 export type ClawEventType =
   | 'user.message'
+  | 'user.attachment'
   | 'agent.message'
   | 'agent.thinking'
   | 'agent.tool_use'
@@ -75,6 +86,16 @@ export type ClawEventType =
   | 'session.model_change'
   | 'session.thinking_level_change'
   | 'session.compaction'
+
+export interface ClawAttachmentInfo {
+  kind: 'image' | 'file'
+  mediaType: string
+  // For images we always emit a data: URL so downstream consumers don't
+  // have to reconstruct it. `name` is best-effort (JSONL rarely carries
+  // a filename for inline image content blocks).
+  dataUrl?: string
+  name?: string
+}
 
 export interface ClawEvent {
   eventId: string
@@ -89,6 +110,7 @@ export interface ClawEvent {
   toolCallId?: string
   toolArguments?: Record<string, unknown>
   isError?: boolean
+  attachment?: ClawAttachmentInfo
 }
 
 export interface JsonlSessionEntry {
@@ -408,9 +430,7 @@ function mapMessageToEvents(
   createdAt: number,
 ): ClawEvent[] {
   if (msg.role === 'user') {
-    const text = extractText(msg.content)
-    if (!text) return []
-    return [{ eventId, type: 'user.message', content: text, createdAt }]
+    return mapUserMessage(msg, eventId, createdAt)
   }
 
   if (msg.role === 'assistant') {
@@ -433,6 +453,92 @@ function mapMessageToEvents(
   }
 
   return []
+}
+
+/**
+ * Build events for a user JSONL message. Each image content block becomes
+ * a separate `user.attachment` event ordered before the `user.message`
+ * text event so downstream accumulators (in jsonlEventsToHistoryItems)
+ * can flush attachments onto the message they arrived with.
+ */
+function mapUserMessage(
+  msg: PiMessage,
+  eventId: string,
+  createdAt: number,
+): ClawEvent[] {
+  const events: ClawEvent[] = []
+  const text = extractText(msg.content)
+
+  if (msg.content) {
+    let attachmentIdx = 0
+    for (const block of msg.content) {
+      const attachment = extractImageAttachment(block)
+      if (!attachment) continue
+      events.push({
+        eventId: `${eventId}:attachment:${attachmentIdx}`,
+        type: 'user.attachment',
+        content: attachment.dataUrl ?? '',
+        createdAt,
+        attachment,
+      })
+      attachmentIdx++
+    }
+  }
+
+  if (text) {
+    events.push({ eventId, type: 'user.message', content: text, createdAt })
+  } else if (events.length > 0) {
+    // User sent only attachments and no caption — synthesize an empty
+    // user.message so downstream pipelines that gate on user.message still
+    // see a turn boundary.
+    events.push({ eventId, type: 'user.message', content: '', createdAt })
+  }
+
+  return events
+}
+
+/**
+ * Extract a normalised image attachment from a single content block.
+ * Handles all three shapes the OpenClaw gateway round-trips:
+ *   - OpenAI: `{ type: 'image_url', image_url: { url } }` (data: URL)
+ *   - Anthropic: `{ type: 'image', source: { type: 'base64', media_type, data } }`
+ *   - Bare: `{ type: 'image', data: '<base64>' }` (used by tool-result outputs)
+ */
+function extractImageAttachment(
+  block: PiContentBlock,
+): ClawAttachmentInfo | null {
+  if (block.type === 'image_url') {
+    const url = block.image_url?.url
+    if (typeof url !== 'string' || !url.startsWith('data:')) return null
+    const mediaType =
+      url.slice(5, url.indexOf(';')).trim() || 'application/octet-stream'
+    return { kind: 'image', mediaType, dataUrl: url }
+  }
+
+  if (block.type === 'image') {
+    const sourceData = block.source?.data
+    const sourceMediaType =
+      block.source?.media_type ?? block.media_type ?? block.mediaType
+    const bareData = block.data
+    if (typeof sourceData === 'string' && typeof sourceMediaType === 'string') {
+      return {
+        kind: 'image',
+        mediaType: sourceMediaType,
+        dataUrl: `data:${sourceMediaType};base64,${sourceData}`,
+      }
+    }
+    if (typeof bareData === 'string') {
+      const mediaType =
+        typeof sourceMediaType === 'string' ? sourceMediaType : 'image/png'
+      return {
+        kind: 'image',
+        mediaType,
+        dataUrl: `data:${mediaType};base64,${bareData}`,
+      }
+    }
+  }
+
+  return null
 }
 
 function mapAssistantMessage(

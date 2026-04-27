@@ -20,11 +20,166 @@ import {
   OpenClawSessionNotFoundError,
 } from '../services/openclaw/errors'
 import { getOpenClawCliProvider } from '../services/openclaw/openclaw-cli-providers/registry'
+import type { OpenClawChatContentPart } from '../services/openclaw/openclaw-http-client'
 import { isUnsupportedOpenClawProviderError } from '../services/openclaw/openclaw-provider-map'
 import {
   getOpenClawService,
   normalizeBrowserOSChatSessionKey,
 } from '../services/openclaw/openclaw-service'
+
+/**
+ * Inbound attachment shapes the chat route accepts. Images travel as
+ * data: URLs (the gateway is on 127.0.0.1 so we don't pay public-network
+ * cost for the base64 overhead). Files arrive with their text already
+ * extracted on the client — we just inline them as a fenced text part on
+ * the user message.
+ */
+type ImageAttachment = {
+  kind: 'image'
+  mediaType: string
+  dataUrl: string
+  name?: string
+}
+type FileAttachment = {
+  kind: 'file'
+  mediaType: string
+  name: string
+  text: string
+}
+type ChatAttachment = ImageAttachment | FileAttachment
+
+const MAX_ATTACHMENTS = 10
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5 MB after compression
+const MAX_FILE_TEXT_BYTES = 1 * 1024 * 1024 // 1 MB extracted text
+const ALLOWED_IMAGE_MEDIA_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+  'image/gif',
+])
+const ALLOWED_FILE_MEDIA_TYPE_PREFIXES = ['text/', 'application/json']
+
+function validateChatAttachments(input: unknown): {
+  attachments: ChatAttachment[] | null
+  error: string | null
+} {
+  if (input === undefined || input === null) {
+    return { attachments: null, error: null }
+  }
+  if (!Array.isArray(input)) {
+    return { attachments: null, error: 'attachments must be an array' }
+  }
+  if (input.length > MAX_ATTACHMENTS) {
+    return {
+      attachments: null,
+      error: `at most ${MAX_ATTACHMENTS} attachments are allowed per message`,
+    }
+  }
+
+  const result: ChatAttachment[] = []
+  for (const raw of input) {
+    if (!raw || typeof raw !== 'object') {
+      return { attachments: null, error: 'invalid attachment entry' }
+    }
+    const entry = raw as Record<string, unknown>
+    if (entry.kind === 'image') {
+      const mediaType =
+        typeof entry.mediaType === 'string' ? entry.mediaType : ''
+      const dataUrl = typeof entry.dataUrl === 'string' ? entry.dataUrl : ''
+      if (!ALLOWED_IMAGE_MEDIA_TYPES.has(mediaType)) {
+        return {
+          attachments: null,
+          error: `unsupported image type: ${mediaType || 'unknown'}`,
+        }
+      }
+      if (!dataUrl.startsWith('data:')) {
+        return {
+          attachments: null,
+          error: 'image attachment must include a data: URL',
+        }
+      }
+      if (dataUrl.length > MAX_IMAGE_BYTES * 2) {
+        return {
+          attachments: null,
+          error: `image exceeds ${MAX_IMAGE_BYTES} bytes`,
+        }
+      }
+      result.push({
+        kind: 'image',
+        mediaType,
+        dataUrl,
+        name: typeof entry.name === 'string' ? entry.name : undefined,
+      })
+      continue
+    }
+    if (entry.kind === 'file') {
+      const mediaType =
+        typeof entry.mediaType === 'string' ? entry.mediaType : ''
+      const name = typeof entry.name === 'string' ? entry.name : ''
+      const text = typeof entry.text === 'string' ? entry.text : ''
+      const allowed = ALLOWED_FILE_MEDIA_TYPE_PREFIXES.some((prefix) =>
+        mediaType.startsWith(prefix),
+      )
+      if (!allowed) {
+        return {
+          attachments: null,
+          error: `unsupported file type: ${mediaType || 'unknown'}`,
+        }
+      }
+      if (!name) {
+        return {
+          attachments: null,
+          error: 'file attachment must include a name',
+        }
+      }
+      if (text.length > MAX_FILE_TEXT_BYTES) {
+        return {
+          attachments: null,
+          error: `file "${name}" exceeds ${MAX_FILE_TEXT_BYTES} bytes`,
+        }
+      }
+      result.push({ kind: 'file', mediaType, name, text })
+      continue
+    }
+    return {
+      attachments: null,
+      error: 'attachment kind must be "image" or "file"',
+    }
+  }
+  return { attachments: result, error: null }
+}
+
+function buildMessagePartsFromAttachments(
+  message: string,
+  attachments: ChatAttachment[],
+): { text: string; parts: OpenClawChatContentPart[] | undefined } {
+  const images = attachments.filter(
+    (a): a is ImageAttachment => a.kind === 'image',
+  )
+  const files = attachments.filter(
+    (a): a is FileAttachment => a.kind === 'file',
+  )
+
+  const fileBlocks = files
+    .map(
+      (f) => `<attachment name="${f.name}" mediaType="${f.mediaType}">
+${f.text}
+</attachment>`,
+    )
+    .join('\n\n')
+  const text = fileBlocks ? `${message}\n\n${fileBlocks}`.trim() : message
+
+  if (images.length === 0) {
+    return { text, parts: undefined }
+  }
+
+  const parts: OpenClawChatContentPart[] = [{ type: 'text', text }]
+  for (const image of images) {
+    parts.push({ type: 'image_url', image_url: { url: image.dataUrl } })
+  }
+  return { text, parts }
+}
 
 function getCreateAgentValidationError(body: { name?: string }): string | null {
   if (!body.name?.trim()) {
@@ -356,9 +511,17 @@ export function createOpenClawRoutes() {
         message: string
         sessionKey?: string
         history?: MonitoringChatTurn[]
+        attachments?: unknown
       }>()
 
-      if (!body.message?.trim()) {
+      const trimmedMessage = body.message?.trim() ?? ''
+      const attachmentValidation = validateChatAttachments(body.attachments)
+      if (attachmentValidation.error) {
+        return c.json({ error: attachmentValidation.error }, 400)
+      }
+      const attachments = attachmentValidation.attachments ?? []
+      // Either a non-empty text body or at least one attachment is required.
+      if (!trimmedMessage && attachments.length === 0) {
         return c.json({ error: 'Message is required' }, 400)
       }
 
@@ -375,19 +538,35 @@ export function createOpenClawRoutes() {
             ),
           )
         : []
-      if (getMonitoringService().getActiveSessionId(id)) {
+
+      // Replace the immediate 409 with a bounded wait so back-to-back user
+      // sends or a cron / hook turn that's still finishing don't reject the
+      // user-chat outright. The client-side outbound queue (Feature 2) keeps
+      // the per-agent send rate at 1, so this only kicks in for cross-source
+      // contention.
+      try {
+        await getMonitoringService().waitForSessionFree(id, {
+          timeoutMs: 30_000,
+        })
+      } catch (err) {
         return c.json(
           {
             error:
-              'A monitored chat session is already active for this agent. Wait for it to finish before starting another.',
+              err instanceof Error
+                ? err.message
+                : 'Agent is busy. Try again shortly.',
           },
-          409,
+          503,
         )
       }
+
+      const { text: composedMessage, parts: messageParts } =
+        buildMessagePartsFromAttachments(trimmedMessage, attachments)
+
       const monitoringContext = await getMonitoringService().startSession({
         agentId: id,
         sessionKey,
-        originalPrompt: body.message.trim(),
+        originalPrompt: composedMessage,
         chatHistory: history,
       })
 
@@ -395,8 +574,9 @@ export function createOpenClawRoutes() {
         const eventStream = await getOpenClawService().chatStream(
           id,
           sessionKey,
-          body.message,
+          composedMessage,
           history,
+          { messageParts },
         )
 
         c.header('Content-Type', 'text/event-stream')

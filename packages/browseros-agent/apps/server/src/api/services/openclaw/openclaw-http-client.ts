@@ -13,10 +13,27 @@ export interface OpenClawChatHistoryMessage {
   content: string
 }
 
+/**
+ * OpenAI-compatible content parts for multimodal user messages. OpenClaw's
+ * gateway accepts the standard `content: [{ type: 'text', ... }, { type:
+ * 'image_url', image_url: { url } }]` shape on /v1/chat/completions and
+ * routes it to whichever upstream provider the agent's model points at.
+ */
+export type OpenClawChatContentPart =
+  | { type: 'text'; text: string }
+  | {
+      type: 'image_url'
+      image_url: { url: string; detail?: 'auto' | 'low' | 'high' }
+    }
+
 export interface OpenClawChatRequest {
   agentId: string
   sessionKey: string
   message: string
+  // When present, sent as the user message's `content` array verbatim. The
+  // legacy string `message` is folded into a leading text part if no text
+  // part is present in `messageParts`.
+  messageParts?: OpenClawChatContentPart[]
   history?: OpenClawChatHistoryMessage[]
   signal?: AbortSignal
 }
@@ -117,6 +134,7 @@ export class OpenClawHttpClient {
 
   private async fetchChat(input: OpenClawChatRequest): Promise<Response> {
     const token = await this.getToken()
+    const userContent = buildUserContent(input)
     const response = await fetch(
       `http://127.0.0.1:${this.hostPort}/v1/chat/completions`,
       {
@@ -130,7 +148,7 @@ export class OpenClawHttpClient {
           stream: true,
           messages: [
             ...(input.history ?? []),
-            { role: 'user', content: input.message },
+            { role: 'user', content: userContent },
           ],
           user: `browseros:${input.agentId}:${input.sessionKey}`,
         }),
@@ -195,6 +213,30 @@ function buildHistoryPath(
 
 function resolveAgentModel(agentId: string): string {
   return agentId === 'main' ? 'openclaw' : `openclaw/${agentId}`
+}
+
+/**
+ * Build the OpenAI-compatible `content` payload for the trailing user
+ * message. When the caller supplies multimodal parts via `messageParts`,
+ * use them as-is, ensuring at least one text part is present (we fold the
+ * legacy `message` string in as a leading text part if not). Otherwise,
+ * fall back to a plain string `content` so simple text-only sends keep
+ * the same wire shape we've always sent.
+ */
+function buildUserContent(
+  input: OpenClawChatRequest,
+): string | OpenClawChatContentPart[] {
+  if (!input.messageParts || input.messageParts.length === 0) {
+    return input.message
+  }
+
+  const hasText = input.messageParts.some((p) => p.type === 'text')
+  if (hasText) return input.messageParts
+
+  const trimmed = input.message.trim()
+  if (!trimmed) return input.messageParts
+
+  return [{ type: 'text', text: input.message }, ...input.messageParts]
 }
 
 function createEventStream(

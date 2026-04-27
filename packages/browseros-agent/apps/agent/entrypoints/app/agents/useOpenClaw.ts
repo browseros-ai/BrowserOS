@@ -317,12 +317,18 @@ export async function chatWithAgent(
   sessionKey?: string,
   history: OpenClawChatHistoryMessage[] = [],
   signal?: AbortSignal,
+  attachments?: ReadonlyArray<unknown>,
 ): Promise<Response> {
   const baseUrl = await getAgentServerUrl()
   return fetch(`${baseUrl}/claw/agents/${agentId}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, sessionKey, history }),
+    body: JSON.stringify({
+      message,
+      sessionKey,
+      history,
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
+    }),
     signal,
   })
 }

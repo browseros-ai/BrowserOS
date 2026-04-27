@@ -70,6 +70,56 @@ export class MonitoringService {
     return this.registry.getActive(agentId)
   }
 
+  /**
+   * Resolve when no monitoring session is active for `agentId`. Used by the
+   * chat route to gate user-chat sends behind any in-flight cron / hook turn
+   * without rejecting the client outright.
+   *
+   * Resolves immediately if the agent is already free. Otherwise registers
+   * a one-shot listener on the session-end event and resolves when it
+   * fires. Rejects with a TimeoutError-shaped Error after `timeoutMs`.
+   */
+  async waitForSessionFree(
+    agentId: string,
+    options: { timeoutMs?: number } = {},
+  ): Promise<void> {
+    if (!this.registry.getActive(agentId)) return
+
+    const timeoutMs = options.timeoutMs ?? 30_000
+
+    return new Promise<void>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | null = null
+      let unsubscribe: (() => void) | null = null
+
+      const cleanup = () => {
+        if (timer) clearTimeout(timer)
+        unsubscribe?.()
+      }
+
+      timer = setTimeout(() => {
+        cleanup()
+        reject(
+          new Error(
+            `Timed out waiting for agent "${agentId}" to become free after ${timeoutMs}ms`,
+          ),
+        )
+      }, timeoutMs)
+
+      unsubscribe = this.registry.onSessionEnd(agentId, () => {
+        if (this.registry.getActive(agentId)) return
+        cleanup()
+        resolve()
+      })
+
+      // Re-check after listener registration to close a race where the
+      // session ended between the initial getActive() and the subscribe.
+      if (!this.registry.getActive(agentId)) {
+        cleanup()
+        resolve()
+      }
+    })
+  }
+
   resolveSessionForMcpRequest(
     explicitAgentId?: string,
   ): { agentId: string; monitoringSessionId: string } | undefined {

@@ -2,13 +2,17 @@ import {
   ArrowRight,
   Bot,
   ChevronDown,
+  FileText,
   Folder,
   Layers,
   Loader2,
   Mic,
+  Paperclip,
   Square,
+  X,
 } from 'lucide-react'
 import {
+  type DragEvent,
   type FC,
   type ReactNode,
   useEffect,
@@ -24,6 +28,7 @@ import { Textarea } from '@/components/ui/textarea'
 import type { AgentEntry } from '@/entrypoints/app/agents/useOpenClaw'
 import { McpServerIcon } from '@/entrypoints/app/connect-mcp/McpServerIcon'
 import { useGetUserMCPIntegrations } from '@/entrypoints/app/connect-mcp/useGetUserMCPIntegrations'
+import { type StagedAttachment, stageAttachments } from '@/lib/attachments'
 import { Feature } from '@/lib/browseros/capabilities'
 import { useCapabilities } from '@/lib/browseros/useCapabilities'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
@@ -32,11 +37,16 @@ import { useVoiceInput } from '@/lib/voice/useVoiceInput'
 import { useWorkspace } from '@/lib/workspace/use-workspace'
 import { AgentSelector } from './AgentSelector'
 
+export interface ConversationInputSendInput {
+  text: string
+  attachments: StagedAttachment[]
+}
+
 interface ConversationInputProps {
   agents: AgentEntry[]
   selectedAgentId: string | null
   onSelectAgent: (agent: AgentEntry) => void
-  onSend: (text: string) => void
+  onSend: (input: ConversationInputSendInput) => void
   onCreateAgent?: () => void
   streaming: boolean
   disabled?: boolean
@@ -131,6 +141,8 @@ function ContextControls({
   onToggleTab,
   showAgentSelector,
   status,
+  onAttachClick,
+  attachDisabled,
 }: {
   agents: AgentEntry[]
   onCreateAgent?: () => void
@@ -140,6 +152,8 @@ function ContextControls({
   onToggleTab: (tab: chrome.tabs.Tab) => void
   showAgentSelector: boolean
   status?: string
+  onAttachClick: () => void
+  attachDisabled: boolean
 }) {
   const { supports } = useCapabilities()
   const { selectedFolder } = useWorkspace()
@@ -199,6 +213,20 @@ function ContextControls({
             <span>Tabs</span>
           </Button>
         </TabPickerPopover>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={onAttachClick}
+          disabled={attachDisabled}
+          title="Attach files"
+          className={cn(
+            'flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium text-sm transition-all',
+            'bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+          )}
+        >
+          <Paperclip className="h-4 w-4" />
+          <span>Attach</span>
+        </Button>
       </div>
 
       {supports(Feature.MANAGED_MCP_SUPPORT) ? (
@@ -271,12 +299,39 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   const [input, setInput] = useState('')
   const [selectedTabs, setSelectedTabs] = useState<chrome.tabs.Tab[]>([])
   const [isExpandedDraft, setIsExpandedDraft] = useState(false)
+  const [attachments, setAttachments] = useState<StagedAttachment[]>([])
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [isStaging, setIsStaging] = useState(false)
+  const [isDragOver, setIsDragOver] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const voice = useVoiceInput()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const selectedAgent = agents.find(
     (agent) => agent.agentId === selectedAgentId,
   )
   const isConversation = variant === 'conversation'
+
+  const stageFiles = async (files: File[]) => {
+    if (files.length === 0) return
+    setIsStaging(true)
+    setAttachmentError(null)
+    try {
+      const result = await stageAttachments(files, attachments.length)
+      if (result.staged.length > 0) {
+        setAttachments((prev) => [...prev, ...result.staged])
+      }
+      if (result.errors.length > 0) {
+        setAttachmentError(result.errors.map((e) => e.message).join(' \u2022 '))
+      }
+    } finally {
+      setIsStaging(false)
+    }
+  }
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id))
+    setAttachmentError(null)
+  }
 
   useLayoutEffect(() => {
     const element = textareaRef.current
@@ -309,11 +364,66 @@ export const ConversationInput: FC<ConversationInputProps> = ({
     })
   }
 
+  const hasContent = input.trim().length > 0 || attachments.length > 0
+
   const handleSend = () => {
     const text = input.trim()
-    if (!text || streaming || disabled) return
-    onSend(text)
+    if (streaming || disabled || isStaging) return
+    if (!text && attachments.length === 0) return
+    onSend({ text, attachments })
     setInput('')
+    setAttachments([])
+    setAttachmentError(null)
+  }
+
+  const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = event.clipboardData?.items
+    if (!items) return
+    const files: File[] = []
+    for (const item of items) {
+      if (item.kind === 'file') {
+        const file = item.getAsFile()
+        if (file) files.push(file)
+      }
+    }
+    if (files.length > 0) {
+      event.preventDefault()
+      void stageFiles(files)
+    }
+  }
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    setIsDragOver(false)
+    const files = Array.from(event.dataTransfer?.files ?? [])
+    if (files.length > 0) {
+      void stageFiles(files)
+    }
+  }
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer?.types.includes('Files')) return
+    event.preventDefault()
+    setIsDragOver(true)
+  }
+
+  const handleDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      return
+    }
+    setIsDragOver(false)
+  }
+
+  const openFilePicker = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handleFileInputChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const files = Array.from(event.target.files ?? [])
+    event.target.value = ''
+    if (files.length > 0) void stageFiles(files)
   }
 
   const shell = variant === 'home' ? HomeShell : ConversationShell
@@ -321,79 +431,187 @@ export const ConversationInput: FC<ConversationInputProps> = ({
 
   return (
     <Shell>
-      <div
-        className={cn(
-          'flex gap-3',
-          variant === 'home' ? 'px-4 py-3' : 'px-4 py-3',
-          isExpandedDraft ? 'items-end' : 'items-center',
-        )}
+      <section
+        // Drag/drop on a region isn't a click affordance — wrap the
+        // composer in a labeled <section> so the a11y rule is satisfied
+        // without misrepresenting the surface as interactive.
+        aria-label="Message composer"
+        className={cn('relative', isDragOver && 'ring-2 ring-primary/60')}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       >
-        <BotInputIcon variant={variant} />
-        <div className="flex-1">
-          <Textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(event) => setInput(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault()
-                handleSend()
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="image/png,image/jpeg,image/webp,image/gif,text/*,application/json"
+          className="hidden"
+          onChange={handleFileInputChange}
+        />
+        {attachments.length > 0 || attachmentError ? (
+          <AttachmentStrip
+            attachments={attachments}
+            onRemove={removeAttachment}
+            error={attachmentError}
+          />
+        ) : null}
+        <div
+          className={cn(
+            'flex gap-3',
+            variant === 'home' ? 'px-4 py-3' : 'px-4 py-3',
+            isExpandedDraft ? 'items-end' : 'items-center',
+          )}
+        >
+          <BotInputIcon variant={variant} />
+          <div className="flex-1">
+            <Textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(event) => setInput(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  handleSend()
+                }
+              }}
+              onPaste={handlePaste}
+              rows={1}
+              placeholder={
+                voice.isTranscribing
+                  ? 'Transcribing...'
+                  : (placeholder ??
+                    `Message ${selectedAgent?.name ?? 'agent'}...`)
               }
+              disabled={disabled || voice.isTranscribing}
+              className={cn(
+                'resize-none border-none bg-transparent px-0 text-[15px] shadow-none focus-visible:ring-0',
+                '[field-sizing:fixed]',
+                variant === 'home'
+                  ? 'min-h-[40px] py-2 leading-6'
+                  : 'min-h-[40px] py-2 leading-6',
+                'placeholder:text-muted-foreground/80',
+              )}
+            />
+          </div>
+          <VoiceButton
+            isRecording={voice.isRecording}
+            isTranscribing={voice.isTranscribing}
+            onStart={() => {
+              void voice.startRecording()
             }}
-            rows={1}
-            placeholder={
+            onStop={() => {
+              void voice.stopRecording()
+            }}
+          />
+          <InputActionButton
+            disabled={
+              !hasContent ||
+              streaming ||
+              isStaging ||
+              !!disabled ||
+              voice.isRecording ||
               voice.isTranscribing
-                ? 'Transcribing...'
-                : (placeholder ??
-                  `Message ${selectedAgent?.name ?? 'agent'}...`)
             }
-            disabled={disabled || voice.isTranscribing}
-            className={cn(
-              'resize-none border-none bg-transparent px-0 text-[15px] shadow-none focus-visible:ring-0',
-              '[field-sizing:fixed]',
-              variant === 'home'
-                ? 'min-h-[40px] py-2 leading-6'
-                : 'min-h-[40px] py-2 leading-6',
-              'placeholder:text-muted-foreground/80',
-            )}
+            onClick={handleSend}
+            streaming={streaming}
           />
         </div>
-        <VoiceButton
-          isRecording={voice.isRecording}
-          isTranscribing={voice.isTranscribing}
-          onStart={() => {
-            void voice.startRecording()
-          }}
-          onStop={() => {
-            void voice.stopRecording()
-          }}
+        {voice.error ? (
+          <div className="px-5 pb-2 text-destructive text-xs">
+            {voice.error}
+          </div>
+        ) : null}
+        <ContextControls
+          agents={agents}
+          onCreateAgent={onCreateAgent}
+          onSelectAgent={onSelectAgent}
+          selectedAgentId={selectedAgentId}
+          selectedTabs={selectedTabs}
+          onToggleTab={toggleTab}
+          showAgentSelector={variant === 'home'}
+          status={status}
+          onAttachClick={openFilePicker}
+          attachDisabled={attachments.length >= 10 || isStaging || !!disabled}
         />
-        <InputActionButton
-          disabled={
-            !input.trim() ||
-            streaming ||
-            !!disabled ||
-            voice.isRecording ||
-            voice.isTranscribing
-          }
-          onClick={handleSend}
-          streaming={streaming}
-        />
-      </div>
-      {voice.error ? (
-        <div className="px-5 pb-2 text-destructive text-xs">{voice.error}</div>
-      ) : null}
-      <ContextControls
-        agents={agents}
-        onCreateAgent={onCreateAgent}
-        onSelectAgent={onSelectAgent}
-        selectedAgentId={selectedAgentId}
-        selectedTabs={selectedTabs}
-        onToggleTab={toggleTab}
-        showAgentSelector={variant === 'home'}
-        status={status}
-      />
+        {isDragOver ? (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[inherit] bg-background/80 font-medium text-foreground text-sm backdrop-blur-sm">
+            Drop files to attach
+          </div>
+        ) : null}
+      </section>
     </Shell>
+  )
+}
+
+function AttachmentStrip({
+  attachments,
+  onRemove,
+  error,
+}: {
+  attachments: StagedAttachment[]
+  onRemove: (id: string) => void
+  error: string | null
+}) {
+  return (
+    <div className="border-border/40 border-b px-4 pt-3 pb-2">
+      {attachments.length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {attachments.map((attachment) => (
+            <AttachmentChip
+              key={attachment.id}
+              attachment={attachment}
+              onRemove={() => onRemove(attachment.id)}
+            />
+          ))}
+        </div>
+      ) : null}
+      {error ? (
+        <div className="mt-2 text-destructive text-xs">{error}</div>
+      ) : null}
+    </div>
+  )
+}
+
+function AttachmentChip({
+  attachment,
+  onRemove,
+}: {
+  attachment: StagedAttachment
+  onRemove: () => void
+}) {
+  if (attachment.kind === 'image' && attachment.dataUrl) {
+    return (
+      <div className="group relative size-16 overflow-hidden rounded-md border border-border/60">
+        <img
+          src={attachment.dataUrl}
+          alt={attachment.name}
+          className="size-full object-cover"
+        />
+        <button
+          type="button"
+          onClick={onRemove}
+          className="absolute top-1 right-1 inline-flex size-5 items-center justify-center rounded-full bg-background/80 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+          aria-label={`Remove ${attachment.name}`}
+        >
+          <X className="size-3" />
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div className="group flex max-w-[220px] items-center gap-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5">
+      <FileText className="size-4 shrink-0 text-muted-foreground" />
+      <span className="truncate text-xs">{attachment.name}</span>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="ml-1 inline-flex size-4 items-center justify-center text-muted-foreground hover:text-foreground"
+        aria-label={`Remove ${attachment.name}`}
+      >
+        <X className="size-3" />
+      </button>
+    </div>
   )
 }
 

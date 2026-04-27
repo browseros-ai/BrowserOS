@@ -34,6 +34,16 @@ export interface BrowserOSChatHistoryReasoning {
   durationMs?: number
 }
 
+export interface BrowserOSChatHistoryAttachment {
+  kind: 'image' | 'file'
+  mediaType: string
+  // Images carry a `data:` URL so we can render directly without any
+  // additional fetch; files (text/PDF) currently round-trip via inline
+  // text in the message body and do not populate this field in v1.
+  dataUrl?: string
+  name?: string
+}
+
 export interface BrowserOSChatHistoryItem {
   id: string
   role: ClawChatRole
@@ -47,6 +57,7 @@ export interface BrowserOSChatHistoryItem {
   tokensOut?: number
   toolCalls?: BrowserOSChatHistoryToolCall[]
   reasoning?: BrowserOSChatHistoryReasoning
+  attachments?: BrowserOSChatHistoryAttachment[]
 }
 
 export interface AgentHistoryPageResponse {
@@ -81,6 +92,13 @@ export type ClawChatMessagePart =
       error?: string
       durationMs?: number
     }
+  | {
+      type: 'attachment'
+      kind: 'image' | 'file'
+      mediaType: string
+      dataUrl?: string
+      name?: string
+    }
   | { type: 'meta'; label: string; value: string }
 
 export interface ClawChatMessage {
@@ -101,6 +119,21 @@ export function mapHistoryItemToClawMessage(
   item: BrowserOSChatHistoryItem,
 ): ClawChatMessage {
   const parts: ClawChatMessagePart[] = []
+
+  // Attachments first — they belong above the text in user messages and
+  // never appear on assistant messages today (assistant images come back
+  // through tool results, which render via the Task collapsible).
+  if (item.attachments && item.attachments.length > 0) {
+    for (const attachment of item.attachments) {
+      parts.push({
+        type: 'attachment',
+        kind: attachment.kind,
+        mediaType: attachment.mediaType,
+        dataUrl: attachment.dataUrl,
+        name: attachment.name,
+      })
+    }
+  }
 
   // Reasoning, then tool calls, then text — the chronological order the
   // agent produced them (think → act → answer).
@@ -135,7 +168,11 @@ export function mapHistoryItemToClawMessage(
     }
   }
 
-  parts.push({ type: 'text', text: item.text })
+  // Only emit a text part when there's actual content. User messages with
+  // only attachments and no caption shouldn't render an empty bubble.
+  if (item.text.trim().length > 0) {
+    parts.push({ type: 'text', text: item.text })
+  }
 
   return {
     id: item.id,

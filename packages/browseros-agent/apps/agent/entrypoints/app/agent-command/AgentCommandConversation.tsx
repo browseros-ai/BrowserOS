@@ -294,8 +294,18 @@ function AgentConversationController({
             agents={agents}
             selectedAgentId={agentId}
             onSelectAgent={handleSelectAgent}
-            onSend={(text) => {
-              void send(text)
+            onSend={(input) => {
+              void send({
+                text: input.text,
+                attachments: input.attachments.map((a) => a.payload),
+                attachmentPreviews: input.attachments.map((a) => ({
+                  id: a.id,
+                  kind: a.kind,
+                  mediaType: a.mediaType,
+                  name: a.name,
+                  dataUrl: a.dataUrl,
+                })),
+              })
             }}
             onCreateAgent={() => navigate(createAgentPath)}
             streaming={streaming}
