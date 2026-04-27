@@ -230,18 +230,11 @@ const SUBJECT_EXTRACTORS: Record<string, SubjectExtractor> = {
     return typeof page === 'number' ? `tab ${page}` : asString(page)
   },
 
-  // Page reads — show which page, if specified
-  take_snapshot: (i) =>
-    typeof i.page === 'number' ? `tab ${i.page}` : undefined,
-  take_enhanced_snapshot: (i) =>
-    typeof i.page === 'number' ? `tab ${i.page}` : undefined,
-  get_page_content: (i) =>
-    typeof i.page === 'number' ? `tab ${i.page}` : undefined,
-  get_page_links: (i) =>
-    typeof i.page === 'number' ? `tab ${i.page}` : undefined,
-  get_dom: (i) => (typeof i.page === 'number' ? `tab ${i.page}` : undefined),
-  take_screenshot: (i) =>
-    typeof i.page === 'number' ? `tab ${i.page}` : undefined,
+  // Page reads (take_snapshot, take_enhanced_snapshot, get_page_content,
+  // get_page_links, get_dom, take_screenshot) intentionally omit a
+  // subject — the only argument is a numeric page ID that's internal
+  // to the agent and meaningless to the user ("tab 4" tells them nothing).
+  // The verb alone communicates what happened.
 
   // External actions via Strata
   execute_action: (i) => {
