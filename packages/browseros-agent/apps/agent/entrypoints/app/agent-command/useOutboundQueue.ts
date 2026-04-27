@@ -182,12 +182,11 @@ export function useOutboundQueue(
         createdAt: Date.now(),
       }
       setLocalItems((prev) => [...prev, optimistic])
-      // Stage previews under the localId until the server responds with
-      // the real id. Once we have that id we re-key under it so SSE
-      // snapshots can match.
-      if (previews.length > 0) {
-        previewMapRef.current.set(localId, { localId, previews })
-      }
+      // Always stage a map entry under the localId — even for text-only
+      // sends — so the SSE snapshot can match the optimistic entry to
+      // its server id and prune the duplicate. The previews array may
+      // be empty; what matters is the localId↔serverId link.
+      previewMapRef.current.set(localId, { localId, previews })
 
       void (async () => {
         try {
@@ -225,7 +224,7 @@ export function useOutboundQueue(
             id?: string
           } | null
           const serverId = payload?.id
-          if (serverId && previews.length > 0) {
+          if (serverId) {
             previewMapRef.current.set(serverId, { localId, previews })
             previewMapRef.current.delete(localId)
           }
