@@ -167,6 +167,16 @@ export interface BrowserOSOpenClawAgentSessionResponse {
   session: BrowserOSOpenClawSession | null
 }
 
+export interface BrowserOSChatHistoryToolCall {
+  toolCallId?: string
+  toolName: string
+  status: 'completed' | 'failed'
+  input?: Record<string, unknown>
+  output?: string
+  error?: string
+  durationMs?: number
+}
+
 export interface BrowserOSChatHistoryItem {
   id: string
   role: 'user' | 'assistant'
@@ -178,6 +188,7 @@ export interface BrowserOSChatHistoryItem {
   costUsd?: number
   tokensIn?: number
   tokensOut?: number
+  toolCalls?: BrowserOSChatHistoryToolCall[]
 }
 
 export interface BrowserOSOpenClawHistoryPageResponse {
@@ -260,7 +271,52 @@ function jsonlEventsToHistoryItems(
   const items: BrowserOSChatHistoryItem[] = []
   let seq = 0
 
+  // Accumulate tool calls between text messages. The agent emits
+  // tool_use → tool_result pairs interspersed with assistant text. We
+  // pair them by toolCallId and attach the resulting list to the next
+  // assistant message (the one that follows the tool sequence).
+  let pendingToolCalls: BrowserOSChatHistoryToolCall[] = []
+  const pendingToolStarts = new Map<string, ClawEvent>()
+
   for (const event of events) {
+    if (event.type === 'agent.tool_use') {
+      if (event.toolCallId) {
+        pendingToolStarts.set(event.toolCallId, event)
+      }
+      // Keep order — record the tool call now with status pending; we'll
+      // patch the result/error/duration when the matching tool_result arrives.
+      pendingToolCalls.push({
+        toolCallId: event.toolCallId,
+        toolName: event.toolName ?? event.content,
+        status: 'completed', // optimistic; downgraded if a failed result arrives
+        input: event.toolArguments,
+      })
+      continue
+    }
+
+    if (event.type === 'agent.tool_result') {
+      // Find the matching tool_use entry by toolCallId and patch it
+      const match = pendingToolCalls.find(
+        (t) => t.toolCallId && t.toolCallId === event.toolCallId,
+      )
+      if (match) {
+        if (event.isError) {
+          match.status = 'failed'
+          match.error = event.content
+        } else {
+          match.output = event.content
+        }
+        const start = event.toolCallId
+          ? pendingToolStarts.get(event.toolCallId)
+          : undefined
+        if (start) {
+          match.durationMs = Math.max(0, event.createdAt - start.createdAt)
+          if (event.toolCallId) pendingToolStarts.delete(event.toolCallId)
+        }
+      }
+      continue
+    }
+
     if (event.type !== 'user.message' && event.type !== 'agent.message') {
       continue
     }
@@ -292,6 +348,9 @@ function jsonlEventsToHistoryItems(
           .trim()
           .replace(/^User:\s*/i, '')
       } else {
+        // Reset pending tool calls — they belong to a discarded turn
+        pendingToolCalls = []
+        pendingToolStarts.clear()
         continue
       }
       if (!text) continue
@@ -307,11 +366,23 @@ function jsonlEventsToHistoryItems(
       source,
     }
 
-    // Pass through per-turn cost and token data for assistant messages
     if (event.type === 'agent.message') {
+      // Pass through per-turn cost and token data
       if (event.costUsd) item.costUsd = event.costUsd
       if (event.tokensIn) item.tokensIn = event.tokensIn
       if (event.tokensOut) item.tokensOut = event.tokensOut
+
+      // Attach any tool calls that happened before this assistant message
+      if (pendingToolCalls.length > 0) {
+        item.toolCalls = pendingToolCalls
+        pendingToolCalls = []
+        pendingToolStarts.clear()
+      }
+    } else if (event.type === 'user.message') {
+      // User messages reset the tool-call buffer — anything pending was
+      // part of an earlier turn that had no final assistant message.
+      pendingToolCalls = []
+      pendingToolStarts.clear()
     }
 
     items.push(item)

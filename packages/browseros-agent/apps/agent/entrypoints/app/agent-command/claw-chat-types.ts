@@ -24,6 +24,16 @@ export interface AgentSessionResponse {
   session: BrowserOSOpenClawSession | null
 }
 
+export interface BrowserOSChatHistoryToolCall {
+  toolCallId?: string
+  toolName: string
+  status: 'completed' | 'failed'
+  input?: Record<string, unknown>
+  output?: string
+  error?: string
+  durationMs?: number
+}
+
 export interface BrowserOSChatHistoryItem {
   id: string
   role: ClawChatRole
@@ -35,6 +45,7 @@ export interface BrowserOSChatHistoryItem {
   costUsd?: number
   tokensIn?: number
   tokensOut?: number
+  toolCalls?: BrowserOSChatHistoryToolCall[]
 }
 
 export interface AgentHistoryPageResponse {
@@ -65,6 +76,7 @@ export type ClawChatMessagePart =
       input?: unknown
       output?: unknown
       error?: string
+      durationMs?: number
     }
   | { type: 'meta'; label: string; value: string }
 
@@ -85,6 +97,26 @@ export interface ClawChatMessage {
 export function mapHistoryItemToClawMessage(
   item: BrowserOSChatHistoryItem,
 ): ClawChatMessage {
+  const parts: ClawChatMessagePart[] = []
+
+  // Tool calls render BEFORE the text response — that's the order the
+  // agent produced them (call tools, then write the final answer).
+  if (item.toolCalls && item.toolCalls.length > 0) {
+    for (const tc of item.toolCalls) {
+      parts.push({
+        type: 'tool-call',
+        name: tc.toolName,
+        status: tc.status,
+        input: tc.input,
+        output: tc.output,
+        error: tc.error,
+        durationMs: tc.durationMs,
+      })
+    }
+  }
+
+  parts.push({ type: 'text', text: item.text })
+
   return {
     id: item.id,
     role: item.role,
@@ -93,7 +125,7 @@ export function mapHistoryItemToClawMessage(
     source: item.source,
     messageSeq: item.messageSeq,
     status: 'historical',
-    parts: [{ type: 'text', text: item.text }],
+    parts,
     costUsd: item.costUsd,
     tokensIn: item.tokensIn,
     tokensOut: item.tokensOut,

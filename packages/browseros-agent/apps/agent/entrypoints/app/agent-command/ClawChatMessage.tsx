@@ -158,8 +158,13 @@ export const ClawChatMessage: FC<ClawChatMessageProps> = ({ message }) => {
                       <ToolStatusIcon status={tool.status} />
                       <span className="font-mono text-xs">{tool.name}</span>
                       {tool.error ? (
-                        <span className="ml-auto truncate text-destructive text-xs">
+                        <span className="ml-2 truncate text-destructive text-xs">
                           {tool.error}
+                        </span>
+                      ) : null}
+                      {tool.durationMs != null ? (
+                        <span className="ml-auto text-muted-foreground/60 text-xs tabular-nums">
+                          {(tool.durationMs / 1000).toFixed(1)}s
                         </span>
                       ) : null}
                     </TaskItem>
