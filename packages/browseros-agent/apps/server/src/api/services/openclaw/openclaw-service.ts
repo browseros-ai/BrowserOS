@@ -1204,7 +1204,10 @@ export class OpenClawService {
     sessionKey: string,
     message: string,
     history: MonitoringChatTurn[] = [],
-    options: { messageParts?: OpenClawChatContentPart[] } = {},
+    options: {
+      messageParts?: OpenClawChatContentPart[]
+      signal?: AbortSignal
+    } = {},
   ): Promise<ReadableStream<OpenClawStreamEvent>> {
     await this.assertGatewayReady()
     const normalizedSessionKey = normalizeBrowserOSChatSessionKey(
@@ -1225,6 +1228,7 @@ export class OpenClawService {
         message,
         messageParts: options.messageParts,
         history,
+        signal: options.signal,
       }),
     )
   }

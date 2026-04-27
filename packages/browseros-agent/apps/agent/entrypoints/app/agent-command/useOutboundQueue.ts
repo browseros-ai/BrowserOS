@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { OpenClawChatHistoryMessage } from '@/entrypoints/app/agents/useOpenClaw'
 import type { UserAttachmentPreview } from '@/lib/agent-conversations/types'
 import type { ServerAttachmentPayload } from '@/lib/attachments'
 import { useAgentServerUrl } from '@/lib/browseros/useBrowserOSProviders'
@@ -25,6 +26,12 @@ export interface OutboundQueueEnqueueInput {
   text: string
   attachments?: ServerAttachmentPayload[]
   attachmentPreviews?: UserAttachmentPreview[]
+  /**
+   * Prior chat turns to forward verbatim. Mirrors the direct chat path so
+   * queued sends never lose conversational context — the queue worker
+   * passes this through to OpenClaw as the message history.
+   */
+  history?: OpenClawChatHistoryMessage[]
 }
 
 export interface OutboundQueueApi {
@@ -89,13 +96,14 @@ export function useOutboundQueue(
   const [serverItems, setServerItems] = useState<OutboundMessage[]>([])
   const [localItems, setLocalItems] = useState<OutboundMessage[]>([])
 
-  // Keep the latest local previews keyed by the local id so when the
-  // server snapshot lands we can carry the data URLs forward onto the
-  // server-issued id (matched by message text + arrival order — best
-  // effort, fine for the chip strip).
-  const localPreviewsRef = useRef<
-    Array<{ text: string; previews: UserAttachmentPreview[] }>
-  >([])
+  // Map local previews onto server-issued ids. The POST response gives us
+  // the server id, and we keep a localId fallback for the brief window
+  // before that response lands. Keying by id (never by message text)
+  // avoids collisions when the user sends two messages with identical
+  // text back-to-back.
+  const previewMapRef = useRef<
+    Map<string, { localId: string; previews: UserAttachmentPreview[] }>
+  >(new Map())
 
   // Subscribe to per-agent queue stream.
   useEffect(() => {
@@ -111,25 +119,37 @@ export function useOutboundQueue(
       try {
         const parsed = JSON.parse(event.data) as { items: ServerQueuedItem[] }
         const next: OutboundMessage[] = parsed.items.map((item) => {
-          const matchedPreview = localPreviewsRef.current.find(
-            (entry) => entry.text === item.message,
-          )
+          const matched = previewMapRef.current.get(item.id)
           return {
             id: item.id,
             text: item.message,
             attachments: [],
-            attachmentPreviews: matchedPreview?.previews ?? [],
+            attachmentPreviews: matched?.previews ?? [],
             status: serverStatusToClient(item.status),
             error: item.error,
             createdAt: item.createdAt,
           }
         })
         setServerItems(next)
-        // Drop any optimistic entries whose text now appears in the
-        // server snapshot — the server has acknowledged them.
+        // Drop optimistic entries that the server has now acknowledged.
+        // We tracked their localId in the preview map alongside the
+        // server id, so when an item's server id appears in the snapshot
+        // its sibling localId is safe to evict.
+        const acknowledgedLocalIds = new Set<string>()
+        for (const item of next) {
+          const matched = previewMapRef.current.get(item.id)
+          if (matched) acknowledgedLocalIds.add(matched.localId)
+        }
         setLocalItems((prev) =>
-          prev.filter((local) => !next.some((s) => s.text === local.text)),
+          prev.filter((local) => !acknowledgedLocalIds.has(local.id)),
         )
+        // Prune preview entries whose server item is no longer in the
+        // snapshot — once the queue drains it we can free the data URLs.
+        const liveIds = new Set(next.map((item) => item.id))
+        for (const id of previewMapRef.current.keys()) {
+          if (id.startsWith(LOCAL_PREFIX)) continue
+          if (!liveIds.has(id)) previewMapRef.current.delete(id)
+        }
       } catch {
         // Malformed event — ignore; next snapshot will recover.
       }
@@ -162,12 +182,12 @@ export function useOutboundQueue(
         createdAt: Date.now(),
       }
       setLocalItems((prev) => [...prev, optimistic])
-      // Remember the previews so they can be re-attached when the server
-      // snapshot replaces the optimistic entry.
-      localPreviewsRef.current = [
-        ...localPreviewsRef.current,
-        { text: trimmed, previews },
-      ]
+      // Stage previews under the localId until the server responds with
+      // the real id. Once we have that id we re-key under it so SSE
+      // snapshots can match.
+      if (previews.length > 0) {
+        previewMapRef.current.set(localId, { localId, previews })
+      }
 
       void (async () => {
         try {
@@ -180,11 +200,13 @@ export function useOutboundQueue(
                 message: trimmed,
                 attachments: attachments.length > 0 ? attachments : undefined,
                 sessionKey: sessionKeyRef.current ?? undefined,
+                history: input.history,
               }),
             },
           )
           if (!response.ok) {
             const text = await response.text().catch(() => '')
+            previewMapRef.current.delete(localId)
             setLocalItems((prev) =>
               prev.map((item) =>
                 item.id === localId
@@ -197,8 +219,18 @@ export function useOutboundQueue(
                   : item,
               ),
             )
+            return
+          }
+          const payload = (await response.json().catch(() => null)) as {
+            id?: string
+          } | null
+          const serverId = payload?.id
+          if (serverId && previews.length > 0) {
+            previewMapRef.current.set(serverId, { localId, previews })
+            previewMapRef.current.delete(localId)
           }
         } catch (err) {
+          previewMapRef.current.delete(localId)
           setLocalItems((prev) =>
             prev.map((item) =>
               item.id === localId
@@ -222,6 +254,7 @@ export function useOutboundQueue(
   const cancel = useCallback(
     (id: string) => {
       if (id.startsWith(LOCAL_PREFIX)) {
+        previewMapRef.current.delete(id)
         setLocalItems((prev) => prev.filter((item) => item.id !== id))
         return
       }

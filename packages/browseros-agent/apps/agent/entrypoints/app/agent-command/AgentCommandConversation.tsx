@@ -337,6 +337,7 @@ function AgentConversationController({
                   name: a.name,
                   dataUrl: a.dataUrl,
                 })),
+                history: chatHistory,
               })
             }}
             onCreateAgent={() => navigate(createAgentPath)}

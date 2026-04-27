@@ -71,6 +71,7 @@ export type ChatStreamFn = (input: {
   message: string
   history: QueuedItem['history']
   messageParts?: OpenClawChatContentPart[]
+  signal?: AbortSignal
 }) => Promise<ReadableStream<OpenClawStreamEvent>>
 
 interface OutboundQueueServiceDeps {
@@ -212,6 +213,7 @@ export class OutboundQueueService {
         message: head.message,
         history: head.history,
         messageParts: head.messageParts,
+        signal: abort.signal,
       })
       // Drain the stream to completion so the gateway run finalizes
       // properly (writes the JSONL turn, releases the run controller).

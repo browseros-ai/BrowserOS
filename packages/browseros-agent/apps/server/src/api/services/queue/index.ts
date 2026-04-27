@@ -28,9 +28,17 @@ export function getOutboundQueueService(): OutboundQueueService {
       // which mirrors what the existing /chat route does.
       resolveExistingSessionKey: (agentId) =>
         openclaw.resolveAgentSession(agentId).sessionKey ?? null,
-      chatStream: ({ agentId, sessionKey, message, history, messageParts }) =>
+      chatStream: ({
+        agentId,
+        sessionKey,
+        message,
+        history,
+        messageParts,
+        signal,
+      }) =>
         openclaw.chatStream(agentId, sessionKey, message, history, {
           messageParts,
+          signal,
         }),
     })
   }

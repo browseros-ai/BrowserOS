@@ -52,6 +52,9 @@ type ChatAttachment = ImageAttachment | FileAttachment
 
 const MAX_ATTACHMENTS = 10
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5 MB after compression
+// data: URLs encode bytes as base64 (~4/3 inflation) plus a small media-type
+// prefix; cap the encoded string against that, not 2× the byte budget.
+const MAX_IMAGE_DATA_URL_LENGTH = Math.ceil(MAX_IMAGE_BYTES * (4 / 3)) + 100
 const MAX_FILE_TEXT_BYTES = 1 * 1024 * 1024 // 1 MB extracted text
 const ALLOWED_IMAGE_MEDIA_TYPES = new Set([
   'image/png',
@@ -101,7 +104,7 @@ function validateChatAttachments(input: unknown): {
           error: 'image attachment must include a data: URL',
         }
       }
-      if (dataUrl.length > MAX_IMAGE_BYTES * 2) {
+      if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) {
         return {
           attachments: null,
           error: `image exceeds ${MAX_IMAGE_BYTES} bytes`,

@@ -16,6 +16,9 @@ describe('createOpenClawRoutes', () => {
     const actualOpenClawService = await import(
       '../../../src/api/services/openclaw/openclaw-service'
     )
+    const actualMonitoringService = await import(
+      '../../../src/monitoring/service'
+    )
     const chatStream = mock(
       async () =>
         new ReadableStream({
@@ -41,6 +44,24 @@ describe('createOpenClawRoutes', () => {
         }) as never,
     }))
 
+    mock.module('../../../src/monitoring/service', () => ({
+      ...actualMonitoringService,
+      getMonitoringService: () =>
+        ({
+          waitForSessionFree: async () => undefined,
+          startSession: async () => ({
+            monitoringSessionId: 'm-1',
+            agentId: 'research',
+            sessionKey: 'session-123',
+            originalPrompt: 'hi',
+            chatHistory: [],
+            startedAt: new Date().toISOString(),
+            source: 'openclaw-agent-chat' as const,
+          }),
+          finalizeSession: async () => undefined,
+        }) as never,
+    }))
+
     const { createOpenClawRoutes } = await import(
       '../../../src/api/routes/openclaw'
     )
@@ -59,7 +80,15 @@ describe('createOpenClawRoutes', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('Content-Type')).toContain('text/event-stream')
     expect(response.headers.get('X-Session-Key')).toBe('session-123')
-    expect(chatStream).toHaveBeenCalledWith('research', 'session-123', 'hi', [])
+    expect(chatStream).toHaveBeenCalledWith(
+      'research',
+      'session-123',
+      'hi',
+      [],
+      {
+        messageParts: undefined,
+      },
+    )
     expect(await response.text()).toBe(
       'data: {"type":"text-delta","data":{"text":"Hello"}}\n\n' +
         'data: {"type":"done","data":{"text":"Hello"}}\n\n' +
@@ -70,6 +99,9 @@ describe('createOpenClawRoutes', () => {
   it('passes prior chat history through to the OpenClaw chat stream', async () => {
     const actualOpenClawService = await import(
       '../../../src/api/services/openclaw/openclaw-service'
+    )
+    const actualMonitoringService = await import(
+      '../../../src/monitoring/service'
     )
     const chatStream = mock(
       async () =>
@@ -89,6 +121,24 @@ describe('createOpenClawRoutes', () => {
       getOpenClawService: () =>
         ({
           chatStream,
+        }) as never,
+    }))
+
+    mock.module('../../../src/monitoring/service', () => ({
+      ...actualMonitoringService,
+      getMonitoringService: () =>
+        ({
+          waitForSessionFree: async () => undefined,
+          startSession: async () => ({
+            monitoringSessionId: 'm-2',
+            agentId: 'research',
+            sessionKey: 'session-456',
+            originalPrompt: 'Summarize what is blocked',
+            chatHistory: [],
+            startedAt: new Date().toISOString(),
+            source: 'openclaw-agent-chat' as const,
+          }),
+          finalizeSession: async () => undefined,
         }) as never,
     }))
 
@@ -117,10 +167,11 @@ describe('createOpenClawRoutes', () => {
       'session-456',
       'Summarize what is blocked',
       history,
+      { messageParts: undefined },
     )
   })
 
-  it('rejects concurrent monitored chat requests for the same agent', async () => {
+  it('returns 503 when waitForSessionFree times out for a busy agent', async () => {
     const actualOpenClawService = await import(
       '../../../src/api/services/openclaw/openclaw-service'
     )
@@ -141,8 +192,11 @@ describe('createOpenClawRoutes', () => {
       ...actualMonitoringService,
       getMonitoringService: () =>
         ({
-          getActiveSessionId: (agentId: string) =>
-            agentId === 'research' ? 'existing-run' : undefined,
+          waitForSessionFree: async () => {
+            throw new Error(
+              'Timed out waiting for agent "research" to become free after 30000ms',
+            )
+          },
         }) as never,
     }))
 
@@ -160,11 +214,11 @@ describe('createOpenClawRoutes', () => {
       }),
     })
 
-    expect(response.status).toBe(409)
+    expect(response.status).toBe(503)
     expect(chatStream).not.toHaveBeenCalled()
     expect(await response.json()).toEqual({
       error:
-        'A monitored chat session is already active for this agent. Wait for it to finish before starting another.',
+        'Timed out waiting for agent "research" to become free after 30000ms',
     })
   })
 
