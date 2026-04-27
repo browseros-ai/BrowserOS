@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { UserAttachmentPreview } from '@/lib/agent-conversations/types'
 import type { ServerAttachmentPayload } from '@/lib/attachments'
-import type { SendInput } from './useAgentConversation'
+import { useAgentServerUrl } from '@/lib/browseros/useBrowserOSProviders'
 
 export type OutboundMessageStatus = 'queued' | 'sending' | 'failed'
 
+/**
+ * The composer renders this shape. It mirrors the server's QueuedItemPublic
+ * but adds local-only `attachmentPreviews` (data URLs) so chip thumbnails
+ * keep rendering while a message is in flight to / on the server. Those
+ * data URLs never leave the browser; the SSE feed only carries metadata.
+ */
 export interface OutboundMessage {
   id: string
   text: string
@@ -29,126 +35,229 @@ export interface OutboundQueueApi {
 }
 
 interface UseOutboundQueueOptions {
-  send: (input: SendInput) => Promise<void>
-  streaming: boolean
+  agentId: string | null | undefined
 }
 
-function makeId(): string {
+interface ServerQueuedItem {
+  id: string
+  status: 'queued' | 'dispatching' | 'failed'
+  message: string
+  attachmentsPreview: Array<{
+    kind: 'image' | 'file'
+    mediaType: string
+    name?: string
+  }>
+  error?: string
+  createdAt: number
+}
+
+const LOCAL_PREFIX = 'local-'
+
+function makeLocalId(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID()
+    return `${LOCAL_PREFIX}${crypto.randomUUID()}`
   }
-  return `outbound-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  return `${LOCAL_PREFIX}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 /**
- * Client-side outbound queue for agent chat sends. Allows the user to keep
- * typing while the agent is mid-turn — each enqueued message is delivered
- * as soon as `streaming` flips false (i.e., the prior turn finished).
+ * Server-backed outbound message queue. The browser is purely a
+ * projection of server state — closing the tab is safe because the queue
+ * keeps draining server-side via the OutboundQueueService.
  *
- * The hook owns no scheduling timers; it reacts to `streaming` transitions
- * and to enqueue calls. The worker is single-flight by design — only one
- * message is dispatched at a time, in arrival order.
+ * The hook still exposes the same `{ queue, enqueue, cancel, retry }`
+ * surface the composer expects. `enqueue` POSTs to /queue and shows an
+ * optimistic local entry until the server's SSE snapshot reflects it
+ * (then the optimistic entry is replaced).
  */
 export function useOutboundQueue(
   options: UseOutboundQueueOptions,
 ): OutboundQueueApi {
-  const { send, streaming } = options
-  const [queue, setQueue] = useState<OutboundMessage[]>([])
-  const sendRef = useRef(send)
-  sendRef.current = send
+  const { agentId } = options
+  const { baseUrl } = useAgentServerUrl()
+  const [serverItems, setServerItems] = useState<OutboundMessage[]>([])
+  const [localItems, setLocalItems] = useState<OutboundMessage[]>([])
 
-  // Re-entrancy guard: while a queued item is mid-dispatch we don't want
-  // a streaming flip to kick off a second simultaneous dispatch.
-  const dispatchingRef = useRef(false)
+  // Keep the latest local previews keyed by the local id so when the
+  // server snapshot lands we can carry the data URLs forward onto the
+  // server-issued id (matched by message text + arrival order — best
+  // effort, fine for the chip strip).
+  const localPreviewsRef = useRef<
+    Array<{ text: string; previews: UserAttachmentPreview[] }>
+  >([])
 
-  const setStatus = useCallback(
-    (id: string, status: OutboundMessageStatus, error?: string) => {
-      setQueue((prev) =>
-        prev.map((m) =>
-          m.id === id
-            ? { ...m, status, error: status === 'failed' ? error : undefined }
-            : m,
-        ),
-      )
-    },
-    [],
-  )
-
-  const removeItem = useCallback((id: string) => {
-    setQueue((prev) => prev.filter((m) => m.id !== id))
-  }, [])
-
-  const enqueue = useCallback((input: OutboundQueueEnqueueInput) => {
-    const trimmed = input.text.trim()
-    const attachments = input.attachments ?? []
-    if (!trimmed && attachments.length === 0) return
-    const message: OutboundMessage = {
-      id: makeId(),
-      text: trimmed,
-      attachments,
-      attachmentPreviews: input.attachmentPreviews ?? [],
-      status: 'queued',
-      createdAt: Date.now(),
-    }
-    setQueue((prev) => [...prev, message])
-  }, [])
-
-  const cancel = useCallback((id: string) => {
-    setQueue((prev) => {
-      const target = prev.find((m) => m.id === id)
-      // Only allow cancelling items that haven't started sending yet.
-      // Sending items are owned by the SSE stream and need a separate
-      // abort path (deferred to v2).
-      if (!target || target.status === 'sending') return prev
-      return prev.filter((m) => m.id !== id)
-    })
-  }, [])
-
-  const retry = useCallback((id: string) => {
-    setQueue((prev) =>
-      prev.map((m) =>
-        m.id === id && m.status === 'failed'
-          ? { ...m, status: 'queued', error: undefined }
-          : m,
-      ),
-    )
-  }, [])
-
-  // Drain the queue whenever `streaming` is false and we have a head item
-  // in `queued`. The effect runs on every queue/streaming change but the
-  // dispatching ref keeps it single-flight.
+  // Subscribe to per-agent queue stream.
   useEffect(() => {
-    if (streaming) return
-    if (dispatchingRef.current) return
-    const head = queue.find((m) => m.status === 'queued')
-    if (!head) return
-
+    if (!baseUrl || !agentId) {
+      setServerItems([])
+      return
+    }
     let cancelled = false
-    dispatchingRef.current = true
-    setStatus(head.id, 'sending')
-    ;(async () => {
+    const url = `${baseUrl}/claw/agents/${encodeURIComponent(agentId)}/queue/stream`
+    const source = new EventSource(url)
+    source.onmessage = (event) => {
+      if (cancelled) return
       try {
-        await sendRef.current({
-          text: head.text,
-          attachments: head.attachments,
-          attachmentPreviews: head.attachmentPreviews,
+        const parsed = JSON.parse(event.data) as { items: ServerQueuedItem[] }
+        const next: OutboundMessage[] = parsed.items.map((item) => {
+          const matchedPreview = localPreviewsRef.current.find(
+            (entry) => entry.text === item.message,
+          )
+          return {
+            id: item.id,
+            text: item.message,
+            attachments: [],
+            attachmentPreviews: matchedPreview?.previews ?? [],
+            status: serverStatusToClient(item.status),
+            error: item.error,
+            createdAt: item.createdAt,
+          }
         })
-        if (!cancelled) removeItem(head.id)
-      } catch (err) {
-        if (!cancelled) {
-          const message =
-            err instanceof Error ? err.message : 'Failed to send message'
-          setStatus(head.id, 'failed', message)
-        }
-      } finally {
-        dispatchingRef.current = false
+        setServerItems(next)
+        // Drop any optimistic entries whose text now appears in the
+        // server snapshot — the server has acknowledged them.
+        setLocalItems((prev) =>
+          prev.filter((local) => !next.some((s) => s.text === local.text)),
+        )
+      } catch {
+        // Malformed event — ignore; next snapshot will recover.
       }
-    })()
-
+    }
+    source.onerror = () => {
+      // Connection issues are transient (server restart, network blip).
+      // EventSource auto-reconnects; nothing to do here.
+    }
     return () => {
       cancelled = true
+      source.close()
     }
-  }, [queue, streaming, removeItem, setStatus])
+  }, [baseUrl, agentId])
+
+  const enqueue = useCallback(
+    (input: OutboundQueueEnqueueInput) => {
+      if (!baseUrl || !agentId) return
+      const trimmed = input.text.trim()
+      const attachments = input.attachments ?? []
+      if (!trimmed && attachments.length === 0) return
+
+      const localId = makeLocalId()
+      const previews = input.attachmentPreviews ?? []
+      const optimistic: OutboundMessage = {
+        id: localId,
+        text: trimmed,
+        attachments,
+        attachmentPreviews: previews,
+        status: 'queued',
+        createdAt: Date.now(),
+      }
+      setLocalItems((prev) => [...prev, optimistic])
+      // Remember the previews so they can be re-attached when the server
+      // snapshot replaces the optimistic entry.
+      localPreviewsRef.current = [
+        ...localPreviewsRef.current,
+        { text: trimmed, previews },
+      ]
+
+      void (async () => {
+        try {
+          const response = await fetch(
+            `${baseUrl}/claw/agents/${encodeURIComponent(agentId)}/queue`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                message: trimmed,
+                attachments: attachments.length > 0 ? attachments : undefined,
+              }),
+            },
+          )
+          if (!response.ok) {
+            const text = await response.text().catch(() => '')
+            setLocalItems((prev) =>
+              prev.map((item) =>
+                item.id === localId
+                  ? {
+                      ...item,
+                      status: 'failed',
+                      error:
+                        text || `Failed to enqueue (status ${response.status})`,
+                    }
+                  : item,
+              ),
+            )
+          }
+        } catch (err) {
+          setLocalItems((prev) =>
+            prev.map((item) =>
+              item.id === localId
+                ? {
+                    ...item,
+                    status: 'failed',
+                    error:
+                      err instanceof Error
+                        ? err.message
+                        : 'Failed to enqueue message',
+                  }
+                : item,
+            ),
+          )
+        }
+      })()
+    },
+    [baseUrl, agentId],
+  )
+
+  const cancel = useCallback(
+    (id: string) => {
+      if (id.startsWith(LOCAL_PREFIX)) {
+        setLocalItems((prev) => prev.filter((item) => item.id !== id))
+        return
+      }
+      if (!baseUrl || !agentId) return
+      void fetch(
+        `${baseUrl}/claw/agents/${encodeURIComponent(agentId)}/queue/${encodeURIComponent(id)}`,
+        { method: 'DELETE' },
+      ).catch(() => {})
+    },
+    [baseUrl, agentId],
+  )
+
+  const retry = useCallback(
+    (id: string) => {
+      if (id.startsWith(LOCAL_PREFIX)) {
+        // Optimistic local items don't have a server id yet — reset them
+        // to 'queued' so the user can press Send again. Caller is
+        // expected to re-enqueue manually for v1.
+        setLocalItems((prev) =>
+          prev.map((item) =>
+            item.id === id
+              ? { ...item, status: 'queued', error: undefined }
+              : item,
+          ),
+        )
+        return
+      }
+      if (!baseUrl || !agentId) return
+      void fetch(
+        `${baseUrl}/claw/agents/${encodeURIComponent(agentId)}/queue/${encodeURIComponent(id)}/retry`,
+        { method: 'POST' },
+      ).catch(() => {})
+    },
+    [baseUrl, agentId],
+  )
+
+  // Order: local optimistic entries first (just-pressed), then server
+  // entries. When the SSE snapshot arrives, the local entry for the same
+  // text has already been pruned above, so this never duplicates.
+  const queue = [...localItems, ...serverItems]
 
   return { queue, enqueue, cancel, retry }
+}
+
+function serverStatusToClient(
+  status: ServerQueuedItem['status'],
+): OutboundMessageStatus {
+  if (status === 'dispatching') return 'sending'
+  if (status === 'failed') return 'failed'
+  return 'queued'
 }

@@ -643,6 +643,11 @@ export class OpenClawService {
     return this.clawSession.onStateChange(listener)
   }
 
+  /** Read the current ClawSession state for an agent (read-only snapshot). */
+  getAgentState(agentId: string): AgentSessionState {
+    return this.clawSession.getState(agentId)
+  }
+
   // ── Lifecycle ────────────────────────────────────────────────────────
 
   async setup(input: SetupInput, onLog?: (msg: string) => void): Promise<void> {

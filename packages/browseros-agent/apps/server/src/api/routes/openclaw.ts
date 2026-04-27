@@ -26,6 +26,8 @@ import {
   getOpenClawService,
   normalizeBrowserOSChatSessionKey,
 } from '../services/openclaw/openclaw-service'
+import type { QueuedItemPublic } from '../services/queue'
+import { getOutboundQueueService } from '../services/queue'
 
 /**
  * Inbound attachment shapes the chat route accepts. Images travel as
@@ -651,6 +653,105 @@ export function createOpenClawRoutes() {
         const message = err instanceof Error ? err.message : String(err)
         return c.json({ error: message }, 500)
       }
+    })
+
+    .post('/agents/:id/queue', async (c) => {
+      const { id } = c.req.param()
+      const body = await c.req.json<{
+        message: string
+        sessionKey?: string
+        history?: MonitoringChatTurn[]
+        attachments?: unknown
+      }>()
+      const trimmedMessage = body.message?.trim() ?? ''
+      const attachmentValidation = validateChatAttachments(body.attachments)
+      if (attachmentValidation.error) {
+        return c.json({ error: attachmentValidation.error }, 400)
+      }
+      const attachments = attachmentValidation.attachments ?? []
+      if (!trimmedMessage && attachments.length === 0) {
+        return c.json({ error: 'Message is required' }, 400)
+      }
+
+      const sessionKey = body.sessionKey
+        ? normalizeBrowserOSChatSessionKey(id, body.sessionKey)
+        : undefined
+      const history = Array.isArray(body.history)
+        ? body.history.filter((entry): entry is MonitoringChatTurn =>
+            Boolean(
+              entry &&
+                (entry.role === 'user' || entry.role === 'assistant') &&
+                typeof entry.content === 'string',
+            ),
+          )
+        : []
+
+      const { text: composedMessage, parts: messageParts } =
+        buildMessagePartsFromAttachments(trimmedMessage, attachments)
+
+      const item = getOutboundQueueService().enqueue({
+        agentId: id,
+        message: composedMessage,
+        messageParts,
+        sessionKey,
+        history,
+        attachmentsPreview: attachments.map((a) => ({
+          kind: a.kind,
+          mediaType: a.mediaType,
+          name: 'name' in a ? a.name : undefined,
+        })),
+      })
+      return c.json({ id: item.id }, 202)
+    })
+
+    .delete('/agents/:id/queue/:itemId', (c) => {
+      const { id, itemId } = c.req.param()
+      const result = getOutboundQueueService().cancel(id, itemId)
+      if (!result.ok) {
+        const code = result.reason === 'dispatching' ? 409 : 404
+        const message =
+          result.reason === 'dispatching'
+            ? 'Item is already dispatching'
+            : 'Item not found'
+        return c.json({ error: message }, code)
+      }
+      return c.json({ ok: true })
+    })
+
+    .post('/agents/:id/queue/:itemId/retry', (c) => {
+      const { id, itemId } = c.req.param()
+      const result = getOutboundQueueService().retry(id, itemId)
+      if (!result.ok) {
+        return c.json({ error: 'Item not found or not failed' }, 404)
+      }
+      return c.json({ ok: true })
+    })
+
+    .get('/agents/:id/queue/stream', (c) => {
+      const { id } = c.req.param()
+      c.header('Content-Type', 'text/event-stream')
+      c.header('Cache-Control', 'no-cache')
+      return stream(c, async (s) => {
+        const encoder = new TextEncoder()
+        const sendSnapshot = (items: QueuedItemPublic[]) => {
+          void s.write(encoder.encode(`data: ${JSON.stringify({ items })}\n\n`))
+        }
+        const unsubscribe = getOutboundQueueService().subscribe(
+          id,
+          sendSnapshot,
+        )
+        const heartbeat = setInterval(() => {
+          void s.write(encoder.encode(': keep-alive\n\n'))
+        }, 15_000)
+        try {
+          await new Promise<void>((resolve) => {
+            s.onAbort(() => resolve())
+          })
+        } finally {
+          clearInterval(heartbeat)
+          unsubscribe()
+        }
+      })
     })
 
     .get('/session/:key/history', async (c) => {
