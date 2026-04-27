@@ -236,9 +236,16 @@ function AgentConversationController({
   onInitialMessageConsumedRef.current = onInitialMessageConsumed
 
   const disabled = status?.status !== 'running'
+  // Stay in the loading state until BOTH queries have actually fetched.
+  // historyQuery.isLoading is only true on the very first request — after
+  // session resolution there's a brief render frame where the history query
+  // hasn't been triggered yet (enabled just flipped to true). Gating on
+  // isFetched closes that window so we never render with empty history.
   const isInitialLoading =
     sessionQuery.isLoading ||
-    (Boolean(resolvedSessionKey) && historyQuery.isLoading)
+    (Boolean(resolvedSessionKey) &&
+      !historyQuery.isFetched &&
+      !historyQuery.isError)
   const historyReady =
     !resolvedSessionKey || historyQuery.isFetched || historyQuery.isError
   const initialMessageKey = initialMessage
