@@ -36,6 +36,11 @@ export interface BrowserOSChatHistoryToolCall {
   durationMs?: number
 }
 
+export interface BrowserOSChatHistoryReasoning {
+  text: string
+  durationMs?: number
+}
+
 export interface BrowserOSChatHistoryItem {
   id: string
   role: ClawChatRole
@@ -48,6 +53,7 @@ export interface BrowserOSChatHistoryItem {
   tokensIn?: number
   tokensOut?: number
   toolCalls?: BrowserOSChatHistoryToolCall[]
+  reasoning?: BrowserOSChatHistoryReasoning
 }
 
 export interface AgentHistoryPageResponse {
@@ -103,8 +109,19 @@ export function mapHistoryItemToClawMessage(
 ): ClawChatMessage {
   const parts: ClawChatMessagePart[] = []
 
-  // Tool calls render BEFORE the text response — that's the order the
-  // agent produced them (call tools, then write the final answer).
+  // Reasoning, then tool calls, then text — the chronological order the
+  // agent produced them (think → act → answer).
+  if (item.reasoning && item.reasoning.text.trim().length > 0) {
+    parts.push({
+      type: 'reasoning',
+      text: item.reasoning.text,
+      duration:
+        item.reasoning.durationMs != null
+          ? Math.round(item.reasoning.durationMs / 1000)
+          : undefined,
+    })
+  }
+
   if (item.toolCalls && item.toolCalls.length > 0) {
     for (const tc of item.toolCalls) {
       parts.push({

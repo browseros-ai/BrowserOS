@@ -180,6 +180,11 @@ export interface BrowserOSChatHistoryToolCall {
   durationMs?: number
 }
 
+export interface BrowserOSChatHistoryReasoning {
+  text: string
+  durationMs?: number
+}
+
 export interface BrowserOSChatHistoryItem {
   id: string
   role: 'user' | 'assistant'
@@ -192,6 +197,7 @@ export interface BrowserOSChatHistoryItem {
   tokensIn?: number
   tokensOut?: number
   toolCalls?: BrowserOSChatHistoryToolCall[]
+  reasoning?: BrowserOSChatHistoryReasoning
 }
 
 export interface BrowserOSOpenClawHistoryPageResponse {
@@ -281,7 +287,23 @@ function jsonlEventsToHistoryItems(
   let pendingToolCalls: BrowserOSChatHistoryToolCall[] = []
   const pendingToolStarts = new Map<string, ClawEvent>()
 
+  // Accumulate thinking blocks across the turn — there can be multiple
+  // (e.g., think → tool → think → tool → answer). We collapse them into
+  // a single Reasoning block per assistant message so the UI shows one
+  // collapsible per turn, with duration = first thinking → final answer.
+  let pendingReasoningTexts: string[] = []
+  let pendingReasoningFirstAt: number | null = null
+
   for (const event of events) {
+    if (event.type === 'agent.thinking') {
+      const text = event.content.trim()
+      if (text) pendingReasoningTexts.push(text)
+      if (pendingReasoningFirstAt == null) {
+        pendingReasoningFirstAt = event.createdAt
+      }
+      continue
+    }
+
     if (event.type === 'agent.tool_use') {
       if (event.toolCallId) {
         pendingToolStarts.set(event.toolCallId, event)
@@ -385,11 +407,31 @@ function jsonlEventsToHistoryItems(
         pendingToolCalls = []
         pendingToolStarts.clear()
       }
+
+      // Attach accumulated thinking. Duration is from the first thinking
+      // event to the final answer — the wall-clock time the user waited
+      // through the model's reasoning loop.
+      if (pendingReasoningTexts.length > 0) {
+        const reasoning: BrowserOSChatHistoryReasoning = {
+          text: pendingReasoningTexts.join('\n\n'),
+        }
+        if (pendingReasoningFirstAt != null) {
+          reasoning.durationMs = Math.max(
+            0,
+            event.createdAt - pendingReasoningFirstAt,
+          )
+        }
+        item.reasoning = reasoning
+        pendingReasoningTexts = []
+        pendingReasoningFirstAt = null
+      }
     } else if (event.type === 'user.message') {
-      // User messages reset the tool-call buffer — anything pending was
+      // User messages reset all per-turn buffers — anything pending was
       // part of an earlier turn that had no final assistant message.
       pendingToolCalls = []
       pendingToolStarts.clear()
+      pendingReasoningTexts = []
+      pendingReasoningFirstAt = null
     }
 
     items.push(item)

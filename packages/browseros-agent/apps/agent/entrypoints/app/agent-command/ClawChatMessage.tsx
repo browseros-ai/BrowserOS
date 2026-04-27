@@ -132,7 +132,12 @@ export const ClawChatMessage: FC<ClawChatMessageProps> = ({ message }) => {
 
           if (entry.kind === 'reasoning' && entry.part?.type === 'reasoning') {
             return (
-              <Reasoning key={key} className="w-full" defaultOpen={false}>
+              <Reasoning
+                key={key}
+                className="w-full"
+                defaultOpen={false}
+                duration={entry.part.duration}
+              >
                 <ReasoningTrigger />
                 <ReasoningContent>{entry.part.text}</ReasoningContent>
               </Reasoning>
