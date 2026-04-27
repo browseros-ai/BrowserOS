@@ -95,6 +95,11 @@ export function useOutboundQueue(
   sessionKeyRef.current = sessionKey
   const [serverItems, setServerItems] = useState<OutboundMessage[]>([])
   const [localItems, setLocalItems] = useState<OutboundMessage[]>([])
+  // Mirror serverItems into a ref so the POST-success branch can
+  // synchronously check whether the SSE snapshot has already landed
+  // for the new server id without depending on a stale closure.
+  const serverItemsRef = useRef<OutboundMessage[]>(serverItems)
+  serverItemsRef.current = serverItems
 
   // Map local previews onto server-issued ids. The POST response gives us
   // the server id, and we keep a localId fallback for the brief window
@@ -227,14 +232,17 @@ export function useOutboundQueue(
           if (serverId) {
             previewMapRef.current.set(serverId, { localId, previews })
             previewMapRef.current.delete(localId)
-            // Drop the optimistic entry as soon as the server has
-            // acknowledged it. The server's enqueue broadcasts to SSE
-            // *before* the POST returns, so by the time we land here
-            // the snapshot already carries the canonical entry — the
-            // SSE-based ack path can race the POST response (snapshot
-            // arrives first, doesn't yet know the localId↔serverId
-            // mapping, can't prune), so we also prune here defensively.
-            setLocalItems((prev) => prev.filter((item) => item.id !== localId))
+            // Only prune the optimistic entry now if the SSE snapshot
+            // has already arrived with this server id. Otherwise leave
+            // it visible — pruning here without a server entry to take
+            // its place causes a one-frame flicker where the message
+            // disappears entirely. The SSE handler now has the map
+            // populated and will dedupe as soon as the snapshot lands.
+            if (serverItemsRef.current.some((item) => item.id === serverId)) {
+              setLocalItems((prev) =>
+                prev.filter((item) => item.id !== localId),
+              )
+            }
           }
         } catch (err) {
           previewMapRef.current.delete(localId)
