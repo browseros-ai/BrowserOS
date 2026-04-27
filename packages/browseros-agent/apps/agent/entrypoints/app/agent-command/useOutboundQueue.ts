@@ -6,12 +6,6 @@ import { useAgentServerUrl } from '@/lib/browseros/useBrowserOSProviders'
 
 export type OutboundMessageStatus = 'queued' | 'sending' | 'failed'
 
-/**
- * The composer renders this shape. It mirrors the server's QueuedItemPublic
- * but adds local-only `attachmentPreviews` (data URLs) so chip thumbnails
- * keep rendering while a message is in flight to / on the server. Those
- * data URLs never leave the browser; the SSE feed only carries metadata.
- */
 export interface OutboundMessage {
   id: string
   text: string
@@ -26,11 +20,6 @@ export interface OutboundQueueEnqueueInput {
   text: string
   attachments?: ServerAttachmentPayload[]
   attachmentPreviews?: UserAttachmentPreview[]
-  /**
-   * Prior chat turns to forward verbatim. Mirrors the direct chat path so
-   * queued sends never lose conversational context — the queue worker
-   * passes this through to OpenClaw as the message history.
-   */
   history?: OpenClawChatHistoryMessage[]
 }
 
@@ -43,12 +32,6 @@ export interface OutboundQueueApi {
 
 interface UseOutboundQueueOptions {
   agentId: string | null | undefined
-  /**
-   * Current resolved sessionKey for the active conversation. The hook
-   * forwards it to the server on every enqueue so the queue worker
-   * targets the same OpenClaw session the user is actively viewing.
-   * Null means "no session yet" — the server will allocate one.
-   */
   sessionKey?: string | null
 }
 
@@ -65,13 +48,11 @@ interface ServerQueuedItem {
   createdAt: number
 }
 
-const LOCAL_PREFIX = 'local-'
-
-function makeLocalId(): string {
+function makeId(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return `${LOCAL_PREFIX}${crypto.randomUUID()}`
+    return crypto.randomUUID()
   }
-  return `${LOCAL_PREFIX}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 /**
@@ -79,41 +60,35 @@ function makeLocalId(): string {
  * projection of server state — closing the tab is safe because the queue
  * keeps draining server-side via the OutboundQueueService.
  *
- * The hook still exposes the same `{ queue, enqueue, cancel, retry }`
- * surface the composer expects. `enqueue` POSTs to /queue and shows an
- * optimistic local entry until the server's SSE snapshot reflects it
- * (then the optimistic entry is replaced).
+ * Single id-keyed list: the client generates the queue id and hands it
+ * to the server in the POST body, so the optimistic row and the SSE
+ * snapshot reconcile on the same key from frame zero — there is no
+ * window in which the message renders twice.
  */
 export function useOutboundQueue(
   options: UseOutboundQueueOptions,
 ): OutboundQueueApi {
   const { agentId, sessionKey } = options
   const { baseUrl } = useAgentServerUrl()
-  // Keep the latest sessionKey in a ref so enqueue's closure always sees
-  // the freshest value without re-creating the callback on every change.
   const sessionKeyRef = useRef<string | null | undefined>(sessionKey)
   sessionKeyRef.current = sessionKey
-  const [serverItems, setServerItems] = useState<OutboundMessage[]>([])
-  const [localItems, setLocalItems] = useState<OutboundMessage[]>([])
-  // Mirror serverItems into a ref so the POST-success branch can
-  // synchronously check whether the SSE snapshot has already landed
-  // for the new server id without depending on a stale closure.
-  const serverItemsRef = useRef<OutboundMessage[]>(serverItems)
-  serverItemsRef.current = serverItems
 
-  // Map local previews onto server-issued ids. The POST response gives us
-  // the server id, and we keep a localId fallback for the brief window
-  // before that response lands. Keying by id (never by message text)
-  // avoids collisions when the user sends two messages with identical
-  // text back-to-back.
-  const previewMapRef = useRef<
-    Map<string, { localId: string; previews: UserAttachmentPreview[] }>
-  >(new Map())
+  const [items, setItems] = useState<OutboundMessage[]>([])
+  // Track which ids the server has confirmed seeing in any SSE snapshot.
+  // We use this to know whether a missing-from-snapshot id is "drained
+  // by the server" (drop it) or "still in flight client-side" (keep
+  // showing the optimistic row).
+  const everSeenByServerRef = useRef<Set<string>>(new Set())
+  // Local-only attachment previews, keyed by queue id. Data URLs never
+  // leave the browser — the SSE feed only carries metadata, so we hold
+  // them here so the chip strip keeps rendering after server takeover.
+  const previewMapRef = useRef<Map<string, UserAttachmentPreview[]>>(new Map())
 
-  // Subscribe to per-agent queue stream.
   useEffect(() => {
     if (!baseUrl || !agentId) {
-      setServerItems([])
+      setItems([])
+      everSeenByServerRef.current = new Set()
+      previewMapRef.current = new Map()
       return
     }
     let cancelled = false
@@ -123,45 +98,39 @@ export function useOutboundQueue(
       if (cancelled) return
       try {
         const parsed = JSON.parse(event.data) as { items: ServerQueuedItem[] }
-        const next: OutboundMessage[] = parsed.items.map((item) => {
-          const matched = previewMapRef.current.get(item.id)
-          return {
+        const snapshotIds = new Set(parsed.items.map((item) => item.id))
+        for (const id of snapshotIds) everSeenByServerRef.current.add(id)
+
+        setItems((prev) => {
+          const next: OutboundMessage[] = parsed.items.map((item) => ({
             id: item.id,
             text: item.message,
             attachments: [],
-            attachmentPreviews: matched?.previews ?? [],
+            attachmentPreviews: previewMapRef.current.get(item.id) ?? [],
             status: serverStatusToClient(item.status),
             error: item.error,
             createdAt: item.createdAt,
-          }
+          }))
+          // Carry forward any optimistic / failed entries the server
+          // doesn't know about yet (POST in flight) or has finished
+          // dispatching but the client wants to keep visible (failed).
+          const carried = prev.filter((local) => {
+            if (snapshotIds.has(local.id)) return false
+            if (everSeenByServerRef.current.has(local.id)) {
+              // Server saw it before and it's gone now — drained.
+              previewMapRef.current.delete(local.id)
+              return false
+            }
+            return local.status !== 'failed' || Boolean(local.error)
+          })
+          return [...carried, ...next]
         })
-        setServerItems(next)
-        // Drop optimistic entries that the server has now acknowledged.
-        // We tracked their localId in the preview map alongside the
-        // server id, so when an item's server id appears in the snapshot
-        // its sibling localId is safe to evict.
-        const acknowledgedLocalIds = new Set<string>()
-        for (const item of next) {
-          const matched = previewMapRef.current.get(item.id)
-          if (matched) acknowledgedLocalIds.add(matched.localId)
-        }
-        setLocalItems((prev) =>
-          prev.filter((local) => !acknowledgedLocalIds.has(local.id)),
-        )
-        // Prune preview entries whose server item is no longer in the
-        // snapshot — once the queue drains it we can free the data URLs.
-        const liveIds = new Set(next.map((item) => item.id))
-        for (const id of previewMapRef.current.keys()) {
-          if (id.startsWith(LOCAL_PREFIX)) continue
-          if (!liveIds.has(id)) previewMapRef.current.delete(id)
-        }
       } catch {
         // Malformed event — ignore; next snapshot will recover.
       }
     }
     source.onerror = () => {
-      // Connection issues are transient (server restart, network blip).
-      // EventSource auto-reconnects; nothing to do here.
+      // Auto-reconnects; nothing to do here.
     }
     return () => {
       cancelled = true
@@ -176,22 +145,20 @@ export function useOutboundQueue(
       const attachments = input.attachments ?? []
       if (!trimmed && attachments.length === 0) return
 
-      const localId = makeLocalId()
+      const id = makeId()
       const previews = input.attachmentPreviews ?? []
-      const optimistic: OutboundMessage = {
-        id: localId,
-        text: trimmed,
-        attachments,
-        attachmentPreviews: previews,
-        status: 'queued',
-        createdAt: Date.now(),
-      }
-      setLocalItems((prev) => [...prev, optimistic])
-      // Always stage a map entry under the localId — even for text-only
-      // sends — so the SSE snapshot can match the optimistic entry to
-      // its server id and prune the duplicate. The previews array may
-      // be empty; what matters is the localId↔serverId link.
-      previewMapRef.current.set(localId, { localId, previews })
+      previewMapRef.current.set(id, previews)
+      setItems((prev) => [
+        ...prev,
+        {
+          id,
+          text: trimmed,
+          attachments,
+          attachmentPreviews: previews,
+          status: 'queued',
+          createdAt: Date.now(),
+        },
+      ])
 
       void (async () => {
         try {
@@ -201,6 +168,7 @@ export function useOutboundQueue(
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
+                id,
                 message: trimmed,
                 attachments: attachments.length > 0 ? attachments : undefined,
                 sessionKey: sessionKeyRef.current ?? undefined,
@@ -210,10 +178,10 @@ export function useOutboundQueue(
           )
           if (!response.ok) {
             const text = await response.text().catch(() => '')
-            previewMapRef.current.delete(localId)
-            setLocalItems((prev) =>
+            previewMapRef.current.delete(id)
+            setItems((prev) =>
               prev.map((item) =>
-                item.id === localId
+                item.id === id
                   ? {
                       ...item,
                       status: 'failed',
@@ -223,32 +191,16 @@ export function useOutboundQueue(
                   : item,
               ),
             )
-            return
-          }
-          const payload = (await response.json().catch(() => null)) as {
-            id?: string
-          } | null
-          const serverId = payload?.id
-          if (serverId) {
-            previewMapRef.current.set(serverId, { localId, previews })
-            previewMapRef.current.delete(localId)
-            // Only prune the optimistic entry now if the SSE snapshot
-            // has already arrived with this server id. Otherwise leave
-            // it visible — pruning here without a server entry to take
-            // its place causes a one-frame flicker where the message
-            // disappears entirely. The SSE handler now has the map
-            // populated and will dedupe as soon as the snapshot lands.
-            if (serverItemsRef.current.some((item) => item.id === serverId)) {
-              setLocalItems((prev) =>
-                prev.filter((item) => item.id !== localId),
-              )
-            }
           }
         } catch (err) {
-          previewMapRef.current.delete(localId)
-          setLocalItems((prev) =>
+          // Only mark as failed if the SSE snapshot hasn't already
+          // taken ownership of the entry (i.e. the request actually
+          // reached the server).
+          if (everSeenByServerRef.current.has(id)) return
+          previewMapRef.current.delete(id)
+          setItems((prev) =>
             prev.map((item) =>
-              item.id === localId
+              item.id === id
                 ? {
                     ...item,
                     status: 'failed',
@@ -268,9 +220,10 @@ export function useOutboundQueue(
 
   const cancel = useCallback(
     (id: string) => {
-      if (id.startsWith(LOCAL_PREFIX)) {
+      // If the server has never seen this id, just drop it locally.
+      if (!everSeenByServerRef.current.has(id)) {
         previewMapRef.current.delete(id)
-        setLocalItems((prev) => prev.filter((item) => item.id !== id))
+        setItems((prev) => prev.filter((item) => item.id !== id))
         return
       }
       if (!baseUrl || !agentId) return
@@ -284,11 +237,10 @@ export function useOutboundQueue(
 
   const retry = useCallback(
     (id: string) => {
-      if (id.startsWith(LOCAL_PREFIX)) {
-        // Optimistic local items don't have a server id yet — reset them
-        // to 'queued' so the user can press Send again. Caller is
-        // expected to re-enqueue manually for v1.
-        setLocalItems((prev) =>
+      if (!everSeenByServerRef.current.has(id)) {
+        // Optimistic-only entry, never made it to the server. Reset
+        // status so the user can press Send again.
+        setItems((prev) =>
           prev.map((item) =>
             item.id === id
               ? { ...item, status: 'queued', error: undefined }
@@ -306,12 +258,7 @@ export function useOutboundQueue(
     [baseUrl, agentId],
   )
 
-  // Order: local optimistic entries first (just-pressed), then server
-  // entries. When the SSE snapshot arrives, the local entry for the same
-  // text has already been pruned above, so this never duplicates.
-  const queue = [...localItems, ...serverItems]
-
-  return { queue, enqueue, cancel, retry }
+  return { queue: items, enqueue, cancel, retry }
 }
 
 function serverStatusToClient(

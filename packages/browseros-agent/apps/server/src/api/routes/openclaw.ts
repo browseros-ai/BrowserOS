@@ -665,6 +665,10 @@ export function createOpenClawRoutes() {
         sessionKey?: string
         history?: MonitoringChatTurn[]
         attachments?: unknown
+        // Optional client-provided id — when set, the queue uses it as
+        // the canonical item id so the browser's optimistic row and the
+        // SSE snapshot reconcile on the same key.
+        id?: string
       }>()
       const trimmedMessage = body.message?.trim() ?? ''
       const attachmentValidation = validateChatAttachments(body.attachments)
@@ -694,6 +698,7 @@ export function createOpenClawRoutes() {
 
       const item = getOutboundQueueService().enqueue({
         agentId: id,
+        id: typeof body.id === 'string' && body.id ? body.id : undefined,
         message: composedMessage,
         messageParts,
         sessionKey,

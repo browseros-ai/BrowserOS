@@ -102,14 +102,24 @@ export class OutboundQueueService {
     })
   }
 
-  enqueue(item: Omit<QueuedItem, 'id' | 'status' | 'createdAt'>): QueuedItem {
+  enqueue(
+    item: Omit<QueuedItem, 'id' | 'status' | 'createdAt'> & { id?: string },
+  ): QueuedItem {
+    // Caller-supplied ids let the browser keep its optimistic row and the
+    // server snapshot reconciled on a single key — without that, SSE
+    // can't dedupe the optimistic entry until the POST response lands
+    // and the client learns the server-generated UUID.
+    const list = this.queues.get(item.agentId) ?? []
+    const id =
+      item.id && !list.some((existing) => existing.id === item.id)
+        ? item.id
+        : randomUUID()
     const queued: QueuedItem = {
       ...item,
-      id: randomUUID(),
+      id,
       status: 'queued',
       createdAt: Date.now(),
     }
-    const list = this.queues.get(item.agentId) ?? []
     list.push(queued)
     this.queues.set(item.agentId, list)
     this.broadcast(item.agentId)
