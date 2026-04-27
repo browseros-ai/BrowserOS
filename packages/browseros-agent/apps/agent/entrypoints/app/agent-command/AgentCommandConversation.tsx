@@ -16,6 +16,7 @@ import {
 } from './claw-chat-types'
 import { useAgentConversation } from './useAgentConversation'
 import { useClawChatHistory } from './useClawChatHistory'
+import { useOutboundQueue } from './useOutboundQueue'
 
 function StatusBadge({ status }: { status: string }) {
   return (
@@ -223,8 +224,7 @@ function AgentConversationController({
       setStreamSessionKey(sessionKey)
     },
   })
-  const sendRef = useRef(send)
-  sendRef.current = send
+  const outboundQueue = useOutboundQueue({ send, streaming })
   onInitialMessageConsumedRef.current = onInitialMessageConsumed
 
   const disabled = status?.status !== 'running'
@@ -242,6 +242,9 @@ function AgentConversationController({
     : null
   const error = historyQuery.error ?? null
 
+  const enqueueRef = useRef(outboundQueue.enqueue)
+  enqueueRef.current = outboundQueue.enqueue
+
   useEffect(() => {
     const query = initialMessage?.trim()
     if (!initialMessageKey) {
@@ -249,20 +252,24 @@ function AgentConversationController({
       return
     }
 
+    // The initial-message handoff (home composer → conversation page via
+    // ?q=) goes through the outbound queue too, so it inherits the same
+    // single-flight serialization. We no longer need to gate on
+    // `streaming` — the queue worker drains as soon as the agent is
+    // free.
     if (
       !query ||
       initialMessageSentRef.current === initialMessageKey ||
       disabled ||
-      !historyReady ||
-      streaming
+      !historyReady
     ) {
       return
     }
 
     initialMessageSentRef.current = initialMessageKey
     onInitialMessageConsumedRef.current()
-    void sendRef.current(query)
-  }, [disabled, historyReady, initialMessage, initialMessageKey, streaming])
+    enqueueRef.current({ text: query })
+  }, [disabled, historyReady, initialMessage, initialMessageKey])
 
   const handleSelectAgent = (entry: AgentEntry) => {
     navigate(`${agentPathPrefix}/${entry.agentId}`)
@@ -295,7 +302,7 @@ function AgentConversationController({
             selectedAgentId={agentId}
             onSelectAgent={handleSelectAgent}
             onSend={(input) => {
-              void send({
+              outboundQueue.enqueue({
                 text: input.text,
                 attachments: input.attachments.map((a) => a.payload),
                 attachmentPreviews: input.attachments.map((a) => ({
@@ -312,6 +319,9 @@ function AgentConversationController({
             disabled={disabled}
             status={status?.status}
             placeholder={`Message ${agentName}...`}
+            outboundQueue={outboundQueue.queue}
+            onCancelQueued={outboundQueue.cancel}
+            onRetryQueued={outboundQueue.retry}
           />
         </div>
       </div>
