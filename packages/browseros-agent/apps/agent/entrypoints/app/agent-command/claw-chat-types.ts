@@ -112,13 +112,17 @@ export function mapHistoryItemToClawMessage(
   // Reasoning, then tool calls, then text — the chronological order the
   // agent produced them (think → act → answer).
   if (item.reasoning && item.reasoning.text.trim().length > 0) {
+    // 0ms means thinking and the final answer were emitted in the same JSONL
+    // line (no tool calls between them) — there's no real elapsed wall-clock,
+    // so fall through to the "Thinking" trigger instead of "Thought for 0
+    // seconds" / streaming shimmer. Real multi-line turns floor at 1s.
+    const durationMs = item.reasoning.durationMs ?? 0
+    const duration =
+      durationMs > 0 ? Math.max(1, Math.round(durationMs / 1000)) : undefined
     parts.push({
       type: 'reasoning',
       text: item.reasoning.text,
-      duration:
-        item.reasoning.durationMs != null
-          ? Math.round(item.reasoning.durationMs / 1000)
-          : undefined,
+      duration,
     })
   }
 

@@ -14,6 +14,9 @@ import { resolve } from 'node:path'
 interface PiContentBlock {
   type: string
   text?: string
+  // OpenClaw stores reasoning blocks as { type: 'thinking', thinking: '...' }
+  // — the prose lives on a `thinking` field, not `text`.
+  thinking?: string
   id?: string
   name?: string
   arguments?: Record<string, unknown>
@@ -444,18 +447,20 @@ function mapAssistantMessage(
     let thinkingIdx = 0
     let toolIdx = 0
     for (const block of msg.content) {
-      if (
-        block.type === 'thinking' &&
-        typeof block.text === 'string' &&
-        block.text.length > 0
-      ) {
-        events.push({
-          eventId: `${eventId}:thinking:${thinkingIdx}`,
-          type: 'agent.thinking',
-          content: block.text,
-          createdAt,
-        })
-        thinkingIdx++
+      if (block.type === 'thinking') {
+        const thinkingText =
+          (typeof block.thinking === 'string' && block.thinking) ||
+          (typeof block.text === 'string' && block.text) ||
+          ''
+        if (thinkingText.length > 0) {
+          events.push({
+            eventId: `${eventId}:thinking:${thinkingIdx}`,
+            type: 'agent.thinking',
+            content: thinkingText,
+            createdAt,
+          })
+          thinkingIdx++
+        }
       }
       if (block.type === 'toolCall' && block.name) {
         events.push({
