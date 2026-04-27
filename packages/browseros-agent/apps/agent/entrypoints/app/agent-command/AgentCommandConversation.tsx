@@ -1,4 +1,3 @@
-import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Bot, Home } from 'lucide-react'
 import { type FC, useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
@@ -16,11 +15,7 @@ import {
   flattenHistoryPages,
 } from './claw-chat-types'
 import { useAgentConversation } from './useAgentConversation'
-import {
-  CLAW_CHAT_QUERY_KEYS,
-  useClawAgentSession,
-  useClawChatHistory,
-} from './useClawChatHistory'
+import { useClawChatHistory } from './useClawChatHistory'
 
 function StatusBadge({ status }: { status: string }) {
   return (
@@ -196,20 +191,18 @@ function AgentConversationController({
   agentPathPrefix: string
   createAgentPath: string
 }) {
-  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const initialMessageSentRef = useRef<string | null>(null)
   const onInitialMessageConsumedRef = useRef(onInitialMessageConsumed)
   const [streamSessionKey, setStreamSessionKey] = useState<string | null>(null)
   const agent = agents.find((entry) => entry.agentId === agentId)
   const agentName = agent?.name || agentId || 'Agent'
-  const sessionQuery = useClawAgentSession(agentId)
-  const resolvedSessionKey =
-    streamSessionKey ?? sessionQuery.data?.sessionKey ?? null
+  // Single source of truth: the history endpoint resolves the session itself
+  // when sessionKey is null. Once a chat creates a new session, streamSessionKey
+  // overrides it and the history queryKey rotates to refetch for that session.
   const historyQuery = useClawChatHistory({
     agentId,
-    sessionKey: resolvedSessionKey,
-    enabled: Boolean(resolvedSessionKey),
+    sessionKey: streamSessionKey,
   })
 
   const historyMessages = useMemo(
@@ -220,15 +213,14 @@ function AgentConversationController({
     () => buildChatHistoryFromClawMessages(historyMessages),
     [historyMessages],
   )
+  const resolvedSessionKey =
+    streamSessionKey ?? historyQuery.data?.pages?.[0]?.sessionKey ?? null
 
   const { turns, streaming, send } = useAgentConversation(agentId, {
     sessionKey: resolvedSessionKey,
     history: chatHistory,
     onSessionKeyChange: (sessionKey) => {
       setStreamSessionKey(sessionKey)
-      void queryClient.invalidateQueries({
-        queryKey: [CLAW_CHAT_QUERY_KEYS.session],
-      })
     },
   })
   const sendRef = useRef(send)
@@ -236,22 +228,19 @@ function AgentConversationController({
   onInitialMessageConsumedRef.current = onInitialMessageConsumed
 
   const disabled = status?.status !== 'running'
-  // Stay in the loading state until BOTH queries have actually fetched.
-  // historyQuery.isLoading is only true on the very first request — after
-  // session resolution there's a brief render frame where the history query
-  // hasn't been triggered yet (enabled just flipped to true). Gating on
-  // isFetched closes that window so we never render with empty history.
+  // Two-part gate: cover both "still fetching" AND "just got enabled but
+  // hasn't started fetching yet". When `enabled` flips true (baseUrl
+  // resolves), there's a render frame where React Query reports
+  // isLoading=false but hasn't run the queryFn yet — `isFetched` is still
+  // false. Without this we render EmptyState during that one frame.
   const isInitialLoading =
-    sessionQuery.isLoading ||
-    (Boolean(resolvedSessionKey) &&
-      !historyQuery.isFetched &&
-      !historyQuery.isError)
-  const historyReady =
-    !resolvedSessionKey || historyQuery.isFetched || historyQuery.isError
+    historyQuery.isLoading || (!historyQuery.isFetched && !historyQuery.isError)
+
+  const historyReady = historyQuery.isFetched || historyQuery.isError
   const initialMessageKey = initialMessage
     ? `${agentId}:${initialMessage}`
     : null
-  const error = sessionQuery.error ?? historyQuery.error ?? null
+  const error = historyQuery.error ?? null
 
   useEffect(() => {
     const query = initialMessage?.trim()
@@ -264,7 +253,6 @@ function AgentConversationController({
       !query ||
       initialMessageSentRef.current === initialMessageKey ||
       disabled ||
-      sessionQuery.isLoading ||
       !historyReady ||
       streaming
     ) {
@@ -274,14 +262,7 @@ function AgentConversationController({
     initialMessageSentRef.current = initialMessageKey
     onInitialMessageConsumedRef.current()
     void sendRef.current(query)
-  }, [
-    disabled,
-    historyReady,
-    initialMessage,
-    initialMessageKey,
-    sessionQuery.isLoading,
-    streaming,
-  ])
+  }, [disabled, historyReady, initialMessage, initialMessageKey, streaming])
 
   const handleSelectAgent = (entry: AgentEntry) => {
     navigate(`${agentPathPrefix}/${entry.agentId}`)
@@ -302,7 +283,6 @@ function AgentConversationController({
           void historyQuery.fetchNextPage()
         }}
         onRetry={() => {
-          void sessionQuery.refetch()
           void historyQuery.refetch()
         }}
       />

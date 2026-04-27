@@ -55,12 +55,14 @@ export function useClawAgentSession(agentId: string) {
 export function useClawChatHistory({
   agentId,
   sessionKey,
-  enabled,
+  enabled = true,
   limit = 50,
 }: {
   agentId: string
+  // null lets the server resolve the most recent user-chat session for the
+  // agent — avoids an extra /session round-trip and the race that came with it.
   sessionKey: string | null
-  enabled: boolean
+  enabled?: boolean
   limit?: number
 }) {
   const {
@@ -72,7 +74,7 @@ export function useClawChatHistory({
   const query = useInfiniteQuery<AgentHistoryPageResponse, Error>({
     queryKey: [CLAW_CHAT_QUERY_KEYS.history, baseUrl, agentId, sessionKey],
     initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam }) => {
+    queryFn: async ({ pageParam }) => {
       const url = buildClawUrl(baseUrl as string, `/agents/${agentId}/history`)
       url.searchParams.set('limit', String(limit))
 
@@ -87,12 +89,7 @@ export function useClawChatHistory({
     },
     getNextPageParam: (lastPage) =>
       lastPage.page.hasMore ? lastPage.page.cursor : undefined,
-    enabled:
-      enabled &&
-      Boolean(baseUrl) &&
-      !urlLoading &&
-      Boolean(agentId) &&
-      Boolean(sessionKey),
+    enabled: enabled && Boolean(baseUrl) && !urlLoading && Boolean(agentId),
   })
 
   return {

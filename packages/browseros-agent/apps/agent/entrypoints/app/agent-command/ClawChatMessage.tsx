@@ -111,6 +111,13 @@ export const ClawChatMessage: FC<ClawChatMessageProps> = ({ message }) => {
             return (
               <MessageResponse
                 key={key}
+                // Historical messages are finalized — render immediately.
+                // Streamdown's default "streaming" mode uses an idle-callback
+                // debounce (300ms / 500ms idle) that paints empty content
+                // first, which made history flash blank tool collapsibles
+                // before text on every load.
+                mode="static"
+                parseIncompleteMarkdown={false}
                 className={cn(
                   'max-w-full overflow-hidden break-words',
                   '[&_[data-streamdown="code-block"]]:!w-full [&_[data-streamdown="code-block"]]:!max-w-full [&_[data-streamdown="code-block"]]:overflow-x-auto',
