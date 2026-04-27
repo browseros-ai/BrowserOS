@@ -1,5 +1,5 @@
-import { CheckCircle2, Copy, Loader2, XCircle } from 'lucide-react'
-import { type FC, useCallback } from 'react'
+import { CheckCircle2, Copy, Loader2, Wrench, XCircle } from 'lucide-react'
+import { type FC, useCallback, useMemo } from 'react'
 import {
   Message,
   MessageAction,
@@ -13,12 +13,70 @@ import {
   ReasoningContent,
   ReasoningTrigger,
 } from '@/components/ai-elements/reasoning'
+import {
+  Task,
+  TaskContent,
+  TaskItem,
+  TaskTrigger,
+} from '@/components/ai-elements/task'
 import { cn } from '@/lib/utils'
-import type { ClawChatMessage as ClawChatMessageType } from './claw-chat-types'
+import type {
+  ClawChatMessagePart,
+  ClawChatMessage as ClawChatMessageType,
+} from './claw-chat-types'
 
 function formatCost(usd: number): string {
   if (usd < 0.005) return `$${usd.toFixed(4)}`
   return `$${usd.toFixed(2)}`
+}
+
+type ToolCallPart = Extract<ClawChatMessagePart, { type: 'tool-call' }>
+
+interface RenderEntry {
+  kind: 'text' | 'reasoning' | 'meta' | 'task'
+  partIndex: number
+  part?: ClawChatMessagePart
+  tools?: ToolCallPart[]
+}
+
+/**
+ * Build a render plan that groups all tool-call parts into a single Task
+ * collapsible at their first appearance position. Other parts render in place.
+ */
+function buildRenderEntries(parts: ClawChatMessagePart[]): RenderEntry[] {
+  const entries: RenderEntry[] = []
+  const tools: ToolCallPart[] = []
+  let taskInserted = false
+
+  parts.forEach((part, partIndex) => {
+    if (part.type === 'tool-call') {
+      tools.push(part)
+      if (!taskInserted) {
+        entries.push({ kind: 'task', partIndex, tools })
+        taskInserted = true
+      }
+    } else if (part.type === 'text') {
+      entries.push({ kind: 'text', partIndex, part })
+    } else if (part.type === 'reasoning') {
+      entries.push({ kind: 'reasoning', partIndex, part })
+    } else if (part.type === 'meta') {
+      entries.push({ kind: 'meta', partIndex, part })
+    }
+  })
+
+  return entries
+}
+
+function ToolStatusIcon({ status }: { status: ToolCallPart['status'] }) {
+  if (status === 'running' || status === 'pending') {
+    return (
+      <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+    )
+  }
+  if (status === 'completed') {
+    return <CheckCircle2 className="size-3.5 shrink-0 text-green-500" />
+  }
+  return <XCircle className="size-3.5 shrink-0 text-destructive" />
 }
 
 interface ClawChatMessageProps {
@@ -35,73 +93,83 @@ export const ClawChatMessage: FC<ClawChatMessageProps> = ({ message }) => {
     if (messageText) navigator.clipboard.writeText(messageText)
   }, [messageText])
 
+  const entries = useMemo(
+    () => buildRenderEntries(message.parts),
+    [message.parts],
+  )
+
   return (
     <Message
       from={message.role}
       className="max-w-full group-[.is-user]:max-w-[80%]"
     >
       <MessageContent className="max-w-full overflow-hidden group-[.is-assistant]:w-full group-[.is-user]:max-w-full">
-        {message.parts.map((part, index) => {
-          const key = `${message.id}-part-${index}`
+        {entries.map((entry) => {
+          const key = `${message.id}-entry-${entry.partIndex}`
 
-          switch (part.type) {
-            case 'text':
-              return (
-                <MessageResponse
-                  key={key}
-                  className={cn(
-                    'max-w-full overflow-hidden break-words',
-                    '[&_[data-streamdown="code-block"]]:!w-full [&_[data-streamdown="code-block"]]:!max-w-full [&_[data-streamdown="code-block"]]:overflow-x-auto',
-                    '[&_[data-streamdown="table-wrapper"]]:!w-full [&_[data-streamdown="table-wrapper"]]:!max-w-full [&_[data-streamdown="table-wrapper"]]:overflow-x-auto',
-                    '[&_table]:w-max [&_table]:min-w-full',
-                  )}
-                >
-                  {part.text}
-                </MessageResponse>
-              )
-
-            case 'reasoning':
-              return (
-                <Reasoning key={key} className="w-full" defaultOpen={false}>
-                  <ReasoningTrigger />
-                  <ReasoningContent>{part.text}</ReasoningContent>
-                </Reasoning>
-              )
-
-            case 'tool-call':
-              return (
-                <div
-                  key={key}
-                  className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
-                >
-                  {part.status === 'running' || part.status === 'pending' ? (
-                    <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
-                  ) : null}
-                  {part.status === 'completed' ? (
-                    <CheckCircle2 className="size-3.5 text-green-500" />
-                  ) : null}
-                  {part.status === 'failed' ? (
-                    <XCircle className="size-3.5 text-destructive" />
-                  ) : null}
-                  <span className="font-mono text-xs">{part.name}</span>
-                  {part.error ? (
-                    <span className="ml-auto text-destructive text-xs">
-                      {part.error}
-                    </span>
-                  ) : null}
-                </div>
-              )
-
-            case 'meta':
-              return (
-                <div key={key} className="text-muted-foreground text-xs">
-                  {part.label}: {part.value}
-                </div>
-              )
-
-            default:
-              return null
+          if (entry.kind === 'text' && entry.part?.type === 'text') {
+            return (
+              <MessageResponse
+                key={key}
+                className={cn(
+                  'max-w-full overflow-hidden break-words',
+                  '[&_[data-streamdown="code-block"]]:!w-full [&_[data-streamdown="code-block"]]:!max-w-full [&_[data-streamdown="code-block"]]:overflow-x-auto',
+                  '[&_[data-streamdown="table-wrapper"]]:!w-full [&_[data-streamdown="table-wrapper"]]:!max-w-full [&_[data-streamdown="table-wrapper"]]:overflow-x-auto',
+                  '[&_table]:w-max [&_table]:min-w-full',
+                )}
+              >
+                {entry.part.text}
+              </MessageResponse>
+            )
           }
+
+          if (entry.kind === 'reasoning' && entry.part?.type === 'reasoning') {
+            return (
+              <Reasoning key={key} className="w-full" defaultOpen={false}>
+                <ReasoningTrigger />
+                <ReasoningContent>{entry.part.text}</ReasoningContent>
+              </Reasoning>
+            )
+          }
+
+          if (entry.kind === 'meta' && entry.part?.type === 'meta') {
+            return (
+              <div key={key} className="text-muted-foreground text-xs">
+                {entry.part.label}: {entry.part.value}
+              </div>
+            )
+          }
+
+          if (entry.kind === 'task' && entry.tools) {
+            const tools = entry.tools
+            const errorCount = tools.filter((t) => t.status === 'failed').length
+            const taskTitle = `Agent activity (${tools.length} ${tools.length === 1 ? 'action' : 'actions'}${errorCount > 0 ? `, ${errorCount} failed` : ''})`
+
+            return (
+              <Task key={key} defaultOpen={false}>
+                <TaskTrigger title={taskTitle} TriggerIcon={Wrench} />
+                <TaskContent>
+                  {tools.map((tool, idx) => (
+                    <TaskItem
+                      // biome-ignore lint/suspicious/noArrayIndexKey: tool order is stable within a finalized historical message
+                      key={`${tool.name}-${tool.status}-${idx}`}
+                      className="flex items-center gap-2"
+                    >
+                      <ToolStatusIcon status={tool.status} />
+                      <span className="font-mono text-xs">{tool.name}</span>
+                      {tool.error ? (
+                        <span className="ml-auto truncate text-destructive text-xs">
+                          {tool.error}
+                        </span>
+                      ) : null}
+                    </TaskItem>
+                  ))}
+                </TaskContent>
+              </Task>
+            )
+          }
+
+          return null
         })}
 
         {message.role === 'assistant' && messageText ? (
