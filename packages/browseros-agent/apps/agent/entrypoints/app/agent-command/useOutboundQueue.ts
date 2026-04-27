@@ -227,6 +227,14 @@ export function useOutboundQueue(
           if (serverId) {
             previewMapRef.current.set(serverId, { localId, previews })
             previewMapRef.current.delete(localId)
+            // Drop the optimistic entry as soon as the server has
+            // acknowledged it. The server's enqueue broadcasts to SSE
+            // *before* the POST returns, so by the time we land here
+            // the snapshot already carries the canonical entry — the
+            // SSE-based ack path can race the POST response (snapshot
+            // arrives first, doesn't yet know the localId↔serverId
+            // mapping, can't prune), so we also prune here defensively.
+            setLocalItems((prev) => prev.filter((item) => item.id !== localId))
           }
         } catch (err) {
           previewMapRef.current.delete(localId)
