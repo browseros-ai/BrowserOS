@@ -1,5 +1,16 @@
 # BrowserOS Agent Extension
 
+## v0.0.99 (2026-04-08)
+
+## What's Changed
+
+- chore: bump server and extension version (#659)
+- chore(agent): remove workflows feature (#656)
+- feat: replace model picker with shadcn Combobox + fuse.js fuzzy search (#617)
+- feat: clean-up - remove obsolete controller extension (#610)
+- docs: update agent extension changelog for v0.0.98 (#609)
+
+
 ## v0.0.98 (2026-03-27)
 
 ## What's Changed

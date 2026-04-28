@@ -59,6 +59,8 @@ interface RunSummary {
 }
 
 const PASS_FAIL_GRADER_ORDER = [
+  'agisdk_state_diff',
+  'infinity_state',
   'performance_grader',
   'webvoyager_grader',
   'fara_combined',

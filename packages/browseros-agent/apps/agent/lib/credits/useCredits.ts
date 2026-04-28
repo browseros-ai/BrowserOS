@@ -1,20 +1,25 @@
+import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getAgentServerUrl } from '@/lib/browseros/helpers'
+import { getBrowserosId } from './browseros-id'
 
 export interface CreditsInfo {
   credits: number
   dailyLimit: number
   lastResetAt?: string
+  browserosId?: string
 }
 
 const CREDITS_QUERY_KEY = ['credits']
 
 async function fetchCredits(): Promise<CreditsInfo> {
-  const baseUrl = await getAgentServerUrl()
-  const response = await fetch(`${baseUrl}/credits`)
+  const browserosId = await getBrowserosId()
+  const response = await fetch(
+    `${EXTERNAL_URLS.CREDITS_GATEWAY}/credits/${browserosId}`,
+  )
   if (!response.ok)
     throw new Error(`Failed to fetch credits: ${response.status}`)
-  return response.json()
+  const data = (await response.json()) as CreditsInfo
+  return { ...data, browserosId }
 }
 
 export function useCredits() {

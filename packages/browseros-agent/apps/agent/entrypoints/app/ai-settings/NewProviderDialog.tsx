@@ -64,6 +64,7 @@ import {
 import {
   getDefaultBaseUrlForProviders,
   getProviderTemplate,
+  MINIMAX_REGIONS,
   providerTypeOptions,
 } from '@/lib/llm-providers/providerTemplates'
 import { type TestResult, testProvider } from '@/lib/llm-providers/testProvider'
@@ -87,6 +88,7 @@ const providerTypeEnum = z.enum([
   'chatgpt-pro',
   'github-copilot',
   'qwen-code',
+  'minimax',
 ])
 
 /**
@@ -105,7 +107,7 @@ export const providerFormSchema = z
     temperature: z.number().min(0).max(2),
     // Azure-specific
     resourceName: z.string().optional(),
-    // Bedrock-specific
+    // Bedrock-specific / MiniMax region
     accessKeyId: z.string().optional(),
     secretAccessKey: z.string().optional(),
     region: z.string().optional(),
@@ -163,6 +165,30 @@ export const providerFormSchema = z
       data.type === 'qwen-code'
     ) {
       // No validation needed — OAuth tokens are on the server
+    }
+    // MiniMax: require baseUrl + apiKey
+    else if (data.type === 'minimax') {
+      if (!data.baseUrl) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Base URL is required',
+          path: ['baseUrl'],
+        })
+      } else if (!/^https?:\/\/.+/.test(data.baseUrl)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Must be a valid URL',
+          path: ['baseUrl'],
+        })
+      }
+
+      if (!data.apiKey?.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'API Key is required',
+          path: ['apiKey'],
+        })
+      }
     }
     // Other providers: require baseUrl
     else if (!data.baseUrl) {
@@ -315,6 +341,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     const defaultUrl = getDefaultBaseUrlForProviders(newType)
     if (defaultUrl) {
       form.setValue('baseUrl', defaultUrl)
+    }
+    if (newType === 'minimax') {
+      form.setValue('region', 'chinese')
     }
     form.setValue('modelId', '')
   }
@@ -718,6 +747,94 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
               )}
             />
           </div>
+        </>
+      )
+    }
+
+    // Minimax: region selector
+    if (watchedType === 'minimax') {
+      return (
+        <>
+          <FormField
+            control={form.control}
+            name="region"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Region *</FormLabel>
+                <Select
+                  onValueChange={(v) => {
+                    field.onChange(v)
+                    form.setValue(
+                      'baseUrl',
+                      MINIMAX_REGIONS[v as keyof typeof MINIMAX_REGIONS].api,
+                    )
+                  }}
+                  value={field.value || 'chinese'}
+                >
+                  <FormControl>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="chinese">
+                      Chinese (api.minimaxi.com)
+                    </SelectItem>
+                    <SelectItem value="international">
+                      International (api.minimax.io)
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <FormDescription>
+                  Choose the endpoint closest to your location
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="baseUrl"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Base URL *</FormLabel>
+                <FormControl>
+                  <Input placeholder="https://api.minimaxi.com/v1" {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="apiKey"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>API Key *</FormLabel>
+                <FormControl>
+                  <Input
+                    type="password"
+                    placeholder="Enter your MiniMax API key"
+                    {...field}
+                  />
+                </FormControl>
+                <FormDescription>
+                  Your API key is encrypted and stored locally.{' '}
+                  {setupGuideUrl && (
+                    <a
+                      href={setupGuideUrl}
+                      onClick={handleSetupGuideClick}
+                      className="inline-flex cursor-pointer items-center gap-1 text-primary hover:underline"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      {setupGuideText}
+                    </a>
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         </>
       )
     }

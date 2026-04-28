@@ -80,3 +80,8 @@ export const CONTENT_LIMITS = {
   CONSOLE_DEFAULT_LIMIT: 50,
   CONSOLE_MAX_LIMIT: 200,
 } as const
+
+export const REFERRAL_LIMITS = {
+  MAX_DAILY_CREDITS: 500,
+  CREDITS_PER_REFERRAL: 200,
+} as const

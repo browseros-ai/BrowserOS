@@ -45,6 +45,12 @@ jobs:
         working-directory: packages/browseros-agent
         run: bun install --ignore-scripts && bun run build:agent-sdk
 
+      - name: Install Python eval dependencies
+        run: pip install agisdk requests
+
+      - name: Clone WebArena-Infinity
+        run: git clone --depth 1 https://github.com/web-arena-x/webarena-infinity.git /tmp/webarena-infinity
+
       - name: Install xvfb
         run: sudo apt-get update && sudo apt-get install -y xvfb
 
@@ -59,9 +65,11 @@ jobs:
         working-directory: packages/browseros-agent/apps/eval
         env:
           FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           NOPECHA_API_KEY: ${{ secrets.NOPECHA_API_KEY }}
           BROWSEROS_BINARY: /usr/bin/browseros
+          WEBARENA_INFINITY_DIR: /tmp/webarena-infinity
           EVAL_CONFIG: ${{ github.event.inputs.config || 'configs/browseros-agent-weekly.json' }}
         run: |
           echo "Running eval with config: $EVAL_CONFIG"
@@ -83,6 +91,8 @@ jobs:
 
       - name: Generate trend report
         if: success()
+        timeout-minutes: 5
+        continue-on-error: true
         working-directory: packages/browseros-agent
         env:
           EVAL_R2_ACCOUNT_ID: ${{ secrets.EVAL_R2_ACCOUNT_ID }}

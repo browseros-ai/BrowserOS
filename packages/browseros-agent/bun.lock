@@ -27,6 +27,7 @@
       "dependencies": {
         "@ai-sdk/react": "^3.0.96",
         "@browseros/server": "workspace:*",
+        "@browseros/shared": "workspace:*",
         "@hookform/resolvers": "^5.2.2",
         "@lobehub/icons": "^2.44.0",
         "@mdxeditor/editor": "^3.52.4",
@@ -2210,7 +2211,7 @@
 
     "chrome-devtools-frontend": ["chrome-devtools-frontend@1.0.1577886", "", {}, "sha512-B9hY3o/0RuVCDWNYh9YnkEbRrPUMCY+NaOgBxvZRzGvqbGSMNckkVSdO67SwWR8bm4fo/qplXbUj0cSr229V6w=="],
 
-    "chrome-devtools-mcp": ["chrome-devtools-mcp@0.20.3", "", { "bin": { "chrome-devtools-mcp": "build/src/bin/chrome-devtools-mcp.js", "chrome-devtools": "build/src/bin/chrome-devtools.js" } }, "sha512-6MlNKlKa+J1FX9w4SUnFERF4MRGWLlrnZvIJGhhsuuMPM7qUG0F4SwheRyjwl0+tsTemxMCBHiib8mXkg5j6og=="],
+    "chrome-devtools-mcp": ["chrome-devtools-mcp@0.21.0", "", { "bin": { "chrome-devtools-mcp": "build/src/bin/chrome-devtools-mcp.js", "chrome-devtools": "build/src/bin/chrome-devtools.js" } }, "sha512-d+iqrRmcwpRFV3Q4DRCF2LCoq+WCRU3GhISKQ9v8g+1C2Uh8upj3urkjxNO4QIjhBMIYei/VQ1OQLFceby80Og=="],
 
     "chrome-launcher": ["chrome-launcher@1.2.0", "", { "dependencies": { "@types/node": "*", "escape-string-regexp": "^4.0.0", "is-wsl": "^2.2.0", "lighthouse-logger": "^2.0.1" }, "bin": { "print-chrome-path": "bin/print-chrome-path.cjs" } }, "sha512-JbuGuBNss258bvGil7FT4HKdC3SC2K7UAEUqiPy3ACS3Yxo3hAW6bvFpCu2HsIJLgTqxgEX6BkujvzZfLpUD0Q=="],
 

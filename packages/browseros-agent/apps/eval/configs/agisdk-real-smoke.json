@@ -1,0 +1,26 @@
+{
+  "agent": {
+    "type": "single",
+    "provider": "openai-compatible",
+    "model": "accounts/fireworks/models/kimi-k2p5",
+    "apiKey": "FIREWORKS_API_KEY",
+    "baseUrl": "https://api.fireworks.ai/inference/v1",
+    "supportsImages": true
+  },
+  "dataset": "../data/agisdk-real.jsonl",
+  "num_workers": 10,
+  "restart_server_per_task": true,
+  "browseros": {
+    "server_url": "http://127.0.0.1:9110",
+    "base_cdp_port": 9010,
+    "base_server_port": 9110,
+    "base_extension_port": 9310,
+    "load_extensions": false,
+    "headless": false
+  },
+  "captcha": {
+    "api_key_env": "NOPECHA_API_KEY"
+  },
+  "graders": ["agisdk_state_diff"],
+  "timeout_ms": 1800000
+}

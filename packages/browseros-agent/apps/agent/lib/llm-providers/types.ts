@@ -17,6 +17,7 @@ export type ProviderType =
   | 'chatgpt-pro'
   | 'github-copilot'
   | 'qwen-code'
+  | 'minimax'
 
 /**
  * LLM Provider configuration

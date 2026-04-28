@@ -9,6 +9,7 @@ import {
 import { runGraders } from '../graders/registry'
 import type { ErrorSource, EvalConfig, GraderResult, Task } from '../types'
 import { callMcpTool } from '../utils/mcp-client'
+import { InfinityAppManager } from './infinity-app-manager'
 import type { GraderOptions, TaskResult } from './types'
 
 // ============================================================================
@@ -101,6 +102,36 @@ export class TaskExecutor {
     // Resolve page ID once — fresh browser has exactly one page
     const pageId = await this.resolveInitialPageId(mcpUrl)
 
+    // For Infinity tasks, start a fresh app server per task
+    let infinityManager: InfinityAppManager | null = null
+    let actualStartUrl = task.start_url
+
+    if (task.dataset === 'webarena-infinity') {
+      const appName = (task.metadata?.additional as Record<string, unknown>)
+        ?.app_name as string
+      const appBasePort =
+        ((task.metadata?.additional as Record<string, unknown>)
+          ?.app_base_port as number) || 8000
+      const workerIndex = this.config.browseros.base_server_port - 9110 // derive from port offset
+
+      if (appName && process.env.WEBARENA_INFINITY_DIR) {
+        infinityManager = new InfinityAppManager(workerIndex, appBasePort)
+        try {
+          actualStartUrl = await infinityManager.startApp(appName)
+          console.log(
+            `  Infinity app "${appName}" started on port ${infinityManager.getPort()}`,
+          )
+        } catch (error) {
+          throw new TaskExecutionError(
+            `Failed to start Infinity app: ${error instanceof Error ? error.message : String(error)}`,
+            task,
+            'navigation',
+            error instanceof Error ? error : undefined,
+          )
+        }
+      }
+    }
+
     try {
       // Phase 1: Set viewport + navigate to start URL
       try {
@@ -114,10 +145,10 @@ export class TaskExecutor {
         )
       }
 
-      if (task.start_url && task.start_url !== 'about:blank') {
+      if (actualStartUrl && actualStartUrl !== 'about:blank') {
         try {
           await callMcpTool(mcpUrl, 'navigate_page', {
-            url: task.start_url,
+            url: actualStartUrl,
             page: pageId,
           })
         } catch (error) {
@@ -134,7 +165,11 @@ export class TaskExecutor {
       const agentResult = await this.executeAgent(task, pageId)
 
       // Phase 3: Run graders
-      const graderResults = await this.runGraders(task, agentResult)
+      const graderResults = await this.runGraders(
+        task,
+        agentResult,
+        infinityManager?.getUrl(),
+      )
 
       const status =
         agentResult.metadata.termination_reason === 'timeout'
@@ -168,6 +203,11 @@ export class TaskExecutor {
         })
       } catch {
         // Ignore cleanup errors
+      }
+
+      // Stop Infinity app server if running
+      if (infinityManager) {
+        await infinityManager.stop().catch(() => {})
       }
     }
   }
@@ -209,6 +249,7 @@ export class TaskExecutor {
   private async runGraders(
     task: Task,
     agentResult: AgentResult,
+    infinityAppUrl?: string,
   ): Promise<Record<string, GraderResult>> {
     const configGraders = this.config.graders ?? []
     const taskGraders = task.graders ?? []
@@ -234,6 +275,8 @@ export class TaskExecutor {
           expectedAnswer: (task.metadata?.additional as Record<string, unknown>)
             ?.answer as string | undefined,
           outputDir: join(this.outputDir, task.query_id),
+          mcpUrl: `${this.config.browseros.server_url}/mcp`,
+          infinityAppUrl,
         },
         this.deps.graderOptions,
       )

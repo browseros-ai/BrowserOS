@@ -1,4 +1,6 @@
 import type { GraderResult } from '../types'
+import { AgisdkStateDiffGrader } from './benchmark/agisdk-state-diff'
+import { InfinityStateGrader } from './benchmark/infinity-state'
 import { Mind2WebJudgeGrader } from './benchmark/mind2web'
 import { WebVoyagerGrader } from './benchmark/webvoyager'
 import { FaraAlignmentGrader } from './fara/alignment'
@@ -19,7 +21,13 @@ export function createGrader(
   options: GraderOptions | null,
 ): Grader | null {
   switch (name) {
-    // Benchmark graders
+    // Deterministic benchmark graders (no LLM judge)
+    case 'agisdk_state_diff':
+      return new AgisdkStateDiffGrader()
+    case 'infinity_state':
+      return new InfinityStateGrader()
+
+    // LLM-based benchmark graders
     case 'webvoyager_grader':
       if (!options?.apiKey) return null
       return new WebVoyagerGrader(
@@ -107,10 +115,12 @@ export async function runGraders(
 
 // Export grader classes for direct use
 export {
+  AgisdkStateDiffGrader,
   FaraAlignmentGrader,
   FaraCombinedGrader,
   FaraMultimodalGrader,
   FaraRubricGrader,
+  InfinityStateGrader,
   Mind2WebJudgeGrader,
   PerformanceGrader,
   WebVoyagerGrader,

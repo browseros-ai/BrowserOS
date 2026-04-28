@@ -65,6 +65,7 @@ export class ChatService {
       declinedApps: request.declinedApps,
       browserosId: this.deps.browserosId,
     }
+    const llmConfigKey = this.buildLlmConfigKey(agentConfig)
 
     let session = sessionStore.get(request.conversationId)
     let isNewSession = false
@@ -144,6 +145,24 @@ export class ChatService {
       }
     }
 
+    // Detect provider/model/auth change mid-conversation -> rebuild session.
+    // The AI SDK agent captures the language model at construction time, so a
+    // reused session would keep calling the previous provider.
+    if (session && session.llmConfigKey !== llmConfigKey) {
+      logger.info('LLM config changed mid-conversation, rebuilding session', {
+        conversationId: request.conversationId,
+        provider: agentConfig.provider,
+        model: agentConfig.model,
+      })
+      session = await this.rebuildSession(
+        session,
+        request,
+        agentConfig,
+        mcpServerKey,
+        llmConfigKey,
+      )
+    }
+
     if (!session) {
       isNewSession = true
       let hiddenPageId: number | undefined
@@ -209,6 +228,7 @@ export class ChatService {
         browserContext,
         mcpServerKey,
         workingDir: request.userWorkingDir,
+        llmConfigKey,
       }
       sessionStore.set(request.conversationId, session)
     }
@@ -341,6 +361,7 @@ export class ChatService {
     request: ChatRequest,
     agentConfig: ResolvedAgentConfig,
     mcpServerKey: string,
+    llmConfigKey = this.buildLlmConfigKey(agentConfig),
   ): Promise<AgentSession> {
     const previousMessages = session.agent.messages
     await session.agent.dispose()
@@ -365,6 +386,7 @@ export class ChatService {
       browserContext,
       mcpServerKey,
       workingDir: request.userWorkingDir,
+      llmConfigKey,
     }
     newSession.agent.messages = sanitizeMessagesForToolset(
       previousMessages,
@@ -372,6 +394,26 @@ export class ChatService {
     )
     this.deps.sessionStore.set(request.conversationId, newSession)
     return newSession
+  }
+
+  private buildLlmConfigKey(config: ResolvedAgentConfig): string {
+    return JSON.stringify({
+      provider: config.provider,
+      model: config.model,
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+      upstreamProvider: config.upstreamProvider,
+      resourceName: config.resourceName,
+      region: config.region,
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+      sessionToken: config.sessionToken,
+      accountId: config.accountId,
+      reasoningEffort: config.reasoningEffort,
+      reasoningSummary: config.reasoningSummary,
+      contextWindowSize: config.contextWindowSize,
+      supportsImages: config.supportsImages,
+    })
   }
 
   private buildMcpServerKey(browserContext?: BrowserContext): string {

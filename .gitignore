@@ -1,4 +1,6 @@
 **/.DS_Store
+**.auctor/**
+.auctor.json
 .gcs_entries
 **/dmg
 **/env
@@ -29,6 +31,7 @@ packages/browseros/build/tools/
 
 # AI SDK DevTools traces
 .devtools/
+.omc/
 
 # Local generated repository snapshot docs
 all_i_know.md

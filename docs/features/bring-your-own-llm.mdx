@@ -131,6 +131,29 @@ Connect to powerful AI models using your API keys. Your keys stay on your machin
     ![Gemini config](/images/byollm--gemini-provider-config.png)
   </Accordion>
 
+  <div id="nvidia" />
+  <Accordion title="NVIDIA (Free)" icon="microchip">
+    NVIDIA's [build.nvidia.com](https://build.nvidia.com/models) hosts 80+ models — including GLM 5.1, MiniMax M2.7, GPT-OSS-120B, Qwen 3.5, Mistral, and Nemotron — behind a **free OpenAI-compatible API endpoint**. Great for chatting, prototyping, and personal projects.
+
+    **Get your API key:**
+    1. Go to [build.nvidia.com/models](https://build.nvidia.com/models) and sign in with a free NVIDIA developer account
+    2. Pick any model tagged **Free Endpoint** (e.g. [`minimaxai/minimax-m2.7`](https://build.nvidia.com/minimaxai/minimax-m2.7), [`z-ai/glm-5.1`](https://build.nvidia.com/z-ai/glm-5.1), [`qwen/qwen3.5-122b-a10b`](https://build.nvidia.com/qwen/qwen3.5-122b-a10b))
+    3. Click **Get API Key** on the model page and copy the `nvapi-...` key
+
+    **Add to BrowserOS:**
+    1. Go to `chrome://browseros/settings`
+    2. Click **USE** on the **OpenAI Compatible** card
+    3. Set **Base URL** to `https://integrate.api.nvidia.com/v1`
+    4. Set **Model ID** to a model from the catalog (e.g. `minimaxai/minimax-m2.7`, `z-ai/glm-5.1`, `qwen/qwen3.5-122b-a10b`)
+    5. Paste your NVIDIA API key
+    6. Set **Context Window** based on the model (most are `128000` or higher)
+    7. Click **Save**
+
+    <Tip>
+    NVIDIA's free endpoints share GPU capacity across all developers, so throughput is slower than a paid API. They're best for Chat Mode, exploring new open-source models, and personal projects. For production agent workloads, use a paid provider like Claude or Kimi.
+    </Tip>
+  </Accordion>
+
   <div id="claude" />
   <Accordion title="Claude (Best for Agents)" icon="message-bot">
     Claude Opus 4.5 gives the best results for Agent Mode.

@@ -44,11 +44,19 @@ const createAgentUIStreamResponseSpy = mock(
   },
 )
 
-const resolveLLMConfigSpy = mock(async () => ({
-  provider: 'openai',
-  model: 'gpt-5',
-  apiKey: 'test-key',
-}))
+const resolveLLMConfigSpy = mock(
+  async (config: {
+    provider?: string
+    model?: string
+    apiKey?: string
+    baseUrl?: string
+  }) => ({
+    provider: config.provider ?? 'openai',
+    model: config.model ?? 'gpt-5',
+    apiKey: config.apiKey ?? 'test-key',
+    baseUrl: config.baseUrl,
+  }),
+)
 
 mock.module('ai', () => ({
   createAgentUIStreamResponse: createAgentUIStreamResponseSpy,
@@ -287,5 +295,66 @@ describe('ChatService scheduled task hidden page lifecycle', () => {
       title: 'Scheduled Task',
     })
     expect(browser.closePage).toHaveBeenCalledWith(88)
+  })
+
+  it('rebuilds an existing session when the LLM provider changes', async () => {
+    const firstAgent = createFakeAgent()
+    agentToReturn = firstAgent
+    streamResponseHandler = async ({ onFinish }) => {
+      await onFinish({ messages: agentToReturn?.messages ?? [] })
+      return new Response('ok')
+    }
+
+    const browser = {
+      resolveTabIds: mock(async () => new Map<number, number>()),
+    }
+    const sessionStore = createSessionStore()
+    const service = new ChatService({
+      sessionStore: sessionStore as never,
+      klavisClient: {} as never,
+      browser: browser as never,
+      registry: {} as never,
+    })
+    const conversationId = crypto.randomUUID()
+    const createCallsBefore = createAgentSpy.mock.calls.length
+
+    await service.processMessage(
+      {
+        conversationId,
+        message: 'First message',
+        provider: 'browseros',
+        model: 'browseros-auto',
+        mode: 'agent',
+        origin: 'sidepanel',
+      } as never,
+      new AbortController().signal,
+    )
+
+    const secondAgent = createFakeAgent()
+    agentToReturn = secondAgent
+
+    await service.processMessage(
+      {
+        conversationId,
+        message: 'Second message',
+        provider: 'chatgpt-pro',
+        model: 'gpt-5.3-codex',
+        mode: 'agent',
+        origin: 'sidepanel',
+      } as never,
+      new AbortController().signal,
+    )
+
+    expect(createAgentSpy.mock.calls.length).toBe(createCallsBefore + 2)
+    expect(firstAgent.dispose).toHaveBeenCalledTimes(1)
+    expect(sessionStore.get(conversationId)?.agent).toBe(secondAgent)
+
+    const latestCreateArgs = createAgentSpy.mock.calls.at(-1)?.[0] as {
+      resolvedConfig: { provider: string; model: string }
+    }
+    expect(latestCreateArgs.resolvedConfig).toMatchObject({
+      provider: 'chatgpt-pro',
+      model: 'gpt-5.3-codex',
+    })
   })
 })
