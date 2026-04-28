@@ -201,6 +201,7 @@
         "zod-from-json-schema": "^0.1.0",
       },
       "devDependencies": {
+        "@agentclientprotocol/sdk": "^0.19.1",
         "@types/bun": "1.3.5",
         "@types/debug": "^4.1.12",
         "@types/node": "^24.3.3",
@@ -269,6 +270,8 @@
     "@0no-co/graphqlsp": ["@0no-co/graphqlsp@1.15.2", "", { "dependencies": { "@gql.tada/internal": "^1.0.0", "graphql": "^15.5.0 || ^16.0.0 || ^17.0.0" }, "peerDependencies": { "typescript": "^5.0.0" } }, "sha512-Ys031WnS3sTQQBtRTkQsYnw372OlW72ais4sp0oh2UMPRNyxxnq85zRfU4PIdoy9kWriysPT5BYAkgIxhbonFA=="],
 
     "@1natsu/wait-element": ["@1natsu/wait-element@4.1.2", "", { "dependencies": { "defu": "^6.1.4", "many-keys-map": "^2.0.1" } }, "sha512-qWxSJD+Q5b8bKOvESFifvfZ92DuMsY+03SBNjTO34ipJLP6mZ9yK4bQz/vlh48aEQXoJfaZBqUwKL5BdI5iiWw=="],
+
+    "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@0.19.1", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-oSb3RzjlMoU3Xu6MRJAL/Gd1DyK2+XSmZyUENrt/j1yqt33+ROhxncU6em8nyXEs97D4lVIGaFZ1pN0Q1C9SpA=="],
 
     "@ai-sdk/amazon-bedrock": ["@ai-sdk/amazon-bedrock@4.0.63", "", { "dependencies": { "@ai-sdk/anthropic": "3.0.46", "@ai-sdk/provider": "3.0.8", "@ai-sdk/provider-utils": "4.0.15", "@smithy/eventstream-codec": "^4.0.1", "@smithy/util-utf8": "^4.0.0", "aws4fetch": "^1.0.20" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-kNOaIaOXWFZFWbB0xM1l/bQYo7XwTkpdHbrA6n9A2U1c4/DcLF/+Rwc3vZF6MHPVSjoYVG0qxIa7jh39rKftYA=="],
 
@@ -2244,7 +2247,7 @@
 
     "chrome-devtools-frontend": ["chrome-devtools-frontend@1.0.1577886", "", {}, "sha512-B9hY3o/0RuVCDWNYh9YnkEbRrPUMCY+NaOgBxvZRzGvqbGSMNckkVSdO67SwWR8bm4fo/qplXbUj0cSr229V6w=="],
 
-    "chrome-devtools-mcp": ["chrome-devtools-mcp@0.21.0", "", { "bin": { "chrome-devtools-mcp": "build/src/bin/chrome-devtools-mcp.js", "chrome-devtools": "build/src/bin/chrome-devtools.js" } }, "sha512-d+iqrRmcwpRFV3Q4DRCF2LCoq+WCRU3GhISKQ9v8g+1C2Uh8upj3urkjxNO4QIjhBMIYei/VQ1OQLFceby80Og=="],
+    "chrome-devtools-mcp": ["chrome-devtools-mcp@0.22.0", "", { "bin": { "chrome-devtools": "build/src/bin/chrome-devtools.js", "chrome-devtools-mcp": "build/src/bin/chrome-devtools-mcp.js" } }, "sha512-WpmJhmFf37I2qQHU4oJC7cEyGkmLdrn9I5aE7LQPQ7m8YXeTz3cyXwVyhKloKzKY57htMG3VkuAI7t9dGcohSw=="],
 
     "chrome-launcher": ["chrome-launcher@1.2.0", "", { "dependencies": { "@types/node": "*", "escape-string-regexp": "^4.0.0", "is-wsl": "^2.2.0", "lighthouse-logger": "^2.0.1" }, "bin": { "print-chrome-path": "bin/print-chrome-path.cjs" } }, "sha512-JbuGuBNss258bvGil7FT4HKdC3SC2K7UAEUqiPy3ACS3Yxo3hAW6bvFpCu2HsIJLgTqxgEX6BkujvzZfLpUD0Q=="],
 
