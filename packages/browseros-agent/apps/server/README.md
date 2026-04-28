@@ -92,6 +92,12 @@ Skills are custom instruction sets that shape agent behavior:
 - **Loader** (`src/skills/loader.ts`) — loads skills from local and remote sources
 - **Remote sync** (`src/skills/remote-sync.ts`) — syncs skills from the BrowserOS cloud
 
+## Dependencies
+
+Notable runtime dependencies worth calling out:
+
+- **`@agentclientprotocol/sdk`** — Agent Client Protocol SDK. Powers the upcoming ACP bridge that drives chat, history, cancellation, and per-session realtime state by spawning `openclaw acp` as a child process and consuming JSON-RPC over stdio. Wiring code lands in `src/api/services/acp/` in subsequent commits.
+
 ## Directory Structure
 
 ```

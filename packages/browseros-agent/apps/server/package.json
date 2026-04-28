@@ -72,6 +72,7 @@
     }
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "0.21.0",
     "@ai-sdk/amazon-bedrock": "^4.0.62",
     "@ai-sdk/anthropic": "^3.0.46",
     "@ai-sdk/azure": "^3.0.31",
@@ -112,7 +113,6 @@
     "zod-from-json-schema": "^0.1.0"
   },
   "devDependencies": {
-    "@agentclientprotocol/sdk": "0.21.0",
     "@types/bun": "1.3.5",
     "@types/debug": "^4.1.12",
     "@types/node": "^24.3.3",
