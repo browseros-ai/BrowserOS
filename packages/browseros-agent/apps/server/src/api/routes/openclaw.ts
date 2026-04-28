@@ -240,6 +240,7 @@ export function createOpenClawRoutes() {
         baseUrl?: string
         apiKey?: string
         modelId?: string
+        supportsImages?: boolean
       }>()
 
       try {
@@ -249,6 +250,7 @@ export function createOpenClawRoutes() {
           hasBaseUrl: !!body.baseUrl,
           hasModel: !!body.modelId,
           hasApiKey: !!body.apiKey,
+          supportsImages: !!body.supportsImages,
         })
         const logs: string[] = []
         await getOpenClawService().setup(body, (msg) => logs.push(msg))
@@ -350,6 +352,7 @@ export function createOpenClawRoutes() {
         baseUrl?: string
         apiKey?: string
         modelId?: string
+        supportsImages?: boolean
       }>()
       const validationError = getCreateAgentValidationError(body)
       if (validationError) {
@@ -364,6 +367,7 @@ export function createOpenClawRoutes() {
           baseUrl: body.baseUrl,
           apiKey: body.apiKey,
           modelId: body.modelId,
+          supportsImages: body.supportsImages,
         })
         return c.json({ agent }, 201)
       } catch (err) {

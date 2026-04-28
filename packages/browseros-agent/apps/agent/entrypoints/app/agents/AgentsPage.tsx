@@ -794,6 +794,7 @@ export const AgentsPage: FC = () => {
         baseUrl: llmOption?.baseUrl,
         apiKey: llmOption?.apiKey,
         modelId: option?.modelId,
+        supportsImages: llmOption?.supportsImages,
       })
       setSetupOpen(false)
       if (isCli) setCliAuthModalOpen(true)
@@ -820,6 +821,7 @@ export const AgentsPage: FC = () => {
         baseUrl: llmOption?.baseUrl,
         apiKey: llmOption?.apiKey,
         modelId: option?.modelId,
+        supportsImages: llmOption?.supportsImages,
       })
       setCreateOpen(false)
       setNewName('')

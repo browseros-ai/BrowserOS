@@ -128,6 +128,11 @@ export interface SetupInput {
   baseUrl?: string
   apiKey?: string
   modelId?: string
+  // The agent UI's "Supports Image" flag (LlmProviderConfig.supportsImages).
+  // Pass-through to provider-map so custom OpenAI-compat providers can
+  // advertise `input: ['text', 'image']` on their model entries when the
+  // user asserted vision support.
+  supportsImages?: boolean
 }
 
 export interface OpenClawProviderUpdateResult {
@@ -959,6 +964,7 @@ export class OpenClawService {
     baseUrl?: string
     apiKey?: string
     modelId?: string
+    supportsImages?: boolean
   }): Promise<OpenClawAgentEntry> {
     const { name } = input
     if (!AGENT_NAME_PATTERN.test(name)) {
@@ -972,6 +978,7 @@ export class OpenClawService {
       hasBaseUrl: !!input.baseUrl,
       hasModel: !!input.modelId,
       hasApiKey: !!input.apiKey,
+      supportsImages: !!input.supportsImages,
     })
     await this.assertGatewayReady()
 
@@ -1734,6 +1741,16 @@ export class OpenClawService {
       {
         path: 'agents.defaults.memorySearch.enabled',
         value: false,
+      },
+      {
+        // Enable OpenClaw's image-understanding pipeline so models that
+        // declare `input: ['text', 'image']` actually receive image bytes
+        // instead of having them stripped at the gateway. Without this,
+        // image_url content parts are silently dropped even if the model
+        // and provider both support vision. Per-model `input` still gates
+        // which models see images — this just turns the global pipeline on.
+        path: 'tools.media.image.enabled',
+        value: true,
       },
     ]
 
