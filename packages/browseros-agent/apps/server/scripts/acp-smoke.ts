@@ -24,6 +24,9 @@
  *   resume        — resumeSession against a discovered session
  *   load          — loadSession replay
  *   cancel        — cancel mid-prompt
+ *   mode          — setSessionMode to a different thought level
+ *   config        — setSessionConfigOption to flip a config value
+ *   auth          — authenticate (probe to confirm noop on OpenClaw)
  */
 
 import { type ChildProcessByStdio, spawn } from 'node:child_process'
@@ -97,6 +100,7 @@ interface SpawnedAcp {
   defaultPermissionResponse: RequestPermissionResponse
   init: acp.InitializeResponse
   sessionId: string
+  newSessionResponse: unknown // configOptions/modes live here
 }
 
 async function spawnOpenClawAcp(opts: {
@@ -262,12 +266,18 @@ async function spawnOpenClawAcp(opts: {
     defaultPermissionResponse,
     init,
     sessionId: newSess.sessionId,
+    newSessionResponse: newSess,
   }
 }
 
 async function tearDown(s: SpawnedAcp): Promise<void> {
-  // SDK 0.19.1 has no closeSession on the connection — we kill the child
-  // process. The Gateway considers the session idle after the WS drops.
+  // SDK 0.21.0 exposes closeSession; try it first, then kill the child.
+  try {
+    // @ts-expect-error - connection types may shift between SDK builds
+    await s.connection.closeSession({ sessionId: s.sessionId })
+  } catch (err) {
+    console.log('[close] error (non-fatal):', (err as Error).message)
+  }
   s.child.kill('SIGTERM')
   await new Promise<void>((r) => setTimeout(r, 500))
   if (!s.child.killed) s.child.kill('SIGKILL')
@@ -363,28 +373,71 @@ async function scenarioList(): Promise<ListSessionsResponse | null> {
 
 async function scenarioResume(): Promise<void> {
   console.log('\n=== scenario: resumeSession ===')
-  console.log(
-    '[resume] SKIPPED — SDK 0.19.1 does not expose resumeSession;\n' +
-      '          OpenClaw advertises sessionCapabilities = {list:{}} only.\n' +
-      '          We use loadSession for rebind+replay instead.',
-  )
+  // session/list is broken on this build, so we can't enumerate.
+  // Instead: spawn one bridge, capture the sessionId of the freshly created
+  // session, kill the bridge, spawn a new bridge, and try resumeSession
+  // against the captured id. This tests whether resume can rebind to a
+  // session that another connection initialized.
+  const first = await spawnOpenClawAcp({})
+  const targetSessionId = first.sessionId
+  console.log('[resume] target sessionId (from prior bridge):', targetSessionId)
+  await tearDown(first)
+
+  const s = await spawnOpenClawAcp({})
+  try {
+    console.log('[resume] calling resumeSession against prior sessionId...')
+    // @ts-expect-error - input shape varies
+    const resp = await s.connection.resumeSession({
+      sessionId: targetSessionId,
+    })
+    console.log('[resume] response:', JSON.stringify(resp, null, 2))
+    console.log('[resume] waiting 5s for session/update notifications...')
+    await new Promise<void>((r) => setTimeout(r, 5000))
+    console.log(`[resume] events received during wait: ${s.events.length}`)
+    if (s.events.length > 0) {
+      console.log('[resume] event kinds:')
+      const kinds = new Set(s.events.map((e) => e.update.sessionUpdate))
+      console.log('  ', [...kinds].join(', '))
+    }
+  } catch (err) {
+    console.log('[resume] error:', (err as Error).message)
+  }
+  await tearDown(s)
 }
 
 async function scenarioLoad(): Promise<void> {
   console.log('\n=== scenario: loadSession ===')
-  // session/list is not implemented on this OpenClaw build, so we can't
-  // discover existing sessions through ACP. Instead we use the gateway
-  // session key the bridge maps to from --session: the freshly-spawned
-  // session shares the same `agent:<id>:main` key. We can call loadSession
-  // against the sessionId returned by newSession to test the replay path
-  // on whatever transcript the gateway has under that key.
-  const s = await spawnOpenClawAcp({})
-  console.log('[load] calling loadSession against own sessionId...')
-  console.log('[load] (this is the only mode we can test without session/list)')
+  const lister = await spawnOpenClawAcp({})
+  let targetSessionId: string | null = null
   try {
-    // @ts-expect-error - input shape varies
+    // @ts-expect-error
+    const list = await lister.connection.listSessions({})
+    // @ts-expect-error
+    const candidates = list.sessions ?? []
+    if (candidates.length === 0) {
+      console.log('[load] no sessions to load; falling back to own sessionId')
+      targetSessionId = lister.sessionId
+    } else {
+      targetSessionId = candidates[0].sessionId
+      console.log('[load] target sessionId:', targetSessionId)
+    }
+  } catch (err) {
+    console.log(
+      '[load] listSessions error, using own sessionId:',
+      (err as Error).message,
+    )
+    targetSessionId = lister.sessionId
+  }
+  await tearDown(lister)
+
+  if (!targetSessionId) return
+
+  const s = await spawnOpenClawAcp({})
+  try {
+    console.log('[load] calling loadSession...')
+    // @ts-expect-error
     await s.connection.loadSession({
-      sessionId: s.sessionId,
+      sessionId: targetSessionId,
       cwd: '/workspace',
       mcpServers: [],
     })
@@ -397,13 +450,85 @@ async function scenarioLoad(): Promise<void> {
     }, {})
     console.log('[load] event breakdown:', counts)
     if (s.events.length > 0) {
-      console.log('[load] first 2 events:')
-      for (const ev of s.events.slice(0, 2)) {
+      console.log('[load] first 3 events:')
+      for (const ev of s.events.slice(0, 3)) {
         console.log(JSON.stringify(ev, null, 2))
       }
     }
   } catch (err) {
     console.log('[load] error:', (err as Error).message)
+  }
+  await tearDown(s)
+}
+
+async function scenarioMode(): Promise<void> {
+  console.log('\n=== scenario: setSessionMode ===')
+  const s = await spawnOpenClawAcp({})
+  try {
+    console.log('[mode] flipping mode to "high"...')
+    // @ts-expect-error - input shape varies
+    const resp = await s.connection.setSessionMode({
+      sessionId: s.sessionId,
+      modeId: 'high',
+    })
+    console.log('[mode] response:', JSON.stringify(resp, null, 2))
+  } catch (err) {
+    console.log('[mode] error:', (err as Error).message)
+  }
+  await tearDown(s)
+}
+
+async function scenarioConfig(): Promise<void> {
+  console.log('\n=== scenario: setSessionConfigOption ===')
+  const s = await spawnOpenClawAcp({})
+  // configOptions live on the newSession response, not on initialize.
+  const opts: unknown[] =
+    (s.newSessionResponse as { configOptions?: unknown[] }).configOptions ?? []
+  console.log(`[config] configOptions advertised: ${opts.length}`)
+  if (opts.length === 0) {
+    console.log('[config] no configOptions advertised; skipping')
+    await tearDown(s)
+    return
+  }
+  // Find a select option to flip (most are select-shaped).
+  const target = (
+    opts as Array<{
+      id: string
+      type: string
+      options?: Array<{ value: string }>
+    }>
+  ).find((o) => o.type === 'select' && (o.options?.length ?? 0) > 1)
+  if (!target) {
+    console.log('[config] no select-typed option found; skipping')
+    await tearDown(s)
+    return
+  }
+  const newValue = target.options![0].value
+  console.log(`[config] setting configId=${target.id} value=${newValue}`)
+  try {
+    // @ts-expect-error - input shape varies
+    const resp = await s.connection.setSessionConfigOption({
+      sessionId: s.sessionId,
+      configId: target.id,
+      value: newValue,
+    })
+    console.log('[config] response:', JSON.stringify(resp, null, 2))
+  } catch (err) {
+    console.log('[config] error:', (err as Error).message)
+  }
+  await tearDown(s)
+}
+
+async function scenarioAuth(): Promise<void> {
+  console.log('\n=== scenario: authenticate ===')
+  const s = await spawnOpenClawAcp({})
+  // OpenClaw advertises authMethods: [] so authenticate should be a noop.
+  try {
+    // @ts-expect-error - methodId shape varies
+    const resp = await s.connection.authenticate({ methodId: 'agent' })
+    console.log('[auth] response:', JSON.stringify(resp, null, 2))
+  } catch (err) {
+    console.log('[auth] error:', (err as Error).message)
   }
   await tearDown(s)
 }
@@ -465,6 +590,15 @@ async function main() {
       case 'cancel':
         await scenarioCancel()
         break
+      case 'mode':
+        await scenarioMode()
+        break
+      case 'config':
+        await scenarioConfig()
+        break
+      case 'auth':
+        await scenarioAuth()
+        break
       case 'all':
         await scenarioInit()
         await scenarioText()
@@ -473,6 +607,9 @@ async function main() {
         await scenarioResume()
         await scenarioLoad()
         await scenarioCancel()
+        await scenarioMode()
+        await scenarioConfig()
+        await scenarioAuth()
         break
       default:
         console.error(`unknown scenario: ${arg}`)
