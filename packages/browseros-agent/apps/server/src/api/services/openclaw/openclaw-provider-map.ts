@@ -114,6 +114,12 @@ export function resolveSupportedOpenClawProvider(input: {
   baseUrl?: string
   apiKey?: string
   modelId?: string
+  // Honors the agent UI's "Supports Image" flag on the LlmProvider record
+  // (apps/agent/lib/llm-providers/types.ts). When true, the custom-provider
+  // model entry advertises `input: ['text', 'image']` so OpenClaw forwards
+  // image content parts to the model. When undefined/false, OpenClaw's
+  // default `input: ['text']` is preserved and image content is stripped.
+  supportsImages?: boolean
 }): ResolvedOpenClawProviderConfig {
   if (!input.providerType) {
     return { envValues: {} }
@@ -135,6 +141,9 @@ export function resolveSupportedOpenClawProvider(input: {
 
   const providerId = deriveOpenClawProviderId(input)
   const apiKeyEnvVar = deriveOpenClawApiKeyEnvVar(providerId)
+  const modelInput: ('text' | 'image')[] = input.supportsImages
+    ? ['text', 'image']
+    : ['text']
 
   return {
     envValues: input.apiKey ? { [apiKeyEnvVar]: input.apiKey } : {},
@@ -148,7 +157,13 @@ export function resolveSupportedOpenClawProvider(input: {
         apiKey: `\${${apiKeyEnvVar}}`,
         ...(input.modelId
           ? {
-              models: [{ id: input.modelId, name: input.modelId }],
+              models: [
+                {
+                  id: input.modelId,
+                  name: input.modelId,
+                  input: modelInput,
+                },
+              ],
             }
           : {}),
       },

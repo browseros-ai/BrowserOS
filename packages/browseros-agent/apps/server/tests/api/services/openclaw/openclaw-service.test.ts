@@ -556,6 +556,10 @@ describe('OpenClawService', () => {
           path: 'gateway.http.endpoints.chatCompletions.enabled',
           value: true,
         },
+        {
+          path: 'tools.media.image.enabled',
+          value: true,
+        },
       ]),
     )
     expect(validateConfig).toHaveBeenCalled()
@@ -1270,6 +1274,7 @@ describe('OpenClawService', () => {
       providerType: 'moonshot',
     })
 
+    // Without supportsImages → emit text-only `input` per OpenClaw schema.
     expect(
       resolveSupportedOpenClawProvider({
         providerType: 'openai-compatible',
@@ -1294,6 +1299,41 @@ describe('OpenClawService', () => {
             {
               id: 'accounts/fireworks/models/kimi-k2p5',
               name: 'accounts/fireworks/models/kimi-k2p5',
+              input: ['text'],
+            },
+          ],
+        },
+      },
+    })
+
+    // With supportsImages → emit ['text', 'image'] so OpenClaw forwards
+    // image content parts to the model instead of stripping them.
+    expect(
+      resolveSupportedOpenClawProvider({
+        providerType: 'openai-compatible',
+        providerName: 'Kimi K2.5',
+        baseUrl: 'https://api.fireworks.ai/inference/v1',
+        apiKey: 'custom-key',
+        modelId: 'accounts/fireworks/models/kimi-k2p5',
+        supportsImages: true,
+      }),
+    ).toEqual({
+      envValues: {
+        KIMI_K2_5_API_KEY: 'custom-key',
+      },
+      model: 'kimi-k2-5/accounts/fireworks/models/kimi-k2p5',
+      customProvider: {
+        providerId: 'kimi-k2-5',
+        apiKeyEnvVar: 'KIMI_K2_5_API_KEY',
+        config: {
+          api: 'openai-completions',
+          baseUrl: 'https://api.fireworks.ai/inference/v1',
+          apiKey: `\${KIMI_K2_5_API_KEY}`,
+          models: [
+            {
+              id: 'accounts/fireworks/models/kimi-k2p5',
+              name: 'accounts/fireworks/models/kimi-k2p5',
+              input: ['text', 'image'],
             },
           ],
         },
