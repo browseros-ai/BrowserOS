@@ -1,5 +1,4 @@
 import {
-  AlertTriangle,
   ArrowRight,
   Bot,
   ChevronDown,
@@ -9,7 +8,6 @@ import {
   Loader2,
   Mic,
   Paperclip,
-  RefreshCw,
   Square,
   X,
 } from 'lucide-react'
@@ -38,7 +36,6 @@ import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/voice/useVoiceInput'
 import { useWorkspace } from '@/lib/workspace/use-workspace'
 import { AgentSelector } from './AgentSelector'
-import type { OutboundMessage } from './useOutboundQueue'
 
 export interface ConversationInputSendInput {
   text: string
@@ -57,15 +54,6 @@ interface ConversationInputProps {
   placeholder?: string
   attachmentsEnabled?: boolean
   variant?: 'home' | 'conversation'
-  // Outbound queue: when present, the composer renders the queue strip
-  // above the textarea and lets the user keep sending while a previous
-  // turn is in flight. Optional so non-conversation variants (the home
-  // page) can opt out — the queue only makes sense in the conversation
-  // page where each enqueued message will eventually be delivered to the
-  // active agent.
-  outboundQueue?: OutboundMessage[]
-  onCancelQueued?: (id: string) => void
-  onRetryQueued?: (id: string) => void
 }
 
 function InputActionButton({
@@ -311,9 +299,6 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   placeholder,
   attachmentsEnabled = true,
   variant = 'conversation',
-  outboundQueue,
-  onCancelQueued,
-  onRetryQueued,
 }) => {
   const [input, setInput] = useState('')
   const [selectedTabs, setSelectedTabs] = useState<chrome.tabs.Tab[]>([])
@@ -394,15 +379,10 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   }
 
   const hasContent = input.trim().length > 0 || attachments.length > 0
-  const queueEnabled = outboundQueue !== undefined
 
   const handleSend = () => {
     const text = input.trim()
-    // The outbound queue accepts new messages while streaming; legacy
-    // direct-send callers (e.g., the home composer) keep the original
-    // streaming-blocks-send semantic.
-    if (disabled || isStaging) return
-    if (!queueEnabled && streaming) return
+    if (disabled || isStaging || streaming) return
     if (!text && attachments.length === 0) return
     onSend({ text, attachments })
     setInput('')
@@ -494,13 +474,6 @@ export const ConversationInput: FC<ConversationInputProps> = ({
             error={attachmentError}
           />
         ) : null}
-        {queueEnabled && outboundQueue && outboundQueue.length > 0 ? (
-          <OutboundQueueStrip
-            messages={outboundQueue}
-            onCancel={onCancelQueued}
-            onRetry={onRetryQueued}
-          />
-        ) : null}
         <div
           className={cn(
             'flex gap-3',
@@ -556,10 +529,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
               !!disabled ||
               voice.isRecording ||
               voice.isTranscribing ||
-              // Only block on `streaming` for the legacy direct-send path
-              // (no queue). With the queue active the press always
-              // succeeds — it just enqueues instead of dispatching.
-              (!queueEnabled && streaming)
+              streaming
             }
             onClick={handleSend}
             // Spinner stays the user-facing "agent is busy" hint; with the
@@ -592,117 +562,6 @@ export const ConversationInput: FC<ConversationInputProps> = ({
         ) : null}
       </section>
     </Shell>
-  )
-}
-
-function OutboundQueueStrip({
-  messages,
-  onCancel,
-  onRetry,
-}: {
-  messages: OutboundMessage[]
-  onCancel?: (id: string) => void
-  onRetry?: (id: string) => void
-}) {
-  return (
-    <div className="border-border/40 border-b px-4 pt-3 pb-2">
-      <ul className="flex flex-col gap-1">
-        {messages.map((message) => (
-          <OutboundQueueItem
-            key={message.id}
-            message={message}
-            onCancel={onCancel}
-            onRetry={onRetry}
-          />
-        ))}
-      </ul>
-    </div>
-  )
-}
-
-function OutboundQueueItem({
-  message,
-  onCancel,
-  onRetry,
-}: {
-  message: OutboundMessage
-  onCancel?: (id: string) => void
-  onRetry?: (id: string) => void
-}) {
-  const preview = message.text.trim() || '(attachments only)'
-  return (
-    <li className="flex items-center gap-2 rounded-md px-2 py-1 text-xs">
-      <OutboundQueueStatusIcon status={message.status} />
-      <span className="min-w-0 flex-1 truncate text-muted-foreground">
-        {preview}
-      </span>
-      {message.attachmentPreviews.length > 0 ? (
-        <span className="inline-flex items-center gap-1 text-muted-foreground/70">
-          <Paperclip className="size-3" />
-          <span className="tabular-nums">
-            {message.attachmentPreviews.length}
-          </span>
-        </span>
-      ) : null}
-      {message.status === 'queued' && onCancel ? (
-        <button
-          type="button"
-          onClick={() => onCancel(message.id)}
-          className="ml-1 inline-flex size-5 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
-          aria-label="Cancel queued message"
-          title="Cancel"
-        >
-          <X className="size-3" />
-        </button>
-      ) : null}
-      {message.status === 'failed' ? (
-        <span className="ml-1 inline-flex items-center gap-2 text-destructive">
-          <span className="max-w-[160px] truncate" title={message.error}>
-            {message.error ?? 'Failed'}
-          </span>
-          {onRetry ? (
-            <button
-              type="button"
-              onClick={() => onRetry(message.id)}
-              className="inline-flex size-5 items-center justify-center rounded-full hover:bg-accent hover:text-foreground"
-              aria-label="Retry failed message"
-              title="Retry"
-            >
-              <RefreshCw className="size-3" />
-            </button>
-          ) : null}
-          {onCancel ? (
-            <button
-              type="button"
-              onClick={() => onCancel(message.id)}
-              className="inline-flex size-5 items-center justify-center rounded-full hover:bg-accent hover:text-foreground"
-              aria-label="Discard failed message"
-              title="Discard"
-            >
-              <X className="size-3" />
-            </button>
-          ) : null}
-        </span>
-      ) : null}
-    </li>
-  )
-}
-
-function OutboundQueueStatusIcon({
-  status,
-}: {
-  status: OutboundMessage['status']
-}) {
-  if (status === 'sending') {
-    return (
-      <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
-    )
-  }
-  if (status === 'failed') {
-    return <AlertTriangle className="size-3.5 shrink-0 text-destructive" />
-  }
-  return (
-    <span className="inline-block size-2 shrink-0 rounded-full bg-muted-foreground/40" />
   )
 }
 

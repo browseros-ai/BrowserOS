@@ -3,11 +3,7 @@ import {
   type AgentHarnessStreamEvent,
   chatWithHarnessAgent,
 } from '@/entrypoints/app/agents/useAgents'
-import {
-  chatWithAgent,
-  type OpenClawChatHistoryMessage,
-  type OpenClawStreamEvent,
-} from '@/entrypoints/app/agents/useOpenClaw'
+import type { OpenClawChatHistoryMessage } from '@/entrypoints/app/agents/useOpenClaw'
 import type {
   AgentConversationTurn,
   AssistantPart,
@@ -29,7 +25,10 @@ export interface SendInput {
 }
 
 interface UseAgentConversationOptions {
-  runtime?: 'openclaw' | 'agent-harness'
+  // The hook always speaks to the harness chat path now; the OpenClaw
+  // legacy /claw/agents/:id/chat surface was removed in Step 12. The
+  // option remains for forward-compatibility.
+  runtime?: 'agent-harness'
   sessionKey?: string | null
   history?: OpenClawChatHistoryMessage[]
   onComplete?: () => void
@@ -80,85 +79,6 @@ export function useAgentConversation(
       if (!last) return prev
       return [...prev.slice(0, -1), { ...last, parts: updater(last.parts) }]
     })
-  }
-
-  const processStreamEvent = (event: OpenClawStreamEvent) => {
-    switch (event.type) {
-      case 'text-delta': {
-        appendTextDelta((event.data.text as string) ?? '')
-        break
-      }
-
-      case 'thinking': {
-        appendThinkingDelta((event.data.text as string) ?? '')
-        break
-      }
-
-      case 'tool-start': {
-        const rawName = (event.data.toolName as string) ?? 'unknown'
-        const args = event.data.args as Record<string, unknown> | undefined
-        const { label, subject } = buildToolLabel(rawName, args)
-        const tool = {
-          id: (event.data.toolCallId as string) ?? crypto.randomUUID(),
-          name: rawName,
-          label,
-          subject,
-          status: 'running' as const,
-        }
-        updateCurrentTurnParts((parts) => {
-          const last = parts[parts.length - 1]
-          if (last?.kind === 'tool-batch') {
-            return [
-              ...parts.slice(0, -1),
-              { ...last, tools: [...last.tools, tool] },
-            ]
-          }
-          return [...parts, { kind: 'tool-batch', tools: [tool] }]
-        })
-        break
-      }
-
-      case 'tool-end': {
-        const toolId = event.data.toolCallId as string
-        const toolStatus: 'completed' | 'error' =
-          (event.data.status as string) === 'error' ? 'error' : 'completed'
-        const durationMs = event.data.durationMs as number | undefined
-        updateCurrentTurnParts((parts) => {
-          for (let i = parts.length - 1; i >= 0; i--) {
-            const part = parts[i]
-            if (
-              part.kind === 'tool-batch' &&
-              part.tools.some((t) => t.id === toolId)
-            ) {
-              const updatedTools = part.tools.map((t) =>
-                t.id === toolId ? { ...t, status: toolStatus, durationMs } : t,
-              )
-              return [
-                ...parts.slice(0, i),
-                { ...part, tools: updatedTools },
-                ...parts.slice(i + 1),
-              ]
-            }
-          }
-          return parts
-        })
-        break
-      }
-
-      case 'done': {
-        markCurrentTurnDone()
-        break
-      }
-
-      case 'error': {
-        const msg =
-          (event.data.message as string) ??
-          (event.data.error as string) ??
-          'Unknown error'
-        appendErrorText(msg)
-        break
-      }
-    }
   }
 
   const appendTextDelta = (delta: string) => {
@@ -304,22 +224,12 @@ export function useAgentConversation(
     streamAbortRef.current = abortController
 
     try {
-      const response =
-        options.runtime === 'agent-harness'
-          ? await chatWithHarnessAgent(
-              agentId,
-              trimmed,
-              abortController.signal,
-              attachments,
-            )
-          : await chatWithAgent(
-              agentId,
-              trimmed,
-              sessionKeyRef.current || undefined,
-              historyRef.current,
-              abortController.signal,
-              attachments,
-            )
+      const response = await chatWithHarnessAgent(
+        agentId,
+        trimmed,
+        abortController.signal,
+        attachments,
+      )
       const responseSessionKey =
         response.headers.get('X-Session-Key') ??
         response.headers.get('X-Session-Id')
@@ -335,19 +245,11 @@ export function useAgentConversation(
         ])
         return
       }
-      if (options.runtime === 'agent-harness') {
-        await consumeSSEStream<AgentHarnessStreamEvent>(
-          response,
-          processAgentHarnessStreamEvent,
-          abortController.signal,
-        )
-      } else {
-        await consumeSSEStream<OpenClawStreamEvent>(
-          response,
-          processStreamEvent,
-          abortController.signal,
-        )
-      }
+      await consumeSSEStream<AgentHarnessStreamEvent>(
+        response,
+        processAgentHarnessStreamEvent,
+        abortController.signal,
+      )
     } catch (err) {
       if (abortController.signal.aborted) return
       const msg = err instanceof Error ? err.message : String(err)

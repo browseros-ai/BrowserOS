@@ -1,5 +1,5 @@
 import { ArrowLeft, Bot, Home } from 'lucide-react'
-import { type FC, useEffect, useMemo, useRef, useState } from 'react'
+import { type FC, useEffect, useMemo, useRef } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
 import { Button } from '@/components/ui/button'
 import {
@@ -16,9 +16,7 @@ import {
   flattenHistoryPages,
 } from './claw-chat-types'
 import { useAgentConversation } from './useAgentConversation'
-import { useClawChatHistory } from './useClawChatHistory'
 import { useHarnessChatHistory } from './useHarnessChatHistory'
-import { useOutboundQueue } from './useOutboundQueue'
 
 function StatusBadge({ status }: { status: string }) {
   return (
@@ -176,19 +174,10 @@ function getAgentEntryMeta(agent: AgentEntry | undefined): string {
   return getModelDisplayName(agent?.model) ?? 'OpenClaw agent'
 }
 
-function getConversationStatusCopy(status: string | undefined): string {
-  if (status === 'running') return 'Ready'
-  if (status === 'starting') return 'Connecting'
-  if (status === 'error') return 'Attention'
-  if (status === 'stopped') return 'Offline'
-  return 'Setup'
-}
-
 function AgentConversationController({
   agentId,
   initialMessage,
   onInitialMessageConsumed,
-  status,
   agents,
   agentPathPrefix,
   createAgentPath,
@@ -196,7 +185,6 @@ function AgentConversationController({
   agentId: string
   initialMessage: string | null
   onInitialMessageConsumed: () => void
-  status: ReturnType<typeof useAgentCommandData>['status']
   agents: AgentEntry[]
   agentPathPrefix: string
   createAgentPath: string
@@ -204,126 +192,49 @@ function AgentConversationController({
   const navigate = useNavigate()
   const initialMessageSentRef = useRef<string | null>(null)
   const onInitialMessageConsumedRef = useRef(onInitialMessageConsumed)
-  const [streamSessionKey, setStreamSessionKey] = useState<string | null>(null)
   const agent = agents.find((entry) => entry.agentId === agentId)
   const agentName = agent?.name || agentId || 'Agent'
-  // Source is the only routing signal: every OpenClaw agent has a
-  // harness record post the gateway → harness backfill, so they all
-  // surface as `source='agent-harness'` after the layout dedup and
-  // route through the harness chat path. ClawChat is reachable today
-  // only as a fallback if reconciliation is failing.
-  const isAgentHarnessAgent = agent?.source === 'agent-harness'
-  const clawHistoryQuery = useClawChatHistory({
-    agentId,
-    sessionKey: streamSessionKey,
-    enabled: Boolean(agent) && !isAgentHarnessAgent,
-  })
-  const harnessHistoryQuery = useHarnessChatHistory(
-    agentId,
-    Boolean(agent) && isAgentHarnessAgent,
-  )
+  // Routing is now harness-only. Every OpenClaw agent has a harness
+  // record post the gateway → harness backfill, so the chat panel
+  // always talks to /agents/<id>/chat. The legacy ClawChat surface
+  // was deleted with the /claw/agents/:id/chat server route.
+  const harnessHistoryQuery = useHarnessChatHistory(agentId, Boolean(agent))
 
   const historyMessages = useMemo(
     () =>
       flattenHistoryPages(
-        isAgentHarnessAgent
-          ? harnessHistoryQuery.data
-            ? [harnessHistoryQuery.data]
-            : []
-          : (clawHistoryQuery.data?.pages ?? []),
+        harnessHistoryQuery.data ? [harnessHistoryQuery.data] : [],
       ),
-    [
-      clawHistoryQuery.data?.pages,
-      harnessHistoryQuery.data,
-      isAgentHarnessAgent,
-    ],
+    [harnessHistoryQuery.data],
   )
   const chatHistory = useMemo(
     () => buildChatHistoryFromClawMessages(historyMessages),
     [historyMessages],
   )
-  const resolvedSessionKey =
-    streamSessionKey ??
-    (isAgentHarnessAgent
-      ? null
-      : (clawHistoryQuery.data?.pages?.[0]?.sessionKey ?? null))
 
   const { turns, streaming, send } = useAgentConversation(agentId, {
-    runtime: isAgentHarnessAgent ? 'agent-harness' : 'openclaw',
-    sessionKey: resolvedSessionKey,
+    runtime: 'agent-harness',
+    sessionKey: null,
     history: chatHistory,
     onComplete: () => {
-      if (isAgentHarnessAgent) {
-        void harnessHistoryQuery.refetch()
-      }
+      void harnessHistoryQuery.refetch()
     },
-    onSessionKeyChange: (sessionKey) => {
-      setStreamSessionKey(sessionKey)
-    },
+    onSessionKeyChange: () => {},
   })
   const visibleTurns = useMemo(
-    () =>
-      isAgentHarnessAgent
-        ? filterTurnsPersistedInHistory(turns, historyMessages)
-        : turns,
-    [historyMessages, isAgentHarnessAgent, turns],
+    () => filterTurnsPersistedInHistory(turns, historyMessages),
+    [historyMessages, turns],
   )
-  const outboundQueue = useOutboundQueue({
-    agentId,
-    sessionKey: resolvedSessionKey,
-    enabled: Boolean(agent) && !isAgentHarnessAgent,
-  })
   onInitialMessageConsumedRef.current = onInitialMessageConsumed
 
-  // Refetch history whenever a server-dispatched queue item completes.
-  // The server worker streams the queued turn into OpenClaw directly, so
-  // the client never observes the live tokens — we only see the new
-  // assistant turn once the JSONL is updated. Watching the queue for
-  // any 'sending' item dropping out is the cleanest "turn finalized"
-  // signal we have without exposing per-turn SSE.
-  const previousSendingIdsRef = useRef<Set<string>>(new Set())
-  useEffect(() => {
-    if (isAgentHarnessAgent) return
-    const currentSending = new Set(
-      outboundQueue.queue
-        .filter((item) => item.status === 'sending')
-        .map((item) => item.id),
-    )
-    const dropped = [...previousSendingIdsRef.current].filter(
-      (id) => !currentSending.has(id),
-    )
-    previousSendingIdsRef.current = currentSending
-    if (dropped.length > 0) {
-      void clawHistoryQuery.refetch()
-    }
-  }, [clawHistoryQuery, isAgentHarnessAgent, outboundQueue.queue])
-
-  const disabled =
-    !agent || (!isAgentHarnessAgent && status?.status !== 'running')
-  // Two-part gate: cover both "still fetching" AND "just got enabled but
-  // hasn't started fetching yet". When `enabled` flips true (baseUrl
-  // resolves), there's a render frame where React Query reports
-  // isLoading=false but hasn't run the queryFn yet — `isFetched` is still
-  // false. Without this we render EmptyState during that one frame.
-  const isInitialLoading =
-    !isAgentHarnessAgent &&
-    (clawHistoryQuery.isLoading ||
-      (!clawHistoryQuery.isFetched && !clawHistoryQuery.isError))
-
+  const disabled = !agent
   const historyReady =
-    (isAgentHarnessAgent &&
-      (harnessHistoryQuery.isFetched || harnessHistoryQuery.isError)) ||
-    (!isAgentHarnessAgent &&
-      (clawHistoryQuery.isFetched || clawHistoryQuery.isError))
+    harnessHistoryQuery.isFetched || harnessHistoryQuery.isError
   const initialMessageKey = initialMessage
     ? `${agentId}:${initialMessage}`
     : null
-  const error = isAgentHarnessAgent
-    ? (harnessHistoryQuery.error ?? null)
-    : (clawHistoryQuery.error ?? null)
+  const error = harnessHistoryQuery.error ?? null
 
-  const enqueueRef = useRef(outboundQueue.enqueue)
-  enqueueRef.current = outboundQueue.enqueue
   const sendRef = useRef(send)
   sendRef.current = send
 
@@ -345,18 +256,8 @@ function AgentConversationController({
 
     initialMessageSentRef.current = initialMessageKey
     onInitialMessageConsumedRef.current()
-    if (isAgentHarnessAgent) {
-      void sendRef.current({ text: query })
-    } else {
-      enqueueRef.current({ text: query })
-    }
-  }, [
-    disabled,
-    historyReady,
-    initialMessage,
-    initialMessageKey,
-    isAgentHarnessAgent,
-  ])
+    void sendRef.current({ text: query })
+  }, [disabled, historyReady, initialMessage, initialMessageKey])
 
   const handleSelectAgent = (entry: AgentEntry) => {
     navigate(`${agentPathPrefix}/${entry.agentId}`)
@@ -369,27 +270,13 @@ function AgentConversationController({
         historyMessages={historyMessages}
         turns={visibleTurns}
         streaming={streaming}
-        isInitialLoading={
-          isAgentHarnessAgent ? harnessHistoryQuery.isLoading : isInitialLoading
-        }
+        isInitialLoading={harnessHistoryQuery.isLoading}
         error={error}
-        hasNextPage={
-          isAgentHarnessAgent ? false : Boolean(clawHistoryQuery.hasNextPage)
-        }
-        isFetchingNextPage={
-          isAgentHarnessAgent ? false : clawHistoryQuery.isFetchingNextPage
-        }
-        onFetchNextPage={() => {
-          if (!isAgentHarnessAgent) {
-            void clawHistoryQuery.fetchNextPage()
-          }
-        }}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        onFetchNextPage={() => {}}
         onRetry={() => {
-          if (isAgentHarnessAgent) {
-            void harnessHistoryQuery.refetch()
-          } else {
-            void clawHistoryQuery.refetch()
-          }
+          void harnessHistoryQuery.refetch()
         }}
       />
 
@@ -409,32 +296,14 @@ function AgentConversationController({
                 name: a.name,
                 dataUrl: a.dataUrl,
               }))
-              if (isAgentHarnessAgent) {
-                void send({ text: input.text, attachments, attachmentPreviews })
-              } else {
-                outboundQueue.enqueue({
-                  text: input.text,
-                  attachments,
-                  attachmentPreviews,
-                  history: chatHistory,
-                })
-              }
+              void send({ text: input.text, attachments, attachmentPreviews })
             }}
             onCreateAgent={() => navigate(createAgentPath)}
             streaming={streaming}
             disabled={disabled}
-            status={isAgentHarnessAgent ? 'running' : status?.status}
+            status="running"
             attachmentsEnabled={true}
             placeholder={`Message ${agentName}...`}
-            outboundQueue={
-              isAgentHarnessAgent ? undefined : outboundQueue.queue
-            }
-            onCancelQueued={
-              isAgentHarnessAgent ? undefined : outboundQueue.cancel
-            }
-            onRetryQueued={
-              isAgentHarnessAgent ? undefined : outboundQueue.retry
-            }
           />
         </div>
       </div>
@@ -458,7 +327,7 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
   const { agentId } = useParams<{ agentId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
-  const { status, agents } = useAgentCommandData()
+  const { agents } = useAgentCommandData()
   const shouldRedirectHome = !agentId
   const resolvedAgentId = agentId ?? ''
   const agent = agents.find((entry) => entry.agentId === resolvedAgentId)
@@ -476,10 +345,11 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
     navigate(`${agentPathPrefix}/${entry.agentId}`)
   }
 
-  const statusCopy =
-    agent?.source === 'agent-harness'
-      ? 'Ready'
-      : getConversationStatusCopy(status?.status)
+  // Every visible agent runs through the harness now, so per-agent
+  // runtime status doesn't gate chat the way OpenClaw's legacy
+  // gateway lifecycle did. Show "Ready" once the agent record is
+  // resolved from the rail, "Setup" otherwise.
+  const statusCopy = agent ? 'Ready' : 'Setup'
 
   return (
     <div className="absolute inset-0 overflow-hidden bg-background md:pl-[theme(spacing.14)]">
@@ -505,7 +375,6 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
           key={resolvedAgentId}
           agentId={resolvedAgentId}
           agents={agents}
-          status={status}
           initialMessage={initialMessage}
           onInitialMessageConsumed={() =>
             setSearchParams({}, { replace: true })

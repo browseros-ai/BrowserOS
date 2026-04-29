@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { getAgentServerUrl } from '@/lib/browseros/helpers'
 import { useAgentServerUrl } from '@/lib/browseros/useBrowserOSProviders'
 
 export interface AgentEntry {
@@ -318,26 +317,4 @@ export function buildChatHistoryFromTurns(
   }
 
   return messages
-}
-
-export async function chatWithAgent(
-  agentId: string,
-  message: string,
-  sessionKey?: string,
-  history: OpenClawChatHistoryMessage[] = [],
-  signal?: AbortSignal,
-  attachments?: ReadonlyArray<unknown>,
-): Promise<Response> {
-  const baseUrl = await getAgentServerUrl()
-  return fetch(`${baseUrl}/claw/agents/${agentId}/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message,
-      sessionKey,
-      history,
-      ...(attachments && attachments.length > 0 ? { attachments } : {}),
-    }),
-    signal,
-  })
 }
