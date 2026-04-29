@@ -154,7 +154,6 @@ export const NewAgentDialog: FC<NewAgentDialogProps> = ({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="openclaw">OpenClaw</SelectItem>
                 {adapters.map((adapter) => (
                   <SelectItem key={adapter.id} value={adapter.id}>
                     {adapter.name}
