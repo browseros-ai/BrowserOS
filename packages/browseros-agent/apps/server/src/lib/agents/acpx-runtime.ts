@@ -35,14 +35,12 @@ import type {
 } from './types'
 
 /**
- * Resolves the runtime data needed to spawn `openclaw acp` inside the
- * gateway container. Used only when an agent's adapter is 'openclaw';
- * Step 4 wires this into the agentRegistry override so OpenClaw turns
- * route through the same harness as Claude and Codex.
+ * Live-getter access to the OpenClaw gateway runtime info. Required
+ * when spawning the openclaw ACP adapter inside the gateway container.
  *
- * All fields are getter-shaped so the values stay live across gateway
- * restarts (port can change, token can rotate). The harness itself
- * never caches the resolved values — it reads them at spawn time.
+ * Fields are getters (not snapshot values) so the harness picks up the
+ * current port/token at spawn time — port can change after a gateway
+ * restart, token can rotate.
  */
 export interface OpenclawGatewayAccessor {
   /** Host port the gateway is currently bound to (e.g. 18789). */
@@ -64,9 +62,8 @@ type AcpxRuntimeOptions = {
   stateDir?: string
   browserosServerPort?: number
   /**
-   * Optional accessor for OpenClaw gateway info. Required for
-   * adapter='openclaw' agents; harmless when absent for claude/codex.
-   * Step 4 will use these values to build the spawn command.
+   * Required for adapter='openclaw' agents; harmless when absent for
+   * claude/codex (their adapters spawn their own CLI binaries).
    */
   openclawGateway?: OpenclawGatewayAccessor
   runtimeFactory?: (options: AcpRuntimeOptions) => AcpxCoreRuntime

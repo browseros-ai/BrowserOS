@@ -136,10 +136,6 @@ export async function createHttpServer(config: HttpServerConfig) {
       createAgentRoutes({
         browserosServerPort: port,
         browser,
-        // Plumb OpenClaw gateway info so the upcoming adapter='openclaw'
-        // path (Step 4) can spawn `openclaw acp` inside the gateway
-        // container with the right port + token. Getter-shaped so the
-        // values stay live across gateway restarts.
         openclawGateway: {
           getPort: () => getOpenClawService().getPort(),
           getGatewayToken: () => getOpenClawService().getGatewayToken(),

@@ -67,9 +67,9 @@ type AgentRouteDeps = {
   browser?: Pick<Browser, 'resolveTabIds'>
   browserosServerPort?: number
   /**
-   * Optional accessor for OpenClaw gateway info. Required for the
-   * upcoming adapter='openclaw' code path; harmless when absent. Step
-   * 4 wires this into the AcpxRuntime registry override.
+   * Required when an `openclaw` adapter agent is in use; harmless when
+   * absent. Forwarded to the AcpxRuntime so it can spawn `openclaw acp`
+   * inside the gateway container.
    */
   openclawGateway?: OpenclawGatewayAccessor
 }
