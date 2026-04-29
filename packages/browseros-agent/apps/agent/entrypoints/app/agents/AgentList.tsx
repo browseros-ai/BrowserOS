@@ -1,117 +1,108 @@
-import { Bot, Cpu, Loader2, MessageSquare, Plus, Trash2 } from 'lucide-react'
-import type { FC } from 'react'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Loader2 } from 'lucide-react'
+import { type FC, useMemo } from 'react'
+import { AgentRowCard } from './AgentRowCard'
+import { AgentsEmptyState } from './AgentsEmptyState'
+import type { HarnessAgent, HarnessAgentAdapter } from './agent-harness-types'
 import type { AgentListItem } from './agents-page-types'
+import type { AgentLiveness } from './LivenessDot'
 
 interface AgentListProps {
   agents: AgentListItem[]
+  /**
+   * Optional per-agent activity metadata. Keyed by `agentId`. Missing
+   * entries fall back to status='unknown' / lastUsedAt=null and the
+   * row renders an "unknown" dot. The server will populate this once
+   * the activity tracker ships; the page works without it.
+   */
+  activity?: Record<
+    string,
+    { status: AgentLiveness; lastUsedAt: number | null }
+  >
+  /**
+   * Lookup table from harness agent id → adapter + reasoning effort,
+   * sourced from `useHarnessAgents`. Lets the row card render the
+   * correct adapter icon and chips for harness agents (legacy
+   * /claw/agents entries fall back to inferring from `runtimeLabel`).
+   */
+  harnessAgentLookup?: Map<string, HarnessAgent>
   loading: boolean
   deletingAgentKey: string | null
-  onChatAgent: (agent: AgentListItem) => void
   onCreateAgent: () => void
   onDeleteAgent: (agent: AgentListItem) => void
 }
 
 export const AgentList: FC<AgentListProps> = ({
   agents,
+  activity,
+  harnessAgentLookup,
   loading,
   deletingAgentKey,
-  onChatAgent,
   onCreateAgent,
   onDeleteAgent,
 }) => {
+  // Sort by recency: most recently used first; never-used agents drop
+  // to the bottom in id-stable order so the list doesn't reshuffle on
+  // every refresh. The pinned exception is the gateway's `main` agent
+  // when it's never been touched — keep it at the top so a fresh
+  // install has an obvious starting point.
+  const ordered = useMemo(() => {
+    const withScore = agents.map((agent) => {
+      const lastUsedAt = activity?.[agent.agentId]?.lastUsedAt ?? null
+      return { agent, lastUsedAt }
+    })
+    return withScore
+      .sort((a, b) => {
+        const aPinned = a.agent.agentId === 'main' && a.lastUsedAt === null
+        const bPinned = b.agent.agentId === 'main' && b.lastUsedAt === null
+        if (aPinned && !bPinned) return -1
+        if (!aPinned && bPinned) return 1
+        const aValue = a.lastUsedAt ?? -Infinity
+        const bValue = b.lastUsedAt ?? -Infinity
+        if (aValue !== bValue) return bValue - aValue
+        return a.agent.agentId.localeCompare(b.agent.agentId)
+      })
+      .map((entry) => entry.agent)
+  }, [activity, agents])
+
   if (loading && agents.length === 0) {
     return (
-      <div className="flex h-36 items-center justify-center rounded-lg border border-border/70">
+      <div className="flex h-36 items-center justify-center rounded-xl border border-border border-dashed bg-card/50">
         <Loader2 className="size-5 animate-spin text-muted-foreground" />
       </div>
     )
   }
 
   if (agents.length === 0) {
-    return (
-      <Card>
-        <CardContent className="flex h-48 flex-col items-center justify-center gap-4 text-center">
-          <div className="flex size-10 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-            <Bot className="size-5" />
-          </div>
-          <div className="space-y-1">
-            <h2 className="font-medium text-base">No agents</h2>
-            <p className="text-muted-foreground text-sm">
-              Create an OpenClaw, Claude Code, or Codex agent.
-            </p>
-          </div>
-          <Button variant="outline" onClick={onCreateAgent}>
-            <Plus className="mr-2 size-4" />
-            New Agent
-          </Button>
-        </CardContent>
-      </Card>
-    )
+    return <AgentsEmptyState onCreateAgent={onCreateAgent} />
   }
 
   return (
     <div className="grid gap-3">
-      {agents.map((agent) => (
-        <Card key={agent.key} className="rounded-lg border-border/70">
-          <CardHeader className="flex flex-row items-center justify-between gap-4 py-3">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-                {agent.source === 'openclaw' ? (
-                  <Cpu className="size-5" />
-                ) : (
-                  <Bot className="size-5" />
-                )}
-              </div>
-              <div className="min-w-0">
-                <CardTitle className="truncate text-base">
-                  {agent.name}
-                </CardTitle>
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-muted-foreground text-xs">
-                  <Badge variant="outline" className="rounded-md">
-                    {agent.runtimeLabel}
-                  </Badge>
-                  <span>{agent.modelLabel}</span>
-                  <Badge variant="outline" className="rounded-md">
-                    main
-                  </Badge>
-                </div>
-                <p className="mt-1 truncate font-mono text-muted-foreground text-xs">
-                  {agent.detail}
-                </p>
-              </div>
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onChatAgent(agent)}
-                disabled={!agent.canChat}
-              >
-                <MessageSquare className="mr-1 size-4" />
-                Chat
-              </Button>
-              {agent.canDelete ? (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Delete agent"
-                  onClick={() => onDeleteAgent(agent)}
-                  disabled={deletingAgentKey === agent.key}
-                >
-                  {deletingAgentKey === agent.key ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Trash2 className="size-4 text-destructive" />
-                  )}
-                </Button>
-              ) : null}
-            </div>
-          </CardHeader>
-        </Card>
-      ))}
+      {ordered.map((agent) => {
+        const harness = harnessAgentLookup?.get(agent.agentId)
+        const adapter: HarnessAgentAdapter | undefined =
+          harness?.adapter ?? inferAdapterFromLabel(agent.runtimeLabel)
+        return (
+          <AgentRowCard
+            key={agent.key}
+            agent={agent}
+            status={activity?.[agent.agentId]?.status}
+            lastUsedAt={activity?.[agent.agentId]?.lastUsedAt}
+            adapter={adapter}
+            reasoningEffort={harness?.reasoningEffort ?? null}
+            onDelete={onDeleteAgent}
+            deleting={deletingAgentKey === agent.key}
+          />
+        )
+      })}
     </div>
   )
+}
+
+function inferAdapterFromLabel(label: string): HarnessAgentAdapter | undefined {
+  const lower = label?.toLowerCase()
+  if (lower === 'claude code') return 'claude'
+  if (lower === 'codex') return 'codex'
+  if (lower === 'openclaw') return 'openclaw'
+  return undefined
 }

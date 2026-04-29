@@ -3,8 +3,9 @@ import { type FC, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useLlmProviders } from '@/lib/llm-providers/useLlmProviders'
 import { AgentList } from './AgentList'
+import { AgentsHeader } from './AgentsHeader'
 import { AgentTerminal } from './AgentTerminal'
-import type { HarnessAgentAdapter } from './agent-harness-types'
+import type { HarnessAgent, HarnessAgentAdapter } from './agent-harness-types'
 import { createAgentPageActions } from './agents-page-actions'
 import {
   useDefaultAgentName,
@@ -29,9 +30,9 @@ import {
   toHarnessListItem,
   toOpenClawListItem,
 } from './agents-page-utils'
+import { GatewayStatusBar } from './GatewayStatusBar'
 import { NewAgentDialog } from './NewAgentDialog'
 import {
-  AgentsPageHeader,
   ControlPlaneAlert,
   GatewayStateCards,
   InlineErrorAlert,
@@ -87,7 +88,6 @@ export const AgentsPage: FC = () => {
     createAgent: createOpenClawAgent,
     deleteAgent: deleteOpenClawAgent,
     startOpenClaw,
-    stopOpenClaw,
     restartOpenClaw,
     reconnectOpenClaw,
     actionInProgress,
@@ -167,6 +167,13 @@ export const AgentsPage: FC = () => {
     ],
     [harnessAgents, openClawManageable, visibleOpenClawAgents],
   )
+  // Lookup map so AgentList can render adapter chips, reasoning, etc.
+  // Computed up here to keep all hooks above the early returns below.
+  const harnessAgentLookup = useMemo(() => {
+    const map = new Map<string, HarnessAgent>()
+    for (const agent of harnessAgents) map.set(agent.id, agent)
+    return map
+  }, [harnessAgents])
   const inlineError = getInlineError({
     lifecyclePending,
     pageError,
@@ -255,27 +262,18 @@ export const AgentsPage: FC = () => {
   const recoveryDetail = status ? getRecoveryDetail(status) : null
   const controlPlaneCopy = getControlPlaneCopyForStatus(status)
 
+  // Bar only makes sense when the gateway is meaningfully alive AND
+  // there's at least one OpenClaw agent in the merged list. Hide it
+  // for Claude/Codex-only setups so the page stays uncluttered.
+  const showGatewayStatusBar =
+    status?.status === 'running' &&
+    (visibleOpenClawAgents.length > 0 ||
+      harnessAgents.some((agent) => agent.adapter === 'openclaw'))
+
   return (
     <div className="min-h-full bg-background px-6 py-8">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
-        <AgentsPageHeader
-          actionInProgress={actionInProgress}
-          controlPlaneBusy={gatewayUiState.controlPlaneBusy}
-          reconnecting={reconnecting}
-          status={status}
-          onCreateAgent={() => setCreateOpen(true)}
-          onOpenTerminal={() => setShowTerminal(true)}
-          onReconnect={() => {
-            void runWithPageErrorHandling(reconnectOpenClaw)
-          }}
-          onRefresh={() => void refreshAll()}
-          onRestart={() => {
-            void runWithPageErrorHandling(restartOpenClaw)
-          }}
-          onStop={() => {
-            void runWithPageErrorHandling(stopOpenClaw)
-          }}
-        />
+      <div className="fade-in slide-in-from-bottom-5 mx-auto flex w-full max-w-5xl animate-in flex-col gap-6 duration-500">
+        <AgentsHeader onCreateAgent={() => setCreateOpen(true)} />
 
         {lifecycleBanner ? <LifecycleAlert message={lifecycleBanner} /> : null}
 
@@ -315,11 +313,19 @@ export const AgentsPage: FC = () => {
           }}
         />
 
+        {showGatewayStatusBar ? (
+          <GatewayStatusBar
+            status={status}
+            onOpenTerminal={() => setShowTerminal(true)}
+            onRefresh={() => void refreshAll()}
+          />
+        ) : null}
+
         <AgentList
           agents={agentListItems}
+          harnessAgentLookup={harnessAgentLookup}
           loading={agentsLoading}
           deletingAgentKey={deletingAgent ? deletingAgentKey : null}
-          onChatAgent={(agent) => navigate(`/agents/${agent.agentId}`)}
           onCreateAgent={() => setCreateOpen(true)}
           onDeleteAgent={(agent) => {
             void handleDelete(agent)
