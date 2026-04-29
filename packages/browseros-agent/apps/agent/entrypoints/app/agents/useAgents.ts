@@ -79,6 +79,12 @@ export function useHarnessAgents(enabled = true) {
       return data.agents ?? []
     },
     enabled: Boolean(baseUrl) && !urlLoading && enabled,
+    // Poll every 5s so the per-agent liveness state (working / idle /
+    // asleep / error) and last-used timestamps stay fresh without a
+    // websocket. `refetchIntervalInBackground: false` lets a hidden
+    // tab go quiet — react-query's default, made explicit.
+    refetchInterval: 5_000,
+    refetchIntervalInBackground: false,
   })
 
   return {

@@ -174,6 +174,28 @@ export const AgentsPage: FC = () => {
     for (const agent of harnessAgents) map.set(agent.id, agent)
     return map
   }, [harnessAgents])
+  // Activity map keyed by agentId. Sourced from the harness listing's
+  // server-side enrichment (`status` + `lastUsedAt`). Legacy gateway
+  // agents that don't have a harness record yet (rare post-backfill)
+  // simply miss from the map and render with the default `unknown`
+  // dot until reconciliation picks them up.
+  const agentActivity = useMemo(() => {
+    const map: Record<
+      string,
+      {
+        status: 'working' | 'idle' | 'asleep' | 'error'
+        lastUsedAt: number | null
+      }
+    > = {}
+    for (const agent of harnessAgents) {
+      if (!agent.status) continue
+      map[agent.id] = {
+        status: agent.status,
+        lastUsedAt: agent.lastUsedAt ?? null,
+      }
+    }
+    return map
+  }, [harnessAgents])
   const inlineError = getInlineError({
     lifecyclePending,
     pageError,
@@ -323,6 +345,7 @@ export const AgentsPage: FC = () => {
 
         <AgentList
           agents={agentListItems}
+          activity={agentActivity}
           harnessAgentLookup={harnessAgentLookup}
           loading={agentsLoading}
           deletingAgentKey={deletingAgent ? deletingAgentKey : null}

@@ -336,6 +336,108 @@ describe('AgentHarnessService', () => {
     expect(listed).toHaveLength(1)
     expect(listed[0]?.id).toBe('agent-existing')
   })
+
+  it('marks an agent working while a turn streams and idle once it ends', async () => {
+    const agent: AgentDefinition = {
+      id: 'live-1',
+      name: 'live',
+      adapter: 'claude',
+      modelId: 'haiku',
+      reasoningEffort: 'medium',
+      permissionMode: 'approve-all',
+      sessionKey: 'agent:live-1:main',
+      createdAt: 1000,
+      updatedAt: 1000,
+    }
+    // Hold the upstream open until the test releases it so we can
+    // observe the "working" state between dispatch and stream end.
+    let releaseUpstream: () => void = () => {}
+    const upstreamHeld = new Promise<void>((resolve) => {
+      releaseUpstream = resolve
+    })
+    const runtime: AgentRuntime = {
+      async status() {
+        return { state: 'ready' }
+      },
+      async listSessions() {
+        return []
+      },
+      async getHistory() {
+        return { agentId: agent.id, sessionId: 'main', items: [] }
+      },
+      async send() {
+        return new ReadableStream<AgentStreamEvent>({
+          async start(controller) {
+            controller.enqueue({
+              type: 'text_delta',
+              text: 'hi',
+              stream: 'output',
+            })
+            await upstreamHeld
+            controller.enqueue({ type: 'done', stopReason: 'end_turn' })
+            controller.close()
+          },
+        })
+      },
+    }
+    const service = new AgentHarnessService({
+      agentStore: createAgentStore([agent]) as FileAgentStore,
+      runtime,
+    })
+
+    const stream = await service.send({ agentId: agent.id, message: 'hi' })
+    // Turn just kicked off — the activity tracker should report working.
+    let listed = await service.listAgentsWithActivity()
+    expect(listed[0]?.status).toBe('working')
+
+    // Release the upstream so the lifecycle hook fires `notifyTurnEnded`,
+    // then drain the consumer side.
+    releaseUpstream()
+    await collectStream(stream)
+    listed = await service.listAgentsWithActivity()
+    expect(listed[0]?.status).toBe('idle')
+  })
+
+  it('flips to error when a turn emits an error event', async () => {
+    const agent: AgentDefinition = {
+      id: 'err-1',
+      name: 'err',
+      adapter: 'claude',
+      modelId: 'haiku',
+      reasoningEffort: 'medium',
+      permissionMode: 'approve-all',
+      sessionKey: 'agent:err-1:main',
+      createdAt: 1000,
+      updatedAt: 1000,
+    }
+    const runtime: AgentRuntime = {
+      async status() {
+        return { state: 'ready' }
+      },
+      async listSessions() {
+        return []
+      },
+      async getHistory() {
+        return { agentId: agent.id, sessionId: 'main', items: [] }
+      },
+      async send() {
+        return new ReadableStream<AgentStreamEvent>({
+          start(controller) {
+            controller.enqueue({ type: 'error', message: 'boom' })
+            controller.close()
+          },
+        })
+      },
+    }
+    const service = new AgentHarnessService({
+      agentStore: createAgentStore([agent]) as FileAgentStore,
+      runtime,
+    })
+
+    await collectStream(await service.send({ agentId: agent.id, message: 'x' }))
+    const listed = await service.listAgentsWithActivity()
+    expect(listed[0]?.status).toBe('error')
+  })
 })
 
 function stubRuntime(): AgentRuntime {

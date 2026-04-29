@@ -33,6 +33,8 @@ export type AgentHarnessStreamEvent =
       code?: string
     }
 
+export type HarnessAgentLiveness = 'working' | 'idle' | 'asleep' | 'error'
+
 export interface HarnessAgent {
   id: string
   name: string
@@ -43,6 +45,17 @@ export interface HarnessAgent {
   sessionKey: string
   createdAt: number
   updatedAt: number
+  /**
+   * Server-derived liveness state. When the listing endpoint hasn't
+   * been enriched yet (older deployments) this is undefined and the UI
+   * falls back to `unknown`.
+   */
+  status?: HarnessAgentLiveness
+  /**
+   * Wall-clock ms of the last persisted turn. `null` for never-used
+   * agents. Drives the recency sort and the "Last used X min ago" copy.
+   */
+  lastUsedAt?: number | null
 }
 
 export interface HarnessAdapterDescriptor {

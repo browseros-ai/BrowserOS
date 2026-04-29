@@ -37,6 +37,7 @@ import type {
   AgentStreamEvent,
 } from '../../lib/agents/types'
 import {
+  type AgentDefinitionWithActivity,
   AgentHarnessService,
   type OpenClawProvisioner,
   OpenClawProvisionerUnavailableError,
@@ -48,6 +49,7 @@ import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-p
 
 type AgentRouteService = {
   listAgents(): Promise<AgentDefinition[]>
+  listAgentsWithActivity(): Promise<AgentDefinitionWithActivity[]>
   createAgent(input: {
     name: string
     adapter: AgentAdapter
@@ -121,7 +123,9 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
 
   return new Hono<Env>()
     .get('/adapters', (c) => c.json({ adapters: AGENT_ADAPTER_CATALOG }))
-    .get('/', async (c) => c.json({ agents: await service.listAgents() }))
+    .get('/', async (c) =>
+      c.json({ agents: await service.listAgentsWithActivity() }),
+    )
     .post('/', async (c) => {
       const parsed = await parseCreateAgentBody(c)
       if ('error' in parsed) return c.json({ error: parsed.error }, 400)

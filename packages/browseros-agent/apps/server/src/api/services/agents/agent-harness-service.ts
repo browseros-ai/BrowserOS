@@ -21,6 +21,25 @@ import type {
 import { logger } from '../../../lib/logger'
 import type { OpenClawGatewayChatClient } from '../openclaw/openclaw-gateway-chat-client'
 
+export type AgentLiveness = 'working' | 'idle' | 'asleep' | 'error'
+
+export interface AgentActivity {
+  status: AgentLiveness
+  /** Wall-clock ms; null when the agent has never been used. */
+  lastUsedAt: number | null
+}
+
+export interface AgentDefinitionWithActivity extends AgentDefinition {
+  status: AgentLiveness
+  lastUsedAt: number | null
+}
+
+/**
+ * `idle` downgrades to `asleep` after this many ms of no activity. Read at
+ * enrichment time; no timer cleanup necessary.
+ */
+const ASLEEP_THRESHOLD_MS = 15 * 60 * 1000
+
 /**
  * Provisions and tears down agent records on the OpenClaw gateway side.
  * OpenClaw agents are dual-tracked: the harness owns the user-facing
@@ -56,6 +75,14 @@ export class AgentHarnessService {
   private readonly runtime: AgentRuntime
   private readonly openclawProvisioner: OpenClawProvisioner | null
   private inFlightReconcile: Promise<void> | null = null
+  // In-memory liveness tracker. Lost on server restart (acceptable —
+  // `lastUsedAt` survives via the acpx session record's `lastUsedAt`,
+  // and an idle/asleep agent post-restart will read fine from the
+  // record's timestamp without ever flipping to `working`).
+  private readonly activity = new Map<
+    string,
+    { status: 'working' | 'error'; lastEventAt: number; lastError?: string }
+  >()
 
   constructor(
     deps: {
@@ -81,6 +108,81 @@ export class AgentHarnessService {
   async listAgents(): Promise<AgentDefinition[]> {
     await this.ensureGatewayReconciled()
     return this.agentStore.list()
+  }
+
+  /**
+   * Same shape as `listAgents()` but every record is enriched with the
+   * current liveness state and `lastUsedAt`. Liveness is read from the
+   * in-memory activity tracker — which only knows about turns that
+   * went through this process — falling back to a timestamp-derived
+   * `idle`/`asleep` from the acpx session record's `lastUsedAt`.
+   */
+  async listAgentsWithActivity(): Promise<AgentDefinitionWithActivity[]> {
+    const agents = await this.listAgents()
+    const lastUsedMap = await this.collectLastUsed(agents)
+    const now = Date.now()
+    return agents.map((agent) => {
+      const live = this.activity.get(agent.id)
+      const lastUsedAt = lastUsedMap.get(agent.id) ?? null
+      return {
+        ...agent,
+        status: deriveStatus(live, lastUsedAt, now),
+        lastUsedAt,
+      }
+    })
+  }
+
+  /**
+   * Read each agent's `lastUsedAt` from the acpx session record (the
+   * runtime exposes it through `getHistory` indirectly, but we don't
+   * need history items here — only the timestamp). Loads in parallel
+   * and tolerates per-agent failures (agents that have never had a
+   * turn won't have a record yet).
+   */
+  private async collectLastUsed(
+    agents: AgentDefinition[],
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>()
+    await Promise.all(
+      agents.map(async (agent) => {
+        try {
+          const page = await this.runtime.getHistory({
+            agent,
+            sessionId: 'main',
+          })
+          const last = page.items.at(-1)?.createdAt
+          if (typeof last === 'number' && Number.isFinite(last)) {
+            out.set(agent.id, last)
+          }
+        } catch {
+          // No record yet — treat as never-used.
+        }
+      }),
+    )
+    return out
+  }
+
+  /** Mark `agentId` as actively running a turn. */
+  notifyTurnStarted(agentId: string): void {
+    this.activity.set(agentId, { status: 'working', lastEventAt: Date.now() })
+  }
+
+  /** Clear the working flag. `error` keeps the row badged as needing attention. */
+  notifyTurnEnded(
+    agentId: string,
+    outcome: { ok: boolean; error?: string } = { ok: true },
+  ): void {
+    if (!outcome.ok) {
+      this.activity.set(agentId, {
+        status: 'error',
+        lastEventAt: Date.now(),
+        lastError: outcome.error,
+      })
+      return
+    }
+    // Successful turn — drop the in-memory entry. Liveness will be
+    // derived from the session record's `lastUsedAt` on next read.
+    this.activity.delete(agentId)
   }
 
   private ensureGatewayReconciled(): Promise<void> {
@@ -236,14 +338,27 @@ export class AgentHarnessService {
     signal?: AbortSignal
   }): Promise<ReadableStream<AgentStreamEvent>> {
     const agent = await this.requireAgent(input.agentId)
-    return this.runtime.send({
-      agent,
-      sessionId: 'main',
-      sessionKey: agent.sessionKey,
-      message: input.message,
-      attachments: input.attachments,
-      permissionMode: agent.permissionMode,
-      signal: input.signal,
+    this.notifyTurnStarted(agent.id)
+    let stream: ReadableStream<AgentStreamEvent>
+    try {
+      stream = await this.runtime.send({
+        agent,
+        sessionId: 'main',
+        sessionKey: agent.sessionKey,
+        message: input.message,
+        attachments: input.attachments,
+        permissionMode: agent.permissionMode,
+        signal: input.signal,
+      })
+    } catch (err) {
+      this.notifyTurnEnded(agent.id, {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      throw err
+    }
+    return wrapStreamWithLifecycle(stream, {
+      onComplete: (ok, error) => this.notifyTurnEnded(agent.id, { ok, error }),
     })
   }
 
@@ -254,6 +369,77 @@ export class AgentHarnessService {
     }
     return agent
   }
+}
+
+/**
+ * Pure derivation: in-memory activity tracker wins; otherwise we fall
+ * back to a timestamp-only judgment. Never-used agents resolve to
+ * `idle` so the UI doesn't render them as `asleep` (asleep implies
+ * "was active, went quiet").
+ */
+function deriveStatus(
+  live: { status: 'working' | 'error'; lastEventAt: number } | undefined,
+  lastUsedAt: number | null,
+  now: number,
+): AgentLiveness {
+  if (live?.status === 'working') return 'working'
+  if (live?.status === 'error') return 'error'
+  if (lastUsedAt == null) return 'idle'
+  return now - lastUsedAt > ASLEEP_THRESHOLD_MS ? 'asleep' : 'idle'
+}
+
+/**
+ * Tee an `AgentStreamEvent` stream so we can fire `onComplete` exactly
+ * once when it ends — whether by natural close, error event, or
+ * downstream cancellation. The wrapped stream is what the caller
+ * consumes; the lifecycle hook fires as a side-effect.
+ */
+function wrapStreamWithLifecycle(
+  upstream: ReadableStream<AgentStreamEvent>,
+  hooks: { onComplete: (ok: boolean, error?: string) => void },
+): ReadableStream<AgentStreamEvent> {
+  let settled = false
+  const settle = (ok: boolean, error?: string) => {
+    if (settled) return
+    settled = true
+    try {
+      hooks.onComplete(ok, error)
+    } catch (err) {
+      logger.warn('Agent harness lifecycle hook threw', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+  let lastError: string | undefined
+  return new ReadableStream<AgentStreamEvent>({
+    start(controller) {
+      const reader = upstream.getReader()
+      const pump = async () => {
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            if (value.type === 'error') {
+              lastError = value.message
+              settle(false, lastError)
+            }
+            controller.enqueue(value)
+          }
+          settle(lastError === undefined, lastError)
+          controller.close()
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          settle(false, msg)
+          controller.error(err)
+        }
+      }
+      void pump()
+    },
+    cancel(reason) {
+      settle(false, typeof reason === 'string' ? reason : undefined)
+      void upstream.cancel(reason).catch(() => {})
+    },
+  })
 }
 
 export class UnknownAgentError extends Error {
