@@ -408,6 +408,16 @@ function createAcpxEventStream(
         const turn = runtime.startTurn({
           handle,
           text: buildBrowserosAcpPrompt(input.message),
+          // Image attachments travel as ACP `image` content blocks
+          // alongside the text prompt. acpx's `toPromptInput` builds
+          // the multi-part `prompt` array directly from this list.
+          attachments:
+            input.attachments && input.attachments.length > 0
+              ? input.attachments.map((image) => ({
+                  mediaType: image.mediaType,
+                  data: image.data,
+                }))
+              : undefined,
           mode: 'prompt',
           requestId: crypto.randomUUID(),
           timeoutMs: input.timeoutMs,

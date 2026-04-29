@@ -64,6 +64,7 @@ type AgentRouteService = {
   send(input: {
     agentId: string
     message: string
+    attachments?: ReadonlyArray<{ mediaType: string; data: string }>
     signal?: AbortSignal
   }): Promise<ReadableStream<AgentStreamEvent>>
 }
@@ -198,6 +199,7 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
         eventStream = await service.send({
           agentId,
           message: parsed.message,
+          attachments: parsed.attachments,
           signal: c.req.raw.signal,
         })
       } catch (err) {
@@ -297,14 +299,49 @@ async function parseCreateAgentBody(c: Context<Env>): Promise<
   }
 }
 
+/**
+ * Image attachment forwarded from the chat composer. The dataUrl is a
+ * `data:<mime>;base64,<payload>` string the composer pre-encoded; the
+ * harness strips the prefix and hands raw base64 to acpx, which builds
+ * the ACP `image` content block.
+ */
+export interface InboundImageAttachment {
+  mediaType: string
+  data: string
+}
+
 async function parseChatBody(
   c: Context<Env>,
-): Promise<{ message: string } | { error: string }> {
+): Promise<
+  { message: string; attachments: InboundImageAttachment[] } | { error: string }
+> {
   const body = await readJsonBody(c)
   if ('error' in body) return body
   const message =
     typeof body.value.message === 'string' ? body.value.message.trim() : ''
-  return message ? { message } : { error: 'Message is required' }
+  const attachmentsRaw = Array.isArray(body.value.attachments)
+    ? body.value.attachments
+    : []
+  const attachments: InboundImageAttachment[] = []
+  for (const entry of attachmentsRaw) {
+    if (!entry || typeof entry !== 'object') continue
+    const record = entry as Record<string, unknown>
+    if (record.kind !== 'image') continue
+    const mediaType =
+      typeof record.mediaType === 'string' ? record.mediaType : ''
+    const dataUrl = typeof record.dataUrl === 'string' ? record.dataUrl : ''
+    if (!mediaType || !dataUrl) continue
+    // Strip the `data:<mime>;base64,` prefix — ACP image blocks carry
+    // raw base64 plus the mime type as separate fields.
+    const commaIdx = dataUrl.indexOf(',')
+    const data = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl
+    if (!data) continue
+    attachments.push({ mediaType, data })
+  }
+  if (!message && attachments.length === 0) {
+    return { error: 'Message is required' }
+  }
+  return { message, attachments }
 }
 
 async function parseSidepanelAcpChatBody(

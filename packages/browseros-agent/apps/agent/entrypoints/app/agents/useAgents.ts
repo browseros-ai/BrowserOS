@@ -141,12 +141,16 @@ export async function chatWithHarnessAgent(
   agentId: string,
   message: string,
   signal?: AbortSignal,
+  attachments?: ReadonlyArray<unknown>,
 ): Promise<Response> {
   const baseUrl = await getAgentServerUrl()
   return fetch(`${baseUrl}/agents/${encodeURIComponent(agentId)}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({
+      message,
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
+    }),
     signal,
   })
 }

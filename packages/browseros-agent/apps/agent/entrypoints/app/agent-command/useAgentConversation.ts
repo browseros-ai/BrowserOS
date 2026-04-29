@@ -306,7 +306,12 @@ export function useAgentConversation(
     try {
       const response =
         options.runtime === 'agent-harness'
-          ? await chatWithHarnessAgent(agentId, trimmed, abortController.signal)
+          ? await chatWithHarnessAgent(
+              agentId,
+              trimmed,
+              abortController.signal,
+              attachments,
+            )
           : await chatWithAgent(
               agentId,
               trimmed,

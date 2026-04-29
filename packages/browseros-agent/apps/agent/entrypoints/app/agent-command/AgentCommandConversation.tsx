@@ -424,7 +424,7 @@ function AgentConversationController({
             streaming={streaming}
             disabled={disabled}
             status={isAgentHarnessAgent ? 'running' : status?.status}
-            attachmentsEnabled={!isAgentHarnessAgent}
+            attachmentsEnabled={true}
             placeholder={`Message ${agentName}...`}
             outboundQueue={
               isAgentHarnessAgent ? undefined : outboundQueue.queue

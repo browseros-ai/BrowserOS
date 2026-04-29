@@ -229,6 +229,7 @@ export class AgentHarnessService {
   async send(input: {
     agentId: string
     message: string
+    attachments?: ReadonlyArray<{ mediaType: string; data: string }>
     signal?: AbortSignal
   }): Promise<ReadableStream<AgentStreamEvent>> {
     const agent = await this.requireAgent(input.agentId)
@@ -237,6 +238,7 @@ export class AgentHarnessService {
       sessionId: 'main',
       sessionKey: agent.sessionKey,
       message: input.message,
+      attachments: input.attachments,
       permissionMode: agent.permissionMode,
       signal: input.signal,
     })

@@ -58,11 +58,21 @@ export type AgentStreamEvent =
       code?: string
     }
 
+/**
+ * Inline image attachment forwarded to the ACP `prompt` request as an
+ * `image` content block. `data` is raw base64 (no `data:` prefix).
+ */
+export interface AgentInlineImage {
+  mediaType: string
+  data: string
+}
+
 export interface AgentPromptInput {
   agent: AgentDefinition
   sessionId: 'main'
   sessionKey: string
   message: string
+  attachments?: ReadonlyArray<AgentInlineImage>
   permissionMode: AgentPermissionMode
   cwd?: string
   timeoutMs?: number
