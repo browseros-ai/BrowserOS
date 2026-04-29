@@ -529,6 +529,56 @@ open &lt;example.com&gt;
     expect(runtimeOptions.mcpServers).toEqual([])
   })
 
+  it('rewrites non-harness OpenClaw session keys onto the gateway main agent', async () => {
+    const calls: Array<{ method: string; input: unknown }> = []
+    const runtime = new AcpxRuntime({
+      cwd: '/tmp/browseros-acpx-runtime',
+      stateDir: '/tmp/browseros-acpx-state',
+      openclawGateway: {
+        getPort: () => 18789,
+        getGatewayToken: () => 'test-token-abc',
+        getContainerName: () => 'browseros-openclaw-openclaw-gateway-1',
+        getLimaHomeDir: () => '/Users/dev/.browseros-dev/lima',
+        getLimactlPath: () => '/opt/homebrew/bin/limactl',
+        getVmName: () => 'browseros-vm',
+      },
+      runtimeFactory: (options) => {
+        calls.push({ method: 'createRuntime', input: options })
+        return createFakeAcpRuntime(calls)
+      },
+    })
+    // Sidepanel sessionKey shape — no dedicated gateway agent has been
+    // provisioned for it, so the bridge needs to be redirected to the
+    // always-present `main` agent with the original key encoded as a
+    // channel suffix. Without this rewrite the bridge accepts newSession
+    // but the prompt hangs forever (no gateway agent matches the key).
+    const agent: AgentDefinition = {
+      id: 'sidepanel:c0ffee',
+      name: 'OpenClaw',
+      adapter: 'openclaw',
+      permissionMode: 'approve-all',
+      sessionKey: 'sidepanel:c0ffee:openclaw:default:medium',
+      createdAt: 1000,
+      updatedAt: 1000,
+    }
+
+    await collectStream(
+      await runtime.send({
+        agent,
+        sessionId: 'main',
+        sessionKey: agent.sessionKey,
+        message: 'hello',
+        permissionMode: 'approve-all',
+      }),
+    )
+
+    const runtimeOptions = calls[0]?.input as AcpRuntimeOptions
+    const command = runtimeOptions.agentRegistry.resolve('openclaw')
+    expect(command).toContain(
+      '--session agent:main:sidepanel-c0ffee-openclaw-default-medium',
+    )
+  })
+
   it('sets Claude approve-all sessions to bypass permissions before starting a turn', async () => {
     const calls: Array<{ method: string; input: unknown }> = []
     const runtime = new AcpxRuntime({

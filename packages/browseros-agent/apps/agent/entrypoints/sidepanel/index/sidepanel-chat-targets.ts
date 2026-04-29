@@ -66,30 +66,58 @@ export function buildSidepanelChatTargets({
 }: BuildSidepanelChatTargetsInput): SidepanelChatTarget[] {
   return [
     ...providers.map(toLlmTarget),
-    ...adapters.flatMap((adapter) =>
-      adapter.models.map((model) => {
-        const reasoning = adapter.reasoningEfforts.find(
-          (effort) => effort.id === adapter.defaultReasoningEffort,
-        )
-        const reasoningEffort =
-          reasoning?.id ?? adapter.defaultReasoningEffort ?? 'medium'
-        return {
-          kind: 'acp' as const,
-          id: buildAcpTargetId(adapter.id, model.id, reasoningEffort),
-          name: `${adapter.name} ${model.label}`,
-          type: 'acp' as const,
-          adapter: adapter.id,
-          adapterName: adapter.name,
-          modelId: model.id,
-          modelLabel: model.label,
-          modelControl: adapter.modelControl,
-          recommended: model.recommended,
-          reasoningEffort,
-          reasoningEffortLabel: reasoning?.label,
-        }
-      }),
-    ),
+    ...adapters.flatMap(toAcpTargetsForAdapter),
   ]
+}
+
+function toAcpTargetsForAdapter(
+  adapter: HarnessAdapterDescriptor,
+): SidepanelChatTarget[] {
+  const reasoning = adapter.reasoningEfforts.find(
+    (effort) => effort.id === adapter.defaultReasoningEffort,
+  )
+  const reasoningEffort =
+    reasoning?.id ?? adapter.defaultReasoningEffort ?? 'medium'
+
+  // Adapters with no per-session model picker (e.g. OpenClaw, whose
+  // model lives on the gateway-side agent record) still need exactly
+  // one sidepanel target so the user can pick the adapter at all.
+  if (adapter.models.length === 0) {
+    return [
+      {
+        kind: 'acp',
+        id: buildAcpTargetId(
+          adapter.id,
+          adapter.defaultModelId,
+          reasoningEffort,
+        ),
+        name: adapter.name,
+        type: 'acp',
+        adapter: adapter.id,
+        adapterName: adapter.name,
+        modelId: adapter.defaultModelId,
+        modelLabel: 'default',
+        modelControl: adapter.modelControl,
+        reasoningEffort,
+        reasoningEffortLabel: reasoning?.label,
+      },
+    ]
+  }
+
+  return adapter.models.map((model) => ({
+    kind: 'acp' as const,
+    id: buildAcpTargetId(adapter.id, model.id, reasoningEffort),
+    name: `${adapter.name} ${model.label}`,
+    type: 'acp' as const,
+    adapter: adapter.id,
+    adapterName: adapter.name,
+    modelId: model.id,
+    modelLabel: model.label,
+    modelControl: adapter.modelControl,
+    recommended: model.recommended,
+    reasoningEffort,
+    reasoningEffortLabel: reasoning?.label,
+  }))
 }
 
 export function resolveSidepanelChatTarget({

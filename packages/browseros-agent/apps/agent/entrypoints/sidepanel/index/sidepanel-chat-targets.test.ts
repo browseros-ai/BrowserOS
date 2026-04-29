@@ -63,6 +63,18 @@ const adapters: HarnessAdapterDescriptor[] = [
     models: [{ id: 'gpt-5.5', label: 'GPT-5.5', recommended: true }],
     reasoningEfforts: [{ id: 'medium', label: 'Medium', recommended: true }],
   },
+  {
+    id: 'openclaw',
+    name: 'OpenClaw',
+    defaultModelId: 'default',
+    defaultReasoningEffort: 'medium',
+    modelControl: 'best-effort',
+    models: [],
+    reasoningEfforts: [
+      { id: 'medium', label: 'Medium', recommended: true },
+      { id: 'high', label: 'High' },
+    ],
+  },
 ]
 
 describe('buildSidepanelChatTargets', () => {
@@ -75,7 +87,28 @@ describe('buildSidepanelChatTargets', () => {
       'acp:claude:sonnet:medium',
       'acp:claude:haiku:medium',
       'acp:codex:gpt-5.5:medium',
+      'acp:openclaw:default:medium',
     ])
+  })
+
+  it('emits a single default ACP target for adapters with no per-session model picker', () => {
+    const targets = buildSidepanelChatTargets({ providers, adapters })
+    const openclaw = targets.find(
+      (target) => target.id === 'acp:openclaw:default:medium',
+    )
+
+    expect(openclaw).toMatchObject({
+      kind: 'acp',
+      adapter: 'openclaw',
+      adapterName: 'OpenClaw',
+      modelId: 'default',
+      modelLabel: 'default',
+      // Without a model picker, the target name is just the adapter
+      // name — the user picks the adapter, not a model under it.
+      name: 'OpenClaw',
+      modelControl: 'best-effort',
+      reasoningEffort: 'medium',
+    })
   })
 
   it('preserves ACP model-control and recommendation metadata', () => {

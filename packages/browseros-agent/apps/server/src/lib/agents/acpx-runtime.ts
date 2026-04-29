@@ -536,6 +536,21 @@ function resolveOpenclawAcpCommand(
   // to a synthetic acp:<uuid> session that does not resolve to any
   // provisioned gateway agent.
   //
+  // Two callers send sessionKeys here:
+  //   * Harness: `agent:<harness-id>:main` — the harness id matches a
+  //     dual-created gateway agent name (Step 5), so the bridge resolves
+  //     directly. Pass through unchanged.
+  //   * Sidepanel: `sidepanel:<convId>:openclaw:<model>:<effort>` — no
+  //     dedicated gateway agent exists for sidepanel sessions, so we
+  //     route them to the always-provisioned `main` gateway agent and
+  //     keep state segregated by encoding the original key as a channel
+  //     suffix.
+  const bridgeSessionKey = sessionKey
+    ? sessionKey.startsWith('agent:')
+      ? sessionKey
+      : `agent:main:${sessionKey.replace(/[^a-zA-Z0-9-]/g, '-')}`
+    : null
+  //
   // Prefix `env LIMA_HOME=<path>` so the spawned limactl finds the
   // BrowserOS-owned VM instance. The BrowserOS server doesn't set
   // LIMA_HOME on its own process env (it injects per-spawn elsewhere),
@@ -562,8 +577,8 @@ function resolveOpenclawAcpCommand(
     '--url',
     `ws://127.0.0.1:${port}`,
   ]
-  if (sessionKey) {
-    argv.push('--session', sessionKey)
+  if (bridgeSessionKey) {
+    argv.push('--session', bridgeSessionKey)
   }
   return argv.join(' ')
 }
