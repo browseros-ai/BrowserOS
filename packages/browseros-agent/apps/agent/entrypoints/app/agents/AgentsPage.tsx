@@ -158,15 +158,24 @@ export const AgentsPage: FC = () => {
     openClawAgentsEnabled,
     openClawAgents,
   )
-  const agentListItems = useMemo(
-    () => [
-      ...visibleOpenClawAgents.map((agent) =>
+  const agentListItems = useMemo(() => {
+    // Dual-created OpenClaw agents (and the backfilled `main`/orphans
+    // post Step 9) live in both `/claw/agents` and `/agents` under the
+    // same id. Prefer the harness entry — it carries adapter/model/
+    // reasoning/lastUsedAt/status that the chat path actually uses —
+    // and drop the legacy duplicate so the rail doesn't show every
+    // OpenClaw agent twice.
+    const harnessIds = new Set(harnessAgents.map((agent) => agent.id))
+    const dedupedOpenClawAgents = visibleOpenClawAgents.filter(
+      (agent) => !harnessIds.has(agent.agentId),
+    )
+    return [
+      ...dedupedOpenClawAgents.map((agent) =>
         toOpenClawListItem(agent, openClawManageable),
       ),
       ...harnessAgents.map(toHarnessListItem),
-    ],
-    [harnessAgents, openClawManageable, visibleOpenClawAgents],
-  )
+    ]
+  }, [harnessAgents, openClawManageable, visibleOpenClawAgents])
   // Lookup map so AgentList can render adapter chips, reasoning, etc.
   // Computed up here to keep all hooks above the early returns below.
   const harnessAgentLookup = useMemo(() => {
