@@ -26,7 +26,15 @@ export const AgentCommandLayout: FC = () => {
   const { agents: harnessAgents, loading: harnessAgentsLoading } =
     useHarnessAgents()
   const visibleOpenClawAgents = openClawEnabled ? openClawAgents : []
-  const agents = [...visibleOpenClawAgents, ...harnessAgents]
+  // Dual-created OpenClaw agents appear in both `/claw/agents` (gateway
+  // record) and `/agents` (harness record) under the same id. Prefer the
+  // harness entry so the chat panel can route through the harness path
+  // and the rail doesn't show duplicates.
+  const harnessAgentIds = new Set(harnessAgents.map((entry) => entry.agentId))
+  const dedupedOpenClawAgents = visibleOpenClawAgents.filter(
+    (entry) => !harnessAgentIds.has(entry.agentId),
+  )
+  const agents = [...dedupedOpenClawAgents, ...harnessAgents]
 
   return (
     <Outlet

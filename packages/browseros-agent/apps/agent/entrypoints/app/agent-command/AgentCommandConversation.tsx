@@ -6,6 +6,7 @@ import {
   type AgentEntry,
   getModelDisplayName,
 } from '@/entrypoints/app/agents/useOpenClaw'
+import { useAcpxForOpenClaw } from '@/lib/feature-flags/useAcpxForOpenClaw'
 import { cn } from '@/lib/utils'
 import { useAgentCommandData } from './agent-command-layout'
 import { ClawChat } from './ClawChat'
@@ -207,7 +208,14 @@ function AgentConversationController({
   const [streamSessionKey, setStreamSessionKey] = useState<string | null>(null)
   const agent = agents.find((entry) => entry.agentId === agentId)
   const agentName = agent?.name || agentId || 'Agent'
-  const isAgentHarnessAgent = agent?.source === 'agent-harness'
+  const useAcpxForOpenclawFlag = useAcpxForOpenClaw()
+  // Under the flag, route legacy `/claw/agents` OpenClaw entries through
+  // the harness chat path too. Assumes the agent has a matching harness
+  // record (post Step 5's dual-creation); legacy gateway-only agents
+  // will see empty history.
+  const isAgentHarnessAgent =
+    agent?.source === 'agent-harness' ||
+    (useAcpxForOpenclawFlag && agent?.source === 'openclaw')
   const clawHistoryQuery = useClawChatHistory({
     agentId,
     sessionKey: streamSessionKey,
@@ -454,6 +462,7 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const { status, agents } = useAgentCommandData()
+  const useAcpxForOpenclawFlag = useAcpxForOpenClaw()
   const shouldRedirectHome = !agentId
   const resolvedAgentId = agentId ?? ''
   const agent = agents.find((entry) => entry.agentId === resolvedAgentId)
@@ -472,7 +481,8 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
   }
 
   const statusCopy =
-    agent?.source === 'agent-harness'
+    agent?.source === 'agent-harness' ||
+    (useAcpxForOpenclawFlag && agent?.source === 'openclaw')
       ? 'Ready'
       : getConversationStatusCopy(status?.status)
 
