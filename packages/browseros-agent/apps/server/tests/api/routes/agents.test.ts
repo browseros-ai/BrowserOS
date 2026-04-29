@@ -189,7 +189,7 @@ function createFakeService(agents: AgentDefinition[]) {
     },
     async createAgent(input: {
       name: string
-      adapter: 'claude' | 'codex'
+      adapter: 'claude' | 'codex' | 'openclaw'
       modelId?: string
       reasoningEffort?: string
     }) {
