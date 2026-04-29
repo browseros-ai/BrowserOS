@@ -207,13 +207,11 @@ function AgentConversationController({
   const [streamSessionKey, setStreamSessionKey] = useState<string | null>(null)
   const agent = agents.find((entry) => entry.agentId === agentId)
   const agentName = agent?.name || agentId || 'Agent'
-  // Source is the only routing signal: dual-created OpenClaw agents
-  // surface as `source='agent-harness'` (harness wins in the layout
-  // dedup), so they already use the harness chat path. Legacy
-  // gateway-only agents (`/claw/agents` with no harness record) stay on
-  // ClawChat. The `useAcpxForOpenClaw` storage flag exists for future
-  // use once a migration path lands; routing it here today only breaks
-  // legacy agents because there is no harness record to chat against.
+  // Source is the only routing signal: every OpenClaw agent has a
+  // harness record post the gateway → harness backfill, so they all
+  // surface as `source='agent-harness'` after the layout dedup and
+  // route through the harness chat path. ClawChat is reachable today
+  // only as a fallback if reconciliation is failing.
   const isAgentHarnessAgent = agent?.source === 'agent-harness'
   const clawHistoryQuery = useClawChatHistory({
     agentId,
