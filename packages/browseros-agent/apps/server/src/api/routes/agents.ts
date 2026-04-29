@@ -42,6 +42,7 @@ import {
   OpenClawProvisionerUnavailableError,
   UnknownAgentError,
 } from '../services/agents/agent-harness-service'
+import type { OpenClawGatewayChatClient } from '../services/openclaw/openclaw-gateway-chat-client'
 import type { Env } from '../types'
 import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'
 
@@ -81,6 +82,13 @@ type AgentRouteDeps = {
    */
   openclawGateway?: OpenclawGatewayAccessor
   /**
+   * Optional. Enables the image-attachment carve-out for OpenClaw
+   * agents — image-bearing turns route through the gateway HTTP
+   * `/v1/chat/completions` instead of the ACP bridge (which drops
+   * image content blocks).
+   */
+  openclawGatewayChat?: OpenClawGatewayChatClient
+  /**
    * Required to dual-create/delete `openclaw` adapter agents on the
    * gateway side. Without this, openclaw create requests fail with 503.
    */
@@ -106,6 +114,7 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
     new AgentHarnessService({
       browserosServerPort: deps.browserosServerPort,
       openclawGateway: deps.openclawGateway,
+      openclawGatewayChat: deps.openclawGatewayChat,
       openclawProvisioner: deps.openclawProvisioner,
     })
   let sidepanelRuntime = deps.runtime

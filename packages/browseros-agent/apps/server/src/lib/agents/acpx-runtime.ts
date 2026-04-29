@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { DEFAULT_PORTS } from '@browseros/shared/constants/ports'
 import {
@@ -18,6 +19,11 @@ import {
   createAgentRegistry,
   createRuntimeStore,
 } from 'acpx/runtime'
+import type {
+  OpenAIChatMessage,
+  OpenAIContentPart,
+  OpenClawGatewayChatClient,
+} from '../../api/services/openclaw/openclaw-gateway-chat-client'
 import { getBrowserosDir } from '../browseros-dir'
 import { logger } from '../logger'
 import type {
@@ -66,6 +72,15 @@ type AcpxRuntimeOptions = {
    * claude/codex (their adapters spawn their own CLI binaries).
    */
   openclawGateway?: OpenclawGatewayAccessor
+  /**
+   * Optional. When wired, the runtime diverts OpenClaw turns that
+   * carry image attachments to the gateway's HTTP `/v1/chat/completions`
+   * endpoint (which accepts OpenAI-style `image_url` parts) instead of
+   * the ACP bridge — the bridge silently drops image content blocks.
+   * Without this client, image turns to OpenClaw agents fall through to
+   * the ACP path and the model never sees the image.
+   */
+  openclawGatewayChat?: OpenClawGatewayChatClient
   runtimeFactory?: (options: AcpRuntimeOptions) => AcpxCoreRuntime
 }
 
@@ -80,6 +95,7 @@ export class AcpxRuntime implements AgentRuntime {
   private readonly stateDir: string
   private readonly browserosServerPort: number
   private readonly openclawGateway: OpenclawGatewayAccessor | null
+  private readonly openclawGatewayChat: OpenClawGatewayChatClient | null
   private readonly runtimeFactory: (
     options: AcpRuntimeOptions,
   ) => AcpxCoreRuntime
@@ -95,6 +111,7 @@ export class AcpxRuntime implements AgentRuntime {
     this.browserosServerPort =
       options.browserosServerPort ?? DEFAULT_PORTS.server
     this.openclawGateway = options.openclawGateway ?? null
+    this.openclawGatewayChat = options.openclawGatewayChat ?? null
     this.sessionStore = createRuntimeStore({ stateDir: this.stateDir })
     this.runtimeFactory = options.runtimeFactory ?? createAcpRuntime
   }
@@ -124,6 +141,9 @@ export class AcpxRuntime implements AgentRuntime {
     input: AgentPromptInput,
   ): Promise<ReadableStream<AgentStreamEvent>> {
     const cwd = input.cwd ?? this.cwd
+    const imageAttachments = (input.attachments ?? []).filter((a) =>
+      a.mediaType.startsWith('image/'),
+    )
     logger.info('Agent harness acpx send requested', {
       agentId: input.agent.id,
       adapter: input.agent.adapter,
@@ -135,7 +155,23 @@ export class AcpxRuntime implements AgentRuntime {
       modelId: input.agent.modelId,
       reasoningEffort: input.agent.reasoningEffort,
       messageLength: input.message.length,
+      imageAttachmentCount: imageAttachments.length,
     })
+
+    // Image carve-out for OpenClaw: the openclaw `acp` bridge silently
+    // drops ACP `image` content blocks, so the model never sees the
+    // attachment. Divert image-bearing turns to the gateway's HTTP
+    // /v1/chat/completions endpoint (which accepts OpenAI-style
+    // `image_url` parts) and pipe its SSE back through the same
+    // AgentStreamEvent shape callers already consume.
+    if (
+      input.agent.adapter === 'openclaw' &&
+      imageAttachments.length > 0 &&
+      this.openclawGatewayChat
+    ) {
+      return this.sendOpenclawViaGateway(input, imageAttachments, cwd)
+    }
+
     const runtime = this.getRuntime({
       cwd,
       permissionMode: input.permissionMode,
@@ -190,6 +226,180 @@ export class AcpxRuntime implements AgentRuntime {
     })
     return runtime
   }
+
+  /**
+   * Drives an OpenClaw turn that includes image attachments through the
+   * gateway HTTP endpoint, which translates OpenAI-style `image_url`
+   * content parts into provider-native multimodal calls. Streams back
+   * `AgentStreamEvent` so the chat panel renders identically to ACP
+   * turns. On natural completion, appends a synthetic user+assistant
+   * pair to the acpx session record so the turn shows up in
+   * `getHistory()` after a reload.
+   *
+   * Persistence is best-effort: when no session record exists yet (e.g.
+   * the very first turn for a fresh agent is image-only), the live
+   * stream still works but the turn is absent from history on reload.
+   * Subsequent text turns through ACP create/update the record normally.
+   */
+  private async sendOpenclawViaGateway(
+    input: AgentPromptInput,
+    imageAttachments: ReadonlyArray<{ mediaType: string; data: string }>,
+    cwd: string,
+  ): Promise<ReadableStream<AgentStreamEvent>> {
+    if (!this.openclawGatewayChat) {
+      throw new Error(
+        'OpenClaw gateway chat client is not wired into AcpxRuntime',
+      )
+    }
+
+    const existingRecord = await this.sessionStore.load(input.sessionKey)
+    const priorMessages = existingRecord
+      ? recordToOpenAIMessages(existingRecord)
+      : []
+    const userContent: OpenAIContentPart[] = [
+      { type: 'text', text: buildBrowserosAcpPrompt(input.message) },
+      ...imageAttachments.map(
+        (a): OpenAIContentPart => ({
+          type: 'image_url',
+          image_url: { url: `data:${a.mediaType};base64,${a.data}` },
+        }),
+      ),
+    ]
+    const messages: OpenAIChatMessage[] = [
+      ...priorMessages,
+      { role: 'user', content: userContent },
+    ]
+
+    logger.info('Agent harness gateway image turn dispatched', {
+      agentId: input.agent.id,
+      sessionKey: input.sessionKey,
+      cwd,
+      priorMessageCount: priorMessages.length,
+      imageAttachmentCount: imageAttachments.length,
+    })
+
+    const upstream = await this.openclawGatewayChat.streamTurn({
+      agentId: input.agent.id,
+      sessionKey: input.sessionKey,
+      messages,
+      signal: input.signal,
+    })
+
+    const sessionStore = this.sessionStore
+    const sessionKey = input.sessionKey
+    const userMessageText = input.message
+    let accumulated = ''
+
+    return new ReadableStream<AgentStreamEvent>({
+      start: (controller) => {
+        const reader = upstream.getReader()
+        const persist = async () => {
+          if (!existingRecord || !accumulated) return
+          try {
+            await persistGatewayTurn(
+              sessionStore,
+              sessionKey,
+              userMessageText,
+              imageAttachments,
+              accumulated,
+            )
+          } catch (err) {
+            logger.warn(
+              'Failed to persist gateway image turn to acpx session record',
+              {
+                sessionKey,
+                error: err instanceof Error ? err.message : String(err),
+              },
+            )
+          }
+        }
+        ;(async () => {
+          try {
+            while (true) {
+              const { done, value } = await reader.read()
+              if (done) break
+              if (value.type === 'text_delta') accumulated += value.text
+              controller.enqueue(value)
+            }
+            await persist()
+            controller.close()
+          } catch (err) {
+            controller.enqueue({
+              type: 'error',
+              message: err instanceof Error ? err.message : String(err),
+            })
+            controller.close()
+          }
+        })().catch(() => {})
+      },
+      cancel: () => {
+        // Best-effort: cancel propagation to the gateway is its own
+        // upstream issue (see plan), but at least drop our reader so
+        // the OpenAI SSE parse loop exits.
+      },
+    })
+  }
+}
+
+async function persistGatewayTurn(
+  sessionStore: ReturnType<typeof createRuntimeStore>,
+  sessionKey: string,
+  userMessageText: string,
+  imageAttachments: ReadonlyArray<{ mediaType: string; data: string }>,
+  assistantText: string,
+): Promise<void> {
+  const record = await sessionStore.load(sessionKey)
+  if (!record) return
+  const userContent: AcpxUserContent[] = [
+    { Text: buildBrowserosAcpPrompt(userMessageText) } as AcpxUserContent,
+  ]
+  for (const _image of imageAttachments) {
+    // The history mapper's `userContentToText` reads `Image.source` and
+    // emits `[image]` for any non-empty value — we just need a truthy
+    // marker so the placeholder renders. We don't store the base64 in
+    // the record (it's already in the gateway's transcript and would
+    // bloat the JSON file).
+    userContent.push({ Image: { source: 'base64' } } as AcpxUserContent)
+  }
+  // The acpx persistence layer requires User messages to carry an `id`
+  // and Agent messages to carry a `tool_results` object — without them
+  // the record fails to round-trip through `parseSessionRecord` on next
+  // load. See acpx/dist/prompt-turn-... `isUserMessage`/`isAgentMessage`.
+  const turnId = randomUUID()
+  const updated = {
+    ...record,
+    messages: [
+      ...record.messages,
+      { User: { id: `user-${turnId}`, content: userContent } },
+      { Agent: { content: [{ Text: assistantText }], tool_results: {} } },
+    ],
+    lastUsedAt: new Date().toISOString(),
+  } as AcpSessionRecord
+  await sessionStore.save(updated)
+}
+
+function recordToOpenAIMessages(record: AcpSessionRecord): OpenAIChatMessage[] {
+  const messages: OpenAIChatMessage[] = []
+  for (const message of record.messages) {
+    if (message === 'Resume') continue
+    if ('User' in message) {
+      const text = message.User.content
+        .map(userContentToText)
+        .filter(Boolean)
+        .join('\n\n')
+        .trim()
+      if (text) messages.push({ role: 'user', content: text })
+      continue
+    }
+    if ('Agent' in message) {
+      const text = message.Agent.content
+        .map((part) => ('Text' in part ? part.Text : ''))
+        .join('')
+        .trim()
+      if (text) messages.push({ role: 'assistant', content: text })
+    }
+  }
+  return messages
 }
 
 type AcpxSessionMessage = AcpSessionRecord['messages'][number]

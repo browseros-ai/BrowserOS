@@ -19,6 +19,7 @@ import type {
   AgentStreamEvent,
 } from '../../../lib/agents/types'
 import { logger } from '../../../lib/logger'
+import type { OpenClawGatewayChatClient } from '../openclaw/openclaw-gateway-chat-client'
 
 /**
  * Provisions and tears down agent records on the OpenClaw gateway side.
@@ -62,6 +63,7 @@ export class AgentHarnessService {
       runtime?: AgentRuntime
       browserosServerPort?: number
       openclawGateway?: OpenclawGatewayAccessor
+      openclawGatewayChat?: OpenClawGatewayChatClient
       openclawProvisioner?: OpenClawProvisioner
     } = {},
   ) {
@@ -71,6 +73,7 @@ export class AgentHarnessService {
       new AcpxRuntime({
         browserosServerPort: deps.browserosServerPort,
         openclawGateway: deps.openclawGateway,
+        openclawGatewayChat: deps.openclawGatewayChat,
       })
     this.openclawProvisioner = deps.openclawProvisioner ?? null
   }
