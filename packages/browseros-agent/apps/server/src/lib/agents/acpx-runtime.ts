@@ -157,7 +157,10 @@ export class AcpxRuntime implements AgentRuntime {
     const runtime = this.runtimeFactory({
       cwd: input.cwd,
       sessionStore: this.sessionStore,
-      agentRegistry: createBrowserosAgentRegistry(input.permissionMode),
+      agentRegistry: createBrowserosAgentRegistry(
+        input.permissionMode,
+        this.openclawGateway,
+      ),
       mcpServers: createBrowserosMcpServers(this.browserosServerPort),
       permissionMode: input.permissionMode,
       nonInteractivePermissions: input.nonInteractivePermissions,
@@ -443,17 +446,33 @@ function createBrowserosMcpServers(
 
 function createBrowserosAgentRegistry(
   permissionMode: AcpRuntimeOptions['permissionMode'],
+  openclawGateway: OpenclawGatewayAccessor | null,
 ): AcpRuntimeOptions['agentRegistry'] {
   const registry = createAgentRegistry()
-  if (permissionMode !== 'approve-all') return registry
 
   return {
     list() {
       return registry.list()
     },
     resolve(agentName) {
+      const lower = agentName.trim().toLowerCase()
+
+      if (lower === 'openclaw') {
+        if (!openclawGateway) {
+          // Fall back to acpx's built-in `openclaw` adapter, which assumes
+          // a host-side openclaw binary. BrowserOS doesn't install one on
+          // the host, so this branch will fail at spawn time with a
+          // descriptive error — the harness should be wired with a
+          // gateway accessor.
+          return registry.resolve(agentName)
+        }
+        return resolveOpenclawAcpCommand(openclawGateway)
+      }
+
       const command = registry.resolve(agentName)
-      switch (agentName.trim().toLowerCase()) {
+      if (permissionMode !== 'approve-all') return command
+
+      switch (lower) {
         case 'claude':
           return appendCommandArg(command, '--dangerously-skip-permissions')
         case 'codex':
@@ -466,6 +485,58 @@ function createBrowserosAgentRegistry(
       }
     },
   }
+}
+
+/**
+ * Builds the command string acpx will spawn for an `openclaw` adapter.
+ * Runs `openclaw acp` inside the gateway container via the bundled
+ * `limactl shell <vm> -- nerdctl exec -i ...` chain so the binary
+ * already installed alongside the gateway is reused; BrowserOS does
+ * not require a host-side openclaw install.
+ *
+ * Auth: the gateway token is injected as the OPENCLAW_GATEWAY_TOKEN
+ * env var on the container exec, which the openclaw CLI honors per
+ * its documented env-var precedence. This avoids the `--token` flag
+ * showing the secret in `ps aux`.
+ *
+ * Banner output: OPENCLAW_HIDE_BANNER and OPENCLAW_SUPPRESS_NOTES
+ * suppress non-JSON-RPC chatter on stdout that would otherwise corrupt
+ * the ACP message stream.
+ */
+function resolveOpenclawAcpCommand(gateway: OpenclawGatewayAccessor): string {
+  const port = gateway.getPort()
+  const token = gateway.getGatewayToken()
+  const limactl = gateway.getLimactlPath()
+  const vm = gateway.getVmName()
+  const container = gateway.getContainerName()
+  const limaHome = gateway.getLimaHomeDir()
+
+  // Prefix `env LIMA_HOME=<path>` so the spawned limactl finds the
+  // BrowserOS-owned VM instance. The BrowserOS server doesn't set
+  // LIMA_HOME on its own process env (it injects per-spawn elsewhere),
+  // so the acpx-spawned subprocess won't inherit it without this hint.
+  return [
+    'env',
+    `LIMA_HOME=${limaHome}`,
+    limactl,
+    'shell',
+    vm,
+    '--',
+    'nerdctl',
+    'exec',
+    '-i',
+    '-e',
+    'OPENCLAW_HIDE_BANNER=1',
+    '-e',
+    'OPENCLAW_SUPPRESS_NOTES=1',
+    '-e',
+    `OPENCLAW_GATEWAY_TOKEN=${token}`,
+    container,
+    'openclaw',
+    'acp',
+    '--url',
+    `ws://127.0.0.1:${port}`,
+  ].join(' ')
 }
 
 function appendCommandArg(command: string, arg: string): string {

@@ -472,6 +472,54 @@ open &lt;example.com&gt;
     )
   })
 
+  it('resolves the openclaw adapter to a lima/nerdctl exec command', async () => {
+    const calls: Array<{ method: string; input: unknown }> = []
+    const runtime = new AcpxRuntime({
+      cwd: '/tmp/browseros-acpx-runtime',
+      stateDir: '/tmp/browseros-acpx-state',
+      openclawGateway: {
+        getPort: () => 18789,
+        getGatewayToken: () => 'test-token-abc',
+        getContainerName: () => 'browseros-openclaw-openclaw-gateway-1',
+        getLimaHomeDir: () => '/Users/dev/.browseros-dev/lima',
+        getLimactlPath: () => '/opt/homebrew/bin/limactl',
+        getVmName: () => 'browseros-vm',
+      },
+      runtimeFactory: (options) => {
+        calls.push({ method: 'createRuntime', input: options })
+        return createFakeAcpRuntime(calls)
+      },
+    })
+    const agent: AgentDefinition = {
+      id: 'main',
+      name: 'OpenClaw main',
+      adapter: 'openclaw',
+      permissionMode: 'approve-all',
+      sessionKey: 'agent:main:main',
+      createdAt: 1000,
+      updatedAt: 1000,
+    }
+
+    await collectStream(
+      await runtime.send({
+        agent,
+        sessionId: 'main',
+        sessionKey: agent.sessionKey,
+        message: 'hello',
+        permissionMode: 'approve-all',
+      }),
+    )
+
+    const runtimeOptions = calls[0]?.input as AcpRuntimeOptions
+    const command = runtimeOptions.agentRegistry.resolve('openclaw')
+    expect(command).toContain('env LIMA_HOME=/Users/dev/.browseros-dev/lima')
+    expect(command).toContain('/opt/homebrew/bin/limactl shell browseros-vm --')
+    expect(command).toContain(
+      'nerdctl exec -i -e OPENCLAW_HIDE_BANNER=1 -e OPENCLAW_SUPPRESS_NOTES=1 -e OPENCLAW_GATEWAY_TOKEN=test-token-abc browseros-openclaw-openclaw-gateway-1',
+    )
+    expect(command).toContain('openclaw acp --url ws://127.0.0.1:18789')
+  })
+
   it('sets Claude approve-all sessions to bypass permissions before starting a turn', async () => {
     const calls: Array<{ method: string; input: unknown }> = []
     const runtime = new AcpxRuntime({
