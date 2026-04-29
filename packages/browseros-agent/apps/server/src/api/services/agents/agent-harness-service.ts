@@ -54,7 +54,7 @@ export class AgentHarnessService {
   private readonly agentStore: FileAgentStore
   private readonly runtime: AgentRuntime
   private readonly openclawProvisioner: OpenClawProvisioner | null
-  private gatewayReconciled: Promise<void> | null = null
+  private inFlightReconcile: Promise<void> | null = null
 
   constructor(
     deps: {
@@ -81,16 +81,23 @@ export class AgentHarnessService {
   }
 
   private ensureGatewayReconciled(): Promise<void> {
-    if (this.gatewayReconciled) return this.gatewayReconciled
-    this.gatewayReconciled = this.reconcileWithGateway().catch((err) => {
-      // Don't permanently memoize failure — clear the cache so the
-      // next list call retries (gateway may have been down at boot).
-      this.gatewayReconciled = null
-      logger.warn('Harness gateway reconciliation failed', {
-        error: err instanceof Error ? err.message : String(err),
+    // Dedupe concurrent listAgents calls into a single in-flight reconcile,
+    // but never memoize the result — agents can be added to the gateway
+    // between list calls (e.g. via the legacy /claw/agents create path or
+    // out-of-band CLI), and the harness needs to pick those up on the
+    // next read. Reconcile is one cheap CLI call and is idempotent.
+    if (this.inFlightReconcile) return this.inFlightReconcile
+    const run = this.reconcileWithGateway()
+      .catch((err) => {
+        logger.warn('Harness gateway reconciliation failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
       })
-    })
-    return this.gatewayReconciled
+      .finally(() => {
+        this.inFlightReconcile = null
+      })
+    this.inFlightReconcile = run
+    return run
   }
 
   async createAgent(input: CreateAgentInput): Promise<AgentDefinition> {
