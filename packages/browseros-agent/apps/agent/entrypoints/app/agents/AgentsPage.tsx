@@ -57,14 +57,12 @@ export const AgentsPage: FC = () => {
     status,
     loading: statusLoading,
     error: statusError,
-    refetch: refetchStatus,
   } = useOpenClawStatus()
   const { providers, defaultProviderId } = useLlmProviders()
   const {
     adapters,
     loading: adaptersLoading,
     error: adaptersError,
-    refetch: refetchAdapters,
   } = useAgentAdapters()
 
   const openClawAgentsEnabled =
@@ -73,13 +71,11 @@ export const AgentsPage: FC = () => {
     agents: openClawAgents,
     loading: openClawAgentsLoading,
     error: openClawAgentsError,
-    refetch: refetchOpenClawAgents,
   } = useOpenClawAgents(openClawAgentsEnabled)
   const {
     harnessAgents,
     loading: harnessAgentsLoading,
     error: harnessAgentsError,
-    refetch: refetchHarnessAgents,
   } = useHarnessAgents()
   const createHarnessAgent = useCreateHarnessAgent()
   const deleteHarnessAgent = useDeleteHarnessAgent()
@@ -223,15 +219,6 @@ export const AgentsPage: FC = () => {
   const creatingAgent = creatingOpenClawAgent || createHarnessAgent.isPending
   const deletingAgent = deletingOpenClawAgent || deleteHarnessAgent.isPending
 
-  const refreshAll = async () => {
-    await Promise.all([
-      refetchStatus(),
-      refetchAdapters(),
-      refetchHarnessAgents(),
-      openClawAgentsEnabled ? refetchOpenClawAgents() : Promise.resolve(),
-    ])
-  }
-
   const handleHarnessAdapterChange = (adapter: HarnessAgentAdapter) => {
     const descriptor = adapters.find((entry) => entry.id === adapter)
     setHarnessAdapterId(adapter)
@@ -347,8 +334,11 @@ export const AgentsPage: FC = () => {
         {showGatewayStatusBar ? (
           <GatewayStatusBar
             status={status}
+            actionInProgress={actionInProgress}
             onOpenTerminal={() => setShowTerminal(true)}
-            onRefresh={() => void refreshAll()}
+            onRestart={() => {
+              void runWithPageErrorHandling(restartOpenClaw)
+            }}
           />
         ) : null}
 

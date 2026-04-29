@@ -1,15 +1,23 @@
-import { RefreshCw, Terminal } from 'lucide-react'
-import type { FC } from 'react'
+import { Loader2, RotateCcw, Terminal } from 'lucide-react'
+import type { FC, ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import type { OpenClawStatus } from './useOpenClaw'
 
 interface GatewayStatusBarProps {
   status: OpenClawStatus | null
+  /** Disabled while a gateway lifecycle mutation is mid-flight. */
+  actionInProgress: boolean
   onOpenTerminal: () => void
-  onRefresh: () => void
+  onRestart: () => void
 }
 
 /**
@@ -18,16 +26,17 @@ interface GatewayStatusBarProps {
  * is in the picture; collapses to nothing when the user only has
  * Claude/Codex agents.
  *
- * Only renders the lifecycle pills + Terminal/Refresh affordances —
- * the existing `GatewayStateCards` (start, restart, setup) keep their
- * own slot below the list because they're action-heavy. This bar is
- * for at-a-glance reassurance: "yes, the gateway is running and the
- * control plane is connected."
+ * Carries the lifecycle pills + a Terminal escape hatch + a Restart
+ * button. The agent listing itself auto-polls every 5s, so a manual
+ * refresh isn't needed; restart is a real lifecycle action that the
+ * old AgentsPageHeader exposed and is still useful when the gateway
+ * gets wedged.
  */
 export const GatewayStatusBar: FC<GatewayStatusBarProps> = ({
   status,
+  actionInProgress,
   onOpenTerminal,
-  onRefresh,
+  onRestart,
 }) => {
   if (!status) return null
 
@@ -65,23 +74,46 @@ export const GatewayStatusBar: FC<GatewayStatusBarProps> = ({
           {controlPlanePill.label}
         </Badge>
         <Separator orientation="vertical" className="h-4" />
-        <Button variant="ghost" size="sm" onClick={onOpenTerminal}>
-          <Terminal className="mr-1.5 h-3.5 w-3.5" />
-          Terminal
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onRefresh}
-          aria-label="Refresh gateway status"
-          className="ml-auto h-8 w-8"
-        >
-          <RefreshCw className="h-4 w-4" />
-        </Button>
+        <WithTooltip label="Open a shell into the OpenClaw gateway container for raw CLI access (config edits, session inspection).">
+          <Button variant="ghost" size="sm" onClick={onOpenTerminal}>
+            <Terminal className="mr-1.5 h-3.5 w-3.5" />
+            Terminal
+          </Button>
+        </WithTooltip>
+        <WithTooltip label="Restart the OpenClaw gateway. Useful when the gateway is stuck or after editing provider config.">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onRestart}
+            disabled={actionInProgress}
+            className="ml-auto"
+          >
+            {actionInProgress ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            Restart Gateway
+          </Button>
+        </WithTooltip>
       </div>
     </div>
   )
 }
+
+const WithTooltip: FC<{ label: string; children: ReactNode }> = ({
+  label,
+  children,
+}) => (
+  <TooltipProvider delayDuration={250}>
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-xs text-xs">
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  </TooltipProvider>
+)
 
 type PillKind = {
   variant: 'default' | 'secondary' | 'outline' | 'destructive'
