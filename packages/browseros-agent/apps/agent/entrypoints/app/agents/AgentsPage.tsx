@@ -45,25 +45,27 @@ import {
   useDeleteHarnessAgent,
   useHarnessAgents,
 } from './useAgents'
-import {
-  useOpenClawAgents,
-  useOpenClawMutations,
-  useOpenClawStatus,
-} from './useOpenClaw'
+import { useOpenClawAgents, useOpenClawMutations } from './useOpenClaw'
 
 export const AgentsPage: FC = () => {
   const navigate = useNavigate()
-  const {
-    status,
-    loading: statusLoading,
-    error: statusError,
-  } = useOpenClawStatus()
   const { providers, defaultProviderId } = useLlmProviders()
   const {
     adapters,
     loading: adaptersLoading,
     error: adaptersError,
   } = useAgentAdapters()
+
+  // The harness listing now carries the gateway lifecycle snapshot
+  // alongside the agents — one polling source for everything the
+  // agents page renders. The legacy `/claw/status` poll is dead from
+  // this surface; the chat-panel layout still uses it for now.
+  const {
+    harnessAgents,
+    gateway: status,
+    loading: harnessAgentsLoading,
+    error: harnessAgentsError,
+  } = useHarnessAgents()
 
   const openClawAgentsEnabled =
     status?.status === 'running' && status.controlPlaneStatus === 'connected'
@@ -72,11 +74,6 @@ export const AgentsPage: FC = () => {
     loading: openClawAgentsLoading,
     error: openClawAgentsError,
   } = useOpenClawAgents(openClawAgentsEnabled)
-  const {
-    harnessAgents,
-    loading: harnessAgentsLoading,
-    error: harnessAgentsError,
-  } = useHarnessAgents()
   const createHarnessAgent = useCreateHarnessAgent()
   const deleteHarnessAgent = useDeleteHarnessAgent()
   const {
@@ -204,16 +201,13 @@ export const AgentsPage: FC = () => {
   const inlineError = getInlineError({
     lifecyclePending,
     pageError,
-    statusError,
     openClawAgentsError,
     adaptersError,
     harnessAgentsError,
   })
   const agentsLoading = getAgentsLoading({
-    statusLoading,
     adaptersLoading,
     harnessAgentsLoading,
-    openClawAgentsEnabled,
     openClawAgentsLoading,
   })
   const creatingAgent = creatingOpenClawAgent || createHarnessAgent.isPending
@@ -264,7 +258,9 @@ export const AgentsPage: FC = () => {
     )
   }
 
-  if (statusLoading && !status) {
+  // First-paint loader: until the harness listing has resolved at
+  // least once we don't know which adapters / agents to render.
+  if (harnessAgentsLoading && !status) {
     return (
       <div className="flex items-center justify-center py-20">
         <Loader2 className="size-6 animate-spin text-muted-foreground" />

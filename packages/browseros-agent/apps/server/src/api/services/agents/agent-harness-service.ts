@@ -68,6 +68,45 @@ export interface OpenClawProvisioner {
   listAgents(): Promise<
     Array<{ agentId: string; name: string; model?: string }>
   >
+  /**
+   * Optional. When wired, the harness exposes the gateway lifecycle
+   * snapshot through `GET /agents` so the agents page can render
+   * Running / Control plane connected pills without a separate
+   * `/claw/status` poll. Returns the same shape as the legacy
+   * endpoint; `null` when the snapshot can't be fetched (e.g. the
+   * gateway is not configured at all).
+   */
+  getStatus?(): Promise<GatewayStatusSnapshot | null>
+}
+
+/**
+ * Mirrors the wire shape `/claw/status` returns. Carried through the
+ * harness so the agents page has one polling source for everything it
+ * renders. Field optionality matches the legacy response.
+ */
+export interface GatewayStatusSnapshot {
+  status: 'uninitialized' | 'starting' | 'running' | 'stopped' | 'error'
+  podmanAvailable: boolean
+  machineReady: boolean
+  port: number | null
+  agentCount: number
+  error: string | null
+  controlPlaneStatus:
+    | 'disconnected'
+    | 'connecting'
+    | 'connected'
+    | 'reconnecting'
+    | 'recovering'
+    | 'failed'
+  lastGatewayError: string | null
+  lastRecoveryReason:
+    | 'transient_disconnect'
+    | 'signature_expired'
+    | 'pairing_required'
+    | 'token_mismatch'
+    | 'container_not_ready'
+    | 'unknown'
+    | null
 }
 
 export class AgentHarnessService {
@@ -130,6 +169,25 @@ export class AgentHarnessService {
         lastUsedAt,
       }
     })
+  }
+
+  /**
+   * Read the gateway lifecycle snapshot through the wired provisioner.
+   * Returns null if no provisioner is configured or it doesn't expose
+   * `getStatus`; route-layer callers should treat that as "no gateway,
+   * skip rendering OpenClaw-only chrome." Errors get logged + swallowed
+   * so a transient gateway issue doesn't 500 the listing endpoint.
+   */
+  async getGatewayStatus(): Promise<GatewayStatusSnapshot | null> {
+    if (!this.openclawProvisioner?.getStatus) return null
+    try {
+      return await this.openclawProvisioner.getStatus()
+    } catch (err) {
+      logger.warn('Failed to fetch gateway status for /agents listing', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return null
+    }
   }
 
   /**

@@ -39,6 +39,7 @@ import type {
 import {
   type AgentDefinitionWithActivity,
   AgentHarnessService,
+  type GatewayStatusSnapshot,
   type OpenClawProvisioner,
   OpenClawProvisionerUnavailableError,
   UnknownAgentError,
@@ -50,6 +51,7 @@ import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-p
 type AgentRouteService = {
   listAgents(): Promise<AgentDefinition[]>
   listAgentsWithActivity(): Promise<AgentDefinitionWithActivity[]>
+  getGatewayStatus(): Promise<GatewayStatusSnapshot | null>
   createAgent(input: {
     name: string
     adapter: AgentAdapter
@@ -123,9 +125,17 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
 
   return new Hono<Env>()
     .get('/adapters', (c) => c.json({ adapters: AGENT_ADAPTER_CATALOG }))
-    .get('/', async (c) =>
-      c.json({ agents: await service.listAgentsWithActivity() }),
-    )
+    .get('/', async (c) => {
+      // Single round-trip the agents page consumes: enriched agents
+      // (status + lastUsedAt) plus the gateway lifecycle snapshot the
+      // GatewayStatusBar / GatewayStateCards / ControlPlaneAlert used
+      // to fetch from `/claw/status`. Lets the page poll one endpoint.
+      const [agents, gateway] = await Promise.all([
+        service.listAgentsWithActivity(),
+        service.getGatewayStatus(),
+      ])
+      return c.json({ agents, gateway })
+    })
     .post('/', async (c) => {
       const parsed = await parseCreateAgentBody(c)
       if ('error' in parsed) return c.json({ error: parsed.error }, 400)

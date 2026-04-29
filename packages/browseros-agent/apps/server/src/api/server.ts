@@ -160,6 +160,7 @@ export async function createHttpServer(config: HttpServerConfig) {
               model: agent.model,
             }))
           },
+          getStatus: () => getOpenClawService().getStatus(),
         },
       }),
     )

@@ -10,6 +10,17 @@ import {
   type HarnessAgentHistoryPage,
   mapHarnessAgentToEntry,
 } from './agent-harness-types'
+import type { OpenClawStatus } from './useOpenClaw'
+
+/**
+ * Combined response shape of `GET /agents`. The page polls this once
+ * and consumes both fields, replacing the dedicated `/claw/status`
+ * poll the previous design carried.
+ */
+interface HarnessAgentsResponse {
+  agents: HarnessAgent[]
+  gateway: OpenClawStatus | null
+}
 
 export type { AgentHarnessStreamEvent }
 
@@ -69,14 +80,17 @@ export function useHarnessAgents(enabled = true) {
     error: urlError,
   } = useAgentServerUrl()
 
-  const query = useQuery<HarnessAgent[], Error>({
+  const query = useQuery<HarnessAgentsResponse, Error>({
     queryKey: [AGENT_QUERY_KEYS.agents, baseUrl],
     queryFn: async () => {
-      const data = await agentsFetch<{ agents: HarnessAgent[] }>(
+      const data = await agentsFetch<HarnessAgentsResponse>(
         baseUrl as string,
         '/',
       )
-      return data.agents ?? []
+      return {
+        agents: data.agents ?? [],
+        gateway: data.gateway ?? null,
+      }
     },
     enabled: Boolean(baseUrl) && !urlLoading && enabled,
     // Poll every 5s so the per-agent liveness state (working / idle /
@@ -88,8 +102,9 @@ export function useHarnessAgents(enabled = true) {
   })
 
   return {
-    agents: (query.data ?? []).map(mapHarnessAgentToEntry),
-    harnessAgents: query.data ?? [],
+    agents: (query.data?.agents ?? []).map(mapHarnessAgentToEntry),
+    harnessAgents: query.data?.agents ?? [],
+    gateway: query.data?.gateway ?? null,
     loading: query.isLoading || urlLoading,
     error: query.error ?? urlError,
     refetch: query.refetch,

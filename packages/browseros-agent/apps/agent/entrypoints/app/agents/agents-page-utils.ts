@@ -138,24 +138,20 @@ export function getVisibleOpenClawAgents(
 }
 
 export function getAgentsLoading(input: {
-  statusLoading: boolean
   adaptersLoading: boolean
   harnessAgentsLoading: boolean
-  openClawAgentsEnabled: boolean
   openClawAgentsLoading: boolean
 }): boolean {
   return (
-    input.statusLoading ||
     input.adaptersLoading ||
     input.harnessAgentsLoading ||
-    (input.openClawAgentsEnabled && input.openClawAgentsLoading)
+    input.openClawAgentsLoading
   )
 }
 
 export function getInlineError(input: {
   lifecyclePending: boolean
   pageError: string | null
-  statusError: Error | null
   openClawAgentsError: Error | null
   adaptersError: Error | null
   harnessAgentsError: Error | null
@@ -163,7 +159,6 @@ export function getInlineError(input: {
   if (input.lifecyclePending) return null
   return (
     input.pageError ??
-    input.statusError?.message ??
     input.openClawAgentsError?.message ??
     input.adaptersError?.message ??
     input.harnessAgentsError?.message ??

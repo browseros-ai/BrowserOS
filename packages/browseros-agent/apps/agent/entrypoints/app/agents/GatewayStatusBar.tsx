@@ -21,16 +21,15 @@ interface GatewayStatusBarProps {
 }
 
 /**
- * Compact one-line status bar for the OpenClaw gateway. Lives between
- * the page header and the agent list when at least one OpenClaw agent
- * is in the picture; collapses to nothing when the user only has
- * Claude/Codex agents.
+ * Compact one-line status bar for the OpenClaw gateway. Renders the
+ * lifecycle pills (Running / Control plane connected) plus a Terminal
+ * escape hatch and a Restart Gateway action. Lives between the page
+ * header and the agent list when at least one OpenClaw agent is in
+ * the merged list; collapses to nothing for Claude/Codex-only setups.
  *
- * Carries the lifecycle pills + a Terminal escape hatch + a Restart
- * button. The agent listing itself auto-polls every 5s, so a manual
- * refresh isn't needed; restart is a real lifecycle action that the
- * old AgentsPageHeader exposed and is still useful when the gateway
- * gets wedged.
+ * Status is sourced from `GET /agents`'s `gateway` field — the agents
+ * page no longer polls `/claw/status` directly. One endpoint, one
+ * 5s interval, no duplicate state.
  */
 export const GatewayStatusBar: FC<GatewayStatusBarProps> = ({
   status,
