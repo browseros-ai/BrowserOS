@@ -193,16 +193,6 @@ function getCreateAgentValidationError(body: { name?: string }): string | null {
   return null
 }
 
-function parsePositiveIntQuery(
-  value: string | undefined,
-  fallback: number,
-): number {
-  if (value === undefined) return fallback
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return fallback
-  return Math.max(1, Math.trunc(parsed))
-}
-
 export function createOpenClawRoutes() {
   return new Hono()
     .get('/status', async (c) => {
@@ -398,34 +388,6 @@ export function createOpenClawRoutes() {
         if (err instanceof OpenClawProtectedAgentError) {
           return c.json({ error: err.message }, 400)
         }
-        const message = err instanceof Error ? err.message : String(err)
-        return c.json({ error: message }, 500)
-      }
-    })
-
-    .get('/agents/:id/sessions', async (c) => {
-      const { id } = c.req.param()
-      const limit = parsePositiveIntQuery(c.req.query('limit'), 20)
-
-      try {
-        const sessions = await getOpenClawService().listSessions(id)
-        return c.json({
-          agentId: id,
-          sessions: sessions.slice(0, Math.min(limit, 100)),
-        })
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return c.json({ error: message }, 500)
-      }
-    })
-
-    .get('/agents/:id/session', async (c) => {
-      const { id } = c.req.param()
-
-      try {
-        const session = await getOpenClawService().resolveAgentSession(id)
-        return c.json(session)
-      } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         return c.json({ error: message }, 500)
       }

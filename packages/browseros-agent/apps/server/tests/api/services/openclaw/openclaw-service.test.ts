@@ -165,42 +165,6 @@ describe('OpenClawService', () => {
     ])
   })
 
-  it('resolves the latest user-chat session for an agent', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
-    await mkdir(join(tempDir, '.openclaw', 'agents', 'main', 'sessions'), {
-      recursive: true,
-    })
-    await writeFile(
-      join(tempDir, '.openclaw', 'agents', 'main', 'sessions', 'sessions.json'),
-      JSON.stringify({
-        'agent:main:cron:daily': {
-          sessionId: 'cron-session',
-          updatedAt: 30,
-        },
-        'openai-user:browseros:main:chat-session': {
-          sessionId: 'chat-session',
-          updatedAt: 20,
-        },
-      }),
-    )
-    const service = new OpenClawService() as MutableOpenClawService
-    service.openclawDir = tempDir
-
-    expect(service.resolveAgentSession('main')).toEqual({
-      agentId: 'main',
-      exists: true,
-      sessionKey: 'openai-user:browseros:main:chat-session',
-      session: {
-        key: 'openai-user:browseros:main:chat-session',
-        updatedAt: 20,
-        sessionId: 'chat-session',
-        agentId: 'main',
-        kind: 'chat',
-        source: 'user-chat',
-      },
-    })
-  })
-
   it('normalizes recursive OpenClaw BrowserOS session keys to the raw chat session id', () => {
     expect(
       normalizeBrowserOSChatSessionKey(
@@ -214,77 +178,6 @@ describe('OpenClawService', () => {
         'agent:main:openai-user:browseros:main:agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00',
       ),
     ).toBe('e1ee8e17-4fdb-4072-99ce-8f680853ec00')
-  })
-
-  it('returns the raw BrowserOS session id while retaining the OpenClaw key for diagnostics', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
-    await mkdir(join(tempDir, '.openclaw', 'agents', 'main', 'sessions'), {
-      recursive: true,
-    })
-    await writeFile(
-      join(tempDir, '.openclaw', 'agents', 'main', 'sessions', 'sessions.json'),
-      JSON.stringify({
-        'agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00':
-          {
-            sessionId: 'chat-session',
-            updatedAt: 20,
-          },
-      }),
-    )
-    const service = new OpenClawService() as MutableOpenClawService
-    service.openclawDir = tempDir
-
-    expect(service.resolveAgentSession('main')).toEqual({
-      agentId: 'main',
-      exists: true,
-      sessionKey: 'e1ee8e17-4fdb-4072-99ce-8f680853ec00',
-      session: {
-        key: 'agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00',
-        updatedAt: 20,
-        sessionId: 'chat-session',
-        agentId: 'main',
-        kind: 'chat',
-        source: 'user-chat',
-      },
-    })
-  })
-
-  it('resolves recursive active sessions back to the canonical OpenClaw transcript key', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
-    await mkdir(join(tempDir, '.openclaw', 'agents', 'main', 'sessions'), {
-      recursive: true,
-    })
-    await writeFile(
-      join(tempDir, '.openclaw', 'agents', 'main', 'sessions', 'sessions.json'),
-      JSON.stringify({
-        'agent:main:openai-user:browseros:main:agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00':
-          {
-            sessionId: 'nested-session',
-            updatedAt: 30,
-          },
-        'agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00':
-          {
-            sessionId: 'canonical-session',
-            updatedAt: 20,
-          },
-      }),
-    )
-    const service = new OpenClawService() as MutableOpenClawService
-    service.openclawDir = tempDir
-
-    expect(service.resolveAgentSession('main')).toEqual({
-      agentId: 'main',
-      exists: true,
-      sessionKey: 'e1ee8e17-4fdb-4072-99ce-8f680853ec00',
-      session: {
-        key: 'agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00',
-        updatedAt: 20,
-        sessionId: 'canonical-session',
-        agentId: 'main',
-        kind: 'chat',
-        source: 'user-chat',
-      },
-    })
   })
 
   it('normalizes recursive session keys before streaming chat', async () => {

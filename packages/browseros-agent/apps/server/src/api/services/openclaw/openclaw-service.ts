@@ -64,11 +64,6 @@ import {
   type OpenClawSessionHistory,
   type OpenClawSessionHistoryEvent,
 } from './openclaw-http-client'
-import {
-  type ClawEvent,
-  OpenClawJsonlReader,
-  summarizeToolActivity,
-} from './openclaw-jsonl-reader'
 import { OpenClawObserver } from './openclaw-observer'
 import {
   type ResolvedOpenClawProviderConfig,
@@ -243,32 +238,6 @@ function getOpenClawBrowserOSSessionPrefix(agentId: string): string {
   return `agent:${agentId}:openai-user:browseros:${agentId}:`
 }
 
-function toOpenClawBrowserOSSessionKey(
-  agentId: string,
-  sessionKey: string,
-): string {
-  return `${getOpenClawBrowserOSSessionPrefix(agentId)}${normalizeBrowserOSChatSessionKey(
-    agentId,
-    sessionKey,
-  )}`
-}
-
-function classifySessionSource(key: string): OpenClawSessionSource {
-  if (key.includes(':cron:')) return 'cron'
-  if (key.includes(':hook:')) return 'hook'
-  if (key.includes('openai-user:browseros')) return 'user-chat'
-  if (key.includes('qa-channel')) return 'channel'
-  return 'other'
-}
-
-function sumCostFromEvents(events: ClawEvent[]): number {
-  let cost = 0
-  for (const e of events) {
-    if (e.type === 'agent.message' && e.costUsd) cost += e.costUsd
-  }
-  return cost
-}
-
 export interface AgentOverview {
   agentId: string
   status: AgentLiveStatus
@@ -309,16 +278,6 @@ export class OpenClawService {
   private lifecycleLock: Promise<void> = Promise.resolve()
   private clawSession = new ClawSession()
   private observer = new OpenClawObserver(this.clawSession)
-
-  private _jsonlReader: OpenClawJsonlReader | null = null
-  private get jsonlReader(): OpenClawJsonlReader {
-    if (!this._jsonlReader) {
-      this._jsonlReader = new OpenClawJsonlReader(
-        getOpenClawStateDir(this.openclawDir),
-      )
-    }
-    return this._jsonlReader
-  }
 
   constructor(config: OpenClawServiceConfig = {}) {
     this.openclawDir = getOpenClawDir()
@@ -794,113 +753,34 @@ export class OpenClawService {
     return this.runControlPlaneCall(() => this.cliClient.listAgents())
   }
 
-  listSessions(agentId?: string): BrowserOSOpenClawSession[] {
-    logger.debug('Listing OpenClaw sessions', { agentId })
-
-    const agentIds = agentId ? [agentId] : this.jsonlReader.listAgents()
-
-    const sessions: BrowserOSOpenClawSession[] = []
-    for (const id of agentIds) {
-      for (const entry of this.jsonlReader.listSessions(id)) {
-        sessions.push({
-          key: entry.key,
-          updatedAt: entry.updatedAt,
-          sessionId: entry.sessionId,
-          agentId: id,
-          kind: 'chat',
-          source: classifySessionSource(entry.key),
-        })
-      }
-    }
-    return sessions.sort((a, b) => b.updatedAt - a.updatedAt)
-  }
-
-  resolveAgentSession(agentId: string): BrowserOSOpenClawAgentSessionResponse {
-    const sessions = this.listSessions(agentId)
-    const session =
-      sessions.find((entry) => entry.source === 'user-chat') ??
-      sessions.find((entry) => entry.kind.toLowerCase().includes('chat')) ??
-      sessions[0] ??
-      null
-
-    if (session) {
-      return this.resolveSpecificAgentSession(agentId, session.key)
-    }
-
-    return {
-      agentId,
-      exists: false,
-      sessionKey: null,
-      session: null,
-    }
-  }
-
   // ── Dashboard ──────────────────────────────────────────────────────
 
+  /**
+   * Reports the live status of every agent the in-memory `ClawSession`
+   * knows about. Pre-Step-11 the dashboard also surfaced JSONL-derived
+   * stats (latest message, per-session cost, activity summary) that
+   * went away with `OpenClawJsonlReader`. Those fields are filled with
+   * null/0 placeholders until a harness-side equivalent ships;
+   * `status`/`currentTool` still reflect real-time observer state.
+   */
   getDashboard(): DashboardResponse {
-    const agentIds = this.jsonlReader.listAgents()
+    const states = this.clawSession.getAllStates()
     const agentOverviews: AgentOverview[] = []
-    let totalCostUsd = 0
-
-    for (const agentId of agentIds) {
-      const liveStatus = this.clawSession.getState(agentId)
-      const sessions = this.jsonlReader.listSessions(agentId)
-
-      if (sessions.length === 0) {
-        agentOverviews.push({
-          agentId,
-          status: liveStatus.status,
-          latestMessage: null,
-          latestMessageAt: null,
-          activitySummary: null,
-          currentTool: liveStatus.currentTool,
-          totalCostUsd: 0,
-          sessionCount: 0,
-        })
-        continue
-      }
-
-      const latestSession = sessions[0]
-      // Read the latest session's JSONL once and derive everything from
-      // the loaded events array — avoids re-reading the same file for
-      // latestAgentMessage() and getSessionStats() individually.
-      const events = this.jsonlReader.listBySession(agentId, latestSession.key)
-
-      let latestMsg: ClawEvent | undefined
-      for (let i = events.length - 1; i >= 0; i--) {
-        if (events[i]?.type === 'agent.message') {
-          latestMsg = events[i]
-          break
-        }
-      }
-
-      // Accumulate cost: derive from the already-loaded events for the
-      // latest session, read remaining sessions separately.
-      let agentCost = sumCostFromEvents(events)
-      for (let i = 1; i < sessions.length; i++) {
-        const stats = this.jsonlReader.getSessionStats(
-          agentId,
-          sessions[i]!.key,
-        )
-        agentCost += stats.totalCostUsd
-      }
-      totalCostUsd += agentCost
-
+    for (const [agentId, liveStatus] of states) {
       agentOverviews.push({
         agentId,
         status: liveStatus.status,
-        latestMessage: latestMsg?.content?.slice(0, 200) ?? null,
-        latestMessageAt: latestMsg?.createdAt ?? latestSession.updatedAt,
-        activitySummary: summarizeToolActivity(events),
+        latestMessage: null,
+        latestMessageAt: liveStatus.lastEventAt || null,
+        activitySummary: null,
         currentTool: liveStatus.currentTool,
-        totalCostUsd: agentCost,
-        sessionCount: sessions.length,
+        totalCostUsd: 0,
+        sessionCount: 0,
       })
     }
-
     return {
       agents: agentOverviews,
-      summary: { totalAgents: agentIds.length, totalCostUsd },
+      summary: { totalAgents: agentOverviews.length, totalCostUsd: 0 },
     }
   }
 
@@ -938,45 +818,6 @@ export class OpenClawService {
         signal: options.signal,
       }),
     )
-  }
-
-  private resolveSpecificAgentSession(
-    agentId: string,
-    sessionKey: string,
-  ): BrowserOSOpenClawAgentSessionResponse {
-    const normalizedSessionKey = normalizeBrowserOSChatSessionKey(
-      agentId,
-      sessionKey,
-    )
-    const canonicalSessionKey = toOpenClawBrowserOSSessionKey(
-      agentId,
-      normalizedSessionKey,
-    )
-    const sessions = this.listSessions(agentId)
-    const session =
-      sessions.find((entry) => entry.key === canonicalSessionKey) ??
-      sessions.find((entry) => entry.key === sessionKey) ??
-      sessions.find(
-        (entry) =>
-          normalizeBrowserOSChatSessionKey(agentId, entry.key) ===
-          normalizedSessionKey,
-      )
-
-    if (!session) {
-      return {
-        agentId,
-        exists: false,
-        sessionKey: normalizedSessionKey,
-        session: null,
-      }
-    }
-
-    return {
-      agentId,
-      exists: true,
-      sessionKey: normalizedSessionKey,
-      session,
-    }
   }
 
   // ── Session History (HTTP) ───────────────────────────────────────────
@@ -1189,7 +1030,6 @@ export class OpenClawService {
     })
     this.cliClient = new OpenClawCliClient(this.runtime)
     this.bootstrapCliClient = this.buildBootstrapCliClient()
-    this._jsonlReader = null
   }
 
   private setPort(hostPort: number): void {
@@ -1294,14 +1134,9 @@ export class OpenClawService {
   }
 
   private ensureObserverConnected(): void {
-    // Seed the ClawSession state machine from JSONL on first control plane
-    // call. This gives every agent a correct initial status (working/idle)
-    // before the WS observer has seen any events.
-    if (!this.clawSession.isSeeded()) {
-      this.clawSession.seedFromJsonl(this.jsonlReader)
-    }
-
     if (this.observer.isConnected()) return
+    // ClawSession starts empty after the JSONL seed was removed; the WS
+    // observer fills in agent status as events arrive.
     const url = `http://127.0.0.1:${this.hostPort}`
     this.observer.connect(url, this.token)
   }
