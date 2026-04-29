@@ -268,7 +268,13 @@ async function parseCreateAgentBody(c: Context<Env>): Promise<
       ? record.reasoningEffort.trim()
       : undefined
 
-  if (!isSupportedAgentModel(record.adapter, modelId)) {
+  // OpenClaw agents resolve their model from the gateway-side provider
+  // config rather than from the harness catalog. Skip catalog model
+  // validation for that adapter; everything else still uses the catalog.
+  if (
+    record.adapter !== 'openclaw' &&
+    !isSupportedAgentModel(record.adapter, modelId)
+  ) {
     return { error: 'Invalid modelId' }
   }
   if (!isSupportedReasoningEffort(record.adapter, reasoningEffort)) {
