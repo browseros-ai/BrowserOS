@@ -40,12 +40,21 @@ export interface OpenClawProvisioner {
     supportsImages?: boolean
   }): Promise<unknown>
   removeAgent(agentId: string): Promise<void>
+  /**
+   * Lists agents currently registered on the gateway. Used by the
+   * harness reconciliation pass to backfill harness records for
+   * gateway-side agents that pre-date the dual-creation flow.
+   */
+  listAgents(): Promise<
+    Array<{ agentId: string; name: string; model?: string }>
+  >
 }
 
 export class AgentHarnessService {
   private readonly agentStore: FileAgentStore
   private readonly runtime: AgentRuntime
   private readonly openclawProvisioner: OpenClawProvisioner | null
+  private gatewayReconciled: Promise<void> | null = null
 
   constructor(
     deps: {
@@ -66,8 +75,22 @@ export class AgentHarnessService {
     this.openclawProvisioner = deps.openclawProvisioner ?? null
   }
 
-  listAgents(): Promise<AgentDefinition[]> {
+  async listAgents(): Promise<AgentDefinition[]> {
+    await this.ensureGatewayReconciled()
     return this.agentStore.list()
+  }
+
+  private ensureGatewayReconciled(): Promise<void> {
+    if (this.gatewayReconciled) return this.gatewayReconciled
+    this.gatewayReconciled = this.reconcileWithGateway().catch((err) => {
+      // Don't permanently memoize failure — clear the cache so the
+      // next list call retries (gateway may have been down at boot).
+      this.gatewayReconciled = null
+      logger.warn('Harness gateway reconciliation failed', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
+    return this.gatewayReconciled
   }
 
   async createAgent(input: CreateAgentInput): Promise<AgentDefinition> {
@@ -110,6 +133,56 @@ export class AgentHarnessService {
         })
       })
       throw err
+    }
+  }
+
+  /**
+   * Pulls every gateway-side OpenClaw agent into the harness store as a
+   * harness record (idempotent, safe to call repeatedly). This lets
+   * legacy gateway-only agents — including the always-present `main`
+   * sandbox and any orphans from rolled-back dual-creates — surface
+   * through the unified `/agents/*` API and route through the harness
+   * chat path. After this runs, the rail dedup in the UI keeps a
+   * single entry per agent (the harness one wins).
+   *
+   * Failures are logged and swallowed: the harness must still come up
+   * if the gateway is unreachable at boot.
+   */
+  async reconcileWithGateway(): Promise<void> {
+    if (!this.openclawProvisioner) return
+    let gatewayAgents: Awaited<ReturnType<OpenClawProvisioner['listAgents']>>
+    try {
+      gatewayAgents = await this.openclawProvisioner.listAgents()
+    } catch (err) {
+      logger.warn('Gateway listAgents failed during harness reconciliation', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return
+    }
+    const existing = await this.agentStore.list()
+    const existingIds = new Set(existing.map((agent) => agent.id))
+    let backfilled = 0
+    for (const gatewayAgent of gatewayAgents) {
+      if (existingIds.has(gatewayAgent.agentId)) continue
+      try {
+        await this.agentStore.upsertExisting({
+          id: gatewayAgent.agentId,
+          name: gatewayAgent.name,
+          adapter: 'openclaw',
+        })
+        backfilled += 1
+      } catch (err) {
+        logger.warn('Failed to backfill harness record for gateway agent', {
+          agentId: gatewayAgent.agentId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    if (backfilled > 0) {
+      logger.info('Harness reconciled with gateway', {
+        backfilled,
+        gatewayCount: gatewayAgents.length,
+      })
     }
   }
 

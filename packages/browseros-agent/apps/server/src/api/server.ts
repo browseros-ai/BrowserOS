@@ -147,6 +147,14 @@ export async function createHttpServer(config: HttpServerConfig) {
         openclawProvisioner: {
           createAgent: (input) => getOpenClawService().createAgent(input),
           removeAgent: (agentId) => getOpenClawService().removeAgent(agentId),
+          listAgents: async () => {
+            const agents = await getOpenClawService().listAgents()
+            return agents.map((agent) => ({
+              agentId: agent.agentId,
+              name: agent.name,
+              model: agent.model,
+            }))
+          },
         },
       }),
     )

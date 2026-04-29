@@ -151,6 +151,9 @@ describe('AgentHarnessService', () => {
       async removeAgent(agentId: string) {
         provisionerCalls.push({ method: 'removeAgent', input: agentId })
       },
+      async listAgents() {
+        return []
+      },
     }
     const service = new AgentHarnessService({
       agentStore: createAgentStore(agents) as FileAgentStore,
@@ -196,6 +199,9 @@ describe('AgentHarnessService', () => {
       async removeAgent() {
         // no-op
       },
+      async listAgents() {
+        return []
+      },
     }
     const service = new AgentHarnessService({
       agentStore: createAgentStore(agents) as FileAgentStore,
@@ -234,6 +240,9 @@ describe('AgentHarnessService', () => {
         provisionerCalls.push(agentId)
         if (shouldFail) throw new Error('gateway down')
       },
+      async listAgents() {
+        return []
+      },
     }
     const service = new AgentHarnessService({
       agentStore: createAgentStore(agents) as FileAgentStore,
@@ -259,6 +268,73 @@ describe('AgentHarnessService', () => {
     shouldFail = true
     expect(await service.deleteAgent(second.id)).toBe(true)
     expect(agents).toHaveLength(0)
+  })
+
+  it('backfills harness records for gateway agents on first listAgents call', async () => {
+    const agents: AgentDefinition[] = []
+    const provisioner = {
+      async createAgent() {
+        return { agentId: 'mock', name: 'mock', workspace: '/workspace' }
+      },
+      async removeAgent() {
+        // no-op
+      },
+      async listAgents() {
+        return [
+          { agentId: 'main', name: 'main' },
+          { agentId: 'orphan', name: 'orphan' },
+        ]
+      },
+    }
+    const service = new AgentHarnessService({
+      agentStore: createAgentStore(agents) as FileAgentStore,
+      runtime: stubRuntime(),
+      openclawProvisioner: provisioner,
+    })
+
+    const listed = await service.listAgents()
+    expect(listed.map((a) => a.id).sort()).toEqual(['main', 'orphan'])
+    expect(listed.every((a) => a.adapter === 'openclaw')).toBe(true)
+
+    // Idempotent: a second listAgents must not duplicate the records.
+    const second = await service.listAgents()
+    expect(second).toHaveLength(2)
+  })
+
+  it('keeps harness usable when gateway listAgents fails during reconciliation', async () => {
+    const agents: AgentDefinition[] = [
+      {
+        id: 'agent-existing',
+        name: 'existing',
+        adapter: 'claude',
+        modelId: 'haiku',
+        reasoningEffort: 'medium',
+        permissionMode: 'approve-all',
+        sessionKey: 'agent:agent-existing:main',
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+    ]
+    const provisioner = {
+      async createAgent() {
+        return { agentId: 'mock', name: 'mock', workspace: '/workspace' }
+      },
+      async removeAgent() {
+        // no-op
+      },
+      async listAgents() {
+        throw new Error('gateway down at boot')
+      },
+    }
+    const service = new AgentHarnessService({
+      agentStore: createAgentStore(agents) as FileAgentStore,
+      runtime: stubRuntime(),
+      openclawProvisioner: provisioner,
+    })
+
+    const listed = await service.listAgents()
+    expect(listed).toHaveLength(1)
+    expect(listed[0]?.id).toBe('agent-existing')
   })
 })
 
@@ -307,6 +383,29 @@ function createAgentStore(agents: AgentDefinition[]) {
       if (idx === -1) return false
       agents.splice(idx, 1)
       return true
+    },
+    async upsertExisting(input: {
+      id: string
+      name: string
+      adapter: AgentDefinition['adapter']
+      modelId?: string
+      reasoningEffort?: string
+    }) {
+      const existing = agents.find((entry) => entry.id === input.id)
+      if (existing) return existing
+      const agent: AgentDefinition = {
+        id: input.id,
+        name: input.name,
+        adapter: input.adapter,
+        modelId: input.modelId ?? 'default',
+        reasoningEffort: input.reasoningEffort ?? 'medium',
+        permissionMode: 'approve-all',
+        sessionKey: `agent:${input.id}:main`,
+        createdAt: 1000,
+        updatedAt: 1000,
+      }
+      agents.push(agent)
+      return agent
     },
   } satisfies Partial<FileAgentStore>
 }

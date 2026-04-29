@@ -105,6 +105,49 @@ export class FileAgentStore {
     })
   }
 
+  /**
+   * Inserts a harness record using a caller-provided id. Used to backfill
+   * harness records for gateway-side OpenClaw agents that pre-date the
+   * dual-creation flow (or were created directly via the legacy
+   * `/claw/agents` API). No-ops when an entry with this id already
+   * exists, so the call is safe to run on every server start.
+   */
+  async upsertExisting(input: {
+    id: string
+    name: string
+    adapter: AgentAdapter
+    modelId?: string
+    reasoningEffort?: string
+  }): Promise<AgentDefinition> {
+    return this.withWriteLock(async () => {
+      const file = await this.read()
+      const existing = file.agents.find((entry) => entry.id === input.id)
+      if (existing) return existing
+      const now = Date.now()
+      const agent: AgentDefinition = {
+        id: input.id,
+        name: input.name.trim(),
+        adapter: input.adapter,
+        modelId: input.modelId ?? resolveDefaultModelId(input.adapter),
+        reasoningEffort:
+          input.reasoningEffort ?? resolveDefaultReasoningEffort(input.adapter),
+        permissionMode: 'approve-all',
+        sessionKey: `agent:${input.id}:main`,
+        createdAt: now,
+        updatedAt: now,
+      }
+      await this.write({ ...file, agents: [...file.agents, agent] })
+      logger.info('Agent harness store backfilled agent', {
+        agentId: agent.id,
+        name: agent.name,
+        adapter: agent.adapter,
+        sessionKey: agent.sessionKey,
+        filePath: this.filePath,
+      })
+      return agent
+    })
+  }
+
   async delete(id: string): Promise<boolean> {
     return this.withWriteLock(async () => {
       const file = await this.read()
