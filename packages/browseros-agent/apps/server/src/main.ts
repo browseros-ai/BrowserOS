@@ -18,7 +18,6 @@ import {
   configureVmRuntime,
   getOpenClawService,
 } from './api/services/openclaw/openclaw-service'
-import { shutdownOutboundQueueService } from './api/services/queue'
 import { CdpBackend } from './browser/backends/cdp'
 import { Browser } from './browser/browser'
 import type { ServerConfig } from './config'
@@ -145,7 +144,6 @@ export class Application {
   stop(reason?: string): void {
     logger.info('Shutting down server...', { reason })
     stopSkillSync()
-    shutdownOutboundQueueService()
     getOpenClawService()
       .shutdown()
       .catch(() => {})

@@ -180,33 +180,6 @@ describe('OpenClawService', () => {
     ).toBe('e1ee8e17-4fdb-4072-99ce-8f680853ec00')
   })
 
-  it('normalizes recursive session keys before streaming chat', async () => {
-    const service = new OpenClawService() as MutableOpenClawService
-    const stream = new ReadableStream()
-    const streamChat = mock(async () => stream)
-
-    service.runtime = {
-      isReady: async () => true,
-    }
-    service.httpClient = {
-      streamChat,
-    }
-
-    await expect(
-      service.chatStream(
-        'main',
-        'agent:main:openai-user:browseros:main:agent:main:openai-user:browseros:main:e1ee8e17-4fdb-4072-99ce-8f680853ec00',
-        'hello',
-      ),
-    ).resolves.toBe(stream)
-    expect(streamChat).toHaveBeenCalledWith({
-      agentId: 'main',
-      sessionKey: 'e1ee8e17-4fdb-4072-99ce-8f680853ec00',
-      message: 'hello',
-      history: [],
-    })
-  })
-
   it('maps successful cli client probes into connected status', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'openclaw-service-'))
     await mkdir(join(tempDir, '.openclaw'), { recursive: true })

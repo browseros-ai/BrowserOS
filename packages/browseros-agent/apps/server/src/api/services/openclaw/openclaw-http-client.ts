@@ -79,19 +79,6 @@ export class OpenClawHttpClient {
     private readonly getToken: () => Promise<string>,
   ) {}
 
-  async streamChat(
-    input: OpenClawChatRequest,
-  ): Promise<ReadableStream<OpenClawStreamEvent>> {
-    const response = await this.fetchChat(input)
-    const body = response.body
-
-    if (!body) {
-      throw new Error('OpenClaw chat response had no body')
-    }
-
-    return createEventStream(body, input.signal)
-  }
-
   async getSessionHistory(
     sessionKey: string,
     input: OpenClawSessionHistoryInput = {},
@@ -130,40 +117,6 @@ export class OpenClawHttpClient {
     } catch {
       return false
     }
-  }
-
-  private async fetchChat(input: OpenClawChatRequest): Promise<Response> {
-    const token = await this.getToken()
-    const userContent = buildUserContent(input)
-    const response = await fetch(
-      `http://127.0.0.1:${this.hostPort}/v1/chat/completions`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: resolveAgentModel(input.agentId),
-          stream: true,
-          messages: [
-            ...(input.history ?? []),
-            { role: 'user', content: userContent },
-          ],
-          user: `browseros:${input.agentId}:${input.sessionKey}`,
-        }),
-        signal: input.signal,
-      },
-    )
-
-    if (response.ok) {
-      return response
-    }
-
-    const detail = await response.text()
-    throw new Error(
-      detail || `OpenClaw chat failed with status ${response.status}`,
-    )
   }
 
   private async fetchSessionHistory(
@@ -211,7 +164,7 @@ function buildHistoryPath(
   }`
 }
 
-function resolveAgentModel(agentId: string): string {
+function _resolveAgentModel(agentId: string): string {
   return agentId === 'main' ? 'openclaw' : `openclaw/${agentId}`
 }
 
@@ -223,7 +176,7 @@ function resolveAgentModel(agentId: string): string {
  * fall back to a plain string `content` so simple text-only sends keep
  * the same wire shape we've always sent.
  */
-function buildUserContent(
+function _buildUserContent(
   input: OpenClawChatRequest,
 ): string | OpenClawChatContentPart[] {
   if (!input.messageParts || input.messageParts.length === 0) {
@@ -239,7 +192,7 @@ function buildUserContent(
   return [{ type: 'text', text: input.message }, ...input.messageParts]
 }
 
-function createEventStream(
+function _createEventStream(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
 ): ReadableStream<OpenClawStreamEvent> {

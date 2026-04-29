@@ -17,7 +17,6 @@ import {
 import { DEFAULT_PORTS } from '@browseros/shared/constants/ports'
 import { getOpenClawDir } from '../../../lib/browseros-dir'
 import { logger } from '../../../lib/logger'
-import type { MonitoringChatTurn } from '../../../monitoring/types'
 import {
   type AgentLiveStatus,
   type AgentSessionState,
@@ -59,7 +58,6 @@ import {
   mergeEnvContent,
 } from './openclaw-env'
 import {
-  type OpenClawChatContentPart,
   OpenClawHttpClient,
   type OpenClawSessionHistory,
   type OpenClawSessionHistoryEvent,
@@ -69,7 +67,6 @@ import {
   type ResolvedOpenClawProviderConfig,
   resolveSupportedOpenClawProvider,
 } from './openclaw-provider-map'
-import type { OpenClawStreamEvent } from './openclaw-types'
 import { allocateGatewayPort, readPersistedGatewayPort } from './runtime-state'
 
 const READY_TIMEOUT_MS = 30_000
@@ -782,42 +779,6 @@ export class OpenClawService {
       agents: agentOverviews,
       summary: { totalAgents: agentOverviews.length, totalCostUsd: 0 },
     }
-  }
-
-  // ── Chat Stream (HTTP) ───────────────────────────────────────────────
-
-  async chatStream(
-    agentId: string,
-    sessionKey: string,
-    message: string,
-    history: MonitoringChatTurn[] = [],
-    options: {
-      messageParts?: OpenClawChatContentPart[]
-      signal?: AbortSignal
-    } = {},
-  ): Promise<ReadableStream<OpenClawStreamEvent>> {
-    await this.assertGatewayReady()
-    const normalizedSessionKey = normalizeBrowserOSChatSessionKey(
-      agentId,
-      sessionKey,
-    )
-    logger.info('Starting OpenClaw chat stream', {
-      agentId,
-      sessionKey: normalizedSessionKey,
-      messageLength: message.length,
-      historyLength: history.length,
-      contentPartCount: options.messageParts?.length ?? 0,
-    })
-    return this.runControlPlaneCall(() =>
-      this.httpClient.streamChat({
-        agentId,
-        sessionKey: normalizedSessionKey,
-        message,
-        messageParts: options.messageParts,
-        history,
-        signal: options.signal,
-      }),
-    )
   }
 
   // ── Session History (HTTP) ───────────────────────────────────────────
