@@ -319,6 +319,24 @@ export interface InboundImageAttachment {
   data: string
 }
 
+// Defense-in-depth caps on chat-body image attachments. The composer
+// already enforces these client-side (see `lib/attachments.ts`) but
+// `/agents/:id/chat` accepts direct curl/script callers too, so the
+// server has to validate independently.
+const MAX_CHAT_ATTACHMENTS = 10
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5 MB raw, post-decode
+// data: URLs encode bytes as base64 (~4/3 inflation) plus the
+// `data:<mime>;base64,` prefix; cap the encoded string against that
+// rather than 2× the raw budget.
+const MAX_IMAGE_DATA_URL_LENGTH = Math.ceil(MAX_IMAGE_BYTES * (4 / 3)) + 100
+const ALLOWED_IMAGE_MEDIA_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+  'image/gif',
+])
+
 async function parseChatBody(
   c: Context<Env>,
 ): Promise<
@@ -331,20 +349,41 @@ async function parseChatBody(
   const attachmentsRaw = Array.isArray(body.value.attachments)
     ? body.value.attachments
     : []
+  if (attachmentsRaw.length > MAX_CHAT_ATTACHMENTS) {
+    return {
+      error: `at most ${MAX_CHAT_ATTACHMENTS} attachments are allowed per message`,
+    }
+  }
   const attachments: InboundImageAttachment[] = []
   for (const entry of attachmentsRaw) {
-    if (!entry || typeof entry !== 'object') continue
+    if (!entry || typeof entry !== 'object') {
+      return { error: 'invalid attachment entry' }
+    }
     const record = entry as Record<string, unknown>
-    if (record.kind !== 'image') continue
+    if (record.kind !== 'image') {
+      return { error: 'attachment kind must be "image"' }
+    }
     const mediaType =
       typeof record.mediaType === 'string' ? record.mediaType : ''
     const dataUrl = typeof record.dataUrl === 'string' ? record.dataUrl : ''
-    if (!mediaType || !dataUrl) continue
+    if (!ALLOWED_IMAGE_MEDIA_TYPES.has(mediaType)) {
+      return {
+        error: `unsupported image type: ${mediaType || 'unknown'}`,
+      }
+    }
+    if (!dataUrl.startsWith('data:')) {
+      return { error: 'image attachment must include a data: URL' }
+    }
+    if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) {
+      return { error: `image exceeds ${MAX_IMAGE_BYTES} bytes` }
+    }
     // Strip the `data:<mime>;base64,` prefix — ACP image blocks carry
     // raw base64 plus the mime type as separate fields.
     const commaIdx = dataUrl.indexOf(',')
     const data = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl
-    if (!data) continue
+    if (!data) {
+      return { error: 'image attachment payload is empty' }
+    }
     attachments.push({ mediaType, data })
   }
   if (!message && attachments.length === 0) {
