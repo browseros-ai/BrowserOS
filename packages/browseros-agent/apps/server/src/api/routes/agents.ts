@@ -18,6 +18,10 @@ import {
   AcpxRuntime,
   type OpenclawGatewayAccessor,
 } from '../../lib/agents/acpx-runtime'
+import type {
+  ActiveTurnInfo,
+  TurnFrame,
+} from '../../lib/agents/active-turn-registry'
 import {
   AGENT_ADAPTER_CATALOG,
   getAgentAdapterDescriptor,
@@ -42,6 +46,7 @@ import {
   type GatewayStatusSnapshot,
   type OpenClawProvisioner,
   OpenClawProvisionerUnavailableError,
+  TurnAlreadyActiveError,
   UnknownAgentError,
 } from '../services/agents/agent-harness-service'
 import type { OpenClawGatewayChatClient } from '../services/openclaw/openclaw-gateway-chat-client'
@@ -66,6 +71,26 @@ type AgentRouteService = {
   getAgent(agentId: string): Promise<AgentDefinition | null>
   deleteAgent(agentId: string): Promise<boolean>
   getHistory(agentId: string): Promise<AgentHistoryPage>
+  startTurn(input: {
+    agentId: string
+    message: string
+    attachments?: ReadonlyArray<{ mediaType: string; data: string }>
+  }): Promise<{ turnId: string; frames: ReadableStream<TurnFrame> }>
+  attachTurn(input: {
+    turnId: string
+    lastSeq?: number
+  }): ReadableStream<TurnFrame> | null
+  getActiveTurn(agentId: string, sessionId?: 'main'): ActiveTurnInfo | null
+  cancelTurn(input: {
+    agentId: string
+    turnId?: string
+    reason?: string
+  }): boolean
+  /**
+   * Legacy wrapper used by the sidepanel ACP route and any external
+   * callers that want a flat AgentStreamEvent stream. Internally goes
+   * through the registry.
+   */
   send(input: {
     agentId: string
     message: string
@@ -217,43 +242,127 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
       const parsed = await parseChatBody(c)
       if ('error' in parsed) return c.json({ error: parsed.error }, 400)
 
-      let eventStream: ReadableStream<AgentStreamEvent>
+      let started: { turnId: string; frames: ReadableStream<TurnFrame> }
       try {
-        eventStream = await service.send({
+        started = await service.startTurn({
           agentId,
           message: parsed.message,
           attachments: parsed.attachments,
-          signal: c.req.raw.signal,
         })
       } catch (err) {
+        if (err instanceof TurnAlreadyActiveError) {
+          // Caller can attach via GET /chat/stream?turnId=… instead.
+          return c.json(
+            {
+              error: 'Turn already active',
+              turnId: err.turnId,
+              attachUrl: `/agents/${agentId}/chat/stream?turnId=${err.turnId}`,
+            },
+            409,
+          )
+        }
         return handleAgentRouteError(c, err)
       }
 
-      c.header('Content-Type', 'text/event-stream')
-      c.header('Cache-Control', 'no-cache')
-      c.header('X-Session-Id', 'main')
-
-      return stream(c, async (s) => {
-        const reader = eventStream.getReader()
-        const encoder = new TextEncoder()
-        let completed = false
-        try {
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            await s.write(encoder.encode(`data: ${JSON.stringify(value)}\n\n`))
-          }
-          await s.write(encoder.encode('data: [DONE]\n\n'))
-          completed = true
-        } finally {
-          if (completed) {
-            reader.releaseLock()
-          } else {
-            await reader.cancel('BrowserOS HTTP stream ended').catch(() => {})
-          }
-        }
+      return streamTurnFrames(c, started.frames, {
+        turnId: started.turnId,
       })
     })
+    .get('/:agentId/chat/active', (c) => {
+      const agentId = c.req.param('agentId')
+      const info = service.getActiveTurn(agentId, 'main')
+      return c.json({ active: info })
+    })
+    .get('/:agentId/chat/stream', (c) => {
+      const agentId = c.req.param('agentId')
+      const url = new URL(c.req.url)
+      const queryTurnId = url.searchParams.get('turnId')?.trim() || undefined
+      const turnId =
+        queryTurnId ?? service.getActiveTurn(agentId, 'main')?.turnId
+      if (!turnId) {
+        return c.json({ error: 'No active turn for this agent' }, 404)
+      }
+      const lastEventId =
+        c.req.header('Last-Event-ID') ??
+        url.searchParams.get('lastSeq') ??
+        undefined
+      const lastSeq = parseLastSeq(lastEventId)
+      const frames = service.attachTurn({ turnId, lastSeq })
+      if (!frames) {
+        return c.json({ error: 'Unknown turn' }, 404)
+      }
+      return streamTurnFrames(c, frames, { turnId })
+    })
+    .post('/:agentId/chat/cancel', async (c) => {
+      const agentId = c.req.param('agentId')
+      const body = await readJsonBody(c)
+      const turnId =
+        'value' in body && typeof body.value.turnId === 'string'
+          ? body.value.turnId.trim() || undefined
+          : undefined
+      const reason =
+        'value' in body && typeof body.value.reason === 'string'
+          ? body.value.reason
+          : undefined
+      const cancelled = service.cancelTurn({ agentId, turnId, reason })
+      return c.json({ cancelled })
+    })
+}
+
+/**
+ * Pipe a TurnFrame stream as Server-Sent Events. Each frame becomes:
+ *
+ *   id: <seq>
+ *   data: <event JSON>
+ *
+ * followed by a final `data: [DONE]` after the upstream closes.
+ * Cancelling the response (caller disconnect) detaches *this*
+ * subscriber; the underlying turn keeps running in the background.
+ */
+function streamTurnFrames(
+  c: Context<Env>,
+  frames: ReadableStream<TurnFrame>,
+  options: { turnId: string },
+) {
+  c.header('Content-Type', 'text/event-stream')
+  c.header('Cache-Control', 'no-cache')
+  c.header('X-Session-Id', 'main')
+  c.header('X-Turn-Id', options.turnId)
+
+  return stream(c, async (s) => {
+    const reader = frames.getReader()
+    const encoder = new TextEncoder()
+    let completed = false
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        await s.write(
+          encoder.encode(
+            `id: ${value.seq}\ndata: ${JSON.stringify(value.event)}\n\n`,
+          ),
+        )
+      }
+      await s.write(encoder.encode('data: [DONE]\n\n'))
+      completed = true
+    } finally {
+      if (completed) {
+        reader.releaseLock()
+      } else {
+        // Caller went away mid-stream. Cancel only this subscription —
+        // the registry's underlying turn keeps running.
+        await reader.cancel('client disconnected').catch(() => {})
+      }
+    }
+  })
+}
+
+function parseLastSeq(value: string | undefined): number | undefined {
+  if (value == null) return undefined
+  const trimmed = value.trim()
+  if (trimmed === '') return undefined
+  const n = Number.parseInt(trimmed, 10)
+  return Number.isFinite(n) ? n : undefined
 }
 
 async function parseCreateAgentBody(c: Context<Env>): Promise<

@@ -8,6 +8,11 @@ import {
   AcpxRuntime,
   type OpenclawGatewayAccessor,
 } from '../../../lib/agents/acpx-runtime'
+import {
+  type ActiveTurnInfo,
+  type TurnFrame,
+  TurnRegistry,
+} from '../../../lib/agents/active-turn-registry'
 import type { AgentDefinition } from '../../../lib/agents/agent-types'
 import {
   type CreateAgentInput,
@@ -113,6 +118,7 @@ export class AgentHarnessService {
   private readonly agentStore: FileAgentStore
   private readonly runtime: AgentRuntime
   private readonly openclawProvisioner: OpenClawProvisioner | null
+  private readonly turnRegistry: TurnRegistry
   private inFlightReconcile: Promise<void> | null = null
   // In-memory liveness tracker. Lost on server restart (acceptable —
   // `lastUsedAt` survives via the acpx session record's `lastUsedAt`,
@@ -131,6 +137,7 @@ export class AgentHarnessService {
       openclawGateway?: OpenclawGatewayAccessor
       openclawGatewayChat?: OpenClawGatewayChatClient
       openclawProvisioner?: OpenClawProvisioner
+      turnRegistry?: TurnRegistry
     } = {},
   ) {
     this.agentStore = deps.agentStore ?? new FileAgentStore()
@@ -142,6 +149,7 @@ export class AgentHarnessService {
         openclawGatewayChat: deps.openclawGatewayChat,
       })
     this.openclawProvisioner = deps.openclawProvisioner ?? null
+    this.turnRegistry = deps.turnRegistry ?? new TurnRegistry()
   }
 
   async listAgents(): Promise<AgentDefinition[]> {
@@ -389,35 +397,185 @@ export class AgentHarnessService {
     return this.runtime.getHistory({ agent, sessionId: 'main' })
   }
 
+  /**
+   * Kick off a new agent turn that survives the caller's HTTP lifetime.
+   * Events are pushed into a per-turn buffer; the returned `frames`
+   * stream is a *subscription* (replays from seq 0). Closing the stream
+   * just unsubscribes; the turn keeps running until terminal or
+   * cancelled. Throws `TurnAlreadyActiveError` if the agent is already
+   * mid-turn — the route layer maps that to 409.
+   */
+  async startTurn(input: {
+    agentId: string
+    message: string
+    attachments?: ReadonlyArray<{ mediaType: string; data: string }>
+  }): Promise<{ turnId: string; frames: ReadableStream<TurnFrame> }> {
+    const agent = await this.requireAgent(input.agentId)
+
+    const existing = this.turnRegistry.getActiveFor(agent.id, 'main')
+    if (existing) {
+      throw new TurnAlreadyActiveError(agent.id, existing.turnId)
+    }
+
+    const turn = this.turnRegistry.register(agent.id, 'main')
+    this.notifyTurnStarted(agent.id)
+
+    // Kick off the runtime call in the background. The per-turn
+    // AbortController — NOT the HTTP request signal — is what cancels
+    // the runtime call. This is the core decoupling that lets turns
+    // outlive their initiating HTTP request.
+    void this.runDetachedTurn(turn.turnId, agent, input)
+
+    const frames = this.turnRegistry.subscribe(turn.turnId, { fromSeq: -1 })
+    if (!frames) {
+      // Should be impossible — register just put it in the registry —
+      // but keep the type narrow.
+      throw new Error('Turn registration race')
+    }
+    return { turnId: turn.turnId, frames }
+  }
+
+  /**
+   * Attach to an existing turn. Resumes by replaying buffered frames
+   * with seq > `lastSeq`, then tails new ones. Returns null if the
+   * turn is unknown (e.g. never existed, or its retain window expired).
+   */
+  attachTurn(input: {
+    turnId: string
+    lastSeq?: number
+  }): ReadableStream<TurnFrame> | null {
+    return this.turnRegistry.subscribe(input.turnId, {
+      fromSeq: input.lastSeq ?? -1,
+    })
+  }
+
+  /**
+   * Active turn for the (agentId, sessionId) pair, if any. Used by the
+   * UI on mount to discover an in-flight turn it should attach to
+   * instead of starting a new one.
+   */
+  getActiveTurn(
+    agentId: string,
+    sessionId: 'main' = 'main',
+  ): ActiveTurnInfo | null {
+    const turn = this.turnRegistry.getActiveFor(agentId, sessionId)
+    return turn ? this.turnRegistry.describe(turn.turnId) : null
+  }
+
+  /**
+   * Cancel an active turn. Idempotent — returns true on the first
+   * successful cancel, false if the turn doesn't exist or already
+   * finished.
+   */
+  cancelTurn(input: {
+    agentId: string
+    turnId?: string
+    reason?: string
+  }): boolean {
+    const turnId =
+      input.turnId ??
+      this.turnRegistry.getActiveFor(input.agentId, 'main')?.turnId
+    if (!turnId) return false
+    return this.turnRegistry.cancel(turnId, input.reason)
+  }
+
+  /**
+   * Back-compat wrapper for the old `send` signature. Returns a stream
+   * of `AgentStreamEvent` (not `TurnFrame`), so legacy callers/tests
+   * keep working. Internally goes through the registry so liveness and
+   * resilience semantics still apply. Drops `signal` — turns now own
+   * their own AbortController.
+   */
   async send(input: {
     agentId: string
     message: string
     attachments?: ReadonlyArray<{ mediaType: string; data: string }>
     signal?: AbortSignal
   }): Promise<ReadableStream<AgentStreamEvent>> {
-    const agent = await this.requireAgent(input.agentId)
-    this.notifyTurnStarted(agent.id)
-    let stream: ReadableStream<AgentStreamEvent>
+    const { frames } = await this.startTurn(input)
+    return frames.pipeThrough(
+      new TransformStream<TurnFrame, AgentStreamEvent>({
+        transform(frame, controller) {
+          controller.enqueue(frame.event)
+        },
+      }),
+    )
+  }
+
+  /**
+   * Background pump: drives the runtime call, fans events into the
+   * registry, and retires the turn on terminal/error/cancel. Never
+   * throws to its caller — all failures land as `error` frames.
+   */
+  private async runDetachedTurn(
+    turnId: string,
+    agent: AgentDefinition,
+    input: {
+      message: string
+      attachments?: ReadonlyArray<{ mediaType: string; data: string }>
+    },
+  ): Promise<void> {
+    const turn = this.turnRegistry.get(turnId)
+    if (!turn) return
+    let lastErrorMessage: string | undefined
     try {
-      stream = await this.runtime.send({
+      const upstream = await this.runtime.send({
         agent,
         sessionId: 'main',
         sessionKey: agent.sessionKey,
         message: input.message,
         attachments: input.attachments,
         permissionMode: agent.permissionMode,
-        signal: input.signal,
+        signal: turn.abortController.signal,
       })
+      const reader = upstream.getReader()
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          if (value.type === 'error') lastErrorMessage = value.message
+          this.turnRegistry.pushEvent(turnId, value)
+        }
+      } finally {
+        try {
+          reader.releaseLock()
+        } catch {
+          // ignore
+        }
+      }
+      // Synthesize a terminal `done` if the upstream finished without
+      // emitting one (defensive — runtime is supposed to, but our
+      // resilience contract requires every subscriber to see a
+      // terminal frame).
+      const refreshed = this.turnRegistry.get(turnId)
+      if (refreshed?.status === 'running') {
+        if (lastErrorMessage !== undefined) {
+          this.turnRegistry.pushEvent(turnId, {
+            type: 'error',
+            message: lastErrorMessage,
+          })
+        } else {
+          this.turnRegistry.pushEvent(turnId, {
+            type: 'done',
+            stopReason: 'end_turn',
+          })
+        }
+      }
     } catch (err) {
+      lastErrorMessage = err instanceof Error ? err.message : String(err)
+      const refreshed = this.turnRegistry.get(turnId)
+      if (refreshed?.status === 'running') {
+        this.turnRegistry.pushEvent(turnId, {
+          type: 'error',
+          message: lastErrorMessage,
+        })
+      }
+    } finally {
       this.notifyTurnEnded(agent.id, {
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
+        ok: lastErrorMessage === undefined,
+        error: lastErrorMessage,
       })
-      throw err
     }
-    return wrapStreamWithLifecycle(stream, {
-      onComplete: (ok, error) => this.notifyTurnEnded(agent.id, { ok, error }),
-    })
   }
 
   private async requireAgent(agentId: string): Promise<AgentDefinition> {
@@ -446,60 +604,6 @@ function deriveStatus(
   return now - lastUsedAt > ASLEEP_THRESHOLD_MS ? 'asleep' : 'idle'
 }
 
-/**
- * Tee an `AgentStreamEvent` stream so we can fire `onComplete` exactly
- * once when it ends — whether by natural close, error event, or
- * downstream cancellation. The wrapped stream is what the caller
- * consumes; the lifecycle hook fires as a side-effect.
- */
-function wrapStreamWithLifecycle(
-  upstream: ReadableStream<AgentStreamEvent>,
-  hooks: { onComplete: (ok: boolean, error?: string) => void },
-): ReadableStream<AgentStreamEvent> {
-  let settled = false
-  const settle = (ok: boolean, error?: string) => {
-    if (settled) return
-    settled = true
-    try {
-      hooks.onComplete(ok, error)
-    } catch (err) {
-      logger.warn('Agent harness lifecycle hook threw', {
-        error: err instanceof Error ? err.message : String(err),
-      })
-    }
-  }
-  let lastError: string | undefined
-  return new ReadableStream<AgentStreamEvent>({
-    start(controller) {
-      const reader = upstream.getReader()
-      const pump = async () => {
-        try {
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            if (value.type === 'error') {
-              lastError = value.message
-              settle(false, lastError)
-            }
-            controller.enqueue(value)
-          }
-          settle(lastError === undefined, lastError)
-          controller.close()
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          settle(false, msg)
-          controller.error(err)
-        }
-      }
-      void pump()
-    },
-    cancel(reason) {
-      settle(false, typeof reason === 'string' ? reason : undefined)
-      void upstream.cancel(reason).catch(() => {})
-    },
-  })
-}
-
 export class UnknownAgentError extends Error {
   constructor(readonly agentId: string) {
     super(`Unknown agent: ${agentId}`)
@@ -517,5 +621,20 @@ export class OpenClawProvisionerUnavailableError extends Error {
   constructor() {
     super('OpenClaw gateway provisioner is not wired into AgentHarnessService')
     this.name = 'OpenClawProvisionerUnavailableError'
+  }
+}
+
+/**
+ * Thrown when `startTurn` is called for an agent that already has an
+ * in-flight turn. The route layer maps this to 409 + the existing
+ * `turnId` so the client can attach instead.
+ */
+export class TurnAlreadyActiveError extends Error {
+  constructor(
+    readonly agentId: string,
+    readonly turnId: string,
+  ) {
+    super(`Agent ${agentId} already has an active turn (${turnId})`)
+    this.name = 'TurnAlreadyActiveError'
   }
 }

@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   type AgentHarnessStreamEvent,
+  attachToHarnessTurn,
+  cancelHarnessTurn,
   chatWithHarnessAgent,
+  fetchActiveHarnessTurn,
 } from '@/entrypoints/app/agents/useAgents'
 import type { OpenClawChatHistoryMessage } from '@/entrypoints/app/agents/useOpenClaw'
 import type {
@@ -48,6 +51,11 @@ export function useAgentConversation(
   const streamAbortRef = useRef<AbortController | null>(null)
   const onCompleteRef = useRef(options.onComplete)
   const onSessionKeyChangeRef = useRef(options.onSessionKeyChange)
+  // Per-turn resume bookkeeping. `turnId` is captured from the response
+  // header; `lastSeq` advances with every SSE event so a reconnect can
+  // resume via Last-Event-ID.
+  const turnIdRef = useRef<string | null>(null)
+  const lastSeqRef = useRef<number | null>(null)
 
   useEffect(() => {
     sessionKeyRef.current = options.sessionKey ?? ''
@@ -70,6 +78,12 @@ export function useAgentConversation(
       streamAbortRef.current?.abort()
     }
   }, [])
+
+  // Indirection for the resume effect below: lets it call the latest
+  // event handler without re-subscribing on every render.
+  const processEventRef = useRef<(event: AgentHarnessStreamEvent) => void>(
+    () => {},
+  )
 
   const updateCurrentTurnParts = (
     updater: (parts: AssistantPart[]) => AssistantPart[],
@@ -195,6 +209,79 @@ export function useAgentConversation(
         break
     }
   }
+  processEventRef.current = processAgentHarnessStreamEvent
+
+  // On mount (and whenever the agent changes), check whether the
+  // server has an in-flight turn for this agent and reattach to it.
+  // This is what makes the chat resilient across tab close/reopen,
+  // refresh, and navigation: the runtime call kept running on the
+  // server while we were away. Effect only depends on `agentId` —
+  // the event handler is read off a ref so this doesn't re-subscribe
+  // every render.
+  useEffect(() => {
+    let cancelled = false
+    const abortController = new AbortController()
+
+    const attemptResume = async () => {
+      try {
+        const active = await fetchActiveHarnessTurn(agentId)
+        if (cancelled || !active || active.status !== 'running') return
+        if (streamAbortRef.current) return // a fresh send already in flight
+
+        // Stage a placeholder turn so the streamed events have a row
+        // to render into. We don't have the user message text on
+        // resume; the assistant turn is what we're catching up on.
+        setTurns((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            userText: '',
+            parts: [],
+            done: false,
+            timestamp: active.startedAt,
+          },
+        ])
+        textAccRef.current = ''
+        thinkAccRef.current = ''
+        turnIdRef.current = active.turnId
+        lastSeqRef.current = null
+        streamAbortRef.current = abortController
+        setStreaming(true)
+
+        const response = await attachToHarnessTurn(agentId, {
+          turnId: active.turnId,
+          signal: abortController.signal,
+        })
+        if (!response.ok) return
+        await consumeSSEStream<AgentHarnessStreamEvent>(
+          response,
+          (event, meta) => {
+            if (typeof meta.seq === 'number') lastSeqRef.current = meta.seq
+            processEventRef.current(event)
+          },
+          abortController.signal,
+        )
+      } catch {
+        // Resume is best-effort; transient errors fall back to the
+        // user starting a new turn manually.
+      } finally {
+        if (!cancelled) {
+          if (streamAbortRef.current === abortController) {
+            streamAbortRef.current = null
+          }
+          turnIdRef.current = null
+          lastSeqRef.current = null
+          setStreaming(false)
+        }
+      }
+    }
+
+    void attemptResume()
+    return () => {
+      cancelled = true
+      abortController.abort()
+    }
+  }, [agentId])
 
   const send = async (input: string | SendInput) => {
     const normalized: SendInput =
@@ -224,18 +311,36 @@ export function useAgentConversation(
     streamAbortRef.current = abortController
 
     try {
-      const response = await chatWithHarnessAgent(
+      let response = await chatWithHarnessAgent(
         agentId,
         trimmed,
         abortController.signal,
         attachments,
       )
+      // 409 means the server already has an active turn for this
+      // agent (e.g. a previous tab kicked one off and we're a fresh
+      // mount that missed the resume window). Attach to it instead of
+      // double-sending.
+      if (response.status === 409) {
+        const body = (await response.json()) as { turnId?: string }
+        if (body.turnId) {
+          response = await attachToHarnessTurn(agentId, {
+            turnId: body.turnId,
+            signal: abortController.signal,
+          })
+        }
+      }
       const responseSessionKey =
         response.headers.get('X-Session-Key') ??
         response.headers.get('X-Session-Id')
       if (responseSessionKey) {
         sessionKeyRef.current = responseSessionKey
         onSessionKeyChangeRef.current?.(responseSessionKey)
+      }
+      const responseTurnId = response.headers.get('X-Turn-Id')
+      if (responseTurnId) {
+        turnIdRef.current = responseTurnId
+        lastSeqRef.current = null
       }
       if (!response.ok) {
         const err = await response.text()
@@ -247,7 +352,10 @@ export function useAgentConversation(
       }
       await consumeSSEStream<AgentHarnessStreamEvent>(
         response,
-        processAgentHarnessStreamEvent,
+        (event, meta) => {
+          if (typeof meta.seq === 'number') lastSeqRef.current = meta.seq
+          processAgentHarnessStreamEvent(event)
+        },
         abortController.signal,
       )
     } catch (err) {
@@ -261,14 +369,35 @@ export function useAgentConversation(
       if (streamAbortRef.current === abortController) {
         streamAbortRef.current = null
       }
+      turnIdRef.current = null
+      lastSeqRef.current = null
       onCompleteRef.current?.()
       setStreaming(false)
     }
   }
 
-  const resetConversation = () => {
+  /**
+   * Stop button. The fetch abort only detaches *this* SSE subscriber
+   * now — the underlying turn would otherwise keep running on the
+   * server. So we explicitly cancel via the new endpoint, then unwind
+   * the local stream.
+   */
+  const stop = async () => {
+    const turnId = turnIdRef.current ?? undefined
     streamAbortRef.current?.abort()
     streamAbortRef.current = null
+    try {
+      await cancelHarnessTurn(agentId, {
+        turnId,
+        reason: 'user pressed stop',
+      })
+    } catch {
+      // Best-effort — UI already aborted.
+    }
+  }
+
+  const resetConversation = () => {
+    void stop()
     setTurns([])
     setStreaming(false)
   }
@@ -278,6 +407,7 @@ export function useAgentConversation(
     streaming,
     sessionKey: sessionKeyRef.current,
     send,
+    stop,
     resetConversation,
   }
 }

@@ -176,6 +176,81 @@ export async function chatWithHarnessAgent(
   })
 }
 
+/**
+ * Subscribe to an existing turn (the server's `ActiveTurnRegistry`
+ * decoupled the turn lifecycle from POST /chat). `lastSeq` lets the
+ * client resume after a disconnect — the server replays buffered
+ * frames with seq > lastSeq, then tails new ones.
+ */
+export async function attachToHarnessTurn(
+  agentId: string,
+  options: { turnId?: string; lastSeq?: number; signal?: AbortSignal } = {},
+): Promise<Response> {
+  const baseUrl = await getAgentServerUrl()
+  const url = new URL(
+    `${baseUrl}/agents/${encodeURIComponent(agentId)}/chat/stream`,
+  )
+  if (options.turnId) url.searchParams.set('turnId', options.turnId)
+  const headers: Record<string, string> = {}
+  if (typeof options.lastSeq === 'number') {
+    headers['Last-Event-ID'] = String(options.lastSeq)
+  }
+  return fetch(url.toString(), { signal: options.signal, headers })
+}
+
+export interface HarnessActiveTurnInfo {
+  turnId: string
+  agentId: string
+  sessionId: 'main'
+  status: 'running' | 'done' | 'error' | 'cancelled'
+  lastSeq: number
+  startedAt: number
+  endedAt?: number
+}
+
+/**
+ * Discover an in-flight turn for an agent. Used on chat mount so the
+ * UI reattaches instead of starting a new turn after a tab/refresh.
+ */
+export async function fetchActiveHarnessTurn(
+  agentId: string,
+): Promise<HarnessActiveTurnInfo | null> {
+  const baseUrl = await getAgentServerUrl()
+  const response = await fetch(
+    `${baseUrl}/agents/${encodeURIComponent(agentId)}/chat/active`,
+  )
+  if (!response.ok) return null
+  const body = (await response.json()) as {
+    active: HarnessActiveTurnInfo | null
+  }
+  return body.active
+}
+
+/**
+ * Stop button. Hits the explicit cancel endpoint instead of just
+ * aborting the fetch (which now only detaches *this* subscriber from
+ * the buffer; the underlying turn would otherwise keep running).
+ */
+export async function cancelHarnessTurn(
+  agentId: string,
+  options: { turnId?: string; reason?: string } = {},
+): Promise<{ cancelled: boolean }> {
+  const baseUrl = await getAgentServerUrl()
+  const response = await fetch(
+    `${baseUrl}/agents/${encodeURIComponent(agentId)}/chat/cancel`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...(options.turnId ? { turnId: options.turnId } : {}),
+        ...(options.reason ? { reason: options.reason } : {}),
+      }),
+    },
+  )
+  if (!response.ok) return { cancelled: false }
+  return (await response.json()) as { cancelled: boolean }
+}
+
 export async function fetchHarnessAgentHistory(
   agentId: string,
 ): Promise<HarnessAgentHistoryPage> {
