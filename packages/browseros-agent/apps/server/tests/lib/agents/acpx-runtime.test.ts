@@ -518,6 +518,10 @@ open &lt;example.com&gt;
       'nerdctl exec -i -e OPENCLAW_HIDE_BANNER=1 -e OPENCLAW_SUPPRESS_NOTES=1 -e OPENCLAW_GATEWAY_TOKEN=test-token-abc browseros-openclaw-openclaw-gateway-1',
     )
     expect(command).toContain('openclaw acp --url ws://127.0.0.1:18789')
+    // sessionKey routing: the bridge needs --session <key> to map newSession
+    // requests to the matching gateway agent (acpx does not forward
+    // sessionKey via ACP newSession params).
+    expect(command).toContain('--session agent:main:main')
   })
 
   it('sets Claude approve-all sessions to bypass permissions before starting a turn', async () => {

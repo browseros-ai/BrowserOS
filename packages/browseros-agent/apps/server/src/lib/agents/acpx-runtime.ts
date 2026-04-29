@@ -140,6 +140,11 @@ export class AcpxRuntime implements AgentRuntime {
       cwd,
       permissionMode: input.permissionMode,
       nonInteractivePermissions: 'fail',
+      // OpenClaw agents need their gateway sessionKey baked into the
+      // spawn command (acpx does not forward sessionKey to newSession);
+      // claude/codex don't, and including it would split their cache.
+      openclawSessionKey:
+        input.agent.adapter === 'openclaw' ? input.sessionKey : null,
     })
 
     return createAcpxEventStream(runtime, input, cwd)
@@ -149,6 +154,7 @@ export class AcpxRuntime implements AgentRuntime {
     cwd: string
     permissionMode: AcpRuntimeOptions['permissionMode']
     nonInteractivePermissions: AcpRuntimeOptions['nonInteractivePermissions']
+    openclawSessionKey: string | null
   }): AcpxCoreRuntime {
     const key = JSON.stringify(input)
     const existing = this.runtimes.get(key)
@@ -160,6 +166,7 @@ export class AcpxRuntime implements AgentRuntime {
       agentRegistry: createBrowserosAgentRegistry(
         input.permissionMode,
         this.openclawGateway,
+        input.openclawSessionKey,
       ),
       mcpServers: createBrowserosMcpServers(this.browserosServerPort),
       permissionMode: input.permissionMode,
@@ -172,6 +179,7 @@ export class AcpxRuntime implements AgentRuntime {
       permissionMode: input.permissionMode,
       nonInteractivePermissions: input.nonInteractivePermissions,
       browserosServerPort: this.browserosServerPort,
+      openclawSessionKey: input.openclawSessionKey,
     })
     return runtime
   }
@@ -447,6 +455,7 @@ function createBrowserosMcpServers(
 function createBrowserosAgentRegistry(
   permissionMode: AcpRuntimeOptions['permissionMode'],
   openclawGateway: OpenclawGatewayAccessor | null,
+  openclawSessionKey: string | null,
 ): AcpRuntimeOptions['agentRegistry'] {
   const registry = createAgentRegistry()
 
@@ -466,7 +475,7 @@ function createBrowserosAgentRegistry(
           // gateway accessor.
           return registry.resolve(agentName)
         }
-        return resolveOpenclawAcpCommand(openclawGateway)
+        return resolveOpenclawAcpCommand(openclawGateway, openclawSessionKey)
       }
 
       const command = registry.resolve(agentName)
@@ -503,7 +512,10 @@ function createBrowserosAgentRegistry(
  * suppress non-JSON-RPC chatter on stdout that would otherwise corrupt
  * the ACP message stream.
  */
-function resolveOpenclawAcpCommand(gateway: OpenclawGatewayAccessor): string {
+function resolveOpenclawAcpCommand(
+  gateway: OpenclawGatewayAccessor,
+  sessionKey: string | null,
+): string {
   const port = gateway.getPort()
   const token = gateway.getGatewayToken()
   const limactl = gateway.getLimactlPath()
@@ -511,11 +523,17 @@ function resolveOpenclawAcpCommand(gateway: OpenclawGatewayAccessor): string {
   const container = gateway.getContainerName()
   const limaHome = gateway.getLimaHomeDir()
 
+  // `--session <key>` routes the bridge's newSession requests to the
+  // matching gateway agent. acpx does not pass sessionKey through ACP
+  // newSession params, so without this CLI flag the bridge falls back
+  // to a synthetic acp:<uuid> session that does not resolve to any
+  // provisioned gateway agent.
+  //
   // Prefix `env LIMA_HOME=<path>` so the spawned limactl finds the
   // BrowserOS-owned VM instance. The BrowserOS server doesn't set
   // LIMA_HOME on its own process env (it injects per-spawn elsewhere),
   // so the acpx-spawned subprocess won't inherit it without this hint.
-  return [
+  const argv = [
     'env',
     `LIMA_HOME=${limaHome}`,
     limactl,
@@ -536,7 +554,11 @@ function resolveOpenclawAcpCommand(gateway: OpenclawGatewayAccessor): string {
     'acp',
     '--url',
     `ws://127.0.0.1:${port}`,
-  ].join(' ')
+  ]
+  if (sessionKey) {
+    argv.push('--session', sessionKey)
+  }
+  return argv.join(' ')
 }
 
 function appendCommandArg(command: string, arg: string): string {
