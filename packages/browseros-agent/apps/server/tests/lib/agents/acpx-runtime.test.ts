@@ -522,6 +522,11 @@ open &lt;example.com&gt;
     // requests to the matching gateway agent (acpx does not forward
     // sessionKey via ACP newSession params).
     expect(command).toContain('--session agent:main:main')
+    // OpenClaw's bridge rejects newSession when mcpServers is non-empty
+    // because its provider tooling comes from the gateway, not from
+    // ACP-side MCP servers. The harness must suppress the BrowserOS HTTP
+    // MCP for openclaw runtimes while still wiring it for claude/codex.
+    expect(runtimeOptions.mcpServers).toEqual([])
   })
 
   it('sets Claude approve-all sessions to bypass permissions before starting a turn', async () => {

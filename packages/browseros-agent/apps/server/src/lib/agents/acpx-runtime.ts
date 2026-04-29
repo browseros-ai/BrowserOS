@@ -160,6 +160,11 @@ export class AcpxRuntime implements AgentRuntime {
     const existing = this.runtimes.get(key)
     if (existing) return existing
 
+    // OpenClaw exposes its provider tools through the gateway, not through
+    // ACP-side MCP servers. Forwarding the BrowserOS HTTP MCP to its bridge
+    // makes newSession fail because openclaw rejects unsupported transports.
+    // Claude/codex still need the BrowserOS MCP for browser tooling.
+    const isOpenclaw = input.openclawSessionKey !== null
     const runtime = this.runtimeFactory({
       cwd: input.cwd,
       sessionStore: this.sessionStore,
@@ -168,7 +173,9 @@ export class AcpxRuntime implements AgentRuntime {
         this.openclawGateway,
         input.openclawSessionKey,
       ),
-      mcpServers: createBrowserosMcpServers(this.browserosServerPort),
+      mcpServers: isOpenclaw
+        ? []
+        : createBrowserosMcpServers(this.browserosServerPort),
       permissionMode: input.permissionMode,
       nonInteractivePermissions: input.nonInteractivePermissions,
     })
