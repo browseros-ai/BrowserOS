@@ -121,7 +121,7 @@ describe('createAgentRoutes', () => {
     expect(sentInput?.signal).toBe(abortController.signal)
 
     const list = await route.request('/agents')
-    expect(await list.json()).toEqual({ agents: [] })
+    expect(await list.json()).toEqual({ agents: [], gateway: null })
   })
 
   it('rejects invalid sidepanel ACP chat requests', async () => {
@@ -186,6 +186,20 @@ function createFakeService(agents: AgentDefinition[]) {
   return {
     async listAgents() {
       return agents
+    },
+    async listAgentsWithActivity() {
+      // The route returns enriched agents in the listing response.
+      // Tests don't care about activity values; default to `idle`/null.
+      return agents.map((agent) => ({
+        ...agent,
+        status: 'idle' as const,
+        lastUsedAt: null,
+      }))
+    },
+    async getGatewayStatus() {
+      // No openclaw provisioner wired in tests → `null` mirrors what
+      // `AgentHarnessService.getGatewayStatus` does without one.
+      return null
     },
     async createAgent(input: {
       name: string
