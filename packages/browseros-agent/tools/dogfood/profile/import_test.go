@@ -1,9 +1,11 @@
 package profile
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +32,14 @@ func TestImportCopiesAllowlistAndLocalState(t *testing.T) {
 	mustWrite(t, filepath.Join(sourceProfile, "Preferences"), `{"profile":{"exit_type":"Crashed","exited_cleanly":false}}`)
 	mustWrite(t, filepath.Join(sourceProfile, "Cache/junk"), "cache")
 	mustWrite(t, filepath.Join(sourceProfile, "Extensions/ext/manifest.json"), "{}")
+	mustWrite(t, filepath.Join(sourceProfile, "Extension State/LOG"), "state")
+	mustWrite(t, filepath.Join(sourceProfile, "Extension Rules/rules.json"), "{}")
+	mustWrite(t, filepath.Join(sourceProfile, "DNR Extension Rules/ruleset"), "dnr")
+	mustWrite(t, filepath.Join(sourceProfile, "Extension Scripts/script.js"), "script")
+	mustWrite(t, filepath.Join(sourceProfile, "Sync Extension Settings/ext/000001.log"), "sync")
+	mustWrite(t, filepath.Join(sourceProfile, "Managed Extension Settings/ext/000001.log"), "managed")
+	mustWrite(t, filepath.Join(sourceProfile, "IndexedDB/chrome-extension_abcdef_0.indexeddb.leveldb/LOG"), "extension-indexeddb")
+	mustWrite(t, filepath.Join(sourceProfile, "IndexedDB/https_example.com_0.indexeddb.leveldb/LOG"), "site-indexeddb")
 
 	err := Import(ImportConfig{
 		SourceUserDataDir: sourceUser,
@@ -45,6 +55,14 @@ func TestImportCopiesAllowlistAndLocalState(t *testing.T) {
 	assertFile(t, filepath.Join(devUser, "Default", "Bookmarks"), "bookmarks")
 	assertMissing(t, filepath.Join(devUser, "Default", "Cache"))
 	assertFileExists(t, filepath.Join(devUser, "Default", "Extensions/ext/manifest.json"))
+	assertFile(t, filepath.Join(devUser, "Default", "Extension State/LOG"), "state")
+	assertFile(t, filepath.Join(devUser, "Default", "Extension Rules/rules.json"), "{}")
+	assertFile(t, filepath.Join(devUser, "Default", "DNR Extension Rules/ruleset"), "dnr")
+	assertFile(t, filepath.Join(devUser, "Default", "Extension Scripts/script.js"), "script")
+	assertFile(t, filepath.Join(devUser, "Default", "Sync Extension Settings/ext/000001.log"), "sync")
+	assertFile(t, filepath.Join(devUser, "Default", "Managed Extension Settings/ext/000001.log"), "managed")
+	assertFile(t, filepath.Join(devUser, "Default", "IndexedDB/chrome-extension_abcdef_0.indexeddb.leveldb/LOG"), "extension-indexeddb")
+	assertMissing(t, filepath.Join(devUser, "Default", "IndexedDB/https_example.com_0.indexeddb.leveldb"))
 	prefs, err := os.ReadFile(filepath.Join(devUser, "Default", "Preferences"))
 	if err != nil {
 		t.Fatal(err)
@@ -109,6 +127,61 @@ func TestCleanupSingletons(t *testing.T) {
 	}
 	assertMissing(t, filepath.Join(dir, "SingletonLock"))
 	assertMissing(t, filepath.Join(dir, "SingletonCookie"))
+}
+
+func TestHasSingletonsDetectsProfileLockFiles(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "SingletonLock"), "lock")
+
+	hasSingletons, err := HasSingletons(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasSingletons {
+		t.Fatal("expected singleton files")
+	}
+}
+
+func TestHasSingletonsReturnsFalseForMissingDir(t *testing.T) {
+	hasSingletons, err := HasSingletons(filepath.Join(t.TempDir(), "missing"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasSingletons {
+		t.Fatal("expected no singleton files")
+	}
+}
+
+func TestPatchPreferencesWarnsOnInvalidJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Preferences")
+	mustWrite(t, path, "{")
+	var out bytes.Buffer
+	old := warningOutput
+	warningOutput = &out
+	defer func() { warningOutput = old }()
+
+	if err := patchPreferences(path); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "could not patch") || !strings.Contains(out.String(), path) {
+		t.Fatalf("missing warning, got %q", out.String())
+	}
+}
+
+func TestPatchLocalStateWarnsOnInvalidJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Local State")
+	mustWrite(t, path, "{")
+	var out bytes.Buffer
+	old := warningOutput
+	warningOutput = &out
+	defer func() { warningOutput = old }()
+
+	if err := patchLocalState(path, "Default", "Default"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "could not patch") || !strings.Contains(out.String(), path) {
+		t.Fatalf("missing warning, got %q", out.String())
+	}
 }
 
 func assertStringList(t *testing.T, got any, want []string) {

@@ -19,6 +19,7 @@ import { logger } from '../../lib/logger'
 import type { ToolRegistry } from '../../tools/tool-registry'
 import type { KlavisProxyRef } from '../services/klavis/strata-proxy'
 import type { BrowserContext, ChatRequest } from '../types'
+import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'
 
 export interface ChatServiceDeps {
   sessionStore: SessionStore
@@ -181,7 +182,10 @@ export class ChatService {
     if (!session) {
       isNewSession = true
       let hiddenPageId: number | undefined
-      let browserContext = await this.resolvePageIds(request.browserContext)
+      let browserContext = await resolveBrowserContextPageIds(
+        this.deps.browser,
+        request.browserContext,
+      )
       if (request.isScheduledTask) {
         try {
           hiddenPageId = await this.deps.browser.newPage('about:blank', {
@@ -290,11 +294,11 @@ export class ChatService {
       ? (session.browserContext ?? request.browserContext)
       : request.browserContext
     // Scheduled tasks already have correct internal pageIds from browser.newPage();
-    // calling resolvePageIds would pass those to resolveTabIds (which expects Chrome
-    // tab IDs), corrupting them back to undefined.
+    // resolving them again would pass those to resolveTabIds, which expects Chrome
+    // tab IDs.
     const resolvedMessageContext = request.isScheduledTask
       ? messageContext
-      : await this.resolvePageIds(messageContext)
+      : await resolveBrowserContextPageIds(this.deps.browser, messageContext)
     const userContent = formatUserMessage(
       request.message,
       resolvedMessageContext,
@@ -342,48 +346,6 @@ export class ChatService {
     return { deleted, sessionCount: this.deps.sessionStore.count() }
   }
 
-  // Browser context arrives with Chrome tab IDs, but tools expect internal page IDs.
-  // Resolve the mapping upfront so the agent's first navigation doesn't fail.
-  private async resolvePageIds(
-    browserContext?: BrowserContext,
-  ): Promise<BrowserContext | undefined> {
-    if (!browserContext) return undefined
-
-    const tabIdSet = new Set<number>()
-    if (browserContext.activeTab) tabIdSet.add(browserContext.activeTab.id)
-    if (browserContext.selectedTabs) {
-      for (const tab of browserContext.selectedTabs) tabIdSet.add(tab.id)
-    }
-    if (browserContext.tabs) {
-      for (const tab of browserContext.tabs) tabIdSet.add(tab.id)
-    }
-
-    if (tabIdSet.size === 0) return browserContext
-
-    const tabToPage = await this.deps.browser.resolveTabIds([...tabIdSet])
-
-    const addPageId = (tab: { id: number; url?: string; title?: string }) => {
-      const pageId = tabToPage.get(tab.id)
-      if (pageId === undefined) {
-        logger.warn('Could not resolve page ID for tab', { tabId: tab.id })
-      }
-      return { ...tab, pageId }
-    }
-
-    logger.debug('Resolved tab IDs to page IDs', {
-      mapping: Object.fromEntries(tabToPage),
-    })
-
-    return {
-      ...browserContext,
-      activeTab: browserContext.activeTab
-        ? addPageId(browserContext.activeTab)
-        : undefined,
-      selectedTabs: browserContext.selectedTabs?.map(addPageId),
-      tabs: browserContext.tabs?.map(addPageId),
-    }
-  }
-
   private closeHiddenPage(pageId: number, conversationId: string): void {
     this.deps.browser.closePage(pageId).catch((error) => {
       logger.warn('Failed to close hidden page', {
@@ -406,8 +368,14 @@ export class ChatService {
 
     const browserContext = agentConfig.isScheduledTask
       ? (session.browserContext ??
-        (await this.resolvePageIds(request.browserContext)))
-      : await this.resolvePageIds(request.browserContext)
+        (await resolveBrowserContextPageIds(
+          this.deps.browser,
+          request.browserContext,
+        )))
+      : await resolveBrowserContextPageIds(
+          this.deps.browser,
+          request.browserContext,
+        )
     const agent = await AiSdkAgent.create({
       resolvedConfig: agentConfig,
       browser: this.deps.browser,

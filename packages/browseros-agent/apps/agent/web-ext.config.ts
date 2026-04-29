@@ -8,6 +8,7 @@ const chromiumArgs = [
   '--show-component-extension-options',
   '--disable-browseros-server',
   '--disable-browseros-extensions',
+  '--browseros-dock-icon=dev',
 ]
 
 if (env.BROWSEROS_CDP_PORT) {

@@ -145,7 +145,7 @@ function createSingleTask(query: string, startUrl?: string): TaskLoadResult {
     query_id: `single-${Date.now()}`,
     dataset: 'manual',
     query: query.trim(),
-    graders: ['fara_alignment'],
+    graders: ['performance_grader'],
     start_url: startUrl,
     metadata: {
       original_task_id: 'manual',

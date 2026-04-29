@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'bun:test'
+import type { AgentConversationTurn } from '@/lib/agent-conversations/types'
 import {
   type AgentHistoryPageResponse,
   type BrowserOSChatHistoryItem,
   buildChatHistoryFromClawMessages,
+  filterTurnsPersistedInHistory,
   flattenHistoryPages,
   mapHistoryItemToClawMessage,
 } from './claw-chat-types'
@@ -117,5 +119,65 @@ describe('claw-chat-types', () => {
       { role: 'user', content: 'User request' },
       { role: 'assistant', content: 'Assistant answer' },
     ])
+  })
+
+  it('hides completed live turns once harness history contains the same turn', () => {
+    const turn: AgentConversationTurn = {
+      id: 'live-turn',
+      userText: 'hello',
+      parts: [{ kind: 'text', text: 'hi there' }],
+      done: true,
+      timestamp: 1_000,
+    }
+
+    const visible = filterTurnsPersistedInHistory(
+      [turn],
+      [
+        {
+          id: 'history-user',
+          role: 'user',
+          sessionKey: 'main',
+          timestamp: 1_050,
+          status: 'historical',
+          parts: [{ type: 'text', text: 'hello' }],
+        },
+        {
+          id: 'history-assistant',
+          role: 'assistant',
+          sessionKey: 'main',
+          timestamp: 1_100,
+          status: 'historical',
+          parts: [{ type: 'text', text: 'hi there' }],
+        },
+      ],
+    )
+
+    expect(visible).toEqual([])
+  })
+
+  it('keeps completed live turns until matching assistant history arrives', () => {
+    const turn: AgentConversationTurn = {
+      id: 'live-turn',
+      userText: 'hello',
+      parts: [{ kind: 'text', text: 'hi there' }],
+      done: true,
+      timestamp: 1_000,
+    }
+
+    const visible = filterTurnsPersistedInHistory(
+      [turn],
+      [
+        {
+          id: 'history-user',
+          role: 'user',
+          sessionKey: 'main',
+          timestamp: 1_050,
+          status: 'historical',
+          parts: [{ type: 'text', text: 'hello' }],
+        },
+      ],
+    )
+
+    expect(visible).toEqual([turn])
   })
 })

@@ -4,14 +4,10 @@ export {
   AgentConfigSchema,
   type EvalConfig,
   EvalConfigSchema,
-  type GeminiComputerUseConfig,
-  GeminiComputerUseConfigSchema,
   type OrchestratorExecutorConfig,
   OrchestratorExecutorConfigSchema,
   type SingleAgentConfig,
   SingleAgentConfigSchema,
-  type YutoriNavigatorConfig,
-  YutoriNavigatorConfigSchema,
 } from './config'
 // Error types
 export {

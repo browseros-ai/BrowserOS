@@ -4,7 +4,6 @@ import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { ParallelExecutor } from '../runner/parallel-executor'
 import { loadTasks } from '../runner/task-loader'
-import { resolveGraderOptions } from '../runner/types'
 import { EvalConfigSchema, type Task } from '../types'
 
 // ============================================================================
@@ -431,14 +430,11 @@ app.post('/api/run', async (c) => {
   const configLabel = body.configName || 'dashboard'
   dashboardState.init(tasks, configLabel, config.agent.type, outputDir)
 
-  const graderOptions = resolveGraderOptions(config)
-
   // Run eval in background — don't await
   const executor = new ParallelExecutor({
     numWorkers: config.num_workers || 1,
     config,
     outputDir,
-    graderOptions,
     restartServerPerTask: config.restart_server_per_task,
     onEvent: (taskId, event) =>
       dashboardState.broadcastStreamEvent(taskId, event),

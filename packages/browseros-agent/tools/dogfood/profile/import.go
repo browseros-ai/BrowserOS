@@ -19,7 +19,13 @@ type ImportConfig struct {
 
 var profileAllowlist = []string{
 	"Extensions",
+	"Extension State",
+	"Extension Rules",
+	"DNR Extension Rules",
+	"Extension Scripts",
 	"Local Extension Settings",
+	"Sync Extension Settings",
+	"Managed Extension Settings",
 	"Login Data",
 	"Login Data For Account",
 	"Cookies",
@@ -29,6 +35,12 @@ var profileAllowlist = []string{
 	"Web Data",
 	"History",
 }
+
+var profileGlobAllowlist = []string{
+	filepath.Join("IndexedDB", "chrome-extension_*"),
+}
+
+var warningOutput io.Writer = os.Stderr
 
 func Import(cfg ImportConfig) error {
 	if cfg.SourceUserDataDir == "" || cfg.SourceProfileDir == "" || cfg.DevUserDataDir == "" || cfg.DevProfileDir == "" {
@@ -62,6 +74,11 @@ func Import(cfg ImportConfig) error {
 			return err
 		}
 	}
+	for _, pattern := range profileGlobAllowlist {
+		if err := copyGlob(sourceProfile, devProfile, pattern); err != nil {
+			return err
+		}
+	}
 	if err := patchPreferences(filepath.Join(devProfile, "Preferences")); err != nil {
 		return err
 	}
@@ -81,6 +98,14 @@ func CleanupSingletons(userDataDir string) error {
 	return nil
 }
 
+func HasSingletons(userDataDir string) (bool, error) {
+	entries, err := filepath.Glob(filepath.Join(userDataDir, "Singleton*"))
+	if err != nil {
+		return false, err
+	}
+	return len(entries) > 0, nil
+}
+
 func copyIfExists(src string, dst string) error {
 	info, err := os.Stat(src)
 	if os.IsNotExist(err) {
@@ -93,6 +118,23 @@ func copyIfExists(src string, dst string) error {
 		return copyDir(src, dst)
 	}
 	return copyFile(src, dst, info.Mode())
+}
+
+func copyGlob(srcRoot string, dstRoot string, pattern string) error {
+	matches, err := filepath.Glob(filepath.Join(srcRoot, pattern))
+	if err != nil {
+		return err
+	}
+	for _, src := range matches {
+		rel, err := filepath.Rel(srcRoot, src)
+		if err != nil {
+			return err
+		}
+		if err := copyIfExists(src, filepath.Join(dstRoot, rel)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func copyDir(src string, dst string) error {
@@ -146,6 +188,7 @@ func patchPreferences(path string) error {
 	}
 	var prefs map[string]any
 	if err := json.Unmarshal(data, &prefs); err != nil {
+		warnPatchSkipped(path, err)
 		return nil
 	}
 	profile, ok := prefs["profile"].(map[string]any)
@@ -172,6 +215,7 @@ func patchLocalState(path string, sourceProfileDir string, devProfileDir string)
 	}
 	var state map[string]any
 	if err := json.Unmarshal(data, &state); err != nil {
+		warnPatchSkipped(path, err)
 		return nil
 	}
 	profile := ensureObject(state, "profile")
@@ -187,6 +231,10 @@ func patchLocalState(path string, sourceProfileDir string, devProfileDir string)
 		return err
 	}
 	return os.WriteFile(path, out, 0644)
+}
+
+func warnPatchSkipped(path string, err error) {
+	fmt.Fprintf(warningOutput, "warning: could not patch %s: invalid JSON: %v\n", path, err)
 }
 
 func ensureObject(parent map[string]any, key string) map[string]any {

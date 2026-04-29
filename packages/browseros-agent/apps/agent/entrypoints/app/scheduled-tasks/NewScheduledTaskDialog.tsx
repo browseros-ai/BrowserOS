@@ -164,9 +164,17 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
   const resolvedProvider: Provider | null = (() => {
     const id = selectedProviderId ?? defaultProviderId
     const found = providers.find((p) => p.id === id)
-    if (found) return { id: found.id, name: found.name, type: found.type }
+    if (found) {
+      return {
+        kind: 'llm' as const,
+        id: found.id,
+        name: found.name,
+        type: found.type,
+      }
+    }
     if (providers[0])
       return {
+        kind: 'llm' as const,
         id: providers[0].id,
         name: providers[0].name,
         type: providers[0].type,
@@ -175,6 +183,7 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
   })()
 
   const providerOptions: Provider[] = providers.map((p) => ({
+    kind: 'llm',
     id: p.id,
     name: p.name,
     type: p.type,

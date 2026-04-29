@@ -1,4 +1,5 @@
 import type { OpenClawChatHistoryMessage } from '@/entrypoints/app/agents/useOpenClaw'
+import type { AgentConversationTurn } from '@/lib/agent-conversations/types'
 
 export type ClawChatRole = 'user' | 'assistant'
 
@@ -22,9 +23,9 @@ export interface BrowserOSChatHistoryToolCall {
   toolName: string
   label: string
   subject?: string
-  status: 'completed' | 'failed'
-  input?: Record<string, unknown>
-  output?: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  input?: unknown
+  output?: unknown
   error?: string
   durationMs?: number
 }
@@ -220,4 +221,67 @@ export function buildChatHistoryFromClawMessages(
     .filter((message): message is OpenClawChatHistoryMessage =>
       Boolean(message),
     )
+}
+
+const TURN_HISTORY_MATCH_WINDOW_MS = 5_000
+
+export function filterTurnsPersistedInHistory(
+  turns: AgentConversationTurn[],
+  historyMessages: ClawChatMessage[],
+): AgentConversationTurn[] {
+  return turns.filter(
+    (turn) => !isTurnPersistedInHistory(turn, historyMessages),
+  )
+}
+
+function isTurnPersistedInHistory(
+  turn: AgentConversationTurn,
+  historyMessages: ClawChatMessage[],
+): boolean {
+  if (!turn.done) return false
+
+  const assistantText = getTurnAssistantText(turn)
+  if (!assistantText) return false
+
+  const minTimestamp = turn.timestamp - TURN_HISTORY_MATCH_WINDOW_MS
+  const userText = turn.userText.trim()
+  const userPersisted =
+    !userText ||
+    historyMessages.some(
+      (message) =>
+        message.role === 'user' &&
+        isHistoryMessageAfter(message, minTimestamp) &&
+        getClawMessageText(message) === userText,
+    )
+  const assistantPersisted = historyMessages.some(
+    (message) =>
+      message.role === 'assistant' &&
+      isHistoryMessageAfter(message, minTimestamp) &&
+      getClawMessageText(message) === assistantText,
+  )
+
+  return userPersisted && assistantPersisted
+}
+
+function isHistoryMessageAfter(
+  message: ClawChatMessage,
+  minTimestamp: number,
+): boolean {
+  return message.timestamp == null || message.timestamp >= minTimestamp
+}
+
+function getTurnAssistantText(turn: AgentConversationTurn): string {
+  return turn.parts
+    .filter((part) => part.kind === 'text')
+    .map((part) => part.text)
+    .join('')
+    .trim()
+}
+
+function getClawMessageText(message: ClawChatMessage): string {
+  return message.parts
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text)
+    .join('')
+    .trim()
 }

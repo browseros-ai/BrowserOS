@@ -26,15 +26,14 @@ import { useInvalidateCredits } from '@/lib/credits/useCredits'
 import { declinedAppsStorage } from '@/lib/declined-apps/storage'
 import { useGraphqlQuery } from '@/lib/graphql/useGraphqlQuery'
 import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
-import { useLlmProviders } from '@/lib/llm-providers/useLlmProviders'
-import {
-  type ApprovalResponseData,
-  buildChatRequestBody,
-  type ChatRequestBrowserContext,
+import type {
+  ApprovalResponseData,
+  ChatRequestBrowserContext,
 } from '@/lib/messaging/server/buildChatRequestBody'
 import { track } from '@/lib/metrics/track'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
+import { sentry } from '@/lib/sentry/sentry'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
 import {
   type ApprovalResponse,
@@ -52,7 +51,12 @@ import {
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
 import type { ChatMode } from './chatTypes'
 import { GetConversationWithMessagesDocument } from './graphql/chatSessionDocument'
+import { toLlmProviderConfig } from './sidepanel-chat-targets'
 import { useChatRefs } from './useChatRefs'
+import {
+  buildSidepanelPreparedSendMessagesRequest,
+  toProviderOption,
+} from './useChatSessionRequest'
 import { useExecutionHistoryTracker } from './useExecutionHistoryTracker'
 import { useNotifyActiveTab } from './useNotifyActiveTab'
 import { useRemoteConversationSave } from './useRemoteConversationSave'
@@ -186,15 +190,18 @@ const buildRequestBrowserContext = ({
 export const useChatSession = (options?: ChatSessionOptions) => {
   const {
     selectedLlmProviderRef,
+    selectedChatTargetRef,
     enabledMcpServersRef,
     enabledCustomServersRef,
     personalizationRef,
+    setDefaultProvider,
+    chatTargets,
+    selectedChatTarget,
+    selectChatTarget,
     selectedLlmProvider,
     isLoadingProviders,
   } = useChatRefs()
   const invalidateCredits = useInvalidateCredits()
-
-  const { providers: llmProviders, setDefaultProvider } = useLlmProviders()
 
   const {
     baseUrl: agentServerUrl,
@@ -218,11 +225,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     agentUrlRef.current = agentServerUrl
   }, [agentServerUrl])
 
-  const providers: Provider[] = llmProviders.map((p) => ({
-    id: p.id,
-    name: p.name,
-    type: p.type,
-  }))
+  const providers: Provider[] = chatTargets.map(toProviderOption)
 
   const [mode, setMode] = useState<ChatMode>('agent')
   const [textToAction, setTextToAction] = useState<Map<string, ChatAction>>(
@@ -324,15 +327,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     textToActionRef.current = textToAction
   }, [mode, textToAction])
 
-  const selectedProvider = selectedLlmProvider
-    ? {
-        id: selectedLlmProvider.id,
-        name: selectedLlmProvider.name,
-        type:
-          selectedLlmProvider.id === 'browseros'
-            ? ('browseros' as const)
-            : selectedLlmProvider.type,
-      }
+  const selectedProvider = selectedChatTarget
+    ? toProviderOption(selectedChatTarget)
     : providers[0]
 
   const {
@@ -346,7 +342,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   } = useChat({
     transport: new DefaultChatTransport({
       prepareSendMessagesRequest: async ({ messages }) => {
-        const provider =
+        const target = selectedChatTargetRef.current
+        const fallbackProvider =
           selectedLlmProviderRef.current ?? createDefaultBrowserOSProvider()
         const activeTabsList = await chrome.tabs.query({
           active: true,
@@ -395,51 +392,46 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           personalizationRef.current,
         )
 
-        const approvalResponses = extractApprovalResponses(messages)
+        const commonRequest = {
+          conversationId: conversationIdRef.current,
+          mode: currentMode,
+          browserContext: requestBrowserContext,
+          userSystemPrompt,
+          userWorkingDir: workingDirRef.current,
+          previousConversation,
+          declinedApps,
+          aclRules: enabledAclRules,
+          toolApprovalConfig: approvalConfig,
+        }
+
+        const approvalResponses =
+          target?.kind === 'acp' ? null : extractApprovalResponses(messages)
         if (approvalResponses) {
-          return {
-            api: `${agentUrlRef.current}/chat`,
-            body: buildChatRequestBody({
-              conversationId: conversationIdRef.current,
-              provider,
-              mode: currentMode,
-              browserContext: requestBrowserContext,
-              userSystemPrompt,
-              userWorkingDir: workingDirRef.current,
-              previousConversation,
-              declinedApps,
-              aclRules: enabledAclRules,
-              toolApprovalConfig: approvalConfig,
-              toolApprovalResponses: approvalResponses,
-            }),
-          }
+          return buildSidepanelPreparedSendMessagesRequest({
+            agentServerUrl: agentUrlRef.current ?? undefined,
+            target,
+            fallbackProvider,
+            ...commonRequest,
+            approvalResponses,
+          })
         }
 
         const message = getLastMessageText(messages)
 
-        const result = {
-          api: `${agentUrlRef.current}/chat`,
-          body: buildChatRequestBody({
-            message,
-            conversationId: conversationIdRef.current,
-            provider,
-            mode: currentMode,
-            browserContext: requestBrowserContext,
-            userSystemPrompt,
-            userWorkingDir: workingDirRef.current,
-            previousConversation,
-            declinedApps,
-            aclRules: enabledAclRules,
-            selectedText: activeTabSelection?.text,
-            selectedTextSource: activeTabSelection
-              ? {
-                  url: activeTabSelection.url,
-                  title: activeTabSelection.title,
-                }
-              : undefined,
-            toolApprovalConfig: approvalConfig,
-          }),
-        }
+        const result = buildSidepanelPreparedSendMessagesRequest({
+          agentServerUrl: agentUrlRef.current ?? undefined,
+          target,
+          fallbackProvider,
+          message,
+          ...commonRequest,
+          selectedText: activeTabSelection?.text,
+          selectedTextSource: activeTabSelection
+            ? {
+                url: activeTabSelection.url,
+                title: activeTabSelection.title,
+              }
+            : undefined,
+        })
 
         // Track which tab's selection was sent so we can clear it on success
         pendingSelectionTabKeyRef.current =
@@ -451,7 +443,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     sendAutomaticallyWhen: () => {
       if (approvalJustRespondedRef.current) {
         approvalJustRespondedRef.current = false
-        return true
+        return selectedChatTargetRef.current?.kind !== 'acp'
       }
       return false
     },
@@ -686,10 +678,15 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   }, [dispatchMessage, isIntegrationsSynced])
 
   const sendMessage = (params: { text: string; action?: ChatAction }) => {
+    const target = selectedChatTargetRef.current
+    const llmTargetProvider = toLlmProviderConfig(target)
     track(MESSAGE_SENT_EVENT, {
       mode,
-      provider_type: selectedLlmProvider?.type,
-      model: selectedLlmProvider?.modelId,
+      provider_type: target?.kind === 'acp' ? 'acp' : llmTargetProvider?.type,
+      model:
+        target?.kind === 'acp'
+          ? target.modelId
+          : llmTargetProvider?.modelId || selectedLlmProvider?.modelId,
     })
 
     if (!isIntegrationsSyncedRef.current) {
@@ -741,14 +738,52 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     addToolApprovalResponse(params)
   }
 
+  const resetConversationState = () => {
+    stop()
+    void finishExecutionTask({ isAbort: true })
+    setConversationId(crypto.randomUUID())
+    setMessages([])
+    setTextToAction(new Map())
+    setLiked({})
+    setDisliked({})
+    setRestoredConversationId(null)
+    resetRemoteConversation()
+  }
+
   const handleSelectProvider = (provider: Provider) => {
-    const fullProvider = llmProviders.find((p) => p.id === provider.id)
+    const target = chatTargets.find(
+      (candidate) =>
+        candidate.id === provider.id && candidate.kind === provider.kind,
+    )
+    if (!target) return
+
+    const previousTarget = selectedChatTargetRef.current
     track(PROVIDER_SELECTED_EVENT, {
-      provider_id: provider.id,
-      provider_type: provider.type,
-      model_id: fullProvider?.modelId,
+      provider_id: target.id,
+      provider_type: target.kind === 'acp' ? 'acp' : target.type,
+      model_id:
+        target.kind === 'acp' ? target.modelId : target.provider.modelId,
     })
-    setDefaultProvider(provider.id)
+
+    void selectChatTarget(target).catch((error) => {
+      sentry.captureException(error, {
+        extra: {
+          message: 'Failed to persist sidepanel chat target selection',
+          targetId: target.id,
+          targetKind: target.kind,
+        },
+      })
+    })
+    if (target.kind === 'llm') setDefaultProvider(target.provider.id)
+
+    if (
+      previousTarget &&
+      (previousTarget.kind !== target.kind ||
+        previousTarget.id !== target.id) &&
+      messagesRef.current.length > 0
+    ) {
+      resetConversationState()
+    }
   }
 
   const getActionForMessage = (message: UIMessage) => {
@@ -762,15 +797,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
   const resetConversation = () => {
     track(CONVERSATION_RESET_EVENT, { message_count: messages.length })
-    stop()
-    void finishExecutionTask({ isAbort: true })
-    setConversationId(crypto.randomUUID())
-    setMessages([])
-    setTextToAction(new Map())
-    setLiked({})
-    setDisliked({})
-    setRestoredConversationId(null)
-    resetRemoteConversation()
+    resetConversationState()
   }
 
   const isRestoringConversation =

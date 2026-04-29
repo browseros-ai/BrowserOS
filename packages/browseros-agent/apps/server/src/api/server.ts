@@ -24,6 +24,7 @@ import { logger } from '../lib/logger'
 import { Sentry } from '../lib/sentry'
 import { getLimaHomeDir, resolveBundledLimactl, VM_NAME } from '../lib/vm'
 import { createAclRoutes } from './routes/acl'
+import { createAgentRoutes } from './routes/agents'
 import { createChatRoutes } from './routes/chat'
 import { createCreditsRoutes } from './routes/credits'
 import { createHealthRoute } from './routes/health'
@@ -35,7 +36,6 @@ import { createOAuthRoutes } from './routes/oauth'
 import { createOpenClawRoutes } from './routes/openclaw'
 import { createProviderRoutes } from './routes/provider'
 import { createRefinePromptRoutes } from './routes/refine-prompt'
-import { createSdkRoutes } from './routes/sdk'
 import { createShutdownRoute } from './routes/shutdown'
 import { createSkillsRoutes } from './routes/skills'
 import { createSoulRoutes } from './routes/soul'
@@ -115,7 +115,7 @@ export async function createHttpServer(config: HttpServerConfig) {
       createTerminalRoutes({
         containerName: OPENCLAW_GATEWAY_CONTAINER_NAME,
         limaHome: getLimaHomeDir(),
-        limactlPath: resolveBundledLimactl(resourcesDir),
+        limactlPath: () => resolveBundledLimactl(resourcesDir),
         vmName: VM_NAME,
       }),
     )
@@ -127,6 +127,10 @@ export async function createHttpServer(config: HttpServerConfig) {
   const monitoringRoutes = new Hono<Env>()
     .use('/*', requireTrustedAppOrigin())
     .route('/', createMonitoringRoutes())
+
+  const agentRoutes = new Hono<Env>()
+    .use('/*', requireTrustedAppOrigin())
+    .route('/', createAgentRoutes({ browserosServerPort: port, browser }))
 
   const app = new Hono<Env>()
     .use('/*', cors(defaultCorsConfig))
@@ -194,14 +198,7 @@ export async function createHttpServer(config: HttpServerConfig) {
         aiSdkDevtoolsEnabled: config.aiSdkDevtoolsEnabled,
       }),
     )
-    .route(
-      '/sdk',
-      createSdkRoutes({
-        port,
-        browser,
-        browserosId,
-      }),
-    )
+    .route('/agents', agentRoutes)
     .route('/claw', clawRoutes)
 
   // Error handler

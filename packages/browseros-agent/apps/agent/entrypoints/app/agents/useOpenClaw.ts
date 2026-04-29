@@ -7,6 +7,7 @@ export interface AgentEntry {
   name: string
   workspace: string
   model?: unknown
+  source?: 'openclaw' | 'agent-harness'
 }
 
 export interface OpenClawStatus {
@@ -98,7 +99,10 @@ async function fetchOpenClawStatus(baseUrl: string): Promise<OpenClawStatus> {
 
 async function fetchOpenClawAgents(baseUrl: string): Promise<AgentEntry[]> {
   const data = await clawFetch<{ agents: AgentEntry[] }>(baseUrl, '/agents')
-  return data.agents ?? []
+  return (data.agents ?? []).map((agent) => ({
+    ...agent,
+    source: 'openclaw',
+  }))
 }
 
 async function invalidateOpenClawQueries(

@@ -80,3 +80,7 @@ export const CONTENT_LIMITS = {
   CONSOLE_DEFAULT_LIMIT: 50,
   CONSOLE_MAX_LIMIT: 200,
 } as const
+
+export const AGENT_HARNESS_LIMITS = {
+  AGENT_NAME_MAX_CHARS: 80,
+} as const

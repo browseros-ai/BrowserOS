@@ -1,4 +1,4 @@
-import { Check, Plus } from 'lucide-react'
+import { Bot, Check, Plus } from 'lucide-react'
 import type { FC, PropsWithChildren } from 'react'
 import { useState } from 'react'
 import {
@@ -17,6 +17,11 @@ import {
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
 import { cn } from '@/lib/utils'
+import {
+  getProviderSearchValue,
+  getProviderSubtitle,
+  groupProviderOptions,
+} from './ChatProviderSelector.helpers'
 import type { Provider } from './chatComponentTypes'
 
 interface ChatProviderSelectorProps {
@@ -29,54 +34,55 @@ export const ChatProviderSelector: FC<
   PropsWithChildren<ChatProviderSelectorProps>
 > = ({ children, providers, selectedProvider, onSelectProvider }) => {
   const [open, setOpen] = useState(false)
+  const groups = groupProviderOptions(providers)
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent side="bottom" align="start" className="w-48 p-0">
+      <PopoverContent side="bottom" align="start" className="w-64 p-0">
         <Command>
-          <CommandInput placeholder="Search providers..." className="h-9" />
+          <CommandInput placeholder="Search models..." className="h-9" />
           <CommandList>
-            <div className="my-2 px-2 font-semibold text-muted-foreground text-xs uppercase tracking-wide">
-              AI Provider
-            </div>
             <CommandEmpty>No provider found</CommandEmpty>
-            <CommandGroup>
-              {providers.map((provider) => {
-                const isSelected = selectedProvider.id === provider.id
-                return (
-                  <CommandItem
-                    key={provider.id}
-                    value={`${provider.id} ${provider.name}`}
-                    onSelect={() => {
-                      onSelectProvider(provider)
-                      setOpen(false)
-                    }}
-                    className={cn(
-                      'flex w-full items-center gap-3 rounded-md p-2 transition-colors',
-                      isSelected && 'bg-[var(--accent-orange)]/10',
-                    )}
-                  >
-                    <span className="text-muted-foreground">
-                      {provider.type === 'browseros' ? (
-                        <BrowserOSIcon size={18} />
-                      ) : (
-                        <ProviderIcon
-                          type={provider.type as ProviderType}
-                          size={18}
-                        />
+            {groups.map((group) => (
+              <CommandGroup key={group.key} heading={group.label}>
+                {group.options.map((provider) => {
+                  const isSelected = selectedProvider.id === provider.id
+                  const subtitle = getProviderSubtitle(provider)
+                  return (
+                    <CommandItem
+                      key={provider.id}
+                      value={getProviderSearchValue(provider, group.label)}
+                      onSelect={() => {
+                        onSelectProvider(provider)
+                        setOpen(false)
+                      }}
+                      className={cn(
+                        'flex w-full items-center gap-3 rounded-md p-2 transition-colors',
+                        isSelected && 'bg-[var(--accent-orange)]/10',
                       )}
-                    </span>
-                    <span className="flex-1 text-left text-sm">
-                      {provider.name}
-                    </span>
-                    {isSelected && (
-                      <Check className="h-3.5 w-3.5 text-[var(--accent-orange)]" />
-                    )}
-                  </CommandItem>
-                )
-              })}
-            </CommandGroup>
+                    >
+                      <span className="text-muted-foreground">
+                        <ProviderOptionIcon provider={provider} />
+                      </span>
+                      <span className="min-w-0 flex-1 text-left">
+                        <span className="block truncate text-sm">
+                          {provider.name}
+                        </span>
+                        {subtitle && (
+                          <span className="block truncate text-muted-foreground text-xs">
+                            {subtitle}
+                          </span>
+                        )}
+                      </span>
+                      {isSelected && (
+                        <Check className="h-3.5 w-3.5 text-[var(--accent-orange)]" />
+                      )}
+                    </CommandItem>
+                  )
+                })}
+              </CommandGroup>
+            ))}
             <div className="border-border border-t p-1">
               <button
                 type="button"
@@ -95,4 +101,10 @@ export const ChatProviderSelector: FC<
       </PopoverContent>
     </Popover>
   )
+}
+
+function ProviderOptionIcon({ provider }: { provider: Provider }) {
+  if (provider.kind === 'acp') return <Bot size={18} />
+  if (provider.type === 'browseros') return <BrowserOSIcon size={18} />
+  return <ProviderIcon type={provider.type as ProviderType} size={18} />
 }

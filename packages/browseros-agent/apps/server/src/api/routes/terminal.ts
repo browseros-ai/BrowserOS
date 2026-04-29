@@ -17,7 +17,7 @@ export const TERMINAL_WS_PATH = '/terminal/ws'
 interface TerminalRouteDeps {
   containerName: string
   limaHome: string
-  limactlPath: string
+  limactlPath: string | (() => string)
   vmName: string
 }
 
@@ -39,16 +39,20 @@ function sendExit(ws: { send(data: string): void }, exitCode: number): void {
   safeSend(ws, serializeTerminalServerMessage({ type: 'exit', exitCode }))
 }
 
-function createSocketEvents(deps: TerminalRouteDeps) {
+export function createTerminalSocketEvents(deps: TerminalRouteDeps) {
   let session: TerminalSession | null = null
 
   return {
     onOpen(_event: Event, ws: { send(data: string): void; close(): void }) {
       try {
+        const limactlPath =
+          typeof deps.limactlPath === 'function'
+            ? deps.limactlPath()
+            : deps.limactlPath
         session = createTerminalSession({
           containerName: deps.containerName,
           limaHome: deps.limaHome,
-          limactlPath: deps.limactlPath,
+          limactlPath,
           vmName: deps.vmName,
           workingDir: TERMINAL_HOME_DIR,
           onOutput(data) {
@@ -93,6 +97,6 @@ function createSocketEvents(deps: TerminalRouteDeps) {
 export function createTerminalRoutes(deps: TerminalRouteDeps) {
   return new Hono<Env>().get(
     '/ws',
-    upgradeWebSocket(() => createSocketEvents(deps)),
+    upgradeWebSocket(() => createTerminalSocketEvents(deps)),
   )
 }

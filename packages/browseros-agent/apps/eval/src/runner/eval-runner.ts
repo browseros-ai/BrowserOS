@@ -19,17 +19,12 @@ import {
 } from './task-loader'
 import type {
   BatchSummary,
-  GraderOptions,
   RunEvalOptions,
   TaskResult,
   TaskResultSummary,
   TaskSource,
 } from './types'
-import {
-  getPrimaryGraderResult,
-  isSuccessfulResult,
-  resolveGraderOptions,
-} from './types'
+import { getPrimaryGraderResult, isSuccessfulResult } from './types'
 
 // ============================================================================
 // Main Entry Point
@@ -58,7 +53,6 @@ export async function runEval(options: RunEvalOptions): Promise<void> {
 
   // Step 4: Setup
   await mkdir(resolvedPaths.outputDir, { recursive: true })
-  const graderOptions = resolveGraderOptions(config)
 
   // Step 5: Start dashboard
   startDashboard({
@@ -69,12 +63,7 @@ export async function runEval(options: RunEvalOptions): Promise<void> {
   })
 
   // Step 6: Execute tasks (parallel or sequential based on num_workers)
-  const results = await executeTasks(
-    tasks,
-    config,
-    resolvedPaths.outputDir,
-    graderOptions,
-  )
+  const results = await executeTasks(tasks, config, resolvedPaths.outputDir)
 
   // Step 7: Summary
   const summary = buildSummary(results)
@@ -187,7 +176,6 @@ async function executeTasks(
   tasks: Task[],
   config: EvalConfig,
   outputDir: string,
-  graderOptions: GraderOptions | null,
 ): Promise<TaskResult[]> {
   console.log(`\n${'='.repeat(60)}`)
   console.log('STARTING EVALUATION')
@@ -204,7 +192,6 @@ async function executeTasks(
     numWorkers,
     config,
     outputDir,
-    graderOptions,
     restartServerPerTask: config.restart_server_per_task,
     onEvent: (taskId, event) =>
       dashboardState.broadcastStreamEvent(taskId, event),

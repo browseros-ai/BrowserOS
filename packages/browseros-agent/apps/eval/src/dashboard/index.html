@@ -190,8 +190,6 @@
           <select id="cfg-agent-type" onchange="onAgentTypeChange(this.value)">
             <option value="single">Single Agent</option>
             <option value="orchestrator-executor">Orchestrator-Executor</option>
-            <option value="gemini-computer-use">Gemini Computer Use</option>
-            <option value="yutori-navigator">Yutori Navigator</option>
           </select>
         </div>
 
@@ -277,50 +275,6 @@
               <label>Base URL <span class="req">*</span></label>
               <input type="text" id="cfg-exec-baseurl" value="https://clado-ai--clado-browseros-action-actionmodel-generate.modal.run">
             </div>
-          </div>
-        </div>
-
-        <!-- Gemini Computer Use fields -->
-        <div class="agent-fields" id="fields-gemini-computer-use">
-          <div class="config-field">
-            <label>API Key <span class="req">*</span></label>
-            <input type="password" id="cfg-gemini-apikey" placeholder="GOOGLE_AI_API_KEY">
-          </div>
-          <div class="config-row">
-            <div class="config-field">
-              <label>Screen Width</label>
-              <input type="number" id="cfg-gemini-width" value="1440" min="800" max="2560">
-            </div>
-            <div class="config-field">
-              <label>Screen Height</label>
-              <input type="number" id="cfg-gemini-height" value="900" min="600" max="1440">
-            </div>
-          </div>
-          <div class="config-field">
-            <label>Turn Limit</label>
-            <input type="number" id="cfg-gemini-turns" value="30" min="1" max="100">
-          </div>
-        </div>
-
-        <!-- Yutori Navigator fields -->
-        <div class="agent-fields" id="fields-yutori-navigator">
-          <div class="config-field">
-            <label>API Key <span class="req">*</span></label>
-            <input type="password" id="cfg-yutori-apikey" placeholder="YUTORI_API_KEY">
-          </div>
-          <div class="config-row">
-            <div class="config-field">
-              <label>Screen Width</label>
-              <input type="number" id="cfg-yutori-width" value="1280" min="800" max="2560">
-            </div>
-            <div class="config-field">
-              <label>Screen Height</label>
-              <input type="number" id="cfg-yutori-height" value="800" min="600" max="1440">
-            </div>
-          </div>
-          <div class="config-field">
-            <label>Turn Limit</label>
-            <input type="number" id="cfg-yutori-turns" value="30" min="1" max="100">
           </div>
         </div>
 
@@ -420,22 +374,9 @@
           <label>Graders</label>
           <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 2px;">
             <div class="config-field-inline"><input type="checkbox" id="cfg-grader-performance" value="performance_grader"><label for="cfg-grader-performance">Performance Grader</label></div>
-            <div class="config-field-inline"><input type="checkbox" id="cfg-grader-webvoyager" value="webvoyager_grader"><label for="cfg-grader-webvoyager">WebVoyager Grader</label></div>
-            <div class="config-field-inline"><input type="checkbox" id="cfg-grader-fara" value="fara_combined"><label for="cfg-grader-fara">Fara Combined</label></div>
-            <div class="config-field-inline"><input type="checkbox" id="cfg-grader-mind2web" value="mind2web_judge"><label for="cfg-grader-mind2web">Mind2Web Judge</label></div>
+            <div class="config-field-inline"><input type="checkbox" id="cfg-grader-agisdk" value="agisdk_state_diff"><label for="cfg-grader-agisdk">AGI SDK State Diff</label></div>
+            <div class="config-field-inline"><input type="checkbox" id="cfg-grader-infinity" value="infinity_state"><label for="cfg-grader-infinity">Infinity State</label></div>
           </div>
-        </div>
-        <div class="config-field">
-          <label>Grader Model</label>
-          <input type="text" id="cfg-grader-model" placeholder="e.g. openai/gpt-4.1">
-        </div>
-        <div class="config-field">
-          <label>Grader API Key</label>
-          <input type="password" id="cfg-grader-key-env" placeholder="Key or env var e.g. OPENROUTER_API_KEY">
-        </div>
-        <div class="config-field">
-          <label>Grader Base URL</label>
-          <input type="text" id="cfg-grader-baseurl" placeholder="https://openrouter.ai/api/v1">
         </div>
       </div>
 
@@ -514,7 +455,7 @@ let passCount = 0;
 let failCount = 0;
 let loadedConfigName = null;
 
-const PASS_FAIL_GRADER_ORDER = ['performance_grader', 'webvoyager_grader', 'fara_combined', 'fara_grader'];
+const PASS_FAIL_GRADER_ORDER = ['agisdk_state_diff', 'infinity_state', 'performance_grader'];
 function getPrimaryGrader(graderResults) {
   for (const name of PASS_FAIL_GRADER_ORDER) {
     if (graderResults[name]) return graderResults[name];
@@ -751,20 +692,6 @@ function fillForm(cfg) {
     setVal('cfg-exec-model', exec.model);
     setVal('cfg-exec-apikey', exec.apiKey);
     setVal('cfg-exec-baseurl', exec.baseUrl);
-  } else if (type === 'gemini-computer-use') {
-    setVal('cfg-gemini-apikey', agent.apiKey);
-    if (agent.screenSize) {
-      setVal('cfg-gemini-width', agent.screenSize.width);
-      setVal('cfg-gemini-height', agent.screenSize.height);
-    }
-    setVal('cfg-gemini-turns', agent.turnLimit);
-  } else if (type === 'yutori-navigator') {
-    setVal('cfg-yutori-apikey', agent.apiKey);
-    if (agent.screenSize) {
-      setVal('cfg-yutori-width', agent.screenSize.width);
-      setVal('cfg-yutori-height', agent.screenSize.height);
-    }
-    setVal('cfg-yutori-turns', agent.turnLimit);
   }
 
   // Infrastructure
@@ -797,17 +724,13 @@ function fillForm(cfg) {
   // Grader checkboxes
   const graderMap = {
     'performance_grader': 'cfg-grader-performance',
-    'webvoyager_grader': 'cfg-grader-webvoyager',
-    'fara_combined': 'cfg-grader-fara',
-    'mind2web_judge': 'cfg-grader-mind2web',
+    'agisdk_state_diff': 'cfg-grader-agisdk',
+    'infinity_state': 'cfg-grader-infinity',
   };
   const configGraders = cfg.graders || [];
   for (const [name, id] of Object.entries(graderMap)) {
     document.getElementById(id).checked = configGraders.includes(name);
   }
-  setVal('cfg-grader-model', cfg.grader_model);
-  setVal('cfg-grader-key-env', cfg.grader_api_key_env);
-  setVal('cfg-grader-baseurl', cfg.grader_base_url);
 }
 
 function setVal(id, val) {
@@ -848,26 +771,6 @@ function buildConfigFromForm() {
         baseUrl: getVal('cfg-exec-baseurl') || undefined,
       },
     };
-  } else if (type === 'gemini-computer-use') {
-    agent = {
-      type: 'gemini-computer-use',
-      apiKey: getVal('cfg-gemini-apikey'),
-      screenSize: {
-        width: parseInt(getVal('cfg-gemini-width'), 10) || 1440,
-        height: parseInt(getVal('cfg-gemini-height'), 10) || 900,
-      },
-      turnLimit: parseInt(getVal('cfg-gemini-turns'), 10) || 30,
-    };
-  } else if (type === 'yutori-navigator') {
-    agent = {
-      type: 'yutori-navigator',
-      apiKey: getVal('cfg-yutori-apikey'),
-      screenSize: {
-        width: parseInt(getVal('cfg-yutori-width'), 10) || 1280,
-        height: parseInt(getVal('cfg-yutori-height'), 10) || 800,
-      },
-      turnLimit: parseInt(getVal('cfg-yutori-turns'), 10) || 30,
-    };
   }
 
   // Dataset: use dropdown value unless custom is selected
@@ -894,16 +797,10 @@ function buildConfigFromForm() {
   if (outputDir) config.output_dir = outputDir;
   const timeoutMs = parseInt(getVal('cfg-timeout'), 10);
   if (timeoutMs) config.timeout_ms = timeoutMs;
-  const selectedGraders = ['cfg-grader-performance', 'cfg-grader-webvoyager', 'cfg-grader-fara', 'cfg-grader-mind2web']
+  const selectedGraders = ['cfg-grader-performance', 'cfg-grader-agisdk', 'cfg-grader-infinity']
     .filter(id => document.getElementById(id).checked)
     .map(id => document.getElementById(id).value);
   if (selectedGraders.length) config.graders = selectedGraders;
-  const graderModel = getVal('cfg-grader-model');
-  if (graderModel) config.grader_model = graderModel;
-  const graderKeyEnv = getVal('cfg-grader-key-env');
-  if (graderKeyEnv) config.grader_api_key_env = graderKeyEnv;
-  const graderBaseUrl = getVal('cfg-grader-baseurl');
-  if (graderBaseUrl) config.grader_base_url = graderBaseUrl;
 
   return config;
 }
@@ -1417,8 +1314,6 @@ function renderGraderPanel() {
   let bodyHtml = '';
   if (primaryName === 'performance_grader') {
     bodyHtml = renderPerformanceGrader(primaryResult);
-  } else if (primaryName === 'fara_combined' || primaryName === 'fara_grader') {
-    bodyHtml = renderFaraCombined(primaryResult);
   } else {
     bodyHtml = renderGenericGrader(primaryResult);
   }
@@ -1470,35 +1365,6 @@ function renderPerformanceGrader(result) {
         </div>
         <div class="grader-axis-bar"><div class="grader-axis-bar-fill" style="width:${score}%;background:${barColor(score)}"></div></div>
         <div class="grader-axis-reasoning">${reasoning}</div>
-      </div>
-    `;
-  }
-  html += '</div>';
-  return html;
-}
-
-function renderFaraCombined(result) {
-  const details = result.details || {};
-  const verifiers = details.verifiers;
-  const voting = details.votingResult;
-  if (!verifiers || typeof verifiers !== 'object') {
-    return renderGenericGrader(result);
-  }
-
-  let html = '';
-  if (voting) {
-    html += `<div style="font-size:11px;color:#8b949e;margin-bottom:8px">Majority vote: ${voting.passCount}/${voting.totalVerifiers} passed &rarr; <strong style="color:${voting.decision === 'PASS' ? '#3fb950' : '#f85149'}">${voting.decision}</strong></div>`;
-  }
-  html += '<div class="grader-verifiers">';
-  for (const [name, v] of Object.entries(verifiers)) {
-    const badge = v.pass ? '<span class="grader-verifier-badge pass">PASS</span>' : '<span class="grader-verifier-badge fail">FAIL</span>';
-    const score = typeof v.score === 'number' ? `${(v.score * 100).toFixed(0)}%` : '';
-    const label = name.charAt(0).toUpperCase() + name.slice(1);
-    html += `
-      <div class="grader-verifier">
-        <span class="grader-verifier-name">${label}</span>
-        ${badge}
-        <span style="font-size:11px;color:#8b949e;margin-left:auto">${score}</span>
       </div>
     `;
   }

@@ -54,10 +54,10 @@ jobs:
             command: (cd apps/server && bun run test:integration)
             junit_path: test-results/server-integration.xml
             needs_browser: true
-          - suite: server-sdk
-            command: (cd apps/server && bun run test:sdk)
-            junit_path: test-results/server-sdk.xml
-            needs_browser: true
+          - suite: server-lib
+            command: (cd apps/server && bun run test:lib)
+            junit_path: test-results/server-lib.xml
+            needs_browser: false
           - suite: server-root
             command: (cd apps/server && bun run test:root)
             junit_path: test-results/server-root.xml
@@ -69,10 +69,6 @@ jobs:
           - suite: eval
             command: bun run test:eval
             junit_path: test-results/eval.xml
-            needs_browser: false
-          - suite: agent-sdk
-            command: bun run test:agent-sdk
-            junit_path: test-results/agent-sdk.xml
             needs_browser: false
           - suite: build
             command: bun run test:build

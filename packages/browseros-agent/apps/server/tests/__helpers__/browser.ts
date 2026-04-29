@@ -98,6 +98,7 @@ export async function spawnBrowser(
       // Match the supported dev/eval launch path and keep legacy BrowserOS
       // extensions from trying to talk to the removed controller bridge.
       '--disable-browseros-extensions',
+      '--browseros-dock-icon=dev',
       '--enable-logging=stderr',
       ...(config.headless ? ['--headless=new'] : []),
       ...config.extraArgs,

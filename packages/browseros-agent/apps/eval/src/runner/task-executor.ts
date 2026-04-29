@@ -10,7 +10,7 @@ import { runGraders } from '../graders/registry'
 import type { ErrorSource, EvalConfig, GraderResult, Task } from '../types'
 import { callMcpTool } from '../utils/mcp-client'
 import { InfinityAppManager } from './infinity-app-manager'
-import type { GraderOptions, TaskResult } from './types'
+import type { TaskResult } from './types'
 
 // ============================================================================
 // Errors
@@ -40,7 +40,6 @@ export class TaskExecutionError extends Error {
 // ============================================================================
 
 export interface TaskExecutorDeps {
-  graderOptions: GraderOptions | null
   onEvent?: (taskId: string, event: Record<string, unknown>) => void
 }
 
@@ -225,6 +224,7 @@ export class TaskExecutor {
       const context: AgentContext = {
         config: this.config,
         task,
+        workerIndex: this.workerIndex,
         initialPageId: pageId,
         outputDir: this.outputDir,
         taskOutputDir,
@@ -259,27 +259,23 @@ export class TaskExecutor {
     }
 
     try {
-      const graderResults = await runGraders(
-        graderNames,
-        {
-          task: {
-            query_id: task.query_id,
-            query: task.query,
-            dataset: task.dataset,
-          },
-          messages: agentResult.messages,
-          screenshotCount:
-            agentResult.metadata.screenshot_count ??
-            agentResult.metadata.total_steps,
-          finalAnswer: agentResult.finalAnswer,
-          expectedAnswer: (task.metadata?.additional as Record<string, unknown>)
-            ?.answer as string | undefined,
-          outputDir: join(this.outputDir, task.query_id),
-          mcpUrl: `${this.config.browseros.server_url}/mcp`,
-          infinityAppUrl,
+      const graderResults = await runGraders(graderNames, {
+        task: {
+          query_id: task.query_id,
+          query: task.query,
+          dataset: task.dataset,
         },
-        this.deps.graderOptions,
-      )
+        messages: agentResult.messages,
+        screenshotCount:
+          agentResult.metadata.screenshot_count ??
+          agentResult.metadata.total_steps,
+        finalAnswer: agentResult.finalAnswer,
+        expectedAnswer: (task.metadata?.additional as Record<string, unknown>)
+          ?.answer as string | undefined,
+        outputDir: join(this.outputDir, task.query_id),
+        mcpUrl: `${this.config.browseros.server_url}/mcp`,
+        infinityAppUrl,
+      })
 
       try {
         const saver = new TrajectorySaver(this.outputDir, task.query_id)
@@ -314,11 +310,7 @@ export function createTaskExecutor(
   config: EvalConfig,
   workerIndex: number,
   outputDir: string,
-  graderOptions: GraderOptions | null,
   onEvent?: (taskId: string, event: Record<string, unknown>) => void,
 ): TaskExecutor {
-  return new TaskExecutor(config, workerIndex, outputDir, {
-    graderOptions,
-    onEvent,
-  })
+  return new TaskExecutor(config, workerIndex, outputDir, { onEvent })
 }

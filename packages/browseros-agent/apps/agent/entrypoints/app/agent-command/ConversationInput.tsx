@@ -55,6 +55,7 @@ interface ConversationInputProps {
   disabled?: boolean
   status?: string
   placeholder?: string
+  attachmentsEnabled?: boolean
   variant?: 'home' | 'conversation'
   // Outbound queue: when present, the composer renders the queue strip
   // above the textarea and lets the user keep sending while a previous
@@ -155,6 +156,7 @@ function ContextControls({
   status,
   onAttachClick,
   attachDisabled,
+  attachmentsEnabled,
 }: {
   agents: AgentEntry[]
   onCreateAgent?: () => void
@@ -166,6 +168,7 @@ function ContextControls({
   status?: string
   onAttachClick: () => void
   attachDisabled: boolean
+  attachmentsEnabled: boolean
 }) {
   const { supports } = useCapabilities()
   const { selectedFolder } = useWorkspace()
@@ -229,7 +232,7 @@ function ContextControls({
           type="button"
           variant="ghost"
           onClick={onAttachClick}
-          disabled={attachDisabled}
+          disabled={attachDisabled || !attachmentsEnabled}
           title="Attach files"
           className={cn(
             'flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium text-sm transition-all',
@@ -306,6 +309,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   disabled,
   status,
   placeholder,
+  attachmentsEnabled = true,
   variant = 'conversation',
   outboundQueue,
   onCancelQueued,
@@ -328,6 +332,10 @@ export const ConversationInput: FC<ConversationInputProps> = ({
 
   const stageFiles = async (files: File[]) => {
     if (files.length === 0) return
+    if (!attachmentsEnabled) {
+      setAttachmentError('Attachments are not supported for this agent yet.')
+      return
+    }
     setIsStaging(true)
     setAttachmentError(null)
     try {
@@ -368,6 +376,12 @@ export const ConversationInput: FC<ConversationInputProps> = ({
       voice.clearTranscript()
     }
   }, [voice.transcript, voice.isTranscribing, voice])
+
+  useEffect(() => {
+    if (attachmentsEnabled) return
+    setAttachments([])
+    setAttachmentError(null)
+  }, [attachmentsEnabled])
 
   const toggleTab = (tab: chrome.tabs.Tab) => {
     setSelectedTabs((prev) => {
@@ -435,6 +449,10 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   }
 
   const openFilePicker = () => {
+    if (!attachmentsEnabled) {
+      setAttachmentError('Attachments are not supported for this agent yet.')
+      return
+    }
     fileInputRef.current?.click()
   }
 
@@ -565,6 +583,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
           status={status}
           onAttachClick={openFilePicker}
           attachDisabled={attachments.length >= 10 || isStaging || !!disabled}
+          attachmentsEnabled={attachmentsEnabled}
         />
         {isDragOver ? (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[inherit] bg-background/80 font-medium text-foreground text-sm backdrop-blur-sm">

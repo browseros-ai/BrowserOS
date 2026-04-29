@@ -1,6 +1,6 @@
 # BrowserOS Agent
 
-The agent platform powering [BrowserOS](https://github.com/browseros-ai/BrowserOS) — contains the MCP server, agent UI, CLI, evaluation framework, and SDK.
+The agent platform powering [BrowserOS](https://github.com/browseros-ai/BrowserOS) — contains the MCP server, agent UI, CLI, and evaluation framework.
 
 ## Monorepo Structure
 
@@ -12,7 +12,6 @@ apps/
   eval/            # Evaluation framework for benchmarking agents
 
 packages/
-  agent-sdk/       # Node.js SDK (@browseros-ai/agent-sdk)
   cdp-protocol/    # Type-safe Chrome DevTools Protocol bindings
   shared/          # Shared constants (ports, timeouts, limits)
 ```
@@ -23,7 +22,6 @@ packages/
 | `apps/agent` | Agent UI — Chrome extension for the chat interface |
 | `apps/cli` | Go CLI — control BrowserOS from the terminal or AI coding agents |
 | `apps/eval` | Benchmark framework — WebVoyager, Mind2Web evaluation |
-| `packages/agent-sdk` | Node.js SDK for browser automation with natural language |
 | `packages/cdp-protocol` | Auto-generated CDP type bindings used by the server |
 | `packages/shared` | Shared constants used across packages |
 

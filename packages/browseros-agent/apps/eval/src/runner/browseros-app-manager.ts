@@ -23,8 +23,13 @@ import {
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { type Subprocess, spawn, spawnSync } from 'bun'
-import type { EvalPorts } from '../utils/dev-config'
 import { sleep } from '../utils/sleep'
+
+export interface EvalPorts {
+  cdp: number
+  server: number
+  extension: number
+}
 
 const MAX_RESTART_ATTEMPTS = 3
 const CDP_WAIT_TIMEOUT_MS = 30_000

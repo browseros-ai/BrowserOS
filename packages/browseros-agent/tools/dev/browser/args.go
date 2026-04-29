@@ -28,6 +28,7 @@ func BuildArgs(cfg ArgsConfig) []string {
 		"--use-mock-keychain",
 		"--show-component-extension-options",
 		"--disable-browseros-server",
+		"--browseros-dock-icon=dev",
 	)
 
 	if cfg.LoadDevExtensions {

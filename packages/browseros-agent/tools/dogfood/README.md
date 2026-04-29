@@ -95,12 +95,16 @@ browseros-dogfood stop
 - BrowserOS state, including the local server state and VM data, lives under `~/.browseros-dogfood`.
 - The imported dev profile lives under `~/.config/browseros-dogfood/profile`.
 - Your installed BrowserOS profile is only used as the source import. It is not where alpha dogfood runs.
+- Installed extensions, extension-specific settings/state, and extension-owned IndexedDB data are copied so dogfood sessions keep extension setup close to your normal profile.
+- Cache and broad site storage directories are not copied.
 
 To re-import your main profile:
 
 ```bash
 browseros-dogfood start --refresh-profile
 ```
+
+If BrowserOS appears to be using the source profile during import, the CLI asks you to quit BrowserOS and press Enter before copying. You can type `continue` if the lock files are stale and you want to import anyway.
 
 ## Config
 

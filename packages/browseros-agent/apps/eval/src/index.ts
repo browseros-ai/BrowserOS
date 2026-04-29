@@ -13,31 +13,34 @@ const { values } = parseArgs({
 
 if (values.help) {
   console.log(`
-Web Agent Eval System
+BrowserOS Eval
 
 Usage:
   bun run eval                          # Opens dashboard in config mode
   bun run eval --config <config.json>   # Runs eval with config file
 
-Config file should include:
-  - agent: Agent configuration (single or orchestrator-executor)
-  - dataset: Path to dataset JSONL file
-  - output_dir: Output directory for results (optional, default: ./results)
-  - num_workers: Number of parallel workers
-  - browseros.server_url: BrowserOS server URL
-  - grader_model, grader_api_key_env, grader_base_url: Grader settings (optional)
-  - timeout_ms: Task timeout in ms (optional)
+Available agent types:
+  - single                  Single LLM agent driven by the BrowserOS tool loop
+  - orchestrator-executor   High-level planner + visual/text executor
 
-Preset configs available in configs/:
-  - configs/webvoyager-full.json    Full WebVoyager evaluation
-  - configs/mind2web-full.json      Full Mind2Web evaluation
-  - configs/webvoyager-test.json    WebVoyager test subset (10 tasks)
-  - configs/mind2web-test.json      Mind2Web test subset (10 tasks)
+Available graders:
+  - performance_grader      Multi-axis grader using Claude Agent SDK
+  - agisdk_state_diff       AGI SDK / REAL Bench state-diff grader
+  - infinity_state          WebArena-Infinity verifier-script grader
+
+Preset configs in configs/:
+  - browseros-agent-weekly.json       Weekly eval (single agent)
+  - browseros-oe-agent-weekly.json    Weekly eval (orchestrator + LLM executor)
+  - browseros-oe-clado-weekly.json    Weekly eval (orchestrator + Clado executor)
+  - agisdk-real-smoke.json            AGI SDK smoke run
+  - infinity-hard-50.json             WebArena-Infinity hard-50 set
+  - test-webvoyager.json              WebVoyager test
+  - test-mind2web.json                Mind2Web test
 
 Examples:
-  bun run eval                                    # Dashboard config mode
-  bun run eval -c configs/webvoyager-test.json   # WebVoyager test
-  bun run eval -c configs/mind2web-full.json     # Full Mind2Web eval
+  bun run eval                                       # Dashboard config mode
+  bun run eval -c configs/browseros-agent-weekly.json
+  bun run eval -c configs/test-webvoyager.json
 `)
   process.exit(0)
 }

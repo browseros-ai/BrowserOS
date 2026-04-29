@@ -14,7 +14,6 @@ import { CdpBackend } from '@browseros/server/browser/backends/cdp'
 import { CaptchaWaiter } from '../../capture/captcha-waiter'
 import { DEFAULT_TIMEOUT_MS } from '../../constants'
 import type {
-  EvalConfig,
   OrchestratorExecutorConfig,
   TaskMetadata,
   UIMessageStreamEvent,
@@ -29,15 +28,6 @@ import type { AgentContext, AgentEvaluator, AgentResult } from '../types'
 import { Executor, type ExecutorCallbacks } from './executor'
 import { OrchestratorAgent } from './orchestrator-agent'
 import type { ExecutorFactory, ExecutorResult } from './types'
-
-function extractCdpPort(config: EvalConfig): number {
-  const serverUrl = config.browseros.server_url
-  const match = serverUrl.match(/:(\d+)$/)
-  if (!match) return config.browseros.base_cdp_port
-  const serverPort = Number.parseInt(match[1], 10)
-  const workerOffset = serverPort - config.browseros.base_server_port
-  return config.browseros.base_cdp_port + workerOffset
-}
 
 interface ResolvedConfigs {
   orchestratorConfig: ResolvedAgentConfig & { maxTurns?: number }
@@ -124,7 +114,7 @@ export class OrchestratorExecutorEvaluator implements AgentEvaluator {
   constructor(private ctx: AgentContext) {}
 
   async execute(): Promise<AgentResult> {
-    const { config, task, capture } = this.ctx
+    const { config, task, capture, workerIndex } = this.ctx
     const startTime = Date.now()
     const timeoutMs = config.timeout_ms ?? DEFAULT_TIMEOUT_MS
 
@@ -140,8 +130,8 @@ export class OrchestratorExecutorEvaluator implements AgentEvaluator {
     const { orchestratorConfig, executorConfig, isCladoAction } =
       await resolveAgentConfig(agentConfig)
 
-    // Connect to Chrome via CDP
-    const cdpPort = extractCdpPort(config)
+    // Connect to Chrome via CDP — same per-worker offset used by app-manager.
+    const cdpPort = config.browseros.base_cdp_port + workerIndex
     const cdp = new CdpBackend({ port: cdpPort })
     await cdp.connect()
     const browser = new Browser(cdp)

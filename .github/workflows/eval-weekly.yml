@@ -30,8 +30,9 @@ jobs:
 
       - name: Install BrowserOS
         run: |
-          wget -q https://github.com/browseros-ai/BrowserOS/releases/download/v0.44.0.1/BrowserOS_v0.44.0.1_amd64.deb
-          sudo dpkg -i BrowserOS_v0.44.0.1_amd64.deb
+          # Rolling stable channel — see https://cdn.browseros.com/download/BrowserOS.deb
+          wget -q -O BrowserOS.deb https://cdn.browseros.com/download/BrowserOS.deb
+          sudo dpkg -i BrowserOS.deb
           browseros --version || echo "BrowserOS installed at $(which browseros)"
 
       - name: Install Bun
@@ -41,7 +42,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: packages/browseros-agent
-        run: bun install --ignore-scripts && bun run build:agent-sdk
+        run: bun install --ignore-scripts
 
       - name: Install Python eval dependencies
         run: pip install agisdk requests

@@ -39,7 +39,10 @@ export function buildAgentCardData(
       agentId: agent.agentId,
       name: agent.name,
       model: getModelDisplayName(agent.model),
-      status: resolveAgentStatus(status, overview?.status),
+      status:
+        agent.source === 'agent-harness'
+          ? 'idle'
+          : resolveAgentStatus(status, overview?.status),
       lastMessage: overview?.latestMessage?.slice(0, 200) ?? undefined,
       lastMessageTimestamp: overview?.latestMessageAt ?? undefined,
       activitySummary: overview?.activitySummary ?? undefined,

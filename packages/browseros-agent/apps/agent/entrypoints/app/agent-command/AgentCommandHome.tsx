@@ -1,4 +1,4 @@
-import { ArrowRight, Bot, Plus, Settings2 } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { type FC, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
@@ -13,34 +13,6 @@ import { AgentCardDock } from './AgentCardDock'
 import { useAgentCommandData } from './agent-command-layout'
 import { ConversationInput } from './ConversationInput'
 import { buildAgentCardData } from './useAgentCardData'
-import { useAgentDashboard } from './useAgentDashboard'
-
-function AgentCommandSetupState({
-  onOpenAgents,
-}: {
-  onOpenAgents: () => void
-}) {
-  return (
-    <Card className="border-border/60 bg-card/90 shadow-sm">
-      <CardContent className="flex flex-col items-center gap-4 p-8 text-center">
-        <div className="flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
-          <Bot className="size-5" />
-        </div>
-        <div className="space-y-2">
-          <h2 className="font-semibold text-lg">Set up your first agent</h2>
-          <p className="max-w-md text-muted-foreground text-sm leading-6">
-            Connect OpenClaw and create an agent before using the new tab as
-            your workspace.
-          </p>
-        </div>
-        <Button onClick={onOpenAgents} className="gap-2 rounded-xl">
-          Open Agent Setup
-          <ArrowRight className="size-4" />
-        </Button>
-      </CardContent>
-    </Card>
-  )
-}
 
 function EmptyAgentsState({ onOpenAgents }: { onOpenAgents: () => void }) {
   return (
@@ -57,33 +29,6 @@ function EmptyAgentsState({ onOpenAgents }: { onOpenAgents: () => void }) {
         </div>
         <Button variant="outline" onClick={onOpenAgents} className="rounded-xl">
           Create agent
-        </Button>
-      </CardContent>
-    </Card>
-  )
-}
-
-function OpenClawUnavailableState({
-  onOpenAgents,
-}: {
-  onOpenAgents: () => void
-}) {
-  return (
-    <Card className="border-border/60 bg-card/90 shadow-sm">
-      <CardContent className="flex flex-col items-center gap-4 p-8 text-center">
-        <div className="flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
-          <Settings2 className="size-5" />
-        </div>
-        <div className="space-y-2">
-          <h2 className="font-semibold text-lg">OpenClaw is unavailable</h2>
-          <p className="max-w-md text-muted-foreground text-sm leading-6">
-            Review your agent setup to restart the gateway or reconnect the
-            local service.
-          </p>
-        </div>
-        <Button onClick={onOpenAgents} className="gap-2 rounded-xl">
-          Open Agent Setup
-          <ArrowRight className="size-4" />
         </Button>
       </CardContent>
     </Card>
@@ -134,10 +79,9 @@ function RecentThreads({
 export const AgentCommandHome: FC = () => {
   const navigate = useNavigate()
   const activeHint = useActiveHint()
-  const { status, agents } = useAgentCommandData()
+  const { agents, status } = useAgentCommandData()
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
-  const { data: dashboard } = useAgentDashboard(status?.status === 'running')
-  const cardData = buildAgentCardData(agents, status?.status, dashboard?.agents)
+  const cardData = buildAgentCardData(agents, status?.status, undefined)
 
   useEffect(() => {
     if (agents.length === 0) {
@@ -157,11 +101,6 @@ export const AgentCommandHome: FC = () => {
 
   const handleSend = (input: { text: string }) => {
     if (!selectedAgentId) return
-    // Home composer navigates to the conversation page with the prompt in
-    // the query string. Attachments are dropped at this boundary in v1 —
-    // the conversation page (where staging UX is most useful anyway) is
-    // where users can attach. A future iteration can stash staged files
-    // in chrome.storage.session and replay them on first mount there.
     navigate(
       `/home/agents/${selectedAgentId}?q=${encodeURIComponent(input.text)}`,
     )
@@ -171,71 +110,65 @@ export const AgentCommandHome: FC = () => {
     setSelectedAgentId(agent.agentId)
   }
 
-  const openClawStatus = status?.status
-  const isSetup = openClawStatus != null && openClawStatus !== 'uninitialized'
-  const shouldShowUnavailableState =
-    openClawStatus != null &&
-    openClawStatus !== 'running' &&
-    openClawStatus !== 'uninitialized' &&
-    cardData.length === 0
+  const selectedAgent = agents.find(
+    (agent) => agent.agentId === selectedAgentId,
+  )
+  const selectedAgentReady = selectedAgent
+    ? selectedAgent.source === 'agent-harness' || status?.status === 'running'
+    : false
+  const selectedAgentStatus =
+    selectedAgent?.source === 'agent-harness' ? 'running' : status?.status
   const selectedCard =
     cardData.find((agent) => agent.agentId === selectedAgentId) ?? cardData[0]
 
   return (
     <div className="min-h-full px-4 py-6">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
-        {isSetup ? (
-          shouldShowUnavailableState ? (
-            <OpenClawUnavailableState
-              onOpenAgents={() => navigate('/agents')}
-            />
-          ) : cardData.length > 0 ? (
-            <>
-              <div className="flex flex-col items-center gap-5 pt-[max(10vh,24px)] text-center">
-                <div className="space-y-3">
-                  <h1 className="font-semibold text-[clamp(2rem,4vw,3.25rem)] leading-tight tracking-tight">
-                    What should your agent work on next?
-                  </h1>
-                  <p className="mx-auto max-w-2xl text-muted-foreground text-sm leading-6">
-                    Start with a task, continue a thread, or switch to another
-                    agent without leaving the new tab.
-                  </p>
-                </div>
-
-                <div className="w-full max-w-3xl">
-                  <ConversationInput
-                    variant="home"
-                    agents={agents}
-                    selectedAgentId={selectedAgentId}
-                    onSelectAgent={handleSelectAgent}
-                    onSend={handleSend}
-                    onCreateAgent={() => navigate('/agents')}
-                    streaming={false}
-                    disabled={status?.status !== 'running'}
-                    status={status?.status}
-                    placeholder={
-                      status?.status === 'running'
-                        ? `Ask ${selectedCard?.name ?? 'your agent'} to handle a task...`
-                        : 'OpenClaw is not running...'
-                    }
-                  />
-                </div>
+        {cardData.length > 0 ? (
+          <>
+            <div className="flex flex-col items-center gap-5 pt-[max(10vh,24px)] text-center">
+              <div className="space-y-3">
+                <h1 className="font-semibold text-[clamp(2rem,4vw,3.25rem)] leading-tight tracking-tight">
+                  What should your agent work on next?
+                </h1>
+                <p className="mx-auto max-w-2xl text-muted-foreground text-sm leading-6">
+                  Start with a task, continue a thread, or switch to another
+                  agent without leaving the new tab.
+                </p>
               </div>
 
-              <Separator />
+              <div className="w-full max-w-3xl">
+                <ConversationInput
+                  variant="home"
+                  agents={agents}
+                  selectedAgentId={selectedAgentId}
+                  onSelectAgent={handleSelectAgent}
+                  onSend={handleSend}
+                  onCreateAgent={() => navigate('/agents')}
+                  streaming={false}
+                  disabled={!selectedAgentReady}
+                  status={selectedAgentStatus}
+                  attachmentsEnabled={false}
+                  placeholder={
+                    selectedAgentReady
+                      ? `Ask ${selectedCard?.name ?? 'your agent'} to handle a task...`
+                      : 'Agent runtime is not running...'
+                  }
+                />
+              </div>
+            </div>
 
-              <RecentThreads
-                activeAgentId={selectedAgentId}
-                agents={cardData}
-                onOpenAgents={() => navigate('/agents')}
-                onSelectAgent={(agentId) => navigate(`/home/agents/${agentId}`)}
-              />
-            </>
-          ) : (
-            <EmptyAgentsState onOpenAgents={() => navigate('/agents')} />
-          )
+            <Separator />
+
+            <RecentThreads
+              activeAgentId={selectedAgentId}
+              agents={cardData}
+              onOpenAgents={() => navigate('/agents')}
+              onSelectAgent={(agentId) => navigate(`/home/agents/${agentId}`)}
+            />
+          </>
         ) : (
-          <AgentCommandSetupState onOpenAgents={() => navigate('/agents')} />
+          <EmptyAgentsState onOpenAgents={() => navigate('/agents')} />
         )}
       </div>
 

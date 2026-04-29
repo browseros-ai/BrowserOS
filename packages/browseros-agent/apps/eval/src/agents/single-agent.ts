@@ -9,25 +9,16 @@ import { CdpBackend } from '@browseros/server/browser/backends/cdp'
 import { registry } from '@browseros/server/tools/registry'
 import { CaptchaWaiter } from '../capture/captcha-waiter'
 import { DEFAULT_TIMEOUT_MS } from '../constants'
-import type { EvalConfig, TaskMetadata } from '../types'
+import type { TaskMetadata } from '../types'
 import { resolveProviderConfig } from '../utils/resolve-provider-config'
 import { withEvalTimeout } from '../utils/with-eval-timeout'
 import type { AgentContext, AgentEvaluator, AgentResult } from './types'
-
-function extractCdpPort(config: EvalConfig): number {
-  const serverUrl = config.browseros.server_url
-  const match = serverUrl.match(/:(\d+)$/)
-  if (!match) return config.browseros.base_cdp_port
-  const serverPort = Number.parseInt(match[1], 10)
-  const workerOffset = serverPort - config.browseros.base_server_port
-  return config.browseros.base_cdp_port + workerOffset
-}
 
 export class SingleAgentEvaluator implements AgentEvaluator {
   constructor(private ctx: AgentContext) {}
 
   async execute(): Promise<AgentResult> {
-    const { config, task, capture } = this.ctx
+    const { config, task, capture, workerIndex } = this.ctx
     const startTime = Date.now()
     const timeoutMs = config.timeout_ms ?? DEFAULT_TIMEOUT_MS
 
@@ -50,8 +41,8 @@ export class SingleAgentEvaluator implements AgentEvaluator {
       supportsImages,
     }
 
-    // Connect to Chrome via CDP
-    const cdpPort = extractCdpPort(config)
+    // Connect to Chrome via CDP — same per-worker offset used by app-manager.
+    const cdpPort = config.browseros.base_cdp_port + workerIndex
     const cdp = new CdpBackend({ port: cdpPort })
     await cdp.connect()
 

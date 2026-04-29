@@ -48,43 +48,25 @@ export async function validateConfig(
 
   // Check if API key env vars are set (apiKey field contains env var name)
   const envVarsToCheck: string[] = []
+  const isEnvVarName = (s: string) => /^[A-Z][A-Z0-9_]*$/.test(s)
+
   if (config.agent.type === 'single') {
     // Skip API key check for browseros provider (uses server's built-in auth)
     if (
       config.agent.provider !== LLM_PROVIDERS.BROWSEROS &&
-      config.agent.apiKey
+      config.agent.apiKey &&
+      isEnvVarName(config.agent.apiKey)
     ) {
-      // If apiKey looks like an env var name, check if it's set
-      if (/^[A-Z][A-Z0-9_]*$/.test(config.agent.apiKey)) {
-        envVarsToCheck.push(config.agent.apiKey)
-      }
+      envVarsToCheck.push(config.agent.apiKey)
     }
-  } else if (config.agent.type === 'orchestrator-executor') {
-    if (config.agent.orchestrator.apiKey) {
-      if (/^[A-Z][A-Z0-9_]*$/.test(config.agent.orchestrator.apiKey)) {
-        envVarsToCheck.push(config.agent.orchestrator.apiKey)
-      }
+  } else {
+    const { orchestrator, executor } = config.agent
+    if (orchestrator.apiKey && isEnvVarName(orchestrator.apiKey)) {
+      envVarsToCheck.push(orchestrator.apiKey)
     }
-    if (config.agent.executor.apiKey) {
-      if (/^[A-Z][A-Z0-9_]*$/.test(config.agent.executor.apiKey)) {
-        envVarsToCheck.push(config.agent.executor.apiKey)
-      }
+    if (executor.apiKey && isEnvVarName(executor.apiKey)) {
+      envVarsToCheck.push(executor.apiKey)
     }
-  } else if (config.agent.type === 'gemini-computer-use') {
-    // Gemini Computer Use agent
-    if (config.agent.apiKey) {
-      if (/^[A-Z][A-Z0-9_]*$/.test(config.agent.apiKey)) {
-        envVarsToCheck.push(config.agent.apiKey)
-      }
-    }
-  }
-
-  // Grader API key is checked at runtime - just warn if not set
-  const graderKeyEnv = config.grader_api_key_env || 'OPENAI_API_KEY'
-  if (!process.env[graderKeyEnv]) {
-    warnings.push(
-      `Grader API key not set (${graderKeyEnv}). Grading will fail.`,
-    )
   }
 
   for (const envVar of [...new Set(envVarsToCheck)]) {

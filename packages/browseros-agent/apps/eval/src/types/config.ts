@@ -19,37 +19,9 @@ export const OrchestratorExecutorConfigSchema = z.object({
   }),
 })
 
-export const GeminiComputerUseConfigSchema = z.object({
-  type: z.literal('gemini-computer-use'),
-  apiKey: z
-    .string()
-    .describe('API key or env var name (e.g., GOOGLE_AI_API_KEY)'),
-  screenSize: z
-    .object({
-      width: z.number().int().min(800).max(2560).default(1440),
-      height: z.number().int().min(600).max(1440).default(900),
-    })
-    .optional(),
-  turnLimit: z.number().int().min(1).max(100).default(30),
-})
-
-export const YutoriNavigatorConfigSchema = z.object({
-  type: z.literal('yutori-navigator'),
-  apiKey: z.string().describe('API key or env var name (e.g., YUTORI_API_KEY)'),
-  screenSize: z
-    .object({
-      width: z.number().int().min(800).max(2560).default(1280),
-      height: z.number().int().min(600).max(1440).default(800),
-    })
-    .optional(),
-  turnLimit: z.number().int().min(1).max(100).default(30),
-})
-
 export const AgentConfigSchema = z.discriminatedUnion('type', [
   SingleAgentConfigSchema,
   OrchestratorExecutorConfigSchema,
-  GeminiComputerUseConfigSchema,
-  YutoriNavigatorConfigSchema,
 ])
 
 export const EvalConfigSchema = z.object({
@@ -67,9 +39,6 @@ export const EvalConfigSchema = z.object({
     headless: z.boolean().optional().default(false),
   }),
   graders: z.array(z.string()).optional(),
-  grader_model: z.string().optional(),
-  grader_api_key_env: z.string().optional(),
-  grader_base_url: z.string().url().optional(),
   timeout_ms: z.number().int().min(30000).max(3600000).optional(),
   captcha: z
     .object({
@@ -84,9 +53,5 @@ export type SingleAgentConfig = z.infer<typeof SingleAgentConfigSchema>
 export type OrchestratorExecutorConfig = z.infer<
   typeof OrchestratorExecutorConfigSchema
 >
-export type GeminiComputerUseConfig = z.infer<
-  typeof GeminiComputerUseConfigSchema
->
-export type YutoriNavigatorConfig = z.infer<typeof YutoriNavigatorConfigSchema>
 export type AgentConfig = z.infer<typeof AgentConfigSchema>
 export type EvalConfig = z.infer<typeof EvalConfigSchema>

@@ -1,26 +1,14 @@
-import { GeminiComputerUseEvaluator } from './gemini-computer-use'
 import { OrchestratorExecutorEvaluator } from './orchestrator-executor'
-import { registerAgent } from './registry'
 import { SingleAgentEvaluator } from './single-agent'
-import { YutoriNavigatorEvaluator } from './yutori-navigator'
+import type { AgentContext, AgentEvaluator } from './types'
 
-// Register built-in agent types
-registerAgent('single', (ctx) => new SingleAgentEvaluator(ctx))
-registerAgent(
-  'orchestrator-executor',
-  (ctx) => new OrchestratorExecutorEvaluator(ctx),
-)
-registerAgent(
-  'gemini-computer-use',
-  (ctx) => new GeminiComputerUseEvaluator(ctx),
-)
-registerAgent('yutori-navigator', (ctx) => new YutoriNavigatorEvaluator(ctx))
+export function createAgent(context: AgentContext): AgentEvaluator {
+  switch (context.config.agent.type) {
+    case 'single':
+      return new SingleAgentEvaluator(context)
+    case 'orchestrator-executor':
+      return new OrchestratorExecutorEvaluator(context)
+  }
+}
 
-// Re-exports
-export {
-  createAgent,
-  getRegisteredAgentTypes,
-  isAgentTypeRegistered,
-  registerAgent,
-} from './registry'
 export type { AgentContext, AgentEvaluator, AgentResult } from './types'

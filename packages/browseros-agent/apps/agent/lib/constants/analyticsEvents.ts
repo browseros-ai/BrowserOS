@@ -76,6 +76,12 @@ export const MCP_EXTERNAL_ACCESS_DISABLED_EVENT =
 export const MCP_SERVER_RESTARTED_EVENT = 'settings.mcp_server.restarted'
 
 /** @public */
+export const AGENT_CREATED_EVENT = 'agents.agent.created'
+
+/** @public */
+export const AGENT_DELETED_EVENT = 'agents.agent.deleted'
+
+/** @public */
 export const NEW_SCHEDULED_TASK_CREATED_EVENT =
   'settings.scheduled_task.created'
 

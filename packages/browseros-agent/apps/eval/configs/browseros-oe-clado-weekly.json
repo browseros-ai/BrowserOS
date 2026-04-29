@@ -29,8 +29,5 @@
     "api_key_env": "NOPECHA_API_KEY"
   },
   "graders": ["performance_grader"],
-  "grader_api_key_env": "OPENROUTER_API_KEY",
-  "grader_base_url": "https://openrouter.ai/api/v1",
-  "grader_model": "openai/gpt-4.1",
   "timeout_ms": 1800000
 }

@@ -9,10 +9,9 @@
  */
 
 import type { EvalConfig, Task } from '../types'
-import type { EvalPorts } from '../utils/dev-config'
-import { BrowserOSAppManager } from './browseros-app-manager'
+import { BrowserOSAppManager, type EvalPorts } from './browseros-app-manager'
 import { createTaskExecutor } from './task-executor'
-import type { GraderOptions, TaskResult } from './types'
+import type { TaskResult } from './types'
 
 // ============================================================================
 // Types
@@ -22,7 +21,6 @@ export interface ParallelExecutorConfig {
   numWorkers: number
   config: EvalConfig
   outputDir: string
-  graderOptions: GraderOptions | null
   restartServerPerTask?: boolean
   onEvent?: (taskId: string, event: Record<string, unknown>) => void
 }
@@ -162,7 +160,6 @@ export class ParallelExecutor {
       workerConfig,
       workerIndex,
       this.config.outputDir,
-      this.config.graderOptions,
       this.config.onEvent,
     )
 
@@ -266,17 +263,4 @@ export class ParallelExecutor {
       process.off('SIGTERM', onSignal)
     }
   }
-}
-
-// ============================================================================
-// Factory
-// ============================================================================
-
-export async function executeTasksInParallel(
-  tasks: Task[],
-  config: ParallelExecutorConfig,
-  onProgress?: ProgressCallback,
-): Promise<TaskResult[]> {
-  const executor = new ParallelExecutor(config)
-  return executor.execute(tasks, onProgress)
 }

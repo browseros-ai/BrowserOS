@@ -1,4 +1,4 @@
-import { Github, History, Plus, SettingsIcon } from 'lucide-react'
+import { Bot, Github, History, Plus, SettingsIcon } from 'lucide-react'
 import type { FC } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
@@ -64,7 +64,9 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
             className="group relative inline-flex cursor-pointer items-center gap-2 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
             title="Change AI Provider"
           >
-            {selectedProvider.type === 'browseros' ? (
+            {selectedProvider.kind === 'acp' ? (
+              <Bot className="h-[18px] w-[18px]" />
+            ) : selectedProvider.type === 'browseros' ? (
               <BrowserOSIcon size={18} />
             ) : (
               <ProviderIcon

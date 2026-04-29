@@ -1,4 +1,5 @@
 import type { AgentResult } from '../agents/types'
+import { PASS_FAIL_GRADER_ORDER } from '../graders/registry'
 import type { ErrorSource, EvalConfig, GraderResult, Task } from '../types'
 
 // ============================================================================
@@ -99,15 +100,6 @@ export interface TaskResultSummary {
 // Pass/Fail Determination
 // ============================================================================
 
-export const PASS_FAIL_GRADER_ORDER = [
-  'agisdk_state_diff',
-  'infinity_state',
-  'performance_grader',
-  'webvoyager_grader',
-  'fara_combined',
-  'fara_grader',
-] as const
-
 export function getPrimaryGraderResult(
   graderResults: Record<string, { pass: boolean; score: number }>,
 ): { name: string; pass: boolean; score: number } | null {
@@ -121,32 +113,4 @@ export function getPrimaryGraderResult(
     return { name: first[0], ...first[1] }
   }
   return null
-}
-
-// ============================================================================
-// Grader Options
-// ============================================================================
-
-export interface GraderOptions {
-  apiKey: string
-  baseUrl?: string
-  model?: string
-}
-
-export function resolveGraderOptions(config: EvalConfig): GraderOptions | null {
-  const keyValue = config.grader_api_key_env || 'OPENAI_API_KEY'
-  // If it looks like an env var name (ALL_CAPS), resolve from env; otherwise use directly
-  const apiKey = /^[A-Z][A-Z0-9_]*$/.test(keyValue)
-    ? process.env[keyValue]
-    : keyValue
-
-  if (!apiKey) {
-    return null
-  }
-
-  return {
-    apiKey,
-    baseUrl: config.grader_base_url,
-    model: config.grader_model,
-  }
 }

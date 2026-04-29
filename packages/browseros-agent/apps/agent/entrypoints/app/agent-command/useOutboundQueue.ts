@@ -33,6 +33,7 @@ export interface OutboundQueueApi {
 interface UseOutboundQueueOptions {
   agentId: string | null | undefined
   sessionKey?: string | null
+  enabled?: boolean
 }
 
 interface ServerQueuedItem {
@@ -68,7 +69,7 @@ function makeId(): string {
 export function useOutboundQueue(
   options: UseOutboundQueueOptions,
 ): OutboundQueueApi {
-  const { agentId, sessionKey } = options
+  const { agentId, enabled = true, sessionKey } = options
   const { baseUrl } = useAgentServerUrl()
   const sessionKeyRef = useRef<string | null | undefined>(sessionKey)
   sessionKeyRef.current = sessionKey
@@ -85,7 +86,7 @@ export function useOutboundQueue(
   const previewMapRef = useRef<Map<string, UserAttachmentPreview[]>>(new Map())
 
   useEffect(() => {
-    if (!baseUrl || !agentId) {
+    if (!enabled || !baseUrl || !agentId) {
       setItems([])
       everSeenByServerRef.current = new Set()
       previewMapRef.current = new Map()
@@ -136,11 +137,11 @@ export function useOutboundQueue(
       cancelled = true
       source.close()
     }
-  }, [baseUrl, agentId])
+  }, [baseUrl, agentId, enabled])
 
   const enqueue = useCallback(
     (input: OutboundQueueEnqueueInput) => {
-      if (!baseUrl || !agentId) return
+      if (!enabled || !baseUrl || !agentId) return
       const trimmed = input.text.trim()
       const attachments = input.attachments ?? []
       if (!trimmed && attachments.length === 0) return
@@ -215,7 +216,7 @@ export function useOutboundQueue(
         }
       })()
     },
-    [baseUrl, agentId],
+    [baseUrl, agentId, enabled],
   )
 
   const cancel = useCallback(
@@ -226,13 +227,13 @@ export function useOutboundQueue(
         setItems((prev) => prev.filter((item) => item.id !== id))
         return
       }
-      if (!baseUrl || !agentId) return
+      if (!enabled || !baseUrl || !agentId) return
       void fetch(
         `${baseUrl}/claw/agents/${encodeURIComponent(agentId)}/queue/${encodeURIComponent(id)}`,
         { method: 'DELETE' },
       ).catch(() => {})
     },
-    [baseUrl, agentId],
+    [baseUrl, agentId, enabled],
   )
 
   const retry = useCallback(
@@ -249,13 +250,13 @@ export function useOutboundQueue(
         )
         return
       }
-      if (!baseUrl || !agentId) return
+      if (!enabled || !baseUrl || !agentId) return
       void fetch(
         `${baseUrl}/claw/agents/${encodeURIComponent(agentId)}/queue/${encodeURIComponent(id)}/retry`,
         { method: 'POST' },
       ).catch(() => {})
     },
-    [baseUrl, agentId],
+    [baseUrl, agentId, enabled],
   )
 
   return { queue: items, enqueue, cancel, retry }
