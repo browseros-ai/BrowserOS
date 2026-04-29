@@ -34,10 +34,41 @@ import type {
   AgentStreamEvent,
 } from './types'
 
+/**
+ * Resolves the runtime data needed to spawn `openclaw acp` inside the
+ * gateway container. Used only when an agent's adapter is 'openclaw';
+ * Step 4 wires this into the agentRegistry override so OpenClaw turns
+ * route through the same harness as Claude and Codex.
+ *
+ * All fields are getter-shaped so the values stay live across gateway
+ * restarts (port can change, token can rotate). The harness itself
+ * never caches the resolved values — it reads them at spawn time.
+ */
+export interface OpenclawGatewayAccessor {
+  /** Host port the gateway is currently bound to (e.g. 18789). */
+  getPort(): number
+  /** Current gateway auth token. Passed via OPENCLAW_GATEWAY_TOKEN env. */
+  getGatewayToken(): string
+  /** Container name e.g. browseros-openclaw-openclaw-gateway-1. */
+  getContainerName(): string
+  /** LIMA_HOME directory containing the browseros-vm instance. */
+  getLimaHomeDir(): string
+  /** Resolved path to the `limactl` binary (bundled or host). */
+  getLimactlPath(): string
+  /** VM name registered in LIMA_HOME (e.g. browseros-vm). */
+  getVmName(): string
+}
+
 type AcpxRuntimeOptions = {
   cwd?: string
   stateDir?: string
   browserosServerPort?: number
+  /**
+   * Optional accessor for OpenClaw gateway info. Required for
+   * adapter='openclaw' agents; harmless when absent for claude/codex.
+   * Step 4 will use these values to build the spawn command.
+   */
+  openclawGateway?: OpenclawGatewayAccessor
   runtimeFactory?: (options: AcpRuntimeOptions) => AcpxCoreRuntime
 }
 
@@ -51,6 +82,7 @@ export class AcpxRuntime implements AgentRuntime {
   private readonly cwd: string
   private readonly stateDir: string
   private readonly browserosServerPort: number
+  private readonly openclawGateway: OpenclawGatewayAccessor | null
   private readonly runtimeFactory: (
     options: AcpRuntimeOptions,
   ) => AcpxCoreRuntime
@@ -65,6 +97,7 @@ export class AcpxRuntime implements AgentRuntime {
       join(getBrowserosDir(), 'agents', 'acpx')
     this.browserosServerPort =
       options.browserosServerPort ?? DEFAULT_PORTS.server
+    this.openclawGateway = options.openclawGateway ?? null
     this.sessionStore = createRuntimeStore({ stateDir: this.stateDir })
     this.runtimeFactory = options.runtimeFactory ?? createAcpRuntime
   }

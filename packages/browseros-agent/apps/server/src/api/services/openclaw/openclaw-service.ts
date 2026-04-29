@@ -641,6 +641,19 @@ export class OpenClawService {
     return this.hostPort
   }
 
+  /**
+   * Current gateway auth token. The token string is loaded from
+   * `gateway.auth.token` in the persisted openclaw.json during setup,
+   * with a freshly generated UUID as fallback. Exposed so the ACPx
+   * harness can pass it to spawned `openclaw acp` child processes via
+   * the documented `OPENCLAW_GATEWAY_TOKEN` env var (avoids both the
+   * `--token` process-listing leak and reliance on a token-file path
+   * that doesn't exist as a discrete file inside the container).
+   */
+  getGatewayToken(): string {
+    return this.token
+  }
+
   /** Subscribe to real-time agent status changes from the ClawSession state machine. */
   onAgentStatusChange(
     listener: (agentId: string, state: AgentSessionState) => void,

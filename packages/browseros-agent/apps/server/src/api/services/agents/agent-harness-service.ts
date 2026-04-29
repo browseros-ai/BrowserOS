@@ -4,7 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { AcpxRuntime } from '../../../lib/agents/acpx-runtime'
+import {
+  AcpxRuntime,
+  type OpenclawGatewayAccessor,
+} from '../../../lib/agents/acpx-runtime'
 import type { AgentDefinition } from '../../../lib/agents/agent-types'
 import {
   type CreateAgentInput,
@@ -25,12 +28,16 @@ export class AgentHarnessService {
       agentStore?: FileAgentStore
       runtime?: AgentRuntime
       browserosServerPort?: number
+      openclawGateway?: OpenclawGatewayAccessor
     } = {},
   ) {
     this.agentStore = deps.agentStore ?? new FileAgentStore()
     this.runtime =
       deps.runtime ??
-      new AcpxRuntime({ browserosServerPort: deps.browserosServerPort })
+      new AcpxRuntime({
+        browserosServerPort: deps.browserosServerPort,
+        openclawGateway: deps.openclawGateway,
+      })
   }
 
   listAgents(): Promise<AgentDefinition[]> {

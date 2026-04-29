@@ -14,7 +14,10 @@ import { stream } from 'hono/streaming'
 import { formatUserMessage } from '../../agent/format-message'
 import type { Browser } from '../../browser/browser'
 import { createAcpUIMessageStreamResponse } from '../../lib/agents/acp-ui-message-stream'
-import { AcpxRuntime } from '../../lib/agents/acpx-runtime'
+import {
+  AcpxRuntime,
+  type OpenclawGatewayAccessor,
+} from '../../lib/agents/acpx-runtime'
 import {
   AGENT_ADAPTER_CATALOG,
   getAgentAdapterDescriptor,
@@ -63,6 +66,12 @@ type AgentRouteDeps = {
   runtime?: AgentRuntime
   browser?: Pick<Browser, 'resolveTabIds'>
   browserosServerPort?: number
+  /**
+   * Optional accessor for OpenClaw gateway info. Required for the
+   * upcoming adapter='openclaw' code path; harmless when absent. Step
+   * 4 wires this into the AcpxRuntime registry override.
+   */
+  openclawGateway?: OpenclawGatewayAccessor
 }
 
 type SidepanelAcpChatRequest = {
@@ -81,7 +90,10 @@ type SidepanelAcpChatRequest = {
 export function createAgentRoutes(deps: AgentRouteDeps = {}) {
   const service =
     deps.service ??
-    new AgentHarnessService({ browserosServerPort: deps.browserosServerPort })
+    new AgentHarnessService({
+      browserosServerPort: deps.browserosServerPort,
+      openclawGateway: deps.openclawGateway,
+    })
   let sidepanelRuntime = deps.runtime
 
   return new Hono<Env>()
@@ -122,6 +134,7 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
       try {
         sidepanelRuntime ??= new AcpxRuntime({
           browserosServerPort: deps.browserosServerPort,
+          openclawGateway: deps.openclawGateway,
         })
         const eventStream = await sidepanelRuntime.send({
           agent,
