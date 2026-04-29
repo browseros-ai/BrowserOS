@@ -431,23 +431,6 @@ export function createOpenClawRoutes() {
       }
     })
 
-    .get('/agents/:id/history', async (c) => {
-      const { id } = c.req.param()
-      const limit = parsePositiveIntQuery(c.req.query('limit'), 50)
-
-      try {
-        const page = await getOpenClawService().getAgentHistoryPage(id, {
-          sessionKey: c.req.query('sessionKey'),
-          cursor: c.req.query('cursor'),
-          limit,
-        })
-        return c.json(page)
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return c.json({ error: message }, 500)
-      }
-    })
-
     .get('/dashboard', (c) => {
       try {
         const dashboard = getOpenClawService().getDashboard()
