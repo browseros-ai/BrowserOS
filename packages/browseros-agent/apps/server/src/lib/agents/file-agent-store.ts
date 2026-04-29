@@ -25,6 +25,16 @@ export interface CreateAgentInput {
   adapter: AgentAdapter
   modelId?: string
   reasoningEffort?: string
+  /**
+   * Provider fields used only when `adapter === 'openclaw'`. They are
+   * forwarded to the gateway-side createAgent call by the harness
+   * service. Other adapters ignore them.
+   */
+  providerType?: string
+  providerName?: string
+  baseUrl?: string
+  apiKey?: string
+  supportsImages?: boolean
 }
 
 export class FileAgentStore {
@@ -62,7 +72,12 @@ export class FileAgentStore {
   async create(input: CreateAgentInput): Promise<AgentDefinition> {
     return this.withWriteLock(async () => {
       const now = Date.now()
-      const id = randomUUID()
+      // OpenClaw agent names must match ^[a-z][a-z0-9-]*$, so prefix with
+      // a fixed letter to guarantee a valid name when the harness id is
+      // also used as the gateway-side agent name. Other adapters keep
+      // raw UUIDs to preserve compatibility with existing records.
+      const id =
+        input.adapter === 'openclaw' ? `oc-${randomUUID()}` : randomUUID()
       const agent: AgentDefinition = {
         id,
         name: input.name.trim(),

@@ -139,7 +139,145 @@ describe('AgentHarnessService', () => {
       toolCalls: [{ toolName: 'read_file' }],
     })
   })
+
+  it('dual-creates an OpenClaw adapter agent on the gateway with the harness id as the gateway name', async () => {
+    const agents: AgentDefinition[] = []
+    const provisionerCalls: Array<{ method: string; input: unknown }> = []
+    const provisioner = {
+      async createAgent(input: unknown) {
+        provisionerCalls.push({ method: 'createAgent', input })
+        return { agentId: 'mock', name: 'mock', workspace: '/workspace' }
+      },
+      async removeAgent(agentId: string) {
+        provisionerCalls.push({ method: 'removeAgent', input: agentId })
+      },
+    }
+    const service = new AgentHarnessService({
+      agentStore: createAgentStore(agents) as FileAgentStore,
+      runtime: stubRuntime(),
+      openclawProvisioner: provisioner,
+    })
+
+    const agent = await service.createAgent({
+      name: 'OpenClaw bot',
+      adapter: 'openclaw',
+      providerType: 'openai-compatible',
+      providerName: 'Kimi',
+      baseUrl: 'https://api.fireworks.ai/inference/v1',
+      apiKey: 'test-key',
+      modelId: 'accounts/fireworks/models/kimi-k2p5',
+      supportsImages: true,
+    })
+
+    expect(agent.adapter).toBe('openclaw')
+    expect(provisionerCalls).toEqual([
+      {
+        method: 'createAgent',
+        input: {
+          name: agent.id,
+          providerType: 'openai-compatible',
+          providerName: 'Kimi',
+          baseUrl: 'https://api.fireworks.ai/inference/v1',
+          apiKey: 'test-key',
+          modelId: 'accounts/fireworks/models/kimi-k2p5',
+          supportsImages: true,
+        },
+      },
+    ])
+    expect(agents).toHaveLength(1)
+  })
+
+  it('rolls back the harness record when gateway provisioning fails', async () => {
+    const agents: AgentDefinition[] = []
+    const provisioner = {
+      async createAgent() {
+        throw new Error('gateway boom')
+      },
+      async removeAgent() {
+        // no-op
+      },
+    }
+    const service = new AgentHarnessService({
+      agentStore: createAgentStore(agents) as FileAgentStore,
+      runtime: stubRuntime(),
+      openclawProvisioner: provisioner,
+    })
+
+    await expect(
+      service.createAgent({ name: 'Doomed', adapter: 'openclaw' }),
+    ).rejects.toThrow('gateway boom')
+    expect(agents).toHaveLength(0)
+  })
+
+  it('refuses to create an OpenClaw agent when no provisioner is wired', async () => {
+    const agents: AgentDefinition[] = []
+    const service = new AgentHarnessService({
+      agentStore: createAgentStore(agents) as FileAgentStore,
+      runtime: stubRuntime(),
+    })
+
+    await expect(
+      service.createAgent({ name: 'Stranded', adapter: 'openclaw' }),
+    ).rejects.toThrow('OpenClaw gateway provisioner is not wired')
+    expect(agents).toHaveLength(0)
+  })
+
+  it('removes the gateway agent on delete and tolerates gateway-side failure', async () => {
+    const agents: AgentDefinition[] = []
+    const provisionerCalls: string[] = []
+    let shouldFail = false
+    const provisioner = {
+      async createAgent() {
+        return { agentId: 'mock', name: 'mock', workspace: '/workspace' }
+      },
+      async removeAgent(agentId: string) {
+        provisionerCalls.push(agentId)
+        if (shouldFail) throw new Error('gateway down')
+      },
+    }
+    const service = new AgentHarnessService({
+      agentStore: createAgentStore(agents) as FileAgentStore,
+      runtime: stubRuntime(),
+      openclawProvisioner: provisioner,
+    })
+
+    const agent = await service.createAgent({
+      name: 'OpenClaw bot',
+      adapter: 'openclaw',
+    })
+
+    // Happy path: gateway delete succeeds → harness record gone.
+    expect(await service.deleteAgent(agent.id)).toBe(true)
+    expect(provisionerCalls).toEqual([agent.id])
+    expect(agents).toHaveLength(0)
+
+    // Failure path: gateway delete throws → harness record still removed.
+    const second = await service.createAgent({
+      name: 'OpenClaw bot 2',
+      adapter: 'openclaw',
+    })
+    shouldFail = true
+    expect(await service.deleteAgent(second.id)).toBe(true)
+    expect(agents).toHaveLength(0)
+  })
 })
+
+function stubRuntime(): AgentRuntime {
+  return {
+    async status() {
+      return { state: 'ready' }
+    },
+    async listSessions() {
+      return []
+    },
+    async getHistory(input) {
+      return { agentId: input.agent.id, sessionId: 'main', items: [] }
+    },
+    async send() {
+      return new ReadableStream<AgentStreamEvent>()
+    },
+  }
+}
 
 function createAgentStore(agents: AgentDefinition[]) {
   return {
@@ -164,7 +302,10 @@ function createAgentStore(agents: AgentDefinition[]) {
       agents.push(agent)
       return agent
     },
-    async delete() {
+    async delete(id: string) {
+      const idx = agents.findIndex((agent) => agent.id === id)
+      if (idx === -1) return false
+      agents.splice(idx, 1)
       return true
     },
   } satisfies Partial<FileAgentStore>

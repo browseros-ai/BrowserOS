@@ -18,10 +18,34 @@ import type {
   AgentRuntime,
   AgentStreamEvent,
 } from '../../../lib/agents/types'
+import { logger } from '../../../lib/logger'
+
+/**
+ * Provisions and tears down agent records on the OpenClaw gateway side.
+ * OpenClaw agents are dual-tracked: the harness owns the user-facing
+ * AgentDefinition record while the gateway owns the actual provider
+ * config + workspace. Both stores must stay in sync.
+ *
+ * The interface is decoupled from OpenClawService so the harness can be
+ * tested without a live gateway.
+ */
+export interface OpenClawProvisioner {
+  createAgent(input: {
+    name: string
+    providerType?: string
+    providerName?: string
+    baseUrl?: string
+    apiKey?: string
+    modelId?: string
+    supportsImages?: boolean
+  }): Promise<unknown>
+  removeAgent(agentId: string): Promise<void>
+}
 
 export class AgentHarnessService {
   private readonly agentStore: FileAgentStore
   private readonly runtime: AgentRuntime
+  private readonly openclawProvisioner: OpenClawProvisioner | null
 
   constructor(
     deps: {
@@ -29,6 +53,7 @@ export class AgentHarnessService {
       runtime?: AgentRuntime
       browserosServerPort?: number
       openclawGateway?: OpenclawGatewayAccessor
+      openclawProvisioner?: OpenClawProvisioner
     } = {},
   ) {
     this.agentStore = deps.agentStore ?? new FileAgentStore()
@@ -38,17 +63,77 @@ export class AgentHarnessService {
         browserosServerPort: deps.browserosServerPort,
         openclawGateway: deps.openclawGateway,
       })
+    this.openclawProvisioner = deps.openclawProvisioner ?? null
   }
 
   listAgents(): Promise<AgentDefinition[]> {
     return this.agentStore.list()
   }
 
-  createAgent(input: CreateAgentInput): Promise<AgentDefinition> {
-    return this.agentStore.create(input)
+  async createAgent(input: CreateAgentInput): Promise<AgentDefinition> {
+    const agent = await this.agentStore.create(input)
+
+    if (agent.adapter !== 'openclaw') {
+      return agent
+    }
+
+    if (!this.openclawProvisioner) {
+      // Compensating delete keeps the harness store consistent with
+      // the failure mode the caller will see (no agent created).
+      await this.agentStore.delete(agent.id).catch(() => {})
+      throw new OpenClawProvisionerUnavailableError()
+    }
+
+    try {
+      await this.openclawProvisioner.createAgent({
+        name: agent.id,
+        providerType: input.providerType,
+        providerName: input.providerName,
+        baseUrl: input.baseUrl,
+        apiKey: input.apiKey,
+        modelId: input.modelId,
+        supportsImages: input.supportsImages,
+      })
+      return agent
+    } catch (err) {
+      logger.warn(
+        'OpenClaw gateway provisioning failed; rolling back harness record',
+        {
+          agentId: agent.id,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      )
+      await this.agentStore.delete(agent.id).catch((delErr) => {
+        logger.error('Compensating delete failed after provisioning error', {
+          agentId: agent.id,
+          error: delErr instanceof Error ? delErr.message : String(delErr),
+        })
+      })
+      throw err
+    }
   }
 
-  deleteAgent(agentId: string): Promise<boolean> {
+  async deleteAgent(agentId: string): Promise<boolean> {
+    const agent = await this.agentStore.get(agentId)
+    if (!agent) return false
+
+    if (agent.adapter === 'openclaw' && this.openclawProvisioner) {
+      try {
+        await this.openclawProvisioner.removeAgent(agentId)
+      } catch (err) {
+        // Tolerate gateway-side removal failure: the harness record is
+        // the user-facing identity, so we still want it gone. The orphan
+        // gateway agent can be cleaned up out-of-band.
+        logger.warn(
+          'OpenClaw gateway removeAgent failed; deleting harness record anyway',
+          {
+            agentId,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        )
+      }
+    }
+
     return this.agentStore.delete(agentId)
   }
 
@@ -90,5 +175,18 @@ export class UnknownAgentError extends Error {
   constructor(readonly agentId: string) {
     super(`Unknown agent: ${agentId}`)
     this.name = 'UnknownAgentError'
+  }
+}
+
+/**
+ * Thrown when an `openclaw` adapter agent is created on a harness that
+ * has no OpenClaw provisioner wired in. Surfaces as a 503 in the route
+ * layer so callers know the service is misconfigured rather than a
+ * client-side input error.
+ */
+export class OpenClawProvisionerUnavailableError extends Error {
+  constructor() {
+    super('OpenClaw gateway provisioner is not wired into AgentHarnessService')
+    this.name = 'OpenClawProvisionerUnavailableError'
   }
 }

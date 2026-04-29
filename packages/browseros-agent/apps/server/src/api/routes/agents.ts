@@ -38,6 +38,8 @@ import type {
 } from '../../lib/agents/types'
 import {
   AgentHarnessService,
+  type OpenClawProvisioner,
+  OpenClawProvisionerUnavailableError,
   UnknownAgentError,
 } from '../services/agents/agent-harness-service'
 import type { Env } from '../types'
@@ -50,6 +52,11 @@ type AgentRouteService = {
     adapter: AgentAdapter
     modelId?: string
     reasoningEffort?: string
+    providerType?: string
+    providerName?: string
+    baseUrl?: string
+    apiKey?: string
+    supportsImages?: boolean
   }): Promise<AgentDefinition>
   getAgent(agentId: string): Promise<AgentDefinition | null>
   deleteAgent(agentId: string): Promise<boolean>
@@ -72,6 +79,11 @@ type AgentRouteDeps = {
    * inside the gateway container.
    */
   openclawGateway?: OpenclawGatewayAccessor
+  /**
+   * Required to dual-create/delete `openclaw` adapter agents on the
+   * gateway side. Without this, openclaw create requests fail with 503.
+   */
+  openclawProvisioner?: OpenClawProvisioner
 }
 
 type SidepanelAcpChatRequest = {
@@ -93,6 +105,7 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
     new AgentHarnessService({
       browserosServerPort: deps.browserosServerPort,
       openclawGateway: deps.openclawGateway,
+      openclawProvisioner: deps.openclawProvisioner,
     })
   let sidepanelRuntime = deps.runtime
 
@@ -224,6 +237,11 @@ async function parseCreateAgentBody(c: Context<Env>): Promise<
       adapter: AgentAdapter
       modelId?: string
       reasoningEffort?: string
+      providerType?: string
+      providerName?: string
+      baseUrl?: string
+      apiKey?: string
+      supportsImages?: boolean
     }
   | { error: string }
 > {
@@ -262,6 +280,14 @@ async function parseCreateAgentBody(c: Context<Env>): Promise<
     adapter: record.adapter,
     modelId,
     reasoningEffort,
+    providerType: readOptionalTrimmedString(record, 'providerType'),
+    providerName: readOptionalTrimmedString(record, 'providerName'),
+    baseUrl: readOptionalTrimmedString(record, 'baseUrl'),
+    apiKey: readOptionalTrimmedString(record, 'apiKey'),
+    supportsImages:
+      typeof record.supportsImages === 'boolean'
+        ? record.supportsImages
+        : undefined,
   }
 }
 
@@ -417,6 +443,9 @@ async function readJsonBody(
 function handleAgentRouteError(c: Context<Env>, err: unknown) {
   if (err instanceof UnknownAgentError) {
     return c.json({ error: err.message }, 404)
+  }
+  if (err instanceof OpenClawProvisionerUnavailableError) {
+    return c.json({ error: err.message }, 503)
   }
   const message = err instanceof Error ? err.message : String(err)
   return c.json({ error: message }, 500)
