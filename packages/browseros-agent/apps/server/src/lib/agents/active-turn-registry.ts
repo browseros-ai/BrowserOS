@@ -24,6 +24,8 @@ export interface ActiveTurnInfo {
   lastSeq: number
   startedAt: number
   endedAt?: number
+  /** User message that kicked off the turn; null when not captured. */
+  prompt: string | null
 }
 
 interface Subscriber {
@@ -43,6 +45,8 @@ interface ActiveTurn {
   startedAt: number
   endedAt?: number
   retainUntil?: number
+  /** User message that kicked off the turn (when known). */
+  prompt: string | null
 }
 
 const DEFAULT_BUFFER_CAPACITY = 5000
@@ -136,7 +140,11 @@ export class TurnRegistry {
    * Register a new turn. The caller is responsible for kicking off the
    * runtime call and pumping its events into `pushEvent` until done.
    */
-  register(agentId: string, sessionId: 'main' = 'main'): ActiveTurn {
+  register(
+    agentId: string,
+    sessionId: 'main' = 'main',
+    options: { prompt?: string | null } = {},
+  ): ActiveTurn {
     const turn: ActiveTurn = {
       turnId: randomUUID(),
       agentId,
@@ -146,6 +154,7 @@ export class TurnRegistry {
       subscribers: new Set(),
       abortController: new AbortController(),
       startedAt: Date.now(),
+      prompt: options.prompt ?? null,
     }
     this.turns.set(turn.turnId, turn)
     this.ensureSweeper()
@@ -187,6 +196,7 @@ export class TurnRegistry {
       lastSeq: turn.buffer.lastSeq,
       startedAt: turn.startedAt,
       endedAt: turn.endedAt,
+      prompt: turn.prompt,
     }
   }
 

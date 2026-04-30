@@ -251,13 +251,15 @@ export function useAgentConversation(
         if (streamAbortRef.current) return // someone else already owns the stream
 
         // Stage a placeholder turn so the streamed events have a row
-        // to render into. We don't have the user message text on
-        // resume; the assistant turn is what we're catching up on.
+        // to render into. The server now persists the kicking-off
+        // prompt on the active turn, so we render it as the user
+        // bubble immediately — no empty-bubble flicker when a queued
+        // message starts running.
         setTurns((prev) => [
           ...prev,
           {
             id: crypto.randomUUID(),
-            userText: '',
+            userText: active.prompt ?? '',
             parts: [],
             done: false,
             timestamp: active.startedAt,

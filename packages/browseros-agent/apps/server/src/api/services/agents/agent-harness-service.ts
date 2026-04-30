@@ -622,7 +622,9 @@ export class AgentHarnessService {
       throw new TurnAlreadyActiveError(agent.id, existing.turnId)
     }
 
-    const turn = this.turnRegistry.register(agent.id, 'main')
+    const turn = this.turnRegistry.register(agent.id, 'main', {
+      prompt: input.message,
+    })
     this.notifyTurnStarted(agent.id)
 
     // Kick off the runtime call in the background. The per-turn

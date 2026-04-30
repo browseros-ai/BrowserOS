@@ -264,6 +264,8 @@ export interface HarnessActiveTurnInfo {
   lastSeq: number
   startedAt: number
   endedAt?: number
+  /** User message that kicked off the turn; null when not captured. */
+  prompt: string | null
 }
 
 /**
