@@ -54,29 +54,59 @@ interface ConversationInputProps {
   placeholder?: string
   attachmentsEnabled?: boolean
   variant?: 'home' | 'conversation'
+  /**
+   * When set, a destructive Stop button surfaces to the left of the
+   * voice mic while `streaming === true`. Click cancels the active
+   * turn server-side via the chat-cancel endpoint. Absent → no Stop
+   * button (legacy behaviour for the home composer).
+   */
+  onStop?: () => void
 }
 
 function InputActionButton({
   disabled,
   onClick,
   streaming,
+  hasContent,
 }: {
   disabled: boolean
   onClick: () => void
   streaming: boolean
+  hasContent: boolean
 }) {
+  // Show the spinner while streaming only when there's nothing to
+  // send — once the user types something, the icon flips back to the
+  // paper-plane so it reads as "queue this message" instead of
+  // "still working".
+  const showSpinner = streaming && !hasContent
   return (
     <Button
       onClick={onClick}
       size="icon"
       disabled={disabled}
+      title={streaming && hasContent ? 'Queue message' : undefined}
       className="h-10 w-10 flex-shrink-0 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90"
     >
-      {streaming ? (
+      {showSpinner ? (
         <Loader2 className="h-5 w-5 animate-spin" />
       ) : (
         <ArrowRight className="h-5 w-5" />
       )}
+    </Button>
+  )
+}
+
+function StopButton({ onStop }: { onStop: () => void }) {
+  return (
+    <Button
+      type="button"
+      size="icon"
+      onClick={onStop}
+      title="Stop current turn — queued messages will start next."
+      aria-label="Stop current turn"
+      className="h-10 w-10 flex-shrink-0 rounded-xl bg-destructive text-destructive-foreground hover:bg-destructive/90"
+    >
+      <Square className="h-4 w-4" />
     </Button>
   )
 }
@@ -299,6 +329,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   placeholder,
   attachmentsEnabled = true,
   variant = 'conversation',
+  onStop,
 }) => {
   const [input, setInput] = useState('')
   const [selectedTabs, setSelectedTabs] = useState<chrome.tabs.Tab[]>([])
@@ -379,10 +410,17 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   }
 
   const hasContent = input.trim().length > 0 || attachments.length > 0
+  // Queue-aware composers (the conversation panel passes `onStop`)
+  // accept input while streaming — the parent decides whether the
+  // submission opens a new turn or enqueues onto the active one.
+  // Surfaces without a Stop hook (home) keep the legacy behaviour
+  // and block input until the current turn finishes.
+  const queueAware = Boolean(onStop)
 
   const handleSend = () => {
     const text = input.trim()
-    if (disabled || isStaging || streaming) return
+    if (disabled || isStaging) return
+    if (streaming && !queueAware) return
     if (!text && attachments.length === 0) return
     onSend({ text, attachments })
     setInput('')
@@ -512,6 +550,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
               )}
             />
           </div>
+          {streaming && onStop ? <StopButton onStop={onStop} /> : null}
           <VoiceButton
             isRecording={voice.isRecording}
             isTranscribing={voice.isTranscribing}
@@ -529,12 +568,13 @@ export const ConversationInput: FC<ConversationInputProps> = ({
               !!disabled ||
               voice.isRecording ||
               voice.isTranscribing ||
-              streaming
+              (streaming && !queueAware)
             }
             onClick={handleSend}
             // Spinner stays the user-facing "agent is busy" hint; with the
             // queue active we still spin while a turn is in flight.
             streaming={streaming}
+            hasContent={hasContent}
           />
         </div>
         {voice.error ? (

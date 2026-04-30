@@ -3,6 +3,12 @@ import { type FC, useEffect, useMemo, useRef } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
 import { Button } from '@/components/ui/button'
 import {
+  cancelHarnessTurn,
+  useEnqueueHarnessMessage,
+  useHarnessAgents,
+  useRemoveHarnessQueuedMessage,
+} from '@/entrypoints/app/agents/useAgents'
+import {
   type AgentEntry,
   getModelDisplayName,
 } from '@/entrypoints/app/agents/useOpenClaw'
@@ -15,6 +21,7 @@ import {
   filterTurnsPersistedInHistory,
   flattenHistoryPages,
 } from './claw-chat-types'
+import { QueuePanel } from './QueuePanel'
 import { useAgentConversation } from './useAgentConversation'
 import { useHarnessChatHistory } from './useHarnessChatHistory'
 
@@ -221,6 +228,23 @@ function AgentConversationController({
     },
     onSessionKeyChange: () => {},
   })
+
+  // Listing query feeds queue + active-turn state for this agent. We
+  // already poll it every 5s for the rail; reusing the same cache
+  // keeps cross-tab queue state in sync without a second poll.
+  const { harnessAgents } = useHarnessAgents()
+  const harnessAgent = harnessAgents.find((entry) => entry.id === agentId)
+  const queue = harnessAgent?.queue ?? []
+  const activeTurnId = harnessAgent?.activeTurnId ?? null
+  const enqueueMessage = useEnqueueHarnessMessage()
+  const removeQueuedMessage = useRemoveHarnessQueuedMessage()
+
+  const handleStop = () => {
+    void cancelHarnessTurn(agentId, {
+      turnId: activeTurnId ?? undefined,
+      reason: 'user pressed stop',
+    })
+  }
   const visibleTurns = useMemo(
     () => filterTurnsPersistedInHistory(turns, historyMessages),
     [historyMessages, turns],
@@ -281,7 +305,15 @@ function AgentConversationController({
       />
 
       <div className="border-border/50 border-t bg-background/88 px-4 py-3 backdrop-blur-md">
-        <div className="mx-auto max-w-3xl">
+        <div className="mx-auto max-w-3xl space-y-3">
+          {queue.length > 0 ? (
+            <QueuePanel
+              queue={queue}
+              onRemove={(messageId) =>
+                removeQueuedMessage.mutate({ agentId, messageId })
+              }
+            />
+          ) : null}
           <ConversationInput
             variant="conversation"
             agents={agents}
@@ -296,14 +328,31 @@ function AgentConversationController({
                 name: a.name,
                 dataUrl: a.dataUrl,
               }))
+              // When the agent already has an in-flight turn, route
+              // the new message into the durable queue instead of
+              // starting a parallel turn. Drains automatically as
+              // soon as the active turn ends.
+              if (streaming || activeTurnId) {
+                enqueueMessage.mutate({
+                  agentId,
+                  message: input.text,
+                  attachments,
+                })
+                return
+              }
               void send({ text: input.text, attachments, attachmentPreviews })
             }}
             onCreateAgent={() => navigate(createAgentPath)}
+            onStop={handleStop}
             streaming={streaming}
             disabled={disabled}
             status="running"
             attachmentsEnabled={true}
-            placeholder={`Message ${agentName}...`}
+            placeholder={
+              streaming
+                ? `Type to queue another message for ${agentName}...`
+                : `Message ${agentName}...`
+            }
           />
         </div>
       </div>

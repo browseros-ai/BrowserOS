@@ -18,6 +18,18 @@ import {
   type CreateAgentInput,
   FileAgentStore,
 } from '../../../lib/agents/file-agent-store'
+import {
+  FileMessageQueue,
+  type QueuedMessage,
+  type QueuedMessageAttachment,
+} from '../../../lib/agents/message-queue'
+
+export {
+  MessageQueueFullError,
+  type QueuedMessage,
+  type QueuedMessageAttachment,
+} from '../../../lib/agents/message-queue'
+
 import type {
   AgentHistoryPage,
   AgentRowSnapshot,
@@ -56,6 +68,8 @@ export interface AgentDefinitionWithActivity extends AgentDefinition {
   lastErrorAt: number | null
   /** When non-null, an in-flight turn this row can be resumed from. */
   activeTurnId: string | null
+  /** Persistent FIFO queue of messages waiting to run for this agent. */
+  queue: QueuedMessage[]
 }
 
 const SPARKLINE_DAYS = 14
@@ -142,6 +156,7 @@ export class AgentHarnessService {
   private readonly runtime: AgentRuntime
   private readonly openclawProvisioner: OpenClawProvisioner | null
   private readonly turnRegistry: TurnRegistry
+  private readonly messageQueue: FileMessageQueue
   private inFlightReconcile: Promise<void> | null = null
   // In-memory liveness tracker. Lost on server restart (acceptable —
   // `lastUsedAt` survives via the acpx session record's `lastUsedAt`,
@@ -161,6 +176,7 @@ export class AgentHarnessService {
       openclawGatewayChat?: OpenClawGatewayChatClient
       openclawProvisioner?: OpenClawProvisioner
       turnRegistry?: TurnRegistry
+      messageQueue?: FileMessageQueue
     } = {},
   ) {
     this.agentStore = deps.agentStore ?? new FileAgentStore()
@@ -173,6 +189,25 @@ export class AgentHarnessService {
       })
     this.openclawProvisioner = deps.openclawProvisioner ?? null
     this.turnRegistry = deps.turnRegistry ?? new TurnRegistry()
+    this.messageQueue = deps.messageQueue ?? new FileMessageQueue()
+    // Drain any agents whose queue file survived a restart. The check
+    // for `getActiveFor` inside `maybeStartNextFromQueue` guards
+    // against double-firing if the in-memory turn registry happens to
+    // have something (it won't post-restart, but the guard is cheap).
+    void this.drainOnBoot()
+  }
+
+  private async drainOnBoot(): Promise<void> {
+    try {
+      const pending = await this.messageQueue.agentsWithPendingMessages()
+      for (const agentId of pending) {
+        void this.maybeStartNextFromQueue(agentId)
+      }
+    } catch (err) {
+      logger.warn('Message queue boot drain failed', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
   }
 
   async listAgents(): Promise<AgentDefinition[]> {
@@ -189,7 +224,10 @@ export class AgentHarnessService {
    */
   async listAgentsWithActivity(): Promise<AgentDefinitionWithActivity[]> {
     const agents = await this.listAgents()
-    const snapshots = await this.collectRowSnapshots(agents)
+    const [snapshots, queueSnapshot] = await Promise.all([
+      this.collectRowSnapshots(agents),
+      this.messageQueue.snapshotAll(),
+    ])
     const now = Date.now()
     return agents.map((agent) => {
       const live = this.activity.get(agent.id)
@@ -210,6 +248,7 @@ export class AgentHarnessService {
         lastErrorAt:
           live?.status === 'error' ? (live.lastEventAt ?? null) : null,
         activeTurnId: activeTurn?.turnId ?? null,
+        queue: queueSnapshot[agent.id] ?? [],
       }
     })
   }
@@ -290,11 +329,101 @@ export class AgentHarnessService {
         lastEventAt: Date.now(),
         lastError: outcome.error,
       })
+    } else {
+      // Successful turn — drop the in-memory entry. Liveness will be
+      // derived from the session record's `lastUsedAt` on next read.
+      this.activity.delete(agentId)
+    }
+    // The queue drain runs on every turn-end (success or failure) so
+    // a queued message is the next thing to run. Fire-and-forget; any
+    // failure inside `maybeStartNextFromQueue` requeues the message
+    // and logs.
+    void this.maybeStartNextFromQueue(agentId)
+  }
+
+  /**
+   * Pop the oldest queued message for `agentId` and start a turn from
+   * it. Fires from `notifyTurnEnded` (covers natural completion +
+   * cancel) and on server boot to drain queue files that survived a
+   * restart. No-ops when the queue is empty or another turn is
+   * already running for the agent.
+   */
+  private async maybeStartNextFromQueue(agentId: string): Promise<void> {
+    const next = await this.messageQueue.popOldest(agentId)
+    if (!next) return
+    // Race guard: a turn may have started between `popOldest` and now
+    // (e.g. the user typed and clicked Send directly between cancel
+    // and the drain). Put the message back at the head and let the
+    // next turn-end retry.
+    if (this.turnRegistry.getActiveFor(agentId, 'main')) {
+      await this.messageQueue.pushFront(agentId, next)
       return
     }
-    // Successful turn — drop the in-memory entry. Liveness will be
-    // derived from the session record's `lastUsedAt` on next read.
-    this.activity.delete(agentId)
+    try {
+      await this.startTurn({
+        agentId,
+        message: next.message,
+        attachments: next.attachments,
+      })
+    } catch (err) {
+      logger.warn('Queue drain failed; requeued message', {
+        agentId,
+        queuedId: next.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      try {
+        await this.messageQueue.pushFront(agentId, next)
+      } catch (requeueErr) {
+        logger.error('Queue requeue after drain failure also failed', {
+          agentId,
+          queuedId: next.id,
+          error:
+            requeueErr instanceof Error
+              ? requeueErr.message
+              : String(requeueErr),
+        })
+      }
+    }
+  }
+
+  /**
+   * Append a message to the agent's queue. Returns the new queued
+   * record. Throws `UnknownAgentError` for unknown agents and
+   * `MessageQueueFullError` when the per-agent cap is reached.
+   */
+  async enqueueMessage(input: {
+    agentId: string
+    message: string
+    attachments?: ReadonlyArray<QueuedMessageAttachment>
+  }): Promise<QueuedMessage> {
+    const agent = await this.requireAgent(input.agentId)
+    const queued = await this.messageQueue.append(agent.id, {
+      message: input.message,
+      attachments: input.attachments,
+    })
+    // Defensive drain: if the agent has no active turn at enqueue
+    // time (e.g. the user enqueued during the brief window between
+    // turns), pop it back off and start it directly. Avoids the
+    // queue sitting idle while the agent is also idle.
+    if (!this.turnRegistry.getActiveFor(agent.id, 'main')) {
+      void this.maybeStartNextFromQueue(agent.id)
+    }
+    return queued
+  }
+
+  /**
+   * Remove a queued message. Returns true if the message was
+   * removed, false if the agent or message was unknown.
+   */
+  async removeQueuedMessage(input: {
+    agentId: string
+    messageId: string
+  }): Promise<boolean> {
+    return this.messageQueue.remove(input.agentId, input.messageId)
+  }
+
+  async listQueuedMessages(agentId: string): Promise<QueuedMessage[]> {
+    return this.messageQueue.list(agentId)
   }
 
   private ensureGatewayReconciled(): Promise<void> {

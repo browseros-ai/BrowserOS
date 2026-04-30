@@ -73,6 +73,20 @@ export interface HarnessAgent {
   lastErrorAt?: number | null
   /** When non-null, an in-flight turn this row can be resumed from. */
   activeTurnId?: string | null
+  /** Persistent FIFO queue of messages waiting for this agent. */
+  queue?: HarnessQueuedMessage[]
+}
+
+export interface HarnessQueuedMessageAttachment {
+  mediaType: string
+  data: string
+}
+
+export interface HarnessQueuedMessage {
+  id: string
+  createdAt: number
+  message: string
+  attachments?: ReadonlyArray<HarnessQueuedMessageAttachment>
 }
 
 export interface HarnessAdapterHealth {

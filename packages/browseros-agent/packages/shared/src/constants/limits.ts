@@ -83,4 +83,8 @@ export const CONTENT_LIMITS = {
 
 export const AGENT_HARNESS_LIMITS = {
   AGENT_NAME_MAX_CHARS: 80,
+  /** Maximum number of messages allowed in an agent's pending queue. */
+  QUEUE_MAX_LENGTH: 50,
+  /** Maximum size in bytes for a single queued message's text. */
+  QUEUE_MESSAGE_MAX_BYTES: 64 * 1024,
 } as const

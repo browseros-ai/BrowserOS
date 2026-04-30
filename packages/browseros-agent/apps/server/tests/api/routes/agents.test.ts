@@ -501,6 +501,93 @@ describe('createAgentRoutes', () => {
     expect(unknown.status).toBe(404)
   })
 
+  it('queues + lists + removes messages for an agent', async () => {
+    const agent: AgentDefinition = {
+      id: 'agent-1',
+      name: 'Review bot',
+      adapter: 'codex',
+      modelId: 'gpt-5.5',
+      reasoningEffort: 'medium',
+      permissionMode: 'approve-all',
+      sessionKey: 'agent:agent-1:main',
+      createdAt: 1000,
+      updatedAt: 1000,
+    }
+    const route = createMountedRoutes([agent])
+
+    const enqueueA = await route.request('/agents/agent-1/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'first', attachments: [] }),
+    })
+    expect(enqueueA.status).toBe(200)
+    const enqueuedA = await enqueueA.json()
+    expect(enqueuedA.queued).toMatchObject({ message: 'first' })
+
+    const enqueueB = await route.request('/agents/agent-1/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'second' }),
+    })
+    expect(enqueueB.status).toBe(200)
+    const enqueuedB = await enqueueB.json()
+
+    const listed = await route.request('/agents/agent-1/queue')
+    expect(listed.status).toBe(200)
+    const listedBody = await listed.json()
+    expect(listedBody.queue.map((q: { message: string }) => q.message)).toEqual(
+      ['first', 'second'],
+    )
+
+    const removed = await route.request(
+      `/agents/agent-1/queue/${enqueuedA.queued.id}`,
+      { method: 'DELETE' },
+    )
+    expect(removed.status).toBe(200)
+    expect(await removed.json()).toEqual({ removed: true })
+
+    const afterRemove = await route.request('/agents/agent-1/queue')
+    expect((await afterRemove.json()).queue).toEqual([
+      expect.objectContaining({ id: enqueuedB.queued.id, message: 'second' }),
+    ])
+
+    const removeMissing = await route.request(
+      '/agents/agent-1/queue/does-not-exist',
+      { method: 'DELETE' },
+    )
+    expect(removeMissing.status).toBe(404)
+  })
+
+  it('rejects empty queue messages and unknown agents', async () => {
+    const route = createMountedRoutes([
+      {
+        id: 'agent-1',
+        name: 'Review bot',
+        adapter: 'codex',
+        modelId: 'gpt-5.5',
+        reasoningEffort: 'medium',
+        permissionMode: 'approve-all',
+        sessionKey: 'agent:agent-1:main',
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+    ])
+
+    const empty = await route.request('/agents/agent-1/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: '   ' }),
+    })
+    expect(empty.status).toBe(400)
+
+    const unknown = await route.request('/agents/missing/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'hi' }),
+    })
+    expect(unknown.status).toBe(404)
+  })
+
   it('rejects overlong agent names', async () => {
     const route = createMountedRoutes([])
     const response = await route.request('/agents', {
@@ -548,6 +635,15 @@ function createFakeService(agents: AgentDefinition[]) {
   let lastStartTurnInput:
     | { agentId: string; message?: string; cwd?: string }
     | undefined
+  const queues = new Map<
+    string,
+    Array<{
+      id: string
+      createdAt: number
+      message: string
+      attachments?: ReadonlyArray<{ mediaType: string; data: string }>
+    }>
+  >()
 
   return {
     get _lastStartTurnInput() {
@@ -655,8 +751,43 @@ function createFakeService(agents: AgentDefinition[]) {
       if (!turnId) return false
       return registry.cancel(turnId, input.reason)
     },
+    async enqueueMessage(input: {
+      agentId: string
+      message: string
+      attachments?: ReadonlyArray<{ mediaType: string; data: string }>
+    }) {
+      if (!agents.some((a) => a.id === input.agentId)) {
+        const { UnknownAgentError } = await import(
+          '../../../src/api/services/agents/agent-harness-service'
+        )
+        throw new UnknownAgentError(input.agentId)
+      }
+      const queued = {
+        id: `q-${Math.random().toString(36).slice(2, 10)}`,
+        createdAt: Date.now(),
+        message: input.message,
+        attachments: input.attachments,
+      }
+      const list = queues.get(input.agentId) ?? []
+      list.push(queued)
+      queues.set(input.agentId, list)
+      return queued
+    },
+    async removeQueuedMessage(input: { agentId: string; messageId: string }) {
+      const list = queues.get(input.agentId)
+      if (!list) return false
+      const next = list.filter((entry) => entry.id !== input.messageId)
+      if (next.length === list.length) return false
+      if (next.length === 0) queues.delete(input.agentId)
+      else queues.set(input.agentId, next)
+      return true
+    },
+    async listQueuedMessages(agentId: string) {
+      return queues.get(agentId)?.slice() ?? []
+    },
     /** Test-only: lets tests await turn completion deterministically. */
     _registry: registry,
+    _queues: queues,
   }
 }
 
@@ -745,6 +876,15 @@ function createBlockingFakeService(agents: AgentDefinition[]) {
         input.turnId ?? registry.getActiveFor(input.agentId, 'main')?.turnId
       if (!turnId) return false
       return registry.cancel(turnId, input.reason)
+    },
+    async enqueueMessage() {
+      throw new Error('not used in this test')
+    },
+    async removeQueuedMessage() {
+      return false
+    },
+    async listQueuedMessages() {
+      return []
     },
     _unblock: () => unblock(),
     _cancelCalls: cancelCalls,

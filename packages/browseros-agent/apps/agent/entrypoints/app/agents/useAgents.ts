@@ -8,6 +8,7 @@ import {
   type HarnessAdapterDescriptor,
   type HarnessAgent,
   type HarnessAgentHistoryPage,
+  type HarnessQueuedMessage,
   mapHarnessAgentToEntry,
 } from './agent-harness-types'
 import type { OpenClawStatus } from './useOpenClaw'
@@ -316,4 +317,146 @@ export async function fetchHarnessAgentHistory(
     baseUrl,
     `/${encodeURIComponent(agentId)}/sessions/main/history`,
   )
+}
+
+export interface EnqueueMessageInput {
+  message: string
+  attachments?: ReadonlyArray<unknown>
+}
+
+export async function enqueueHarnessMessage(
+  agentId: string,
+  input: EnqueueMessageInput,
+): Promise<HarnessQueuedMessage> {
+  const baseUrl = await getAgentServerUrl()
+  const response = await fetch(
+    `${baseUrl}/agents/${encodeURIComponent(agentId)}/queue`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: input.message,
+        ...(input.attachments && input.attachments.length > 0
+          ? { attachments: input.attachments }
+          : {}),
+      }),
+    },
+  )
+  if (!response.ok) {
+    let message = `Request failed with status ${response.status}`
+    try {
+      const body = (await response.json()) as { error?: string }
+      if (body.error) message = body.error
+    } catch {}
+    throw new Error(message)
+  }
+  const body = (await response.json()) as { queued: HarnessQueuedMessage }
+  return body.queued
+}
+
+export async function removeHarnessQueuedMessage(
+  agentId: string,
+  messageId: string,
+): Promise<{ removed: boolean }> {
+  const baseUrl = await getAgentServerUrl()
+  const response = await fetch(
+    `${baseUrl}/agents/${encodeURIComponent(agentId)}/queue/${encodeURIComponent(
+      messageId,
+    )}`,
+    { method: 'DELETE' },
+  )
+  if (!response.ok) return { removed: false }
+  return (await response.json()) as { removed: boolean }
+}
+
+/**
+ * Optimistic enqueue: writes the new queued message into the listing
+ * cache immediately so the queue panel reflects the change without
+ * waiting for the next poll. Rolls back if the server rejects.
+ */
+export function useEnqueueHarnessMessage() {
+  const { baseUrl } = useAgentServerUrl()
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (input: { agentId: string } & EnqueueMessageInput) =>
+      enqueueHarnessMessage(input.agentId, input),
+    onMutate: async (input) => {
+      const queryKey = [AGENT_QUERY_KEYS.agents, baseUrl]
+      await queryClient.cancelQueries({ queryKey })
+      const previous = queryClient.getQueryData<HarnessAgentsResponse>(queryKey)
+      if (!previous) return { previous: undefined }
+      const optimistic: HarnessQueuedMessage = {
+        id: `optimistic-${Math.random().toString(36).slice(2, 10)}`,
+        createdAt: Date.now(),
+        message: input.message,
+      }
+      queryClient.setQueryData<HarnessAgentsResponse>(queryKey, {
+        ...previous,
+        agents: previous.agents.map((agent) =>
+          agent.id === input.agentId
+            ? { ...agent, queue: [...(agent.queue ?? []), optimistic] }
+            : agent,
+        ),
+      })
+      return { previous }
+    },
+    onError: (_err, _vars, context) => {
+      if (!context?.previous) return
+      queryClient.setQueryData(
+        [AGENT_QUERY_KEYS.agents, baseUrl],
+        context.previous,
+      )
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: [AGENT_QUERY_KEYS.agents],
+      })
+    },
+  })
+}
+
+/**
+ * Optimistic queue removal mirror of `useEnqueueHarnessMessage`.
+ */
+export function useRemoveHarnessQueuedMessage() {
+  const { baseUrl } = useAgentServerUrl()
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (input: { agentId: string; messageId: string }) =>
+      removeHarnessQueuedMessage(input.agentId, input.messageId),
+    onMutate: async (input) => {
+      const queryKey = [AGENT_QUERY_KEYS.agents, baseUrl]
+      await queryClient.cancelQueries({ queryKey })
+      const previous = queryClient.getQueryData<HarnessAgentsResponse>(queryKey)
+      if (!previous) return { previous: undefined }
+      queryClient.setQueryData<HarnessAgentsResponse>(queryKey, {
+        ...previous,
+        agents: previous.agents.map((agent) =>
+          agent.id === input.agentId
+            ? {
+                ...agent,
+                queue: (agent.queue ?? []).filter(
+                  (entry) => entry.id !== input.messageId,
+                ),
+              }
+            : agent,
+        ),
+      })
+      return { previous }
+    },
+    onError: (_err, _vars, context) => {
+      if (!context?.previous) return
+      queryClient.setQueryData(
+        [AGENT_QUERY_KEYS.agents, baseUrl],
+        context.previous,
+      )
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: [AGENT_QUERY_KEYS.agents],
+      })
+    },
+  })
 }

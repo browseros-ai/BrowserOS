@@ -36,8 +36,10 @@ import {
   AgentHarnessService,
   type GatewayStatusSnapshot,
   InvalidAgentUpdateError,
+  MessageQueueFullError,
   type OpenClawProvisioner,
   OpenClawProvisionerUnavailableError,
+  type QueuedMessage,
   TurnAlreadyActiveError,
   UnknownAgentError,
 } from '../services/agents/agent-harness-service'
@@ -83,6 +85,16 @@ type AgentRouteService = {
     turnId?: string
     reason?: string
   }): boolean
+  enqueueMessage(input: {
+    agentId: string
+    message: string
+    attachments?: ReadonlyArray<{ mediaType: string; data: string }>
+  }): Promise<QueuedMessage>
+  removeQueuedMessage(input: {
+    agentId: string
+    messageId: string
+  }): Promise<boolean>
+  listQueuedMessages(agentId: string): Promise<QueuedMessage[]>
 }
 
 type AgentRouteDeps = {
@@ -353,6 +365,40 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
       const cancelled = service.cancelTurn({ agentId, turnId, reason })
       return c.json({ cancelled })
     })
+    .get('/:agentId/queue', async (c) => {
+      try {
+        const queue = await service.listQueuedMessages(c.req.param('agentId'))
+        return c.json({ queue })
+      } catch (err) {
+        return handleAgentRouteError(c, err)
+      }
+    })
+    .post('/:agentId/queue', async (c) => {
+      const parsed = await parseEnqueueBody(c)
+      if ('error' in parsed) return c.json({ error: parsed.error }, 400)
+      try {
+        const queued = await service.enqueueMessage({
+          agentId: c.req.param('agentId'),
+          message: parsed.message,
+          attachments: parsed.attachments,
+        })
+        return c.json({ queued })
+      } catch (err) {
+        return handleAgentRouteError(c, err)
+      }
+    })
+    .delete('/:agentId/queue/:messageId', async (c) => {
+      try {
+        const removed = await service.removeQueuedMessage({
+          agentId: c.req.param('agentId'),
+          messageId: c.req.param('messageId'),
+        })
+        if (!removed) return c.json({ error: 'Queued message not found' }, 404)
+        return c.json({ removed })
+      } catch (err) {
+        return handleAgentRouteError(c, err)
+      }
+    })
 }
 
 function turnFramesToAgentEvents(
@@ -551,6 +597,27 @@ const ALLOWED_IMAGE_MEDIA_TYPES = new Set([
   'image/gif',
 ])
 
+/**
+ * Body parser for `POST /agents/:id/queue`. Mirrors `parseChatBody`'s
+ * shape (message + attachments) but adds an upper bound on the
+ * message text size so a runaway client can't fill the queue file
+ * with multi-megabyte payloads.
+ */
+async function parseEnqueueBody(
+  c: Context<Env>,
+): Promise<
+  { message: string; attachments: InboundImageAttachment[] } | { error: string }
+> {
+  const parsed = await parseChatBody(c)
+  if ('error' in parsed) return parsed
+  if (parsed.message.length > AGENT_HARNESS_LIMITS.QUEUE_MESSAGE_MAX_BYTES) {
+    return {
+      error: `Message exceeds ${AGENT_HARNESS_LIMITS.QUEUE_MESSAGE_MAX_BYTES} bytes`,
+    }
+  }
+  return parsed
+}
+
 async function parseChatBody(
   c: Context<Env>,
 ): Promise<
@@ -705,6 +772,9 @@ function handleAgentRouteError(c: Context<Env>, err: unknown) {
   }
   if (err instanceof InvalidAgentUpdateError) {
     return c.json({ error: err.message }, 400)
+  }
+  if (err instanceof MessageQueueFullError) {
+    return c.json({ error: err.message }, 429)
   }
   if (err instanceof OpenClawProvisionerUnavailableError) {
     return c.json({ error: err.message }, 503)
