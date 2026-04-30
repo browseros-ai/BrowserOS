@@ -101,12 +101,13 @@ function StopButton({ onStop }: { onStop: () => void }) {
     <Button
       type="button"
       size="icon"
+      variant="ghost"
       onClick={onStop}
       title="Stop current turn — queued messages will start next."
       aria-label="Stop current turn"
-      className="h-10 w-10 flex-shrink-0 rounded-xl bg-destructive text-destructive-foreground hover:bg-destructive/90"
+      className="h-8 w-8 flex-shrink-0 rounded-lg bg-destructive/10 text-destructive transition-colors hover:bg-destructive/15 hover:text-destructive"
     >
-      <Square className="h-4 w-4" />
+      <Square className="h-3.5 w-3.5 fill-current" />
     </Button>
   )
 }

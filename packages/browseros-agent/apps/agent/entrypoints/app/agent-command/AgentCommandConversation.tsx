@@ -219,16 +219,6 @@ function AgentConversationController({
     [historyMessages],
   )
 
-  const { turns, streaming, send } = useAgentConversation(agentId, {
-    runtime: 'agent-harness',
-    sessionKey: null,
-    history: chatHistory,
-    onComplete: () => {
-      void harnessHistoryQuery.refetch()
-    },
-    onSessionKeyChange: () => {},
-  })
-
   // Listing query feeds queue + active-turn state for this agent. We
   // already poll it every 5s for the rail; reusing the same cache
   // keeps cross-tab queue state in sync without a second poll.
@@ -236,6 +226,17 @@ function AgentConversationController({
   const harnessAgent = harnessAgents.find((entry) => entry.id === agentId)
   const queue = harnessAgent?.queue ?? []
   const activeTurnId = harnessAgent?.activeTurnId ?? null
+
+  const { turns, streaming, send } = useAgentConversation(agentId, {
+    runtime: 'agent-harness',
+    sessionKey: null,
+    history: chatHistory,
+    activeTurnId,
+    onComplete: () => {
+      void harnessHistoryQuery.refetch()
+    },
+    onSessionKeyChange: () => {},
+  })
   const enqueueMessage = useEnqueueHarnessMessage()
   const removeQueuedMessage = useRemoveHarnessQueuedMessage()
 

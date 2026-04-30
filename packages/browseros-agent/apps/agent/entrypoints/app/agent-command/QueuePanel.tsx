@@ -9,7 +9,6 @@ import {
   QueueItemContent,
   QueueItemFile,
   QueueItemImage,
-  QueueItemIndicator,
   QueueList,
   QueueSection,
   QueueSectionContent,
@@ -49,8 +48,7 @@ export const QueuePanel: FC<QueuePanelProps> = ({ queue, onRemove }) => {
           <QueueList>
             {queue.map((entry) => (
               <QueueItem key={entry.id}>
-                <div className="flex items-start gap-2">
-                  <QueueItemIndicator />
+                <div className="flex items-center gap-2">
                   <QueueItemContent>
                     {firstNonBlankLine(entry.message)}
                   </QueueItemContent>
