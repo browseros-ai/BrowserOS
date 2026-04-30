@@ -56,21 +56,11 @@ interface ConversationInputProps {
   variant?: 'home' | 'conversation'
   /**
    * When set, a Stop button surfaces to the left of the voice mic
-   * whenever `canStop !== false` (defaults to `streaming`). Click
-   * cancels the active turn server-side via the chat-cancel
-   * endpoint. Absent → no Stop button (legacy behaviour for the
-   * home composer).
+   * while `streaming === true`. Click cancels the active turn
+   * server-side via the chat-cancel endpoint. Absent → no Stop
+   * button (legacy behaviour for the home composer).
    */
   onStop?: () => void
-  /**
-   * Override for the Stop button's visibility. Defaults to
-   * `streaming`, which covers the simple case. Queue-aware surfaces
-   * pass `streaming || activeTurnId !== null || queue.length > 0`
-   * so the button stays visible across the brief gap between turns
-   * while the server drains the queue — otherwise the affordance
-   * flickers off and on every time a turn ends.
-   */
-  canStop?: boolean
 }
 
 function InputActionButton({
@@ -341,9 +331,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   attachmentsEnabled = true,
   variant = 'conversation',
   onStop,
-  canStop,
 }) => {
-  const showStop = canStop ?? streaming
   const [input, setInput] = useState('')
   const [selectedTabs, setSelectedTabs] = useState<chrome.tabs.Tab[]>([])
   const [isExpandedDraft, setIsExpandedDraft] = useState(false)
@@ -563,7 +551,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
               )}
             />
           </div>
-          {showStop && onStop ? <StopButton onStop={onStop} /> : null}
+          {streaming && onStop ? <StopButton onStop={onStop} /> : null}
           <VoiceButton
             isRecording={voice.isRecording}
             isTranscribing={voice.isTranscribing}

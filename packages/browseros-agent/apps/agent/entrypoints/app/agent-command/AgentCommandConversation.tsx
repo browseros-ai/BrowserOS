@@ -345,12 +345,6 @@ function AgentConversationController({
             }}
             onCreateAgent={() => navigate(createAgentPath)}
             onStop={handleStop}
-            // Stop visible whenever there's *any* pending work for
-            // the agent — local stream, server-side active turn, or
-            // queued messages waiting to drain. This keeps the
-            // affordance steady across the brief gap between turns
-            // while the server pops the next queued message.
-            canStop={streaming || activeTurnId !== null || queue.length > 0}
             streaming={streaming}
             disabled={disabled}
             status="running"
