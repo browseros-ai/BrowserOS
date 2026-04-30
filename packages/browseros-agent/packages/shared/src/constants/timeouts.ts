@@ -10,6 +10,19 @@ export const KLAVIS_PROXY_RETRY_BACKOFF_MS = [
   5_000, 10_000, 20_000, 40_000, 60_000,
 ] as const
 
+/**
+ * HTTP retry configuration for rate-limited and transient failures.
+ * Uses exponential backoff: baseDelay * 2^attempt + jitter
+ */
+export const HTTP_RETRY = {
+  // Exponential backoff multiplier: delay = baseDelay * 2^attempt + random(0, jitter)
+  BASE_DELAY_MS: 200, // Start with 200ms
+  JITTER_MAX_MS: 100, // Random 0-100ms added to each retry
+  MAX_RETRIES: 5, // Maximum of 5 retries (6 total attempts including original)
+  // Status codes to retry on
+  RETRYABLE_STATUS_CODES: [408, 429, 500, 502, 503, 504] as const,
+} as const
+
 export const TIMEOUTS = {
   // Agent/Tool execution
   TOOL_CALL: 120_000,

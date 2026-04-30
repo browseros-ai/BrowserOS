@@ -87,6 +87,13 @@ async function clawFetch<T>(
         message = body.error
       }
     } catch {}
+
+    // Provide helpful context for rate limiting
+    if (res.status === 429) {
+      const retryAfter = res.headers.get('Retry-After')
+      message = `Rate limited (429)${retryAfter ? `: retry after ${retryAfter}s` : ''}. ${message}`
+    }
+
     throw new Error(message)
   }
   return res.json() as Promise<T>
