@@ -10,8 +10,9 @@ import { createRetryableFetch, isRetryableStatus } from './retry-handler'
  * - OpenRouter-style error detail extraction and message enhancement
  *
  * The Vercel AI SDK's retry mechanism is also applied by this fetch wrapper,
- * providing defense-in-depth retry handling. The SDK uses the APICallError.isRetryable
- * flag (auto-calculated from statusCode) and respects Retry-After headers.
+ * providing defense-in-depth retry handling. This wrapper explicitly classifies
+ * retryability for the APICallError it throws, and the SDK also respects the
+ * status code and Retry-After headers when it applies its own retry logic.
  *
  * Note: This is primarily for non-gateway APIs. For gateway requests, use createBrowserOSFetch.
  */

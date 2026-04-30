@@ -12,7 +12,7 @@ import {
   createRetryableFetch,
   isRetryableStatus,
   parseRetryAfter,
-} from '../src/lib/retry-handler'
+} from '../../src/lib/retry-handler'
 
 describe('Retry Handler', () => {
   describe('parseRetryAfter', () => {
@@ -128,7 +128,7 @@ describe('Retry Handler', () => {
       const result = await retryableFetch('http://example.com')
 
       expect(result).toBe(response)
-      expect(fetchMock.mock.callCount).toBe(1)
+      expect(fetchMock.mock.calls.length).toBe(1)
     })
 
     it('retries on network errors', async () => {
@@ -170,7 +170,7 @@ describe('Retry Handler', () => {
       }
 
       // Original attempt + 2 retries = 3 total
-      expect(fetchMock.mock.callCount).toBe(3)
+      expect(fetchMock.mock.calls.length).toBe(3)
     })
 
     it('retries on 429 rate limit errors', async () => {
@@ -245,7 +245,7 @@ describe('Retry Handler', () => {
 
       const result = await retryableFetch('http://example.com')
       expect(result.status).toBe(404)
-      expect(fetchMock.mock.callCount).toBe(1) // Only one attempt
+      expect(fetchMock.mock.calls.length).toBe(1) // Only one attempt
     })
 
     it('retries on 500+ server errors', async () => {

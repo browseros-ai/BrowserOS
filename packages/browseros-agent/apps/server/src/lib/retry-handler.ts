@@ -72,18 +72,18 @@ export class RetryableError extends Error {
 export function parseRetryAfter(
   retryAfterHeader: string | null | undefined,
 ): number | undefined {
-  if (!retryAfterHeader?.trim()) return undefined
+  const trimmedHeader = retryAfterHeader?.trim()
+  if (!trimmedHeader) return undefined
 
   // Attempt to parse as seconds (RFC 7231 Section 7.1.3)
-  const seconds = parseInt(retryAfterHeader, 10)
-  if (!Number.isNaN(seconds) && seconds > 0) {
-    return seconds
+  if (/^\d+$/.test(trimmedHeader)) {
+    return Number(trimmedHeader)
   }
 
   // Attempt to parse as HTTP-date (RFC 7231 Section 7.1.1)
   // Example: "Fri, 31 Dec 1999 23:59:59 GMT"
   try {
-    const retryDate = new Date(retryAfterHeader)
+    const retryDate = new Date(trimmedHeader)
     if (!Number.isNaN(retryDate.getTime())) {
       const delayMs = retryDate.getTime() - Date.now()
       if (delayMs > 0) {
@@ -175,6 +175,19 @@ function handleNetworkError(
 }
 
 /**
+ * Cancels a response body so discarded retry responses do not keep streams open.
+ */
+async function cancelResponseBody(response: Response): Promise<void> {
+  if (!response.body) return
+
+  try {
+    await response.body.cancel()
+  } catch {
+    // Best effort only.
+  }
+}
+
+/**
  * Helper to wait for a given number of milliseconds.
  * @param ms Milliseconds to wait
  */
@@ -224,9 +237,10 @@ async function evaluateResponseForRetry(
   // Calculate delay
   const retryAfterHeader = response.headers.get('Retry-After')
   const retryAfterSeconds = parseRetryAfter(retryAfterHeader)
-  const delayMs = retryAfterSeconds
-    ? retryAfterSeconds * 1000 // Retry-After takes precedence
-    : calculateBackoffDelay(attempt, baseDelayMs, jitterMaxMs)
+  const delayMs =
+    retryAfterSeconds !== undefined
+      ? retryAfterSeconds * 1000 // Retry-After takes precedence
+      : calculateBackoffDelay(attempt, baseDelayMs, jitterMaxMs)
 
   logger.debug('HTTP request will be retried', {
     url: urlStr,
@@ -237,6 +251,21 @@ async function evaluateResponseForRetry(
   })
 
   return { shouldRetry: true, delayMs }
+}
+
+type FetchWithPreconnect = FetchLike & {
+  preconnect?: typeof globalThis.fetch.preconnect
+}
+
+function getBoundPreconnect(
+  fetchLike: FetchLike | typeof globalThis.fetch,
+): typeof globalThis.fetch.preconnect | undefined {
+  const candidate = fetchLike as FetchWithPreconnect
+  if (typeof candidate.preconnect !== 'function') {
+    return undefined
+  }
+
+  return candidate.preconnect.bind(candidate)
 }
 
 /**
@@ -293,6 +322,7 @@ export function createRetryableFetch(
         if (delayMs === undefined) {
           throw new Error('Expected retry delay to be defined')
         }
+        await cancelResponseBody(response)
         await wait(delayMs)
       } catch (error) {
         const backoffDelayMs = handleNetworkError(
@@ -315,9 +345,13 @@ export function createRetryableFetch(
     throw lastError ?? new Error('Unknown error during retry loop')
   }
 
-  return Object.assign(retryableFetch, {
-    preconnect: globalThis.fetch.preconnect.bind(globalThis.fetch),
-  })
+  const preconnect =
+    getBoundPreconnect(fetch) ?? getBoundPreconnect(globalThis.fetch)
+
+  return Object.assign(
+    retryableFetch,
+    preconnect ? { preconnect } : {},
+  ) as typeof globalThis.fetch
 }
 
 /**

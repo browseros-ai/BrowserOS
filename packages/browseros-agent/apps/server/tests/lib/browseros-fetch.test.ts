@@ -8,7 +8,7 @@
 
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
 import { APICallError } from '@ai-sdk/provider'
-import { createBrowserOSFetch } from '../src/lib/browseros-fetch'
+import { createBrowserOSFetch } from '../../src/lib/browseros-fetch'
 
 describe('BrowserOS Fetch Integration', () => {
   beforeEach(() => {
@@ -79,7 +79,7 @@ describe('BrowserOS Fetch Integration', () => {
             status: 429,
             headers: {
               'Content-Type': 'application/json',
-              'Retry-After': '1',
+              'Retry-After': '0',
             },
           },
         )
@@ -108,7 +108,10 @@ describe('BrowserOS Fetch Integration', () => {
         }),
         {
           status: 500,
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Retry-After': '0',
+          },
         },
       )
     })
@@ -138,7 +141,7 @@ describe('BrowserOS Fetch Integration', () => {
           status: 429,
           headers: {
             'Content-Type': 'application/json',
-            'Retry-After': '60',
+            'Retry-After': '0',
           },
         },
       )
@@ -150,19 +153,26 @@ describe('BrowserOS Fetch Integration', () => {
       await fetch('http://example.com')
     } catch (error) {
       const apiError = error as APICallError
-      expect(apiError.responseHeaders?.['retry-after']).toBe('60')
+      expect(apiError.responseHeaders?.['retry-after']).toBe('0')
     }
   })
 
-  it('returns response for non-retryable errors like 404', async () => {
+  it('throws APICallError for non-retryable errors like 404', async () => {
     globalThis.fetch = mock(async () => {
       return new Response('Not Found', { status: 404 })
     })
 
     const fetch = createBrowserOSFetch('test-123')
-    const response = await fetch('http://example.com')
 
-    expect(response.status).toBe(404)
+    try {
+      await fetch('http://example.com')
+      expect.unreachable()
+    } catch (error) {
+      expect(error instanceof APICallError).toBe(true)
+      const apiError = error as APICallError
+      expect(apiError.statusCode).toBe(404)
+      expect(apiError.isRetryable).toBe(false)
+    }
   })
 
   it('logs credits remaining from response header', async () => {
