@@ -238,10 +238,17 @@ export function useAgentConversation(
     void activeTurnIdDep
 
     const attemptResume = async () => {
+      // Track whether *we* started a stream in this run. When the
+      // early-return paths fire (no active turn, or a `send()` /
+      // earlier resume already owns `streamAbortRef`), the finally
+      // block must NOT touch streaming/turnIdRef/lastSeqRef —
+      // otherwise we clobber the in-flight stream's state and the
+      // Stop button drops out mid-turn while events keep arriving.
+      let weStartedStream = false
       try {
         const active = await fetchActiveHarnessTurn(agentId)
         if (cancelled || !active || active.status !== 'running') return
-        if (streamAbortRef.current) return // a fresh send already in flight
+        if (streamAbortRef.current) return // someone else already owns the stream
 
         // Stage a placeholder turn so the streamed events have a row
         // to render into. We don't have the user message text on
@@ -262,6 +269,7 @@ export function useAgentConversation(
         lastSeqRef.current = null
         streamAbortRef.current = abortController
         setStreaming(true)
+        weStartedStream = true
 
         const response = await attachToHarnessTurn(agentId, {
           turnId: active.turnId,
@@ -280,7 +288,7 @@ export function useAgentConversation(
         // Resume is best-effort; transient errors fall back to the
         // user starting a new turn manually.
       } finally {
-        if (!cancelled) {
+        if (!cancelled && weStartedStream) {
           if (streamAbortRef.current === abortController) {
             streamAbortRef.current = null
           }
