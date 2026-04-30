@@ -290,10 +290,20 @@ export function useAgentConversation(
         // Resume is best-effort; transient errors fall back to the
         // user starting a new turn manually.
       } finally {
+        // Always release `streamAbortRef` if we owned it — even when
+        // the effect was cancelled mid-stream (a listing poll
+        // captured the next queue-drain turn id, for example). If we
+        // don't, the next effect run hits `if (streamAbortRef.current)
+        // return` against our now-aborted controller and never
+        // reattaches, leaving `streaming === true` with no live stream.
+        if (weStartedStream && streamAbortRef.current === abortController) {
+          streamAbortRef.current = null
+        }
+        // The other state (streaming flag, turn id, lastSeq) is the
+        // *current run's* lifecycle: only reset it on a clean exit.
+        // When `cancelled` is true the next run will set these
+        // itself, so resetting here would only cause a brief flicker.
         if (!cancelled && weStartedStream) {
-          if (streamAbortRef.current === abortController) {
-            streamAbortRef.current = null
-          }
           turnIdRef.current = null
           lastSeqRef.current = null
           setStreaming(false)
