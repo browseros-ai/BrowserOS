@@ -60,7 +60,7 @@ export const ConversationHeader: FC<ConversationHeaderProps> = ({
   }
 
   return (
-    <div className="flex shrink-0 items-start justify-between gap-4 px-5 py-3">
+    <div className="flex min-h-[84px] shrink-0 items-start justify-between gap-4 px-5 py-3">
       <div className="flex min-w-0 items-start gap-3">
         <Button
           variant="ghost"
@@ -92,11 +92,11 @@ export const ConversationHeader: FC<ConversationHeaderProps> = ({
               adapterHealth={adapterHealth}
             />
           </div>
-          {metaParts.length > 0 ? (
-            <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
-              <span className="truncate">{metaParts.join(' · ')}</span>
-            </div>
-          ) : null}
+          <div className="mt-1 flex h-4 items-center gap-2 text-[11px] text-muted-foreground">
+            <span className="truncate">
+              {metaParts.length > 0 ? metaParts.join(' · ') : '\u00A0'}
+            </span>
+          </div>
         </div>
       </div>
     </div>

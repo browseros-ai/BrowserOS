@@ -292,7 +292,7 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
         {/* Shared top band — the rail's "Agents" header and the chat
             header live on one row so they're aligned by construction. */}
         <div className="flex shrink-0 items-stretch border-border/50 border-b">
-          <div className="hidden w-[288px] shrink-0 items-center gap-3 border-border/50 border-r px-4 lg:flex">
+          <div className="hidden min-h-[84px] w-[288px] shrink-0 items-center gap-3 border-border/50 border-r px-4 lg:flex">
             <Button
               variant="ghost"
               size="icon"
