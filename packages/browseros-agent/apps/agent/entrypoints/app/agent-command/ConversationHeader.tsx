@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button'
 import { formatRelativeTime } from '@/entrypoints/app/agents/agent-display.helpers'
 import type { HarnessAgent } from '@/entrypoints/app/agents/agent-harness-types'
 import { AgentSummaryChips } from '@/entrypoints/app/agents/agent-row/AgentSummaryChips'
-import { AgentTile } from '@/entrypoints/app/agents/agent-row/AgentTile'
 import { formatTokens } from '@/entrypoints/app/agents/agent-row/agent-row.helpers'
 import type { AgentAdapterHealth } from '@/entrypoints/app/agents/agent-row/agent-row.types'
 import { PinToggle } from '@/entrypoints/app/agents/agent-row/PinToggle'
@@ -52,7 +51,6 @@ export const ConversationHeader: FC<ConversationHeaderProps> = ({
   const lifetimeTotal = tokens
     ? tokens.cumulative.input + tokens.cumulative.output
     : 0
-  const cwd = agent?.cwd ?? null
 
   const metaParts: string[] = []
   if (lastUsedAt !== null) metaParts.push(formatRelativeTime(lastUsedAt))
@@ -62,21 +60,20 @@ export const ConversationHeader: FC<ConversationHeaderProps> = ({
   }
 
   return (
-    <div className="flex min-h-14 items-start justify-between gap-4 border-border/50 border-b px-5 py-2.5">
+    <div className="flex shrink-0 items-start justify-between gap-4 border-border/50 border-b px-5 py-3">
       <div className="flex min-w-0 items-start gap-3">
         <Button
           variant="ghost"
           size="icon"
           onClick={onGoHome}
-          className="mt-1 size-8 shrink-0 rounded-xl lg:hidden"
+          className="size-8 shrink-0 rounded-xl lg:hidden"
           title={backLabel}
         >
           <BackIcon className="size-4" />
         </Button>
-        <AgentTile adapter={adapter} status={status} lastUsedAt={lastUsedAt} />
-        <div className="group min-w-0 flex-1 pt-0.5">
-          <div className="flex items-center gap-1.5">
-            <span className="truncate font-semibold text-[15px] leading-5">
+        <div className="group min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate font-semibold text-[15px] leading-6">
               {agent?.name || fallbackName}
             </span>
             {agent ? (
@@ -87,24 +84,16 @@ export const ConversationHeader: FC<ConversationHeaderProps> = ({
               hasActiveTurn={Boolean(agent?.activeTurnId)}
             />
           </div>
-          <div className="mt-0.5 flex items-center gap-2">
+          <div className="mt-1 flex items-center gap-2">
             <AgentSummaryChips
               adapter={adapter}
               modelLabel={agent?.modelId ?? null}
               reasoningEffort={agent?.reasoningEffort ?? null}
               adapterHealth={adapterHealth}
             />
-            {cwd ? (
-              <span
-                className="truncate text-muted-foreground text-xs"
-                title={cwd}
-              >
-                · {cwd}
-              </span>
-            ) : null}
           </div>
           {metaParts.length > 0 ? (
-            <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+            <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
               <span className="truncate">{metaParts.join(' · ')}</span>
             </div>
           ) : null}

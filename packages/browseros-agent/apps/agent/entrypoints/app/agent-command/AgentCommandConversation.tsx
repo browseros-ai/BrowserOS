@@ -286,7 +286,7 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
 
   return (
     <div className="absolute inset-0 overflow-hidden bg-background md:pl-[theme(spacing.14)]">
-      <div className="mx-auto grid h-full w-full max-w-[1480px] lg:grid-cols-[288px_minmax(0,1fr)]">
+      <div className="mx-auto grid h-full w-full max-w-[1480px] grid-rows-[minmax(0,1fr)] lg:grid-cols-[288px_minmax(0,1fr)]">
         <AgentRail
           agents={harnessAgents}
           adapters={adapters}
