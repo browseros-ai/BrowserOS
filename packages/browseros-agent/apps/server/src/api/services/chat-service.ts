@@ -311,17 +311,49 @@ export class ChatService {
       contextChanges.length > 0
         ? `${contextChanges.map((c) => `[Context: ${c}]`).join('\n')}\n\n`
         : ''
-    session.agent.appendUserMessage(contextPrefix + userContent)
+
+    // Persist the *raw* user text in session.agent.messages so it
+    // round-trips clean to the client's useChat state and to any
+    // future history reload. The wrapped form (browser context +
+    // <selected_text> + <USER_QUERY>) is built as a transient prompt
+    // copy below — the LLM sees it, the user-visible state never
+    // does.
+    session.agent.appendUserMessage(request.message)
+    const promptUserText = contextPrefix + userContent
+    const wrappedUserMessageId =
+      session.agent.messages[session.agent.messages.length - 1]?.id
+
+    const promptUiMessages = filterValidMessages(session.agent.messages).map(
+      (msg) =>
+        msg.id === wrappedUserMessageId && msg.role === 'user'
+          ? {
+              ...msg,
+              parts: [{ type: 'text' as const, text: promptUserText }],
+            }
+          : msg,
+    )
 
     return createAgentUIStreamResponse({
       agent: session.agent.toolLoopAgent,
-      uiMessages: filterValidMessages(session.agent.messages),
+      uiMessages: promptUiMessages,
       abortSignal,
       onFinish: async ({ messages }: { messages: UIMessage[] }) => {
-        session.agent.messages = filterValidMessages(messages)
+        // The agent loop returns `messages` containing the prompt-
+        // wrapped user text. Restore the raw form before persisting
+        // so subsequent turns see the clean text and the client's
+        // local UIMessage matches what was originally typed.
+        const restored = messages.map((msg) =>
+          msg.id === wrappedUserMessageId && msg.role === 'user'
+            ? {
+                ...msg,
+                parts: [{ type: 'text' as const, text: request.message }],
+              }
+            : msg,
+        )
+        session.agent.messages = filterValidMessages(restored)
         logger.info('Agent execution complete', {
           conversationId: request.conversationId,
-          totalMessages: messages.length,
+          totalMessages: restored.length,
         })
 
         if (session?.hiddenPageId) {

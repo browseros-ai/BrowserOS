@@ -558,13 +558,53 @@ function mapToolUseToHistoryToolCall(
 }
 
 function userContentToText(content: AcpxUserContent): string {
-  if ('Text' in content) return unwrapBrowserosAcpPrompt(content.Text)
+  if ('Text' in content) return unwrapBrowserosAcpUserMessage(content.Text)
   if ('Mention' in content) return content.Mention.content
   if ('Image' in content) return content.Image.source ? '[image]' : ''
   return ''
 }
 
-function unwrapBrowserosAcpPrompt(value: string): string {
+/**
+ * Strip the BrowserOS ACP envelopes from a user-message text so HTTP
+ * consumers (history endpoint, listing's `lastUserMessage`) see only
+ * the user's actual question. Two layers are added on the wire today:
+ *
+ *   1. <role>…</role>\n\n<user_request>…</user_request> from
+ *      `buildBrowserosAcpPrompt` (outer).
+ *   2. ## Browser Context + <selected_text> + <USER_QUERY> from
+ *      `apps/server/src/agent/format-message.ts` (inner).
+ *
+ * Each step is independently defensive — anchors that don't match are
+ * skipped — so partially-wrapped text (older persisted records,
+ * messages without a selection, future schema drift) gets best-
+ * effort cleaning without throwing. The function is idempotent;
+ * applying it to already-clean text is a no-op.
+ *
+ * TODO: drop this once acpx/runtime exposes a real system-prompt
+ * surface so we can stop persisting the role block on every user
+ * message. Tracked in the server architecture audit.
+ */
+export function unwrapBrowserosAcpUserMessage(raw: string): string {
+  if (!raw) return raw
+  let text = raw
+
+  // Order matters: the outer envelope is added AFTER
+  // `escapePromptTagText` runs over the inner formatUserMessage
+  // payload (see buildBrowserosAcpPrompt). So once the outer
+  // <role>…</role>+<user_request>…</user_request> tags are stripped,
+  // the inner content is still entity-escaped (`&lt;USER_QUERY&gt;`
+  // not `<USER_QUERY>`). We decode entities BEFORE the inner-envelope
+  // strips so their anchors actually match.
+  text = stripOuterRoleEnvelope(text)
+  text = decodeBasicEntities(text)
+  text = stripBrowserContextHeader(text)
+  text = stripSelectedTextBlock(text)
+  text = unwrapUserQuery(text)
+
+  return text.trim()
+}
+
+function stripOuterRoleEnvelope(value: string): string {
   const prefix = `${BROWSEROS_ACP_AGENT_INSTRUCTIONS}
 
 <user_request>
@@ -572,12 +612,41 @@ function unwrapBrowserosAcpPrompt(value: string): string {
   const suffix = `
 </user_request>`
   if (!value.startsWith(prefix) || !value.endsWith(suffix)) return value
-
-  // TODO: nikhil: remove this once acpx/runtime exposes system prompt support.
-  return unescapePromptTagText(value.slice(prefix.length, -suffix.length))
+  return value.slice(prefix.length, -suffix.length)
 }
 
-function unescapePromptTagText(value: string): string {
+function stripBrowserContextHeader(value: string): string {
+  // The `## Browser Context` block (when present) ends with the
+  // `\n\n---\n\n` separator emitted by `formatBrowserContext`.
+  // Anchored at the start of the string; non-greedy match through
+  // the body; one removal.
+  const match = value.match(/^## Browser Context\n[\s\S]*?\n\n---\n\n/)
+  return match ? value.slice(match[0].length) : value
+}
+
+function stripSelectedTextBlock(value: string): string {
+  // Optional `<selected_text [attrs]>…</selected_text>\n\n` block
+  // emitted by `formatUserMessage` when the user has a selection.
+  return value.replace(
+    /<selected_text(?:[^>]*)>\n[\s\S]*?\n<\/selected_text>\n\n/,
+    '',
+  )
+}
+
+function unwrapUserQuery(value: string): string {
+  // `formatUserMessage` always wraps the user's typed text in
+  // `<USER_QUERY>\n…\n</USER_QUERY>` — even when no browser context
+  // or selection is present.
+  const match = value.match(/^<USER_QUERY>\n([\s\S]*?)\n<\/USER_QUERY>$/)
+  return match ? match[1] : value
+}
+
+function decodeBasicEntities(value: string): string {
+  // Reverse the three escapes the server applied via
+  // `escapePromptTagText` so user-typed XML-like content (e.g.
+  // `<USER_QUERY>` typed literally) renders as the user typed it.
+  // Decode `&amp;` last to avoid double-decoding sequences like
+  // `&amp;lt;` → `&lt;` → `<`.
   return value
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')

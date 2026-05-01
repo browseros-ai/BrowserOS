@@ -298,7 +298,9 @@ describe('ChatService Klavis session rebuilds', () => {
     const firstAgent = createFakeAgent()
     const secondAgent = createFakeAgent()
     agentToReturn = firstAgent
+    let lastPromptUiMessages: MockMessage[] | undefined
     streamResponseHandler = async ({ onFinish, uiMessages }) => {
+      lastPromptUiMessages = uiMessages
       await onFinish({ messages: uiMessages ?? [] })
       return new Response('ok')
     }
@@ -348,13 +350,24 @@ describe('ChatService Klavis session rebuilds', () => {
 
     expect(createAgentSpy.mock.calls.length - createCallsBefore).toBe(2)
     expect(firstAgent.dispose).toHaveBeenCalledTimes(1)
+
+    // Persisted form stays the raw user text — TKT-774. The Klavis
+    // context-change notice and the formatted user envelope go only
+    // into the transient prompt copy fed to the LLM.
     expect(secondAgent.messages).toHaveLength(2)
-    const rebuiltMessage = secondAgent.messages[1]?.parts[0]?.text ?? ''
-    expect(rebuiltMessage).toContain(
+    const persistedRebuiltMessage =
+      secondAgent.messages[1]?.parts[0]?.text ?? ''
+    expect(persistedRebuiltMessage).toBe('check integrations again')
+
+    // Prompt copy (what the agent loop actually saw) carries the
+    // context-change prefix so the model knows about the new tools.
+    const promptRebuiltMessage =
+      lastPromptUiMessages?.at(-1)?.parts[0]?.text ?? ''
+    expect(promptRebuiltMessage).toContain(
       'Klavis app integration tools are now available for the following connected apps: slack.',
     )
-    expect(rebuiltMessage).not.toContain('klavis:pending')
-    expect(rebuiltMessage).not.toContain('klavis:connected')
+    expect(promptRebuiltMessage).not.toContain('klavis:pending')
+    expect(promptRebuiltMessage).not.toContain('klavis:connected')
   })
 
   it('does not rebuild a session with no enabled managed apps when Klavis connects', async () => {
