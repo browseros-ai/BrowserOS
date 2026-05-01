@@ -15,7 +15,11 @@ import type {
   AcpRuntime as AcpxCoreRuntime,
 } from 'acpx/runtime'
 import { createRuntimeStore } from 'acpx/runtime'
-import { AcpxRuntime } from '../../../src/lib/agents/acpx-runtime'
+import { formatUserMessage } from '../../../src/agent/format-message'
+import {
+  AcpxRuntime,
+  unwrapBrowserosAcpUserMessage,
+} from '../../../src/lib/agents/acpx-runtime'
 import type { AgentDefinition } from '../../../src/lib/agents/agent-types'
 import type { AgentStreamEvent } from '../../../src/lib/agents/types'
 
@@ -303,6 +307,230 @@ open &lt;example.com&gt;
         createdAt: Date.parse(timestamp),
       },
     ])
+  })
+
+  it('strips the inner formatUserMessage envelope from history payloads', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'browseros-acpx-runtime-'))
+    const stateDir = await mkdtemp(join(tmpdir(), 'browseros-acpx-state-'))
+    tempDirs.push(cwd, stateDir)
+    const timestamp = '2026-04-29T20:00:00.000Z'
+    const agent: AgentDefinition = {
+      id: 'agent-1',
+      name: 'Browser bot',
+      adapter: 'codex',
+      permissionMode: 'approve-all',
+      sessionKey: 'agent:agent-1:main',
+      createdAt: 1000,
+      updatedAt: 1000,
+    }
+    // Wrapped form persisted to the session record: outer
+    // <role>…</role>\n\n<user_request>…</user_request> from
+    // buildBrowserosAcpPrompt + inner ## Browser Context +
+    // <selected_text> + <USER_QUERY> from formatUserMessage.
+    const wrapped = `<role>
+You are BrowserOS - a browser agent with full control of a Chromium browser through the BrowserOS MCP server.
+
+Use the BrowserOS MCP server for all browser tasks, including browsing the web, interacting with pages, inspecting browser state, and managing tabs, windows, bookmarks, and history.
+</role>
+
+<user_request>
+## Browser Context
+**Active Tab:** Tab 1 (Page ID: 101) - "Example" (https://example.com)
+
+---
+
+<selected_text (from "Example" — https://example.com)>
+quoted selection
+</selected_text>
+
+<USER_QUERY>
+summarise this
+</USER_QUERY>
+</user_request>`
+    const record: AcpSessionRecord = {
+      schema: 'acpx.session.v1',
+      acpxRecordId: agent.sessionKey,
+      acpSessionId: 'sid-1',
+      agentSessionId: 'inner-1',
+      agentCommand: 'codex --acp',
+      cwd,
+      name: agent.sessionKey,
+      createdAt: timestamp,
+      lastUsedAt: timestamp,
+      lastSeq: 0,
+      eventLog: {
+        active_path: '',
+        segment_count: 0,
+        max_segment_bytes: 0,
+        max_segments: 0,
+      },
+      closed: false,
+      messages: [
+        {
+          User: {
+            id: 'user-1',
+            content: [{ Text: wrapped }],
+          },
+        },
+      ],
+      updated_at: timestamp,
+      cumulative_token_usage: {},
+      request_token_usage: {},
+      acpx: {},
+    }
+    await createRuntimeStore({ stateDir }).save(record)
+
+    const history = await new AcpxRuntime({ cwd, stateDir }).getHistory({
+      agent,
+      sessionId: 'main',
+    })
+
+    expect(history.items[0]?.text).toBe('summarise this')
+  })
+
+  describe('unwrapBrowserosAcpUserMessage', () => {
+    it('returns clean text for input that has no envelope', () => {
+      expect(unwrapBrowserosAcpUserMessage('hello')).toBe('hello')
+    })
+
+    it('handles empty input', () => {
+      expect(unwrapBrowserosAcpUserMessage('')).toBe('')
+    })
+
+    it('strips a fully wrapped message and decodes escapes', () => {
+      const wrapped = `<role>
+You are BrowserOS - a browser agent with full control of a Chromium browser through the BrowserOS MCP server.
+
+Use the BrowserOS MCP server for all browser tasks, including browsing the web, interacting with pages, inspecting browser state, and managing tabs, windows, bookmarks, and history.
+</role>
+
+<user_request>
+## Browser Context
+**Active Tab:** Tab 1 (Page ID: 101) - "Example" (https://example.com)
+
+---
+
+<USER_QUERY>
+look at &lt;example&gt;
+</USER_QUERY>
+</user_request>`
+      expect(unwrapBrowserosAcpUserMessage(wrapped)).toBe('look at <example>')
+    })
+
+    it('strips the inner envelope when only the inner wrapper is present', () => {
+      const innerOnly = `## Browser Context
+**Active Tab:** Tab 1
+
+---
+
+<USER_QUERY>
+just inner
+</USER_QUERY>`
+      expect(unwrapBrowserosAcpUserMessage(innerOnly)).toBe('just inner')
+    })
+
+    it('strips the outer envelope when only the outer wrapper is present', () => {
+      const outerOnly = `<role>
+You are BrowserOS - a browser agent with full control of a Chromium browser through the BrowserOS MCP server.
+
+Use the BrowserOS MCP server for all browser tasks, including browsing the web, interacting with pages, inspecting browser state, and managing tabs, windows, bookmarks, and history.
+</role>
+
+<user_request>
+just outer
+</user_request>`
+      expect(unwrapBrowserosAcpUserMessage(outerOnly)).toBe('just outer')
+    })
+
+    it('removes a selected_text block with attribute string', () => {
+      const wrapped = `<role>
+You are BrowserOS - a browser agent with full control of a Chromium browser through the BrowserOS MCP server.
+
+Use the BrowserOS MCP server for all browser tasks, including browsing the web, interacting with pages, inspecting browser state, and managing tabs, windows, bookmarks, and history.
+</role>
+
+<user_request>
+<selected_text (from "Title" — https://example.com)>
+selection body
+</selected_text>
+
+<USER_QUERY>
+question with selection
+</USER_QUERY>
+</user_request>`
+      expect(unwrapBrowserosAcpUserMessage(wrapped)).toBe(
+        'question with selection',
+      )
+    })
+
+    it('is idempotent — applying twice equals applying once', () => {
+      const wrapped = `<role>
+You are BrowserOS - a browser agent with full control of a Chromium browser through the BrowserOS MCP server.
+
+Use the BrowserOS MCP server for all browser tasks, including browsing the web, interacting with pages, inspecting browser state, and managing tabs, windows, bookmarks, and history.
+</role>
+
+<user_request>
+## Browser Context
+ctx
+
+---
+
+<USER_QUERY>
+hello
+</USER_QUERY>
+</user_request>`
+      const once = unwrapBrowserosAcpUserMessage(wrapped)
+      const twice = unwrapBrowserosAcpUserMessage(once)
+      expect(twice).toBe(once)
+      expect(twice).toBe('hello')
+    })
+
+    it('round-trips formatUserMessage output back to the user typed text', () => {
+      const userText = 'fix the OAuth redirect after login'
+      const formatted = formatUserMessage(userText, {
+        activeTab: {
+          id: 1,
+          url: 'https://example.com',
+          title: 'Example',
+        },
+      })
+      // Mirror what acpx-runtime.ts's buildBrowserosAcpPrompt does on
+      // the wire: wrap with <role>…</role> + <user_request>…</user_request>.
+      // Constants are duplicated here so the test pins the exact
+      // serialised shape rather than the helper that produces it.
+      const ROLE = `<role>
+You are BrowserOS - a browser agent with full control of a Chromium browser through the BrowserOS MCP server.
+
+Use the BrowserOS MCP server for all browser tasks, including browsing the web, interacting with pages, inspecting browser state, and managing tabs, windows, bookmarks, and history.
+</role>`
+      const wrapped = `${ROLE}
+
+<user_request>
+${formatted}
+</user_request>`
+      expect(unwrapBrowserosAcpUserMessage(wrapped)).toBe(userText)
+    })
+
+    it('preserves user-typed angle-brackets via the entity decode', () => {
+      // Server escapes `<` `>` `&` inside the user text via
+      // `escapePromptTagText` to keep the wire serialisation
+      // parseable. The unwrap reverses those escapes.
+      const wrapped = `<role>
+You are BrowserOS - a browser agent with full control of a Chromium browser through the BrowserOS MCP server.
+
+Use the BrowserOS MCP server for all browser tasks, including browsing the web, interacting with pages, inspecting browser state, and managing tabs, windows, bookmarks, and history.
+</role>
+
+<user_request>
+<USER_QUERY>
+the user typed &lt;USER_QUERY&gt;foo&lt;/USER_QUERY&gt; literally
+</USER_QUERY>
+</user_request>`
+      expect(unwrapBrowserosAcpUserMessage(wrapped)).toBe(
+        'the user typed <USER_QUERY>foo</USER_QUERY> literally',
+      )
+    })
   })
 
   it('continues the turn when runtime config control is unavailable', async () => {
