@@ -11,6 +11,7 @@ import type {
   AgentAdapterHealth,
   AgentRowData,
 } from './agent-row/agent-row.types'
+import { compareAgentsByPinThenRecency } from './agents-list-order'
 import type { AgentListItem } from './agents-page-types'
 import type { AgentLiveness } from './LivenessDot'
 
@@ -56,31 +57,18 @@ export const AgentList: FC<AgentListProps> = ({
     return map
   }, [adapters])
 
-  // Sort: pinned rows first, then most recently used, then never-used
-  // agents in id-stable order. The gateway's `main` agent stays
-  // pinned-to-top when never touched so a fresh install has an
-  // obvious starting point.
   const ordered = useMemo(() => {
     const withMeta = agents.map((agent) => {
       const harness = harnessAgentLookup?.get(agent.agentId)
       return {
         agent,
+        id: agent.agentId,
         pinned: harness?.pinned ?? false,
         lastUsedAt: activity?.[agent.agentId]?.lastUsedAt ?? null,
       }
     })
     return withMeta
-      .sort((a, b) => {
-        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
-        const aSeed = a.agent.agentId === 'main' && a.lastUsedAt === null
-        const bSeed = b.agent.agentId === 'main' && b.lastUsedAt === null
-        if (aSeed && !bSeed) return -1
-        if (!aSeed && bSeed) return 1
-        const aValue = a.lastUsedAt ?? -Infinity
-        const bValue = b.lastUsedAt ?? -Infinity
-        if (aValue !== bValue) return bValue - aValue
-        return a.agent.agentId.localeCompare(b.agent.agentId)
-      })
+      .sort(compareAgentsByPinThenRecency)
       .map((entry) => entry.agent)
   }, [activity, agents, harnessAgentLookup])
 

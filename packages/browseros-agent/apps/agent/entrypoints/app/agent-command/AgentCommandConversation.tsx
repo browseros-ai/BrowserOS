@@ -1,20 +1,23 @@
-import { ArrowLeft, Bot, Home } from 'lucide-react'
 import { type FC, useEffect, useMemo, useRef } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
-import { Button } from '@/components/ui/button'
+import type {
+  HarnessAgent,
+  HarnessAgentAdapter,
+} from '@/entrypoints/app/agents/agent-harness-types'
+import type { AgentAdapterHealth } from '@/entrypoints/app/agents/agent-row/agent-row.types'
 import {
   cancelHarnessTurn,
+  useAgentAdapters,
   useEnqueueHarnessMessage,
   useHarnessAgents,
   useRemoveHarnessQueuedMessage,
+  useUpdateHarnessAgent,
 } from '@/entrypoints/app/agents/useAgents'
-import {
-  type AgentEntry,
-  getModelDisplayName,
-} from '@/entrypoints/app/agents/useOpenClaw'
-import { cn } from '@/lib/utils'
+import type { AgentEntry } from '@/entrypoints/app/agents/useOpenClaw'
+import { AgentRail } from './AgentRail'
 import { useAgentCommandData } from './agent-command-layout'
 import { ClawChat } from './ClawChat'
+import { ConversationHeader } from './ConversationHeader'
 import { ConversationInput } from './ConversationInput'
 import {
   buildChatHistoryFromClawMessages,
@@ -24,162 +27,6 @@ import {
 import { QueuePanel } from './QueuePanel'
 import { useAgentConversation } from './useAgentConversation'
 import { useHarnessChatHistory } from './useHarnessChatHistory'
-
-function StatusBadge({ status }: { status: string }) {
-  return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card px-3 py-1 text-[11px] text-muted-foreground uppercase tracking-[0.18em]">
-      <span
-        className={cn(
-          'size-1.5 rounded-full',
-          status === 'Working on your request'
-            ? 'bg-amber-500'
-            : status === 'Ready'
-              ? 'bg-emerald-500'
-              : status === 'Offline'
-                ? 'bg-muted-foreground/50'
-                : 'bg-[var(--accent-orange)]',
-        )}
-      />
-      <span>{status}</span>
-    </div>
-  )
-}
-
-function AgentIdentity({
-  name,
-  meta,
-  className,
-}: {
-  name: string
-  meta: string
-  className?: string
-}) {
-  return (
-    <div className={cn('min-w-0', className)}>
-      <div className="truncate font-semibold text-[15px] leading-5">{name}</div>
-      <div className="truncate text-muted-foreground text-xs leading-5">
-        {meta}
-      </div>
-    </div>
-  )
-}
-
-function ConversationHeader({
-  agentName,
-  agentMeta,
-  status,
-  backLabel,
-  backTarget,
-  onGoHome,
-}: {
-  agentName: string
-  agentMeta: string
-  status: string
-  backLabel: string
-  backTarget: 'home' | 'page'
-  onGoHome: () => void
-}) {
-  const BackIcon = backTarget === 'home' ? Home : ArrowLeft
-
-  return (
-    <div className="flex h-14 items-center justify-between gap-4 border-border/50 border-b px-5">
-      <div className="flex min-w-0 items-center gap-3">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onGoHome}
-          className="size-8 rounded-xl lg:hidden"
-          title={backLabel}
-        >
-          <BackIcon className="size-4" />
-        </Button>
-        <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-          <Bot className="size-4" />
-        </div>
-        <AgentIdentity name={agentName} meta={agentMeta} />
-      </div>
-
-      <StatusBadge status={status} />
-    </div>
-  )
-}
-
-function AgentRailHeader({ onGoHome }: { onGoHome: () => void }) {
-  return (
-    <div className="hidden h-14 items-center border-border/50 border-r border-b bg-background/70 px-4 lg:flex">
-      <div className="flex min-w-0 items-center gap-3">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onGoHome}
-          className="size-8 rounded-xl"
-          title="Back to home"
-        >
-          <ArrowLeft className="size-4" />
-        </Button>
-        <div className="truncate font-semibold text-[15px] leading-5">
-          Agents
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function AgentRailList({
-  activeAgentId,
-  agents,
-  onSelectAgent,
-}: {
-  activeAgentId: string
-  agents: AgentEntry[]
-  onSelectAgent: (entry: AgentEntry) => void
-}) {
-  return (
-    <aside className="hidden min-h-0 flex-col border-border/50 border-r bg-background/70 lg:flex">
-      <div className="styled-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3">
-        {agents.map((entry) => {
-          const active = entry.agentId === activeAgentId
-          const modelName = getAgentEntryMeta(entry)
-
-          return (
-            <button
-              key={entry.agentId}
-              type="button"
-              onClick={() => onSelectAgent(entry)}
-              className={cn(
-                'w-full rounded-2xl border px-3 py-3 text-left transition-all',
-                active
-                  ? 'border-[var(--accent-orange)]/30 bg-[var(--accent-orange)]/8 shadow-sm'
-                  : 'border-transparent bg-transparent hover:border-border/60 hover:bg-card',
-              )}
-            >
-              <div className="flex items-center gap-3">
-                <div
-                  className={cn(
-                    'flex size-9 items-center justify-center rounded-xl',
-                    active
-                      ? 'bg-[var(--accent-orange)]/12 text-[var(--accent-orange)]'
-                      : 'bg-muted text-muted-foreground',
-                  )}
-                >
-                  <Bot className="size-4" />
-                </div>
-                <AgentIdentity name={entry.name} meta={modelName} />
-              </div>
-            </button>
-          )
-        })}
-      </div>
-    </aside>
-  )
-}
-
-function getAgentEntryMeta(agent: AgentEntry | undefined): string {
-  if (agent?.source === 'agent-harness') {
-    return getModelDisplayName(agent.model) ?? 'ACP agent'
-  }
-  return getModelDisplayName(agent?.model) ?? 'OpenClaw agent'
-}
 
 function AgentConversationController({
   agentId,
@@ -368,6 +215,22 @@ interface AgentCommandConversationProps {
   createAgentPath?: string
 }
 
+function inferAdapterFromEntry(
+  entry: AgentEntry | undefined,
+): HarnessAgentAdapter | 'unknown' {
+  if (!entry) return 'unknown'
+  if (entry.source === 'agent-harness') {
+    // Harness entries don't carry the adapter on AgentEntry; the rail
+    // / header read the harness record directly. This branch only runs
+    // before the harness query resolves, so 'unknown' is correct — the
+    // tile's bot fallback renders until data arrives.
+    return 'unknown'
+  }
+  // OpenClaw-only entries (no harness shadow) are deprecated in
+  // practice but the rail still tolerates them.
+  return 'openclaw'
+}
+
 export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
   variant = 'command',
   backPath = '/home',
@@ -378,60 +241,85 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const { agents } = useAgentCommandData()
+  const { harnessAgents } = useHarnessAgents()
+  const { adapters } = useAgentAdapters()
+  const updateAgent = useUpdateHarnessAgent()
+
   const shouldRedirectHome = !agentId
   const resolvedAgentId = agentId ?? ''
-  const agent = agents.find((entry) => entry.agentId === resolvedAgentId)
-  const agentName = agent?.name || resolvedAgentId || 'Agent'
-  const agentMeta = getAgentEntryMeta(agent)
+  const harnessAgent = harnessAgents.find(
+    (entry) => entry.id === resolvedAgentId,
+  )
+  const entry = agents.find((item) => item.agentId === resolvedAgentId)
+  const fallbackName = entry?.name || resolvedAgentId || 'Agent'
+  const fallbackAdapter = inferAdapterFromEntry(entry)
   const initialMessage = searchParams.get('q')
   const isPageVariant = variant === 'page'
   const backLabel = isPageVariant ? 'Back to agents' : 'Back to home'
+
+  const adapterHealth = useMemo<AgentAdapterHealth | null>(() => {
+    const adapterId = harnessAgent?.adapter
+    if (!adapterId) return null
+    const descriptor = adapters.find((item) => item.id === adapterId)
+    if (!descriptor?.health) return null
+    return {
+      healthy: descriptor.health.healthy,
+      reason: descriptor.health.reason,
+    }
+  }, [adapters, harnessAgent?.adapter])
 
   if (shouldRedirectHome) {
     return <Navigate to="/home" replace />
   }
 
-  const handleSelectAgent = (entry: AgentEntry) => {
-    navigate(`${agentPathPrefix}/${entry.agentId}`)
+  const handleSelectHarnessAgent = (target: HarnessAgent) => {
+    navigate(`${agentPathPrefix}/${target.id}`)
   }
 
-  // Every visible agent runs through the harness now, so per-agent
-  // runtime status doesn't gate chat the way OpenClaw's legacy
-  // gateway lifecycle did. Show "Ready" once the agent record is
-  // resolved from the rail, "Setup" otherwise.
-  const statusCopy = agent ? 'Ready' : 'Setup'
+  const handlePinToggle = (target: HarnessAgent | null, next: boolean) => {
+    if (!target) return
+    updateAgent.mutate({
+      agentId: target.id,
+      patch: { pinned: next },
+    })
+  }
 
   return (
     <div className="absolute inset-0 overflow-hidden bg-background md:pl-[theme(spacing.14)]">
-      <div className="mx-auto grid h-full w-full max-w-[1480px] lg:grid-cols-[288px_minmax(0,1fr)] lg:grid-rows-[3.5rem_minmax(0,1fr)]">
-        <AgentRailHeader onGoHome={() => navigate(backPath)} />
-
-        <ConversationHeader
-          agentName={agentName}
-          agentMeta={agentMeta}
-          status={statusCopy}
-          backLabel={backLabel}
-          backTarget={isPageVariant ? 'page' : 'home'}
+      <div className="mx-auto grid h-full w-full max-w-[1480px] lg:grid-cols-[288px_minmax(0,1fr)]">
+        <AgentRail
+          agents={harnessAgents}
+          adapters={adapters}
+          activeAgentId={resolvedAgentId}
+          onSelectAgent={handleSelectHarnessAgent}
+          onPinToggle={(target, next) => handlePinToggle(target, next)}
           onGoHome={() => navigate(backPath)}
         />
 
-        <AgentRailList
-          activeAgentId={resolvedAgentId}
-          agents={agents}
-          onSelectAgent={handleSelectAgent}
-        />
+        <div className="flex min-h-0 flex-col overflow-hidden">
+          <ConversationHeader
+            agent={harnessAgent ?? null}
+            fallbackName={fallbackName}
+            fallbackAdapter={fallbackAdapter}
+            adapterHealth={adapterHealth}
+            backLabel={backLabel}
+            backTarget={isPageVariant ? 'page' : 'home'}
+            onGoHome={() => navigate(backPath)}
+            onPinToggle={(next) => handlePinToggle(harnessAgent ?? null, next)}
+          />
 
-        <AgentConversationController
-          key={resolvedAgentId}
-          agentId={resolvedAgentId}
-          agents={agents}
-          initialMessage={initialMessage}
-          onInitialMessageConsumed={() =>
-            setSearchParams({}, { replace: true })
-          }
-          agentPathPrefix={agentPathPrefix}
-          createAgentPath={createAgentPath}
-        />
+          <AgentConversationController
+            key={resolvedAgentId}
+            agentId={resolvedAgentId}
+            agents={agents}
+            initialMessage={initialMessage}
+            onInitialMessageConsumed={() =>
+              setSearchParams({}, { replace: true })
+            }
+            agentPathPrefix={agentPathPrefix}
+            createAgentPath={createAgentPath}
+          />
+        </div>
       </div>
     </div>
   )
