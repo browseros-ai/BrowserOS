@@ -60,7 +60,7 @@ export const ConversationHeader: FC<ConversationHeaderProps> = ({
   }
 
   return (
-    <div className="flex shrink-0 items-start justify-between gap-4 border-border/50 border-b px-5 py-3">
+    <div className="flex shrink-0 items-start justify-between gap-4 px-5 py-3">
       <div className="flex min-w-0 items-start gap-3">
         <Button
           variant="ghost"

@@ -1,5 +1,7 @@
+import { ArrowLeft } from 'lucide-react'
 import { type FC, useEffect, useMemo, useRef } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
+import { Button } from '@/components/ui/button'
 import type {
   HarnessAgent,
   HarnessAgentAdapter,
@@ -286,39 +288,64 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
 
   return (
     <div className="absolute inset-0 overflow-hidden bg-background md:pl-[theme(spacing.14)]">
-      <div className="mx-auto grid h-full w-full max-w-[1480px] grid-rows-[minmax(0,1fr)] lg:grid-cols-[288px_minmax(0,1fr)]">
-        <AgentRail
-          agents={harnessAgents}
-          adapters={adapters}
-          activeAgentId={resolvedAgentId}
-          onSelectAgent={handleSelectHarnessAgent}
-          onPinToggle={(target, next) => handlePinToggle(target, next)}
-          onGoHome={() => navigate(backPath)}
-        />
+      <div className="mx-auto flex h-full w-full max-w-[1480px] flex-col">
+        {/* Shared top band — the rail's "Agents" header and the chat
+            header live on one row so they're aligned by construction. */}
+        <div className="flex shrink-0 items-stretch border-border/50 border-b">
+          <div className="hidden w-[288px] shrink-0 items-center gap-3 border-border/50 border-r px-4 lg:flex">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate(backPath)}
+              className="size-8 rounded-xl"
+              title="Back to home"
+            >
+              <ArrowLeft className="size-4" />
+            </Button>
+            <div className="truncate font-semibold text-[15px] leading-5">
+              Agents
+            </div>
+          </div>
+          <div className="min-w-0 flex-1">
+            <ConversationHeader
+              agent={harnessAgent ?? null}
+              fallbackName={fallbackName}
+              fallbackAdapter={fallbackAdapter}
+              adapterHealth={adapterHealth}
+              backLabel={backLabel}
+              backTarget={isPageVariant ? 'page' : 'home'}
+              onGoHome={() => navigate(backPath)}
+              onPinToggle={(next) =>
+                handlePinToggle(harnessAgent ?? null, next)
+              }
+            />
+          </div>
+        </div>
 
-        <div className="flex h-full min-h-0 flex-col overflow-hidden">
-          <ConversationHeader
-            agent={harnessAgent ?? null}
-            fallbackName={fallbackName}
-            fallbackAdapter={fallbackAdapter}
-            adapterHealth={adapterHealth}
-            backLabel={backLabel}
-            backTarget={isPageVariant ? 'page' : 'home'}
-            onGoHome={() => navigate(backPath)}
-            onPinToggle={(next) => handlePinToggle(harnessAgent ?? null, next)}
+        {/* Body grid: rail list + chat. Both columns share the same
+            top edge (the band above) so headers can never drift. */}
+        <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] lg:grid-cols-[288px_minmax(0,1fr)]">
+          <AgentRail
+            agents={harnessAgents}
+            adapters={adapters}
+            activeAgentId={resolvedAgentId}
+            onSelectAgent={handleSelectHarnessAgent}
+            onPinToggle={(target, next) => handlePinToggle(target, next)}
           />
 
-          <AgentConversationController
-            key={resolvedAgentId}
-            agentId={resolvedAgentId}
-            agents={agents}
-            initialMessage={initialMessage}
-            onInitialMessageConsumed={() =>
-              setSearchParams({}, { replace: true })
-            }
-            agentPathPrefix={agentPathPrefix}
-            createAgentPath={createAgentPath}
-          />
+          <div className="flex h-full min-h-0 flex-col overflow-hidden">
+            <AgentConversationController
+              key={resolvedAgentId}
+              agentId={resolvedAgentId}
+              agents={agents}
+              initialMessage={initialMessage}
+              onInitialMessageConsumed={() =>
+                setSearchParams({}, { replace: true })
+              }
+              agentPathPrefix={agentPathPrefix}
+              createAgentPath={createAgentPath}
+            />
+          </div>
         </div>
       </div>
     </div>
