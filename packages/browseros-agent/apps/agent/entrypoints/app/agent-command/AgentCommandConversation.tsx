@@ -136,7 +136,7 @@ function AgentConversationController({
   }
 
   return (
-    <div className="flex min-h-0 flex-col overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <ClawChat
         agentName={agentName}
         historyMessages={historyMessages}
@@ -296,7 +296,7 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
           onGoHome={() => navigate(backPath)}
         />
 
-        <div className="flex min-h-0 flex-col overflow-hidden">
+        <div className="flex h-full min-h-0 flex-col overflow-hidden">
           <ConversationHeader
             agent={harnessAgent ?? null}
             fallbackName={fallbackName}
