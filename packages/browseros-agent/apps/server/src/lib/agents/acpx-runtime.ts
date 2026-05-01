@@ -588,11 +588,18 @@ export function unwrapBrowserosAcpUserMessage(raw: string): string {
   if (!raw) return raw
   let text = raw
 
+  // Order matters: the outer envelope is added AFTER
+  // `escapePromptTagText` runs over the inner formatUserMessage
+  // payload (see buildBrowserosAcpPrompt). So once the outer
+  // <role>…</role>+<user_request>…</user_request> tags are stripped,
+  // the inner content is still entity-escaped (`&lt;USER_QUERY&gt;`
+  // not `<USER_QUERY>`). We decode entities BEFORE the inner-envelope
+  // strips so their anchors actually match.
   text = stripOuterRoleEnvelope(text)
+  text = decodeBasicEntities(text)
   text = stripBrowserContextHeader(text)
   text = stripSelectedTextBlock(text)
   text = unwrapUserQuery(text)
-  text = decodeBasicEntities(text)
 
   return text.trim()
 }
