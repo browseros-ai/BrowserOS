@@ -306,13 +306,19 @@ export const NewTab = () => {
       const selectedItem = flatItems[highlightedIndex]
       runSelectedAction(selectedItem)
     } else {
-      executeDefaultAction()
+      // FIX: Only execute default action if inputValue has content
+      if (inputValue && inputValue.trim() !== '') {
+        executeDefaultAction()
+      }
     }
   }
 
   const executeDefaultAction = () => {
     const selectedItem = flatItems[0]
-    runSelectedAction(selectedItem)
+    // FIX: Only run action if selectedItem exists
+    if (selectedItem) {
+      runSelectedAction(selectedItem)
+    }
   }
 
   const startInlineChat = (
@@ -320,6 +326,12 @@ export const NewTab = () => {
     chatMode: 'chat' | 'agent',
     aiTab?: { name: string; description: string },
   ) => {
+    // FIX: Validate message is not null/undefined/empty
+    if (!message || message.trim() === '') {
+      console.warn('startInlineChat: message is empty, using default')
+      message = 'Help'
+    }
+    
     track(NEWTAB_CHAT_STARTED_EVENT, {
       mode: chatMode,
       tabs_count: selectedTabs.length,
@@ -329,7 +341,8 @@ export const NewTab = () => {
       .filter((id): id is number => id !== undefined)
     reset()
     setSelectedTabs([])
-    const params = new URLSearchParams({ q: message, mode: chatMode })
+    // FIX: Ensure message is a valid string for URLSearchParams
+    const params = new URLSearchParams({ q: String(message), mode: chatMode })
     if (tabIds.length > 0) {
       params.set('tabs', tabIds.join(','))
     }
@@ -386,6 +399,11 @@ export const NewTab = () => {
           mode: item.mode,
           tabs_count: selectedTabs.length,
         })
+        // FIX: Validate item.message before using it
+        if (!item.message) {
+          console.warn('runSelectedAction: browseros item has no message')
+          return
+        }
         if (supportsInlineChat) {
           startInlineChat(item.message, item.mode)
         } else {
