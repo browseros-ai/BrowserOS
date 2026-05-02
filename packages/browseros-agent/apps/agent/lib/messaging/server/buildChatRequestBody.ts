@@ -38,6 +38,7 @@ interface ChatRequestBodyParams {
   provider: LlmProviderConfig
   message?: string
   mode?: ChatMode
+  origin?: 'sidepanel' | 'newtab'
   browserContext?: ChatRequestBrowserContext
   userSystemPrompt?: string
   userWorkingDir?: string
@@ -69,6 +70,7 @@ export const buildChatRequestBody = ({
   provider,
   message = '',
   mode,
+  origin,
   browserContext,
   userSystemPrompt,
   userWorkingDir,
@@ -91,6 +93,7 @@ export const buildChatRequestBody = ({
   conversationId,
   model: provider.modelId ?? 'default',
   mode,
+  origin,
   contextWindowSize: provider.contextWindow,
   temperature: provider.temperature,
   resourceName: provider.resourceName,

@@ -293,6 +293,159 @@ describe('ChatService scheduled task hidden page lifecycle', () => {
   })
 })
 
+describe('ChatService page context prompt injection', () => {
+  it('adds the active tab markdown to the transient sidepanel prompt only', async () => {
+    const fakeAgent = createFakeAgent()
+    agentToReturn = fakeAgent
+    let lastPromptUiMessages: MockMessage[] | undefined
+    streamResponseHandler = async ({ onFinish, uiMessages }) => {
+      lastPromptUiMessages = uiMessages
+      await onFinish({ messages: uiMessages ?? [] })
+      return new Response('ok')
+    }
+
+    const browser = {
+      resolveTabIds: mock(
+        async (tabIds: number[]) =>
+          new Map(tabIds.map((tabId) => [tabId, tabId + 100])),
+      ),
+      contentAsMarkdown: mock(async () => '# Example\nVisible page text'),
+      closePage: mock(async () => {}),
+    }
+    const service = new ChatService({
+      sessionStore: createSessionStore() as never,
+      klavisRef: { handle: null },
+      browser: browser as never,
+      registry: {} as never,
+    })
+
+    await service.processMessage(
+      {
+        conversationId: crypto.randomUUID(),
+        message: 'What is on this page?',
+        isScheduledTask: false,
+        mode: 'agent',
+        origin: 'sidepanel',
+        browserContext: {
+          activeTab: {
+            id: 3,
+            url: 'https://example.com/article',
+            title: 'Example Article',
+          },
+        },
+      } as never,
+      new AbortController().signal,
+    )
+
+    expect(browser.contentAsMarkdown).toHaveBeenCalledWith(103, {
+      includeLinks: true,
+      includeImages: false,
+    })
+    const promptMessage = lastPromptUiMessages?.at(-1)?.parts[0]?.text ?? ''
+    expect(promptMessage).toContain('<current_page_context>')
+    expect(promptMessage).toContain(
+      '<page_content page_id="103" title="Example Article" url="https://example.com/article">',
+    )
+    expect(promptMessage).toContain('# Example\nVisible page text')
+    expect(promptMessage).toContain('<USER_QUERY>\nWhat is on this page?')
+    expect(fakeAgent.messages.at(-1)?.parts[0]?.text).toBe(
+      'What is on this page?',
+    )
+  })
+
+  it('does not inject the active tab page body for newtab-origin chat', async () => {
+    const fakeAgent = createFakeAgent()
+    agentToReturn = fakeAgent
+    let lastPromptUiMessages: MockMessage[] | undefined
+    streamResponseHandler = async ({ onFinish, uiMessages }) => {
+      lastPromptUiMessages = uiMessages
+      await onFinish({ messages: uiMessages ?? [] })
+      return new Response('ok')
+    }
+
+    const browser = {
+      resolveTabIds: mock(
+        async (tabIds: number[]) =>
+          new Map(tabIds.map((tabId) => [tabId, tabId + 200])),
+      ),
+      contentAsMarkdown: mock(async () => 'This should not be read'),
+      closePage: mock(async () => {}),
+    }
+    const service = new ChatService({
+      sessionStore: createSessionStore() as never,
+      klavisRef: { handle: null },
+      browser: browser as never,
+      registry: {} as never,
+    })
+
+    await service.processMessage(
+      {
+        conversationId: crypto.randomUUID(),
+        message: 'Summarize my current tab',
+        isScheduledTask: false,
+        mode: 'agent',
+        origin: 'newtab',
+        browserContext: {
+          activeTab: {
+            id: 5,
+            url: 'https://example.com/private',
+            title: 'Private Tab',
+          },
+        },
+      } as never,
+      new AbortController().signal,
+    )
+
+    expect(browser.contentAsMarkdown).not.toHaveBeenCalled()
+    const promptMessage = lastPromptUiMessages?.at(-1)?.parts[0]?.text ?? ''
+    expect(promptMessage).not.toContain('<current_page_context>')
+    expect(promptMessage).toContain('<USER_QUERY>\nSummarize my current tab')
+  })
+
+  it('skips page body injection for scheduled tasks', async () => {
+    const fakeAgent = createFakeAgent()
+    agentToReturn = fakeAgent
+    streamResponseHandler = async ({ onFinish, uiMessages }) => {
+      await onFinish({ messages: uiMessages ?? [] })
+      return new Response('ok')
+    }
+
+    const browser = {
+      newPage: mock(async () => 91),
+      listPages: mock(async () => [{ pageId: 91, windowId: 12 }]),
+      closePage: mock(async () => {}),
+      resolveTabIds: mock(async () => new Map<number, number>()),
+      contentAsMarkdown: mock(async () => 'Scheduled page body'),
+    }
+    const service = new ChatService({
+      sessionStore: createSessionStore() as never,
+      klavisRef: { handle: null },
+      browser: browser as never,
+      registry: {} as never,
+    })
+
+    await service.processMessage(
+      {
+        conversationId: crypto.randomUUID(),
+        message: 'Run later',
+        isScheduledTask: true,
+        mode: 'agent',
+        origin: 'sidepanel',
+        browserContext: {
+          activeTab: {
+            id: 3,
+            url: 'https://example.com',
+            title: 'Example',
+          },
+        },
+      } as never,
+      new AbortController().signal,
+    )
+
+    expect(browser.contentAsMarkdown).not.toHaveBeenCalled()
+  })
+})
+
 describe('ChatService Klavis session rebuilds', () => {
   it('rebuilds a managed-app session when the shared Klavis handle appears', async () => {
     const firstAgent = createFakeAgent()
@@ -311,6 +464,7 @@ describe('ChatService Klavis session rebuilds', () => {
         async (tabIds: number[]) =>
           new Map(tabIds.map((tabId) => [tabId, tabId + 100])),
       ),
+      contentAsMarkdown: mock(async () => ''),
       closePage: mock(async () => {}),
     }
     const sessionStore = createSessionStore()
@@ -385,6 +539,7 @@ describe('ChatService Klavis session rebuilds', () => {
         async (tabIds: number[]) =>
           new Map(tabIds.map((tabId) => [tabId, tabId + 200])),
       ),
+      contentAsMarkdown: mock(async () => ''),
       closePage: mock(async () => {}),
     }
     const sessionStore = createSessionStore()

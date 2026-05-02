@@ -4,9 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { CONTENT_LIMITS } from '@browseros/shared/constants/limits'
 import { createAgentUIStreamResponse, type UIMessage } from 'ai'
 import { AiSdkAgent } from '../../agent/ai-sdk-agent'
-import { formatUserMessage } from '../../agent/format-message'
+import {
+  formatUserMessage,
+  type PageContextContent,
+} from '../../agent/format-message'
 import {
   filterValidMessages,
   sanitizeMessagesForToolset,
@@ -299,11 +303,17 @@ export class ChatService {
     const resolvedMessageContext = request.isScheduledTask
       ? messageContext
       : await resolveBrowserContextPageIds(this.deps.browser, messageContext)
+    const pageContext = await this.resolvePageContext({
+      browserContext: resolvedMessageContext,
+      origin: request.origin,
+      isScheduledTask: request.isScheduledTask,
+    })
     const userContent = formatUserMessage(
       request.message,
       resolvedMessageContext,
       request.selectedText,
       request.selectedTextSource,
+      pageContext,
     )
 
     // Prepend tool-change context when session was rebuilt mid-conversation
@@ -492,5 +502,69 @@ export class ChatService {
           : 'klavis:pending'
         : null
     return [klavisState, ...managed, ...custom].filter(Boolean).join(',')
+  }
+
+  private async resolvePageContext(input: {
+    browserContext?: BrowserContext
+    origin?: 'sidepanel' | 'newtab'
+    isScheduledTask?: boolean
+  }): Promise<PageContextContent[] | undefined> {
+    if (input.isScheduledTask) return undefined
+
+    const tabs = this.getPageContextTabs(input.browserContext, input.origin)
+    if (tabs.length === 0) return undefined
+
+    const maxChars = CONTENT_LIMITS.BODY_CONTEXT_SIZE
+    const perPageLimit = Math.max(1000, Math.floor(maxChars / tabs.length))
+    const pageContexts: PageContextContent[] = []
+
+    for (const tab of tabs) {
+      if (tab.pageId === undefined) continue
+      try {
+        const content = await this.deps.browser.contentAsMarkdown(tab.pageId, {
+          includeLinks: true,
+          includeImages: false,
+        })
+        const trimmed = content.trim()
+        if (!trimmed) continue
+        pageContexts.push({
+          pageId: tab.pageId,
+          url: tab.url,
+          title: tab.title,
+          content: trimmed.slice(0, perPageLimit),
+          truncated: trimmed.length > perPageLimit,
+        })
+      } catch (error) {
+        logger.warn('Failed to read page context for side chat', {
+          pageId: tab.pageId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+
+    return pageContexts.length > 0 ? pageContexts : undefined
+  }
+
+  private getPageContextTabs(
+    browserContext?: BrowserContext,
+    origin?: 'sidepanel' | 'newtab',
+  ): Array<NonNullable<BrowserContext['activeTab']>> {
+    const tabs: Array<NonNullable<BrowserContext['activeTab']>> = []
+    const seenPageIds = new Set<number>()
+    const addTab = (tab?: NonNullable<BrowserContext['activeTab']>) => {
+      if (!tab?.pageId || seenPageIds.has(tab.pageId)) return
+      seenPageIds.add(tab.pageId)
+      tabs.push(tab)
+    }
+
+    if (origin !== 'newtab') {
+      addTab(browserContext?.activeTab)
+    }
+
+    for (const tab of browserContext?.selectedTabs ?? []) {
+      addTab(tab)
+    }
+
+    return tabs
   }
 }

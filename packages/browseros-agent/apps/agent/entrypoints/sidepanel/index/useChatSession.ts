@@ -395,6 +395,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         const commonRequest = {
           conversationId: conversationIdRef.current,
           mode: currentMode,
+          origin: options?.origin ?? 'sidepanel',
           browserContext: requestBrowserContext,
           userSystemPrompt,
           userWorkingDir: workingDirRef.current,

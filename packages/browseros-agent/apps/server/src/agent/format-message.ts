@@ -41,9 +41,43 @@ export function formatBrowserContext(browserContext?: BrowserContext): string {
 /** Strip XML-like tags that match our prompt delimiters to prevent injection. */
 function sanitizeForPrompt(s: string): string {
   return s.replace(
-    /<\/?(?:selected_text|USER_QUERY|page_context|AGENT_PROMPT|soul|memory_and_identity|security|workspace)[^>]*>/gi,
+    /<\/?(?:selected_text|current_page_context|page_content|USER_QUERY|page_context|AGENT_PROMPT|soul|memory_and_identity|security|workspace)[^>]*>/gi,
     '',
   )
+}
+
+export interface PageContextContent {
+  pageId: number
+  url?: string
+  title?: string
+  content: string
+  truncated?: boolean
+}
+
+function formatPageContextBlock(pages?: PageContextContent[]): string {
+  if (!pages?.length) return ''
+
+  const blocks = pages
+    .filter((page) => page.content.trim())
+    .map((page) => {
+      const title = page.title
+        ? sanitizeForPrompt(page.title).replace(/"/g, "'")
+        : ''
+      const url = page.url ? sanitizeForPrompt(page.url) : ''
+      const attrs = [
+        `page_id="${page.pageId}"`,
+        title ? `title="${title}"` : '',
+        url ? `url="${url}"` : '',
+        page.truncated ? 'truncated="true"' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')
+
+      return `<page_content ${attrs}>\n${sanitizeForPrompt(page.content)}\n</page_content>`
+    })
+
+  if (blocks.length === 0) return ''
+  return `<current_page_context>\n${blocks.join('\n\n')}\n</current_page_context>\n\n`
 }
 
 export function formatUserMessage(
@@ -51,8 +85,10 @@ export function formatUserMessage(
   browserContext?: BrowserContext,
   selectedText?: string,
   selectedTextSource?: { url: string; title: string },
+  pageContext?: PageContextContent[],
 ): string {
   const contextPrefix = formatBrowserContext(browserContext)
+  const pageContextBlock = formatPageContextBlock(pageContext)
 
   let selectedTextBlock = ''
   if (selectedText) {
@@ -67,5 +103,5 @@ export function formatUserMessage(
     selectedTextBlock = `<selected_text${source}>\n${sanitizedText}\n</selected_text>\n\n`
   }
 
-  return `${contextPrefix}${selectedTextBlock}<USER_QUERY>\n${message}\n</USER_QUERY>`
+  return `${contextPrefix}${pageContextBlock}${selectedTextBlock}<USER_QUERY>\n${message}\n</USER_QUERY>`
 }
