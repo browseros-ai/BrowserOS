@@ -1,205 +1,377 @@
-<div align="center">
-<img width="693" height="379" alt="github-banner" src="https://github.com/user-attachments/assets/1e37941c-4dbc-4662-9c8c-3bbe9971301d" />
+# Shimmy-Browser
 
-<br></br>
-[![Discord](https://img.shields.io/badge/Discord-Join%20us-blue)](https://discord.gg/YKwjt5vuKr)
-[![Slack](https://img.shields.io/badge/Slack-Join%20us-4A154B?logo=slack&logoColor=white)](https://dub.sh/browserOS-slack)
-[![Twitter](https://img.shields.io/twitter/follow/browserOS_ai?style=social)](https://twitter.com/browseros_ai)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
-[![Docs](https://img.shields.io/badge/Docs-docs.browseros.com-blue)](https://docs.browseros.com)
-<br></br>
-<a href="https://files.browseros.com/download/BrowserOS.dmg">
-  <img src="https://img.shields.io/badge/Download-macOS-black?style=flat&logo=apple&logoColor=white" alt="Download for macOS (beta)" />
-</a>
-<a href="https://files.browseros.com/download/BrowserOS_installer.exe">
-  <img src="https://img.shields.io/badge/Download-Windows-0078D4?style=flat&logo=windows&logoColor=white" alt="Download for Windows (beta)" />
-</a>
-<a href="https://files.browseros.com/download/BrowserOS.AppImage">
-  <img src="https://img.shields.io/badge/Download-Linux-FCC624?style=flat&logo=linux&logoColor=black" alt="Download for Linux (beta)" />
-</a>
-<a href="https://cdn.browseros.com/download/BrowserOS.deb">
-  <img src="https://img.shields.io/badge/Download-Debian-D70A53?style=flat&logo=debian&logoColor=white" alt="Download Debian package" />
-</a>
-<br />
-</div>
+**Shimmy-Browser** is a development fork of [BrowserOS](https://github.com/browseros-ai/BrowserOS) — an open-source Chromium-based browser that runs AI agents locally and connects them to the web through the **Chrome DevTools Protocol (CDP)**. This repository contains:
 
-BrowserOS is an open-source Chromium fork that runs AI agents natively. **The privacy-first alternative to ChatGPT Atlas, Perplexity Comet, and Dia.**
+1. **`packages/browseros`** — the **BrowserOS browser**: Chromium patches, Python build orchestration, packaging, and signing.
+2. **`packages/browseros-agent`** — the **agent platform**: Bun server (MCP + agent loop), WXT/React extension UI, shared packages, eval harness, and CLI tooling.
+3. **`packages/browseros-agent/vendor/sup-agent`** — the **Sup-agent** Git submodule: upstream skill definitions and related assets consumed by this fork (see [Sup-agent submodule](#sup-agent-submodule)).
 
-Use your own API keys or run local models with Ollama. Your data never leaves your machine.
+This README is written for contributors and advanced users who want a **single map of the whole repo**: how pieces talk to each other, how to run the stack locally, how the browser is built, and how Sup-agent fits in.
 
-> **[Documentation](https://docs.browseros.com)** · **[Discord](https://discord.gg/YKwjt5vuKr)** · **[Slack](https://dub.sh/browserOS-slack)** · **[Twitter](https://x.com/browserOS_ai)** · **[Feature Requests](https://github.com/browseros-ai/BrowserOS/issues/99)**
+---
 
-## Quick Start
+## Table of contents
 
-1. **Download and install** BrowserOS — [macOS](https://files.browseros.com/download/BrowserOS.dmg) · [Windows](https://files.browseros.com/download/BrowserOS_installer.exe) · [Linux (AppImage)](https://files.browseros.com/download/BrowserOS.AppImage) · [Linux (Debian)](https://cdn.browseros.com/download/BrowserOS.deb)
-2. **Import your Chrome data** (optional) — bookmarks, passwords, extensions all carry over
-3. **Connect your AI provider** — Claude, OpenAI, Gemini, ChatGPT Pro via OAuth, or local models via Ollama/LM Studio
+- [What you are running in practice](#what-you-are-running-in-practice)
+- [High-level architecture](#high-level-architecture)
+- [Repository layout](#repository-layout)
+- [Prerequisites](#prerequisites)
+- [Quick start (full agent stack)](#quick-start-full-agent-stack)
+- [Agent platform (`packages/browseros-agent`)](#agent-platform-packagesbrowseros-agent)
+  - [Apps and packages](#apps-and-packages)
+  - [Ports and environment variables](#ports-and-environment-variables)
+  - [Development workflows](#development-workflows)
+  - [Useful scripts](#useful-scripts)
+- [Browser (`packages/browseros`)](#browser-packagesbrowseros)
+- [Sup-agent submodule](#sup-agent-submodule)
+- [Documentation in this repo](#documentation-in-this-repo)
+- [Quality checks (Biome, Lefthook)](#quality-checks-biome-lefthook)
+- [Git: fork, upstream, and submodules](#git-fork-upstream-and-submodules)
+- [Troubleshooting](#troubleshooting)
+- [License and credits](#license-and-credits)
 
-## Features
+---
 
-| Feature | Description | Docs |
-|---------|-------------|------|
-| **AI Agent** | 53+ browser automation tools — navigate, click, type, extract data, all with natural language | [Guide](https://docs.browseros.com/getting-started) |
-| **MCP Server** | Control the browser from Claude Code, Gemini CLI, or any MCP client | [Setup](https://docs.browseros.com/features/use-with-claude-code) |
-| **Workflows** | Build repeatable browser automations with a visual graph builder | [Docs](https://docs.browseros.com/features/workflows) |
-| **Cowork** | Combine browser automation with local file operations — research the web, save reports to your folder | [Docs](https://docs.browseros.com/features/cowork) |
-| **Scheduled Tasks** | Run agents on autopilot — daily, hourly, or every few minutes | [Docs](https://docs.browseros.com/features/scheduled-tasks) |
-| **Memory** | Persistent memory across conversations — your assistant remembers context over time | [Docs](https://docs.browseros.com/features/memory) |
-| **SOUL.md** | Define your AI's personality and instructions in a single markdown file | [Docs](https://docs.browseros.com/features/soul-md) |
-| **LLM Hub** | Compare Claude, ChatGPT, and Gemini responses side-by-side on any page | [Docs](https://docs.browseros.com/features/llm-chat-hub) |
-| **40+ App Integrations** | Gmail, Slack, GitHub, Linear, Notion, Figma, Salesforce, and more via MCP | [Docs](https://docs.browseros.com/features/connect-apps) |
-| **Vertical Tabs** | Side-panel tab management — stay organized even with 100+ tabs open | [Docs](https://docs.browseros.com/features/vertical-tabs) |
-| **Ad Blocking** | uBlock Origin + Manifest V2 support — [10x more protection](https://docs.browseros.com/features/ad-blocking) than Chrome | [Docs](https://docs.browseros.com/features/ad-blocking) |
-| **Cloud Sync** | Sync browser config and agent history across devices | [Docs](https://docs.browseros.com/features/sync) |
-| **Skills** | Custom instruction sets that shape how your AI assistant behaves | [Docs](https://docs.browseros.com/features/skills) |
-| **Smart Nudges** | Contextual suggestions to connect apps and use features at the right moment | [Docs](https://docs.browseros.com/features/smart-nudges) |
+## What you are running in practice
 
-## Demos
+For **local development**, you typically run three cooperating pieces:
 
-### BrowserOS agent in action
-[![BrowserOS agent in action](docs/videos/browserOS-agent-in-action.gif)](https://www.youtube.com/watch?v=SoSFev5R5dI)
-<br/><br/>
+| Piece | Role |
+|--------|------|
+| **Chromium (or Chrome)** | Launched by the agent dev tooling with **remote debugging** enabled so the **server** can attach over **CDP**. |
+| **Agent extension (WXT + Vite)** | The BrowserOS UI: app pages, side panel, background service worker, new-tab override, etc. |
+| **BrowserOS server (`apps/server`)** | A **Bun** process that exposes HTTP routes (chat, MCP, health, …), runs the **AI agent loop**, and uses CDP to drive the browser. |
 
-### Install [BrowserOS as MCP](https://docs.browseros.com/features/use-with-claude-code) and control it from `claude-code`
+The **built BrowserOS binary** (from `packages/browseros`) is what end-users install; in dev you often use a **stock Chromium** or a **downloaded BrowserOS build**, configured via `BROWSEROS_BINARY` and matching ports in `.env.development` files.
 
-https://github.com/user-attachments/assets/c725d6df-1a0d-40eb-a125-ea009bf664dc
+---
 
-<br/><br/>
+## High-level architecture
 
-### Use BrowserOS to chat
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Extension UI (WXT/React) — chat, settings, Connect Apps, …      │
+│  Talks to HTTP API (same host/port as local server in dev)       │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │ HTTP (REST, SSE, MCP transports)
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  BrowserOS Server (Bun, `apps/server`)                           │
+│  • Agent loop (LLM via AI SDK)                                  │
+│  • MCP tools (browser automation, filesystem, memory, …)          │
+│  • Optional Klavis / external MCP integrations                   │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │ CDP client
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Chromium CDP endpoint (debug port)                              │
+│  Exposed by the browser process (9912-style dev port in .env)   │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-https://github.com/user-attachments/assets/726803c5-8e36-420e-8694-c63a2607beca
+**Important:** The server **connects to** the browser’s CDP port; the browser does not call the server. If CDP is down or the port mismatch, you will see health checks failing or “connection failed” style errors in the UI.
 
-<br/><br/>
+---
 
-### Use BrowserOS to scrape data
+## Repository layout
 
-https://github.com/user-attachments/assets/9f038216-bc24-4555-abf1-af2adcb7ebc0
+```
+Shimmy-Browser/
+├── package.json                 # Root convenience: `bun run dev` → full stack script
+├── packages/
+│   ├── browseros/               # Chromium fork — patches, Python CLI, packaging
+│   │   ├── build/               # `browseros` Python CLI and modules
+│   │   ├── chromium_patches/    # Patches applied to Chromium source
+│   │   ├── chromium_files/      # New files merged into the Chromium tree
+│   │   ├── series_patches/      # Ordered patch series
+│   │   ├── resources/           # Icons, entitlements, signing assets
+│   │   ├── CHROMIUM_VERSION     # Pinned Chromium version
+│   │   └── BASE_COMMIT          # Base Chromium commit
+│   │
+│   └── browseros-agent/         # Agent monorepo (Bun workspaces)
+│       ├── apps/
+│       │   ├── agent/           # Extension: WXT, React, entrypoints
+│       │   ├── server/          # Bun server: MCP + agent loop + CDP
+│       │   ├── cli/             # Go CLI (+ npm wrapper under cli/npm)
+│       │   └── eval/            # Evaluation / benchmarking
+│       ├── packages/
+│       │   ├── agent-sdk/      # @browseros-ai/agent-sdk
+│       │   ├── cdp-protocol/   # CDP typings / codegen
+│       │   └── shared/         # Shared constants (limits, URLs, …)
+│       ├── vendor/
+│       │   └── sup-agent/      # Git submodule (see below)
+│       ├── scripts/
+│       │   └── dev/
+│       │       └── stack.ts    # One-command dev: agent + wait CDP + server
+│       ├── process-compose.yaml # Optional multi-process dev (install + server + …)
+│       └── package.json         # Workspace scripts (build, test, lint, …)
+├── docs/                        # Mintlify-style docs (includes submodule workflow)
+├── CONTRIBUTING.md              # Upstream-oriented contributor guide
+├── LICENSE                      # AGPL-3.0 (see file for exact terms)
+└── README.md                    # This file
+```
 
-<br/><br/>
+---
 
-## Install `browseros-cli`
+## Prerequisites
 
-Use `browseros-cli` to launch and control BrowserOS from the terminal or from AI coding agents like Claude Code.
+| Requirement | Notes |
+|-------------|--------|
+| **[Bun](https://bun.sh)** | The `packages/browseros-agent` workspace pins a **packageManager** version (see `packages/browseros-agent/package.json`). Install a matching Bun release. |
+| **Git** | For submodules: `git submodule update --init --recursive`. |
+| **Python 3.12+** | Only needed for **`packages/browseros`** (Chromium build CLI). |
+| **Disk / RAM (browser build)** | Chromium development: on the order of **~100 GB** disk and **16 GB+ RAM** recommended upstream. |
 
-**macOS / Linux:**
+---
+
+## Quick start (full agent stack)
+
+From the **repository root**:
 
 ```bash
-curl -fsSL https://cdn.browseros.com/cli/install.sh | bash
+cd packages/browseros-agent
+bun install
+cp apps/server/.env.example apps/server/.env.development
+cp apps/agent/.env.example apps/agent/.env.development
+# Edit BOTH files so BROWSEROS_SERVER_PORT, BROWSEROS_CDP_PORT (and Vite URL/port) agree.
 ```
 
-**Windows:**
+Then either:
+
+**Option A — recommended for this fork (single terminal)**
+
+```bash
+# From repo root
+bun run dev
+```
+
+This runs `packages/browseros-agent/scripts/dev/stack.ts`, which:
+
+1. Loads `packages/browseros-agent/apps/agent/.env.development`.
+2. Starts **`bun run --filter @browseros/agent dev`** (WXT dev server + Chromium with the extension).
+3. Waits until **CDP** responds on `http://127.0.0.1:<BROWSEROS_CDP_PORT>/json/version`.
+4. Starts **`bun run --filter @browseros/server start`**.
+
+Press **Ctrl+C** to stop both processes.
+
+**Option B — from `packages/browseros-agent` only**
+
+```bash
+cd packages/browseros-agent
+bun run dev
+```
+
+(`dev`, `start`, and `dev:stack` in that `package.json` point at the same stack script.)
+
+**VS Code:** Run the task **“Dev: full stack (agent + browser + server)”** (`.vscode/tasks.json`) which executes `bun run dev` at the workspace root.
+
+---
+
+## Agent platform (`packages/browseros-agent`)
+
+The agent monorepo follows upstream BrowserOS structure. Official package READMEs with extra detail:
+
+- [`packages/browseros-agent/README.md`](packages/browseros-agent/README.md)
+- [`packages/browseros-agent/apps/server/README.md`](packages/browseros-agent/apps/server/README.md)
+- [`packages/browseros-agent/apps/agent/README.md`](packages/browseros-agent/apps/agent/README.md)
+
+### Apps and packages
+
+| Path | Technology | Purpose |
+|------|------------|---------|
+| `apps/server` | Bun, Hono, Vercel AI SDK | HTTP API, MCP surfaces, agent loop, CDP client, SQLite sessions, skills/memory tooling |
+| `apps/agent` | WXT, Vite, React | Extension UI: `app` full page, side panel, background worker, new tab, onboarding, options |
+| `apps/cli` | Go + npm shim | `browseros-cli` — terminal control of a running BrowserOS instance |
+| `apps/eval` | TypeScript | Benchmarks / evaluation harness |
+| `packages/shared` | TypeScript | Cross-package constants (e.g. limits, public URLs) |
+| `packages/cdp-protocol` | TypeScript | CDP typings / codegen consumed by the server |
+| `packages/agent-sdk` | TypeScript | Published SDK for automation scenarios |
+
+### Ports and environment variables
+
+Upstream docs often cite defaults like **9100** (HTTP) and **9000** (CDP). **Your fork may use different values** (for example **9111** / **9333**) as long as **server** and **agent** configs **match**.
+
+**Keep in sync:**
+
+- `packages/browseros-agent/apps/server/.env.development`
+- `packages/browseros-agent/apps/agent/.env.development`
+
+**Important variables:**
+
+| Variable | Typical role |
+|----------|----------------|
+| `BROWSEROS_SERVER_PORT` | Port for the Bun server (MCP, chat, health, …). |
+| `BROWSEROS_CDP_PORT` | Remote debugging port for Chromium — server connects **to** this. |
+| `BROWSEROS_EXTENSION_PORT` | Legacy CLI compatibility; may still be passed to launches. |
+| `VITE_PUBLIC_BROWSEROS_API` | Used by the extension for auth/GraphQL/product URLs in production-like setups; in local dev, **the hostname/port must be consistent** with where the server listens. |
+| `VITE_BROWSEROS_SERVER_PORT` | Used by the Vite bundle for API base URL construction in development; the stack script sets it from your env when starting. |
+| `BROWSEROS_BINARY` | Path to BrowserOS/Chromium binary when not using pure stock Chrome. |
+
+The extension resolves local server port with precedence implemented in `apps/agent/lib/browseros/helpers.ts`: prefer the port embedded in **`VITE_PUBLIC_BROWSEROS_API`**, then **`VITE_BROWSEROS_SERVER_PORT`**, then adapter defaults — so **avoid contradicting URLs** between env vars.
+
+Copy examples:
+
+- `apps/server/.env.example` → `apps/server/.env.development`
+- `apps/agent/.env.example` → `apps/agent/.env.development`
+
+### Development workflows
+
+1. **Full stack (this fork):** `bun run dev` from repo root or `packages/browseros-agent` (see [Quick start](#quick-start-full-agent-stack)).
+
+2. **Manual two-process:**  
+   - Terminal A: `bun run start:agent` (under `packages/browseros-agent`)  
+   - Terminal B: after CDP is up, `bun run start:server`  
+
+3. **process-compose:** If you use [process-compose](https://github.com/F1bonacc1/process-compose), see `packages/browseros-agent/process-compose.yaml`. Note: the checked-in file may only define a subset of processes; you can extend it locally to mirror the stack script.
+
+### Useful scripts
+
+Run from **`packages/browseros-agent`** unless noted:
+
+| Script | Purpose |
+|--------|---------|
+| `bun run dev` / `start` / `dev:stack` | Full stack via `scripts/dev/stack.ts` |
+| `bun run start:server` | Server only |
+| `bun run start:agent` | WXT + browser dev only |
+| `bun run build` | Build pipeline as defined in this fork’s `package.json` (includes Windows-oriented server build + agent build) |
+| `bun run build:agent` | Codegen + production agent build |
+| `bun run lint` / `lint:fix` | Biome |
+| `bun run typecheck` | TypeScript across workspaces |
+| `bun run test` | Server tests (see package.json for filters) |
+
+---
+
+## Browser (`packages/browseros`)
+
+This package is the **Chromium-based BrowserOS browser**: patch set, **Python** CLI (`browseros`), resources, and packaging.
+
+### What the build system needs
+
+- **A full Chromium checkout** at a path you provide (`chromium_src` in config, or `--chromium-src`, or `CHROMIUM_SRC` environment variable). There is **no** supported path to produce the real BrowserOS browser **without** Chromium sources — disk and time costs are significant.
+
+### Typical CLI flow
+
+```bash
+cd packages/browseros
+pip install -e .
+# or: uv pip install -e .
+
+browseros setup    # fetch/prepare Chromium (per project docs)
+browseros apply    # apply patches
+browseros build    # compile
+browseros package  # DMG / installer / AppImage / etc.
+browseros sign     # platform-specific signing
+```
+
+Pinned version files:
+
+- `CHROMIUM_VERSION` — e.g. **146.0.7680.31** (see file for current pin)
+- `BASE_COMMIT` — exact Chromium baseline
+
+### Windows note (Python console)
+
+When running Python CLI output that emits Unicode, set UTF-8 mode if you hit encoding errors, e.g. PowerShell:
 
 ```powershell
-irm https://cdn.browseros.com/cli/install.ps1 | iex
+$env:PYTHONUTF8 = '1'
 ```
 
-After install, run `browseros-cli init` to connect the CLI to your running BrowserOS instance.
+More detail: [`packages/browseros/README.md`](packages/browseros/README.md).
 
-## LLM Providers
+---
 
-BrowserOS works with any LLM. Bring your own keys, use OAuth, or run models locally.
+## Sup-agent submodule
 
-| Provider | Type | Auth |
-|----------|------|------|
-| Kimi K2.5 | Cloud (default) | Built-in |
-| ChatGPT Pro/Plus | Cloud | [OAuth](https://docs.browseros.com/features/chatgpt) |
-| GitHub Copilot | Cloud | [OAuth](https://docs.browseros.com/features/github-copilot) |
-| Qwen Code | Cloud | [OAuth](https://docs.browseros.com/features/qwen-code) |
-| Claude (Anthropic) | Cloud | API key |
-| GPT-4o / o3 (OpenAI) | Cloud | API key |
-| Gemini (Google) | Cloud | API key |
-| Azure OpenAI | Cloud | API key |
-| AWS Bedrock | Cloud | IAM credentials |
-| OpenRouter | Cloud | API key |
-| Ollama | Local | [Setup](https://docs.browseros.com/features/ollama) |
-| LM Studio | Local | [Setup](https://docs.browseros.com/features/lm-studio) |
+**Sup-agent** is a **separate Git repository** linked as a submodule at:
 
-## How We Compare
+`packages/browseros-agent/vendor/sup-agent`
 
-| | BrowserOS | Chrome | Brave | Dia | Comet | Atlas |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|
-| Open Source | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
-| AI Agent | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ |
-| MCP Server | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Visual Workflows | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Cowork (files + browser) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Scheduled Tasks | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Bring Your Own Keys | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
-| Local Models (Ollama) | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
-| Local-first Privacy | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
-| Ad Blocking (MV2) | ✅ | ❌ | ✅ | ❌ | ✅ | ❌ |
+### Why it exists here
 
-**Detailed comparisons:**
-- [BrowserOS vs Chrome DevTools MCP](https://docs.browseros.com/comparisons/chrome-devtools-mcp) — developer-focused comparison for browser automation
-- [BrowserOS vs Claude Cowork](https://docs.browseros.com/comparisons/claude-cowork) — getting real work done with AI
-- [BrowserOS vs OpenClaw](https://docs.browseros.com/comparisons/openclaw) — everyday AI assistance
+- **Default skill content** for the agent is imported from paths under the submodule, e.g. `apps/server/src/skills/defaults/index.ts` imports `SKILL.md` files from  
+  `vendor/sup-agent/apps/server/src/skills/defaults/...`.
+- Scripts such as `packages/browseros-agent/scripts/upload-skills-catalog.ts` reference the same tree.
+- Memory tooling may keep **legacy naming** compatible with Sup-agent workflows (see server `tools/memory` sources).
 
-## Architecture
+### Initializing and updating
 
-BrowserOS is a monorepo with two main subsystems: the **browser** (Chromium fork) and the **agent platform** (TypeScript/Go).
+After clone:
 
-```
-BrowserOS/
-├── packages/browseros/              # Chromium fork + build system (Python)
-│   ├── chromium_patches/            # Patches applied to Chromium source
-│   ├── build/                       # Build CLI and modules
-│   └── resources/                   # Icons, entitlements, signing
-│
-├── packages/browseros-agent/        # Agent platform (TypeScript/Go)
-│   ├── apps/
-│   │   ├── server/                  # MCP server + AI agent loop (Bun)
-│   │   ├── agent/                   # Browser extension UI (WXT + React)
-│   │   ├── cli/                     # CLI tool (Go)
-│   │   ├── eval/                    # Benchmark framework
-│   │   └── controller-ext/          # Chrome API bridge extension
-│   │
-│   └── packages/
-│       ├── agent-sdk/               # Node.js SDK (npm: @browseros-ai/agent-sdk)
-│       ├── cdp-protocol/            # CDP type bindings
-│       └── shared/                  # Shared constants
+```bash
+git submodule update --init --recursive
 ```
 
-| Package | What it does |
-|---------|-------------|
-| [`packages/browseros`](packages/browseros/) | Chromium fork — patches, build system, signing |
-| [`apps/server`](packages/browseros-agent/apps/server/) | Bun server exposing 53+ MCP tools and running the AI agent loop |
-| [`apps/agent`](packages/browseros-agent/apps/agent/) | Browser extension — new tab, side panel chat, onboarding, settings |
-| [`apps/cli`](packages/browseros-agent/apps/cli/) | Go CLI — control BrowserOS from the terminal or AI coding agents |
-| [`apps/eval`](packages/browseros-agent/apps/eval/) | Benchmark framework — WebVoyager, Mind2Web evaluation |
-| [`agent-sdk`](packages/browseros-agent/packages/agent-sdk/) | Node.js SDK for browser automation with natural language |
-| [`cdp-protocol`](packages/browseros-agent/packages/cdp-protocol/) | Type-safe Chrome DevTools Protocol bindings |
+To move the submodule forward when you intend to track newer commits:
 
-## Contributing
+```bash
+git submodule update --remote --merge packages/browseros-agent/vendor/sup-agent
+# Then commit the updated submodule pointer in the parent repo.
+```
 
-We'd love your help making BrowserOS better! See our [Contributing Guide](CONTRIBUTING.md) for details.
+**Canonical workflow** (independent repos, pointer commits): see **[`docs/submodule-workflow.md`](docs/submodule-workflow.md)**.
 
-- [Report bugs](https://github.com/browseros-ai/BrowserOS/issues)
-- [Suggest features](https://github.com/browseros-ai/BrowserOS/issues/99)
-- [Join Discord](https://discord.gg/YKwjt5vuKr) · [Join Slack](https://dub.sh/browserOS-slack)
-- [Follow on Twitter](https://x.com/browserOS_ai)
+### Tests
 
-**Agent development** (TypeScript/Go) — see the [agent monorepo README](packages/browseros-agent/README.md) for setup instructions.
+`packages/browseros-agent/bunfig.toml` sets test `pathIgnorePatterns` to ignore `**/vendor/**` so Bun does **not** run Sup-agent’s own tests inside this monorepo; skill **files** are still loaded for BrowserOS.
 
-**Browser development** (C++/Python) — requires ~100GB disk space. See [`packages/browseros`](packages/browseros/) for build instructions.
+---
 
-## Credits
+## Documentation in this repo
 
-- [ungoogled-chromium](https://github.com/ungoogled-software/ungoogled-chromium) — BrowserOS uses some patches for enhanced privacy. Thanks to everyone behind this project!
-- [The Chromium Project](https://www.chromium.org/) — at the core of BrowserOS, making it possible to exist in the first place.
+| Doc | Topic |
+|-----|--------|
+| [`docs/submodule-workflow.md`](docs/submodule-workflow.md) | Sup-agent submodule rules |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Upstream contribution paths (agent vs browser) |
+| [`packages/browseros/README.md`](packages/browseros/README.md) | Chromium build |
+| [`packages/browseros-agent/README.md`](packages/browseros-agent/README.md) | Agent monorepo |
+| [`CLAUDE.md`](CLAUDE.md) (repo / packages) | Project-specific AI assistant notes |
 
-## License
+Public product documentation for end users remains at **[docs.browseros.com](https://docs.browseros.com)**.
 
-BrowserOS is open source under the [AGPL-3.0 license](LICENSE).
+---
 
-Copyright &copy; 2026 Felafax, Inc.
+## Quality checks (Biome, Lefthook)
 
-## Stargazers
+- **Biome** — formatting and lint (`bun run lint` in `packages/browseros-agent`).
+- **Lefthook** — Git hooks (see `lefthook.yml`): Conventional Commits for commit messages, Biome on pre-commit, branch name hints on pre-push.
 
-Thank you to all our supporters!
+On **Windows**, corporate **Application Control** may block `lefthook.exe`; you may need an admin allowlist. Hooks often assume a Unix-like shell for some commands — using **Git Bash** or **WSL** for git commits can avoid edge cases.
 
-[![Star History Chart](https://api.star-history.com/svg?repos=browseros-ai/BrowserOS&type=Date)](https://www.star-history.com/#browseros-ai/BrowserOS&Date)
+---
 
-<p align="center">
-Built with ❤️ from San Francisco
-</p>
+## Git: fork, upstream, and submodules
+
+This repo is suitable as a **personal or team fork** of BrowserOS.
+
+| Remote | Typical use |
+|--------|-------------|
+| `origin` | Your fork (e.g. **Shimmy-Browser** on GitHub). |
+| `upstream` | `browseros-ai/BrowserOS` (add if you merge upstream changes). |
+
+Submodule URL is recorded in `.gitmodules` (Sup-agent). After pulling parent changes, run **`git submodule update --init --recursive`** so `vendor/sup-agent` matches the committed SHA.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | What to check |
+|---------|----------------|---------------|
+| “Connection failed” / Failed to fetch in Connect Apps | Server not running or **wrong port** vs extension | Same `BROWSEROS_SERVER_PORT` / API URL in agent + server env; hit `/health` on the server port. |
+| Health: CDP not connected | Browser closed, wrong `BROWSEROS_CDP_PORT`, or server started before CDP | Start order: browser with debugging port **before** or **with** server; use `stack.ts` |
+| Blank extension UI | Stale Vite client, uncaught React error, or unresolved imports | Re-run `bun install` in `packages/browseros-agent`; restart dev stack; check browser console |
+| Vite “Failed to resolve import `@browseros/shared/...`” | Workspace deps out of date | `bun install` at `packages/browseros-agent` |
+| Browser build: “chromium_src required” | No Chromium tree configured | Provide Chromium source path per `packages/browseros` README |
+| `UnicodeEncodeError` in Python on Windows | Console encoding | `PYTHONUTF8=1` |
+
+---
+
+## License and credits
+
+- **Shimmy-Browser** inherits licensing from upstream BrowserOS; see the **[`LICENSE`](LICENSE)** file in this repository (AGPL-3.0).
+- BrowserOS credits **ungoogled-chromium** and **The Chromium Project**; see the upstream README and `LICENSE.ungoogled_chromium` where applicable.
+
+---
+
+## Relationship to upstream BrowserOS
+
+Feature lists, download badges, and comparisons in the **upstream** repository README still apply at a product level. This file focuses on **this repo’s layout**, **fork-specific automation** (`bun run dev` / `stack.ts`), **Sup-agent**, and **how the browser package and agent monorepo fit together**. For release binaries and marketing screenshots, see **[browseros-ai/BrowserOS](https://github.com/browseros-ai/BrowserOS)** and **[docs.browseros.com](https://docs.browseros.com)**.

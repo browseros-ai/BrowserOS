@@ -37,5 +37,10 @@ export default defineWebExtConfig({
   chromiumArgs,
   chromiumProfile: env.BROWSEROS_USER_DATA_DIR || '/tmp/browseros-dev',
   keepProfileChanges: true,
-  startUrls: ['chrome://newtab'],
+  // Launch directly into the extension UI so startup doesn't depend on
+  // asynchronous new-tab replacement logic in the background script.
+  // Extension ID is stable because manifest key is fixed in wxt.config.ts.
+  startUrls: [
+    'chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk/app.html#/home',
+  ],
 })
