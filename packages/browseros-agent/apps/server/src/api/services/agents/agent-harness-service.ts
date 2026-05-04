@@ -31,6 +31,7 @@ export {
   type QueuedMessageAttachment,
 } from '../../../lib/agents/message-queue'
 
+import { basename } from 'node:path'
 import type {
   AgentHistoryPage,
   AgentRowSnapshot,
@@ -39,10 +40,16 @@ import type {
 } from '../../../lib/agents/types'
 import { getOpenClawDir } from '../../../lib/browseros-dir'
 import { logger } from '../../../lib/logger'
+import {
+  buildFilePreview,
+  detectMimeType,
+  type FilePreview,
+} from '../openclaw/file-preview'
 import { getHostWorkspaceDir } from '../openclaw/openclaw-env'
 import type { OpenClawGatewayChatClient } from '../openclaw/openclaw-gateway-chat-client'
 import {
   type FileSnapshot,
+  type ProducedFileRow,
   ProducedFilesStore,
 } from '../openclaw/produced-files-store'
 
@@ -620,6 +627,99 @@ export class AgentHarnessService {
     return this.runtime.getHistory({ agent, sessionId: 'main' })
   }
 
+  // ── Produced files (Files rail / inline artifact card) ───────────
+
+  /**
+   * Outputs-rail data for one agent. Returns groups of files keyed
+   * by the assistant turn that produced them, newest first. Empty
+   * array when the agent hasn't produced anything yet, or when the
+   * adapter doesn't track outputs (claude / codex — see Phase 2
+   * commit).
+   */
+  async listAgentFiles(
+    agentId: string,
+    options: { limit?: number } = {},
+  ): Promise<ProducedFilesRailGroup[]> {
+    const agent = await this.requireAgent(agentId)
+    const store = this.tryGetProducedFilesStore()
+    if (!store) return []
+    const rows = await store.listByAgent(agent.id, options)
+    return store
+      .groupByTurn(rows)
+      .map(({ turnId, turnPrompt, createdAt, files }) => ({
+        turnId,
+        turnPrompt,
+        createdAt,
+        files: files.map(toProducedFileEntry),
+      }))
+  }
+
+  /**
+   * Inline-card data for one assistant turn. Used by the SSE
+   * `produced_files` event consumer to refresh metadata after the
+   * turn completes; also handy for direct fetches by clients that
+   * missed the live event.
+   */
+  async listAgentFilesForTurn(
+    agentId: string,
+    turnId: string,
+  ): Promise<ProducedFileEntry[]> {
+    await this.requireAgent(agentId)
+    const store = this.tryGetProducedFilesStore()
+    if (!store) return []
+    const rows = await store.listByTurn(turnId)
+    return rows.map(toProducedFileEntry)
+  }
+
+  /**
+   * Build a preview payload for a single file. Returns null when the
+   * file id is unknown OR the on-disk path no longer exists. The
+   * route layer maps null → 404.
+   */
+  async previewProducedFile(fileId: string): Promise<FilePreview | null> {
+    const store = this.tryGetProducedFilesStore()
+    if (!store) return null
+    const row = await store.findById(fileId)
+    if (!row) return null
+    const agent = await this.agentStore.get(row.agentDefinitionId)
+    if (!agent || agent.adapter !== 'openclaw') return null
+    const workspaceDir = getHostWorkspaceDir(getOpenClawDir(), agent.name)
+    const resolved = await store.resolveFilePath({ fileId, workspaceDir })
+    if (!resolved) return null
+    return buildFilePreview(resolved.absolutePath)
+  }
+
+  /**
+   * Resolve a file id to an absolute on-disk path + metadata for the
+   * download route to stream. Null when the file id is unknown or
+   * the path escaped the workspace root (containment check happens
+   * inside `producedFilesStore.resolveFilePath`).
+   */
+  async resolveProducedFileForDownload(fileId: string): Promise<{
+    absolutePath: string
+    fileName: string
+    mimeType: string
+    size: number
+  } | null> {
+    const store = this.tryGetProducedFilesStore()
+    if (!store) return null
+    const row = await store.findById(fileId)
+    if (!row) return null
+    const agent = await this.agentStore.get(row.agentDefinitionId)
+    if (!agent || agent.adapter !== 'openclaw') return null
+    const workspaceDir = getHostWorkspaceDir(getOpenClawDir(), agent.name)
+    const resolved = await store.resolveFilePath({ fileId, workspaceDir })
+    if (!resolved) return null
+    const mimeType = await detectMimeType(resolved.absolutePath)
+    const fileName = basename(row.path)
+    return {
+      absolutePath: resolved.absolutePath,
+      fileName,
+      mimeType,
+      size: row.size,
+    }
+  }
+
   /**
    * Kick off a new agent turn that survives the caller's HTTP lifetime.
    * Events are pushed into a per-turn buffer; the returned `frames`
@@ -990,5 +1090,40 @@ export class TurnAlreadyActiveError extends Error {
   ) {
     super(`Agent ${agentId} already has an active turn (${turnId})`)
     this.name = 'TurnAlreadyActiveError'
+  }
+}
+
+// ── Files API DTO ────────────────────────────────────────────────
+
+/**
+ * Wire shape for one produced-file entry returned by the rail and
+ * inline-card endpoints. Trimmed from the on-disk row — clients
+ * never see `agentDefinitionId` or `sessionKey`.
+ */
+export interface ProducedFileEntry {
+  id: string
+  path: string
+  size: number
+  mtimeMs: number
+  createdAt: number
+  detectedBy: 'diff' | 'tool'
+}
+
+export interface ProducedFilesRailGroup {
+  turnId: string
+  /** First non-blank line of the user prompt that initiated this turn. */
+  turnPrompt: string
+  createdAt: number
+  files: ProducedFileEntry[]
+}
+
+function toProducedFileEntry(row: ProducedFileRow): ProducedFileEntry {
+  return {
+    id: row.id,
+    path: row.path,
+    size: row.size,
+    mtimeMs: row.mtimeMs,
+    createdAt: row.createdAt,
+    detectedBy: row.detectedBy,
   }
 }

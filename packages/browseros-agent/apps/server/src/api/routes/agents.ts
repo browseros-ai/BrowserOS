@@ -39,10 +39,13 @@ import {
   MessageQueueFullError,
   type OpenClawProvisioner,
   OpenClawProvisionerUnavailableError,
+  type ProducedFileEntry,
+  type ProducedFilesRailGroup,
   type QueuedMessage,
   TurnAlreadyActiveError,
   UnknownAgentError,
 } from '../services/agents/agent-harness-service'
+import type { FilePreview } from '../services/openclaw/file-preview'
 import type { OpenClawGatewayChatClient } from '../services/openclaw/openclaw-gateway-chat-client'
 import type { Env } from '../types'
 import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'
@@ -95,6 +98,23 @@ type AgentRouteService = {
     messageId: string
   }): Promise<boolean>
   listQueuedMessages(agentId: string): Promise<QueuedMessage[]>
+
+  // Files API — Phase 3 of TKT-762.
+  listAgentFiles(
+    agentId: string,
+    options?: { limit?: number },
+  ): Promise<ProducedFilesRailGroup[]>
+  listAgentFilesForTurn(
+    agentId: string,
+    turnId: string,
+  ): Promise<ProducedFileEntry[]>
+  previewProducedFile(fileId: string): Promise<FilePreview | null>
+  resolveProducedFileForDownload(fileId: string): Promise<{
+    absolutePath: string
+    fileName: string
+    mimeType: string
+    size: number
+  } | null>
 }
 
 type AgentRouteDeps = {
@@ -146,260 +166,349 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
   // tests can swap in an alternate via deps if needed.
   const adapterHealth = deps.adapterHealth ?? new AdapterHealthChecker()
 
-  return new Hono<Env>()
-    .get('/adapters', async (c) => {
-      const adapters = await Promise.all(
-        AGENT_ADAPTER_CATALOG.map(async (descriptor) => ({
-          ...descriptor,
-          health: await adapterHealth.getHealth(descriptor.id),
-        })),
-      )
-      return c.json({ adapters })
-    })
-    .get('/', async (c) => {
-      // Single round-trip the agents page consumes: enriched agents
-      // (status + lastUsedAt) plus the gateway lifecycle snapshot the
-      // GatewayStatusBar / GatewayStateCards / ControlPlaneAlert used
-      // to fetch from `/claw/status`. Lets the page poll one endpoint.
-      const [agents, gateway] = await Promise.all([
-        service.listAgentsWithActivity(),
-        service.getGatewayStatus(),
-      ])
-      return c.json({ agents, gateway })
-    })
-    .post('/', async (c) => {
-      const parsed = await parseCreateAgentBody(c)
-      if ('error' in parsed) return c.json({ error: parsed.error }, 400)
-      try {
-        return c.json({ agent: await service.createAgent(parsed) })
-      } catch (err) {
-        return handleAgentRouteError(c, err)
-      }
-    })
-    .post('/:agentId/sidepanel/chat', async (c) => {
-      const agentId = c.req.param('agentId')
-      const parsed = await parseSidepanelAgentChatBody(c)
-      if ('error' in parsed) return c.json({ error: parsed.error }, 400)
-
-      try {
-        const agent = await service.getAgent(agentId)
-        if (!agent) return c.json({ error: 'Unknown agent' }, 404)
-
-        let browserContext = parsed.browserContext
-        if (deps.browser) {
-          browserContext = await resolveBrowserContextPageIds(
-            deps.browser,
-            browserContext,
-          )
-        }
-
-        const userContent = formatUserMessage(
-          parsed.message,
-          browserContext,
-          parsed.selectedText,
-          parsed.selectedTextSource,
+  return (
+    new Hono<Env>()
+      .get('/adapters', async (c) => {
+        const adapters = await Promise.all(
+          AGENT_ADAPTER_CATALOG.map(async (descriptor) => ({
+            ...descriptor,
+            health: await adapterHealth.getHealth(descriptor.id),
+          })),
         )
-        const message = parsed.userSystemPrompt?.trim()
-          ? `${parsed.userSystemPrompt.trim()}\n\n${userContent}`
-          : userContent
+        return c.json({ adapters })
+      })
+      .get('/', async (c) => {
+        // Single round-trip the agents page consumes: enriched agents
+        // (status + lastUsedAt) plus the gateway lifecycle snapshot the
+        // GatewayStatusBar / GatewayStateCards / ControlPlaneAlert used
+        // to fetch from `/claw/status`. Lets the page poll one endpoint.
+        const [agents, gateway] = await Promise.all([
+          service.listAgentsWithActivity(),
+          service.getGatewayStatus(),
+        ])
+        return c.json({ agents, gateway })
+      })
+      .post('/', async (c) => {
+        const parsed = await parseCreateAgentBody(c)
+        if ('error' in parsed) return c.json({ error: parsed.error }, 400)
+        try {
+          return c.json({ agent: await service.createAgent(parsed) })
+        } catch (err) {
+          return handleAgentRouteError(c, err)
+        }
+      })
+      .post('/:agentId/sidepanel/chat', async (c) => {
+        const agentId = c.req.param('agentId')
+        const parsed = await parseSidepanelAgentChatBody(c)
+        if ('error' in parsed) return c.json({ error: parsed.error }, 400)
+
+        try {
+          const agent = await service.getAgent(agentId)
+          if (!agent) return c.json({ error: 'Unknown agent' }, 404)
+
+          let browserContext = parsed.browserContext
+          if (deps.browser) {
+            browserContext = await resolveBrowserContextPageIds(
+              deps.browser,
+              browserContext,
+            )
+          }
+
+          const userContent = formatUserMessage(
+            parsed.message,
+            browserContext,
+            parsed.selectedText,
+            parsed.selectedTextSource,
+          )
+          const message = parsed.userSystemPrompt?.trim()
+            ? `${parsed.userSystemPrompt.trim()}\n\n${userContent}`
+            : userContent
+
+          let started: { turnId: string; frames: ReadableStream<TurnFrame> }
+          try {
+            started = await service.startTurn({
+              agentId: agent.id,
+              message,
+              cwd: parsed.userWorkingDir,
+            })
+          } catch (err) {
+            if (err instanceof TurnAlreadyActiveError) {
+              return c.json(
+                {
+                  error: 'Turn already active',
+                  turnId: err.turnId,
+                  attachUrl: `/agents/${agent.id}/chat/stream?turnId=${err.turnId}`,
+                },
+                409,
+              )
+            }
+            throw err
+          }
+
+          let didRequestCancel = false
+          const cancelStartedTurn = () => {
+            if (didRequestCancel) return
+            didRequestCancel = true
+            service.cancelTurn({
+              agentId: agent.id,
+              turnId: started.turnId,
+              reason: 'sidepanel stream cancelled',
+            })
+          }
+          if (c.req.raw.signal.aborted) {
+            cancelStartedTurn()
+          } else {
+            c.req.raw.signal.addEventListener('abort', cancelStartedTurn, {
+              once: true,
+            })
+          }
+
+          const events = turnFramesToAgentEvents(started.frames, {
+            onCancel: cancelStartedTurn,
+          })
+
+          return createAcpUIMessageStreamResponse(events, {
+            headers: {
+              'X-Session-Id': 'main',
+              'X-Turn-Id': started.turnId,
+            },
+          })
+        } catch (err) {
+          return handleAgentRouteError(c, err)
+        }
+      })
+      .get('/:agentId', async (c) => {
+        try {
+          const agent = await service.getAgent(c.req.param('agentId'))
+          if (!agent) return c.json({ error: 'Unknown agent' }, 404)
+          return c.json({ agent })
+        } catch (err) {
+          return handleAgentRouteError(c, err)
+        }
+      })
+      .delete('/:agentId', async (c) => {
+        try {
+          return c.json({
+            success: await service.deleteAgent(c.req.param('agentId')),
+          })
+        } catch (err) {
+          return handleAgentRouteError(c, err)
+        }
+      })
+      .patch('/:agentId', async (c) => {
+        const parsed = await parseAgentPatchBody(c)
+        if ('error' in parsed) return c.json({ error: parsed.error }, 400)
+        try {
+          const agent = await service.updateAgent(
+            c.req.param('agentId'),
+            parsed.patch,
+          )
+          if (!agent) return c.json({ error: 'Unknown agent' }, 404)
+          return c.json({ agent })
+        } catch (err) {
+          return handleAgentRouteError(c, err)
+        }
+      })
+      .get('/:agentId/sessions/main/history', async (c) => {
+        try {
+          return c.json(await service.getHistory(c.req.param('agentId')))
+        } catch (err) {
+          return handleAgentRouteError(c, err)
+        }
+      })
+      .post('/:agentId/chat', async (c) => {
+        const agentId = c.req.param('agentId')
+        const parsed = await parseChatBody(c)
+        if ('error' in parsed) return c.json({ error: parsed.error }, 400)
 
         let started: { turnId: string; frames: ReadableStream<TurnFrame> }
         try {
           started = await service.startTurn({
-            agentId: agent.id,
-            message,
-            cwd: parsed.userWorkingDir,
+            agentId,
+            message: parsed.message,
+            attachments: parsed.attachments,
+            cwd: parsed.cwd,
           })
         } catch (err) {
           if (err instanceof TurnAlreadyActiveError) {
+            // Caller can attach via GET /chat/stream?turnId=… instead.
             return c.json(
               {
                 error: 'Turn already active',
                 turnId: err.turnId,
-                attachUrl: `/agents/${agent.id}/chat/stream?turnId=${err.turnId}`,
+                attachUrl: `/agents/${agentId}/chat/stream?turnId=${err.turnId}`,
               },
               409,
             )
           }
-          throw err
+          return handleAgentRouteError(c, err)
         }
 
-        let didRequestCancel = false
-        const cancelStartedTurn = () => {
-          if (didRequestCancel) return
-          didRequestCancel = true
-          service.cancelTurn({
-            agentId: agent.id,
-            turnId: started.turnId,
-            reason: 'sidepanel stream cancelled',
-          })
-        }
-        if (c.req.raw.signal.aborted) {
-          cancelStartedTurn()
-        } else {
-          c.req.raw.signal.addEventListener('abort', cancelStartedTurn, {
-            once: true,
-          })
-        }
-
-        const events = turnFramesToAgentEvents(started.frames, {
-          onCancel: cancelStartedTurn,
+        return streamTurnFrames(c, started.frames, {
+          turnId: started.turnId,
         })
-
-        return createAcpUIMessageStreamResponse(events, {
-          headers: {
-            'X-Session-Id': 'main',
-            'X-Turn-Id': started.turnId,
-          },
-        })
-      } catch (err) {
-        return handleAgentRouteError(c, err)
-      }
-    })
-    .get('/:agentId', async (c) => {
-      try {
-        const agent = await service.getAgent(c.req.param('agentId'))
-        if (!agent) return c.json({ error: 'Unknown agent' }, 404)
-        return c.json({ agent })
-      } catch (err) {
-        return handleAgentRouteError(c, err)
-      }
-    })
-    .delete('/:agentId', async (c) => {
-      try {
-        return c.json({
-          success: await service.deleteAgent(c.req.param('agentId')),
-        })
-      } catch (err) {
-        return handleAgentRouteError(c, err)
-      }
-    })
-    .patch('/:agentId', async (c) => {
-      const parsed = await parseAgentPatchBody(c)
-      if ('error' in parsed) return c.json({ error: parsed.error }, 400)
-      try {
-        const agent = await service.updateAgent(
-          c.req.param('agentId'),
-          parsed.patch,
-        )
-        if (!agent) return c.json({ error: 'Unknown agent' }, 404)
-        return c.json({ agent })
-      } catch (err) {
-        return handleAgentRouteError(c, err)
-      }
-    })
-    .get('/:agentId/sessions/main/history', async (c) => {
-      try {
-        return c.json(await service.getHistory(c.req.param('agentId')))
-      } catch (err) {
-        return handleAgentRouteError(c, err)
-      }
-    })
-    .post('/:agentId/chat', async (c) => {
-      const agentId = c.req.param('agentId')
-      const parsed = await parseChatBody(c)
-      if ('error' in parsed) return c.json({ error: parsed.error }, 400)
-
-      let started: { turnId: string; frames: ReadableStream<TurnFrame> }
-      try {
-        started = await service.startTurn({
-          agentId,
-          message: parsed.message,
-          attachments: parsed.attachments,
-          cwd: parsed.cwd,
-        })
-      } catch (err) {
-        if (err instanceof TurnAlreadyActiveError) {
-          // Caller can attach via GET /chat/stream?turnId=… instead.
-          return c.json(
-            {
-              error: 'Turn already active',
-              turnId: err.turnId,
-              attachUrl: `/agents/${agentId}/chat/stream?turnId=${err.turnId}`,
-            },
-            409,
-          )
-        }
-        return handleAgentRouteError(c, err)
-      }
-
-      return streamTurnFrames(c, started.frames, {
-        turnId: started.turnId,
       })
-    })
-    .get('/:agentId/chat/active', (c) => {
-      const agentId = c.req.param('agentId')
-      const info = service.getActiveTurn(agentId, 'main')
-      return c.json({ active: info })
-    })
-    .get('/:agentId/chat/stream', (c) => {
-      const agentId = c.req.param('agentId')
-      const url = new URL(c.req.url)
-      const queryTurnId = url.searchParams.get('turnId')?.trim() || undefined
-      const turnId =
-        queryTurnId ?? service.getActiveTurn(agentId, 'main')?.turnId
-      if (!turnId) {
-        return c.json({ error: 'No active turn for this agent' }, 404)
-      }
-      const lastEventId =
-        c.req.header('Last-Event-ID') ??
-        url.searchParams.get('lastSeq') ??
-        undefined
-      const lastSeq = parseLastSeq(lastEventId)
-      const frames = service.attachTurn({ turnId, lastSeq })
-      if (!frames) {
-        return c.json({ error: 'Unknown turn' }, 404)
-      }
-      return streamTurnFrames(c, frames, { turnId })
-    })
-    .post('/:agentId/chat/cancel', async (c) => {
-      const agentId = c.req.param('agentId')
-      const body = await readJsonBody(c)
-      const turnId =
-        'value' in body && typeof body.value.turnId === 'string'
-          ? body.value.turnId.trim() || undefined
-          : undefined
-      const reason =
-        'value' in body && typeof body.value.reason === 'string'
-          ? body.value.reason
-          : undefined
-      const cancelled = service.cancelTurn({ agentId, turnId, reason })
-      return c.json({ cancelled })
-    })
-    .get('/:agentId/queue', async (c) => {
-      try {
-        const queue = await service.listQueuedMessages(c.req.param('agentId'))
-        return c.json({ queue })
-      } catch (err) {
-        return handleAgentRouteError(c, err)
-      }
-    })
-    .post('/:agentId/queue', async (c) => {
-      const parsed = await parseEnqueueBody(c)
-      if ('error' in parsed) return c.json({ error: parsed.error }, 400)
-      try {
-        const queued = await service.enqueueMessage({
-          agentId: c.req.param('agentId'),
-          message: parsed.message,
-          attachments: parsed.attachments,
-        })
-        return c.json({ queued })
-      } catch (err) {
-        return handleAgentRouteError(c, err)
-      }
-    })
-    .delete('/:agentId/queue/:messageId', async (c) => {
-      try {
-        const removed = await service.removeQueuedMessage({
-          agentId: c.req.param('agentId'),
-          messageId: c.req.param('messageId'),
-        })
-        if (!removed) return c.json({ error: 'Queued message not found' }, 404)
-        return c.json({ removed })
-      } catch (err) {
-        return handleAgentRouteError(c, err)
-      }
-    })
+      .get('/:agentId/chat/active', (c) => {
+        const agentId = c.req.param('agentId')
+        const info = service.getActiveTurn(agentId, 'main')
+        return c.json({ active: info })
+      })
+      .get('/:agentId/chat/stream', (c) => {
+        const agentId = c.req.param('agentId')
+        const url = new URL(c.req.url)
+        const queryTurnId = url.searchParams.get('turnId')?.trim() || undefined
+        const turnId =
+          queryTurnId ?? service.getActiveTurn(agentId, 'main')?.turnId
+        if (!turnId) {
+          return c.json({ error: 'No active turn for this agent' }, 404)
+        }
+        const lastEventId =
+          c.req.header('Last-Event-ID') ??
+          url.searchParams.get('lastSeq') ??
+          undefined
+        const lastSeq = parseLastSeq(lastEventId)
+        const frames = service.attachTurn({ turnId, lastSeq })
+        if (!frames) {
+          return c.json({ error: 'Unknown turn' }, 404)
+        }
+        return streamTurnFrames(c, frames, { turnId })
+      })
+      .post('/:agentId/chat/cancel', async (c) => {
+        const agentId = c.req.param('agentId')
+        const body = await readJsonBody(c)
+        const turnId =
+          'value' in body && typeof body.value.turnId === 'string'
+            ? body.value.turnId.trim() || undefined
+            : undefined
+        const reason =
+          'value' in body && typeof body.value.reason === 'string'
+            ? body.value.reason
+            : undefined
+        const cancelled = service.cancelTurn({ agentId, turnId, reason })
+        return c.json({ cancelled })
+      })
+      .get('/:agentId/queue', async (c) => {
+        try {
+          const queue = await service.listQueuedMessages(c.req.param('agentId'))
+          return c.json({ queue })
+        } catch (err) {
+          return handleAgentRouteError(c, err)
+        }
+      })
+      .post('/:agentId/queue', async (c) => {
+        const parsed = await parseEnqueueBody(c)
+        if ('error' in parsed) return c.json({ error: parsed.error }, 400)
+        try {
+          const queued = await service.enqueueMessage({
+            agentId: c.req.param('agentId'),
+            message: parsed.message,
+            attachments: parsed.attachments,
+          })
+          return c.json({ queued })
+        } catch (err) {
+          return handleAgentRouteError(c, err)
+        }
+      })
+      .delete('/:agentId/queue/:messageId', async (c) => {
+        try {
+          const removed = await service.removeQueuedMessage({
+            agentId: c.req.param('agentId'),
+            messageId: c.req.param('messageId'),
+          })
+          if (!removed)
+            return c.json({ error: 'Queued message not found' }, 404)
+          return c.json({ removed })
+        } catch (err) {
+          return handleAgentRouteError(c, err)
+        }
+      })
+
+      // ── Files (TKT-762) ────────────────────────────────────────────
+      //
+      // V1 surfaces files OpenClaw agents produce inside their workspace
+      // dir (`~/.browseros/vm/openclaw/.openclaw/workspace[-<name>]/`)
+      // as outputs, attributed back to the chat turn that produced them
+      // by the per-turn workspace diff in
+      // `agent-harness-service.runDetachedTurn`. Adapter-gated to
+      // openclaw on the service side; for claude / codex these endpoints
+      // simply return empty lists.
+      //
+      // The file-id-scoped endpoints (`/files/:fileId/{preview,download}`)
+      // accept an opaque `fileId` and resolve the on-disk path
+      // server-side, so the client never sees a raw path and traversal
+      // is impossible by construction.
+
+      .get('/:agentId/files', async (c) => {
+        try {
+          const limitRaw = c.req.query('limit')
+          const limit = limitRaw ? Number.parseInt(limitRaw, 10) : undefined
+          const groups = await service.listAgentFiles(
+            c.req.param('agentId'),
+            Number.isFinite(limit) ? { limit: limit as number } : undefined,
+          )
+          return c.json({ groups })
+        } catch (err) {
+          return handleAgentRouteError(c, err)
+        }
+      })
+      .get('/:agentId/files/turn/:turnId', async (c) => {
+        try {
+          const files = await service.listAgentFilesForTurn(
+            c.req.param('agentId'),
+            c.req.param('turnId'),
+          )
+          return c.json({ files })
+        } catch (err) {
+          return handleAgentRouteError(c, err)
+        }
+      })
+      .get('/files/:fileId/preview', async (c) => {
+        try {
+          const preview = await service.previewProducedFile(
+            c.req.param('fileId'),
+          )
+          if (!preview || preview.kind === 'missing') {
+            return c.json({ error: 'File not found' }, 404)
+          }
+          return c.json(preview)
+        } catch (err) {
+          return handleAgentRouteError(c, err)
+        }
+      })
+      .get('/files/:fileId/download', async (c) => {
+        try {
+          const resolved = await service.resolveProducedFileForDownload(
+            c.req.param('fileId'),
+          )
+          if (!resolved) return c.json({ error: 'File not found' }, 404)
+
+          // Stream raw bytes via Bun's lazy file handle. Sets
+          // Content-Disposition so browsers save instead of preview.
+          const file = Bun.file(resolved.absolutePath)
+          return new Response(file.stream(), {
+            headers: {
+              'Content-Type': resolved.mimeType,
+              'Content-Length': String(resolved.size),
+              'Content-Disposition': `attachment; filename="${encodeRfc6266Filename(resolved.fileName)}"`,
+              'Cache-Control': 'no-store',
+            },
+          })
+        } catch (err) {
+          return handleAgentRouteError(c, err)
+        }
+      })
+  )
+}
+
+/**
+ * RFC 6266 / RFC 5987 filename encoding for `Content-Disposition`.
+ * Quotes the ASCII-safe filename and adds a percent-encoded `filename*`
+ * fallback for non-ASCII so browsers download with the original name.
+ */
+function encodeRfc6266Filename(filename: string): string {
+  // Strip CRLFs and quotes (header injection guard).
+  const safe = filename.replace(/["\r\n]/g, '_')
+  return safe
 }
 
 function turnFramesToAgentEvents(
