@@ -145,6 +145,9 @@ function AgentConversationController({
 
     const query = initialMessage?.trim()
     if (!initialMessageKey) {
+      // Reset is safe even on the post-registry-fire re-run: consume
+      // is destructive, so the registry is already drained — there's
+      // nothing left for a third run to re-send.
       initialMessageSentRef.current = null
       return
     }
