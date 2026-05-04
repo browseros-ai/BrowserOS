@@ -26,6 +26,7 @@ import {
   filterTurnsPersistedInHistory,
   flattenHistoryPages,
 } from './claw-chat-types'
+import { consumePendingInitialMessage } from './pending-initial-message'
 import { QueuePanel } from './QueuePanel'
 import { useAgentConversation } from './useAgentConversation'
 import { useHarnessChatHistory } from './useHarnessChatHistory'
@@ -113,25 +114,49 @@ function AgentConversationController({
   sendRef.current = send
 
   useEffect(() => {
+    if (disabled || !historyReady) return
+
+    // Registry-first: when the user submitted at /home with
+    // attachments, the rich payload is here. URL `?q=` may also be
+    // present and is the text-only fallback path; the registry wins
+    // when both exist because it carries the binary attachments
+    // alongside the text.
+    const pending = consumePendingInitialMessage(agentId)
+    if (pending) {
+      // Mark the dedup ref so the text-only branch below doesn't
+      // re-fire on the same render.
+      if (initialMessageKey) {
+        initialMessageSentRef.current = initialMessageKey
+      }
+      onInitialMessageConsumedRef.current()
+      void sendRef.current({
+        text: pending.text,
+        attachments: pending.attachments.map((a) => a.payload),
+        attachmentPreviews: pending.attachments.map((a) => ({
+          id: a.id,
+          kind: a.kind,
+          mediaType: a.mediaType,
+          name: a.name,
+          dataUrl: a.dataUrl,
+        })),
+      })
+      return
+    }
+
     const query = initialMessage?.trim()
     if (!initialMessageKey) {
       initialMessageSentRef.current = null
       return
     }
 
-    if (
-      !query ||
-      initialMessageSentRef.current === initialMessageKey ||
-      disabled ||
-      !historyReady
-    ) {
+    if (!query || initialMessageSentRef.current === initialMessageKey) {
       return
     }
 
     initialMessageSentRef.current = initialMessageKey
     onInitialMessageConsumedRef.current()
     void sendRef.current({ text: query })
-  }, [disabled, historyReady, initialMessage, initialMessageKey])
+  }, [agentId, disabled, historyReady, initialMessage, initialMessageKey])
 
   const handleSelectAgent = (entry: AgentEntry) => {
     navigate(`${agentPathPrefix}/${entry.agentId}`)

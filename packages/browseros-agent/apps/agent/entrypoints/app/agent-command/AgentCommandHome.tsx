@@ -18,8 +18,12 @@ import { SignInHint } from '@/entrypoints/newtab/index/SignInHint'
 import { useActiveHint } from '@/entrypoints/newtab/index/useActiveHint'
 import { AgentCardDock } from './AgentCardDock'
 import { useAgentCommandData } from './agent-command-layout'
-import { ConversationInput } from './ConversationInput'
+import {
+  ConversationInput,
+  type ConversationInputSendInput,
+} from './ConversationInput'
 import { orderHomeAgents } from './home-agent-card.helpers'
+import { setPendingInitialMessage } from './pending-initial-message'
 
 function EmptyAgentsState({ onOpenAgents }: { onOpenAgents: () => void }) {
   return (
@@ -116,8 +120,19 @@ export const AgentCommandHome: FC = () => {
     }
   }, [legacyAgents, selectedAgentId])
 
-  const handleSend = (input: { text: string }) => {
+  const handleSend = (input: ConversationInputSendInput) => {
     if (!selectedAgentId) return
+    // Stash text + attachments in the in-memory registry. Text also
+    // travels in `?q=` so a hard refresh / shareable URL still works
+    // for text-only prompts; attachments are registry-only because a
+    // multi-megabyte dataUrl can't ride a URL search param. The chat
+    // screen prefers the registry when both are present.
+    setPendingInitialMessage({
+      agentId: selectedAgentId,
+      text: input.text,
+      attachments: input.attachments,
+      createdAt: Date.now(),
+    })
     navigate(
       `/home/agents/${selectedAgentId}?q=${encodeURIComponent(input.text)}`,
     )
@@ -167,7 +182,7 @@ export const AgentCommandHome: FC = () => {
                   streaming={false}
                   disabled={!selectedAgentReady}
                   status={selectedAgentStatus}
-                  attachmentsEnabled={false}
+                  attachmentsEnabled={true}
                   placeholder={
                     selectedAgentReady
                       ? `Ask ${selectedAgentName} to handle a task...`
