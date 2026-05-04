@@ -164,6 +164,168 @@ function VoiceButton({
   )
 }
 
+/**
+ * Calm-composer footer used by `variant="home"`. Pill-shaped chips on
+ * an internal dashed divider, with a right-aligned keyboard hint.
+ * The chat-screen composer keeps the original `ContextControls`
+ * layout — no shared structure beyond the props pass-through.
+ */
+function HomeContextControls({
+  agents,
+  onCreateAgent,
+  onSelectAgent,
+  selectedAgentId,
+  selectedTabs,
+  onToggleTab,
+  showAgentSelector,
+  status,
+  onAttachClick,
+  attachDisabled,
+  attachmentsEnabled,
+}: {
+  agents: AgentEntry[]
+  onCreateAgent?: () => void
+  onSelectAgent: (agent: AgentEntry) => void
+  selectedAgentId: string | null
+  selectedTabs: chrome.tabs.Tab[]
+  onToggleTab: (tab: chrome.tabs.Tab) => void
+  showAgentSelector: boolean
+  status?: string
+  onAttachClick: () => void
+  attachDisabled: boolean
+  attachmentsEnabled: boolean
+}) {
+  const { supports } = useCapabilities()
+  const { selectedFolder } = useWorkspace()
+  const { servers: mcpServers } = useMcpServers()
+  const { data: userMCPIntegrations } = useGetUserMCPIntegrations()
+
+  const connectedManagedServers = mcpServers.filter((server) => {
+    if (server.type !== 'managed' || !server.managedServerName) return false
+    return userMCPIntegrations?.integrations?.find(
+      (integration) => integration.name === server.managedServerName,
+    )?.is_authenticated
+  })
+
+  const showApps = supports(Feature.MANAGED_MCP_SUPPORT)
+  const showWorkspace = supports(Feature.WORKSPACE_FOLDER_SUPPORT)
+
+  return (
+    <div className="mx-3 flex items-center gap-1 border-border/60 border-t border-dashed py-2">
+      {showAgentSelector ? (
+        <>
+          <AgentSelector
+            agents={agents}
+            selectedAgentId={selectedAgentId}
+            onSelectAgent={onSelectAgent}
+            onCreateAgent={onCreateAgent}
+            status={status}
+            triggerVariant="pill"
+          />
+          <span
+            aria-hidden="true"
+            className="mx-1 inline-block h-3.5 w-px shrink-0 bg-border"
+          />
+        </>
+      ) : null}
+      {showWorkspace ? (
+        <WorkspaceSelector>
+          <button
+            type="button"
+            className="inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
+          >
+            <Folder className="size-3" />
+            <span>Workspace</span>
+            <span className="font-mono text-[10.5px] text-muted-foreground/70">
+              {selectedFolder?.name ?? 'none'}
+            </span>
+          </button>
+        </WorkspaceSelector>
+      ) : null}
+      <TabPickerPopover
+        variant="selector"
+        selectedTabs={selectedTabs}
+        onToggleTab={onToggleTab}
+      >
+        <button
+          type="button"
+          className={cn(
+            'inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[11.5px] transition-colors data-[state=open]:bg-accent data-[state=open]:text-foreground',
+            selectedTabs.length > 0
+              ? 'bg-[var(--accent-orange)] text-white hover:bg-[var(--accent-orange)]/90'
+              : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+          )}
+        >
+          <Layers className="size-3" />
+          <span>Tabs</span>
+          <span
+            className={cn(
+              'font-mono text-[10.5px]',
+              selectedTabs.length > 0
+                ? 'text-white/80'
+                : 'text-muted-foreground/70',
+            )}
+          >
+            {selectedTabs.length}
+          </span>
+        </button>
+      </TabPickerPopover>
+      <button
+        type="button"
+        onClick={onAttachClick}
+        disabled={attachDisabled || !attachmentsEnabled}
+        title="Attach files"
+        className="inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <Paperclip className="size-3" />
+        <span>Attach</span>
+      </button>
+      {showApps ? (
+        <AppSelector side="bottom">
+          <button
+            type="button"
+            className="inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
+          >
+            {connectedManagedServers.length > 0 ? (
+              <span className="flex items-center -space-x-1.5">
+                {connectedManagedServers.slice(0, 4).map((server) => (
+                  <span
+                    key={server.id}
+                    className="rounded-full ring-2 ring-card"
+                  >
+                    <McpServerIcon
+                      serverName={server.managedServerName ?? ''}
+                      size={12}
+                    />
+                  </span>
+                ))}
+              </span>
+            ) : (
+              <FileText className="size-3" />
+            )}
+            <span>Apps</span>
+            <ChevronDown className="size-3" />
+          </button>
+        </AppSelector>
+      ) : null}
+      <div className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground/70">
+        <kbd className="inline-flex h-4 min-w-4 items-center justify-center rounded border border-border bg-accent/30 px-1 font-mono text-[10px] text-muted-foreground">
+          ↵
+        </kbd>
+        <span>to run</span>
+        <span className="text-muted-foreground/40">·</span>
+        <kbd className="inline-flex h-4 min-w-4 items-center justify-center rounded border border-border bg-accent/30 px-1 font-mono text-[10px] text-muted-foreground">
+          ⇧
+        </kbd>
+        <kbd className="inline-flex h-4 min-w-4 items-center justify-center rounded border border-border bg-accent/30 px-1 font-mono text-[10px] text-muted-foreground">
+          ↵
+        </kbd>
+        <span>new line</span>
+      </div>
+    </div>
+  )
+}
+
 function ContextControls({
   agents,
   onCreateAgent,
@@ -304,7 +466,7 @@ function ContextControls({
 
 function HomeShell({ children }: { children: ReactNode }) {
   return (
-    <div className="overflow-hidden rounded-[1.55rem] border border-border/60 bg-card/95 shadow-sm">
+    <div className="overflow-hidden rounded-[1.55rem] border border-border/60 bg-card/95 shadow-sm transition-[border-color,box-shadow] duration-150 focus-within:border-[var(--accent-orange)]/40 focus-within:shadow-[0_0_0_4px_color-mix(in_oklch,var(--accent-orange)_15%,transparent),0_1px_2px_rgba(15,23,42,0.04)]">
       {children}
     </div>
   )
@@ -583,19 +745,35 @@ export const ConversationInput: FC<ConversationInputProps> = ({
             {voice.error}
           </div>
         ) : null}
-        <ContextControls
-          agents={agents}
-          onCreateAgent={onCreateAgent}
-          onSelectAgent={onSelectAgent}
-          selectedAgentId={selectedAgentId}
-          selectedTabs={selectedTabs}
-          onToggleTab={toggleTab}
-          showAgentSelector={variant === 'home'}
-          status={status}
-          onAttachClick={openFilePicker}
-          attachDisabled={attachments.length >= 10 || isStaging || !!disabled}
-          attachmentsEnabled={attachmentsEnabled}
-        />
+        {variant === 'home' ? (
+          <HomeContextControls
+            agents={agents}
+            onCreateAgent={onCreateAgent}
+            onSelectAgent={onSelectAgent}
+            selectedAgentId={selectedAgentId}
+            selectedTabs={selectedTabs}
+            onToggleTab={toggleTab}
+            showAgentSelector={true}
+            status={status}
+            onAttachClick={openFilePicker}
+            attachDisabled={attachments.length >= 10 || isStaging || !!disabled}
+            attachmentsEnabled={attachmentsEnabled}
+          />
+        ) : (
+          <ContextControls
+            agents={agents}
+            onCreateAgent={onCreateAgent}
+            onSelectAgent={onSelectAgent}
+            selectedAgentId={selectedAgentId}
+            selectedTabs={selectedTabs}
+            onToggleTab={toggleTab}
+            showAgentSelector={false}
+            status={status}
+            onAttachClick={openFilePicker}
+            attachDisabled={attachments.length >= 10 || isStaging || !!disabled}
+            attachmentsEnabled={attachmentsEnabled}
+          />
+        )}
         {isDragOver ? (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[inherit] bg-background/80 font-medium text-foreground text-sm backdrop-blur-sm">
             Drop files to attach
