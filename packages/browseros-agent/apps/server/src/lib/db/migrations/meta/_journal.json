@@ -15,6 +15,13 @@
       "when": 1777752799806,
       "tag": "0001_lazy_orphan",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1777902205667,
+      "tag": "0002_chemical_whirlwind",
+      "breakpoints": true
     }
   ]
 }
