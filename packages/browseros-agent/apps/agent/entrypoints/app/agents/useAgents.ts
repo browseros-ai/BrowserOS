@@ -25,12 +25,18 @@ interface HarnessAgentsResponse {
 
 export type { AgentHarnessStreamEvent }
 
-const AGENT_QUERY_KEYS = {
+export const AGENT_QUERY_KEYS = {
   adapters: 'agent-harness-adapters',
   agents: 'agent-harness-agents',
+  /** Outputs-rail data for one agent — `[agentOutputs, baseUrl, agentId]`. */
+  agentOutputs: 'agent-harness-agent-outputs',
+  /** Per-turn artifact-card files — `[agentTurnFiles, baseUrl, agentId, turnId]`. */
+  agentTurnFiles: 'agent-harness-agent-turn-files',
+  /** Single-file preview payload — `[filePreview, baseUrl, fileId]`. */
+  filePreview: 'agent-harness-file-preview',
 } as const
 
-async function agentsFetch<T>(
+export async function agentsFetch<T>(
   baseUrl: string,
   path: string,
   init?: RequestInit,
