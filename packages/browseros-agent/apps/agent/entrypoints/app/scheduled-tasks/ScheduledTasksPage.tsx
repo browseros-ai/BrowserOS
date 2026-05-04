@@ -18,6 +18,8 @@ import {
   SCHEDULED_TASK_DELETED_EVENT,
   SCHEDULED_TASK_EDITED_EVENT,
   SCHEDULED_TASK_RETRIED_EVENT,
+  SCHEDULED_TASK_RUN_DELETED_EVENT,
+  SCHEDULED_TASK_RUNS_CLEARED_EVENT,
   SCHEDULED_TASK_TESTED_EVENT,
   SCHEDULED_TASK_TOGGLED_EVENT,
   SCHEDULED_TASK_VIEW_RESULTS_EVENT,
@@ -42,13 +44,14 @@ import type { ScheduledJob } from './types'
 export const ScheduledTasksPage: FC = () => {
   const { jobs, addJob, editJob, toggleJob, removeJob, runJob } =
     useScheduledJobs()
-  const { jobRuns, cancelJobRun } = useScheduledJobRuns()
+  const { jobRuns, cancelJobRun, removeJobRun, clearJobRuns } = useScheduledJobRuns()
 
   const [activeTab, setActiveTab] = useState<string | null>(null)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [editingJob, setEditingJob] = useState<ScheduledJob | null>(null)
   const [deleteJobId, setDeleteJobId] = useState<string | null>(null)
   const [viewingRunId, setViewingRunId] = useState<string | null>(null)
+  const [clearAllRunsConfirm, setClearAllRunsConfirm] = useState(false)
   const viewingRun = viewingRunId
     ? (jobRuns.find((r) => r.id === viewingRunId) ?? null)
     : null
@@ -149,6 +152,21 @@ export const ScheduledTasksPage: FC = () => {
     track(SCHEDULED_TASK_VIEW_RESULTS_EVENT)
   }
 
+  const handleDeleteRun = async (runId: string) => {
+    await removeJobRun(runId)
+    track(SCHEDULED_TASK_RUN_DELETED_EVENT)
+  }
+
+  const handleClearRuns = () => {
+    setClearAllRunsConfirm(true)
+  }
+
+  const confirmClearRuns = async () => {
+    await clearJobRuns()
+    track(SCHEDULED_TASK_RUNS_CLEARED_EVENT)
+    setClearAllRunsConfirm(false)
+  }
+
   useEffect(() => {
     scheduledJobRunStorage.getValue().then((runs) => {
       setActiveTab(runs && runs.length > 0 ? 'results' : 'tasks')
@@ -175,6 +193,8 @@ export const ScheduledTasksPage: FC = () => {
               onViewRun={handleViewRun}
               onCancelRun={handleCancelRun}
               onRetryRun={handleRetryRun}
+              onDeleteRun={handleDeleteRun}
+              onClearRuns={handleClearRuns}
             />
           </TabsContent>
 
@@ -234,6 +254,27 @@ export const ScheduledTasksPage: FC = () => {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={confirmDelete}>
               Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={clearAllRunsConfirm}
+        onOpenChange={(open) => !open && setClearAllRunsConfirm(false)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear All Run History</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete all scheduled task run history. This
+              action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmClearRuns}>
+              Clear All
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

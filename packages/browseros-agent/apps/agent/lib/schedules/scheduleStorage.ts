@@ -144,6 +144,10 @@ export function useScheduledJobRuns() {
     await scheduledJobRunStorage.setValue(current.filter((r) => r.id !== id))
   }
 
+  const clearJobRuns = async () => {
+    await scheduledJobRunStorage.setValue([])
+  }
+
   const editJobRun = async (
     id: string,
     updates: Partial<Omit<ScheduledJobRun, 'id'>>,
@@ -158,7 +162,7 @@ export function useScheduledJobRuns() {
     return sendScheduleMessage('cancelScheduledJobRun', { runId })
   }
 
-  return { jobRuns, addJobRun, removeJobRun, editJobRun, cancelJobRun }
+  return { jobRuns, addJobRun, removeJobRun, clearJobRuns, editJobRun, cancelJobRun }
 }
 
 export async function syncScheduledJobs(): Promise<void> {

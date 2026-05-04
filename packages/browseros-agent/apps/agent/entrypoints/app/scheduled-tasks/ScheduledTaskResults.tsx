@@ -8,6 +8,7 @@ import {
   RotateCcw,
   Square,
   XCircle,
+  Trash2,
 } from 'lucide-react'
 import type { FC } from 'react'
 import { useMemo } from 'react'
@@ -31,6 +32,8 @@ interface ScheduledTaskResultsProps {
   onViewRun: (run: ScheduledJobRun) => void
   onCancelRun: (runId: string) => void
   onRetryRun: (jobId: string) => void
+  onDeleteRun: (runId: string) => void
+  onClearRuns: () => void
 }
 
 const getStatusIcon = (status: JobRunWithDetails['status']) => {
@@ -50,6 +53,8 @@ export const ScheduledTaskResults: FC<ScheduledTaskResultsProps> = ({
   onViewRun,
   onCancelRun,
   onRetryRun,
+  onDeleteRun,
+  onClearRuns,
 }) => {
   const { jobRuns } = useScheduledJobRuns()
   const { jobs } = useScheduledJobs()
@@ -85,63 +90,90 @@ export const ScheduledTaskResults: FC<ScheduledTaskResultsProps> = ({
   }
 
   return (
-    <div className="space-y-2">
-      {sortedRuns.map((run) => (
+    <div className="space-y-4">
+      <div className="flex justify-end">
         <Button
-          key={run.id}
-          variant="ghost"
-          onClick={() => onViewRun(run)}
-          className="h-auto w-full justify-start rounded-xl border border-border/50 bg-card p-4 text-left transition-all hover:border-border"
+          variant="outline"
+          size="sm"
+          onClick={onClearRuns}
+          className="flex items-center gap-2"
         >
-          <div className="flex w-full items-start gap-3">
-            {getStatusIcon(run.status)}
-            <div className="min-w-0 flex-1">
-              <div className="mb-1 flex items-center gap-2">
-                <span className="truncate font-medium text-foreground text-sm">
-                  {run.job?.name}
-                </span>
-                <span className="flex items-center gap-1 text-muted-foreground text-xs">
-                  <Clock className="h-3 w-3" />
-                  {formatTimestamp(run.startedAt)}
-                </span>
+          <Trash2 className="h-4 w-4" />
+          Clear All History
+        </Button>
+      </div>
+      <div className="space-y-2">
+        {sortedRuns.map((run) => (
+          <Button
+            key={run.id}
+            variant="ghost"
+            onClick={() => onViewRun(run)}
+            className="h-auto w-full justify-start rounded-xl border border-border/50 bg-card p-4 text-left transition-all hover:border-border"
+          >
+            <div className="flex w-full items-start gap-3">
+              {getStatusIcon(run.status)}
+              <div className="min-w-0 flex-1">
+                <div className="mb-1 flex items-center gap-2">
+                  <span className="truncate font-medium text-foreground text-sm">
+                    {run.job?.name}
+                  </span>
+                  <span className="flex items-center gap-1 text-muted-foreground text-xs">
+                    <Clock className="h-3 w-3" />
+                    {formatTimestamp(run.startedAt)}
+                  </span>
+                </div>
+                {run.result && (
+                  <p className="line-clamp-2 text-ellipsis text-muted-foreground text-xs">
+                    {run.result}
+                  </p>
+                )}
               </div>
-              {run.result && (
-                <p className="line-clamp-2 text-ellipsis text-muted-foreground text-xs">
-                  {run.result}
-                </p>
+              {run.status === 'running' && (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onCancelRun(run.id)
+                  }}
+                  className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  aria-label="Cancel run"
+                >
+                  <Square className="h-3.5 w-3.5" />
+                </Button>
+              )}
+              {run.status === 'failed' && (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onRetryRun(run.jobId)
+                  }}
+                  className="shrink-0 text-muted-foreground hover:text-foreground"
+                  aria-label="Retry run"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                </Button>
+              )}
+              {run.status !== 'running' && (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDeleteRun(run.id)
+                  }}
+                  className="shrink-0 text-muted-foreground hover:text-destructive"
+                  aria-label="Delete run"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
               )}
             </div>
-            {run.status === 'running' && (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onCancelRun(run.id)
-                }}
-                className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                aria-label="Cancel run"
-              >
-                <Square className="h-3.5 w-3.5" />
-              </Button>
-            )}
-            {run.status === 'failed' && (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onRetryRun(run.jobId)
-                }}
-                className="shrink-0 text-muted-foreground hover:text-foreground"
-                aria-label="Retry run"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-              </Button>
-            )}
-          </div>
-        </Button>
-      ))}
+          </Button>
+        ))}
+      </div>
     </div>
   )
 }
