@@ -704,7 +704,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
               }
               disabled={disabled || voice.isTranscribing}
               className={cn(
-                'resize-none border-none bg-transparent px-0 text-[15px] shadow-none focus-visible:ring-0',
+                'resize-none border-none bg-transparent px-0 text-[15px] shadow-none focus-visible:ring-0 dark:bg-transparent',
                 '[field-sizing:fixed]',
                 variant === 'home'
                   ? 'min-h-[40px] py-2 leading-6'
