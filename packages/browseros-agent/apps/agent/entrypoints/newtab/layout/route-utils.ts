@@ -19,12 +19,3 @@ export function shouldHideFocusGrid(pathname: string): boolean {
     HIDE_FOCUS_GRID_PATHS.has(pathname) || isAgentConversationPath(pathname)
   )
 }
-
-export function shouldUseChatSession(
-  pathname: string,
-  useChatSessionOnHome = false,
-): boolean {
-  return (
-    pathname === '/home/chat' || (useChatSessionOnHome && pathname === '/home')
-  )
-}

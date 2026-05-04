@@ -87,7 +87,7 @@ export const App: FC = () => {
           {/* Home routes */}
           <Route
             path="home"
-            element={<NewTabLayout useChatSessionOnHome={!alphaEnabled} />}
+            element={<NewTabLayout />}
           >
             {alphaEnabled ? (
               <>
