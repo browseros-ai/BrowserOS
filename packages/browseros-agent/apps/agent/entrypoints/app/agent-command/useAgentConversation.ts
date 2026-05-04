@@ -10,9 +10,11 @@ import type { OpenClawChatHistoryMessage } from '@/entrypoints/app/agents/useOpe
 import type {
   AgentConversationTurn,
   AssistantPart,
+  ConversationTurnFile,
   ToolEntry,
   UserAttachmentPreview,
 } from '@/lib/agent-conversations/types'
+import { useInvalidateAgentOutputs } from '@/lib/agent-files'
 import type { ServerAttachmentPayload } from '@/lib/attachments'
 import { consumeSSEStream } from '@/lib/sse'
 import { buildToolLabel } from '@/lib/tool-labels'
@@ -53,6 +55,12 @@ export function useAgentConversation(
 ) {
   const [turns, setTurns] = useState<AgentConversationTurn[]>([])
   const [streaming, setStreaming] = useState(false)
+  const invalidateAgentOutputs = useInvalidateAgentOutputs()
+  // Stable ref so the resume effect doesn't re-subscribe on every
+  // render (the hook's returned callable is freshly closured each
+  // time, but the underlying queryClient is stable).
+  const invalidateAgentOutputsRef = useRef(invalidateAgentOutputs)
+  invalidateAgentOutputsRef.current = invalidateAgentOutputs
   const sessionKeyRef = useRef(options.sessionKey ?? '')
   const historyRef = useRef<OpenClawChatHistoryMessage[]>(options.history ?? [])
   const textAccRef = useRef('')
@@ -152,6 +160,17 @@ export function useAgentConversation(
     })
   }
 
+  const setProducedFilesOnCurrentTurn = (files: ConversationTurnFile[]) => {
+    setTurns((prev) => {
+      const last = prev[prev.length - 1]
+      if (!last) return prev
+      // Replace, don't merge: the server's diff is authoritative for
+      // the just-completed turn — duplicate events shouldn't grow the
+      // list, and a re-attribution should overwrite an earlier one.
+      return [...prev.slice(0, -1), { ...last, producedFiles: files }]
+    })
+  }
+
   const upsertAgentHarnessTool = (event: AgentHarnessStreamEvent) => {
     if (event.type !== 'tool_call') return
     const rawName = event.title || event.rawType || 'tool call'
@@ -208,6 +227,9 @@ export function useAgentConversation(
       case 'tool_call':
         upsertAgentHarnessTool(event)
         break
+      case 'produced_files':
+        setProducedFilesOnCurrentTurn(event.files)
+        break
       case 'done':
         markCurrentTurnDone()
         break
@@ -259,6 +281,7 @@ export function useAgentConversation(
           ...prev,
           {
             id: crypto.randomUUID(),
+            turnId: active.turnId,
             userText: active.prompt ?? '',
             parts: [],
             done: false,
@@ -304,9 +327,14 @@ export function useAgentConversation(
         // When `cancelled` is true the next run will set these
         // itself, so resetting here would only cause a brief flicker.
         if (!cancelled && weStartedStream) {
+          const finishedTurnId = turnIdRef.current
           turnIdRef.current = null
           lastSeqRef.current = null
           setStreaming(false)
+          void invalidateAgentOutputsRef.current(
+            agentId,
+            finishedTurnId ?? undefined,
+          )
         }
       }
     }
@@ -317,6 +345,60 @@ export function useAgentConversation(
       abortController.abort()
     }
   }, [agentId, activeTurnIdDep])
+
+  /**
+   * Send the chat request and follow the 409-active-turn redirect
+   * once. Pulled out of `send` to keep its cognitive complexity in
+   * check — the retry adds a branch that biome counts heavily.
+   */
+  const openSendStream = async (
+    targetAgentId: string,
+    text: string,
+    attachments: ServerAttachmentPayload[],
+    signal: AbortSignal,
+  ): Promise<Response> => {
+    const initial = await chatWithHarnessAgent(
+      targetAgentId,
+      text,
+      signal,
+      attachments,
+    )
+    if (initial.status !== 409) return initial
+    // 409 means the server already has an active turn for this agent
+    // (a previous tab kicked one off and we're a fresh mount that
+    // missed the resume window). Attach to it instead of double-sending.
+    const body = (await initial.json()) as { turnId?: string }
+    if (!body.turnId) return initial
+    return attachToHarnessTurn(targetAgentId, {
+      turnId: body.turnId,
+      signal,
+    })
+  }
+
+  /**
+   * Pull session-key / turn-id off response headers and propagate to
+   * refs + the optimistic turn. Stamping `turnId` here lets the
+   * inline artifact card fall back to /files/turn/<id> on a resumed
+   * mount that missed the live `produced_files` event.
+   */
+  const applyResponseHeadersToTurn = (response: Response) => {
+    const responseSessionKey =
+      response.headers.get('X-Session-Key') ??
+      response.headers.get('X-Session-Id')
+    if (responseSessionKey) {
+      sessionKeyRef.current = responseSessionKey
+      onSessionKeyChangeRef.current?.(responseSessionKey)
+    }
+    const responseTurnId = response.headers.get('X-Turn-Id')
+    if (!responseTurnId) return
+    turnIdRef.current = responseTurnId
+    lastSeqRef.current = null
+    setTurns((prev) => {
+      const last = prev[prev.length - 1]
+      if (!last) return prev
+      return [...prev.slice(0, -1), { ...last, turnId: responseTurnId }]
+    })
+  }
 
   const send = async (input: string | SendInput) => {
     const normalized: SendInput =
@@ -346,37 +428,13 @@ export function useAgentConversation(
     streamAbortRef.current = abortController
 
     try {
-      let response = await chatWithHarnessAgent(
+      const response = await openSendStream(
         agentId,
         trimmed,
-        abortController.signal,
         attachments,
+        abortController.signal,
       )
-      // 409 means the server already has an active turn for this
-      // agent (e.g. a previous tab kicked one off and we're a fresh
-      // mount that missed the resume window). Attach to it instead of
-      // double-sending.
-      if (response.status === 409) {
-        const body = (await response.json()) as { turnId?: string }
-        if (body.turnId) {
-          response = await attachToHarnessTurn(agentId, {
-            turnId: body.turnId,
-            signal: abortController.signal,
-          })
-        }
-      }
-      const responseSessionKey =
-        response.headers.get('X-Session-Key') ??
-        response.headers.get('X-Session-Id')
-      if (responseSessionKey) {
-        sessionKeyRef.current = responseSessionKey
-        onSessionKeyChangeRef.current?.(responseSessionKey)
-      }
-      const responseTurnId = response.headers.get('X-Turn-Id')
-      if (responseTurnId) {
-        turnIdRef.current = responseTurnId
-        lastSeqRef.current = null
-      }
+      applyResponseHeadersToTurn(response)
       if (!response.ok) {
         const err = await response.text()
         updateCurrentTurnParts((parts) => [
@@ -404,10 +462,15 @@ export function useAgentConversation(
       if (streamAbortRef.current === abortController) {
         streamAbortRef.current = null
       }
+      // Capture before nulling — the invalidation needs the turn id so
+      // useAgentTurnFiles consumers also flush, not just the agent-wide
+      // rail query.
+      const finishedTurnId = turnIdRef.current
       turnIdRef.current = null
       lastSeqRef.current = null
       onCompleteRef.current?.()
       setStreaming(false)
+      void invalidateAgentOutputs(agentId, finishedTurnId ?? undefined)
     }
   }
 

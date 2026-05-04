@@ -1,5 +1,5 @@
 import { ArrowLeft, Home } from 'lucide-react'
-import type { FC } from 'react'
+import type { FC, ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { formatRelativeTime } from '@/entrypoints/app/agents/agent-display.helpers'
@@ -20,6 +20,8 @@ interface ConversationHeaderProps {
   backTarget: 'home' | 'page'
   onGoHome: () => void
   onPinToggle: (next: boolean) => void
+  /** Optional trailing slot — currently used for the Outputs rail toggle. */
+  headerExtra?: ReactNode
 }
 
 /**
@@ -40,6 +42,7 @@ export const ConversationHeader: FC<ConversationHeaderProps> = ({
   backTarget,
   onGoHome,
   onPinToggle,
+  headerExtra,
 }) => {
   const BackIcon = backTarget === 'home' ? Home : ArrowLeft
   const adapter = agent?.adapter ?? fallbackAdapter
@@ -90,16 +93,21 @@ export const ConversationHeader: FC<ConversationHeaderProps> = ({
           </div>
         </div>
       </div>
-      <div className="flex shrink-0 flex-col items-end gap-1">
-        <StatusPill
-          status={status}
-          hasActiveTurn={Boolean(agent?.activeTurnId)}
-        />
-        <div className="flex h-4 items-center text-[11px] text-muted-foreground">
-          <span className="truncate">
-            {metaParts.length > 0 ? metaParts.join(' · ') : '\u00A0'}
-          </span>
+      <div className="flex shrink-0 items-center gap-3">
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <StatusPill
+            status={status}
+            hasActiveTurn={Boolean(agent?.activeTurnId)}
+          />
+          <div className="flex h-4 items-center text-[11px] text-muted-foreground">
+            <span className="truncate">
+              {metaParts.length > 0 ? metaParts.join(' · ') : '\u00A0'}
+            </span>
+          </div>
         </div>
+        {headerExtra ? (
+          <div className="flex shrink-0 items-center">{headerExtra}</div>
+        ) : null}
       </div>
     </div>
   )

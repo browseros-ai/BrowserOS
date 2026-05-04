@@ -1,4 +1,4 @@
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, PanelRight } from 'lucide-react'
 import { type FC, useEffect, useMemo, useRef } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
 import { Button } from '@/components/ui/button'
@@ -16,8 +16,13 @@ import {
   useUpdateHarnessAgent,
 } from '@/entrypoints/app/agents/useAgents'
 import type { AgentEntry } from '@/entrypoints/app/agents/useOpenClaw'
+import { cn } from '@/lib/utils'
 import { AgentRail } from './AgentRail'
 import { useAgentCommandData } from './agent-command-layout'
+import {
+  OutputsRail,
+  useOutputsRailOpen,
+} from './agent-conversation.outputs-rail'
 import { ClawChat } from './ClawChat'
 import { ConversationHeader } from './ConversationHeader'
 import { ConversationInput } from './ConversationInput'
@@ -287,6 +292,11 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
   const isPageVariant = variant === 'page'
   const backLabel = isPageVariant ? 'Back to agents' : 'Back to home'
 
+  const isOpenClawAgent = harnessAgent?.adapter === 'openclaw'
+  const [outputsRailOpen, setOutputsRailOpen] =
+    useOutputsRailOpen(resolvedAgentId)
+  const railVisible = isOpenClawAgent && outputsRailOpen
+
   const adapterHealth = useMemo<AgentAdapterHealth | null>(() => {
     const adapterId = harnessAgent?.adapter
     if (!adapterId) return null
@@ -346,13 +356,34 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
               onPinToggle={(next) =>
                 handlePinToggle(harnessAgent ?? null, next)
               }
+              headerExtra={
+                isOpenClawAgent ? (
+                  <Button
+                    variant={railVisible ? 'secondary' : 'ghost'}
+                    size="icon"
+                    className="size-8 rounded-xl"
+                    onClick={() => setOutputsRailOpen(!railVisible)}
+                    title={railVisible ? 'Hide outputs' : 'Show outputs'}
+                  >
+                    <PanelRight className="size-4" />
+                  </Button>
+                ) : undefined
+              }
             />
           </div>
         </div>
 
-        {/* Body grid: rail list + chat. Both columns share the same
-            top edge (the band above) so headers can never drift. */}
-        <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] lg:grid-cols-[288px_minmax(0,1fr)]">
+        {/* Body grid: rail list + chat (+ outputs rail when an
+            openclaw agent has it open). Columns share the same top
+            edge as the band above so headers can never drift. */}
+        <div
+          className={cn(
+            'grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)]',
+            railVisible
+              ? 'lg:grid-cols-[288px_minmax(0,1fr)_320px]'
+              : 'lg:grid-cols-[288px_minmax(0,1fr)]',
+          )}
+        >
           <AgentRail
             agents={harnessAgents}
             adapters={adapters}
@@ -374,6 +405,13 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
               createAgentPath={createAgentPath}
             />
           </div>
+
+          {railVisible ? (
+            <OutputsRail
+              agentId={resolvedAgentId}
+              onClose={() => setOutputsRailOpen(false)}
+            />
+          ) : null}
         </div>
       </div>
     </div>

@@ -42,11 +42,34 @@ export interface UserAttachmentPreview {
   dataUrl?: string
 }
 
+/**
+ * Files attributed to this turn by the harness's per-turn workspace
+ * diff. Populated either via the live `produced_files` SSE event or
+ * (on resume) the `useAgentTurnFiles` fallback. Mirrors the wire
+ * shape from `agent-harness-types.HarnessProducedFile` minus the
+ * stream-only fields the inline card doesn't need.
+ */
+export interface ConversationTurnFile {
+  id: string
+  path: string
+  size: number
+  mtimeMs: number
+}
+
 export interface AgentConversationTurn {
   id: string
+  /**
+   * Server-issued turn id, set as soon as the response headers arrive
+   * (`X-Turn-Id`) for fresh sends, or from the active-turn payload on
+   * resume. Required for the historic-files fallback fetch; absent on
+   * the brief optimistic window before the first header.
+   */
+  turnId?: string | null
   userText: string
   userAttachments?: UserAttachmentPreview[]
   parts: AssistantPart[]
+  /** Files produced during this turn (openclaw only in v1). */
+  producedFiles?: ConversationTurnFile[]
   done: boolean
   timestamp: number
 }

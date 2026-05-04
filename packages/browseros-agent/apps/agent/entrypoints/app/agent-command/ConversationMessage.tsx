@@ -22,6 +22,7 @@ import type {
   AgentConversationTurn,
   ToolEntry,
 } from '@/lib/agent-conversations/types'
+import { ArtifactCard } from './agent-conversation.artifact-card'
 
 interface ConversationMessageProps {
   turn: AgentConversationTurn
@@ -184,6 +185,10 @@ export const ConversationMessage: FC<ConversationMessageProps> = ({
           </MessageContent>
         </Message>
       )}
+
+      {turn.producedFiles && turn.producedFiles.length > 0 ? (
+        <ArtifactCard files={turn.producedFiles} />
+      ) : null}
 
       {!turn.done && turn.parts.length === 0 && streaming && (
         <div className="flex gap-2">
