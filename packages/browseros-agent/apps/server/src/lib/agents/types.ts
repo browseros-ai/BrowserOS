@@ -27,6 +27,20 @@ export interface AgentHistoryPage {
   items: AgentHistoryEntry[]
 }
 
+/**
+ * One file the harness attributed to the assistant turn that just
+ * finished. Emitted as part of a `produced_files` event before the
+ * terminal `done` so the inline artifact card renders alongside the
+ * streamed text the user just watched complete.
+ */
+export interface ProducedFileEventEntry {
+  id: string
+  /** Workspace-relative POSIX path. */
+  path: string
+  size: number
+  mtimeMs: number
+}
+
 export type AgentStreamEvent =
   | {
       type: 'text_delta'
@@ -46,6 +60,10 @@ export type AgentStreamEvent =
       type: 'status'
       text: string
       rawType?: string
+    }
+  | {
+      type: 'produced_files'
+      files: ProducedFileEventEntry[]
     }
   | {
       type: 'done'

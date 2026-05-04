@@ -37,8 +37,14 @@ import type {
   AgentRuntime,
   AgentStreamEvent,
 } from '../../../lib/agents/types'
+import { getOpenClawDir } from '../../../lib/browseros-dir'
 import { logger } from '../../../lib/logger'
+import { getHostWorkspaceDir } from '../openclaw/openclaw-env'
 import type { OpenClawGatewayChatClient } from '../openclaw/openclaw-gateway-chat-client'
+import {
+  type FileSnapshot,
+  ProducedFilesStore,
+} from '../openclaw/produced-files-store'
 
 export type AgentLiveness = 'working' | 'idle' | 'asleep' | 'error'
 
@@ -158,6 +164,14 @@ export class AgentHarnessService {
   private readonly openclawProvisioner: OpenClawProvisioner | null
   private readonly turnRegistry: TurnRegistry
   private readonly messageQueue: FileMessageQueue
+  /**
+   * Lazy-initialised so tests that swap in a fake `agentStore` don't
+   * eagerly hit `getDb()` (which throws when the test harness hasn't
+   * called `initializeDb`). Tests that exercise file attribution can
+   * inject an explicit store via `deps.producedFilesStore`.
+   */
+  private explicitProducedFilesStore: ProducedFilesStore | null = null
+  private cachedProducedFilesStore: ProducedFilesStore | null = null
   private inFlightReconcile: Promise<void> | null = null
   // In-memory liveness tracker. Lost on server restart (acceptable —
   // `lastUsedAt` survives via the acpx session record's `lastUsedAt`,
@@ -178,6 +192,7 @@ export class AgentHarnessService {
       openclawProvisioner?: OpenClawProvisioner
       turnRegistry?: TurnRegistry
       messageQueue?: FileMessageQueue
+      producedFilesStore?: ProducedFilesStore
     } = {},
   ) {
     this.agentStore = deps.agentStore ?? new DbAgentStore()
@@ -191,6 +206,9 @@ export class AgentHarnessService {
     this.openclawProvisioner = deps.openclawProvisioner ?? null
     this.turnRegistry = deps.turnRegistry ?? new TurnRegistry()
     this.messageQueue = deps.messageQueue ?? new FileMessageQueue()
+    if (deps.producedFilesStore) {
+      this.explicitProducedFilesStore = deps.producedFilesStore
+    }
     // Drain any agents whose queue file survived a restart. The check
     // for `getActiveFor` inside `maybeStartNextFromQueue` guards
     // against double-firing if the in-memory turn registry happens to
@@ -728,6 +746,36 @@ export class AgentHarnessService {
     const turn = this.turnRegistry.get(turnId)
     if (!turn) return
     let lastErrorMessage: string | undefined
+
+    // Bracket openclaw turns with a workspace snapshot so any file the
+    // agent produces during the turn is attributable back to it (rail
+    // + inline artifact UX). Adapter-gated for v1 — Claude / Codex
+    // write to the user's host filesystem and don't need this; their
+    // outputs are already visible via the user's own tools.
+    const isOpenclaw = agent.adapter === 'openclaw'
+    const workspaceDir = isOpenclaw
+      ? getHostWorkspaceDir(getOpenClawDir(), agent.name)
+      : null
+    let workspaceSnapshot: FileSnapshot | null = null
+    const producedFilesStore = workspaceDir
+      ? this.tryGetProducedFilesStore()
+      : null
+    if (workspaceDir && producedFilesStore) {
+      try {
+        workspaceSnapshot =
+          await producedFilesStore.snapshotWorkspace(workspaceDir)
+      } catch (err) {
+        logger.warn(
+          'Failed to snapshot openclaw workspace; file attribution disabled for this turn',
+          {
+            agentId: agent.id,
+            workspaceDir,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        )
+      }
+    }
+
     try {
       const upstream = await this.runtime.send({
         agent,
@@ -782,9 +830,93 @@ export class AgentHarnessService {
         })
       }
     } finally {
+      // Attribute any files the agent produced during this turn. We
+      // run on success, error, AND inside `finally` so an upstream
+      // failure mid-turn that still managed to write files doesn't
+      // lose them. We skip only when the user explicitly cancelled —
+      // in that case the side effects shouldn't be surfaced as
+      // "outputs you asked for."
+      if (
+        workspaceDir &&
+        workspaceSnapshot !== null &&
+        producedFilesStore &&
+        !turn.abortController.signal.aborted
+      ) {
+        await this.attributeTurnFiles({
+          producedFilesStore,
+          workspaceDir,
+          before: workspaceSnapshot,
+          agent,
+          turnId,
+          turnPrompt: input.message,
+        })
+      }
       this.notifyTurnEnded(agent.id, {
         ok: lastErrorMessage === undefined,
         error: lastErrorMessage,
+      })
+    }
+  }
+
+  /**
+   * Lazily resolve the produced-files store. Returns `null` if the
+   * SQLite handle isn't initialised yet — keeps the harness usable in
+   * tests + during early server boot, where chat turns are unlikely
+   * but allowed.
+   */
+  private tryGetProducedFilesStore(): ProducedFilesStore | null {
+    if (this.explicitProducedFilesStore) return this.explicitProducedFilesStore
+    if (this.cachedProducedFilesStore) return this.cachedProducedFilesStore
+    try {
+      this.cachedProducedFilesStore = new ProducedFilesStore()
+      return this.cachedProducedFilesStore
+    } catch (err) {
+      logger.warn(
+        'Produced-files store unavailable; turn-level file attribution disabled',
+        { error: err instanceof Error ? err.message : String(err) },
+      )
+      return null
+    }
+  }
+
+  /**
+   * Diff the workspace, persist new/modified files, and emit a
+   * `produced_files` event so subscribers can render the inline
+   * artifact card. Tolerant of all errors — a failure here must
+   * never block the rest of the turn-end bookkeeping.
+   */
+  private async attributeTurnFiles(input: {
+    producedFilesStore: ProducedFilesStore
+    workspaceDir: string
+    before: FileSnapshot
+    agent: AgentDefinition
+    turnId: string
+    turnPrompt: string
+  }): Promise<void> {
+    try {
+      const rows = await input.producedFilesStore.finalizeTurn({
+        agentDefinitionId: input.agent.id,
+        sessionKey: input.agent.sessionKey,
+        turnId: input.turnId,
+        turnPrompt: input.turnPrompt,
+        workspaceDir: input.workspaceDir,
+        before: input.before,
+      })
+      if (rows.length === 0) return
+      this.turnRegistry.pushEvent(input.turnId, {
+        type: 'produced_files',
+        files: rows.map((row) => ({
+          id: row.id,
+          path: row.path,
+          size: row.size,
+          mtimeMs: row.mtimeMs,
+        })),
+      })
+    } catch (err) {
+      logger.warn('Failed to attribute produced files for turn', {
+        agentId: input.agent.id,
+        turnId: input.turnId,
+        error: err instanceof Error ? err.message : String(err),
       })
     }
   }

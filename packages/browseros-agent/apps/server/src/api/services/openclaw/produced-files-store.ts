@@ -17,9 +17,10 @@
 import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { relative, resolve, sep } from 'node:path'
-import { desc, eq } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 import { type BrowserOsDatabase, getDb } from '../../../lib/db'
 import {
+  agentDefinitions,
   type NewProducedFileRow,
   type ProducedFileRow,
   producedFiles,
@@ -161,6 +162,47 @@ export class ProducedFilesStore {
       .orderBy(desc(producedFiles.createdAt))
       .limit(limit)
       .all()
+  }
+
+  /**
+   * Resolve a gateway-side OpenClaw agent name (e.g. `main`,
+   * `chief-01`) to the corresponding `agentDefinitions.id` so file
+   * rows can be FK'd back to the harness record.
+   *
+   * Two shapes exist on disk depending on how the agent was added:
+   *
+   *   1. Reconciled rows from `agentHarnessService.reconcileWithGateway`
+   *      use `id == openclawAgentId` directly
+   *      (see `agent-harness-service.ts:522`).
+   *   2. BrowserOS-created rows use `id = oc-<uuid>` and store the
+   *      openclaw name in the `name` column (`db-agent-store.ts:55-65`).
+   *
+   * Lookup tries shape 1 first (direct id hit), then shape 2 by
+   * `(adapter='openclaw', name)`.
+   */
+  async resolveAgentDefinitionId(
+    openclawAgentId: string,
+  ): Promise<string | null> {
+    const directHit = this.db
+      .select({ id: agentDefinitions.id })
+      .from(agentDefinitions)
+      .where(eq(agentDefinitions.id, openclawAgentId))
+      .limit(1)
+      .all()
+    if (directHit[0]) return directHit[0].id
+
+    const byName = this.db
+      .select({ id: agentDefinitions.id })
+      .from(agentDefinitions)
+      .where(
+        and(
+          eq(agentDefinitions.adapter, 'openclaw'),
+          eq(agentDefinitions.name, openclawAgentId),
+        ),
+      )
+      .limit(1)
+      .all()
+    return byName[0]?.id ?? null
   }
 
   /** Single-row lookup; null if the id is unknown. */
