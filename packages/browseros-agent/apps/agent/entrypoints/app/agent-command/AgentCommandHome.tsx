@@ -164,7 +164,7 @@ export const AgentCommandHome: FC = () => {
               <div className="space-y-3">
                 <h1 className="font-semibold text-[clamp(2.25rem,4.5vw,3.5rem)] leading-[1.08] tracking-[-0.025em] [text-wrap:balance]">
                   What should your agent{' '}
-                  <span className="font-medium text-muted-foreground italic">
+                  <span className="font-medium text-[var(--accent-orange)] italic">
                     work on
                   </span>{' '}
                   next?
