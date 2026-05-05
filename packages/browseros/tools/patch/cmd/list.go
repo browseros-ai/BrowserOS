@@ -11,13 +11,14 @@ func init() {
 	command := &cobra.Command{
 		Use:         "list",
 		Aliases:     []string{"ls"},
-		Annotations: map[string]string{"group": "Workspace:"},
-		Short:       "List registered workspaces",
+		Annotations: map[string]string{"group": "Chromium Checkouts:"},
+		Short:       "List registered Chromium checkouts",
+		Example:     `  browseros-patch list`,
 		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(appState.Registry.Workspaces) == 0 {
 				return renderResult(map[string]any{"workspaces": []any{}}, func() {
-					fmt.Println("No workspaces registered. Run `browseros-patch add <name> <path>`.")
+					fmt.Println("No Chromium checkouts registered. Run `browseros-patch add <name> <path>`.")
 				})
 			}
 			rows := make([][]string, 0, len(appState.Registry.Workspaces))

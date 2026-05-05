@@ -35,6 +35,7 @@ export interface AgentRuntimePaths {
   effectiveCwd: string
   runtimeStatePath: string
   runtimeSkillsDir: string
+  runtimeRoot: string
   codexHome: string
 }
 
@@ -45,6 +46,7 @@ export function resolveAgentRuntimePaths(input: {
 }): AgentRuntimePaths {
   const harnessDir = join(input.browserosDir, 'agents', 'harness')
   const defaultWorkspaceCwd = join(harnessDir, 'workspace')
+  const runtimeRoot = join(harnessDir, input.agentId, 'runtime')
   return {
     browserosDir: input.browserosDir,
     harnessDir,
@@ -57,7 +59,8 @@ export function resolveAgentRuntimePaths(input: {
       `${input.agentId}.json`,
     ),
     runtimeSkillsDir: join(harnessDir, 'runtime-skills'),
-    codexHome: join(harnessDir, input.agentId, 'runtime', 'codex-home'),
+    runtimeRoot,
+    codexHome: join(runtimeRoot, 'codex-home'),
   }
 }
 
@@ -110,7 +113,7 @@ export async function materializeCodexHome(input: {
   }
 }
 
-/** Builds the stable BrowserOS operating instructions prepended to ACP turns. */
+/** Builds stable BrowserOS-managed instructions for Claude/Codex ACP turns. */
 export function buildAcpxRuntimePromptPrefix(input: {
   agent: AgentDefinition
   paths: AgentRuntimePaths
@@ -134,6 +137,12 @@ BrowserOS has made runtime skills available for this ACPX session.
 Skill root: ${input.paths.runtimeSkillsDir}
 Available skills: ${input.skillNames.join(', ')}
 When a task calls for one of these skills, read its SKILL.md from that root and follow it.
+
+When the user asks you to remember, save feedback, store a preference, or update memory in this BrowserOS ACPX context, use the BrowserOS memory skill.
+Write BrowserOS memory only under AGENT_HOME:
+- AGENT_HOME/MEMORY.md for durable promoted preferences and operating patterns.
+- AGENT_HOME/memory/YYYY-MM-DD.md for daily notes and candidate memories.
+Do not use native Claude project memory, native CLI memory, or workspace files for BrowserOS memory.
 </browseros_acpx_runtime>`
 }
 
@@ -146,6 +155,40 @@ export function wrapCommandWithEnv(
     .map(([key, value]) => `${key}=${shellQuote(value)}`)
     .join(' ')
   return prefix ? `env ${prefix} ${command}` : command
+}
+
+/** Ensures the runtime cwd exists, creating only the managed default workspace. */
+export async function ensureUsableCwd(
+  cwd: string,
+  isDefaultWorkspace: boolean,
+): Promise<void> {
+  if (isDefaultWorkspace) {
+    await mkdir(cwd, { recursive: true })
+    return
+  }
+  let info: Stats
+  try {
+    info = await stat(cwd)
+  } catch (err) {
+    if (isNotFoundError(err)) {
+      throw new Error(`Selected workspace does not exist: ${cwd}`)
+    }
+    throw err
+  }
+  if (!info.isDirectory()) {
+    throw new Error(`Selected workspace is not a directory: ${cwd}`)
+  }
+}
+
+export function buildBrowserosAcpPrompt(
+  prefix: string,
+  message: string,
+): string {
+  return `${prefix}
+
+<user_request>
+${escapePromptTagText(message)}
+</user_request>`
 }
 
 async function writeFileIfMissing(
@@ -207,13 +250,20 @@ async function sourceFileExists(path: string): Promise<boolean> {
     throw err
   }
   if (!info.isFile()) {
-    throw new Error(`Expected Codex source file to be a file: ${path}`)
+    throw new Error(`Expected source file to be a file: ${path}`)
   }
   return true
 }
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`
+}
+
+function escapePromptTagText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
 }
 
 function isNotFoundError(err: unknown): boolean {

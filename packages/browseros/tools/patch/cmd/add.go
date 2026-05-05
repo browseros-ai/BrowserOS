@@ -12,8 +12,8 @@ func init() {
 	command := &cobra.Command{
 		Use:         "add <name> <path>",
 		Aliases:     []string{"register"},
-		Annotations: map[string]string{"group": "Workspace:"},
-		Short:       "Register a Chromium checkout as a workspace",
+		Annotations: map[string]string{"group": "Chromium Checkouts:"},
+		Short:       "Register a named Chromium checkout",
 		Args:        cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ensureRepoConfigured(patchesRepo); err != nil {
@@ -30,7 +30,7 @@ func init() {
 				"workspace":    entry,
 				"patches_repo": appState.Config.PatchesRepo,
 			}, func() {
-				fmt.Println(ui.Success("Registered workspace"))
+				fmt.Println(ui.Success("Registered Chromium checkout"))
 				fmt.Printf("%s  %s\n", ui.Muted("name:"), entry.Name)
 				fmt.Printf("%s  %s\n", ui.Muted("path:"), entry.Path)
 				fmt.Printf("%s  %s\n", ui.Muted("repo:"), appState.Config.PatchesRepo)

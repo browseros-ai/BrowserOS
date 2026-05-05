@@ -36,5 +36,6 @@ export async function resolveProviderConfig(
     accessKeyId: resolveEnvValue(agent.accessKeyId),
     secretAccessKey: resolveEnvValue(agent.secretAccessKey),
     sessionToken: resolveEnvValue(agent.sessionToken),
+    region: resolveEnvValue(agent.region),
   }
 }

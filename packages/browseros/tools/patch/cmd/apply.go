@@ -14,16 +14,19 @@ func init() {
 	var changed string
 	var rangeEnd string
 	command := &cobra.Command{
-		Use:         "apply [workspace] [-- files...]",
+		Use:         "apply [checkout] [-- files...]",
 		Annotations: map[string]string{"group": "Core:"},
-		Short:       "Apply repo patches to a workspace",
-		Args:        cobra.ArbitraryArgs,
+		Short:       "Apply repo patches to a checkout",
+		Example: `  browseros-patch apply ch1
+  browseros-patch apply ch1 -- chrome/browser/browser.cc
+  browseros-patch apply --src /path/to/chromium/src`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			positional, filters := splitWorkspaceAndFilters(cmd, args)
 			if len(positional) > 1 {
-				return fmt.Errorf("expected at most one workspace name")
+				return fmt.Errorf("expected at most one checkout name")
 			}
-			ws, err := resolveWorkspace(positional, src)
+			ws, err := resolveWorkspace(cmd, positional, src)
 			if err != nil {
 				return err
 			}
@@ -58,7 +61,7 @@ func init() {
 			})
 		},
 	}
-	command.Flags().StringVar(&src, "src", "", "Chromium checkout path to operate on directly")
+	command.Flags().StringVar(&src, "src", "", srcFlagUsage)
 	command.Flags().BoolVar(&reset, "reset", false, "Reset patched files to BASE_COMMIT before applying")
 	command.Flags().StringVar(&changed, "changed", "", "Apply only patches changed in the given repo commit")
 	command.Flags().StringVar(&rangeEnd, "range-end", "", "End revision when using --changed as a range start")

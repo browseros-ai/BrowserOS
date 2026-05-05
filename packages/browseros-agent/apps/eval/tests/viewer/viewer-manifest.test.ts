@@ -9,6 +9,7 @@ describe('buildViewerManifest', () => {
       suiteId: 'agisdk-daily-10',
       variantId: 'kimi',
       uploadedAt: '2026-04-29T06:00:00.000Z',
+      reportPath: 'report.html',
       summary: { total: 1, passRate: 0 },
       tasks: [
         {
@@ -18,6 +19,13 @@ describe('buildViewerManifest', () => {
           status: 'completed',
           durationMs: 353_000,
           screenshotCount: 42,
+          metrics: {
+            durationMs: 353_000,
+            steps: 47,
+            screenshots: 42,
+            toolCalls: 19,
+            toolErrors: 2,
+          },
           graderResults: {
             agisdk_state_diff: {
               score: 0,
@@ -32,6 +40,7 @@ describe('buildViewerManifest', () => {
 
     const publishManifest: R2RunManifest = manifest
     expect(publishManifest.schemaVersion).toBe(2)
+    expect(manifest.reportPath).toBe('report.html')
     expect(manifest.tasks[0].paths.messages).toBe(
       'tasks/agisdk-dashdish-4/messages.jsonl',
     )
@@ -41,6 +50,21 @@ describe('buildViewerManifest', () => {
     expect(manifest.tasks[0].paths.graderArtifacts).toBe(
       'tasks/agisdk-dashdish-4/grader-artifacts',
     )
+    expect(manifest.metrics).toMatchObject({
+      taskCount: 1,
+      avgDurationMs: 353_000,
+      avgSteps: 47,
+      avgToolCalls: 19,
+      totalToolCalls: 19,
+      totalToolErrors: 2,
+    })
+    expect(manifest.tasks[0].metrics).toEqual({
+      durationMs: 353_000,
+      steps: 47,
+      screenshots: 42,
+      toolCalls: 19,
+      toolErrors: 2,
+    })
     expect(manifest.tasks[0].graderResults.agisdk_state_diff.details).toEqual({
       missing: ['checkout item'],
     })

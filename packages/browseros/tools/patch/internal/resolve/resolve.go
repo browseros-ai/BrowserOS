@@ -86,7 +86,7 @@ func FindActive(reg *workspace.Registry, cwd string) (workspace.Entry, error) {
 	case 1:
 		return active[0], nil
 	default:
-		return workspace.Entry{}, fmt.Errorf("multiple workspaces have active conflicts; run from inside the target workspace")
+		return workspace.Entry{}, fmt.Errorf("multiple Chromium checkouts have active conflicts; run from inside the target checkout")
 	}
 }
 

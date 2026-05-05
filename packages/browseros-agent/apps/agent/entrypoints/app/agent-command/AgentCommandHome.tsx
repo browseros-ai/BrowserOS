@@ -162,12 +162,16 @@ export const AgentCommandHome: FC = () => {
           <>
             <div className="flex flex-col items-center gap-5 pt-[max(10vh,24px)] text-center">
               <div className="space-y-3">
-                <h1 className="font-semibold text-[clamp(2rem,4vw,3.25rem)] leading-tight tracking-tight">
-                  What should your agent work on next?
+                <h1 className="font-semibold text-[clamp(2.25rem,4.5vw,3.5rem)] leading-[1.08] tracking-[-0.025em] [text-wrap:balance]">
+                  What should your agent{' '}
+                  <span className="font-medium text-[var(--accent-orange)] italic">
+                    work on
+                  </span>{' '}
+                  next?
                 </h1>
-                <p className="mx-auto max-w-2xl text-muted-foreground text-sm leading-6">
-                  Start with a task, continue a thread, or switch to another
-                  agent without leaving the new tab.
+                <p className="mx-auto max-w-2xl text-muted-foreground text-sm leading-6 [text-wrap:pretty]">
+                  Start a task, continue a thread, or hand off to a different
+                  agent — all without leaving this tab.
                 </p>
               </div>
 

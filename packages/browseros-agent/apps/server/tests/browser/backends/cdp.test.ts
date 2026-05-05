@@ -51,13 +51,17 @@ describe('CdpBackend', () => {
   const originalReconnectDelay = TIMEOUTS.CDP_RECONNECT_DELAY
   let fetchUrls: string[] = []
   let failIpv4Discovery = false
+  let failAllDiscovery = false
   let wsHost = '127.0.0.1'
+  let originalExit: typeof process.exit
 
   beforeEach(() => {
     MockWebSocket.instances = []
     fetchUrls = []
     failIpv4Discovery = false
+    failAllDiscovery = false
     wsHost = '127.0.0.1'
+    originalExit = process.exit
 
     ;(TIMEOUTS as unknown as { CDP_CONNECT: number }).CDP_CONNECT = 200
     ;(
@@ -67,6 +71,9 @@ describe('CdpBackend', () => {
     globalThis.fetch = (async (input: string | URL | Request) => {
       const url = String(input)
       fetchUrls.push(url)
+      if (failAllDiscovery) {
+        throw new Error('Unable to connect')
+      }
       if (failIpv4Discovery && url.includes('127.0.0.1')) {
         throw new Error('Unable to connect')
       }
@@ -87,6 +94,7 @@ describe('CdpBackend', () => {
   afterEach(() => {
     globalThis.fetch = originalFetch
     globalThis.WebSocket = originalWebSocket
+    process.exit = originalExit
     ;(TIMEOUTS as unknown as { CDP_CONNECT: number }).CDP_CONNECT =
       originalConnectTimeout
     ;(
@@ -158,6 +166,33 @@ describe('CdpBackend', () => {
     await waitFor(() => cdp.isConnected())
     assert.strictEqual(cdp.isConnected(), true)
     assert(fetchUrls.length >= 3)
+    await cdp.disconnect()
+  })
+
+  it('can disable process exit when reconnect retries are exhausted', async () => {
+    let exitCalled = false
+    process.exit = (() => {
+      exitCalled = true
+      throw new Error('process.exit should not be called')
+    }) as unknown as typeof process.exit
+
+    const cdp = new CdpBackend({ port: 9222, exitOnReconnectFailure: false })
+    const connectPromise = cdp.connect()
+
+    await waitFor(() => MockWebSocket.instances.length === 1)
+    const ws1 = MockWebSocket.instances[0]
+    ws1?.open()
+    await connectPromise
+    assert.strictEqual(cdp.isConnected(), true)
+
+    failAllDiscovery = true
+    ws1?.close()
+
+    await waitFor(() => fetchUrls.length >= 10)
+    await Bun.sleep(5)
+
+    assert.strictEqual(exitCalled, false)
+    assert.strictEqual(cdp.isConnected(), false)
     await cdp.disconnect()
   })
 })

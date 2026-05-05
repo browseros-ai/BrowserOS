@@ -55,6 +55,9 @@ describe('acpx runtime context helpers', () => {
     expect(paths.runtimeSkillsDir).toBe(
       join(browserosDir, 'agents', 'harness', 'runtime-skills'),
     )
+    expect(paths.runtimeRoot).toBe(
+      join(browserosDir, 'agents', 'harness', 'agent-1', 'runtime'),
+    )
     expect(paths.codexHome).toBe(
       join(
         browserosDir,
@@ -256,5 +259,34 @@ describe('acpx runtime context helpers', () => {
       'Skill root: /tmp/browseros/agents/harness/runtime-skills',
     )
     expect(prompt).toContain('Available skills: browseros, memory, soul')
+  })
+
+  it('routes explicit memory requests to BrowserOS AGENT_HOME files', () => {
+    const agent: AgentDefinition = {
+      id: 'agent-1',
+      name: 'Researcher',
+      adapter: 'claude',
+      permissionMode: 'approve-all',
+      sessionKey: 'agent:agent-1:main',
+      createdAt: 1000,
+      updatedAt: 1000,
+    }
+    const paths = resolveAgentRuntimePaths({
+      browserosDir: '/tmp/browseros',
+      agentId: agent.id,
+      cwd: '/tmp/workspace',
+    })
+
+    const prompt = buildAcpxRuntimePromptPrefix({
+      agent,
+      paths,
+      skillNames: ['browseros', 'memory', 'soul'],
+    })
+
+    expect(prompt).toContain('When the user asks you to remember')
+    expect(prompt).toContain('use the BrowserOS memory skill')
+    expect(prompt).toContain('AGENT_HOME/MEMORY.md')
+    expect(prompt).toContain('AGENT_HOME/memory/YYYY-MM-DD.md')
+    expect(prompt).toContain('Do not use native Claude project memory')
   })
 })

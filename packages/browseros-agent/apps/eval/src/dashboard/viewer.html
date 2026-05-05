@@ -61,6 +61,17 @@
   .header-stats .stat-pass { color: #3fb950; }
   .header-stats .stat-fail { color: #f85149; }
   .header-stats .stat-score { color: #f0883e; }
+  .header-report {
+    color: #58a6ff;
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 5px 9px;
+    white-space: nowrap;
+  }
+  .header-report:hover { border-color: #58a6ff; background: #1c2333; }
 
   /* ── 3-column layout ─────────────────────────────────────────── */
   .layout {
@@ -84,6 +95,7 @@
     background: #161b22;
     border-bottom: 1px solid #30363d;
     display: flex;
+    flex-wrap: wrap;
     gap: 12px;
     font-size: 11px;
     font-weight: 600;
@@ -93,6 +105,80 @@
   }
   .sidebar-stats .s-pass { color: #3fb950; }
   .sidebar-stats .s-fail { color: #f85149; }
+  .sidebar-metrics {
+    padding: 12px 16px;
+    background: #0d1117;
+    border-bottom: 1px solid #21262d;
+  }
+  .metric-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .metric-cell {
+    min-width: 0;
+  }
+  .metric-label {
+    display: block;
+    font-size: 9px;
+    font-weight: 600;
+    color: #6e7681;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .metric-value {
+    display: block;
+    font-size: 13px;
+    font-weight: 700;
+    color: #e6edf3;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mini-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .mini-chart-title {
+    font-size: 10px;
+    font-weight: 700;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .mini-bar-row {
+    display: grid;
+    grid-template-columns: minmax(60px, 1fr) 70px 28px;
+    gap: 8px;
+    align-items: center;
+    font-size: 10px;
+    color: #8b949e;
+  }
+  .mini-bar-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+  }
+  .mini-bar-track {
+    height: 6px;
+    background: #21262d;
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .mini-bar-fill {
+    height: 100%;
+    background: #58a6ff;
+    border-radius: 999px;
+  }
+  .mini-bar-value {
+    color: #e6edf3;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
   .sidebar-filter {
     padding: 8px 12px;
     border-bottom: 1px solid #21262d;
@@ -526,6 +612,7 @@
   <div class="header-sep"></div>
   <span class="header-run" id="header-run"></span>
   <span class="header-date" id="header-date"></span>
+  <a class="header-report" id="header-report" target="_blank" rel="noopener" style="display: none;">Run Report</a>
   <div class="header-stats" id="header-stats"></div>
 </div>
 
@@ -533,6 +620,7 @@
   <!-- Left sidebar -->
   <div class="sidebar" id="sidebar">
     <div class="sidebar-stats" id="sidebar-stats"></div>
+    <div class="sidebar-metrics" id="sidebar-metrics"></div>
     <div class="sidebar-filter">
       <input type="text" id="filter-input" placeholder="Search tasks..." autocomplete="off" spellcheck="false" />
     </div>
@@ -627,7 +715,23 @@
     if (stats.avgScore !== null) {
       parts.push(`<span class="stat-score">avg ${stats.avgScore}%</span>`);
     }
+    if (stats.avgDurationMs !== null) {
+      parts.push(`<span>${fmtDuration(stats.avgDurationMs)} avg</span>`);
+    }
+    if (stats.avgToolCalls !== null) {
+      parts.push(`<span>${fmtCompact(stats.avgToolCalls)} tools/task</span>`);
+    }
     el.innerHTML = parts.join('');
+
+    const reportLink = document.getElementById('header-report');
+    const url = reportUrl(manifest);
+    if (url) {
+      reportLink.href = url;
+      reportLink.style.display = '';
+    } else {
+      reportLink.removeAttribute('href');
+      reportLink.style.display = 'none';
+    }
   }
 
   // ── Sidebar rendering ─────────────────────────────────────────
@@ -639,9 +743,47 @@
     statsEl.innerHTML =
       '<span>' + stats.total + ' total</span>' +
       '<span class="s-pass">' + stats.passed + ' pass</span>' +
-      '<span class="s-fail">' + stats.failed + ' fail</span>';
+      '<span class="s-fail">' + stats.failed + ' fail</span>' +
+      (stats.avgSteps !== null ? '<span>' + fmtCompact(stats.avgSteps) + ' steps/task</span>' : '') +
+      (stats.avgToolCalls !== null ? '<span>' + fmtCompact(stats.avgToolCalls) + ' tools/task</span>' : '');
+
+    renderSidebarMetrics(tasks, stats);
 
     renderTaskList('');
+  }
+
+  function renderSidebarMetrics(tasks, stats) {
+    const el = document.getElementById('sidebar-metrics');
+    if (!el) return;
+
+    const chartTasks = tasks
+      .slice()
+      .sort((a, b) => taskMetrics(b).toolCalls - taskMetrics(a).toolCalls)
+      .slice(0, 5);
+    const maxCalls = Math.max(1, ...chartTasks.map((task) => taskMetrics(task).toolCalls));
+
+    const bars = chartTasks.map((task) => {
+      const calls = taskMetrics(task).toolCalls;
+      const width = Math.max(4, Math.round((calls / maxCalls) * 100));
+      return (
+        '<div class="mini-bar-row">' +
+          '<span class="mini-bar-name" title="' + escAttr(task.queryId || task.id || 'Untitled') + '">' + esc(task.queryId || task.id || 'Untitled') + '</span>' +
+          '<span class="mini-bar-track"><span class="mini-bar-fill" style="width: ' + width + '%"></span></span>' +
+          '<span class="mini-bar-value">' + fmtCompact(calls) + '</span>' +
+        '</div>'
+      );
+    }).join('');
+
+    el.innerHTML =
+      '<div class="metric-grid">' +
+        '<div class="metric-cell"><span class="metric-label">Avg Time</span><span class="metric-value">' + (stats.avgDurationMs !== null ? fmtDuration(stats.avgDurationMs) : '-') + '</span></div>' +
+        '<div class="metric-cell"><span class="metric-label">Avg Steps</span><span class="metric-value">' + (stats.avgSteps !== null ? fmtCompact(stats.avgSteps) : '-') + '</span></div>' +
+        '<div class="metric-cell"><span class="metric-label">Avg Tools</span><span class="metric-value">' + (stats.avgToolCalls !== null ? fmtCompact(stats.avgToolCalls) : '-') + '</span></div>' +
+      '</div>' +
+      '<div class="mini-chart">' +
+        '<div class="mini-chart-title">Tool Calls by Task</div>' +
+        (bars || '<div class="task-meta-line"><span>No tool calls recorded</span></div>') +
+      '</div>';
   }
 
   function renderTaskList(filter) {
@@ -668,8 +810,11 @@
       }
 
       const metaParts = [];
-      if (task.durationMs) metaParts.push(fmtDuration(task.durationMs));
-      if (task.screenshotCount) metaParts.push(`${task.screenshotCount} steps`);
+      const metrics = taskMetrics(task);
+      if (metrics.durationMs) metaParts.push(fmtDuration(metrics.durationMs));
+      if (metrics.steps) metaParts.push(`${fmtCompact(metrics.steps)} steps`);
+      if (metrics.toolCalls) metaParts.push(`${fmtCompact(metrics.toolCalls)} tools`);
+      if (metrics.toolErrors) metaParts.push(`${fmtCompact(metrics.toolErrors)} errors`);
 
       item.innerHTML =
         '<div class="task-row">' +
@@ -714,7 +859,7 @@
   }
 
   function artifactPath(task, artifact) {
-    const manifestPath = task.paths && task.paths[artifact];
+    const manifestPath = task.paths?.[artifact];
     if (typeof manifestPath === 'string' && manifestPath.length > 0) {
       return manifestPath.replace(/^\/+/, '');
     }
@@ -723,6 +868,17 @@
 
   function artifactUrl(task, artifact) {
     return `${basePath}/${artifactPath(task, artifact)}`;
+  }
+
+  function runArtifactUrl(path) {
+    if (typeof path !== 'string' || path.length === 0) return null;
+    return `${basePath}/${path.replace(/^\/+/, '')}`;
+  }
+
+  function reportUrl(manifest, task) {
+    const url = runArtifactUrl(manifest?.reportPath);
+    if (!url || !task) return url;
+    return `${url}#${encodeURIComponent(task.queryId || task.id || '')}`;
   }
 
   function metadataUrl(task) {
@@ -905,10 +1061,38 @@
     }
 
     // Duration
-    if (task.durationMs) {
+    const metrics = taskMetrics(task);
+    if (metrics.durationMs) {
       html += '<div class="db-section">';
       html += '<span class="db-label">Duration</span>';
-      html += `<span class="db-value">${fmtDuration(task.durationMs)}</span>`;
+      html += `<span class="db-value">${fmtDuration(metrics.durationMs)}</span>`;
+      html += '</div>';
+    }
+
+    if (metrics.steps) {
+      html += '<div class="db-section">';
+      html += '<span class="db-label">Steps</span>';
+      html += `<span class="db-value">${fmtCompact(metrics.steps)}</span>`;
+      html += '</div>';
+    }
+
+    html += '<div class="db-section">';
+    html += '<span class="db-label">Tool Calls</span>';
+    html += `<span class="db-value">${fmtCompact(metrics.toolCalls)}</span>`;
+    html += '</div>';
+
+    if (metrics.toolErrors) {
+      html += '<div class="db-section">';
+      html += '<span class="db-label">Tool Errors</span>';
+      html += `<span class="db-value">${fmtCompact(metrics.toolErrors)}</span>`;
+      html += '</div>';
+    }
+
+    const reportLink = reportUrl(manifest, task);
+    if (reportLink) {
+      html += '<div class="db-section">';
+      html += '<span class="db-label">Report</span>';
+      html += `<span class="db-value"><a href="${escAttr(reportLink)}" target="_blank" rel="noopener">Open task analysis</a></span>`;
       html += '</div>';
     }
 
@@ -1234,8 +1418,25 @@
   function computeStats(tasks) {
     const total = tasks.length;
     let passed = 0, failed = 0, totalScore = 0, scoredCount = 0;
+    let totalDurationMs = 0, durationCount = 0;
+    let totalSteps = 0, stepsCount = 0;
+    let totalToolCalls = 0, toolCount = 0;
+    let totalToolErrors = 0;
 
     tasks.forEach((t) => {
+      const metrics = taskMetrics(t);
+      if (metrics.durationMs > 0) {
+        totalDurationMs += metrics.durationMs;
+        durationCount++;
+      }
+      if (metrics.steps > 0) {
+        totalSteps += metrics.steps;
+        stepsCount++;
+      }
+      totalToolCalls += metrics.toolCalls;
+      totalToolErrors += metrics.toolErrors;
+      toolCount++;
+
       const graders = t.graderResults || {};
       const keys = Object.keys(graders);
       if (keys.length > 0) {
@@ -1254,7 +1455,34 @@
       total: total,
       passed: passed,
       failed: failed,
-      avgScore: scoredCount > 0 ? Math.round((totalScore / scoredCount) * 100) : null
+      avgScore: scoredCount > 0 ? Math.round((totalScore / scoredCount) * 100) : null,
+      avgDurationMs: durationCount > 0 ? totalDurationMs / durationCount : null,
+      avgSteps: stepsCount > 0 ? totalSteps / stepsCount : null,
+      avgToolCalls: toolCount > 0 ? totalToolCalls / toolCount : null,
+      totalToolCalls: totalToolCalls,
+      totalToolErrors: totalToolErrors
+    };
+  }
+
+  function taskMetrics(task) {
+    const metrics = task.metrics || {};
+    const screenshots = Number.isFinite(Number(metrics.screenshots))
+      ? Number(metrics.screenshots)
+      : Number(task.screenshotCount || 0);
+    return {
+      durationMs: Number.isFinite(Number(metrics.durationMs))
+        ? Number(metrics.durationMs)
+        : Number(task.durationMs || 0),
+      steps: Number.isFinite(Number(metrics.steps))
+        ? Number(metrics.steps)
+        : screenshots,
+      screenshots: screenshots,
+      toolCalls: Number.isFinite(Number(metrics.toolCalls))
+        ? Number(metrics.toolCalls)
+        : 0,
+      toolErrors: Number.isFinite(Number(metrics.toolErrors))
+        ? Number(metrics.toolErrors)
+        : 0
     };
   }
 
@@ -1308,6 +1536,13 @@
     const h = Math.floor(m / 60);
     const remM = m % 60;
     return `${h}h ${remM}m`;
+  }
+
+  function fmtCompact(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return '0';
+    if (Number.isInteger(num)) return String(num);
+    return num.toFixed(1);
   }
 
   function showFatalError(msgHtml) {

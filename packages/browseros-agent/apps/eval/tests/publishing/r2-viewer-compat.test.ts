@@ -6,6 +6,7 @@ interface ViewerPathResolvers {
   artifactUrl(task: Record<string, unknown>, artifact: string): string
   metadataUrl(task: Record<string, unknown>): string
   messagesUrl(task: Record<string, unknown>): string
+  reportUrl(manifest: Record<string, unknown>): string | null
   screenshotUrl(task: Record<string, unknown>, step: number): string
 }
 
@@ -24,7 +25,7 @@ async function loadViewerPathResolvers(): Promise<ViewerPathResolvers> {
     `
       const basePath = 'runs/run-1';
       ${block}
-      return { artifactUrl, metadataUrl, messagesUrl, screenshotUrl };
+      return { artifactUrl, metadataUrl, messagesUrl, reportUrl, screenshotUrl };
     `,
   ) as () => ViewerPathResolvers
   return createResolvers()
@@ -58,6 +59,35 @@ async function runAutoSelectFromHash(hash: string): Promise<unknown> {
     `,
   ) as () => unknown
   return runAutoSelect()
+}
+
+async function runComputeStats(): Promise<unknown> {
+  const html = await readFile(
+    join(import.meta.dir, '..', '..', 'src', 'dashboard', 'viewer.html'),
+    'utf-8',
+  )
+  const start = html.indexOf('function computeStats(tasks)')
+  const end = html.indexOf('function resolveStatus(task)', start)
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+
+  const block = html.slice(start, end)
+  const compute = new Function(
+    `
+      ${block}
+      return computeStats([
+        {
+          graderResults: { agisdk_state_diff: { pass: true, score: 1 } },
+          metrics: { durationMs: 1000, steps: 4, toolCalls: 3, toolErrors: 0 }
+        },
+        {
+          graderResults: { agisdk_state_diff: { pass: false, score: 0 } },
+          metrics: { durationMs: 3000, steps: 8, toolCalls: 5, toolErrors: 2 }
+        }
+      ]);
+    `,
+  ) as () => unknown
+  return compute()
 }
 
 describe('R2 viewer artifact path compatibility', () => {
@@ -95,6 +125,15 @@ describe('R2 viewer artifact path compatibility', () => {
     )
   })
 
+  it('resolves manifest-level run report links', async () => {
+    const resolvers = await loadViewerPathResolvers()
+
+    expect(resolvers.reportUrl({ reportPath: 'report.html' })).toBe(
+      'runs/run-1/report.html',
+    )
+    expect(resolvers.reportUrl({})).toBe(null)
+  })
+
   it('falls back to legacy inferred paths for old uploaded runs', async () => {
     const resolvers = await loadViewerPathResolvers()
     const task = { queryId: 'legacy-task' }
@@ -125,6 +164,19 @@ describe('R2 viewer artifact path compatibility', () => {
     })
     expect(await runAutoSelectFromHash('#legacy-task')).toMatchObject({
       queryId: 'legacy-task',
+    })
+  })
+
+  it('computes run-level timing and tool metrics for the viewer', async () => {
+    expect(await runComputeStats()).toMatchObject({
+      total: 2,
+      passed: 1,
+      failed: 1,
+      avgDurationMs: 2000,
+      avgSteps: 6,
+      avgToolCalls: 4,
+      totalToolCalls: 8,
+      totalToolErrors: 2,
     })
   })
 })

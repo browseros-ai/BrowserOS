@@ -536,6 +536,12 @@ export interface DashboardConfig {
   configMode?: boolean
 }
 
+export function shouldAutoOpenDashboard(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return env.CI !== 'true'
+}
+
 export function startDashboard(config: DashboardConfig) {
   const port = config.port ?? 9900
   dashboardConfigMode = config.configMode ?? false
@@ -558,10 +564,12 @@ export function startDashboard(config: DashboardConfig) {
   console.log(`  Dashboard: ${url}`)
 
   // Auto-open browser
-  try {
-    Bun.spawn(['open', url], { stdout: 'ignore', stderr: 'ignore' })
-  } catch {
-    /* ignore if open command fails */
+  if (shouldAutoOpenDashboard()) {
+    try {
+      Bun.spawn(['open', url], { stdout: 'ignore', stderr: 'ignore' })
+    } catch {
+      /* ignore if open command fails */
+    }
   }
 
   return { url, port }

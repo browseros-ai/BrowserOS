@@ -27,6 +27,14 @@ interface AgentSelectorProps {
   onSelectAgent: (agent: AgentEntry) => void
   onCreateAgent?: () => void
   status?: string
+  /**
+   * `'pill'` renders the filled-pill variant used by the calm
+   * composer on `/home` — bordered, slightly elevated background,
+   * mono agent name, used as the visual anchor on the left of the
+   * footer chip row. Default `'ghost'` keeps the existing flat
+   * shadcn ghost-button trigger used by the chat surface.
+   */
+  triggerVariant?: 'ghost' | 'pill'
 }
 
 function getStatusDot(status?: string) {
@@ -42,31 +50,49 @@ export const AgentSelector: FC<AgentSelectorProps> = ({
   onSelectAgent,
   onCreateAgent,
   status,
+  triggerVariant = 'ghost',
 }) => {
   const [open, setOpen] = useState(false)
   const selectedAgent = agents.find(
     (agent) => agent.agentId === selectedAgentId,
   )
 
+  const triggerNode =
+    triggerVariant === 'pill' ? (
+      <button
+        type="button"
+        className={cn(
+          'inline-flex h-6 max-w-[180px] items-center gap-1.5 rounded-full border border-border bg-accent/40 pr-2 pl-2.5 text-[11.5px] text-foreground transition-colors',
+          'hover:border-border hover:bg-accent/70 data-[state=open]:border-border data-[state=open]:bg-accent/70',
+        )}
+      >
+        <span className={cn('size-1.5 rounded-full', getStatusDot(status))} />
+        <span className="truncate font-medium font-mono text-[11.5px] tracking-[-0.01em]">
+          {selectedAgent?.name ?? 'Select agent'}
+        </span>
+        <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
+      </button>
+    ) : (
+      <Button
+        variant="ghost"
+        className={cn(
+          'flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium text-sm transition-all',
+          'bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+          'data-[state=open]:bg-accent',
+        )}
+      >
+        <Bot className="h-4 w-4" />
+        <span className={cn('size-2 rounded-full', getStatusDot(status))} />
+        <span className="max-w-32 truncate">
+          {selectedAgent?.name ?? 'Select agent'}
+        </span>
+        <ChevronDown className="h-3 w-3" />
+      </Button>
+    )
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          className={cn(
-            'flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium text-sm transition-all',
-            'bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-            'data-[state=open]:bg-accent',
-          )}
-        >
-          <Bot className="h-4 w-4" />
-          <span className={cn('size-2 rounded-full', getStatusDot(status))} />
-          <span className="max-w-32 truncate">
-            {selectedAgent?.name ?? 'Select agent'}
-          </span>
-          <ChevronDown className="h-3 w-3" />
-        </Button>
-      </PopoverTrigger>
+      <PopoverTrigger asChild>{triggerNode}</PopoverTrigger>
       <PopoverContent side="bottom" align="start" className="w-72 p-0">
         <Command>
           <CommandInput placeholder="Search agents..." className="h-9" />

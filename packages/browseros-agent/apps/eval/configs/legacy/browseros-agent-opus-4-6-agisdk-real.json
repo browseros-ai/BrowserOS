@@ -1,11 +1,15 @@
 {
   "agent": {
-    "type": "claude-code",
-    "model": "opus",
-    "extraArgs": ["--permission-mode", "bypassPermissions"]
+    "type": "single",
+    "provider": "bedrock",
+    "model": "global.anthropic.claude-opus-4-6-v1",
+    "region": "AWS_REGION",
+    "accessKeyId": "AWS_ACCESS_KEY_ID",
+    "secretAccessKey": "AWS_SECRET_ACCESS_KEY",
+    "supportsImages": true
   },
   "dataset": "../../data/agisdk-real.jsonl",
-  "num_workers": 1,
+  "num_workers": 2,
   "restart_server_per_task": true,
   "browseros": {
     "server_url": "http://127.0.0.1:9110",

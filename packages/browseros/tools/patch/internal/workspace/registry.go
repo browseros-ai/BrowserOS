@@ -65,12 +65,12 @@ func NormalizeWorkspacePath(raw string) (string, error) {
 		return "", err
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("workspace path is not a directory: %s", clean)
+		return "", fmt.Errorf("checkout path is not a directory: %s", clean)
 	}
 	if _, err := os.Stat(filepath.Join(clean, ".git")); err != nil {
-		return "", fmt.Errorf("workspace is not a git checkout: %s", clean)
+		return "", fmt.Errorf("checkout is not a git checkout: %s", clean)
 	}
-	return clean, nil
+	return canonicalPath(clean), nil
 }
 
 func (r *Registry) Get(name string) (Entry, error) {
@@ -79,7 +79,7 @@ func (r *Registry) Get(name string) (Entry, error) {
 			return ws, nil
 		}
 	}
-	return Entry{}, fmt.Errorf("workspace %q not found", name)
+	return Entry{}, fmt.Errorf("checkout %q not found", name)
 }
 
 func (r *Registry) Add(name string, path string) (Entry, error) {
@@ -90,9 +90,9 @@ func (r *Registry) Add(name string, path string) (Entry, error) {
 	for _, ws := range r.Workspaces {
 		switch {
 		case ws.Name == name:
-			return Entry{}, fmt.Errorf("workspace %q already exists", name)
+			return Entry{}, fmt.Errorf("checkout %q already exists", name)
 		case ws.Path == normalized:
-			return Entry{}, fmt.Errorf("workspace path already registered as %q", ws.Name)
+			return Entry{}, fmt.Errorf("checkout path already registered as %q", ws.Name)
 		}
 	}
 	entry := Entry{Name: name, Path: normalized, AddedAt: time.Now().UTC()}
@@ -117,5 +117,5 @@ func (r *Registry) Remove(name string) (Entry, error) {
 		r.Workspaces = append(r.Workspaces[:idx], r.Workspaces[idx+1:]...)
 		return ws, nil
 	}
-	return Entry{}, fmt.Errorf("workspace %q not found", name)
+	return Entry{}, fmt.Errorf("checkout %q not found", name)
 }

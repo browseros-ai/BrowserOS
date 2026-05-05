@@ -10,16 +10,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const srcFlagUsage = "Chromium checkout path to operate on directly without registry lookup"
+
 func repoInfo() (*repo.Info, error) {
 	return appState.RepoInfo()
 }
 
-func resolveWorkspace(positional []string, src string) (workspace.Entry, error) {
+func resolveWorkspace(cmd *cobra.Command, positional []string, src string) (workspace.Entry, error) {
 	name := ""
 	if len(positional) > 0 {
 		name = positional[0]
 	}
-	return appState.ResolveWorkspace(name, src)
+	commandPath := ""
+	if cmd != nil {
+		commandPath = cmd.CommandPath()
+	}
+	return workspace.ResolveForCommand(appState.Registry, name, appState.CWD, src, commandPath)
 }
 
 func splitWorkspaceAndFilters(cmd *cobra.Command, args []string) ([]string, []string) {
@@ -28,6 +34,24 @@ func splitWorkspaceAndFilters(cmd *cobra.Command, args []string) ([]string, []st
 		return args, nil
 	}
 	return args[:atDash], args[atDash:]
+}
+
+// llmTxtGuide returns a stable plain-text operating guide for coding agents.
+func llmTxtGuide() string {
+	return `browseros-patch quick reference for coding agents
+
+Terms:
+- patch repo: BrowserOS packages/browseros repo containing chromium_patches/.
+- Chromium checkout: local Chromium src tree registered with a checkout name like ch1.
+- checkout name: registry alias used by commands, for example ch1.
+- --src: operate on a Chromium checkout path directly without registry lookup.
+
+Rules:
+- Checkout commands work from anywhere when passed a checkout name: browseros-patch diff ch1.
+- browseros-patch list reads only registered Chromium checkouts; it does not inspect sync state.
+- Use browseros-patch status ch1 or browseros-patch diff ch1 before mutating.
+- Mutating commands: browseros-patch sync ch1, browseros-patch apply ch1, browseros-patch extract ch1.
+`
 }
 
 func ensureRepoConfigured(override string) error {

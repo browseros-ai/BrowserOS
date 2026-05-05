@@ -134,7 +134,10 @@ export class OrchestratorExecutorEvaluator implements AgentEvaluator {
 
     // Connect to Chrome via CDP — same per-worker offset used by app-manager.
     const cdpPort = config.browseros.base_cdp_port + workerIndex
-    const cdp = new CdpBackend({ port: cdpPort })
+    const cdp = new CdpBackend({
+      port: cdpPort,
+      exitOnReconnectFailure: false,
+    })
     await cdp.connect()
     const browser = new Browser(cdp)
     capture.screenshot.setBrowser(browser)

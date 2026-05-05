@@ -44,6 +44,19 @@ jobs:
         working-directory: packages/browseros-agent
         run: bun install --ignore-scripts
 
+      - name: Install Claude Code CLI
+        working-directory: packages/browseros-agent/apps/eval
+        env:
+          EVAL_CONFIG: ${{ github.event.inputs.config || 'configs/legacy/browseros-agent-weekly.json' }}
+        run: |
+          if bun -e "const config = await Bun.file(process.env.EVAL_CONFIG).json(); process.exit(config.agent?.type === 'claude-code' ? 0 : 1)"; then
+            npm install -g @anthropic-ai/claude-code@2.1.119
+            echo "Claude Code CLI installed at $(command -v claude)"
+            claude --version
+          else
+            echo "Eval config does not use Claude Code; skipping Claude Code CLI install"
+          fi
+
       - name: Install Python eval dependencies
         # agisdk pinned so silent upstream releases can't shift task definitions
         # or grader behavior. Bump intentionally with a documented re-baseline.
@@ -67,13 +80,11 @@ jobs:
         env:
           FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION || 'us-west-2' }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           NOPECHA_API_KEY: ${{ secrets.NOPECHA_API_KEY }}
-          EVAL_R2_ACCOUNT_ID: ${{ secrets.EVAL_R2_ACCOUNT_ID }}
-          EVAL_R2_ACCESS_KEY_ID: ${{ secrets.EVAL_R2_ACCESS_KEY_ID }}
-          EVAL_R2_SECRET_ACCESS_KEY: ${{ secrets.EVAL_R2_SECRET_ACCESS_KEY }}
-          EVAL_R2_BUCKET: ${{ secrets.EVAL_R2_BUCKET }}
-          EVAL_R2_CDN_BASE_URL: ${{ secrets.EVAL_R2_CDN_BASE_URL }}
           BROWSEROS_BINARY: /usr/bin/browseros
           WEBARENA_INFINITY_DIR: /tmp/webarena-infinity
           # OpenClaw container runtime is macOS-only; opt the Linux runner
@@ -82,7 +93,35 @@ jobs:
           EVAL_CONFIG: ${{ github.event.inputs.config || 'configs/legacy/browseros-agent-weekly.json' }}
         run: |
           echo "Running eval with config: $EVAL_CONFIG"
-          xvfb-run --auto-servernum --server-args="-screen 0 1440x900x24" bun run src/index.ts suite --config "$EVAL_CONFIG" --publish r2
+          xvfb-run --auto-servernum --server-args="-screen 0 1440x900x24" bun run src/index.ts suite --config "$EVAL_CONFIG"
+          # Capture the run directory so report.html can be generated before the R2 publish step.
+          SUMMARY_PATH="$(find results -name summary.json -type f -print | sort | tail -n 1)"
+          if [ -z "$SUMMARY_PATH" ]; then
+            echo "No eval run summary found"
+            exit 1
+          fi
+          RUN_DIR="$(dirname "$SUMMARY_PATH")"
+          echo "EVAL_RUN_DIR=$RUN_DIR" >> "$GITHUB_ENV"
+
+      - name: Generate run analysis report
+        if: success()
+        working-directory: packages/browseros-agent/apps/eval
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          echo "Generating run report for $EVAL_RUN_DIR"
+          bun scripts/generate-report.ts --input "$EVAL_RUN_DIR" --output "$EVAL_RUN_DIR/report.html"
+
+      - name: Publish eval run to R2
+        if: success()
+        working-directory: packages/browseros-agent/apps/eval
+        env:
+          EVAL_R2_ACCOUNT_ID: ${{ secrets.EVAL_R2_ACCOUNT_ID }}
+          EVAL_R2_ACCESS_KEY_ID: ${{ secrets.EVAL_R2_ACCESS_KEY_ID }}
+          EVAL_R2_SECRET_ACCESS_KEY: ${{ secrets.EVAL_R2_SECRET_ACCESS_KEY }}
+          EVAL_R2_BUCKET: ${{ secrets.EVAL_R2_BUCKET }}
+          EVAL_R2_CDN_BASE_URL: ${{ secrets.EVAL_R2_CDN_BASE_URL }}
+        run: bun run src/index.ts publish --run "$EVAL_RUN_DIR" --target r2
 
       - name: Generate trend report
         if: success()
@@ -97,7 +136,7 @@ jobs:
           EVAL_R2_CDN_BASE_URL: ${{ secrets.EVAL_R2_CDN_BASE_URL }}
         run: bun apps/eval/scripts/weekly-report.ts /tmp/eval-report.html
 
-      - name: Upload report as artifact
+      - name: Upload trend report as artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:

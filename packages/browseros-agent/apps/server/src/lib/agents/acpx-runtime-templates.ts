@@ -114,6 +114,11 @@ Do not store memory files in the project workspace.
 
 ## Write
 
+- When the user explicitly asks you to remember, save feedback, store a preference, or update memory, use this skill.
+- Write BrowserOS memory only under $AGENT_HOME.
+- Use $AGENT_HOME/MEMORY.md for durable promoted preferences and operating patterns.
+- Use $AGENT_HOME/memory/YYYY-MM-DD.md for daily notes and candidate memories.
+- Do not use native Claude project memory, native CLI memory, or workspace files for BrowserOS memory.
 - Put observations and task breadcrumbs in today's daily note first.
 - Promote only stable patterns into MEMORY.md.
 - Do not promote one-off facts, raw transcripts, temporary state, secrets, or credentials.

@@ -23,11 +23,17 @@ interface CdpVersion {
 const LOOPBACK_DISCOVERY_HOSTS = ['127.0.0.1', 'localhost', '[::1]'] as const
 type LoopbackDiscoveryHost = (typeof LOOPBACK_DISCOVERY_HOSTS)[number]
 
+interface CdpBackendConfig {
+  port: number
+  exitOnReconnectFailure?: boolean
+}
+
 // biome-ignore lint/correctness/noUnusedVariables: declaration merging adds ProtocolApi properties to the class
 interface CdpBackend extends ProtocolApi {}
 // biome-ignore lint/suspicious/noUnsafeDeclarationMerging: intentional — Object.assign fills these at runtime
 class CdpBackend implements ICdpBackend {
   private port: number
+  private exitOnReconnectFailure: boolean
   private ws: WebSocket | null = null
   private messageId = 0
   private pending = new Map<number, PendingRequest>()
@@ -44,8 +50,9 @@ class CdpBackend implements ICdpBackend {
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null
   private preferredDiscoveryHost: LoopbackDiscoveryHost | null = null
 
-  constructor(config: { port: number }) {
+  constructor(config: CdpBackendConfig) {
     this.port = config.port
+    this.exitOnReconnectFailure = config.exitOnReconnectFailure ?? true
 
     const rawSend: RawSend = (method, params) => this.rawSend(method, params)
     const rawOn: RawOn = (event, handler) => this.rawOn(event, handler)
@@ -293,7 +300,8 @@ class CdpBackend implements ICdpBackend {
   private async reconnectLoop(): Promise<void> {
     do {
       this.reconnectRequested = false
-      await this.reconnectWithRetries()
+      const reconnected = await this.reconnectWithRetries()
+      if (!reconnected) return
     } while (
       !this.disconnecting &&
       (this.reconnectRequested || !this.connected)
@@ -309,12 +317,12 @@ class CdpBackend implements ICdpBackend {
     this.pending.clear()
   }
 
-  private async reconnectWithRetries(): Promise<void> {
+  private async reconnectWithRetries(): Promise<boolean> {
     const maxRetries = CDP_LIMITS.RECONNECT_MAX_RETRIES
     const delay = TIMEOUTS.CDP_RECONNECT_DELAY
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      if (this.disconnecting) return
+      if (this.disconnecting) return false
 
       try {
         logger.info(`CDP reconnection attempt ${attempt}/${maxRetries}...`)
@@ -322,7 +330,7 @@ class CdpBackend implements ICdpBackend {
         await this.attemptConnect()
         this.startKeepalive()
         logger.info('CDP reconnected successfully')
-        return
+        return true
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
         logger.warn(
@@ -331,10 +339,14 @@ class CdpBackend implements ICdpBackend {
       }
     }
 
-    logger.error(
-      `CDP reconnection failed after ${maxRetries} attempts, exiting for restart`,
-    )
-    process.exit(EXIT_CODES.GENERAL_ERROR)
+    if (this.exitOnReconnectFailure) {
+      logger.error(
+        `CDP reconnection failed after ${maxRetries} attempts, exiting for restart`,
+      )
+      process.exit(EXIT_CODES.GENERAL_ERROR)
+    }
+    logger.error(`CDP reconnection failed after ${maxRetries} attempts`)
+    return false
   }
 
   async disconnect(): Promise<void> {

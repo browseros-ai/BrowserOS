@@ -868,7 +868,7 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
     )
   })
 
-  it('injects AGENT_HOME into Claude ACP command resolution', async () => {
+  it('injects AGENT_HOME without CLAUDE_CONFIG_DIR into Claude ACP command resolution', async () => {
     const browserosDir = await mkdtemp(
       join(tmpdir(), 'browseros-acpx-browseros-'),
     )
@@ -898,6 +898,7 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
     const command =
       getCreateRuntimeOptions(calls).agentRegistry.resolve('claude')
     expect(command).toContain('env AGENT_HOME=')
+    expect(command).not.toContain('CLAUDE_CONFIG_DIR=')
     expect(command).not.toContain('CODEX_HOME=')
   })
 
@@ -1261,7 +1262,15 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
         max_segments: 0,
       },
       closed: false,
-      messages: [],
+      messages: [
+        {
+          User: {
+            id: 'prior-user',
+            content: [{ Text: 'literal &amp; &lt;tag&gt;' } as never],
+          },
+        },
+        { Agent: { content: [{ Text: 'Prior answer.' }], tool_results: {} } },
+      ],
       updated_at: seedTimestamp,
       cumulative_token_usage: {},
       request_token_usage: {},
@@ -1286,13 +1295,15 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
         })
       },
     } as never
+    const calls: Array<{ method: string; input: unknown }> = []
     const runtime = new AcpxRuntime({
       cwd,
       stateDir,
       openclawGatewayChat,
       // Provide a runtime factory that would fail loudly if reached —
       // image turns must NOT fall through to the ACP path.
-      runtimeFactory: () => {
+      runtimeFactory: (options) => {
+        calls.push({ method: 'createRuntime', input: options })
         throw new Error('ACP path should not be reached for image turns')
       },
     })
@@ -1323,6 +1334,9 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
       { type: 'done', stopReason: 'end_turn' },
     ])
     expect(gatewayCalls).toHaveLength(1)
+    expect(
+      calls.filter((call) => call.method === 'createRuntime'),
+    ).toHaveLength(0)
     const gatewayInput = gatewayCalls[0]?.input as {
       agentId: string
       sessionKey: string
@@ -1332,6 +1346,10 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
       }>
     }
     expect(gatewayInput.agentId).toBe('img-bot')
+    expect(gatewayInput.messages[0]).toEqual({
+      role: 'user',
+      content: 'literal &amp; &lt;tag&gt;',
+    })
     expect(gatewayInput.messages.at(-1)?.role).toBe('user')
     const userContent = gatewayInput.messages.at(-1)?.content
     expect(Array.isArray(userContent)).toBe(true)
@@ -1346,7 +1364,7 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
       agent,
       sessionId: 'main',
     })
-    expect(history.items.map((item) => item.role)).toEqual([
+    expect(history.items.slice(-2).map((item) => item.role)).toEqual([
       'user',
       'assistant',
     ])
