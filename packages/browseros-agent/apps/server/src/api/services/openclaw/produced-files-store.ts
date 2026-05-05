@@ -15,7 +15,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { stat } from 'node:fs/promises'
+import { realpath, stat } from 'node:fs/promises'
 import { relative, resolve, sep } from 'node:path'
 import { and, desc, eq } from 'drizzle-orm'
 import { type BrowserOsDatabase, getDb } from '../../../lib/db'
@@ -246,24 +246,11 @@ export class ProducedFilesStore {
     const row = await this.findById(input.fileId)
     if (!row) return null
 
-    const workspaceRoot = resolve(input.workspaceDir)
-    const absolutePath = resolve(workspaceRoot, row.path)
-
-    // Containment check — reject anything escaping the workspace root.
-    // `relative` returning a `..`-prefixed path means the resolved
-    // absolute lives outside `workspaceRoot`.
-    const rel = relative(workspaceRoot, absolutePath)
-    if (rel.startsWith('..') || rel === '' || rel.startsWith(`..${sep}`)) {
-      return null
-    }
-
-    // Final on-disk sanity check.
-    try {
-      await stat(absolutePath)
-    } catch {
-      return null
-    }
-
+    const absolutePath = await resolveSafeWorkspacePath(
+      input.workspaceDir,
+      row.path,
+    )
+    if (!absolutePath) return null
     return { row, absolutePath }
   }
 
@@ -315,6 +302,56 @@ function truncatePrompt(value: string): string {
   const trimmed = value.trim()
   if (trimmed.length <= TURN_PROMPT_MAX_CHARS) return trimmed
   return `${trimmed.slice(0, TURN_PROMPT_MAX_CHARS - 1)}…`
+}
+
+/**
+ * Resolve `workspaceDir + relPath` to an absolute host path, but only
+ * if the resolved real path lives inside the workspace root. Returns
+ * null on:
+ *  - lexical traversal (`..` segments escaping the root),
+ *  - symlink escape (a file in the workspace pointing outside it),
+ *  - missing files,
+ *  - any unreadable path component.
+ *
+ * Exported so the unit test can hit it without a sqlite handle.
+ */
+export async function resolveSafeWorkspacePath(
+  workspaceDir: string,
+  relPath: string,
+): Promise<string | null> {
+  // Lexical containment first — fail fast without touching the FS.
+  const workspaceRoot = resolve(workspaceDir)
+  const lexical = resolve(workspaceRoot, relPath)
+  const lexicalRel = relative(workspaceRoot, lexical)
+  if (
+    lexicalRel === '' ||
+    lexicalRel.startsWith('..') ||
+    lexicalRel.startsWith(`..${sep}`)
+  ) {
+    return null
+  }
+
+  // Realpath check — collapses symlinks so a workspace symlink that
+  // points outside the root cannot be downloaded. Falls through to
+  // null if anything errors (file gone, permissions, broken link).
+  try {
+    const [realRoot, realFile] = await Promise.all([
+      realpath(workspaceRoot),
+      realpath(lexical),
+    ])
+    const realRel = relative(realRoot, realFile)
+    if (
+      realRel === '' ||
+      realRel.startsWith('..') ||
+      realRel.startsWith(`..${sep}`)
+    ) {
+      return null
+    }
+    await stat(realFile)
+    return realFile
+  } catch {
+    return null
+  }
 }
 
 // Re-export the row type so callers pulling the store don't have to

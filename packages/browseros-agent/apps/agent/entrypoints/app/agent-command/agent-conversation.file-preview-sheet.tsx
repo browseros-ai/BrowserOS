@@ -10,7 +10,8 @@
  */
 
 import { Download, FileWarning, Loader2 } from 'lucide-react'
-import { type FC, useMemo } from 'react'
+import { type FC, useEffect, useMemo, useRef } from 'react'
+import { toast } from 'sonner'
 import { MessageResponse } from '@/components/ai-elements/message'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -57,6 +58,41 @@ export const FilePreviewSheet: FC<FilePreviewSheetProps> = ({
     return buildFileDownloadUrl(baseUrl, fileId)
   }, [baseUrl, fileId])
 
+  // Surface preview-load failures in a toast in addition to the
+  // inline error block — the inline UI lives at the bottom of the
+  // sheet and is easy to miss when scrolled into the body.
+  const lastToastedFileIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!open) {
+      lastToastedFileIdRef.current = null
+      return
+    }
+    if (!error || !fileId) return
+    if (lastToastedFileIdRef.current === fileId) return
+    lastToastedFileIdRef.current = fileId
+    toast.error('Could not load preview', { description: error.message })
+  }, [open, error, fileId])
+
+  const handleDownload = () => {
+    if (!downloadUrl) {
+      toast.error("Couldn't reach the agent server", {
+        description: 'Reconnect to BrowserOS and try again.',
+      })
+      return
+    }
+    // Manually trigger the download so any future failure (e.g. the
+    // server returns 404 because the file was removed) can be
+    // surfaced via toast — the bare <a download> path swallows
+    // these errors silently.
+    const link = document.createElement('a')
+    link.href = downloadUrl
+    link.download = fileName
+    link.rel = 'noopener'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+  }
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -86,13 +122,16 @@ export const FilePreviewSheet: FC<FilePreviewSheetProps> = ({
           </div>
         </ScrollArea>
 
-        {downloadUrl ? (
+        {fileId ? (
           <div className="border-border/60 border-t bg-background/90 px-5 py-3 backdrop-blur">
-            <Button asChild size="sm" className="w-full gap-2">
-              <a href={downloadUrl} download={fileName} rel="noopener">
-                <Download className="size-3.5" />
-                Download
-              </a>
+            <Button
+              type="button"
+              size="sm"
+              className="w-full gap-2"
+              onClick={handleDownload}
+            >
+              <Download className="size-3.5" />
+              Download
             </Button>
           </div>
         ) : null}

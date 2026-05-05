@@ -28,6 +28,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { type FC, useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   Collapsible,
@@ -124,7 +125,15 @@ export const OutputsRail: FC<OutputsRailProps> = ({ agentId, onClose }) => {
             variant="ghost"
             size="icon"
             className="size-7"
-            onClick={() => refresh.mutate()}
+            onClick={() =>
+              refresh.mutate(undefined, {
+                onError: (err) =>
+                  toast.error('Refresh failed', {
+                    description:
+                      err instanceof Error ? err.message : String(err),
+                  }),
+              })
+            }
             disabled={refresh.isPending}
             title="Refresh"
           >
