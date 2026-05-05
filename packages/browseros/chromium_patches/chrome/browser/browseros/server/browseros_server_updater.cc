@@ -203,11 +203,6 @@ index 0000000000000..9050130727fc8
 +  std::string stdout_output;
 +  std::string stderr_output;
 +
-+  base::LaunchOptions options;
-+#if BUILDFLAG(IS_WIN)
-+  options.start_hidden = true;
-+#endif
-+
 +  // GetAppOutputWithExitCode runs the process and captures output
 +  bool success = base::GetAppOutputAndError(cmd, &stdout_output);
 +

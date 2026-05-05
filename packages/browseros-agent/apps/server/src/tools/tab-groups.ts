@@ -21,7 +21,7 @@ const tabGroupWithPageIdsSchema = z.object({
   color: z.string(),
   collapsed: z.boolean(),
   pageIds: z.array(z.number()),
-})
+}).passthrough()
 
 export const list_tab_groups = defineManagementTool({
   name: 'list_tab_groups',

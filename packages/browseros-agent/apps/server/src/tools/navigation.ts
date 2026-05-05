@@ -17,7 +17,7 @@ const pageInfoSchema = z.object({
   windowId: z.number().optional(),
   index: z.number().optional(),
   groupId: z.string().optional(),
-})
+}).passthrough()
 
 export const get_active_page = defineNavigationTool({
   name: 'get_active_page',

@@ -44,7 +44,7 @@ export const get_console_logs = defineObservationTool({
         url: z.string().optional(),
         lineNumber: z.number().optional(),
         timestamp: z.number(),
-      }),
+      }).passthrough(),
     ),
     totalCount: z.number(),
     returnedCount: z.number(),

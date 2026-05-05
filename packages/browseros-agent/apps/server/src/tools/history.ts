@@ -9,7 +9,7 @@ const historyItemSchema = z.object({
   lastVisitTime: z.number(),
   visitCount: z.number().optional(),
   typedCount: z.number().optional(),
-})
+}).passthrough()
 
 export const search_history = defineManagementTool({
   name: 'search_history',

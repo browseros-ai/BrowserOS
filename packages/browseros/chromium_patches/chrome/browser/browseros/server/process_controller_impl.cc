@@ -142,6 +142,12 @@ index 0000000000000..d1bb340ae3d86
 +  options.start_hidden = true;
 +#endif
 +
+++#if BUILDFLAG(IS_WIN)
+++  options.environment[L"BROWSEROS_DIR"] = config.paths.execution.value();
+++#else
+++  options.environment["BROWSEROS_DIR"] = config.paths.execution.value();
+++#endif
+++
 +  // Launch the process (blocking I/O)
 +  result.process = base::LaunchProcess(cmd, options);
 +  return result;

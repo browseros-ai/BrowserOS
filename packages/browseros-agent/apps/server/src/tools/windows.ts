@@ -20,12 +20,13 @@ const windowInfoSchema = z.object({
     windowState: z
       .enum(['normal', 'minimized', 'maximized', 'fullscreen'])
       .optional(),
-  }),
+  }).passthrough(),
   isActive: z.boolean(),
   isVisible: z.boolean(),
   tabCount: z.number(),
   activeTabId: z.number().optional(),
-})
+  incognito: z.boolean().optional(),
+}).passthrough()
 
 export const list_windows = defineManagementTool({
   name: 'list_windows',

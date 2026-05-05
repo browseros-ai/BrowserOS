@@ -12,7 +12,7 @@ const bookmarkNodeSchema = z.object({
   index: z.number().optional(),
   dateAdded: z.number(),
   dateLastUsed: z.number().optional(),
-})
+}).passthrough()
 
 function formatBookmarkTree(nodes: BookmarkNode[]): string {
   const lines: string[] = []
