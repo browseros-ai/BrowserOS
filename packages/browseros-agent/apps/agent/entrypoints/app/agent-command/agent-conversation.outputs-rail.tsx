@@ -27,7 +27,7 @@ import {
   PanelRightClose,
   RefreshCw,
 } from 'lucide-react'
-import { type FC, useEffect, useMemo, useState } from 'react'
+import { type FC, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -51,6 +51,16 @@ import { FilePreviewSheet } from './agent-conversation.file-preview-sheet'
 interface OutputsRailProps {
   agentId: string
   onClose: () => void
+  /**
+   * When set, the rail scrolls the matching `RailTurnGroup` into
+   * view and force-opens its `Collapsible`. Used by the inline
+   * file-card strip's "View" / "+N" deep-link path. Cleared by
+   * the parent (via `onFocusTurnConsumed`) once the rail has
+   * acknowledged the deep-link so subsequent renders don't keep
+   * re-scrolling the same group.
+   */
+  focusTurnId?: string | null
+  onFocusTurnConsumed?: () => void
 }
 
 const RAIL_LOCAL_STORAGE_PREFIX = 'browseros:outputs-rail:'
@@ -94,7 +104,12 @@ export function useOutputsRailOpen(
   return [open, update]
 }
 
-export const OutputsRail: FC<OutputsRailProps> = ({ agentId, onClose }) => {
+export const OutputsRail: FC<OutputsRailProps> = ({
+  agentId,
+  onClose,
+  focusTurnId,
+  onFocusTurnConsumed,
+}) => {
   const { groups, loading, error } = useAgentOutputs(agentId)
   const refresh = useRefreshAgentOutputs(agentId)
 
@@ -170,6 +185,10 @@ export const OutputsRail: FC<OutputsRailProps> = ({ agentId, onClose }) => {
                 <li key={group.turnId}>
                   <RailTurnGroup
                     group={group}
+                    focused={
+                      Boolean(focusTurnId) && focusTurnId === group.turnId
+                    }
+                    onFocusConsumed={onFocusTurnConsumed}
                     onOpenFile={(file) =>
                       setOpenFile({ id: file.id, path: file.path })
                     }
@@ -195,42 +214,64 @@ export const OutputsRail: FC<OutputsRailProps> = ({ agentId, onClose }) => {
 
 function RailTurnGroup({
   group,
+  focused,
+  onFocusConsumed,
   onOpenFile,
 }: {
   group: ProducedFilesRailGroup
+  focused: boolean
+  onFocusConsumed?: () => void
   onOpenFile: (file: { id: string; path: string }) => void
 }) {
   const [open, setOpen] = useState(true)
   const headerLabel = group.turnPrompt.trim() || 'Turn'
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // Deep-link consumption: when the parent passes `focused=true`,
+  // expand the collapsible (in case the user had collapsed it
+  // earlier) and scroll into view. Fire `onFocusConsumed` so the
+  // parent can drop the URL param and we don't re-scroll on every
+  // render after that.
+  useEffect(() => {
+    if (!focused) return
+    setOpen(true)
+    containerRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'nearest',
+    })
+    onFocusConsumed?.()
+  }, [focused, onFocusConsumed])
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger
-        className={cn(
-          'flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-muted-foreground text-xs',
-          'transition-colors hover:bg-accent/40 hover:text-foreground',
-        )}
-      >
-        {open ? (
-          <ChevronDown className="size-3 shrink-0" />
-        ) : (
-          <ChevronRight className="size-3 shrink-0" />
-        )}
-        <span className="min-w-0 flex-1 truncate font-medium">
-          {headerLabel}
-        </span>
-        <span className="shrink-0 tabular-nums">{group.files.length}</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <ul className="mt-1 ml-1 flex flex-col gap-0.5 border-border/40 border-l pl-2">
-          {group.files.map((file) => (
-            <li key={file.id}>
-              <RailFileRow file={file} onOpen={() => onOpenFile(file)} />
-            </li>
-          ))}
-        </ul>
-      </CollapsibleContent>
-    </Collapsible>
+    <div ref={containerRef}>
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger
+          className={cn(
+            'flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-muted-foreground text-xs',
+            'transition-colors hover:bg-accent/40 hover:text-foreground',
+          )}
+        >
+          {open ? (
+            <ChevronDown className="size-3 shrink-0" />
+          ) : (
+            <ChevronRight className="size-3 shrink-0" />
+          )}
+          <span className="min-w-0 flex-1 truncate font-medium">
+            {headerLabel}
+          </span>
+          <span className="shrink-0 tabular-nums">{group.files.length}</span>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <ul className="mt-1 ml-1 flex flex-col gap-0.5 border-border/40 border-l pl-2">
+            {group.files.map((file) => (
+              <li key={file.id}>
+                <RailFileRow file={file} onOpen={() => onOpenFile(file)} />
+              </li>
+            ))}
+          </ul>
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
   )
 }
 

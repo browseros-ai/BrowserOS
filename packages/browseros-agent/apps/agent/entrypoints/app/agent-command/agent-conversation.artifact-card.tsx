@@ -3,17 +3,12 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
+ * @deprecated Replaced by `FileCardStrip` in
+ * `agent-conversation.file-card-strip.tsx`. Kept temporarily so
+ * any in-flight callers don't fail to import; remove in a
+ * follow-up once nothing external references it.
+ *
  * Compact "Files produced" card rendered under an assistant turn.
- * Owns the FilePreviewSheet for its row of files — the rail keeps
- * its own sheet instance so the two surfaces don't fight over
- * `open`/`onOpenChange`.
- *
- * Source of `files`:
- *  - Live turn:    `produced_files` SSE event (HarnessProducedFile[])
- *  - Resumed turn: `useAgentTurnFiles(agentId, turnId)` fallback
- *
- * The card itself is shape-agnostic: it accepts whatever upstream
- * resolved into `ProducedFileLike`.
  */
 
 import { FileText, Image as ImageIcon, Paperclip } from 'lucide-react'

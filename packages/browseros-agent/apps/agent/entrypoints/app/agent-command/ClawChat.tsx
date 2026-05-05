@@ -22,6 +22,8 @@ interface ClawChatProps {
   isFetchingNextPage: boolean
   onFetchNextPage: () => void
   onRetry: () => void
+  /** Wired through to the inline file-card strip on each assistant turn. */
+  onOpenOutputsRail?: ((turnId?: string | null) => void) | null
   className?: string
 }
 
@@ -85,6 +87,7 @@ export const ClawChat: FC<ClawChatProps> = ({
   isFetchingNextPage,
   onFetchNextPage,
   onRetry,
+  onOpenOutputsRail,
   className,
 }) => {
   const topSentinelRef = useRef<HTMLDivElement>(null)
@@ -155,6 +158,7 @@ export const ClawChat: FC<ClawChatProps> = ({
                   key={turn.id}
                   turn={turn}
                   streaming={streaming && index === turns.length - 1}
+                  onOpenOutputsRail={onOpenOutputsRail}
                 />
               ))}
               {error ? (

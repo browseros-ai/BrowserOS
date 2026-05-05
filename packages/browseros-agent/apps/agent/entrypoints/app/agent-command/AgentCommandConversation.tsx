@@ -1,5 +1,5 @@
 import { ArrowLeft, PanelRight } from 'lucide-react'
-import { type FC, useEffect, useMemo, useRef } from 'react'
+import { type FC, useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
 import { Button } from '@/components/ui/button'
 import type {
@@ -43,6 +43,7 @@ function AgentConversationController({
   agents,
   agentPathPrefix,
   createAgentPath,
+  onOpenOutputsRail,
 }: {
   agentId: string
   initialMessage: string | null
@@ -50,6 +51,7 @@ function AgentConversationController({
   agents: AgentEntry[]
   agentPathPrefix: string
   createAgentPath: string
+  onOpenOutputsRail?: ((turnId?: string | null) => void) | null
 }) {
   const navigate = useNavigate()
   const initialMessageSentRef = useRef<string | null>(null)
@@ -182,6 +184,7 @@ function AgentConversationController({
         hasNextPage={false}
         isFetchingNextPage={false}
         onFetchNextPage={() => {}}
+        onOpenOutputsRail={onOpenOutputsRail}
         onRetry={() => {
           void harnessHistoryQuery.refetch()
         }}
@@ -297,6 +300,40 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
     useOutputsRailOpen(resolvedAgentId)
   const railVisible = isOpenClawAgent && outputsRailOpen
 
+  // Deep-link target for the rail. Set when (a) the user clicks
+  // View / +N on an inline file-card strip, or (b) an external nav
+  // arrived with `?outputsTurn=<turnId>`. Cleared by the rail
+  // itself once it has scrolled to + expanded the matching group.
+  const urlOutputsTurn = searchParams.get('outputsTurn')
+  const [focusTurnId, setFocusTurnId] = useState<string | null>(urlOutputsTurn)
+  // If the URL param flips while we're already on this agent, sync.
+  useEffect(() => {
+    if (!urlOutputsTurn) return
+    setFocusTurnId(urlOutputsTurn)
+    if (isOpenClawAgent) setOutputsRailOpen(true)
+  }, [urlOutputsTurn, isOpenClawAgent, setOutputsRailOpen])
+
+  const handleOpenOutputsRail = (turnId?: string | null) => {
+    if (!isOpenClawAgent) return
+    setOutputsRailOpen(true)
+    setFocusTurnId(turnId ?? null)
+  }
+  const handleFocusTurnConsumed = () => {
+    setFocusTurnId(null)
+    if (urlOutputsTurn) {
+      // Drop the URL param so a back-nav doesn't re-trigger the
+      // scroll. `replace: true` keeps history clean.
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          next.delete('outputsTurn')
+          return next
+        },
+        { replace: true },
+      )
+    }
+  }
+
   const adapterHealth = useMemo<AgentAdapterHealth | null>(() => {
     const adapterId = harnessAgent?.adapter
     if (!adapterId) return null
@@ -398,11 +435,23 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
               agentId={resolvedAgentId}
               agents={agents}
               initialMessage={initialMessage}
-              onInitialMessageConsumed={() =>
-                setSearchParams({}, { replace: true })
-              }
+              onInitialMessageConsumed={() => {
+                // Preserve the outputsTurn deep-link if present —
+                // dropping all params would erase the rail focus
+                // before it had a chance to consume.
+                setSearchParams(
+                  (prev) => {
+                    const next = new URLSearchParams()
+                    const turn = prev.get('outputsTurn')
+                    if (turn) next.set('outputsTurn', turn)
+                    return next
+                  },
+                  { replace: true },
+                )
+              }}
               agentPathPrefix={agentPathPrefix}
               createAgentPath={createAgentPath}
+              onOpenOutputsRail={isOpenClawAgent ? handleOpenOutputsRail : null}
             />
           </div>
 
@@ -410,6 +459,8 @@ export const AgentCommandConversation: FC<AgentCommandConversationProps> = ({
             <OutputsRail
               agentId={resolvedAgentId}
               onClose={() => setOutputsRailOpen(false)}
+              focusTurnId={focusTurnId}
+              onFocusTurnConsumed={handleFocusTurnConsumed}
             />
           ) : null}
         </div>

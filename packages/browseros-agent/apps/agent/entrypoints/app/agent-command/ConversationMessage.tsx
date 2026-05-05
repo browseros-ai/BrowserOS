@@ -22,11 +22,19 @@ import type {
   AgentConversationTurn,
   ToolEntry,
 } from '@/lib/agent-conversations/types'
-import { ArtifactCard } from './agent-conversation.artifact-card'
+import { FileCardStrip } from './agent-conversation.file-card-strip'
 
 interface ConversationMessageProps {
   turn: AgentConversationTurn
   streaming: boolean
+  /**
+   * Forwarded to the inline file-card strip's "View" / "+N"
+   * button. Wired up by AgentCommandConversation so the strip can
+   * deep-link straight into the Outputs rail at the matching turn
+   * group. `null` here disables the strip's deep-link affordance
+   * — the cards still open the preview Sheet directly.
+   */
+  onOpenOutputsRail?: ((turnId?: string | null) => void) | null
 }
 
 interface RenderEntry {
@@ -89,6 +97,7 @@ function ToolStatusIcon({ status }: { status: ToolEntry['status'] }) {
 export const ConversationMessage: FC<ConversationMessageProps> = ({
   turn,
   streaming,
+  onOpenOutputsRail,
 }) => {
   const entries = useMemo(() => buildRenderEntries(turn), [turn])
 
@@ -187,7 +196,11 @@ export const ConversationMessage: FC<ConversationMessageProps> = ({
       )}
 
       {turn.producedFiles && turn.producedFiles.length > 0 ? (
-        <ArtifactCard files={turn.producedFiles} />
+        <FileCardStrip
+          turnId={turn.turnId ?? null}
+          files={turn.producedFiles}
+          onOpenRail={onOpenOutputsRail ?? (() => {})}
+        />
       ) : null}
 
       {!turn.done && turn.parts.length === 0 && streaming && (
