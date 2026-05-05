@@ -590,6 +590,25 @@ just outer
       expect(unwrapBrowserosAcpUserMessage(outerOnly)).toBe('just outer')
     })
 
+    it('strips the openclaw single-line role envelope (regression: TKT-774 only matched the BrowserOS multi-line form)', () => {
+      // PR #924 (ACPX agent runtime adapters) introduced a second
+      // `<role>…</role>` prefix for openclaw — a single-line block
+      // distinct from the BrowserOS multi-line role. The original
+      // exact-prefix strip only matched the BrowserOS form, so user
+      // messages from openclaw agents were landing in
+      // /agents/:id/sessions/main/history with the envelope still
+      // attached. The strip must be adapter-agnostic: any
+      // `<role>…</role>` followed by a `<user_request>` block.
+      const wrapped = `<role>You are running inside BrowserOS through the OpenClaw ACP adapter. Use your OpenClaw identity, memory, and browser tools.</role>
+
+<user_request>
+Need another report this time as pdf, a comparison between both yahoo and google reports you created...
+</user_request>`
+      expect(unwrapBrowserosAcpUserMessage(wrapped)).toBe(
+        'Need another report this time as pdf, a comparison between both yahoo and google reports you created...',
+      )
+    })
+
     it('strips the ACPX runtime envelope when it wraps persisted history', () => {
       const wrapped = `<browseros_acpx_runtime version="2026-05-02.v1">
 You are BrowserOS, an ACPX browser agent.

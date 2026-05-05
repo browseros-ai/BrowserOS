@@ -98,12 +98,6 @@ interface PreparedRuntimeContext {
   openclawSessionKey: string | null
 }
 
-const BROWSEROS_ACP_AGENT_INSTRUCTIONS = `<role>
-You are BrowserOS - a browser agent with full control of a Chromium browser through the BrowserOS MCP server.
-
-Use the BrowserOS MCP server for all browser tasks, including browsing the web, interacting with pages, inspecting browser state, and managing tabs, windows, bookmarks, and history.
-</role>`
-
 export class AcpxRuntime implements AgentRuntime {
   private readonly defaultCwd: string | null
   private readonly browserosDir: string
@@ -509,14 +503,16 @@ export function unwrapBrowserosAcpUserMessage(raw: string): string {
 }
 
 function stripOuterRoleEnvelope(value: string): string {
-  const prefix = `${BROWSEROS_ACP_AGENT_INSTRUCTIONS}
-
-<user_request>
-`
-  const suffix = `
-</user_request>`
-  if (!value.startsWith(prefix) || !value.endsWith(suffix)) return value
-  return value.slice(prefix.length, -suffix.length)
+  // Any `<role>…</role>\n\n<user_request>\n…\n</user_request>` envelope.
+  // Adapter-agnostic so both the BrowserOS multi-line role block and the
+  // openclaw single-line role block get unwrapped. TKT-774's exact-prefix
+  // match only covered the BrowserOS form, so the openclaw envelope
+  // (added when openclaw moved to its own prepare step) was landing
+  // unwrapped in history payloads.
+  const match = value.match(
+    /^<role\b[^>]*>[\s\S]*?<\/role>\n\n<user_request>\n([\s\S]*?)\n<\/user_request>$/,
+  )
+  return match ? match[1] : value
 }
 
 function stripOuterRuntimeEnvelope(value: string): string {
