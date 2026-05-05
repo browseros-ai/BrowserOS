@@ -1,5 +1,5 @@
 import { Bot, Loader2, RefreshCw } from 'lucide-react'
-import { type FC, useEffect, useRef } from 'react'
+import { type FC, Fragment, useEffect, useRef } from 'react'
 import {
   Conversation,
   ConversationContent,
@@ -26,13 +26,18 @@ interface ClawChatProps {
    */
   stripOnlyTurns?: AgentConversationTurn[]
   /**
-   * Per-turn produced-files groups loaded from the harness's
-   * /agents/<id>/files endpoint. Used to surface strips on a fresh
-   * page load (when there's no optimistic turn to carry the data).
-   * Already deduped against `turns` + `stripOnlyTurns` upstream by
-   * `AgentCommandConversation` so the same turn never renders two
-   * strips. Each group renders as a tail strip after history; the
-   * View button still deep-links into the rail at that group.
+   * Maps each assistant history message id → the produced-files
+   * group that came from its turn. Built by
+   * `mapHistoryToProducedFilesGroups` upstream so the strip
+   * renders directly under the matching message instead of
+   * stacking at the conversation tail.
+   */
+  filesByAssistantId?: Map<string, ProducedFilesRailGroup>
+  /**
+   * Produced-files groups that didn't match any persisted history
+   * pair (e.g. orphaned turns where history loaded after the
+   * group was attributed). Rendered at the conversation tail as
+   * a fallback so the user can still see them.
    */
   tailStripGroups?: ReadonlyArray<ProducedFilesRailGroup>
   streaming: boolean
@@ -101,6 +106,7 @@ export const ClawChat: FC<ClawChatProps> = ({
   historyMessages,
   turns,
   stripOnlyTurns,
+  filesByAssistantId,
   tailStripGroups,
   streaming,
   isInitialLoading,
@@ -172,9 +178,21 @@ export const ClawChat: FC<ClawChatProps> = ({
                   Start of conversation
                 </div>
               ) : null}
-              {historyMessages.map((message) => (
-                <ClawChatMessage key={message.id} message={message} />
-              ))}
+              {historyMessages.map((message) => {
+                const matched = filesByAssistantId?.get(message.id)
+                return (
+                  <Fragment key={message.id}>
+                    <ClawChatMessage message={message} />
+                    {matched ? (
+                      <FileCardStrip
+                        turnId={matched.turnId}
+                        files={matched.files}
+                        onOpenRail={onOpenOutputsRail ?? (() => {})}
+                      />
+                    ) : null}
+                  </Fragment>
+                )
+              })}
               {(tailStripGroups ?? []).map((group) => (
                 <FileCardStrip
                   key={`tail-strip-${group.turnId}`}

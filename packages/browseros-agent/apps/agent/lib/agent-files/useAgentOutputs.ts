@@ -102,37 +102,46 @@ export function useAgentTurnFiles(
 
 /**
  * Returns a callable that invalidates outputs / turn-files queries
- * for one agent. Call after an assistant turn completes so the rail
- * picks up the new attributed rows. Cheap when the queries aren't
- * mounted — react-query just marks the cached value stale.
+ * for one agent across any baseUrl. Call after an assistant turn
+ * completes so the rail (and the inline file-card strip) pick up
+ * the new attributed rows. Cheap when the queries aren't mounted
+ * — react-query just marks the cached value stale.
+ *
+ * Implementation note: react-query's `invalidateQueries({ queryKey })`
+ * does positional partial-match, so passing `undefined` as the
+ * baseUrl placeholder does NOT match a cached `[…, baseUrl, …]`
+ * key — the cache stayed stale. Use a predicate so we ignore the
+ * baseUrl position entirely.
  */
 export function useInvalidateAgentOutputs() {
   const queryClient = useQueryClient()
   return async (agentId: string, turnId?: string) => {
     await Promise.all([
       queryClient.invalidateQueries({
-        queryKey: [AGENT_QUERY_KEYS.agentOutputs, undefined, agentId],
-        // `undefined` placeholder for `baseUrl`. Predicate-based match
-        // would be cleaner, but invalidateQueries scopes by prefix
-        // automatically — the second arg position is the baseUrl, the
-        // third is the agentId. We pass `undefined` so any baseUrl
-        // matches.
-        exact: false,
+        predicate: (query) => {
+          const key = query.queryKey
+          return (
+            Array.isArray(key) &&
+            key[0] === AGENT_QUERY_KEYS.agentOutputs &&
+            key[2] === agentId
+          )
+        },
       }),
-      turnId
-        ? queryClient.invalidateQueries({
-            queryKey: [
-              AGENT_QUERY_KEYS.agentTurnFiles,
-              undefined,
-              agentId,
-              turnId,
-            ],
-            exact: false,
-          })
-        : queryClient.invalidateQueries({
-            queryKey: [AGENT_QUERY_KEYS.agentTurnFiles, undefined, agentId],
-            exact: false,
-          }),
+      queryClient.invalidateQueries({
+        predicate: (query) => {
+          const key = query.queryKey
+          if (
+            !Array.isArray(key) ||
+            key[0] !== AGENT_QUERY_KEYS.agentTurnFiles ||
+            key[2] !== agentId
+          ) {
+            return false
+          }
+          // When a turnId was supplied, scope to just that turn's
+          // entry. Otherwise flush every cached turn for this agent.
+          return turnId ? key[3] === turnId : true
+        },
+      }),
     ])
   }
 }

@@ -16,7 +16,7 @@ import {
   useUpdateHarnessAgent,
 } from '@/entrypoints/app/agents/useAgents'
 import type { AgentEntry } from '@/entrypoints/app/agents/useOpenClaw'
-import { useAgentOutputs } from '@/lib/agent-files'
+import { type ProducedFilesRailGroup, useAgentOutputs } from '@/lib/agent-files'
 import { cn } from '@/lib/utils'
 import { AgentRail } from './AgentRail'
 import { useAgentCommandData } from './agent-command-layout'
@@ -31,6 +31,7 @@ import {
   buildChatHistoryFromClawMessages,
   filterTurnsPersistedInHistory,
   flattenHistoryPages,
+  mapHistoryToProducedFilesGroups,
   selectStripOnlyTurns,
 } from './claw-chat-types'
 import { consumePendingInitialMessage } from './pending-initial-message'
@@ -125,19 +126,37 @@ function AgentConversationController({
     () => selectStripOnlyTurns(turns, historyMessages),
     [historyMessages, turns],
   )
-  // Tail strips for groups not already covered by a live or
-  // strip-only turn. Each rendered as its own FileCardStrip after
-  // history. Deduped by turnId so the same turn never doubles up.
-  const tailStripGroups = useMemo(() => {
-    if (!isOpenClawAgent) return []
+  // Two outputs from the per-turn matcher:
+  //  - filesByAssistantId  → strip rendered directly under the
+  //    matching assistant history bubble.
+  //  - tailUnmatched      → groups with no history pair (orphans);
+  //    rendered at the conversation tail.
+  // Both are filtered to exclude turnIds already covered by a
+  // live or strip-only optimistic turn (those carry their own
+  // strip and history hasn't reloaded yet).
+  const { filesByAssistantId, tailStripGroups } = useMemo(() => {
+    if (!isOpenClawAgent) {
+      return {
+        filesByAssistantId: new Map<string, ProducedFilesRailGroup>(),
+        tailStripGroups: [] as ProducedFilesRailGroup[],
+      }
+    }
     const coveredTurnIds = new Set<string>()
     for (const turn of turns) {
       if (turn.turnId) coveredTurnIds.add(turn.turnId)
     }
-    return agentOutputGroups.filter(
+    const eligibleGroups = agentOutputGroups.filter(
       (group) => !coveredTurnIds.has(group.turnId),
     )
-  }, [agentOutputGroups, isOpenClawAgent, turns])
+    const { byAssistantMessageId, unmatched } = mapHistoryToProducedFilesGroups(
+      historyMessages,
+      eligibleGroups,
+    )
+    return {
+      filesByAssistantId: byAssistantMessageId,
+      tailStripGroups: unmatched,
+    }
+  }, [agentOutputGroups, isOpenClawAgent, historyMessages, turns])
   onInitialMessageConsumedRef.current = onInitialMessageConsumed
 
   const disabled = !agent
@@ -210,6 +229,7 @@ function AgentConversationController({
         historyMessages={historyMessages}
         turns={visibleTurns}
         stripOnlyTurns={stripOnlyTurns}
+        filesByAssistantId={filesByAssistantId}
         tailStripGroups={tailStripGroups}
         streaming={streaming}
         isInitialLoading={harnessHistoryQuery.isLoading}

@@ -1,5 +1,6 @@
 import type { OpenClawChatHistoryMessage } from '@/entrypoints/app/agents/useOpenClaw'
 import type { AgentConversationTurn } from '@/lib/agent-conversations/types'
+import type { ProducedFilesRailGroup } from '@/lib/agent-files'
 
 export type ClawChatRole = 'user' | 'assistant'
 
@@ -308,4 +309,60 @@ function getClawMessageText(message: ClawChatMessage): string {
     .map((part) => part.text)
     .join('')
     .trim()
+}
+
+function firstNonBlankLine(value: string): string {
+  for (const raw of value.split('\n')) {
+    const trimmed = raw.trim()
+    if (trimmed) return trimmed
+  }
+  return ''
+}
+
+/**
+ * Map each assistant history message to the produced-files group
+ * that came from its turn. Match key is `group.turnPrompt` (first
+ * non-blank line of the user prompt that initiated the turn) vs.
+ * the first non-blank line of the user message that immediately
+ * preceded this assistant message — the same shape the server
+ * emits when storing turnPrompt.
+ *
+ * Walks history forward (oldest-first per `flattenHistoryPages`)
+ * and consumes groups in chronological order. A group can only
+ * match once — if two turns share the same prompt the earlier
+ * one wins, and the later assistant message stays unassociated
+ * (those land back in `tailStripGroups` at the conversation tail).
+ */
+export function mapHistoryToProducedFilesGroups(
+  historyMessages: ClawChatMessage[],
+  groups: ReadonlyArray<ProducedFilesRailGroup>,
+): {
+  byAssistantMessageId: Map<string, ProducedFilesRailGroup>
+  unmatched: ProducedFilesRailGroup[]
+} {
+  const byAssistantMessageId = new Map<string, ProducedFilesRailGroup>()
+  if (groups.length === 0) {
+    return { byAssistantMessageId, unmatched: [] }
+  }
+  // Oldest-first so the iteration order matches history.
+  const remaining = [...groups].sort((a, b) => a.createdAt - b.createdAt)
+
+  let pendingPrompt: string | null = null
+  for (const message of historyMessages) {
+    if (message.role === 'user') {
+      pendingPrompt = firstNonBlankLine(getClawMessageText(message))
+      continue
+    }
+    if (message.role !== 'assistant' || !pendingPrompt) continue
+    const matchIndex = remaining.findIndex(
+      (group) => group.turnPrompt === pendingPrompt,
+    )
+    if (matchIndex >= 0) {
+      const [match] = remaining.splice(matchIndex, 1)
+      byAssistantMessageId.set(message.id, match)
+    }
+    pendingPrompt = null
+  }
+
+  return { byAssistantMessageId, unmatched: remaining }
 }
