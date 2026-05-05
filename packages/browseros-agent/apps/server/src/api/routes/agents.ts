@@ -440,11 +440,9 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
 
       .get('/:agentId/files', async (c) => {
         try {
-          const limitRaw = c.req.query('limit')
-          const limit = limitRaw ? Number.parseInt(limitRaw, 10) : undefined
           const groups = await service.listAgentFiles(
             c.req.param('agentId'),
-            Number.isFinite(limit) ? { limit: limit as number } : undefined,
+            parseAgentFilesLimit(c.req.query('limit')),
           )
           return c.json({ groups })
         } catch (err) {
@@ -489,7 +487,7 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
             headers: {
               'Content-Type': resolved.mimeType,
               'Content-Length': String(resolved.size),
-              'Content-Disposition': `attachment; filename="${encodeRfc6266Filename(resolved.fileName)}"`,
+              'Content-Disposition': `attachment; ${encodeRfc6266Filename(resolved.fileName)}`,
               'Cache-Control': 'no-store',
             },
           })
@@ -500,15 +498,40 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
   )
 }
 
+/** Hard cap on `?limit=` for /agents/:id/files — guards against
+ *  a caller-supplied huge value forcing a per-agent table scan. */
+const MAX_FILES_LIMIT = 500
+
 /**
- * RFC 6266 / RFC 5987 filename encoding for `Content-Disposition`.
- * Quotes the ASCII-safe filename and adds a percent-encoded `filename*`
- * fallback for non-ASCII so browsers download with the original name.
+ * Parse + clamp the `limit` query for /agents/:id/files. Returns
+ * `undefined` when the param is absent or unparseable so the
+ * service falls back to its own default.
+ */
+function parseAgentFilesLimit(
+  raw: string | undefined,
+): { limit: number } | undefined {
+  if (!raw) return undefined
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed)) return undefined
+  return { limit: Math.min(Math.max(1, parsed), MAX_FILES_LIMIT) }
+}
+
+/**
+ * RFC 6266 / RFC 5987 filename attributes for `Content-Disposition`.
+ * Returns the `filename="..."` attribute (always) plus a
+ * percent-encoded `filename*=UTF-8''…` attribute when the name
+ * contains non-ASCII characters, so browsers download with the
+ * original name even on stricter HTTP clients.
  */
 function encodeRfc6266Filename(filename: string): string {
   // Strip CRLFs and quotes (header injection guard).
   const safe = filename.replace(/["\r\n]/g, '_')
-  return safe
+  // Detect non-ASCII; emit the RFC 5987 fallback attribute when
+  // present. `encodeURIComponent` is the standard browser-safe
+  // percent-encoder for this purpose.
+  const hasNonAscii = /[^ -~]/.test(safe)
+  if (!hasNonAscii) return `filename="${safe}"`
+  return `filename="${safe}"; filename*=UTF-8''${encodeURIComponent(safe)}`
 }
 
 function turnFramesToAgentEvents(

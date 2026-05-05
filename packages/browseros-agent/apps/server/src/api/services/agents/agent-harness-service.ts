@@ -853,28 +853,18 @@ export class AgentHarnessService {
     // write to the user's host filesystem and don't need this; their
     // outputs are already visible via the user's own tools.
     const isOpenclaw = agent.adapter === 'openclaw'
-    const workspaceDir = isOpenclaw
-      ? getHostWorkspaceDir(getOpenClawDir(), agent.name)
-      : null
-    let workspaceSnapshot: FileSnapshot | null = null
+    const workspaceDir = isOpenclaw ? this.resolveSafeWorkspaceDir(agent) : null
     const producedFilesStore = workspaceDir
       ? this.tryGetProducedFilesStore()
       : null
-    if (workspaceDir && producedFilesStore) {
-      try {
-        workspaceSnapshot =
-          await producedFilesStore.snapshotWorkspace(workspaceDir)
-      } catch (err) {
-        logger.warn(
-          'Failed to snapshot openclaw workspace; file attribution disabled for this turn',
-          {
-            agentId: agent.id,
+    const workspaceSnapshot =
+      workspaceDir && producedFilesStore
+        ? await this.snapshotWorkspaceForTurn(
+            agent,
             workspaceDir,
-            error: err instanceof Error ? err.message : String(err),
-          },
-        )
-      }
-    }
+            producedFilesStore,
+          )
+        : null
 
     try {
       const upstream = await this.runtime.send({
@@ -955,6 +945,49 @@ export class AgentHarnessService {
         ok: lastErrorMessage === undefined,
         error: lastErrorMessage,
       })
+    }
+  }
+
+  /**
+   * Compute the host-side workspace dir for an openclaw agent,
+   * returning `null` when the agent's display name fails the
+   * path-traversal guard. Logs a warning so the safety-disabled
+   * case is observable in production.
+   */
+  private resolveSafeWorkspaceDir(agent: AgentDefinition): string | null {
+    try {
+      return getHostWorkspaceDir(getOpenClawDir(), agent.name)
+    } catch (err) {
+      logger.warn('Skipping openclaw file attribution: unsafe agent name', {
+        agentId: agent.id,
+        agentName: agent.name,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return null
+    }
+  }
+
+  /**
+   * Pre-turn workspace snapshot. Returns `null` on any failure so
+   * the rest of the turn flow continues without file attribution.
+   */
+  private async snapshotWorkspaceForTurn(
+    agent: AgentDefinition,
+    workspaceDir: string,
+    producedFilesStore: ProducedFilesStore,
+  ): Promise<FileSnapshot | null> {
+    try {
+      return await producedFilesStore.snapshotWorkspace(workspaceDir)
+    } catch (err) {
+      logger.warn(
+        'Failed to snapshot openclaw workspace; file attribution disabled for this turn',
+        {
+          agentId: agent.id,
+          workspaceDir,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      )
+      return null
     }
   }
 
