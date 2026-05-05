@@ -121,6 +121,6 @@ export function formatFileSize(bytes: number): string {
 export function buildFileDownloadUrl(baseUrl: string, fileId: string): string {
   return buildAgentApiUrl(
     baseUrl,
-    `/agents/files/${encodeURIComponent(fileId)}/download`,
+    `/files/${encodeURIComponent(fileId)}/download`,
   )
 }

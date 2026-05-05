@@ -42,7 +42,7 @@ export function useAgentOutputs(agentId: string, enabled = true) {
     queryFn: async () => {
       const data = await agentsFetch<OutputsResponse>(
         baseUrl as string,
-        `/agents/${encodeURIComponent(agentId)}/files`,
+        `/${encodeURIComponent(agentId)}/files`,
       )
       return data.groups ?? []
     },
@@ -78,7 +78,7 @@ export function useAgentTurnFiles(
     queryFn: async () => {
       const data = await agentsFetch<TurnFilesResponse>(
         baseUrl as string,
-        `/agents/${encodeURIComponent(agentId)}/files/turn/${encodeURIComponent(
+        `/${encodeURIComponent(agentId)}/files/turn/${encodeURIComponent(
           turnId as string,
         )}`,
       )

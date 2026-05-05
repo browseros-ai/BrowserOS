@@ -29,7 +29,7 @@ export function useFilePreview(fileId: string | null, enabled = true) {
     queryFn: async () => {
       return agentsFetch<FilePreview>(
         baseUrl as string,
-        `/agents/files/${encodeURIComponent(fileId as string)}/preview`,
+        `/files/${encodeURIComponent(fileId as string)}/preview`,
       )
     },
     enabled: Boolean(baseUrl) && !urlLoading && enabled && Boolean(fileId),
