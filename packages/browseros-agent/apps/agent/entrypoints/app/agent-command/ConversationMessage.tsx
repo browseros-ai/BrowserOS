@@ -35,6 +35,13 @@ interface ConversationMessageProps {
    * — the cards still open the preview Sheet directly.
    */
   onOpenOutputsRail?: ((turnId?: string | null) => void) | null
+  /**
+   * Render only the trailing FileCardStrip for this turn — used
+   * when the turn's user / assistant text is already rendered
+   * elsewhere (e.g. by `ClawChatMessage` from persisted history)
+   * but the produced-files affordance would otherwise be lost.
+   */
+  stripOnly?: boolean
 }
 
 interface RenderEntry {
@@ -98,8 +105,20 @@ export const ConversationMessage: FC<ConversationMessageProps> = ({
   turn,
   streaming,
   onOpenOutputsRail,
+  stripOnly,
 }) => {
   const entries = useMemo(() => buildRenderEntries(turn), [turn])
+
+  if (stripOnly) {
+    if (!turn.producedFiles || turn.producedFiles.length === 0) return null
+    return (
+      <FileCardStrip
+        turnId={turn.turnId ?? null}
+        files={turn.producedFiles}
+        onOpenRail={onOpenOutputsRail ?? (() => {})}
+      />
+    )
+  }
 
   return (
     <div className="space-y-3">

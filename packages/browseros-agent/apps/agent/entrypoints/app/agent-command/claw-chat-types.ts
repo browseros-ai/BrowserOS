@@ -234,6 +234,30 @@ export function filterTurnsPersistedInHistory(
   )
 }
 
+/**
+ * Persisted turns that still carry `producedFiles` — once history
+ * reloads, the assistant text is rendered by `ClawChatMessage` and
+ * the optimistic turn is filtered out by
+ * `filterTurnsPersistedInHistory`. The historical message has no
+ * `producedFiles` field (history items don't carry that), so the
+ * inline file-card strip would vanish on history reload.
+ *
+ * Returning these here lets the caller render a strip-only entry
+ * after the corresponding history bubble — full message stays as
+ * the persisted history pair, but the produced-files affordance
+ * survives.
+ */
+export function selectStripOnlyTurns(
+  turns: AgentConversationTurn[],
+  historyMessages: ClawChatMessage[],
+): AgentConversationTurn[] {
+  return turns.filter(
+    (turn) =>
+      Boolean(turn.producedFiles && turn.producedFiles.length > 0) &&
+      isTurnPersistedInHistory(turn, historyMessages),
+  )
+}
+
 function isTurnPersistedInHistory(
   turn: AgentConversationTurn,
   historyMessages: ClawChatMessage[],

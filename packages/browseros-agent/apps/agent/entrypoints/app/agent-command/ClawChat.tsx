@@ -6,7 +6,9 @@ import {
   ConversationScrollButton,
 } from '@/components/ai-elements/conversation'
 import type { AgentConversationTurn } from '@/lib/agent-conversations/types'
+import type { ProducedFilesRailGroup } from '@/lib/agent-files'
 import { cn } from '@/lib/utils'
+import { FileCardStrip } from './agent-conversation.file-card-strip'
 import { ClawChatMessage } from './ClawChatMessage'
 import { ConversationMessage } from './ConversationMessage'
 import type { ClawChatMessage as ClawChatMessageModel } from './claw-chat-types'
@@ -15,6 +17,24 @@ interface ClawChatProps {
   agentName: string
   historyMessages: ClawChatMessageModel[]
   turns: AgentConversationTurn[]
+  /**
+   * Persisted turns that still need to render their FileCardStrip
+   * because the history items they were filtered against don't
+   * carry produced-files data. Rendered between history and the
+   * live `turns` so the strip lands at the bottom of the
+   * corresponding assistant turn.
+   */
+  stripOnlyTurns?: AgentConversationTurn[]
+  /**
+   * Per-turn produced-files groups loaded from the harness's
+   * /agents/<id>/files endpoint. Used to surface strips on a fresh
+   * page load (when there's no optimistic turn to carry the data).
+   * Already deduped against `turns` + `stripOnlyTurns` upstream by
+   * `AgentCommandConversation` so the same turn never renders two
+   * strips. Each group renders as a tail strip after history; the
+   * View button still deep-links into the rail at that group.
+   */
+  tailStripGroups?: ReadonlyArray<ProducedFilesRailGroup>
   streaming: boolean
   isInitialLoading: boolean
   error: Error | null
@@ -80,6 +100,8 @@ export const ClawChat: FC<ClawChatProps> = ({
   agentName,
   historyMessages,
   turns,
+  stripOnlyTurns,
+  tailStripGroups,
   streaming,
   isInitialLoading,
   error,
@@ -152,6 +174,23 @@ export const ClawChat: FC<ClawChatProps> = ({
               ) : null}
               {historyMessages.map((message) => (
                 <ClawChatMessage key={message.id} message={message} />
+              ))}
+              {(tailStripGroups ?? []).map((group) => (
+                <FileCardStrip
+                  key={`tail-strip-${group.turnId}`}
+                  turnId={group.turnId}
+                  files={group.files}
+                  onOpenRail={onOpenOutputsRail ?? (() => {})}
+                />
+              ))}
+              {(stripOnlyTurns ?? []).map((turn) => (
+                <ConversationMessage
+                  key={`strip-${turn.id}`}
+                  turn={turn}
+                  streaming={false}
+                  stripOnly
+                  onOpenOutputsRail={onOpenOutputsRail}
+                />
               ))}
               {turns.map((turn, index) => (
                 <ConversationMessage

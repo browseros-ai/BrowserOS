@@ -16,6 +16,7 @@ import {
   useUpdateHarnessAgent,
 } from '@/entrypoints/app/agents/useAgents'
 import type { AgentEntry } from '@/entrypoints/app/agents/useOpenClaw'
+import { useAgentOutputs } from '@/lib/agent-files'
 import { cn } from '@/lib/utils'
 import { AgentRail } from './AgentRail'
 import { useAgentCommandData } from './agent-command-layout'
@@ -30,6 +31,7 @@ import {
   buildChatHistoryFromClawMessages,
   filterTurnsPersistedInHistory,
   flattenHistoryPages,
+  selectStripOnlyTurns,
 } from './claw-chat-types'
 import { consumePendingInitialMessage } from './pending-initial-message'
 import { QueuePanel } from './QueuePanel'
@@ -83,6 +85,15 @@ function AgentConversationController({
   const harnessAgent = harnessAgents.find((entry) => entry.id === agentId)
   const queue = harnessAgent?.queue ?? []
   const activeTurnId = harnessAgent?.activeTurnId ?? null
+  const isOpenClawAgent = harnessAgent?.adapter === 'openclaw'
+
+  // Used to surface produced-files strips on a fresh page load
+  // when there's no optimistic turn to carry the data. Disabled
+  // for non-openclaw adapters since they don't attribute files.
+  const { groups: agentOutputGroups } = useAgentOutputs(
+    agentId,
+    isOpenClawAgent,
+  )
 
   const { turns, streaming, send } = useAgentConversation(agentId, {
     runtime: 'agent-harness',
@@ -107,6 +118,26 @@ function AgentConversationController({
     () => filterTurnsPersistedInHistory(turns, historyMessages),
     [historyMessages, turns],
   )
+  // Persisted turns that still need to surface their FileCardStrip
+  // — history items don't carry produced-files data, so without
+  // these the strip would vanish on history reload.
+  const stripOnlyTurns = useMemo(
+    () => selectStripOnlyTurns(turns, historyMessages),
+    [historyMessages, turns],
+  )
+  // Tail strips for groups not already covered by a live or
+  // strip-only turn. Each rendered as its own FileCardStrip after
+  // history. Deduped by turnId so the same turn never doubles up.
+  const tailStripGroups = useMemo(() => {
+    if (!isOpenClawAgent) return []
+    const coveredTurnIds = new Set<string>()
+    for (const turn of turns) {
+      if (turn.turnId) coveredTurnIds.add(turn.turnId)
+    }
+    return agentOutputGroups.filter(
+      (group) => !coveredTurnIds.has(group.turnId),
+    )
+  }, [agentOutputGroups, isOpenClawAgent, turns])
   onInitialMessageConsumedRef.current = onInitialMessageConsumed
 
   const disabled = !agent
@@ -178,6 +209,8 @@ function AgentConversationController({
         agentName={agentName}
         historyMessages={historyMessages}
         turns={visibleTurns}
+        stripOnlyTurns={stripOnlyTurns}
+        tailStripGroups={tailStripGroups}
         streaming={streaming}
         isInitialLoading={harnessHistoryQuery.isLoading}
         error={error}
