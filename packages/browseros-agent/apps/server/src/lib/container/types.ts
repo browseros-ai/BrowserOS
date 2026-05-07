@@ -59,6 +59,11 @@ export interface WaitForContainerNameReleaseOptions {
   intervalMs?: number
 }
 
+export interface WaitForContainerRunningOptions {
+  timeoutMs?: number
+  intervalMs?: number
+}
+
 export interface LogLine {
   stream: 'stdout' | 'stderr'
   line: string

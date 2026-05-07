@@ -63,6 +63,25 @@ export class ContainerNameReleaseTimeoutError extends VmError {
   }
 }
 
+/**
+ * Container's process never reached `running` state within the
+ * timeout window. Distinct from `ContainerNameReleaseTimeoutError`
+ * (which is about deletion). Thrown by
+ * `ContainerCli.waitForContainerRunning` and surfaced by the
+ * managed-container layer when a `start()` finishes the create+start
+ * commands but the container hasn't actually come up.
+ */
+export class ContainerNotRunningError extends VmError {
+  constructor(
+    public readonly containerName: string,
+    public readonly timeoutMs: number,
+  ) {
+    super(
+      `Timed out waiting ${timeoutMs}ms for container "${containerName}" to reach running state`,
+    )
+  }
+}
+
 export class ImageLoadError extends VmError {
   constructor(
     public readonly imageRef: string,

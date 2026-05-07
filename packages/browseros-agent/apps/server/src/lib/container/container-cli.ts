@@ -8,6 +8,7 @@ import {
   ContainerCliError,
   ContainerNameInUseError,
   ContainerNameReleaseTimeoutError,
+  ContainerNotRunningError,
 } from '../vm/errors'
 import { LimaCli } from '../vm/lima-cli'
 import type {
@@ -17,6 +18,7 @@ import type {
   MountSpec,
   PortMapping,
   WaitForContainerNameReleaseOptions,
+  WaitForContainerRunningOptions,
 } from './types'
 
 export function buildNerdctlCommand(args: string[]): string[] {
@@ -115,6 +117,36 @@ export class ContainerCli {
     }
     if (isNoSuchContainer(result.stderr)) return null
     throw this.commandError(args, result)
+  }
+
+  /**
+   * Poll `nerdctl container inspect` until the container reports
+   * `running: true`. Used by the managed-container layer between
+   * `nerdctl create + start` and "container is ready for `exec`" so
+   * the harness never spawns a turn against a half-started container.
+   *
+   * Distinct from `waitForContainerNameRelease`, which waits for the
+   * container to disappear after `rm`. Defaults are sized for a
+   * cold-start: 30 s budget at 500 ms cadence (60 polls). Caller can
+   * tighten for tests via `opts`.
+   */
+  async waitForContainerRunning(
+    name: string,
+    opts: WaitForContainerRunningOptions = {},
+  ): Promise<void> {
+    const timeoutMs = opts.timeoutMs ?? 30_000
+    const intervalMs = opts.intervalMs ?? 500
+    const startedAt = Date.now()
+
+    while (Date.now() - startedAt <= timeoutMs) {
+      const info = await this.inspectContainer(name)
+      if (info?.running === true) return
+      const remainingMs = timeoutMs - (Date.now() - startedAt)
+      if (remainingMs <= 0) break
+      await Bun.sleep(Math.min(intervalMs, remainingMs))
+    }
+
+    throw new ContainerNotRunningError(name, timeoutMs)
   }
 
   /** Wait for containerd/nerdctl to stop resolving a container name after rm. */
