@@ -62,10 +62,16 @@ export interface OpenclawGatewayAccessor {
 }
 
 /**
- * Live-getter access to the Hermes container runtime info. Required
- * when spawning the hermes ACP adapter inside its long-running idle
+ * Live-getter access to the Hermes container runtime. Required when
+ * spawning the hermes ACP adapter inside its long-running idle
  * container; absent only in tests / dev fallback (where the harness
- * still falls back to a host-process `hermes acp` spawn).
+ * falls back to a host-process `hermes acp` spawn).
+ *
+ * `buildExecArgv` is the new single source of truth for the
+ * `env LIMA_HOME=… limactl shell <vm> -- nerdctl exec -i …` chain.
+ * The pre-existing four getters stay so callers that build the
+ * argv themselves (legacy paths, tests) continue to work; the ACP
+ * runtime now goes through `buildExecArgv` exclusively.
  */
 export interface HermesGatewayAccessor {
   /** Container name e.g. browseros-hermes-hermes-agent-1. */
@@ -76,6 +82,15 @@ export interface HermesGatewayAccessor {
   getLimactlPath(): string
   /** VM name registered in LIMA_HOME (e.g. browseros-vm). */
   getVmName(): string
+  /**
+   * Build the shell-command string acpx-core will spawn to run
+   * `argv` inside the Hermes container. Owned by the underlying
+   * `ManagedContainer`. Pure builder; no state side effects.
+   */
+  buildExecArgv(spec: {
+    argv: readonly [string, ...string[]]
+    env?: Record<string, string>
+  }): string
 }
 
 type AcpxRuntimeOptions = {
@@ -761,62 +776,31 @@ function createBrowserosAgentRegistry(input: {
 
 /**
  * Builds the command string acpx will spawn for a `hermes` adapter.
- * Runs `hermes acp` inside the long-running Hermes container via the
- * bundled `limactl shell <vm> -- nerdctl exec -i ...` chain so the
- * upstream image's `hermes` binary is reused; BrowserOS does not
- * require a host-side hermes install.
+ * Runs `hermes acp` inside the long-running Hermes container via
+ * the bundled `limactl shell <vm> -- nerdctl exec -i ...` chain.
  *
- * HERMES_HOME inside the container points at the per-agent home
- * directory (translated from the host-side path by prepareHermesContext)
- * so each BrowserOS agent stays isolated.
+ * The argv chain itself is built by the gateway accessor's
+ * `buildExecArgv` (delegates to `ManagedContainer.buildExecArgv`)
+ * so this function stays out of the limactl/nerdctl business. The
+ * single command env merger here adds `PYTHONUNBUFFERED=1` (sticky
+ * on the container, re-added for safety) on top of caller-supplied
+ * env (typically `HERMES_HOME`, a /data/... path set by
+ * `prepareHermesContext`).
  *
- * Stdio: with `limactl shell -- nerdctl exec`, hermes' stdio inside the
- * container is a real pipe(2), and bytes flow back through limactl/SSH
- * to the harness. The Bun↔Python socketpair workaround that the
- * Phase A host-process spawn needed (`bash -c "... | tee /dev/null"`) is
- * unnecessary here because the multiple pipe→socket conversions
- * naturally absorb the issue.
+ * The upstream nousresearch/hermes-agent image installs hermes
+ * into `/opt/hermes/.venv/bin/hermes` (note the leading dot). PATH
+ * isn't set up for arbitrary `nerdctl exec` calls because we
+ * override the entrypoint to keep the container idle, so the
+ * absolute path is used here.
  */
 function resolveHermesAcpCommand(
   gateway: HermesGatewayAccessor,
   commandEnv: Record<string, string>,
 ): string {
-  const limactl = gateway.getLimactlPath()
-  const vm = gateway.getVmName()
-  const container = gateway.getContainerName()
-  const limaHome = gateway.getLimaHomeDir()
-
-  // Build `nerdctl exec -i -e <K=V> ... <container> hermes acp`. The
-  // commandEnv typically carries HERMES_HOME (a /data/... path inside
-  // the container set by prepareHermesContext); pass each value through
-  // `-e` so hermes sees them, even though the env itself was set on the
-  // host process. PYTHONUNBUFFERED is sticky on the container; we
-  // re-add it here for safety.
-  const argv = [
-    'env',
-    `LIMA_HOME=${limaHome}`,
-    limactl,
-    'shell',
-    '--workdir',
-    '/',
-    vm,
-    '--',
-    'nerdctl',
-    'exec',
-    '-i',
-    '-e',
-    'PYTHONUNBUFFERED=1',
-  ]
-  for (const [key, value] of Object.entries(commandEnv)) {
-    argv.push('-e', `${key}=${value}`)
-  }
-  // The upstream nousresearch/hermes-agent image installs hermes into
-  // /opt/hermes/.venv/bin (note the leading dot). It's not on PATH for
-  // arbitrary `nerdctl exec` calls — the image's own entrypoint script
-  // sets the PATH but we override the entrypoint to keep the container
-  // idle, so we use the absolute path here.
-  argv.push(container, '/opt/hermes/.venv/bin/hermes', 'acp')
-  return argv.join(' ')
+  return gateway.buildExecArgv({
+    argv: ['/opt/hermes/.venv/bin/hermes', 'acp'],
+    env: { PYTHONUNBUFFERED: '1', ...commandEnv },
+  })
 }
 
 /**

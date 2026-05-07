@@ -970,6 +970,28 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
         getLimaHomeDir: () => '/Users/dev/.browseros-dev/lima',
         getLimactlPath: () => '/opt/homebrew/bin/limactl',
         getVmName: () => 'browseros-vm',
+        // Mirrors ManagedContainer.buildExecArgv — kept inline so the
+        // test doesn't depend on the production class wiring.
+        buildExecArgv: (spec) => {
+          const argv = [
+            'env',
+            'LIMA_HOME=/Users/dev/.browseros-dev/lima',
+            '/opt/homebrew/bin/limactl',
+            'shell',
+            '--workdir',
+            '/',
+            'browseros-vm',
+            '--',
+            'nerdctl',
+            'exec',
+            '-i',
+          ]
+          for (const [key, value] of Object.entries(spec.env ?? {})) {
+            argv.push('-e', `${key}=${value}`)
+          }
+          argv.push('browseros-hermes-hermes-agent-1', ...spec.argv)
+          return argv.join(' ')
+        },
       },
       runtimeFactory: (options) => {
         calls.push({ method: 'createRuntime', input: options })

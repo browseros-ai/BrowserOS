@@ -47,15 +47,22 @@ export interface HermesContainerServiceConfig {
 }
 
 /**
- * Structural type returned by `getAccessor()` so the ACP runtime can
- * build its `nerdctl exec` command without a hard dep on this module.
- * Wire-compatible with what `acpx-runtime.ts` expects today.
+ * Structural type returned by `getAccessor()` so the ACP runtime
+ * can build its `nerdctl exec` command without a hard dep on this
+ * module. Mirrors `HermesGatewayAccessor` in `acpx-runtime.ts`;
+ * `buildExecArgv` delegates to the underlying
+ * `ManagedContainer.buildExecArgv` so the limactl/nerdctl argv
+ * chain has exactly one owner.
  */
 export interface HermesAccessor {
   getContainerName(): string
   getLimaHomeDir(): string
   getLimactlPath(): string
   getVmName(): string
+  buildExecArgv(spec: {
+    argv: readonly [string, ...string[]]
+    env?: Record<string, string>
+  }): string
 }
 
 export class HermesContainerService {
@@ -145,7 +152,10 @@ export class HermesContainerService {
   /**
    * Live-getters used by AcpxRuntime to spawn `hermes acp` inside
    * the container. Kept structural so the ACP runtime doesn't need
-   * to import this module.
+   * to import this module. `buildExecArgv` delegates to the
+   * underlying `HermesContainer` so the limactl/nerdctl argv chain
+   * has exactly one owner; the four legacy getters are kept for
+   * tests and any caller still constructing the chain by hand.
    */
   getAccessor(): HermesAccessor {
     return {
@@ -153,6 +163,10 @@ export class HermesContainerService {
       getLimaHomeDir: () => this.limaHome,
       getLimactlPath: () => this.limactlPath,
       getVmName: () => VM_NAME,
+      buildExecArgv: (spec) => {
+        const container = this.requireContainer()
+        return container.buildExecArgv(spec)
+      },
     }
   }
 
