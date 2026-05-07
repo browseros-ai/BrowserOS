@@ -5,15 +5,9 @@ import {
   useScheduledJobRuns,
   useScheduledJobs,
 } from '@/lib/schedules/scheduleStorage'
-import type {
-  ScheduledJob,
-  ScheduledJobRun,
-} from '@/lib/schedules/scheduleTypes'
+import type { ScheduledJobRun } from '@/lib/schedules/scheduleTypes'
 import { ScheduledTaskResultGroup } from './ScheduledTaskResultGroup'
-
-interface JobRunWithDetails extends ScheduledJobRun {
-  job: ScheduledJob | undefined
-}
+import { groupRunsByJob } from './types'
 
 interface ScheduledTaskResultsProps {
   onViewRun: (run: ScheduledJobRun) => void
@@ -30,41 +24,10 @@ export const ScheduledTaskResults: FC<ScheduledTaskResultsProps> = ({
   const { jobs } = useScheduledJobs()
   const [openGroupId, setOpenGroupId] = useState<string | null>(null)
 
-  const groupedRuns = useMemo(() => {
-    const enrichWithJob = (run: ScheduledJobRun): JobRunWithDetails => ({
-      ...run,
-      job: jobs.find((j) => j.id === run.jobId),
-    })
-
-    const runsByJob = new Map<string, JobRunWithDetails[]>()
-
-    for (const run of jobRuns) {
-      const enriched = enrichWithJob(run)
-      const existing = runsByJob.get(run.jobId) ?? []
-      existing.push(enriched)
-      runsByJob.set(run.jobId, existing)
-    }
-
-    const groups: Array<{ job: ScheduledJob; runs: JobRunWithDetails[] }> = []
-
-    for (const [jobId, runs] of runsByJob) {
-      const job = jobs.find((j) => j.id === jobId)
-      if (!job) continue
-
-      const sorted = runs.sort(
-        (a, b) =>
-          new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
-      )
-
-      groups.push({ job, runs: sorted })
-    }
-
-    return groups.sort((a, b) => {
-      const latestA = a.runs[0]?.startedAt ?? ''
-      const latestB = b.runs[0]?.startedAt ?? ''
-      return new Date(latestB).getTime() - new Date(latestA).getTime()
-    })
-  }, [jobRuns, jobs])
+  const groupedRuns = useMemo(
+    () => groupRunsByJob(jobRuns, jobs),
+    [jobRuns, jobs],
+  )
 
   if (!groupedRuns.length) {
     return (

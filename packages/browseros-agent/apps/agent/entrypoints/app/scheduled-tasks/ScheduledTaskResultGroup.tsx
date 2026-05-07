@@ -16,13 +16,9 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
-import type { ScheduledJob, ScheduledJobRun } from './types'
+import type { JobRunWithDetails, ScheduledJob } from './types'
 
 dayjs.extend(relativeTime)
-
-interface JobRunWithDetails extends ScheduledJobRun {
-  job: ScheduledJob | undefined
-}
 
 interface ScheduledTaskResultGroupProps {
   job: ScheduledJob

@@ -31,21 +31,13 @@ import {
   useScheduledJobRuns,
   useScheduledJobs,
 } from '@/lib/schedules/scheduleStorage'
-import type {
-  ScheduledJob,
-  ScheduledJobRun,
-} from '@/lib/schedules/scheduleTypes'
+import {
+  groupRunsByJob,
+  type JobGroup,
+  type JobRunWithDetails,
+} from '../app/scheduled-tasks/types'
 
 dayjs.extend(relativeTime)
-
-interface JobRunWithDetails extends ScheduledJobRun {
-  job: ScheduledJob | undefined
-}
-
-interface JobGroup {
-  job: ScheduledJob
-  runs: JobRunWithDetails[]
-}
 
 const MAX_DISPLAY_COUNT = 3
 const SCHEDULE_RESULTS_COLLAPSED_KEY = 'schedule-results-collapsed'
@@ -82,41 +74,22 @@ export const ScheduleResults: FC = () => {
   const runningCount = jobRuns.filter((r) => r.status === 'running').length
 
   const groupedRuns: JobGroup[] = useMemo(() => {
-    const enrichWithJob = (run: ScheduledJobRun): JobRunWithDetails => ({
-      ...run,
-      job: jobs.find((j) => j.id === run.jobId),
-    })
+    const allGroups = groupRunsByJob(jobRuns, jobs)
 
-    const runsByJob = new Map<string, JobRunWithDetails[]>()
+    const withRunning = allGroups.filter((g) =>
+      g.runs.some((r) => r.status === 'running'),
+    )
+    const withoutRunning = allGroups.filter(
+      (g) => !g.runs.some((r) => r.status === 'running'),
+    )
 
-    for (const run of jobRuns) {
-      const enriched = enrichWithJob(run)
-      const existing = runsByJob.get(run.jobId) ?? []
-      existing.push(enriched)
-      runsByJob.set(run.jobId, existing)
+    const result = [...withRunning]
+    for (const group of withoutRunning) {
+      if (result.length >= MAX_DISPLAY_COUNT) break
+      result.push(group)
     }
 
-    const groups: JobGroup[] = []
-
-    for (const [jobId, runs] of runsByJob) {
-      const job = jobs.find((j) => j.id === jobId)
-      if (!job) continue
-
-      const sorted = runs.sort(
-        (a, b) =>
-          new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
-      )
-
-      groups.push({ job, runs: sorted })
-    }
-
-    return groups
-      .sort((a, b) => {
-        const latestA = a.runs[0]?.startedAt ?? ''
-        const latestB = b.runs[0]?.startedAt ?? ''
-        return new Date(latestB).getTime() - new Date(latestA).getTime()
-      })
-      .slice(0, MAX_DISPLAY_COUNT)
+    return result
   }, [jobRuns, jobs])
 
   const viewRun = (run: JobRunWithDetails) => {
@@ -168,7 +141,9 @@ export const ScheduleResults: FC = () => {
       <CollapsibleContent className="fade-in-0 slide-in-from-top-2 animate-in space-y-2 duration-200">
         {groupedRuns.map(({ job, runs }) => {
           const latestRun = runs[0]
-          const latestTime = latestRun ? formatTimestamp(latestRun.startedAt) : ''
+          const latestTime = latestRun
+            ? formatTimestamp(latestRun.startedAt)
+            : ''
           const groupRunningCount = runs.filter(
             (r) => r.status === 'running',
           ).length
