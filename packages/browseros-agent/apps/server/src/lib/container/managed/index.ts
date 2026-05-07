@@ -10,6 +10,10 @@ export {
   ResetNotSupportedError,
 } from './errors'
 export {
+  HermesContainer,
+  type HermesContainerConfig,
+} from './hermes-container'
+export {
   ManagedContainer,
   type ManagedContainerDeps,
   type StateListener,

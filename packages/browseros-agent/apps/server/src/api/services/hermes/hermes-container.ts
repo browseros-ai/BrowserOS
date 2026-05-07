@@ -3,41 +3,40 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Lifecycle service for the Hermes ACPX adapter container. Hermes runs
- * in the same Lima VM as OpenClaw — image is pulled into containerd, an
- * idle container is kept up so the harness can `nerdctl exec hermes acp`
- * per turn. Much smaller than OpenClawService: no gateway, no token, no
- * agent CRUD via container — the harness owns all of that.
+ * Singleton wrapper around `HermesContainer` (the `ManagedContainer`
+ * subclass living in `lib/container/managed/`). Preserves the
+ * existing `HermesContainerService` public surface — `prewarm`,
+ * `start`, `stop`, `restart`, `shutdown`, `getAccessor`, `configure`
+ * — so the existing callers (`main.ts`, `server.ts`,
+ * `agent-harness-service`) compile unchanged in this PR.
+ *
+ * The wrapper is a temporary bridge: in a follow-up PR the
+ * singleton vends the `HermesContainer` directly, the accessor
+ * collapses, and `configure` becomes the constructor option of a
+ * fresh instance instead of a mutating call. Goal here is minimal
+ * blast-radius for the primitives + abstract base introduction.
  */
 
-import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
-  HERMES_CONTAINER_HARNESS_DIR,
   HERMES_CONTAINER_NAME,
   HERMES_IMAGE,
 } from '@browseros/shared/constants/hermes'
 import { getBrowserosDir } from '../../../lib/browseros-dir'
 import {
   ContainerCli,
-  type ContainerSpec,
+  HermesContainer,
   ImageLoader,
 } from '../../../lib/container'
 import { logger } from '../../../lib/logger'
-import { withProcessLock } from '../../../lib/process-lock'
 import {
-  GUEST_VM_STATE,
   getLimaHomeDir,
   resolveBundledLimactl,
   resolveBundledLimaTemplate,
   VM_NAME,
   VmRuntime,
 } from '../../../lib/vm'
-import { ContainerNameInUseError } from '../../../lib/vm/errors'
 import { getHermesHarnessHostDir, getHermesHostStateDir } from './hermes-paths'
-
-const CREATE_CONTAINER_MAX_ATTEMPTS = 3
-const NAME_RELEASE_WAIT_MS = 10_000
 
 const UNSUPPORTED_PLATFORM_MESSAGE =
   'browseros-vm currently supports macOS only; see the Linux/Windows tracking issue'
@@ -47,6 +46,11 @@ export interface HermesContainerServiceConfig {
   browserosDir?: string
 }
 
+/**
+ * Structural type returned by `getAccessor()` so the ACP runtime can
+ * build its `nerdctl exec` command without a hard dep on this module.
+ * Wire-compatible with what `acpx-runtime.ts` expects today.
+ */
 export interface HermesAccessor {
   getContainerName(): string
   getLimaHomeDir(): string
@@ -55,16 +59,13 @@ export interface HermesAccessor {
 }
 
 export class HermesContainerService {
-  private vm: VmRuntime | null = null
-  private shell: ContainerCli | null = null
-  private loader: ImageLoader | null = null
+  private container: HermesContainer | null = null
   private limactlPath: string
   private limaHome: string
   private resourcesDir: string | null
   private browserosDir: string
   private readonly hermesStateDir: string
   private readonly platform: NodeJS.Platform
-  private lifecycleLock: Promise<void> = Promise.resolve()
 
   constructor(config: HermesContainerServiceConfig = {}) {
     this.resourcesDir = config.resourcesDir ?? null
@@ -73,7 +74,7 @@ export class HermesContainerService {
     this.platform = process.platform
     this.limactlPath = this.resolveLimactlPath()
     this.limaHome = getLimaHomeDir(this.browserosDir)
-    this.initRuntimes()
+    this.initContainer()
   }
 
   configure(config: HermesContainerServiceConfig): void {
@@ -95,11 +96,11 @@ export class HermesContainerService {
     if (runtimeChanged) {
       this.limactlPath = this.resolveLimactlPath()
       this.limaHome = getLimaHomeDir(this.browserosDir)
-      this.initRuntimes()
+      this.initContainer()
     }
   }
 
-  /** Warm the VM and Hermes image so first-use spawns avoid registry work. */
+  /** Warm the VM and Hermes image so first-use spawns avoid pulls. */
   async prewarm(onLog?: (msg: string) => void): Promise<void> {
     if (!this.isSupportedPlatform()) {
       logger.warn('Hermes prewarm skipped: unsupported platform', {
@@ -107,26 +108,10 @@ export class HermesContainerService {
       })
       return
     }
-    return this.withLifecycleLock('prewarm', async () => {
-      const logProgress = (message: string) => {
-        logger.info(message)
-        onLog?.(message)
-      }
-      logProgress('Hermes prewarm: ensuring BrowserOS VM is ready')
-      await this.requireVm().ensureReady()
-      logProgress(`Hermes prewarm: ensuring image ${HERMES_IMAGE} is available`)
-      await this.requireLoader().ensureImageLoaded(HERMES_IMAGE)
-      logProgress('Hermes prewarm: ready')
-    })
+    await this.requireContainer().install({ onLog })
   }
 
-  /**
-   * Start a long-running idle container with the harness dir bind-
-   * mounted. The container's default ENTRYPOINT (`hermes acp`) is
-   * overridden with `tini -- sleep infinity` so the container stays
-   * up; the AcpxRuntime spawns `hermes acp` per turn via `nerdctl
-   * exec` and pipes its stdio back through limactl/SSH.
-   */
+  /** Bring the long-running idle container up. */
   async start(onLog?: (msg: string) => void): Promise<void> {
     if (!this.isSupportedPlatform()) {
       logger.warn('Hermes start skipped: unsupported platform', {
@@ -134,43 +119,12 @@ export class HermesContainerService {
       })
       return
     }
-    return this.withLifecycleLock('start', async () => {
-      const logProgress = (msg: string) => {
-        logger.info(msg)
-        onLog?.(msg)
-      }
-      await this.requireVm().ensureReady(logProgress)
-      await this.requireLoader().ensureImageLoaded(HERMES_IMAGE, logProgress)
-
-      // Make sure the host-side harness root exists so the bind-mount
-      // doesn't error on a missing source path. Per-agent home dirs
-      // get created lazily by prepareHermesContext.
-      await mkdir(getHermesHarnessHostDir(this.browserosDir), {
-        recursive: true,
-      })
-
-      logProgress('Hermes: starting idle container...')
-      const container = await this.buildContainerSpec()
-      await this.createContainerWithNameReconcile(container, logProgress)
-      await this.requireShell().startContainer(container.name, logProgress)
-      logProgress(
-        `Hermes container running: ${HERMES_CONTAINER_NAME} (image ${HERMES_IMAGE})`,
-      )
-    })
+    await this.requireContainer().start({ onLog })
   }
 
   async stop(): Promise<void> {
     if (!this.isSupportedPlatform()) return
-    return this.withLifecycleLock('stop', async () => {
-      logger.info('Stopping Hermes container', {
-        container: HERMES_CONTAINER_NAME,
-      })
-      await this.requireShell().removeContainer(
-        HERMES_CONTAINER_NAME,
-        { force: true },
-        undefined,
-      )
-    })
+    await this.requireContainer().stop()
   }
 
   async restart(onLog?: (msg: string) => void): Promise<void> {
@@ -178,24 +132,20 @@ export class HermesContainerService {
     await this.start(onLog)
   }
 
+  /** Best-effort container removal at server shutdown. */
   async shutdown(): Promise<void> {
     if (!this.isSupportedPlatform()) return
     try {
-      await this.requireShell().removeContainer(
-        HERMES_CONTAINER_NAME,
-        { force: true },
-        undefined,
-      )
+      await this.requireContainer().stop()
     } catch {
       // best effort
     }
   }
 
   /**
-   * Live-getters used by AcpxRuntime to spawn `hermes acp` inside the
-   * container. Returned shape matches `HermesGatewayAccessor` in
-   * acpx-runtime — kept structural here so the type wiring works without
-   * a circular import.
+   * Live-getters used by AcpxRuntime to spawn `hermes acp` inside
+   * the container. Kept structural so the ACP runtime doesn't need
+   * to import this module.
    */
   getAccessor(): HermesAccessor {
     return {
@@ -206,7 +156,17 @@ export class HermesContainerService {
     }
   }
 
-  // ── Internal ─────────────────────────────────────────────────────────
+  /**
+   * Hand the underlying `HermesContainer` out so callers that have
+   * been ported to the new abstraction can use its richer surface
+   * (`buildExecArgv`, state subscriptions, path translation).
+   * Returns `null` on unsupported platforms.
+   */
+  getContainer(): HermesContainer | null {
+    return this.container
+  }
+
+  // ── Internal ─────────────────────────────────────────────────────
 
   private isSupportedPlatform(): boolean {
     return this.platform === 'darwin'
@@ -219,14 +179,12 @@ export class HermesContainerService {
       : 'limactl'
   }
 
-  private initRuntimes(): void {
+  private initContainer(): void {
     if (!this.isSupportedPlatform()) {
-      this.vm = null
-      this.shell = null
-      this.loader = null
+      this.container = null
       return
     }
-    this.vm = new VmRuntime({
+    const vm = new VmRuntime({
       limactlPath: this.limactlPath,
       limaHome: this.limaHome,
       templatePath: this.resourcesDir
@@ -234,125 +192,32 @@ export class HermesContainerService {
         : undefined,
       browserosRoot: this.browserosDir,
     })
-    this.shell = new ContainerCli({
+    const cli = new ContainerCli({
       limactlPath: this.limactlPath,
       limaHome: this.limaHome,
       vmName: VM_NAME,
     })
-    this.loader = new ImageLoader(this.shell)
-  }
-
-  private requireVm(): VmRuntime {
-    if (!this.vm) throw unsupportedPlatformError()
-    return this.vm
-  }
-
-  private requireShell(): ContainerCli {
-    if (!this.shell) throw unsupportedPlatformError()
-    return this.shell
-  }
-
-  private requireLoader(): ImageLoader {
-    if (!this.loader) throw unsupportedPlatformError()
-    return this.loader
-  }
-
-  private async buildContainerSpec(): Promise<ContainerSpec> {
-    const guestHarnessDir = `${GUEST_VM_STATE}/hermes/harness`
-    const gateway = await this.requireVm().getDefaultGateway()
-    return {
-      name: HERMES_CONTAINER_NAME,
-      image: HERMES_IMAGE,
-      restart: 'unless-stopped',
-      env: {
-        PYTHONUNBUFFERED: '1',
+    const loader = new ImageLoader(cli)
+    this.container = new HermesContainer(
+      {
+        cli,
+        loader,
+        vm,
+        limactlPath: this.limactlPath,
+        limaHome: this.limaHome,
+        vmName: VM_NAME,
+        lockDir: join(this.hermesStateDir, '.locks'),
       },
-      // Make `host.containers.internal` resolve to the VM's gateway so
-      // hermes inside the container can reach the BrowserOS HTTP server
-      // running on the host (where the BrowserOS MCP /mcp lives). Mirrors
-      // OpenClaw's container-runtime.ts gatewayContainer setup.
-      addHosts: [`host.containers.internal:${gateway}`],
-      mounts: [
-        // Host harness root lives under <browserosDir>/vm/hermes/harness
-        // so it's reachable inside the Lima VM via the existing vm/
-        // mount; container sees it at /data/agents/harness.
-        { source: guestHarnessDir, target: HERMES_CONTAINER_HARNESS_DIR },
-      ],
-      // Override the upstream image's `hermes acp` ENTRYPOINT — we want
-      // a long-lived container that we `nerdctl exec` into per turn,
-      // not one that tries to speak ACP at startup.
-      // Bypass tini and use /bin/sh directly: tini 0.19.0 in the upstream
-      // image getopt-parses any `-x` token (even after the PROGRAM), so
-      // `tini /bin/sh -c "..."` errors with `invalid option -- 'c'`. We
-      // don't need tini reaping zombies for an idle sleeper anyway.
-      entrypoint: '/bin/sh',
-      command: ['-c', 'exec sleep infinity'],
-    }
+      {
+        hermesHarnessHostDir: getHermesHarnessHostDir(this.browserosDir),
+      },
+    )
+    logger.debug('HermesContainer initialised', { image: HERMES_IMAGE })
   }
 
-  /**
-   * Create the fixed-name Hermes container, reconciling stale nerdctl
-   * name ownership. Mirrors the OpenClaw service's reconcile loop.
-   */
-  private async createContainerWithNameReconcile(
-    container: ContainerSpec,
-    onLog?: (msg: string) => void,
-  ): Promise<void> {
-    let attempt = 1
-    const shell = this.requireShell()
-    while (true) {
-      await this.removeContainerAndWait(container.name)
-      try {
-        await shell.createContainer(container, onLog)
-        return
-      } catch (err) {
-        if (
-          !(err instanceof ContainerNameInUseError) ||
-          attempt >= CREATE_CONTAINER_MAX_ATTEMPTS
-        ) {
-          throw err
-        }
-        logger.warn('Hermes container name still in use; retrying create', {
-          containerName: container.name,
-          attempt,
-          maxAttempts: CREATE_CONTAINER_MAX_ATTEMPTS,
-        })
-        attempt++
-      }
-    }
-  }
-
-  private async removeContainerAndWait(containerName: string): Promise<void> {
-    const shell = this.requireShell()
-    await shell.removeContainer(containerName, { force: true }, undefined)
-    await shell.waitForContainerNameRelease(containerName, {
-      timeoutMs: NAME_RELEASE_WAIT_MS,
-      intervalMs: 100,
-    })
-  }
-
-  private async withLifecycleLock<T>(
-    operation: string,
-    fn: () => Promise<T>,
-  ): Promise<T> {
-    const previous = this.lifecycleLock
-    let release!: () => void
-    this.lifecycleLock = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    await previous.catch(() => undefined)
-    try {
-      return await withProcessLock(
-        'hermes-lifecycle',
-        { lockDir: join(this.hermesStateDir, '.locks') },
-        async () => {
-          logger.debug('Hermes lifecycle operation started', { operation })
-          return await fn()
-        },
-      )
-    } finally {
-      release()
-    }
+  private requireContainer(): HermesContainer {
+    if (!this.container) throw unsupportedPlatformError()
+    return this.container
   }
 }
 
