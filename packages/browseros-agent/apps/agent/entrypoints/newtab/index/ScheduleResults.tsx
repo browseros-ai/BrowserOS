@@ -42,6 +42,11 @@ interface JobRunWithDetails extends ScheduledJobRun {
   job: ScheduledJob | undefined
 }
 
+interface JobGroup {
+  job: ScheduledJob
+  runs: JobRunWithDetails[]
+}
+
 const MAX_DISPLAY_COUNT = 3
 const SCHEDULE_RESULTS_COLLAPSED_KEY = 'schedule-results-collapsed'
 
@@ -63,6 +68,7 @@ export const ScheduleResults: FC = () => {
     const stored = localStorage.getItem(SCHEDULE_RESULTS_COLLAPSED_KEY)
     return stored !== 'true'
   })
+  const [openGroupId, setOpenGroupId] = useState<string | null>(null)
   const [viewingRun, setViewingRun] = useState<JobRunWithDetails | null>(null)
 
   const handleOpenChange = (open: boolean) => {
@@ -75,30 +81,42 @@ export const ScheduleResults: FC = () => {
 
   const runningCount = jobRuns.filter((r) => r.status === 'running').length
 
-  const displayedRuns: JobRunWithDetails[] = useMemo(() => {
+  const groupedRuns: JobGroup[] = useMemo(() => {
     const enrichWithJob = (run: ScheduledJobRun): JobRunWithDetails => ({
       ...run,
       job: jobs.find((j) => j.id === run.jobId),
     })
 
-    const runningJobs = jobRuns
-      .filter((r) => r.status === 'running')
-      .map(enrichWithJob)
+    const runsByJob = new Map<string, JobRunWithDetails[]>()
 
-    if (runningJobs.length >= MAX_DISPLAY_COUNT) {
-      return runningJobs
+    for (const run of jobRuns) {
+      const enriched = enrichWithJob(run)
+      const existing = runsByJob.get(run.jobId) ?? []
+      existing.push(enriched)
+      runsByJob.set(run.jobId, existing)
     }
 
-    const completedOrFailed = jobRuns
-      .filter((r) => r.status === 'completed' || r.status === 'failed')
-      .sort(
+    const groups: JobGroup[] = []
+
+    for (const [jobId, runs] of runsByJob) {
+      const job = jobs.find((j) => j.id === jobId)
+      if (!job) continue
+
+      const sorted = runs.sort(
         (a, b) =>
           new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
       )
-      .slice(0, MAX_DISPLAY_COUNT - runningJobs.length)
-      .map(enrichWithJob)
 
-    return [...runningJobs, ...completedOrFailed]
+      groups.push({ job, runs: sorted })
+    }
+
+    return groups
+      .sort((a, b) => {
+        const latestA = a.runs[0]?.startedAt ?? ''
+        const latestB = b.runs[0]?.startedAt ?? ''
+        return new Date(latestB).getTime() - new Date(latestA).getTime()
+      })
+      .slice(0, MAX_DISPLAY_COUNT)
   }, [jobRuns, jobs])
 
   const viewRun = (run: JobRunWithDetails) => {
@@ -117,7 +135,7 @@ export const ScheduleResults: FC = () => {
     track(SCHEDULED_TASK_RETRIED_EVENT)
   }
 
-  if (!displayedRuns.length) return null
+  if (!groupedRuns.length) return null
 
   return (
     <Collapsible
@@ -148,62 +166,118 @@ export const ScheduleResults: FC = () => {
       </CollapsibleTrigger>
 
       <CollapsibleContent className="fade-in-0 slide-in-from-top-2 animate-in space-y-2 duration-200">
-        {displayedRuns.map((run) => (
-          <Button
-            key={run.id}
-            variant="ghost"
-            onClick={() => viewRun(run)}
-            className="h-auto w-full justify-start rounded-xl border border-border/50 bg-card p-4 text-left transition-all hover:border-border"
-          >
-            <div className="flex w-full items-start gap-3">
-              {getStatusIcon(run.status)}
-              <div className="min-w-0 flex-1">
-                <div className="mb-1 flex items-center gap-2">
-                  <span className="truncate font-medium text-foreground text-sm">
-                    {run.job?.name}
-                  </span>
-                  <span className="flex items-center gap-1 text-muted-foreground text-xs">
-                    <Clock className="h-3 w-3" />
-                    {formatTimestamp(run.startedAt)}
-                  </span>
+        {groupedRuns.map(({ job, runs }) => {
+          const latestRun = runs[0]
+          const latestTime = latestRun ? formatTimestamp(latestRun.startedAt) : ''
+          const groupRunningCount = runs.filter(
+            (r) => r.status === 'running',
+          ).length
+
+          return (
+            <Collapsible
+              key={job.id}
+              open={openGroupId === job.id}
+              onOpenChange={(open) => setOpenGroupId(open ? job.id : null)}
+            >
+              <CollapsibleTrigger asChild>
+                <Button
+                  variant="ghost"
+                  className="flex h-auto w-full items-center justify-between rounded-xl border border-border/50 bg-card p-4 text-left transition-all hover:border-border"
+                >
+                  <div className="flex items-center gap-3">
+                    {latestRun ? getStatusIcon(latestRun.status) : null}
+                    <div className="min-w-0 flex-1">
+                      <div className="mb-1 flex items-center gap-2">
+                        <span className="truncate font-medium text-foreground text-sm">
+                          {job.name}
+                        </span>
+                        {groupRunningCount > 0 && (
+                          <span className="rounded-full bg-accent-orange/20 px-2 py-0.5 text-accent-orange text-xs">
+                            {groupRunningCount} running
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-muted-foreground text-xs">
+                        <span className="flex items-center gap-1">
+                          <Clock className="h-3 w-3" />
+                          {latestTime}
+                        </span>
+                        <span>•</span>
+                        <span>
+                          {runs.length}{' '}
+                          {runs.length === 1 ? 'result' : 'results'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <ChevronDown
+                    className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${openGroupId === job.id ? 'rotate-180' : ''}`}
+                  />
+                </Button>
+              </CollapsibleTrigger>
+
+              <CollapsibleContent className="fade-in-0 slide-in-from-top-2 animate-in pt-2 duration-200">
+                <div className="space-y-2 pl-4">
+                  {runs.map((run) => (
+                    <Button
+                      key={run.id}
+                      variant="ghost"
+                      onClick={() => viewRun(run)}
+                      className="h-auto w-full justify-start rounded-lg border border-border/50 bg-background p-3 text-left transition-all hover:border-border"
+                    >
+                      <div className="flex w-full items-start gap-3">
+                        {getStatusIcon(run.status)}
+                        <div className="min-w-0 flex-1">
+                          <div className="mb-1 flex items-center gap-2">
+                            <span className="text-sm">
+                              {dayjs(run.startedAt).format('MMM D, h:mm A')}
+                            </span>
+                            <span className="flex items-center gap-1 text-muted-foreground text-xs">
+                              {formatTimestamp(run.startedAt)}
+                            </span>
+                          </div>
+                          {run.result && (
+                            <p className="line-clamp-2 text-ellipsis text-muted-foreground text-xs">
+                              {run.result}
+                            </p>
+                          )}
+                        </div>
+                        {run.status === 'running' && (
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleCancelRun(run.id)
+                            }}
+                            className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            aria-label="Cancel run"
+                          >
+                            <Square className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        {run.status === 'failed' && (
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleRetryRun(run.jobId)
+                            }}
+                            className="shrink-0 text-muted-foreground hover:text-foreground"
+                            aria-label="Retry run"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </div>
+                    </Button>
+                  ))}
                 </div>
-                {run.result && (
-                  <p className="line-clamp-2 text-ellipsis text-muted-foreground text-xs">
-                    {run.result}
-                  </p>
-                )}
-              </div>
-              {run.status === 'running' && (
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleCancelRun(run.id)
-                  }}
-                  className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                  aria-label="Cancel run"
-                >
-                  <Square className="h-3.5 w-3.5" />
-                </Button>
-              )}
-              {run.status === 'failed' && (
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleRetryRun(run.jobId)
-                  }}
-                  className="shrink-0 text-muted-foreground hover:text-foreground"
-                  aria-label="Retry run"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                </Button>
-              )}
-            </div>
-          </Button>
-        ))}
+              </CollapsibleContent>
+            </Collapsible>
+          )
+        })}
         <Button variant="ghost" asChild className="w-full">
           {/* biome-ignore lint/a11y/useValidAnchor: click handler is passive */}
           <a
