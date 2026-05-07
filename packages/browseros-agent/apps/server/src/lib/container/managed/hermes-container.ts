@@ -43,9 +43,6 @@ export class HermesContainer extends ManagedContainer {
     readinessProbe: { timeoutMs: 30_000, intervalMs: 500 },
   }
 
-  // Stored separately because Phase 1 wires the wrapper through
-  // `ManagedContainerDeps`; later phases will make this a
-  // first-class config option.
   private readonly hermesConfig: HermesContainerConfig
 
   constructor(

@@ -318,7 +318,7 @@ describe('ManagedContainer', () => {
   })
 
   describe('reset', () => {
-    it('throws ResetNotSupportedError for every level (Phase 1 stub)', async () => {
+    it('throws ResetNotSupportedError for every level', async () => {
       const lockDir = mkTempDir()
       const deps = makeFakeDeps({ lockDir })
       const c = new TestContainer(deps)

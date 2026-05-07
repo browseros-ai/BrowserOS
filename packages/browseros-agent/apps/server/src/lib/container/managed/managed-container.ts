@@ -283,10 +283,9 @@ export abstract class ManagedContainer {
    * `execGateTimeoutMs` (default 60s). Returns Bun's spawned process
    * — caller owns stdio piping and `exit`.
    *
-   * NOTE: Phase 1 implementation is minimal — sufficient for the
-   * `execOneShot` convenience and for tests that need to verify the
-   * gating semantics. The ACP runtime continues to use
-   * `buildExecArgv` directly because acpx-core does its own spawn.
+   * The ACP runtime continues to use `buildExecArgv` directly
+   * because acpx-core does its own spawn; this entry point exists
+   * for `execOneShot` and for callers that want to own stdio.
    */
   async execProcess(
     spec: ExecSpec,
