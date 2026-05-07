@@ -6,4 +6,5 @@
 
 export * from './container-cli'
 export * from './image-loader'
+export * from './managed'
 export * from './types'
