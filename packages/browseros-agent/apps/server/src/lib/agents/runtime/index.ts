@@ -5,7 +5,12 @@
  */
 
 export type { AgentRuntime } from './agent-runtime'
+export { ContainerAgentRuntime } from './container-agent-runtime'
 export { ActionNotSupportedError, RuntimeNotReadyError } from './errors'
+export {
+  HostProcessAgentRuntime,
+  type HostProcessAgentRuntimeDeps,
+} from './host-process-agent-runtime'
 export {
   AgentRuntimeRegistry,
   getAgentRuntimeRegistry,
