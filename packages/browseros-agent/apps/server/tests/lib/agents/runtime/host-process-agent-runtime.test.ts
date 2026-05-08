@@ -104,6 +104,22 @@ describe('HostProcessAgentRuntime', () => {
       expect(snap.lastError).toBe('ENOENT')
     })
 
+    it('does not stamp the cache when probe throws (lets next call retry)', async () => {
+      let attempt = 0
+      const spawnProbe = mock(async () => {
+        attempt += 1
+        if (attempt === 1) throw new Error('ENOENT')
+        return { exitCode: 0, stdout: 'ok', stderr: '' }
+      })
+      const r = makeRuntime({ spawnProbe, probeCacheMs: 60_000 })
+      await r.probeHealth()
+      // No force flag — should still re-probe because the first call
+      // failed and must not have advanced the cache.
+      await r.probeHealth()
+      expect(spawnProbe).toHaveBeenCalledTimes(2)
+      expect(r.getStatusSnapshot().state).toBe('cli_present')
+    })
+
     it('caches probe results within the cache window', async () => {
       const spawnProbe = mock(async () => ({
         exitCode: 0,
@@ -186,6 +202,22 @@ describe('HostProcessAgentRuntime', () => {
       await expect(
         r.executeAction({ type: 'reset-soft' }),
       ).rejects.toBeInstanceOf(ActionNotSupportedError)
+    })
+
+    it('gates on getCapabilities() — subclass-filtered actions throw', async () => {
+      class FilteredRuntime extends TestRuntime {
+        override getCapabilities() {
+          return ['check-auth' as const]
+        }
+      }
+      const r = new FilteredRuntime({ binaryName: 'fake-cli' })
+      await expect(
+        r.executeAction({ type: 'reinstall-cli' }),
+      ).rejects.toBeInstanceOf(ActionNotSupportedError)
+      expect(r.reinstallCalls).toBe(0)
+      // Whitelisted action still goes through.
+      await r.executeAction({ type: 'check-auth' })
+      expect(r.authCalls).toBe(1)
     })
 
     it('default handleReinstallCli throws if subclass does not override', async () => {

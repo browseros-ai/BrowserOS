@@ -85,6 +85,13 @@ export abstract class HostProcessAgentRuntime implements AgentRuntime {
     action: RuntimeAction,
     _opts: { onLog?: (msg: string) => void } = {},
   ): Promise<void> {
+    if (!this.getCapabilities().includes(action.type as RuntimeCapability)) {
+      throw new ActionNotSupportedError(
+        this.descriptor.adapterId,
+        action.type,
+        this.getCapabilities(),
+      )
+    }
     switch (action.type) {
       case 'reinstall-cli':
         return this.handleReinstallCli()
@@ -121,7 +128,6 @@ export abstract class HostProcessAgentRuntime implements AgentRuntime {
     const cacheMs = this.deps.probeCacheMs ?? DEFAULT_PROBE_CACHE_MS
     const now = Date.now()
     if (!force && now - this.healthCheckedAt < cacheMs) return
-    this.healthCheckedAt = now
 
     const argv = this.deps.versionProbeArgs ?? [
       this.deps.binaryName,
@@ -129,6 +135,10 @@ export abstract class HostProcessAgentRuntime implements AgentRuntime {
     ]
     try {
       const result = await this.runProbe(argv, DEFAULT_PROBE_TIMEOUT_MS)
+      // Only stamp the cache once a definitive result lands. A spawn
+      // throw (binary missing, perm denied) leaves the timestamp
+      // untouched so the next call re-probes immediately.
+      this.healthCheckedAt = Date.now()
       if (result.exitCode === 0) {
         this.binaryVersion = result.stdout.trim() || null
         this.setState('cli_present')
