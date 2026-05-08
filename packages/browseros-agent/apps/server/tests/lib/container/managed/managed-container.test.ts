@@ -405,4 +405,179 @@ describe('ManagedContainer', () => {
       expect(transitions.at(-1)).toBe('running')
     })
   })
+
+  describe('isImageCurrent', () => {
+    function attachImageRef(
+      deps: ReturnType<typeof makeFakeDeps>,
+      ref: string | null,
+    ): void {
+      // biome-ignore lint/suspicious/noExplicitAny: extending the fake at runtime
+      ;(deps.cli as any).containerImageRef = async () => ref
+    }
+
+    it('returns true when ref matches descriptor.defaultImage', async () => {
+      const deps = makeFakeDeps({ lockDir: mkTempDir() })
+      attachImageRef(deps, 'docker.io/test:latest')
+      expect(await new TestContainer(deps).isImageCurrent()).toBe(true)
+    })
+
+    it('returns true for SHA-pinned variants of the expected ref', async () => {
+      const deps = makeFakeDeps({ lockDir: mkTempDir() })
+      attachImageRef(deps, 'docker.io/test:latest@sha256:deadbeef')
+      expect(await new TestContainer(deps).isImageCurrent()).toBe(true)
+    })
+
+    it('returns false when ref differs', async () => {
+      const deps = makeFakeDeps({ lockDir: mkTempDir() })
+      attachImageRef(deps, 'docker.io/test:older')
+      expect(await new TestContainer(deps).isImageCurrent()).toBe(false)
+    })
+
+    it('returns false when the container is missing', async () => {
+      const deps = makeFakeDeps({ lockDir: mkTempDir() })
+      attachImageRef(deps, null)
+      expect(await new TestContainer(deps).isImageCurrent()).toBe(false)
+    })
+  })
+
+  describe('getLogs / tailLogs', () => {
+    it('getLogs collects lines from cli.runCommand', async () => {
+      const deps = makeFakeDeps({ lockDir: mkTempDir() })
+      let captured: string[] = []
+      // biome-ignore lint/suspicious/noExplicitAny: extending the fake at runtime
+      ;(deps.cli as any).runCommand = async (
+        args: string[],
+        onLog?: (line: string) => void,
+      ) => {
+        captured = args
+        onLog?.('line-a')
+        onLog?.('line-b')
+        return { exitCode: 0, stdout: '', stderr: '' }
+      }
+      const c = new TestContainer(deps)
+      const lines = await c.getLogs(120)
+      expect(lines).toEqual(['line-a', 'line-b'])
+      expect(captured).toEqual(['logs', '-n', '120', 'test-container'])
+    })
+
+    it('tailLogs returns the unsubscribe handle from cli.tailLogs', () => {
+      const deps = makeFakeDeps({ lockDir: mkTempDir() })
+      let unsubscribed = false
+      let receivedName: string | null = null
+      // biome-ignore lint/suspicious/noExplicitAny: extending the fake at runtime
+      ;(deps.cli as any).tailLogs = (name: string, _onLine: unknown) => {
+        receivedName = name
+        return () => {
+          unsubscribed = true
+        }
+      }
+      const c = new TestContainer(deps)
+      const stop = c.tailLogs(() => {})
+      expect(receivedName).toBe('test-container')
+      stop()
+      expect(unsubscribed).toBe(true)
+    })
+  })
+
+  describe('runOneShot', () => {
+    type OneShotFakes = {
+      removed: string[]
+      created: ContainerSpec[]
+      runCalls: string[][]
+      runResult: { exitCode: number; stdout: string; stderr: string }
+    }
+
+    function attachOneShotFakes(
+      deps: ReturnType<typeof makeFakeDeps>,
+    ): OneShotFakes {
+      const state: OneShotFakes = {
+        removed: [],
+        created: [],
+        runCalls: [],
+        runResult: { exitCode: 0, stdout: 'hi', stderr: '' },
+      }
+      const cli = deps.cli as unknown as Record<string, unknown>
+      cli.removeContainer = async (
+        name: string,
+        _opts?: { force?: boolean },
+      ) => {
+        state.removed.push(name)
+      }
+      cli.waitForContainerNameRelease = async () => {}
+      cli.createContainer = async (spec: ContainerSpec) => {
+        state.created.push(spec)
+      }
+      cli.runCommand = async (args: string[]) => {
+        state.runCalls.push(args)
+        return state.runResult
+      }
+      return state
+    }
+
+    it('creates a sibling -setup container with no ports/health and the requested argv', async () => {
+      const deps = makeFakeDeps({ lockDir: mkTempDir() })
+      const fakes = attachOneShotFakes(deps)
+      const c = new TestContainer(deps)
+
+      const result = await c.runOneShot(['echo', 'hello'], {
+        env: { EXTRA: '1' },
+      })
+
+      expect(result).toEqual({ exitCode: 0, stdout: 'hi', stderr: '' })
+      expect(fakes.created).toHaveLength(1)
+      const setupSpec = fakes.created[0]
+      expect(setupSpec.name).toBe('test-container-setup')
+      expect(setupSpec.image).toBe('docker.io/test:latest')
+      expect(setupSpec.restart).toBe('no')
+      expect(setupSpec.ports).toBeUndefined()
+      expect(setupSpec.health).toBeUndefined()
+      expect(setupSpec.command).toEqual(['echo', 'hello'])
+      expect(setupSpec.env).toEqual({ FOO: 'bar', EXTRA: '1' })
+      expect(fakes.runCalls).toEqual([['start', '-a', 'test-container-setup']])
+      // Removed twice: pre-create cleanup + final force-remove.
+      expect(
+        fakes.removed.filter((n) => n === 'test-container-setup'),
+      ).toHaveLength(2)
+    })
+
+    it('force-removes the sibling even when the inner command throws', async () => {
+      const deps = makeFakeDeps({ lockDir: mkTempDir() })
+      const fakes = attachOneShotFakes(deps)
+      const cli = deps.cli as unknown as Record<string, unknown>
+      cli.runCommand = async () => {
+        throw new Error('boom')
+      }
+      const c = new TestContainer(deps)
+      await expect(c.runOneShot(['noop'])).rejects.toThrow(/boom/)
+      expect(
+        fakes.removed.filter((n) => n === 'test-container-setup'),
+      ).toHaveLength(2)
+    })
+
+    it('retries createContainer on ContainerNameInUseError', async () => {
+      const deps = makeFakeDeps({ lockDir: mkTempDir() })
+      const fakes = attachOneShotFakes(deps)
+      const cli = deps.cli as unknown as Record<string, unknown>
+      let createAttempts = 0
+      cli.createContainer = async (spec: ContainerSpec) => {
+        createAttempts += 1
+        if (createAttempts < 2) {
+          const { ContainerNameInUseError } = await import(
+            '../../../../src/lib/vm/errors'
+          )
+          throw new ContainerNameInUseError(
+            spec.name,
+            'nerdctl create',
+            1,
+            `container name "${spec.name}" is already used`,
+          )
+        }
+        fakes.created.push(spec)
+      }
+      const c = new TestContainer(deps)
+      await c.runOneShot(['echo'])
+      expect(createAttempts).toBe(2)
+      expect(fakes.created).toHaveLength(1)
+    })
+  })
 })
