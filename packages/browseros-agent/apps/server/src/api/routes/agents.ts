@@ -14,10 +14,7 @@ import { stream } from 'hono/streaming'
 import { formatUserMessage } from '../../agent/format-message'
 import type { Browser } from '../../browser/browser'
 import { createAcpUIMessageStreamResponse } from '../../lib/agents/acp-ui-message-stream'
-import type {
-  HermesGatewayAccessor,
-  OpenclawGatewayAccessor,
-} from '../../lib/agents/acpx-runtime'
+import type { OpenclawGatewayAccessor } from '../../lib/agents/acpx-runtime'
 import type {
   ActiveTurnInfo,
   TurnFrame,
@@ -136,13 +133,6 @@ type AgentRouteDeps = {
    * gateway side. Without this, openclaw create requests fail with 503.
    */
   openclawProvisioner?: OpenClawProvisioner
-  /**
-   * Required when a `hermes` adapter agent is in use; harmless when
-   * absent (the AcpxRuntime falls back to a host-process spawn for
-   * tests / dev). Forwarded to the AcpxRuntime so it can spawn
-   * `hermes acp` inside the Hermes container.
-   */
-  hermesGateway?: HermesGatewayAccessor
   /** Optional override; defaults to a fresh in-memory checker. */
   adapterHealth?: AdapterHealthChecker
   /**
@@ -171,7 +161,6 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
       browserosServerPort: deps.browserosServerPort,
       openclawGateway: deps.openclawGateway,
       openclawProvisioner: deps.openclawProvisioner,
-      hermesGateway: deps.hermesGateway,
     })
   if (deps.onTurnLifecycle && service instanceof AgentHarnessService) {
     service.onTurnLifecycle(deps.onTurnLifecycle)

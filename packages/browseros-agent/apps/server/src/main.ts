@@ -13,10 +13,6 @@ import path from 'node:path'
 import { EXIT_CODES } from '@browseros/shared/constants/exit-codes'
 import { createHttpServer } from './api/server'
 import {
-  configureHermesContainerService,
-  getHermesContainerService,
-} from './api/services/hermes/hermes-container'
-import {
   configureOpenClawService,
   configureVmRuntime,
   getOpenClawService,
@@ -25,6 +21,7 @@ import { CdpBackend } from './browser/backends/cdp'
 import { Browser } from './browser/browser'
 import type { ServerConfig } from './config'
 import { INLINED_ENV } from './env'
+import { configureHermesRuntime, getHermesRuntime } from './lib/agents/runtime'
 import {
   cleanOldSessions,
   ensureBrowserosDir,
@@ -159,19 +156,19 @@ export class Application {
     // an idle container is brought up so per-turn `nerdctl exec hermes acp`
     // calls from the harness don't pay container-create latency.
     try {
-      const hermesService = configureHermesContainerService({
-        resourcesDir,
-      })
-      void hermesService.prewarm().catch((err) =>
-        logger.warn('Hermes prewarm failed', {
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      )
-      void hermesService.start().catch((err) =>
-        logger.warn('Hermes container start failed', {
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      )
+      const hermesRuntime = configureHermesRuntime({ resourcesDir })
+      if (hermesRuntime) {
+        void hermesRuntime.executeAction({ type: 'install' }).catch((err) =>
+          logger.warn('Hermes prewarm failed', {
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        )
+        void hermesRuntime.executeAction({ type: 'start' }).catch((err) =>
+          logger.warn('Hermes container start failed', {
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        )
+      }
     } catch (err) {
       logger.warn(
         'Hermes container configuration failed, continuing without it',
@@ -190,8 +187,8 @@ export class Application {
     getOpenClawService()
       .shutdown()
       .catch(() => {})
-    getHermesContainerService()
-      .shutdown()
+    getHermesRuntime()
+      ?.executeAction({ type: 'stop' })
       .catch(() => {})
     removeServerConfigSync()
 

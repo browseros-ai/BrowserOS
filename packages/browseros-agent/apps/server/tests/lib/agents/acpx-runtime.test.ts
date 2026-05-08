@@ -21,7 +21,13 @@ import {
   unwrapBrowserosAcpUserMessage,
 } from '../../../src/lib/agents/acpx-runtime'
 import type { AgentDefinition } from '../../../src/lib/agents/agent-types'
+import {
+  getAgentRuntimeRegistry,
+  HermesContainerRuntime,
+  resetAgentRuntimeRegistry,
+} from '../../../src/lib/agents/runtime'
 import type { AgentStreamEvent } from '../../../src/lib/agents/types'
+import type { ManagedContainerDeps } from '../../../src/lib/container/managed'
 
 describe('AcpxRuntime', () => {
   const tempDirs: string[] = []
@@ -955,44 +961,32 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
     expect(command).toContain('/runtime/codex-home')
   })
 
-  it('resolves the Hermes adapter to a container `nerdctl exec hermes acp` command when a HermesGatewayAccessor is wired', async () => {
+  it('resolves the Hermes adapter to a container `nerdctl exec hermes acp` command when a HermesContainerRuntime is registered', async () => {
     const browserosDir = await mkdtemp(
       join(tmpdir(), 'browseros-acpx-browseros-'),
     )
     const stateDir = await mkdtemp(join(tmpdir(), 'browseros-acpx-state-'))
     tempDirs.push(browserosDir, stateDir)
+    resetAgentRuntimeRegistry()
+    const fakeManagedDeps: ManagedContainerDeps = {
+      cli: {} as ManagedContainerDeps['cli'],
+      loader: {} as ManagedContainerDeps['loader'],
+      vm: {} as ManagedContainerDeps['vm'],
+      limactlPath: '/opt/homebrew/bin/limactl',
+      limaHome: '/Users/dev/.browseros-dev/lima',
+      vmName: 'browseros-vm',
+      lockDir: stateDir,
+    }
+    const hermesRuntime = new HermesContainerRuntime(fakeManagedDeps, {
+      browserosDir,
+      hermesHarnessHostDir: join(browserosDir, 'vm', 'hermes', 'harness'),
+    })
+    getAgentRuntimeRegistry().register(hermesRuntime)
+
     const calls: Array<{ method: string; input: unknown }> = []
     const runtime = new AcpxRuntime({
       browserosDir,
       stateDir,
-      hermesGateway: {
-        getContainerName: () => 'browseros-hermes-hermes-agent-1',
-        getLimaHomeDir: () => '/Users/dev/.browseros-dev/lima',
-        getLimactlPath: () => '/opt/homebrew/bin/limactl',
-        getVmName: () => 'browseros-vm',
-        // Mirrors ManagedContainer.buildExecArgv — kept inline so the
-        // test doesn't depend on the production class wiring.
-        buildExecArgv: (spec) => {
-          const argv = [
-            'env',
-            'LIMA_HOME=/Users/dev/.browseros-dev/lima',
-            '/opt/homebrew/bin/limactl',
-            'shell',
-            '--workdir',
-            '/',
-            'browseros-vm',
-            '--',
-            'nerdctl',
-            'exec',
-            '-i',
-          ]
-          for (const [key, value] of Object.entries(spec.env ?? {})) {
-            argv.push('-e', `${key}=${value}`)
-          }
-          argv.push('browseros-hermes-hermes-agent-1', ...spec.argv)
-          return argv.join(' ')
-        },
-      },
       runtimeFactory: (options) => {
         calls.push({ method: 'createRuntime', input: options })
         return createFakeAcpRuntime(calls)
@@ -1019,7 +1013,6 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
       '/opt/homebrew/bin/limactl shell --workdir / browseros-vm --',
     )
     expect(command).toContain('nerdctl exec -i')
-    expect(command).toContain('browseros-hermes-hermes-agent-1')
     expect(command).toContain('hermes acp')
     expect(command).toContain('HERMES_HOME=')
     expect(command).not.toContain('bash -c')
@@ -1027,6 +1020,7 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
     expect(command).not.toContain('AGENT_HOME=')
     expect(command).not.toContain('CODEX_HOME=')
     expect(command).not.toContain('CLAUDE_CONFIG_DIR=')
+    resetAgentRuntimeRegistry()
   })
 
   it('falls back to a host-process `hermes acp` command when no HermesGatewayAccessor is wired', async () => {

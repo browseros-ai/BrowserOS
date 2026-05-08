@@ -7,8 +7,8 @@
 import type { AgentDefinition } from './agent-types'
 import { prepareClaudeCodeContext } from './claude-code/prepare'
 import { prepareCodexContext } from './codex/prepare'
-import { prepareHermesContext } from './hermes/prepare'
 import { prepareOpenClawContext } from './openclaw/prepare'
+import { prepareHermesContext } from './runtime/hermes-container-runtime'
 
 export interface PreparedAcpxAgentContext {
   cwd: string

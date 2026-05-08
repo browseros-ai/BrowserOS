@@ -75,7 +75,7 @@ export abstract class ManagedContainer {
 
   // Promise chain so concurrent lifecycle calls serialise within this
   // process. Cross-process serialisation lives in `withProcessLock`
-  // below. Same pattern as today's HermesContainerService.
+  // below.
   private lifecycleLock: Promise<void> = Promise.resolve()
 
   constructor(protected readonly deps: ManagedContainerDeps) {}
@@ -482,8 +482,7 @@ export abstract class ManagedContainer {
 
   /**
    * Serialise lifecycle operations both within this process (via the
-   * promise chain) and across processes (via file-lock). Mirrors the
-   * pattern in today's HermesContainerService / OpenClawService.
+   * promise chain) and across processes (via file-lock).
    */
   private async withLifecycleLock<T>(
     operation: string,

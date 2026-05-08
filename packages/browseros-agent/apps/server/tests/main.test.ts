@@ -121,9 +121,7 @@ async function setupApplicationTest() {
   const openclawService = await import(
     '../src/api/services/openclaw/openclaw-service'
   )
-  const hermesContainerService = await import(
-    '../src/api/services/hermes/hermes-container'
-  )
+  const runtimeModule = await import('../src/lib/agents/runtime')
   const browserosDir = await import('../src/lib/browseros-dir')
   const dbModule = await import('../src/lib/db')
   const identityModule = await import('../src/lib/identity')
@@ -209,25 +207,13 @@ async function setupApplicationTest() {
       }) as never,
   )
 
-  const hermesPrewarm = mock(async () => {})
-  const hermesStart = mock(async () => {})
-  spyOn(
-    hermesContainerService,
-    'configureHermesContainerService',
-  ).mockImplementation(
-    () =>
-      ({
-        prewarm: hermesPrewarm,
-        start: hermesStart,
-      }) as never,
+  const hermesExecuteAction = mock(async () => {})
+  const fakeHermesRuntime = { executeAction: hermesExecuteAction } as never
+  spyOn(runtimeModule, 'configureHermesRuntime').mockImplementation(
+    () => fakeHermesRuntime,
   )
-  spyOn(hermesContainerService, 'getHermesContainerService').mockImplementation(
-    () =>
-      ({
-        prewarm: hermesPrewarm,
-        start: hermesStart,
-        shutdown: async () => {},
-      }) as never,
+  spyOn(runtimeModule, 'getHermesRuntime').mockImplementation(
+    () => fakeHermesRuntime,
   )
 
   const { Application } = await import('../src/main')
@@ -241,6 +227,6 @@ async function setupApplicationTest() {
     loggerWarn,
     initializeDb,
     openClawService: { prewarm, tryAutoStart },
-    hermesService: { prewarm: hermesPrewarm, start: hermesStart },
+    hermesService: { executeAction: hermesExecuteAction },
   }
 }

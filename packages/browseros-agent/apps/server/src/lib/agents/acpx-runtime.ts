@@ -32,6 +32,7 @@ import type {
   AgentHistoryEntry,
   AgentHistoryToolCall,
 } from './agent-types'
+import { getHermesRuntime } from './runtime'
 import type {
   AgentHistoryPage,
   AgentPromptInput,
@@ -61,38 +62,6 @@ export interface OpenclawGatewayAccessor {
   getVmName(): string
 }
 
-/**
- * Live-getter access to the Hermes container runtime. Required when
- * spawning the hermes ACP adapter inside its long-running idle
- * container; absent only in tests / dev fallback (where the harness
- * falls back to a host-process `hermes acp` spawn).
- *
- * `buildExecArgv` is the new single source of truth for the
- * `env LIMA_HOME=… limactl shell <vm> -- nerdctl exec -i …` chain.
- * The pre-existing four getters stay so callers that build the
- * argv themselves (legacy paths, tests) continue to work; the ACP
- * runtime now goes through `buildExecArgv` exclusively.
- */
-export interface HermesGatewayAccessor {
-  /** Container name e.g. browseros-hermes-hermes-agent-1. */
-  getContainerName(): string
-  /** LIMA_HOME directory containing the browseros-vm instance. */
-  getLimaHomeDir(): string
-  /** Resolved path to the `limactl` binary (bundled or host). */
-  getLimactlPath(): string
-  /** VM name registered in LIMA_HOME (e.g. browseros-vm). */
-  getVmName(): string
-  /**
-   * Build the shell-command string acpx-core will spawn to run
-   * `argv` inside the Hermes container. Owned by the underlying
-   * `ManagedContainer`. Pure builder; no state side effects.
-   */
-  buildExecArgv(spec: {
-    argv: readonly [string, ...string[]]
-    env?: Record<string, string>
-  }): string
-}
-
 type AcpxRuntimeOptions = {
   cwd?: string
   browserosDir?: string
@@ -103,12 +72,6 @@ type AcpxRuntimeOptions = {
    * claude/codex (their adapters spawn their own CLI binaries).
    */
   openclawGateway?: OpenclawGatewayAccessor
-  /**
-   * Required for adapter='hermes' agents in production; absence falls
-   * back to a host-process `hermes acp` spawn (used by tests / dev
-   * before the container service is wired).
-   */
-  hermesGateway?: HermesGatewayAccessor
   runtimeFactory?: (options: AcpRuntimeOptions) => AcpxCoreRuntime
 }
 
@@ -129,7 +92,6 @@ export class AcpxRuntime implements AgentRuntime {
   private readonly stateDir: string
   private readonly browserosServerPort: number
   private readonly openclawGateway: OpenclawGatewayAccessor | null
-  private readonly hermesGateway: HermesGatewayAccessor | null
   private readonly runtimeFactory: (
     options: AcpRuntimeOptions,
   ) => AcpxCoreRuntime
@@ -146,7 +108,6 @@ export class AcpxRuntime implements AgentRuntime {
     this.browserosServerPort =
       options.browserosServerPort ?? DEFAULT_PORTS.server
     this.openclawGateway = options.openclawGateway ?? null
-    this.hermesGateway = options.hermesGateway ?? null
     this.sessionStore = createRuntimeStore({ stateDir: this.stateDir })
     this.runtimeFactory = options.runtimeFactory ?? createAcpRuntime
   }
@@ -313,7 +274,6 @@ export class AcpxRuntime implements AgentRuntime {
       agentRegistry: createBrowserosAgentRegistry({
         openclawGateway: this.openclawGateway,
         openclawSessionKey: input.openclawSessionKey,
-        hermesGateway: this.hermesGateway,
         commandEnv: input.commandEnv,
       }),
       mcpServers: input.useBrowserosMcp
@@ -725,7 +685,6 @@ function createBrowserosMcpServers(
 function createBrowserosAgentRegistry(input: {
   openclawGateway: OpenclawGatewayAccessor | null
   openclawSessionKey: string | null
-  hermesGateway: HermesGatewayAccessor | null
   commandEnv: Record<string, string>
 }): AcpRuntimeOptions['agentRegistry'] {
   const registry = createAgentRegistry()
@@ -753,16 +712,17 @@ function createBrowserosAgentRegistry(input: {
       }
 
       if (lower === 'hermes') {
-        if (!input.hermesGateway) {
-          // No container service wired (tests, dev fallback). Spawn the
-          // host-side `hermes` binary if available. acpx's built-in
-          // hermes registry resolution is good enough — we just inject
-          // HERMES_HOME via the env wrapper so per-agent state still
-          // works. Production wires `hermesGateway` and goes through
+        const runtime = getHermesRuntime()
+        if (!runtime) {
+          // No runtime registered (tests, dev fallback, non-darwin).
+          // Spawn the host-side `hermes` binary if available; acpx's
+          // built-in registry resolution suffices, with HERMES_HOME
+          // injected via the env wrapper so per-agent state still
+          // works. Production registers the runtime and goes through
           // the container path below.
           return wrapCommandWithEnv('hermes acp', input.commandEnv)
         }
-        return resolveHermesAcpCommand(input.hermesGateway, input.commandEnv)
+        return runtime.buildExecArgv(runtime.getAcpExecSpec(input.commandEnv))
       }
 
       if (lower === 'claude' || lower === 'codex') {
@@ -772,35 +732,6 @@ function createBrowserosAgentRegistry(input: {
       return registry.resolve(agentName)
     },
   }
-}
-
-/**
- * Builds the command string acpx will spawn for a `hermes` adapter.
- * Runs `hermes acp` inside the long-running Hermes container via
- * the bundled `limactl shell <vm> -- nerdctl exec -i ...` chain.
- *
- * The argv chain itself is built by the gateway accessor's
- * `buildExecArgv` (delegates to `ManagedContainer.buildExecArgv`)
- * so this function stays out of the limactl/nerdctl business. The
- * single command env merger here adds `PYTHONUNBUFFERED=1` (sticky
- * on the container, re-added for safety) on top of caller-supplied
- * env (typically `HERMES_HOME`, a /data/... path set by
- * `prepareHermesContext`).
- *
- * The upstream nousresearch/hermes-agent image installs hermes
- * into `/opt/hermes/.venv/bin/hermes` (note the leading dot). PATH
- * isn't set up for arbitrary `nerdctl exec` calls because we
- * override the entrypoint to keep the container idle, so the
- * absolute path is used here.
- */
-function resolveHermesAcpCommand(
-  gateway: HermesGatewayAccessor,
-  commandEnv: Record<string, string>,
-): string {
-  return gateway.buildExecArgv({
-    argv: ['/opt/hermes/.venv/bin/hermes', 'acp'],
-    env: { PYTHONUNBUFFERED: '1', ...commandEnv },
-  })
 }
 
 /**
