@@ -37,6 +37,7 @@ describe('AcpxRuntime', () => {
       tempDirs.map((dir) => rm(dir, { recursive: true, force: true })),
     )
     tempDirs.length = 0
+    resetAgentRuntimeRegistry()
   })
 
   it('uses acpx/runtime to ensure a session and stream a turn', async () => {
@@ -967,7 +968,6 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
     )
     const stateDir = await mkdtemp(join(tmpdir(), 'browseros-acpx-state-'))
     tempDirs.push(browserosDir, stateDir)
-    resetAgentRuntimeRegistry()
     const fakeManagedDeps: ManagedContainerDeps = {
       cli: {} as ManagedContainerDeps['cli'],
       loader: {} as ManagedContainerDeps['loader'],
@@ -1020,7 +1020,6 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
     expect(command).not.toContain('AGENT_HOME=')
     expect(command).not.toContain('CODEX_HOME=')
     expect(command).not.toContain('CLAUDE_CONFIG_DIR=')
-    resetAgentRuntimeRegistry()
   })
 
   it('falls back to a host-process `hermes acp` command when no HermesGatewayAccessor is wired', async () => {
