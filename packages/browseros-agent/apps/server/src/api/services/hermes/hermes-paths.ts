@@ -72,6 +72,15 @@ export async function writeHermesPerAgentProvider(input: {
   })
   await mkdir(home, { recursive: true })
 
+  // Hermes' `provider: custom` requires a `base_url` — without one the
+  // model loader rejects with `unknown provider 'custom'`. Callers that
+  // use a named Hermes provider (e.g. anthropic, openrouter) can omit
+  // baseUrl and Hermes resolves the URL itself.
+  if (input.providerId === 'custom' && !input.baseUrl) {
+    throw new Error(
+      'Hermes provider "custom" requires base_url; set HermesProviderMapping.defaultBaseUrl or supply input.baseUrl',
+    )
+  }
   const yamlLines = [
     'model:',
     `  default: ${JSON.stringify(input.modelId)}`,

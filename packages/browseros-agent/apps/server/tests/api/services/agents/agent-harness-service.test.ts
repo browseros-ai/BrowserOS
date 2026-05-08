@@ -531,7 +531,7 @@ describe('AgentHarnessService', () => {
     expect(agents).toHaveLength(0)
   })
 
-  it('writes Hermes per-agent base_url for openai-compatible providers (mapped to Hermes openai key)', async () => {
+  it('writes provider:custom + base_url for openai-compatible providers', async () => {
     const agents: AgentDefinition[] = []
     const browserosDir = mkdtempSync(join(tmpdir(), 'browseros-hermes-test-'))
     const service = new AgentHarnessService({
@@ -559,12 +559,47 @@ describe('AgentHarnessService', () => {
     )
     const yaml = readFileSync(join(homeDir, 'config.yaml'), 'utf8')
     const env = readFileSync(join(homeDir, '.env'), 'utf8')
-    // BrowserOS' openai-compatible type routes through Hermes' `openai`
-    // provider with base_url set.
-    expect(yaml).toContain('"openai"')
+    // Hermes has no provider key called "openai" — the canonical shape
+    // for any OpenAI-compatible endpoint is `provider: custom` with
+    // `base_url` set. Hermes then short-circuits provider lookup and
+    // calls the URL directly using OPENAI_API_KEY.
+    expect(yaml).toContain('"custom"')
     expect(yaml).toContain('"my-model"')
     expect(yaml).toContain('"https://api.example.com/v1"')
     expect(env).toContain('OPENAI_API_KEY=sk-test')
+  })
+
+  it('falls back to OpenAI default base_url for the openai provider type', async () => {
+    const agents: AgentDefinition[] = []
+    const browserosDir = mkdtempSync(join(tmpdir(), 'browseros-hermes-test-'))
+    const service = new AgentHarnessService({
+      agentStore: createAgentStore(agents) as AgentStore,
+      runtime: stubRuntime(),
+      browserosDir,
+    })
+
+    const agent = await service.createAgent({
+      name: 'OpenAI Hermes',
+      adapter: 'hermes',
+      providerType: 'openai',
+      apiKey: 'sk-openai-test',
+      modelId: 'gpt-4o-mini',
+      // No baseUrl supplied — provider:custom still requires one,
+      // so the mapping's defaultBaseUrl must take over.
+    })
+
+    const homeDir = join(
+      browserosDir,
+      'vm',
+      'hermes',
+      'harness',
+      agent.id,
+      'home',
+    )
+    const yaml = readFileSync(join(homeDir, 'config.yaml'), 'utf8')
+    expect(yaml).toContain('"custom"')
+    expect(yaml).toContain('"gpt-4o-mini"')
+    expect(yaml).toContain('"https://api.openai.com/v1"')
   })
 
   it('rejects openai-compatible Hermes agent creation when baseUrl is missing', async () => {

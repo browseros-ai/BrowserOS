@@ -27,8 +27,14 @@ export interface HermesProviderMapping {
   hermesProvider: string
   /** Env var Hermes reads the API key from (written into per-agent `.env`). */
   envVarName: string
-  /** True when Hermes needs an explicit `model.base_url` to reach the API. */
+  /** True when the harness must require an explicit baseUrl from input. */
   requiresBaseUrl: boolean
+  /**
+   * Used when `hermesProvider === 'custom'` and the input has no
+   * baseUrl — Hermes treats `provider: custom` as "call this URL
+   * directly", so `base_url` must always end up in config.yaml.
+   */
+  defaultBaseUrl?: string
 }
 
 const HERMES_PROVIDER_MAP: Record<
@@ -40,21 +46,24 @@ const HERMES_PROVIDER_MAP: Record<
     envVarName: 'ANTHROPIC_API_KEY',
     requiresBaseUrl: false,
   },
+  // Hermes (v2026.4.x) has no provider key named `"openai"`. Per the
+  // upstream docs, `provider: custom` + `base_url` is the canonical
+  // shape for any OpenAI-compatible endpoint with an API key — Hermes
+  // skips provider lookup and calls the URL directly. Used for both
+  // pure OpenAI (default base URL) and openai-compatible (caller URL).
   openai: {
-    hermesProvider: 'openai',
+    hermesProvider: 'custom',
     envVarName: 'OPENAI_API_KEY',
     requiresBaseUrl: false,
+    defaultBaseUrl: 'https://api.openai.com/v1',
   },
   openrouter: {
     hermesProvider: 'openrouter',
     envVarName: 'OPENROUTER_API_KEY',
     requiresBaseUrl: false,
   },
-  // BrowserOS' "openai-compatible" type is anything that speaks the OpenAI
-  // wire format on a custom base URL (Together, Groq, etc.). Hermes routes
-  // these through its `openai` provider with `base_url` set.
   'openai-compatible': {
-    hermesProvider: 'openai',
+    hermesProvider: 'custom',
     envVarName: 'OPENAI_API_KEY',
     requiresBaseUrl: true,
   },

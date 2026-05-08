@@ -629,7 +629,7 @@ export class AgentHarnessService {
       envVarName: mapping.envVarName,
       apiKey: (input.apiKey as string).trim(),
       modelId: (input.modelId as string).trim(),
-      baseUrl: input.baseUrl?.trim() || undefined,
+      baseUrl: input.baseUrl?.trim() || mapping.defaultBaseUrl,
     })
   }
 
