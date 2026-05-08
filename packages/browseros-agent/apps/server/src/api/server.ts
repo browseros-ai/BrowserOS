@@ -20,6 +20,7 @@ import { initializeOAuth } from '../lib/clients/oauth'
 import { getDb } from '../lib/db'
 import { logger } from '../lib/logger'
 import { Sentry } from '../lib/sentry'
+import { requireTrustedOrigin } from './middleware/require-trusted-origin'
 import { createChatRoutes } from './routes/chat'
 import { createCreditsRoutes } from './routes/credits'
 import { createHealthRoute } from './routes/health'
@@ -103,6 +104,7 @@ export async function createHttpServer(config: HttpServerConfig) {
 
   const app = new Hono<Env>()
     .use('/*', cors(defaultCorsConfig))
+    .use('/*', requireTrustedOrigin())
     .route('/health', createHealthRoute({ browser }))
     .route(
       '/shutdown',
