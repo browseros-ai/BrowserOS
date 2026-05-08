@@ -20,10 +20,17 @@ describe('isAllowedOrigin', () => {
     resetAllowedOriginsForTesting()
   })
 
-  it('rejects every origin when env is empty', () => {
+  it('accepts the pinned published extension origin even when env is empty', () => {
+    process.env.BROWSEROS_TRUSTED_ORIGINS = ''
+    expect(
+      isAllowedOrigin('chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk'),
+    ).toBe(true)
+  })
+
+  it('rejects unknown origins when env is empty', () => {
     process.env.BROWSEROS_TRUSTED_ORIGINS = ''
     expect(isAllowedOrigin('https://example.com')).toBe(false)
-    expect(isAllowedOrigin('chrome-extension://anyid')).toBe(false)
+    expect(isAllowedOrigin('chrome-extension://someotherid')).toBe(false)
     expect(isAllowedOrigin('null')).toBe(false)
   })
 

@@ -32,11 +32,15 @@ type CorsOptions = Parameters<typeof cors>[0]
  */
 
 /**
- * Static, hard-coded allowlist. Empty by default — every
- * deployment supplies its trusted origins via env. This keeps
- * the source agnostic of any specific build/extension id.
+ * Static, hard-coded allowlist for the published BrowserOS
+ * extension. Pinned by extension id (a SHA-256 of the
+ * extension's public key, stable across releases). Additional
+ * origins (dev builds, alpha channels, the WXT dev server) can
+ * be appended via `BROWSEROS_TRUSTED_ORIGINS`.
  */
-const STATIC_ALLOWED_ORIGINS = new Set<string>()
+const STATIC_ALLOWED_ORIGINS = new Set<string>([
+  'chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk',
+])
 
 let cachedAllowedOrigins: Set<string> | null = null
 
