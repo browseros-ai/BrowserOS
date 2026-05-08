@@ -32,7 +32,7 @@ import type {
   AgentHistoryEntry,
   AgentHistoryToolCall,
 } from './agent-types'
-import { getHermesRuntime } from './runtime'
+import { getClaudeRuntime, getCodexRuntime, getHermesRuntime } from './runtime'
 import type {
   AgentHistoryPage,
   AgentPromptInput,
@@ -713,22 +713,31 @@ function createBrowserosAgentRegistry(input: {
 
       if (lower === 'hermes') {
         const runtime = getHermesRuntime()
-        if (!runtime) {
-          // No runtime registered (tests, dev fallback, non-darwin).
-          // Spawn the host-side `hermes` binary if available; acpx's
-          // built-in registry resolution suffices, with HERMES_HOME
-          // injected via the env wrapper so per-agent state still
-          // works. Production registers the runtime and goes through
-          // the container path below.
-          return wrapCommandWithEnv('hermes acp', input.commandEnv)
-        }
-        return runtime.buildExecArgv(runtime.getAcpExecSpec(input.commandEnv))
+        // No runtime registered (tests, dev fallback, non-darwin) →
+        // fall through to the host-process `hermes acp` spawn below.
+        if (runtime)
+          return runtime.buildExecArgv(runtime.getAcpExecSpec(input.commandEnv))
       }
 
-      if (lower === 'claude' || lower === 'codex') {
+      if (lower === 'claude') {
+        const runtime = getClaudeRuntime()
+        if (runtime)
+          return runtime.buildExecArgv(runtime.getAcpExecSpec(input.commandEnv))
+      }
+
+      if (lower === 'codex') {
+        const runtime = getCodexRuntime()
+        if (runtime)
+          return runtime.buildExecArgv(runtime.getAcpExecSpec(input.commandEnv))
+      }
+
+      // Registry miss → preserve legacy behaviour: spawn the bare
+      // binary acpx-core's registry resolves to, with the prepared
+      // env injected via the shell-quoting wrapper.
+      if (lower === 'hermes')
+        return wrapCommandWithEnv('hermes acp', input.commandEnv)
+      if (lower === 'claude' || lower === 'codex')
         return wrapCommandWithEnv(registry.resolve(agentName), input.commandEnv)
-      }
-
       return registry.resolve(agentName)
     },
   }

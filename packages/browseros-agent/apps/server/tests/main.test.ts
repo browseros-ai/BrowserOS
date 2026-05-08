@@ -215,6 +215,12 @@ async function setupApplicationTest() {
   spyOn(runtimeModule, 'getHermesRuntime').mockImplementation(
     () => fakeHermesRuntime,
   )
+  spyOn(runtimeModule, 'configureClaudeRuntime').mockImplementation(
+    () => ({}) as never,
+  )
+  spyOn(runtimeModule, 'configureCodexRuntime').mockImplementation(
+    () => ({}) as never,
+  )
 
   const { Application } = await import('../src/main')
   return {

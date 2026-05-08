@@ -21,7 +21,12 @@ import { CdpBackend } from './browser/backends/cdp'
 import { Browser } from './browser/browser'
 import type { ServerConfig } from './config'
 import { INLINED_ENV } from './env'
-import { configureHermesRuntime, getHermesRuntime } from './lib/agents/runtime'
+import {
+  configureClaudeRuntime,
+  configureCodexRuntime,
+  configureHermesRuntime,
+  getHermesRuntime,
+} from './lib/agents/runtime'
 import {
   cleanOldSessions,
   ensureBrowserosDir,
@@ -61,6 +66,8 @@ export class Application {
 
     const resourcesDir = path.resolve(this.config.resourcesDir)
     configureVmRuntime({ resourcesDir })
+    configureClaudeRuntime()
+    configureCodexRuntime()
     await this.initCoreServices()
 
     if (!this.config.cdpPort) {
