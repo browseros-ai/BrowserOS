@@ -67,27 +67,6 @@ describe('ClaudeRuntime', () => {
     )
   })
 
-  it('getAcpExecSpec returns argv [claude] with the caller env', () => {
-    const runtime = new ClaudeRuntime(
-      { binaryName: 'claude' },
-      { browserosDir: '/tmp/browseros' },
-    )
-    expect(runtime.getAcpExecSpec({ AGENT_HOME: '/x' })).toEqual({
-      argv: ['claude'],
-      env: { AGENT_HOME: '/x' },
-    })
-  })
-
-  it('buildExecArgv composes env prefix + argv', () => {
-    const runtime = new ClaudeRuntime(
-      { binaryName: 'claude' },
-      { browserosDir: '/tmp/browseros' },
-    )
-    expect(
-      runtime.buildExecArgv(runtime.getAcpExecSpec({ AGENT_HOME: '/x' })),
-    ).toBe('env AGENT_HOME=/x claude')
-  })
-
   it('prepareTurnContext sets AGENT_HOME and not CODEX_HOME', async () => {
     const browserosDir = await mkdtemp(join(tmpdir(), 'browseros-claude-'))
     tempDirs.push(browserosDir)

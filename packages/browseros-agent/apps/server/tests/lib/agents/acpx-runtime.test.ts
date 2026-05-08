@@ -926,6 +926,9 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
     expect(command).toContain('env AGENT_HOME=')
     expect(command).not.toContain('CLAUDE_CONFIG_DIR=')
     expect(command).not.toContain('CODEX_HOME=')
+    // Spawn must go through acpx-core's npx wrapper for the official
+    // claude-agent-acp package, not a bare `claude` binary.
+    expect(command).toContain('claude-agent-acp')
   })
 
   it('injects AGENT_HOME and CODEX_HOME into Codex ACP command resolution', async () => {
@@ -960,6 +963,9 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
     expect(command).toContain('env AGENT_HOME=')
     expect(command).toContain('CODEX_HOME=')
     expect(command).toContain('/runtime/codex-home')
+    // Spawn must go through acpx-core's npx wrapper for the official
+    // codex-acp package, not a bare `codex` binary.
+    expect(command).toContain('codex-acp')
   })
 
   it('resolves the Hermes adapter to a container `nerdctl exec hermes acp` command when a HermesContainerRuntime is registered', async () => {

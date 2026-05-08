@@ -17,7 +17,7 @@ import {
 import { resolveAgentRuntimePaths } from '../acpx-runtime-context'
 import { HostProcessAgentRuntime } from './host-process-agent-runtime'
 import { getAgentRuntimeRegistry } from './registry'
-import type { ExecSpec, RuntimeDescriptor } from './types'
+import type { RuntimeDescriptor } from './types'
 
 const CLAUDE_BINARY = 'claude'
 
@@ -48,10 +48,6 @@ export class ClaudeRuntime extends HostProcessAgentRuntime {
       browserosDir: this.claudeConfig.browserosDir,
       agentId,
     }).agentHome
-  }
-
-  getAcpExecSpec(commandEnv: Record<string, string>): ExecSpec {
-    return { argv: [CLAUDE_BINARY], env: commandEnv }
   }
 
   prepareTurnContext(

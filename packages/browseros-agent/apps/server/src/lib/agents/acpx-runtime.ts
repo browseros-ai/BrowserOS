@@ -32,7 +32,7 @@ import type {
   AgentHistoryEntry,
   AgentHistoryToolCall,
 } from './agent-types'
-import { getClaudeRuntime, getCodexRuntime, getHermesRuntime } from './runtime'
+import { getHermesRuntime } from './runtime'
 import type {
   AgentHistoryPage,
   AgentPromptInput,
@@ -713,31 +713,24 @@ function createBrowserosAgentRegistry(input: {
 
       if (lower === 'hermes') {
         const runtime = getHermesRuntime()
+        if (runtime)
+          return runtime.buildExecArgv(runtime.getAcpExecSpec(input.commandEnv))
         // No runtime registered (tests, dev fallback, non-darwin) →
-        // fall through to the host-process `hermes acp` spawn below.
-        if (runtime)
-          return runtime.buildExecArgv(runtime.getAcpExecSpec(input.commandEnv))
-      }
-
-      if (lower === 'claude') {
-        const runtime = getClaudeRuntime()
-        if (runtime)
-          return runtime.buildExecArgv(runtime.getAcpExecSpec(input.commandEnv))
-      }
-
-      if (lower === 'codex') {
-        const runtime = getCodexRuntime()
-        if (runtime)
-          return runtime.buildExecArgv(runtime.getAcpExecSpec(input.commandEnv))
-      }
-
-      // Registry miss → preserve legacy behaviour: spawn the bare
-      // binary acpx-core's registry resolves to, with the prepared
-      // env injected via the shell-quoting wrapper.
-      if (lower === 'hermes')
+        // host-process spawn of the bare hermes binary.
         return wrapCommandWithEnv('hermes acp', input.commandEnv)
-      if (lower === 'claude' || lower === 'codex')
+      }
+
+      // claude + codex resolve through acpx-core's built-in registry
+      // because the canonical command is an npx wrapper around the
+      // upstream ACP-adapter package (e.g. `npx @zed-industries/codex-acp`),
+      // and the package version range lives inside acpx-core. The
+      // ClaudeRuntime / CodexRuntime registrations still drive health
+      // probing and per-turn prep; only the spawn command source-of-
+      // truth stays in acpx-core.
+      if (lower === 'claude' || lower === 'codex') {
         return wrapCommandWithEnv(registry.resolve(agentName), input.commandEnv)
+      }
+
       return registry.resolve(agentName)
     },
   }

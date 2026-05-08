@@ -20,7 +20,7 @@ import {
 } from '../acpx-runtime-context'
 import { HostProcessAgentRuntime } from './host-process-agent-runtime'
 import { getAgentRuntimeRegistry } from './registry'
-import type { ExecSpec, RuntimeDescriptor } from './types'
+import type { RuntimeDescriptor } from './types'
 
 const CODEX_BINARY = 'codex'
 
@@ -51,10 +51,6 @@ export class CodexRuntime extends HostProcessAgentRuntime {
       browserosDir: this.codexConfig.browserosDir,
       agentId,
     }).agentHome
-  }
-
-  getAcpExecSpec(commandEnv: Record<string, string>): ExecSpec {
-    return { argv: [CODEX_BINARY], env: commandEnv }
   }
 
   prepareTurnContext(

@@ -55,31 +55,6 @@ describe('CodexRuntime', () => {
     expect(runtime.descriptor.kind).toBe('host-process')
   })
 
-  it('getAcpExecSpec returns argv [codex] with merged env', () => {
-    const runtime = new CodexRuntime(
-      { binaryName: 'codex' },
-      { browserosDir: '/tmp/browseros' },
-    )
-    expect(
-      runtime.getAcpExecSpec({ AGENT_HOME: '/x', CODEX_HOME: '/c' }),
-    ).toEqual({
-      argv: ['codex'],
-      env: { AGENT_HOME: '/x', CODEX_HOME: '/c' },
-    })
-  })
-
-  it('buildExecArgv composes env prefix + argv with both vars', () => {
-    const runtime = new CodexRuntime(
-      { binaryName: 'codex' },
-      { browserosDir: '/tmp/browseros' },
-    )
-    expect(
-      runtime.buildExecArgv(
-        runtime.getAcpExecSpec({ AGENT_HOME: '/x', CODEX_HOME: '/c' }),
-      ),
-    ).toContain('codex')
-  })
-
   it('prepareTurnContext sets AGENT_HOME + CODEX_HOME and materializes codex home', async () => {
     const browserosDir = await mkdtemp(join(tmpdir(), 'browseros-codex-'))
     tempDirs.push(browserosDir)
