@@ -5,6 +5,22 @@
  */
 
 export type { AgentRuntime } from './agent-runtime'
+export {
+  ClaudeRuntime,
+  type ClaudeRuntimeConfig,
+  type ConfigureClaudeRuntimeOptions,
+  configureClaudeRuntime,
+  getClaudeRuntime,
+  prepareClaudeCodeContext,
+} from './claude-host-process-runtime'
+export {
+  CodexRuntime,
+  type CodexRuntimeConfig,
+  type ConfigureCodexRuntimeOptions,
+  configureCodexRuntime,
+  getCodexRuntime,
+  prepareCodexContext,
+} from './codex-host-process-runtime'
 export { ContainerAgentRuntime } from './container-agent-runtime'
 export { ActionNotSupportedError, RuntimeNotReadyError } from './errors'
 export {
