@@ -35,7 +35,7 @@ import {
   groupRunsByJob,
   type JobGroup,
   type JobRunWithDetails,
-} from '../app/scheduled-tasks/types'
+} from '../../app/scheduled-tasks/types'
 
 dayjs.extend(relativeTime)
 

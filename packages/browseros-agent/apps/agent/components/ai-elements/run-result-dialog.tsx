@@ -2,15 +2,19 @@ import dayjs from 'dayjs'
 import duration from 'dayjs/plugin/duration'
 import {
   AlertCircle,
+  Bot,
   Check,
   CheckCircle2,
+  ChevronDown,
   Copy,
   Loader2,
+  MessageSquare,
   RotateCcw,
   Square,
   XCircle,
 } from 'lucide-react'
 import { type FC, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -19,7 +23,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { SCHEDULED_TASK_CONTINUE_IN_CHAT_EVENT } from '@/lib/constants/analyticsEvents'
+import { track } from '@/lib/metrics/track'
 import type { ScheduledJobRun } from '@/lib/schedules/scheduleTypes'
 import { MessageResponse } from './message'
 
@@ -54,6 +66,14 @@ export const RunResultDialog: FC<RunResultDialogProps> = ({
   onRetryRun,
 }) => {
   const [copied, setCopied] = useState(false)
+  const navigate = useNavigate()
+
+  const handleContinueInChat = (mode: 'chat' | 'agent') => {
+    if (!run?.result) return
+    onOpenChange(false)
+    track(SCHEDULED_TASK_CONTINUE_IN_CHAT_EVENT, { mode })
+    navigate(`/home/chat?q=${encodeURIComponent(run.result)}&mode=${mode}`)
+  }
 
   const handleCopy = async () => {
     if (!run?.result) return
@@ -141,6 +161,26 @@ export const RunResultDialog: FC<RunResultDialogProps> = ({
                 </>
               )}
             </Button>
+          )}
+          {run.result && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline">
+                  Continue in Chat
+                  <ChevronDown className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => handleContinueInChat('chat')}>
+                  <MessageSquare className="h-4 w-4" />
+                  Chat
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleContinueInChat('agent')}>
+                  <Bot className="h-4 w-4" />
+                  Assistant
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
           <Button onClick={() => onOpenChange(false)}>Close</Button>
         </DialogFooter>
