@@ -25,10 +25,11 @@ export function groupRunsByJob(
   jobRuns: ScheduledJobRun[],
   jobs: ScheduledJob[],
 ): JobGroup[] {
+  const jobsById = new Map(jobs.map((j) => [j.id, j]))
   const runsByJob = new Map<string, JobRunWithDetails[]>()
 
   for (const run of jobRuns) {
-    const job = jobs.find((j) => j.id === run.jobId) ?? {
+    const job = jobsById.get(run.jobId) ?? {
       id: run.jobId,
       name: 'Unknown task',
       query: '',
