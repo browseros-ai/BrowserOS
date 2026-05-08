@@ -145,8 +145,14 @@ export abstract class ManagedContainer {
   async install(opts: { onLog?: (msg: string) => void } = {}): Promise<void> {
     return this.withLifecycleLock('install', async () => {
       if (this.state === 'running' || this.state === 'starting') return
-      this.setState('installing')
       try {
+        // Image ops run inside the Lima VM, so the VM has to be up
+        // before nerdctl can pull. On cold boot this method is the
+        // first lifecycle call to win the lock, so the ensure has to
+        // happen here too — `start()` having its own ensure is not
+        // enough.
+        await this.deps.vm.ensureReady(opts.onLog)
+        this.setState('installing')
         await this.deps.loader.ensureImageLoaded(
           this.descriptor.defaultImage,
           opts.onLog,

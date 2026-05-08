@@ -180,6 +180,24 @@ describe('ManagedContainer', () => {
       await c.stop()
       expect(c.getState()).toBe('stopped')
     })
+
+    it('install() calls vm.ensureReady before loader.ensureImageLoaded (cold-boot regression)', async () => {
+      const lockDir = mkTempDir()
+      const deps = makeFakeDeps({ lockDir })
+      const calls: string[] = []
+      deps.fakeVm.ensureReady = async () => {
+        calls.push('vm.ensureReady')
+      }
+      deps.fakeLoader.ensureImageLoaded = async () => {
+        calls.push('loader.ensureImageLoaded')
+      }
+      const c = new TestContainer(deps)
+
+      await c.install()
+
+      expect(calls).toEqual(['vm.ensureReady', 'loader.ensureImageLoaded'])
+      expect(c.getState()).toBe('installed')
+    })
   })
 
   describe('execProcess gating', () => {
