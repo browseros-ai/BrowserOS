@@ -72,7 +72,11 @@ export const RunResultDialog: FC<RunResultDialogProps> = ({
     if (!run?.result) return
     onOpenChange(false)
     track(SCHEDULED_TASK_CONTINUE_IN_CHAT_EVENT, { mode })
-    navigate(`/home/chat?q=${encodeURIComponent(run.result)}&mode=${mode}`)
+    const key = `scheduled-task-${run.id}`
+    sessionStorage.setItem(key, run.result)
+    navigate(
+      `/home/chat?q=${encodeURIComponent(key)}&mode=${mode}&source=scheduled-task`,
+    )
   }
 
   const handleCopy = async () => {
