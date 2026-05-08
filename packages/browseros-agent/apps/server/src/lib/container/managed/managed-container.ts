@@ -20,7 +20,7 @@ import { logger } from '../../logger'
 import { withProcessLock } from '../../process-lock'
 import { ContainerNameInUseError } from '../../vm/errors'
 import type { VmRuntime } from '../../vm/vm-runtime'
-import type { ContainerCli } from '../container-cli'
+import { type ContainerCli, isNoSuchContainer } from '../container-cli'
 import type { ImageLoader } from '../image-loader'
 import type { ContainerSpec, LogFn } from '../types'
 import {
@@ -271,15 +271,7 @@ export abstract class ManagedContainer {
 
   // ── Image / logs ────────────────────────────────────────────────
 
-  /**
-   * True iff the existing container's image ref matches
-   * `descriptor.defaultImage`. Pure predicate — never called by base
-   * machinery; subclasses + service layers compose it for their own
-   * short-circuit logic. Returns false when the container does not
-   * exist (caller decides whether that means "stale" or "absent").
-   * Treats SHA-pinned variants (`<ref>@sha256:…`) as a match so a
-   * registry-resolved digest doesn't read as drift.
-   */
+  /** True iff the existing container's image matches `descriptor.defaultImage`; treats SHA-pinned variants as a match. */
   async isImageCurrent(): Promise<boolean> {
     const actual = await this.deps.cli.containerImageRef(
       this.descriptor.containerName,
@@ -289,14 +281,18 @@ export abstract class ManagedContainer {
     return actual === expected || actual.startsWith(`${expected}@sha256:`)
   }
 
-  /** Tail the last `n` log lines from the container. */
+  /** Tail the last `n` log lines; returns [] if the container is missing, throws on other CLI failures. */
   async getLogs(tail = 50): Promise<string[]> {
     const lines: string[] = []
-    await this.deps.cli.runCommand(
-      ['logs', '-n', String(tail), this.descriptor.containerName],
-      (line) => lines.push(line),
+    const args = ['logs', '-n', String(tail), this.descriptor.containerName]
+    const result = await this.deps.cli.runCommand(args, (line) =>
+      lines.push(line),
     )
-    return lines
+    if (result.exitCode === 0) return lines
+    if (isNoSuchContainer(result.stderr)) return []
+    throw new Error(
+      `nerdctl ${args.join(' ')} exited ${result.exitCode}: ${result.stderr.trim() || '(no stderr)'}`,
+    )
   }
 
   /** Stream container logs until the returned handle is invoked. */
@@ -306,15 +302,7 @@ export abstract class ManagedContainer {
 
   // ── Sibling-container one-shot ──────────────────────────────────
 
-  /**
-   * Run `argv` inside a throwaway sibling container built from the
-   * same spec as the live one (image, mounts, add-hosts, base env)
-   * but with `restart: 'no'`, no port mappings, no health check.
-   * Used for migrations, image self-tests, one-off provider installs
-   * — anything that should run in the same image without disturbing
-   * the live container. Force-removes the sibling on completion,
-   * including when the inner command throws or times out.
-   */
+  /** Run `argv` in a throwaway `<name>-setup` sibling using the same image+mounts; force-removes after, including on throw or timeout. */
   async runOneShot(
     argv: ReadonlyArray<string>,
     opts: {
@@ -357,8 +345,7 @@ export abstract class ManagedContainer {
     })
   }
 
-  /** Create with retry-on-name-collision: nerdctl occasionally lags
-   *  releasing a name after `rm`, so a single recreate can fail. */
+  /** nerdctl occasionally lags releasing a name after `rm`; retry to absorb that. */
   private async createOneShotContainer(
     spec: ContainerSpec,
     onLog?: LogFn,
@@ -398,9 +385,19 @@ export abstract class ManagedContainer {
     timeoutMs: number | undefined,
   ): Promise<ExecResult> {
     if (timeoutMs === undefined) return this.deps.cli.runCommand(args, onLog)
+    // The underlying runCommand keeps streaming onLog after a timeout
+    // until removeContainer kills `nerdctl start -a`. Gate the wrapped
+    // callback so callers don't see stale lines after rejection.
+    let active = true
+    const guardedOnLog: LogFn | undefined = onLog
+      ? (line) => {
+          if (active) onLog(line)
+        }
+      : undefined
     let timer: ReturnType<typeof setTimeout> | null = null
     const timeoutPromise = new Promise<ExecResult>((_, reject) => {
       timer = setTimeout(() => {
+        active = false
         reject(
           new Error(
             `One-shot exceeded timeout of ${timeoutMs}ms for ${args.join(' ')}`,
@@ -410,7 +407,7 @@ export abstract class ManagedContainer {
     })
     try {
       return await Promise.race([
-        this.deps.cli.runCommand(args, onLog),
+        this.deps.cli.runCommand(args, guardedOnLog),
         timeoutPromise,
       ])
     } finally {

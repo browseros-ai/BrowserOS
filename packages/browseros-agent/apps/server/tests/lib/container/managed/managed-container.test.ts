@@ -460,6 +460,37 @@ describe('ManagedContainer', () => {
       expect(captured).toEqual(['logs', '-n', '120', 'test-container'])
     })
 
+    it('getLogs returns [] when the container does not exist', async () => {
+      const deps = makeFakeDeps({ lockDir: mkTempDir() })
+      // biome-ignore lint/suspicious/noExplicitAny: extending the fake at runtime
+      ;(deps.cli as any).runCommand = async (
+        _args: string[],
+        onLog?: (line: string) => void,
+      ) => {
+        onLog?.('Error: no such container: test-container')
+        return {
+          exitCode: 1,
+          stdout: '',
+          stderr: 'Error: no such container: test-container',
+        }
+      }
+      const lines = await new TestContainer(deps).getLogs()
+      expect(lines).toEqual([])
+    })
+
+    it('getLogs throws on non-zero exit that is not a no-such-container error', async () => {
+      const deps = makeFakeDeps({ lockDir: mkTempDir() })
+      // biome-ignore lint/suspicious/noExplicitAny: extending the fake at runtime
+      ;(deps.cli as any).runCommand = async () => ({
+        exitCode: 2,
+        stdout: '',
+        stderr: 'permission denied',
+      })
+      await expect(new TestContainer(deps).getLogs()).rejects.toThrow(
+        /exited 2.*permission denied/,
+      )
+    })
+
     it('tailLogs returns the unsubscribe handle from cli.tailLogs', () => {
       const deps = makeFakeDeps({ lockDir: mkTempDir() })
       let unsubscribed = false
@@ -534,7 +565,6 @@ describe('ManagedContainer', () => {
       expect(setupSpec.command).toEqual(['echo', 'hello'])
       expect(setupSpec.env).toEqual({ FOO: 'bar', EXTRA: '1' })
       expect(fakes.runCalls).toEqual([['start', '-a', 'test-container-setup']])
-      // Removed twice: pre-create cleanup + final force-remove.
       expect(
         fakes.removed.filter((n) => n === 'test-container-setup'),
       ).toHaveLength(2)
@@ -552,6 +582,31 @@ describe('ManagedContainer', () => {
       expect(
         fakes.removed.filter((n) => n === 'test-container-setup'),
       ).toHaveLength(2)
+    })
+
+    it('drops onLog calls fired by the underlying runCommand after a timeout', async () => {
+      const deps = makeFakeDeps({ lockDir: mkTempDir() })
+      attachOneShotFakes(deps)
+      const cli = deps.cli as unknown as Record<string, unknown>
+      let capturedOnLog: ((line: string) => void) | undefined
+      cli.runCommand = async (
+        _args: string[],
+        onLog?: (line: string) => void,
+      ) => {
+        capturedOnLog = onLog
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        return { exitCode: 0, stdout: '', stderr: '' }
+      }
+      const seen: string[] = []
+      const c = new TestContainer(deps)
+      await expect(
+        c.runOneShot(['noop'], {
+          processTimeoutMs: 5,
+          onLog: (line) => seen.push(line),
+        }),
+      ).rejects.toThrow(/exceeded timeout/)
+      capturedOnLog?.('post-timeout-line')
+      expect(seen).toEqual([])
     })
 
     it('retries createContainer on ContainerNameInUseError', async () => {
