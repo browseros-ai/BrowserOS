@@ -52,6 +52,7 @@ export abstract class HostProcessAgentRuntime implements AgentRuntime {
   protected binaryVersion: string | null = null
   private readonly listeners = new Set<StateListener>()
   private healthCheckedAt = 0
+  private probeInFlight: Promise<void> | null = null
 
   constructor(protected readonly deps: HostProcessAgentRuntimeDeps) {}
 
@@ -64,6 +65,7 @@ export abstract class HostProcessAgentRuntime implements AgentRuntime {
       isReady: this.state === 'cli_present',
       lastError: this.lastError,
       lastErrorAt: this.lastErrorAt,
+      probedAt: this.healthCheckedAt > 0 ? this.healthCheckedAt : null,
       details: { binaryVersion: this.binaryVersion },
     }
   }
@@ -128,16 +130,23 @@ export abstract class HostProcessAgentRuntime implements AgentRuntime {
     const cacheMs = this.deps.probeCacheMs ?? DEFAULT_PROBE_CACHE_MS
     const now = Date.now()
     if (!force && now - this.healthCheckedAt < cacheMs) return
+    // Concurrent callers race past the cache check when the cache is
+    // stale or never stamped (spawn-failure path). Coalesce them onto
+    // the same probe so we never spawn duplicate `--version` processes.
+    if (this.probeInFlight) return this.probeInFlight
+    this.probeInFlight = this.runProbeOnce().finally(() => {
+      this.probeInFlight = null
+    })
+    return this.probeInFlight
+  }
 
+  private async runProbeOnce(): Promise<void> {
     const argv = this.deps.versionProbeArgs ?? [
       this.deps.binaryName,
       '--version',
     ]
     try {
       const result = await this.runProbe(argv, DEFAULT_PROBE_TIMEOUT_MS)
-      // Only stamp the cache once a definitive result lands. A spawn
-      // throw (binary missing, perm denied) leaves the timestamp
-      // untouched so the next call re-probes immediately.
       this.healthCheckedAt = Date.now()
       if (result.exitCode === 0) {
         this.binaryVersion = result.stdout.trim() || null
@@ -150,8 +159,9 @@ export abstract class HostProcessAgentRuntime implements AgentRuntime {
         )
       }
     } catch (err) {
-      // Spawn failure (binary missing, permission denied) — distinct
-      // from a non-zero exit, so the UI can render different copy.
+      // Spawn failure (binary missing, perm denied) leaves the cache
+      // unstamped so the next call re-probes; the inflight promise
+      // above still prevents *concurrent* duplicates.
       this.binaryVersion = null
       this.setState(
         'cli_missing',

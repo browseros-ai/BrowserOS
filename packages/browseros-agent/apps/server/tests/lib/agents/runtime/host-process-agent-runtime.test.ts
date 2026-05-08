@@ -104,6 +104,40 @@ describe('HostProcessAgentRuntime', () => {
       expect(snap.lastError).toBe('ENOENT')
     })
 
+    it('coalesces concurrent probes onto a single spawn', async () => {
+      let resolveProbe: (value: {
+        exitCode: number
+        stdout: string
+        stderr: string
+      }) => void = () => {}
+      const spawnProbe = mock(
+        () =>
+          new Promise<{ exitCode: number; stdout: string; stderr: string }>(
+            (resolve) => {
+              resolveProbe = resolve
+            },
+          ),
+      )
+      const r = makeRuntime({ spawnProbe })
+      const a = r.probeHealth()
+      const b = r.probeHealth()
+      const c = r.probeHealth()
+      expect(spawnProbe).toHaveBeenCalledTimes(1)
+      resolveProbe({ exitCode: 0, stdout: 'v', stderr: '' })
+      await Promise.all([a, b, c])
+      expect(spawnProbe).toHaveBeenCalledTimes(1)
+    })
+
+    it('exposes probedAt on the snapshot once a probe completes', async () => {
+      const r = makeRuntime()
+      expect(r.getStatusSnapshot().probedAt).toBeNull()
+      const before = Date.now()
+      await r.probeHealth()
+      const probedAt = r.getStatusSnapshot().probedAt
+      expect(probedAt).not.toBeNull()
+      expect(probedAt).toBeGreaterThanOrEqual(before)
+    })
+
     it('does not stamp the cache when probe throws (lets next call retry)', async () => {
       let attempt = 0
       const spawnProbe = mock(async () => {

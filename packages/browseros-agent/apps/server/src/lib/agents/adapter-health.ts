@@ -50,7 +50,10 @@ function runtimeSnapshotToHealth(runtime: AgentRuntime): AdapterHealth {
   return {
     healthy: snap.isReady,
     reason: snap.isReady ? undefined : (snap.lastError ?? undefined),
-    checkedAt: snap.lastErrorAt ?? Date.now(),
+    // Prefer probedAt so the timestamp reflects probe completion
+    // regardless of health state. lastErrorAt is the fallback for
+    // runtimes that don't emit probedAt yet (containers).
+    checkedAt: snap.probedAt ?? snap.lastErrorAt ?? Date.now(),
   }
 }
 

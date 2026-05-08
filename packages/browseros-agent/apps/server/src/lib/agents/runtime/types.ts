@@ -45,6 +45,11 @@ export interface RuntimeStatusSnapshot {
   isReady: boolean
   lastError: string | null
   lastErrorAt: number | null
+  /** Wall-clock ms when the last definitive readiness probe completed.
+   *  Null when the runtime has never been probed. Distinct from
+   *  `lastErrorAt` (only set on errors) so consumers can read probe
+   *  staleness regardless of health state. */
+  probedAt?: number | null
   /** Adapter-specific structured fields the UI may render. Keep keys
    *  stable so the UI can opt into them. */
   details?: Record<string, unknown>
