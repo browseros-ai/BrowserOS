@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Copy,
   Loader2,
+  MessageSquareText,
   RotateCcw,
   Square,
   XCircle,
@@ -31,6 +32,7 @@ interface RunResultDialogProps {
   onOpenChange: (open: boolean) => void
   onCancelRun?: (runId: string) => void
   onRetryRun?: (jobId: string) => void
+  onContinueInChat?: (run: ScheduledJobRun) => void
 }
 
 const formatDateTime = (dateStr: string) =>
@@ -52,6 +54,7 @@ export const RunResultDialog: FC<RunResultDialogProps> = ({
   onOpenChange,
   onCancelRun,
   onRetryRun,
+  onContinueInChat,
 }) => {
   const [copied, setCopied] = useState(false)
 
@@ -140,6 +143,18 @@ export const RunResultDialog: FC<RunResultDialogProps> = ({
                   Copy
                 </>
               )}
+            </Button>
+          )}
+          {run.result && onContinueInChat && (
+            <Button
+              variant="outline"
+              onClick={() => {
+                onContinueInChat(run)
+                onOpenChange(false)
+              }}
+            >
+              <MessageSquareText className="h-4 w-4" />
+              Continue in Chat
             </Button>
           )}
           <Button onClick={() => onOpenChange(false)}>Close</Button>

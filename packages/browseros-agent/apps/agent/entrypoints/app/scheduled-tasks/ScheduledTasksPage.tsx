@@ -1,5 +1,5 @@
 import { type FC, useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { RunResultDialog } from '@/components/ai-elements/run-result-dialog'
 import {
   AlertDialog,
@@ -40,6 +40,7 @@ import type { ScheduledJob } from './types'
  * @public
  */
 export const ScheduledTasksPage: FC = () => {
+  const navigate = useNavigate()
   const { jobs, addJob, editJob, toggleJob, removeJob, runJob } =
     useScheduledJobs()
   const { jobRuns, cancelJobRun } = useScheduledJobRuns()
@@ -149,6 +150,15 @@ export const ScheduledTasksPage: FC = () => {
     track(SCHEDULED_TASK_VIEW_RESULTS_EVENT)
   }
 
+  const handleContinueInChat = (run: ScheduledJobRun) => {
+    const params = new URLSearchParams({
+      scheduledRunId: run.id,
+      mode: 'chat',
+    })
+    setViewingRunId(null)
+    navigate(`/home/chat?${params.toString()}`)
+  }
+
   useEffect(() => {
     scheduledJobRunStorage.getValue().then((runs) => {
       setActiveTab(runs && runs.length > 0 ? 'results' : 'tasks')
@@ -216,6 +226,7 @@ export const ScheduledTasksPage: FC = () => {
           handleRetryRun(jobId)
           setViewingRunId(null)
         }}
+        onContinueInChat={handleContinueInChat}
       />
 
       <AlertDialog

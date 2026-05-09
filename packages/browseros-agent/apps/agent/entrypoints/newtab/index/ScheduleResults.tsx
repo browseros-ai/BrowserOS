@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import type { FC } from 'react'
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { RunResultDialog } from '@/components/ai-elements/run-result-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -59,6 +60,7 @@ const getStatusIcon = (status: JobRunWithDetails['status']) => {
 const formatTimestamp = (dateString: string) => dayjs(dateString).fromNow()
 
 export const ScheduleResults: FC = () => {
+  const navigate = useNavigate()
   const [isOpen, setIsOpen] = useState(() => {
     const stored = localStorage.getItem(SCHEDULE_RESULTS_COLLAPSED_KEY)
     return stored !== 'true'
@@ -104,6 +106,15 @@ export const ScheduleResults: FC = () => {
   const viewRun = (run: JobRunWithDetails) => {
     track(SCHEDULED_TASK_VIEW_RESULTS_IN_NEWTAB_EVENT)
     setViewingRun(run)
+  }
+
+  const handleContinueInChat = (run: ScheduledJobRun) => {
+    const params = new URLSearchParams({
+      scheduledRunId: run.id,
+      mode: 'chat',
+    })
+    setViewingRun(null)
+    navigate(`/home/chat?${params.toString()}`)
   }
 
   const handleCancelRun = async (runId: string) => {
@@ -221,6 +232,7 @@ export const ScheduleResults: FC = () => {
         onOpenChange={(open) => !open && setViewingRun(null)}
         onCancelRun={handleCancelRun}
         onRetryRun={handleRetryRun}
+        onContinueInChat={handleContinueInChat}
       />
     </Collapsible>
   )
