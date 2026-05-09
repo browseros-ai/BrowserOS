@@ -8,6 +8,7 @@ import {
 import type { FC } from 'react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
+import { CloudSyncDisclosure } from '@/components/auth/CloudSyncDisclosure'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -199,6 +200,8 @@ export const LoginPage: FC = () => {
           )}
           Continue with Google
         </Button>
+
+        <CloudSyncDisclosure />
       </CardContent>
     </Card>
   )
