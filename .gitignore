@@ -33,3 +33,6 @@ packages/browseros/build/tools/
 # AI SDK DevTools traces
 .devtools/
 .omc/
+.gitnexus
+identity/
+browseros-server.log
