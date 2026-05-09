@@ -1,4 +1,3 @@
-import path from 'node:path'
 /**
  * @license
  * Copyright 2025 BrowserOS
@@ -11,15 +10,16 @@ import path from 'node:path'
  * process.env is read at import time with the overridden value.
  */
 
+import path from 'node:path'
 import { describe, expect, it } from 'bun:test'
 
-// ---------------------------------------------------------------------------
-// Helper: run a one-liner in a child Bun process with custom env
-// ---------------------------------------------------------------------------
+const PATHS_MODULE_PATH = JSON.stringify(
+  path.resolve(import.meta.dir, '../../src/constants/paths.ts'),
+)
 
 async function spawnWithEnv(envOverrides: Record<string, string>, code: string): Promise<string> {
   const proc = Bun.spawn(['bun', '-e', code], {
-    env: { ...process.env, ...envOverrides, NO_COLOR: '1', FORCE_COLOR: '0' } as Record<string, string>,
+    env: { ...process.env, ...envOverrides, NO_COLOR: '1', FORCE_COLOR: '0' },
     stdout: 'pipe',
     stderr: 'pipe',
   })
@@ -31,8 +31,6 @@ async function spawnWithEnv(envOverrides: Record<string, string>, code: string):
   }
   return stdout.trim()
 }
-
-const modDir = import.meta.dir
 
 // ---------------------------------------------------------------------------
 // Default values — retention and sizing
@@ -89,7 +87,7 @@ describe('PATHS env override', () => {
   it('overrides SOUL_MAX_LINES via BROWSEROS_LIMIT_SOUL_MAX_LINES', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_LIMIT_SOUL_MAX_LINES: '300' },
-      `const { PATHS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/paths.ts'); console.log(PATHS.SOUL_MAX_LINES)`,
+      `const { PATHS } = require(${PATHS_MODULE_PATH}); console.log(PATHS.SOUL_MAX_LINES)`,
     )
     expect(Number(result)).toBe(300)
   })
@@ -97,7 +95,7 @@ describe('PATHS env override', () => {
   it('overrides MEMORY_RETENTION_DAYS via BROWSEROS_LIMIT_MEMORY_RETENTION_DAYS', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_LIMIT_MEMORY_RETENTION_DAYS: '90' },
-      `const { PATHS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/paths.ts'); console.log(PATHS.MEMORY_RETENTION_DAYS)`,
+      `const { PATHS } = require(${PATHS_MODULE_PATH}); console.log(PATHS.MEMORY_RETENTION_DAYS)`,
     )
     expect(Number(result)).toBe(90)
   })
@@ -105,7 +103,7 @@ describe('PATHS env override', () => {
   it('overrides SESSION_RETENTION_DAYS via BROWSEROS_LIMIT_SESSION_RETENTION_DAYS', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_LIMIT_SESSION_RETENTION_DAYS: '60' },
-      `const { PATHS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/paths.ts'); console.log(PATHS.SESSION_RETENTION_DAYS)`,
+      `const { PATHS } = require(${PATHS_MODULE_PATH}); console.log(PATHS.SESSION_RETENTION_DAYS)`,
     )
     expect(Number(result)).toBe(60)
   })
@@ -115,7 +113,15 @@ describe('PATHS invalid env fallback', () => {
   it('falls back to default when BROWSEROS_LIMIT_SOUL_MAX_LINES is non-numeric', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_LIMIT_SOUL_MAX_LINES: 'abc' },
-      `const { PATHS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/paths.ts'); console.log(PATHS.SOUL_MAX_LINES)`,
+      `const { PATHS } = require(${PATHS_MODULE_PATH}); console.log(PATHS.SOUL_MAX_LINES)`,
+    )
+    expect(Number(result)).toBe(150)
+  })
+
+  it('falls back to default when env has trailing chars', async () => {
+    const result = await spawnWithEnv(
+      { BROWSEROS_LIMIT_SOUL_MAX_LINES: '300d' },
+      `const { PATHS } = require(${PATHS_MODULE_PATH}); console.log(PATHS.SOUL_MAX_LINES)`,
     )
     expect(Number(result)).toBe(150)
   })
@@ -125,7 +131,7 @@ describe('PATHS negative env fallback', () => {
   it('falls back to default when BROWSEROS_LIMIT_SOUL_MAX_LINES is negative', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_LIMIT_SOUL_MAX_LINES: '-1' },
-      `const { PATHS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/paths.ts'); console.log(PATHS.SOUL_MAX_LINES)`,
+      `const { PATHS } = require(${PATHS_MODULE_PATH}); console.log(PATHS.SOUL_MAX_LINES)`,
     )
     expect(Number(result)).toBe(150)
   })

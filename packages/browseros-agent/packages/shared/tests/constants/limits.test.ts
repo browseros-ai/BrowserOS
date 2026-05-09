@@ -1,4 +1,3 @@
-import path from 'node:path'
 /**
  * @license
  * Copyright 2025 BrowserOS
@@ -11,15 +10,16 @@ import path from 'node:path'
  * process.env is read at import time with the overridden value.
  */
 
+import path from 'node:path'
 import { describe, expect, it } from 'bun:test'
 
-// ---------------------------------------------------------------------------
-// Helper: run a one-liner in a child Bun process with custom env
-// ---------------------------------------------------------------------------
+const LIMITS_MODULE_PATH = JSON.stringify(
+  path.resolve(import.meta.dir, '../../src/constants/limits.ts'),
+)
 
 async function spawnWithEnv(envOverrides: Record<string, string>, code: string): Promise<string> {
   const proc = Bun.spawn(['bun', '-e', code], {
-    env: { ...process.env, ...envOverrides, NO_COLOR: '1', FORCE_COLOR: '0' } as Record<string, string>,
+    env: { ...process.env, ...envOverrides, NO_COLOR: '1', FORCE_COLOR: '0' },
     stdout: 'pipe',
     stderr: 'pipe',
   })
@@ -32,10 +32,8 @@ async function spawnWithEnv(envOverrides: Record<string, string>, code: string):
   return stdout.trim()
 }
 
-const modDir = import.meta.dir
-
 // ---------------------------------------------------------------------------
-// Default values — imported once for synchronous checks
+// Default values
 // ---------------------------------------------------------------------------
 
 describe('AGENT_LIMITS defaults', () => {
@@ -156,7 +154,7 @@ describe('AGENT_LIMITS env override', () => {
   it('overrides MAX_TURNS via BROWSEROS_LIMIT_MAX_TURNS', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_LIMIT_MAX_TURNS: '200' },
-      `const { AGENT_LIMITS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/limits.ts'); console.log(AGENT_LIMITS.MAX_TURNS)`,
+      `const { AGENT_LIMITS } = require(${LIMITS_MODULE_PATH}); console.log(AGENT_LIMITS.MAX_TURNS)`,
     )
     expect(Number(result)).toBe(200)
   })
@@ -164,15 +162,15 @@ describe('AGENT_LIMITS env override', () => {
   it('overrides DEFAULT_CONTEXT_WINDOW via BROWSEROS_LIMIT_DEFAULT_CONTEXT_WINDOW', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_LIMIT_DEFAULT_CONTEXT_WINDOW: '500000' },
-      `const { AGENT_LIMITS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/limits.ts'); console.log(AGENT_LIMITS.DEFAULT_CONTEXT_WINDOW)`,
+      `const { AGENT_LIMITS } = require(${LIMITS_MODULE_PATH}); console.log(AGENT_LIMITS.DEFAULT_CONTEXT_WINDOW)`,
     )
-    expect(Number(result)).toBe(500000)
+    expect(Number(result)).toBe(500_000)
   })
 
   it('overrides FILESYSTEM_READ_MAX_LINES via BROWSEROS_LIMIT_FILESYSTEM_READ_MAX_LINES', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_LIMIT_FILESYSTEM_READ_MAX_LINES: '1000' },
-      `const { TOOL_LIMITS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/limits.ts'); console.log(TOOL_LIMITS.FILESYSTEM_READ_MAX_LINES)`,
+      `const { TOOL_LIMITS } = require(${LIMITS_MODULE_PATH}); console.log(TOOL_LIMITS.FILESYSTEM_READ_MAX_LINES)`,
     )
     expect(Number(result)).toBe(1000)
   })
@@ -182,7 +180,15 @@ describe('AGENT_LIMITS invalid env fallback', () => {
   it('falls back to default when BROWSEROS_LIMIT_MAX_TURNS is non-numeric', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_LIMIT_MAX_TURNS: 'abc' },
-      `const { AGENT_LIMITS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/limits.ts'); console.log(AGENT_LIMITS.MAX_TURNS)`,
+      `const { AGENT_LIMITS } = require(${LIMITS_MODULE_PATH}); console.log(AGENT_LIMITS.MAX_TURNS)`,
+    )
+    expect(Number(result)).toBe(100)
+  })
+
+  it('falls back to default when env has trailing chars', async () => {
+    const result = await spawnWithEnv(
+      { BROWSEROS_LIMIT_MAX_TURNS: '100s' },
+      `const { AGENT_LIMITS } = require(${LIMITS_MODULE_PATH}); console.log(AGENT_LIMITS.MAX_TURNS)`,
     )
     expect(Number(result)).toBe(100)
   })
@@ -192,7 +198,7 @@ describe('AGENT_LIMITS negative env fallback', () => {
   it('falls back to default when BROWSEROS_LIMIT_MAX_TURNS is negative', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_LIMIT_MAX_TURNS: '-1' },
-      `const { AGENT_LIMITS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/limits.ts'); console.log(AGENT_LIMITS.MAX_TURNS)`,
+      `const { AGENT_LIMITS } = require(${LIMITS_MODULE_PATH}); console.log(AGENT_LIMITS.MAX_TURNS)`,
     )
     expect(Number(result)).toBe(100)
   })

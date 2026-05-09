@@ -9,12 +9,16 @@
  * Invalid values (non-numeric, negative) fall back to defaults.
  */
 
-/** Read a positive integer limit from env, returning fallback on invalid input. */
+/** Read a positive integer limit from env, returning fallback on invalid input.
+ * Only accepts pure integer strings (optional leading underscores stripped).
+ * Rejects partial parses like "100s", "1.5", "abc". */
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name]
   if (raw === undefined) return fallback
-  const parsed = Number.parseInt(raw, 10)
-  if (Number.isNaN(parsed) || parsed < 0) return fallback
+  const normalized = raw.trim().replace(/_/g, '')
+  if (!/^\d+$/.test(normalized)) return fallback
+  const parsed = Number(normalized)
+  if (!Number.isSafeInteger(parsed) || parsed < 0) return fallback
   return parsed
 }
 

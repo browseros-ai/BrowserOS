@@ -1,4 +1,3 @@
-import path from 'node:path'
 /**
  * @license
  * Copyright 2025 BrowserOS
@@ -11,7 +10,13 @@ import path from 'node:path'
  * process.env is read at import time with the overridden value.
  */
 
+import path from 'node:path'
 import { describe, expect, it } from 'bun:test'
+
+// Absolute path to the module under test — computed once, baked into child code.
+const TIMEOUTS_MODULE_PATH = JSON.stringify(
+  path.resolve(import.meta.dir, '../../src/constants/timeouts.ts'),
+)
 
 // ---------------------------------------------------------------------------
 // Helper: run a one-liner in a child Bun process with custom env
@@ -19,7 +24,7 @@ import { describe, expect, it } from 'bun:test'
 
 async function spawnWithEnv(envOverrides: Record<string, string>, code: string): Promise<string> {
   const proc = Bun.spawn(['bun', '-e', code], {
-    env: { ...process.env, ...envOverrides, NO_COLOR: '1', FORCE_COLOR: '0' } as Record<string, string>,
+    env: { ...process.env, ...envOverrides, NO_COLOR: '1', FORCE_COLOR: '0' },
     stdout: 'pipe',
     stderr: 'pipe',
   })
@@ -101,7 +106,7 @@ describe('TIMEOUTS env override', () => {
   it('overrides TOOL_CALL via BROWSEROS_TIMEOUT_TOOL_CALL', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_TIMEOUT_TOOL_CALL: '99999' },
-      `const { TIMEOUTS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/timeouts.ts'); console.log(TIMEOUTS.TOOL_CALL)`,
+      `const { TIMEOUTS } = require(${TIMEOUTS_MODULE_PATH}); console.log(TIMEOUTS.TOOL_CALL)`,
     )
     expect(Number(result)).toBe(99999)
   })
@@ -109,33 +114,33 @@ describe('TIMEOUTS env override', () => {
   it('overrides MCP_CLIENT_CONNECT via BROWSEROS_TIMEOUT_MCP_CLIENT_CONNECT', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_TIMEOUT_MCP_CLIENT_CONNECT: '25000' },
-      `const { TIMEOUTS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/timeouts.ts'); console.log(TIMEOUTS.MCP_CLIENT_CONNECT)`,
+      `const { TIMEOUTS } = require(${TIMEOUTS_MODULE_PATH}); console.log(TIMEOUTS.MCP_CLIENT_CONNECT)`,
     )
-    expect(Number(result)).toBe(25000)
+    expect(Number(result)).toBe(25_000)
   })
 
   it('overrides CDP_REQUEST_TIMEOUT via BROWSEROS_TIMEOUT_CDP_REQUEST_TIMEOUT', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_TIMEOUT_CDP_REQUEST_TIMEOUT: '90000' },
-      `const { TIMEOUTS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/timeouts.ts'); console.log(TIMEOUTS.CDP_REQUEST_TIMEOUT)`,
+      `const { TIMEOUTS } = require(${TIMEOUTS_MODULE_PATH}); console.log(TIMEOUTS.CDP_REQUEST_TIMEOUT)`,
     )
-    expect(Number(result)).toBe(90000)
+    expect(Number(result)).toBe(90_000)
   })
 
   it('overrides SKILLS_SYNC_INTERVAL via BROWSEROS_TIMEOUT_SKILLS_SYNC_INTERVAL', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_TIMEOUT_SKILLS_SYNC_INTERVAL: '60000' },
-      `const { TIMEOUTS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/timeouts.ts'); console.log(TIMEOUTS.SKILLS_SYNC_INTERVAL)`,
+      `const { TIMEOUTS } = require(${TIMEOUTS_MODULE_PATH}); console.log(TIMEOUTS.SKILLS_SYNC_INTERVAL)`,
     )
-    expect(Number(result)).toBe(60000)
+    expect(Number(result)).toBe(60_000)
   })
 
   it('overrides OAUTH_FLOW_TTL via BROWSEROS_TIMEOUT_OAUTH_FLOW_TTL', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_TIMEOUT_OAUTH_FLOW_TTL: '120000' },
-      `const { TIMEOUTS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/timeouts.ts'); console.log(TIMEOUTS.OAUTH_FLOW_TTL)`,
+      `const { TIMEOUTS } = require(${TIMEOUTS_MODULE_PATH}); console.log(TIMEOUTS.OAUTH_FLOW_TTL)`,
     )
-    expect(Number(result)).toBe(120000)
+    expect(Number(result)).toBe(120_000)
   })
 })
 
@@ -147,9 +152,17 @@ describe('TIMEOUTS invalid env fallback', () => {
   it('falls back to default when env is non-numeric', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_TIMEOUT_TOOL_CALL: 'abc' },
-      `const { TIMEOUTS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/timeouts.ts'); console.log(TIMEOUTS.TOOL_CALL)`,
+      `const { TIMEOUTS } = require(${TIMEOUTS_MODULE_PATH}); console.log(TIMEOUTS.TOOL_CALL)`,
     )
-    expect(Number(result)).toBe(120000)
+    expect(Number(result)).toBe(120_000)
+  })
+
+  it('falls back to default when env has trailing chars', async () => {
+    const result = await spawnWithEnv(
+      { BROWSEROS_TIMEOUT_TOOL_CALL: '10s' },
+      `const { TIMEOUTS } = require(${TIMEOUTS_MODULE_PATH}); console.log(TIMEOUTS.TOOL_CALL)`,
+    )
+    expect(Number(result)).toBe(120_000)
   })
 })
 
@@ -161,9 +174,9 @@ describe('TIMEOUTS negative env fallback', () => {
   it('falls back to default when env is negative', async () => {
     const result = await spawnWithEnv(
       { BROWSEROS_TIMEOUT_TOOL_CALL: '-1' },
-      `const { TIMEOUTS } = require('/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/packages/shared/src/constants/timeouts.ts'); console.log(TIMEOUTS.TOOL_CALL)`,
+      `const { TIMEOUTS } = require(${TIMEOUTS_MODULE_PATH}); console.log(TIMEOUTS.TOOL_CALL)`,
     )
-    expect(Number(result)).toBe(120000)
+    expect(Number(result)).toBe(120_000)
   })
 })
 
