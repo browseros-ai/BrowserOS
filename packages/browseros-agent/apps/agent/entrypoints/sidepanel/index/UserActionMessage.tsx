@@ -1,10 +1,11 @@
-import { Bot, FileText, Globe, Sparkles } from 'lucide-react'
+import { Bot, Brain, FileText, Globe, Sparkles } from 'lucide-react'
 import type { FC } from 'react'
 import type {
   AITabAction,
   BrowserOSAction,
   ChatAction,
 } from '@/lib/chat-actions/types'
+import type { ContextAttachment } from '@/lib/context-attachments'
 
 interface UserActionMessageProps {
   action: ChatAction
@@ -35,6 +36,31 @@ const AttachedTabs: FC<AttachedTabsProps> = ({ tabs }) => {
             <span className="max-w-[150px] truncate text-xs">{tab.title}</span>
           </div>
         ))}
+      </div>
+    )
+  )
+}
+
+const AttachedContexts: FC<{ contexts: ContextAttachment[] }> = ({
+  contexts,
+}) => {
+  return (
+    contexts.length > 0 && (
+      <div className="flex flex-wrap gap-1.5">
+        {contexts.map((context) => {
+          const Icon = context.kind === 'memory' ? Brain : FileText
+          return (
+            <div
+              key={context.id}
+              className="flex items-center gap-1.5 rounded-md border border-border/50 bg-accent/50 px-2 py-1"
+            >
+              <Icon className="h-3 w-3 text-muted-foreground" />
+              <span className="max-w-[150px] truncate text-xs">
+                {context.title}
+              </span>
+            </div>
+          )
+        })}
       </div>
     )
   )
@@ -86,6 +112,9 @@ const BrowserOSActionCard: FC<{ action: BrowserOSAction }> = ({ action }) => {
         </div>
       </div>
       {action.tabs ? <AttachedTabs tabs={action.tabs} /> : null}
+      {action.contextAttachments ? (
+        <AttachedContexts contexts={action.contextAttachments} />
+      ) : null}
     </div>
   )
 }

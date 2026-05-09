@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react'
 import { TabPickerPopover } from '@/components/elements/tab-picker-popover'
+import type { ContextAttachment } from '@/lib/context-attachments'
 import { cn } from '@/lib/utils'
 import type { VoiceInputState } from '@/lib/voice/useVoiceInput'
 import type { ChatMode } from './chatTypes'
@@ -27,7 +28,9 @@ interface ChatInputProps {
   onSubmit: (e: FormEvent) => void
   onStop: () => void
   selectedTabs: chrome.tabs.Tab[]
+  selectedContexts: ContextAttachment[]
   onToggleTab: (tab: chrome.tabs.Tab) => void
+  onToggleContext: (attachment: ContextAttachment) => void
   onTabMentionOpenChange?: (isOpen: boolean) => void
   voice?: VoiceInputState
 }
@@ -49,7 +52,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       onSubmit: onSubmitProp,
       onStop,
       selectedTabs,
+      selectedContexts,
       onToggleTab,
+      onToggleContext,
       onTabMentionOpenChange,
       voice,
     },
@@ -342,7 +347,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           isOpen={mentionState.isOpen}
           filterText={mentionState.filterText}
           selectedTabs={selectedTabs}
+          selectedContexts={selectedContexts}
           onToggleTab={onToggleTab}
+          onToggleContext={onToggleContext}
           onClose={closeMention}
           anchorRef={textareaRef}
         />

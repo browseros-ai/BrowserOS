@@ -91,6 +91,60 @@ describe('buildSidepanelPreparedSendMessagesRequest', () => {
       ],
     })
   })
+
+  it('forwards attached context snippets to chat endpoints', () => {
+    const contextAttachments = [
+      {
+        id: 'file:README.md',
+        kind: 'file' as const,
+        title: 'README.md',
+        source: 'README.md',
+        content: '# Project',
+      },
+      {
+        id: 'memory:CORE.md',
+        kind: 'memory' as const,
+        title: 'Core memory',
+        source: 'CORE.md',
+        content: 'User prefers concise answers.',
+      },
+    ]
+
+    const llmRequest = buildSidepanelPreparedSendMessagesRequest({
+      agentServerUrl: 'http://127.0.0.1:5151',
+      target: llmTarget,
+      fallbackProvider,
+      message: 'Use this context',
+      ...commonRequestInput(),
+      contextAttachments,
+    })
+
+    expect(llmRequest.body.contextAttachments).toEqual([
+      {
+        kind: 'file',
+        title: 'README.md',
+        source: 'README.md',
+        content: '# Project',
+      },
+      {
+        kind: 'memory',
+        title: 'Core memory',
+        source: 'CORE.md',
+        content: 'User prefers concise answers.',
+      },
+    ])
+
+    const acpRequest = buildSidepanelPreparedSendMessagesRequest({
+      agentServerUrl: 'http://127.0.0.1:5151',
+      target: acpTarget,
+      fallbackProvider,
+      message: 'Use this context',
+      ...commonRequestInput(),
+      contextAttachments,
+    })
+
+    expect(acpRequest.body).toMatchObject({ contextAttachments })
+  })
 })
 
 function commonRequestInput() {

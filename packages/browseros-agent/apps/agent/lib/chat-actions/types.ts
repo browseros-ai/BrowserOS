@@ -2,6 +2,8 @@
  * Base interface for all chat actions
  * @public
  */
+import type { ContextAttachment } from '@/lib/context-attachments'
+
 interface BaseChatAction {
   id: string
   timestamp: number
@@ -27,6 +29,7 @@ export interface BrowserOSAction extends BaseChatAction {
   mode: 'chat' | 'agent'
   message: string
   tabs?: chrome.tabs.Tab[]
+  contextAttachments?: ContextAttachment[]
 }
 
 /**
@@ -70,6 +73,7 @@ export const createBrowserOSAction = (params: {
   mode: 'chat' | 'agent'
   message: string
   tabs?: chrome.tabs.Tab[]
+  contextAttachments?: ContextAttachment[]
 }): BrowserOSAction => ({
   id: crypto.randomUUID(),
   type: 'browseros',
@@ -77,4 +81,5 @@ export const createBrowserOSAction = (params: {
   mode: params.mode,
   message: params.message,
   tabs: params.tabs,
+  contextAttachments: params.contextAttachments,
 })

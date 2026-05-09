@@ -11,7 +11,10 @@ import {
 } from '@browseros/shared/schemas/browser-context'
 import { type Context, Hono } from 'hono'
 import { stream } from 'hono/streaming'
-import { formatUserMessage } from '../../agent/format-message'
+import {
+  formatUserMessage,
+  type UserContextAttachment,
+} from '../../agent/format-message'
 import type { Browser } from '../../browser/browser'
 import { createAcpUIMessageStreamResponse } from '../../lib/agents/acp-ui-message-stream'
 import type { OpenclawGatewayAccessor } from '../../lib/agents/acpx-runtime'
@@ -150,6 +153,7 @@ type SidepanelAgentChatRequest = {
   browserContext?: BrowserContext
   selectedText?: string
   selectedTextSource?: { url: string; title: string }
+  contextAttachments?: UserContextAttachment[]
   userSystemPrompt?: string
   userWorkingDir?: string
 }
@@ -222,6 +226,7 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
             browserContext,
             parsed.selectedText,
             parsed.selectedTextSource,
+            parsed.contextAttachments,
           )
           const message = parsed.userSystemPrompt?.trim()
             ? `${parsed.userSystemPrompt.trim()}\n\n${userContent}`
@@ -840,6 +845,8 @@ async function parseSidepanelAgentChatBody(
   const selectedText = readOptionalString(record, 'selectedText')
   const selectedTextSource = parseSelectedTextSource(record.selectedTextSource)
   if ('error' in selectedTextSource) return selectedTextSource
+  const contextAttachments = parseContextAttachments(record.contextAttachments)
+  if ('error' in contextAttachments) return contextAttachments
 
   return {
     conversationId,
@@ -847,6 +854,7 @@ async function parseSidepanelAgentChatBody(
     browserContext: browserContext.value,
     selectedText,
     selectedTextSource: selectedTextSource.value,
+    contextAttachments: contextAttachments.value,
     userSystemPrompt: readOptionalString(record, 'userSystemPrompt'),
     userWorkingDir: readOptionalTrimmedString(record, 'userWorkingDir'),
   }
@@ -873,6 +881,38 @@ function parseSelectedTextSource(
   return typeof record.url === 'string' && typeof record.title === 'string'
     ? { value: { url: record.url, title: record.title } }
     : { error: 'Invalid selectedTextSource' }
+}
+
+function parseContextAttachments(
+  value: unknown,
+): { value?: UserContextAttachment[] } | { error: string } {
+  if (value === undefined) return { value: undefined }
+  if (!Array.isArray(value) || value.length > 10) {
+    return { error: 'Invalid contextAttachments' }
+  }
+
+  const attachments: UserContextAttachment[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return { error: 'Invalid contextAttachments' }
+    }
+    const record = item as Record<string, unknown>
+    const kind = record.kind
+    const title = readOptionalTrimmedString(record, 'title')
+    const source = readOptionalTrimmedString(record, 'source')
+    const content = readOptionalString(record, 'content')
+    if (
+      (kind !== 'file' && kind !== 'memory') ||
+      !title ||
+      !content ||
+      content.length > 50_000
+    ) {
+      return { error: 'Invalid contextAttachments' }
+    }
+    attachments.push({ kind, title, source, content })
+  }
+
+  return { value: attachments }
 }
 
 function readOptionalString(

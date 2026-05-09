@@ -34,17 +34,22 @@ export function buildSidepanelPreparedSendMessagesRequest({
   ...common
 }: BuildSidepanelPreparedSendMessagesRequestInput) {
   if (target?.kind === 'acp') {
+    const body = {
+      conversationId: common.conversationId,
+      message: message ?? '',
+      browserContext: common.browserContext,
+      userSystemPrompt: common.userSystemPrompt,
+      userWorkingDir: common.userWorkingDir,
+      selectedText: common.selectedText,
+      selectedTextSource: common.selectedTextSource,
+      ...(common.contextAttachments?.length
+        ? { contextAttachments: common.contextAttachments }
+        : {}),
+    }
+
     return {
       api: `${agentServerUrl}/agents/${encodeURIComponent(target.agentId)}/sidepanel/chat`,
-      body: {
-        conversationId: common.conversationId,
-        message: message ?? '',
-        browserContext: common.browserContext,
-        userSystemPrompt: common.userSystemPrompt,
-        userWorkingDir: common.userWorkingDir,
-        selectedText: common.selectedText,
-        selectedTextSource: common.selectedTextSource,
-      },
+      body,
     }
   }
 

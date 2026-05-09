@@ -51,12 +51,15 @@ export const NewTabChat: FC = () => {
     input,
     setInput,
     attachedTabs,
+    attachedContexts,
     mounted,
     voiceState,
     handleModeChange,
     handleStop,
     toggleTabSelection,
+    toggleContextSelection,
     removeTab,
+    removeContext,
     handleSubmit,
     handleSuggestionClick,
   } = useChatActions({
@@ -190,8 +193,11 @@ export const NewTabChat: FC = () => {
           status={status}
           onStop={handleStop}
           attachedTabs={attachedTabs}
+          attachedContexts={attachedContexts}
           onToggleTab={toggleTabSelection}
+          onToggleContext={toggleContextSelection}
           onRemoveTab={removeTab}
+          onRemoveContext={removeContext}
           voice={voiceState}
         />
       </div>

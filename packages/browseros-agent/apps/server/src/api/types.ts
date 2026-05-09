@@ -17,6 +17,13 @@ import { z } from 'zod'
 import type { Browser } from '../browser/browser'
 import type { ToolRegistry } from '../tools/tool-registry'
 
+const ContextAttachmentSchema = z.object({
+  kind: z.enum(['file', 'memory']),
+  title: z.string().min(1).max(500),
+  source: z.string().max(1000).optional(),
+  content: z.string().min(1).max(50_000),
+})
+
 // Re-export browser context types for consumers
 export {
   type BrowserContext,
@@ -79,6 +86,7 @@ export const ChatRequestSchema = AgentLLMConfigSchema.extend({
       title: z.string(),
     })
     .optional(),
+  contextAttachments: z.array(ContextAttachmentSchema).max(10).optional(),
   previousConversation: z
     .union([
       z.array(

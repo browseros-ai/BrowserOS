@@ -304,6 +304,7 @@ export class ChatService {
       resolvedMessageContext,
       request.selectedText,
       request.selectedTextSource,
+      request.contextAttachments,
     )
 
     // Prepend tool-change context when session was rebuilt mid-conversation

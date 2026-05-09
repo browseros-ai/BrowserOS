@@ -1,5 +1,12 @@
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 
+export interface UserContextAttachment {
+  kind: 'file' | 'memory'
+  title: string
+  source?: string
+  content: string
+}
+
 export function formatBrowserContext(browserContext?: BrowserContext): string {
   if (!browserContext?.activeTab && !browserContext?.selectedTabs?.length) {
     return ''
@@ -41,9 +48,31 @@ export function formatBrowserContext(browserContext?: BrowserContext): string {
 /** Strip XML-like tags that match our prompt delimiters to prevent injection. */
 function sanitizeForPrompt(s: string): string {
   return s.replace(
-    /<\/?(?:selected_text|USER_QUERY|page_context|AGENT_PROMPT|soul|memory_and_identity|security|workspace)[^>]*>/gi,
+    /<\/?(?:selected_text|attached_context|USER_QUERY|page_context|AGENT_PROMPT|soul|memory_and_identity|security|workspace)[^>]*>/gi,
     '',
   )
+}
+
+function sanitizeAttribute(s: string): string {
+  return sanitizeForPrompt(s).replace(/["<>]/g, "'")
+}
+
+function formatContextAttachments(
+  attachments?: ReadonlyArray<UserContextAttachment>,
+): string {
+  if (!attachments?.length) return ''
+
+  return attachments
+    .filter((attachment) => attachment.content.trim())
+    .map((attachment) => {
+      const title = sanitizeAttribute(attachment.title)
+      const source = attachment.source
+        ? ` source="${sanitizeAttribute(attachment.source)}"`
+        : ''
+      const content = sanitizeForPrompt(attachment.content)
+      return `<attached_context type="${attachment.kind}" title="${title}"${source}>\n${content}\n</attached_context>`
+    })
+    .join('\n\n')
 }
 
 export function formatUserMessage(
@@ -51,6 +80,7 @@ export function formatUserMessage(
   browserContext?: BrowserContext,
   selectedText?: string,
   selectedTextSource?: { url: string; title: string },
+  contextAttachments?: ReadonlyArray<UserContextAttachment>,
 ): string {
   const contextPrefix = formatBrowserContext(browserContext)
 
@@ -67,5 +97,10 @@ export function formatUserMessage(
     selectedTextBlock = `<selected_text${source}>\n${sanitizedText}\n</selected_text>\n\n`
   }
 
-  return `${contextPrefix}${selectedTextBlock}<USER_QUERY>\n${message}\n</USER_QUERY>`
+  const contextAttachmentBlock = formatContextAttachments(contextAttachments)
+  const contextAttachmentPrefix = contextAttachmentBlock
+    ? `${contextAttachmentBlock}\n\n`
+    : ''
+
+  return `${contextPrefix}${selectedTextBlock}${contextAttachmentPrefix}<USER_QUERY>\n${message}\n</USER_QUERY>`
 }

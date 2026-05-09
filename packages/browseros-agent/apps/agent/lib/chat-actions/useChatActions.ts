@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ChatMode } from '@/entrypoints/sidepanel/index/chatTypes'
 import { useChatSessionContext } from '@/entrypoints/sidepanel/layout/ChatSessionContext'
+import type { ContextAttachment } from '@/lib/context-attachments'
 import { track } from '@/lib/metrics/track'
 import { useVoiceInput } from '@/lib/voice/useVoiceInput'
 import { createBrowserOSAction } from './types'
@@ -31,6 +32,9 @@ export function useChatActions(config: ChatActionsConfig) {
 
   const [input, setInput] = useState('')
   const [attachedTabs, setAttachedTabs] = useState<chrome.tabs.Tab[]>([])
+  const [attachedContexts, setAttachedContexts] = useState<ContextAttachment[]>(
+    [],
+  )
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
@@ -96,15 +100,32 @@ export function useChatActions(config: ChatActionsConfig) {
     setAttachedTabs((prev) => prev.filter((t) => t.id !== tabId))
   }
 
+  const toggleContextSelection = (context: ContextAttachment) => {
+    setAttachedContexts((prev) => {
+      const isSelected = prev.some((item) => item.id === context.id)
+      if (isSelected) {
+        return prev.filter((item) => item.id !== context.id)
+      }
+      return [...prev, context]
+    })
+  }
+
+  const removeContext = (id: string) => {
+    setAttachedContexts((prev) => prev.filter((context) => context.id !== id))
+  }
+
   const executeMessage = (customMessageText?: string) => {
     const messageText = customMessageText ? customMessageText : input.trim()
     if (!messageText) return
 
-    if (attachedTabs.length) {
+    if (attachedTabs.length || attachedContexts.length) {
       const action = createBrowserOSAction({
         mode,
         message: messageText,
-        tabs: attachedTabs,
+        tabs: attachedTabs.length ? attachedTabs : undefined,
+        contextAttachments: attachedContexts.length
+          ? attachedContexts
+          : undefined,
       })
       sendMessage({ text: messageText, action })
     } else {
@@ -112,6 +133,7 @@ export function useChatActions(config: ChatActionsConfig) {
     }
     setInput('')
     setAttachedTabs([])
+    setAttachedContexts([])
   }
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -159,12 +181,16 @@ export function useChatActions(config: ChatActionsConfig) {
     setInput,
     attachedTabs,
     setAttachedTabs,
+    attachedContexts,
+    setAttachedContexts,
     mounted,
     voiceState,
     handleModeChange,
     handleStop,
     toggleTabSelection,
     removeTab,
+    toggleContextSelection,
+    removeContext,
     executeMessage,
     handleSubmit,
     handleSuggestionClick,

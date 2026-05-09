@@ -13,6 +13,7 @@ import {
   SIDEPANEL_VOICE_RECORDING_STOPPED_EVENT,
   SIDEPANEL_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
 } from '@/lib/constants/analyticsEvents'
+import type { ContextAttachment } from '@/lib/context-attachments'
 import { useJtbdPopup } from '@/lib/jtbd-popup/useJtbdPopup'
 import { track } from '@/lib/metrics/track'
 import { useVoiceInput } from '@/lib/voice/useVoiceInput'
@@ -59,6 +60,9 @@ export const Chat = () => {
 
   const [input, setInput] = useState('')
   const [attachedTabs, setAttachedTabs] = useState<chrome.tabs.Tab[]>([])
+  const [attachedContexts, setAttachedContexts] = useState<ContextAttachment[]>(
+    [],
+  )
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
@@ -140,17 +144,34 @@ export const Chat = () => {
     setAttachedTabs((prev) => prev.filter((t) => t.id !== tabId))
   }
 
+  const toggleContextSelection = (context: ContextAttachment) => {
+    setAttachedContexts((prev) => {
+      const isSelected = prev.some((item) => item.id === context.id)
+      if (isSelected) {
+        return prev.filter((item) => item.id !== context.id)
+      }
+      return [...prev, context]
+    })
+  }
+
+  const removeContext = (id: string) => {
+    setAttachedContexts((prev) => prev.filter((context) => context.id !== id))
+  }
+
   const executeMessage = (customMessageText?: string) => {
     const messageText = customMessageText ? customMessageText : input.trim()
     if (!messageText) return
 
     recordMessageSent()
 
-    if (attachedTabs.length) {
+    if (attachedTabs.length || attachedContexts.length) {
       const action = createBrowserOSAction({
         mode,
         message: messageText,
-        tabs: attachedTabs,
+        tabs: attachedTabs.length ? attachedTabs : undefined,
+        contextAttachments: attachedContexts.length
+          ? attachedContexts
+          : undefined,
       })
       sendMessage({ text: messageText, action })
     } else {
@@ -158,6 +179,7 @@ export const Chat = () => {
     }
     setInput('')
     setAttachedTabs([])
+    setAttachedContexts([])
   }
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -251,8 +273,11 @@ export const Chat = () => {
         status={status}
         onStop={handleStop}
         attachedTabs={attachedTabs}
+        attachedContexts={attachedContexts}
         onToggleTab={toggleTabSelection}
+        onToggleContext={toggleContextSelection}
         onRemoveTab={removeTab}
+        onRemoveContext={removeContext}
         voice={voiceState}
       />
     </>

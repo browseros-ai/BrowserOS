@@ -7,6 +7,7 @@ import { McpServerIcon } from '@/entrypoints/app/connect-mcp/McpServerIcon'
 import { useGetUserMCPIntegrations } from '@/entrypoints/app/connect-mcp/useGetUserMCPIntegrations'
 import { Feature } from '@/lib/browseros/capabilities'
 import { useCapabilities } from '@/lib/browseros/useCapabilities'
+import type { ContextAttachment } from '@/lib/context-attachments'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import {
   type SelectedTextData,
@@ -15,6 +16,7 @@ import {
 import { cn } from '@/lib/utils'
 import type { VoiceInputState } from '@/lib/voice/useVoiceInput'
 import { useWorkspace } from '@/lib/workspace/use-workspace'
+import { ChatAttachedContexts } from './ChatAttachedContexts'
 import { ChatAttachedTabs } from './ChatAttachedTabs'
 import { ChatInput, type ChatInputHandle } from './ChatInput'
 import { ChatModeToggle } from './ChatModeToggle'
@@ -30,8 +32,11 @@ interface ChatFooterProps {
   status: 'streaming' | 'submitted' | 'ready' | 'error'
   onStop: () => void
   attachedTabs: chrome.tabs.Tab[]
+  attachedContexts: ContextAttachment[]
   onToggleTab: (tab: chrome.tabs.Tab) => void
+  onToggleContext: (attachment: ContextAttachment) => void
   onRemoveTab: (tabId?: number) => void
+  onRemoveContext: (id: string) => void
   voice?: VoiceInputState
 }
 
@@ -44,8 +49,11 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   status,
   onStop,
   attachedTabs,
+  attachedContexts,
   onToggleTab,
+  onToggleContext,
   onRemoveTab,
+  onRemoveContext,
   voice,
 }) => {
   const { selectedFolder } = useWorkspace()
@@ -113,6 +121,10 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   return (
     <footer className="border-border/40 border-t bg-background/80 backdrop-blur-md">
       <ChatAttachedTabs tabs={attachedTabs} onRemoveTab={onRemoveTab} />
+      <ChatAttachedContexts
+        contexts={attachedContexts}
+        onRemoveContext={onRemoveContext}
+      />
       {visibleSelectedText && (
         <ChatSelectedText
           selectedText={visibleSelectedText}
@@ -142,12 +154,12 @@ export const ChatFooter: FC<ChatFooterProps> = ({
               aria-expanded={isTabMentionOpen}
               aria-haspopup="dialog"
               className="flex cursor-pointer items-center gap-1 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
-              title="Attach tabs (@)"
+              title="Attach context (@)"
             >
               <Layers className="h-4 w-4" />
-              {attachedTabs.length > 0 && (
+              {attachedTabs.length + attachedContexts.length > 0 && (
                 <span className="font-medium text-[var(--accent-orange)] text-xs">
-                  {attachedTabs.length}
+                  {attachedTabs.length + attachedContexts.length}
                 </span>
               )}
               <ChevronDown className="h-3 w-3" />
@@ -230,7 +242,9 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           onSubmit={onSubmit}
           onStop={onStop}
           selectedTabs={attachedTabs}
+          selectedContexts={attachedContexts}
           onToggleTab={onToggleTab}
+          onToggleContext={onToggleContext}
           onTabMentionOpenChange={setIsTabMentionOpen}
           voice={voice}
           ref={chatInputRef}

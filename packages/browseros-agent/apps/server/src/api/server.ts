@@ -26,6 +26,7 @@ import { getLimaHomeDir, resolveBundledLimactl, VM_NAME } from '../lib/vm'
 import { createAclRoutes } from './routes/acl'
 import { createAgentRoutes } from './routes/agents'
 import { createChatRoutes } from './routes/chat'
+import { createContextRoutes } from './routes/context'
 import { createCreditsRoutes } from './routes/credits'
 import { createHealthRoute } from './routes/health'
 import { createKlavisRoutes } from './routes/klavis'
@@ -129,6 +130,10 @@ export async function createHttpServer(config: HttpServerConfig) {
     .use('/*', requireTrustedAppOrigin())
     .route('/', createMonitoringRoutes())
 
+  const contextRoutes = new Hono<Env>()
+    .use('/*', requireTrustedAppOrigin())
+    .route('/', createContextRoutes())
+
   const agentRoutes = new Hono<Env>()
     .use('/*', requireTrustedAppOrigin())
     .route(
@@ -196,6 +201,7 @@ export async function createHttpServer(config: HttpServerConfig) {
     .route('/status', createStatusRoute({ browser }))
     .route('/soul', createSoulRoutes())
     .route('/memory', createMemoryRoutes())
+    .route('/context', contextRoutes)
     .route('/skills', createSkillsRoutes())
     .route('/monitoring', monitoringRoutes)
     .route('/acl-rules', aclRoutes)

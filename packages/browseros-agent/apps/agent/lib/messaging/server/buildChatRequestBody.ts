@@ -1,5 +1,6 @@
 import type { AclRule } from '@browseros/shared/types/acl'
 import type { ChatMode } from '@/entrypoints/sidepanel/index/chatTypes'
+import type { ContextAttachment } from '@/lib/context-attachments'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import type { ToolApprovalConfig } from '@/lib/tool-approvals/types'
 
@@ -50,6 +51,7 @@ interface ChatRequestBodyParams {
     url: string
     title: string
   }
+  contextAttachments?: ContextAttachment[]
   toolApprovalConfig?: ToolApprovalConfig
   toolApprovalResponses?: ApprovalResponseData[]
   isScheduledTask?: boolean
@@ -78,6 +80,7 @@ export const buildChatRequestBody = ({
   aclRules,
   selectedText,
   selectedTextSource,
+  contextAttachments,
   toolApprovalConfig,
   toolApprovalResponses,
   isScheduledTask,
@@ -109,6 +112,14 @@ export const buildChatRequestBody = ({
   aclRules: aclRules?.length ? aclRules : undefined,
   selectedText,
   selectedTextSource,
+  contextAttachments: contextAttachments?.length
+    ? contextAttachments.map(({ kind, title, source, content }) => ({
+        kind,
+        title,
+        source,
+        content,
+      }))
+    : undefined,
   toolApprovalConfig: toRequestToolApprovalConfig(toolApprovalConfig),
   toolApprovalResponses,
   isScheduledTask,

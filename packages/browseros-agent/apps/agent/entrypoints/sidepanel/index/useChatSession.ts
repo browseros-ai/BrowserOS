@@ -402,6 +402,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           declinedApps,
           aclRules: enabledAclRules,
           toolApprovalConfig: approvalConfig,
+          contextAttachments:
+            action?.type === 'browseros'
+              ? action.contextAttachments
+              : undefined,
         }
 
         const approvalResponses =
