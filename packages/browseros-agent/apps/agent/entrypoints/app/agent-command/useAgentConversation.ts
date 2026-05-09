@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   type AgentHarnessStreamEvent,
   attachToHarnessTurn,
@@ -16,8 +16,13 @@ import type {
 } from '@/lib/agent-conversations/types'
 import { useInvalidateAgentOutputs } from '@/lib/agent-files'
 import type { ServerAttachmentPayload } from '@/lib/attachments'
+import { sentry } from '@/lib/sentry/sentry'
 import { consumeSSEStream } from '@/lib/sse'
 import { buildToolLabel } from '@/lib/tool-labels'
+import {
+  createWorkflowUsageRecord,
+  recordWorkflowUsage,
+} from '@/lib/workflow-usage/storage'
 import { mapAgentHarnessToolStatus } from './agent-stream-events'
 
 export interface SendInput {
@@ -68,6 +73,8 @@ export function useAgentConversation(
   const streamAbortRef = useRef<AbortController | null>(null)
   const onCompleteRef = useRef(options.onComplete)
   const onSessionKeyChangeRef = useRef(options.onSessionKeyChange)
+  const workflowToolNamesRef = useRef<string[]>([])
+  const workflowToolIdsRef = useRef(new Set<string>())
   // Per-turn resume bookkeeping. `turnId` is captured from the response
   // header; `lastSeq` advances with every SSE event so a reconnect can
   // resume via Last-Event-ID.
@@ -111,6 +118,35 @@ export function useAgentConversation(
       return [...prev.slice(0, -1), { ...last, parts: updater(last.parts) }]
     })
   }
+
+  const resetWorkflowUsageCapture = useCallback(() => {
+    workflowToolNamesRef.current = []
+    workflowToolIdsRef.current = new Set()
+  }, [])
+
+  const persistWorkflowUsageCapture = useCallback(
+    (turnId?: string | null) => {
+      const toolNames = workflowToolNamesRef.current
+      if (toolNames.length === 0) return
+
+      void recordWorkflowUsage(
+        createWorkflowUsageRecord({
+          id: `agent-harness-turn:${turnId ?? crypto.randomUUID()}`,
+          source: 'agent-harness-chat',
+          toolNames,
+        }),
+      ).catch((error) => {
+        sentry.captureException(error, {
+          extra: {
+            message: 'Failed to persist agent workflow usage pattern',
+            agentId,
+            turnId,
+          },
+        })
+      })
+    },
+    [agentId],
+  )
 
   const appendTextDelta = (delta: string) => {
     textAccRef.current += delta
@@ -174,6 +210,11 @@ export function useAgentConversation(
   const upsertAgentHarnessTool = (event: AgentHarnessStreamEvent) => {
     if (event.type !== 'tool_call') return
     const rawName = event.title || event.rawType || 'tool call'
+    const toolId = event.id ?? rawName
+    if (!workflowToolIdsRef.current.has(toolId)) {
+      workflowToolIdsRef.current.add(toolId)
+      workflowToolNamesRef.current.push(rawName)
+    }
     const { label, subject } = buildToolLabel(
       rawName,
       event.text ? { description: event.text } : undefined,
@@ -295,6 +336,7 @@ export function useAgentConversation(
         streamAbortRef.current = abortController
         setStreaming(true)
         weStartedStream = true
+        resetWorkflowUsageCapture()
 
         const response = await attachToHarnessTurn(agentId, {
           turnId: active.turnId,
@@ -328,6 +370,7 @@ export function useAgentConversation(
         // itself, so resetting here would only cause a brief flicker.
         if (!cancelled && weStartedStream) {
           const finishedTurnId = turnIdRef.current
+          persistWorkflowUsageCapture(finishedTurnId)
           turnIdRef.current = null
           lastSeqRef.current = null
           setStreaming(false)
@@ -344,7 +387,12 @@ export function useAgentConversation(
       cancelled = true
       abortController.abort()
     }
-  }, [agentId, activeTurnIdDep])
+  }, [
+    agentId,
+    activeTurnIdDep,
+    persistWorkflowUsageCapture,
+    resetWorkflowUsageCapture,
+  ])
 
   /**
    * Send the chat request and follow the 409-active-turn redirect
@@ -422,6 +470,7 @@ export function useAgentConversation(
     }
     setTurns((prev) => [...prev, turn])
     setStreaming(true)
+    resetWorkflowUsageCapture()
     textAccRef.current = ''
     thinkAccRef.current = ''
     const abortController = new AbortController()
@@ -466,6 +515,7 @@ export function useAgentConversation(
       // useAgentTurnFiles consumers also flush, not just the agent-wide
       // rail query.
       const finishedTurnId = turnIdRef.current
+      persistWorkflowUsageCapture(finishedTurnId)
       turnIdRef.current = null
       lastSeqRef.current = null
       onCompleteRef.current?.()

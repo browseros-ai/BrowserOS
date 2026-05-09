@@ -10,6 +10,10 @@ import type {
   ExecutionTaskStatus,
 } from '@/lib/execution-history/types'
 import { sentry } from '@/lib/sentry/sentry'
+import {
+  createWorkflowUsageRecordFromExecutionTask,
+  recordWorkflowUsage,
+} from '@/lib/workflow-usage/storage'
 
 interface StartExecutionTaskInput {
   conversationId: string
@@ -145,6 +149,17 @@ export function useExecutionHistoryTracker() {
       }
 
       persistTask(nextTask)
+      void recordWorkflowUsage(
+        createWorkflowUsageRecordFromExecutionTask(nextTask),
+      ).catch((error) => {
+        sentry.captureException(error, {
+          extra: {
+            message: 'Failed to persist workflow usage pattern',
+            conversationId: nextTask.conversationId,
+            taskId: nextTask.id,
+          },
+        })
+      })
       activeTaskRef.current = null
     },
     [persistTask],

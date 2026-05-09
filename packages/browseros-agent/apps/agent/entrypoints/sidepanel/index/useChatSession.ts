@@ -48,6 +48,18 @@ import {
   normalizeToolApprovalConfig,
   toolApprovalConfigStorage,
 } from '@/lib/tool-approvals/storage'
+import {
+  analyzeWorkflowUsage,
+  detectWorkflowAdvisorCommand,
+  formatWorkflowAnalysisResponse,
+  formatWorkflowUsageClearedResponse,
+  formatWorkflowUsageDataResponse,
+  type WorkflowAdvisorCommand,
+} from '@/lib/workflow-usage/advisor'
+import {
+  clearWorkflowUsageRecords,
+  getWorkflowUsageRecords,
+} from '@/lib/workflow-usage/storage'
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
 import type { ChatMode } from './chatTypes'
 import { GetConversationWithMessagesDocument } from './graphql/chatSessionDocument'
@@ -133,6 +145,7 @@ export interface ChatSessionOptions {
 }
 
 const NEWTAB_SYSTEM_PROMPT = `IMPORTANT: The user is chatting from the New Tab page. When performing browser actions, ALWAYS open content in a NEW TAB rather than navigating the current tab. The user's new tab page should remain accessible.`
+const WORKFLOW_ADVISOR_LOCAL_ONLY = 'workflow-advisor'
 
 const getUserSystemPrompt = (
   origin: ChatOrigin | undefined,
@@ -141,6 +154,25 @@ const getUserSystemPrompt = (
   origin === 'newtab'
     ? [personalization, NEWTAB_SYSTEM_PROMPT].filter(Boolean).join('\n\n')
     : personalization
+
+const createTextMessage = (
+  role: 'user' | 'assistant',
+  text: string,
+  options?: { localOnly?: boolean },
+): UIMessage =>
+  ({
+    id: crypto.randomUUID(),
+    role,
+    parts: [{ type: 'text', text }],
+    metadata: options?.localOnly
+      ? { browserosLocalOnly: WORKFLOW_ADVISOR_LOCAL_ONLY }
+      : undefined,
+  }) as UIMessage
+
+const isWorkflowAdvisorLocalOnlyMessage = (message: UIMessage): boolean => {
+  const metadata = (message as { metadata?: Record<string, unknown> }).metadata
+  return metadata?.browserosLocalOnly === WORKFLOW_ADVISOR_LOCAL_ONLY
+}
 
 const buildRequestBrowserContext = ({
   activeTab,
@@ -376,7 +408,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           Feature.PREVIOUS_CONVERSATION_ARRAY,
         )
 
-        const previousMessages = messagesRef.current
+        const previousMessages = messagesRef.current.filter(
+          (message) => !isWorkflowAdvisorLocalOnlyMessage(message),
+        )
         const history =
           previousMessages.length > 0
             ? formatConversationHistory(previousMessages)
@@ -559,7 +593,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       })
     }
 
-    const messagesToSave = messages.filter((m) => m.parts?.length > 0)
+    const messagesToSave = messages.filter(
+      (m) => m.parts?.length > 0 && !isWorkflowAdvisorLocalOnlyMessage(m),
+    )
     if (messagesToSave.length === 0) return
 
     if (isLoggedIn) {
@@ -645,6 +681,54 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     action?: ChatAction
   } | null>(null)
 
+  const appendLocalWorkflowAdvisorExchange = (
+    userText: string,
+    responseText: string,
+  ) => {
+    const nextMessages = [
+      ...messagesRef.current,
+      createTextMessage('user', userText, { localOnly: true }),
+      createTextMessage('assistant', responseText, { localOnly: true }),
+    ]
+    messagesRef.current = nextMessages
+    setMessages(nextMessages)
+  }
+
+  const handleWorkflowAdvisorCommand = async (
+    text: string,
+    command: WorkflowAdvisorCommand,
+  ) => {
+    try {
+      if (command === 'clear') {
+        await clearWorkflowUsageRecords()
+        appendLocalWorkflowAdvisorExchange(
+          text,
+          formatWorkflowUsageClearedResponse(),
+        )
+        return
+      }
+
+      const records = await getWorkflowUsageRecords()
+      const response =
+        command === 'view'
+          ? formatWorkflowUsageDataResponse(records)
+          : formatWorkflowAnalysisResponse(analyzeWorkflowUsage(records))
+
+      appendLocalWorkflowAdvisorExchange(text, response)
+    } catch (error) {
+      sentry.captureException(error, {
+        extra: {
+          message: 'Failed to run local workflow advisor command',
+          command,
+        },
+      })
+      appendLocalWorkflowAdvisorExchange(
+        text,
+        "I couldn't read the local workflow usage patterns. Nothing was sent to a model or external service.",
+      )
+    }
+  }
+
   const dispatchMessage = useCallback(
     (text: string) => {
       startExecutionTask({
@@ -695,6 +779,12 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         llmTargetProvider?.modelId ??
         selectedLlmProvider?.modelId,
     })
+
+    const workflowAdvisorCommand = detectWorkflowAdvisorCommand(params.text)
+    if (workflowAdvisorCommand) {
+      void handleWorkflowAdvisorCommand(params.text, workflowAdvisorCommand)
+      return
+    }
 
     if (!isIntegrationsSyncedRef.current) {
       // Queue the message — will be sent when sync completes
