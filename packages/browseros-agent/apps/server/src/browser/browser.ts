@@ -249,6 +249,20 @@ export class Browser {
     return this.pages.get(pageId)
   }
 
+  private async resolvePageInfo(pageId: number): Promise<PageInfo | undefined> {
+    const cached = this.pages.get(pageId)
+    if (cached) return cached
+
+    await this.listPages()
+    return this.pages.get(pageId)
+  }
+
+  private unknownPageError(pageId: number): Error {
+    return new Error(
+      `Unknown page ${pageId}. Use list_pages to see available pages.`,
+    )
+  }
+
   async refreshPageInfo(pageId: number): Promise<PageInfo | undefined> {
     let info = this.pages.get(pageId)
     if (!info) {
@@ -591,12 +605,24 @@ export class Browser {
   }
 
   async closePage(page: number): Promise<void> {
-    const info = this.pages.get(page)
-    if (!info)
-      throw new Error(
-        `Unknown page ${page}. Use list_pages to see available pages.`,
-      )
-    await this.cdp.Browser.closeTab({ tabId: info.tabId })
+    let info = await this.resolvePageInfo(page)
+    if (!info) throw this.unknownPageError(page)
+
+    try {
+      await this.cdp.Browser.closeTab({ targetId: info.targetId })
+    } catch (error) {
+      const refreshed = await this.refreshPageInfo(page)
+      if (
+        !refreshed ||
+        (refreshed.targetId === info.targetId && refreshed.tabId === info.tabId)
+      ) {
+        throw error
+      }
+
+      info = refreshed
+      await this.cdp.Browser.closeTab({ targetId: info.targetId })
+    }
+
     this.consoleCollector.detach(page)
     this.pages.delete(page)
     this.sessions.delete(info.targetId)
