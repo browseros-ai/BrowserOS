@@ -81,6 +81,11 @@ const primarySettingsSections: NavSection[] = [
         feature: Feature.CUSTOMIZATION_SUPPORT,
       },
       {
+        name: 'Reset Data',
+        to: '/settings/reset-data',
+        icon: RotateCcw,
+      },
+      {
         name: 'Tool Approvals',
         to: '/settings/approvals',
         icon: ShieldCheck,

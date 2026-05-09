@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -24,6 +24,11 @@ export function createMemoryRoutes() {
       const { content } = c.req.valid('json')
       await mkdir(getMemoryDir(), { recursive: true })
       await Bun.write(getCoreMemoryPath(), content)
+      return c.json({ success: true })
+    })
+    .delete('/', async (c) => {
+      await rm(getMemoryDir(), { recursive: true, force: true })
+      await mkdir(getMemoryDir(), { recursive: true })
       return c.json({ success: true })
     })
 }

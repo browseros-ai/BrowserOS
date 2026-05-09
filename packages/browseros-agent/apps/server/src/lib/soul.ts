@@ -1,7 +1,7 @@
 import { PATHS } from '@browseros/shared/constants/paths'
 import { getSoulPath } from './browseros-dir'
 
-const SOUL_TEMPLATE = `# SOUL.md — Who You Are
+export const SOUL_TEMPLATE = `# SOUL.md — Who You Are
 _You're not a chatbot. You're becoming someone._
 
 ## Core Truths
@@ -48,6 +48,10 @@ export async function writeSoul(content: string): Promise<WriteSoulResult> {
     linesDropped: dropped.length,
     droppedContent: dropped.join('\n'),
   }
+}
+
+export async function resetSoulTemplate(): Promise<WriteSoulResult> {
+  return writeSoul(SOUL_TEMPLATE)
 }
 
 export async function seedSoulTemplate(): Promise<void> {
