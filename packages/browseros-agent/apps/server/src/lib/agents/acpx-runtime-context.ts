@@ -8,7 +8,6 @@ import { randomUUID } from 'node:crypto'
 import { constants, type Stats } from 'node:fs'
 import {
   access,
-  mkdir,
   readFile,
   rename,
   rm,
@@ -18,6 +17,7 @@ import {
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
+import { ensureDirectory } from '../ensure-directory'
 import {
   MEMORY_TEMPLATE,
   RUNTIME_SKILLS,
@@ -66,7 +66,7 @@ export function resolveAgentRuntimePaths(input: {
 
 /** Seeds the stable per-agent identity and memory home without overwriting edits. */
 export async function ensureAgentHome(paths: AgentRuntimePaths): Promise<void> {
-  await mkdir(join(paths.agentHome, 'memory'), { recursive: true })
+  await ensureDirectory(join(paths.agentHome, 'memory'))
   await writeFileIfMissing(join(paths.agentHome, 'SOUL.md'), SOUL_TEMPLATE)
   await writeFileIfMissing(join(paths.agentHome, 'MEMORY.md'), MEMORY_TEMPLATE)
 }
@@ -89,7 +89,7 @@ export async function materializeCodexHome(input: {
   skillNames: string[]
   sourceCodexHome?: string
 }): Promise<void> {
-  await mkdir(input.paths.codexHome, { recursive: true })
+  await ensureDirectory(input.paths.codexHome)
   const source =
     input.sourceCodexHome ??
     process.env.CODEX_HOME?.trim() ??
@@ -163,7 +163,7 @@ export async function ensureUsableCwd(
   isDefaultWorkspace: boolean,
 ): Promise<void> {
   if (isDefaultWorkspace) {
-    await mkdir(cwd, { recursive: true })
+    await ensureDirectory(cwd)
     return
   }
   let info: Stats
@@ -195,7 +195,7 @@ async function writeFileIfMissing(
   path: string,
   content: string,
 ): Promise<void> {
-  await mkdir(dirname(path), { recursive: true })
+  await ensureDirectory(dirname(path))
   try {
     await writeFile(path, content, { encoding: 'utf8', flag: 'wx' })
   } catch (err) {
@@ -205,7 +205,7 @@ async function writeFileIfMissing(
 
 async function symlinkIfPresent(source: string, target: string): Promise<void> {
   if (!(await sourceFileExists(source))) return
-  await mkdir(dirname(target), { recursive: true })
+  await ensureDirectory(dirname(target))
   try {
     await symlink(source, target)
   } catch (err) {
@@ -216,7 +216,7 @@ async function symlinkIfPresent(source: string, target: string): Promise<void> {
 async function copyIfPresent(source: string, target: string): Promise<void> {
   if (!(await sourceFileExists(source))) return
   const content = await readFile(source, 'utf8')
-  await mkdir(dirname(target), { recursive: true })
+  await ensureDirectory(dirname(target))
   try {
     await writeFile(target, content, { encoding: 'utf8', flag: 'wx' })
   } catch (err) {
@@ -226,7 +226,7 @@ async function copyIfPresent(source: string, target: string): Promise<void> {
 
 /** Writes generated content via atomic replace so readers never see partial files. */
 async function writeFileAtomic(path: string, content: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true })
+  await ensureDirectory(dirname(path))
   const temporaryPath = join(
     dirname(path),
     `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`,
