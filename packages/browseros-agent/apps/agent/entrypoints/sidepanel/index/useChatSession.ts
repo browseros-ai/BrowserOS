@@ -205,6 +205,35 @@ const buildRequestBrowserContext = ({
   return Object.keys(browserContext).length ? browserContext : undefined
 }
 
+type ScheduledTaskContextLoadResult =
+  | { context: string; jobName: string }
+  | { error: string }
+
+const loadScheduledTaskContextForRun = async (
+  runId: string,
+): Promise<ScheduledTaskContextLoadResult> => {
+  const [runs, jobs] = await Promise.all([
+    scheduledJobRunStorage.getValue(),
+    scheduledJobStorage.getValue(),
+  ])
+
+  const run = (runs ?? []).find((item) => item.id === runId)
+  if (!run) {
+    return { error: 'Scheduled task result was not found.' }
+  }
+
+  const job = (jobs ?? []).find((item) => item.id === run.jobId)
+  const context = buildScheduledTaskResultChatContext({ run, job })
+  if (!context) {
+    return { error: 'Scheduled task result has no output.' }
+  }
+
+  return {
+    context,
+    jobName: job?.name?.trim() || 'Scheduled Task',
+  }
+}
+
 export const useChatSession = (options?: ChatSessionOptions) => {
   const {
     selectedLlmProviderRef,
@@ -262,38 +291,23 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     })
 
     const loadScheduledTaskContext = async () => {
-      const [runs, jobs] = await Promise.all([
-        scheduledJobRunStorage.getValue(),
-        scheduledJobStorage.getValue(),
-      ])
+      const result = await loadScheduledTaskContextForRun(scheduledRunIdParam)
       if (cancelled) return
 
-      const run = (runs ?? []).find((item) => item.id === scheduledRunIdParam)
-      if (!run) {
+      if ('error' in result) {
         setScheduledTaskContext({
           status: 'error',
           runId: scheduledRunIdParam,
-          error: 'Scheduled task result was not found.',
+          error: result.error,
         })
         return
       }
 
-      const job = (jobs ?? []).find((item) => item.id === run.jobId)
-      const context = buildScheduledTaskResultChatContext({ run, job })
-      if (!context) {
-        setScheduledTaskContext({
-          status: 'error',
-          runId: scheduledRunIdParam,
-          error: 'Scheduled task result has no output.',
-        })
-        return
-      }
-
-      scheduledTaskContextRef.current = context
+      scheduledTaskContextRef.current = result.context
       setScheduledTaskContext({
         status: 'ready',
         runId: scheduledRunIdParam,
-        jobName: job?.name?.trim() || 'Scheduled Task',
+        jobName: result.jobName,
       })
     }
 
@@ -473,10 +487,31 @@ export const useChatSession = (options?: ChatSessionOptions) => {
             : history.map((m) => `${m.role}: ${m.content}`).join('\n')
           : undefined
 
+        let scheduledTaskContextForRequest = scheduledTaskContextRef.current
+        if (!scheduledTaskContextForRequest && scheduledRunIdParam) {
+          const result =
+            await loadScheduledTaskContextForRun(scheduledRunIdParam)
+          if ('error' in result) {
+            setScheduledTaskContext({
+              status: 'error',
+              runId: scheduledRunIdParam,
+              error: result.error,
+            })
+          } else {
+            scheduledTaskContextForRequest = result.context
+            scheduledTaskContextRef.current = result.context
+            setScheduledTaskContext({
+              status: 'ready',
+              runId: scheduledRunIdParam,
+              jobName: result.jobName,
+            })
+          }
+        }
+
         const userSystemPrompt = getUserSystemPrompt(
           options?.origin,
           personalizationRef.current,
-          scheduledTaskContextRef.current,
+          scheduledTaskContextForRequest,
         )
 
         const commonRequest = {
