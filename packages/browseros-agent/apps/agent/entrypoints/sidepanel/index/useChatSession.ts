@@ -31,6 +31,11 @@ import type {
   ChatRequestBrowserContext,
 } from '@/lib/messaging/server/buildChatRequestBody'
 import { track } from '@/lib/metrics/track'
+import { buildScheduledTaskResultChatContext } from '@/lib/schedules/scheduledChatContext'
+import {
+  scheduledJobRunStorage,
+  scheduledJobStorage,
+} from '@/lib/schedules/scheduleStorage'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { sentry } from '@/lib/sentry/sentry'
@@ -132,15 +137,28 @@ export interface ChatSessionOptions {
   isIntegrationsSynced?: boolean
 }
 
+export type ScheduledTaskContextState =
+  | { status: 'idle' }
+  | { status: 'loading'; runId: string }
+  | { status: 'ready'; runId: string; jobName: string }
+  | { status: 'error'; runId: string; error: string }
+
 const NEWTAB_SYSTEM_PROMPT = `IMPORTANT: The user is chatting from the New Tab page. When performing browser actions, ALWAYS open content in a NEW TAB rather than navigating the current tab. The user's new tab page should remain accessible.`
 
 const getUserSystemPrompt = (
   origin: ChatOrigin | undefined,
   personalization: string,
-) =>
-  origin === 'newtab'
-    ? [personalization, NEWTAB_SYSTEM_PROMPT].filter(Boolean).join('\n\n')
-    : personalization
+  scheduledTaskContext?: string | null,
+) => {
+  const parts = [personalization]
+  if (origin === 'newtab') {
+    parts.push(NEWTAB_SYSTEM_PROMPT)
+  }
+  if (scheduledTaskContext) {
+    parts.push(scheduledTaskContext)
+  }
+  return parts.filter(Boolean).join('\n\n')
+}
 
 const buildRequestBrowserContext = ({
   activeTab,
@@ -218,12 +236,80 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   } = useRemoteConversationSave()
   const [searchParams, setSearchParams] = useSearchParams()
   const conversationIdParam = searchParams.get('conversationId')
+  const scheduledRunIdParam = searchParams.get('scheduledRunId')
 
   const agentUrlRef = useRef(agentServerUrl)
+  const scheduledTaskContextRef = useRef<string | null>(null)
+  const [scheduledTaskContext, setScheduledTaskContext] =
+    useState<ScheduledTaskContextState>({ status: 'idle' })
 
   useEffect(() => {
     agentUrlRef.current = agentServerUrl
   }, [agentServerUrl])
+
+  useEffect(() => {
+    if (!scheduledRunIdParam) {
+      scheduledTaskContextRef.current = null
+      setScheduledTaskContext({ status: 'idle' })
+      return
+    }
+
+    let cancelled = false
+    scheduledTaskContextRef.current = null
+    setScheduledTaskContext({
+      status: 'loading',
+      runId: scheduledRunIdParam,
+    })
+
+    const loadScheduledTaskContext = async () => {
+      const [runs, jobs] = await Promise.all([
+        scheduledJobRunStorage.getValue(),
+        scheduledJobStorage.getValue(),
+      ])
+      if (cancelled) return
+
+      const run = (runs ?? []).find((item) => item.id === scheduledRunIdParam)
+      if (!run) {
+        setScheduledTaskContext({
+          status: 'error',
+          runId: scheduledRunIdParam,
+          error: 'Scheduled task result was not found.',
+        })
+        return
+      }
+
+      const job = (jobs ?? []).find((item) => item.id === run.jobId)
+      const context = buildScheduledTaskResultChatContext({ run, job })
+      if (!context) {
+        setScheduledTaskContext({
+          status: 'error',
+          runId: scheduledRunIdParam,
+          error: 'Scheduled task result has no output.',
+        })
+        return
+      }
+
+      scheduledTaskContextRef.current = context
+      setScheduledTaskContext({
+        status: 'ready',
+        runId: scheduledRunIdParam,
+        jobName: job?.name?.trim() || 'Scheduled Task',
+      })
+    }
+
+    loadScheduledTaskContext().catch((error) => {
+      if (cancelled) return
+      setScheduledTaskContext({
+        status: 'error',
+        runId: scheduledRunIdParam,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [scheduledRunIdParam])
 
   const providers: Provider[] = chatTargets.map(toProviderOption)
 
@@ -390,6 +476,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         const userSystemPrompt = getUserSystemPrompt(
           options?.origin,
           personalizationRef.current,
+          scheduledTaskContextRef.current,
         )
 
         const commonRequest = {
@@ -748,6 +835,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const resetConversationState = () => {
     stop()
     void finishExecutionTask({ isAbort: true })
+    scheduledTaskContextRef.current = null
+    setScheduledTaskContext({ status: 'idle' })
     setConversationId(crypto.randomUUID())
     setMessages([])
     setTextToAction(new Map())
@@ -807,6 +896,15 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const resetConversation = () => {
     track(CONVERSATION_RESET_EVENT, { message_count: messages.length })
     resetConversationState()
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('scheduledRunId')
+        next.delete('mode')
+        return next
+      },
+      { replace: true },
+    )
   }
 
   const isRestoringConversation =
@@ -826,6 +924,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isRestoringConversation,
     agentUrlError,
     chatError,
+    scheduledTaskContext,
     handleSelectProvider,
     getActionForMessage,
     resetConversation,

@@ -46,6 +46,7 @@ export const NewTabChat: FC = () => {
     isRestoringConversation,
     providers,
     selectedProvider,
+    scheduledTaskContext,
     handleSelectProvider,
     resetConversation,
     input,
@@ -82,13 +83,24 @@ export const NewTabChat: FC = () => {
     const query = searchParams.get('q')
     const chatMode = searchParams.get('mode')
     const tabIdsParam = searchParams.get('tabs')
-    if (!query) return
-
-    hasSentInitialRef.current = true
     if (chatMode === 'chat' || chatMode === 'agent') {
       setMode(chatMode)
     }
-    setSearchParams({}, { replace: true })
+    if (!query) return
+
+    hasSentInitialRef.current = true
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('q')
+        next.delete('tabs')
+        next.delete('actionType')
+        next.delete('tabName')
+        next.delete('tabDescription')
+        return next
+      },
+      { replace: true },
+    )
 
     const actionType = searchParams.get('actionType')
     const tabName = searchParams.get('tabName')
@@ -177,6 +189,17 @@ export const NewTabChat: FC = () => {
         )}
         {chatError && (
           <ChatError error={chatError} providerType={selectedProvider?.type} />
+        )}
+        {scheduledTaskContext.status === 'ready' && (
+          <div className="rounded-lg border border-border bg-muted/45 px-3 py-2 text-muted-foreground text-sm">
+            Scheduled task result loaded: {scheduledTaskContext.jobName}
+          </div>
+        )}
+        {scheduledTaskContext.status === 'error' && (
+          <ChatError
+            error={scheduledTaskContext.error}
+            providerType={selectedProvider?.type}
+          />
         )}
       </main>
 
