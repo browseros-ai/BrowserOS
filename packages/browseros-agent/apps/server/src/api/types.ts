@@ -41,6 +41,7 @@ export const ChatRequestSchema = AgentLLMConfigSchema.extend({
   browserContext: BrowserContextSchema.optional(),
   userSystemPrompt: z.string().optional(),
   isScheduledTask: z.boolean().optional().default(false),
+  runSilently: z.boolean().optional().default(true),
   userWorkingDir: z.string().min(1).optional(),
   supportsImages: z.boolean().optional().default(true),
   mode: z.enum(['chat', 'agent']).optional().default('agent'),

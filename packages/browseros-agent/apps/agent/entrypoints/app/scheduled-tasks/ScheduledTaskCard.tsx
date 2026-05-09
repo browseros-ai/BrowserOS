@@ -149,6 +149,10 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
                 </span>
               </>
             )}
+            <span>•</span>
+            <span>
+              {job.runSilently === false ? 'Visible run' : 'Silent run'}
+            </span>
             {job.lastRunAt && (
               <>
                 <span>•</span>

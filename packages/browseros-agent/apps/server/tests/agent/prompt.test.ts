@@ -326,6 +326,14 @@ describe('mode-aware framing', () => {
     expect(prompt).toContain('Do NOT create new windows')
     expect(prompt).toContain('Close extra hidden pages')
   })
+
+  it('visible scheduled task mode excludes hidden page rules', () => {
+    const prompt = buildScheduled({ scheduledTaskRunSilently: false })
+    expect(prompt).toContain('scheduled background task')
+    expect(prompt).not.toContain('system-managed hidden page')
+    expect(prompt).not.toContain('Do NOT close your starting hidden page')
+    expect(prompt).toContain('new_page')
+  })
 })
 
 // ---------------------------------------------------------------------------

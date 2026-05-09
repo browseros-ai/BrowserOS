@@ -26,7 +26,7 @@ type RemoteScheduledJob = {
   lastRunAt: string | null
 }
 
-const IGNORED_FIELDS = ['id', 'createdAt', 'lastRunAt'] as const
+const IGNORED_FIELDS = ['id', 'createdAt', 'lastRunAt', 'runSilently'] as const
 
 function toComparable(job: ScheduledJob) {
   const data = omit(job, IGNORED_FIELDS)
@@ -63,6 +63,7 @@ function remoteToLocal(remote: RemoteScheduledJob): ScheduledJob {
     scheduleTime: remote.scheduleTime ?? undefined,
     scheduleInterval: remote.scheduleInterval ?? undefined,
     enabled: remote.enabled,
+    runSilently: true,
     providerId: remote.llmProviderId ?? undefined,
     createdAt: normalizeTimestamp(remote.createdAt),
     updatedAt: normalizeTimestamp(remote.updatedAt),

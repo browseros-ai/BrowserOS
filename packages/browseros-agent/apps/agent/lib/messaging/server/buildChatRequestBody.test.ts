@@ -81,4 +81,16 @@ describe('buildChatRequestBody', () => {
 
     expect(body.toolApprovalConfig).toBeUndefined()
   })
+
+  it('passes scheduled task silent mode through to the server', () => {
+    const body = buildChatRequestBody({
+      conversationId: '6ff46e3b-e45a-40a4-9157-ca520e800f43',
+      provider,
+      isScheduledTask: true,
+      runSilently: false,
+    })
+
+    expect(body.isScheduledTask).toBe(true)
+    expect(body.runSilently).toBe(false)
+  })
 })

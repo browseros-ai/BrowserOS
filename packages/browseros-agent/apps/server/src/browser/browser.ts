@@ -517,45 +517,15 @@ export class Browser {
     return null
   }
 
-  private async resolveWindowIdForNewPage(opts?: {
-    hidden?: boolean
-    windowId?: number
-  }): Promise<number | undefined> {
-    if (!opts?.hidden) {
-      return opts?.windowId
-    }
-
-    if (opts.windowId !== undefined) {
-      const windows = await this.listWindows()
-      const targetWindow = windows.find(
-        (window) => window.windowId === opts.windowId,
-      )
-      if (targetWindow && !targetWindow.isVisible) {
-        return targetWindow.windowId
-      }
-      if (targetWindow?.isVisible) {
-        logger.warn(
-          'Requested hidden page target window is visible, creating a new hidden window instead',
-          {
-            requestedWindowId: opts.windowId,
-          },
-        )
-      }
-    }
-
-    const hiddenWindow = await this.createWindow({ hidden: true })
-    return hiddenWindow.windowId
-  }
-
   async newPage(
     url: string,
     opts?: { hidden?: boolean; background?: boolean; windowId?: number },
   ): Promise<number> {
-    const windowId = await this.resolveWindowIdForNewPage(opts)
     const createResult = await this.cdp.Browser.createTab({
       url,
       ...(opts?.background !== undefined && { background: opts.background }),
-      ...(windowId !== undefined && { windowId }),
+      ...(opts?.hidden !== undefined && { hidden: opts.hidden }),
+      ...(opts?.windowId !== undefined && { windowId: opts.windowId }),
     })
 
     const tabId = (createResult.tab as TabInfo).tabId
@@ -583,7 +553,7 @@ export class Browser {
       loadProgress: tabInfo.loadProgress,
       isPinned: tabInfo.isPinned,
       isHidden: tabInfo.isHidden,
-      windowId: tabInfo.windowId ?? windowId,
+      windowId: tabInfo.windowId ?? opts?.windowId,
       index: tabInfo.index,
       groupId: tabInfo.groupId,
     })

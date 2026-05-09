@@ -48,8 +48,11 @@ You do not have a filesystem workspace in this session. Return all results direc
 
   // Mode-aware framing
   if (options?.isScheduledTask) {
-    role +=
-      '\n\nYou are running as a scheduled background task on a system-managed hidden page. Complete the task autonomously and report results.'
+    const location =
+      options.scheduledTaskRunSilently !== false
+        ? ' on a system-managed hidden page'
+        : ''
+    role += `\n\nYou are running as a scheduled background task${location}. Complete the task autonomously and report results.`
   } else if (options?.chatMode) {
     role +=
       '\n\nYou are in read-only chat mode. You can observe pages but cannot interact with them, modify files, or store memories.'
@@ -659,9 +662,13 @@ function getUserContext(
   if (!options?.chatMode) {
     let pageCtx = '<page_context>'
 
+    const isSilentScheduledTask =
+      options?.isScheduledTask && options.scheduledTaskRunSilently !== false
+
     if (options?.isScheduledTask) {
-      pageCtx +=
-        '\nYou are running as a **scheduled background task** on a system-managed hidden page.'
+      pageCtx += isSilentScheduledTask
+        ? '\nYou are running as a **scheduled background task** on a system-managed hidden page.'
+        : '\nYou are running as a **scheduled background task**.'
     }
 
     pageCtx +=
@@ -671,14 +678,21 @@ function getUserContext(
       const pageRef = options.scheduledTaskPageId
         ? `\`${options.scheduledTaskPageId}\``
         : 'the page ID from the Browser Context'
-      pageCtx += `\n2. **Use starting page ID ${pageRef} directly.** For additional browsing, prefer \`new_hidden_page\` so the work stays invisible to the user.`
-      pageCtx +=
-        '\n3. **Do NOT close your starting hidden page** (via `close_page` on that page ID). It is managed by the system and will be cleaned up automatically.'
-      pageCtx +=
-        '\n4. **Do NOT create new windows** (via `create_window` or `create_hidden_window`). Use hidden pages instead.'
-      pageCtx +=
-        '\n5. **Close extra hidden pages when you are done with them** unless you explicitly reveal them with `show_page`.'
-      pageCtx += '\n6. Complete the task end-to-end and report results.'
+      if (isSilentScheduledTask) {
+        pageCtx += `\n2. **Use starting page ID ${pageRef} directly.** For additional browsing, prefer \`new_hidden_page\` so the work stays invisible to the user.`
+        pageCtx +=
+          '\n3. **Do NOT close your starting hidden page** (via `close_page` on that page ID). It is managed by the system and will be cleaned up automatically.'
+        pageCtx +=
+          '\n4. **Do NOT create new windows** (via `create_window` or `create_hidden_window`). Use hidden pages instead.'
+        pageCtx +=
+          '\n5. **Close extra hidden pages when you are done with them** unless you explicitly reveal them with `show_page`.'
+        pageCtx += '\n6. Complete the task end-to-end and report results.'
+      } else {
+        pageCtx += `\n2. **Use starting page ID ${pageRef} directly.** For additional browsing, prefer \`new_page\` with background mode so the task does not steal focus.`
+        pageCtx +=
+          '\n3. **Do NOT create new windows** unless the scheduled task explicitly requires a separate window.'
+        pageCtx += '\n4. Complete the task end-to-end and report results.'
+      }
     }
 
     pageCtx += '\n</page_context>'
@@ -739,6 +753,7 @@ export interface BuildSystemPromptOptions {
   userSystemPrompt?: string
   exclude?: string[]
   isScheduledTask?: boolean
+  scheduledTaskRunSilently?: boolean
   scheduledTaskPageId?: number
   workspaceDir?: string
   soulContent?: string

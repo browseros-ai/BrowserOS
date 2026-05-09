@@ -37,7 +37,7 @@ export const TIPS: Tip[] = [
   },
   {
     id: 'background-tasks',
-    text: 'Scheduled tasks run in a separate window so they never interrupt your browsing.',
+    text: 'Scheduled tasks can run silently in the background without opening a new browser window.',
   },
   {
     id: 'claude-code-mcp',

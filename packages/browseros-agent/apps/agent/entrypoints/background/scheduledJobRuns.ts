@@ -118,6 +118,7 @@ export const scheduledJobRuns = async () => {
         message: job.query,
         signal: abortController.signal,
         providerId: job.providerId,
+        runSilently: job.runSilently ?? true,
       })
 
       await updateJobRun(jobRun.id, {

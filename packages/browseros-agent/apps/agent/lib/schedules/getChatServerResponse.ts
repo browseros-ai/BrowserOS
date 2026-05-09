@@ -27,6 +27,7 @@ interface ChatServerRequest {
   activeTab?: ActiveTab
   signal?: AbortSignal
   providerId?: string
+  runSilently?: boolean
 }
 
 interface ChatServerResponse {
@@ -137,6 +138,7 @@ export async function getChatServerResponse(
         userSystemPrompt: `${personalization}\n${scheduleSystemPrompt}`,
         supportsImages: provider.supportsImages,
         isScheduledTask: true,
+        runSilently: request.runSilently ?? true,
       }),
     }),
   })

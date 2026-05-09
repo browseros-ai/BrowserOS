@@ -57,6 +57,7 @@ const formSchema = z
     scheduleTime: z.string().optional(),
     scheduleInterval: z.number().int().min(1).max(60).optional(),
     providerId: z.string().optional(),
+    runSilently: z.boolean(),
     enabled: z.boolean(),
   })
   .superRefine((data, ctx) => {
@@ -107,6 +108,7 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
       scheduleTime: '09:00',
       scheduleInterval: 1,
       providerId: undefined,
+      runSilently: true,
       enabled: true,
     },
   })
@@ -144,6 +146,7 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
           scheduleTime: initialValues.scheduleTime || '09:00',
           scheduleInterval: initialValues.scheduleInterval || 1,
           providerId: initialValues.providerId,
+          runSilently: initialValues.runSilently ?? true,
           enabled: initialValues.enabled,
         })
       } else {
@@ -154,6 +157,7 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
           scheduleTime: '09:00',
           scheduleInterval: 1,
           providerId: undefined,
+          runSilently: true,
           enabled: true,
         })
       }
@@ -253,6 +257,7 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
       scheduleInterval:
         values.scheduleType !== 'daily' ? values.scheduleInterval : undefined,
       providerId: values.providerId,
+      runSilently: values.runSilently,
       enabled: values.enabled,
     })
     form.reset()
@@ -457,6 +462,28 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
                 />
               )}
             </div>
+
+            <FormField
+              control={form.control}
+              name="runSilently"
+              render={({ field }) => (
+                <FormItem className="flex flex-row items-start gap-3 space-y-0">
+                  <FormControl>
+                    <Checkbox
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                  <div className="space-y-1">
+                    <FormLabel className="font-normal">Run silently</FormLabel>
+                    <FormDescription>
+                      Use a hidden background page without opening or focusing a
+                      browser window.
+                    </FormDescription>
+                  </div>
+                </FormItem>
+              )}
+            />
 
             <FormField
               control={form.control}

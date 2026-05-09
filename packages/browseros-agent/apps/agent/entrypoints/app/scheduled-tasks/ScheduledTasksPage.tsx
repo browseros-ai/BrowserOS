@@ -71,6 +71,7 @@ export const ScheduledTasksPage: FC = () => {
         'daily',
       scheduleTime: searchParams.get('scheduleTime') ?? '09:00',
       scheduleInterval: 1,
+      runSilently: true,
       enabled: true,
       createdAt: '',
       updatedAt: '',

@@ -45,6 +45,8 @@ export interface ResolvedAgentConfig {
   chatMode?: boolean
   /** Scheduled task mode - disables tab grouping. Defaults to false. */
   isScheduledTask?: boolean
+  /** Scheduled task silent mode - runs on hidden pages without visible windows. Defaults to true. */
+  scheduledTaskRunSilently?: boolean
   /** Apps the user previously declined to connect via MCP (chose "do it manually"). */
   declinedApps?: string[]
   /** Where the chat session originates from — determines navigation behavior. */

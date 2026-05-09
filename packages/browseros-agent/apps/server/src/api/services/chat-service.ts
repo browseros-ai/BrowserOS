@@ -62,6 +62,7 @@ export class ChatService {
       supportsImages: request.supportsImages,
       chatMode: request.mode === 'chat',
       isScheduledTask: request.isScheduledTask,
+      scheduledTaskRunSilently: request.runSilently,
       origin: request.origin,
       declinedApps: request.declinedApps,
       browserosId: this.deps.browserosId,
@@ -186,7 +187,7 @@ export class ChatService {
         this.deps.browser,
         request.browserContext,
       )
-      if (request.isScheduledTask) {
+      if (request.isScheduledTask && request.runSilently !== false) {
         try {
           hiddenPageId = await this.deps.browser.newPage('about:blank', {
             hidden: true,

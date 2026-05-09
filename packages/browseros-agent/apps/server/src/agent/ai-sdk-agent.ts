@@ -224,6 +224,7 @@ export class AiSdkAgent {
       userSystemPrompt: config.resolvedConfig.userSystemPrompt,
       exclude: excludeSections,
       isScheduledTask: config.resolvedConfig.isScheduledTask,
+      scheduledTaskRunSilently: config.resolvedConfig.scheduledTaskRunSilently,
       scheduledTaskPageId: config.browserContext?.activeTab?.pageId,
       workspaceDir: config.resolvedConfig.workingDir,
       soulContent,

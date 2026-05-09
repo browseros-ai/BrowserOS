@@ -53,6 +53,7 @@ interface ChatRequestBodyParams {
   toolApprovalConfig?: ToolApprovalConfig
   toolApprovalResponses?: ApprovalResponseData[]
   isScheduledTask?: boolean
+  runSilently?: boolean
 }
 
 export const toRequestToolApprovalConfig = (
@@ -81,6 +82,7 @@ export const buildChatRequestBody = ({
   toolApprovalConfig,
   toolApprovalResponses,
   isScheduledTask,
+  runSilently,
 }: ChatRequestBodyParams) => ({
   message,
   provider: provider.type,
@@ -112,4 +114,5 @@ export const buildChatRequestBody = ({
   toolApprovalConfig: toRequestToolApprovalConfig(toolApprovalConfig),
   toolApprovalResponses,
   isScheduledTask,
+  runSilently,
 })

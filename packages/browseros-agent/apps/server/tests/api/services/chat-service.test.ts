@@ -291,6 +291,68 @@ describe('ChatService scheduled task hidden page lifecycle', () => {
     })
     expect(browser.closePage).toHaveBeenCalledWith(88)
   })
+
+  it('uses the provided visible context when a scheduled task disables silent mode', async () => {
+    const fakeAgent = createFakeAgent()
+    agentToReturn = fakeAgent
+    streamResponseHandler = async ({ onFinish, uiMessages }) => {
+      await onFinish({ messages: uiMessages ?? fakeAgent.messages })
+      return new Response('ok')
+    }
+
+    const browser = {
+      newPage: mock(async () => 99),
+      listPages: mock(async () => []),
+      closePage: mock(async () => {}),
+      resolveTabIds: mock(async () => new Map([[3, 103]])),
+    }
+    const sessionStore = createSessionStore()
+    const service = new ChatService({
+      sessionStore: sessionStore as never,
+      klavisRef: { handle: null },
+      browser: browser as never,
+      registry: {} as never,
+    })
+
+    await service.processMessage(
+      {
+        conversationId: crypto.randomUUID(),
+        message: 'Run the scheduled task visibly',
+        isScheduledTask: true,
+        runSilently: false,
+        mode: 'agent',
+        origin: 'sidepanel',
+        browserContext: {
+          activeTab: {
+            id: 3,
+            url: 'https://example.com',
+            title: 'Example',
+          },
+        },
+      } as never,
+      new AbortController().signal,
+    )
+
+    expect(browser.newPage).not.toHaveBeenCalled()
+    expect(browser.closePage).not.toHaveBeenCalled()
+
+    const createArgs = createAgentSpy.mock.calls.at(-1)?.[0] as {
+      browserContext?: {
+        activeTab?: {
+          id: number
+          pageId?: number
+          url: string
+          title: string
+        }
+      }
+    }
+    expect(createArgs.browserContext?.activeTab).toEqual({
+      id: 3,
+      pageId: 103,
+      url: 'https://example.com',
+      title: 'Example',
+    })
+  })
 })
 
 describe('ChatService Klavis session rebuilds', () => {
