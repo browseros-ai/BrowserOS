@@ -2,7 +2,10 @@ import { storage } from '@wxt-dev/storage'
 import type { UIMessage } from 'ai'
 import { useEffect, useState } from 'react'
 import { useSessionInfo } from '../auth/sessionStorage'
-import { removeConversationExecutionHistory } from '../execution-history/storage'
+import {
+  clearConversationExecutionHistory,
+  removeConversationExecutionHistory,
+} from '../execution-history/storage'
 import { uploadConversationsToGraphql } from './uploadConversationsToGraphql'
 
 const MAX_CONVERSATIONS = 50
@@ -44,6 +47,11 @@ export function useConversations() {
     const current = (await conversationStorage.getValue()) ?? []
     await conversationStorage.setValue(current.filter((c) => c.id !== id))
     await removeConversationExecutionHistory(id)
+  }
+
+  const clearConversations = async () => {
+    await conversationStorage.setValue([])
+    await clearConversationExecutionHistory()
   }
 
   const saveConversation = async (id: string, messages: UIMessage[]) => {
@@ -90,6 +98,7 @@ export function useConversations() {
   return {
     conversations,
     removeConversation,
+    clearConversations,
     saveConversation,
     getConversation,
   }

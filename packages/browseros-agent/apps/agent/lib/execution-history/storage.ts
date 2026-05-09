@@ -82,6 +82,10 @@ export async function removeConversationExecutionHistory(
   await executionHistoryStorage.setValue(rest)
 }
 
+export async function clearConversationExecutionHistory(): Promise<void> {
+  await executionHistoryStorage.setValue({})
+}
+
 export async function removeConversationExecutionTask(args: {
   conversationId: string
   taskId: string

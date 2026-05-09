@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAgentServerUrl } from '@/lib/browseros/useBrowserOSProviders'
 
+export const MEMORY_QUERY_KEY = 'memory'
+
 async function fetchMemory(baseUrl: string): Promise<string> {
   const response = await fetch(`${baseUrl}/memory`)
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -30,7 +32,7 @@ export function useMemoryContent() {
   const queryClient = useQueryClient()
 
   const { data, isLoading, error, refetch } = useQuery<string, Error>({
-    queryKey: ['memory', baseUrl],
+    queryKey: [MEMORY_QUERY_KEY, baseUrl],
     queryFn: () => fetchMemory(baseUrl as string),
     enabled: !!baseUrl && !urlLoading,
   })
@@ -38,7 +40,7 @@ export function useMemoryContent() {
   const saveMutation = useMutation({
     mutationFn: (content: string) => saveMemory(baseUrl as string, content),
     onSuccess: (_data, content) => {
-      queryClient.setQueryData(['memory', baseUrl], content)
+      queryClient.setQueryData([MEMORY_QUERY_KEY, baseUrl], content)
     },
   })
 
