@@ -4,11 +4,23 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Centralized limits and thresholds.
+ *
+ * Select values can be overridden via environment variables.
+ * Invalid values (non-numeric, negative) fall back to defaults.
  */
 
+/** Read a positive integer limit from env, returning fallback on invalid input. */
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name]
+  if (raw === undefined) return fallback
+  const parsed = Number.parseInt(raw, 10)
+  if (Number.isNaN(parsed) || parsed < 0) return fallback
+  return parsed
+}
+
 export const AGENT_LIMITS = {
-  MAX_TURNS: 100,
-  DEFAULT_CONTEXT_WINDOW: 200_000,
+  MAX_TURNS: envInt('BROWSEROS_LIMIT_MAX_TURNS', 100),
+  DEFAULT_CONTEXT_WINDOW: envInt('BROWSEROS_LIMIT_DEFAULT_CONTEXT_WINDOW', 200_000),
 
   // Compression settings for context compaction heuristics
   COMPRESSION_MIN_HEADROOM: 10_000,
@@ -37,7 +49,7 @@ export const AGENT_LIMITS = {
   COMPACTION_MIN_TOKEN_FLOOR: 256,
   COMPACTION_TURN_PREFIX_OUTPUT_RATIO: 0.5,
   COMPACTION_MAX_SUMMARIZATION_INPUT: 100_000,
-  COMPACTION_SUMMARIZATION_TIMEOUT_MS: 60_000,
+  COMPACTION_SUMMARIZATION_TIMEOUT_MS: envInt('BROWSEROS_TIMEOUT_COMPACTION_SUMMARIZATION', 60_000),
   COMPACTION_SUMMARIZER_OUTPUT_RATIO: 0.8,
 
   // Compaction — estimation (step 0 / no real usage)
@@ -58,9 +70,9 @@ export const AGENT_LIMITS = {
 } as const
 
 export const TOOL_LIMITS = {
-  INLINE_PAGE_CONTENT_MAX_CHARS: 5_000,
-  FILESYSTEM_READ_MAX_LINES: 500,
-  FILESYSTEM_READ_MAX_CHARS: 15_000,
+  INLINE_PAGE_CONTENT_MAX_CHARS: envInt('BROWSEROS_LIMIT_INLINE_PAGE_CONTENT_MAX_CHARS', 5_000),
+  FILESYSTEM_READ_MAX_LINES: envInt('BROWSEROS_LIMIT_FILESYSTEM_READ_MAX_LINES', 500),
+  FILESYSTEM_READ_MAX_CHARS: envInt('BROWSEROS_LIMIT_FILESYSTEM_READ_MAX_CHARS', 15_000),
 } as const
 
 export const PAGINATION = {
