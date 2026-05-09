@@ -3,6 +3,7 @@ import type { ToolApprovalConfig } from '@browseros/shared/constants/tool-approv
 import { type ToolSet, tool } from 'ai'
 import { logger } from '../lib/logger'
 import { metrics } from '../lib/metrics'
+import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
 import { executeTool, type ToolContext } from '../tools/framework'
 import type { ContentItem } from '../tools/response'
 import type { ToolRegistry } from '../tools/tool-registry'
@@ -65,7 +66,7 @@ export function buildBrowserToolSet(
             def,
             params,
             ctx,
-            AbortSignal.timeout(120_000),
+            AbortSignal.timeout(TIMEOUTS.TOOL_CALL),
           )
 
           metrics.log('tool_executed', {
