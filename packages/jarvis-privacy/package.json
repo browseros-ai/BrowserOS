@@ -1,8 +1,15 @@
 {
   "name": "@jarvisos/privacy",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "JarvisOS Privacy Layer — ported from Brave browser",
   "private": true,
+  "main": "./shields/index.ts",
+  "exports": {
+    "./shields/shields.types": "./shields/shields.types.ts",
+    "./shields": "./shields/index.ts",
+    "./adblock": "./adblock/jarvis-adblock.ts",
+    "./config": "./config/privacy-defaults.json"
+  },
   "brave_version": "brave-core (depth-1 clone, May 2026)",
   "components": {
     "shields": "Brave Shields — tracker/ad blocking UI layer",
@@ -12,10 +19,12 @@
     "referrer": "Referrer trimming"
   },
   "integration_status": {
-    "shields": "headers-copied",
-    "adblock": "filter-lists-copied",
+    "shields": "types-created",
+    "adblock": "ts-wrapper-created",
     "fingerprint": "headers-copied",
     "debounce": "headers-copied",
-    "referrer": "pending"
+    "referrer": "pending",
+    "shields_ui": "phase4-complete",
+    "wasm": "pending-network-fix"
   }
 }
