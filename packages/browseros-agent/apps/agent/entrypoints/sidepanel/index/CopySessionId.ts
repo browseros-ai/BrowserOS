@@ -15,7 +15,7 @@ export const SESSION_ID_COPIED_EVENT = 'sidepanel.session_id.copied'
  */
 export async function copySessionIdToClipboard(
   conversationId: string | null | undefined,
-): Promise<void | false> {
+): Promise<undefined | false> {
   if (!conversationId) {
     return false
   }
