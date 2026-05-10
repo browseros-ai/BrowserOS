@@ -299,4 +299,7 @@ export const SIDEPANEL_VOICE_TRANSCRIPTION_COMPLETED_EVENT =
   'sidepanel.voice.transcription_completed'
 
 /** @public */
+export const SIDEPANEL_SESSION_ID_COPIED_EVENT = 'sidepanel.session_id.copied'
+
+/** @public */
 export const SIDEPANEL_VOICE_ERROR_EVENT = 'sidepanel.voice.error'

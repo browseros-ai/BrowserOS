@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd /home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent
+bun run build:agent:dev

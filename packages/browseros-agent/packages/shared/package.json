@@ -34,6 +34,14 @@
       "types": "./src/constants/paths.ts",
       "default": "./src/constants/paths.ts"
     },
+    "./constants/config-schema": {
+      "types": "./src/constants/config-schema.ts",
+      "default": "./src/constants/config-schema.ts"
+    },
+    "./constants/config-store": {
+      "types": "./src/constants/config-store.ts",
+      "default": "./src/constants/config-store.ts"
+    },
     "./constants/openclaw": {
       "types": "./src/constants/openclaw.ts",
       "default": "./src/constants/openclaw.ts"

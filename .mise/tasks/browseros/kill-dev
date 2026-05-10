@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd /home/bhd/Documents/Projects/bhd/BrowserOS
+pkill -9 -f "/home/bhd/.browseros-dev-chrome" 2>/dev/null || true
+pkill -9 -f "apps/server/src/index.ts" 2>/dev/null || true
+pkill -9 -f "@browseros/server start:ci" 2>/dev/null || true
+rm -f /tmp/browseros-dev-browser.pid /tmp/browseros-dev-server.pid

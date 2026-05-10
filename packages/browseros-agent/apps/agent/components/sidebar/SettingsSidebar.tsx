@@ -9,6 +9,7 @@ import {
   RotateCcw,
   Search,
   Server,
+  Settings2,
   ShieldAlert,
   ShieldCheck,
 } from 'lucide-react'
@@ -99,6 +100,7 @@ const primarySettingsSections: NavSection[] = [
         icon: CreditCard,
         feature: Feature.CREDITS_SUPPORT,
       },
+      { name: 'Advanced Config', to: '/settings/advanced', icon: Settings2 },
     ],
   },
 ]

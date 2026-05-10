@@ -14,6 +14,7 @@ const ChatLayoutContent: FC = () => {
     resetConversation,
     messages,
     isLoading,
+    conversationId,
   } = useChatSessionContext()
 
   if (isLoading || !selectedProvider) {
@@ -32,6 +33,7 @@ const ChatLayoutContent: FC = () => {
         providers={providers}
         onNewConversation={resetConversation}
         hasMessages={messages.length > 0}
+        conversationId={conversationId}
       />
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <Outlet />

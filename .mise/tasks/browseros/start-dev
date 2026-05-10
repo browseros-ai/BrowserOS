@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd /home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent
+APP="/home/bhd/Downloads/alta/BrowserOS.AppImage"
+EXT_DIR="/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/apps/agent/dist/chrome-mv3-dev"
+BROWSER_LOG="/tmp/browseros-dev-browser.log"
+SERVER_LOG="/tmp/browseros-dev-server.log"
+
+if [ ! -x "$APP" ]; then
+  echo "[ERROR] BrowserOS AppImage missing: $APP" >&2
+  exit 1
+fi
+
+if [ ! -d "$EXT_DIR" ]; then
+  echo "[ERROR] Dev extension build missing: $EXT_DIR" >&2
+  exit 1
+fi
+
+nohup "$APP" \
+  --no-sandbox \
+  --no-first-run \
+  --no-default-browser-check \
+  --use-mock-keychain \
+  --show-component-extension-options \
+  --disable-browseros-server \
+  --disable-browseros-extensions \
+  --remote-debugging-port=9010 \
+  --browseros-mcp-port=9110 \
+  --browseros-server-port=9110 \
+  --user-data-dir=/home/bhd/.browseros-dev-chrome \
+  --load-extension="$EXT_DIR" \
+  chrome://newtab \
+  > "$BROWSER_LOG" 2>&1 &
+echo $! > /tmp/browseros-dev-browser.pid
+
+python3 - <<"PY"
+import socket, time, sys
+for _ in range(60):
+    s = socket.socket()
+    s.settimeout(0.5)
+    try:
+        s.connect(("127.0.0.1", 9010))
+        s.close()
+        sys.exit(0)
+    except OSError:
+        time.sleep(0.5)
+print("[ERROR] BrowserOS CDP port 9010 did not open", file=sys.stderr)
+sys.exit(1)
+PY
+
+nohup env \
+  BROWSEROS_SKIP_OPENCLAW=1 \
+  BROWSEROS_CDP_PORT=9010 \
+  BROWSEROS_SERVER_PORT=9110 \
+  BROWSEROS_EXTENSION_PORT=9305 \
+  bun run --filter @browseros/server start:ci \
+  > "$SERVER_LOG" 2>&1 &
+echo $! > /tmp/browseros-dev-server.pid
+
+python3 - <<"PY"
+import json, time, urllib.request, sys
+url = "http://127.0.0.1:9110/health"
+for _ in range(60):
+    try:
+        with urllib.request.urlopen(url, timeout=1) as r:
+            data = json.load(r)
+        if data.get("status") == "ok" and data.get("cdpConnected") is True:
+            print(json.dumps(data))
+            sys.exit(0)
+    except Exception:
+        time.sleep(0.5)
+print("[ERROR] BrowserOS server health check failed on http://127.0.0.1:9110/health", file=sys.stderr)
+sys.exit(1)
+PY

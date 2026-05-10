@@ -96,6 +96,10 @@ export function getServerConfigPath(): string {
   return join(getBrowserosDir(), PATHS.SERVER_CONFIG_FILE_NAME)
 }
 
+export function getAdvancedConfigPath(): string {
+  return join(getBrowserosDir(), 'advanced-config.json')
+}
+
 export async function writeServerConfig(
   config: ServerDiscoveryConfig,
 ): Promise<void> {

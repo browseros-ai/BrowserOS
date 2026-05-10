@@ -1,0 +1,21 @@
+[tasks."browseros:kill-dev"]
+description = "Kill the local BrowserOS dev app and local dev server tied to the .browseros-dev-chrome profile"
+run = "bash .mise/tasks/browseros/kill-dev"
+
+[tasks."browseros:build-dev"]
+description = "Build the local BrowserOS dev extension bundle (dist/chrome-mv3-dev)"
+run = "bash .mise/tasks/browseros/build-dev"
+
+[tasks."browseros:start-dev"]
+description = "Start the local BrowserOS dev app on Linux with the rebuilt dev extension and detached local server"
+depends = ["browseros:build-dev"]
+run = "bash .mise/tasks/browseros/start-dev"
+
+[tasks."browseros:health-dev"]
+description = "Check the local BrowserOS dev server health endpoint"
+run = "bash .mise/tasks/browseros/health-dev"
+
+[tasks."browseros:restart-dev"]
+description = "Kill, rebuild, restart, and verify the local BrowserOS dev app/server workflow"
+depends = ["browseros:kill-dev", "browseros:start-dev"]
+run = "echo 'browseros:restart-dev complete'"

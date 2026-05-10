@@ -1,5 +1,14 @@
-import { Bot, Github, History, Plus, SettingsIcon } from 'lucide-react'
+import {
+  Bot,
+  CheckIcon,
+  CopyIcon,
+  Github,
+  History,
+  Plus,
+  SettingsIcon,
+} from 'lucide-react'
 import type { FC } from 'react'
+import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
 import type { Provider } from '@/components/chat/chatComponentTypes'
@@ -7,10 +16,13 @@ import { CreditBadge } from '@/components/credits/CreditBadge'
 import { ThemeToggle } from '@/components/elements/theme-toggle'
 import { Feature } from '@/lib/browseros/capabilities'
 import { useCapabilities } from '@/lib/browseros/useCapabilities'
+import { SIDEPANEL_SESSION_ID_COPIED_EVENT } from '@/lib/constants/analyticsEvents'
 import { productRepositoryUrl } from '@/lib/constants/productUrls'
 import { useCredits } from '@/lib/credits/useCredits'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
+import { track } from '@/lib/metrics/track'
+import { copySessionIdToClipboard } from './CopySessionId'
 
 const CreditsBadgeWrapper: FC = () => {
   const { supports } = useCapabilities()
@@ -31,6 +43,7 @@ interface ChatHeaderProps {
   onNewConversation: () => void
   hasMessages: boolean
   hideHistory?: boolean
+  conversationId?: string
 }
 
 export const ChatHeader: FC<ChatHeaderProps> = ({
@@ -40,10 +53,12 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
   onNewConversation,
   hasMessages,
   hideHistory,
+  conversationId,
 }) => {
   const location = useLocation()
   const navigate = useNavigate()
   const isHistoryPage = location.pathname === '/history'
+  const [copied, setCopied] = useState(false)
 
   const handleNewConversationFromHistory = () => {
     onNewConversation()
@@ -83,6 +98,26 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
       </div>
 
       <div className="flex items-center gap-1">
+        {conversationId && (
+          <button
+            type="button"
+            onClick={async () => {
+              await copySessionIdToClipboard(conversationId)
+              track(SIDEPANEL_SESSION_ID_COPIED_EVENT)
+              setCopied(true)
+              setTimeout(() => setCopied(false), 2000)
+            }}
+            className="cursor-pointer rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+            title="Copy session ID"
+          >
+            {copied ? (
+              <CheckIcon className="h-4 w-4" />
+            ) : (
+              <CopyIcon className="h-4 w-4" />
+            )}
+          </button>
+        )}
+
         {!isHistoryPage && hasMessages && (
           <button
             type="button"

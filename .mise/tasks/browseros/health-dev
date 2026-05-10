@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+python3 - <<"PY"
+import json, urllib.request
+with urllib.request.urlopen("http://127.0.0.1:9110/health", timeout=3) as r:
+    print(json.dumps(json.load(r)))
+PY
