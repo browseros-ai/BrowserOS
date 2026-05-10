@@ -1,0 +1,21 @@
+{
+  "name": "JarvisOS Privacy Config",
+  "version": "0.1.0",
+  "shields": {
+    "enabled": true,
+    "adblock": true,
+    "tracker_block": true,
+    "fingerprint_protection": "balanced",
+    "cookie_protection": "cross_site_blocked",
+    "referrer_trimming": true,
+    "bounce_tracking_protection": true,
+    "https_upgrade": true,
+    "tor_available": true
+  },
+  "ai_privacy": {
+    "local_ai_preferred": true,
+    "data_stays_local": true,
+    "api_calls_proxied": false
+  },
+  "source": "Ported from Brave browser privacy defaults"
+}

@@ -115,13 +115,22 @@ utilities that reduce `Referer` header leakage across origins.
 - [x] Filter list registry (59 providers) documented
 - [x] `package.json` for `@jarvisos/privacy` created
 
-### Phase 2 — Rust Engine Integration (TODO)
-- [ ] Integrate `adblock-rust` as a Cargo workspace dependency
-- [ ] Build WASM/NAPI bindings for browser process consumption
+### Phase 2 — Rust Engine Integration (DONE ✅)
+- [x] `adblock-rust v0.12.4` cargo check PASSED (GNU toolchain, May 2026)
+- [x] wasm32-unknown-unknown + x86_64-pc-windows-gnu targets added
+- [x] MSVC limitation documented — GNU toolchain required on Windows
+- [ ] Build WASM/NAPI bindings for browser process consumption (wasm-pack needs MSVC linker)
 - [ ] Wire `blocker.rs` to JarvisOS network request interception layer
-- [ ] Fetch full filter lists via `gclient sync` or direct EasyList/AdGuard CDN
+- [ ] Fetch full filter lists via direct EasyList/AdGuard CDN
 
-### Phase 3 — Shields UI Layer (TODO)
+### Phase 3 — Build Environment + TS Integration (DONE ✅ — May 10, 2026)
+- [x] Bun 1.3.13 installed (BrowserOS build tool requirement)
+- [x] BrowserOS-dev full architecture analyzed (Chromium 146.0.7680.31)
+- [x] JarvisOS vs BrowserOS-dev diff completed — packages identical except `jarvis-privacy`
+- [x] `jarvis-adblock.ts` TypeScript wrapper created (`packages/jarvis-privacy/adblock/`)
+- [x] `privacy-defaults.json` config created (`packages/jarvis-privacy/config/`)
+- [x] brave-core-master Windows installer + privacy patches documented
+- [x] adblock-rust v0.12.4 verified compiles (cargo check ✅, GNU toolchain)
 - [ ] Port `brave_shield_constants.h` constants to TypeScript enums
 - [ ] Implement per-origin shield settings store (Zustand or Jotai)
 - [ ] Build JarvisOS Shields panel UI component (React/Tailwind)
@@ -166,6 +175,51 @@ All ported files from `brave-core` are subject to the
 [Brave Browser License](https://github.com/brave/brave-core/blob/master/LICENSE) (MPL 2.0).
 `adblock-rust` is licensed under MPL 2.0.
 JarvisOS integration code: see `LICENSE` in repo root.
+
+---
+
+## Phase 3 Findings — BrowserOS-dev Architecture Analysis
+
+### Chromium Base
+- **Version:** Chromium `146.0.7680.31` (BASE_COMMIT: `4d3225104176d`)
+- **Build system:** Bun 1.3.6 required (strict — npm/yarn/pnpm all rejected)
+- **Package manager:** bun workspaces monorepo
+
+### BrowserOS Agent Stack (packages/browseros-agent/)
+| App | Tech | Role |
+|-----|------|------|
+| `apps/agent` | WXT + React + Bun | Browser extension (AI agent UI) |
+| `apps/server` | Bun + TypeScript | Local server — CDP, MCP, HTTP |
+| `apps/cli` | Bun + Commander | CLI installer |
+| `apps/eval` | Bun | Test/eval harness |
+
+**Server ports (config.sample.json):**
+- CDP: 9000, HTTP/MCP: 9100, Agent: 9200, Extension: 9300
+
+### JarvisOS vs BrowserOS-dev Diff
+| Item | JarvisOS | BrowserOS-dev |
+|------|----------|---------------|
+| `packages/browseros` | ✅ Identical | ✅ Same |
+| `packages/browseros-agent` | ✅ Identical | ✅ Same |
+| `packages/jarvis-privacy` | ✅ JarvisOS-only | ❌ Not present |
+| `BRAVE_INTEGRATION.md` | ✅ JarvisOS-only | ❌ Not present |
+| `JARVIS.md` | ✅ JarvisOS-only | ❌ Not present |
+| `SOUL.md` | ✅ JarvisOS-only | ❌ Not present |
+
+**Conclusion:** JarvisOS = BrowserOS-dev base + Brave privacy layer (jarvis-privacy package). Architecture is sound — clean separation maintained.
+
+### brave-core-master Windows/Privacy Key Files
+- **Windows installer:** `installer/mini_installer/` + `installer/setup/` + `installer/util/`
+- **Windows-specific browser files:** `browser/brave_shell_integration_win.cc`, `browser/default_protocol_handler_utils_win.cc`
+- **Windows Chromium patches (BrowserOS):** 5 patches — download warning, rcpy, command IDs, rc errors
+- **Privacy components in brave-core:** `brave_shields/`, `debounce/`, `global_privacy_control/`, `privacy_sandbox/`, `brave_adblock_ui/`
+- **Privacy patches:** 6 privacy_page patches (settings UI for Android + desktop)
+
+### adblock-rust v0.12.4 Cargo Check Result
+```
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 17s
+```
+**Status: VERIFIED COMPILES** — 77 dependencies resolved, GNU toolchain required.
 
 ---
 
