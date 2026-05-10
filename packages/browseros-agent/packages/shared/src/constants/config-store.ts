@@ -2,16 +2,14 @@
  * @license
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * ConfigStore — runtime configuration overrides with file persistence.
+ *
+ * Uses lazy Node.js fs imports so the module can be safely imported
+ * in browser bundles without pulling in node:fs at build time.
+ * File I/O only executes when a filePath is provided (server-side).
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs'
-import { dirname } from 'node:path'
 import {
   CONFIG_KEY_MAP,
   type ConfigOverrides,
@@ -26,6 +24,24 @@ function readNumericEnv(envVar: string): number | undefined {
   const parsed = Number(normalized)
   if (!Number.isSafeInteger(parsed) || parsed < 0) return undefined
   return parsed
+}
+
+/** Lazy-loaded Node.js fs functions — only used server-side. */
+let fsImpl: typeof import('node:fs') | null = null
+let pathImpl: typeof import('node:path') | null = null
+
+function getFs() {
+  if (!fsImpl) {
+    fsImpl = require('node:fs')
+  }
+  return fsImpl
+}
+
+function getPath() {
+  if (!pathImpl) {
+    pathImpl = require('node:path')
+  }
+  return pathImpl
 }
 
 export class ConfigStore {
@@ -88,7 +104,7 @@ export class ConfigStore {
     if (!this.filePath) return
 
     try {
-      unlinkSync(this.filePath)
+      getFs().unlinkSync(this.filePath)
     } catch {
       // ignore missing or already removed file
     }
@@ -109,10 +125,13 @@ export class ConfigStore {
   }
 
   private readFromDisk(): ConfigOverrides {
-    if (!this.filePath || !existsSync(this.filePath)) return {}
+    if (!this.filePath) return {}
 
     try {
-      const content = readFileSync(this.filePath, 'utf8')
+      const fs = getFs()
+      if (!fs.existsSync(this.filePath)) return {}
+
+      const content = fs.readFileSync(this.filePath, 'utf8')
       const parsed = JSON.parse(content)
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
         return {}
@@ -136,8 +155,10 @@ export class ConfigStore {
 
   private writeToDisk(): void {
     if (!this.filePath) return
-    mkdirSync(dirname(this.filePath), { recursive: true })
-    writeFileSync(
+    const fs = getFs()
+    const path = getPath()
+    fs.mkdirSync(path.dirname(this.filePath), { recursive: true })
+    fs.writeFileSync(
       this.filePath,
       `${JSON.stringify(this.pendingOverrides, null, 2)}\n`,
     )

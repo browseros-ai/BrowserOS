@@ -102,10 +102,16 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
           <button
             type="button"
             onClick={async () => {
-              await copySessionIdToClipboard(conversationId)
-              track(SIDEPANEL_SESSION_ID_COPIED_EVENT)
-              setCopied(true)
-              setTimeout(() => setCopied(false), 2000)
+              try {
+                const result = await copySessionIdToClipboard(conversationId)
+                if (result !== false) {
+                  track(SIDEPANEL_SESSION_ID_COPIED_EVENT)
+                  setCopied(true)
+                  setTimeout(() => setCopied(false), 2000)
+                }
+              } catch {
+                // clipboard access denied — silently ignore
+              }
             }}
             className="cursor-pointer rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
             title="Copy session ID"

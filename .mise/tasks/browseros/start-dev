@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd /home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent
-APP="/home/bhd/Downloads/alta/BrowserOS.AppImage"
-EXT_DIR="/home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/apps/agent/dist/chrome-mv3-dev"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$REPO_ROOT/packages/browseros-agent"
+APP="${BROWSEROS_APP_PATH:-$HOME/Downloads/alta/BrowserOS.AppImage}"
+EXT_DIR="apps/agent/dist/chrome-mv3-dev"
 BROWSER_LOG="/tmp/browseros-dev-browser.log"
 SERVER_LOG="/tmp/browseros-dev-server.log"
 
 if [ ! -x "$APP" ]; then
   echo "[ERROR] BrowserOS AppImage missing: $APP" >&2
+  echo "        Set BROWSEROS_APP_PATH env var to override." >&2
   exit 1
 fi
 
@@ -24,10 +26,10 @@ nohup "$APP" \
   --show-component-extension-options \
   --disable-browseros-server \
   --disable-browseros-extensions \
-  --remote-debugging-port=9010 \
-  --browseros-mcp-port=9110 \
-  --browseros-server-port=9110 \
-  --user-data-dir=/home/bhd/.browseros-dev-chrome \
+  --remote-debugging-port="${BROWSEROS_CDP_PORT:-9010}" \
+  --browseros-mcp-port="${BROWSEROS_SERVER_PORT:-9110}" \
+  --browseros-server-port="${BROWSEROS_SERVER_PORT:-9110}" \
+  --user-data-dir="$HOME/.browseros-dev-chrome" \
   --load-extension="$EXT_DIR" \
   chrome://newtab \
   > "$BROWSER_LOG" 2>&1 &
@@ -35,31 +37,33 @@ echo $! > /tmp/browseros-dev-browser.pid
 
 python3 - <<"PY"
 import socket, time, sys
+port = int(__import__('os').environ.get('BROWSEROS_CDP_PORT', '9010'))
 for _ in range(60):
     s = socket.socket()
     s.settimeout(0.5)
     try:
-        s.connect(("127.0.0.1", 9010))
+        s.connect(("127.0.0.1", port))
         s.close()
         sys.exit(0)
     except OSError:
         time.sleep(0.5)
-print("[ERROR] BrowserOS CDP port 9010 did not open", file=sys.stderr)
+print(f"[ERROR] BrowserOS CDP port {port} did not open", file=sys.stderr)
 sys.exit(1)
 PY
 
 nohup env \
   BROWSEROS_SKIP_OPENCLAW=1 \
-  BROWSEROS_CDP_PORT=9010 \
-  BROWSEROS_SERVER_PORT=9110 \
-  BROWSEROS_EXTENSION_PORT=9305 \
+  BROWSEROS_CDP_PORT="${BROWSEROS_CDP_PORT:-9010}" \
+  BROWSEROS_SERVER_PORT="${BROWSEROS_SERVER_PORT:-9110}" \
+  BROWSEROS_EXTENSION_PORT="${BROWSEROS_EXTENSION_PORT:-9305}" \
   bun run --filter @browseros/server start:ci \
   > "$SERVER_LOG" 2>&1 &
 echo $! > /tmp/browseros-dev-server.pid
 
 python3 - <<"PY"
-import json, time, urllib.request, sys
-url = "http://127.0.0.1:9110/health"
+import json, time, urllib.request, sys, os
+port = os.environ.get('BROWSEROS_SERVER_PORT', '9110')
+url = f"http://127.0.0.1:{port}/health"
 for _ in range(60):
     try:
         with urllib.request.urlopen(url, timeout=1) as r:
@@ -69,6 +73,6 @@ for _ in range(60):
             sys.exit(0)
     except Exception:
         time.sleep(0.5)
-print("[ERROR] BrowserOS server health check failed on http://127.0.0.1:9110/health", file=sys.stderr)
+print(f"[ERROR] BrowserOS server health check failed on {url}", file=sys.stderr)
 sys.exit(1)
 PY
