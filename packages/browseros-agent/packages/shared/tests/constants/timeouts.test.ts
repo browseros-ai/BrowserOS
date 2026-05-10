@@ -13,29 +13,12 @@
 import path from 'node:path'
 import { describe, expect, it } from 'bun:test'
 
+import { spawnWithEnv } from './test-utils'
+
 // Absolute path to the module under test — computed once, baked into child code.
 const TIMEOUTS_MODULE_PATH = JSON.stringify(
   path.resolve(import.meta.dir, '../../src/constants/timeouts.ts'),
 )
-
-// ---------------------------------------------------------------------------
-// Helper: run a one-liner in a child Bun process with custom env
-// ---------------------------------------------------------------------------
-
-async function spawnWithEnv(envOverrides: Record<string, string>, code: string): Promise<string> {
-  const proc = Bun.spawn(['bun', '-e', code], {
-    env: { ...process.env, ...envOverrides, NO_COLOR: '1', FORCE_COLOR: '0' },
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
-  await proc.exited
-  const stdout = await new Response(proc.stdout).text()
-  if (proc.exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text()
-    throw new Error(`Child process exited ${proc.exitCode}: ${stderr}\n${stdout}`)
-  }
-  return stdout.trim()
-}
 
 // ---------------------------------------------------------------------------
 // 1. Default values — all 26 constants
@@ -181,7 +164,62 @@ describe('TIMEOUTS negative env fallback', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 5. KLAVIS_PROXY_RETRY_BACKOFF_MS — hardcoded array, never affected by env
+// 5. Edge cases — zero, float, empty, whitespace, overflow
+// ---------------------------------------------------------------------------
+
+describe('TIMEOUTS edge-case env handling', () => {
+  it('falls back to default when env is zero', async () => {
+    const result = await spawnWithEnv(
+      { BROWSEROS_TIMEOUT_TOOL_CALL: '0' },
+      `const { TIMEOUTS } = require(${TIMEOUTS_MODULE_PATH}); console.log(TIMEOUTS.TOOL_CALL)`,
+    )
+    expect(Number(result)).toBe(120_000)
+  })
+
+  it('falls back to default when env is a float', async () => {
+    const result = await spawnWithEnv(
+      { BROWSEROS_TIMEOUT_TOOL_CALL: '1.5' },
+      `const { TIMEOUTS } = require(${TIMEOUTS_MODULE_PATH}); console.log(TIMEOUTS.TOOL_CALL)`,
+    )
+    expect(Number(result)).toBe(120_000)
+  })
+
+  it('falls back to default when env is empty string', async () => {
+    const result = await spawnWithEnv(
+      { BROWSEROS_TIMEOUT_TOOL_CALL: '' },
+      `const { TIMEOUTS } = require(${TIMEOUTS_MODULE_PATH}); console.log(TIMEOUTS.TOOL_CALL)`,
+    )
+    expect(Number(result)).toBe(120_000)
+  })
+
+  it('falls back to default when env is whitespace-only', async () => {
+    const result = await spawnWithEnv(
+      { BROWSEROS_TIMEOUT_TOOL_CALL: '  \t' },
+      `const { TIMEOUTS } = require(${TIMEOUTS_MODULE_PATH}); console.log(TIMEOUTS.TOOL_CALL)`,
+    )
+    expect(Number(result)).toBe(120_000)
+  })
+
+  it('falls back to default when env exceeds MAX_SAFE_INTEGER', async () => {
+    const result = await spawnWithEnv(
+      { BROWSEROS_TIMEOUT_TOOL_CALL: '99999999999999999999' },
+      `const { TIMEOUTS } = require(${TIMEOUTS_MODULE_PATH}); console.log(TIMEOUTS.TOOL_CALL)`,
+    )
+    expect(Number(result)).toBe(120_000)
+  })
+
+  it('successfully overrides when env has leading/trailing whitespace around a valid number', async () => {
+    // parseInt('  5000  ') → 5000 (valid) — this SHOULD override
+    const result = await spawnWithEnv(
+      { BROWSEROS_TIMEOUT_TOOL_CALL: '  5000  ' },
+      `const { TIMEOUTS } = require(${TIMEOUTS_MODULE_PATH}); console.log(TIMEOUTS.TOOL_CALL)`,
+    )
+    expect(Number(result)).toBe(5_000)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 6. KLAVIS_PROXY_RETRY_BACKOFF_MS — hardcoded array, never affected by env
 // ---------------------------------------------------------------------------
 
 describe('KLAVIS_PROXY_RETRY_BACKOFF_MS', () => {

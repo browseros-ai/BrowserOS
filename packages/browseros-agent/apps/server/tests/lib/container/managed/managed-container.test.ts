@@ -17,6 +17,7 @@ import {
   PathOutsideMountsError,
   ResetNotSupportedError,
 } from '../../../../src/lib/container/managed'
+import { ContainerNameInUseError } from '../../../../src/lib/vm/errors'
 import type {
   ContainerInfo,
   ContainerSpec,
@@ -617,9 +618,6 @@ describe('ManagedContainer', () => {
       cli.createContainer = async (spec: ContainerSpec) => {
         createAttempts += 1
         if (createAttempts < 2) {
-          const { ContainerNameInUseError } = await import(
-            '../../../../src/lib/vm/errors'
-          )
           throw new ContainerNameInUseError(
             spec.name,
             'nerdctl create',
