@@ -131,12 +131,19 @@ utilities that reduce `Referer` header leakage across origins.
 - [x] `privacy-defaults.json` config created (`packages/jarvis-privacy/config/`)
 - [x] brave-core-master Windows installer + privacy patches documented
 - [x] adblock-rust v0.12.4 verified compiles (cargo check ✅, GNU toolchain)
-- [ ] Port `brave_shield_constants.h` constants to TypeScript enums
-- [ ] Implement per-origin shield settings store (Zustand or Jotai)
-- [ ] Build JarvisOS Shields panel UI component (React/Tailwind)
-- [ ] Wire shields state to network/content blocking pipeline
 
-### Phase 4 — Farbling Implementation (TODO)
+### Phase 4 — Shields UI Layer (DONE ✅ — May 10, 2026)
+- [x] `shields.types.ts` — FingerprintMode, CookieMode, AdblockMode, HttpsUpgradeMode TypeScript enums
+- [x] `ShieldsConfig` interface + `DEFAULT_SHIELDS_CONFIG` matching Brave defaults
+- [x] `use-jarvis-shields.ts` — React hook: global config + per-site origin overrides
+- [x] `JarvisShieldsPanel.tsx` — Full Shields control panel (shadcn/ui, Brave Shields UX parity)
+- [x] `ShieldToggle.tsx` — Reusable labeled toggle component
+- [x] `ShieldsStatusBadge.tsx` — Toolbar badge (blocked count + shield state indicator)
+- [x] `@jarvisos/privacy` v0.2.0 — exports map updated
+- [ ] Wire shields state to network/content blocking pipeline
+- [ ] WASM bindings (blocked: Rust 1.94 download network issue — retry needed)
+
+### Phase 5 — Farbling Implementation (TODO)
 - [ ] Port farbling randomization seeds to JarvisOS renderer process
 - [ ] Implement canvas fingerprint farbling (noise injection)
 - [ ] Implement AudioContext farbling
@@ -144,7 +151,7 @@ utilities that reduce `Referer` header leakage across origins.
 - [ ] Implement WebGL parameter farbling
 - [ ] Validate against 16 brave-core browsertest specs
 
-### Phase 5 — Debounce + Referrer (TODO)
+### Phase 6 — Debounce + Referrer (TODO)
 - [ ] Port debounce rule JSON/patterns to JarvisOS navigation throttle
 - [ ] Implement referrer trimming (cross-origin → origin-only, or strip)
 - [ ] Add UI toggles for debounce and referrer protection levels
