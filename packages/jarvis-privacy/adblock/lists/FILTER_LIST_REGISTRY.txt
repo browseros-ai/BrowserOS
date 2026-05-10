@@ -1,0 +1,66 @@
+# Brave Adblock Filter List Registry
+# Source: brave-core/components/third_party/adblock/lists/
+# Note: depth-1 git clone — actual .txt filter files not fetched (use gclient sync to fetch)
+# Total provider count: 59
+# Integration: slim-list.txt from adblock-rust (included) — primary filter list for JarvisOS
+
+## Filter List Providers (to fetch via gclient sync or direct URL):
+- abp_xfiles
+- abpindo
+- abpjf
+- abpvn
+- adblock_bg
+- adblock_dk
+- adblock_ee
+- adblock_iran
+- adblock_korea_contrib
+- adblock_latvian
+- adblock_pl
+- adguard_cn
+- adguard_es
+- adguard_fr
+- adguard_jp
+- adguard_ru
+- adguard_tr
+- adguard_url
+- advblock
+- bitblock
+- cjx_annoyance
+- cjx_easylist_lite
+- easylist
+- easylist_cookie
+- easylist_hebrew
+- easylist_lithuania
+- easylist_thailand
+- easylistchina
+- easylistczechandslovak
+- easylistdutch
+- easylistgermany
+- easylistitaly
+- easylistspanish
+- fanboy_annoyance
+- fanboy_chatapps_third_party
+- fanboy_indian
+- fanboy_korean
+- fanboy_mobile_notifications
+- fanboy_newsletter
+- fanboy_social
+- finnish_easylist_addition
+- frellwits_filter_lists
+- hufilter
+- indianlist
+- is_abp
+- listear
+- norwegianlist
+- persianblocker
+- peter_lowes
+- polish_adblock
+- polish_anti_adblock
+- polish_anti_adblock_suplement
+- porn-ags
+- road_block
+- slovenian_list
+- ublock
+- urlhaus
+- void_gr_filters
+- youslist

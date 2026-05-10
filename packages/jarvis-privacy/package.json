@@ -1,0 +1,21 @@
+{
+  "name": "@jarvisos/privacy",
+  "version": "0.1.0",
+  "description": "JarvisOS Privacy Layer — ported from Brave browser",
+  "private": true,
+  "brave_version": "brave-core (depth-1 clone, May 2026)",
+  "components": {
+    "shields": "Brave Shields — tracker/ad blocking UI layer",
+    "adblock": "Filter lists from brave-core + adblock-rust engine",
+    "fingerprint": "Farbling-based fingerprint protection",
+    "debounce": "Bounce tracking protection",
+    "referrer": "Referrer trimming"
+  },
+  "integration_status": {
+    "shields": "headers-copied",
+    "adblock": "filter-lists-copied",
+    "fingerprint": "headers-copied",
+    "debounce": "headers-copied",
+    "referrer": "pending"
+  }
+}

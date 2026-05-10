@@ -1,0 +1,113 @@
+[package]
+name = "adblock"
+version = "0.12.4"
+authors = ["Anton Lazarev <alazarev@brave.com>", "Andrius Aucinas"]
+edition = "2021"
+
+description = "Native Rust module for Adblock Plus syntax (e.g. EasyList, EasyPrivacy) filter parsing and matching."
+repository = "https://github.com/brave/adblock-rust/"
+license = "MPL-2.0"
+readme = "README.md"
+
+exclude = [
+    "*.md",
+    ".github/",
+    ".gitignore",
+    ".npmignore",
+    "data/",
+    "examples/",
+    "js/",
+    "package-lock.json",
+    "package.json",
+    "tests/",
+]
+
+[dependencies]
+addr = { version = "0.15", default-features = false, features = ["psl"], optional = true }
+url = "2.5"
+percent-encoding = "2.1"
+regex = "1.12.2"
+bitflags = { version = "2.10.0", features = ["serde"] }
+itertools = "0.13"
+idna = "1.0.3"
+serde = { workspace = true }
+serde_json = { workspace = true }
+seahash = "4.1.0"
+# rustc-hash v1.1.0 provides a better performance than 2.x, chromium pins the same version.
+rustc-hash = { version = "1.1.0", default-features = false }
+memchr = "2.7"
+base64 = "0.22"
+arrayvec = "0.7"
+cssparser = { version = "0.34", optional = true }
+selectors = { version = "0.26", optional = true }
+precomputed-hash = "0.1"
+thiserror = "1.0"
+flatbuffers = { version = "25.9.23" }
+
+[dev-dependencies]
+criterion = "=0.5.1"
+csv = "=1.3.0"
+mock_instant = { version = "=0.5.1" }
+reqwest = "=0.13.3"
+futures = "=0.3.31"
+tokio = { version = "=1.47.4", features = ["rt-multi-thread"] }
+sha2 = "=0.9.9"
+
+[lib]
+bench = false
+
+[[bench]]
+name = "bench_regex"
+harness = false
+
+[[bench]]
+name = "bench_matching"
+harness = false
+
+[[bench]]
+name = "bench_url"
+harness = false
+
+[[bench]]
+name = "bench_rules"
+harness = false
+
+[[bench]]
+name = "bench_redirect_performance"
+harness = false
+
+
+[[bench]]
+name = "bench_memory"
+harness = false
+
+[[bench]]
+name = "bench_serialization"
+harness = false
+
+[[bench]]
+name = "bench_cosmetic_matching"
+harness = false
+
+[features]
+# If disabling default features, consider explicitly re-enabling the
+# "embedded-domain-resolver" feature.
+default = ["embedded-domain-resolver", "full-regex-handling", "single-thread"]
+full-regex-handling = []
+single-thread = [] # disables `Send` and `Sync` on `Engine`.
+debug-info = []
+css-validation = ["cssparser", "selectors"]
+content-blocking = []
+embedded-domain-resolver = ["addr"] # Requires setting an external domain resolver if disabled.
+resource-assembler = []
+
+[lints.clippy]
+len_zero = "allow"
+uninlined_format_args = "warn"
+
+[workspace]
+members = ["js", "fuzz"]
+
+[workspace.dependencies]
+serde = { version = "1.0.228", features = ["derive", "rc"] }
+serde_json = "1.0.145"
