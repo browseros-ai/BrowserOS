@@ -286,3 +286,89 @@ export const disable_extension = defineExtTool({
     response.data({ action: 'disable', extensionId: '' })
   },
 })
+
+// ── L3: Extension Message Bridge tools ──
+
+export const send_extension_message = defineExtTool({
+  name: 'send_extension_message',
+  description:
+    'Send a JSON message to an extension\'s chrome.runtime.onMessage listener. '
+    + 'Discovers the extension\'s service worker via CDP and injects the message. '
+    + 'Only works for extensions with sync onMessage responders (V1 limitation). '
+    + 'Returns the extension\'s response or null if no handler responded.',
+  input: z.object({
+    extensionId: z
+      .string()
+      .describe('Target extension ID'),
+    message: z
+      .unknown()
+      .describe('JSON-serializable message payload'),
+    timeout: z
+      .number()
+      .optional()
+      .describe('Timeout in ms (default: 10000)'),
+  }),
+  output: z.object({
+    extensionId: z.string(),
+    response: z.unknown().nullable(),
+  }),
+  handler: async (args, ctx, response) => {
+    const result = await ctx.browser.sendExtensionMessage(
+      args.extensionId,
+      args.message,
+      args.timeout,
+    )
+    response.text(
+      `Message sent to ${args.extensionId}. Response: ${JSON.stringify(result)}`,
+    )
+    response.data({
+      extensionId: args.extensionId,
+      response: result,
+    })
+  },
+})
+
+export const list_messageable_extensions = defineExtTool({
+  name: 'list_messageable_extensions',
+  description:
+    'List extensions with active service workers that can receive messages. '
+    + 'Only returns extensions with currently running service workers. '
+    + 'Use send_extension_message to wake up suspended workers.',
+  input: z.object({}),
+  output: z.object({
+    extensions: z.array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        type: z.string(),
+        hasActiveBackground: z.boolean(),
+      }),
+    ),
+    count: z.number(),
+  }),
+  handler: async (_args, ctx, response) => {
+    const extensions = await ctx.browser.listMessageableExtensions()
+
+    if (extensions.length === 0) {
+      response.text('No extensions with active service workers found.')
+      response.data({ extensions: [], count: 0 })
+      return
+    }
+
+    const lines = extensions.map(
+      (ext) => `[${ext.id}] ${ext.name} (${ext.type})`,
+    )
+    response.text(
+      `Found ${extensions.length} messageable extensions:\n${lines.join('\n')}`,
+    )
+    response.data({
+      extensions: extensions.map((e) => ({
+        id: e.id,
+        name: e.name,
+        type: e.type,
+        hasActiveBackground: e.hasActiveBackground,
+      })),
+      count: extensions.length,
+    })
+  },
+})

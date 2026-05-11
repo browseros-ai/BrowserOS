@@ -24,6 +24,7 @@ import * as snapshot from './snapshot'
 import type { TabGroup } from './tab-groups'
 import * as tabGroups from './tab-groups'
 import * as extensions from './extensions'
+import * as extensionBridge from './extension-bridge'
 
 export interface PageInfo {
   pageId: number
@@ -1611,6 +1612,20 @@ export class Browser {
     storageArea: extensions.StorageArea,
   ): Promise<void> {
     return extensions.clearStorageItems(this.cdp, id, storageArea)
+  }
+
+  // --- Extension Message Bridge (L3) ---
+
+  async listMessageableExtensions() {
+    return extensionBridge.listMessageableExtensions(this.cdp)
+  }
+
+  async sendExtensionMessage(
+    extensionId: string,
+    message: unknown,
+    timeoutMs?: number,
+  ) {
+    return extensionBridge.sendExtensionMessage(this.cdp, extensionId, message, timeoutMs)
   }
 
   // --- Tab Groups ---

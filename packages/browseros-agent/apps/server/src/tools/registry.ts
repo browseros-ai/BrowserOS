@@ -54,8 +54,10 @@ import {
   get_extension_info,
   get_extension_storage,
   list_extensions,
+  list_messageable_extensions,
   load_unpacked_extension,
   remove_extension_storage,
+  send_extension_message,
   set_extension_storage,
   uninstall_extension,
 } from './extensions'
@@ -166,7 +168,7 @@ export const registry = createRegistry([
   suggest_schedule,
   suggest_app_connection,
 
-  // Extensions (10)
+  // Extensions (12)
   list_extensions,
   get_extension_info,
   enable_extension,
@@ -177,4 +179,6 @@ export const registry = createRegistry([
   set_extension_storage,
   remove_extension_storage,
   clear_extension_storage,
+  send_extension_message,
+  list_messageable_extensions,
 ])
