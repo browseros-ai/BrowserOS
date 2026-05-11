@@ -1,26 +1,10 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import Fuse from 'fuse.js'
-import {
-  Check,
-  CheckCircle2,
-  ChevronDown,
-  ExternalLink,
-  Loader2,
-  XCircle,
-} from 'lucide-react'
-import { type FC, useEffect, useMemo, useRef, useState } from 'react'
+import { CheckCircle2, ExternalLink, Loader2, XCircle } from 'lucide-react'
+import { type FC, useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod/v3'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from '@/components/ui/command'
 import {
   Dialog,
   DialogContent,
@@ -40,11 +24,6 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover'
-import {
   Select,
   SelectContent,
   SelectItem,
@@ -59,7 +38,6 @@ import {
   AI_PROVIDER_UPDATED_EVENT,
   KIMI_API_KEY_CONFIGURED_EVENT,
   KIMI_API_KEY_GUIDE_CLICKED_EVENT,
-  MODEL_SELECTED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import {
   getDefaultBaseUrlForProviders,
@@ -69,8 +47,10 @@ import {
 import { type TestResult, testProvider } from '@/lib/llm-providers/testProvider'
 import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
-import { cn } from '@/lib/utils'
-import { getModelContextLength, getModelsForProvider } from './models'
+import { ActiveModelSelect } from './ActiveModelSelect'
+import { FetchModelsButton } from './FetchModelsButton'
+import { ModelTagInput } from './ModelTagInput'
+import { getModelContextLength } from './models'
 
 const providerTypeEnum = z.enum([
   'moonshot',
@@ -186,13 +166,6 @@ export const providerFormSchema = z
  */
 export type ProviderFormValues = z.infer<typeof providerFormSchema>
 
-function formatContextWindow(tokens: number): string {
-  if (tokens >= 1000000)
-    return `${(tokens / 1000000).toFixed(tokens % 1000000 === 0 ? 0 : 1)}M`
-  if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`
-  return `${tokens}`
-}
-
 /**
  * Props for NewProviderDialog
  * @public
@@ -220,9 +193,10 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 }) => {
   const [isTesting, setIsTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestResult | null>(null)
-  const [modelPickerOpen, setModelPickerOpen] = useState(false)
-  const [modelSearch, setModelSearch] = useState('')
-  const modelListRef = useRef<HTMLDivElement>(null)
+  const [savedModels, setSavedModels] = useState<string[]>(
+    initialValues?.models?.map((m) => m.id) ??
+      (initialValues?.modelId ? [initialValues.modelId] : []),
+  )
   const { supports } = useCapabilities()
   const { baseUrl: agentServerUrl } = useAgentServerUrl()
 
@@ -290,25 +264,6 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     watchedSessionToken,
   ])
 
-  const modelInfoList = getModelsForProvider(watchedType as ProviderType)
-
-  const modelFuse = useMemo(
-    () =>
-      new Fuse(modelInfoList, {
-        keys: ['modelId'],
-        threshold: 0.4,
-        distance: 100,
-      }),
-    [modelInfoList],
-  )
-
-  const filteredModels = modelSearch
-    ? modelFuse.search(modelSearch).map((r) => r.item)
-    : modelInfoList
-
-  const showCustomEntry =
-    modelSearch && !filteredModels.some((m) => m.modelId === modelSearch)
-
   // Handle provider type change (user-initiated via Select)
   const handleTypeChange = (newType: ProviderType) => {
     form.setValue('type', newType)
@@ -316,7 +271,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     if (defaultUrl) {
       form.setValue('baseUrl', defaultUrl)
     }
-    form.setValue('modelId', '')
+    if (!savedModels.includes(form.getValues('modelId'))) {
+      form.setValue('modelId', '')
+    }
   }
 
   // Auto-fill context window when model changes (only for new providers)
@@ -390,10 +347,30 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   }, [open, initialValues, form])
 
   const onSubmit = async (values: ProviderFormValues) => {
+    if (savedModels.length === 0) {
+      form.setError('modelId', { message: 'At least one model is required' })
+      return
+    }
     const isNewProvider = !initialValues?.id
     const provider: LlmProviderConfig = {
       id: initialValues?.id || crypto.randomUUID(),
       ...values,
+      models: savedModels.map((id) => {
+        const existingEntry = initialValues?.models?.find((m) => m.id === id)
+        const contextLength = getModelContextLength(
+          values.type as ProviderType,
+          id,
+        )
+        return {
+          id,
+          contextLength: contextLength || values.contextWindow,
+          supportsImages: values.supportsImages,
+          source: existingEntry?.source || ('manual' as const),
+          ...(existingEntry?.fetchedAt
+            ? { fetchedAt: existingEntry.fetchedAt }
+            : {}),
+        }
+      }),
       createdAt: initialValues?.createdAt || Date.now(),
       updatedAt: Date.now(),
     }
@@ -842,157 +819,70 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 
             {renderProviderSpecificFields()}
 
-            {/* Model field - shown for all providers */}
+            {/* Active Model */}
             <FormField
               control={form.control}
               name="modelId"
               render={({ field }) => (
-                <FormItem className="flex flex-col">
-                  <FormLabel>Model *</FormLabel>
-                  {modelInfoList.length === 0 ? (
-                    <FormControl>
-                      <Input
-                        placeholder={
-                          watchedType === 'azure'
-                            ? 'Enter your deployment name'
-                            : watchedType === 'bedrock'
-                              ? 'e.g., anthropic.claude-3-5-sonnet-20241022-v2:0'
-                              : 'Enter model ID'
-                        }
-                        {...field}
-                      />
-                    </FormControl>
-                  ) : (
-                    <Popover
-                      open={modelPickerOpen}
-                      onOpenChange={(isOpen) => {
-                        setModelPickerOpen(isOpen)
-                        if (!isOpen) setModelSearch('')
-                      }}
-                    >
-                      <PopoverTrigger asChild>
-                        <button
-                          type="button"
-                          className={cn(
-                            'flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs',
-                            field.value
-                              ? 'text-foreground'
-                              : 'text-muted-foreground',
-                          )}
-                        >
-                          <span className="truncate">
-                            {field.value || 'Select a model...'}
-                          </span>
-                          <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                        </button>
-                      </PopoverTrigger>
-                      <PopoverContent
-                        className="w-[var(--radix-popover-trigger-width)] p-0"
-                        align="start"
-                      >
-                        <Command shouldFilter={false}>
-                          <CommandInput
-                            placeholder="Search models..."
-                            value={modelSearch}
-                            onValueChange={(v) => {
-                              setModelSearch(v)
-                              requestAnimationFrame(() => {
-                                modelListRef.current?.scrollTo(0, 0)
-                              })
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' && modelSearch) {
-                                e.preventDefault()
-                                e.stopPropagation()
-                                form.setValue('modelId', modelSearch)
-                                track(MODEL_SELECTED_EVENT, {
-                                  provider_type: watchedType,
-                                  model_id: modelSearch,
-                                  is_custom_model: !modelInfoList.some(
-                                    (m) => m.modelId === modelSearch,
-                                  ),
-                                })
-                                setModelPickerOpen(false)
-                                setModelSearch('')
-                              }
-                            }}
-                          />
-                          <CommandList ref={modelListRef}>
-                            <CommandEmpty>
-                              No models found. Press Enter to use &quot;
-                              {modelSearch}&quot;
-                            </CommandEmpty>
-                            {showCustomEntry && (
-                              <CommandGroup forceMount>
-                                <CommandItem
-                                  forceMount
-                                  value={`custom:${modelSearch}`}
-                                  onSelect={() => {
-                                    form.setValue('modelId', modelSearch)
-                                    track(MODEL_SELECTED_EVENT, {
-                                      provider_type: watchedType,
-                                      model_id: modelSearch,
-                                      is_custom_model: true,
-                                    })
-                                    setModelPickerOpen(false)
-                                    setModelSearch('')
-                                  }}
-                                >
-                                  <span className="flex-1 truncate">
-                                    {modelSearch}
-                                  </span>
-                                  {field.value === modelSearch && (
-                                    <Check className="ml-2 h-4 w-4 shrink-0" />
-                                  )}
-                                </CommandItem>
-                              </CommandGroup>
-                            )}
-                            {filteredModels.length > 0 && (
-                              <CommandGroup>
-                                {filteredModels.map((model) => (
-                                  <CommandItem
-                                    key={model.modelId}
-                                    value={model.modelId}
-                                    onSelect={() => {
-                                      form.setValue('modelId', model.modelId)
-                                      track(MODEL_SELECTED_EVENT, {
-                                        provider_type: watchedType,
-                                        model_id: model.modelId,
-                                        context_window: model.contextLength,
-                                        is_custom_model: !modelInfoList.some(
-                                          (m) => m.modelId === model.modelId,
-                                        ),
-                                      })
-                                      setModelPickerOpen(false)
-                                      setModelSearch('')
-                                    }}
-                                  >
-                                    <span className="flex-1 truncate">
-                                      {model.modelId}
-                                    </span>
-                                    {model.contextLength > 0 && (
-                                      <span className="ml-2 shrink-0 rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                                        {formatContextWindow(
-                                          model.contextLength,
-                                        )}
-                                      </span>
-                                    )}
-                                    {field.value === model.modelId && (
-                                      <Check className="ml-2 h-4 w-4 shrink-0" />
-                                    )}
-                                  </CommandItem>
-                                ))}
-                              </CommandGroup>
-                            )}
-                          </CommandList>
-                        </Command>
-                      </PopoverContent>
-                    </Popover>
-                  )}
+                <FormItem>
+                  <FormLabel>Active Model *</FormLabel>
+                  <ActiveModelSelect
+                    models={savedModels}
+                    value={field.value}
+                    onChange={(modelId) => {
+                      field.onChange(modelId)
+                      // Auto-fill contextWindow from catalog
+                      const contextLength = getModelContextLength(
+                        watchedType as ProviderType,
+                        modelId,
+                      )
+                      if (contextLength)
+                        form.setValue('contextWindow', contextLength)
+                    }}
+                    disabled={savedModels.length === 0}
+                  />
                   <FormMessage />
                 </FormItem>
               )}
             />
+
+            {/* Saved Models (Tag Input) */}
+            <div className="space-y-2">
+              <FormLabel>Saved Models</FormLabel>
+              <ModelTagInput
+                models={savedModels}
+                onModelsChange={setSavedModels}
+                activeModel={watchedModelId}
+                onActiveModelChange={(modelId) =>
+                  form.setValue('modelId', modelId)
+                }
+                disabled={false}
+              />
+              <FormDescription>
+                Add models via tag input or fetch from API
+              </FormDescription>
+            </div>
+
+            {/* Fetch Models Button */}
+            <div className="flex items-center gap-3">
+              <FetchModelsButton
+                baseUrl={watchedBaseUrl || ''}
+                apiKey={watchedApiKey}
+                onFetchComplete={(fetchedIds) => {
+                  const newIds = fetchedIds.filter(
+                    (id) => !savedModels.includes(id),
+                  )
+                  if (newIds.length > 0) {
+                    const updated = [...savedModels, ...newIds]
+                    setSavedModels(updated)
+                    if (!watchedModelId && updated.length > 0) {
+                      form.setValue('modelId', updated[0])
+                    }
+                  }
+                }}
+                disabled={!watchedBaseUrl}
+              />
+            </div>
 
             {/* Model Configuration */}
             <div className="space-y-4 border-border border-t pt-4">

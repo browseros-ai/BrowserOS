@@ -18,6 +18,20 @@ export type ProviderType =
   | 'github-copilot'
   | 'qwen-code'
 
+/** A single model entry within a provider */
+export interface ModelEntry {
+  /** Model identifier */
+  id: string
+  /** Context window in tokens (0 = unknown) */
+  contextLength: number
+  /** Whether this specific model supports images */
+  supportsImages?: boolean
+  /** Source of this model entry */
+  source: 'static' | 'fetched' | 'manual'
+  /** When this entry was last refreshed (fetched models) */
+  fetchedAt?: number
+}
+
 /**
  * LLM Provider configuration
  * @public
@@ -33,6 +47,13 @@ export interface LlmProviderConfig {
   baseUrl?: string
   /** Model identifier */
   modelId: string
+  /** All models available for this provider */
+  models?: ModelEntry[]
+  /** Cached /models response for offline use */
+  fetchedModels?: {
+    fetchedAt: number
+    ids: string[]
+  }
   /** API key (encrypted and stored locally) */
   apiKey?: string
   /** Whether this provider supports image inputs */

@@ -2,29 +2,75 @@
 set -euo pipefail
 # mise executes this from the project root (where .mise.toml lives)
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-# Fallback: if mise runs from project root, use pwd
 [[ -d "${REPO_ROOT}/packages/browseros-agent" ]] || REPO_ROOT="$(pwd)"
 cd "${REPO_ROOT}/packages/browseros-agent"
 
-# Ensure desktop entries are registered
-"$REPO_ROOT/scripts/setup-desktop-entries.sh" 2>/dev/null || true
-update-desktop-database ~/.local/share/applications/ 2>/dev/null || true
+source "${REPO_ROOT}/scripts/launch/common.sh"
+
 APP="${BROWSEROS_APP_PATH:-$HOME/Downloads/alta/BrowserOS.AppImage}"
 EXT_DIR="apps/agent/dist/chrome-mv3-dev"
 BROWSER_LOG="/tmp/browseros-dev-browser.log"
 SERVER_LOG="/tmp/browseros-dev-server.log"
 
+# ── Fallback cleanup on ANY failure (fixes H2) ──
+cleanup_on_failure() {
+  echo "[cleanup] start-dev failed — cleaning up orphaned processes..." >&2
+  bash "${REPO_ROOT}/.mise/tasks/browseros/kill-dev" 2>/dev/null || true
+}
+trap cleanup_on_failure ERR
+
+# ── Ensure state dirs exist (mkdir only, NEVER rm) ──
+mkdir -p "$DEV_PROFILE" "$DEV_BOS_DIR"
+
+# ── Singleton guard with flock (fixes H3) ──
+LOCK_FD=200
+eval "exec $LOCK_FD>\"${DEV_BOS_DIR}/start.lock\""
+flock -n $LOCK_FD || {
+  echo "[ERROR] Another start-dev is already running (lock held)." >&2
+  echo "        If stale, remove ${DEV_BOS_DIR}/start.lock" >&2
+  exit 1
+}
+
+# ── Check if browser already running via PID file (fixes M1) ──
+if is_browser_running "$DEV_BROWSER_PID"; then
+  OLD_PID=$(cat "$DEV_BROWSER_PID")
+  echo "[ERROR] Dev browser already running (PID $OLD_PID)." >&2
+  echo "        Run 'mise run browseros:kill-dev' first." >&2
+  exit 1
+fi
+
+# ── Pre-flight: check BOTH ports (fixes H1) ──
+if port_in_use "$DEV_CDP_PORT"; then
+  echo "[ERROR] CDP port $DEV_CDP_PORT already in use — dev instance may be running." >&2
+  echo "        Run 'mise run browseros:kill-dev' first." >&2
+  exit 1
+fi
+if port_in_use "$DEV_SERVER_PORT"; then
+  echo "[ERROR] Server port $DEV_SERVER_PORT already in use." >&2
+  echo "        Run 'mise run browseros:kill-dev' first." >&2
+  exit 1
+fi
+
+# ── Pre-flight: check binary and extension ──
 if [ ! -x "$APP" ]; then
   echo "[ERROR] BrowserOS AppImage missing: $APP" >&2
   echo "        Set BROWSEROS_APP_PATH env var to override." >&2
   exit 1
 fi
-
 if [ ! -d "$EXT_DIR" ]; then
   echo "[ERROR] Dev extension build missing: $EXT_DIR" >&2
   exit 1
 fi
 
+# ── Update desktop entries ──
+"$REPO_ROOT/scripts/setup-desktop-entries.sh" 2>/dev/null || true
+update-desktop-database ~/.local/share/applications/ 2>/dev/null || true
+
+# ── Clean stale singleton locks ──
+clean_singleton_locks "$DEV_PROFILE"
+
+# ── Start dev browser ──
+echo "[start] Launching BrowserOS Dev (CDP=$DEV_CDP_PORT, Server=$DEV_SERVER_PORT)..."
 nohup "$APP" \
   --no-sandbox \
   --no-first-run \
@@ -34,18 +80,20 @@ nohup "$APP" \
   --disable-browseros-server \
   --disable-browseros-extensions \
   --name=BrowserOS-Dev \
-  --remote-debugging-port="${BROWSEROS_CDP_PORT:-9010}" \
-  --browseros-mcp-port="${BROWSEROS_SERVER_PORT:-9110}" \
-  --browseros-server-port="${BROWSEROS_SERVER_PORT:-9110}" \
-  --user-data-dir="$HOME/.browseros-dev-chrome" \
+  --remote-debugging-port="$DEV_CDP_PORT" \
+  --browseros-mcp-port="$DEV_SERVER_PORT" \
+  --browseros-server-port="$DEV_SERVER_PORT" \
+  --user-data-dir="$DEV_PROFILE" \
   --load-extension="$EXT_DIR" \
   chrome://newtab \
   > "$BROWSER_LOG" 2>&1 &
-echo $! > /tmp/browseros-dev-browser.pid
+BROWSER_PID=$!
+echo "$BROWSER_PID" > "$DEV_BROWSER_PID"
 
-python3 - <<"PY"
+# ── Wait for CDP port — pass port as CLI arg (fixes M4) ──
+python3 - "$DEV_CDP_PORT" <<"PY"
 import socket, time, sys
-port = int(__import__('os').environ.get('BROWSEROS_CDP_PORT', '9010'))
+port = int(sys.argv[1])
 for _ in range(60):
     s = socket.socket()
     s.settimeout(0.5)
@@ -58,19 +106,24 @@ for _ in range(60):
 print(f"[ERROR] BrowserOS CDP port {port} did not open", file=sys.stderr)
 sys.exit(1)
 PY
+echo "[start] Browser ready on CDP port $DEV_CDP_PORT"
 
+# ── Start dev server ──
+echo "[start] Launching dev server..."
 nohup env \
   BROWSEROS_SKIP_OPENCLAW=1 \
-  BROWSEROS_CDP_PORT="${BROWSEROS_CDP_PORT:-9010}" \
-  BROWSEROS_SERVER_PORT="${BROWSEROS_SERVER_PORT:-9110}" \
-  BROWSEROS_EXTENSION_PORT="${BROWSEROS_EXTENSION_PORT:-9305}" \
+  BROWSEROS_CDP_PORT="$DEV_CDP_PORT" \
+  BROWSEROS_SERVER_PORT="$DEV_SERVER_PORT" \
+  BROWSEROS_EXTENSION_PORT="$DEV_EXTENSION_PORT" \
   bun run --filter @browseros/server start:ci \
   > "$SERVER_LOG" 2>&1 &
-echo $! > /tmp/browseros-dev-server.pid
+SERVER_PID=$!
+echo "$SERVER_PID" > "$DEV_SERVER_PID"
 
-python3 - <<"PY"
-import json, time, urllib.request, sys, os
-port = os.environ.get('BROWSEROS_SERVER_PORT', '9110')
+# ── Wait for server health — pass port as CLI arg (fixes M4) ──
+python3 - "$DEV_SERVER_PORT" <<"PY"
+import json, time, urllib.request, sys
+port = sys.argv[1]
 url = f"http://127.0.0.1:{port}/health"
 for _ in range(60):
     try:
@@ -79,10 +132,14 @@ for _ in range(60):
         if data.get("status") == "ok" and data.get("cdpConnected") is True:
             print(json.dumps(data))
             sys.exit(0)
-        # Health responded but not ready — wait longer before retrying
         time.sleep(1)
     except Exception:
         time.sleep(0.5)
 print(f"[ERROR] BrowserOS server health check failed on {url}", file=sys.stderr)
 sys.exit(1)
 PY
+echo "[start] Server ready on port $DEV_SERVER_PORT"
+echo "=== start-dev complete ==="
+
+# Release lock on success
+flock -u $LOCK_FD

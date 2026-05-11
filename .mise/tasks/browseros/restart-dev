@@ -4,14 +4,32 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 [[ -d "${REPO_ROOT}/packages/browseros-agent" ]] || REPO_ROOT="$(pwd)"
 cd "$REPO_ROOT"
 
+source "${REPO_ROOT}/scripts/launch/common.sh"
+
 echo "=== browseros:restart-dev ==="
+echo ""
+echo "  ⚠  Data preservation: user profiles, LLM config, and extension"
+echo "     storage are NEVER touched by this script."
+echo ""
+
 echo "[1/3] Killing existing dev instance..."
 bash .mise/tasks/browseros/kill-dev
 
+# Wait for ports to be released after kill
+echo "        Waiting for ports to release..."
+sleep 2
+
 echo "[2/3] Building dev extension..."
-bash .mise/tasks/browseros/build-dev
+if ! bash .mise/tasks/browseros/build-dev; then
+  echo "" >&2
+  echo "[ERROR] Build failed! Dev instance is stopped." >&2
+  echo "        Fix the build error, then run:" >&2
+  echo "          mise run browseros:start-dev" >&2
+  exit 1
+fi
 
 echo "[3/3] Starting dev instance..."
 bash .mise/tasks/browseros/start-dev
 
+echo ""
 echo "=== restart-dev complete ==="

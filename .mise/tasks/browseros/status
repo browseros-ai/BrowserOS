@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+[[ -d "${REPO_ROOT}/packages/browseros-agent" ]] || REPO_ROOT="$(pwd)"
+
+source "${REPO_ROOT}/scripts/launch/common.sh"
+
+BROWSER_STATUS="STOPPED"
+SERVER_STATUS="STOPPED"
+BROWSER_PID_STR="-"
+SERVER_PID_STR="-"
+
+if is_browser_running "$DEV_BROWSER_PID"; then
+  BROWSER_STATUS="RUNNING"
+  BROWSER_PID_STR=$(cat "$DEV_BROWSER_PID")
+fi
+
+if [[ -f "$DEV_SERVER_PID" ]]; then
+  PID=$(cat "$DEV_SERVER_PID")
+  if verify_pid "$PID" "@browseros/server" || verify_pid "$PID" "bun"; then
+    SERVER_STATUS="RUNNING"
+    SERVER_PID_STR="$PID"
+  fi
+fi
+
+# Port status
+CDP_STATUS="free"
+SERVER_PORT_STATUS="free"
+port_in_use "$DEV_CDP_PORT" && CDP_STATUS="in use"
+port_in_use "$DEV_SERVER_PORT" && SERVER_PORT_STATUS="in use"
+
+echo "┌─────────────────────────────────────────────────┐"
+echo "│ BrowserOS Dev Status                            │"
+echo "├─────────────────────────────────────────────────┤"
+echo "│ Browser:  ${BROWSER_STATUS}  PID: ${BROWSER_PID_STR}"
+echo "│ Server:   ${SERVER_STATUS}  PID: ${SERVER_PID_STR}"
+echo "│ CDP port: ${DEV_CDP_PORT} (${CDP_STATUS})"
+echo "│ Srv port: ${DEV_SERVER_PORT} (${SERVER_PORT_STATUS})"
+echo "│ Profile:  ${DEV_PROFILE}"
+echo "│ Config:   ${DEV_BOS_DIR}"
+echo "│ Pidfiles: ${DEV_BOS_DIR}/"
+echo "└─────────────────────────────────────────────────┘"

@@ -97,6 +97,11 @@ export const ProviderCard: FC<ProviderCardProps> = ({
           ) : (
             provider.modelId
           )}
+          {provider.models && provider.models.length > 1 && (
+            <span className="ml-1.5 inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 font-medium text-[10px]">
+              {provider.models.length} models
+            </span>
+          )}
         </p>
       </div>
       {!isBuiltIn && (

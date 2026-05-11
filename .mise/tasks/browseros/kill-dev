@@ -2,8 +2,33 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 [[ -d "${REPO_ROOT}/packages/browseros-agent" ]] || REPO_ROOT="$(pwd)"
-cd "$REPO_ROOT"
-pkill -9 -f "\.browseros-dev-chrome" 2>/dev/null || true
-pkill -9 -f "apps/server/src/index.ts" 2>/dev/null || true
-pkill -9 -f "@browseros/server start:ci" 2>/dev/null || true
-rm -f /tmp/browseros-dev-browser.pid /tmp/browseros-dev-server.pid
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "${REPO_ROOT}/scripts/launch/common.sh"
+
+echo "=== browseros:kill-dev ==="
+
+# ── Kill dev browser (verified PID, no false positives) ──
+if is_browser_running "$DEV_BROWSER_PID"; then
+  PID=$(cat "$DEV_BROWSER_PID")
+  echo "[kill] Stopping dev browser (PID $PID)..."
+  kill_by_pidfile "$DEV_BROWSER_PID" "browseros-dev-chrome"
+else
+  echo "[kill] Browser not running."
+fi
+
+# ── Kill dev server (verified PID) ──
+if [[ -f "$DEV_SERVER_PID" ]]; then
+  PID=$(cat "$DEV_SERVER_PID")
+  echo "[kill] Stopping dev server (PID $PID)..."
+  kill_by_pidfile "$DEV_SERVER_PID" "bun" || kill_by_pidfile "$DEV_SERVER_PID" "@browseros/server" || true
+else
+  echo "[kill] Server not running."
+fi
+
+# ── Clean singleton locks if no browser process exists ──
+if ! is_browser_running "$DEV_BROWSER_PID"; then
+  clean_singleton_locks "$DEV_PROFILE"
+fi
+
+echo "=== kill-dev done ==="

@@ -13,7 +13,7 @@ const DEFAULT_PROVIDER_NAME = 'BrowserOS'
 export const providersStorage = storage.defineItem<LlmProviderConfig[]>(
   'local:llm-providers',
   {
-    version: 2,
+    version: 3,
     migrations: {
       2: (
         providers: LlmProviderConfig[] | null,
@@ -28,6 +28,22 @@ export const providersStorage = storage.defineItem<LlmProviderConfig[]>(
           }
           return provider
         })
+      },
+      3: (
+        providers: LlmProviderConfig[] | null,
+      ): LlmProviderConfig[] | null => {
+        if (!providers) return providers
+        return providers.map((provider) => ({
+          ...provider,
+          models: provider.models ?? [
+            {
+              id: provider.modelId,
+              contextLength: provider.contextWindow,
+              supportsImages: provider.supportsImages,
+              source: 'manual' as const,
+            },
+          ],
+        }))
       },
     },
   },
@@ -110,6 +126,14 @@ export function createDefaultBrowserOSProvider(): LlmProviderConfig {
     name: DEFAULT_PROVIDER_NAME,
     baseUrl: 'https://api.browseros.com/v1',
     modelId: 'browseros-auto',
+    models: [
+      {
+        id: 'browseros-auto',
+        contextLength: 200000,
+        supportsImages: true,
+        source: 'static',
+      },
+    ],
     supportsImages: true,
     contextWindow: 200000,
     temperature: 0.2,

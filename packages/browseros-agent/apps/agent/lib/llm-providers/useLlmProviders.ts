@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  type FetchModelsResult,
+  fetchModelsFromApi,
+  mergeModelLists,
+} from './fetchModels'
+import {
   createDefaultProvidersConfig,
   DEFAULT_PROVIDER_ID,
   defaultProviderIdStorage,
@@ -27,6 +32,10 @@ export interface UseLlmProvidersReturn {
   setDefaultProvider: (providerId: string) => Promise<void>
   /** Delete a provider */
   deleteProvider: (providerId: string) => Promise<void>
+  /** Fetch models from provider API and persist */
+  fetchModels: (providerId: string) => Promise<FetchModelsResult>
+  /** Switch active model for a provider */
+  setActiveModel: (providerId: string, modelId: string) => Promise<void>
 }
 
 /**
@@ -155,6 +164,49 @@ export function useLlmProviders(): UseLlmProvidersReturn {
     await providersStorage.setValue(updatedProviders)
   }
 
+  const fetchModels = async (
+    providerId: string,
+  ): Promise<FetchModelsResult> => {
+    const currentProviders = (await providersStorage.getValue()) || []
+    const provider = currentProviders.find((p) => p.id === providerId)
+    if (!provider)
+      return { success: false, models: [], error: 'Provider not found' }
+
+    const result = await fetchModelsFromApi(
+      provider.baseUrl || '',
+      provider.apiKey,
+    )
+
+    if (result.success) {
+      const existing = provider.models ?? []
+      const merged = mergeModelLists(existing, result.models)
+      const updated = currentProviders.map((p) =>
+        p.id === providerId
+          ? {
+              ...p,
+              models: merged,
+              fetchedModels: {
+                fetchedAt: Date.now(),
+                ids: result.models.map((m) => m.id),
+              },
+              updatedAt: Date.now(),
+            }
+          : p,
+      )
+      await providersStorage.setValue(updated)
+    }
+
+    return result
+  }
+
+  const setActiveModelFn = async (providerId: string, modelId: string) => {
+    const currentProviders = (await providersStorage.getValue()) || []
+    const updated = currentProviders.map((p) =>
+      p.id === providerId ? { ...p, modelId, updatedAt: Date.now() } : p,
+    )
+    await providersStorage.setValue(updated)
+  }
+
   // Fall back to first provider if defaultProviderId is stale/invalid
   const selectedProvider = useMemo(
     () =>
@@ -170,5 +222,7 @@ export function useLlmProviders(): UseLlmProvidersReturn {
     saveProvider,
     setDefaultProvider: setDefaultProviderFn,
     deleteProvider,
+    fetchModels,
+    setActiveModel: setActiveModelFn,
   }
 }

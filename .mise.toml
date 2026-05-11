@@ -15,6 +15,10 @@ run = "bash .mise/tasks/browseros/start-dev"
 description = "Check the local BrowserOS dev server health endpoint"
 run = "bash .mise/tasks/browseros/health-dev"
 
+[tasks."browseros:status"]
+description = "Show BrowserOS dev instance status (running PIDs, ports, data dirs)"
+run = "bash .mise/tasks/browseros/status"
+
 [tasks."browseros:restart-dev"]
 description = "Kill, rebuild, restart, and verify the local BrowserOS dev app/server workflow"
 run = "bash .mise/tasks/browseros/restart-dev"
