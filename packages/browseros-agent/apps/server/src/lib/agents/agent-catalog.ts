@@ -102,6 +102,19 @@ export const AGENT_ADAPTER_CATALOG: AgentAdapterDescriptor[] = [
       { id: 'high', label: 'High' },
     ],
   },
+  {
+    id: 'custom',
+    name: 'Custom ACP Agent',
+    defaultModelId: 'default',
+    defaultReasoningEffort: 'medium',
+    modelControl: 'best-effort',
+    models: [],
+    reasoningEfforts: [
+      { id: 'low', label: 'Low' },
+      { id: 'medium', label: 'Medium', recommended: true },
+      { id: 'high', label: 'High' },
+    ],
+  },
 ]
 
 export function getAgentAdapterDescriptor(
@@ -115,7 +128,8 @@ export function isAgentAdapter(value: unknown): value is AgentAdapter {
     value === 'claude' ||
     value === 'codex' ||
     value === 'openclaw' ||
-    value === 'hermes'
+    value === 'hermes' ||
+    value === 'custom'
   )
 }
 

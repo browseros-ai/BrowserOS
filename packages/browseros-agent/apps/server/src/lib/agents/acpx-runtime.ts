@@ -194,6 +194,7 @@ export class AcpxRuntime implements AgentRuntime {
       useBrowserosMcp: prepared.useBrowserosMcp,
       browserosMcpHost: prepared.browserosMcpHost,
       openclawSessionKey: prepared.openclawSessionKey,
+      agent: input.agent,
     })
 
     return createAcpxEventStream(runtime, input, {
@@ -254,6 +255,7 @@ export class AcpxRuntime implements AgentRuntime {
     useBrowserosMcp: boolean
     browserosMcpHost?: string
     openclawSessionKey: string | null
+    agent: AgentDefinition
   }): AcpxCoreRuntime {
     const mcpHost = input.browserosMcpHost ?? '127.0.0.1'
     const key = JSON.stringify({
@@ -268,6 +270,9 @@ export class AcpxRuntime implements AgentRuntime {
     const existing = this.runtimes.get(key)
     if (existing) return existing
 
+    const customAgents = new Map<string, AgentDefinition>()
+    customAgents.set(input.agent.id, input.agent)
+
     const runtime = this.runtimeFactory({
       cwd: input.cwd,
       sessionStore: this.sessionStore,
@@ -275,6 +280,7 @@ export class AcpxRuntime implements AgentRuntime {
         openclawGateway: this.openclawGateway,
         openclawSessionKey: input.openclawSessionKey,
         commandEnv: input.commandEnv,
+        customAgents,
       }),
       mcpServers: input.useBrowserosMcp
         ? createBrowserosMcpServers(this.browserosServerPort, mcpHost)
@@ -592,7 +598,10 @@ function createAcpxEventStream(
       const run = async () => {
         const handle = await runtime.ensureSession({
           sessionKey: prepared.runtimeSessionKey,
-          agent: input.agent.adapter,
+          agent:
+            input.agent.adapter === 'custom'
+              ? `custom:${input.agent.id}`
+              : input.agent.adapter,
           mode: 'persistent',
           cwd: prepared.cwd,
         })
@@ -686,6 +695,7 @@ function createBrowserosAgentRegistry(input: {
   openclawGateway: OpenclawGatewayAccessor | null
   openclawSessionKey: string | null
   commandEnv: Record<string, string>
+  customAgents: Map<string, AgentDefinition>
 }): AcpRuntimeOptions['agentRegistry'] {
   const registry = createAgentRegistry()
 
@@ -729,6 +739,16 @@ function createBrowserosAgentRegistry(input: {
       // truth stays in acpx-core.
       if (lower === 'claude' || lower === 'codex') {
         return wrapCommandWithEnv(registry.resolve(agentName), input.commandEnv)
+      }
+
+      if (lower.startsWith('custom:')) {
+        const agentId = lower.slice('custom:'.length)
+        const def = input.customAgents.get(agentId)
+        if (!def?.customCommand) return agentName
+        return wrapCommandWithEnv(
+          [def.customCommand, ...(def.customArgs ?? [])].join(' '),
+          input.commandEnv,
+        )
       }
 
       return registry.resolve(agentName)

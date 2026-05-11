@@ -4,6 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import {
+  finishBrowserosManagedContext,
+  prepareBrowserosManagedContext,
+  stableCommandIdentity,
+} from './acpx-agent-common'
 import type { AgentDefinition } from './agent-types'
 import { prepareOpenClawContext } from './openclaw/prepare'
 import {
@@ -51,6 +56,26 @@ const ADAPTERS: Record<AgentDefinition['adapter'], AcpxAgentAdapter> = {
   codex: { prepare: prepareCodexContext },
   openclaw: { prepare: prepareOpenClawContext },
   hermes: { prepare: prepareHermesContext },
+  custom: { prepare: prepareCustomContext },
+}
+
+/** Prepares a custom ACP agent with BrowserOS agent home and unique command identity. */
+async function prepareCustomContext(
+  input: PrepareAcpxAgentContextInput,
+): Promise<PreparedAcpxAgentContext> {
+  const common = await prepareBrowserosManagedContext(input)
+  const cmd = input.agent.customCommand
+  if (!cmd) throw new Error('customCommand is required for custom adapter')
+  const fullCommand = [cmd, ...(input.agent.customArgs ?? [])].join(' ')
+  const commandEnv: Record<string, string> = {
+    AGENT_HOME: common.paths.agentHome,
+    BROWSEROS_CUSTOM_COMMAND: fullCommand,
+  }
+  const _commandIdentity = stableCommandIdentity(commandEnv)
+  return finishBrowserosManagedContext({
+    ...common,
+    commandEnv,
+  })
 }
 
 export function getAcpxAgentAdapter(

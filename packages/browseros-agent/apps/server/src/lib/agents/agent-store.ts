@@ -16,6 +16,9 @@ export interface CreateAgentInput {
   baseUrl?: string
   apiKey?: string
   supportsImages?: boolean
+  customCommand?: string
+  customArgs?: string[]
+  customLabel?: string
 }
 
 export interface AgentStore {

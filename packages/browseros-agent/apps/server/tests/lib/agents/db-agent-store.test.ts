@@ -125,6 +125,63 @@ describe('DbAgentStore', () => {
     expect(await store.list()).toEqual([first])
   })
 
+  it('roundtrips customCommand/customArgs/customLabel through serialize/deserialize', async () => {
+    const { db, store } = createStoreWithDb()
+
+    const agent = await store.create({
+      name: 'my-custom-agent',
+      adapter: 'custom',
+      customCommand: './bin/my-acp-server',
+      customArgs: ['acp', '--verbose'],
+      customLabel: 'My Custom Agent 🚀',
+    })
+
+    // Verify the returned object has custom fields
+    expect(agent).toMatchObject({
+      name: 'my-custom-agent',
+      adapter: 'custom',
+      customCommand: './bin/my-acp-server',
+      customArgs: ['acp', '--verbose'],
+      customLabel: 'My Custom Agent 🚀',
+    })
+
+    // Verify persisted in adapterConfigJson
+    const row = db
+      .select()
+      .from(agentDefinitions)
+      .where(eq(agentDefinitions.id, agent.id))
+      .get()
+    expect(JSON.parse(row?.adapterConfigJson ?? '{}')).toMatchObject({
+      customCommand: './bin/my-acp-server',
+      customArgs: ['acp', '--verbose'],
+      customLabel: 'My Custom Agent 🚀',
+    })
+
+    // Verify get() roundtrips
+    const reloaded = await store.get(agent.id)
+    expect(reloaded).toMatchObject({
+      customCommand: './bin/my-acp-server',
+      customArgs: ['acp', '--verbose'],
+      customLabel: 'My Custom Agent 🚀',
+    })
+  })
+
+  it('handles custom agent without optional custom fields', async () => {
+    const store = createStore()
+
+    const agent = await store.create({
+      name: 'minimal-custom',
+      adapter: 'custom',
+      customCommand: 'gemini',
+    })
+
+    expect(agent).toMatchObject({
+      customCommand: 'gemini',
+    })
+    expect(agent.customArgs).toBeUndefined()
+    expect(agent.customLabel).toBeUndefined()
+  })
+
   function createStore(): DbAgentStore {
     return createStoreWithDb().store
   }

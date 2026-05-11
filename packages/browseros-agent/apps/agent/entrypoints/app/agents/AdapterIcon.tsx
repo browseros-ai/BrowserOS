@@ -1,4 +1,4 @@
-import { Bot, Cpu, Sparkles, Wand2 } from 'lucide-react'
+import { Bot, Cpu, Plug, Sparkles, Wand2 } from 'lucide-react'
 import type { FC } from 'react'
 import type { HarnessAgentAdapter } from './agent-harness-types'
 
@@ -26,6 +26,9 @@ export const AdapterIcon: FC<AdapterIconProps> = ({ adapter, className }) => {
     case 'hermes':
       // Hermes — messenger god framing, wand evokes the agentic conjuring.
       return <Wand2 className={className} aria-label="Hermes" />
+    case 'custom':
+      // Custom ACP — plug/terminal icon for user-provided binary.
+      return <Plug className={className} aria-label="Custom ACP" />
     default:
       return <Bot className={className} aria-label="Agent" />
   }
@@ -41,6 +44,8 @@ export function adapterLabel(adapter: HarnessAgentAdapter | 'unknown'): string {
       return 'OpenClaw'
     case 'hermes':
       return 'Hermes'
+    case 'custom':
+      return 'Custom ACP'
     default:
       return 'Agent'
   }

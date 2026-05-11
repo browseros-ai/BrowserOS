@@ -32,6 +32,11 @@ import type {
 } from '../../lib/agents/agent-types'
 import type { AgentHistoryPage, AgentStreamEvent } from '../../lib/agents/types'
 import {
+  importAgentsFromAcpx,
+  probeCustomAgent,
+  readAcpxConfig,
+} from '../services/agents/acpx-config-sync'
+import {
   type AgentDefinitionWithActivity,
   AgentHarnessService,
   type GatewayStatusSnapshot,
@@ -64,12 +69,21 @@ type AgentRouteService = {
     baseUrl?: string
     apiKey?: string
     supportsImages?: boolean
+    customCommand?: string
+    customArgs?: string[]
+    customLabel?: string
   }): Promise<AgentDefinition>
   getAgent(agentId: string): Promise<AgentDefinition | null>
   deleteAgent(agentId: string): Promise<boolean>
   updateAgent(
     agentId: string,
-    patch: { name?: string; pinned?: boolean },
+    patch: {
+      name?: string
+      pinned?: boolean
+      customCommand?: string
+      customArgs?: string[]
+      customLabel?: string
+    },
   ): Promise<AgentDefinition | null>
   getHistory(agentId: string): Promise<AgentHistoryPage>
   startTurn(input: {
@@ -199,6 +213,45 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
         } catch (err) {
           return handleAgentRouteError(c, err)
         }
+      })
+      .post('/probe-custom', async (c) => {
+        const body = await c.req.json().catch(() => ({}))
+        const { command, args = [] } = body as {
+          command?: string
+          args?: string[]
+        }
+        if (!command) return c.json({ error: 'command required' }, 400)
+        const result = await probeCustomAgent(command, args)
+        return c.json(result)
+      })
+      .post('/import-acpx', async (c) => {
+        const { acpxDir } = (await c.req.json().catch(() => ({}))) as {
+          acpxDir?: string
+        }
+        const config = readAcpxConfig(acpxDir)
+        if (!config)
+          return c.json({
+            results: [],
+            discovered: 0,
+            error: 'No acpx config found',
+          })
+        const existing = await service.listAgents()
+        const results = importAgentsFromAcpx(config, existing)
+        for (const r of results.filter((r) => r.imported)) {
+          const entry = config.agents[r.name]
+          if (!entry) continue
+          await service.createAgent({
+            name: r.name,
+            adapter: 'custom',
+            customCommand: entry.command,
+            customArgs: entry.args,
+            customLabel: r.name,
+          })
+        }
+        return c.json({
+          results,
+          discovered: Object.keys(config.agents).length,
+        })
       })
       .post('/:agentId/sidepanel/chat', async (c) => {
         const agentId = c.req.param('agentId')
@@ -649,6 +702,9 @@ async function parseCreateAgentBody(c: Context<Env>): Promise<
       baseUrl?: string
       apiKey?: string
       supportsImages?: boolean
+      customCommand?: string
+      customArgs?: string[]
+      customLabel?: string
     }
   | { error: string }
 > {
@@ -666,6 +722,14 @@ async function parseCreateAgentBody(c: Context<Env>): Promise<
     return { error: 'Invalid adapter' }
   }
 
+  // Custom adapter requires customCommand
+  if (
+    record.adapter === 'custom' &&
+    (typeof record.customCommand !== 'string' || !record.customCommand.trim())
+  ) {
+    return { error: 'customCommand is required for custom adapter' }
+  }
+
   const modelId =
     typeof record.modelId === 'string' && record.modelId.trim()
       ? record.modelId.trim()
@@ -675,14 +739,14 @@ async function parseCreateAgentBody(c: Context<Env>): Promise<
       ? record.reasoningEffort.trim()
       : undefined
 
-  // OpenClaw and Hermes resolve their model from per-agent provider
-  // config (gateway / config.yaml) rather than from the harness catalog.
-  // Skip catalog model validation for those adapters — both have an
-  // empty `models: []` in the catalog by design — everything else still
-  // uses the catalog for validation.
+  // OpenClaw, Hermes, and custom adapters resolve their model from
+  // per-agent config rather than from the harness catalog. Skip catalog
+  // model validation for those adapters — custom agents use whatever
+  // the binary exposes via ACP.
   if (
     record.adapter !== 'openclaw' &&
     record.adapter !== 'hermes' &&
+    record.adapter !== 'custom' &&
     !isSupportedAgentModel(record.adapter, modelId)
   ) {
     return { error: 'Invalid modelId' }
@@ -690,6 +754,13 @@ async function parseCreateAgentBody(c: Context<Env>): Promise<
   if (!isSupportedReasoningEffort(record.adapter, reasoningEffort)) {
     return { error: 'Invalid reasoningEffort' }
   }
+
+  // Extract custom fields (only relevant for adapter='custom')
+  const customCommand = readOptionalTrimmedString(record, 'customCommand')
+  const customLabel = readOptionalTrimmedString(record, 'customLabel')
+  const customArgs = Array.isArray(record.customArgs)
+    ? record.customArgs.filter((a: unknown) => typeof a === 'string')
+    : undefined
 
   return {
     name,
@@ -704,6 +775,9 @@ async function parseCreateAgentBody(c: Context<Env>): Promise<
       typeof record.supportsImages === 'boolean'
         ? record.supportsImages
         : undefined,
+    ...(customCommand ? { customCommand } : {}),
+    ...(customArgs?.length ? { customArgs } : {}),
+    ...(customLabel ? { customLabel } : {}),
   }
 }
 

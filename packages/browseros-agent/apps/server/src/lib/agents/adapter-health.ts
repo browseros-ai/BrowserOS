@@ -58,7 +58,8 @@ function runtimeSnapshotToHealth(runtime: AgentRuntime): AdapterHealth {
 }
 
 function openclawFallback(adapter: AgentAdapter): AdapterHealth {
-  if (adapter === 'openclaw') return { healthy: true, checkedAt: Date.now() }
+  if (adapter === 'openclaw' || adapter === 'custom')
+    return { healthy: true, checkedAt: Date.now() }
   return {
     healthy: false,
     reason: `No runtime registered for "${adapter}"`,

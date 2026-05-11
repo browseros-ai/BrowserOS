@@ -19,7 +19,7 @@ export const agentDefinitions = sqliteTable(
     id: text('id').primaryKey(),
     name: text('name').notNull(),
     adapter: text('adapter', {
-      enum: ['claude', 'codex', 'openclaw', 'hermes'],
+      enum: ['claude', 'codex', 'openclaw', 'hermes', 'custom'],
     }).notNull(),
     modelId: text('model_id').notNull(),
     reasoningEffort: text('reasoning_effort').notNull(),

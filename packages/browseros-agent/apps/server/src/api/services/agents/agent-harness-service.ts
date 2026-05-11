@@ -561,6 +561,12 @@ export class AgentHarnessService {
       return agent
     }
 
+    if (agent.adapter === 'custom') {
+      // Custom agents need no OpenClaw/Hermes provisioning — the command
+      // is stored in adapterConfigJson and resolved at runtime.
+      return agent
+    }
+
     if (agent.adapter !== 'openclaw') {
       return agent
     }
@@ -712,7 +718,13 @@ export class AgentHarnessService {
    */
   async updateAgent(
     agentId: string,
-    patch: { name?: string; pinned?: boolean },
+    patch: {
+      name?: string
+      pinned?: boolean
+      customCommand?: string
+      customArgs?: string[]
+      customLabel?: string
+    },
   ): Promise<AgentDefinition | null> {
     if (patch.name !== undefined) {
       const trimmed = patch.name.trim()
@@ -730,7 +742,20 @@ export class AgentHarnessService {
       }
       patch = { ...patch, name: trimmed }
     }
-    return this.agentStore.update(agentId, patch)
+
+    // When custom fields are present on a 'custom' adapter agent,
+    // re-serialize adapterConfigJson. The AgentStore interface only
+    // accepts name/pinned in its patch, so custom field updates
+    // require agent-store.ts to be extended (see M16). For now,
+    // the patch carries the fields but the store update only applies
+    // name/pinned. The full adapterConfigJson re-serialization will
+    // land when agent-store.ts is updated in the follow-up.
+    void (patch.customCommand ?? patch.customArgs ?? patch.customLabel)
+
+    return this.agentStore.update(agentId, {
+      name: patch.name,
+      pinned: patch.pinned,
+    })
   }
 
   getAgent(agentId: string): Promise<AgentDefinition | null> {

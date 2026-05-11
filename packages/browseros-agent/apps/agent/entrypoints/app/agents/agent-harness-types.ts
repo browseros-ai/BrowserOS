@@ -1,6 +1,11 @@
 import type { AgentEntry } from './useOpenClaw'
 
-export type HarnessAgentAdapter = 'claude' | 'codex' | 'openclaw' | 'hermes'
+export type HarnessAgentAdapter =
+  | 'claude'
+  | 'codex'
+  | 'openclaw'
+  | 'hermes'
+  | 'custom'
 
 /**
  * One file the harness attributed to the assistant turn that just
