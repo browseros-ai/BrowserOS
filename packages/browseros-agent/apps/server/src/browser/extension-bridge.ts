@@ -103,7 +103,11 @@ export async function sendExtensionMessage(
   // F7: Payload serializability validation
   let serializedMsg: string
   try {
-    serializedMsg = JSON.stringify(message)
+    const serialized = JSON.stringify(message)
+    if (typeof serialized !== 'string') {
+      throw new Error('Message payload is not JSON-serializable')
+    }
+    serializedMsg = serialized
   } catch {
     throw new Error('Message payload is not JSON-serializable')
   }
@@ -170,10 +174,14 @@ export async function sendExtensionMessage(
         new Promise((resolve) => {
           try {
             chrome.runtime.sendMessage(${serializedMsg}, (response) => {
-              resolve(JSON.stringify(response ?? null));
+              if (chrome.runtime.lastError) {
+                resolve(JSON.stringify({ __browseros_bridge_error: chrome.runtime.lastError.message }));
+              } else {
+                resolve(JSON.stringify(response ?? null));
+              }
             });
           } catch (e) {
-            resolve(JSON.stringify({ __error: e.message }));
+            resolve(JSON.stringify({ __browseros_bridge_error: e.message }));
           }
         })
       `
@@ -209,8 +217,8 @@ export async function sendExtensionMessage(
 
       try {
         const parsed = JSON.parse(value)
-        if (parsed?.__error) {
-          throw new Error(`Extension error: ${parsed.__error}`)
+        if (parsed?.__browseros_bridge_error) {
+          throw new Error(`Extension error: ${parsed.__browseros_bridge_error}`)
         }
         return parsed
       } catch (parseErr) {
@@ -225,7 +233,8 @@ export async function sendExtensionMessage(
       // Retry on attach failure (SW may have suspended between discover and attach)
       if (
         lastError.message.includes('Target closed') ||
-        lastError.message.includes('session')
+        lastError.message.includes('No session with given id') ||
+        lastError.message.includes('Session closed')
       ) {
         // F5: Remove `as any`
         try {

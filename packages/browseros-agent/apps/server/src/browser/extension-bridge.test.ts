@@ -535,6 +535,217 @@ describe('extension-bridge — F8: input validation', () => {
   })
 })
 
+// ── Fix 4: Retry matching too broad ──
+
+describe('extension-bridge — Fix 4: specific retry patterns', () => {
+  test('error with "Invalid session ID format" is NOT retried', async () => {
+    let attachCallCount = 0
+    const backend = createMockBackend({
+      getTargets: [
+        {
+          id: 'sw-1',
+          type: 'service_worker',
+          title: 'Ext SW',
+          url: 'chrome-extension://ext-1/sw.js',
+        },
+      ],
+    })
+
+    backend.Target.attachToTarget = mock(async () => {
+      attachCallCount++
+      throw new Error('Invalid session ID format')
+    })
+
+    await expect(
+      sendExtensionMessage(backend, 'ext-1', { action: 'test' }),
+    ).rejects.toThrow('Invalid session ID format')
+
+    // Should NOT retry — only 1 attempt
+    expect(attachCallCount).toBe(1)
+  })
+
+  test('error with "Target closed" IS retried', async () => {
+    let attachCallCount = 0
+    const backend = createMockBackend({
+      getTargets: [
+        {
+          id: 'sw-1',
+          type: 'service_worker',
+          title: 'Ext SW',
+          url: 'chrome-extension://ext-1/sw.js',
+        },
+      ],
+    })
+
+    backend.Target.attachToTarget = mock(async () => {
+      attachCallCount++
+      throw new Error('Target closed')
+    })
+
+    await expect(
+      sendExtensionMessage(backend, 'ext-1', { action: 'test' }),
+    ).rejects.toThrow('Target closed')
+
+    // Should retry — 2 attempts
+    expect(attachCallCount).toBe(2)
+  })
+
+  test('error with "No session with given id" IS retried', async () => {
+    let attachCallCount = 0
+    const backend = createMockBackend({
+      getTargets: [
+        {
+          id: 'sw-1',
+          type: 'service_worker',
+          title: 'Ext SW',
+          url: 'chrome-extension://ext-1/sw.js',
+        },
+      ],
+    })
+
+    backend.Target.attachToTarget = mock(async () => {
+      attachCallCount++
+      throw new Error('No session with given id')
+    })
+
+    await expect(
+      sendExtensionMessage(backend, 'ext-1', { action: 'test' }),
+    ).rejects.toThrow('No session with given id')
+
+    // Should retry — 2 attempts
+    expect(attachCallCount).toBe(2)
+  })
+})
+
+// ── Fix 3: runtime.lastError unchecked ──
+
+describe('extension-bridge — Fix 3: runtime.lastError in injected callback', () => {
+  test('sendExtensionMessage throws when lastError is set (no onMessage handler)', async () => {
+    const sessionApi = {
+      Runtime: {
+        enable: mock(async () => {}),
+        evaluate: mock(async () => ({
+          result: {
+            type: 'string',
+            value: JSON.stringify({ __browseros_bridge_error: 'Could not establish connection. Receiving end does not exist.' }),
+          },
+        })),
+        on: mock(() => {}),
+      },
+    } as unknown as ProtocolApi
+
+    const backend = createMockBackend({
+      getTargets: [
+        {
+          id: 'sw-1',
+          type: 'service_worker',
+          title: 'NoHandler Ext',
+          url: 'chrome-extension://ext-1/sw.js',
+        },
+      ],
+    })
+    backend.session = mock((() => sessionApi) as any)
+
+    await expect(
+      sendExtensionMessage(backend, 'ext-1', { action: 'test' }),
+    ).rejects.toThrow('Could not establish connection')
+  })
+})
+
+// ── Fix 2: JSON.stringify returns undefined for functions/symbols ──
+
+describe('extension-bridge — Fix 2: non-JSON-serializable payloads', () => {
+  test('sendExtensionMessage throws for undefined message', async () => {
+    const backend = createMockBackend()
+
+    await expect(
+      sendExtensionMessage(backend, 'ext-1', undefined),
+    ).rejects.toThrow('not JSON-serializable')
+  })
+
+  test('sendExtensionMessage throws for function message', async () => {
+    const backend = createMockBackend()
+
+    await expect(
+      sendExtensionMessage(backend, 'ext-1', () => {}),
+    ).rejects.toThrow('not JSON-serializable')
+  })
+
+  test('sendExtensionMessage throws for Symbol message', async () => {
+    const backend = createMockBackend()
+
+    await expect(
+      sendExtensionMessage(backend, 'ext-1', Symbol('test')),
+    ).rejects.toThrow('not JSON-serializable')
+  })
+})
+
+// ── Fix 1: __error key collision ──
+
+describe('extension-bridge — Fix 1: __error sentinel key collision', () => {
+  test('extension returning __error key as data is NOT treated as error', async () => {
+    const sessionApi = {
+      Runtime: {
+        enable: mock(async () => {}),
+        evaluate: mock(async () => ({
+          result: {
+            type: 'string',
+            value: JSON.stringify({ __error: 'last_error_message', count: 5, status: 'ok' }),
+          },
+        })),
+        on: mock(() => {}),
+      },
+    } as unknown as ProtocolApi
+
+    const backend = createMockBackend({
+      getTargets: [
+        {
+          id: 'sw-1',
+          type: 'service_worker',
+          title: 'Error Tracker',
+          url: 'chrome-extension://ext-1/sw.js',
+        },
+      ],
+    })
+    backend.session = mock((() => sessionApi) as any)
+
+    // Should return the data as-is, NOT throw
+    const result = await sendExtensionMessage(backend, 'ext-1', { action: 'get_errors' })
+    expect(result).toEqual({ __error: 'last_error_message', count: 5, status: 'ok' })
+  })
+
+  test('extension bridge error with new sentinel IS treated as error', async () => {
+    const sessionApi = {
+      Runtime: {
+        enable: mock(async () => {}),
+        evaluate: mock(async () => ({
+          result: {
+            type: 'string',
+            value: JSON.stringify({ __browseros_bridge_error: 'Actual bridge error' }),
+          },
+        })),
+        on: mock(() => {}),
+      },
+    } as unknown as ProtocolApi
+
+    const backend = createMockBackend({
+      getTargets: [
+        {
+          id: 'sw-1',
+          type: 'service_worker',
+          title: 'Test Ext',
+          url: 'chrome-extension://ext-1/sw.js',
+        },
+      ],
+    })
+    backend.session = mock((() => sessionApi) as any)
+
+    await expect(
+      sendExtensionMessage(backend, 'ext-1', { action: 'test' }),
+    ).rejects.toThrow('Actual bridge error')
+  })
+})
+
 // ── Fix F4: Stale swTarget across retries ──
 
 describe('extension-bridge — F4: re-discover targets after startWorker', () => {
