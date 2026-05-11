@@ -1,7 +1,7 @@
 # Custom ACP Agent Configuration via acpx
 
 **Date**: 2026-05-11
-**Status**: Draft
+**Status**: Verified Draft (7 sub-agent verification round)
 **Depends on**: acpx@0.6.1, Agent Client Protocol spec
 
 ---
@@ -26,7 +26,7 @@
 >   },
 >   "auth": {
 >     "my_auth_method_id": "credential-value"
->   }
+> }
 > }
 > ```
 > Implement a section to be able to config that as well, basically it will be any arbitrary cmd that will launch the underlying acp. We will start the conversation in the acpx to probes if it is in correct format, if not then make the warning, do not block the rest. Make the TEST button per configuration as well.
@@ -42,53 +42,39 @@
 
 ## Architecture
 
-### Approach: Thin Config Layer + acpx Config Pass-Through (Hybrid)
-
-BrowserOS reads acpx config for import (c1/c2/c3), but also has its own custom agent form (a/b) that writes back to acpx config. Single source of truth with full UI control.
-
 ```
 ┌─────────────────────────────────────────────────┐
-│ BrowserOS UI                                     │
+│ BrowserOS UI (agents/NewAgentDialog.tsx)         │
 │                                                  │
-│  ┌──────────────────┐  ┌──────────────────────┐ │
-│  │ Create Agent      │  │ Import from acpx     │ │
-│  │ - Adapter dropdown│  │ - Scan ~/.acpx/      │ │
-│  │ - Custom command  │  │ - Pick agents        │ │
-│  │ - TEST button     │  │ - Import selected    │ │
-│  └────────┬─────────┘  └──────────┬───────────┘ │
-│           │                       │              │
-│           ▼                       ▼              │
-│  ┌──────────────────────────────────────────┐   │
-│  │ AgentHarnessService                       │   │
-│  │  - createAgent(adapter, customCommand..)  │   │
-│  │  - probeAgent(agentId) → ProbeResult      │   │
-│  │  - importFromAcpx(acpxDir)                │   │
-│  └──────────────────┬───────────────────────┘   │
-│                     │                            │
-│  ┌──────────────────▼───────────────────────┐   │
-│  │ AcpxRuntime                               │   │
-│  │  - resolve('custom') → spawn command      │   │
-│  │  - Same ACP handshake as built-in agents  │   │
-│  └──────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────┘
-         │
-         │ stdio JSON-RPC (ACP)
-         ▼
+│  Adapter dropdown: Claude/Codex/OpenClaw/Hermes/ │
+│  Custom ACP Agent                                │
+│                                                  │
+│  Custom fields: Command + Args                   │
+│  TEST button: POST /agents/probe-custom          │
+│  Import button: POST /agents/import-acpx         │
+└───────────────────────┬─────────────────────────┘
+                        │
+                        ▼
 ┌─────────────────────────────────────────────────┐
-│ acpx runtime (npm:acpx@0.6.1)                    │
-│  - createAgentRegistry()                         │
-│  - Agent spawn + session management              │
-│  - Custom agents resolve via command string      │
-└─────────────────────────────────────────────────┘
-         │
-         │ spawns
-         ▼
+│ Existing POST /agents/ route (extended)          │
+│  + optional customCommand/customArgs fields      │
+└───────────────────────┬─────────────────────────┘
+                        │
+                        ▼
 ┌─────────────────────────────────────────────────┐
-│ Any ACP-capable binary                           │
-│  gemini, cursor, copilot, pi, opencode, kiro,    │
-│  kimi, trae, droid, kilocode, qwen, qoder,       │
-│  iflow, or user's custom script                  │
-└─────────────────────────────────────────────────┘
+│ AgentHarnessService.createAgent()                │
+│  + custom branch: no OpenClaw/Hermes provisioning│
+└───────────────────────┬─────────────────────────┘
+                        │
+                        ▼
+┌─────────────────────────────────────────────────┐
+│ AcpxRuntime                                      │
+│  ensureSession(agent: 'custom:<agentId>')        │
+│  resolve() → wrapCommandWithEnv(customCommand)   │
+└───────────────────────┬─────────────────────────┘
+                        │ stdio JSON-RPC (ACP)
+                        ▼
+                  Any ACP binary
 ```
 
 ---
@@ -112,24 +98,25 @@ export interface AgentDefinition {
   createdAt: number
   updatedAt: number
   pinned?: boolean
-  // NEW fields (required when adapter='custom')
-  customCommand?: string    // e.g. "gemini", "./bin/my-acp", "npx -y opencode-ai acp"
-  customArgs?: string[]     // e.g. ["acp", "--profile", "ci"]
-  customLabel?: string      // display name override for UI
+  // NEW: stored in adapterConfigJson, not new columns
+  customCommand?: string    // required when adapter='custom'
+  customArgs?: string[]     // optional
 }
 ```
+
+**Note**: No `customLabel` field. `name` serves as display name (YAGNI per v-data-model).
 
 ### AgentAdapterDescriptor catalog extension
 
 ```ts
-// agent-catalog.ts — add custom descriptor
+// agent-catalog.ts
 {
   id: 'custom',
   name: 'Custom ACP Agent',
   defaultModelId: 'default',
   defaultReasoningEffort: 'medium',
   modelControl: 'best-effort',
-  models: [],  // no per-session model picker — agent binary controls this
+  models: [],  // no per-session model picker
   reasoningEfforts: [
     { id: 'low', label: 'Low' },
     { id: 'medium', label: 'Medium', recommended: true },
@@ -140,236 +127,206 @@ export interface AgentDefinition {
 
 ### DB schema
 
-**Schema migration required** for the `adapter` enum column:
-
-Current drizzle schema (`lib/db/schema/agents.ts`) defines:
-```ts
-adapter: text('adapter', { enum: ['claude', 'codex', 'openclaw', 'hermes'] }).notNull()
-```
-
-Must extend to:
+**Schema change**: Extend `adapter` enum in `lib/db/schema/agents.ts`:
 ```ts
 adapter: text('adapter', { enum: ['claude', 'codex', 'openclaw', 'hermes', 'custom'] }).notNull()
 ```
 
-**No new columns needed.** Use existing `adapterConfigJson` column to store custom agent config:
+**No new columns.** Custom fields stored in existing `adapterConfigJson`:
 ```json
-{
-  "customCommand": "gemini",
-  "customArgs": ["--acp"],
-  "customLabel": "Gemini CLI"
-}
+{ "customCommand": "gemini", "customArgs": ["--acp"] }
 ```
 
-`adapterConfigJson` is already a nullable text column used for provider config (providerType, providerName, baseUrl, apiKey, supportsImages). Extend `serializeAdapterConfig()` and `toAgentDefinition()` to include custom fields.
+**MUST extend** `serializeAdapterConfig()` and `toAgentDefinition()` in `db-agent-store.ts`:
+- `serializeAdapterConfig()`: add `customCommand`/`customArgs` to serialized JSON
+- `toAgentDefinition()`: parse `adapterConfigJson` and hydrate `customCommand`/`customArgs` back
 
-### Config store new keys
+Without this, custom fields are silently lost on write and never read back (verified by v-data-model + v-gotchas).
+
+### Config store
+
+**Only one new key** (ACPX.AUTO_IMPORT deferred to v2 — YAGNI per v-data-model):
 
 ```ts
-// config-schema.ts
+// config-schema.ts — new string config key
 'ACPX.CONFIG_DIR': {
   default: '~/.acpx',
   type: 'string',
   min: 1,
-  description: 'Path to acpx configuration directory containing config.json',
-},
-'ACPX.AUTO_IMPORT': {
-  default: false,
-  type: 'boolean',
-  description: 'Automatically import new agents from acpx config on server startup',
-},
+  description: 'Path to acpx config directory for agent import',
+}
 ```
+
+**Implementation note**: Current `config-schema.ts` only supports numeric types (`ConfigValueSchema = z.number()`). Need to add a parallel string config type (`StringConfigKeyMeta` + `STRING_CONFIG_KEYS`) or refactor `ConfigKeyMeta` to a discriminated union (verified by v-data-model).
 
 ---
 
 ## Component Details
 
-### 1. acpx-config-sync.ts (NEW)
+### 1. acpx-config-sync.ts (NEW — single file, no separate acpx-probe.ts)
 
 Location: `apps/server/src/api/services/agents/acpx-config-sync.ts`
 
 ```
 readAcpxConfig(acpxDir?: string) → AcpxConfig | null
   - Default dir: configStore.get('ACPX.CONFIG_DIR') resolved (~ → $HOME)
-  - Reads config.json from dir
-  - Returns parsed { agents, defaultAgent, auth, ... } or null if missing/invalid
+  - Reads config.json from dir directly (no acpx CLI dependency)
+  - Returns { agents: { [name]: { command, args } } } or null
 
-importAgentsFromAcpx(config: AcpxConfig, existingAgents: AgentDefinition[])
-  → ImportResult[]
+importAgentsFromAcpx(config, existingAgents) → ImportResult[]
   - For each entry in config.agents:
     - Skip if agent with same name already exists (idempotent)
     - Create AgentDefinition { adapter: 'custom', customCommand, customArgs, name }
-    - Return { imported: AgentDefinition, skipped: boolean, reason?: string }
+    - Agents named 'claude'/'codex'/'openclaw'/'hermes': import as custom + show warning
+  - Return results list
 
-exportAgentToAcpx(agent: AgentDefinition, acpxDir: string) → void
-  - Read existing config.json
-  - Add/update entry in agents map
-  - Write back
-
-probeAgent(command: string, args: string[], timeout?: number) → ProbeResult
-  - Spawn process: `${command} ${args.join(' ')}`
-  - Send ACP initialize handshake over stdin
-  - Wait for initialize response (or timeout 15s)
-  - Kill process
-  - Return { healthy: boolean, error?: string, agentInfo?: { name, version } }
-  - On failure: warning only, never throws
+probeCustomAgent(command: string, args: string[]) → ProbeResult
+  - Spawn child process with shell: true
+  - Send ACP initialize JSON-RPC over stdin
+  - Read stdout for response (15s timeout, SIGKILL fallback)
+  - Return { healthy: boolean, error?: string }
+  - On timeout + command contains 'npx': append hint about first-run download
+  - agentInfo { name, version }: parsed from initialize response if present (diagnostic only, no UI dependency)
+  - Never throws — returns { healthy: false, error } on all failures
 ```
+
+**Dropped** (YAGNI per v-acpx-sync):
+- ~~`exportAgentToAcpx()`~~ — BrowserOS is source of truth, no dual-write
+- ~~`getAcpxConfig()`~~ — import endpoint returns discovery data inline
 
 ### 2. AcpxRuntime changes
 
-In `createBrowserosAgentRegistry().resolve()`:
+**Do NOT change `resolve()` signature** — it's an acpx interface contract (verified by v-acpx-runtime).
+
+Instead:
+
+1. Pass `Map<string, AgentDefinition>` into `createBrowserosAgentRegistry()`
+2. Use `custom:<agentId>` as the agent name in `ensureSession()`
+3. Add a `custom:*` branch in BrowserOS's resolve wrapper:
 
 ```ts
-if (lower === 'custom') {
-  // Look up the agent's customCommand from the definition
-  // This requires passing agent context into resolve()
-  // ...see implementation note below
+// In createBrowserosAgentRegistry().resolve():
+if (agentName.startsWith('custom:')) {
+  const agentId = agentName.slice('custom:'.length)
+  const def = input.customAgents.get(agentId)
+  if (!def?.customCommand) return agentName  // fallback
+  return wrapCommandWithEnv(
+    [def.customCommand, ...(def.customArgs ?? [])].join(' '),
+    input.commandEnv
+  )
 }
 ```
 
-Implementation note: `resolve()` currently only receives `agentName` string. We need to extend it to also accept agent metadata. Options:
-- **Option A**: Pass full `AgentDefinition` through `resolve()`
-- **Option B**: Store a `Map<string, AgentDefinition>` in the registry context
+4. In `createAcpxEventStream()`, pass unique agent name:
+```ts
+agent: input.agent.adapter === 'custom'
+  ? `custom:${input.agent.id}`
+  : input.agent.adapter
+```
 
-**Choice: Option A** — modify `resolve()` signature to accept optional `AgentDefinition` for custom agents. This is cleaner because the command comes from the agent definition, not the registry.
+5. Thread `AgentDefinition` through: `send()` → `getRuntime()` → `createBrowserosAgentRegistry()`
+
+6. **Runtime cache key**: include custom command string to prevent cross-agent collisions
 
 ### 3. Agent Harness Service changes
 
-```ts
-// New methods on AgentHarnessService
+**No new methods** — keep it minimal:
 
-probeAgent(agentId: string): Promise<ProbeResult>
-  - Look up agent definition
-  - If adapter !== 'custom', return { healthy: true } (built-in agents already probed)
-  - Call probeAgent(customCommand, customArgs)
+- `createAgent()`: existing method, just add `adapter === 'custom'` branch (skip OpenClaw/Hermes provisioning)
+- Probe and import logic lives in `acpx-config-sync.ts`, called directly from route handlers
 
-importFromAcpx(acpxDir?: string): Promise<ImportResult[]>
-  - Read acpx config
-  - Diff against existing agents
-  - Create new agents for entries not yet imported
-  - Return results
-
-getAcpxConfig(): Promise<AcpxConfig | null>
-  - Read acpx config from configured dir
-  - Return parsed config for UI display
-```
-
-### 4. API routes
+### 4. API routes (minimal — 2 new routes only)
 
 ```
-POST   /agents/custom
-  Body: { name, customCommand, customArgs?, customLabel? }
-  → Creates AgentDefinition with adapter='custom'
-  → Validates customCommand is non-empty
-  → Optionally writes to acpx config
+POST  /agents/probe-custom              ← TEST button (pre-creation)
+  Body: { command: string, args?: string[] }
+  → ProbeResult { healthy, error? }
+  → Always 200. Warning only.
 
-POST   /agents/:id/probe
-  → ProbeResult { healthy, error?, agentInfo? }
-  → 15s timeout
-  → Never returns error status — always 200 with probe result
-
-POST   /agents/import-acpx
-  Body: { acpxDir?: string, agentNames?: string[] }
-  → Scan acpx config, import selected (or all if agentNames omitted)
-  → Returns ImportResult[]
-
-GET    /agents/acpx-config
-  → Returns current acpx config (agents map) for UI display
-  → { agents: { name: { command, args } }, defaultAgent, ... }
+POST  /agents/import-acpx               ← Import button
+  Body: { acpxDir?: string }
+  → { results: ImportResult[], discovered: number }
 ```
 
-### 5. UI — Create Agent dialog changes
+**Dropped** (YAGNI per v-harness-routes):
+- ~~`POST /agents/custom`~~ — extend existing `POST /agents/` with optional customCommand/customArgs
+- ~~`GET /agents/acpx-config`~~ — discovery data returned inline from import
+- ~~`POST /agents/:id/probe`~~ — probe-custom takes command+args directly, no agentId needed
 
-**Adapter dropdown** adds:
-```
-- Claude Code
-- Codex
-- OpenClaw
-- Hermes
-─────────────
-- Custom ACP Agent  ← NEW
-```
+### 5. UI changes — extend existing dialog
 
-When "Custom ACP Agent" selected, show:
-- **Name** field (agent display name)
-- **Command** field (the binary/command to spawn)
-- **Args** field (optional, comma-separated or multi-input)
-- **TEST button** — calls `POST /agents/:id/probe` or inline probe
-- **Import from acpx** collapsible section:
-  - acpx directory input (default `~/.acpx`)
-  - "Scan" button — calls `GET /agents/acpx-config`
-  - Checkbox list of discovered agents
-  - "Import Selected" button — calls `POST /agents/import-acpx`
+**Extend `agents/NewAgentDialog.tsx`**, not new files (verified by v-ui).
 
-### 6. Probe (TEST button) flow
+When adapter dropdown selects "Custom ACP Agent":
+- **Command** input (required)
+- **Args** input (optional)
+- **TEST** button → `POST /agents/probe-custom { command, args }` → shows ✅ or ⚠️
+- **Import from acpx** button → `POST /agents/import-acpx {}` → shows results summary ("3 imported, 1 skipped")
 
-```
-User clicks TEST
-  → UI calls POST /agents/probe-custom { command, args }
-  → Server spawns child process:
-      1. Spawn: command + args
-      2. Write ACP initialize to stdin
-      3. Read stdout for JSON-RPC initialize response
-      4. Timeout 15s
-      5. Kill process
-  → Parse response:
-      ✅ { healthy: true, agentInfo: { name: "gemini", version: "2.1.0" } }
-      ⚠️ { healthy: false, error: "command not found: gemini" }
-      ⚠️ { healthy: false, error: "process exited with code 1: ..." }
-      ⚠️ { healthy: false, error: "timeout: no ACP response within 15s" }
-  → UI shows result badge (green checkmark or yellow warning)
-  → WARNING ONLY — does NOT disable "Create" button
-```
+No checkbox selection — import-all with summary is simpler (YAGNI per v-ui).
 
-### 7. Startup auto-import (requirement c1)
+---
 
-When `ACPX.AUTO_IMPORT=true` in BrowserOS config:
-1. On server startup, after agent harness initializes
-2. Read acpx config from `ACPX.CONFIG_DIR`
-3. Diff agents map against existing BrowserOS agents
-4. Auto-create any new agents found
-5. Log results
-6. Does NOT remove agents that were deleted from acpx config
+## Mandatory Code Changes (from verifier findings)
+
+These are **breaking if not done** — not optional:
+
+| # | File | Change | Verified by |
+|---|------|--------|-------------|
+| M1 | `agent-catalog.ts` | `isAgentAdapter()`: add `value === 'custom'` | v-data-model |
+| M2 | `acpx-agent-adapter.ts` | `ADAPTERS` record: add `custom: { prepare: prepareCustomContext }` | v-data-model, v-gotchas N1 |
+| M3 | `acpx-agent-adapter.ts` | New `prepareCustomContext()` function (reuse common flow) | v-acpx-runtime |
+| M4 | `db-agent-store.ts` | `serializeAdapterConfig()`: include customCommand/customArgs | v-data-model, v-gotchas N4 |
+| M5 | `db-agent-store.ts` | `toAgentDefinition()`: parse adapterConfigJson → custom fields | v-data-model, v-gotchas N4 |
+| M6 | `lib/db/schema/agents.ts` | Extend adapter enum with `'custom'` | v-data-model H1 |
+| M7 | `agent-store.ts` | `CreateAgentInput`: add `customCommand?`, `customArgs?` | v-data-model M2 |
+| M8 | `routes/agents.ts` | `parseCreateAgentBody()`: extract customCommand/customArgs | v-data-model M2 |
+| M9 | `routes/agents.ts` | Model validation: skip catalog check for `adapter === 'custom'` (like openclaw/hermes) | v-data-model M1 |
+| M10 | `acpx-runtime.ts` | Registry: accept `Map<string, AgentDefinition>`, add `custom:*` resolve branch | v-acpx-runtime |
+| M11 | `acpx-runtime.ts` | `createAcpxEventStream()`: pass `custom:<agentId>` when adapter=custom | v-acpx-runtime |
+| M12 | `adapter-health.ts` | Add `adapter === 'custom'` bypass (return healthy like openclaw fallback) | v-gotchas N2 |
+| M13 | `config-schema.ts` | Add string config type support + `ACPX.CONFIG_DIR` key | v-data-model H3 |
 
 ---
 
 ## Gotchas & Edge Cases
 
 ### G0: Drizzle enum constraint (CRITICAL)
-`adapter` column uses drizzle enum `['claude', 'codex', 'openclaw', 'hermes']`. Must add `'custom'` to the enum. This requires a drizzle migration file AND an SQLite `ALTER TABLE` to update the check constraint. Files: `lib/db/schema/agents.ts` + migration.
+Must add `'custom'` to adapter enum. Requires schema change + migration.
 
 ### G1: Command with spaces
-Custom commands like `"npx -y opencode-ai acp"` need proper shell parsing. Use `child_process.spawn(command, args, { shell: true })` or pre-parse with `shlex`-like splitting.
+Use `child_process.spawn(command, args, { shell: true })`.
 
 ### G2: acpx not installed
-`readAcpxConfig()` reads JSON directly — no dependency on acpx CLI. But `probeAgent()` spawns the binary directly (not via acpx), so acpx itself is NOT required for custom agents to work.
+Read config JSON directly, no acpx CLI dependency. Probe spawns binary directly.
 
 ### G3: Custom agent name collision
-If user creates a custom agent named "claude", it must NOT shadow the built-in claude adapter. Custom agents always have `adapter='custom'`, so the built-in registry is unaffected. The harness routes by `adapter` field, not by name.
+`adapter='custom'` never shadows built-ins. Harness routes by `adapter` field. Import of agent named 'claude' from acpx config works but shows warning.
 
-### G3b: isAgentAdapter() validator
-`agent-catalog.ts` has `isAgentAdapter()` that checks exact values: `value === 'claude' || value === 'codex' || value === 'openclaw' || value === 'hermes'`. Must add `|| value === 'custom'`. Used in `routes/agents.ts` line 665 for validation — will reject custom agents if not updated.
+### G3b: isAgentAdapter() — see M1 above
 
-### G3c: AcpxRuntime resolve() registry
-`acpx-runtime.ts` `createBrowserosAgentRegistry().resolve()` has explicit branches for `openclaw`, `hermes`, `claude`, `codex`. Unknown names fall through to `registry.resolve(agentName)` which treats them as raw commands. Custom agents with `adapter='custom'` need their own branch that reads `customCommand` from the agent definition. Current `resolve()` only receives `agentName` string — needs signature change to also accept `AgentDefinition`.
+### G3c: AcpxRuntime resolve() — see M10-M11 above. NOT changing resolve() signature.
 
-### G3d: OpenClaw dual-tracking skip
-`routes/agents.ts` lines 684-685 check `record.adapter !== 'openclaw'` before OpenClaw provisioning. Custom agents correctly skip this. But the createAgent flow in `agent-harness-service.ts` may still attempt gateway provisioning — verify the guard covers all paths.
+### G3d: OpenClaw dual-tracking — `adapter !== 'openclaw'` guard correctly skips custom agents
 
-### G4: acpx config directory missing
-`readAcpxConfig()` returns `null` gracefully. UI shows "No acpx configuration found" message.
+### G4: acpx config missing → returns null, UI shows "no config found"
 
-### G5: Probe process hangs
-15s timeout + SIGKILL fallback. Never blocks the server.
+### G5: Probe timeout → 15s + SIGKILL. Never blocks.
 
-### G6: Custom agent exits mid-session
-AcpxRuntime already handles crash reconnect for all agents. Custom agents get the same treatment — dead process detected, session reloaded transparently.
+### G6: Crash reconnect → AcpxRuntime handles for all agents equally.
 
-### G7: Auth for custom agents
-acpx config `auth` map is read but NOT used by BrowserOS directly. Auth credentials stay in acpx config. BrowserOS passes through environment variables to child processes (existing behavior).
+### ~~G7: Auth~~ — DROPPED. Auth stays in acpx config. BrowserOS does not read it. (YAGNI per v-gotchas)
 
-### G8: Import idempotency
-Re-importing same agent name updates `customCommand`/`customArgs` if they changed, does NOT create duplicate.
+### G8: Import idempotency — skip same-name, update command if changed.
+
+### G9: AgentRuntimeRegistry single 'custom' slot (NEW from v-gotchas N3)
+Registry maps `adapterId → AgentRuntime`. All custom agents share `adapter='custom'`. Health/probe path must bypass registry and spawn directly. The per-agent command resolution happens inside `createBrowserosAgentRegistry().resolve()`.
+
+### G10: Runtime cache key collision (NEW from v-acpx-runtime)
+Different custom agents with same cwd/env could share cached runtime. Fix: include custom command string in cache key.
+
+### G11: acpx agent named 'claude' in config (NEW from v-acpx-sync)
+Import as `adapter='custom'` with warning. Do NOT skip — user configured it intentionally.
 
 ---
 
@@ -378,43 +335,44 @@ Re-importing same agent name updates `customCommand`/`customArgs` if they change
 ### New files
 | File | Purpose |
 |------|---------|
-| `apps/server/src/api/services/agents/acpx-config-sync.ts` | Read/write/probe acpx config |
-| `apps/server/src/api/services/agents/acpx-probe.ts` | ACP initialize handshake probe |
-| `apps/agent/entrypoints/app/ai-settings/CustomAgentForm.tsx` | UI form for custom agent config |
-| `apps/agent/entrypoints/app/ai-settings/AcpxImportPanel.tsx` | UI panel for acpx import |
-| `tests/server/api/services/agents/acpx-config-sync.test.ts` | Unit tests |
-| `tests/server/api/services/agents/acpx-probe.test.ts` | Probe tests |
+| `apps/server/src/api/services/agents/acpx-config-sync.ts` | read/import/probe acpx config |
+| `apps/server/src/lib/agents/runtime/custom-host-process-runtime.ts` | prepareCustomContext |
+| `apps/server/tests/api/services/agents/acpx-config-sync.test.ts` | Unit tests |
 
 ### Modified files
 | File | Change |
 |------|--------|
-| `lib/agents/agent-types.ts` | Add `'custom'` to AgentAdapter union + new fields to AgentDefinition |
-| `lib/agents/agent-catalog.ts` | Add custom descriptor + update validators |
-| `lib/agents/acpx-runtime.ts` | Add custom agent resolution in registry |
-| `lib/db/schema/agents.ts` | Add `'custom'` to adapter enum |
-| `api/services/agents/agent-harness-service.ts` | Add probe/import methods |
-| `api/routes/agents.ts` | Add new routes |
-| `packages/shared/src/constants/config-schema.ts` | Add ACPX.CONFIG_DIR, ACPX.AUTO_IMPORT |
-| UI: Create Agent dialog | Add Custom ACP option + import panel |
+| `lib/agents/agent-types.ts` | Add `'custom'` to AgentAdapter + customCommand/customArgs |
+| `lib/agents/agent-catalog.ts` | Add custom descriptor + update `isAgentAdapter()` |
+| `lib/agents/acpx-agent-adapter.ts` | Add `'custom'` entry to ADAPTERS record |
+| `lib/agents/acpx-runtime.ts` | Custom agent registry resolution + ensureSession agent name |
+| `lib/db/schema/agents.ts` | Extend adapter enum |
+| `lib/agents/db-agent-store.ts` | Serialize/deserialize custom fields in adapterConfigJson |
+| `lib/agents/agent-store.ts` | Add custom fields to CreateAgentInput |
+| `lib/agents/adapter-health.ts` | Add 'custom' bypass |
+| `api/routes/agents.ts` | Extend create route + probe-custom + import-acpx routes |
+| `packages/shared/src/constants/config-schema.ts` | String config type + ACPX.CONFIG_DIR |
+| `agents/NewAgentDialog.tsx` | Add Custom ACP option + command/args fields + TEST + import |
 
 ---
 
 ## Testing Strategy
 
 ### Unit tests
-- `acpx-config-sync.test.ts`: read config (valid/invalid/missing), import (new/existing/collision), export
-- `acpx-probe.test.ts`: probe success, probe timeout, probe command-not-found, probe invalid JSON
-- `agent-catalog.test.ts`: custom adapter validation, customCommand required when adapter=custom
+- `acpx-config-sync.test.ts`: read config (valid/invalid/missing), import (new/existing/collision, name-clash with built-in), probe (success/timeout/command-not-found/npx-hint)
+- `agent-catalog.test.ts`: `isAgentAdapter('custom')` returns true, custom adapter validation
 
 ### Integration tests
-- Create custom agent via API → verify in DB → probe → send message (mock agent)
+- Create custom agent via `POST /agents/` → verify customCommand in DB → probe
 - Import from acpx config → verify agents created → re-import idempotent
 
-### TDD approach
-1. RED: Write tests for acpx-config-sync (read, import, export, probe)
-2. GREEN: Implement acpx-config-sync + acpx-probe
-3. RED: Write tests for API routes (create custom, probe, import)
-4. GREEN: Implement routes + harness methods
-5. RED: Write tests for AcpxRuntime custom resolution
-6. GREEN: Implement custom agent registry resolution
-7. UI: Implement form + import panel (no TDD for UI)
+### TDD order
+1. RED: acpx-config-sync tests (read, import, probe)
+2. GREEN: acpx-config-sync implementation
+3. RED: agent-catalog + agent-types tests (isAgentAdapter, custom validation)
+4. GREEN: type + catalog changes
+5. RED: route tests (create custom, probe-custom, import-acpx)
+6. GREEN: routes + harness + store plumbing
+7. RED: AcpxRuntime custom resolution test
+8. GREEN: runtime registry changes
+9. UI: extend NewAgentDialog (no TDD)
