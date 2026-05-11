@@ -226,10 +226,9 @@ export const list_extensions = defineExtReadTool({
     ),
     count: z.number(),
   }),
-  handler: async (_args, _ctx, response) => {
+  handler: async (_args, _ctx, _response) => {
     // TODO: Requires L2 CDP handler (Extensions.listExtensions)
-    response.text('Extension listing requires L2 CDP handler (not yet implemented)')
-    response.data({ extensions: [], count: 0 })
+    throw new Error('Extension listing requires L2 CDP handler (not yet implemented)')
   },
 })
 
