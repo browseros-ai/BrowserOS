@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **BrowserOS** (21168 symbols, 43165 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **BrowserOS** (21165 symbols, 43159 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -135,74 +135,3 @@ Utility for copying the active conversation session ID to clipboard.
 | Analytics | `@/lib/constants/analyticsEvents.ts` | Event: `sidepanel.session_id.copied` via `track()` |
 
 The button is conditionally rendered when `conversationId` is truthy. On success it shows a ✓ checkmark for 2 seconds.
-
-# Dev Deployment
-
-Use mise tasks as the single entry point for local dev workflow.
-
-| Task | Command | Purpose |
-|---|---|---|
-| Full restart | `mise run browseros:restart-dev` | Kill → rebuild → start → verify |
-| Kill | `mise run browseros:kill-dev` | Kill browser + server processes |
-| Build | `mise run browseros:build-dev` | Build dev extension bundle |
-| Start | `mise run browseros:start-dev` | Launch AppImage + server + health check |
-| Health | `mise run browseros:health-dev` | Check `GET /health` response |
-
-Prerequisites: `mise` (trusted), `bun`, BrowserOS AppImage.
-
-Desktop entries installed by `scripts/setup-desktop-entries.sh`:
-- **Prod**: `BrowserOS` (WM_CLASS: `chromium-browser`)
-- **Dev**: `BrowserOS (Dev)` with β badge (WM_CLASS: `BrowserOS-Dev`)
-
-### Environment Variables
-
-| Var | Default | Purpose |
-|---|---|---|
-| `BROWSEROS_APP_PATH` | `$HOME/Downloads/alta/BrowserOS.AppImage` | AppImage location |
-| `BROWSEROS_CDP_PORT` | `9010` | Chrome DevTools Protocol port |
-| `BROWSEROS_SERVER_PORT` | `9110` | Dev server port |
-| `BROWSEROS_EXTENSION_PORT` | `9305` | Extension messaging port |
-
-# Config System
-
-Runtime configuration with bounds validation and layer precedence.
-
-### Layer precedence (highest wins)
-
-1. **ENV vars** — e.g. `BROWSEROS_LIMIT_MAX_TURNS=9999`
-2. **File overrides** — `~/.browseros/advanced-config.json` (prod) or `~/.browseros-dev/advanced-config.json` (dev)
-3. **Defaults** — in `packages/shared/src/constants/config-schema.ts`
-
-### Key files
-
-| File | Purpose |
-|---|---|
-| `packages/shared/src/constants/config-schema.ts` | Schema: keys, defaults, bounds, ENV var mapping |
-| `packages/shared/src/constants/config-store.ts` | Store: file persistence, ENV override, getter API |
-| `packages/shared/src/constants/limits.ts` | Resolved limit values |
-| `packages/shared/src/constants/timeouts.ts` | Resolved timeout values |
-| `apps/agent/entrypoints/app/advanced-config/` | UI: Advanced Config settings page |
-| `apps/server/src/api/routes/config.ts` | API: GET/PUT/DELETE /config |
-
-### Config keys
-
-All limit keys have `min=1`, `max=MAX_SAFE_INTEGER` — no artificial caps.
-
-| Key | Default | ENV |
-|---|---|---|
-| `AGENT_LIMITS.MAX_TURNS` | 100 | `BROWSEROS_LIMIT_MAX_TURNS` |
-| `AGENT_LIMITS.DEFAULT_CONTEXT_WINDOW` | 200000 | `BROWSEROS_LIMIT_DEFAULT_CONTEXT_WINDOW` |
-| `TOOL_LIMITS.FILESYSTEM_READ_MAX_CHARS` | 15000 | `BROWSEROS_LIMIT_FILESYSTEM_READ_MAX_CHARS` |
-| `TOOL_LIMITS.FILESYSTEM_READ_MAX_LINES` | 500 | `BROWSEROS_LIMIT_FILESYSTEM_READ_MAX_LINES` |
-| `TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS` | 5000 | `BROWSEROS_LIMIT_INLINE_PAGE_CONTENT_MAX_CHARS` |
-| `TIMEOUTS.TOOL_CALL` | 120000 | `BROWSEROS_TIMEOUT_TOOL_CALL` |
-
-Dev overrides in `~/.browseros-dev/advanced-config.json`: max turns=9999, tool timeout=2h, context=20M tokens, chars=1.5M, lines=50K.
-
-**Do NOT modify bounds in config-schema.ts without updating tests.**
-
-# Copy Session ID
-
-ChatHeader has a "Copy Session ID" button (📋 icon) that copies `conversationId` (UUID) to clipboard.
-Tracked via `sidepanel.session_id.copied` analytics event.
-Implementation: `apps/agent/entrypoints/sidepanel/index/CopySessionId.ts` + `CopySessionId.test.ts`.
