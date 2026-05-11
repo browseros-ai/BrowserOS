@@ -47,6 +47,20 @@ import {
   wait_for,
 } from './navigation'
 import { suggest_app_connection, suggest_schedule } from './nudges'
+import {
+  clear_extension_storage,
+  disable_extension,
+  enable_extension,
+  get_extension_info,
+  get_extension_storage,
+  list_extensions,
+  list_messageable_extensions,
+  load_unpacked_extension,
+  remove_extension_storage,
+  send_extension_message,
+  set_extension_storage,
+  uninstall_extension,
+} from './extensions'
 import { download_file, save_pdf, save_screenshot } from './page-actions'
 import {
   evaluate_script,
@@ -153,4 +167,18 @@ export const registry = createRegistry([
   // Nudges (2)
   suggest_schedule,
   suggest_app_connection,
+
+  // Extensions (12)
+  list_extensions,
+  get_extension_info,
+  enable_extension,
+  disable_extension,
+  uninstall_extension,
+  load_unpacked_extension,
+  get_extension_storage,
+  set_extension_storage,
+  remove_extension_storage,
+  clear_extension_storage,
+  send_extension_message,
+  list_messageable_extensions,
 ])

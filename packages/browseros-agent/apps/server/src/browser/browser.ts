@@ -23,6 +23,8 @@ import type { AXNode } from './snapshot'
 import * as snapshot from './snapshot'
 import type { TabGroup } from './tab-groups'
 import * as tabGroups from './tab-groups'
+import * as extensions from './extensions'
+import * as extensionBridge from './extension-bridge'
 
 export interface PageInfo {
   pageId: number
@@ -1569,6 +1571,61 @@ export class Browser {
 
   async deleteHistoryRange(startTime: number, endTime: number): Promise<void> {
     return history.deleteRange(this.cdp, startTime, endTime)
+  }
+
+  // --- Extension Management ---
+
+  async loadUnpackedExtension(path: string): Promise<string> {
+    return extensions.loadUnpackedExtension(this.cdp, path)
+  }
+
+  async uninstallExtension(id: string): Promise<void> {
+    return extensions.uninstallExtension(this.cdp, id)
+  }
+
+  async getExtensionStorage(
+    id: string,
+    storageArea: extensions.StorageArea,
+    keys?: string[],
+  ): Promise<Record<string, unknown>> {
+    return extensions.getStorageItems(this.cdp, id, storageArea, keys)
+  }
+
+  async setExtensionStorage(
+    id: string,
+    storageArea: extensions.StorageArea,
+    values: Record<string, unknown>,
+  ): Promise<void> {
+    return extensions.setStorageItems(this.cdp, id, storageArea, values)
+  }
+
+  async removeExtensionStorage(
+    id: string,
+    storageArea: extensions.StorageArea,
+    keys: string[],
+  ): Promise<void> {
+    return extensions.removeStorageItems(this.cdp, id, storageArea, keys)
+  }
+
+  async clearExtensionStorage(
+    id: string,
+    storageArea: extensions.StorageArea,
+  ): Promise<void> {
+    return extensions.clearStorageItems(this.cdp, id, storageArea)
+  }
+
+  // --- Extension Message Bridge (L3) ---
+
+  async listMessageableExtensions(): Promise<extensionBridge.MessageableExtension[]> {
+    return extensionBridge.listMessageableExtensions(this.cdp)
+  }
+
+  async sendExtensionMessage(
+    extensionId: string,
+    message: unknown,
+    timeoutMs?: number,
+  ): Promise<unknown> {
+    return extensionBridge.sendExtensionMessage(this.cdp, extensionId, message, timeoutMs)
   }
 
   // --- Tab Groups ---
