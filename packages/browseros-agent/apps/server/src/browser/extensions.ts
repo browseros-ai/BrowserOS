@@ -8,6 +8,7 @@
  */
 
 import type { CdpBackend } from './backends/types'
+export type { StorageArea } from '@browseros/cdp-protocol/generated/domains/extensions'
 import type { StorageArea } from '@browseros/cdp-protocol/generated/domains/extensions'
 
 // BrowserOS first-party extension IDs (from browseros_constants.h)
