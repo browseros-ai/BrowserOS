@@ -203,15 +203,14 @@ export async function sendExtensionMessage(
       ])
 
       // F3: Check exceptionDetails from Runtime.evaluate
-      if ((evalResult as any)?.exceptionDetails) {
-        const details = (evalResult as any).exceptionDetails
+      if (evalResult.exceptionDetails) {
         throw new Error(
-          `Runtime evaluation failed: ${details.text ?? 'unknown error'}`,
+          `Runtime evaluation failed: ${evalResult.exceptionDetails.text ?? 'unknown error'}`,
         )
       }
 
-      const value = (evalResult as any)?.result?.value
-      if (value === undefined || value === 'undefined') {
+      const value = evalResult.result?.value
+      if (value === undefined) {
         return null
       }
 

@@ -75,11 +75,11 @@ export async function getStorageItems(
   storageArea: StorageArea,
   keys?: string[],
 ): Promise<Record<string, unknown>> {
-  const params: Record<string, unknown> = { id, storageArea }
+  const params: { id: string; storageArea: StorageArea; keys?: string[] } = { id, storageArea }
   if (keys) {
     params.keys = keys
   }
-  const result = await cdp.Extensions.getStorageItems(params as any)
+  const result = await cdp.Extensions.getStorageItems(params)
   return result.data ?? {}
 }
 
