@@ -3,12 +3,14 @@
 set -euo pipefail
 
 HOME_DIR="${HOME}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 STABLE_ICON_DIR="${HOME_DIR}/.local/share/browseros/icons"
 ICON_SRC_256="${STABLE_ICON_DIR}/browseros-256.png"
-ICON_SRC_128="${HOME_DIR}/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/apps/agent/public/icon/128.png"
-APPIMAGE="${HOME_DIR}/Downloads/alta/BrowserOS.AppImage"
+ICON_SRC_128="${REPO_ROOT}/packages/browseros-agent/apps/agent/public/icon/128.png"
+APPIMAGE="${BROWSEROS_APP_PATH:-${HOME_DIR}/Downloads/alta/BrowserOS.AppImage}"
 DEV_PROFILE="${HOME_DIR}/.browseros-dev-chrome"
-DEV_EXT_DIR="${HOME_DIR}/Documents/Projects/bhd/BrowserOS/packages/browseros-agent/apps/agent/dist/chrome-mv3-dev"
+DEV_EXT_DIR="${REPO_ROOT}/packages/browseros-agent/apps/agent/dist/chrome-mv3-dev"
 
 ICON_DIR="${HOME_DIR}/.local/share/icons/hicolor"
 APP_DIR="${HOME_DIR}/.local/share/applications"
