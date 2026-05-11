@@ -23,9 +23,32 @@ ensure_icons_extracted() {
   fi
 }
 
+# --- Ensure hicolor index.theme exists ---
+ensure_icon_theme_index() {
+  if [[ ! -f "${ICON_DIR}/index.theme" ]]; then
+    mkdir -p "${ICON_DIR}"
+    cat > "${ICON_DIR}/index.theme" << 'THEME'
+[Icon Theme]
+Name=hicolor
+Directories=128x128/apps,256x256/apps
+
+[128x128/apps]
+Size=128
+Context=Applications
+Type=Threshold
+
+[256x256/apps]
+Size=256
+Context=Applications
+Type=Threshold
+THEME
+  fi
+}
+
 # --- Install icons ---
 install_icons() {
   ensure_icons_extracted
+  ensure_icon_theme_index
   mkdir -p "${ICON_DIR}/256x256/apps" "${ICON_DIR}/128x128/apps"
 
   # Prod icons
@@ -88,28 +111,34 @@ install_desktop_entries() {
 
   cat > "${APP_DIR}/browseros.desktop" <<EOF
 [Desktop Entry]
+Version=1.0
 Name=BrowserOS
+GenericName=Web Browser
 Comment=AI-powered browser agent
-Exec=${APPIMAGE} --no-sandbox
+Exec=${APPIMAGE} --no-sandbox %U
 Icon=browseros
+Terminal=false
 Type=Application
 Categories=Network;WebBrowser;
 StartupNotify=true
-StartupWMClass=browseros
+StartupWMClass=chromium-browser
 EOF
   chmod +x "${APP_DIR}/browseros.desktop"
   echo "✔ Installed browseros.desktop"
 
   cat > "${APP_DIR}/browseros-dev.desktop" <<EOF
 [Desktop Entry]
+Version=1.0
 Name=BrowserOS (Dev)
+GenericName=Web Browser
 Comment=BrowserOS Development Instance
-Exec=${APPIMAGE} --no-sandbox --no-first-run --no-default-browser-check --use-mock-keychain --show-component-extension-options --disable-browseros-server --disable-browseros-extensions --remote-debugging-port=9010 --browseros-mcp-port=9110 --browseros-server-port=9110 --user-data-dir=${DEV_PROFILE} --load-extension=${DEV_EXT_DIR} chrome://newtab
+Exec=${APPIMAGE} --no-sandbox --no-first-run --no-default-browser-check --use-mock-keychain --show-component-extension-options --disable-browseros-server --disable-browseros-extensions --name=BrowserOS-Dev --remote-debugging-port=9010 --browseros-mcp-port=9110 --browseros-server-port=9110 --user-data-dir=${DEV_PROFILE} --load-extension=${DEV_EXT_DIR} chrome://newtab
 Icon=browseros-dev
+Terminal=false
 Type=Application
-Categories=Network;WebBrowser;Development;
+Categories=Development;Network;WebBrowser;
 StartupNotify=true
-StartupWMClass=browseros-dev
+StartupWMClass=BrowserOS-Dev
 EOF
   chmod +x "${APP_DIR}/browseros-dev.desktop"
   echo "✔ Installed browseros-dev.desktop"

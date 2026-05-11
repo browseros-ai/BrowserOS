@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+[[ -d "${REPO_ROOT}/packages/browseros-agent" ]] || REPO_ROOT="$(pwd)"
 cd "$REPO_ROOT"
 pkill -9 -f "\.browseros-dev-chrome" 2>/dev/null || true
 pkill -9 -f "apps/server/src/index.ts" 2>/dev/null || true

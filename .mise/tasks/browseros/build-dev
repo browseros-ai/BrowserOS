@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd /home/bhd/Documents/Projects/bhd/BrowserOS/packages/browseros-agent
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+[[ -d "${REPO_ROOT}/packages/browseros-agent" ]] || REPO_ROOT="$(pwd)"
+cd "${REPO_ROOT}/packages/browseros-agent"
 bun run build:agent:dev
