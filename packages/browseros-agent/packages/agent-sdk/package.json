@@ -6,12 +6,12 @@
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "https://github.com/browseros-ai/BrowserOS.git",
-    "directory": "packages/agent-sdk"
+    "url": "https://github.com/Karthikprasadm/Shimmy-Browser.git",
+    "directory": "packages/browseros-agent/packages/agent-sdk"
   },
-  "homepage": "https://github.com/browseros-ai/BrowserOS#readme",
+  "homepage": "https://github.com/Karthikprasadm/Shimmy-Browser#readme",
   "bugs": {
-    "url": "https://github.com/browseros-ai/BrowserOS/issues"
+    "url": "https://github.com/Karthikprasadm/Shimmy-Browser/issues"
   },
   "keywords": [
     "browseros",

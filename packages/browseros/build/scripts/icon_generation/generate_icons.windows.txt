@@ -1,0 +1,71 @@
+# Windows-focused icon generation (no macOS iconutil / actool / Linux XPM).
+# Use: python generate_icons.py --config generate_icons.windows.txt
+#
+# Skips: COPY (optional static vectors), macOS, Linux XPM, full Linux set optional.
+
+# ==============================================================================
+# COMMON PNG ICONS
+# ==============================================================================
+
+PNG source/app_icon.png 16 product_logo_16.png
+PNG source/app_icon.png 22 product_logo_22.png
+PNG source/app_icon.png 24 product_logo_24.png
+PNG source/app_icon.png 32 product_logo_32.png
+PNG source/app_icon.png 48 product_logo_48.png
+PNG source/app_icon.png 64 product_logo_64.png
+PNG source/app_icon.png 128 product_logo_128.png
+PNG source/app_icon.png 192 product_logo_192.png
+PNG source/app_icon.png 256 product_logo_256.png
+PNG source/app_icon.png 1024 product_logo_1024.png
+
+PNG source/app_icon.png 128 product_logo.png
+
+MONO source/app_icon.png 22 product_logo_22_mono.png
+
+PNG source/app_icon.png 22 product_logo_name_22.png
+PNG source/app_icon.png 44 product_logo_name_22_2x.png
+PNG source/app_icon.png 22 product_logo_name_22_white.png
+PNG source/app_icon.png 44 product_logo_name_22_white_2x.png
+
+# DPI variants
+PNG source/app_icon.png 16 default_100_percent/product_logo_16.png
+PNG source/app_icon.png 32 default_100_percent/product_logo_32.png
+PNG source/app_icon.png 22 default_100_percent/product_logo_name_22.png
+PNG source/app_icon.png 22 default_100_percent/product_logo_name_22_white.png
+PNG source/app_icon.png 16 default_100_percent/linux/product_logo_16.png
+PNG source/app_icon.png 32 default_100_percent/linux/product_logo_32.png
+
+PNG source/app_icon.png 32 default_200_percent/product_logo_16.png
+PNG source/app_icon.png 64 default_200_percent/product_logo_32.png
+PNG source/app_icon.png 44 default_200_percent/product_logo_name_22.png
+PNG source/app_icon.png 44 default_200_percent/product_logo_name_22_white.png
+
+# ==============================================================================
+# WINDOWS ICONS (taskbar, title bar, shortcuts)
+# ==============================================================================
+
+ICO source/app_icon.png 16,20,24,32,40,48,64,128,256 win/chromium.ico
+ICO source/app_icon.png 16,20,24,32,40,48,64,128,256 win/incognito.ico
+ICO source/app_icon.png 16,20,24,32,40,48,64,128,256 win/app_list.ico
+ICO source/app_icon.png 16,32,48,256 win/chromium_doc.ico
+ICO source/app_icon.png 16,32,48,256 win/chromium_pdf.ico
+
+PNG source/app_icon.png 150 win/tiles/Logo.png
+PNG source/app_icon.png 70 win/tiles/SmallLogo.png
+
+# ==============================================================================
+# LINUX PNG (no XPM — avoids ImageMagick)
+# ==============================================================================
+
+PNG source/app_icon.png 24 linux/product_logo_24.png
+PNG source/app_icon.png 48 linux/product_logo_48.png
+PNG source/app_icon.png 64 linux/product_logo_64.png
+PNG source/app_icon.png 128 linux/product_logo_128.png
+PNG source/app_icon.png 256 linux/product_logo_256.png
+
+# ==============================================================================
+# CHROMEOS
+# ==============================================================================
+
+PNG source/app_icon.png 32 chromeos/chrome_app_icon_32.png
+PNG source/app_icon.png 192 chromeos/chrome_app_icon_192.png

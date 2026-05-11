@@ -1,6 +1,6 @@
 # BrowserOS Agent
 
-The agent platform powering [BrowserOS](https://github.com/browseros-ai/BrowserOS) — contains the MCP server, agent UI, CLI, evaluation framework, and SDK.
+The agent platform powering **BrowserOS**-based builds ([Shimmy-Browser](https://github.com/Karthikprasadm/Shimmy-Browser)) — contains the MCP server, agent UI, CLI, evaluation framework, and SDK.
 
 ## Monorepo Structure
 

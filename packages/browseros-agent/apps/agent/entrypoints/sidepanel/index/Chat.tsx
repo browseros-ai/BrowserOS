@@ -43,7 +43,10 @@ export const Chat = () => {
     disliked,
     onClickDislike,
     isRestoringConversation,
+    hasRestorableSession,
+    restoreSessionFromOtherTab,
   } = useChatSessionContext()
+
 
   const {
     popupVisible,
@@ -208,7 +211,10 @@ export const Chat = () => {
             mode={mode}
             mounted={mounted}
             onSuggestionClick={handleSuggestionClick}
+            hasRestorableSession={hasRestorableSession}
+            onRestoreSession={restoreSessionFromOtherTab}
           />
+
         ) : (
           <ChatMessages
             messages={messages}

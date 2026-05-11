@@ -78,3 +78,6 @@ export const createBrowserOSAction = (params: {
   message: params.message,
   tabs: params.tabs,
 })
+
+/** Alias for call sites that use the product name in the helper identifier. */
+export const createShimmyAction = createBrowserOSAction

@@ -103,7 +103,7 @@ export const MCPServerHeader: FC<MCPServerHeaderProps> = ({
         </div>
         <div className="flex-1">
           <div className="mb-1 flex items-center justify-between">
-            <h2 className="font-semibold text-xl">BrowserOS MCP Server</h2>
+            <h2 className="font-semibold text-xl">Shimmy MCP Server</h2>
             <a
               href={DOCS_URL}
               target="_blank"
@@ -115,7 +115,7 @@ export const MCPServerHeader: FC<MCPServerHeaderProps> = ({
             </a>
           </div>
           <p className="mb-6 text-muted-foreground text-sm">
-            Connect BrowserOS to MCP clients like Claude Code, Gemini CLI and
+            Connect Shimmy to MCP clients like Claude Code, Gemini CLI and
             others.
           </p>
 

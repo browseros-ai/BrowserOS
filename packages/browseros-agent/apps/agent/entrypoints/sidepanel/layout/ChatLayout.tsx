@@ -23,7 +23,7 @@ const ChatLayoutContent: FC = () => {
           className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent"
           aria-hidden
         />
-        <p className="text-muted-foreground text-sm">Loading assistant…</p>
+        <p className="text-muted-foreground text-sm">Loading Sup…</p>
       </div>
     )
   }
@@ -57,7 +57,7 @@ const ChatLayoutContent: FC = () => {
 
 export const ChatLayout: FC = () => {
   return (
-    <ChatSessionProvider>
+    <ChatSessionProvider origin="sidepanel">
       <ChatLayoutContent />
     </ChatSessionProvider>
   )

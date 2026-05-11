@@ -65,7 +65,7 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
             title="Change AI Provider"
           >
             {selectedProvider.type === 'browseros' ? (
-              <BrowserOSIcon size={18} />
+              <BrowserOSIcon size={22} />
             ) : (
               <ProviderIcon
                 type={selectedProvider.type as ProviderType}

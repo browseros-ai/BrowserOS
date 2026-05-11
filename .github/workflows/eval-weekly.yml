@@ -32,7 +32,7 @@ jobs:
 
       - name: Install BrowserOS
         run: |
-          wget -q https://github.com/browseros-ai/BrowserOS/releases/download/v0.44.0.1/BrowserOS_v0.44.0.1_amd64.deb
+          wget -q https://github.com/Karthikprasadm/Shimmy-Browser/releases/download/v0.44.0.1/BrowserOS_v0.44.0.1_amd64.deb
           sudo dpkg -i BrowserOS_v0.44.0.1_amd64.deb
           browseros --version || echo "BrowserOS installed at $(which browseros)"
 

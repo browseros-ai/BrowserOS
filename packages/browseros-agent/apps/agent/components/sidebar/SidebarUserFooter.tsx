@@ -7,16 +7,19 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { ThemeAccentPicker } from '@/components/sidebar/ThemeAccentPicker'
 import { cn } from '@/lib/utils'
 
 interface SidebarUserFooterProps {
   expanded?: boolean
   onOpenShortcuts?: () => void
+  onApplied?: () => void
 }
 
 export const SidebarUserFooter: FC<SidebarUserFooterProps> = ({
   expanded = true,
   onOpenShortcuts,
+  onApplied,
 }) => {
   // const signInButton = (
   //   <Button
@@ -31,7 +34,7 @@ export const SidebarUserFooter: FC<SidebarUserFooterProps> = ({
   //         expanded ? 'opacity-100' : 'opacity-0',
   //       )}
   //     >
-  //       Sign in to BrowserOS
+  //       Sign in to Shimmy
   //     </span>
   //   </Button>
   // )
@@ -50,7 +53,7 @@ export const SidebarUserFooter: FC<SidebarUserFooterProps> = ({
           expanded ? 'opacity-100' : 'opacity-0',
         )}
       >
-        About BrowserOS
+        About Shimmy
       </span>
     </a>
   )
@@ -76,6 +79,7 @@ export const SidebarUserFooter: FC<SidebarUserFooterProps> = ({
   return (
     <TooltipProvider delayDuration={0}>
       <div className="mt-auto space-y-1 border-t p-2">
+        <ThemeAccentPicker expanded={expanded} onApplied={onApplied} />
         {expanded ? (
           shortcutsButton
         ) : (
@@ -90,7 +94,7 @@ export const SidebarUserFooter: FC<SidebarUserFooterProps> = ({
         ) : (
           <Tooltip>
             <TooltipTrigger asChild>{aboutLink}</TooltipTrigger>
-            <TooltipContent side="right">About BrowserOS</TooltipContent>
+            <TooltipContent side="right">About Shimmy</TooltipContent>
           </Tooltip>
         )}
       </div>

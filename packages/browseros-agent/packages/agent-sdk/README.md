@@ -199,7 +199,7 @@ try {
 ## Links
 
 - [Documentation](https://docs.browseros.com)
-- [GitHub](https://github.com/browseros-ai/BrowserOS)
+- [GitHub](https://github.com/Karthikprasadm/Shimmy-Browser)
 - [Changelog](./CHANGELOG.md)
 - [Discord](https://discord.gg/YKwjt5vuKr)
 

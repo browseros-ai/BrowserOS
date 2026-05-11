@@ -1,7 +1,16 @@
 import { sessionStorage } from '@/lib/auth/sessionStorage'
 import { Capabilities } from '@/lib/browseros/capabilities'
 import { getHealthCheckUrl, getMcpServerUrl } from '@/lib/browseros/helpers'
-import { openSidePanel, toggleSidePanel } from '@/lib/browseros/toggleSidePanel'
+import {
+  migrateSidePanelIfOpenBetweenTabs,
+  openSidePanel,
+  SHIMMY_AGENT_SIDEPANEL_BUSY_KEY,
+  SHIMMY_SIDEPANEL_LAST_TAB_KEY,
+  toggleSidePanel,
+} from '@/lib/browseros/toggleSidePanel'
+import { markRestorePending } from '@/lib/browseros/activeSessionStorage'
+
+
 import { checkAndShowChangelog } from '@/lib/changelog/changelog-notifier'
 import {
   setupLlmProvidersBackupToBrowserOS,
@@ -228,6 +237,50 @@ export default defineBackground(() => {
       await toggleSidePanel(tab.id)
     }
   })
+
+  /** Keep the AI side panel open when automation changes the active tab (CDP). */
+  chrome.tabs.onActivated.addListener((activeInfo) => {
+    const previousTabId = (
+      activeInfo as Parameters<Parameters<typeof chrome.tabs.onActivated.addListener>[0]>[0] & { previousTabId?: number }
+    ).previousTabId
+
+    chrome.storage.session
+      .get([SHIMMY_AGENT_SIDEPANEL_BUSY_KEY, SHIMMY_SIDEPANEL_LAST_TAB_KEY])
+      .then((v) => {
+        const agentBusy = Boolean(v[SHIMMY_AGENT_SIDEPANEL_BUSY_KEY])
+        return migrateSidePanelIfOpenBetweenTabs(
+          activeInfo.tabId,
+          previousTabId,
+          agentBusy,
+        )
+      })
+      .catch(() => null)
+  })
+
+  /**
+   * When the agent creates a brand-new tab and navigates it, onActivated fires
+   * before the tab has a real URL, so sidePanel.open can fail. Re-try once the
+   * tab reaches 'complete' status so the panel follows reliably.
+   */
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.status !== 'complete') return
+    if (!tab.active) return
+    chrome.storage.session
+      .get([SHIMMY_AGENT_SIDEPANEL_BUSY_KEY, SHIMMY_SIDEPANEL_LAST_TAB_KEY])
+      .then((v) => {
+        const agentBusy = Boolean(v[SHIMMY_AGENT_SIDEPANEL_BUSY_KEY])
+        const lastOpenTabId = v[SHIMMY_SIDEPANEL_LAST_TAB_KEY] as
+          | number
+          | undefined
+        if (!agentBusy && lastOpenTabId !== tabId) return
+        if (lastOpenTabId === tabId) return
+        markRestorePending()
+        return openSidePanel(tabId)
+      })
+      .catch(() => null)
+  })
+
+
 
   onOpenSidePanelWithSearch('open', async (messageData) => {
     const currentTabsList = await chrome.tabs.query({

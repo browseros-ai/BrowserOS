@@ -24,7 +24,7 @@ export const ProviderTemplateCard: FC<ProviderTemplateCardProps> = ({
       className={cn(
         'group pointer-events-auto relative z-10 flex w-full cursor-pointer items-center gap-3 rounded-lg border bg-background p-4 text-left transition-all hover:border-[var(--accent-orange)] hover:shadow-md',
         highlighted
-          ? 'border-orange-300/80 bg-orange-50/30 shadow-sm ring-1 ring-orange-300/45 dark:bg-orange-500/5'
+          ? 'border-stone-400/45 bg-stone-100/50 shadow-sm ring-1 ring-stone-400/35 dark:bg-stone-500/10'
           : isNew
             ? 'border-2 border-[var(--accent-orange)]/50'
             : 'border-border',
@@ -45,7 +45,7 @@ export const ProviderTemplateCard: FC<ProviderTemplateCardProps> = ({
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium text-foreground">{template.name}</span>
             {highlighted && (
-              <span className="rounded-full border border-orange-300/60 bg-orange-100/70 px-2 py-0.5 font-semibold text-[10px] text-orange-700 dark:border-orange-400/40 dark:bg-orange-500/15 dark:text-orange-300">
+              <span className="rounded-full border border-stone-400/50 bg-stone-200/60 px-2 py-0.5 font-semibold text-[10px] text-stone-700 dark:border-stone-500/40 dark:bg-stone-600/25 dark:text-stone-200">
                 Recommended
               </span>
             )}

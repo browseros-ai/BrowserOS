@@ -60,7 +60,7 @@ export const StepSoul = ({ direction, onContinue }: StepSoulProps) => {
         <div className="w-full max-w-md space-y-6">
           <div className="space-y-2 text-center">
             <h2 className="font-bold text-3xl tracking-tight">
-              Choose your agent's personality
+              Choose your Sup's personality
             </h2>
             <p className="text-base text-muted-foreground">
               This sets the starting tone — you can always evolve it later

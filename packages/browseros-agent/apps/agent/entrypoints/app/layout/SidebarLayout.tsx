@@ -49,6 +49,14 @@ export const SidebarLayout: FC = () => {
     }, COLLAPSE_DELAY)
   }, [])
 
+  const collapseSidebarNow = useCallback(() => {
+    if (collapseTimeoutRef.current) {
+      clearTimeout(collapseTimeoutRef.current)
+      collapseTimeoutRef.current = null
+    }
+    setSidebarOpen(false)
+  }, [])
+
   if (isMobile) {
     return (
       <RpcClientProvider>
@@ -67,7 +75,7 @@ export const SidebarLayout: FC = () => {
             >
               <Menu className="size-4" />
             </Button>
-            <span className="font-semibold">BrowserOS</span>
+            <span className="font-semibold">Shimmy</span>
           </header>
           <main className="flex-1 overflow-y-auto">
             <div
@@ -81,7 +89,11 @@ export const SidebarLayout: FC = () => {
           </main>
           <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
             <SheetContent side="left" className="w-72 p-0">
-              <AppSidebar expanded onOpenShortcuts={openShortcuts} />
+              <AppSidebar
+              expanded
+              onOpenShortcuts={openShortcuts}
+              onSidebarAutoCollapse={() => setMobileOpen(false)}
+            />
             </SheetContent>
           </Sheet>
           <ShortcutsDialog
@@ -104,7 +116,11 @@ export const SidebarLayout: FC = () => {
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >
-          <AppSidebar expanded={sidebarOpen} onOpenShortcuts={openShortcuts} />
+          <AppSidebar
+            expanded={sidebarOpen}
+            onOpenShortcuts={openShortcuts}
+            onSidebarAutoCollapse={collapseSidebarNow}
+          />
         </div>
 
         {/* Main content - full width, centered */}

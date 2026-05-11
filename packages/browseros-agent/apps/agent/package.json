@@ -15,7 +15,8 @@
     "lint:fix": "bunx biome check --write --unsafe",
     "clean:cache": "rm -rf node_modules/.cache && rm -rf .output/ && rm -rf .wxt/",
     "codegen": "bun --env-file=.env.development graphql-codegen --config codegen.ts",
-    "codegen:watch": "graphql-codegen --config codegen.ts --watch"
+    "codegen:watch": "graphql-codegen --config codegen.ts --watch",
+    "icons:brand": "bun scripts/gen-brand-icons.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "^3.0.96",
@@ -115,6 +116,7 @@
     "@types/react-dom": "^19.1.9",
     "@wxt-dev/module-react": "^1.1.5",
     "lefthook": "^2.0.3",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4.1.17",
     "typescript": "^5.9.2",
     "wxt": "^0.20.18"

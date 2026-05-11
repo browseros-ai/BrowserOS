@@ -201,7 +201,7 @@ index 0000000000000..89503c57538ad
 +<section>
 + <div class="section-head"><span class="label">🚀 Getting Started</span></div>
 + <div style="text-align:center;">
-+  <a class="btn btn-outline" href="https://github.com/browseros-ai/BrowserOS">
++  <a class="btn btn-outline" href="https://github.com/Karthikprasadm/Shimmy-Browser">
 +   <span class="icon" aria-hidden="true">
 +    <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#eac54f"><path d="m354-287 126-76 126 77-33-144 111-96-146-13-58-136-58 135-146 13 111 97-33 143ZM233-120l65-281L80-590l288-25 112-265 112 265 288 25-218 189 65 281-247-149-247 149Zm247-350Z"/></svg>
 +   </span>
@@ -306,7 +306,7 @@ index 0000000000000..89503c57538ad
 +   </span>
 +   Discord
 +  </a>
-+  <a href="https://github.com/browseros-ai/BrowserOS">
++  <a href="https://github.com/Karthikprasadm/Shimmy-Browser">
 +   <span class="icon" aria-hidden="true">
 +    <svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
 +     <title>GitHub</title>

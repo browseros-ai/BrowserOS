@@ -1,7 +1,11 @@
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import type { FC } from 'react'
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Button } from '@/components/ui/button'
+import {
+  useInvalidateCredits,
+  useMarkCreditsExhausted,
+} from '@/lib/credits/useCredits'
 import type { ProviderType } from '@/lib/llm-providers/types'
 
 const SURVEY_DIRECTIONS = [
@@ -25,7 +29,7 @@ const PROVIDER_DISPLAY_NAMES: Record<ProviderType, string> = {
   ollama: 'Ollama',
   lmstudio: 'LM Studio',
   bedrock: 'AWS Bedrock',
-  browseros: 'BrowserOS',
+  browseros: 'Shimmy',
   moonshot: 'Moonshot',
   'chatgpt-pro': 'ChatGPT Pro',
   'github-copilot': 'GitHub Copilot',
@@ -74,17 +78,17 @@ function parseErrorMessage(
 } {
   const isBrowserosProvider = providerType === 'browseros'
 
-  // All chat requests go through the local BrowserOS agent server, so any
+  // All chat requests go through the local Shimmy Sup server, so any
   // fetch failure is always a local connection issue.
   if (message.includes('Failed to fetch') || message.includes('fetch failed')) {
     return {
-      text: 'Unable to connect to BrowserOS agent. Follow below instructions.',
+      text: 'Unable to connect to Shimmy Sup. Follow below instructions.',
       url: 'https://docs.browseros.com/troubleshooting/connection-issues',
       isConnectionError: true,
     }
   }
 
-  // Detect credit exhaustion from gateway (BrowserOS provider only)
+  // Detect credit exhaustion from gateway (Shimmy provider only)
   if (
     isBrowserosProvider &&
     (message.includes('CREDITS_EXHAUSTED') ||
@@ -99,10 +103,10 @@ function parseErrorMessage(
     }
   }
 
-  // Detect BrowserOS rate limit (BrowserOS provider only)
+  // Detect Shimmy rate limit (Shimmy provider only)
   if (
     isBrowserosProvider &&
-    message.includes('BrowserOS LLM daily limit reached')
+    message.includes('Shimmy LLM daily limit reached')
   ) {
     return {
       text: 'Add your own API key for unlimited usage.',
@@ -111,9 +115,9 @@ function parseErrorMessage(
     }
   }
 
-  // Detect rate limits from non-BrowserOS upstream providers. Users were
+  // Detect rate limits from non-Shimmy upstream providers. Users were
   // confused that a quota/429 from OpenAI/Anthropic/etc. looked like a
-  // BrowserOS-imposed limit.
+  // Shimmy-imposed limit.
   if (!isBrowserosProvider && providerType) {
     const lower = message.toLowerCase()
     const matchesRateLimit = UPSTREAM_RATE_LIMIT_PATTERNS.some((p) =>
@@ -154,6 +158,8 @@ export const ChatError: FC<ChatErrorProps> = ({
   onRetry,
   providerType,
 }) => {
+  const invalidateCredits = useInvalidateCredits()
+  const markCreditsExhausted = useMarkCreditsExhausted()
   const {
     text,
     url,
@@ -170,12 +176,19 @@ export const ChatError: FC<ChatErrorProps> = ({
     [],
   )
 
+  useEffect(() => {
+    if (!isCreditsExhausted) return
+    markCreditsExhausted()
+    invalidateCredits()
+  }, [invalidateCredits, isCreditsExhausted, markCreditsExhausted])
+
   const getTitle = () => {
     if (isUpstreamRateLimit) {
       return providerName && providerName !== 'your provider'
         ? `${providerName} rate limit reached`
         : 'Upstream rate limit reached'
     }
+    if (isCreditsExhausted) return 'Credits exhausted'
     if (isRateLimit) return 'Daily limit reached'
     if (isConnectionError) return 'Connection failed'
     return 'Something went wrong'
@@ -192,7 +205,7 @@ export const ChatError: FC<ChatErrorProps> = ({
         <p className="text-center text-muted-foreground text-xs">
           This is a limit from{' '}
           <span className="font-medium">{providerName}</span>
-          {' — your configured model provider — not BrowserOS. Check your '}
+          {' — your configured model provider — not Shimmy. Check your '}
           provider's dashboard for quota, usage, or billing details.
         </p>
       )}

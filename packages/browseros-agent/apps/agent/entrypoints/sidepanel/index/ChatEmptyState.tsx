@@ -1,5 +1,5 @@
-import { Sparkles } from 'lucide-react'
-import type { FC } from 'react'
+import { History, Sparkles } from 'lucide-react'
+import { type FC, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { AGENT_SUGGESTIONS, CHAT_SUGGESTIONS, type ChatMode } from './chatTypes'
 
@@ -7,14 +7,26 @@ interface ChatEmptyStateProps {
   mode: ChatMode
   mounted: boolean
   onSuggestionClick: (suggestion: string) => void
+  hasRestorableSession?: boolean
+  onRestoreSession?: () => Promise<void>
 }
 
 export const ChatEmptyState: FC<ChatEmptyStateProps> = ({
   mode,
   mounted,
   onSuggestionClick,
+  hasRestorableSession = false,
+  onRestoreSession,
 }) => {
   const suggestions = mode === 'chat' ? CHAT_SUGGESTIONS : AGENT_SUGGESTIONS
+  const [isRestoring, setIsRestoring] = useState(false)
+
+  const handleRestore = async () => {
+    if (!onRestoreSession || isRestoring) return
+    setIsRestoring(true)
+    await onRestoreSession()
+    setIsRestoring(false)
+  }
 
   return (
     <div
@@ -36,6 +48,31 @@ export const ChatEmptyState: FC<ChatEmptyStateProps> = ({
             : 'Let AI automate tasks and browse for you'}
         </p>
       </div>
+
+      {/* Restore pill — only shown when another tab has an active conversation */}
+      {hasRestorableSession && onRestoreSession && (
+        <button
+          type="button"
+          id="restore-chats-pill"
+          onClick={handleRestore}
+          disabled={isRestoring}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/60 px-3.5 py-1.5 text-xs font-medium text-foreground/80 shadow-sm backdrop-blur-sm',
+            'transition-all duration-200',
+            'hover:border-[var(--accent-orange)]/60 hover:bg-[var(--accent-orange)]/10 hover:text-foreground hover:shadow-md',
+            'active:scale-95',
+            isRestoring && 'cursor-wait opacity-60',
+          )}
+        >
+          <History
+            className={cn(
+              'h-3.5 w-3.5 shrink-0',
+              isRestoring && 'animate-spin',
+            )}
+          />
+          {isRestoring ? 'Restoring…' : 'Restore chats from other tabs'}
+        </button>
+      )}
 
       <div className="mt-6 grid w-full max-w-[260px] grid-cols-1 gap-2">
         {suggestions.map((suggestion) => (

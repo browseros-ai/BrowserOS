@@ -59,7 +59,7 @@ export const ChatProviderSelector: FC<
                   >
                     <span className="text-muted-foreground">
                       {provider.type === 'browseros' ? (
-                        <BrowserOSIcon size={18} />
+                        <BrowserOSIcon size={22} />
                       ) : (
                         <ProviderIcon
                           type={provider.type as ProviderType}

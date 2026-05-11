@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { GetProfileByUserIdDocument } from '@/entrypoints/app/profile/graphql/profileDocument'
 import { useSessionInfo } from '@/lib/auth/sessionStorage'
-import { getProductLogoUrl } from '@/lib/branding/logo'
+import { getProductLogoUrl, PRODUCT_LOGO_ALT } from '@/lib/branding/logo'
 import { useGraphqlQuery } from '@/lib/graphql/useGraphqlQuery'
 import { cn } from '@/lib/utils'
 import { useWorkspace } from '@/lib/workspace/use-workspace'
@@ -62,15 +62,20 @@ export const SidebarBranding: FC<SidebarBrandingProps> = ({
       <img
         src={displayImage}
         alt={displayName}
-        className="size-8 shrink-0 rounded-full object-cover"
+        className="size-10 shrink-0 rounded-full object-cover"
       />
     ) : (
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary font-medium text-primary-foreground text-xs">
+      <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary font-medium text-primary-foreground text-xs">
         {getInitials(displayName)}
       </div>
     )
   ) : (
-    <img src={PRODUCT_LOGO_URL} alt="BrowserOS" className="size-8" />
+    <img
+      src={PRODUCT_LOGO_URL}
+      alt={PRODUCT_LOGO_ALT}
+      className="h-10 w-auto max-w-40 object-contain object-left"
+      draggable={false}
+    />
   )
 
   return (
@@ -93,9 +98,7 @@ export const SidebarBranding: FC<SidebarBrandingProps> = ({
             >
               <div className="flex items-center gap-1">
                 <span className="truncate font-semibold">
-                  {isLoggedIn
-                    ? displayName
-                    : selectedFolder?.name || 'BrowserOS'}
+                  {isLoggedIn ? displayName : selectedFolder?.name || 'Shimmy'}
                 </span>
                 <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
               </div>

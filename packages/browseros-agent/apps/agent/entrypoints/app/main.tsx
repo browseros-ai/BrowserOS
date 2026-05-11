@@ -37,7 +37,7 @@ class AppErrorBoundary extends React.Component<
     if (this.state.hasError) {
       return (
         <div className="m-4 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm">
-          <div className="mb-2 font-medium">Assistant failed to render</div>
+          <div className="mb-2 font-medium">Sup failed to render</div>
           <div className="text-muted-foreground">
             {this.state.message ?? 'Unknown render error'}
           </div>

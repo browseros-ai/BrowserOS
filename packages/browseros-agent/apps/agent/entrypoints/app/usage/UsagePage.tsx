@@ -6,7 +6,7 @@ import {
   getCreditTextColor,
 } from '@/lib/credits/credit-colors'
 import { useCredits } from '@/lib/credits/useCredits'
-import { BrowserOSIcon } from '@/lib/llm-providers/providerIcons'
+import { ShimmyIcon } from '@/lib/llm-providers/providerIcons'
 import { cn } from '@/lib/utils'
 
 export const UsagePage: FC = () => {
@@ -24,11 +24,11 @@ export const UsagePage: FC = () => {
     return (
       <div className="space-y-6 p-6">
         <div className="flex items-center gap-4 rounded-xl border p-5">
-          <BrowserOSIcon size={40} />
+          <ShimmyIcon size={48} />
           <div>
             <h2 className="font-semibold text-lg">Usage & Billing</h2>
             <p className="text-muted-foreground text-sm">
-              Monitor your BrowserOS AI credit usage
+              Monitor your Shimmy AI credit usage
             </p>
           </div>
         </div>
@@ -51,11 +51,11 @@ export const UsagePage: FC = () => {
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-center gap-4 rounded-xl border p-5">
-        <BrowserOSIcon size={40} />
+        <ShimmyIcon size={48} />
         <div>
           <h2 className="font-semibold text-lg">Usage & Billing</h2>
           <p className="text-muted-foreground text-sm">
-            Monitor your BrowserOS AI credit usage
+            Monitor your Shimmy AI credit usage
           </p>
         </div>
       </div>

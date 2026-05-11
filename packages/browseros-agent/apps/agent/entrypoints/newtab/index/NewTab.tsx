@@ -34,10 +34,7 @@ import { useGetUserMCPIntegrations } from '@/entrypoints/app/connect-mcp/useGetU
 import { useChatSessionContext } from '@/entrypoints/sidepanel/layout/ChatSessionContext'
 import { Feature } from '@/lib/browseros/capabilities'
 import { useCapabilities } from '@/lib/browseros/useCapabilities'
-import {
-  createAITabAction,
-  createBrowserOSAction,
-} from '@/lib/chat-actions/types'
+import { createAITabAction, createShimmyAction } from '@/lib/chat-actions/types'
 import {
   NEWTAB_AI_TRIGGERED_EVENT,
   NEWTAB_APPS_OPENED_EVENT,
@@ -53,7 +50,7 @@ import {
   NEWTAB_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
   NEWTAB_WORKSPACE_OPENED_EVENT,
 } from '@/lib/constants/analyticsEvents'
-import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import { ProviderIcon, ShimmyIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import { useSyncRemoteIntegrations } from '@/lib/mcp/useSyncRemoteIntegrations'
@@ -167,7 +164,7 @@ export const NewTab = () => {
     query: inputValue,
     selectedTabs,
   })
-  const searchPlaceholder = `Ask BrowserOS or search ${providerConfig.name}...`
+  const searchPlaceholder = `Ask Shimmy or search ${providerConfig.name}...`
 
   const {
     isOpen,
@@ -386,7 +383,7 @@ export const NewTab = () => {
         if (supports(Feature.NEWTAB_CHAT_SUPPORT)) {
           startInlineChat(item.message, item.mode)
         } else {
-          const action = createBrowserOSAction({
+          const action = createShimmyAction({
             mode: item.mode,
             message: item.message,
             tabs: selectedTabs,
@@ -641,11 +638,11 @@ export const NewTab = () => {
                         )}
                       >
                         {selectedProvider.type === 'browseros' ? (
-                          <BrowserOSIcon size={16} />
+                          <ShimmyIcon size={20} />
                         ) : (
                           <ProviderIcon
                             type={selectedProvider.type as ProviderType}
-                            size={16}
+                            size={20}
                           />
                         )}
                       </Button>
@@ -794,3 +791,4 @@ export const NewTab = () => {
     </div>
   )
 }
+

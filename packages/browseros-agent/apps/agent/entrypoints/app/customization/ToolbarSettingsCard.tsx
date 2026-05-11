@@ -156,10 +156,10 @@ export const ToolbarSettingsCard: FC = () => {
               htmlFor="open-home-on-startup"
               className="font-medium text-sm"
             >
-              Open BrowserOS Home on Startup
+              Open Shimmy Home on Startup
             </Label>
             <p className="text-muted-foreground text-xs">
-              Start with the BrowserOS interface instead of a plain new tab
+              Start with the Shimmy interface instead of a plain new tab
             </p>
           </div>
           <Switch

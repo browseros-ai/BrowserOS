@@ -8,7 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { getProductLogoUrl } from '@/lib/branding/logo'
+import { getProductLogoUrl, PRODUCT_LOGO_ALT } from '@/lib/branding/logo'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 
 const PRODUCT_LOGO_URL = getProductLogoUrl()
@@ -32,8 +32,13 @@ export const LlmProvidersHeader: FC<LlmProvidersHeaderProps> = ({
   return (
     <div className="rounded-xl border border-border bg-card p-6 shadow-sm transition-all hover:shadow-md">
       <div className="flex items-start gap-4">
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-orange)]/10">
-          <img src={PRODUCT_LOGO_URL} alt="BrowserOS" className="h-8 w-8" />
+        <div className="flex h-14 shrink-0 items-center justify-center">
+          <img
+            src={PRODUCT_LOGO_URL}
+            alt={PRODUCT_LOGO_ALT}
+            className="h-14 w-auto max-w-32 object-contain"
+            draggable={false}
+          />
         </div>
         <div className="flex-1">
           <h2 className="mb-1 font-semibold text-xl">LLM Providers</h2>

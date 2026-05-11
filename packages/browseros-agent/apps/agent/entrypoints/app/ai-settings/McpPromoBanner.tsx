@@ -23,7 +23,7 @@ export const McpPromoBanner: FC = () => {
       </div>
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-2 font-semibold text-sm">
-          Use BrowserOS with Claude Code, Cursor & more
+          Use Shimmy with Claude Code, Cursor & more
           <span className="text-[var(--accent-orange)] text-xs">
             (66+ tools)
           </span>
@@ -33,7 +33,7 @@ export const McpPromoBanner: FC = () => {
           </span>
         </p>
         <p className="text-muted-foreground text-xs">
-          Connect your favorite coding tools to BrowserOS as an MCP server
+          Connect your favorite coding tools to Shimmy as an MCP server
         </p>
       </div>
       <Button

@@ -148,7 +148,7 @@ export const StepConnectApps = ({
               Connect your apps
             </h2>
             <p className="text-base text-muted-foreground">
-              Let your assistant work with your email, calendar, and more
+              Let Sup work with your email, calendar, and more
             </p>
           </div>
 

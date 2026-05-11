@@ -580,7 +580,7 @@ def create_metainfo_file(ctx: Context, metainfo_dir: Path) -> None:
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>BSD-3-Clause and LGPL-2.1+ and Apache-2.0 and IJG and MIT and GPL-2.0+ and ISC and OpenSSL and (MPL-1.1 or GPL-2.0 or LGPL-2.0)</project_license>
   <url type="homepage">https://www.browseros.com/</url>
-  <url type="bugtracker">https://github.com/browseros-ai/BrowserOS/issues</url>
+  <url type="bugtracker">https://github.com/Karthikprasadm/Shimmy-Browser/issues</url>
   <url type="help">https://docs.browseros.com/</url>
   <description>
     <p>

@@ -13,10 +13,11 @@ import {
 } from '@lobehub/icons'
 import { Bot, Github } from 'lucide-react'
 import type { FC, SVGProps } from 'react'
-import { getProductLogoUrl } from '@/lib/branding/logo'
+import { getProductMarkUrl, PRODUCT_LOGO_ALT } from '@/lib/branding/logo'
 import type { ProviderType } from './types'
 
-const PRODUCT_LOGO_URL = getProductLogoUrl()
+/** Raster mark for small inline chips (matches extension toolbar icon). */
+const PRODUCT_MARK_URL = getProductMarkUrl(48)
 
 interface IconProps extends SVGProps<SVGSVGElement> {
   size?: number | string
@@ -76,11 +77,15 @@ export const BrowserOSIcon: FC<{ size?: number; className?: string }> = ({
 }) => {
   return (
     <img
-      src={PRODUCT_LOGO_URL}
-      alt="BrowserOS"
+      src={PRODUCT_MARK_URL}
+      alt={PRODUCT_LOGO_ALT}
       width={size}
       height={size}
       className={className}
+      draggable={false}
     />
   )
 }
+
+/** Alias for product-branded UI copy (same asset as {@link BrowserOSIcon}). */
+export const ShimmyIcon = BrowserOSIcon

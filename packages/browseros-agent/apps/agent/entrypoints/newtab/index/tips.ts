@@ -29,11 +29,11 @@ export const TIPS: Tip[] = [
   },
   {
     id: 'cowork-mode',
-    text: 'Enable Cowork and select a folder to let the agent browse the web AND create files in a single task.',
+    text: 'Enable Cowork and select a folder to let the Sup browse the web AND create files in a single task.',
   },
   {
     id: 'scheduled-tasks',
-    text: 'Set up Scheduled Tasks to run the agent on a timer — results appear right here on your New Tab.',
+    text: 'Set up Scheduled Tasks to run the Sup on a timer — results appear right here on your New Tab.',
   },
   {
     id: 'background-tasks',
@@ -41,7 +41,7 @@ export const TIPS: Tip[] = [
   },
   {
     id: 'claude-code-mcp',
-    text: 'Connect BrowserOS to Claude Code to control tabs, clicks, and pages from your terminal.',
+    text: 'Connect Shimmy to Claude Code to control tabs, clicks, and pages from your terminal.',
   },
   {
     id: 'mcp-servers',
@@ -49,15 +49,15 @@ export const TIPS: Tip[] = [
   },
   {
     id: 'skills',
-    text: 'Create a Skill if you want the agent to follow the same instructions every time for a task.',
+    text: 'Create a Skill if you want the Sup to follow the same instructions every time for a task.',
   },
   {
     id: 'smart-nudges',
-    text: 'If BrowserOS offers to connect an app, saying yes lets it use that app directly next time.',
+    text: 'If Shimmy offers to connect an app, saying yes lets it use that app directly next time.',
   },
   {
     id: 'soul-md',
-    text: "Tell the assistant things like 'be more direct' or 'always ask first,' and it updates your SOUL.md.",
+    text: "Tell Sup things like 'be more direct' or 'always ask first,' and it updates your SOUL.md.",
   },
   {
     id: 'sync-to-cloud',
@@ -69,7 +69,7 @@ export const TIPS: Tip[] = [
   },
   {
     id: 'ad-blocking',
-    text: 'BrowserOS supports uBlock Origin for ad blocking — install it from the Chrome Web Store or GitHub.',
+    text: 'Shimmy supports uBlock Origin for ad blocking — install it from the Chrome Web Store or GitHub.',
   },
   {
     id: 'at-mention-tabs',

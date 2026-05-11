@@ -40,15 +40,15 @@ const features: Feature[] = [
     tag: 'AI AGENT',
     title: 'Built-in AI Agent',
     description:
-      'Describe any task and watch BrowserOS execute it—clicking, typing, and navigating for you.',
+      'Describe any task and watch Shimmy execute it—clicking, typing, and navigating for you.',
     detailedDescription:
-      'The BrowserOS Agent turns your words into browser actions. Describe what you need in plain English—fill out this form, extract data from that page, navigate through these steps—and the agent handles the rest. It clicks buttons, types text, navigates between pages, and completes multi-step browser tasks automatically. Everything runs locally on your machine with your own API keys, so your data stays private.',
+      'The Shimmy Sup turns your words into browser actions. Describe what you need in plain English—fill out this form, extract data from that page, navigate through these steps—and the Sup handles the rest. It clicks buttons, types text, navigates between pages, and completes multi-step browser tasks automatically. Everything runs locally on your machine with your own API keys, so your data stays private.',
     highlights: [
       'Multi-tab execution — run agents in multiple tabs simultaneously',
       'Smart navigation — automatically finds and interacts with page elements',
       'Form filling — completes forms with intelligent context understanding',
       'Data extraction — pulls structured data from any webpage',
-      'Auto-save sessions — pick up where you left off from the Assistant panel',
+      'Auto-save sessions — pick up where you left off from the Sup panel',
     ],
     videoDuration: '2:22',
     gridClass: 'md:col-span-2',
@@ -58,11 +58,11 @@ const features: Feature[] = [
     id: 'mcp-server',
     Icon: Plug,
     tag: 'MCP',
-    title: 'BrowserOS as MCP Server',
+    title: 'Shimmy as MCP Server',
     description:
       'Connect Claude Code, Gemini CLI, or any MCP client to control your browser with 31 tools.',
     detailedDescription:
-      'BrowserOS includes a built-in MCP server that lets AI coding agents control your browser. Claude Code can open tabs, click elements, fill forms, take screenshots, and read page content—all through natural language commands. Unlike Chrome DevTools MCP which requires debug profiles and separate servers, BrowserOS works out of the box. Just copy the URL from settings and connect.',
+      'Shimmy includes a built-in MCP server that lets AI coding agents control your browser. Claude Code can open tabs, click elements, fill forms, take screenshots, and read page content—all through natural language commands. Unlike Chrome DevTools MCP which requires debug profiles and separate servers, Shimmy works out of the box. Just copy the URL from settings and connect.',
     highlights: [
       'One-line setup — run `claude mcp add` with your server URL to connect',
       '31 browser tools — tabs, clicks, typing, screenshots, bookmarks, history',
@@ -79,9 +79,9 @@ const features: Feature[] = [
     tag: 'FILES',
     title: 'Cowork',
     description:
-      'Give the agent access to local files. Research the web, then save reports to your computer.',
+      'Give the Sup access to local files. Research the web, then save reports to your computer.',
     detailedDescription:
-      'Cowork lets the agent read and write files on your computer. Select a folder and the agent can read documents, write reports, and run shell commands—all while browsing the web. Research a topic online and generate an HTML report. Scrape product data and save it as a spreadsheet. The agent is sandboxed to your selected folder and cannot access anything outside it.',
+      'Cowork lets the Sup read and write files on your computer. Select a folder and the Sup can read documents, write reports, and run shell commands—all while browsing the web. Research a topic online and generate an HTML report. Scrape product data and save it as a spreadsheet. the Sup is sandboxed to your selected folder and cannot access anything outside it.',
     highlights: [
       'Read & write files — create reports, spreadsheets, and markdown documents',
       'Run shell commands — execute commands within your selected folder',
@@ -117,7 +117,7 @@ const features: Feature[] = [
     description:
       'Claude Code tests your web app, reads console errors, and fixes your code in one loop.',
     detailedDescription:
-      'The killer workflow for frontend developers. Claude Code connects to BrowserOS, opens your localhost app, clicks through the UI, reads console errors and network failures, then goes back to your codebase to fix the bugs—all in one continuous loop. No more switching between terminal and browser. No more copy-pasting error messages. Just describe the issue and let the agent debug it end-to-end.',
+      'The killer workflow for frontend developers. Claude Code connects to Shimmy, opens your localhost app, clicks through the UI, reads console errors and network failures, then goes back to your codebase to fix the bugs—all in one continuous loop. No more switching between terminal and browser. No more copy-pasting error messages. Just describe the issue and let the Sup debug it end-to-end.',
     highlights: [
       'Test & fix loop — Claude navigates your app, finds bugs, and patches them',
       'Console access — read browser console and network errors from your terminal',
@@ -173,9 +173,7 @@ export const FeaturesPage: FC = () => {
                   )}
                 >
                   Why Switch to{' '}
-                  <span className="text-[var(--accent-orange)]">
-                    BrowserOS?
-                  </span>
+                  <span className="text-[var(--accent-orange)]">Shimmy?</span>
                 </h1>
                 <p
                   className={cn(
@@ -186,8 +184,8 @@ export const FeaturesPage: FC = () => {
                       : 'translate-y-4 opacity-0',
                   )}
                 >
-                  Watch our launch video to understand the vision of BrowserOS
-                  and key features!
+                  Watch our launch video to understand the vision of Shimmy and
+                  key features!
                 </p>
               </div>
             </div>
@@ -205,7 +203,7 @@ export const FeaturesPage: FC = () => {
               <video
                 className="h-full w-full"
                 src={BROWSER_OS_INTRO_VIDEO_URL}
-                title="BrowserOS MCP Server Demonstration"
+                title="Shimmy MCP Server Demonstration"
                 autoPlay
                 muted
                 loop
@@ -275,7 +273,7 @@ export const FeaturesPage: FC = () => {
             <LinkIcon className="h-6 w-6 text-[var(--accent-orange)]" />
             <h2 className="font-bold text-3xl">
               Join our community and help us improve{' '}
-              <span className="text-[var(--accent-orange)]">BrowserOS!</span>
+              <span className="text-[var(--accent-orange)]">Shimmy!</span>
             </h2>
           </div>
 
@@ -380,7 +378,7 @@ export const FeaturesPage: FC = () => {
             size="lg"
             className="bg-[var(--accent-orange)] text-white shadow-[var(--accent-orange)]/25 shadow-lg hover:bg-[var(--accent-orange)]/90"
           >
-            Start Using BrowserOS
+            Start Using Shimmy
             <ArrowRight className="ml-2 h-4 w-4" />
           </Button>
         </div>

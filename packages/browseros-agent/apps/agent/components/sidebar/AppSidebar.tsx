@@ -7,11 +7,14 @@ import { SidebarUserFooter } from './SidebarUserFooter'
 interface AppSidebarProps {
   expanded?: boolean
   onOpenShortcuts?: () => void
+  /** After theme Apply/Reset: collapse hover-expanded rail or close mobile sheet */
+  onSidebarAutoCollapse?: () => void
 }
 
 export const AppSidebar: FC<AppSidebarProps> = ({
   expanded = false,
   onOpenShortcuts,
+  onSidebarAutoCollapse,
 }) => {
   return (
     <div
@@ -25,6 +28,7 @@ export const AppSidebar: FC<AppSidebarProps> = ({
       <SidebarUserFooter
         expanded={expanded}
         onOpenShortcuts={onOpenShortcuts}
+        onApplied={onSidebarAutoCollapse}
       />
     </div>
   )

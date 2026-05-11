@@ -19,11 +19,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/browseros-ai/BrowserOS",
+    "url": "https://github.com/Karthikprasadm/Shimmy-Browser",
     "directory": "packages/browseros-agent/apps/cli/npm"
   },
   "homepage": "https://browseros.com",
-  "bugs": "https://github.com/browseros-ai/BrowserOS/issues",
+  "bugs": "https://github.com/Karthikprasadm/Shimmy-Browser/issues",
   "license": "MIT",
   "os": [
     "darwin",

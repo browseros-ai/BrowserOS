@@ -1,4 +1,6 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useState } from 'react'
+import { accentThemeStorage } from '@/lib/theme/accent-theme-storage'
+import { mountAccentThemeCss } from '@/lib/theme/accentThemeDocument'
 import { type Theme, themeStorage } from '@/lib/theme/theme-storage'
 
 type ThemeProviderProps = {
@@ -17,6 +19,22 @@ const initialState: ThemeProviderState = {
 }
 
 const ThemeProviderContext = createContext<ThemeProviderState>(initialState)
+
+function ThemeAccentSync() {
+  const [hex, setHex] = useState<string | null>(null)
+
+  useEffect(() => {
+    const un = accentThemeStorage.watch((v) => setHex(v))
+    accentThemeStorage.getValue().then(setHex)
+    return () => un()
+  }, [])
+
+  useLayoutEffect(() => {
+    mountAccentThemeCss(hex)
+  }, [hex])
+
+  return null
+}
 
 /**
  * @public
@@ -88,6 +106,7 @@ export function ThemeProvider({
 
   return (
     <ThemeProviderContext.Provider {...props} value={value}>
+      <ThemeAccentSync />
       {children}
     </ThemeProviderContext.Provider>
   )

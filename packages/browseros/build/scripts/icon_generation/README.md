@@ -18,6 +18,15 @@ python generate_icons.py
 # 4. Icons are output to packages/browseros/resources/icons/
 ```
 
+**Shimmy / red brand (Windows-friendly, no macOS tools):** from this directory, with [Pillow](https://pypi.org/project/pillow/) installed:
+
+```bash
+python prepare_app_icon_from_png.py
+python generate_icons.py --config generate_icons.windows.txt
+```
+
+That refreshes `resources/icons/win/chromium.ico` (taskbar / `.exe` icon) and related PNGs from the repo root `red_logo.png`. Rebuild the Chromium-based browser and reinstall so Windows picks up the new embedded icon.
+
 ## Directory Structure
 
 ```

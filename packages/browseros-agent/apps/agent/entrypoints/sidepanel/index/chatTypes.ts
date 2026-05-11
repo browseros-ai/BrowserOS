@@ -33,7 +33,7 @@ export const AGENT_SUGGESTIONS: Suggestion[] = [
     icon: '❤️',
   },
   {
-    display: 'Support BrowserOS on Github',
+    display: 'Support Shimmy on Github',
     prompt:
       'Go to http://git.new/browseros in current tab and star the repository',
     icon: '⭐',

@@ -1,6 +1,10 @@
 # Shimmy-Browser
 
-**Shimmy-Browser** is a development fork of [BrowserOS](https://github.com/browseros-ai/BrowserOS) — an open-source Chromium-based browser that runs AI agents locally and connects them to the web through the **Chrome DevTools Protocol (CDP)**. This repository contains:
+<div align="center">
+  <img src="docs/images/shimmy-wordmark.png" width="320" height="80" alt="Shimmy-Browser logo" />
+</div>
+
+**Shimmy-Browser** ([GitHub](https://github.com/Karthikprasadm/Shimmy-Browser)) is a development fork of **BrowserOS** — an open-source Chromium-based browser that runs AI agents locally and connects them to the web through the **Chrome DevTools Protocol (CDP)**. This repository contains:
 
 1. **`packages/browseros`** — the **BrowserOS browser**: Chromium patches, Python build orchestration, packaging, and signing.
 2. **`packages/browseros-agent`** — the **agent platform**: Bun server (MCP + agent loop), WXT/React extension UI, shared packages, eval harness, and CLI tooling.
@@ -346,7 +350,7 @@ This repo is suitable as a **personal or team fork** of BrowserOS.
 | Remote | Typical use |
 |--------|-------------|
 | `origin` | Your fork (e.g. **Shimmy-Browser** on GitHub). |
-| `upstream` | `browseros-ai/BrowserOS` (add if you merge upstream changes). |
+| `upstream` | Optional second remote if you merge changes from another BrowserOS fork or the original project (use that project’s documented clone URL). |
 
 Submodule URL is recorded in `.gitmodules` (Sup-agent). After pulling parent changes, run **`git submodule update --init --recursive`** so `vendor/sup-agent` matches the committed SHA.
 
@@ -374,4 +378,4 @@ Submodule URL is recorded in `.gitmodules` (Sup-agent). After pulling parent cha
 
 ## Relationship to upstream BrowserOS
 
-Feature lists, download badges, and comparisons in the **upstream** repository README still apply at a product level. This file focuses on **this repo’s layout**, **fork-specific automation** (`bun run dev` / `stack.ts`), **Sup-agent**, and **how the browser package and agent monorepo fit together**. For release binaries and marketing screenshots, see **[browseros-ai/BrowserOS](https://github.com/browseros-ai/BrowserOS)** and **[docs.browseros.com](https://docs.browseros.com)**.
+Feature lists, download badges, and comparisons in the **upstream** BrowserOS README still apply at a product level. This file focuses on **this repo’s layout**, **fork-specific automation** (`bun run dev` / `stack.ts`), **Sup-agent**, and **how the browser package and agent monorepo fit together**. For this fork’s source and releases, see **[Karthikprasadm/Shimmy-Browser](https://github.com/Karthikprasadm/Shimmy-Browser)** and **[docs.browseros.com](https://docs.browseros.com)**.

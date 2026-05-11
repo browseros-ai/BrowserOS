@@ -305,7 +305,7 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
                   </div>
                   <FormControl>
                     <Textarea
-                      placeholder="What should the agent do? e.g., Check my email and summarize important messages"
+                      placeholder="What should Sup do? e.g., Check my email and summarize important messages"
                       className="min-h-[100px] resize-none"
                       {...field}
                       onChange={(e) => {
@@ -330,7 +330,7 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
                     </button>
                   ) : (
                     <FormDescription>
-                      The instruction that will be sent to the agent
+                      The instruction that will be sent to Sup
                     </FormDescription>
                   )}
                   <FormMessage />

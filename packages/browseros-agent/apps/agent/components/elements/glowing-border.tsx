@@ -148,5 +148,5 @@ export const GlowingBorder: FC<GlowingBorderProps> = ({
  * @public
  */
 export const GlowingElement: FC = () => (
-  <div className="h-20 w-20 bg-[radial-gradient(var(--accent-orange)_40%,transparent_60%)] opacity-[0.8]" />
+  <div className="h-28 w-28 bg-[radial-gradient(var(--accent-orange)_40%,transparent_60%)] opacity-[0.8] sm:h-32 sm:w-32" />
 )

@@ -60,7 +60,7 @@ export const ProviderCard: FC<ProviderCardProps> = ({
       </div>
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--accent-orange)]/10 text-[var(--accent-orange)]">
         {isBuiltIn ? (
-          <BrowserOSIcon size={24} />
+          <BrowserOSIcon size={28} />
         ) : (
           <ProviderIcon type={provider.type} size={24} />
         )}
@@ -80,7 +80,7 @@ export const ProviderCard: FC<ProviderCardProps> = ({
         <p className="truncate text-muted-foreground text-sm">
           {isBuiltIn ? (
             <>
-              BrowserOS-hosted model with strict rate limits.{' '}
+              Shimmy-hosted model with strict rate limits.{' '}
               <a
                 href="https://docs.browseros.com/features/bring-your-own-llm"
                 target="_blank"

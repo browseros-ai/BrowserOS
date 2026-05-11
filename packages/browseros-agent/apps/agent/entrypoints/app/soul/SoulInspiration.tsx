@@ -15,8 +15,8 @@ export const SoulInspiration: FC = () => {
           OpenClaw's SOUL.md
           <ExternalLink className="h-3 w-3" />
         </a>{' '}
-        — the idea that AI assistants should have an evolving personality shaped
-        by their conversations.
+        — the idea that Sup should have an evolving personality shaped by their
+        conversations.
       </p>
     </div>
   )

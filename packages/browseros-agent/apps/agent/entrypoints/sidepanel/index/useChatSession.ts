@@ -29,7 +29,16 @@ import { useLlmProviders } from '@/lib/llm-providers/useLlmProviders'
 import { track } from '@/lib/metrics/track'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
+import { SHIMMY_AGENT_SIDEPANEL_BUSY_KEY } from '@/lib/browseros/toggleSidePanel'
+import {
+  clearActiveSession,
+  consumeRestorePending,
+  readActiveSession,
+  saveActiveSession,
+} from '@/lib/browseros/activeSessionStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
+
+
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
 import type { ChatMode } from './chatTypes'
 import { GetConversationWithMessagesDocument } from './graphql/chatSessionDocument'
@@ -126,9 +135,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const [conversationId, setConversationId] = useState(crypto.randomUUID())
   const conversationIdRef = useRef(conversationId)
 
-  useEffect(() => {
-    conversationIdRef.current = conversationId
-  }, [conversationId])
+
 
   const onClickLike = (messageId: string) => {
     const { responseText, queryText } = getResponseAndQueryFromMessageId(
@@ -387,11 +394,72 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     }
   }, [messages, status, setMessages])
 
+  /**
+   * On mount: if RESTORE_PENDING flag is set (background set it right before
+   * opening this panel on an agent-navigated tab), auto-restore the
+   * conversation. Otherwise, if a session exists, offer the restore pill.
+   * Both `messages` and `setMessages` are now in scope (useChat is above).
+   */
+  const [isRestoringFromSession, setIsRestoringFromSession] = useState(false)
+  const [hasRestorableSession, setHasRestorableSession] = useState(false)
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only run once on mount
+  useEffect(() => {
+    if (options?.origin !== 'sidepanel') return
+    let cancelled = false
+    const tryRestore = async () => {
+      const shouldAutoRestore = await consumeRestorePending()
+      const saved = await readActiveSession()
+      if (!saved || cancelled || saved.messages.length === 0) return
+
+      if (shouldAutoRestore) {
+        // Agent navigated here → silently restore so panel mirrors original tab
+        setConversationId(
+          saved.conversationId as ReturnType<typeof crypto.randomUUID>,
+        )
+        setMessages(saved.messages)
+        setIsRestoringFromSession(true)
+        setTimeout(() => {
+          if (!cancelled) setIsRestoringFromSession(false)
+        }, 150)
+      } else {
+        // User opened tab manually → offer the restore pill
+        setHasRestorableSession(true)
+      }
+    }
+    tryRestore()
+    return () => { cancelled = true }
+  }, [])
+
+  /**
+   * Keep session storage current whenever messages change so other panels
+   * can restore mid-flight or after the agent finishes.
+   */
+  useEffect(() => {
+    if (options?.origin !== 'sidepanel') return
+    if (messages.length === 0) return
+    saveActiveSession(conversationIdRef.current, messages)
+  }, [options?.origin, messages])
+
+
   useNotifyActiveTab({
     messages,
     status,
     conversationId: conversationIdRef.current,
   })
+
+  useEffect(() => {
+    if (options?.origin !== 'sidepanel') return
+    const busy = status === 'submitted' || status === 'streaming'
+    void chrome.storage.session.set({
+      [SHIMMY_AGENT_SIDEPANEL_BUSY_KEY]: busy,
+    })
+    return () => {
+      void chrome.storage.session.set({
+        [SHIMMY_AGENT_SIDEPANEL_BUSY_KEY]: false,
+      })
+    }
+  }, [options?.origin, status])
 
   const {
     data: remoteConversationData,
@@ -454,6 +522,13 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   useEffect(() => {
     messagesRef.current = messages
   }, [messages])
+
+  // Keep conversationIdRef in sync
+  useEffect(() => {
+    conversationIdRef.current = conversationId
+  }, [conversationId])
+
+
 
   // Save conversation only after streaming completes — not on every token
   const previousStatusRef = useRef(status)
@@ -548,6 +623,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     baseSendMessage({ text: params.text })
   }
 
+
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: only need to run this once
   useEffect(() => {
     const unwatch = searchActionsStorage.watch((storageAction) => {
@@ -600,10 +677,28 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     setDisliked({})
     setRestoredConversationId(null)
     resetRemoteConversation()
+    // Clear the shared active session so other panel instances see a fresh start
+    clearActiveSession()
+  }
+
+  /**
+   * Manually triggered by the "Restore chats from other tabs" pill.
+   * Reads the active session from storage and populates this panel's
+   * messages — NO new request is sent, it's purely a display restore.
+   */
+  const restoreSessionFromOtherTab = async () => {
+    const saved = await readActiveSession()
+    if (!saved || saved.messages.length === 0) return
+    setConversationId(
+      saved.conversationId as ReturnType<typeof crypto.randomUUID>,
+    )
+    setMessages(saved.messages)
+    setHasRestorableSession(false)
   }
 
   const isRestoringConversation =
-    !!conversationIdParam && restoredConversationId !== conversationIdParam
+    (!!conversationIdParam && restoredConversationId !== conversationIdParam) ||
+    isRestoringFromSession
 
   return {
     mode,
@@ -627,5 +722,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     disliked,
     onClickDislike,
     conversationId,
+    hasRestorableSession,
+    restoreSessionFromOtherTab,
   }
 }
+
+

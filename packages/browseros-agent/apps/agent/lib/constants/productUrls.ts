@@ -11,12 +11,13 @@ export const productWebUrl = 'https://browseros.com'
 /**
  * @public
  */
-export const productRepositoryUrl = 'https://github.com/browseros-ai/BrowserOS'
+export const productRepositoryUrl =
+  'https://github.com/Karthikprasadm/Shimmy-Browser'
 
 /**
  * @public
  */
-export const githubOrgUrl = 'https://github.com/browseros-ai'
+export const githubOrgUrl = 'https://github.com/Karthikprasadm'
 
 /**
  * @public
@@ -27,7 +28,7 @@ export const privacyPolicyUrl = 'https://browseros.com/privacy'
  * @public
  */
 export const contributorsUrl =
-  'https://github.com/browseros-ai/BrowserOS/graphs/contributors'
+  'https://github.com/Karthikprasadm/Shimmy-Browser/graphs/contributors'
 
 /**
  * @public
@@ -47,7 +48,8 @@ export const productVideoUrl = 'https://youtu.be/J-lFhTP-7is'
 /**
  * @public
  */
-export const productRepositoryShortUrl = 'https://git.new/browseros'
+export const productRepositoryShortUrl =
+  'https://github.com/Karthikprasadm/Shimmy-Browser'
 
 /**
  * @public

@@ -173,7 +173,7 @@ const SkillsHeader: FC<{
       <div>
         <h1 className="font-semibold text-2xl tracking-tight">Skills</h1>
         <p className="text-muted-foreground text-sm">
-          Define reusable instructions that extend how your agent responds.
+          Define reusable instructions that extend how your Sup responds.
         </p>
         <p className="mt-1 text-muted-foreground text-xs">
           {skillLabel} • {enabledLabel}
@@ -218,7 +218,7 @@ const SkillsErrorState: FC<{ onRetry: () => void }> = ({ onRetry }) => (
         <div className="space-y-1">
           <h2 className="font-semibold">Couldn&apos;t load skills</h2>
           <p className="text-destructive/80 text-sm">
-            Check that the local agent services are running, then retry.
+            Check that the local Sup services are running, then retry.
           </p>
         </div>
       </div>
@@ -237,7 +237,7 @@ const EmptyState: FC<{ onCreateClick: () => void }> = ({ onCreateClick }) => (
       </div>
       <h3 className="mb-1 font-medium text-lg">No skills yet</h3>
       <p className="mb-5 max-w-sm text-muted-foreground text-sm leading-6">
-        Skills teach your agent how to handle repeatable tasks like research,
+        Skills teach your Sup how to handle repeatable tasks like research,
         extraction, and repeatable browser tasks.
       </p>
       <Button onClick={onCreateClick} size="sm">
@@ -284,7 +284,7 @@ const SkillSections: FC<{
 
       {builtInSkills.length > 0 ? (
         <div className="space-y-3">
-          <h3 className="font-semibold text-sm">BrowserOS Skills</h3>
+          <h3 className="font-semibold text-sm">Shimmy Skills</h3>
           <SkillGrid>{builtInSkills.map(renderCard)}</SkillGrid>
         </div>
       ) : null}
@@ -422,10 +422,10 @@ const SkillDialog: FC<{
           </DialogTitle>
           <DialogDescription>
             {readOnly
-              ? 'This skill is managed by BrowserOS and updated automatically.'
+              ? 'This skill is managed by Shimmy and updated automatically.'
               : editingSkill
-                ? 'Refine when the agent should use this skill and how it should execute it.'
-                : 'Define a reusable instruction set your agent can apply when a request matches.'}
+                ? 'Refine when the Sup should use this skill and how it should execute it.'
+                : 'Define a reusable instruction set your Sup can apply when a request matches.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -450,7 +450,7 @@ const SkillDialog: FC<{
               <Label htmlFor="skill-description">Description</Label>
               <Textarea
                 id="skill-description"
-                placeholder="Describe when the agent should use this skill."
+                placeholder="Describe when the Sup should use this skill."
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
                 maxLength={500}
@@ -458,7 +458,7 @@ const SkillDialog: FC<{
                 readOnly={readOnly}
               />
               <p className="text-muted-foreground text-xs leading-5">
-                This is the trigger summary the agent uses to pick the skill.
+                This is the trigger summary the Sup uses to pick the skill.
               </p>
             </div>
 
@@ -466,7 +466,7 @@ const SkillDialog: FC<{
               <div className="mt-auto rounded-lg border border-border/60 border-dashed bg-muted/30 px-3 py-2.5">
                 <p className="font-medium text-muted-foreground text-xs">Tip</p>
                 <ul className="mt-1.5 list-disc space-y-1 pl-4 text-muted-foreground text-xs leading-5">
-                  <li>List the ordered steps the agent should follow.</li>
+                  <li>List the ordered steps the Sup should follow.</li>
                   <li>Close with the output or formatting you expect back.</li>
                 </ul>
               </div>
@@ -491,7 +491,7 @@ const SkillDialog: FC<{
                 value={content}
                 onChange={setContent}
                 onKeyDown={handleContentKeyDown}
-                placeholder="Write instructions for the agent. Use markdown for structure."
+                placeholder="Write instructions for the Sup. Use markdown for structure."
                 className="mt-4 min-h-[320px] flex-1 overflow-y-auto text-sm"
               />
             )}
@@ -501,8 +501,8 @@ const SkillDialog: FC<{
         <div className="flex flex-col gap-3 border-t px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-muted-foreground text-xs">
             {readOnly
-              ? 'This skill is managed by BrowserOS and updated automatically.'
-              : 'Saved locally and available to your agent immediately.'}
+              ? 'This skill is managed by Shimmy and updated automatically.'
+              : 'Saved locally and available to your Sup immediately.'}
           </p>
           <div className="flex flex-col-reverse gap-2 sm:flex-row">
             {readOnly ? (

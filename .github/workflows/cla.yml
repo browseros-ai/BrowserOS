@@ -30,7 +30,7 @@ jobs:
           path-to-signatures: 'cla-signatures.json'
           path-to-document: 'https://github.com/${{ github.repository }}/blob/main/CLA.md'
           branch: 'main'
-          remote-organization-name: 'browseros-ai'
+          remote-organization-name: 'Karthikprasadm'
           remote-repository-name: 'cla-signatures'
           allowlist: 'shadowfax92,felarof99,bot*,*[bot],dependabot,renovate,github-actions,snyk-bot,imgbot,greenkeeper,semantic-release-bot,allcontributors'
           lock-pullrequest-aftermerge: false

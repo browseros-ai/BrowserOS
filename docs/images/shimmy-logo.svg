@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Shimmy-Browser project logo: six dots on a regular hexagon (black field, pure red #FF0000).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Shimmy-Browser logo">
+  <title>Shimmy-Browser</title>
+  <rect width="128" height="128" fill="#000000"/>
+  <g fill="#FF0000">
+    <circle cx="64" cy="36" r="11"/>
+    <circle cx="88.248" cy="50" r="11"/>
+    <circle cx="88.248" cy="78" r="11"/>
+    <circle cx="64" cy="92" r="11"/>
+    <circle cx="39.752" cy="78" r="11"/>
+    <circle cx="39.752" cy="50" r="11"/>
+  </g>
+</svg>

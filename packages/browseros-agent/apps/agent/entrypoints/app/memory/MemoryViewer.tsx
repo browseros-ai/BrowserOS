@@ -55,7 +55,7 @@ export const MemoryViewer: FC = () => {
           <div>
             <p className="font-medium text-sm">Loading your memory...</p>
             <p className="mt-1 text-muted-foreground text-xs">
-              Fetching your latest CORE.md from the BrowserOS server.
+              Fetching your latest CORE.md from the Shimmy server.
             </p>
           </div>
           <Button
@@ -76,10 +76,10 @@ export const MemoryViewer: FC = () => {
     return (
       <div className="rounded-xl border border-destructive/50 bg-destructive/5 p-6">
         <p className="text-destructive text-sm">
-          Could not load memory. BrowserOS server may be disconnected.
+          Could not load memory. Shimmy server may be disconnected.
         </p>
         <p className="mt-1 text-muted-foreground text-xs">
-          Try restarting BrowserOS agent/server, then click retry.
+          Try restarting Shimmy Sup/server, then click retry.
         </p>
         <Button
           variant="outline"
@@ -102,7 +102,7 @@ export const MemoryViewer: FC = () => {
           <div>
             <p className="font-medium text-sm">No memories yet</p>
             <p className="mt-1 text-muted-foreground text-xs">
-              Start a conversation and your agent will learn about you, or add
+              Start a conversation and your Sup will learn about you, or add
               memories directly.
             </p>
           </div>

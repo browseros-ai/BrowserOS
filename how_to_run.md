@@ -1,5 +1,9 @@
 # How to run Shimmy-Browser (agent + browser) and push to GitHub
 
+<div align="center">
+  <img src="docs/images/shimmy-wordmark.png" width="280" height="70" alt="Shimmy-Browser logo" />
+</div>
+
 This guide walks through **starting the full development stack** (extension UI + Chromium dev browser + Bun server), optional pieces, and **publishing changes to GitHub**, including the **Sup-agent** submodule.
 
 **To run the project, go to [Run the project (copy-paste commands)](#run-the-project-copy-paste-commands) first**, then use the rest of the doc for details.
@@ -416,7 +420,7 @@ git remote add origin git@github.com:<your-user>/Shimmy-Browser.git
 Optional **upstream** (original BrowserOS) for merges:
 
 ```bash
-git remote add upstream https://github.com/browseros-ai/BrowserOS.git
+git remote add upstream https://github.com/Karthikprasadm/Shimmy-Browser.git
 ```
 
 ### 5. Push

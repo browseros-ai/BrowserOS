@@ -11,7 +11,7 @@ export const MemoryHeader: FC = () => {
         <div className="flex-1">
           <h2 className="mb-1 font-semibold text-xl">Agent Memory</h2>
           <p className="text-muted-foreground text-sm">
-            Facts your agent remembers about you — your name, preferences,
+            Facts your Sup remembers about you — your name, preferences,
             projects, and tools. Edit directly or teach through conversation.
           </p>
         </div>

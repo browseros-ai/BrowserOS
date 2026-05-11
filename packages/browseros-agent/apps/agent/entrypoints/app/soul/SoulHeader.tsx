@@ -11,8 +11,8 @@ export const SoulHeader: FC = () => {
         <div className="flex-1">
           <h2 className="mb-1 font-semibold text-xl">Agent Soul</h2>
           <p className="text-muted-foreground text-sm">
-            Your agent's personality, tone, and behavioral rules. The soul
-            evolves as your agent learns how you like to interact.
+            your Sup's personality, tone, and behavioral rules. The soul evolves
+            as your Sup learns how you like to interact.
           </p>
         </div>
       </div>

@@ -4,7 +4,6 @@ import {
   type RawSend,
 } from '@browseros/cdp-protocol/create-api'
 import type { ProtocolApi } from '@browseros/cdp-protocol/protocol-api'
-import { EXIT_CODES } from '@browseros/shared/constants/exit-codes'
 import { CDP_LIMITS } from '@browseros/shared/constants/limits'
 import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
 import { logger } from '../../lib/logger'
@@ -293,7 +292,15 @@ class CdpBackend implements ICdpBackend {
   private async reconnectLoop(): Promise<void> {
     do {
       this.reconnectRequested = false
-      await this.reconnectWithRetries()
+      const reconnected = await this.reconnectWithRetries()
+      if (!reconnected && !this.disconnecting) {
+        // Keep server process alive even if browser/CDP is temporarily unavailable.
+        const cooldownMs = Math.max(TIMEOUTS.CDP_RECONNECT_DELAY * 2, 2000)
+        logger.warn(
+          `CDP still unavailable after retry batch; retrying again in ${cooldownMs}ms`,
+        )
+        await Bun.sleep(cooldownMs)
+      }
     } while (
       !this.disconnecting &&
       (this.reconnectRequested || !this.connected)
@@ -309,12 +316,12 @@ class CdpBackend implements ICdpBackend {
     this.pending.clear()
   }
 
-  private async reconnectWithRetries(): Promise<void> {
+  private async reconnectWithRetries(): Promise<boolean> {
     const maxRetries = CDP_LIMITS.RECONNECT_MAX_RETRIES
     const delay = TIMEOUTS.CDP_RECONNECT_DELAY
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      if (this.disconnecting) return
+      if (this.disconnecting) return false
 
       try {
         logger.info(`CDP reconnection attempt ${attempt}/${maxRetries}...`)
@@ -322,7 +329,7 @@ class CdpBackend implements ICdpBackend {
         await this.attemptConnect()
         this.startKeepalive()
         logger.info('CDP reconnected successfully')
-        return
+        return true
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
         logger.warn(
@@ -332,9 +339,9 @@ class CdpBackend implements ICdpBackend {
     }
 
     logger.error(
-      `CDP reconnection failed after ${maxRetries} attempts, exiting for restart`,
+      `CDP reconnection failed after ${maxRetries} attempts; server will continue retrying in background`,
     )
-    process.exit(EXIT_CODES.GENERAL_ERROR)
+    return false
   }
 
   async disconnect(): Promise<void> {

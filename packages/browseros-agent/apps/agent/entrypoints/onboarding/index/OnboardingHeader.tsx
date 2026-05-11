@@ -1,6 +1,6 @@
 import type { FC } from 'react'
 import { Button } from '@/components/ui/button'
-import { getProductLogoUrl } from '@/lib/branding/logo'
+import { getProductLogoUrl, PRODUCT_LOGO_ALT } from '@/lib/branding/logo'
 import { docsUrl, githubOrgUrl } from '@/lib/constants/productUrls'
 
 const PRODUCT_LOGO_URL = getProductLogoUrl()
@@ -15,14 +15,13 @@ export const OnboardingHeader: FC<OnboardingHeaderProps> = ({ isMounted }) => {
       className={`border-border/40 border-b transition-all duration-700 ${isMounted ? 'translate-y-0 opacity-100' : '-translate-y-4 opacity-0'}`}
     >
       <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-        <div className="flex items-center gap-3">
-          {/* Floating animation to logo */}
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-orange">
-            <img src={PRODUCT_LOGO_URL} alt="BrowserOS" className="h-6 w-6" />
-          </div>
-          <span className="font-semibold text-accent-orange text-lg">
-            BrowserOS
-          </span>
+        <div className="flex min-w-0 items-center gap-3">
+          <img
+            src={PRODUCT_LOGO_URL}
+            alt={PRODUCT_LOGO_ALT}
+            className="h-9 w-auto max-w-[min(100vw-12rem,280px)] object-contain object-left sm:h-10"
+            draggable={false}
+          />
         </div>
         <nav className="hidden items-center gap-1 md:flex">
           <Button

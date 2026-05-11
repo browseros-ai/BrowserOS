@@ -67,9 +67,9 @@ export const MemoryExamples: FC = () => {
   return (
     <div className="space-y-3">
       <div>
-        <h3 className="font-medium text-sm">Teach your agent about you</h3>
+        <h3 className="font-medium text-sm">Teach your Sup about you</h3>
         <p className="mt-1 text-muted-foreground text-xs">
-          Use these prompts to help your agent learn. Edit the message before
+          Use these prompts to help your Sup learn. Edit the message before
           sending.
         </p>
       </div>
@@ -104,7 +104,7 @@ export const MemoryExamples: FC = () => {
           <DialogHeader>
             <DialogTitle>Edit message</DialogTitle>
             <DialogDescription>
-              Customize the prompt before sending it to your agent.
+              Customize the prompt before sending it to your Sup.
             </DialogDescription>
           </DialogHeader>
           <Textarea
@@ -131,3 +131,4 @@ export const MemoryExamples: FC = () => {
     </div>
   )
 }
+

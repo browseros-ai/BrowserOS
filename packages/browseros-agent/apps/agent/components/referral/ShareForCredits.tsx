@@ -73,7 +73,7 @@ export const ShareForCredits: FC<ShareForCreditsProps> = ({ compact }) => {
   return (
     <div className={compact ? 'space-y-2' : 'space-y-3'}>
       <p className={compact ? 'text-muted-foreground text-xs' : 'text-sm'}>
-        Share BrowserOS on Twitter to earn{' '}
+        Share Shimmy on Twitter to earn{' '}
         {REFERRAL_LIMITS.CREDITS_PER_REFERRAL} bonus credits!
       </p>
 

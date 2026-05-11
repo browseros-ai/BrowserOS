@@ -43,13 +43,13 @@
     "generate:models": "bun scripts/generate-models.ts",
     "clean": "rimraf dist"
   },
-  "repository": "browseros-ai/BrowserOS-server",
+  "repository": "Karthikprasadm/Shimmy-Browser",
   "author": "BrowserOS",
   "license": "AGPL-3.0-or-later",
   "bugs": {
-    "url": "https://github.com/browseros-ai/BrowserOS/issues"
+    "url": "https://github.com/Karthikprasadm/Shimmy-Browser/issues"
   },
-  "homepage": "https://github.com/browseros-ai/BrowserOS#readme",
+  "homepage": "https://github.com/Karthikprasadm/Shimmy-Browser#readme",
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.933.0",
     "@biomejs/biome": "2.4.8",

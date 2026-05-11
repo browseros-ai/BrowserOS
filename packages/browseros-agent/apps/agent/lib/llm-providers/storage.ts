@@ -7,7 +7,7 @@ import { uploadLlmProvidersToGraphql } from './uploadLlmProvidersToGraphql'
 
 /** Default provider ID constant */
 export const DEFAULT_PROVIDER_ID = 'browseros'
-const DEFAULT_PROVIDER_NAME = 'BrowserOS'
+const DEFAULT_PROVIDER_NAME = 'Shimmy'
 
 /** Storage key for LLM providers array */
 export const providersStorage = storage.defineItem<LlmProviderConfig[]>(
@@ -33,29 +33,35 @@ export const providersStorage = storage.defineItem<LlmProviderConfig[]>(
   },
 )
 
-/** Backup providers to BrowserOS prefs (write-only, best-effort) */
-async function backupToBrowserOS(backup: LlmProvidersBackup): Promise<void> {
+/** Backup providers to Shimmy prefs (write-only, best-effort) */
+async function backupToShimmy(backup: LlmProvidersBackup): Promise<void> {
   try {
     const adapter = getBrowserOSAdapter()
     await adapter.setPref(BROWSEROS_PREFS.PROVIDERS, JSON.stringify(backup))
   } catch {
-    // BrowserOS API not available - ignore
+    // Shimmy API not available - ignore
   }
 }
 
 /**
- * Setup one-way sync of LLM providers to BrowserOS prefs
+ * Setup one-way sync of LLM providers to Shimmy prefs
  * @public
  */
-export function setupLlmProvidersBackupToBrowserOS(): () => void {
+export function setupLlmProvidersBackupToShimmy(): () => void {
   const unsubscribe = providersStorage.watch(async (providers) => {
     if (providers) {
       const defaultProviderId = await defaultProviderIdStorage.getValue()
-      await backupToBrowserOS({ defaultProviderId, providers })
+      await backupToShimmy({ defaultProviderId, providers })
     }
   })
   return unsubscribe
 }
+
+/**
+ * Backward-compatible alias for existing call sites that still reference BrowserOS naming.
+ */
+export const setupLlmProvidersBackupToBrowserOS =
+  setupLlmProvidersBackupToShimmy
 
 export async function syncLlmProviders(): Promise<void> {
   const providers = await providersStorage.getValue()
@@ -101,8 +107,8 @@ export async function loadProviders(): Promise<LlmProviderConfig[]> {
   return normalizedProviders
 }
 
-/** Creates the default BrowserOS provider configuration */
-export function createDefaultBrowserOSProvider(): LlmProviderConfig {
+/** Creates the default Shimmy provider configuration */
+export function createDefaultShimmyProvider(): LlmProviderConfig {
   const timestamp = Date.now()
   return {
     id: DEFAULT_PROVIDER_ID,
@@ -118,13 +124,18 @@ export function createDefaultBrowserOSProvider(): LlmProviderConfig {
   }
 }
 
+/**
+ * Backward-compatible alias for existing call sites that still reference BrowserOS naming.
+ */
+export const createDefaultBrowserOSProvider = createDefaultShimmyProvider
+
 /** Creates the default providers configuration. Only call when storage is empty. */
 export function createDefaultProvidersConfig(): LlmProviderConfig[] {
-  return [createDefaultBrowserOSProvider()]
+  return [createDefaultShimmyProvider()]
 }
 
 /**
- * Normalize built-in provider names back to "BrowserOS" (e.g. from "Kimi K2.5"
+ * Normalize built-in provider names back to "Shimmy" (e.g. from "Kimi K2.5"
  * which was set during a previous partnership launch).
  */
 function normalizeProviderNames(

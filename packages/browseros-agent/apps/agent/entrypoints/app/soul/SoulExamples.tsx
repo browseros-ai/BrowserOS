@@ -105,9 +105,9 @@ export const SoulExamples: FC = () => {
   return (
     <div className="space-y-3">
       <div>
-        <h3 className="font-medium text-sm">Shape your agent's soul</h3>
+        <h3 className="font-medium text-sm">Shape your Sup's soul</h3>
         <p className="mt-1 text-muted-foreground text-xs">
-          Try these prompts to customize how your agent behaves. Edit the
+          Try these prompts to customize how your Sup behaves. Edit the
           message before sending.
         </p>
       </div>
@@ -160,7 +160,7 @@ export const SoulExamples: FC = () => {
           <DialogHeader>
             <DialogTitle>Edit message</DialogTitle>
             <DialogDescription>
-              Customize the prompt before sending it to your agent.
+              Customize the prompt before sending it to your Sup.
             </DialogDescription>
           </DialogHeader>
           <Textarea
@@ -256,3 +256,4 @@ export const SoulExamples: FC = () => {
     </div>
   )
 }
+

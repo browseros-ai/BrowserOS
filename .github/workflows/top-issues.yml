@@ -12,7 +12,7 @@ permissions:
 jobs:
   update-top-issues:
     runs-on: ubuntu-latest
-    if: github.repository == 'browseros-ai/BrowserOS'
+    if: github.repository == 'Karthikprasadm/Shimmy-Browser'
 
     steps:
       - name: Update top issues list
@@ -41,7 +41,7 @@ jobs:
                 }
               }
             }
-          ' -f owner='browseros-ai' -f repo='BrowserOS')
+          ' -f owner='Karthikprasadm' -f repo='Shimmy-Browser')
 
           # Parse and sort RFC issues (titles containing [RFC])
           sorted_rfcs=$(echo "$issues" | jq -r --arg ISSUE_NUMBER "$ISSUE_NUMBER" '
@@ -78,7 +78,7 @@ jobs:
             echo "| 👍 on an issue | Adds your vote — we prioritize by vote count |"
             echo "| 💬 Comment | Your feedback shapes what we build |"
             echo ""
-            echo "**Don't see what you need?** Create a new [feature request](https://github.com/browseros-ai/BrowserOS/issues/new) or [bug report](https://github.com/browseros-ai/BrowserOS/issues/new)."
+            echo "**Don't see what you need?** Create a new [feature request](https://github.com/Karthikprasadm/Shimmy-Browser/issues/new) or [bug report](https://github.com/Karthikprasadm/Shimmy-Browser/issues/new)."
             echo ""
             echo "**Last updated:** $current_time"
             echo ""
@@ -109,7 +109,7 @@ jobs:
           # Update the tracking issue
           echo "Updating issue #$ISSUE_NUMBER..."
           gh issue edit "$ISSUE_NUMBER" \
-            --repo browseros-ai/BrowserOS \
+            --repo Karthikprasadm/Shimmy-Browser \
             --body-file /tmp/issue_body.md
 
           echo "✅ Successfully updated top issues list!"

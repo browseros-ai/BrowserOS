@@ -15,7 +15,7 @@ export const SoulViewer: FC = () => {
           <div>
             <p className="font-medium text-sm">Loading your soul...</p>
             <p className="mt-1 text-muted-foreground text-xs">
-              Fetching SOUL.md from the local BrowserOS agent.
+              Fetching SOUL.md from the local Shimmy Sup.
             </p>
           </div>
           <Button
@@ -36,10 +36,10 @@ export const SoulViewer: FC = () => {
     return (
       <div className="rounded-xl border border-destructive/50 bg-destructive/5 p-6">
         <p className="text-destructive text-sm">
-          Could not load soul file. BrowserOS server may be disconnected.
+          Could not load soul file. Shimmy server may be disconnected.
         </p>
         <p className="mt-1 text-muted-foreground text-xs">
-          Try restarting BrowserOS agent/server, then click retry.
+          Try restarting Shimmy Sup/server, then click retry.
         </p>
         <Button
           variant="outline"
@@ -62,7 +62,7 @@ export const SoulViewer: FC = () => {
           <div>
             <p className="font-medium text-sm">No soul file yet</p>
             <p className="mt-1 text-muted-foreground text-xs">
-              Start a conversation and your agent will create its personality.
+              Start a conversation and your Sup will create its personality.
             </p>
           </div>
         </div>
