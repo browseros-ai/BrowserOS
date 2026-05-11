@@ -197,3 +197,38 @@ describe('ConfigStore pending changes', () => {
     expect(store.hasPendingChanges()).toBe(false)
   })
 })
+
+describe('ConfigStore ENV clamping', () => {
+  test('clamps ENV value below min to min', () => {
+    //#given
+    process.env.BROWSEROS_LIMIT_MAX_TURNS = '0'
+
+    //#when
+    const value = store.get('AGENT_LIMITS.MAX_TURNS')
+
+    //#then
+    expect(value).toBe(1)
+  })
+
+  test('allows ENV value at min boundary', () => {
+    //#given
+    process.env.BROWSEROS_LIMIT_MAX_TURNS = '1'
+
+    //#when
+    const value = store.get('AGENT_LIMITS.MAX_TURNS')
+
+    //#then
+    expect(value).toBe(1)
+  })
+
+  test('allows ENV value well above min', () => {
+    //#given
+    process.env.BROWSEROS_LIMIT_MAX_TURNS = '9999'
+
+    //#when
+    const value = store.get('AGENT_LIMITS.MAX_TURNS')
+
+    //#then
+    expect(value).toBe(9999)
+  })
+})
