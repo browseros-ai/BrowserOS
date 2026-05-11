@@ -2,6 +2,10 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT/packages/browseros-agent"
+
+# Ensure desktop entries are registered
+"$REPO_ROOT/scripts/setup-desktop-entries.sh" 2>/dev/null || true
+update-desktop-database ~/.local/share/applications/ 2>/dev/null || true
 APP="${BROWSEROS_APP_PATH:-$HOME/Downloads/alta/BrowserOS.AppImage}"
 EXT_DIR="apps/agent/dist/chrome-mv3-dev"
 BROWSER_LOG="/tmp/browseros-dev-browser.log"
