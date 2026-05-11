@@ -226,6 +226,39 @@ describe('extensions module — Zone 6: protected extensions', () => {
     expect(extensions.isBrowserOSExtension('cjpalhdlnbpafiamejdnhcphjbkeiagm')).toBe(false)
     expect(extensions.isBrowserOSExtension('random-extension-id')).toBe(false)
   })
+
+  test.each(PROTECTED_IDS)(
+    'setStorageItems rejects BrowserOS first-party extension %s',
+    async (id) => {
+      const backend = createMockCdpBackend()
+
+      await expect(
+        extensions.setStorageItems(backend, id, 'local', { key: 'val' }),
+      ).rejects.toThrow('first-party')
+    },
+  )
+
+  test.each(PROTECTED_IDS)(
+    'removeStorageItems rejects BrowserOS first-party extension %s',
+    async (id) => {
+      const backend = createMockCdpBackend()
+
+      await expect(
+        extensions.removeStorageItems(backend, id, 'local', ['key']),
+      ).rejects.toThrow('first-party')
+    },
+  )
+
+  test.each(PROTECTED_IDS)(
+    'clearStorageItems rejects BrowserOS first-party extension %s',
+    async (id) => {
+      const backend = createMockCdpBackend()
+
+      await expect(
+        extensions.clearStorageItems(backend, id, 'local'),
+      ).rejects.toThrow('first-party')
+    },
+  )
 })
 
 // ── Zone 1: Empty / nil inputs ──
@@ -277,6 +310,15 @@ describe('extensions module — Zone 1: empty inputs', () => {
       storageArea: 'local',
       keys: ['foo'],
     })
+  })
+
+  test('getStorageItems returns empty object when CDP returns undefined data', async () => {
+    const backend = createMockCdpBackend()
+    backend.Extensions.getStorageItems = mock(async () => ({ data: undefined as any }))
+
+    const result = await extensions.getStorageItems(backend, 'ext-id', 'local')
+
+    expect(result).toEqual({})
   })
 })
 

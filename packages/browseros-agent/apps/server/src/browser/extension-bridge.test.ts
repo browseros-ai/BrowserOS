@@ -340,4 +340,246 @@ describe('extension-bridge — happy path', () => {
 
     expect(result).toBeNull()
   })
+
+  // ── Fix F12: Verify detachFromTarget called on success ──
+
+  test('sendExtensionMessage detaches session after successful send', async () => {
+    const backend = createMockBackend({
+      getTargets: [
+        {
+          id: 'sw-1',
+          type: 'service_worker',
+          title: 'Test Ext',
+          url: 'chrome-extension://ext-1/sw.js',
+        },
+      ],
+      evaluateResult: {
+        result: {
+          type: 'string',
+          value: JSON.stringify({ ok: true }),
+        },
+      },
+    })
+
+    await sendExtensionMessage(backend, 'ext-1', { action: 'ping' })
+
+    expect(backend.Target.detachFromTarget).toHaveBeenCalledWith({
+      sessionId: 'sw-sess-1',
+    })
+  })
+
+  // ── Fix F13: Exhausted retries ──
+
+  test('sendExtensionMessage throws after exhausting all retries', async () => {
+    const backend = createMockBackend({
+      getTargets: [
+        {
+          id: 'sw-1',
+          type: 'service_worker',
+          title: 'Ext SW',
+          url: 'chrome-extension://ext-1/sw.js',
+        },
+      ],
+    })
+
+    // Always fail with retriable error
+    backend.Target.attachToTarget = mock(async () => {
+      throw new Error('Target closed')
+    })
+
+    await expect(
+      sendExtensionMessage(backend, 'ext-1', { action: 'test' }),
+    ).rejects.toThrow('Target closed')
+
+    // Should have attempted MAX_RETRIES times
+    const attachCallCount = (backend.Target.attachToTarget as ReturnType<typeof mock>).mock.calls.length
+    expect(attachCallCount).toBe(2)
+  })
+
+  // ── Fix F14: exceptionDetails in Runtime.evaluate result ──
+
+  test('sendExtensionMessage throws when Runtime.evaluate returns exceptionDetails', async () => {
+    const sessionApi = {
+      Runtime: {
+        enable: mock(async () => {}),
+        evaluate: mock(async () => ({
+          result: { type: 'object', value: {} },
+          exceptionDetails: { text: 'Extension context was destroyed' },
+        })),
+        on: mock(() => {}),
+      },
+    } as unknown as ProtocolApi
+
+    const backend = createMockBackend({
+      getTargets: [
+        {
+          id: 'sw-1',
+          type: 'service_worker',
+          title: 'Ext SW',
+          url: 'chrome-extension://ext-1/sw.js',
+        },
+      ],
+    })
+    // Override session to return exceptionDetails
+    backend.session = mock((() => sessionApi) as any)
+
+    await expect(
+      sendExtensionMessage(backend, 'ext-1', { action: 'test' }),
+    ).rejects.toThrow('Extension context was destroyed')
+  })
+
+  // ── Fix F15: Timeout behavior ──
+
+  test('sendExtensionMessage throws timeout error when extension does not respond', async () => {
+    // Create a session where evaluate never resolves
+    let rejectEvaluate: (err: Error) => void
+    const evaluatePromise = new Promise<any>((_resolve, reject) => {
+      rejectEvaluate = reject
+    })
+    const sessionApi = {
+      Runtime: {
+        enable: mock(async () => {}),
+        evaluate: mock(async () => evaluatePromise),
+        on: mock(() => {}),
+      },
+    } as unknown as ProtocolApi
+
+    const backend = createMockBackend({
+      getTargets: [
+        {
+          id: 'sw-1',
+          type: 'service_worker',
+          title: 'Slow Ext',
+          url: 'chrome-extension://ext-1/sw.js',
+        },
+      ],
+    })
+    backend.session = mock((() => sessionApi) as any)
+
+    // Use very short timeout
+    await expect(
+      sendExtensionMessage(backend, 'ext-1', { action: 'slow' }, 50),
+    ).rejects.toThrow('timeout')
+  })
+
+  // ── Fix F16: Non-serializable message ──
+
+  test('sendExtensionMessage throws descriptive error for non-serializable payload', async () => {
+    const backend = createMockBackend({
+      getTargets: [
+        {
+          id: 'sw-1',
+          type: 'service_worker',
+          title: 'Ext SW',
+          url: 'chrome-extension://ext-1/sw.js',
+        },
+      ],
+    })
+
+    // Circular reference
+    const circular: any = { a: 1 }
+    circular.self = circular
+
+    await expect(
+      sendExtensionMessage(backend, 'ext-1', circular),
+    ).rejects.toThrow('not JSON-serializable')
+  })
+})
+
+// ── Fix F1: Session leak on error path ──
+
+describe('extension-bridge — F1: session cleanup on error', () => {
+  test('sendExtensionMessage detaches session when Runtime.evaluate throws', async () => {
+    const sessionApi = {
+      Runtime: {
+        enable: mock(async () => {}),
+        evaluate: mock(async () => {
+          throw new Error('Context destroyed')
+        }),
+        on: mock(() => {}),
+      },
+    } as unknown as ProtocolApi
+
+    const backend = createMockBackend({
+      getTargets: [
+        {
+          id: 'sw-1',
+          type: 'service_worker',
+          title: 'Ext SW',
+          url: 'chrome-extension://ext-1/sw.js',
+        },
+      ],
+    })
+    backend.session = mock((() => sessionApi) as any)
+
+    await expect(
+      sendExtensionMessage(backend, 'ext-1', { action: 'test' }),
+    ).rejects.toThrow('Context destroyed')
+
+    // Critical: session must be detached even on error
+    expect(backend.Target.detachFromTarget).toHaveBeenCalledWith({
+      sessionId: 'sw-sess-1',
+    })
+  })
+})
+
+// ── Fix F8: Empty extensionId guard ──
+
+describe('extension-bridge — F8: input validation', () => {
+  test('sendExtensionMessage throws on empty extensionId', async () => {
+    const backend = createMockBackend()
+
+    await expect(
+      sendExtensionMessage(backend, '', { action: 'test' }),
+    ).rejects.toThrow('Extension ID is required')
+  })
+})
+
+// ── Fix F4: Stale swTarget across retries ──
+
+describe('extension-bridge — F4: re-discover targets after startWorker', () => {
+  test('sendExtensionMessage re-discovers target after SW restart on retry', async () => {
+    let getTargetsCallCount = 0
+    let attachCallCount = 0
+
+    const sessionApi = {
+      Runtime: {
+        enable: mock(async () => {}),
+        evaluate: mock(async () => ({
+          result: { type: 'string', value: JSON.stringify({ ok: true }) },
+        })),
+        on: mock(() => {}),
+      },
+    } as unknown as ProtocolApi
+
+    const backend = createMockBackend()
+
+    // First getTargets returns old target, second (after retry) returns new target
+    backend.getTargets = mock(async () => {
+      getTargetsCallCount++
+      if (getTargetsCallCount === 1) {
+        return [{ id: 'sw-old', type: 'service_worker', title: 'Old SW', url: 'chrome-extension://ext-1/sw.js' }]
+      }
+      return [{ id: 'sw-new', type: 'service_worker', title: 'New SW', url: 'chrome-extension://ext-1/sw.js' }]
+    })
+
+    // First attach to old target fails, second to new target succeeds
+    backend.Target.attachToTarget = mock(async (params: any) => {
+      attachCallCount++
+      if (params.targetId === 'sw-old') throw new Error('Target closed')
+      return { sessionId: 'sw-sess-new' }
+    })
+
+    backend.session = mock((() => sessionApi) as any)
+
+    const result = await sendExtensionMessage(backend, 'ext-1', { action: 'test' })
+
+    expect(result).toEqual({ ok: true })
+    // Should have called getTargets at least twice (initial + retry re-discover)
+    expect(getTargetsCallCount).toBeGreaterThanOrEqual(2)
+    // Should have attached to the NEW target
+    expect(backend.Target.attachToTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: 'sw-new' }),
+    )
+  })
 })

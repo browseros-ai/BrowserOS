@@ -12,6 +12,7 @@ import { defineToolWithCategory } from './framework'
 import type { StorageArea } from '@browseros/cdp-protocol/generated/domains/extensions'
 
 const defineExtTool = defineToolWithCategory('data-modification')
+const defineExtReadTool = defineToolWithCategory('observation')
 
 // ── Lifecycle tools ──
 
@@ -54,7 +55,7 @@ export const uninstall_extension = defineExtTool({
 
 // ── Storage tools ──
 
-export const get_extension_storage = defineExtTool({
+export const get_extension_storage = defineExtReadTool({
   name: 'get_extension_storage',
   description:
     'Get storage items from an extension. Supports local, sync, session, and managed (read-only) areas.',
@@ -144,7 +145,8 @@ export const remove_extension_storage = defineExtTool({
       .describe('Storage area'),
     keys: z
       .array(z.string())
-      .describe('Keys to remove'),
+      .min(1)
+      .describe('Keys to remove (at least one)'),
   }),
   output: z.object({
     action: z.literal('remove_storage'),
@@ -206,7 +208,7 @@ export const clear_extension_storage = defineExtTool({
 // ── Placeholder tools for L2 CDP handler (list/enable/disable/get_info) ──
 // These require the new Chromium CDP handler — stubs for now.
 
-export const list_extensions = defineExtTool({
+export const list_extensions = defineExtReadTool({
   name: 'list_extensions',
   description:
     'List all installed extensions. Returns id, name, version, state, canModify, isBrowserOS. Requires L2 CDP handler.',
@@ -231,7 +233,7 @@ export const list_extensions = defineExtTool({
   },
 })
 
-export const get_extension_info = defineExtTool({
+export const get_extension_info = defineExtReadTool({
   name: 'get_extension_info',
   description:
     'Get detailed info for a specific extension. Requires L2 CDP handler.',
@@ -244,10 +246,9 @@ export const get_extension_info = defineExtTool({
     state: z.string(),
     canModify: z.boolean(),
   }),
-  handler: async (_args, _ctx, response) => {
+  handler: async (_args, _ctx, _response) => {
     // TODO: Requires L2 CDP handler
-    response.text('Extension info requires L2 CDP handler (not yet implemented)')
-    response.data({ id: '', name: '', state: '', canModify: false })
+    throw new Error('Extension info requires L2 CDP handler (not yet implemented)')
   },
 })
 
@@ -262,10 +263,9 @@ export const enable_extension = defineExtTool({
     action: z.literal('enable'),
     extensionId: z.string(),
   }),
-  handler: async (_args, _ctx, response) => {
+  handler: async (_args, _ctx, _response) => {
     // TODO: Requires L2 CDP handler
-    response.text('Enable extension requires L2 CDP handler (not yet implemented)')
-    response.data({ action: 'enable', extensionId: '' })
+    throw new Error('Enable extension requires L2 CDP handler (not yet implemented)')
   },
 })
 
@@ -280,10 +280,9 @@ export const disable_extension = defineExtTool({
     action: z.literal('disable'),
     extensionId: z.string(),
   }),
-  handler: async (_args, _ctx, response) => {
+  handler: async (_args, _ctx, _response) => {
     // TODO: Requires L2 CDP handler
-    response.text('Disable extension requires L2 CDP handler (not yet implemented)')
-    response.data({ action: 'disable', extensionId: '' })
+    throw new Error('Disable extension requires L2 CDP handler (not yet implemented)')
   },
 })
 
@@ -305,8 +304,10 @@ export const send_extension_message = defineExtTool({
       .describe('JSON-serializable message payload'),
     timeout: z
       .number()
+      .min(100)
+      .max(30000)
       .optional()
-      .describe('Timeout in ms (default: 10000)'),
+      .describe('Timeout in ms (default: 10000, min: 100, max: 30000)'),
   }),
   output: z.object({
     extensionId: z.string(),
@@ -328,7 +329,7 @@ export const send_extension_message = defineExtTool({
   },
 })
 
-export const list_messageable_extensions = defineExtTool({
+export const list_messageable_extensions = defineExtReadTool({
   name: 'list_messageable_extensions',
   description:
     'List extensions with active service workers that can receive messages. '

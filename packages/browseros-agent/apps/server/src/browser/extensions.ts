@@ -30,6 +30,15 @@ function validateNotManaged(area: StorageArea): void {
   }
 }
 
+/** Validate that storage write is not targeting a first-party extension */
+function validateNotFirstParty(id: string): void {
+  if (isBrowserOSExtension(id)) {
+    throw new Error(
+      `Cannot modify BrowserOS first-party extension storage: ${id}`,
+    )
+  }
+}
+
 // ── Lifecycle operations ──
 
 /** Load an unpacked extension from a local directory */
@@ -71,7 +80,7 @@ export async function getStorageItems(
     params.keys = keys
   }
   const result = await cdp.Extensions.getStorageItems(params as any)
-  return result.data
+  return result.data ?? {}
 }
 
 /** Set storage items in an extension's storage area */
@@ -81,6 +90,7 @@ export async function setStorageItems(
   storageArea: StorageArea,
   values: Record<string, unknown>,
 ): Promise<void> {
+  validateNotFirstParty(id)
   validateNotManaged(storageArea)
   await cdp.Extensions.setStorageItems({ id, storageArea, values })
 }
@@ -92,6 +102,7 @@ export async function removeStorageItems(
   storageArea: StorageArea,
   keys: string[],
 ): Promise<void> {
+  validateNotFirstParty(id)
   validateNotManaged(storageArea)
   await cdp.Extensions.removeStorageItems({ id, storageArea, keys })
 }
@@ -102,6 +113,7 @@ export async function clearStorageItems(
   id: string,
   storageArea: StorageArea,
 ): Promise<void> {
+  validateNotFirstParty(id)
   validateNotManaged(storageArea)
   await cdp.Extensions.clearStorageItems({ id, storageArea })
 }

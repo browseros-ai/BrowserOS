@@ -95,25 +95,43 @@ export async function sendExtensionMessage(
   message: unknown,
   timeoutMs = 10000,
 ): Promise<unknown> {
+  // F8: Input validation
+  if (!extensionId) {
+    throw new Error('Extension ID is required')
+  }
+
+  // F7: Payload serializability validation
+  let serializedMsg: string
+  try {
+    serializedMsg = JSON.stringify(message)
+  } catch {
+    throw new Error('Message payload is not JSON-serializable')
+  }
+
   // Phase 1: Enable SW and force-start the extension's service worker
   await cdp.ServiceWorker.enable()
 
   const scopeURL = `chrome-extension://${extensionId}/`
 
   // Try to start the service worker (may already be running)
+  // F5: Remove `as any` — startWorker is on ProtocolApi
   try {
-    await (cdp.ServiceWorker as any).startWorker({ scopeURL })
+    await cdp.ServiceWorker.startWorker({ scopeURL })
   } catch {
     // SW may already be running — that's fine
   }
 
   // Phase 2: Discover the SW target
-  const targets = await cdp.getTargets()
-  const swTarget = targets.find(
-    (t) =>
-      t.type === 'service_worker' &&
-      t.url.startsWith(`chrome-extension://${extensionId}/`),
-  )
+  const discoverTarget = async () => {
+    const targets = await cdp.getTargets()
+    return targets.find(
+      (t) =>
+        t.type === 'service_worker' &&
+        t.url.startsWith(`chrome-extension://${extensionId}/`),
+    )
+  }
+
+  const swTarget = await discoverTarget()
 
   if (!swTarget) {
     throw new Error(
@@ -126,19 +144,28 @@ export async function sendExtensionMessage(
   let lastError: Error | null = null
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    // F4: Re-discover target on retry (SW may have restarted with new targetId)
+    let currentTarget = swTarget
+    if (attempt > 0) {
+      const rediscovered = await discoverTarget()
+      if (rediscovered) {
+        currentTarget = rediscovered
+      }
+    }
+
+    let sessionId: string | undefined
     try {
-      const { sessionId } = await cdp.Target.attachToTarget({
-        targetId: swTarget.id,
+      const attachResult = await cdp.Target.attachToTarget({
+        targetId: currentTarget.id,
         flatten: true,
       })
+      sessionId = attachResult.sessionId
 
       const session = cdp.session(sessionId)
 
       // Enable Runtime to evaluate expressions
       await session.Runtime.enable()
 
-      // Inject chrome.runtime.sendMessage into the extension's SW context
-      const serializedMsg = JSON.stringify(message)
       const evaluateExpr = `
         new Promise((resolve) => {
           try {
@@ -167,11 +194,12 @@ export async function sendExtensionMessage(
         timeoutPromise,
       ])
 
-      // Detach after evaluation
-      try {
-        await cdp.Target.detachFromTarget({ sessionId })
-      } catch {
-        // Ignore detach errors
+      // F3: Check exceptionDetails from Runtime.evaluate
+      if ((evalResult as any)?.exceptionDetails) {
+        const details = (evalResult as any).exceptionDetails
+        throw new Error(
+          `Runtime evaluation failed: ${details.text ?? 'unknown error'}`,
+        )
       }
 
       const value = (evalResult as any)?.result?.value
@@ -185,8 +213,11 @@ export async function sendExtensionMessage(
           throw new Error(`Extension error: ${parsed.__error}`)
         }
         return parsed
-      } catch {
-        // Not JSON — return raw value
+      } catch (parseErr) {
+        // If JSON.parse threw and it's not from __error, return raw value
+        if (parseErr instanceof Error && parseErr.message.startsWith('Extension error')) {
+          throw parseErr
+        }
         return value
       }
     } catch (err) {
@@ -196,17 +227,26 @@ export async function sendExtensionMessage(
         lastError.message.includes('Target closed') ||
         lastError.message.includes('session')
       ) {
-        // Force restart SW and retry
+        // F5: Remove `as any`
         try {
-          await (cdp.ServiceWorker as any).startWorker({ scopeURL })
+          await cdp.ServiceWorker.startWorker({ scopeURL })
         } catch {
           // Ignore
         }
         continue
       }
       throw lastError
+    } finally {
+      // F1: Always detach session, even on error
+      if (sessionId) {
+        try {
+          await cdp.Target.detachFromTarget({ sessionId })
+        } catch {
+          // Ignore detach errors
+        }
+      }
     }
   }
 
-  throw lastError!
+  throw lastError ?? new Error('Unknown error in sendExtensionMessage')
 }
