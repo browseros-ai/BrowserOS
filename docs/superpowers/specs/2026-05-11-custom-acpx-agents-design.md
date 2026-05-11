@@ -101,10 +101,11 @@ export interface AgentDefinition {
   // NEW: stored in adapterConfigJson, not new columns
   customCommand?: string    // required when adapter='custom'
   customArgs?: string[]     // optional
+  customLabel?: string      // human-facing display name (spaces, emojis ok)
 }
 ```
 
-**Note**: No `customLabel` field. `name` serves as display name (YAGNI per v-data-model).
+**Why `customLabel`**: `name` is the stable machine identifier used in session keys, routing, and DB lookups. `customLabel` is the user-facing display name that can contain spaces, emojis, and special characters. Example: `name: "claude-opus-config"` vs `customLabel: "Claude Opus (Deep Think)"`. Built-in agents have this distinction already: `id: 'claude'` vs `name: 'Claude Code'` in `AGENT_ADAPTER_CATALOG`. Falls back to `name` when unset.
 
 ### AgentAdapterDescriptor catalog extension
 
@@ -134,12 +135,12 @@ adapter: text('adapter', { enum: ['claude', 'codex', 'openclaw', 'hermes', 'cust
 
 **No new columns.** Custom fields stored in existing `adapterConfigJson`:
 ```json
-{ "customCommand": "gemini", "customArgs": ["--acp"] }
+{ "customCommand": "gemini", "customArgs": ["--acp"], "customLabel": "Gemini Pro" }
 ```
 
 **MUST extend** `serializeAdapterConfig()` and `toAgentDefinition()` in `db-agent-store.ts`:
-- `serializeAdapterConfig()`: add `customCommand`/`customArgs` to serialized JSON
-- `toAgentDefinition()`: parse `adapterConfigJson` and hydrate `customCommand`/`customArgs` back
+- `serializeAdapterConfig()`: add `customCommand`/`customArgs`/`customLabel` to serialized JSON
+- `toAgentDefinition()`: parse `adapterConfigJson` and hydrate `customCommand`/`customArgs`/`customLabel` back
 
 Without this, custom fields are silently lost on write and never read back (verified by v-data-model + v-gotchas).
 
@@ -176,17 +177,20 @@ readAcpxConfig(acpxDir?: string) → AcpxConfig | null
 importAgentsFromAcpx(config, existingAgents) → ImportResult[]
   - For each entry in config.agents:
     - Skip if agent with same name already exists (idempotent)
-    - Create AgentDefinition { adapter: 'custom', customCommand, customArgs, name }
+    - Create AgentDefinition { adapter: 'custom', customCommand, customArgs, customLabel, name }
     - Agents named 'claude'/'codex'/'openclaw'/'hermes': import as custom + show warning
   - Return results list
 
 probeCustomAgent(command: string, args: string[]) → ProbeResult
-  - Spawn child process with shell: true
+  - **SECURITY: spawn with shell: false**. Split command into argv. Reject metacharacters `[;&|`$(){}!#~]`.
   - Send ACP initialize JSON-RPC over stdin
   - Read stdout for response (15s timeout, SIGKILL fallback)
   - Return { healthy: boolean, error?: string }
+  - Differentiated error messages:
+    - Exit non-zero + no ACP response → "Process exited with code N. Is this an ACP-compliant binary?"
+    - Timeout → "Probe timed out. Binary did not respond to ACP initialize."
+    - Invalid JSON → "Binary responded with non-ACP output. Expected JSON-RPC."
   - On timeout + command contains 'npx': append hint about first-run download
-  - agentInfo { name, version }: parsed from initialize response if present (diagnostic only, no UI dependency)
   - Never throws — returns { healthy: false, error } on all failures
 ```
 
@@ -276,16 +280,20 @@ These are **breaking if not done** — not optional:
 | M1 | `agent-catalog.ts` | `isAgentAdapter()`: add `value === 'custom'` | v-data-model |
 | M2 | `acpx-agent-adapter.ts` | `ADAPTERS` record: add `custom: { prepare: prepareCustomContext }` | v-data-model, v-gotchas N1 |
 | M3 | `acpx-agent-adapter.ts` | New `prepareCustomContext()` function (reuse common flow) | v-acpx-runtime |
-| M4 | `db-agent-store.ts` | `serializeAdapterConfig()`: include customCommand/customArgs | v-data-model, v-gotchas N4 |
-| M5 | `db-agent-store.ts` | `toAgentDefinition()`: parse adapterConfigJson → custom fields | v-data-model, v-gotchas N4 |
+| M4 | `db-agent-store.ts` | `serializeAdapterConfig()`: include customCommand/customArgs/customLabel | v-data-model, v-gotchas N4 |
+| M5 | `db-agent-store.ts` | `toAgentDefinition()`: parse adapterConfigJson → custom fields (customCommand/customArgs/customLabel) | v-data-model, v-gotchas N4 |
 | M6 | `lib/db/schema/agents.ts` | Extend adapter enum with `'custom'` | v-data-model H1 |
-| M7 | `agent-store.ts` | `CreateAgentInput`: add `customCommand?`, `customArgs?` | v-data-model M2 |
-| M8 | `routes/agents.ts` | `parseCreateAgentBody()`: extract customCommand/customArgs | v-data-model M2 |
+| M7 | `agent-store.ts` | `CreateAgentInput`: add `customCommand?`, `customArgs?`, `customLabel?` | v-data-model M2 |
+| M8 | `routes/agents.ts` | `parseCreateAgentBody()`: extract customCommand/customArgs/customLabel | v-data-model M2 |
 | M9 | `routes/agents.ts` | Model validation: skip catalog check for `adapter === 'custom'` (like openclaw/hermes) | v-data-model M1 |
 | M10 | `acpx-runtime.ts` | Registry: accept `Map<string, AgentDefinition>`, add `custom:*` resolve branch | v-acpx-runtime |
 | M11 | `acpx-runtime.ts` | `createAcpxEventStream()`: pass `custom:<agentId>` when adapter=custom | v-acpx-runtime |
 | M12 | `adapter-health.ts` | Add `adapter === 'custom'` bypass (return healthy like openclaw fallback) | v-gotchas N2 |
-| M13 | `config-schema.ts` | Add string config type support + `ACPX.CONFIG_DIR` key | v-data-model H3 |
+| M13 | `config-schema.ts` | Use env var `ACPX_CONFIG_DIR` with fallback `~/.acpx` instead of config store (config system is numeric-only) | v-round2 G13 |
+| M14 | `acpx-runtime.ts` | Thread `AgentDefinition` through `send()` → `getRuntime()` → `createBrowserosAgentRegistry()` | v-round2 G12 |
+| M15 | `acpx-runtime.ts` | Inject `BROWSEROS_CUSTOM_COMMAND` into commandEnv for session key uniqueness | v-round2 G10 |
+| M16 | `agent-harness-service.ts` | Extend `updateAgent()` to accept customCommand/customArgs/customLabel patches | v-round2 G15 |
+| M17 | `db/schema/agents.ts` | Drizzle migration: extend adapter enum (table recreation for SQLite CHECK) | v-round2 G14 |
 
 ---
 
@@ -294,8 +302,8 @@ These are **breaking if not done** — not optional:
 ### G0: Drizzle enum constraint (CRITICAL)
 Must add `'custom'` to adapter enum. Requires schema change + migration.
 
-### G1: Command with spaces
-Use `child_process.spawn(command, args, { shell: true })`.
+### G1: Command with spaces + shell injection (CRITICAL)
+Do NOT use `shell: true` — shell injection vector with user input. Instead, split command into argv and use `shell: false`. Reject commands with metacharacters `[;&|`$(){}!#~]`.
 
 ### G2: acpx not installed
 Read config JSON directly, no acpx CLI dependency. Probe spawns binary directly.
@@ -322,10 +330,33 @@ Read config JSON directly, no acpx CLI dependency. Probe spawns binary directly.
 ### G9: AgentRuntimeRegistry single 'custom' slot (NEW from v-gotchas N3)
 Registry maps `adapterId → AgentRuntime`. All custom agents share `adapter='custom'`. Health/probe path must bypass registry and spawn directly. The per-agent command resolution happens inside `createBrowserosAgentRegistry().resolve()`.
 
-### G10: Runtime cache key collision (NEW from v-acpx-runtime)
-Different custom agents with same cwd/env could share cached runtime. Fix: include custom command string in cache key.
+### G10: Session key + runtime cache collision (CRITICAL)
+Different custom agents sharing cwd get same `commandIdentity` (empty string) → same session key → data corruption.
+Fix: inject `BROWSEROS_CUSTOM_COMMAND=<fullCommand>` into commandEnv so `commandIdentity` differs per binary.
+Also: include custom command in runtime cache key in `getRuntime()`. If user changes customCommand, session key changes → old session orphaned (acceptable, document).
 
-### G11: acpx agent named 'claude' in config (NEW from v-acpx-sync)
+### G11: Shell injection in probe (CRITICAL)
+`spawn(userInput, { shell: true })` is RCE. Fix: `shell: false` + argv split + metachar rejection.
+
+### G12: AgentDefinition not threaded to registry (CRITICAL)
+`createBrowserosAgentRegistry()` called inside `getRuntime()` but doesn't receive AgentDefinition. Thread `agent` through: `send()` → `getRuntime({ ..., agent })` → registry factory.
+
+### G13: Config schema string type — use env var (HIGH)
+Config system is numeric-only (`z.number()`). Adding string support needs parallel system. Simpler: read from env var `ACPX_CONFIG_DIR` with fallback `~/.acpx`. Skip config store for this key.
+
+### G14: Drizzle migration for adapter enum (MEDIUM)
+SQLite CHECK requires table recreation. Or: drop drizzle `enum`, validate in app code.
+
+### G15: Update agent — allow customCommand changes (MEDIUM)
+Extend `updateAgent()` to accept `customCommand/customArgs/customLabel` patches.
+
+### G16: UI files needing 'custom' support (MEDIUM)
+`AdapterIcon.tsx`, `NewAgentDialog.tsx`, `agents-page-types.ts`, `agent-harness-types.ts` — all need `'custom'` added.
+
+### G17: Non-ACP binary error messages (LOW)
+Differentiate: timeout vs invalid JSON vs non-zero exit. Actionable guidance.
+
+### G18: acpx agent named 'claude' in config
 Import as `adapter='custom'` with warning. Do NOT skip — user configured it intentionally.
 
 ---
@@ -342,12 +373,12 @@ Import as `adapter='custom'` with warning. Do NOT skip — user configured it in
 ### Modified files
 | File | Change |
 |------|--------|
-| `lib/agents/agent-types.ts` | Add `'custom'` to AgentAdapter + customCommand/customArgs |
+| `lib/agents/agent-types.ts` | Add `'custom'` to AgentAdapter + customCommand/customArgs/customLabel |
 | `lib/agents/agent-catalog.ts` | Add custom descriptor + update `isAgentAdapter()` |
 | `lib/agents/acpx-agent-adapter.ts` | Add `'custom'` entry to ADAPTERS record |
 | `lib/agents/acpx-runtime.ts` | Custom agent registry resolution + ensureSession agent name |
 | `lib/db/schema/agents.ts` | Extend adapter enum |
-| `lib/agents/db-agent-store.ts` | Serialize/deserialize custom fields in adapterConfigJson |
+| `lib/agents/db-agent-store.ts` | Serialize/deserialize custom fields (customCommand/customArgs/customLabel) in adapterConfigJson |
 | `lib/agents/agent-store.ts` | Add custom fields to CreateAgentInput |
 | `lib/agents/adapter-health.ts` | Add 'custom' bypass |
 | `api/routes/agents.ts` | Extend create route + probe-custom + import-acpx routes |
