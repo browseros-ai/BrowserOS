@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+[[ -d "${REPO_ROOT}/packages/browseros-agent" ]] || REPO_ROOT="$(pwd)"
+cd "$REPO_ROOT"
+
+echo "=== browseros:restart-dev ==="
+echo "[1/3] Killing existing dev instance..."
+bash .mise/tasks/browseros/kill-dev
+
+echo "[2/3] Building dev extension..."
+bash .mise/tasks/browseros/build-dev
+
+echo "[3/3] Starting dev instance..."
+bash .mise/tasks/browseros/start-dev
+
+echo "=== restart-dev complete ==="

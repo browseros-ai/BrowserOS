@@ -79,6 +79,8 @@ for _ in range(60):
         if data.get("status") == "ok" and data.get("cdpConnected") is True:
             print(json.dumps(data))
             sys.exit(0)
+        # Health responded but not ready — wait longer before retrying
+        time.sleep(1)
     except Exception:
         time.sleep(0.5)
 print(f"[ERROR] BrowserOS server health check failed on {url}", file=sys.stderr)

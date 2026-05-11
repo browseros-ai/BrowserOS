@@ -198,7 +198,12 @@ export async function createHttpServer(config: HttpServerConfig) {
       }),
     )
     .route('/status', createStatusRoute({ browser }))
-    .route('/config', createConfigRoutes())
+    .route(
+      '/config',
+      new Hono<Env>()
+        .use('/*', requireTrustedAppOrigin())
+        .route('/', createConfigRoutes()),
+    )
     .route('/soul', createSoulRoutes())
     .route('/memory', createMemoryRoutes())
     .route('/skills', createSkillsRoutes())

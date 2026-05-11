@@ -17,5 +17,4 @@ run = "bash .mise/tasks/browseros/health-dev"
 
 [tasks."browseros:restart-dev"]
 description = "Kill, rebuild, restart, and verify the local BrowserOS dev app/server workflow"
-depends = ["browseros:kill-dev", "browseros:start-dev"]
-run = "echo 'browseros:restart-dev complete'"
+run = "bash .mise/tasks/browseros/restart-dev"

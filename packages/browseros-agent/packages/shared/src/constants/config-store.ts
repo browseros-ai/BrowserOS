@@ -61,7 +61,11 @@ export class ConfigStore {
     if (!meta) throw new Error(`Unknown config key: ${key}`)
 
     const envValue = readNumericEnv(meta.envVar)
-    if (envValue !== undefined) return envValue
+    if (envValue !== undefined) {
+      // Validate ENV value against min/max bounds
+      if (envValue < meta.min) return meta.min
+      return envValue
+    }
 
     const fileValue = this.activeOverrides[key]
     if (fileValue !== undefined) return fileValue
