@@ -157,7 +157,7 @@ describe('extractActivities', () => {
       toolCall('fill', { page: 1, selector: '#input2', value: 'world' }, 5),
     ]
 
-    const visits = extractActivities(blocks)
+    const { visits } = extractActivities(blocks)
 
     expect(visits).toHaveLength(1)
     expect(visits[0].url).toBe('https://example.com')
@@ -177,7 +177,7 @@ describe('extractActivities', () => {
       toolCall('click', { page: 2 }, 3),
     ]
 
-    const visits = extractActivities(blocks)
+    const { visits } = extractActivities(blocks)
 
     expect(visits).toHaveLength(2)
     expect(visits[0].domain).toBe('site1.com')
@@ -194,7 +194,7 @@ describe('extractActivities', () => {
       toolCall('click', { page: 3 }, 5),
     ]
 
-    const visits = extractActivities(blocks)
+    const { visits } = extractActivities(blocks)
 
     // Same domain grouped into 1 visit
     const exampleVisits = visits.filter((v) => v.domain === 'example.com')
@@ -212,7 +212,7 @@ describe('extractActivities', () => {
       userMsg('hello', 2),
     ]
 
-    const visits = extractActivities(blocks)
+    const { visits } = extractActivities(blocks)
     expect(visits).toHaveLength(0)
   })
 
@@ -224,7 +224,7 @@ describe('extractActivities', () => {
       ),
     ]
 
-    const visits = extractActivities(blocks)
+    const { visits } = extractActivities(blocks)
     const tools = Object.fromEntries(visits[0].tools)
     expect(tools.click).toBe(10)
   })
@@ -234,7 +234,7 @@ describe('extractActivities', () => {
       toolCall('navigate_page', { url: `https://site${i}.com`, page: i }, i),
     )
 
-    const visits = extractActivities(blocks)
+    const { visits } = extractActivities(blocks)
 
     // Max 10 sites
     expect(visits).toHaveLength(10)
@@ -251,7 +251,7 @@ describe('extractActivities', () => {
       toolCall('navigate_page', { url: 'https://m.com', page: 3 }, 5),
     ]
 
-    const visits = extractActivities(blocks)
+    const { visits } = extractActivities(blocks)
 
     // Ordered by sourceIndex, not alphabetically
     expect(visits[0].domain).toBe('z.com')
@@ -271,7 +271,7 @@ describe('extractActivities', () => {
       ),
     ]
 
-    const visits = extractActivities(blocks)
+    const { visits } = extractActivities(blocks)
     expect(visits[0].domain).toBe('docs.google.com')
     expect(visits[0].url).toBe('https://docs.google.com/spreadsheets/d/123')
   })
@@ -285,7 +285,7 @@ describe('extractActivities', () => {
       toolCall('fill', { page: 1 }, 4),
     ]
 
-    const visits = extractActivities(blocks)
+    const { visits } = extractActivities(blocks)
     const tools = Object.fromEntries(visits[0].tools)
 
     // bash and Read are not browser tools — should not appear
@@ -302,7 +302,7 @@ describe('extractActivities', () => {
       toolCall('click', { page: 0 }, 1),
     ]
 
-    const visits = extractActivities(blocks)
+    const { visits } = extractActivities(blocks)
     expect(visits).toHaveLength(1)
     expect(visits[0].domain).toBe('github.com')
     expect(visits[0].url).toBe('https://github.com/repo')
@@ -313,19 +313,19 @@ describe('extractActivities', () => {
       toolCall('new_hidden_page', { url: 'https://api.test.com' }, 0),
     ]
 
-    const visits = extractActivities(blocks)
+    const { visits } = extractActivities(blocks)
     expect(visits).toHaveLength(1)
     expect(visits[0].domain).toBe('api.test.com')
   })
 
   it('empty blocks returns empty array', () => {
-    const visits = extractActivities([])
+    const { visits } = extractActivities([])
     expect(visits).toHaveLength(0)
   })
 
   it('only user messages returns empty array', () => {
     const blocks: NormalizedBlock[] = [userMsg('hello', 0), userMsg('world', 1)]
-    const visits = extractActivities(blocks)
+    const { visits } = extractActivities(blocks)
     expect(visits).toHaveLength(0)
   })
 
@@ -336,7 +336,7 @@ describe('extractActivities', () => {
       toolCall('navigate_page', { url: 'https://c.com', page: 3 }, 2),
     ]
 
-    const visits = extractActivities(blocks)
+    const { visits } = extractActivities(blocks)
 
     expect(visits[0].order).toBe(1)
     expect(visits[1].order).toBe(2)
@@ -346,7 +346,60 @@ describe('extractActivities', () => {
   it('tool results do not create visits', () => {
     const blocks: NormalizedBlock[] = [toolResult('navigate_page', 'OK', 0)]
 
-    const visits = extractActivities(blocks)
+    const { visits } = extractActivities(blocks)
     expect(visits).toHaveLength(0)
+  })
+
+  // ─── Timeline events ─────────────────────────────────────────────
+
+  it('timeline has sequential navigation events', () => {
+    const blocks: NormalizedBlock[] = [
+      toolCall('navigate_page', { url: 'https://a.com', page: 1 }, 0),
+      toolCall('navigate_page', { url: 'https://b.com', page: 2 }, 1),
+    ]
+
+    const { timeline: tl } = extractActivities(blocks)
+    expect(tl).toHaveLength(2)
+    expect(tl[0].domain).toBe('a.com')
+    expect(tl[0].isReturnVisit).toBe(false)
+    expect(tl[1].domain).toBe('b.com')
+    expect(tl[1].isReturnVisit).toBe(false)
+  })
+
+  it('timeline marks return visits', () => {
+    const blocks: NormalizedBlock[] = [
+      toolCall('navigate_page', { url: 'https://a.com', page: 1 }, 0),
+      toolCall('navigate_page', { url: 'https://b.com', page: 2 }, 1),
+      toolCall('navigate_page', { url: 'https://a.com/page2', page: 3 }, 2),
+    ]
+
+    const { timeline: tl } = extractActivities(blocks)
+    expect(tl).toHaveLength(3)
+    expect(tl[0].isReturnVisit).toBe(false)
+    expect(tl[1].isReturnVisit).toBe(false)
+    expect(tl[2].isReturnVisit).toBe(true)
+    expect(tl[2].domain).toBe('a.com')
+  })
+
+  it('timeline events include tool snapshot', () => {
+    const blocks: NormalizedBlock[] = [
+      toolCall('navigate_page', { url: 'https://a.com', page: 1 }, 0),
+      toolCall('click', { page: 1 }, 1),
+      toolCall('click', { page: 1 }, 2),
+      toolCall('navigate_page', { url: 'https://b.com', page: 2 }, 3),
+    ]
+
+    const { timeline: tl } = extractActivities(blocks)
+    // First timeline event shows tools at that point
+    expect(tl[0].toolSnapshot).toContain('navigate_page')
+    // Second event
+    expect(tl[1].domain).toBe('b.com')
+  })
+
+  it('no navigation produces empty timeline', () => {
+    const blocks: NormalizedBlock[] = [toolCall('click', { page: 1 }, 0)]
+
+    const { timeline: tl } = extractActivities(blocks)
+    expect(tl).toHaveLength(0)
   })
 })

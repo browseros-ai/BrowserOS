@@ -85,7 +85,10 @@ export const buildSections = (input: BuildSectionsInput): SectionData => {
     outstandingContext: extractOutstandingContext(blocks),
     filesAndChanges: formatFileActivity(blocks),
     commits: formatCommits(extractCommits(blocks)),
-    siteActivity: extractActivities(blocks),
+    ...(() => {
+      const { visits, timeline } = extractActivities(blocks)
+      return { siteActivity: visits, timelineEvents: timeline }
+    })(),
     userPreferences,
     briefTranscript: stringifyBrief(briefSections),
     transcriptEntries: sectionsToTranscript(briefSections),

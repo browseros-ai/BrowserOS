@@ -2,7 +2,12 @@
  * Vendored from pi-vcc core/format.ts — format-agnostic.
  * Formats SectionData into a summary string.
  */
-import type { SectionData, SiteVisit, VccOverrides } from './types'
+import type {
+  SectionData,
+  SiteVisit,
+  TimelineEvent,
+  VccOverrides,
+} from './types'
 
 const DEFAULT_MAX_TRANSCRIPT_LINES = 120
 
@@ -41,12 +46,15 @@ const formatSiteActivity = (visits: SiteVisit[]): string => {
   return `[Site Activity]\n${lines.map((l) => `- ${l}`).join('\n')}`
 }
 
-const formatTimeline = (visits: SiteVisit[]): string => {
-  if (visits.length === 0) return ''
+const formatTimeline = (events: TimelineEvent[]): string => {
+  if (events.length === 0) return ''
 
-  const lines = visits.map((v) => {
-    const totalTools = [...v.tools.values()].reduce((a, b) => a + b, 0)
-    return `#${v.order} → ${v.domain} [tools: ${totalTools}]`
+  const lines = events.map((e) => {
+    const prefix = e.isReturnVisit
+      ? '  ↳ back to'
+      : `#${events.indexOf(e) + 1} →`
+    const toolInfo = e.toolSnapshot ? `[tools: ${e.toolSnapshot}]` : ''
+    return `${prefix} ${e.domain} ${toolInfo}`.trim()
   })
 
   return `[Timeline]\n${lines.join('\n')}`
@@ -65,7 +73,7 @@ export const formatSummary = (
     section('Commits', data.commits),
     section('Outstanding Context', data.outstandingContext),
     formatSiteActivity(data.siteActivity),
-    formatTimeline(data.siteActivity),
+    formatTimeline(data.timelineEvents),
     section('User Preferences', data.userPreferences),
   ].filter(Boolean)
 
