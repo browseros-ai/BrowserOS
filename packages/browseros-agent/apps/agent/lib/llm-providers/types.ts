@@ -17,6 +17,7 @@ export type ProviderType =
   | 'chatgpt-pro'
   | 'github-copilot'
   | 'qwen-code'
+  | 'minimax'
 
 /** A single model entry within a provider */
 export interface ModelEntry {

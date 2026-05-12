@@ -7,6 +7,7 @@ import {
   ConversationScrollButton,
 } from '@/components/ai-elements/conversation'
 import {
+  AssistantMessageBody,
   Message,
   MessageContent,
   MessageResponse,
@@ -86,7 +87,68 @@ export const ChatMessages: FC<ChatMessagesProps> = ({
               <Fragment key={message.id}>
                 <Message from={message.role}>
                   <MessageContent>
-                    {action ? (
+                    {message.role === 'assistant' ? (
+                      action ? (
+                        <AssistantMessageBody>
+                          <UserActionMessage action={action} />
+                        </AssistantMessageBody>
+                      ) : (
+                        <AssistantMessageBody>
+                          {segments.map((segment) => {
+                            switch (segment.type) {
+                              case 'text':
+                                return (
+                                  <MessageResponse key={segment.key}>
+                                    {segment.text}
+                                  </MessageResponse>
+                                )
+                              case 'reasoning':
+                                return (
+                                  <Reasoning
+                                    key={segment.key}
+                                    className="w-full"
+                                    isStreaming={segment.isStreaming}
+                                  >
+                                    <ReasoningTrigger />
+                                    <ReasoningContent>
+                                      {segment.text}
+                                    </ReasoningContent>
+                                  </Reasoning>
+                                )
+                              case 'tool-batch':
+                                return (
+                                  <ToolBatch
+                                    key={segment.key}
+                                    tools={segment.tools}
+                                    isLastBatch={segment.key === lastToolBatchKey}
+                                    isLastMessage={isLastMessage}
+                                    isStreaming={isStreaming}
+                                    onApprove={onToolApprove}
+                                    onDeny={onToolDeny}
+                                  />
+                                )
+                              case 'nudge':
+                                return segment.nudgeType ===
+                                  'schedule_suggestion' ? (
+                                  <ScheduleSuggestionCard
+                                    key={segment.key}
+                                    data={segment.data}
+                                    isLastMessage={isLastMessage}
+                                  />
+                                ) : (
+                                  <ConnectAppCard
+                                    key={segment.key}
+                                    data={segment.data}
+                                    isLastMessage={isLastMessage}
+                                  />
+                                )
+                              default:
+                                return null
+                            }
+                          })}
+                        </AssistantMessageBody>
+                      )
+                    ) : action ? (
                       <UserActionMessage action={action} />
                     ) : (
                       segments.map((segment) => {

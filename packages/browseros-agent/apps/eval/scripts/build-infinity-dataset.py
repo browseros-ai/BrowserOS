@@ -16,7 +16,7 @@ import os
 import sys
 
 
-def load_tasks(app_dir: str) -> list[dict]:
+def load_tasks(app_dir: str, app_name: str) -> list[dict]:
     tasks_file = os.path.join(app_dir, "real-tasks.json")
     if not os.path.exists(tasks_file):
         print(f"Warning: No real-tasks.json found in {app_dir}", file=sys.stderr)
@@ -53,7 +53,7 @@ def build_task_entry(
                 "app_name": app_name,
                 "difficulty": difficulty,
                 "verifier_path": verifier_path,
-                "app_base_port": base_port,
+                "app_port": base_port,
             },
         },
     }
@@ -102,7 +102,7 @@ def main():
         if not os.path.isdir(app_path):
             continue
 
-        tasks = load_tasks(app_path)
+        tasks = load_tasks(app_path, app_name)
         for task in tasks:
             difficulty = task.get("difficulty", "unknown")
             if args.difficulty and difficulty != args.difficulty:

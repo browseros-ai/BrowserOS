@@ -1,5 +1,6 @@
-import { AlertCircle, Clock, Coins, CreditCard, Zap } from 'lucide-react'
+import { AlertCircle, Clock, Coins, Gift, Zap } from 'lucide-react'
 import type { FC } from 'react'
+import { ShareForCredits } from '@/components/referral/ShareForCredits'
 import { Button } from '@/components/ui/button'
 import {
   getCreditBarColor,
@@ -43,8 +44,10 @@ export const UsagePage: FC = () => {
   }
 
   const credits = data?.credits ?? 0
-  const total = data?.dailyLimit ?? 100
+  const total = data?.dailyLimit ?? 50
   const percentage = Math.min((credits / total) * 100, 100)
+  const bonusCredits = Math.max(0, credits - total)
+  const creditsUsed = Math.max(0, total - credits)
 
   return (
     <div className="space-y-6 p-6">
@@ -95,30 +98,32 @@ export const UsagePage: FC = () => {
           <div className="flex items-center gap-2.5 rounded-lg bg-muted/50 px-3 py-2.5">
             <Zap className="h-4 w-4 shrink-0 text-muted-foreground" />
             <div>
-              <p className="font-medium text-xs">Credits used today</p>
-              <p className="text-muted-foreground text-xs">
-                {total - credits} of {total}
-              </p>
+              {bonusCredits > 0 ? (
+                <>
+                  <p className="font-medium text-xs">Bonus credits</p>
+                  <p className="text-muted-foreground text-xs">
+                    +{bonusCredits} from referrals
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="font-medium text-xs">Credits used today</p>
+                  <p className="text-muted-foreground text-xs">
+                    {creditsUsed} of {total}
+                  </p>
+                </>
+              )}
             </div>
           </div>
         </div>
       </div>
 
       <div className="rounded-xl border p-5">
-        <div className="flex items-center gap-3">
-          <CreditCard className="h-5 w-5 text-muted-foreground" />
-          <div>
-            <p className="flex items-center gap-2 font-semibold text-sm">
-              Need more credits?
-              <span className="rounded-full bg-muted px-2 py-0.5 font-medium text-[10px] text-muted-foreground uppercase tracking-wide">
-                Coming soon
-              </span>
-            </p>
-            <p className="text-muted-foreground text-xs">
-              Additional credit packages will be available soon
-            </p>
-          </div>
+        <div className="mb-4 flex items-center gap-2">
+          <Gift className="h-5 w-5 text-muted-foreground" />
+          <span className="font-semibold text-sm">Earn More Credits</span>
         </div>
+        <ShareForCredits />
       </div>
 
       <div className="rounded-xl border border-[var(--accent-orange)]/30 bg-[var(--accent-orange)]/5 p-5">

@@ -1,12 +1,5 @@
+import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import {
-  writeGraderJsonArtifact,
-  writeGraderTextArtifact,
-} from '../../grading/artifacts'
-import {
-  type PythonEvaluatorResult,
-  runPythonJsonEvaluator,
-} from '../../grading/python-evaluator'
 import type { GraderResult } from '../../types'
 import { callMcpTool } from '../../utils/mcp-client'
 import type { Grader, GraderInput } from '../types'
@@ -14,22 +7,11 @@ import type { Grader, GraderInput } from '../types'
 const EVAL_SCRIPT = join(
   import.meta.dirname,
   '..',
-  'python',
+  '..',
+  '..',
+  'scripts',
   'agisdk-evaluate.py',
 )
-
-interface AgisdkEvaluatorInput {
-  task_id: string
-  env_state: Record<string, unknown>
-  model_response: string
-}
-
-interface AgisdkEvaluatorOutput {
-  reward: number
-  pass: boolean
-  message: string
-  per_criterion: unknown[]
-}
 
 export class AgisdkStateDiffGrader implements Grader {
   name = 'agisdk_state_diff'
@@ -54,16 +36,6 @@ export class AgisdkStateDiffGrader implements Grader {
     let envState: Record<string, unknown>
     try {
       envState = await this.fetchFinishState(origin, mcpEndpoint)
-      await writeGraderJsonArtifact(
-        input,
-        this.name,
-        'finish-state.json',
-        envState,
-      )
-      await writeGraderJsonArtifact(input, this.name, 'context.json', {
-        origin,
-        agisdk_task_id: taskId,
-      })
     } catch (error) {
       return {
         score: 0,
@@ -74,30 +46,10 @@ export class AgisdkStateDiffGrader implements Grader {
     }
 
     try {
-      const evaluatorInput: AgisdkEvaluatorInput = {
-        task_id: taskId,
-        env_state: envState,
-        model_response: input.finalAnswer || '',
-      }
-      await writeGraderJsonArtifact(
-        input,
-        this.name,
-        'evaluator-input.json',
-        evaluatorInput,
-      )
-      const evaluation = await this.runPythonEvaluator(evaluatorInput)
-      const result = evaluation.output
-      await writeGraderJsonArtifact(
-        input,
-        this.name,
-        'evaluator-output.json',
-        result,
-      )
-      await writeGraderTextArtifact(
-        input,
-        this.name,
-        'stderr.txt',
-        evaluation.stderr,
+      const result = await this.runPythonEvaluator(
+        taskId,
+        envState,
+        input.finalAnswer || '',
       )
       return {
         score: result.reward,
@@ -192,12 +144,59 @@ export class AgisdkStateDiffGrader implements Grader {
   }
 
   private runPythonEvaluator(
-    evalInput: AgisdkEvaluatorInput,
-  ): Promise<PythonEvaluatorResult<AgisdkEvaluatorOutput>> {
-    return runPythonJsonEvaluator<AgisdkEvaluatorOutput>({
-      scriptPath: EVAL_SCRIPT,
-      input: evalInput,
-      timeoutMs: 300_000,
+    taskId: string,
+    envState: Record<string, unknown>,
+    modelResponse: string,
+  ): Promise<{
+    reward: number
+    pass: boolean
+    message: string
+    per_criterion: unknown[]
+  }> {
+    return new Promise((resolve, reject) => {
+      const proc = spawn('python3', [EVAL_SCRIPT], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+
+      const inputData = JSON.stringify({
+        task_id: taskId,
+        env_state: envState,
+        model_response: modelResponse,
+      })
+
+      let stdout = ''
+      let stderr = ''
+
+      proc.stdout.on('data', (data: Buffer) => {
+        stdout += data.toString()
+      })
+
+      proc.stderr.on('data', (data: Buffer) => {
+        stderr += data.toString()
+      })
+
+      proc.on('close', (code) => {
+        if (code !== 0) {
+          reject(
+            new Error(`Python evaluator exited with code ${code}: ${stderr}`),
+          )
+          return
+        }
+
+        try {
+          const result = JSON.parse(stdout.trim())
+          resolve(result)
+        } catch {
+          reject(new Error(`Failed to parse evaluator output: ${stdout}`))
+        }
+      })
+
+      proc.on('error', (err) => {
+        reject(new Error(`Failed to spawn Python evaluator: ${err.message}`))
+      })
+
+      proc.stdin.write(inputData)
+      proc.stdin.end()
     })
   }
 }

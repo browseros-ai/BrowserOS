@@ -5402,5 +5402,89 @@
         "outputCost": 0
       }
     ]
+  },
+  "minimax": {
+    "name": "MiniMax",
+    "api": "https://api.minimaxi.com/v1",
+    "doc": "https://platform.minimax.io",
+    "models": [
+      {
+        "id": "MiniMax-M2.7",
+        "name": "MiniMax M2.7",
+        "contextWindow": 204800,
+        "maxOutput": 8192,
+        "supportsImages": false,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "inputCost": 0.3,
+        "outputCost": 1.2
+      },
+      {
+        "id": "MiniMax-M2.7-highspeed",
+        "name": "MiniMax M2.7 Highspeed",
+        "contextWindow": 204800,
+        "maxOutput": 8192,
+        "supportsImages": false,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "inputCost": 0.6,
+        "outputCost": 2.4
+      },
+      {
+        "id": "MiniMax-M2.5",
+        "name": "MiniMax M2.5",
+        "contextWindow": 204800,
+        "maxOutput": 8192,
+        "supportsImages": false,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "inputCost": 0.3,
+        "outputCost": 1.2
+      },
+      {
+        "id": "MiniMax-M2.5-highspeed",
+        "name": "MiniMax M2.5 Highspeed",
+        "contextWindow": 204800,
+        "maxOutput": 8192,
+        "supportsImages": false,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "inputCost": 0.6,
+        "outputCost": 2.4
+      },
+      {
+        "id": "MiniMax-M2.1",
+        "name": "MiniMax M2.1",
+        "contextWindow": 204800,
+        "maxOutput": 8192,
+        "supportsImages": false,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "inputCost": 0.3,
+        "outputCost": 1.2
+      },
+      {
+        "id": "MiniMax-M2.1-highspeed",
+        "name": "MiniMax M2.1 Highspeed",
+        "contextWindow": 204800,
+        "maxOutput": 8192,
+        "supportsImages": false,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "inputCost": 0.6,
+        "outputCost": 2.4
+      },
+      {
+        "id": "M2-her",
+        "name": "M2-her",
+        "contextWindow": 204800,
+        "maxOutput": 8192,
+        "supportsImages": false,
+        "supportsReasoning": false,
+        "supportsToolCall": true,
+        "inputCost": 0.3,
+        "outputCost": 1.2
+      }
+    ]
   }
 }

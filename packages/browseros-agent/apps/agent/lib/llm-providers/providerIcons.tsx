@@ -5,6 +5,7 @@ import {
   Gemini,
   Kimi,
   LmStudio,
+  Minimax,
   Ollama,
   OpenAI,
   OpenRouter,
@@ -36,6 +37,7 @@ const providerIconMap: Record<ProviderType, IconComponent | null> = {
   'chatgpt-pro': OpenAI,
   'github-copilot': Github,
   'qwen-code': Qwen,
+  minimax: Minimax,
 }
 
 interface ProviderIconProps {

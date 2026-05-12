@@ -14,16 +14,15 @@ import {
 import type { AgentSession, SessionStore } from '../../agent/session-store'
 import type { ResolvedAgentConfig } from '../../agent/types'
 import type { Browser } from '../../browser/browser'
+import type { KlavisClient } from '../../lib/clients/klavis/klavis-client'
 import { resolveLLMConfig } from '../../lib/clients/llm/config'
 import { logger } from '../../lib/logger'
 import type { ToolRegistry } from '../../tools/tool-registry'
-import type { KlavisProxyRef } from '../services/klavis/strata-proxy'
 import type { BrowserContext, ChatRequest } from '../types'
-import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'
 
 export interface ChatServiceDeps {
   sessionStore: SessionStore
-  klavisRef?: KlavisProxyRef
+  klavisClient: KlavisClient
   browser: Browser
   registry: ToolRegistry
   browserosId?: string
@@ -65,18 +64,15 @@ export class ChatService {
       origin: request.origin,
       declinedApps: request.declinedApps,
       browserosId: this.deps.browserosId,
-      toolApprovalConfig: request.toolApprovalConfig,
     }
+    const llmConfigKey = this.buildLlmConfigKey(agentConfig)
 
     let session = sessionStore.get(request.conversationId)
     let isNewSession = false
     const contextChanges: string[] = []
 
-    // Build stable keys for change detection
+    // Build a stable key from enabled MCP servers for change detection
     const mcpServerKey = this.buildMcpServerKey(request.browserContext)
-    const approvalConfigKey = this.buildApprovalConfigKey(
-      request.toolApprovalConfig,
-    )
 
     // Detect MCP config change mid-conversation → rebuild session
     if (session && session.mcpServerKey !== mcpServerKey) {
@@ -93,16 +89,10 @@ export class ChatService {
         mcpServerKey,
       )
 
-      const oldParts = (previousMcpKey ?? '').split(',').filter(Boolean)
-      const newParts = mcpServerKey.split(',').filter(Boolean)
-      const oldKlavisState = oldParts.find((s) => s.startsWith('klavis:'))
-      const newKlavisState = newParts.find((s) => s.startsWith('klavis:'))
       const oldServers = new Set(
-        oldParts.filter((s) => !s.startsWith('klavis:')),
+        (previousMcpKey ?? '').split(',').filter(Boolean),
       )
-      const newServers = new Set(
-        newParts.filter((s) => !s.startsWith('klavis:')),
-      )
+      const newServers = new Set(mcpServerKey.split(',').filter(Boolean))
       const added = [...newServers].filter((s) => !oldServers.has(s))
       const removed = [...oldServers].filter((s) => !newServers.has(s))
 
@@ -118,19 +108,9 @@ export class ChatService {
         )
       }
       if (parts.length === 0) {
-        if (
-          oldKlavisState === 'klavis:pending' &&
-          newKlavisState === 'klavis:connected' &&
-          newServers.size > 0
-        ) {
-          parts.push(
-            `Klavis app integration tools are now available for the following connected apps: ${[...newServers].join(', ')}.`,
-          )
-        } else {
-          parts.push(
-            'Connected app integrations changed during this conversation. Use only tools that are currently registered.',
-          )
-        }
+        parts.push(
+          'Connected app integrations changed during this conversation. Use only tools that are currently registered.',
+        )
       }
       contextChanges.push(parts.join(' '))
     }
@@ -165,27 +145,28 @@ export class ChatService {
       }
     }
 
-    // Detect approval config change mid-conversation → rebuild session
-    if (session && session.approvalConfigKey !== approvalConfigKey) {
-      logger.info(
-        'Approval config changed mid-conversation, rebuilding session',
-        { conversationId: request.conversationId },
-      )
+    // Detect provider/model/auth change mid-conversation -> rebuild session.
+    // The AI SDK agent captures the language model at construction time, so a
+    // reused session would keep calling the previous provider.
+    if (session && session.llmConfigKey !== llmConfigKey) {
+      logger.info('LLM config changed mid-conversation, rebuilding session', {
+        conversationId: request.conversationId,
+        provider: agentConfig.provider,
+        model: agentConfig.model,
+      })
       session = await this.rebuildSession(
         session,
         request,
         agentConfig,
         mcpServerKey,
+        llmConfigKey,
       )
     }
 
     if (!session) {
       isNewSession = true
       let hiddenPageId: number | undefined
-      let browserContext = await resolveBrowserContextPageIds(
-        this.deps.browser,
-        request.browserContext,
-      )
+      let browserContext = await this.resolvePageIds(request.browserContext)
       if (request.isScheduledTask) {
         try {
           hiddenPageId = await this.deps.browser.newPage('about:blank', {
@@ -237,10 +218,9 @@ export class ChatService {
         browser: this.deps.browser,
         registry: this.deps.registry,
         browserContext,
-        klavisRef: this.deps.klavisRef,
+        klavisClient: this.deps.klavisClient,
         browserosId: this.deps.browserosId,
         aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
-        aclRules: request.aclRules,
       })
       session = {
         agent,
@@ -248,12 +228,10 @@ export class ChatService {
         browserContext,
         mcpServerKey,
         workingDir: request.userWorkingDir,
-        approvalConfigKey,
+        llmConfigKey,
       }
       sessionStore.set(request.conversationId, session)
     }
-
-    session.agent.updateAclRules(request.aclRules)
 
     if (isNewSession && request.previousConversation?.length) {
       for (const msg of request.previousConversation) {
@@ -270,35 +248,15 @@ export class ChatService {
       })
     }
 
-    // Handle tool approval responses: patch the agent's messages and re-run
-    if (request.toolApprovalResponses?.length) {
-      this.applyToolApprovalResponses(
-        session.agent.messages,
-        request.toolApprovalResponses,
-      )
-      logger.info('Applied tool approval responses', {
-        conversationId: request.conversationId,
-        count: request.toolApprovalResponses.length,
-      })
-      return createAgentUIStreamResponse({
-        agent: session.agent.toolLoopAgent,
-        uiMessages: filterValidMessages(session.agent.messages),
-        abortSignal,
-        onFinish: async ({ messages }: { messages: UIMessage[] }) => {
-          session.agent.messages = filterValidMessages(messages)
-        },
-      })
-    }
-
     const messageContext = request.isScheduledTask
       ? (session.browserContext ?? request.browserContext)
       : request.browserContext
     // Scheduled tasks already have correct internal pageIds from browser.newPage();
-    // resolving them again would pass those to resolveTabIds, which expects Chrome
-    // tab IDs.
+    // calling resolvePageIds would pass those to resolveTabIds (which expects Chrome
+    // tab IDs), corrupting them back to undefined.
     const resolvedMessageContext = request.isScheduledTask
       ? messageContext
-      : await resolveBrowserContextPageIds(this.deps.browser, messageContext)
+      : await this.resolvePageIds(messageContext)
     const userContent = formatUserMessage(
       request.message,
       resolvedMessageContext,
@@ -311,49 +269,17 @@ export class ChatService {
       contextChanges.length > 0
         ? `${contextChanges.map((c) => `[Context: ${c}]`).join('\n')}\n\n`
         : ''
-
-    // Persist the *raw* user text in session.agent.messages so it
-    // round-trips clean to the client's useChat state and to any
-    // future history reload. The wrapped form (browser context +
-    // <selected_text> + <USER_QUERY>) is built as a transient prompt
-    // copy below — the LLM sees it, the user-visible state never
-    // does.
-    session.agent.appendUserMessage(request.message)
-    const promptUserText = contextPrefix + userContent
-    const wrappedUserMessageId =
-      session.agent.messages[session.agent.messages.length - 1]?.id
-
-    const promptUiMessages = filterValidMessages(session.agent.messages).map(
-      (msg) =>
-        msg.id === wrappedUserMessageId && msg.role === 'user'
-          ? {
-              ...msg,
-              parts: [{ type: 'text' as const, text: promptUserText }],
-            }
-          : msg,
-    )
+    session.agent.appendUserMessage(contextPrefix + userContent)
 
     return createAgentUIStreamResponse({
       agent: session.agent.toolLoopAgent,
-      uiMessages: promptUiMessages,
+      uiMessages: filterValidMessages(session.agent.messages),
       abortSignal,
       onFinish: async ({ messages }: { messages: UIMessage[] }) => {
-        // The agent loop returns `messages` containing the prompt-
-        // wrapped user text. Restore the raw form before persisting
-        // so subsequent turns see the clean text and the client's
-        // local UIMessage matches what was originally typed.
-        const restored = messages.map((msg) =>
-          msg.id === wrappedUserMessageId && msg.role === 'user'
-            ? {
-                ...msg,
-                parts: [{ type: 'text' as const, text: request.message }],
-              }
-            : msg,
-        )
-        session.agent.messages = filterValidMessages(restored)
+        session.agent.messages = filterValidMessages(messages)
         logger.info('Agent execution complete', {
           conversationId: request.conversationId,
-          totalMessages: restored.length,
+          totalMessages: messages.length,
         })
 
         if (session?.hiddenPageId) {
@@ -378,6 +304,48 @@ export class ChatService {
     return { deleted, sessionCount: this.deps.sessionStore.count() }
   }
 
+  // Browser context arrives with Chrome tab IDs, but tools expect internal page IDs.
+  // Resolve the mapping upfront so the agent's first navigation doesn't fail.
+  private async resolvePageIds(
+    browserContext?: BrowserContext,
+  ): Promise<BrowserContext | undefined> {
+    if (!browserContext) return undefined
+
+    const tabIdSet = new Set<number>()
+    if (browserContext.activeTab) tabIdSet.add(browserContext.activeTab.id)
+    if (browserContext.selectedTabs) {
+      for (const tab of browserContext.selectedTabs) tabIdSet.add(tab.id)
+    }
+    if (browserContext.tabs) {
+      for (const tab of browserContext.tabs) tabIdSet.add(tab.id)
+    }
+
+    if (tabIdSet.size === 0) return browserContext
+
+    const tabToPage = await this.deps.browser.resolveTabIds([...tabIdSet])
+
+    const addPageId = (tab: { id: number; url?: string; title?: string }) => {
+      const pageId = tabToPage.get(tab.id)
+      if (pageId === undefined) {
+        logger.warn('Could not resolve page ID for tab', { tabId: tab.id })
+      }
+      return { ...tab, pageId }
+    }
+
+    logger.debug('Resolved tab IDs to page IDs', {
+      mapping: Object.fromEntries(tabToPage),
+    })
+
+    return {
+      ...browserContext,
+      activeTab: browserContext.activeTab
+        ? addPageId(browserContext.activeTab)
+        : undefined,
+      selectedTabs: browserContext.selectedTabs?.map(addPageId),
+      tabs: browserContext.tabs?.map(addPageId),
+    }
+  }
+
   private closeHiddenPage(pageId: number, conversationId: string): void {
     this.deps.browser.closePage(pageId).catch((error) => {
       logger.warn('Failed to close hidden page', {
@@ -393,6 +361,7 @@ export class ChatService {
     request: ChatRequest,
     agentConfig: ResolvedAgentConfig,
     mcpServerKey: string,
+    llmConfigKey = this.buildLlmConfigKey(agentConfig),
   ): Promise<AgentSession> {
     const previousMessages = session.agent.messages
     await session.agent.dispose()
@@ -400,23 +369,16 @@ export class ChatService {
 
     const browserContext = agentConfig.isScheduledTask
       ? (session.browserContext ??
-        (await resolveBrowserContextPageIds(
-          this.deps.browser,
-          request.browserContext,
-        )))
-      : await resolveBrowserContextPageIds(
-          this.deps.browser,
-          request.browserContext,
-        )
+        (await this.resolvePageIds(request.browserContext)))
+      : await this.resolvePageIds(request.browserContext)
     const agent = await AiSdkAgent.create({
       resolvedConfig: agentConfig,
       browser: this.deps.browser,
       registry: this.deps.registry,
       browserContext,
-      klavisRef: this.deps.klavisRef,
+      klavisClient: this.deps.klavisClient,
       browserosId: this.deps.browserosId,
       aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
-      aclRules: request.aclRules,
     })
     const newSession: AgentSession = {
       agent,
@@ -424,9 +386,7 @@ export class ChatService {
       browserContext,
       mcpServerKey,
       workingDir: request.userWorkingDir,
-      approvalConfigKey: this.buildApprovalConfigKey(
-        request.toolApprovalConfig,
-      ),
+      llmConfigKey,
     }
     newSession.agent.messages = sanitizeMessagesForToolset(
       previousMessages,
@@ -436,61 +396,30 @@ export class ChatService {
     return newSession
   }
 
-  private applyToolApprovalResponses(
-    messages: UIMessage[],
-    responses: Array<{
-      approvalId: string
-      approved: boolean
-      reason?: string
-    }>,
-  ): void {
-    const responseMap = new Map(responses.map((r) => [r.approvalId, r]))
-    for (const msg of messages) {
-      if (msg.role !== 'assistant') continue
-      for (const part of msg.parts) {
-        const toolPart = part as {
-          state?: string
-          approval?: { id: string; approved?: boolean; reason?: string }
-        }
-        if (
-          toolPart.state === 'approval-requested' &&
-          toolPart.approval?.id &&
-          responseMap.has(toolPart.approval.id)
-        ) {
-          const resp = responseMap.get(toolPart.approval.id)
-          if (!resp) continue
-          toolPart.state = 'approval-responded'
-          toolPart.approval = {
-            ...toolPart.approval,
-            approved: resp.approved,
-            reason: resp.reason,
-          }
-        }
-      }
-    }
-  }
-
-  private buildApprovalConfigKey(config?: {
-    categories: Record<string, boolean>
-  }): string {
-    if (!config) return ''
-    return Object.entries(config.categories)
-      .filter(([, v]) => v)
-      .map(([k]) => k)
-      .sort()
-      .join(',')
+  private buildLlmConfigKey(config: ResolvedAgentConfig): string {
+    return JSON.stringify({
+      provider: config.provider,
+      model: config.model,
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+      upstreamProvider: config.upstreamProvider,
+      resourceName: config.resourceName,
+      region: config.region,
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+      sessionToken: config.sessionToken,
+      accountId: config.accountId,
+      reasoningEffort: config.reasoningEffort,
+      reasoningSummary: config.reasoningSummary,
+      contextWindowSize: config.contextWindowSize,
+      supportsImages: config.supportsImages,
+    })
   }
 
   private buildMcpServerKey(browserContext?: BrowserContext): string {
     const managed = browserContext?.enabledMcpServers?.slice().sort() ?? []
     const custom =
       browserContext?.customMcpServers?.map((s) => s.url).sort() ?? []
-    const klavisState =
-      managed.length > 0
-        ? this.deps.klavisRef?.handle
-          ? 'klavis:connected'
-          : 'klavis:pending'
-        : null
-    return [klavisState, ...managed, ...custom].filter(Boolean).join(',')
+    return [...managed, ...custom].join(',')
   }
 }
