@@ -21,8 +21,8 @@ const isNoiseUser = (text: string): boolean => {
 // Unicode-aware word segmentation
 const segmenter = new Intl.Segmenter(undefined, { granularity: 'word' })
 
-const isWord = (seg: { segment: string; isWordLike: boolean }): boolean =>
-  seg.isWordLike || /[\p{L}\p{N}]/u.test(seg.segment)
+const isWord = (seg: { segment: string; isWordLike?: boolean }): boolean =>
+  (seg.isWordLike ?? false) || /[\p{L}\p{N}]/u.test(seg.segment)
 
 const STOP_WORDS = new Set([
   'a',

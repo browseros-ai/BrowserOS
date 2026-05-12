@@ -26,7 +26,8 @@ import {
   type StepWithUsage,
   slidingWindow,
 } from './compaction/utils'
-import { type VccOverrides, vccCompile } from './compaction/vcc-adapter'
+import type { VccOverrides } from './compaction/vcc/types'
+import { vccCompile } from './compaction/vcc-adapter'
 import type { CompactionStrategyConfig } from './types'
 
 export {
