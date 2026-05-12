@@ -26,6 +26,8 @@ import {
   type StepWithUsage,
   slidingWindow,
 } from './compaction/utils'
+import { type VccOverrides, vccCompile } from './compaction/vcc-adapter'
+import type { CompactionStrategyConfig } from './types'
 
 export {
   type CompactionState,
@@ -99,11 +101,12 @@ async function summarizeMessages(
   existingSummary: string | null,
   timeoutMs: number,
   maxOutputTokens: number,
+  customPrompt?: string | null,
 ): Promise<string | null> {
   return callSummarizer(
     model,
     messagesToSummarize,
-    buildSummarizationPrompt(existingSummary),
+    buildSummarizationPrompt(existingSummary, customPrompt),
     timeoutMs,
     maxOutputTokens,
     'Summarization',
@@ -131,6 +134,7 @@ async function compactMessages(
   messages: ModelMessage[],
   config: ComputedConfig,
   state: CompactionState,
+  compactionConfig?: CompactionStrategyConfig,
 ): Promise<ModelMessage[]> {
   const { splitIndex, turnStartIndex, isSplitTurn } = findSafeSplitPoint(
     messages,
@@ -214,8 +218,37 @@ async function compactMessages(
     compactionCount: state.compactionCount,
   })
 
+  const method = compactionConfig?.method ?? 'default'
   let summary: string | null = null
-  if (isSplitTurn && summarizedTurnPrefix.length > 0) {
+
+  if (method === 'vcc') {
+    // VCC path — algorithmic, no LLM call
+    const vccOverrides: VccOverrides | undefined = compactionConfig?.vccConfig
+    try {
+      summary = vccCompile(toSummarize, state.existingSummary, vccOverrides)
+
+      if (isSplitTurn && summarizedTurnPrefix.length > 0) {
+        const prefixSummary = vccCompile(
+          summarizedTurnPrefix,
+          null,
+          vccOverrides,
+        )
+        if (summary && prefixSummary) {
+          summary = `${summary}\n\n---\n\n**Turn Context (split turn):**\n\n${prefixSummary}`
+        } else {
+          summary = summary ?? prefixSummary
+        }
+      }
+    } catch (error) {
+      logger.warn('VCC compaction failed, falling back to sliding window', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      summary = null
+    }
+  } else if (isSplitTurn && summarizedTurnPrefix.length > 0) {
+    // Default LLM path — split turn handling
+    const customPrompt = compactionConfig?.customPrompt
+
     if (toSummarize.length > 0) {
       const [historySummary, turnPrefixSummary] = await Promise.all([
         summarizeMessages(
@@ -224,6 +257,7 @@ async function compactMessages(
           state.existingSummary,
           config.summarizationTimeoutMs,
           config.summarizerMaxOutputTokens,
+          customPrompt,
         ),
         summarizeTurnPrefix(
           model,
@@ -247,12 +281,14 @@ async function compactMessages(
       )
     }
   } else {
+    // Default LLM path — simple summarization
     summary = await summarizeMessages(
       model,
       toSummarize,
       state.existingSummary,
       config.summarizationTimeoutMs,
       config.summarizerMaxOutputTokens,
+      compactionConfig?.customPrompt,
     )
   }
 
@@ -278,7 +314,7 @@ async function compactMessages(
   state.existingSummary = summary
   state.compactionCount++
 
-  logger.info('LLM compaction succeeded', {
+  logger.info(`${method === 'vcc' ? 'VCC' : 'LLM'} compaction succeeded`, {
     originalMessages: messages.length,
     keptMessages: toKeep.length,
     summaryTokens,
@@ -299,6 +335,7 @@ async function compactMessages(
 
 export function createCompactionPrepareStep(
   userConfig?: Partial<CompactionConfig>,
+  compactionConfig?: CompactionStrategyConfig,
 ) {
   const contextWindow =
     userConfig?.contextWindow ?? AGENT_LIMITS.DEFAULT_CONTEXT_WINDOW
@@ -378,7 +415,13 @@ export function createCompactionPrepareStep(
       },
     )
 
-    const compacted = await compactMessages(model, reduced, config, state)
+    const compacted = await compactMessages(
+      model,
+      reduced,
+      config,
+      state,
+      compactionConfig,
+    )
     return { messages: compacted, experimental_context: state }
   }
 }

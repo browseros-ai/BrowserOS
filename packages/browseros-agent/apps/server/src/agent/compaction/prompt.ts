@@ -78,13 +78,17 @@ Be concise. Focus on what's needed to understand the kept suffix.`
 
 export function buildSummarizationPrompt(
   existingSummary: string | null,
+  customPrompt?: string | null,
 ): string {
-  if (existingSummary) {
-    return `${UPDATE_PROMPT}
+  if (customPrompt) {
+    const base = existingSummary
+      ? `Update the existing summary with new information.\n\n<previous_summary>\n${existingSummary}\n</previous_summary>`
+      : `Summarize the following conversation transcript.`
+    return `${base}\n\n${customPrompt}`
+  }
 
-<previous_summary>
-${existingSummary}
-</previous_summary>`
+  if (existingSummary) {
+    return `${UPDATE_PROMPT}\n\n<previous_summary>\n${existingSummary}\n</previous_summary>`
   }
   return INITIAL_PROMPT
 }

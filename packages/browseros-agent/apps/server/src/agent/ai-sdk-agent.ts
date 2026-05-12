@@ -236,9 +236,10 @@ export class AiSdkAgent {
     })
 
     // Configure compaction for context window management
-    const compactionPrepareStep = createCompactionPrepareStep({
-      contextWindow,
-    })
+    const compactionPrepareStep = createCompactionPrepareStep(
+      { contextWindow },
+      config.resolvedConfig.compaction,
+    )
     const normalizationOptions = getMessageNormalizationOptions(
       config.resolvedConfig,
     )
