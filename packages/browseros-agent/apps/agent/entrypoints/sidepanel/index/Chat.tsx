@@ -22,6 +22,7 @@ import { ChatError } from './ChatError'
 import { ChatFooter } from './ChatFooter'
 import { ChatMessages } from './ChatMessages'
 import type { ChatMode } from './chatTypes'
+import { SessionCompletedFooter } from './SessionCompletedFooter'
 
 /**
  * @public
@@ -240,6 +241,12 @@ export const Chat = () => {
         {chatError && (
           <ChatError error={chatError} providerType={selectedProvider?.type} />
         )}
+        {messages.length > 0 &&
+          status === 'ready' &&
+          !chatError &&
+          !agentUrlError && (
+            <SessionCompletedFooter provider={selectedProvider} />
+          )}
       </main>
 
       <ChatFooter
