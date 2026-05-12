@@ -17,6 +17,7 @@ interface ChatRouteDeps {
   browserosId?: string
   klavisRef?: KlavisProxyRef
   aiSdkDevtoolsEnabled?: boolean
+  compaction?: import('../../config').ServerConfig['compaction']
 }
 
 export function createChatRoutes(deps: ChatRouteDeps) {
@@ -30,6 +31,7 @@ export function createChatRoutes(deps: ChatRouteDeps) {
     registry: deps.registry,
     browserosId,
     aiSdkDevtoolsEnabled: deps.aiSdkDevtoolsEnabled,
+    compaction: deps.compaction,
   })
 
   return new Hono()

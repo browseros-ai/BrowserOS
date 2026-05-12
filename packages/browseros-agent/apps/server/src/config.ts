@@ -16,6 +16,21 @@ import { VERSION } from './version'
 
 const portSchema = z.number().int()
 
+export const CompactionStrategySchema = z.object({
+  method: z.enum(['default', 'vcc']).optional(),
+  customPrompt: z.string().optional(),
+  vccConfig: z
+    .object({
+      maxTranscriptLines: z.number().min(0).optional(),
+      maxGoalLines: z.number().min(0).optional(),
+      maxFileEntries: z.number().min(0).optional(),
+      maxCommitEntries: z.number().min(0).optional(),
+      maxPreferenceLines: z.number().min(0).optional(),
+      maxOutstandingLines: z.number().min(0).optional(),
+    })
+    .optional(),
+})
+
 export const ServerConfigSchema = z.object({
   cdpPort: portSchema.nullable(),
   serverPort: portSchema,
@@ -30,6 +45,7 @@ export const ServerConfigSchema = z.object({
   instanceBrowserosVersion: z.string().optional(),
   instanceChromiumVersion: z.string().optional(),
   aiSdkDevtoolsEnabled: z.boolean(),
+  compaction: CompactionStrategySchema.optional(),
 })
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>

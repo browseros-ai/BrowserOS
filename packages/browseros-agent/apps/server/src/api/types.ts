@@ -125,6 +125,7 @@ export interface HttpServerConfig {
   resourcesDir: string
   codegenServiceUrl?: string
   aiSdkDevtoolsEnabled?: boolean
+  compaction?: import('../../config').ServerConfig['compaction']
 
   onShutdown?: () => void
 }

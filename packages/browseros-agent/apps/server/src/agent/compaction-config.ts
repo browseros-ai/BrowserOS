@@ -5,6 +5,8 @@
  *
  * Compaction strategy config resolution and validation.
  */
+
+import { logger } from '../lib/logger'
 import type { CompactionStrategyConfig } from './types'
 
 const VALID_METHODS = new Set(['default', 'vcc'])
@@ -84,7 +86,7 @@ export function resolveCompactionConfig(
 
   // Warn on mismatched combinations
   if (method === 'default' && 'vccConfig' in input && input.vccConfig != null) {
-    console.warn(
+    logger.warn(
       '[compaction] vccConfig is set but method is "default" — vccConfig will be ignored',
     )
   }
@@ -93,7 +95,7 @@ export function resolveCompactionConfig(
     'customPrompt' in input &&
     typeof input.customPrompt === 'string'
   ) {
-    console.warn(
+    logger.warn(
       '[compaction] customPrompt is set but method is "vcc" — customPrompt will be ignored',
     )
   }

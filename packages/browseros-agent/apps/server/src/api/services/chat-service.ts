@@ -6,6 +6,7 @@
 
 import { createAgentUIStreamResponse, type UIMessage } from 'ai'
 import { AiSdkAgent } from '../../agent/ai-sdk-agent'
+import { resolveCompactionConfig } from '../../agent/compaction-config'
 import { formatUserMessage } from '../../agent/format-message'
 import {
   filterValidMessages,
@@ -28,6 +29,7 @@ export interface ChatServiceDeps {
   registry: ToolRegistry
   browserosId?: string
   aiSdkDevtoolsEnabled?: boolean
+  compaction?: import('../../config').ServerConfig['compaction']
 }
 
 export class ChatService {
@@ -66,6 +68,9 @@ export class ChatService {
       declinedApps: request.declinedApps,
       browserosId: this.deps.browserosId,
       toolApprovalConfig: request.toolApprovalConfig,
+      compaction: this.deps.compaction
+        ? resolveCompactionConfig(this.deps.compaction)
+        : undefined,
     }
 
     let session = sessionStore.get(request.conversationId)

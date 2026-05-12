@@ -32,8 +32,9 @@ const mergePrevious = (previous: string, fresh: string): string => {
     return `${fresh}\n\n---\n\n[Previous Context]\n${previous}`
   }
 
-  // For longer previous summaries, include a condensed reference
-  const condensed = previous.split('\n').slice(0, 20).join('\n')
+  // For longer previous summaries, include the most recent lines (tail)
+  // VCC format puts goals first (least important) and transcript last (most important)
+  const condensed = previous.split('\n').slice(-20).join('\n')
   return `${fresh}\n\n---\n\n[Previous Context]\n${condensed}`
 }
 
