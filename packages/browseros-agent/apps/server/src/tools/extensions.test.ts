@@ -63,6 +63,10 @@ function createMockBrowser(overrides?: Partial<Browser>): Browser {
     sendExtensionMessage: mock(async () => null),
     listMessageableExtensions: mock(async () => []),
     isCdpConnected: mock(() => true),
+    listExtensions: mock(async () => []),
+    getExtensionInfo: mock(async () => ({} as any)),
+    enableExtension: mock(async () => {}),
+    disableExtension: mock(async () => {}),
     ...overrides,
   } as unknown as Browser
 }
@@ -237,34 +241,11 @@ describe('extension tools — happy path', () => {
 })
 
 // ── F9: Stub tools must throw, not return fake data ──
+// NOTE: These tests were for the old stubs. Replaced with real implementation tests below.
 
 describe('extension tools — F9: stub tools throw not fake-success', () => {
-  test('get_extension_info stub throws "not yet implemented"', async () => {
-    const ctx = createMockContext()
-    const resp = createMockResponse()
-
-    await expect(
-      get_extension_info.handler({ extensionId: 'ext-123' }, ctx, resp),
-    ).rejects.toThrow('not yet implemented')
-  })
-
-  test('enable_extension stub throws "not yet implemented"', async () => {
-    const ctx = createMockContext()
-    const resp = createMockResponse()
-
-    await expect(
-      enable_extension.handler({ extensionId: 'ext-123' }, ctx, resp),
-    ).rejects.toThrow('not yet implemented')
-  })
-
-  test('disable_extension stub throws "not yet implemented"', async () => {
-    const ctx = createMockContext()
-    const resp = createMockResponse()
-
-    await expect(
-      disable_extension.handler({ extensionId: 'ext-123' }, ctx, resp),
-    ).rejects.toThrow('not yet implemented')
-  })
+  // These stub tests are replaced by the L2 real implementation tests below.
+  // Keeping the describe block for historical reference — all 4 tools now have real implementations.
 })
 
 // ── F11: send_extension_message and list_messageable_extensions tests ──
@@ -556,5 +537,171 @@ describe('extension tools — additional coverage', () => {
         resp,
       ),
     ).rejects.toThrow('Extension not found')
+  })
+})
+
+// ── L2: list_extensions / get_extension_info / enable_extension / disable_extension ──
+
+describe('extension tools — L2: list_extensions', () => {
+  test('returns extensions array with count', async () => {
+    const ctx = createMockContext({
+      listExtensions: mock(async () => [
+        {
+          id: 'ext-1',
+          name: 'Test Extension',
+          version: '1.0.0',
+          description: 'A test',
+          path: '/path',
+          state: 'enabled',
+          isBrowserOS: false,
+          canModify: true,
+        },
+      ]),
+    })
+    const resp = createMockResponse()
+
+    await list_extensions.handler({}, ctx, resp)
+
+    expect(resp.dataParts[0]).toMatchObject({
+      count: 1,
+      extensions: [{ id: 'ext-1', name: 'Test Extension' }],
+    })
+    expect(resp.textParts[0]).toContain('1')
+  })
+
+  test('returns empty array with count 0', async () => {
+    const ctx = createMockContext({
+      listExtensions: mock(async () => []),
+    })
+    const resp = createMockResponse()
+
+    await list_extensions.handler({}, ctx, resp)
+
+    expect(resp.dataParts[0]).toMatchObject({
+      count: 0,
+      extensions: [],
+    })
+    expect(resp.textParts[0]).toContain('0')
+  })
+})
+
+describe('extension tools — L2: get_extension_info', () => {
+  test('returns info for valid extension', async () => {
+    const info = {
+      id: 'ext-1',
+      name: 'Test Extension',
+      version: '1.0.0',
+      description: 'A test',
+      path: '/path',
+      state: 'enabled',
+      isBrowserOS: false,
+      canModify: true,
+    }
+    const ctx = createMockContext({
+      getExtensionInfo: mock(async () => info),
+    })
+    const resp = createMockResponse()
+
+    await get_extension_info.handler({ extensionId: 'ext-1' }, ctx, resp)
+
+    expect(resp.dataParts[0]).toMatchObject({
+      id: 'ext-1',
+      name: 'Test Extension',
+    })
+    expect(resp.textParts[0]).toContain('ext-1')
+  })
+
+  test('throws on empty ID', async () => {
+    const ctx = createMockContext({
+      getExtensionInfo: mock(async () => {
+        throw new Error('Extension ID is required')
+      }),
+    })
+    const resp = createMockResponse()
+
+    await expect(
+      get_extension_info.handler({ extensionId: '' }, ctx, resp),
+    ).rejects.toThrow('Extension ID is required')
+  })
+})
+
+describe('extension tools — L2: enable_extension', () => {
+  test('returns action + extensionId', async () => {
+    const enableMock = mock(async () => {})
+    const ctx = createMockContext({
+      enableExtension: enableMock,
+    })
+    const resp = createMockResponse()
+
+    await enable_extension.handler({ extensionId: 'ext-1' }, ctx, resp)
+
+    expect(enableMock).toHaveBeenCalledWith('ext-1')
+    expect(resp.dataParts[0]).toEqual({
+      action: 'enable',
+      extensionId: 'ext-1',
+    })
+    expect(resp.textParts[0]).toContain('ext-1')
+  })
+
+  test('throws on empty ID', async () => {
+    const ctx = createMockContext({
+      enableExtension: mock(async () => {
+        throw new Error('Extension ID is required')
+      }),
+    })
+    const resp = createMockResponse()
+
+    await expect(
+      enable_extension.handler({ extensionId: '' }, ctx, resp),
+    ).rejects.toThrow('Extension ID is required')
+  })
+})
+
+describe('extension tools — L2: disable_extension', () => {
+  test('returns action + extensionId', async () => {
+    const disableMock = mock(async () => {})
+    const ctx = createMockContext({
+      disableExtension: disableMock,
+    })
+    const resp = createMockResponse()
+
+    await disable_extension.handler({ extensionId: 'ext-1' }, ctx, resp)
+
+    expect(disableMock).toHaveBeenCalledWith('ext-1')
+    expect(resp.dataParts[0]).toEqual({
+      action: 'disable',
+      extensionId: 'ext-1',
+    })
+    expect(resp.textParts[0]).toContain('ext-1')
+  })
+
+  test('throws on empty ID', async () => {
+    const ctx = createMockContext({
+      disableExtension: mock(async () => {
+        throw new Error('Extension ID is required')
+      }),
+    })
+    const resp = createMockResponse()
+
+    await expect(
+      disable_extension.handler({ extensionId: '' }, ctx, resp),
+    ).rejects.toThrow('Extension ID is required')
+  })
+
+  test('throws on first-party BrowserOS extension', async () => {
+    const ctx = createMockContext({
+      disableExtension: mock(async () => {
+        throw new Error('Cannot disable BrowserOS first-party extension: bflpfmnmnokmjhmgnolecpppdbdophmk')
+      }),
+    })
+    const resp = createMockResponse()
+
+    await expect(
+      disable_extension.handler(
+        { extensionId: 'bflpfmnmnokmjhmgnolecpppdbdophmk' },
+        ctx,
+        resp,
+      ),
+    ).rejects.toThrow('first-party')
   })
 })

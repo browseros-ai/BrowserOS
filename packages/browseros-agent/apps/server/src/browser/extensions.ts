@@ -8,8 +8,8 @@
  */
 
 import type { CdpBackend } from './backends/types'
-export type { StorageArea } from '@browseros/cdp-protocol/generated/domains/extensions'
-import type { StorageArea } from '@browseros/cdp-protocol/generated/domains/extensions'
+export type { StorageArea, ExtensionInfo } from '@browseros/cdp-protocol/generated/domains/extensions'
+import type { StorageArea, ExtensionInfo } from '@browseros/cdp-protocol/generated/domains/extensions'
 
 // BrowserOS first-party extension IDs (from browseros_constants.h)
 const BROWSEROS_EXTENSION_IDS = new Set([
@@ -116,4 +116,34 @@ export async function clearStorageItems(
   validateNotFirstParty(id)
   validateNotManaged(storageArea)
   await cdp.Extensions.clearStorageItems({ id, storageArea })
+}
+
+// ── L2 Extension Management: list/getInfo/enable/disable ──
+
+/** List all installed extensions via CDP */
+export async function listExtensions(cdp: CdpBackend): Promise<ExtensionInfo[]> {
+  const result = await cdp.Extensions.listExtensions()
+  return result.extensions
+}
+
+/** Get detailed info for a specific extension */
+export async function getExtensionInfo(cdp: CdpBackend, id: string): Promise<ExtensionInfo> {
+  if (!id) throw new Error('Extension ID is required')
+  const result = await cdp.Extensions.getExtensionInfo({ id })
+  return result.info
+}
+
+/** Enable a disabled extension */
+export async function enableExtension(cdp: CdpBackend, id: string): Promise<void> {
+  if (!id) throw new Error('Extension ID is required')
+  await cdp.Extensions.enableExtension({ id })
+}
+
+/** Disable an enabled extension. Rejects first-party BrowserOS extensions. */
+export async function disableExtension(cdp: CdpBackend, id: string): Promise<void> {
+  if (!id) throw new Error('Extension ID is required')
+  if (isBrowserOSExtension(id)) {
+    throw new Error(`Cannot disable BrowserOS first-party extension: ${id}`)
+  }
+  await cdp.Extensions.disableExtension({ id })
 }

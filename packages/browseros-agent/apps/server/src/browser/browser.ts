@@ -1614,6 +1614,24 @@ export class Browser {
     return extensions.clearStorageItems(this.cdp, id, storageArea)
   }
 
+  // --- L2 Extension Management: list/getInfo/enable/disable ---
+
+  async listExtensions(): Promise<extensions.ExtensionInfo[]> {
+    return extensions.listExtensions(this.cdp)
+  }
+
+  async getExtensionInfo(id: string): Promise<extensions.ExtensionInfo> {
+    return extensions.getExtensionInfo(this.cdp, id)
+  }
+
+  async enableExtension(id: string): Promise<void> {
+    return extensions.enableExtension(this.cdp, id)
+  }
+
+  async disableExtension(id: string): Promise<void> {
+    return extensions.disableExtension(this.cdp, id)
+  }
+
   // --- Extension Message Bridge (L3) ---
 
   async listMessageableExtensions(): Promise<extensionBridge.MessageableExtension[]> {
