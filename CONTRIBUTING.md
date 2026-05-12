@@ -138,6 +138,39 @@ python build/build.py --config build/config/release.windows.yaml --chromium-src 
 
 The build typically takes 1-3 hours on modern hardware (M4 Max, Ryzen 9, etc.).
 
+### Building Without R2 Credentials (External Contributors)
+
+The browser build's `download_resources` step pulls pre-built `browseros_server`
+binaries from a private Cloudflare R2 bucket. External contributors don't have
+those credentials, and historically the build failed at validation with:
+
+```
+R2 configuration not set. Required env vars: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
+```
+
+You can skip this step by setting `BROWSEROS_SKIP_R2_DOWNLOAD=1`:
+
+```bash
+# macOS / Linux
+export BROWSEROS_SKIP_R2_DOWNLOAD=1
+python build/build.py --config build/config/debug.macos.yaml --chromium-src /path/to/chromium/src --build
+
+# Windows (PowerShell)
+$env:BROWSEROS_SKIP_R2_DOWNLOAD = "1"
+python build/build.py --config build/config/debug.windows.yaml --chromium-src C:\path\to\chromium\src --build
+```
+
+**What this does:** the `download_resources` module short-circuits with a
+warning and the build proceeds with whatever is already cached locally under
+`resources/binaries/browseros_server/`.
+
+**Caveat:** subsequent steps that copy server binaries into the Chromium tree
+(see `build/config/copy_resources.yaml`) will produce a partial build if that
+cache is empty. This flag is intended for contributors working on **Chromium
+patches, the build system, or the agent extension** — areas that don't depend
+on the bundled server binary. If you need a working server binary too, please
+reach out on Discord.
+
 **For detailed instructions, see [Browser Build Guide](docs/BUILD.md).**
 
 ## Making Your First Contribution

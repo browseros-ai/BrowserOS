@@ -266,6 +266,18 @@ class EnvConfig:
             self.r2_account_id and self.r2_access_key_id and self.r2_secret_access_key
         )
 
+    @property
+    def skip_r2_download(self) -> bool:
+        """Whether to skip the R2 resource download step.
+
+        External contributors without R2 credentials can set
+        BROWSEROS_SKIP_R2_DOWNLOAD=1 to bypass downloading the browseros_server
+        resource bundles. The build will proceed with whatever is already
+        cached locally under resources/binaries/browseros_server/.
+        """
+        value = os.environ.get("BROWSEROS_SKIP_R2_DOWNLOAD", "")
+        return value.strip().lower() in ("1", "true", "yes", "on")
+
     def has_sparkle_key(self) -> bool:
         """Check if Sparkle private key is available"""
         return bool(self.sparkle_private_key)

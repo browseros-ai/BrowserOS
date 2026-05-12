@@ -15,6 +15,7 @@ from ...common.context import Context
 from ...common.utils import (
     log_info,
     log_success,
+    log_warning,
     get_platform,
 )
 
@@ -187,6 +188,12 @@ class DownloadResourcesModule(CommandModule):
     description = "Download resources from Cloudflare R2"
 
     def validate(self, context: Context) -> None:
+        if context.env.skip_r2_download:
+            # External contributors without R2 access opt in via
+            # BROWSEROS_SKIP_R2_DOWNLOAD=1. Don't gate on boto3 or R2 creds here;
+            # execute() will log and return early.
+            return
+
         if not BOTO3_AVAILABLE:
             raise ValidationError(
                 "boto3 library not installed - run: pip install boto3"
@@ -195,7 +202,9 @@ class DownloadResourcesModule(CommandModule):
         if not context.env.has_r2_config():
             raise ValidationError(
                 "R2 configuration not set. Required env vars: "
-                "R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY"
+                "R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY. "
+                "External contributors without R2 access can set "
+                "BROWSEROS_SKIP_R2_DOWNLOAD=1 to skip this step."
             )
 
         config_path = context.get_download_resources_config()
@@ -205,6 +214,16 @@ class DownloadResourcesModule(CommandModule):
             )
 
     def execute(self, context: Context) -> None:
+        if context.env.skip_r2_download:
+            log_warning(
+                "Skipping R2 resource download (BROWSEROS_SKIP_R2_DOWNLOAD is set).\n"
+                "  Build will proceed with whatever is already cached under\n"
+                "  resources/binaries/browseros_server/. Subsequent steps that\n"
+                "  copy server binaries into the Chromium tree may fail or\n"
+                "  produce a partial build if the cache is empty."
+            )
+            return
+
         log_info("\nDownloading resources from R2...")
 
         config_path = context.get_download_resources_config()

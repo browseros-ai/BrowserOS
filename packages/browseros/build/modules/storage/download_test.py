@@ -9,9 +9,12 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from build.modules.storage.download import (
     ARTIFACT_METADATA_NAME,
+    DownloadResourcesModule,
     extract_artifact_zip,
 )
 
@@ -141,6 +144,52 @@ class ExtractArtifactZipTest(unittest.TestCase):
                 for relative_path, content in files.items()
             ],
         }
+
+
+class SkipR2DownloadTest(unittest.TestCase):
+    """Verify BROWSEROS_SKIP_R2_DOWNLOAD bypasses validation and execution.
+
+    External contributors without R2 credentials need a way to run the build
+    pipeline without failing at the download step.
+    """
+
+    def _make_context(self, *, skip: bool) -> SimpleNamespace:
+        env = SimpleNamespace(
+            skip_r2_download=skip,
+            has_r2_config=lambda: False,
+        )
+        return SimpleNamespace(env=env)
+
+    def test_validate_skips_all_checks_when_flag_set(self) -> None:
+        module = DownloadResourcesModule()
+        context = self._make_context(skip=True)
+
+        # Must not raise even though R2 config is missing.
+        module.validate(context)
+
+    def test_validate_still_requires_r2_when_flag_unset(self) -> None:
+        from build.common.module import ValidationError
+
+        module = DownloadResourcesModule()
+        context = self._make_context(skip=False)
+
+        with self.assertRaises(ValidationError):
+            module.validate(context)
+
+    def test_execute_returns_early_when_flag_set(self) -> None:
+        module = DownloadResourcesModule()
+        context = self._make_context(skip=True)
+
+        # Mock log_warning to avoid console encoding issues on Windows hosts
+        # and to assert the user sees a clear notice.
+        with mock.patch(
+            "build.modules.storage.download.log_warning"
+        ) as log_warning, mock.patch(
+            "build.modules.storage.download.get_r2_client"
+        ) as get_client:
+            module.execute(context)
+            log_warning.assert_called_once()
+            get_client.assert_not_called()
 
 
 if __name__ == "__main__":
