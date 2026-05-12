@@ -146,6 +146,12 @@ export interface CreateHarnessAgentInput {
   apiKey?: string
   /** Hermes-only — base URL for the `custom` provider. */
   baseUrl?: string
+  /** Custom adapter executable/binary to spawn through ACP. */
+  customCommand?: string
+  /** Custom adapter argv entries paired with `customCommand`. */
+  customArgs?: string[]
+  /** Optional display label surfaced for the custom ACP runtime. */
+  customLabel?: string
 }
 
 export interface HarnessHistoryReasoning {

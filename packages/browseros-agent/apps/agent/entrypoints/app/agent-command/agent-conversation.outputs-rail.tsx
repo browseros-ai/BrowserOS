@@ -224,7 +224,7 @@ function RailTurnGroup({
   onOpenFile: (file: { id: string; path: string }) => void
 }) {
   const [open, setOpen] = useState(true)
-  const headerLabel = group.turnPrompt.trim() || 'Turn'
+  const headerLabel = (group.turnPrompt ?? '').trim() || 'Turn'
   const containerRef = useRef<HTMLDivElement>(null)
 
   // Deep-link consumption: when the parent passes `focused=true`,

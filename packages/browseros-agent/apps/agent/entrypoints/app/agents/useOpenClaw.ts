@@ -293,7 +293,7 @@ export function buildChatHistoryFromTurns(
   const messages: OpenClawChatHistoryMessage[] = []
 
   for (const turn of turns) {
-    const userText = turn.userText.trim()
+    const userText = turn.userText?.trim() ?? ''
     if (userText) {
       messages.push({ role: 'user', content: userText })
     }

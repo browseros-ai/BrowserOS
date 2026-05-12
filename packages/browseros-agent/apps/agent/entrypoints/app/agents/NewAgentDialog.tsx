@@ -55,11 +55,11 @@ interface NewAgentDialogProps {
   createError: string | null
   createRuntime: CreateAgentRuntime
   creating: boolean
-  customCommand: string
-  customArgs: string
-  customLabel: string
-  customProbeResult: { healthy: boolean; error?: string } | null
-  customProbeLoading: boolean
+  customCommand?: string
+  customArgs?: string
+  customLabel?: string
+  customProbeResult?: { healthy: boolean; error?: string } | null
+  customProbeLoading?: boolean
   defaultProviderId: string
   harnessAdapterId: HarnessAgentAdapter
   harnessModelId: string
@@ -84,11 +84,11 @@ interface NewAgentDialogProps {
   onHermesProviderChange: (providerId: string) => void
   onNameChange: (name: string) => void
   onProviderChange: (providerId: string) => void
-  onCustomCommandChange: (command: string) => void
-  onCustomArgsChange: (args: string) => void
-  onCustomLabelChange: (label: string) => void
-  onProbeCustom: () => void
-  onImportAcpx: () => void
+  onCustomCommandChange?: (command: string) => void
+  onCustomArgsChange?: (args: string) => void
+  onCustomLabelChange?: (label: string) => void
+  onProbeCustom?: () => void
+  onImportAcpx?: () => void
 }
 
 export const NewAgentDialog: FC<NewAgentDialogProps> = ({
@@ -97,11 +97,11 @@ export const NewAgentDialog: FC<NewAgentDialogProps> = ({
   createError,
   createRuntime,
   creating,
-  customCommand,
-  customArgs,
-  customLabel,
-  customProbeResult,
-  customProbeLoading,
+  customCommand = '',
+  customArgs = '',
+  customLabel = '',
+  customProbeResult = null,
+  customProbeLoading = false,
   defaultProviderId,
   harnessAdapterId,
   harnessModelId,
@@ -126,11 +126,11 @@ export const NewAgentDialog: FC<NewAgentDialogProps> = ({
   onHermesProviderChange,
   onNameChange,
   onProviderChange,
-  onCustomCommandChange,
-  onCustomArgsChange,
-  onCustomLabelChange,
-  onProbeCustom,
-  onImportAcpx,
+  onCustomCommandChange = () => {},
+  onCustomArgsChange = () => {},
+  onCustomLabelChange = () => {},
+  onProbeCustom = () => {},
+  onImportAcpx = () => {},
 }) => {
   const selectedHarnessAdapter =
     adapters.find((adapter) => adapter.id === harnessAdapterId) ?? adapters[0]
