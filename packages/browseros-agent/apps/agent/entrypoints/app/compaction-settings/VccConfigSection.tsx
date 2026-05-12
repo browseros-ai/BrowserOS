@@ -70,6 +70,10 @@ const VCC_FIELDS: FieldDef[] = [
   },
 ]
 
+export const VCC_DEFAULTS: VccConfig = Object.fromEntries(
+  VCC_FIELDS.map((f) => [f.key, f.default]),
+) as VccConfig
+
 export function validateVccField(field: FieldDef, raw: string): string | null {
   const normalized = raw.trim()
   if (!/^\d+$/.test(normalized)) return 'Enter a whole non-negative integer'

@@ -11,19 +11,14 @@ import {
 } from './compaction-queries'
 import { MethodSelector } from './MethodSelector'
 import {
+  VCC_DEFAULTS,
   VCC_FIELDS,
   VccConfigSection,
   validateVccField,
 } from './VccConfigSection'
 
-const VCC_FIELD_DEFAULTS: VccConfig = {
-  maxTranscriptLines: 120,
-  maxGoalLines: 8,
-  maxFileEntries: 10,
-  maxCommitEntries: 8,
-  maxPreferenceLines: 15,
-  maxOutstandingLines: 10,
-}
+// Single source of truth: VCC defaults come from VccConfigSection's VCC_FIELDS
+const VCC_FIELD_DEFAULTS = VCC_DEFAULTS
 
 export const CompactionSettingsPage: FC = () => {
   const {
@@ -41,12 +36,12 @@ export const CompactionSettingsPage: FC = () => {
   const [vccConfig, setVccConfig] = useState<VccConfig>({})
   const [hasPendingRestart, setHasPendingRestart] = useState(false)
 
-  // Populate form from server data
+  // Populate form from server data on first load only
   useEffect(() => {
     if (!config) return
     const active = config.active
     if (active) {
-      setMethod(active.method)
+      setMethod(active.method ?? 'default')
       setCustomPrompt(active.customPrompt ?? '')
       setVccConfig(active.vccConfig ?? {})
     } else {
@@ -54,8 +49,9 @@ export const CompactionSettingsPage: FC = () => {
       setCustomPrompt('')
       setVccConfig({})
     }
-    // Reset pending flag when server data changes (e.g. after refetch)
-    setHasPendingRestart(false)
+    // NOTE: Do NOT reset hasPendingRestart here.
+    // After save+invalidate, the refetch triggers this effect.
+    // Resetting would hide the banner after one frame.
   }, [config])
 
   // Validate VCC fields
@@ -117,11 +113,16 @@ export const CompactionSettingsPage: FC = () => {
       }
     }
 
-    const result = await saveConfig(newConfig)
-    if (!result.ok) {
-      toast.error(
-        result.errors?.[0]?.message ?? 'Failed to save compaction config',
-      )
+    try {
+      const result = await saveConfig(newConfig)
+      if (!result.ok) {
+        toast.error(
+          result.errors?.[0]?.message ?? 'Failed to save compaction config',
+        )
+        return
+      }
+    } catch {
+      toast.error('Failed to save compaction config')
       return
     }
 
@@ -132,17 +133,19 @@ export const CompactionSettingsPage: FC = () => {
   }
 
   const handleReset = async () => {
-    const result = await resetConfig()
-    if (!result.ok) {
-      toast.error(
-        result.errors?.[0]?.message ?? 'Failed to reset compaction config',
-      )
+    try {
+      const result = await resetConfig()
+      if (!result.ok) {
+        toast.error(
+          result.errors?.[0]?.message ?? 'Failed to reset compaction config',
+        )
+        return
+      }
+    } catch {
+      toast.error('Failed to reset compaction config')
       return
     }
 
-    setMethod('default')
-    setCustomPrompt('')
-    setVccConfig({})
     setHasPendingRestart(false)
     toast.success(
       'Compaction config reset. Quit and reopen BrowserOS to apply.',
