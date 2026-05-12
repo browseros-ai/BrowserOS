@@ -4,6 +4,7 @@ import {
   Bot,
   Compass,
   CreditCard,
+  Layers,
   MessageSquare,
   Palette,
   RotateCcw,
@@ -101,6 +102,7 @@ const primarySettingsSections: NavSection[] = [
         feature: Feature.CREDITS_SUPPORT,
       },
       { name: 'Advanced Config', to: '/settings/advanced', icon: Settings2 },
+      { name: 'Compaction', to: '/settings/compaction', icon: Layers },
     ],
   },
 ]
