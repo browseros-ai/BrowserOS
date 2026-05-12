@@ -62,6 +62,16 @@ interface ParsedCliArgs {
   overrides: PartialConfig
 }
 
+let _resolvedConfigFilePath: string | null = null
+
+/**
+ * Returns the absolute path to the config file passed via --config,
+ * or null if no config file was specified.
+ */
+export function getResolvedConfigFilePath(): string | null {
+  return _resolvedConfigFilePath
+}
+
 export function loadServerConfig(
   argv: string[] = process.argv,
 ): ConfigResult<ServerConfig> {
@@ -71,6 +81,14 @@ export function loadServerConfig(
 
   // 2. Parse config file (only if --config provided)
   const file = parseConfigFile(cli.value.configPath)
+
+  // Store the resolved config file path for API routes
+  if (cli.value.configPath) {
+    const absPath = path.isAbsolute(cli.value.configPath)
+      ? cli.value.configPath
+      : path.resolve(process.cwd(), cli.value.configPath)
+    _resolvedConfigFilePath = absPath
+  }
   if (!file.ok) return file
 
   // 3. Parse runtime environment variables
