@@ -205,13 +205,13 @@ export const clear_extension_storage = defineExtTool({
   },
 })
 
-// ── Placeholder tools for L2 CDP handler (list/enable/disable/get_info) ──
-// These require the new Chromium CDP handler — stubs for now.
+// ── L2 Extension Management: list/getInfo/enable/disable ──
+// Now implemented via CDP Extensions.* commands.
 
 export const list_extensions = defineExtReadTool({
   name: 'list_extensions',
   description:
-    'List all installed extensions. Returns id, name, version, state, canModify, isBrowserOS. Requires L2 CDP handler.',
+    'List all installed extensions. Returns id, name, version, state, canModify, isBrowserOS.',
   input: z.object({}),
   output: z.object({
     extensions: z.array(
@@ -226,16 +226,27 @@ export const list_extensions = defineExtReadTool({
     ),
     count: z.number(),
   }),
-  handler: async (_args, _ctx, _response) => {
-    // TODO: Requires L2 CDP handler (Extensions.listExtensions)
-    throw new Error('Extension listing requires L2 CDP handler (not yet implemented)')
+  handler: async (_args, ctx, response) => {
+    const extensions = await ctx.browser.listExtensions()
+    response.text(`Found ${extensions.length} extension(s)`)
+    response.data({
+      extensions: extensions.map((e) => ({
+        id: e.id,
+        name: e.name,
+        version: e.version,
+        state: e.state,
+        canModify: e.canModify,
+        isBrowserOS: e.isBrowserOS,
+      })),
+      count: extensions.length,
+    })
   },
 })
 
 export const get_extension_info = defineExtReadTool({
   name: 'get_extension_info',
   description:
-    'Get detailed info for a specific extension. Requires L2 CDP handler.',
+    'Get detailed info for a specific extension.',
   input: z.object({
     extensionId: z.string().describe('Extension ID'),
   }),
@@ -245,16 +256,22 @@ export const get_extension_info = defineExtReadTool({
     state: z.string(),
     canModify: z.boolean(),
   }),
-  handler: async (_args, _ctx, _response) => {
-    // TODO: Requires L2 CDP handler
-    throw new Error('Extension info requires L2 CDP handler (not yet implemented)')
+  handler: async (args, ctx, response) => {
+    const info = await ctx.browser.getExtensionInfo(args.extensionId)
+    response.text(`Extension: ${info.name} (${info.id}) v${info.version} — ${info.state}`)
+    response.data({
+      id: info.id,
+      name: info.name,
+      state: info.state,
+      canModify: info.canModify,
+    })
   },
 })
 
 export const enable_extension = defineExtTool({
   name: 'enable_extension',
   description:
-    'Enable a disabled extension. Requires L2 CDP handler.',
+    'Enable a disabled extension.',
   input: z.object({
     extensionId: z.string().describe('Extension ID to enable'),
   }),
@@ -262,16 +279,17 @@ export const enable_extension = defineExtTool({
     action: z.literal('enable'),
     extensionId: z.string(),
   }),
-  handler: async (_args, _ctx, _response) => {
-    // TODO: Requires L2 CDP handler
-    throw new Error('Enable extension requires L2 CDP handler (not yet implemented)')
+  handler: async (args, ctx, response) => {
+    await ctx.browser.enableExtension(args.extensionId)
+    response.text(`Enabled extension ${args.extensionId}`)
+    response.data({ action: 'enable', extensionId: args.extensionId })
   },
 })
 
 export const disable_extension = defineExtTool({
   name: 'disable_extension',
   description:
-    'Disable an enabled extension. Cannot disable BrowserOS first-party extensions. Requires L2 CDP handler.',
+    'Disable an enabled extension. Cannot disable BrowserOS first-party extensions.',
   input: z.object({
     extensionId: z.string().describe('Extension ID to disable'),
   }),
@@ -279,9 +297,10 @@ export const disable_extension = defineExtTool({
     action: z.literal('disable'),
     extensionId: z.string(),
   }),
-  handler: async (_args, _ctx, _response) => {
-    // TODO: Requires L2 CDP handler
-    throw new Error('Disable extension requires L2 CDP handler (not yet implemented)')
+  handler: async (args, ctx, response) => {
+    await ctx.browser.disableExtension(args.extensionId)
+    response.text(`Disabled extension ${args.extensionId}`)
+    response.data({ action: 'disable', extensionId: args.extensionId })
   },
 })
 

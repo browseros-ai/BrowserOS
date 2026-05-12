@@ -2,8 +2,13 @@
 
 import type {
   ClearStorageItemsParams,
+  DisableExtensionParams,
+  EnableExtensionParams,
+  GetExtensionInfoParams,
+  GetExtensionInfoResult,
   GetStorageItemsParams,
   GetStorageItemsResult,
+  ListExtensionsResult,
   LoadUnpackedParams,
   LoadUnpackedResult,
   RemoveStorageItemsParams,
@@ -20,4 +25,11 @@ export interface ExtensionsApi {
   removeStorageItems(params: RemoveStorageItemsParams): Promise<void>
   clearStorageItems(params: ClearStorageItemsParams): Promise<void>
   setStorageItems(params: SetStorageItemsParams): Promise<void>
+
+  // ── BrowserOS extension commands ──
+
+  listExtensions(): Promise<ListExtensionsResult>
+  getExtensionInfo(params: GetExtensionInfoParams): Promise<GetExtensionInfoResult>
+  enableExtension(params: EnableExtensionParams): Promise<void>
+  disableExtension(params: DisableExtensionParams): Promise<void>
 }
