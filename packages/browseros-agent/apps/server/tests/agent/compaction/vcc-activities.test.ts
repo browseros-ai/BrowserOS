@@ -7,14 +7,14 @@
  * RED phase — implementation does not exist yet.
  */
 import { describe, expect, it } from 'bun:test'
-import { extractActivities } from '../../src/agent/compaction/vcc/extract/activities'
+import { extractActivities } from '../../../src/agent/compaction/vcc/extract/activities'
 import {
   extractPageId,
   extractUrl,
   isBrowserTool,
   isNavigationTool,
-} from '../../src/agent/compaction/vcc/tool-args'
-import type { NormalizedBlock } from '../../src/agent/compaction/vcc/types'
+} from '../../../src/agent/compaction/vcc/tool-args'
+import type { NormalizedBlock } from '../../../src/agent/compaction/vcc/types'
 
 // ─── Helpers ────────────────────────────────────────────────────────
 

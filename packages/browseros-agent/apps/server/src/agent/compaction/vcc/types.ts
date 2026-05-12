@@ -36,11 +36,20 @@ export interface TranscriptEntry {
   count?: number
 }
 
+export interface SiteVisit {
+  url: string
+  domain: string
+  order: number
+  sourceIndex: number
+  tools: Map<string, number>
+}
+
 export interface SectionData {
   sessionGoal: string[]
   outstandingContext: string[]
   filesAndChanges: string[]
   commits: string[]
+  siteActivity: SiteVisit[]
   userPreferences: string[]
   briefTranscript: string
   transcriptEntries: TranscriptEntry[]

@@ -9,6 +9,7 @@ import {
   stringifyBrief,
 } from './brief'
 import { clipSentence, firstLine, nonEmptyLines } from './content'
+import { extractActivities } from './extract/activities'
 import { extractCommits, formatCommits } from './extract/commits'
 import { extractFiles } from './extract/files'
 import { extractGoals } from './extract/goals'
@@ -84,6 +85,7 @@ export const buildSections = (input: BuildSectionsInput): SectionData => {
     outstandingContext: extractOutstandingContext(blocks),
     filesAndChanges: formatFileActivity(blocks),
     commits: formatCommits(extractCommits(blocks)),
+    siteActivity: extractActivities(blocks),
     userPreferences,
     briefTranscript: stringifyBrief(briefSections),
     transcriptEntries: sectionsToTranscript(briefSections),
