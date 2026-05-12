@@ -49,6 +49,10 @@ import {
   toolApprovalConfigStorage,
 } from '@/lib/tool-approvals/storage'
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
+import {
+  computeVisibleChatError,
+  isStaleErrorMarkerStillCurrent,
+} from './chat-error-suppression'
 import type { ChatMode } from './chatTypes'
 import { GetConversationWithMessagesDocument } from './graphql/chatSessionDocument'
 import { toLlmProviderConfig } from './sidepanel-chat-targets'
@@ -534,6 +538,17 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     syncExecutionHistory(messages, status)
   }, [messages, status, syncExecutionHistory])
 
+  // Suppress useChat's error after the user switches provider or resets the
+  // conversation to recover from a failure. Drops the marker once useChat
+  // produces a different error reference or clears it on its own. See
+  // chat-error-suppression.ts for the why.
+  const [staleErrorMarker, setStaleErrorMarker] = useState<Error | null>(null)
+  useEffect(() => {
+    if (!isStaleErrorMarkerStillCurrent(chatError, staleErrorMarker)) {
+      setStaleErrorMarker(null)
+    }
+  }, [chatError, staleErrorMarker])
+
   // Save conversation only after streaming completes — not on every token
   const previousStatusRef = useRef(status)
   // biome-ignore lint/correctness/useExhaustiveDependencies: only save when streaming finishes
@@ -785,13 +800,19 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     })
     if (target.kind === 'llm') setDefaultProvider(target.provider.id)
 
-    if (
+    const providerActuallyChanged =
       previousTarget &&
-      (previousTarget.kind !== target.kind ||
-        previousTarget.id !== target.id) &&
-      messagesRef.current.length > 0
-    ) {
-      resetConversationState()
+      (previousTarget.kind !== target.kind || previousTarget.id !== target.id)
+
+    if (providerActuallyChanged) {
+      // Closes #862: suppress the previous provider's error so the user can
+      // retry on the new one without the stale banner. Done independently of
+      // resetConversationState so it also covers the empty-conversation case
+      // (e.g. auth error on the very first send produces no assistant turn).
+      if (chatError) setStaleErrorMarker(chatError)
+      if (messagesRef.current.length > 0) {
+        resetConversationState()
+      }
     }
   }
 
@@ -806,6 +827,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
   const resetConversation = () => {
     track(CONVERSATION_RESET_EVENT, { message_count: messages.length })
+    // Closes #862: hide any error from the just-ended conversation so the
+    // fresh session starts with a clean slate.
+    if (chatError) setStaleErrorMarker(chatError)
     resetConversationState()
   }
 
@@ -825,7 +849,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isSyncing: !isIntegrationsSynced,
     isRestoringConversation,
     agentUrlError,
-    chatError,
+    chatError: computeVisibleChatError({ chatError, staleErrorMarker }),
     handleSelectProvider,
     getActionForMessage,
     resetConversation,
