@@ -1,11 +1,13 @@
 import { Loader2 } from 'lucide-react'
 import { type FC, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
+import { getAgentServerUrl } from '@/lib/browseros/helpers'
 import { useLlmProviders } from '@/lib/llm-providers/useLlmProviders'
 import { AgentList } from './AgentList'
 import { AgentsHeader } from './AgentsHeader'
 import { AgentTerminal } from './AgentTerminal'
 import type { HarnessAgent, HarnessAgentAdapter } from './agent-harness-types'
+import { buildAgentApiUrl } from './agent-api-url'
 import { createAgentPageActions } from './agents-page-actions'
 import {
   useDefaultAgentName,
@@ -67,6 +69,7 @@ export const AgentsPage: FC = () => {
     gateway: status,
     loading: harnessAgentsLoading,
     error: harnessAgentsError,
+    refetch: refetchHarnessAgents,
   } = useHarnessAgents()
 
   const openClawAgentsEnabled =
@@ -108,6 +111,14 @@ export const AgentsPage: FC = () => {
   const [harnessModelId, setHarnessModelId] = useState('')
   const [harnessReasoningEffort, setHarnessReasoningEffort] = useState('')
   const [createHermesProviderId, setCreateHermesProviderId] = useState('')
+  const [customCommand, setCustomCommand] = useState('')
+  const [customArgs, setCustomArgs] = useState('')
+  const [customLabel, setCustomLabel] = useState('')
+  const [customProbeResult, setCustomProbeResult] = useState<{
+    healthy: boolean
+    error?: string
+  } | null>(null)
+  const [customProbeLoading, setCustomProbeLoading] = useState(false)
   const [showTerminal, setShowTerminal] = useState(false)
   const [cliAuthModalOpen, setCliAuthModalOpen] = useState(false)
   const [pageError, setPageError] = useState<string | null>(null)
@@ -225,6 +236,72 @@ export const AgentsPage: FC = () => {
   const creatingAgent = creatingOpenClawAgent || createHarnessAgent.isPending
   const deletingAgent = deletingOpenClawAgent || deleteHarnessAgent.isPending
 
+  const handleProbeCustom = async () => {
+    if (!customCommand.trim()) return
+    setCustomProbeLoading(true)
+    setCustomProbeResult(null)
+    try {
+      const baseUrl = await getAgentServerUrl()
+      const response = await fetch(buildAgentApiUrl(baseUrl, '/probe-custom'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          command: customCommand.trim(),
+          args: customArgs
+            .split(/\s+/)
+            .map((value) => value.trim())
+            .filter(Boolean),
+        }),
+      })
+      const result = (await response.json()) as {
+        healthy?: boolean
+        error?: string
+      }
+      setCustomProbeResult({
+        healthy: Boolean(result.healthy),
+        ...(result.error ? { error: result.error } : {}),
+      })
+    } catch (err) {
+      setCustomProbeResult({
+        healthy: false,
+        error: err instanceof Error ? err.message : 'Probe failed',
+      })
+    } finally {
+      setCustomProbeLoading(false)
+    }
+  }
+
+  const handleImportAcpx = async () => {
+    try {
+      const baseUrl = await getAgentServerUrl()
+      const response = await fetch(buildAgentApiUrl(baseUrl, '/import-acpx'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const result = (await response.json()) as {
+        results?: Array<{ imported?: boolean; reason?: string }>
+        error?: string
+      }
+      if (!response.ok || result.error) {
+        setCreateError(result.error ?? 'Failed to import ACPX agents')
+        return
+      }
+      const importedCount = result.results?.filter((entry) => entry.imported).length ?? 0
+      if (importedCount === 0) {
+        setCreateError(
+          result.results?.[0]?.reason ?? 'No ACPX agents available to import',
+        )
+        return
+      }
+      setCreateError(null)
+      setCreateOpen(false)
+      await refetchHarnessAgents()
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   const handleHarnessAdapterChange = (adapter: HarnessAgentAdapter) => {
     const descriptor = adapters.find((entry) => entry.id === adapter)
     setHarnessAdapterId(adapter)
@@ -237,6 +314,9 @@ export const AgentsPage: FC = () => {
       createProviderId,
       createRuntime,
       createHermesProviderId,
+      customArgs,
+      customCommand,
+      customLabel,
       harnessModelId,
       harnessReasoningEffort,
       navigate,
@@ -408,6 +488,11 @@ export const AgentsPage: FC = () => {
           cliAuthError={cliAuthError ?? null}
           cliAuthLoading={cliAuthLoading}
           cliAuthStatus={cliAuthStatus}
+          customCommand={customCommand}
+          customArgs={customArgs}
+          customLabel={customLabel}
+          customProbeResult={customProbeResult}
+          customProbeLoading={customProbeLoading}
           onConnectCliProvider={() => setCliAuthModalOpen(true)}
           onCreate={handleCreate}
           onOpenChange={(open) => {
@@ -416,6 +501,11 @@ export const AgentsPage: FC = () => {
               setCreateError(null)
               createHarnessAgent.reset()
               setCreateHermesProviderId('')
+              setCustomCommand('')
+              setCustomArgs('')
+              setCustomLabel('')
+              setCustomProbeResult(null)
+              setCustomProbeLoading(false)
             }
           }}
           onRuntimeChange={setCreateRuntime}
@@ -425,6 +515,11 @@ export const AgentsPage: FC = () => {
           onHermesProviderChange={setCreateHermesProviderId}
           onNameChange={setNewName}
           onProviderChange={setCreateProviderId}
+          onCustomCommandChange={setCustomCommand}
+          onCustomArgsChange={setCustomArgs}
+          onCustomLabelChange={setCustomLabel}
+          onProbeCustom={handleProbeCustom}
+          onImportAcpx={handleImportAcpx}
         />
       </div>
     </div>
