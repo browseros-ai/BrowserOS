@@ -4,6 +4,8 @@
 **Status:** Draft
 **Scope:** Augment BrowserOS compaction with VCC (algorithmic) method alongside existing LLM summarization. Support method switching and per-method configuration.
 
+**Skills invoked:** `brainstorming`
+
 ## Problem
 
 BrowserOS compaction is a `prepareStep` in `ToolLoopAgent` that cascades: prune → reduceToolOutputs → compactMessages. The `compactMessages()` function always calls the LLM to summarize history. There is no way to:
@@ -16,6 +18,119 @@ BrowserOS compaction is a `prepareStep` in `ToolLoopAgent` that cascades: prune 
 ## Solution
 
 Add a `compaction` config block to `ResolvedAgentConfig`. Route inside `compactMessages()` based on `method`. Vendor the pi-vcc algorithmic pipeline (normalize → filter → sections → format) adapted for AI SDK `ModelMessage[]`.
+
+## Data Shapes
+
+These are the exact types flowing through the compaction pipeline. Any adapter or new code must conform to these.
+
+### ModelMessage (AI SDK)
+
+```ts
+type ModelMessage = SystemModelMessage | UserModelMessage | AssistantModelMessage | ToolModelMessage
+
+interface SystemModelMessage {
+  role: 'system'
+  content: string
+  providerOptions?: ProviderOptions
+}
+
+interface UserModelMessage {
+  role: 'user'
+  content: UserContent  // string | Array<TextPart | ImagePart | FilePart>
+  providerOptions?: ProviderOptions
+}
+
+interface AssistantModelMessage {
+  role: 'assistant'
+  content: AssistantContent  // string | Array<TextPart | FilePart | ReasoningPart | ToolCallPart | ToolResultPart | ToolApprovalRequest>
+  providerOptions?: ProviderOptions
+}
+
+interface ToolModelMessage {
+  role: 'tool'
+  content: ToolContent  // Array<ToolResultPart | ToolApprovalResponse>
+  providerOptions?: ProviderOptions
+}
+```
+
+### CompactionState (carried across turns)
+
+```ts
+interface CompactionState {
+  existingSummary: string | null
+  compactionCount: number
+}
+```
+
+Passed via `experimental_context` in the `prepareStep` callback. Persisted across turns by the AI SDK agent loop. On first compaction, `existingSummary` is `null` and `compactionCount` is `0`. After each successful compaction, `existingSummary` holds the last summary text and `compactionCount` increments.
+
+### ComputedConfig (derived from contextWindow)
+
+```ts
+interface ComputedConfig {
+  contextWindow: number            // e.g. 200000
+  reserveTokens: number            // 20000 (or 50% for small contexts)
+  triggerRatio: number             // e.g. 0.9
+  triggerThreshold: number         // contextWindow - reserveTokens
+  keepRecentTokens: number         // ~35% of threshold, capped at 20000
+  minSummarizableTokens: number    // minimum content worth summarizing
+  maxSummarizationInput: number    // cap on input to summarizer
+  summarizerMaxOutputTokens: number // budget for summary output
+  summarizationTimeoutMs: number   // abort timeout for LLM call
+  fixedOverhead: number            // 12000 tokens
+  safetyMultiplier: number         // 1.3x
+  imageTokenEstimate: number       // 1000 per image
+  toolOutputMaxChars: number       // truncation limit
+}
+```
+
+### StepWithUsage
+
+```ts
+interface StepWithUsage {
+  usage?: {
+    inputTokens?: number | undefined
+    outputTokens?: number | undefined
+  }
+}
+```
+
+### SplitPointResult
+
+```ts
+interface SplitPointResult {
+  splitIndex: number       // -1 if no safe split found
+  turnStartIndex: number   // -1 if not a split turn
+  isSplitTurn: boolean     // true when split lands mid-turn
+}
+```
+
+### prepareStep Signature
+
+```ts
+type PrepareStep = (options: {
+  messages: ModelMessage[]
+  steps: ReadonlyArray<StepWithUsage>
+  model: LanguageModel
+  experimental_context: unknown  // carries CompactionState
+}) => Promise<{
+  messages: ModelMessage[]
+  experimental_context: unknown  // updated CompactionState
+}>
+```
+
+### Compaction Output Format
+
+Regardless of method (LLM or VCC), `compactMessages()` always returns:
+
+```ts
+[
+  { role: 'user', content: `${summary}\n\nContinue from where you left off.` },
+  ...toKeep  // the recent messages after the split point
+]
+```
+
+The summary is injected as a synthetic `user` message. The `toKeep` tail is untouched.
 
 ## Current Architecture
 
