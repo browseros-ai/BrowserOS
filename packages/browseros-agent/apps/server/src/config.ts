@@ -258,6 +258,7 @@ function parseConfigFile(filePath?: string): ConfigResult<PartialConfig> {
           typeof cfg.instance?.chromium_version === 'string'
             ? cfg.instance.chromium_version
             : undefined,
+        compaction: cfg.compaction,
       }),
     }
   } catch (e: unknown) {

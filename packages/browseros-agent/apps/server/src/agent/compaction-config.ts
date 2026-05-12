@@ -32,17 +32,20 @@ export function resolveCompactionConfig(
     return undefined
   }
 
-  // Validate method
-  const method = input.method
-  if (method == null || typeof method !== 'string') {
-    throw new Error(
-      'Compaction config: "method" must be a string ("default" | "vcc")',
-    )
-  }
+  // Validate method — default to 'default' if absent or invalid
+  const rawMethod = input.method
+  const method =
+    typeof rawMethod === 'string' && VALID_METHODS.has(rawMethod)
+      ? rawMethod
+      : 'default'
 
-  if (!VALID_METHODS.has(method)) {
-    throw new Error(
-      `Compaction config: invalid method "${method}". Must be "default" or "vcc"`,
+  if (
+    rawMethod != null &&
+    typeof rawMethod === 'string' &&
+    !VALID_METHODS.has(rawMethod)
+  ) {
+    logger.warn(
+      `Compaction config: invalid method "${rawMethod}", falling back to "default"`,
     )
   }
 
