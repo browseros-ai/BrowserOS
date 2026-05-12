@@ -1,6 +1,7 @@
 import type { FC } from 'react'
 import { HashRouter, Navigate, Route, Routes, useParams } from 'react-router'
-
+import { Feature } from '@/lib/browseros/capabilities'
+import { useCapabilities } from '@/lib/browseros/useCapabilities'
 import { NewTab } from '../newtab/index/NewTab'
 import { NewTabChat } from '../newtab/index/NewTabChat'
 import { NewTabLayout } from '../newtab/layout/NewTabLayout'
@@ -9,7 +10,15 @@ import { OnboardingDemo } from '../onboarding/demo/OnboardingDemo'
 import { FeaturesPage } from '../onboarding/features/Features'
 import { Onboarding } from '../onboarding/index/Onboarding'
 import { StepsLayout } from '../onboarding/steps/StepsLayout'
+import { AclSettingsPage } from './acl-settings/AclSettingsPage'
+import { AdminDashboardPage } from './admin-dashboard/AdminDashboardPage'
+import { AdvancedConfigPage } from './advanced-config/AdvancedConfigPage'
+import { AgentCommandConversation } from './agent-command/AgentCommandConversation'
+import { AgentCommandHome } from './agent-command/AgentCommandHome'
+import { AgentCommandLayout } from './agent-command/agent-command-layout'
+import { AgentsPage } from './agents/AgentsPage'
 import { AISettingsPage } from './ai-settings/AISettingsPage'
+import { CompactionSettingsPage } from './compaction-settings/CompactionSettingsPage'
 import { ConnectMCP } from './connect-mcp/ConnectMCP'
 import { CustomizationPage } from './customization/CustomizationPage'
 import { SurveyPage } from './jtbd-agent/SurveyPage'
@@ -27,6 +36,7 @@ import { ScheduledTasksPage } from './scheduled-tasks/ScheduledTasksPage'
 import { SearchProviderPage } from './search-provider/SearchProviderPage'
 import { SkillsPage } from './skills/SkillsPage'
 import { SoulPage } from './soul/SoulPage'
+import { ToolApprovalsPage } from './tool-approvals/ToolApprovalsPage'
 import { UsagePage } from './usage/UsagePage'
 
 function getSurveyParams(): { maxTurns?: number; experimentId?: string } {
@@ -60,6 +70,8 @@ const OptionsRedirect: FC = () => {
 
 export const App: FC = () => {
   const surveyParams = getSurveyParams()
+  const { supports } = useCapabilities()
+  const alphaEnabled = supports(Feature.ALPHA_FEATURES_SUPPORT)
 
   return (
     <HashRouter>
@@ -75,10 +87,25 @@ export const App: FC = () => {
         {/* Main app with sidebar */}
         <Route element={<SidebarLayout />}>
           {/* Home routes */}
-          <Route path="home" element={<NewTabLayout />}>
-            <Route index element={<NewTab />} />
-            <Route path="chat" element={<NewTabChat />} />
-            <Route path="personalize" element={<Personalize />} />
+          <Route
+            path="home"
+            element={<NewTabLayout useChatSessionOnHome={!alphaEnabled} />}
+          >
+            {alphaEnabled ? (
+              <>
+                <Route element={<AgentCommandLayout />}>
+                  <Route index element={<AgentCommandHome />} />
+                  <Route
+                    path="agents/:agentId"
+                    element={<AgentCommandConversation />}
+                  />
+                </Route>
+                <Route path="chat" element={<NewTabChat />} />
+                <Route path="personalize" element={<Personalize />} />
+              </>
+            ) : (
+              <Route index element={<NewTab />} />
+            )}
             <Route path="soul" element={<SoulPage />} />
             <Route path="skills" element={<SkillsPage />} />
             <Route path="memory" element={<MemoryPage />} />
@@ -87,6 +114,27 @@ export const App: FC = () => {
           {/* Primary nav routes */}
           <Route path="connect-apps" element={<ConnectMCP />} />
           <Route path="scheduled" element={<ScheduledTasksPage />} />
+          {alphaEnabled ? (
+            <>
+              <Route path="agents" element={<AgentsPage />} />
+              <Route element={<AgentCommandLayout />}>
+                <Route
+                  path="agents/:agentId"
+                  element={
+                    <AgentCommandConversation
+                      variant="page"
+                      backPath="/agents"
+                      agentPathPrefix="/agents"
+                      createAgentPath="/agents"
+                    />
+                  }
+                />
+              </Route>
+            </>
+          ) : null}
+          {alphaEnabled ? (
+            <Route path="admin" element={<AdminDashboardPage />} />
+          ) : null}
         </Route>
 
         {/* Settings with dedicated sidebar */}
@@ -98,8 +146,16 @@ export const App: FC = () => {
             <Route path="mcp" element={<MCPSettingsPage />} />
             <Route path="customization" element={<CustomizationPage />} />
             <Route path="search" element={<SearchProviderPage />} />
+            <Route path="advanced" element={<AdvancedConfigPage />} />
+            <Route path="compaction" element={<CompactionSettingsPage />} />
             <Route path="survey" element={<SurveyPage {...surveyParams} />} />
             <Route path="usage" element={<UsagePage />} />
+            {alphaEnabled ? (
+              <>
+                <Route path="acl" element={<AclSettingsPage />} />
+                <Route path="approvals" element={<ToolApprovalsPage />} />
+              </>
+            ) : null}
           </Route>
         </Route>
 
@@ -115,7 +171,12 @@ export const App: FC = () => {
         <Route path="/" element={<Navigate to="/home" replace />} />
         <Route
           path="/personalize"
-          element={<Navigate to="/home/personalize" replace />}
+          element={
+            <Navigate
+              to={alphaEnabled ? '/home/personalize' : '/home'}
+              replace
+            />
+          }
         />
         <Route
           path="/settings/connect-mcp"
@@ -128,6 +189,18 @@ export const App: FC = () => {
         <Route
           path="/settings/skills"
           element={<Navigate to="/home/skills" replace />}
+        />
+        <Route
+          path="/audit"
+          element={<Navigate to={alphaEnabled ? '/admin' : '/home'} replace />}
+        />
+        <Route
+          path="/observability"
+          element={<Navigate to={alphaEnabled ? '/admin' : '/home'} replace />}
+        />
+        <Route
+          path="/executions"
+          element={<Navigate to={alphaEnabled ? '/admin' : '/home'} replace />}
         />
         <Route path="/options/*" element={<OptionsRedirect />} />
 

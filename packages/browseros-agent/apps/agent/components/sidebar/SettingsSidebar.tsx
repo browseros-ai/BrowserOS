@@ -4,11 +4,15 @@ import {
   Bot,
   Compass,
   CreditCard,
+  Layers,
   MessageSquare,
   Palette,
   RotateCcw,
   Search,
   Server,
+  Settings2,
+  ShieldAlert,
+  ShieldCheck,
 } from 'lucide-react'
 import type { FC } from 'react'
 import { NavLink } from 'react-router'
@@ -78,13 +82,27 @@ const primarySettingsSections: NavSection[] = [
         icon: Palette,
         feature: Feature.CUSTOMIZATION_SUPPORT,
       },
+      {
+        name: 'Tool Approvals',
+        to: '/settings/approvals',
+        icon: ShieldCheck,
+        feature: Feature.ALPHA_FEATURES_SUPPORT,
+      },
       { name: 'BrowserOS as MCP', to: '/settings/mcp', icon: Server },
+      {
+        name: 'ACL Rules',
+        to: '/settings/acl',
+        icon: ShieldAlert,
+        feature: Feature.ALPHA_FEATURES_SUPPORT,
+      },
       {
         name: 'Usage & Billing',
         to: '/settings/usage',
         icon: CreditCard,
         feature: Feature.CREDITS_SUPPORT,
       },
+      { name: 'Advanced Config', to: '/settings/advanced', icon: Settings2 },
+      { name: 'Compaction', to: '/settings/compaction', icon: Layers },
     ],
   },
 ]
