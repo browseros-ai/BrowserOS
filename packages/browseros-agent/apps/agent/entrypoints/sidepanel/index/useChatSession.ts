@@ -18,18 +18,18 @@ import {
   PROVIDER_SELECTED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import {
+  editMessageById,
+  forkFromMessageId,
+  undoFromMessageId,
+} from '@/lib/conversation-undo-fork'
+import {
   conversationStorage,
   useConversations,
 } from '@/lib/conversations/conversationStorage'
-import {
-  undoFromMessageId,
-  forkFromMessageId,
-  editMessageById,
-} from '@/lib/conversation-undo-fork'
-import { removeConversationExecutionHistory } from '@/lib/execution-history/storage'
 import { formatConversationHistory } from '@/lib/conversations/formatConversationHistory'
 import { useInvalidateCredits } from '@/lib/credits/useCredits'
 import { declinedAppsStorage } from '@/lib/declined-apps/storage'
+import { removeConversationExecutionHistory } from '@/lib/execution-history/storage'
 import { useGraphqlQuery } from '@/lib/graphql/useGraphqlQuery'
 import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
 import type {
@@ -825,17 +825,30 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       if (isStreaming) return
       const truncated = undoFromMessageId(messages, messageId)
       setMessages(truncated)
-      // Clean up execution history for removed tasks
-      void removeConversationExecutionHistory(conversationIdRef.current).then(() => {
-        // Re-save with truncated messages
-        if (isLoggedIn) {
-          saveRemoteConversation(conversationIdRef.current, truncated)
-        } else {
-          saveLocalConversation(conversationIdRef.current, truncated)
-        }
+      track(CONVERSATION_UNDO_EVENT, {
+        conversationId: conversationIdRef.current,
+        messageId,
       })
+      // Clean up execution history for removed tasks
+      void removeConversationExecutionHistory(conversationIdRef.current).then(
+        () => {
+          // Re-save with truncated messages
+          if (isLoggedIn) {
+            saveRemoteConversation(conversationIdRef.current, truncated)
+          } else {
+            saveLocalConversation(conversationIdRef.current, truncated)
+          }
+        },
+      )
     },
-    [messages, setMessages, isStreaming, isLoggedIn, saveLocalConversation, saveRemoteConversation],
+    [
+      messages,
+      setMessages,
+      isStreaming,
+      isLoggedIn,
+      saveLocalConversation,
+      saveRemoteConversation,
+    ],
   )
 
   const forkTurn = useCallback(
@@ -844,6 +857,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       if (!result) return
 
       const newId = crypto.randomUUID()
+      track(CONVERSATION_FORK_EVENT, {
+        conversationId: conversationIdRef.current,
+        messageId,
+        newConversationId: newId,
+      })
       // Save the forked conversation as a new conversation
       if (isLoggedIn) {
         saveRemoteConversation(newId, result.messages)
@@ -854,7 +872,13 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       // Navigate to the new conversation
       setSearchParams({ conversationId: newId }, { replace: false })
     },
-    [messages, isLoggedIn, saveLocalConversation, saveRemoteConversation, setSearchParams],
+    [
+      messages,
+      isLoggedIn,
+      saveLocalConversation,
+      saveRemoteConversation,
+      setSearchParams,
+    ],
   )
 
   const editTurn = useCallback(
