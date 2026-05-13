@@ -10,6 +10,8 @@ let builtinDir: string
 mock.module('../../src/lib/browseros-dir', () => ({
   getSkillsDir: () => testDir,
   getBuiltinSkillsDir: () => builtinDir,
+  getSkillsSourcesPath: () => join(testDir, 'sources.json'),
+  getSkillsStatePath: () => join(testDir, 'state.json'),
 }))
 
 mock.module('../../src/env', () => ({

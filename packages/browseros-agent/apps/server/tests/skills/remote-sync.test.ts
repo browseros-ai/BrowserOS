@@ -19,6 +19,8 @@ let builtinDir: string
 mock.module('../../src/lib/browseros-dir', () => ({
   getSkillsDir: () => testDir,
   getBuiltinSkillsDir: () => builtinDir,
+  getSkillsSourcesPath: () => join(testDir, 'sources.json'),
+  getSkillsStatePath: () => join(testDir, 'state.json'),
 }))
 
 const { fetchRemoteCatalog, syncBuiltinSkills } = await import(
@@ -266,6 +268,79 @@ describe('syncBuiltinSkills', () => {
       .then(() => true)
       .catch(() => false)
     assert.strictEqual(exists, false)
+    spy.mockRestore()
+  })
+
+  it('preserves disabled state using gray-matter when metadata has complex nesting', async () => {
+    const complexFrontmatter = `---
+name: test-skill
+description: A test skill
+metadata:
+  display-name: Test Skill
+  enabled: "false"
+  version: "3.0"
+  extra:
+    nested: true
+---
+# Body
+`
+    await mkdir(join(builtinDir, 'test-skill'), { recursive: true })
+    await writeFile(
+      join(builtinDir, 'test-skill', 'SKILL.md'),
+      complexFrontmatter,
+    )
+
+    const v4 = `---
+name: test-skill
+description: Updated skill
+metadata:
+  display-name: Test Skill
+  enabled: "true"
+  version: "4.0"
+---
+# Body v4
+`
+    const spy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify(
+          makeCatalog([{ id: 'test-skill', version: '4.0', content: v4 }]),
+        ),
+        { status: 200 },
+      ),
+    )
+    await syncBuiltinSkills()
+    const content = await readFile(
+      join(builtinDir, 'test-skill', 'SKILL.md'),
+      'utf-8',
+    )
+    assert.ok(
+      content.includes('version: "4.0"') || content.includes("version: '4.0'"),
+      'should update version',
+    )
+    assert.ok(
+      content.includes('enabled: "false"') ||
+        content.includes("enabled: 'false'"),
+      'should preserve disabled state via gray-matter',
+    )
+    spy.mockRestore()
+  })
+
+  it('does not wipe existing builtin skills when remote catalog is empty', async () => {
+    await mkdir(join(builtinDir, 'existing-skill'), { recursive: true })
+    await writeFile(join(builtinDir, 'existing-skill', 'SKILL.md'), SKILL_V1)
+
+    const spy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(makeCatalog([])), { status: 200 }),
+    )
+    await syncBuiltinSkills()
+    const exists = await stat(join(builtinDir, 'existing-skill'))
+      .then(() => true)
+      .catch(() => false)
+    assert.strictEqual(
+      exists,
+      true,
+      'empty catalog should NOT remove existing skills',
+    )
     spy.mockRestore()
   })
 })

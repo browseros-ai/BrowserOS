@@ -28,6 +28,8 @@ afterEach(async () => {
 mock.module('../../src/lib/browseros-dir', () => ({
   getSkillsDir: () => testDir,
   getBuiltinSkillsDir: () => builtinDir,
+  getSkillsSourcesPath: () => join(testDir, 'sources.json'),
+  getSkillsStatePath: () => join(testDir, 'state.json'),
 }))
 
 const { migrateBuiltinSkills } = await import('../../src/skills/migrate')
