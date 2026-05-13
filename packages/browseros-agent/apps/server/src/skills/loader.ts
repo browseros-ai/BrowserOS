@@ -4,7 +4,13 @@ import { PATHS } from '@browseros/shared/constants/paths'
 import matter from 'gray-matter'
 import { getBuiltinSkillsDir, getSkillsDir } from '../lib/browseros-dir'
 import { logger } from '../lib/logger'
-import type { SkillFrontmatter, SkillMeta } from './types'
+import { loadSkillsSources, loadSkillsState } from './state'
+import type {
+  SkillConflict,
+  SkillFrontmatter,
+  SkillMeta,
+  SkillSourceKind,
+} from './types'
 
 async function isDirectory(dirPath: string): Promise<boolean> {
   try {
@@ -26,10 +32,18 @@ export function isValidFrontmatter(data: unknown): data is SkillFrontmatter {
   )
 }
 
+function stateKeyFor(
+  skill: Pick<SkillMeta, 'sourceKind' | 'sourceId' | 'id'>,
+): string {
+  return `${skill.sourceKind}:${skill.sourceId}:${skill.id}`
+}
+
 async function parseSkillFile(
   skillMdPath: string,
   dirName: string,
-  builtIn: boolean,
+  sourceKind: SkillSourceKind,
+  sourceId: string,
+  sourceLabel?: string,
 ): Promise<SkillMeta | null> {
   try {
     const content = await readFile(skillMdPath, 'utf-8')
@@ -51,7 +65,10 @@ async function parseSkillFile(
       location: skillMdPath,
       enabled: meta?.enabled !== 'false',
       version: meta?.version,
-      builtIn,
+      builtIn: sourceKind === 'builtin',
+      sourceKind,
+      sourceId,
+      sourceLabel,
     }
   } catch (err) {
     logger.warn('Failed to parse skill', {
@@ -64,7 +81,9 @@ async function parseSkillFile(
 
 async function scanDir(
   dir: string,
-  builtIn: boolean,
+  sourceKind: SkillSourceKind,
+  sourceId: string,
+  sourceLabel?: string,
   skipDirs?: Set<string>,
 ): Promise<SkillMeta[]> {
   let entries: string[]
@@ -89,7 +108,13 @@ async function scanDir(
       continue
     }
 
-    const skill = await parseSkillFile(skillMdPath, entry, builtIn)
+    const skill = await parseSkillFile(
+      skillMdPath,
+      entry,
+      sourceKind,
+      sourceId,
+      sourceLabel,
+    )
     if (!skill || seen.has(skill.id)) continue
 
     seen.add(skill.id)
@@ -99,17 +124,74 @@ async function scanDir(
   return skills
 }
 
+function applyRuntimeState(
+  skills: SkillMeta[],
+  runtimeState: { skills: Record<string, { enabled: boolean }> },
+): SkillMeta[] {
+  return skills.map((skill) => {
+    const override = runtimeState.skills[stateKeyFor(skill)]
+    return override ? { ...skill, enabled: override.enabled } : skill
+  })
+}
+
+function applyConflicts(skills: SkillMeta[]): SkillMeta[] {
+  const grouped = new Map<string, SkillMeta[]>()
+  for (const skill of skills) {
+    const bucket = grouped.get(skill.id) ?? []
+    bucket.push(skill)
+    grouped.set(skill.id, bucket)
+  }
+  return skills.map((skill) => {
+    const collisions = grouped.get(skill.id) ?? []
+    if (collisions.length <= 1) return skill
+    const conflict: SkillConflict = {
+      kind: 'duplicate-id',
+      collisions: collisions.map((entry) => ({
+        sourceKind: entry.sourceKind,
+        sourceId: entry.sourceId,
+        location: entry.location,
+      })),
+    }
+    return { ...skill, conflict }
+  })
+}
+
 export async function loadAllSkills(): Promise<SkillMeta[]> {
-  const builtinSkills = await scanDir(getBuiltinSkillsDir(), true)
-  const userSkills = await scanDir(
+  const builtinSkills = await scanDir(
+    getBuiltinSkillsDir(),
+    'builtin',
+    'builtin',
+  )
+  const localSkills = await scanDir(
     getSkillsDir(),
-    false,
+    'local',
+    'local',
+    'My Skills',
     new Set([PATHS.BUILTIN_DIR_NAME]),
   )
-  return [...builtinSkills, ...userSkills]
+
+  const sources = await loadSkillsSources()
+  const externalSkills = (
+    await Promise.all(
+      sources.sources
+        .filter((source) => source.enabled)
+        .map((source) =>
+          scanDir(source.path, 'external', source.id, source.label),
+        ),
+    )
+  ).flat()
+
+  const runtimeState = await loadSkillsState()
+  return applyConflicts(
+    applyRuntimeState(
+      [...builtinSkills, ...localSkills, ...externalSkills],
+      runtimeState,
+    ),
+  )
 }
 
 export async function loadSkills(): Promise<SkillMeta[]> {
-  const all = await loadAllSkills()
-  return all.filter((s) => s.enabled)
+  return (await loadAllSkills()).filter(
+    (skill) => skill.enabled && !skill.conflict,
+  )
 }
