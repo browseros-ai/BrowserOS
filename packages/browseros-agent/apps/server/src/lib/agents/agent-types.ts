@@ -64,7 +64,7 @@ export interface AgentHistoryToolCall {
 export interface AgentHistoryEntry {
   id: string
   agentId: string
-  sessionId: 'main'
+  sessionId: string
   role: 'user' | 'assistant'
   text: string
   createdAt: number

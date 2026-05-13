@@ -38,7 +38,7 @@ export interface PreparedAcpxAgentContext {
 export interface PrepareAcpxAgentContextInput {
   browserosDir: string
   agent: AgentDefinition
-  sessionId: 'main'
+  sessionId: string
   sessionKey: string
   cwdOverride: string | null
   isSelectedCwd: boolean

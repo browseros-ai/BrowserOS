@@ -941,7 +941,7 @@ export class AgentHarnessService {
    */
   getActiveTurn(
     agentId: string,
-    sessionId: 'main' = 'main',
+    sessionId: string = 'main',
   ): ActiveTurnInfo | null {
     const turn = this.turnRegistry.getActiveFor(agentId, sessionId)
     return turn ? this.turnRegistry.describe(turn.turnId) : null
