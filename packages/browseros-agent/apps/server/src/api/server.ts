@@ -21,7 +21,10 @@ import { getDb } from '../lib/db'
 import { logger } from '../lib/logger'
 import { Sentry } from '../lib/sentry'
 import { requireTrustedOrigin } from './middleware/require-trusted-origin'
+import { AgentSessionStore } from '../agent/agent-session-store'
 import { createAgentRoutes } from './routes/agents'
+import { createAgentSessionRoutes } from './routes/agent-sessions'
+import { createAssistantSessionRoutes } from './routes/assistant-sessions'
 import { createChatRoutes } from './routes/chat'
 import { createCreditsRoutes } from './routes/credits'
 import { createHealthRoute } from './routes/health'
@@ -125,6 +128,11 @@ export async function createHttpServer(config: HttpServerConfig) {
       '/agents',
       createAgentRoutes({ browser, browserosServerPort: port }),
     )
+    .route(
+      '/agents',
+      createAgentSessionRoutes({ sessionStore: new AgentSessionStore() }),
+    )
+    .route('/assistant', createAssistantSessionRoutes())
     .route('/soul', createSoulRoutes())
     .route('/memory', createMemoryRoutes())
     .route('/skills', createSkillsRoutes())

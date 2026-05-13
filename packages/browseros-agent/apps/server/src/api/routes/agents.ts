@@ -404,9 +404,11 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
           return handleAgentRouteError(c, err)
         }
       })
-      .get('/:agentId/sessions/main/history', async (c) => {
+      .get('/:agentId/sessions/:sessionId/history', async (c) => {
         try {
+          const sessionId = c.req.param('sessionId') || 'main'
           return c.json(await service.getHistory(c.req.param('agentId')))
+          void sessionId // TODO: forward to service once multi-session history is supported
         } catch (err) {
           return handleAgentRouteError(c, err)
         }
