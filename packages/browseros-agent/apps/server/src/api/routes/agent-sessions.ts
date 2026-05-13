@@ -33,23 +33,31 @@ export function createAgentSessionRoutes(deps: {
       const cursor = url.searchParams.get('cursor') ?? undefined
       const limitRaw = url.searchParams.get('limit')
       const limit = limitRaw ? Number.parseInt(limitRaw, 10) : undefined
+      const cappedLimit = Number.isFinite(limit) ? Math.min(limit, 200) : undefined
 
       const sessions = await sessionStore.listSessions(agentId, {
         search,
         cursor,
-        limit: Number.isFinite(limit) ? limit : undefined,
+        limit: cappedLimit,
       })
 
       return c.json({ sessions })
     })
     .get('/:agentId/sessions/:sessionId', async (c) => {
+      const agentId = c.req.param('agentId')
       const sessionId = c.req.param('sessionId')
       const session = await sessionStore.getSessionMeta(sessionId)
-      if (!session) return c.json({ error: 'Session not found' }, 404)
+      if (!session || session.agentId !== agentId) return c.json({ error: 'Session not found' }, 404)
       return c.json({ session })
     })
     .patch('/:agentId/sessions/:sessionId', async (c) => {
+      const agentId = c.req.param('agentId')
       const sessionId = c.req.param('sessionId')
+
+      // Verify ownership before update
+      const existing = await sessionStore.getSessionMeta(sessionId)
+      if (!existing || existing.agentId !== agentId) return c.json({ error: 'Session not found' }, 404)
+
       const body = await c.req.json().catch(() => ({}))
       if (!body || typeof body !== 'object') {
         return c.json({ error: 'Invalid JSON body' }, 400)
@@ -57,7 +65,7 @@ export function createAgentSessionRoutes(deps: {
 
       const updates: Parameters<typeof sessionStore.updateSessionMeta>[1] = {}
       if (typeof body.title === 'string') updates.title = body.title
-      if (typeof body.turnCount === 'number') updates.turnCount = body.turnCount
+      if (Number.isInteger(body.turnCount) && body.turnCount >= 0) updates.turnCount = body.turnCount
       if (typeof body.lastMessagePreview === 'string')
         updates.lastMessagePreview = body.lastMessagePreview
       if (typeof body.lastMessageAt === 'number')
@@ -76,11 +84,14 @@ export function createAgentSessionRoutes(deps: {
       return c.json({ session })
     })
     .delete('/:agentId/sessions/:sessionId', async (c) => {
+      const agentId = c.req.param('agentId')
       const sessionId = c.req.param('sessionId')
+
+      // Verify ownership before delete
+      const existing = await sessionStore.getSessionMeta(sessionId)
+      if (!existing || existing.agentId !== agentId) return c.json({ error: 'Session not found' }, 404)
+
       const refCount = await sessionStore.closeSession(sessionId)
-      if (refCount === -1) {
-        return c.json({ error: 'Session not found' }, 404)
-      }
       return c.json({ refCount })
     })
 }

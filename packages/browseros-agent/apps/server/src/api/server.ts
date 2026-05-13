@@ -124,13 +124,15 @@ export async function createHttpServer(config: HttpServerConfig) {
       }),
     )
     .route('/status', createStatusRoute({ browser }))
+    // Single shared AgentSessionStore — harness and routes see the same instance
+    const sharedSessionStore = new AgentSessionStore()
     .route(
       '/agents',
-      createAgentRoutes({ browser, browserosServerPort: port }),
+      createAgentRoutes({ browser, browserosServerPort: port, sessionMetaStore: sharedSessionStore }),
     )
     .route(
       '/agents',
-      createAgentSessionRoutes({ sessionStore: new AgentSessionStore() }),
+      createAgentSessionRoutes({ sessionStore: sharedSessionStore }),
     )
     .route('/assistant', createAssistantSessionRoutes())
     .route('/soul', createSoulRoutes())

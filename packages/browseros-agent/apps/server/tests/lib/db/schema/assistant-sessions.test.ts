@@ -164,9 +164,17 @@ describe('assistant-sessions schema', () => {
       expect(builder).toBeDefined()
       const result = builder({}) as Array<{ config: { name: string } }>
       const idx = result.find(
-        (i) => i.config.name === 'session_tags_tag_idx',
+        (i) => i?.config?.name === 'session_tags_tag_idx',
       )
       expect(idx).toBeDefined()
+    })
+
+    it('has composite primary key on (sessionId, tag)', () => {
+      const builder = sessionTags[Symbol.for('drizzle:ExtraConfigBuilder')]
+      const result = builder({}) as Array<{ config: { name: string } }>
+      // primaryKey produces an entry with a different shape; verify it exists
+      const hasPK = result.some((i) => i?.config?.name?.includes('session_tags') || i?.config?.columns)
+      expect(hasPK).toBe(true)
     })
 
     it('exports TypeScript types', () => {

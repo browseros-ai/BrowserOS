@@ -1029,9 +1029,10 @@ export class AgentHarnessService {
           )
         : null
 
-    // Open (or re-open) the session in the session metadata store so
-    // callers can enumerate active sessions and read their metadata.
-    await this.sessionMetaStore.openSession(agent.id, 'main', input.cwd)
+    // Ensure session exists in the metadata store (idempotent — skips if already tracked)
+    if (!(await this.sessionMetaStore.getSessionMeta('main'))) {
+      await this.sessionMetaStore.openSession(agent.id, 'main', input.cwd)
+    }
 
     try {
       const upstream = await this.runtime.send({
