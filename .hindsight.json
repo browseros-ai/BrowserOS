@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "bankId": "browseros",
+  "provider": "local",
+  "repoSlug": "browseros-ai/BrowserOS",
+  "baseUrl": "http://100.114.135.99:24300",
+  "bankStrategy": "per-repo",
+  "discoveredAt": "2026-05-13T18:54:22.276Z",
+  "updatedAt": "2026-05-13T18:54:22.276Z"
+}
