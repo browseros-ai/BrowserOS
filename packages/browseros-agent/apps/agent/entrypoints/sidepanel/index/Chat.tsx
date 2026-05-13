@@ -12,9 +12,16 @@ import {
   SIDEPANEL_VOICE_RECORDING_STARTED_EVENT,
   SIDEPANEL_VOICE_RECORDING_STOPPED_EVENT,
   SIDEPANEL_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
+  SLASH_COMMAND_EXECUTED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { useJtbdPopup } from '@/lib/jtbd-popup/useJtbdPopup'
 import { track } from '@/lib/metrics/track'
+import {
+  getAllCommands,
+  processSlashCommand,
+  type SlashCommand,
+} from '@/lib/slash-commands'
+import { registerBuiltinCommands } from '@/lib/slash-commands/builtins'
 import { useVoiceInput } from '@/lib/voice/useVoiceInput'
 import { useChatSessionContext } from '../layout/ChatSessionContext'
 import { ChatEmptyState } from './ChatEmptyState'
@@ -44,7 +51,22 @@ export const Chat = () => {
     onClickDislike,
     isRestoringConversation,
     addToolApprovalResponse,
+    undoTurn,
+    forkTurn,
+    editTurn,
+    conversationId,
+    setMessages: setMessagesFromContext,
+    resetConversation,
   } = useChatSessionContext()
+
+  // Register slash commands once on mount
+  const slashCommandsRegistered = useRef(false)
+  if (!slashCommandsRegistered.current) {
+    registerBuiltinCommands()
+    slashCommandsRegistered.current = true
+  }
+
+  const [slashCommands] = useState<SlashCommand[]>(() => getAllCommands())
 
   const {
     popupVisible,
@@ -60,6 +82,8 @@ export const Chat = () => {
   const [input, setInput] = useState('')
   const [attachedTabs, setAttachedTabs] = useState<chrome.tabs.Tab[]>([])
   const [mounted, setMounted] = useState(false)
+  const [slashCommandOpen, setSlashCommandOpen] = useState(false)
+  const [slashFilterText, setSlashFilterText] = useState('')
 
   useEffect(() => {
     setMounted(true)
@@ -112,6 +136,31 @@ export const Chat = () => {
     }
   }, [voice.error])
 
+  const handleInputChange = (value: string) => {
+    setInput(value)
+
+    // Track slash command autocomplete
+    if (value.startsWith('/')) {
+      const afterSlash = value.slice(1)
+      const spaceIndex = afterSlash.indexOf(' ')
+      if (spaceIndex === -1 && afterSlash.length > 0) {
+        setSlashFilterText(afterSlash)
+        setSlashCommandOpen(true)
+      } else {
+        setSlashCommandOpen(false)
+      }
+    } else {
+      setSlashCommandOpen(false)
+    }
+  }
+
+  const handleSlashSelect = (cmd: SlashCommand) => {
+    const nextInput = `/${cmd.name} `
+    setInput(nextInput)
+    setSlashCommandOpen(false)
+    setSlashFilterText('')
+  }
+
   const handleModeChange = (newMode: ChatMode) => {
     track(SIDEPANEL_MODE_CHANGED_EVENT, { from: mode, to: newMode })
     setMode(newMode)
@@ -140,11 +189,57 @@ export const Chat = () => {
     setAttachedTabs((prev) => prev.filter((t) => t.id !== tabId))
   }
 
-  const executeMessage = (customMessageText?: string) => {
+  const executeMessage = async (customMessageText?: string) => {
     const messageText = customMessageText ? customMessageText : input.trim()
     if (!messageText) return
 
     recordMessageSent()
+
+    // Process slash commands before sending
+    if (messageText.startsWith('/')) {
+      const maybeResult = processSlashCommand(messageText, {
+        messages,
+        conversationId,
+        setMessages: setMessagesFromContext,
+        resetConversation,
+        mode,
+        setMode,
+      })
+      const result =
+        maybeResult instanceof Promise ? await maybeResult : maybeResult
+
+      if (result) {
+        if (result.type === 'action') {
+          track(SLASH_COMMAND_EXECUTED_EVENT, {
+            command: messageText.split(' ')[0],
+            type: 'action',
+          })
+          setInput('')
+          setAttachedTabs([])
+          return
+        }
+        if (resolved.type === 'prompt') {
+          track(SLASH_COMMAND_EXECUTED_EVENT, {
+            command: messageText.split(' ')[0],
+            type: 'prompt',
+          })
+          if (attachedTabs.length) {
+            const action = createBrowserOSAction({
+              mode,
+              message: resolved.expandedText,
+              tabs: attachedTabs,
+            })
+            sendMessage({ text: resolved.expandedText, action })
+          } else {
+            sendMessage({ text: resolved.expandedText })
+          }
+          setInput('')
+          setAttachedTabs([])
+          return
+        }
+        // passthrough — fall through to normal send
+      }
+    }
 
     if (attachedTabs.length) {
       const action = createBrowserOSAction({
@@ -229,6 +324,9 @@ export const Chat = () => {
             onToolDeny={(id) =>
               addToolApprovalResponse({ id, approved: false })
             }
+            onUndoTurn={undoTurn}
+            onForkTurn={forkTurn}
+            onEditTurn={editTurn}
           />
         )}
         {agentUrlError && (
@@ -246,7 +344,7 @@ export const Chat = () => {
         mode={mode}
         onModeChange={handleModeChange}
         input={input}
-        onInputChange={setInput}
+        onInputChange={handleInputChange}
         onSubmit={handleSubmit}
         status={status}
         onStop={handleStop}
@@ -254,6 +352,10 @@ export const Chat = () => {
         onToggleTab={toggleTabSelection}
         onRemoveTab={removeTab}
         voice={voiceState}
+        slashCommands={slashCommands}
+        onSlashSelect={handleSlashSelect}
+        slashCommandOpen={slashCommandOpen}
+        slashFilterText={slashFilterText}
       />
     </>
   )

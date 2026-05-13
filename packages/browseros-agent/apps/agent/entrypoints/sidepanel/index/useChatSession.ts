@@ -18,12 +18,18 @@ import {
   PROVIDER_SELECTED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import {
+  editMessageById,
+  forkFromMessageId,
+  undoFromMessageId,
+} from '@/lib/conversation-undo-fork'
+import {
   conversationStorage,
   useConversations,
 } from '@/lib/conversations/conversationStorage'
 import { formatConversationHistory } from '@/lib/conversations/formatConversationHistory'
 import { useInvalidateCredits } from '@/lib/credits/useCredits'
 import { declinedAppsStorage } from '@/lib/declined-apps/storage'
+import { removeConversationExecutionHistory } from '@/lib/execution-history/storage'
 import { useGraphqlQuery } from '@/lib/graphql/useGraphqlQuery'
 import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
 import type {
@@ -812,6 +818,81 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const isRestoringConversation =
     !!conversationIdParam && restoredConversationId !== conversationIdParam
 
+  const isStreaming = status === 'streaming' || status === 'submitted'
+
+  const undoTurn = useCallback(
+    (messageId: string) => {
+      if (isStreaming) return
+      const truncated = undoFromMessageId(messages, messageId)
+      setMessages(truncated)
+      track(CONVERSATION_UNDO_EVENT, {
+        conversationId: conversationIdRef.current,
+        messageId,
+      })
+      // Clean up execution history for removed tasks
+      void removeConversationExecutionHistory(conversationIdRef.current).then(
+        () => {
+          // Re-save with truncated messages
+          if (isLoggedIn) {
+            saveRemoteConversation(conversationIdRef.current, truncated)
+          } else {
+            saveLocalConversation(conversationIdRef.current, truncated)
+          }
+        },
+      )
+    },
+    [
+      messages,
+      setMessages,
+      isStreaming,
+      isLoggedIn,
+      saveLocalConversation,
+      saveRemoteConversation,
+    ],
+  )
+
+  const forkTurn = useCallback(
+    (messageId: string) => {
+      const result = forkFromMessageId(messages, messageId)
+      if (!result) return
+
+      const newId = crypto.randomUUID()
+      track(CONVERSATION_FORK_EVENT, {
+        conversationId: conversationIdRef.current,
+        messageId,
+        newConversationId: newId,
+      })
+      // Save the forked conversation as a new conversation
+      if (isLoggedIn) {
+        saveRemoteConversation(newId, result.messages)
+      } else {
+        saveLocalConversation(newId, result.messages)
+      }
+
+      // Navigate to the new conversation
+      setSearchParams({ conversationId: newId }, { replace: false })
+    },
+    [
+      messages,
+      isLoggedIn,
+      saveLocalConversation,
+      saveRemoteConversation,
+      setSearchParams,
+    ],
+  )
+
+  const editTurn = useCallback(
+    (messageId: string, newContent: string) => {
+      if (isStreaming) return
+      const edited = editMessageById(messages, messageId, newContent)
+      if (!edited) return
+      setMessages(edited)
+      // After editing, auto-send the edited message
+      dispatchMessage(newContent)
+    },
+    [messages, setMessages, isStreaming, dispatchMessage],
+  )
+
   return {
     mode,
     setMode,
@@ -835,5 +916,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     onClickDislike,
     conversationId,
     addToolApprovalResponse: respondToToolApproval,
+    isStreaming,
+    undoTurn,
+    forkTurn,
+    editTurn,
   }
 }

@@ -918,3 +918,102 @@ function createBlockingFakeService(agents: AgentDefinition[]) {
     _cancelCalls: cancelCalls,
   }
 }
+
+// ── ACP Slash Command Integration Tests ────────────────────────────────
+
+describe('createAgentRoutes – ACP slash commands', () => {
+  const agent: AgentDefinition = {
+    id: 'slash-test-agent',
+    name: 'Slash Bot',
+    adapter: 'codex',
+    modelId: 'gpt-5.5',
+    reasoningEffort: 'medium',
+    permissionMode: 'approve-all',
+    sessionKey: 'agent:slash-test-agent:main',
+    createdAt: 1000,
+    updatedAt: 1000,
+  }
+
+  it('intercepts /help before startTurn and returns synthetic response', async () => {
+    const route = createMountedRoutes([agent])
+    const response = await route.request(
+      '/agents/slash-test-agent/sidepanel/chat',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: '00000000-0000-4000-8000-000000000001',
+          message: '/help',
+        }),
+      },
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    // Synthetic response should contain "Available commands" without
+    // ever calling startTurn (no id: 0 SSE frame from the runtime)
+    expect(body).toContain('Available commands')
+    expect(body).toContain('data: [DONE]')
+  })
+
+  it('intercepts /status and returns agent info', async () => {
+    const route = createMountedRoutes([agent])
+    const response = await route.request(
+      '/agents/slash-test-agent/sidepanel/chat',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: '00000000-0000-4000-8000-000000000002',
+          message: '/status',
+        }),
+      },
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    expect(body).toContain('slash-test-agent')
+    expect(body).toContain('main')
+  })
+
+  it('returns error for unknown command', async () => {
+    const route = createMountedRoutes([agent])
+    const response = await route.request(
+      '/agents/slash-test-agent/sidepanel/chat',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: '00000000-0000-4000-8000-000000000003',
+          message: '/nonexistent',
+        }),
+      },
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    expect(body).toContain('Unknown command')
+  })
+
+  it('passes non-slash messages through to startTurn', async () => {
+    const route = createMountedRoutes([agent])
+    const response = await route.request(
+      '/agents/slash-test-agent/sidepanel/chat',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: '00000000-0000-4000-8000-000000000004',
+          message: 'hello world',
+        }),
+      },
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('X-Turn-Id')).toBeTruthy()
+    const body = await response.text()
+    // Should be a normal SSE turn stream, not a synthetic command response
+    expect(body).toContain('data: {"type":"start"}')
+    expect(body).toContain('data: [DONE]')
+  })
+})

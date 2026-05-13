@@ -62,9 +62,11 @@ if [ ! -d "$EXT_DIR" ]; then
   exit 1
 fi
 
-# ── Update desktop entries ──
-"$REPO_ROOT/scripts/setup-desktop-entries.sh" 2>/dev/null || true
-update-desktop-database ~/.local/share/applications/ 2>/dev/null || true
+# ── Desktop entries: skip if already installed (prevents GNOME losing track of running window) ──
+# Only regenerate during dev:setup, NOT on every start. See: setup-desktop-entries.sh
+if [ ! -f "${HOME}/.local/share/applications/browseros-dev.desktop" ]; then
+  "$REPO_ROOT/scripts/setup-desktop-entries.sh" 2>/dev/null || true
+fi
 
 # ── Clean stale singleton locks ──
 clean_singleton_locks "$DEV_PROFILE"
@@ -80,6 +82,7 @@ nohup "$APP" \
   --disable-browseros-server \
   --disable-browseros-extensions \
   --name=BrowserOS-Dev \
+  --class=browseros-dev \
   --remote-debugging-port="$DEV_CDP_PORT" \
   --browseros-mcp-port="$DEV_SERVER_PORT" \
   --browseros-server-port="$DEV_SERVER_PORT" \

@@ -83,6 +83,23 @@ describe('HTTP Server Integration Tests', () => {
     })
   })
 
+  describe('Agent endpoints', () => {
+    it('exposes the adapter catalog on /agents/adapters', async () => {
+      const response = await fetch(`${getBaseUrl()}/agents/adapters`)
+      assert.strictEqual(response.status, 200)
+
+      const json = (await response.json()) as {
+        adapters: Array<{ id: string }>
+      }
+      assert.ok(Array.isArray(json.adapters), 'Should return adapter list')
+      assert.ok(json.adapters.length > 0, 'Should expose at least one adapter')
+      assert.ok(
+        json.adapters.some((adapter) => adapter.id === 'claude'),
+        'Should include claude adapter',
+      )
+    })
+  })
+
   describe('MCP endpoint', () => {
     it('lists available tools', async () => {
       assert.ok(mcpClient, 'MCP client should be connected')

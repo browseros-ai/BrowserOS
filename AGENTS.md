@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **BrowserOS** (22456 symbols, 44865 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **BrowserOS-wt-undo-fork-slashcmds** (21954 symbols, 44382 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -24,10 +24,10 @@ This project is indexed by GitNexus as **BrowserOS** (22456 symbols, 44865 relat
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/BrowserOS/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/BrowserOS/clusters` | All functional areas |
-| `gitnexus://repo/BrowserOS/processes` | All execution flows |
-| `gitnexus://repo/BrowserOS/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/BrowserOS-wt-undo-fork-slashcmds/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/BrowserOS-wt-undo-fork-slashcmds/clusters` | All functional areas |
+| `gitnexus://repo/BrowserOS-wt-undo-fork-slashcmds/processes` | All execution flows |
+| `gitnexus://repo/BrowserOS-wt-undo-fork-slashcmds/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 
