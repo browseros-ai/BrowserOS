@@ -16,6 +16,35 @@ export type SkillFrontmatter = {
   'allowed-tools'?: string
 }
 
+export type SkillSourceKind = 'builtin' | 'local' | 'external'
+
+export type SkillSourceEntry = {
+  id: string
+  type: 'external'
+  path: string
+  enabled: boolean
+  label?: string
+}
+
+export type SkillsSourcesRegistry = {
+  version: 1
+  sources: SkillSourceEntry[]
+}
+
+export type SkillsRuntimeState = {
+  version: 1
+  skills: Record<string, { enabled: boolean }>
+}
+
+export type SkillConflict = {
+  kind: 'duplicate-id'
+  collisions: Array<{
+    sourceKind: SkillSourceKind
+    sourceId: string
+    location: string
+  }>
+}
+
 export type SkillMeta = {
   id: string
   name: string
@@ -24,6 +53,10 @@ export type SkillMeta = {
   enabled: boolean
   version?: string
   builtIn: boolean
+  sourceKind: SkillSourceKind
+  sourceId: string
+  sourceLabel?: string
+  conflict?: SkillConflict
 }
 
 export type SkillDetail = SkillMeta & {
