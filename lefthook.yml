@@ -37,6 +37,11 @@ pre-commit:
           fi
         done
 
+    coding-guard:
+      glob: "*.{ts,tsx}"
+      exclude: "*.{test,spec,d}.ts|*.{test,spec}.tsx|**/__tests__/**|**/tests/**|**/*.generated.*|**/node_modules/**|**/dist/**"
+      run: bash "$(git rev-parse --show-toplevel)/scripts/pre-commit-coding-guard.sh" {staged_files}
+
 pre-push:
   commands:
     branch-name:
