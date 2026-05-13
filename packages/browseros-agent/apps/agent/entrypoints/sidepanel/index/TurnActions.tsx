@@ -1,9 +1,6 @@
 import { CopyIcon, PencilIcon, ReplyIcon } from 'lucide-react'
 import { type FC, useState } from 'react'
-import {
-  MessageAction,
-  MessageActions,
-} from '@/components/ai-elements/message'
+import { MessageAction, MessageActions } from '@/components/ai-elements/message'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -12,7 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 
 export interface TurnActionsProps {
   /** The message ID (passed to onUndo/onFork callbacks) */
@@ -92,7 +89,7 @@ export const TurnActions: FC<TurnActionsProps> = ({
           <DialogHeader>
             <DialogTitle>Edit message</DialogTitle>
           </DialogHeader>
-          <Input
+          <Textarea
             value={editText}
             onChange={(e) => setEditText(e.target.value)}
             onKeyDown={(e) => {
@@ -101,13 +98,11 @@ export const TurnActions: FC<TurnActionsProps> = ({
                 handleEditSubmit()
               }
             }}
+            rows={3}
             autoFocus
           />
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setEditDialogOpen(false)}
-            >
+            <Button variant="outline" onClick={() => setEditDialogOpen(false)}>
               Cancel
             </Button>
             <Button onClick={handleEditSubmit}>Send</Button>

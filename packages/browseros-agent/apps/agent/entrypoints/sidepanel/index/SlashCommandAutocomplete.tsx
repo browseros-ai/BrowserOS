@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback } from 'react'
 import {
   Command,
   CommandEmpty,
@@ -6,11 +6,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command'
-import {
-  Popover,
-  PopoverAnchor,
-  PopoverContent,
-} from '@/components/ui/popover'
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import type { SlashCommand } from '@/lib/slash-commands/types'
 
 interface SlashCommandAutocompleteProps {
@@ -36,8 +32,6 @@ export function SlashCommandAutocomplete({
   onClose,
   anchorRef,
 }: SlashCommandAutocompleteProps) {
-  const [selectedIndex, setSelectedIndex] = useState(0)
-
   const filtered = commands.filter((cmd) => {
     if (!filterText) return true
     const q = filterText.toLowerCase()
@@ -46,11 +40,6 @@ export function SlashCommandAutocomplete({
       cmd.description.toLowerCase().includes(q)
     )
   })
-
-  // Reset selection when filter changes
-  useEffect(() => {
-    setSelectedIndex(0)
-  }, [filterText])
 
   const handleSelect = useCallback(
     (cmd: SlashCommand) => {
@@ -62,7 +51,7 @@ export function SlashCommandAutocomplete({
   // Keyboard navigation handled by parent — this component is purely visual
   // The parent (ChatInput) intercepts keys when isOpen is true
 
-  if (!isOpen || filtered.length === 0) return null
+  if (!isOpen) return null
 
   return (
     <Popover open={isOpen}>
@@ -77,7 +66,9 @@ export function SlashCommandAutocomplete({
       >
         <Command className="border-0 shadow-none">
           <CommandList>
-            <CommandEmpty>No matching commands</CommandEmpty>
+            {filtered.length === 0 && (
+              <CommandEmpty>No matching commands</CommandEmpty>
+            )}
             <CommandGroup heading="Commands">
               {filtered.map((cmd) => (
                 <CommandItem
@@ -87,14 +78,18 @@ export function SlashCommandAutocomplete({
                   className="flex flex-col items-start gap-0.5 px-3 py-2"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-sm font-medium text-[var(--accent-orange)]">
+                    <span className="font-medium font-mono text-[var(--accent-orange)] text-sm">
                       /{cmd.name}
                     </span>
-                    <span className="text-xs text-muted-foreground">
-                      {cmd.type === 'action' ? '⚡' : cmd.type === 'template' ? '📄' : '💬'}
+                    <span className="text-muted-foreground text-xs">
+                      {cmd.type === 'action'
+                        ? '⚡'
+                        : cmd.type === 'template'
+                          ? '📄'
+                          : '💬'}
                     </span>
                   </div>
-                  <span className="text-xs text-muted-foreground">
+                  <span className="text-muted-foreground text-xs">
                     {cmd.description}
                   </span>
                   <span className="font-mono text-[10px] text-muted-foreground/60">
