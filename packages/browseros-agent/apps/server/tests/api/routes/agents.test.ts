@@ -936,14 +936,17 @@ describe('createAgentRoutes – ACP slash commands', () => {
 
   it('intercepts /help before startTurn and returns synthetic response', async () => {
     const route = createMountedRoutes([agent])
-    const response = await route.request('/agents/slash-test-agent/sidepanel/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        conversationId: '00000000-0000-4000-8000-000000000001',
-        message: '/help',
-      }),
-    })
+    const response = await route.request(
+      '/agents/slash-test-agent/sidepanel/chat',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: '00000000-0000-4000-8000-000000000001',
+          message: '/help',
+        }),
+      },
+    )
 
     expect(response.status).toBe(200)
     const body = await response.text()
@@ -955,14 +958,17 @@ describe('createAgentRoutes – ACP slash commands', () => {
 
   it('intercepts /status and returns agent info', async () => {
     const route = createMountedRoutes([agent])
-    const response = await route.request('/agents/slash-test-agent/sidepanel/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        conversationId: '00000000-0000-4000-8000-000000000002',
-        message: '/status',
-      }),
-    })
+    const response = await route.request(
+      '/agents/slash-test-agent/sidepanel/chat',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: '00000000-0000-4000-8000-000000000002',
+          message: '/status',
+        }),
+      },
+    )
 
     expect(response.status).toBe(200)
     const body = await response.text()
@@ -972,14 +978,17 @@ describe('createAgentRoutes – ACP slash commands', () => {
 
   it('returns error for unknown command', async () => {
     const route = createMountedRoutes([agent])
-    const response = await route.request('/agents/slash-test-agent/sidepanel/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        conversationId: '00000000-0000-4000-8000-000000000003',
-        message: '/nonexistent',
-      }),
-    })
+    const response = await route.request(
+      '/agents/slash-test-agent/sidepanel/chat',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: '00000000-0000-4000-8000-000000000003',
+          message: '/nonexistent',
+        }),
+      },
+    )
 
     expect(response.status).toBe(200)
     const body = await response.text()
@@ -988,20 +997,23 @@ describe('createAgentRoutes – ACP slash commands', () => {
 
   it('passes non-slash messages through to startTurn', async () => {
     const route = createMountedRoutes([agent])
-    const response = await route.request('/agents/slash-test-agent/sidepanel/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        conversationId: '00000000-0000-4000-8000-000000000004',
-        message: 'hello world',
-      }),
-    })
+    const response = await route.request(
+      '/agents/slash-test-agent/sidepanel/chat',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: '00000000-0000-4000-8000-000000000004',
+          message: 'hello world',
+        }),
+      },
+    )
 
     expect(response.status).toBe(200)
     expect(response.headers.get('X-Turn-Id')).toBeTruthy()
     const body = await response.text()
     // Should be a normal SSE turn stream, not a synthetic command response
-    expect(body).toMatch(/^id: 0\ndata: /m)
+    expect(body).toContain('data: {"type":"start"}')
     expect(body).toContain('data: [DONE]')
   })
 })
