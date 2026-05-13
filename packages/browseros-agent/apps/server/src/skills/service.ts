@@ -159,7 +159,11 @@ export async function updateSkill(
 
   // External skills: only allow enabled toggle, reject content changes
   if (meta.sourceKind === 'external') {
-    if (input.content || input.name || input.description) {
+    if (
+      input.content !== undefined ||
+      input.name !== undefined ||
+      input.description !== undefined
+    ) {
       throw new Error('Cannot edit external skill content')
     }
     const newState = input.enabled ?? meta.enabled

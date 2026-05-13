@@ -33,7 +33,7 @@ export function createSkillSourcesRoutes() {
         return c.json({ source }, 201)
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Failed to create'
-        const status = msg.includes('already exists') ? 409 : 400
+        const status = msg.includes('already exists') ? 409 : 500
         return c.json({ error: msg }, status)
       }
     })
@@ -46,7 +46,7 @@ export function createSkillSourcesRoutes() {
         return c.json({ source })
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Failed to update'
-        const status = msg.includes('not found') ? 404 : 400
+        const status = msg.includes('not found') ? 404 : 500
         return c.json({ error: msg }, status)
       }
     })

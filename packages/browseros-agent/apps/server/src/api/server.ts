@@ -138,8 +138,8 @@ export async function createHttpServer(config: HttpServerConfig) {
     .route('/assistant', createAssistantSessionRoutes())
     .route('/soul', createSoulRoutes())
     .route('/memory', createMemoryRoutes())
-    .route('/skills', createSkillsRoutes())
     .route('/skills/sources', createSkillSourcesRoutes())
+    .route('/skills', createSkillsRoutes())
     .route('/test-provider', createProviderRoutes({ browserosId }))
     .route('/refine-prompt', createRefinePromptRoutes({ browserosId }))
     .route(
@@ -180,7 +180,7 @@ export async function createHttpServer(config: HttpServerConfig) {
         aiSdkDevtoolsEnabled: config.aiSdkDevtoolsEnabled,
       }),
     )
-    // Error handler
+  // Error handler
   app.onError((err, c) => {
     const error = err as Error
 

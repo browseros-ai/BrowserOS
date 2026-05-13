@@ -8,7 +8,7 @@ const EMPTY_STATE: SkillsRuntimeState = { version: 1, skills: {} }
 
 function assertAbsolutePath(path: string): string {
   const resolved = resolve(path)
-  if (resolved !== path) {
+  if (!resolved.startsWith('/')) {
     throw new Error('External source path must be absolute')
   }
   return resolved
