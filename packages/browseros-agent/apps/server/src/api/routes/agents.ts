@@ -14,6 +14,8 @@ import { stream } from 'hono/streaming'
 import { formatUserMessage } from '../../agent/format-message'
 import type { Browser } from '../../browser/browser'
 import { createAcpUIMessageStreamResponse } from '../../lib/agents/acp-ui-message-stream'
+import { createSyntheticCommandStream } from './acp-command-response'
+import { dispatchCommand } from './acp-slash-commands-builtins'
 import type { OpenclawGatewayAccessor } from '../../lib/agents/acpx-runtime'
 import type {
   ActiveTurnInfo,
@@ -168,6 +170,11 @@ type SidepanelAgentChatRequest = {
   userWorkingDir?: string
 }
 
+import {
+  createConversationMutationRoutes,
+  createConversationMutationsService,
+} from './conversation-mutations'
+
 export function createAgentRoutes(deps: AgentRouteDeps = {}) {
   const service =
     deps.service ??
@@ -280,6 +287,38 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
             ? `${parsed.userSystemPrompt.trim()}\n\n${userContent}`
             : userContent
 
+          // ── ACP Slash Command Dispatch ─────────────────────────────
+          // Check if the message is a slash command BEFORE startTurn().
+          // Handled commands return a synthetic response; errors return
+          // an error message; passthrough falls through to normal LLM.
+          if (parsed.message.startsWith('/')) {
+            const cmdResult = await dispatchCommand(parsed.message, {
+              agentId: agent.id,
+              conversationId: parsed.conversationId,
+              sessionId: 'main',
+              args: '',
+            })
+
+            if (cmdResult.type === 'handled') {
+              const syntheticEvents = createSyntheticCommandStream(
+                cmdResult.response ?? 'Command executed.',
+              )
+              return createAcpUIMessageStreamResponse(syntheticEvents, {
+                headers: { 'X-Session-Id': 'main' },
+              })
+            }
+
+            if (cmdResult.type === 'error') {
+              const errorEvents = createSyntheticCommandStream(
+                `⚠️ ${cmdResult.error}`,
+              )
+              return createAcpUIMessageStreamResponse(errorEvents, {
+                headers: { 'X-Session-Id': 'main' },
+              })
+            }
+            // 'passthrough' → fall through to normal LLM call
+          }
+
           let started: { turnId: string; frames: ReadableStream<TurnFrame> }
           try {
             started = await service.startTurn({
@@ -371,6 +410,41 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
         } catch (err) {
           return handleAgentRouteError(c, err)
         }
+      })
+      // ── Conversation mutations (undo / fork) ────────────────────
+      .post('/:agentId/conversation/undo', async (c) => {
+        const agentId = c.req.param('agentId')
+        const acpxRuntime =
+          service instanceof AgentHarnessService
+            ? service.getAcpxRuntime()
+            : null
+        if (!acpxRuntime) {
+          return c.json({ error: 'Undo not available' }, 501)
+        }
+        const mutationService = createConversationMutationsService({
+          runtime: acpxRuntime,
+        })
+        const routes = createConversationMutationRoutes({
+          service: mutationService,
+        })
+        return routes.handleUndo(c, agentId)
+      })
+      .post('/:agentId/conversation/fork', async (c) => {
+        const agentId = c.req.param('agentId')
+        const acpxRuntime =
+          service instanceof AgentHarnessService
+            ? service.getAcpxRuntime()
+            : null
+        if (!acpxRuntime) {
+          return c.json({ error: 'Fork not available' }, 501)
+        }
+        const mutationService = createConversationMutationsService({
+          runtime: acpxRuntime,
+        })
+        const routes = createConversationMutationRoutes({
+          service: mutationService,
+        })
+        return routes.handleFork(c, agentId)
       })
       .post('/:agentId/chat', async (c) => {
         const agentId = c.req.param('agentId')
@@ -551,6 +625,7 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
           return handleAgentRouteError(c, err)
         }
       })
+
   )
 }
 
@@ -985,6 +1060,8 @@ async function readJsonBody(
   }
   return { value: body as Record<string, unknown> }
 }
+
+// ── Conversation undo/fork helpers are in ./conversation-mutations.ts ──
 
 function handleAgentRouteError(c: Context<Env>, err: unknown) {
   if (err instanceof UnknownAgentError) {

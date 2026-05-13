@@ -21,6 +21,7 @@ import { getDb } from '../lib/db'
 import { logger } from '../lib/logger'
 import { Sentry } from '../lib/sentry'
 import { requireTrustedOrigin } from './middleware/require-trusted-origin'
+import { createAgentRoutes } from './routes/agents'
 import { createChatRoutes } from './routes/chat'
 import { createCreditsRoutes } from './routes/credits'
 import { createHealthRoute } from './routes/health'
@@ -30,7 +31,6 @@ import { createMemoryRoutes } from './routes/memory'
 import { createOAuthRoutes } from './routes/oauth'
 import { createProviderRoutes } from './routes/provider'
 import { createRefinePromptRoutes } from './routes/refine-prompt'
-import { createSdkRoutes } from './routes/sdk'
 import { createShutdownRoute } from './routes/shutdown'
 import { createSkillsRoutes } from './routes/skills'
 import { createSoulRoutes } from './routes/soul'
@@ -121,6 +121,10 @@ export async function createHttpServer(config: HttpServerConfig) {
       }),
     )
     .route('/status', createStatusRoute({ browser }))
+    .route(
+      '/agents',
+      createAgentRoutes({ browser, browserosServerPort: port }),
+    )
     .route('/soul', createSoulRoutes())
     .route('/memory', createMemoryRoutes())
     .route('/skills', createSkillsRoutes())
@@ -164,16 +168,7 @@ export async function createHttpServer(config: HttpServerConfig) {
         aiSdkDevtoolsEnabled: config.aiSdkDevtoolsEnabled,
       }),
     )
-    .route(
-      '/sdk',
-      createSdkRoutes({
-        port,
-        browser,
-        browserosId,
-      }),
-    )
-
-  // Error handler
+    // Error handler
   app.onError((err, c) => {
     const error = err as Error
 

@@ -9,8 +9,10 @@ import {
   useState,
 } from 'react'
 import { TabPickerPopover } from '@/components/elements/tab-picker-popover'
+import type { SlashCommand } from '@/lib/slash-commands/types'
 import { cn } from '@/lib/utils'
 import type { VoiceInputState } from '@/lib/voice/useVoiceInput'
+import { SlashCommandAutocomplete } from './SlashCommandAutocomplete'
 import type { ChatMode } from './chatTypes'
 
 interface MentionState {
@@ -30,6 +32,11 @@ interface ChatInputProps {
   onToggleTab: (tab: chrome.tabs.Tab) => void
   onTabMentionOpenChange?: (isOpen: boolean) => void
   voice?: VoiceInputState
+  slashCommandOpen?: boolean
+  slashFilterText?: string
+  slashCommands?: SlashCommand[]
+  onSlashSelect?: (cmd: SlashCommand) => void
+  onSlashOpenChange?: (isOpen: boolean) => void
 }
 
 export interface ChatInputHandle {
@@ -52,6 +59,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       onToggleTab,
       onTabMentionOpenChange,
       voice,
+      slashCommandOpen: slashCommandOpenProp = false,
+      slashFilterText = '',
+      slashCommands = [],
+      onSlashSelect,
+      onSlashOpenChange,
     },
     ref,
   ) => {
@@ -61,6 +73,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       filterText: '',
       startPosition: 0,
     })
+    const [localSlashOpen, setLocalSlashOpen] = useState(false)
+    const slashOpen = slashCommandOpenProp || localSlashOpen
 
     const inputRef = useRef(input)
     const mentionStateRef = useRef(mentionState)
@@ -230,6 +244,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         }
       }
 
+      // Slash command autocomplete: close on Escape or Tab
+      if (slashOpen) {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          setLocalSlashOpen(false)
+          onSlashOpenChange?.(false)
+          return
+        }
+        // Let the popover handle arrow keys and enter via cmdk
+      }
+
       if (
         e.key === 'Enter' &&
         !e.shiftKey &&
@@ -237,6 +262,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         !e.ctrlKey &&
         !e.nativeEvent.isComposing
       ) {
+        if (slashOpen) {
+          // Don't submit while autocomplete is open — let cmdk handle selection
+          return
+        }
         e.preventDefault()
         if (input.trim() && !isBusy) {
           e.currentTarget.form?.requestSubmit()
@@ -344,6 +373,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           selectedTabs={selectedTabs}
           onToggleTab={onToggleTab}
           onClose={closeMention}
+          anchorRef={textareaRef}
+        />
+        <SlashCommandAutocomplete
+          isOpen={slashOpen && !mentionState.isOpen}
+          filterText={slashFilterText}
+          commands={slashCommands}
+          onSelect={(cmd) => {
+            onSlashSelect?.(cmd)
+            setLocalSlashOpen(false)
+            onSlashOpenChange?.(false)
+          }}
+          onClose={() => {
+            setLocalSlashOpen(false)
+            onSlashOpenChange?.(false)
+          }}
           anchorRef={textareaRef}
         />
         {voice?.isRecording ? (

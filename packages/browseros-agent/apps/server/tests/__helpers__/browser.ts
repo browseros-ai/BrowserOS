@@ -106,6 +106,8 @@ export async function spawnBrowser(
       // TODO: replace with --browseros-cdp-port once we fix the browseros bug
       `--remote-debugging-port=${config.cdpPort}`,
       `--browseros-mcp-port=${config.serverPort}`,
+      `--browseros-server-port=${config.serverPort}`,
+      `--browseros-proxy-port=${config.serverPort}`,
       `--browseros-extension-port=${config.extensionPort}`,
       '--disable-browseros-server',
     ],

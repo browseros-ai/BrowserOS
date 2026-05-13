@@ -22,3 +22,7 @@ run = "bash .mise/tasks/browseros/status"
 [tasks."browseros:restart-dev"]
 description = "Kill, rebuild, restart, and verify the local BrowserOS dev app/server workflow"
 run = "bash .mise/tasks/browseros/restart-dev"
+
+[tasks."browseros:start-prod"]
+description = "Launch the local BrowserOS production app, wait for MCP port 9100, and run smoke + soak checks"
+run = "bash .mise/tasks/browseros/start-prod"

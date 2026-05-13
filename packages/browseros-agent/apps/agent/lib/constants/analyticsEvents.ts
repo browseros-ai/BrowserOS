@@ -303,3 +303,14 @@ export const SIDEPANEL_SESSION_ID_COPIED_EVENT = 'sidepanel.session_id.copied'
 
 /** @public */
 export const SIDEPANEL_VOICE_ERROR_EVENT = 'sidepanel.voice.error'
+
+/** @public */
+export const CONVERSATION_UNDO_EVENT = 'ui.conversation.undo'
+
+/** @public */
+export const CONVERSATION_FORK_EVENT = 'ui.conversation.fork'
+
+/** @public */
+export const CONVERSATION_EDIT_EVENT = 'ui.conversation.edit'
+
+export const SLASH_COMMAND_EXECUTED_EVENT = 'ui.slash_command.executed'

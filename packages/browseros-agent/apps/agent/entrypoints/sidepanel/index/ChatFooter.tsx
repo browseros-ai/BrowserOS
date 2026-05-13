@@ -33,6 +33,11 @@ interface ChatFooterProps {
   onToggleTab: (tab: chrome.tabs.Tab) => void
   onRemoveTab: (tabId?: number) => void
   voice?: VoiceInputState
+  slashCommandOpen?: boolean
+  slashFilterText?: string
+  slashCommands?: import('@/lib/slash-commands/types').SlashCommand[]
+  onSlashSelect?: (cmd: import('@/lib/slash-commands/types').SlashCommand) => void
+  onSlashOpenChange?: (isOpen: boolean) => void
 }
 
 export const ChatFooter: FC<ChatFooterProps> = ({
@@ -47,6 +52,11 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   onToggleTab,
   onRemoveTab,
   voice,
+  slashCommandOpen,
+  slashFilterText,
+  slashCommands,
+  onSlashSelect,
+  onSlashOpenChange,
 }) => {
   const { selectedFolder } = useWorkspace()
   const { supports } = useCapabilities()
@@ -234,6 +244,11 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           onTabMentionOpenChange={setIsTabMentionOpen}
           voice={voice}
           ref={chatInputRef}
+          slashCommandOpen={slashCommandOpen}
+          slashFilterText={slashFilterText}
+          slashCommands={slashCommands}
+          onSlashSelect={onSlashSelect}
+          onSlashOpenChange={onSlashOpenChange}
         />
       </div>
     </footer>

@@ -15,7 +15,14 @@ func TestBuildArgsUsesDevDockIcon(t *testing.T) {
 		LoadDevExtensions: true,
 	})
 	joined := strings.Join(args, "\n")
-	if !strings.Contains(joined, "--browseros-dock-icon=dev") {
-		t.Fatalf("missing dev dock icon arg in\n%s", joined)
+	for _, want := range []string{
+		"--browseros-dock-icon=dev",
+		"--browseros-mcp-port=9105",
+		"--browseros-server-port=9105",
+		"--browseros-proxy-port=9105",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %s in\n%s", want, joined)
+		}
 	}
 }
