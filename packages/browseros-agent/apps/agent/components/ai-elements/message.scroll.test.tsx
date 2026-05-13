@@ -81,7 +81,7 @@ afterEach(() => {
 })
 
 describe('assistant message scrolling', () => {
-  it('adds assistant-only scroll variant tokens to message content', async () => {
+  it('keeps assistant wrapper non-scrollable', async () => {
     const el = await renderToDOM(
       createElement(
         Message,
@@ -94,8 +94,8 @@ describe('assistant message scrolling', () => {
     const tokens = (content?.className ?? '').split(/\s+/)
 
     expect(content).toBeTruthy()
-    expect(tokens).toContain('group-[.is-assistant]:max-h-[28rem]')
-    expect(tokens).toContain('group-[.is-assistant]:overflow-y-auto')
+    expect(tokens).not.toContain('group-[.is-assistant]:max-h-[28rem]')
+    expect(tokens).not.toContain('group-[.is-assistant]:overflow-y-auto')
   })
 
   it('does not apply unconditional scroll tokens to user message content', async () => {
@@ -115,7 +115,6 @@ describe('assistant message scrolling', () => {
     expect(tokens).not.toContain('overflow-y-auto')
   })
 })
-
 describe('assistant scroll-body contract (Task 1)', () => {
   it('renders assistant content inside a dedicated scroll body', async () => {
     const el = await renderToDOM(
@@ -185,5 +184,48 @@ describe('assistant scroll-body contract (Task 1)', () => {
     expect(content).toBeTruthy()
     expect(userBody).toBeNull()
     expect((content?.className ?? '').split(/\s+/)).not.toContain('overflow-y-auto')
+  })
+
+  it('renders a non-interactive fade affordance inside assistant scroll body', async () => {
+    const el = await renderToDOM(
+      createElement(
+        Message,
+        { from: 'assistant' },
+        createElement(
+          MessageContent,
+          null,
+          createElement(AssistantMessageBody, null, 'Long assistant response'),
+        ),
+      ),
+    )
+
+    const fade = el.querySelector(
+      '[data-role="assistant-scroll-body"] > [aria-hidden="true"]',
+    ) as HTMLDivElement | null
+
+    expect(fade).toBeTruthy()
+    expect(fade?.className).toContain('pointer-events-none')
+    expect(fade?.className).toContain('sticky')
+  })
+
+  it('keeps assistant wrapper itself non-scrollable when body is present', async () => {
+    const el = await renderToDOM(
+      createElement(
+        Message,
+        { from: 'assistant' },
+        createElement(
+          MessageContent,
+          null,
+          createElement(AssistantMessageBody, null, 'Long assistant response'),
+        ),
+      ),
+    )
+
+    const wrapper = el.querySelector('.is-assistant > div') as HTMLDivElement | null
+    const tokens = (wrapper?.className ?? '').split(/\s+/)
+
+    expect(wrapper).toBeTruthy()
+    expect(tokens).not.toContain('group-[.is-assistant]:max-h-[28rem]')
+    expect(tokens).not.toContain('group-[.is-assistant]:overflow-y-auto')
   })
 })

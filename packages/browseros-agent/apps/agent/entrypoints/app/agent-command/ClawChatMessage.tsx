@@ -1,6 +1,7 @@
 import { CheckCircle2, Copy, Loader2, Wrench, XCircle } from 'lucide-react'
 import { type FC, useCallback, useMemo } from 'react'
 import {
+  AssistantMessageBody,
   Message,
   MessageAction,
   MessageActions,
@@ -111,137 +112,144 @@ export const ClawChatMessage: FC<ClawChatMessageProps> = ({ message }) => {
     [message.parts],
   )
 
+  const renderedEntries = entries.map((entry) => {
+    const key = `${message.id}-entry-${entry.partIndex}`
+
+    if (entry.kind === 'attachments' && entry.attachments) {
+      return (
+        <MessageAttachments key={key}>
+          {entry.attachments.map((attachment, idx) => (
+            <MessageAttachment
+              // biome-ignore lint/suspicious/noArrayIndexKey: attachment order is stable within a finalized message
+              key={`${attachment.kind}-${idx}`}
+              data={{
+                type: 'file',
+                url: attachment.dataUrl ?? '',
+                mediaType: attachment.mediaType,
+                filename: attachment.name,
+              }}
+            />
+          ))}
+        </MessageAttachments>
+      )
+    }
+
+    if (entry.kind === 'text' && entry.part?.type === 'text') {
+      return (
+        <MessageResponse
+          key={key}
+          // Historical messages are finalized — render immediately.
+          // Streamdown's default "streaming" mode uses an idle-callback
+          // debounce (300ms / 500ms idle) that paints empty content
+          // first, which made history flash blank tool collapsibles
+          // before text on every load.
+          mode="static"
+          parseIncompleteMarkdown={false}
+          className={cn(
+            'max-w-full overflow-hidden break-words',
+            '[&_[data-streamdown="code-block"]]:!w-full [&_[data-streamdown="code-block"]]:!max-w-full [&_[data-streamdown="code-block"]]:overflow-x-auto',
+            '[&_[data-streamdown="table-wrapper"]]:!w-full [&_[data-streamdown="table-wrapper"]]:!max-w-full [&_[data-streamdown="table-wrapper"]]:overflow-x-auto',
+            '[&_table]:w-max [&_table]:min-w-full',
+          )}
+        >
+          {entry.part.text}
+        </MessageResponse>
+      )
+    }
+
+    if (entry.kind === 'reasoning' && entry.part?.type === 'reasoning') {
+      return (
+        <Reasoning
+          key={key}
+          className="w-full"
+          defaultOpen={false}
+          duration={entry.part.duration}
+        >
+          <ReasoningTrigger />
+          <ReasoningContent>{entry.part.text}</ReasoningContent>
+        </Reasoning>
+      )
+    }
+
+    if (entry.kind === 'meta' && entry.part?.type === 'meta') {
+      return (
+        <div key={key} className="text-muted-foreground text-xs">
+          {entry.part.label}: {entry.part.value}
+        </div>
+      )
+    }
+
+    if (entry.kind === 'task' && entry.tools) {
+      const tools = entry.tools
+      const errorCount = tools.filter((t) => t.status === 'failed').length
+      const taskTitle = `Agent activity (${tools.length} ${tools.length === 1 ? 'action' : 'actions'}${errorCount > 0 ? `, ${errorCount} failed` : ''})`
+
+      return (
+        <Task key={key} defaultOpen={false}>
+          <TaskTrigger title={taskTitle} TriggerIcon={Wrench} />
+          <TaskContent>
+            {tools.map((tool, idx) => (
+              <TaskItem
+                // biome-ignore lint/suspicious/noArrayIndexKey: tool order is stable within a finalized historical message
+                key={`${tool.name}-${tool.status}-${idx}`}
+                className="flex items-center gap-2"
+              >
+                <ToolStatusIcon status={tool.status} />
+                <span className="text-foreground text-xs">{tool.label}</span>
+                {tool.subject ? (
+                  <span className="ml-1.5 truncate text-muted-foreground/70 text-xs">
+                    · {tool.subject}
+                  </span>
+                ) : null}
+                {tool.error ? (
+                  <span className="ml-2 truncate text-destructive text-xs">
+                    {tool.error}
+                  </span>
+                ) : null}
+                {tool.durationMs != null ? (
+                  <span className="ml-auto text-muted-foreground/60 text-xs tabular-nums">
+                    {(tool.durationMs / 1000).toFixed(1)}s
+                  </span>
+                ) : null}
+              </TaskItem>
+            ))}
+          </TaskContent>
+        </Task>
+      )
+    }
+
+    return null
+  })
+
   return (
     <Message
       from={message.role}
       className="max-w-full group-[.is-user]:max-w-[80%]"
     >
       <MessageContent className="max-w-full overflow-hidden group-[.is-assistant]:w-full group-[.is-user]:max-w-full">
-        {entries.map((entry) => {
-          const key = `${message.id}-entry-${entry.partIndex}`
-
-          if (entry.kind === 'attachments' && entry.attachments) {
-            return (
-              <MessageAttachments key={key}>
-                {entry.attachments.map((attachment, idx) => (
-                  <MessageAttachment
-                    // biome-ignore lint/suspicious/noArrayIndexKey: attachment order is stable within a finalized message
-                    key={`${attachment.kind}-${idx}`}
-                    data={{
-                      type: 'file',
-                      url: attachment.dataUrl ?? '',
-                      mediaType: attachment.mediaType,
-                      filename: attachment.name,
-                    }}
-                  />
-                ))}
-              </MessageAttachments>
-            )
-          }
-
-          if (entry.kind === 'text' && entry.part?.type === 'text') {
-            return (
-              <MessageResponse
-                key={key}
-                // Historical messages are finalized — render immediately.
-                // Streamdown's default "streaming" mode uses an idle-callback
-                // debounce (300ms / 500ms idle) that paints empty content
-                // first, which made history flash blank tool collapsibles
-                // before text on every load.
-                mode="static"
-                parseIncompleteMarkdown={false}
-                className={cn(
-                  'max-w-full overflow-hidden break-words',
-                  '[&_[data-streamdown="code-block"]]:!w-full [&_[data-streamdown="code-block"]]:!max-w-full [&_[data-streamdown="code-block"]]:overflow-x-auto',
-                  '[&_[data-streamdown="table-wrapper"]]:!w-full [&_[data-streamdown="table-wrapper"]]:!max-w-full [&_[data-streamdown="table-wrapper"]]:overflow-x-auto',
-                  '[&_table]:w-max [&_table]:min-w-full',
-                )}
-              >
-                {entry.part.text}
-              </MessageResponse>
-            )
-          }
-
-          if (entry.kind === 'reasoning' && entry.part?.type === 'reasoning') {
-            return (
-              <Reasoning
-                key={key}
-                className="w-full"
-                defaultOpen={false}
-                duration={entry.part.duration}
-              >
-                <ReasoningTrigger />
-                <ReasoningContent>{entry.part.text}</ReasoningContent>
-              </Reasoning>
-            )
-          }
-
-          if (entry.kind === 'meta' && entry.part?.type === 'meta') {
-            return (
-              <div key={key} className="text-muted-foreground text-xs">
-                {entry.part.label}: {entry.part.value}
-              </div>
-            )
-          }
-
-          if (entry.kind === 'task' && entry.tools) {
-            const tools = entry.tools
-            const errorCount = tools.filter((t) => t.status === 'failed').length
-            const taskTitle = `Agent activity (${tools.length} ${tools.length === 1 ? 'action' : 'actions'}${errorCount > 0 ? `, ${errorCount} failed` : ''})`
-
-            return (
-              <Task key={key} defaultOpen={false}>
-                <TaskTrigger title={taskTitle} TriggerIcon={Wrench} />
-                <TaskContent>
-                  {tools.map((tool, idx) => (
-                    <TaskItem
-                      // biome-ignore lint/suspicious/noArrayIndexKey: tool order is stable within a finalized historical message
-                      key={`${tool.name}-${tool.status}-${idx}`}
-                      className="flex items-center gap-2"
-                    >
-                      <ToolStatusIcon status={tool.status} />
-                      <span className="text-foreground text-xs">
-                        {tool.label}
-                      </span>
-                      {tool.subject ? (
-                        <span className="ml-1.5 truncate text-muted-foreground/70 text-xs">
-                          · {tool.subject}
-                        </span>
-                      ) : null}
-                      {tool.error ? (
-                        <span className="ml-2 truncate text-destructive text-xs">
-                          {tool.error}
-                        </span>
-                      ) : null}
-                      {tool.durationMs != null ? (
-                        <span className="ml-auto text-muted-foreground/60 text-xs tabular-nums">
-                          {(tool.durationMs / 1000).toFixed(1)}s
-                        </span>
-                      ) : null}
-                    </TaskItem>
-                  ))}
-                </TaskContent>
-              </Task>
-            )
-          }
-
-          return null
-        })}
-
-        {message.role === 'assistant' && messageText ? (
-          <MessageToolbar>
-            <MessageActions>
-              <MessageAction tooltip="Copy" onClick={handleCopy}>
-                <Copy className="size-3.5" />
-              </MessageAction>
-            </MessageActions>
-            {message.costUsd ? (
-              <span className="text-[11px] text-muted-foreground/50 tabular-nums">
-                {formatCost(message.costUsd)}
-              </span>
+        {message.role === 'assistant' ? (
+          <>
+            <AssistantMessageBody className="w-full">
+              {renderedEntries}
+            </AssistantMessageBody>
+            {messageText ? (
+              <MessageToolbar>
+                <MessageActions>
+                  <MessageAction tooltip="Copy" onClick={handleCopy}>
+                    <Copy className="size-3.5" />
+                  </MessageAction>
+                </MessageActions>
+                {message.costUsd ? (
+                  <span className="text-[11px] text-muted-foreground/50 tabular-nums">
+                    {formatCost(message.costUsd)}
+                  </span>
+                ) : null}
+              </MessageToolbar>
             ) : null}
-          </MessageToolbar>
-        ) : null}
+          </>
+        ) : (
+          renderedEntries
+        )}
       </MessageContent>
     </Message>
   )

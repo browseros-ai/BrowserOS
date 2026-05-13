@@ -1,6 +1,7 @@
 import { Bot, CheckCircle2, Loader2, Wrench, XCircle } from 'lucide-react'
 import { type FC, useMemo } from 'react'
 import {
+  AssistantMessageBody,
   Message,
   MessageAttachment,
   MessageAttachments,
@@ -150,66 +151,68 @@ export const ConversationMessage: FC<ConversationMessageProps> = ({
       {entries.length > 0 && (
         <Message from="assistant">
           <MessageContent>
-            {entries.map((entry) => {
-              const key = `${turn.id}-entry-${entry.partIndex}`
+            <AssistantMessageBody>
+              {entries.map((entry) => {
+                const key = `${turn.id}-entry-${entry.partIndex}`
 
-              if (entry.kind === 'thinking') {
+                if (entry.kind === 'thinking') {
+                  return (
+                    <Reasoning
+                      key={key}
+                      className="w-full"
+                      isStreaming={!entry.done}
+                      defaultOpen={!entry.done}
+                    >
+                      <ReasoningTrigger />
+                      <ReasoningContent>{entry.text ?? ''}</ReasoningContent>
+                    </Reasoning>
+                  )
+                }
+
+                if (entry.kind === 'text') {
+                  return (
+                    <MessageResponse key={key}>
+                      {entry.text ?? ''}
+                    </MessageResponse>
+                  )
+                }
+
+                const tools = entry.tools ?? []
+                const allDone = tools.every((t) => t.status !== 'running')
+                const taskTitle = allDone
+                  ? `Agent activity (${tools.length} ${tools.length === 1 ? 'action' : 'actions'})`
+                  : `Working… (${tools.length} ${tools.length === 1 ? 'action' : 'actions'})`
+
                 return (
-                  <Reasoning
-                    key={key}
-                    className="w-full"
-                    isStreaming={!entry.done}
-                    defaultOpen={!entry.done}
-                  >
-                    <ReasoningTrigger />
-                    <ReasoningContent>{entry.text ?? ''}</ReasoningContent>
-                  </Reasoning>
-                )
-              }
-
-              if (entry.kind === 'text') {
-                return (
-                  <MessageResponse key={key}>
-                    {entry.text ?? ''}
-                  </MessageResponse>
-                )
-              }
-
-              const tools = entry.tools ?? []
-              const allDone = tools.every((t) => t.status !== 'running')
-              const taskTitle = allDone
-                ? `Agent activity (${tools.length} ${tools.length === 1 ? 'action' : 'actions'})`
-                : `Working… (${tools.length} ${tools.length === 1 ? 'action' : 'actions'})`
-
-              return (
-                <Task key={key} defaultOpen={!turn.done}>
-                  <TaskTrigger title={taskTitle} TriggerIcon={Wrench} />
-                  <TaskContent>
-                    {tools.map((tool) => (
-                      <TaskItem
-                        key={tool.id}
-                        className="flex items-center gap-2"
-                      >
-                        <ToolStatusIcon status={tool.status} />
-                        <span className="text-foreground text-xs">
-                          {tool.label}
-                        </span>
-                        {tool.subject ? (
-                          <span className="ml-1.5 truncate text-muted-foreground/70 text-xs">
-                            · {tool.subject}
+                  <Task key={key} defaultOpen={!turn.done}>
+                    <TaskTrigger title={taskTitle} TriggerIcon={Wrench} />
+                    <TaskContent>
+                      {tools.map((tool) => (
+                        <TaskItem
+                          key={tool.id}
+                          className="flex items-center gap-2"
+                        >
+                          <ToolStatusIcon status={tool.status} />
+                          <span className="text-foreground text-xs">
+                            {tool.label}
                           </span>
-                        ) : null}
-                        {tool.durationMs != null && (
-                          <span className="ml-auto text-muted-foreground/60 text-xs tabular-nums">
-                            {(tool.durationMs / 1000).toFixed(1)}s
-                          </span>
-                        )}
-                      </TaskItem>
-                    ))}
-                  </TaskContent>
-                </Task>
-              )
-            })}
+                          {tool.subject ? (
+                            <span className="ml-1.5 truncate text-muted-foreground/70 text-xs">
+                              · {tool.subject}
+                            </span>
+                          ) : null}
+                          {tool.durationMs != null && (
+                            <span className="ml-auto text-muted-foreground/60 text-xs tabular-nums">
+                              {(tool.durationMs / 1000).toFixed(1)}s
+                            </span>
+                          )}
+                        </TaskItem>
+                      ))}
+                    </TaskContent>
+                  </Task>
+                )
+              })}
+            </AssistantMessageBody>
           </MessageContent>
         </Message>
       )}

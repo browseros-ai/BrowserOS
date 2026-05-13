@@ -56,14 +56,43 @@ export const MessageContent = ({
 }: MessageContentProps) => (
   <div
     className={cn(
-      'is-user:dark flex w-fit flex-col gap-2 overflow-hidden text-sm',
+      'is-user:dark flex w-fit max-w-full flex-col gap-2 overflow-hidden text-sm',
       'group-[.is-user]:ml-auto group-[.is-user]:rounded-lg group-[.is-user]:bg-secondary group-[.is-user]:px-4 group-[.is-user]:py-3 group-[.is-user]:text-foreground',
-      'group-[.is-assistant]:text-foreground',
+      'group-[.is-assistant]:w-full group-[.is-assistant]:text-foreground',
       className,
     )}
     {...props}
   >
     {children}
+  </div>
+)
+
+export type AssistantMessageBodyProps = HTMLAttributes<HTMLDivElement>
+
+/**
+ * @public
+ */
+export const AssistantMessageBody = ({
+  children,
+  className,
+  ...props
+}: AssistantMessageBodyProps) => (
+  <div
+    aria-label="Assistant message content"
+    className={cn(
+      'relative flex flex-col gap-2 overflow-y-auto overscroll-contain text-foreground',
+      'max-h-[min(28rem,60vh)]',
+      className,
+    )}
+    data-role="assistant-scroll-body"
+    tabIndex={0}
+    {...props}
+  >
+    {children}
+    <div
+      aria-hidden="true"
+      className="pointer-events-none sticky bottom-0 h-6 bg-gradient-to-t from-background to-transparent"
+    />
   </div>
 )
 
@@ -488,6 +517,7 @@ export const MessageToolbar = ({
       'mt-4 flex w-full items-center justify-between gap-4',
       className,
     )}
+    data-role="message-toolbar"
     {...props}
   >
     {children}
