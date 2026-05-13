@@ -52,10 +52,10 @@ describe('AgentSessionStore', () => {
     it('decrements ref count on close; deletes at zero', async () => {
       await store.openSession('agent-1', 'session-1')
 
-      const remaining = await store.closeSession('session-1')
+      const remaining = await store.closeSession('agent-1', 'session-1')
       expect(remaining).toBe(0)
 
-      const session = await store.getSessionMeta('session-1')
+      const session = await store.getSessionMeta('agent-1', 'session-1')
       expect(session).toBeNull()
     })
 
@@ -63,16 +63,16 @@ describe('AgentSessionStore', () => {
       await store.openSession('agent-1', 'session-1')
       await store.openSession('agent-1', 'session-1')
 
-      const remaining = await store.closeSession('session-1')
+      const remaining = await store.closeSession('agent-1', 'session-1')
       expect(remaining).toBe(1)
 
-      const session = await store.getSessionMeta('session-1')
+      const session = await store.getSessionMeta('agent-1', 'session-1')
       expect(session).not.toBeNull()
       expect(session?.refCount).toBe(1)
     })
 
     it('returns -1 for unknown session', async () => {
-      const remaining = await store.closeSession('nonexistent')
+      const remaining = await store.closeSession('agent-1', 'nonexistent')
       expect(remaining).toBe(-1)
     })
   })
@@ -100,13 +100,13 @@ describe('AgentSessionStore', () => {
 
     it('searches sessions by title (case-insensitive)', async () => {
       await store.openSession('agent-1', 'session-1')
-      await store.updateSessionMeta('session-1', { title: 'Fix Login Bug' })
+      await store.updateSessionMeta('agent-1', 'session-1', { title: 'Fix Login Bug' })
 
       await store.openSession('agent-1', 'session-2')
-      await store.updateSessionMeta('session-2', { title: 'Update README' })
+      await store.updateSessionMeta('agent-1', 'session-2', { title: 'Update README' })
 
       await store.openSession('agent-1', 'session-3')
-      await store.updateSessionMeta('session-3', {
+      await store.updateSessionMeta('agent-1', 'session-3', {
         title: 'Login Page Redesign',
       })
 
@@ -119,7 +119,7 @@ describe('AgentSessionStore', () => {
 
     it('returns empty when search matches nothing', async () => {
       await store.openSession('agent-1', 'session-1')
-      await store.updateSessionMeta('session-1', { title: 'Fix Login Bug' })
+      await store.updateSessionMeta('agent-1', 'session-1', { title: 'Fix Login Bug' })
 
       const results = await store.listSessions('agent-1', {
         search: 'xyznonexistent',
@@ -161,7 +161,7 @@ describe('AgentSessionStore', () => {
   describe('getSessionMeta', () => {
     it('returns session metadata', async () => {
       await store.openSession('agent-1', 'session-1', '/home/user')
-      const session = await store.getSessionMeta('session-1')
+      const session = await store.getSessionMeta('agent-1', 'session-1')
 
       expect(session).not.toBeNull()
       expect(session?.sessionId).toBe('session-1')
@@ -170,7 +170,7 @@ describe('AgentSessionStore', () => {
     })
 
     it('returns null for unknown session', async () => {
-      const session = await store.getSessionMeta('nonexistent')
+      const session = await store.getSessionMeta('agent-1', 'nonexistent')
       expect(session).toBeNull()
     })
   })
@@ -178,7 +178,7 @@ describe('AgentSessionStore', () => {
   describe('updateSessionMeta', () => {
     it('updates session metadata', async () => {
       await store.openSession('agent-1', 'session-1')
-      const updated = await store.updateSessionMeta('session-1', {
+      const updated = await store.updateSessionMeta('agent-1', 'session-1', {
         title: 'My Session',
         turnCount: 5,
         mode: 'code',
@@ -193,7 +193,7 @@ describe('AgentSessionStore', () => {
       expect(updated?.model).toBe('gpt-4o')
       expect(updated?.lastMessagePreview).toBe('Hello world')
       await Bun.sleep(1)
-      const afterUpdate = await store.updateSessionMeta('session-1', {
+      const afterUpdate = await store.updateSessionMeta('agent-1', 'session-1', {
         title: 'My Session',
         turnCount: 5,
         mode: 'code',
@@ -205,7 +205,7 @@ describe('AgentSessionStore', () => {
     })
 
     it('returns null for unknown session', async () => {
-      const result = await store.updateSessionMeta('nonexistent', {
+      const result = await store.updateSessionMeta('agent-1', 'nonexistent', {
         title: 'X',
       })
       expect(result).toBeNull()
@@ -213,9 +213,9 @@ describe('AgentSessionStore', () => {
 
     it('preserves unmodified fields on partial update', async () => {
       await store.openSession('agent-1', 'session-1', '/home/user')
-      await store.updateSessionMeta('session-1', { title: 'New Title' })
+      await store.updateSessionMeta('agent-1', 'session-1', { title: 'New Title' })
 
-      const session = await store.getSessionMeta('session-1')
+      const session = await store.getSessionMeta('agent-1', 'session-1')
       expect(session?.title).toBe('New Title')
       expect(session?.cwd).toBe('/home/user')
       expect(session?.refCount).toBe(1)
@@ -223,23 +223,50 @@ describe('AgentSessionStore', () => {
 
     it('supports meta object updates', async () => {
       await store.openSession('agent-1', 'session-1')
-      await store.updateSessionMeta('session-1', {
+      await store.updateSessionMeta('agent-1', 'session-1', {
         meta: { key1: 'value1', nested: { a: 1 } },
       })
 
-      const session = await store.getSessionMeta('session-1')
+      const session = await store.getSessionMeta('agent-1', 'session-1')
       expect(session?.meta).toEqual({ key1: 'value1', nested: { a: 1 } })
     })
 
     it('sets lastMessageAt when updating lastMessagePreview', async () => {
       await store.openSession('agent-1', 'session-1')
       const before = Date.now()
-      const updated = await store.updateSessionMeta('session-1', {
+      const updated = await store.updateSessionMeta('agent-1', 'session-1', {
         lastMessagePreview: 'new message',
       })
 
       expect(updated?.lastMessageAt).toBeGreaterThanOrEqual(before)
       expect(updated?.lastMessageAt).toBeLessThanOrEqual(Date.now())
     })
+  })
+
+  it('isolates sessions across agents with same sessionId', async () => {
+    // Both agents use 'main' sessionId — they must not collide
+    await store.openSession('agent-A', 'main', '/project-a')
+    await store.openSession('agent-B', 'main', '/project-b')
+
+    const sessionsA = await store.listSessions('agent-A')
+    const sessionsB = await store.listSessions('agent-B')
+
+    expect(sessionsA).toHaveLength(1)
+    expect(sessionsA[0].agentId).toBe('agent-A')
+    expect(sessionsA[0].cwd).toBe('/project-a')
+
+    expect(sessionsB).toHaveLength(1)
+    expect(sessionsB[0].agentId).toBe('agent-B')
+    expect(sessionsB[0].cwd).toBe('/project-b')
+
+    // Update agent-A's session should not affect agent-B
+    await store.updateSessionMeta('agent-A', 'main', { title: 'Agent A session' })
+    const bSession = await store.getSessionMeta('agent-B', 'main')
+    expect(bSession?.title).toBeNull()
+
+    // Close agent-A's session should not affect agent-B
+    await store.closeSession('agent-A', 'main')
+    const bAfter = await store.getSessionMeta('agent-B', 'main')
+    expect(bAfter).not.toBeNull()
   })
 })

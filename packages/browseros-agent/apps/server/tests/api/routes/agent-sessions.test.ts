@@ -75,9 +75,9 @@ describe('createAgentSessionRoutes', () => {
     it('supports search filtering', async () => {
       const store = new AgentSessionStore()
       await store.openSession('agent-1', 's1')
-      await store.updateSessionMeta('s1', { title: 'Bug fix session' })
+      await store.updateSessionMeta('agent-1', 's1', { title: 'Bug fix session' })
       await store.openSession('agent-1', 's2')
-      await store.updateSessionMeta('s2', { title: 'Feature work' })
+      await store.updateSessionMeta('agent-1', 's2', { title: 'Feature work' })
 
       const app = createApp(store)
       const res = await app.request(

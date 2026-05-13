@@ -46,24 +46,23 @@ export function createAgentSessionRoutes(deps: {
     .get('/:agentId/sessions/:sessionId', async (c) => {
       const agentId = c.req.param('agentId')
       const sessionId = c.req.param('sessionId')
-      const session = await sessionStore.getSessionMeta(sessionId)
-      if (!session || session.agentId !== agentId) return c.json({ error: 'Session not found' }, 404)
+      const session = await sessionStore.getSessionMeta(agentId, sessionId)
+      if (!session) return c.json({ error: 'Session not found' }, 404)
       return c.json({ session })
     })
     .patch('/:agentId/sessions/:sessionId', async (c) => {
       const agentId = c.req.param('agentId')
       const sessionId = c.req.param('sessionId')
 
-      // Verify ownership before update
-      const existing = await sessionStore.getSessionMeta(sessionId)
-      if (!existing || existing.agentId !== agentId) return c.json({ error: 'Session not found' }, 404)
+      const existing = await sessionStore.getSessionMeta(agentId, sessionId)
+      if (!existing) return c.json({ error: 'Session not found' }, 404)
 
       const body = await c.req.json().catch(() => ({}))
       if (!body || typeof body !== 'object') {
         return c.json({ error: 'Invalid JSON body' }, 400)
       }
 
-      const updates: Parameters<typeof sessionStore.updateSessionMeta>[1] = {}
+      const updates: Parameters<typeof sessionStore.updateSessionMeta>[2] = {}
       if (typeof body.title === 'string') updates.title = body.title
       if (Number.isInteger(body.turnCount) && body.turnCount >= 0) updates.turnCount = body.turnCount
       if (typeof body.lastMessagePreview === 'string')
@@ -79,7 +78,7 @@ export function createAgentSessionRoutes(deps: {
         return c.json({ error: 'No editable fields supplied' }, 400)
       }
 
-      const session = await sessionStore.updateSessionMeta(sessionId, updates)
+      const session = await sessionStore.updateSessionMeta(agentId, sessionId, updates)
       if (!session) return c.json({ error: 'Session not found' }, 404)
       return c.json({ session })
     })
@@ -87,11 +86,10 @@ export function createAgentSessionRoutes(deps: {
       const agentId = c.req.param('agentId')
       const sessionId = c.req.param('sessionId')
 
-      // Verify ownership before delete
-      const existing = await sessionStore.getSessionMeta(sessionId)
-      if (!existing || existing.agentId !== agentId) return c.json({ error: 'Session not found' }, 404)
+      const existing = await sessionStore.getSessionMeta(agentId, sessionId)
+      if (!existing) return c.json({ error: 'Session not found' }, 404)
 
-      const refCount = await sessionStore.closeSession(sessionId)
+      const refCount = await sessionStore.closeSession(agentId, sessionId)
       return c.json({ refCount })
     })
 }

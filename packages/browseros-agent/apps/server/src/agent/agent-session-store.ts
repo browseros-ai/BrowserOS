@@ -17,12 +17,17 @@ export interface ActiveSession {
 export class AgentSessionStore {
   private sessions = new Map<string, ActiveSession>()
 
+  private compositeKey(agentId: string, sessionId: string): string {
+    return `${agentId}::${sessionId}`
+  }
+
   async openSession(
     agentId: string,
     sessionId: string,
     cwd?: string,
   ): Promise<ActiveSession> {
-    const existing = this.sessions.get(sessionId)
+    const key = this.compositeKey(agentId, sessionId)
+    const existing = this.sessions.get(key)
     if (existing) {
       existing.refCount++
       existing.updatedAt = Date.now()
@@ -46,12 +51,13 @@ export class AgentSessionStore {
       meta: null,
     }
 
-    this.sessions.set(sessionId, session)
+    this.sessions.set(key, session)
     return session
   }
 
-  async closeSession(sessionId: string): Promise<number> {
-    const session = this.sessions.get(sessionId)
+  async closeSession(agentId: string, sessionId: string): Promise<number> {
+    const key = this.compositeKey(agentId, sessionId)
+    const session = this.sessions.get(key)
     if (!session) {
       return -1
     }
@@ -60,7 +66,7 @@ export class AgentSessionStore {
     session.updatedAt = Date.now()
 
     if (session.refCount <= 0) {
-      this.sessions.delete(sessionId)
+      this.sessions.delete(key)
       return 0
     }
 
@@ -94,11 +100,12 @@ export class AgentSessionStore {
     return sessions
   }
 
-  async getSessionMeta(sessionId: string): Promise<ActiveSession | null> {
-    return this.sessions.get(sessionId) ?? null
+  async getSessionMeta(agentId: string, sessionId: string): Promise<ActiveSession | null> {
+    return this.sessions.get(this.compositeKey(agentId, sessionId)) ?? null
   }
 
   async updateSessionMeta(
+    agentId: string,
     sessionId: string,
     updates: Partial<
       Pick<
@@ -113,7 +120,8 @@ export class AgentSessionStore {
       >
     >,
   ): Promise<ActiveSession | null> {
-    const session = this.sessions.get(sessionId)
+    const key = this.compositeKey(agentId, sessionId)
+    const session = this.sessions.get(key)
     if (!session) return null
 
     Object.assign(session, updates)
