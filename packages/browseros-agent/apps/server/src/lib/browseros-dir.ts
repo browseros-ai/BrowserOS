@@ -47,6 +47,14 @@ export function getBuiltinSkillsDir(): string {
   return join(getSkillsDir(), PATHS.BUILTIN_DIR_NAME)
 }
 
+export function getSkillsSourcesPath(): string {
+  return join(getSkillsDir(), 'sources.json')
+}
+
+export function getSkillsStatePath(): string {
+  return join(getSkillsDir(), 'state.json')
+}
+
 export function getOpenClawDir(): string {
   return join(getVmStateDir(), PATHS.OPENCLAW_DIR_NAME)
 }

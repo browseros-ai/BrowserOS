@@ -11,21 +11,27 @@ import type { RemoteSkillCatalog, RemoteSkillEntry } from './types'
 
 let syncTimer: ReturnType<typeof setInterval> | null = null
 
+import matter from 'gray-matter'
+import { isValidFrontmatter } from './loader'
+
 function extractVersion(content: string): string {
-  const match = content.match(/^\s*version:\s*["']?([^"'\n]+)["']?/m)
-  return match?.[1]?.trim() || '1.0'
+  const parsed = matter(content)
+  if (!isValidFrontmatter(parsed.data)) return '1.0'
+  return parsed.data.metadata?.version || '1.0'
 }
 
 function extractEnabled(content: string): string | null {
-  const match = content.match(/^\s*enabled:\s*["']?(true|false)["']?/m)
-  return match?.[1] ?? null
+  const parsed = matter(content)
+  if (!isValidFrontmatter(parsed.data)) return null
+  return parsed.data.metadata?.enabled ?? null
 }
 
 function setEnabled(content: string, enabled: string): string {
-  return content.replace(
-    /^(\s*enabled:\s*)["']?(?:true|false)["']?/m,
-    `$1"${enabled}"`,
-  )
+  const parsed = matter(content)
+  if (!isValidFrontmatter(parsed.data)) return content
+  if (!parsed.data.metadata) parsed.data.metadata = {}
+  parsed.data.metadata.enabled = enabled
+  return matter.stringify(parsed.content.trim(), parsed.data)
 }
 
 function isValidSkillEntry(entry: unknown): entry is RemoteSkillEntry {
@@ -104,7 +110,8 @@ export async function syncBuiltinSkills(): Promise<void> {
     }
   }
 
-  if (catalog) await removeObsoleteSkills(contentMap)
+  if (catalog && catalog.skills.length > 0)
+    await removeObsoleteSkills(contentMap)
 }
 
 async function syncOneSkill(

@@ -4,11 +4,18 @@ import matter from 'gray-matter'
 import { getBuiltinSkillsDir, getSkillsDir } from '../lib/browseros-dir'
 import { logger } from '../lib/logger'
 import { isValidFrontmatter, loadAllSkills } from './loader'
+import {
+  loadSkillsSources,
+  loadSkillsState,
+  saveSkillsSources,
+  saveSkillsState,
+} from './state'
 import type {
   CreateSkillInput,
   SkillDetail,
   SkillFrontmatter,
   SkillMeta,
+  SkillSourceEntry,
   UpdateSkillInput,
 } from './types'
 
@@ -50,6 +57,17 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+function stateKeyFor(
+  skill: Pick<SkillMeta, 'sourceKind' | 'sourceId' | 'id'>,
+): string {
+  return `${skill.sourceKind}:${skill.sourceId}:${skill.id}`
+}
+
+async function resolveSkillMeta(id: string): Promise<SkillMeta | null> {
+  const all = await loadAllSkills()
+  return all.find((s) => s.id === id) ?? null
+}
+
 async function resolveSkillDir(
   id: string,
 ): Promise<{ dir: string; builtIn: boolean } | null> {
@@ -69,12 +87,11 @@ export async function listSkills(): Promise<SkillMeta[]> {
 }
 
 export async function getSkill(id: string): Promise<SkillDetail | null> {
-  const resolved = await resolveSkillDir(id)
-  if (!resolved) return null
+  const meta = await resolveSkillMeta(id)
+  if (!meta) return null
 
-  const skillMdPath = join(resolved.dir, 'SKILL.md')
   try {
-    const raw = await readFile(skillMdPath, 'utf-8')
+    const raw = await readFile(meta.location, 'utf-8')
     const parsed = matter(raw)
 
     if (!isValidFrontmatter(parsed.data)) {
@@ -82,15 +99,8 @@ export async function getSkill(id: string): Promise<SkillDetail | null> {
       return null
     }
 
-    const meta = parsed.data.metadata
     return {
-      id,
-      name: meta?.['display-name'] || parsed.data.name,
-      description: parsed.data.description,
-      location: skillMdPath,
-      enabled: meta?.enabled !== 'false',
-      version: meta?.version,
-      builtIn: resolved.builtIn,
+      ...meta,
       content: parsed.content.trim(),
     }
   } catch (err) {
@@ -135,6 +145,8 @@ export async function createSkill(input: CreateSkillInput): Promise<SkillMeta> {
     location: join(dirPath, 'SKILL.md'),
     enabled: true,
     builtIn: false,
+    sourceKind: 'local',
+    sourceId: 'local',
   }
 }
 
@@ -142,6 +154,26 @@ export async function updateSkill(
   id: string,
   input: UpdateSkillInput,
 ): Promise<SkillMeta> {
+  const meta = await resolveSkillMeta(id)
+  if (!meta) throw new Error(`Skill "${id}" not found`)
+
+  // External skills: only allow enabled toggle, reject content changes
+  if (meta.sourceKind === 'external') {
+    if (
+      input.content !== undefined ||
+      input.name !== undefined ||
+      input.description !== undefined
+    ) {
+      throw new Error('Cannot edit external skill content')
+    }
+    const newState = input.enabled ?? meta.enabled
+    const runtimeState = await loadSkillsState()
+    runtimeState.skills[stateKeyFor(meta)] = { enabled: newState }
+    await saveSkillsState(runtimeState)
+    return { ...meta, enabled: newState }
+  }
+
+  // Builtin/local skills: edit in place
   const resolved = await resolveSkillDir(id)
   if (!resolved) throw new Error(`Skill "${id}" not found`)
 
@@ -181,12 +213,58 @@ export async function updateSkill(
     enabled,
     version: existingMeta.version,
     builtIn: resolved.builtIn,
+    sourceKind: resolved.builtIn ? 'builtin' : 'local',
+    sourceId: resolved.builtIn ? 'builtin' : 'local',
   }
 }
 
 export async function deleteSkill(id: string): Promise<void> {
-  const resolved = await resolveSkillDir(id)
-  if (!resolved) throw new Error(`Skill "${id}" not found`)
-  if (resolved.builtIn) throw new Error('Cannot delete built-in skill')
-  await rm(resolved.dir, { recursive: true })
+  const meta = await resolveSkillMeta(id)
+  if (!meta) throw new Error(`Skill "${id}" not found`)
+  if (meta.sourceKind === 'builtin')
+    throw new Error('Cannot delete built-in skill')
+  if (meta.sourceKind === 'external')
+    throw new Error('Cannot delete external skill')
+  await rm(safeSkillDir(id), { recursive: true })
+}
+
+// --- Source Registry CRUD ---
+
+export async function listSkillSources(): Promise<SkillSourceEntry[]> {
+  return (await loadSkillsSources()).sources
+}
+
+export async function createSkillSource(
+  input: Omit<SkillSourceEntry, 'type'>,
+): Promise<SkillSourceEntry> {
+  const registry = await loadSkillsSources()
+  if (registry.sources.some((s) => s.id === input.id)) {
+    throw new Error(`Skill source "${input.id}" already exists`)
+  }
+  const entry: SkillSourceEntry = { ...input, type: 'external' }
+  registry.sources.push(entry)
+  await saveSkillsSources(registry)
+  return entry
+}
+
+export async function updateSkillSource(
+  id: string,
+  input: Partial<Omit<SkillSourceEntry, 'id' | 'type'>>,
+): Promise<SkillSourceEntry> {
+  const registry = await loadSkillsSources()
+  const entry = registry.sources.find((s) => s.id === id)
+  if (!entry) throw new Error(`Skill source "${id}" not found`)
+  if (input.path !== undefined) entry.path = input.path
+  if (input.enabled !== undefined) entry.enabled = input.enabled
+  if (input.label !== undefined) entry.label = input.label
+  await saveSkillsSources(registry)
+  return entry
+}
+
+export async function deleteSkillSource(id: string): Promise<void> {
+  const registry = await loadSkillsSources()
+  const idx = registry.sources.findIndex((s) => s.id === id)
+  if (idx === -1) throw new Error(`Skill source "${id}" not found`)
+  registry.sources.splice(idx, 1)
+  await saveSkillsSources(registry)
 }
