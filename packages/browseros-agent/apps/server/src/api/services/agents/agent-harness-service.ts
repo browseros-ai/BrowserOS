@@ -24,6 +24,7 @@ import {
   type QueuedMessage,
   type QueuedMessageAttachment,
 } from '../../../lib/agents/message-queue'
+import { AgentSessionStore } from '../../../agent/agent-session-store'
 import { writeHermesPerAgentProvider } from '../hermes/hermes-paths'
 import { getHermesProviderMapping } from '../hermes/hermes-provider-map'
 
@@ -196,6 +197,7 @@ export type TurnLifecycleListener = (
 ) => void
 
 export class AgentHarnessService {
+  readonly sessionMetaStore: AgentSessionStore
   private readonly agentStore: AgentStore
   private readonly runtime: AgentRuntime
   private readonly openclawProvisioner: OpenClawProvisioner | null
@@ -237,6 +239,7 @@ export class AgentHarnessService {
       turnRegistry?: TurnRegistry
       messageQueue?: FileMessageQueue
       producedFilesStore?: ProducedFilesStore
+      sessionMetaStore?: AgentSessionStore
     } = {},
   ) {
     this.agentStore = deps.agentStore ?? new DbAgentStore()
@@ -250,6 +253,7 @@ export class AgentHarnessService {
     this.turnRegistry = deps.turnRegistry ?? new TurnRegistry()
     this.messageQueue = deps.messageQueue ?? new FileMessageQueue()
     this.browserosDir = deps.browserosDir
+    this.sessionMetaStore = deps.sessionMetaStore ?? new AgentSessionStore()
     if (deps.producedFilesStore) {
       this.explicitProducedFilesStore = deps.producedFilesStore
     }
@@ -941,7 +945,7 @@ export class AgentHarnessService {
    */
   getActiveTurn(
     agentId: string,
-    sessionId: 'main' = 'main',
+    sessionId: string = 'main',
   ): ActiveTurnInfo | null {
     const turn = this.turnRegistry.getActiveFor(agentId, sessionId)
     return turn ? this.turnRegistry.describe(turn.turnId) : null
@@ -1025,6 +1029,11 @@ export class AgentHarnessService {
           )
         : null
 
+    // Ensure session exists in the metadata store (idempotent — skips if already tracked)
+    if (!(await this.sessionMetaStore.getSessionMeta(agent.id, 'main'))) {
+      await this.sessionMetaStore.openSession(agent.id, 'main', input.cwd)
+    }
+
     try {
       const upstream = await this.runtime.send({
         agent,
@@ -1100,6 +1109,21 @@ export class AgentHarnessService {
           turnId,
           turnPrompt: input.message,
         })
+      }
+      // Update session metadata after the turn completes. Skip on
+      // explicit cancel — the user didn't want the side effects.
+      if (!turn.abortController.signal.aborted) {
+        const meta = await this.sessionMetaStore.getSessionMeta(agent.id, 'main')
+        if (meta) {
+          const preview = input.message
+            .split('\n')
+            .find((l) => l.trim())
+            ?.slice(0, 200) ?? null
+          await this.sessionMetaStore.updateSessionMeta(agent.id, 'main', {
+            turnCount: meta.turnCount + 1,
+            lastMessagePreview: preview,
+          })
+        }
       }
       this.notifyTurnEnded(agent.id, {
         ok: lastErrorMessage === undefined,

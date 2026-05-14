@@ -98,7 +98,7 @@ type AgentRouteService = {
     turnId: string
     lastSeq?: number
   }): ReadableStream<TurnFrame> | null
-  getActiveTurn(agentId: string, sessionId?: 'main'): ActiveTurnInfo | null
+  getActiveTurn(agentId: string, sessionId?: string): ActiveTurnInfo | null
   cancelTurn(input: {
     agentId: string
     turnId?: string
@@ -158,6 +158,8 @@ type AgentRouteDeps = {
    * chat panel sees, so no second WS observer is needed.
    */
   onTurnLifecycle?: import('../services/agents/agent-harness-service').TurnLifecycleListener
+  /** Shared session metadata store. Forwarded to AgentHarnessService. */
+  sessionMetaStore?: import('../../agent/agent-session-store').AgentSessionStore
 }
 
 type SidepanelAgentChatRequest = {
@@ -182,6 +184,7 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
       browserosServerPort: deps.browserosServerPort,
       openclawGateway: deps.openclawGateway,
       openclawProvisioner: deps.openclawProvisioner,
+      sessionMetaStore: deps.sessionMetaStore,
     })
   if (deps.onTurnLifecycle && service instanceof AgentHarnessService) {
     service.onTurnLifecycle(deps.onTurnLifecycle)
@@ -404,9 +407,11 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
           return handleAgentRouteError(c, err)
         }
       })
-      .get('/:agentId/sessions/main/history', async (c) => {
+      .get('/:agentId/sessions/:sessionId/history', async (c) => {
         try {
+          const sessionId = c.req.param('sessionId') || 'main'
           return c.json(await service.getHistory(c.req.param('agentId')))
+          void sessionId // TODO: forward to service once multi-session history is supported
         } catch (err) {
           return handleAgentRouteError(c, err)
         }

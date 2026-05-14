@@ -19,7 +19,7 @@ export interface TurnFrame {
 export interface ActiveTurnInfo {
   turnId: string
   agentId: string
-  sessionId: 'main'
+  sessionId: string
   status: TurnStatus
   lastSeq: number
   startedAt: number
@@ -36,7 +36,7 @@ interface Subscriber {
 interface ActiveTurn {
   turnId: string
   agentId: string
-  sessionId: 'main'
+  sessionId: string
   status: TurnStatus
   buffer: RingBuffer
   subscribers: Set<Subscriber>
@@ -142,7 +142,7 @@ export class TurnRegistry {
    */
   register(
     agentId: string,
-    sessionId: 'main' = 'main',
+    sessionId: string = 'main',
     options: { prompt?: string | null } = {},
   ): ActiveTurn {
     const turn: ActiveTurn = {
@@ -171,7 +171,7 @@ export class TurnRegistry {
    */
   getActiveFor(
     agentId: string,
-    sessionId: 'main' = 'main',
+    sessionId: string = 'main',
   ): ActiveTurn | undefined {
     for (const turn of this.turns.values()) {
       if (

@@ -21,7 +21,10 @@ import { getDb } from '../lib/db'
 import { logger } from '../lib/logger'
 import { Sentry } from '../lib/sentry'
 import { requireTrustedOrigin } from './middleware/require-trusted-origin'
+import { AgentSessionStore } from '../agent/agent-session-store'
 import { createAgentRoutes } from './routes/agents'
+import { createAgentSessionRoutes } from './routes/agent-sessions'
+import { createAssistantSessionRoutes } from './routes/assistant-sessions'
 import { createChatRoutes } from './routes/chat'
 import { createCreditsRoutes } from './routes/credits'
 import { createHealthRoute } from './routes/health'
@@ -121,10 +124,17 @@ export async function createHttpServer(config: HttpServerConfig) {
       }),
     )
     .route('/status', createStatusRoute({ browser }))
+    // Single shared AgentSessionStore — harness and routes see the same instance
+    const sharedSessionStore = new AgentSessionStore()
     .route(
       '/agents',
-      createAgentRoutes({ browser, browserosServerPort: port }),
+      createAgentRoutes({ browser, browserosServerPort: port, sessionMetaStore: sharedSessionStore }),
     )
+    .route(
+      '/agents',
+      createAgentSessionRoutes({ sessionStore: sharedSessionStore }),
+    )
+    .route('/assistant', createAssistantSessionRoutes())
     .route('/soul', createSoulRoutes())
     .route('/memory', createMemoryRoutes())
     .route('/skills', createSkillsRoutes())

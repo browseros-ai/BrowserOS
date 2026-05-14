@@ -9,7 +9,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 export interface LatestRuntimeState {
-  sessionId: 'main'
+  sessionId: string
   runtimeSessionKey: string
   cwd: string
   agentHome: string
@@ -53,7 +53,7 @@ export async function saveLatestRuntimeState(
 
 export function deriveRuntimeSessionKey(input: {
   agentId: string
-  sessionId: 'main'
+  sessionId: string
   adapter: string
   cwd: string
   agentHome: string
