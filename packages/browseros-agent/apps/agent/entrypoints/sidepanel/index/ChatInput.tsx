@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react'
 import { TabPickerPopover } from '@/components/elements/tab-picker-popover'
+import { useTranslation } from '@/lib/i18n/useTranslation'
 import { cn } from '@/lib/utils'
 import type { VoiceInputState } from '@/lib/voice/useVoiceInput'
 import type { ChatMode } from './chatTypes'
@@ -55,6 +56,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     },
     ref,
   ) => {
+    const { t } = useTranslation()
     const textareaRef = useRef<HTMLTextAreaElement>(null)
     const [mentionState, setMentionState] = useState<MentionState>({
       isOpen: false,
@@ -273,7 +275,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             className="cursor-pointer rounded-full bg-red-600 p-2 text-white shadow-sm transition-all duration-200 hover:bg-red-900"
           >
             <Square className="h-3.5 w-3.5" />
-            <span className="sr-only">Stop recording</span>
+            <span className="sr-only">{t('stopRecording')}</span>
           </button>
         )
       }
@@ -370,10 +372,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             onKeyDown={handleKeyDown}
             placeholder={
               voice?.isTranscribing
-                ? 'Transcribing...'
+                ? t('transcribing')
                 : mode === 'chat'
-                  ? 'Ask about this page...'
-                  : 'What should I do?'
+                  ? t('askAboutThisPage')
+                  : t('whatShouldIDo')
             }
             disabled={voice?.isTranscribing}
             rows={1}

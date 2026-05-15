@@ -1,5 +1,6 @@
 import { Sparkles } from 'lucide-react'
 import type { FC } from 'react'
+import { useTranslation } from '@/lib/i18n/useTranslation'
 import { cn } from '@/lib/utils'
 import { AGENT_SUGGESTIONS, CHAT_SUGGESTIONS, type ChatMode } from './chatTypes'
 
@@ -14,6 +15,7 @@ export const ChatEmptyState: FC<ChatEmptyStateProps> = ({
   mounted,
   onSuggestionClick,
 }) => {
+  const { t } = useTranslation()
   const suggestions = mode === 'chat' ? CHAT_SUGGESTIONS : AGENT_SUGGESTIONS
 
   return (
@@ -28,12 +30,12 @@ export const ChatEmptyState: FC<ChatEmptyStateProps> = ({
       </div>
       <div>
         <h2 className="mb-1 font-semibold text-lg">
-          {mode === 'chat' ? 'Chat with this page' : 'Agent at your service'}
+          {mode === 'chat' ? t('chatWithThisPage') : t('agentAtYourService')}
         </h2>
         <p className="max-w-[200px] text-muted-foreground text-xs">
           {mode === 'chat'
-            ? 'Ask questions about the current page or any topic'
-            : 'Let AI automate tasks and browse for you'}
+            ? t('askQuestionsAboutCurrentPage')
+            : t('letAIAutomateTasks')}
         </p>
       </div>
 

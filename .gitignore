@@ -1,31 +1,79 @@
-**/.DS_Store
-.gcs_entries
-**/dmg
-**/env
-**/logs
-**/old-scripts
+```
+# Dependencies
+node_modules/
 
-# Python
-**/__pycache__/
-**/*.pyc
-**/*.pyo
-**/*.egg-info/
-**/*.egg
-**/.pytest_cache/
-**/dist/
-**/releases/
-**/.wrangler/
-**/node_modules/
+# Build artifacts
+dist/
+build/
+*.js
+*.ts
 
-
-
-nxtscape-cli-access.json
-gclient.json
+# Environment
 .env
-.grove/
-**/resources/binaries/
+.env.local
+*.env.*
 
-packages/browseros/build/tools/
+# Editors
+.vscode/
+.idea/
 
-# AI SDK DevTools traces
-.devtools/
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Coverage reports
+coverage/
+htmlcov/
+.coverage
+
+# Python specific
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Node.js specific
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Compiled binary files
+*.exe
+*.dll
+*.so
+*.a
+*.o
+*.obj
+*.out
+
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
+```

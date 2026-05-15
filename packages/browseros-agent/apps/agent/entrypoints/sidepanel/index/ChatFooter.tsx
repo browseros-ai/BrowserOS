@@ -7,6 +7,7 @@ import { McpServerIcon } from '@/entrypoints/app/connect-mcp/McpServerIcon'
 import { useGetUserMCPIntegrations } from '@/entrypoints/app/connect-mcp/useGetUserMCPIntegrations'
 import { Feature } from '@/lib/browseros/capabilities'
 import { useCapabilities } from '@/lib/browseros/useCapabilities'
+import { useTranslation } from '@/lib/i18n/useTranslation'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import {
   type SelectedTextData,
@@ -48,6 +49,7 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   onRemoveTab,
   voice,
 }) => {
+  const { t } = useTranslation()
   const { selectedFolder } = useWorkspace()
   const { supports } = useCapabilities()
   const { servers: mcpServers } = useMcpServers()
@@ -142,7 +144,7 @@ export const ChatFooter: FC<ChatFooterProps> = ({
               aria-expanded={isTabMentionOpen}
               aria-haspopup="dialog"
               className="flex cursor-pointer items-center gap-1 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
-              title="Attach tabs (@)"
+              title={t('attachTabs')}
             >
               <Layers className="h-4 w-4" />
               {attachedTabs.length > 0 && (
@@ -166,7 +168,7 @@ export const ChatFooter: FC<ChatFooterProps> = ({
                   title={
                     selectedFolder
                       ? selectedFolder.name
-                      : 'Select workspace folder'
+                      : t('selectWorkspaceFolder')
                   }
                 >
                   <div className="relative">
@@ -185,7 +187,7 @@ export const ChatFooter: FC<ChatFooterProps> = ({
                 <button
                   type="button"
                   className="flex cursor-pointer items-center gap-1 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
-                  title="Connect apps"
+                  title={t('connectApps')}
                 >
                   {connectedManagedServers.length > 0 ? (
                     <>
