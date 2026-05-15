@@ -2,7 +2,7 @@
 # Dependencies
 node_modules/
 
-# Build artifacts
+# Build outputs
 dist/
 build/
 target/
@@ -12,51 +12,59 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.py.class
-*.py.obj
-*.py.out
-*.py.dll
-*.py.so
-*.py.a
-
-# Virtual environments
+.Python
+env/
 venv/
 .venv/
-env/
-ENV/
+.venv*/
+.ENV/
+.env
+.env.*
+.env.local
+.venv.bak/
+.python-version
 
 # Logs
 *.log
 
-# Environment variables
-.env
-.env.local
-.env.*
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
-# IDE
+# Editor files
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 *.tmp
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Coverage
+# Coverage reports
 coverage/
 htmlcov/
 .coverage
 
-# MyPy
+# MyPy cache
 .mypy_cache/
+.dmypy.json
+dmypy.json
 
-# PyTest
+# Pytest cache
 .pytest_cache/
 
 # Gradle
 .gradle/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
 
 # Compressed files
 *.zip
