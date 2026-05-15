@@ -125,7 +125,7 @@ index 96ccc8d0a6acc..9c446a5e041a9 100644
 +              bwi))
 +          .SetActionId(kActionBrowserOSAgent)
 +          .SetText(u"Assistant")
-+          .SetTooltipText(u"Ask BrowserOS")
++          .SetTooltipText(u"Ask SUP")
 +          .SetImage(ui::ImageModel::FromResourceId(IDR_PRODUCT_LOGO_16))
 +          .SetProperty(actions::kActionItemPinnableKey,
 +                       std::underlying_type_t<actions::ActionPinnableState>(

@@ -5,6 +5,8 @@ const BROWSEROS_INFO = `# BrowserOS — The Open-Source AI Browser
 
 BrowserOS is an AI-native browser built on Chromium that turns plain English into browser actions. It runs AI agents locally on your machine, keeping your data private. Open source under AGPL-3.0.
 
+The browser's name is Shimmy.
+
 **Docs:** https://docs.browseros.com/
 
 ---
