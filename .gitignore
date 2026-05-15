@@ -5,53 +5,58 @@ node_modules/
 # Build artifacts
 dist/
 build/
-*.js
-*.ts
+target/
 
-# Environment
-.env
-.env.local
-*.env.*
-
-# Editors
-.vscode/
-.idea/
-
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-
-# OS generated files
-.DS_Store
-Thumbs.db
-
-# Coverage reports
-coverage/
-htmlcov/
-.coverage
-
-# Python specific
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python
-*.so
+*.py.class
+*.py.obj
+*.py.out
+*.py.dll
+*.py.so
+*.py.a
 
-# Node.js specific
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
 
-# Compiled binary files
-*.exe
-*.dll
-*.so
-*.a
-*.o
-*.obj
-*.out
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.local
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# MyPy
+.mypy_cache/
+
+# PyTest
+.pytest_cache/
+
+# Gradle
+.gradle/
 
 # Compressed files
 *.zip

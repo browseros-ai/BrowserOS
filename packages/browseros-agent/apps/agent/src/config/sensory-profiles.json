@@ -1,0 +1,122 @@
+{
+  "version": "2.0",
+  "description": "Next-gen sensory profiles for zero-config accessibility",
+  "autoDetection": {
+    "enabled": true,
+    "sensitivity": "medium",
+    "learningRate": 0.1
+  },
+  "profiles": [
+    {
+      "id": "adhd-focus",
+      "name": "ADHD 專注模式",
+      "icon": "⚡",
+      "triggers": ["rapid_tab_switching", "frequent_context_change"],
+      "settings": {
+        "visual": {
+          "layout": "single-column",
+          "distractionBlocker": true,
+          "colorScheme": "monochrome-focus",
+          "animationSpeed": "fast",
+          "hideUnusedUI": true
+        },
+        "audio": {
+          "noiseCancellation": "high",
+          "alertType": "subtle-chime",
+          "voiceSpeed": 1.2
+        },
+        "haptic": {
+          "enabled": true,
+          "intensity": "low",
+          "pattern": "short-pulse"
+        },
+        "cognitive": {
+          "chunking": "micro-steps",
+          "progressVisualization": "garden",
+          "rewardFrequency": "high"
+        }
+      }
+    },
+    {
+      "id": "dyslexia-read",
+      "name": "讀寫輔助模式",
+      "icon": "📖",
+      "triggers": ["slow_reading_speed", "text_selection_hesitation"],
+      "settings": {
+        "visual": {
+          "font": "OpenDyslexic",
+          "letterSpacing": 1.5,
+          "lineHeight": 2.0,
+          "textBackground": "soft-cream",
+          "syllableHighlight": true,
+          "readingRuler": true
+        },
+        "audio": {
+          "textToSpeech": "always-on",
+          "voiceType": "natural-warm",
+          "highlightSync": true
+        },
+        "cognitive": {
+          "simplifyLanguage": true,
+          "iconSubstitution": "high",
+          "grammarAssist": "gentle"
+        }
+      }
+    },
+    {
+      "id": "visual-impaired",
+      "name": "視覺增強模式",
+      "icon": "👁️",
+      "triggers": ["high_zoom_level", "screen_reader_usage"],
+      "settings": {
+        "visual": {
+          "contrast": "enhanced",
+          "fontSize": "large",
+          "cursorSize": "extra-large",
+          "focusIndicator": "thick-glow",
+          "iconSize": "large"
+        },
+        "audio": {
+          "screenReader": "detailed",
+          "soundLabels": true,
+          "spatialAudio": true
+        },
+        "haptic": {
+          "enabled": true,
+          "intensity": "medium",
+          "navigationFeedback": "strong"
+        }
+      }
+    },
+    {
+      "id": "hsp-calm",
+      "name": "高敏感平靜模式",
+      "icon": "🌿",
+      "triggers": ["rapid_scroll", "error_avoidance", "long_inactivity"],
+      "settings": {
+        "visual": {
+          "colorPalette": "pastel-earth",
+          "brightness": "reduced",
+          "animations": "fade-only",
+          "popups": "blocked",
+          "whiteSpace": "generous"
+        },
+        "audio": {
+          "volume": "low",
+          "alertType": "visual-only",
+          "backgroundSound": "nature-ambient"
+        },
+        "cognitive": {
+          "notificationBatching": "high",
+          "confirmations": "soft",
+          "errorMessages": "encouraging"
+        }
+      }
+    }
+  ],
+  "defaults": {
+    "activeProfile": "auto",
+    "transitionDuration": 300,
+    "savePreferences": true
+  }
+}
