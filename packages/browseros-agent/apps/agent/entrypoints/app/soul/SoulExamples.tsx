@@ -107,8 +107,8 @@ export const SoulExamples: FC = () => {
       <div>
         <h3 className="font-medium text-sm">Shape your Sup's soul</h3>
         <p className="mt-1 text-muted-foreground text-xs">
-          Try these prompts to customize how your Sup behaves. Edit the
-          message before sending.
+          Try these prompts to customize how your Sup behaves. Edit the message
+          before sending.
         </p>
       </div>
 
@@ -256,4 +256,3 @@ export const SoulExamples: FC = () => {
     </div>
   )
 }
-

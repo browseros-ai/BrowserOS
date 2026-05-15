@@ -5,7 +5,14 @@ import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { Provider } from '@/components/chat/chatComponentTypes'
+import {
+  clearActiveSession,
+  consumeRestorePending,
+  readActiveSession,
+  saveActiveSession,
+} from '@/lib/browseros/activeSessionStorage'
 import { Capabilities, Feature } from '@/lib/browseros/capabilities'
+import { SHIMMY_AGENT_SIDEPANEL_BUSY_KEY } from '@/lib/browseros/toggleSidePanel'
 import { useAgentServerUrl } from '@/lib/browseros/useBrowserOSProviders'
 import type { ChatAction } from '@/lib/chat-actions/types'
 import {
@@ -29,15 +36,7 @@ import { useLlmProviders } from '@/lib/llm-providers/useLlmProviders'
 import { track } from '@/lib/metrics/track'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
-import { SHIMMY_AGENT_SIDEPANEL_BUSY_KEY } from '@/lib/browseros/toggleSidePanel'
-import {
-  clearActiveSession,
-  consumeRestorePending,
-  readActiveSession,
-  saveActiveSession,
-} from '@/lib/browseros/activeSessionStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
-
 
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
 import type { ChatMode } from './chatTypes'
@@ -134,8 +133,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const [disliked, setDisliked] = useState<Record<string, boolean>>({})
   const [conversationId, setConversationId] = useState(crypto.randomUUID())
   const conversationIdRef = useRef(conversationId)
-
-
 
   const onClickLike = (messageId: string) => {
     const { responseText, queryText } = getResponseAndQueryFromMessageId(
@@ -428,7 +425,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       }
     }
     tryRestore()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   /**
@@ -440,7 +439,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     if (messages.length === 0) return
     saveActiveSession(conversationIdRef.current, messages)
   }, [options?.origin, messages])
-
 
   useNotifyActiveTab({
     messages,
@@ -527,8 +525,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   useEffect(() => {
     conversationIdRef.current = conversationId
   }, [conversationId])
-
-
 
   // Save conversation only after streaming completes — not on every token
   const previousStatusRef = useRef(status)
@@ -622,8 +618,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     }
     baseSendMessage({ text: params.text })
   }
-
-
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: only need to run this once
   useEffect(() => {
@@ -726,5 +720,3 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     restoreSessionFromOtherTab,
   }
 }
-
-

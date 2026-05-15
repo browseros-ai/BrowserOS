@@ -90,10 +90,10 @@ export const SidebarLayout: FC = () => {
           <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
             <SheetContent side="left" className="w-72 p-0">
               <AppSidebar
-              expanded
-              onOpenShortcuts={openShortcuts}
-              onSidebarAutoCollapse={() => setMobileOpen(false)}
-            />
+                expanded
+                onOpenShortcuts={openShortcuts}
+                onSidebarAutoCollapse={() => setMobileOpen(false)}
+              />
             </SheetContent>
           </Sheet>
           <ShortcutsDialog

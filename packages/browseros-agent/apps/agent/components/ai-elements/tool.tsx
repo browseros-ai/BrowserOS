@@ -55,7 +55,9 @@ const getStatusBadge = (status: ToolUIPart['state']) => {
     'approval-responded': <CheckCircleIcon className="size-4 text-blue-600" />,
     'output-available': <CheckCircleIcon className="size-4 text-green-600" />,
     'output-error': <XCircleIcon className="size-4 text-red-600" />,
-    'output-denied': <XCircleIcon className="size-4 text-amber-900/80 dark:text-amber-200/90" />,
+    'output-denied': (
+      <XCircleIcon className="size-4 text-amber-900/80 dark:text-amber-200/90" />
+    ),
   }
 
   return (

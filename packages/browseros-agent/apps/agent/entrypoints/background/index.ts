@@ -1,4 +1,5 @@
 import { sessionStorage } from '@/lib/auth/sessionStorage'
+import { markRestorePending } from '@/lib/browseros/activeSessionStorage'
 import { Capabilities } from '@/lib/browseros/capabilities'
 import { getHealthCheckUrl, getMcpServerUrl } from '@/lib/browseros/helpers'
 import {
@@ -8,8 +9,6 @@ import {
   SHIMMY_SIDEPANEL_LAST_TAB_KEY,
   toggleSidePanel,
 } from '@/lib/browseros/toggleSidePanel'
-import { markRestorePending } from '@/lib/browseros/activeSessionStorage'
-
 
 import { checkAndShowChangelog } from '@/lib/changelog/changelog-notifier'
 import {
@@ -241,7 +240,9 @@ export default defineBackground(() => {
   /** Keep the AI side panel open when automation changes the active tab (CDP). */
   chrome.tabs.onActivated.addListener((activeInfo) => {
     const previousTabId = (
-      activeInfo as Parameters<Parameters<typeof chrome.tabs.onActivated.addListener>[0]>[0] & { previousTabId?: number }
+      activeInfo as Parameters<
+        Parameters<typeof chrome.tabs.onActivated.addListener>[0]
+      >[0] & { previousTabId?: number }
     ).previousTabId
 
     chrome.storage.session
@@ -279,8 +280,6 @@ export default defineBackground(() => {
       })
       .catch(() => null)
   })
-
-
 
   onOpenSidePanelWithSearch('open', async (messageData) => {
     const currentTabsList = await chrome.tabs.query({

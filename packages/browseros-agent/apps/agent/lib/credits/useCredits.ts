@@ -42,15 +42,7 @@ function readCreditsExhaustedOverride(): number | null {
 
 function writeCreditsExhaustedOverride(expiresAt: number) {
   if (typeof window === 'undefined') return
-  window.localStorage.setItem(
-    CREDITS_EXHAUSTED_OVERRIDE_KEY,
-    String(expiresAt),
-  )
-}
-
-function clearCreditsExhaustedOverride() {
-  if (typeof window === 'undefined') return
-  window.localStorage.removeItem(CREDITS_EXHAUSTED_OVERRIDE_KEY)
+  window.localStorage.setItem(CREDITS_EXHAUSTED_OVERRIDE_KEY, String(expiresAt))
 }
 
 function applyCreditsExhaustedOverride(data: CreditsInfo): CreditsInfo {

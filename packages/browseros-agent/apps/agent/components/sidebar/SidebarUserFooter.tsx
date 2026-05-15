@@ -1,5 +1,6 @@
 import { Info, Keyboard } from 'lucide-react'
 import type { FC } from 'react'
+import { ThemeAccentPicker } from '@/components/sidebar/ThemeAccentPicker'
 import { Button } from '@/components/ui/button'
 import {
   Tooltip,
@@ -7,7 +8,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { ThemeAccentPicker } from '@/components/sidebar/ThemeAccentPicker'
 import { cn } from '@/lib/utils'
 
 interface SidebarUserFooterProps {

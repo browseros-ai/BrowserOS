@@ -47,7 +47,6 @@ export const Chat = () => {
     restoreSessionFromOtherTab,
   } = useChatSessionContext()
 
-
   const {
     popupVisible,
     showDontShowAgain,
@@ -214,7 +213,6 @@ export const Chat = () => {
             hasRestorableSession={hasRestorableSession}
             onRestoreSession={restoreSessionFromOtherTab}
           />
-
         ) : (
           <ChatMessages
             messages={messages}

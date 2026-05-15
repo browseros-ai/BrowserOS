@@ -32,10 +32,7 @@ for (const size of [16, 32, 48, 96, 128] as const) {
     .toFile(join(iconDir, `${size}.png`))
 }
 
-await base
-  .clone()
-  .png()
-  .toFile(join(brandDir, 'wordmark.png'))
+await base.clone().png().toFile(join(brandDir, 'wordmark.png'))
 
 process.stdout.write(
   `Wrote ${[16, 32, 48, 96, 128].map((s) => `icon/${s}.png`).join(', ')}, brand/wordmark.png from red_logo.png\n`,

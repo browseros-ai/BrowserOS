@@ -2,7 +2,9 @@
  * Derive full theme CSS variables from a single hex accent (user-chosen color).
  */
 
-export function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+export function hexToRgb(
+  hex: string,
+): { r: number; g: number; b: number } | null {
   const h = hex.trim().replace(/^#/, '')
   if (h.length !== 6 || !/^[0-9a-fA-F]+$/.test(h)) return null
   return {

@@ -108,4 +108,3 @@ export const Onboarding: FC = () => {
     </div>
   )
 }
-

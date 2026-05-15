@@ -80,6 +80,184 @@ interface MentionState {
   startPosition: number
 }
 
+type ChatSessionContextValue = ReturnType<typeof useChatSessionContext>
+type WorkspaceState = ReturnType<typeof useWorkspace>
+type McpServer = ReturnType<typeof useMcpServers>['servers'][number]
+
+interface NewTabFooterProps {
+  providers: ChatSessionContextValue['providers']
+  selectedProvider: ChatSessionContextValue['selectedProvider']
+  onSelectProvider: ChatSessionContextValue['handleSelectProvider']
+  selectedFolder: WorkspaceState['selectedFolder']
+  supports: (feature: Feature) => boolean
+  selectedTabs: chrome.tabs.Tab[]
+  onToggleTab: (tab: chrome.tabs.Tab) => void
+  connectedManagedServers: McpServer[]
+}
+
+const NewTabFooter = ({
+  providers,
+  selectedProvider,
+  onSelectProvider,
+  selectedFolder,
+  supports,
+  selectedTabs,
+  onToggleTab,
+  connectedManagedServers,
+}: NewTabFooterProps) => {
+  const tabsDropdownRef = useRef<HTMLDivElement>(null)
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-border/50 border-t px-3 py-2.5 sm:justify-between sm:px-5 sm:py-3">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+        {selectedProvider && (
+          <ChatProviderSelector
+            providers={providers}
+            selectedProvider={selectedProvider}
+            onSelectProvider={onSelectProvider}
+          >
+            <Button
+              variant="ghost"
+              size="icon"
+              title={selectedProvider.name}
+              className={cn(
+                'h-8 w-8 rounded-lg transition-all',
+                'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                'data-[state=open]:bg-accent',
+              )}
+            >
+              {selectedProvider.type === 'browseros' ? (
+                <ShimmyIcon size={20} />
+              ) : (
+                <ProviderIcon
+                  type={selectedProvider.type as ProviderType}
+                  size={20}
+                />
+              )}
+            </Button>
+          </ChatProviderSelector>
+        )}
+
+        {supports(Feature.WORKSPACE_FOLDER_SUPPORT) && (
+          <WorkspaceSelector>
+            <Button
+              variant="ghost"
+              onClick={() => track(NEWTAB_WORKSPACE_OPENED_EVENT)}
+              className={cn(
+                'flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium text-sm transition-all',
+                'bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                'data-[state=open]:bg-accent',
+              )}
+            >
+              <Folder className="h-4 w-4" />
+              <span className="max-w-28 truncate sm:max-w-44">
+                {selectedFolder?.name || 'Add workspace'}
+              </span>
+              <ChevronDown className="h-3 w-3" />
+            </Button>
+          </WorkspaceSelector>
+        )}
+
+        <div className="relative" ref={tabsDropdownRef}>
+          <TabPickerPopover
+            variant="selector"
+            selectedTabs={selectedTabs}
+            onToggleTab={onToggleTab}
+          >
+            <Button
+              onClick={() => track(NEWTAB_TABS_OPENED_EVENT)}
+              className={cn(
+                'flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium text-sm transition-all',
+                selectedTabs.length > 0
+                  ? 'bg-[var(--accent-orange)]! text-white shadow-sm'
+                  : 'bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                'data-[state=open]:bg-accent',
+              )}
+            >
+              <Layers className="h-4 w-4" />
+              <span>Tabs</span>
+            </Button>
+          </TabPickerPopover>
+        </div>
+      </div>
+
+      {supports(Feature.MANAGED_MCP_SUPPORT) && (
+        <div className="flex w-full flex-wrap items-center justify-end gap-1.5 sm:ml-auto sm:w-auto sm:flex-nowrap">
+          {connectedManagedServers.length === 0 && (
+            <span className="flex items-center gap-1 font-semibold text-[var(--accent-orange)] text-sm">
+              New!
+            </span>
+          )}
+          {connectedManagedServers.length === 0 ? (
+            <Tooltip>
+              <AppSelector side="bottom">
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    onClick={() =>
+                      track(NEWTAB_APPS_OPENED_EVENT, {
+                        has_connected_apps: false,
+                      })
+                    }
+                    className={cn(
+                      'flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium text-sm transition-all',
+                      'bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                      'data-[state=open]:bg-accent',
+                    )}
+                  >
+                    <PlugZap className="h-4 w-4" />
+                    <span>Apps</span>
+                    <ChevronDown className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+              </AppSelector>
+              <TooltipContent side="left" className="max-w-56">
+                Apps directly connected will have more accurate and faster
+                responses for your queries!
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <AppSelector side="bottom">
+              <Button
+                variant="ghost"
+                onClick={() =>
+                  track(NEWTAB_APPS_OPENED_EVENT, {
+                    has_connected_apps: true,
+                    connected_count: connectedManagedServers.length,
+                  })
+                }
+                className={cn(
+                  'flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium text-sm transition-all',
+                  'bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                  'data-[state=open]:bg-accent',
+                )}
+              >
+                <div className="flex items-center -space-x-1.5">
+                  {connectedManagedServers.slice(0, 4).map((s) => (
+                    <div key={s.id} className="rounded-full ring-2 ring-card">
+                      <McpServerIcon
+                        serverName={s.managedServerName ?? ''}
+                        size={16}
+                      />
+                    </div>
+                  ))}
+                </div>
+                {connectedManagedServers.length > 4 && (
+                  <span className="text-xs">
+                    +{connectedManagedServers.length - 4}
+                  </span>
+                )}
+                <span>Apps</span>
+                <ChevronDown className="h-3 w-3" />
+              </Button>
+            </AppSelector>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /**
  * @public
  */
@@ -89,7 +267,6 @@ export const NewTab = () => {
   const [inputValue, setInputValue] = useState('')
   const [mounted, setMounted] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
-  const tabsDropdownRef = useRef<HTMLDivElement>(null)
   const [selectedTabs, setSelectedTabs] = useState<chrome.tabs.Tab[]>([])
   const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false)
   const [mentionState, setMentionState] = useState<MentionState>({
@@ -619,156 +796,16 @@ export const NewTab = () => {
             </AnimatePresence>
 
             {mounted && (
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-border/50 border-t px-3 py-2.5 sm:justify-between sm:px-5 sm:py-3">
-                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-                  {selectedProvider && (
-                    <ChatProviderSelector
-                      providers={providers}
-                      selectedProvider={selectedProvider}
-                      onSelectProvider={handleSelectProvider}
-                    >
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        title={selectedProvider.name}
-                        className={cn(
-                          'h-8 w-8 rounded-lg transition-all',
-                          'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                          'data-[state=open]:bg-accent',
-                        )}
-                      >
-                        {selectedProvider.type === 'browseros' ? (
-                          <ShimmyIcon size={20} />
-                        ) : (
-                          <ProviderIcon
-                            type={selectedProvider.type as ProviderType}
-                            size={20}
-                          />
-                        )}
-                      </Button>
-                    </ChatProviderSelector>
-                  )}
-
-                  {supports(Feature.WORKSPACE_FOLDER_SUPPORT) && (
-                    <WorkspaceSelector>
-                      <Button
-                        variant="ghost"
-                        onClick={() => track(NEWTAB_WORKSPACE_OPENED_EVENT)}
-                        className={cn(
-                          'flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium text-sm transition-all',
-                          'bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                          'data-[state=open]:bg-accent',
-                        )}
-                      >
-                        <Folder className="h-4 w-4" />
-                        <span className="max-w-28 truncate sm:max-w-44">
-                          {selectedFolder?.name || 'Add workspace'}
-                        </span>
-                        <ChevronDown className="h-3 w-3" />
-                      </Button>
-                    </WorkspaceSelector>
-                  )}
-
-                  <div className="relative" ref={tabsDropdownRef}>
-                    <TabPickerPopover
-                      variant="selector"
-                      selectedTabs={selectedTabs}
-                      onToggleTab={toggleTab}
-                    >
-                      <Button
-                        onClick={() => track(NEWTAB_TABS_OPENED_EVENT)}
-                        className={cn(
-                          'flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium text-sm transition-all',
-                          selectedTabs.length > 0
-                            ? 'bg-[var(--accent-orange)]! text-white shadow-sm'
-                            : 'bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                          'data-[state=open]:bg-accent',
-                        )}
-                      >
-                        <Layers className="h-4 w-4" />
-                        <span>Tabs</span>
-                      </Button>
-                    </TabPickerPopover>
-                  </div>
-                </div>
-
-                {supports(Feature.MANAGED_MCP_SUPPORT) && (
-                  <div className="flex w-full flex-wrap items-center justify-end gap-1.5 sm:ml-auto sm:w-auto sm:flex-nowrap">
-                    {connectedManagedServers.length === 0 && (
-                      <span className="flex items-center gap-1 font-semibold text-[var(--accent-orange)] text-sm">
-                        New!
-                      </span>
-                    )}
-                    {connectedManagedServers.length === 0 ? (
-                      <Tooltip>
-                        <AppSelector side="bottom">
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              onClick={() =>
-                                track(NEWTAB_APPS_OPENED_EVENT, {
-                                  has_connected_apps: false,
-                                })
-                              }
-                              className={cn(
-                                'flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium text-sm transition-all',
-                                'bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                                'data-[state=open]:bg-accent',
-                              )}
-                            >
-                              <PlugZap className="h-4 w-4" />
-                              <span>Apps</span>
-                              <ChevronDown className="h-3 w-3" />
-                            </Button>
-                          </TooltipTrigger>
-                        </AppSelector>
-                        <TooltipContent side="left" className="max-w-56">
-                          Apps directly connected will have more accurate and
-                          faster responses for your queries!
-                        </TooltipContent>
-                      </Tooltip>
-                    ) : (
-                      <AppSelector side="bottom">
-                        <Button
-                          variant="ghost"
-                          onClick={() =>
-                            track(NEWTAB_APPS_OPENED_EVENT, {
-                              has_connected_apps: true,
-                              connected_count: connectedManagedServers.length,
-                            })
-                          }
-                          className={cn(
-                            'flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium text-sm transition-all',
-                            'bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                            'data-[state=open]:bg-accent',
-                          )}
-                        >
-                          <div className="flex items-center -space-x-1.5">
-                            {connectedManagedServers.slice(0, 4).map((s) => (
-                              <div
-                                key={s.id}
-                                className="rounded-full ring-2 ring-card"
-                              >
-                                <McpServerIcon
-                                  serverName={s.managedServerName ?? ''}
-                                  size={16}
-                                />
-                              </div>
-                            ))}
-                          </div>
-                          {connectedManagedServers.length > 4 && (
-                            <span className="text-xs">
-                              +{connectedManagedServers.length - 4}
-                            </span>
-                          )}
-                          <span>Apps</span>
-                          <ChevronDown className="h-3 w-3" />
-                        </Button>
-                      </AppSelector>
-                    )}
-                  </div>
-                )}
-              </div>
+              <NewTabFooter
+                providers={providers}
+                selectedProvider={selectedProvider}
+                onSelectProvider={handleSelectProvider}
+                selectedFolder={selectedFolder}
+                supports={supports}
+                selectedTabs={selectedTabs}
+                onToggleTab={toggleTab}
+                connectedManagedServers={connectedManagedServers}
+              />
             )}
           </div>
         </div>
@@ -791,4 +828,3 @@ export const NewTab = () => {
     </div>
   )
 }
-

@@ -73,8 +73,8 @@ export const ShareForCredits: FC<ShareForCreditsProps> = ({ compact }) => {
   return (
     <div className={compact ? 'space-y-2' : 'space-y-3'}>
       <p className={compact ? 'text-muted-foreground text-xs' : 'text-sm'}>
-        Share Shimmy on Twitter to earn{' '}
-        {REFERRAL_LIMITS.CREDITS_PER_REFERRAL} bonus credits!
+        Share Shimmy on Twitter to earn {REFERRAL_LIMITS.CREDITS_PER_REFERRAL}{' '}
+        bonus credits!
       </p>
 
       <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground text-xs">

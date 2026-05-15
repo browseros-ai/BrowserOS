@@ -5,7 +5,8 @@ import { markRestorePending } from '@/lib/browseros/activeSessionStorage'
  * background script should keep the side panel visible when CDP activates
  * other tabs.
  */
-export const SHIMMY_AGENT_SIDEPANEL_BUSY_KEY = 'shimmyAgentSidepanelBusy' as const
+export const SHIMMY_AGENT_SIDEPANEL_BUSY_KEY =
+  'shimmyAgentSidepanelBusy' as const
 
 /**
  * Session flag: the tabId that most recently had the side panel open.
@@ -138,11 +139,10 @@ export async function migrateSidePanelIfOpenBetweenTabs(
   // on the previous tab (or if the agent is mid-task).
   const sessionData = await chrome.storage.session
     .get(SHIMMY_SIDEPANEL_LAST_TAB_KEY)
-    .catch(() => ({} as Record<string, unknown>))
-  const lastOpenTabId = (sessionData as Record<string, unknown>)[SHIMMY_SIDEPANEL_LAST_TAB_KEY] as
-    | number
-    | undefined
-
+    .catch(() => ({}) as Record<string, unknown>)
+  const lastOpenTabId = (sessionData as Record<string, unknown>)[
+    SHIMMY_SIDEPANEL_LAST_TAB_KEY
+  ] as number | undefined
 
   const panelWasOpen =
     agentBusy || lastOpenTabId === previousTabId || lastOpenTabId === newTabId
