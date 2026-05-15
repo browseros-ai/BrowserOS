@@ -14,6 +14,25 @@ processes:
       install:
         condition: process_completed_successfully
 
+  n8n:
+    command: bunx n8n start --tunnel --webhook-port 5678
+    availability:
+      restart: unless-exited
+    depends_on:
+      install:
+        condition: process_completed_successfully
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_USER_FOLDER=./data/n8n
+    readiness_probe:
+      http_get:
+        host: localhost
+        port: 5678
+        path: /healthz
+      initial_delay_seconds: 5
+      period_seconds: 10
+
   server:
     command: bun --cwd apps/server start
     availability:
@@ -21,6 +40,8 @@ processes:
     depends_on:
       build-ext:
         condition: process_completed_successfully
+      n8n:
+        condition: process_healthy
 
   agent-codegen:
     command: bun --cwd apps/agent codegen --watch

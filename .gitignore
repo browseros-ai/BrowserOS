@@ -1,11 +1,10 @@
-```
+```gitignore
 # Dependencies
 node_modules/
-
-# Build outputs
-dist/
-build/
+.julia/
+zig*/
 target/
+.gradle/
 
 # Python
 __pycache__/
@@ -16,13 +15,12 @@ __pycache__/
 env/
 venv/
 .venv/
-.venv*/
-.ENV/
-.env
-.env.*
-.env.local
-.venv.bak/
+.ENV
 .python-version
+.mypy_cache/
+.pytest_cache/
+.coverage
+coverage/
 
 # Logs
 *.log
@@ -36,35 +34,27 @@ venv/
 ehthumbs.db
 Thumbs.db
 
-# Editor files
+# Environment variables
+.env
+.env.local
+.env.*
+!.env.example
+
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
-*.tmp
 
-# Coverage reports
-coverage/
-htmlcov/
-.coverage
-
-# MyPy cache
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pytest cache
-.pytest_cache/
-
-# Gradle
-.gradle/
-
-# Temporary files
-*.tmp
-*.temp
-*.bak
-*.backup
+# Build outputs
+dist/
+build/
+*.out
+*.exe
+*.dll
+*.so
+*.a
+*.class
 
 # Compressed files
 *.zip

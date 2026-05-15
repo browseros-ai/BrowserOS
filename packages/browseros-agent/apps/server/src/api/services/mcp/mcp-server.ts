@@ -14,6 +14,8 @@ import {
   registerKlavisTools,
 } from './register-klavis-mcp'
 import { registerTools } from './register-mcp'
+import { N8NProvider, createN8NTools } from '../../../tools/n8n-provider'
+import { MultimodalService } from '../../../services/accessibility/multimodal-service'
 
 export interface McpServiceDeps {
   version: string
@@ -51,6 +53,33 @@ export function createMcpServer(deps: McpServiceDeps): McpServer {
   if (deps.klavisProxy) {
     registerKlavisTools(server, deps.klavisProxy)
   }
+
+  // Register n8n automation tools
+  const n8nProvider = new N8NProvider();
+  const n8nTools = createN8NTools(n8nProvider);
+  n8nTools.forEach(tool => {
+    server.registerTool(
+      tool.name,
+      {
+        description: tool.description,
+        inputSchema: tool.inputSchema as any,
+      },
+      tool.execute as any
+    );
+  });
+
+  // Register accessibility multimodal tools
+  const multimodalService = new MultimodalService();
+  multimodalService.getTools().forEach(tool => {
+    server.registerTool(
+      tool.name,
+      {
+        description: tool.description,
+        inputSchema: tool.inputSchema as any,
+      },
+      tool.execute as any
+    );
+  });
 
   return server
 }
