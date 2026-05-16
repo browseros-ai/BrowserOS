@@ -28,3 +28,29 @@ index 33c0b42d826b5..1e258157b8033 100644
          <!-- TODO(thestig) Should this be Linux only? Add #ifdefs to external_process_importer_client.cc -->
          <message name="IDS_IMPORT_FROM_ICEWEASEL" desc="browser combo box: Iceweasel">
            Iceweasel
+@@ -12234,6 +12246,12 @@ Check your passwords anytime in <ph name="GOOGLE_PASSWORD_MANAGER">$1<ex>Google
+         <message name="IDS_PIN_SPLIT_TAB_TOGGLE" desc="Pins the split tabs button to the toolbar when toggled on.">
+           Open in split view
+         </message>
++        <message name="IDS_SPLIT_TAB_CREATE_LEFT_RIGHT" desc="The label for a toolbar button context menu item that creates a left/right split view.">
++          Split left/right
++        </message>
++        <message name="IDS_SPLIT_TAB_CREATE_TOP_BOTTOM" desc="The label for a toolbar button context menu item that creates a top/bottom split view.">
++          Split top/bottom
++        </message>
+         <message name="IDS_SPLIT_TAB_REVERSE_VIEWS" desc="The label for a menu item that swaps the inactive split tab to the other side when clicked.">
+           Reverse views
+         </message>
+@@ -12275,6 +12293,12 @@ Check your passwords anytime in <ph name="GOOGLE_PASSWORD_MANAGER">$1<ex>Google
+         <message name="IDS_PIN_SPLIT_TAB_TOGGLE" desc="In title case: pins the split tabs button to the toolbar when toggled on.">
+           Open In Split View
+         </message>
++        <message name="IDS_SPLIT_TAB_CREATE_LEFT_RIGHT" desc="In title case: the label for a toolbar button context menu item that creates a left/right split view.">
++          Split Left/Right
++        </message>
++        <message name="IDS_SPLIT_TAB_CREATE_TOP_BOTTOM" desc="In title case: the label for a toolbar button context menu item that creates a top/bottom split view.">
++          Split Top/Bottom
++        </message>
+         <message name="IDS_SPLIT_TAB_REVERSE_VIEWS" desc="In title case: the label for a menu item that swaps the inactive split tab to the other side when clicked.">
+           Reverse Views
+         </message>
