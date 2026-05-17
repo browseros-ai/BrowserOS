@@ -175,9 +175,12 @@ export const scheduledJobRuns = async () => {
 
         if (job.scheduleType === 'daily' && job.scheduleTime) {
           const [hours, minutes] = job.scheduleTime.split(':').map(Number)
+          if (!Number.isFinite(hours) || !Number.isFinite(minutes)) continue
           const scheduledToday = new Date()
           scheduledToday.setHours(hours, minutes, 0, 0)
           if (now < scheduledToday.getTime()) continue
+          const createdAt = new Date(job.createdAt).getTime()
+          if (createdAt > scheduledToday.getTime()) continue
         }
 
         if (
