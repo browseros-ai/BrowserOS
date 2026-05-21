@@ -1,12 +1,26 @@
 import type { Dirent } from 'node:fs'
 import { readdir } from 'node:fs/promises'
-import { join, relative } from 'node:path'
+import { isAbsolute, join, normalize, relative, resolve } from 'node:path'
 import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 
-const MAX_LINES = 2000
-const MAX_BYTES = 50 * 1024
+export function resolveSafePath(cwd: string, unsafePath: string): string {
+  const resolved = resolve(cwd, unsafePath)
+  const normalizedCwd = normalize(cwd)
+  const rel = relative(normalizedCwd, resolved)
+
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error(
+      `Security Error: Path traversal detected. Access to '${unsafePath}' is outside of the workspace directory.`,
+    )
+  }
+
+  return resolved
+}
+
+export const MAX_LINES = 2000
+export const MAX_BYTES = 50 * 1024
 export const GREP_MAX_LINE_LENGTH = 500
 export const DEFAULT_GREP_LIMIT = 100
 export const DEFAULT_FIND_LIMIT = 1000
