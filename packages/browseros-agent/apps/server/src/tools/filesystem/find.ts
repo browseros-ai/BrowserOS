@@ -1,9 +1,9 @@
-import { resolve } from 'node:path'
 import { tool } from 'ai'
 import { z } from 'zod'
 import {
   DEFAULT_FIND_LIMIT,
   executeWithMetrics,
+  resolveSafePath,
   toModelOutput,
   walkFiles,
 } from './utils'
@@ -31,7 +31,7 @@ export function createFindTool(cwd: string) {
     }),
     execute: (params) =>
       executeWithMetrics(TOOL_NAME, async () => {
-        const searchPath = resolve(cwd, params.path || '.')
+        const searchPath = resolveSafePath(cwd, params.path || '.')
         const limit = params.limit || DEFAULT_FIND_LIMIT
 
         let effectivePattern = params.pattern

@@ -78,7 +78,7 @@ async function assertPortAvailable(port: number): Promise<void> {
 export async function createHttpServer(config: HttpServerConfig) {
   const {
     port,
-    host = '0.0.0.0',
+    host = '127.0.0.1',
     browserosId,
     executionDir,
     resourcesDir,

@@ -1,7 +1,5 @@
-/**
- * @public
- */
 export const getFavicons = (host: string) => {
-  // return `https://icons.duckduckgo.com/ip3/${host}.ico`
-  return `https://www.google.com/s2/favicons?domain=${host}&sz=28`
+  // Security Hardening: Disabled Google Favicon service to prevent navigation history leakage
+  // Using a generic fallback icon
+  return '/icons/generic-favicon.png'
 }

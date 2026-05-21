@@ -9,6 +9,7 @@ import {
   IMAGE_MIME_TYPES,
   MAX_READ_CHARS,
   MAX_READ_LINES,
+  resolveSafePath,
   toModelOutput,
 } from './utils'
 
@@ -115,7 +116,7 @@ export function createReadTool(cwd: string) {
     }),
     execute: (params) =>
       executeWithMetrics(TOOL_NAME, async () => {
-        const resolved = resolve(cwd, params.path)
+        const resolved = resolveSafePath(cwd, params.path)
         const ext = extname(resolved).toLowerCase()
 
         if (IMAGE_EXTENSIONS.has(ext)) {

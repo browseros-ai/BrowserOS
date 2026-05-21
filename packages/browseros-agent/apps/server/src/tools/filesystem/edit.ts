@@ -1,11 +1,12 @@
 import { readFile, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
 import { tool } from 'ai'
 import { z } from 'zod'
 import {
   detectLineEnding,
   executeWithMetrics,
+  MAX_BYTES,
   normalizeToLF,
+  resolveSafePath,
   restoreLineEndings,
   stripBom,
   toModelOutput,
@@ -85,7 +86,7 @@ export function createEditTool(cwd: string) {
     }),
     execute: (params) =>
       executeWithMetrics(TOOL_NAME, async () => {
-        const resolved = resolve(cwd, params.path)
+        const resolved = resolveSafePath(cwd, params.path)
         const raw = await readFile(resolved, 'utf-8')
 
         const { content: noBom, hasBom } = stripBom(raw)
