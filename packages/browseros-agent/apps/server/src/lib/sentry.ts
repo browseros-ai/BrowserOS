@@ -15,8 +15,8 @@ const SENTRY_ENVIRONMENT = process.env.NODE_ENV || 'development'
 Sentry.init({
   dsn: INLINED_ENV.SENTRY_DSN,
   // Adds request headers and IP for users, for more info visit:
-  // https://docs.sentry.io/platforms/javascript/guides/bun/configuration/options/#sendDefaultPii
-  sendDefaultPii: true,
+  // Security Hardening: Disabled sending PII to Sentry
+  sendDefaultPii: false,
   environment: SENTRY_ENVIRONMENT,
   release: VERSION,
 

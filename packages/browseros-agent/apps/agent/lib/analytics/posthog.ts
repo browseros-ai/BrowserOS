@@ -1,26 +1,24 @@
-import posthog from 'posthog-js'
-import 'posthog-js/dist/posthog-recorder'
-import { env } from '../env'
+// Security Hardening: Completely disabled PostHog analytics and session recording.
+// Using a mock object to prevent application crashes while ensuring no data is collected.
 
-if (env.VITE_PUBLIC_POSTHOG_KEY && env.VITE_PUBLIC_POSTHOG_HOST) {
-  posthog.init(env.VITE_PUBLIC_POSTHOG_KEY, {
-    api_host: env.VITE_PUBLIC_POSTHOG_HOST,
-    person_profiles: 'identified_only',
-    disable_external_dependency_loading: true,
-    disable_session_recording: false,
-    capture_pageview: true,
-    autocapture: true,
-    session_recording: {
-      maskAllInputs: true,
-    },
-    persistence: 'localStorage',
-    loaded: (posthog) => {
-      posthog.register({
-        extension_version: chrome.runtime.getManifest().version,
-        ui_context: window.location.pathname,
-      })
-    },
-  })
+const noop = () => {}
+const posthogMock: any = {
+  init: noop,
+  capture: noop,
+  identify: noop,
+  reset: noop,
+  register: noop,
+  register_once: noop,
+  unregister: noop,
+  opt_in_capturing: noop,
+  opt_out_capturing: noop,
+  has_opted_in_capturing: () => false,
+  has_opted_out_capturing: () => true,
+  onFeatureFlags: noop,
+  getFeatureFlag: () => undefined,
+  getFeatureFlagPayload: () => undefined,
+  reloadFeatureFlags: noop,
+  isFeatureEnabled: () => false,
 }
 
-export { posthog }
+export { posthogMock as posthog }
