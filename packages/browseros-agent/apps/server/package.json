@@ -1,6 +1,6 @@
 {
   "name": "@browseros/server",
-  "version": "0.0.97",
+  "version": "0.0.97-safkan",
   "description": "BrowserOS server",
   "type": "module",
   "main": "./src/index.ts",
