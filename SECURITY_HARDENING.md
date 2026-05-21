@@ -8,6 +8,7 @@ Bu dosya, BrowserOS üzerindeki güvenlik açıklarını kapatmak için yapılan
 3. **Dead-Code Telemetry:** Veri sızdıran fonksiyonlar silinmez, içleri `return` ile boşaltılır veya mock nesneler kullanılır.
 
 ## 📋 Mevcut Durum (2026-05-21)
+**Versiyon:** `0.0.94-safkan` (Güvenli ve Geliştirilmiş Sürüm)
 **Audit Raporu:** `.sisyphus/security-audit-2026-05-19.md`
 
 ### ✅ Faz 1: Kanmayı Durdur (Tamamlandı)
@@ -28,6 +29,10 @@ Bu dosya, BrowserOS üzerindeki güvenlik açıklarını kapatmak için yapılan
 - [x] **C-2: OAuth Tokens Encryption** (Node.js Crypto + AES-256-GCM ile SQLite şifreleme eklendi)
 - [x] **Extra: Conversation History Encryption** (Konuşma geçmişi diskte artık tamamen şifreli saklanıyor)
 
+### 🆕 Entegre Edilen Özellikler (Extra Features)
+- [x] **#950 - Group Scheduled Task Results** (Sonuçlar Today, Yesterday, vb. şeklinde tarihe göre gruplanıyor)
+- [x] **#926 - Delete Task Runs** (Bireysel sonuç silme ve "Clear All" özelliği eklendi)
+
 ---
 
 ## 🧪 Doğrulama (Validation)
@@ -41,12 +46,7 @@ Bu dosya, BrowserOS üzerindeki güvenlik açıklarını kapatmak için yapılan
 
 ## 🛠️ Yapılan Müdahaleler
 
-### 2026-05-21: Faz 1 & 2
-(Detaylar önceki commitlerde mevcut)
-
-### 2026-05-21: Faz 3 (Kriptografi)
-1. **apps/server/src/lib/crypto.ts:** Node.js tabanlı AES-256-GCM modülü oluşturuldu.
-2. **apps/server/src/lib/clients/oauth/token-store.ts:** OAuth token'ları veritabanına girmeden önce şifreleniyor.
-3. **apps/agent/lib/crypto.ts:** Web Crypto API tabanlı AES-GCM modülü oluşturuldu.
-4. **apps/agent/lib/llm-providers/storage.ts:** `providersStorage` sarmalanarak API key'lerin diskte şifreli durması sağlandı.
-5. **apps/agent/lib/conversations/conversationStorage.ts:** Konuşma geçmişi şifreli depolamaya taşındı.
+### 2026-05-21: Faz 1, 2 & 3 ve Özellik Entegrasyonu
+1. **Güvenlik:** Tüm kritik açıklar kapatıldı ve şifreleme katmanları eklendi.
+2. **UI/UX:** Görev sonuçları için gruplandırma ve silme özellikleri eklendi.
+3. **Versiyonlama:** Monorepo ve alt paket versiyonları `0.0.94-safkan` olarak mühürlendi.
