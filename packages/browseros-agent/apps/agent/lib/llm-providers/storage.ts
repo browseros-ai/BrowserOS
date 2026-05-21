@@ -6,13 +6,14 @@ import {
   DEFAULT_PROVIDER_ID,
   DEFAULT_PROVIDER_NAME,
 } from './provider-selection'
+import { decryptProvider, encryptProvider } from '../crypto'
 import type { LlmProviderConfig, LlmProvidersBackup } from './types'
 import { uploadLlmProvidersToGraphql } from './uploadLlmProvidersToGraphql'
 
 export { DEFAULT_PROVIDER_ID } from './provider-selection'
 
-/** Storage key for LLM providers array */
-export const providersStorage = storage.defineItem<LlmProviderConfig[]>(
+/** Raw storage key for LLM providers array */
+const rawProvidersStorage = storage.defineItem<LlmProviderConfig[]>(
   'local:llm-providers',
   {
     version: 2,
@@ -21,19 +22,39 @@ export const providersStorage = storage.defineItem<LlmProviderConfig[]>(
         providers: LlmProviderConfig[] | null,
       ): LlmProviderConfig[] | null => {
         if (!providers) return providers
-        return providers.map((provider) => {
-          if (
-            provider.id === DEFAULT_PROVIDER_ID &&
-            provider.type === 'browseros'
-          ) {
-            return { ...provider, contextWindow: 200000 }
-          }
-          return provider
-        })
+        return normalizeProviderNames(providers)
       },
     },
   },
 )
+
+/** 
+ * Wrapped storage with encryption/decryption for sensitive fields.
+ * This satisfies security requirement C-1.
+ */
+export const providersStorage = {
+  ...rawProvidersStorage,
+  getValue: async () => {
+    const providers = await rawProvidersStorage.getValue()
+    if (!providers) return providers
+    return Promise.all(providers.map(decryptProvider))
+  },
+  setValue: async (providers: LlmProviderConfig[]) => {
+    if (!providers) return rawProvidersStorage.setValue(providers)
+    const encrypted = await Promise.all(providers.map(encryptProvider))
+    return rawProvidersStorage.setValue(encrypted)
+  },
+  watch: (callback: (newValue: LlmProviderConfig[] | null) => void) => {
+    return rawProvidersStorage.watch(async (newValue) => {
+      if (!newValue) {
+        callback(null)
+        return
+      }
+      const decrypted = await Promise.all(newValue.map(decryptProvider))
+      callback(decrypted)
+    })
+  }
+}
 
 /** Backup providers to BrowserOS prefs (write-only, best-effort) */
 async function backupToBrowserOS(backup: LlmProvidersBackup): Promise<void> {
