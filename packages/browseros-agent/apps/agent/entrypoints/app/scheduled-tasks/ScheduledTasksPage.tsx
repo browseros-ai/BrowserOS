@@ -42,7 +42,8 @@ import type { ScheduledJob } from './types'
 export const ScheduledTasksPage: FC = () => {
   const { jobs, addJob, editJob, toggleJob, removeJob, runJob } =
     useScheduledJobs()
-  const { jobRuns, cancelJobRun } = useScheduledJobRuns()
+  const { jobRuns, cancelJobRun, removeJobRun, clearAllRuns } =
+    useScheduledJobRuns()
 
   const [activeTab, setActiveTab] = useState<string | null>(null)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
@@ -149,6 +150,14 @@ export const ScheduledTasksPage: FC = () => {
     track(SCHEDULED_TASK_VIEW_RESULTS_EVENT)
   }
 
+  const handleRemoveRun = async (runId: string) => {
+    await removeJobRun(runId)
+  }
+
+  const handleClearAllRuns = async () => {
+    await clearAllRuns()
+  }
+
   useEffect(() => {
     scheduledJobRunStorage.getValue().then((runs) => {
       setActiveTab(runs && runs.length > 0 ? 'results' : 'tasks')
@@ -175,6 +184,8 @@ export const ScheduledTasksPage: FC = () => {
               onViewRun={handleViewRun}
               onCancelRun={handleCancelRun}
               onRetryRun={handleRetryRun}
+              onRemoveRun={handleRemoveRun}
+              onClearAll={handleClearAllRuns}
             />
           </TabsContent>
 

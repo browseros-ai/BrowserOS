@@ -1,6 +1,7 @@
 import { storage } from '@wxt-dev/storage'
 import type { UIMessage } from 'ai'
 import { useEffect, useState } from 'react'
+import { decryptObject, encryptObject } from '../crypto'
 import { useSessionInfo } from '../auth/sessionStorage'
 import { removeConversationExecutionHistory } from '../execution-history/storage'
 import { uploadConversationsToGraphql } from './uploadConversationsToGraphql'
@@ -13,12 +14,40 @@ export interface Conversation {
   lastMessagedAt: number
 }
 
-export const conversationStorage = storage.defineItem<Conversation[]>(
-  'local:conversations',
+const rawConversationStorage = storage.defineItem<string>(
+  'local:conversations-encrypted',
   {
-    fallback: [],
+    fallback: '',
   },
 )
+
+/**
+ * Wrapped storage with encryption for conversation history.
+ * This ensures no plaintext conversations are stored on disk.
+ */
+export const conversationStorage = {
+  ...rawConversationStorage,
+  getValue: async () => {
+    const encrypted = await rawConversationStorage.getValue()
+    if (!encrypted) return []
+    return (await decryptObject<Conversation[]>(encrypted)) ?? []
+  },
+  setValue: async (conversations: Conversation[]) => {
+    const encrypted = await encryptObject(conversations)
+    return rawConversationStorage.setValue(encrypted)
+  },
+  watch: (callback: (newValue: Conversation[] | null) => void) => {
+    return rawConversationStorage.watch(async (newValue) => {
+      if (!newValue) {
+        callback([])
+        return
+      }
+      const decrypted = await decryptObject<Conversation[]>(newValue)
+      callback(decrypted ?? [])
+    })
+  }
+}
+
 
 export function useConversations() {
   const [conversations, setConversations] = useState<Conversation[]>([])
