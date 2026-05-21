@@ -158,7 +158,18 @@ export function useScheduledJobRuns() {
     return sendScheduleMessage('cancelScheduledJobRun', { runId })
   }
 
-  return { jobRuns, addJobRun, removeJobRun, editJobRun, cancelJobRun }
+  const clearAllRuns = async () => {
+    await scheduledJobRunStorage.setValue([])
+  }
+
+  return {
+    jobRuns,
+    addJobRun,
+    removeJobRun,
+    editJobRun,
+    cancelJobRun,
+    clearAllRuns,
+  }
 }
 
 export async function syncScheduledJobs(): Promise<void> {

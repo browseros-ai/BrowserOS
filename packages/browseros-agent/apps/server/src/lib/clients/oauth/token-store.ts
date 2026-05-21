@@ -7,6 +7,7 @@
 import { and, eq } from 'drizzle-orm'
 import type { BrowserOsDatabase } from '../../db'
 import { type OAuthTokenRow, oauthTokens } from '../../db/schema'
+import { encrypt, tryDecrypt } from '../../crypto'
 import type {
   OAuthStatus,
   OAuthTokenStore as OAuthTokenStoreContract,
@@ -25,8 +26,8 @@ export class OAuthTokenStore implements OAuthTokenStoreContract {
     const row: OAuthTokenRow = {
       browserosId,
       provider,
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
+      accessToken: encrypt(tokens.accessToken),
+      refreshToken: encrypt(tokens.refreshToken),
       expiresAt: tokens.expiresAt,
       email: tokens.email ?? null,
       accountId: tokens.accountId ?? null,
@@ -46,8 +47,8 @@ export class OAuthTokenStore implements OAuthTokenStoreContract {
     const row = this.findRow(browserosId, provider)
     if (!row) return null
     return {
-      accessToken: row.accessToken,
-      refreshToken: row.refreshToken,
+      accessToken: tryDecrypt(row.accessToken),
+      refreshToken: tryDecrypt(row.refreshToken),
       expiresAt: row.expiresAt,
       email: row.email ?? undefined,
       accountId: row.accountId ?? undefined,
