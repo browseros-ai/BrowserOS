@@ -21,16 +21,39 @@ const rawConversationStorage = storage.defineItem<string>(
   },
 )
 
+/** Storage key for legacy unencrypted conversations */
+const legacyConversationStorage = storage.defineItem<Conversation[]>(
+  'local:conversations',
+  {
+    fallback: [],
+  },
+)
+
 /**
  * Wrapped storage with encryption for conversation history.
- * This ensures no plaintext conversations are stored on disk.
+ * Includes a migration layer from legacy unencrypted storage.
  */
 export const conversationStorage = {
   ...rawConversationStorage,
   getValue: async () => {
+    // 1. Try to get new encrypted data
     const encrypted = await rawConversationStorage.getValue()
-    if (!encrypted) return []
-    return (await decryptObject<Conversation[]>(encrypted)) ?? []
+    if (encrypted) {
+      return (await decryptObject<Conversation[]>(encrypted)) ?? []
+    }
+
+    // 2. Migration: If no encrypted data, check for legacy data
+    const legacy = await legacyConversationStorage.getValue()
+    if (legacy && legacy.length > 0) {
+      console.log('Migrating legacy conversations to encrypted storage...')
+      const newEncrypted = await encryptObject(legacy)
+      await rawConversationStorage.setValue(newEncrypted)
+      // Optionally keep legacy for one session as fallback, or clear it
+      // legacyConversationStorage.setValue([]) 
+      return legacy
+    }
+
+    return []
   },
   setValue: async (conversations: Conversation[]) => {
     const encrypted = await encryptObject(conversations)

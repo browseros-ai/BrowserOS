@@ -1,6 +1,6 @@
 {
   "name": "browseros-monorepo",
-  "version": "1.0.0",
+  "version": "0.0.94-safkan",
   "description": "BrowserOS monorepo - server, extension, and shared packages",
   "private": true,
   "type": "module",
