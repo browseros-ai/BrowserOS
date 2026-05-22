@@ -34,7 +34,7 @@ const clients: ClientConfig[] = [
     id: 'codex',
     name: 'Codex',
     type: 'command',
-    getSnippet: (url) => `codex mcp add browseros ${url}`,
+    getSnippet: (url) => `codex mcp add browseros --url ${url}`,
   },
   {
     id: 'claude-desktop',
