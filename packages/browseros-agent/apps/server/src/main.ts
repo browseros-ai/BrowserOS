@@ -81,7 +81,12 @@ export class Application {
       await cdp.connect()
       logger.info(`Connected to CDP on port ${this.config.cdpPort}`)
     } catch (error) {
-      return this.handleStartupError('CDP', this.config.cdpPort, error)
+      logger.warn(
+        `Failed to connect to CDP on port ${this.config.cdpPort}. Browser tools will be unavailable, but server will continue starting.`,
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      )
     }
 
     const browser = new Browser(cdp)
@@ -91,7 +96,7 @@ export class Application {
     try {
       await createHttpServer({
         port: this.config.serverPort,
-        host: '0.0.0.0',
+        host: '127.0.0.1',
         version: VERSION,
         browser,
         registry,

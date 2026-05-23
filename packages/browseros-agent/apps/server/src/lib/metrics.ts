@@ -2,12 +2,8 @@
  * @license
  * Copyright 2025 BrowserOS
  */
-import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
-import { PostHog } from 'posthog-node'
+import type { PostHog } from 'posthog-node'
 
-import { INLINED_ENV } from '../env'
-
-const POSTHOG_API_KEY = INLINED_ENV.POSTHOG_API_KEY
 const EVENT_PREFIX = 'browseros.server.'
 
 export interface MetricsConfig {
@@ -25,16 +21,12 @@ class MetricsService {
 
   initialize(config: MetricsConfig): void {
     this.config = { ...this.config, ...config }
-
-    if (!this.client && POSTHOG_API_KEY) {
-      this.client = new PostHog(POSTHOG_API_KEY, {
-        host: EXTERNAL_URLS.POSTHOG_DEFAULT,
-      })
-    }
+    // Security Hardening: PostHog disabled on server side to prevent data leakage and network noise
+    this.client = null
   }
 
   isEnabled(): boolean {
-    return this.client !== null
+    return false
   }
 
   getClientId(): string | null {
