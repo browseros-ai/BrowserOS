@@ -188,10 +188,43 @@ export class Browser {
   // --- Pages ---
 
   async listPages(): Promise<PageInfo[]> {
-    const result = await this.cdp.Browser.getTabs({ includeHidden: true })
-    const tabs = (result.tabs as TabInfo[]).filter(
-      (t) => !EXCLUDED_URL_PREFIXES.some((prefix) => t.url.startsWith(prefix)),
-    )
+    let tabs: TabInfo[]
+    try {
+      const result = await this.cdp.Browser.getTabs({ includeHidden: true })
+      tabs = (result.tabs as TabInfo[]).filter(
+        (t) =>
+          !EXCLUDED_URL_PREFIXES.some((prefix) => t.url.startsWith(prefix)),
+      )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      // Fallback for CDP implementations without Browser.getTabs (e.g. some
+      // Chromium forks or older builds).
+      if (msg.includes("wasn't found") || msg.includes('not found')) {
+        const result = await this.cdp.Target.getTargets()
+        tabs = result.targetInfos
+          .filter((t) => t.type === 'page')
+          .map((t) => ({
+            tabId: t.tabId ?? 0,
+            targetId: t.targetId,
+            url: t.url,
+            title: t.title,
+            isActive: false,
+            isLoading: false,
+            loadProgress: 1,
+            isPinned: false,
+            isHidden: false,
+            windowId: t.windowId,
+            index: 0,
+            groupId: undefined,
+          }))
+          .filter(
+            (t) =>
+              !EXCLUDED_URL_PREFIXES.some((prefix) => t.url.startsWith(prefix)),
+          )
+      } else {
+        throw err
+      }
+    }
 
     const seenTargetIds = new Set<string>()
 

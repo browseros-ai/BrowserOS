@@ -21,6 +21,11 @@ export class McpPortError extends Error {
  * @public
  */
 export async function getAgentServerUrl(): Promise<string> {
+  // In development, always use the configured server port directly
+  if (env.VITE_BROWSEROS_SERVER_PORT) {
+    return `http://127.0.0.1:${env.VITE_BROWSEROS_SERVER_PORT}`
+  }
+
   const supportsUnifiedPort = await Capabilities.supports(
     Feature.UNIFIED_PORT_SUPPORT,
   )

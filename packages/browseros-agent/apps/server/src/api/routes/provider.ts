@@ -26,6 +26,13 @@ export function createProviderRoutes(deps: ProviderRouteDeps = {}) {
         model: config.model,
       })
 
+      logger.info('Testing provider connection start', {
+        provider: config.provider,
+        model: config.model,
+        baseUrl: config.baseUrl,
+        hasApiKey: !!config.apiKey,
+      })
+
       const result = await testProviderConnection(config, deps.browserosId)
 
       logger.info('Provider test result', {

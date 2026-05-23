@@ -168,6 +168,17 @@ function createMoonshotFactory(
   })
 }
 
+function createZaiFactory(
+  config: ResolvedAgentConfig,
+): (modelId: string) => unknown {
+  if (!config.apiKey) throw new Error('z.ai provider requires apiKey')
+  return createOpenAICompatible({
+    name: 'zai',
+    baseURL: config.baseUrl || EXTERNAL_URLS.ZAI_API,
+    apiKey: config.apiKey,
+  })
+}
+
 function createQwenCodeFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
@@ -218,6 +229,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProFactory,
   [LLM_PROVIDERS.GITHUB_COPILOT]: createGitHubCopilotFactory,
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeFactory,
+  [LLM_PROVIDERS.ZAI]: createZaiFactory,
 }
 
 export function createLanguageModel(

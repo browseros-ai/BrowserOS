@@ -6,6 +6,7 @@ const OPENCLAW_SUPPORTED_PROVIDER_TYPES: ProviderType[] = [
   'openai-compatible',
   'anthropic',
   'moonshot',
+  'zai',
 ]
 
 export function isOpenClawSupportedProviderType(

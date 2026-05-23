@@ -153,6 +153,11 @@ function createMoonshotModel(config: ResolvedLLMConfig): LanguageModel {
 }
 
 function createZaiModel(config: ResolvedLLMConfig): LanguageModel {
+  logger.info('createZaiModel', {
+    model: config.model,
+    baseUrl: config.baseUrl || EXTERNAL_URLS.ZAI_API,
+    hasApiKey: !!config.apiKey,
+  })
   if (!config.apiKey) throw new Error('z.ai provider requires apiKey')
   return createOpenAICompatible({
     name: 'zai',
