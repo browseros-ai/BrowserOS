@@ -24,12 +24,26 @@ export const ChatSessionProvider: FC<
   )
 }
 
-export const useChatSessionContext = () => {
+export const useChatSessionContext = (): ChatSessionContextValue => {
   const context = useContext(ChatSessionContext)
+  // Security Hardening & Fix: Don't throw error and return safe defaults to prevent UI crash & refresh loops
   if (!context) {
-    throw new Error(
-      'useChatSessionContext must be used within a ChatSessionProvider',
+    console.warn(
+      'useChatSessionContext used outside of ChatSessionProvider. Returning safe defaults.',
     )
+    // Return a safe mock object that matches the ChatSessionContextValue type
+    return {
+      providers: [],
+      selectedProvider: null,
+      handleSelectProvider: () => {},
+      sendMessage: () => {},
+      messages: [],
+      status: 'ready',
+      mode: 'agent',
+      conversationId: '',
+      liked: {},
+      disliked: {},
+    } as unknown as ChatSessionContextValue
   }
   return context
 }

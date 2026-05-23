@@ -4,7 +4,6 @@ import { z } from 'zod'
 import {
   detectLineEnding,
   executeWithMetrics,
-  MAX_BYTES,
   normalizeToLF,
   resolveSafePath,
   restoreLineEndings,
