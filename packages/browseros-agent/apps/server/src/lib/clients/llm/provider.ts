@@ -152,6 +152,15 @@ function createMoonshotModel(config: ResolvedLLMConfig): LanguageModel {
   })(config.model)
 }
 
+function createZaiModel(config: ResolvedLLMConfig): LanguageModel {
+  if (!config.apiKey) throw new Error('z.ai provider requires apiKey')
+  return createOpenAICompatible({
+    name: 'zai',
+    baseURL: config.baseUrl || EXTERNAL_URLS.ZAI_API,
+    apiKey: config.apiKey,
+  })(config.model)
+}
+
 function createQwenCodeModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('Qwen Code requires OAuth authentication')
   return createOpenAICompatible({
@@ -196,6 +205,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProModel,
   [LLM_PROVIDERS.GITHUB_COPILOT]: createGitHubCopilotModel,
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeModel,
+  [LLM_PROVIDERS.ZAI]: createZaiModel,
 }
 
 export function createLLMProvider(config: ResolvedLLMConfig): LanguageModel {

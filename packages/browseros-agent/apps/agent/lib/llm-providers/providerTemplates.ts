@@ -140,6 +140,16 @@ export const providerTemplates: ProviderTemplate[] = [
     setupGuideUrl:
       'https://docs.aws.amazon.com/bedrock/latest/userguide/getting-started.html',
   }),
+  {
+    id: 'zai',
+    name: 'z.ai',
+    defaultBaseUrl: 'https://api.z.ai/api/coding/paas/v4',
+    defaultModelId: 'glm-4.6',
+    supportsImages: true,
+    contextWindow: 200000,
+    apiKeyUrl: 'https://z.ai/manage-apikey/apikey-list',
+    setupGuideUrl: 'https://docs.z.ai/guides/llm/glm-4.6',
+  },
 ]
 
 /**
@@ -161,6 +171,7 @@ export const providerTypeOptions: { value: ProviderType; label: string }[] = [
   { value: 'lmstudio', label: 'LM Studio' },
   { value: 'bedrock', label: 'AWS Bedrock' },
   { value: 'browseros', label: 'BrowserOS' },
+  { value: 'zai', label: 'z.ai' },
 ]
 
 /**
@@ -192,6 +203,7 @@ export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   lmstudio: 'http://localhost:1234/v1',
   bedrock: '',
   browseros: '',
+  zai: 'https://api.z.ai/api/coding/paas/v4',
 }
 
 /**

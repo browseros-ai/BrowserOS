@@ -9,6 +9,7 @@ import {
   OpenAI,
   OpenRouter,
   Qwen,
+  ZAI,
 } from '@lobehub/icons'
 import { Bot, Github } from 'lucide-react'
 import type { FC, SVGProps } from 'react'
@@ -36,6 +37,7 @@ const providerIconMap: Record<ProviderType, IconComponent | null> = {
   'chatgpt-pro': OpenAI,
   'github-copilot': Github,
   'qwen-code': Qwen,
+  zai: ZAI,
 }
 
 interface ProviderIconProps {
