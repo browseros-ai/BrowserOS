@@ -2,7 +2,7 @@
   "name": "@browseros/agent",
   "description": "manifest.json description",
   "private": true,
-  "version": "0.0.99",
+  "version": "0.0.103",
   "type": "module",
   "scripts": {
     "dev": "test -d generated/graphql || bun run codegen; mkdir -p /tmp/browseros-dev; bun --env-file=.env.development wxt",

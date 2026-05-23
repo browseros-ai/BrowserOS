@@ -25,7 +25,11 @@ function enrichTemplate(
     setupGuideUrl?: string
   },
 ): ProviderTemplate {
-  const provider = getModelsDevProvider(providerId)
+  // `models-dev-data.json` stores provider models under key `z-ai`,
+  // while our provider type is `zai`.
+  const modelsDevProviderKey = providerId === 'zai' ? 'z-ai' : providerId
+
+  const provider = getModelsDevProvider(modelsDevProviderKey)
   const model = provider?.models.find((m) => m.id === overrides.defaultModelId)
 
   return {
@@ -81,6 +85,16 @@ export const providerTemplates: ProviderTemplate[] = [
     contextWindow: 200000,
     apiKeyUrl: 'https://platform.moonshot.ai/console/api-keys',
     setupGuideUrl: 'https://platform.moonshot.ai/console/api-keys',
+  },
+  {
+    id: 'zai',
+    name: 'z.ai',
+    defaultBaseUrl: 'https://api.z.ai/api/coding/paas/v4',
+    defaultModelId: 'glm-4.6',
+    supportsImages: true,
+    contextWindow: 200000,
+    apiKeyUrl: 'https://z.ai/manage-apikey/apikey-list',
+    setupGuideUrl: 'https://z.ai/manage-apikey/apikey-list',
   },
   enrichTemplate('openai', {
     defaultModelId: 'gpt-5',
@@ -151,6 +165,7 @@ export const providerTypeOptions: { value: ProviderType; label: string }[] = [
   { value: 'github-copilot', label: 'GitHub Copilot' },
   { value: 'qwen-code', label: 'Qwen Code' },
   { value: 'moonshot', label: 'Moonshot AI' },
+  { value: 'zai', label: 'z.ai' },
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'openai', label: 'OpenAI' },
   { value: 'openai-compatible', label: 'OpenAI Compatible' },
@@ -182,6 +197,7 @@ export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   'github-copilot': 'https://api.githubcopilot.com',
   'qwen-code': 'https://portal.qwen.ai/v1',
   moonshot: 'https://api.moonshot.ai/v1',
+  zai: 'https://api.z.ai/api/coding/paas/v4',
   anthropic: 'https://api.anthropic.com/v1',
   openai: 'https://api.openai.com/v1',
   'openai-compatible': '',

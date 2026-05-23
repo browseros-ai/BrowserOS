@@ -1153,7 +1153,7 @@
         "supportsReasoning": false,
         "supportsToolCall": true,
         "inputCost": 2e-7,
-        "outputCost": 0.00000125
+        "outputCost": 1.25e-6
       },
       {
         "id": "openai/gpt-5.4-mini",
@@ -1164,7 +1164,7 @@
         "supportsReasoning": true,
         "supportsToolCall": true,
         "inputCost": 7.5e-7,
-        "outputCost": 0.0000045
+        "outputCost": 4.5e-6
       },
       {
         "id": "x-ai/grok-4.20-multi-agent-beta",
@@ -5398,6 +5398,40 @@
         "supportsImages": true,
         "supportsReasoning": false,
         "supportsToolCall": true,
+        "inputCost": 0,
+        "outputCost": 0
+      }
+    ]
+  },
+  "zai": {
+    "name": "z.ai",
+    "api": "https://api.z.ai/api/coding/paas/v4",
+    "doc": "https://docs.z.ai/guides/llm/glm-4.6",
+    "models": [
+      {
+        "id": "glm-4.6",
+        "name": "GLM-4.6",
+        "description": "z.ai flagship coding model with 200K context window",
+        "contextWindow": 200000,
+        "maxTokens": 8192,
+        "inputCost": 0,
+        "outputCost": 0
+      },
+      {
+        "id": "glm-4.5",
+        "name": "GLM-4.5",
+        "description": "High-performance coding model",
+        "contextWindow": 200000,
+        "maxTokens": 8192,
+        "inputCost": 0,
+        "outputCost": 0
+      },
+      {
+        "id": "glm-4.5-air",
+        "name": "GLM-4.5 Air",
+        "description": "Lightweight coding model",
+        "contextWindow": 128000,
+        "maxTokens": 8192,
         "inputCost": 0,
         "outputCost": 0
       }

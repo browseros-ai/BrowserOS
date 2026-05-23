@@ -203,6 +203,17 @@ function createChatGPTProFactory(
   }).responses
 }
 
+function createZaiFactory(
+  config: ResolvedAgentConfig,
+): (modelId: string) => unknown {
+  if (!config.apiKey) throw new Error('z.ai provider requires apiKey')
+  return createOpenAICompatible({
+    name: 'zai',
+    baseURL: config.baseUrl || EXTERNAL_URLS.ZAI_API,
+    apiKey: config.apiKey,
+  })
+}
+
 const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.ANTHROPIC]: createAnthropicFactory,
   [LLM_PROVIDERS.OPENAI]: createOpenAIFactory,
@@ -218,6 +229,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProFactory,
   [LLM_PROVIDERS.GITHUB_COPILOT]: createGitHubCopilotFactory,
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeFactory,
+  [LLM_PROVIDERS.ZAI]: createZaiFactory,
 }
 
 export function createLanguageModel(

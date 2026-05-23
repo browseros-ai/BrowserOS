@@ -9,6 +9,7 @@ export const SUPPORTED_OPENCLAW_PROVIDERS = [
   'openai',
   'anthropic',
   'moonshot',
+  'zai',
 ] as const
 
 export type SupportedOpenClawProvider =

@@ -23,8 +23,6 @@ import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
 import { scheduledJobRuns } from './scheduledJobRuns'
 
 export default defineBackground(() => {
-  chrome.sidePanel.setOptions({ enabled: false })
-
   Capabilities.initialize().catch(() => null)
   setupLlmProvidersBackupToBrowserOS()
   setupLlmProvidersSyncToBackend()

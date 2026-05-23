@@ -35,6 +35,14 @@ export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
     return true
   })
 
+  // HOTFIX: ensure zai is always visible (debugging why it gets filtered out)
+  if (!filteredTemplates.find((t) => t.id === 'zai')) {
+    const zaiTemplate = providerTemplates.find((t) => t.id === 'zai')
+    if (zaiTemplate) {
+      filteredTemplates.splice(4, 0, zaiTemplate)
+    }
+  }
+
   return (
     <Collapsible defaultOpen className="group/collapsible">
       <div className="rounded-xl border border-border bg-card p-6 shadow-sm transition-all hover:shadow-md">

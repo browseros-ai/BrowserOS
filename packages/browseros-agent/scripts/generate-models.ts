@@ -70,6 +70,7 @@ const PROVIDER_MAP: Record<string, string> = {
   lmstudio: 'lmstudio',
   moonshotai: 'moonshot',
   'github-copilot': 'github-copilot',
+  zai: 'zai',
 }
 
 function transformModel(model: ModelsDevModel): OutputModel | null {

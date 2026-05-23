@@ -194,7 +194,6 @@ function startManualBrowser(ports: Ports): ReturnType<typeof spawn> {
     '--use-mock-keychain',
     '--show-component-extension-options',
     '--disable-browseros-server',
-    '--disable-browseros-extensions',
     // TODO: replace with --browseros-cdp-port once we fix the browseros bug
     `--remote-debugging-port=${ports.cdp}`,
     `--browseros-mcp-port=${ports.server}`,

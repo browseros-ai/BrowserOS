@@ -6,7 +6,7 @@
 
 import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
 import type { LLMConfig } from '@browseros/shared/schemas/llm'
-import { streamText } from 'ai'
+import { generateText } from 'ai'
 import { resolveLLMConfig } from './config'
 import { createLLMProvider } from './provider'
 
@@ -33,13 +33,15 @@ export async function testProviderConnection(
     const resolvedConfig = await resolveLLMConfig(config, browserosId)
     const model = createLLMProvider(resolvedConfig)
 
-    // streamText works for all providers including Codex (which requires streaming)
-    const stream = streamText({
+    // Use generateText for testing to get clear API errors (streamText wraps
+    // APICallError in NoOutputGeneratedError and loses responseBody details).
+    const result = await generateText({
       model,
       messages: [{ role: 'user', content: TEST_PROMPT }],
+      maxRetries: 0,
       abortSignal: AbortSignal.timeout(TIMEOUTS.TEST_PROVIDER),
     })
-    const text = await stream.text
+    const text = result.text
     const responseTime = Math.round(performance.now() - startTime)
 
     if (text) {
@@ -58,7 +60,7 @@ export async function testProviderConnection(
     }
   } catch (error) {
     const responseTime = Math.round(performance.now() - startTime)
-    const errorMessage = error instanceof Error ? error.message : String(error)
+    const errorMessage = extractProviderErrorMessage(error, config.provider)
 
     return {
       success: false,

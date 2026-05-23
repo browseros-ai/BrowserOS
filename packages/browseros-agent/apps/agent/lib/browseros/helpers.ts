@@ -52,6 +52,11 @@ async function getAgentPort(): Promise<number> {
 }
 
 async function getMcpPort(): Promise<number> {
+  // In dev mode, fall back to env var when browser prefs aren't available
+  if (env.VITE_BROWSEROS_SERVER_PORT) {
+    return env.VITE_BROWSEROS_SERVER_PORT
+  }
+
   try {
     const adapter = getBrowserOSAdapter()
     const pref = await adapter.getPref(BROWSEROS_PREFS.MCP_PORT)
