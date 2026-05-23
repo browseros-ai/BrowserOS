@@ -15,11 +15,12 @@ import {
 import { cn } from '@/lib/utils'
 import type { VoiceInputState } from '@/lib/voice/useVoiceInput'
 import { useWorkspace } from '@/lib/workspace/use-workspace'
-import { ChatAttachedTabs } from './ChatAttachedTabs'
+import { ChatAttachedItems } from './ChatAttachedItems'
 import { ChatInput, type ChatInputHandle } from './ChatInput'
 import { ChatModeToggle } from './ChatModeToggle'
 import { ChatSelectedText } from './ChatSelectedText'
 import type { ChatMode } from './chatTypes'
+import type { ContextItem } from '@/components/elements/use-context-sources'
 
 interface ChatFooterProps {
   mode: ChatMode
@@ -29,9 +30,9 @@ interface ChatFooterProps {
   onSubmit: (e: FormEvent) => void
   status: 'streaming' | 'submitted' | 'ready' | 'error'
   onStop: () => void
-  attachedTabs: chrome.tabs.Tab[]
-  onToggleTab: (tab: chrome.tabs.Tab) => void
-  onRemoveTab: (tabId?: number) => void
+  attachedContext: ContextItem[]
+  onToggleItem: (item: ContextItem) => void
+  onRemoveItem: (itemId: string) => void
   voice?: VoiceInputState
 }
 
@@ -43,9 +44,9 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   onSubmit,
   status,
   onStop,
-  attachedTabs,
-  onToggleTab,
-  onRemoveTab,
+  attachedContext,
+  onToggleItem,
+  onRemoveItem,
   voice,
 }) => {
   const { selectedFolder } = useWorkspace()
@@ -80,7 +81,7 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   const visibleSelectedText = activeTabId
     ? (selectionMap[String(activeTabId)] ?? null)
     : null
-  const [isTabMentionOpen, setIsTabMentionOpen] = useState(false)
+  const [isContextMentionOpen, setIsContextMentionOpen] = useState(false)
 
   useEffect(() => {
     const focusInput = () => {
@@ -112,7 +113,7 @@ export const ChatFooter: FC<ChatFooterProps> = ({
 
   return (
     <footer className="border-border/40 border-t bg-background/80 backdrop-blur-md">
-      <ChatAttachedTabs tabs={attachedTabs} onRemoveTab={onRemoveTab} />
+      <ChatAttachedItems items={attachedContext} onRemoveItem={onRemoveItem} />
       {visibleSelectedText && (
         <ChatSelectedText
           selectedText={visibleSelectedText}
@@ -136,18 +137,18 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={() => chatInputRef.current?.toggleTabMention()}
+              onClick={() => chatInputRef.current?.toggleContextMention()}
               data-tab-mention-trigger
-              data-state={isTabMentionOpen ? 'open' : 'closed'}
-              aria-expanded={isTabMentionOpen}
+              data-state={isContextMentionOpen ? 'open' : 'closed'}
+              aria-expanded={isContextMentionOpen}
               aria-haspopup="dialog"
               className="flex cursor-pointer items-center gap-1 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
-              title="Attach tabs (@)"
+              title="Attach context (@)"
             >
               <Layers className="h-4 w-4" />
-              {attachedTabs.length > 0 && (
+              {attachedContext.length > 0 && (
                 <span className="font-medium text-[var(--accent-orange)] text-xs">
-                  {attachedTabs.length}
+                  {attachedContext.length}
                 </span>
               )}
               <ChevronDown className="h-3 w-3" />
@@ -229,9 +230,9 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           onInputChange={onInputChange}
           onSubmit={onSubmit}
           onStop={onStop}
-          selectedTabs={attachedTabs}
-          onToggleTab={onToggleTab}
-          onTabMentionOpenChange={setIsTabMentionOpen}
+          selectedItems={attachedContext}
+          onToggleItem={onToggleItem}
+          onMentionOpenChange={setIsContextMentionOpen}
           voice={voice}
           ref={chatInputRef}
         />

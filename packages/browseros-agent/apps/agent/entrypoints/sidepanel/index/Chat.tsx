@@ -1,5 +1,6 @@
 import { Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { type ContextItem } from '@/components/elements/use-context-sources'
 import { createBrowserOSAction } from '@/lib/chat-actions/types'
 import {
   SIDEPANEL_AI_TRIGGERED_EVENT,
@@ -58,7 +59,7 @@ export const Chat = () => {
   const voice = useVoiceInput()
 
   const [input, setInput] = useState('')
-  const [attachedTabs, setAttachedTabs] = useState<chrome.tabs.Tab[]>([])
+  const [attachedContext, setAttachedContext] = useState<ContextItem[]>([])
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
@@ -67,13 +68,24 @@ export const Chat = () => {
 
   useEffect(() => {
     ;(async () => {
-      const currentTab = (
+      const currentTabs = (
         await chrome.tabs.query({
           active: true,
           currentWindow: true,
         })
       ).filter((tab) => tab.url?.startsWith('http'))
-      setAttachedTabs(currentTab)
+      
+      const items: ContextItem[] = currentTabs.map(tab => ({
+        id: `tab-${tab.id}`,
+        originalId: String(tab.id),
+        type: 'tab',
+        title: tab.title || 'Untitled Tab',
+        subtitle: tab.url,
+        url: tab.url,
+        icon: tab.favIconUrl
+      }))
+      
+      setAttachedContext(items)
     })()
   }, [])
 
@@ -122,22 +134,23 @@ export const Chat = () => {
     stop()
   }
 
-  const toggleTabSelection = (tab: chrome.tabs.Tab) => {
-    setAttachedTabs((prev) => {
-      const isSelected = prev.some((t) => t.id === tab.id)
+  const toggleContextItem = (item: ContextItem) => {
+    setAttachedContext((prev) => {
+      const isSelected = prev.some((i) => i.id === item.id)
       track(SIDEPANEL_TAB_TOGGLED_EVENT, {
         action: isSelected ? 'removed' : 'added',
+        type: item.type
       })
       if (isSelected) {
-        return prev.filter((t) => t.id !== tab.id)
+        return prev.filter((i) => i.id !== item.id)
       }
-      return [...prev, tab]
+      return [...prev, item]
     })
   }
 
-  const removeTab = (tabId?: number) => {
+  const removeContextItem = (itemId: string) => {
     track(SIDEPANEL_TAB_REMOVED_EVENT)
-    setAttachedTabs((prev) => prev.filter((t) => t.id !== tabId))
+    setAttachedContext((prev) => prev.filter((i) => i.id !== itemId))
   }
 
   const executeMessage = (customMessageText?: string) => {
@@ -146,18 +159,27 @@ export const Chat = () => {
 
     recordMessageSent()
 
-    if (attachedTabs.length) {
+    if (attachedContext.length) {
+      const tabs: chrome.tabs.Tab[] = attachedContext
+        .filter(i => i.type === 'tab')
+        .map(i => ({ id: Number(i.originalId), url: i.url, title: i.title } as any))
+      
+      const bookmarks = attachedContext
+        .filter(i => i.type === 'bookmark')
+        .map(i => ({ id: i.originalId, url: i.url, title: i.title }))
+
       const action = createBrowserOSAction({
         mode,
         message: messageText,
-        tabs: attachedTabs,
+        tabs: tabs.length > 0 ? tabs : undefined,
+        bookmarks: bookmarks.length > 0 ? bookmarks : undefined
       })
       sendMessage({ text: messageText, action })
     } else {
       sendMessage({ text: messageText })
     }
     setInput('')
-    setAttachedTabs([])
+    setAttachedContext([])
   }
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -165,7 +187,7 @@ export const Chat = () => {
     if (messages.length === 0) {
       track(SIDEPANEL_AI_TRIGGERED_EVENT, {
         mode,
-        tabs_count: attachedTabs.length,
+        context_count: attachedContext.length,
       })
     }
     executeMessage()
@@ -250,9 +272,9 @@ export const Chat = () => {
         onSubmit={handleSubmit}
         status={status}
         onStop={handleStop}
-        attachedTabs={attachedTabs}
-        onToggleTab={toggleTabSelection}
-        onRemoveTab={removeTab}
+        attachedContext={attachedContext}
+        onToggleItem={toggleContextItem}
+        onRemoveItem={removeContextItem}
         voice={voiceState}
       />
     </>

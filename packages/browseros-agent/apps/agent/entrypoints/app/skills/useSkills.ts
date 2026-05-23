@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAgentServerUrl } from '@/lib/browseros/useBrowserOSProviders'
+import { discoverSkills, type SuggestedSkill } from '@/lib/skills/skillDiscovery'
 
 export type SkillMeta = {
   id: string
@@ -110,6 +111,10 @@ export function useSkills() {
     onSuccess: invalidate,
   })
 
+  const discoverSuggestedSkills = async (sendMessage: (text: string) => Promise<string>): Promise<SuggestedSkill[]> => {
+     return await discoverSkills(sendMessage)
+  }
+
   return {
     skills: data ?? [],
     isLoading: isLoading || urlLoading,
@@ -120,5 +125,6 @@ export function useSkills() {
       updateMutation.mutateAsync({ id, input }),
     deleteSkill: deleteMutation.mutateAsync,
     fetchSkillDetail: (id: string) => fetchSkill(baseUrl as string, id),
+    discoverSuggestedSkills,
   }
 }

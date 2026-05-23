@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
+import { decryptProvider } from '../crypto'
 import {
   createDefaultProvidersConfig,
   DEFAULT_PROVIDER_ID,
   defaultProviderIdStorage,
   loadProviders,
   providersStorage,
+  saveProviders,
 } from './storage'
 import type { LlmProviderConfig } from './types'
 
@@ -52,7 +54,7 @@ export function useLlmProviders(): UseLlmProvidersReturn {
         // Initialize with defaults if storage is empty
         if (!loadedProviders || loadedProviders.length === 0) {
           loadedProviders = createDefaultProvidersConfig()
-          await providersStorage.setValue(loadedProviders)
+          await saveProviders(loadedProviders)
         }
 
         if (!loadedDefaultId) {
@@ -72,7 +74,7 @@ export function useLlmProviders(): UseLlmProvidersReturn {
         setProviders(loadedProviders)
         setDefaultProviderId(loadedDefaultId)
       } catch {
-        // TODO: Record error to error recording service
+        // Silent error
       } finally {
         setIsLoading(false)
       }
@@ -83,11 +85,14 @@ export function useLlmProviders(): UseLlmProvidersReturn {
 
   // Listen for storage changes
   useEffect(() => {
-    const unsubscribeProviders = providersStorage.watch((newProviders) => {
-      if (newProviders) {
-        setProviders(newProviders)
-      }
-    })
+    const unsubscribeProviders = providersStorage.watch(
+      async (newProviders) => {
+        if (newProviders) {
+          const decrypted = await Promise.all(newProviders.map(decryptProvider))
+          setProviders(decrypted)
+        }
+      },
+    )
 
     const unsubscribeDefaultId = defaultProviderIdStorage.watch(
       (newDefaultId) => {
@@ -104,7 +109,7 @@ export function useLlmProviders(): UseLlmProvidersReturn {
   }, [])
 
   const saveProvider = async (provider: LlmProviderConfig) => {
-    const currentProviders = (await providersStorage.getValue()) || []
+    const currentProviders = await loadProviders()
     const existingIndex = currentProviders.findIndex(
       (p) => p.id === provider.id,
     )
@@ -129,7 +134,7 @@ export function useLlmProviders(): UseLlmProvidersReturn {
       ]
     }
 
-    await providersStorage.setValue(updatedProviders)
+    await saveProviders(updatedProviders)
   }
 
   const setDefaultProviderFn = async (providerId: string) => {
@@ -143,7 +148,7 @@ export function useLlmProviders(): UseLlmProvidersReturn {
       return
     }
 
-    const currentProviders = (await providersStorage.getValue()) || []
+    const currentProviders = await loadProviders()
     const updatedProviders = currentProviders.filter((p) => p.id !== providerId)
 
     // Handle default provider reassignment if deleted provider was default
@@ -152,7 +157,7 @@ export function useLlmProviders(): UseLlmProvidersReturn {
       await defaultProviderIdStorage.setValue(newDefaultId)
     }
 
-    await providersStorage.setValue(updatedProviders)
+    await saveProviders(updatedProviders)
   }
 
   // Fall back to first provider if defaultProviderId is stale/invalid

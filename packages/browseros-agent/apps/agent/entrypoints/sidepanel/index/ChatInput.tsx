@@ -8,7 +8,8 @@ import {
   useRef,
   useState,
 } from 'react'
-import { TabPickerPopover } from '@/components/elements/tab-picker-popover'
+import { ContextPickerPopover } from '@/components/elements/context-picker-popover'
+import type { ContextItem } from '@/components/elements/use-context-sources'
 import { cn } from '@/lib/utils'
 import type { VoiceInputState } from '@/lib/voice/useVoiceInput'
 import type { ChatMode } from './chatTypes'
@@ -26,16 +27,16 @@ interface ChatInputProps {
   onInputChange: (value: string) => void
   onSubmit: (e: FormEvent) => void
   onStop: () => void
-  selectedTabs: chrome.tabs.Tab[]
-  onToggleTab: (tab: chrome.tabs.Tab) => void
-  onTabMentionOpenChange?: (isOpen: boolean) => void
+  selectedItems: ContextItem[]
+  onToggleItem: (item: ContextItem) => void
+  onMentionOpenChange?: (isOpen: boolean) => void
   voice?: VoiceInputState
 }
 
 export interface ChatInputHandle {
-  openTabMention: () => void
-  closeTabMention: () => void
-  toggleTabMention: () => void
+  openContextMention: () => void
+  closeContextMention: () => void
+  toggleContextMention: () => void
   focus: () => void
 }
 
@@ -48,9 +49,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       onInputChange,
       onSubmit: onSubmitProp,
       onStop,
-      selectedTabs,
-      onToggleTab,
-      onTabMentionOpenChange,
+      selectedItems,
+      onToggleItem,
+      onMentionOpenChange,
       voice,
     },
     ref,
@@ -71,8 +72,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     })
 
     useEffect(() => {
-      onTabMentionOpenChange?.(mentionState.isOpen)
-    }, [mentionState.isOpen, onTabMentionOpenChange])
+      onMentionOpenChange?.(mentionState.isOpen)
+    }, [mentionState.isOpen, onMentionOpenChange])
 
     const closeMention = useCallback(() => {
       const state = mentionStateRef.current
@@ -142,9 +143,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     useImperativeHandle(
       ref,
       () => ({
-        openTabMention: openMentionAtCursor,
-        closeTabMention: closeMention,
-        toggleTabMention: toggleMentionAtCursor,
+        openContextMention: openMentionAtCursor,
+        closeContextMention: closeMention,
+        toggleContextMention: toggleMentionAtCursor,
         focus: () => textareaRef.current?.focus(),
       }),
       [closeMention, openMentionAtCursor, toggleMentionAtCursor],
@@ -337,12 +338,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         onSubmit={handleSubmit}
         className="relative mt-2 flex w-full items-end gap-2"
       >
-        <TabPickerPopover
+        <ContextPickerPopover
           variant="mention"
           isOpen={mentionState.isOpen}
           filterText={mentionState.filterText}
-          selectedTabs={selectedTabs}
-          onToggleTab={onToggleTab}
+          selectedItems={selectedItems}
+          onToggleItem={onToggleItem}
           onClose={closeMention}
           anchorRef={textareaRef}
         />

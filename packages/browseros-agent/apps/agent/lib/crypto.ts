@@ -1,3 +1,5 @@
+import type { LlmProviderConfig } from './llm-providers/types'
+
 /**
  * Browser-based encryption utility using Web Crypto API.
  * Provides AES-GCM encryption for sensitive data in local storage.
@@ -37,8 +39,8 @@ async function getMasterKey(): Promise<CryptoKey> {
   )
 }
 
-export async function encrypt(text: string): Promise<string> {
-  if (!text) return text
+export async function encrypt(text: string | undefined): Promise<string> {
+  if (!text) return ''
   
   const key = await getMasterKey()
   const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH))
@@ -57,9 +59,9 @@ export async function encrypt(text: string): Promise<string> {
   return `${ivBase64}:${cipherBase64}`
 }
 
-export async function decrypt(encryptedData: string): Promise<string> {
+export async function decrypt(encryptedData: string | undefined): Promise<string> {
   if (!encryptedData || !encryptedData.includes(':')) {
-    return encryptedData // Return as-is if not in our format
+    return encryptedData || '' // Return as-is if not in our format
   }
 
   try {
@@ -75,9 +77,9 @@ export async function decrypt(encryptedData: string): Promise<string> {
     )
     
     return new TextDecoder().decode(decrypted)
-  } catch (e) {
-    console.error('Decryption failed:', e)
-    return encryptedData // Fallback to original
+  } catch {
+    // Return original data as fallback for migration support.
+    return encryptedData
   }
 }
 
@@ -92,13 +94,12 @@ export async function encryptObject<T>(obj: T): Promise<string> {
 /**
  * Decrypts a string back into an object
  */
-export async function decryptObject<T>(encryptedData: string): Promise<T | null> {
+export async function decryptObject<T>(encryptedData: string | undefined): Promise<T | null> {
   if (!encryptedData) return null
   const decrypted = await decrypt(encryptedData)
   try {
     return JSON.parse(decrypted) as T
-  } catch (e) {
-    console.error('Failed to parse decrypted object:', e)
+  } catch (_e) {
     return null
   }
 }
@@ -106,7 +107,7 @@ export async function decryptObject<T>(encryptedData: string): Promise<T | null>
 /**
  * Encrypts sensitive fields in an LLM provider config
  */
-export async function encryptProvider(config: any): Promise<any> {
+export async function encryptProvider(config: LlmProviderConfig): Promise<LlmProviderConfig> {
   const encrypted = { ...config }
   if (encrypted.apiKey) encrypted.apiKey = await encrypt(encrypted.apiKey)
   if (encrypted.accessKeyId) encrypted.accessKeyId = await encrypt(encrypted.accessKeyId)
@@ -118,7 +119,7 @@ export async function encryptProvider(config: any): Promise<any> {
 /**
  * Decrypts sensitive fields in an LLM provider config
  */
-export async function decryptProvider(config: any): Promise<any> {
+export async function decryptProvider(config: LlmProviderConfig): Promise<LlmProviderConfig> {
   const decrypted = { ...config }
   if (decrypted.apiKey) decrypted.apiKey = await decrypt(decrypted.apiKey)
   if (decrypted.accessKeyId) decrypted.accessKeyId = await decrypt(decrypted.accessKeyId)

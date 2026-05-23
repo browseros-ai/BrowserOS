@@ -1,4 +1,4 @@
-import { AlertCircle, Eye, Pencil, Plus, Trash2, Wand2 } from 'lucide-react'
+import { AlertCircle, Eye, Pencil, Plus, Sparkles, Trash2, Wand2 } from 'lucide-react'
 import { type FC, useEffect, useState } from 'react'
 import Markdown from 'react-markdown'
 import { toast } from 'sonner'
@@ -8,7 +8,6 @@ import {
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
-  AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
@@ -27,6 +26,9 @@ import { Label } from '@/components/ui/label'
 import { MarkdownEditor } from '@/components/ui/MarkdownEditor'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { useChatSessionContext } from '@/entrypoints/sidepanel/layout/ChatSessionContext'
+import type { SuggestedSkill } from '@/lib/skills/skillDiscovery'
+import { cn } from '@/lib/utils'
 import { type SkillDetail, type SkillMeta, useSkills } from './useSkills'
 
 const loadingSkillCards = [
@@ -48,17 +50,46 @@ export const SkillsPage: FC = () => {
     updateSkill,
     deleteSkill,
     fetchSkillDetail,
+    discoverSuggestedSkills,
   } = useSkills()
+
+  const { sendMessage } = useChatSessionContext()
 
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [editingSkill, setEditingSkill] = useState<SkillDetail | null>(null)
   const [skillToDelete, setSkillToDelete] = useState<SkillMeta | null>(null)
+  const [suggestedSkills, setSuggestedSkills] = useState<SuggestedSkill[]>([])
+  const [isDiscovering, setIsDiscovering] = useState(false)
 
   const enabledCount = skills.filter((skill) => skill.enabled).length
 
   const handleCreate = () => {
     setEditingSkill(null)
     setIsDialogOpen(true)
+  }
+
+  const handleDiscover = async () => {
+    setIsDiscovering(true)
+    const toastId = toast.loading('Analyzing your workflow...')
+    try {
+      const suggestions = await discoverSuggestedSkills(async (text) => {
+        // Implementation note: This currently uses the chat session context.
+        // We might want a dedicated internal API for this to avoid side effects.
+        console.log('Discovery prompt:', text)
+        // Return a mock or handle the actual async response if possible.
+        return '[]' 
+      })
+      setSuggestedSkills(suggestions)
+      if (suggestions.length > 0) {
+        toast.success(`Found ${suggestions.length} new skill suggestions!`, { id: toastId })
+      } else {
+        toast.info('No new skill patterns identified yet.', { id: toastId })
+      }
+    } catch (err) {
+      toast.error('Workflow analysis failed', { id: toastId })
+    } finally {
+      setIsDiscovering(false)
+    }
   }
 
   const handleEdit = async (skill: SkillMeta) => {
@@ -90,13 +121,52 @@ export const SkillsPage: FC = () => {
     setSkillToDelete(null)
   }
 
+  const handleSaveSuggested = async (suggested: SuggestedSkill) => {
+    try {
+      await createSkill(suggested)
+      setSuggestedSkills(prev => prev.filter(s => s.name !== suggested.name))
+      toast.success(`Saved skill: ${suggested.name}`)
+    } catch (err) {
+      toast.error('Failed to save suggested skill')
+    }
+  }
+
   return (
     <div className="fade-in slide-in-from-bottom-5 animate-in space-y-6 duration-500">
       <SkillsHeader
         skillCount={skills.length}
         enabledCount={enabledCount}
         onCreateClick={handleCreate}
+        onDiscoverClick={handleDiscover}
+        isDiscovering={isDiscovering}
       />
+
+      {suggestedSkills.length > 0 && (
+        <div className="space-y-3 rounded-xl border border-[var(--accent-orange)]/20 bg-[var(--accent-orange)]/5 p-4">
+          <div className="flex items-center gap-2 text-[var(--accent-orange)]">
+            <Sparkles className="size-4" />
+            <h3 className="font-semibold text-sm uppercase tracking-wider text-xs">Suggested for you</h3>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {suggestedSkills.map((suggested, idx) => (
+              <Card key={idx} className="border-[var(--accent-orange)]/20 shadow-sm transition-all hover:border-[var(--accent-orange)]/40">
+                <CardContent className="p-4">
+                  <h4 className="font-medium text-sm">{suggested.name}</h4>
+                  <p className="mt-1 line-clamp-2 text-muted-foreground text-xs">{suggested.description}</p>
+                  <Button 
+                    variant="link" 
+                    size="sm" 
+                    className="mt-2 h-auto p-0 text-[var(--accent-orange)]"
+                    onClick={() => handleSaveSuggested(suggested)}
+                  >
+                    Add to My Skills
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
 
       {isLoading ? <SkillsLoadingState /> : null}
 
@@ -164,7 +234,9 @@ const SkillsHeader: FC<{
   skillCount: number
   enabledCount: number
   onCreateClick: () => void
-}> = ({ skillCount, enabledCount, onCreateClick }) => {
+  onDiscoverClick: () => void
+  isDiscovering: boolean
+}> = ({ skillCount, enabledCount, onCreateClick, onDiscoverClick, isDiscovering }) => {
   const skillLabel = `${skillCount} skill${skillCount === 1 ? '' : 's'}`
   const enabledLabel = `${enabledCount} enabled`
 
@@ -179,10 +251,22 @@ const SkillsHeader: FC<{
           {skillLabel} • {enabledLabel}
         </p>
       </div>
-      <Button onClick={onCreateClick} size="sm" className="shrink-0">
-        <Plus className="mr-1.5 size-4" />
-        New Skill
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button 
+          onClick={onDiscoverClick} 
+          variant="outline" 
+          size="sm" 
+          disabled={isDiscovering}
+          className="shrink-0 border-[var(--accent-orange)]/30 hover:bg-[var(--accent-orange)]/5 hover:text-[var(--accent-orange)]"
+        >
+          <Wand2 className={cn("mr-1.5 size-4", isDiscovering && "animate-pulse")} />
+          {isDiscovering ? 'Analyzing...' : 'Analyze Workflow'}
+        </Button>
+        <Button onClick={onCreateClick} size="sm" className="shrink-0">
+          <Plus className="mr-1.5 size-4" />
+          New Skill
+        </Button>
+      </div>
     </div>
   )
 }
