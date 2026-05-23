@@ -2,7 +2,6 @@ import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:
 
 const ALGORITHM = 'aes-256-gcm'
 const IV_LENGTH = 12
-const AUTH_TAG_LENGTH = 16
 
 // In production, BROWSEROS_ENCRYPTION_KEY should be set.
 // If not, we derive a key from a fixed salt for basic protection against casual inspection.

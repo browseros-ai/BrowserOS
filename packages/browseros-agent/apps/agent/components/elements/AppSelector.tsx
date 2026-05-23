@@ -116,7 +116,7 @@ export const AppSelector: FC<AppSelectorProps> = ({
         return
       }
       window.open(response.oauthUrl, '_blank')?.focus()
-    } catch (e) {
+    } catch {
       toast.error(`Failed to add app: ${serverName}`)
       sentry.captureException(e)
     }
@@ -143,7 +143,7 @@ export const AppSelector: FC<AppSelectorProps> = ({
         return
       }
       window.open(response.oauthUrl, '_blank')?.focus()
-    } catch (e) {
+    } catch {
       toast.error(`Failed to add app: ${name}`)
       sentry.captureException(e)
     }
@@ -160,7 +160,7 @@ export const AppSelector: FC<AppSelectorProps> = ({
       toast.success(`${apiKeyServer.name} connected successfully`)
       setApiKeyServer(null)
       mutateUserIntegrations()
-    } catch (e) {
+    } catch {
       toast.error(
         `Failed to connect ${apiKeyServer.name}: ${e instanceof Error ? e.message : 'Unknown error'}`,
       )

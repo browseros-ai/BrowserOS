@@ -13,6 +13,11 @@ export interface OAuthMcpServer {
  * Curated list of popular OAuth MCP servers supported via Klavis
  */
 export const OAUTH_MCP_SERVERS: OAuthMcpServer[] = [
+  { name: 'Joplin', description: 'Access and manage your Joplin notes' },
+  {
+    name: 'Borsa',
+    description: 'Financial data from BIST, US, Crypto, and TCMB',
+  },
   { name: 'Gmail', description: 'Send, read, and search emails' },
   { name: 'Google Calendar', description: 'Create events, manage calendars' },
   { name: 'Google Docs', description: 'Create and edit documents' },

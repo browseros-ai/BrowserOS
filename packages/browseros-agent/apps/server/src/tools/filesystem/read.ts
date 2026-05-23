@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { extname, resolve } from 'node:path'
+import { extname } from 'node:path'
 import { tool } from 'ai'
 import { z } from 'zod'
 import {

@@ -24,7 +24,8 @@ export const NewTabLayout: FC<NewTabLayoutProps> = ({
     </>
   )
 
-  if (!useChatSession) return content
+  // Security Hardening & Fix: Always wrap /home in ChatSessionProvider because NewTab component requires it
+  if (!useChatSession && location.pathname !== '/home') return content
 
   return <ChatSessionProvider origin="newtab">{content}</ChatSessionProvider>
 }
