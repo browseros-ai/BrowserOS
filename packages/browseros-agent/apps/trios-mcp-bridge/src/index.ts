@@ -79,11 +79,7 @@ async function _main() {
 	);
 	const tri = new TriClient(config.triCliPath, config.workingDir);
 
-	// Create bridge server with deps
-	const bridgeDeps = { config, browseros, gitbutler, tri };
-	const _server = createBridgeServer(bridgeDeps);
-
-	console.log("  Port:         ${config.port}");
+	console.log(`  Port:         ${config.port}`);
 	console.log(`  BrowserOS:    ${config.browserosMcpUrl}`);
 	console.log(
 		`  GitButler:    ${config.gitbutlerCliPath} (internal: ${config.gitbutlerInternal})`,
@@ -108,11 +104,15 @@ async function _main() {
 		console.warn(`⚠️  BrowserOS not available yet: ${err}`);
 		console.warn("   Will retry on first tool call.");
 	});
+	// Keep connection warm
+	browseros.startHealthCheck();
+
 	console.log("\n📡 Connecting to GitButler MCP...");
 	await gitbutler.connect().catch((err) => {
 		console.warn(`⚠️  GitButler MCP not available yet: ${err}`);
 		console.warn("   Will use CLI fallback for gitbutler tools.");
 	});
+	gitbutler.startHealthCheck();
 
 	// Set up HTTP server with Hono
 	const app = new Hono();
@@ -158,6 +158,59 @@ async function _main() {
 		});
 	});
 
+	// Observatory — detailed health with latency
+	app.get("/health/detailed", async (c) => {
+		const startBrowseros = performance.now();
+		let browserosStatus = "disconnected";
+		let browserosLatency: number | null = null;
+		let browserosLastPing: string | null = null;
+		try {
+			if (browseros.isConnected) {
+				await browseros.listTools();
+				browserosLatency = Math.round(performance.now() - startBrowseros);
+				browserosStatus = "connected";
+				browserosLastPing = new Date().toISOString();
+			}
+		} catch {
+			browserosStatus = "degraded";
+		}
+
+		const startGitbutler = performance.now();
+		let gitbutlerStatus = "disconnected";
+		let gitbutlerLatency: number | null = null;
+		let gitbutlerLastPing: string | null = null;
+		try {
+			if (gitbutler.isConnected) {
+				await gitbutler.listTools();
+				gitbutlerLatency = Math.round(performance.now() - startGitbutler);
+				gitbutlerStatus = "connected";
+				gitbutlerLastPing = new Date().toISOString();
+			}
+		} catch {
+			gitbutlerStatus = "degraded";
+		}
+
+		return c.json({
+			name: "trios-mcp-bridge",
+			version: "0.2.0",
+			uptime_seconds: Math.round(process.uptime()),
+			browseros: {
+				status: browserosStatus,
+				latency_ms: browserosLatency,
+				last_ping: browserosLastPing,
+			},
+			gitbutler: {
+				status: gitbutlerStatus,
+				latency_ms: gitbutlerLatency,
+				last_ping: gitbutlerLastPing,
+			},
+			circuit_breaker: {
+				browseros: browseros.circuit.currentState,
+				gitbutler: gitbutler.circuit.currentState,
+			},
+		});
+	});
+
 	// MCP request endpoint (POST /mcp) — per-request server + transport
 	app.post("/mcp", async (c) => {
 		const mcpServer = createBridgeServer({
@@ -183,10 +236,24 @@ async function _main() {
 	console.log(`   MCP endpoint:  http://127.0.0.1:${config.port}/mcp`);
 	console.log("\n   Press Ctrl+C to stop.\n");
 
-	Bun.serve({
+	const server = Bun.serve({
 		port: config.port,
 		fetch: app.fetch,
 	});
+
+	// Graceful shutdown
+	async function shutdown(signal: string) {
+		console.log(`\n${signal} received. Shutting down gracefully...`);
+		browseros.stopHealthCheck();
+		gitbutler.stopHealthCheck();
+		await browseros.disconnect().catch(() => {});
+		await gitbutler.disconnect().catch(() => {});
+		server.stop(true);
+		process.exit(0);
+	}
+
+	process.on("SIGINT", () => shutdown("SIGINT"));
+	process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
 
 _main().catch((err) => {
