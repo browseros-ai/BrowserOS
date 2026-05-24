@@ -26,7 +26,7 @@ export interface BridgeConfig {
   databaseUrl: string | null
   /** Railway MCP server URL (default: null) */
   railwayMcpUrl: string | null
-  /** trios-mcp-github binary path (default: "trios-mcp-github") */
+  /** trios-mcp-github server script path (default: "trios-mcp-github") */
   githubCliPath: string
 }
 
