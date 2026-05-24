@@ -1,47 +1,53 @@
 ---
 name: doctor
-description: HEALER — diagnose trios build, heal dirty files, monitor health. Every loop = action + proof.
+description: HEALER — diagnose trios build, heal dirty files, monitor health. No .sh/.py scripts per L7 UNITY.
 argument-hint: [quick|full|scan|build|commit] [lang:ru|en]
-allowed-tools: Bash(swiftc *), Bash(git *), Bash(ls *), Bash(find *), Bash(grep *), Bash(wc *), Bash(cat *), Bash(date *), Bash(tail *), Bash(echo *), Read, Edit, Write
+allowed-tools: fs_read, fs_write, fs_edit, shell_execute, fs_list
 ---
 
 ## HEALER MODE — DIAGNOSE → HEAL → REPORT
 
-**HONESTY RULE**: Never say "all good" if there are dirty files. Fix them or explain WHY.
+**HONESTY RULE**: Never say all good if dirty files exist. Fix or explain WHY.
+
+**L7 UNITY**: No ad-hoc .sh/.py scripts. Use MCP tools only.
 
 ## Healing Protocol
 
-### Step 1: DIAGNOSE
-```bash
-cd /Users/playra/BrowserOS-full/trios
-git status --porcelain                    # dirty files
-git diff --name-only -- '*.swift'        # changed swift files
-./build.sh 2>&1 | tail -10              # build check
-curl -s http://127.0.0.1:9105/health    # MCP server
-cat .trinity/doctor_prev.dat 2>/dev/null || echo "no prev state"
+### Step 1: DIAGNOSE (via MCP tools)
+
+```
+shell_execute: "cd /Users/playra/BrowserOS-full/trios && git status --porcelain | wc -l"
+shell_execute: "curl -s http://127.0.0.1:9105/health"
+shell_execute: "cd /Users/playra/BrowserOS-full/trios && ./build.sh 2>&1 | tail -5"
+fs_read: "/Users/playra/BrowserOS-full/trios/.trinity/doctor_prev.dat"
 ```
 
 ### Step 2: HEAL
 
-**2a. Build broken?** → Read errors, fix code, ./build.sh again
-**2b. Dirty .swift files?** → Build passes, then commit:
-```bash
-git add <dirty .swift files>
-git commit -m "ring-NNN-fix: description (Closes #N)"
+**2a. Build broken?** → fs_read errors, fs_edit fix, shell_execute rebuild
+**2b. Dirty .swift?** → Commit via shell_execute:
 ```
-**2c. Dirty state files?** (.trinity/*, .claude/*) → Batch commit
-**2d. Build script stale?** → Update build.sh if new files added
+shell_execute: "cd /Users/playra/BrowserOS-full/trios && git add -A && git commit -m ring-NNN-fix: desc (Closes #N)"
+```
+**2c. Dirty state?** → Batch commit via shell_execute
+**2d. Build script stale?** → fs_edit build.sh
 
 ### Step 3: VERIFY
-```bash
-git status --porcelain
-git log --oneline -3
+```
+shell_execute: "cd /Users/playra/BrowserOS-full/trios && git status --porcelain && git log --oneline -3"
 ```
 
 ### Step 4: SNAPSHOT
-```bash
-echo "$(date +%s) build=$(test -f trios_app && echo OK || echo FAIL) dirty=$(git status --porcelain | wc -l | tr -d ' ')" > .trinity/doctor_prev.dat
 ```
+fs_write: path=.trinity/doctor_prev.dat, content=timestamp build_status dirty_count
+```
+
+## Trinity Compliance
+- L1 TRACEABILITY: ring-NNN-type: desc (Closes #N)
+- L2 GENERATION: No hand-editing generated code
+- L3 PURITY: ASCII-only identifiers
+- L4 TESTABILITY: Build passes after heal
+- L7 UNITY: No .sh/.py scripts
 
 ## Report Format
 ```
@@ -51,14 +57,14 @@ echo "$(date +%s) build=$(test -f trios_app && echo OK || echo FAIL) dirty=$(git
 
 ### Diagnosis
 - Build: {PASS|FAIL}
-- Dirty files: {N}
+- Dirty: {N} files
 - Server: {UP|DOWN}
 
 ### Treatment
 - File: {path}
-- Change: {what changed}
+- Change: {what}
 - Verification: build {PASS|FAIL}
 
-### Remaining Issues
-- {list or "None — all healthy"}
-``
+### Remaining
+- {list or None — all healthy}
+```

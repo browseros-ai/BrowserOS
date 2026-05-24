@@ -1,61 +1,57 @@
 ---
 name: tri
-description: TRI status dashboard for trios — build health, git state, server status, agent memory. Compact mode by default, /tri full for full diagnostic.
+description: TRI status dashboard for trios. Build health, git state, server status, agent memory. No .sh scripts per L7 UNITY.
 argument-hint: [short] [full] [audit] [coverage] [lang:ru|en]
-allowed-tools: Bash(ls *), Bash(wc *), Bash(grep *), Bash(cat *), Bash(find *), Bash(git *), Bash(date *), Bash(test *), Bash(tail *), Bash(echo *), Bash(curl *), Read, Edit, Write
+allowed-tools: fs_read, fs_write, fs_edit, shell_execute, fs_list
 ---
 
 ## Mode Detection
 
 Check arguments for mode:
-- If arguments contains "full" → **MODE=FULL**
-- If arguments contains "short" → **MODE=COMPACT**
-- If arguments contains "audit" → **MODE=AUDIT**
-- Otherwise → **MODE=COMPACT**
+- If arguments contains full → MODE=FULL
+- If arguments contains short → MODE=COMPACT
+- If arguments contains audit → MODE=AUDIT
+- Otherwise → MODE=COMPACT
 
 ## Compact Mode (~15 lines)
 
-Quick trios health check:
+Quick trios health check via MCP tools:
 
-```bash
-cd /Users/playra/BrowserOS-full/trios
-echo "=== TRIOS STATUS ==="
-echo "Build: $(test -f trios_app && echo '✅ binary exists' || echo '❌ no binary')"
-echo "Git: $(git status --short | wc -l | tr -d ' ') dirty files"
-echo "Branch: $(git branch --show-current)"
-echo "Last commit: $(git log --oneline -1 | head -c 50)"
-echo "Server health: $(curl -s http://127.0.0.1:9105/health | grep -o 'ok' || echo 'DOWN')"
-echo "MCP tools: $(curl -s http://127.0.0.1:9105/tools/list | grep -o 'name' | wc -l | tr -d ' ') registered"
-echo "Agents: $(ls .claude/agents/*.md 2>/dev/null | wc -l | tr -d ' ') definitions"
-echo "Skills: $(ls .claude/skills/*/SKILL.md 2>/dev/null | wc -l | tr -d ' ') loaded"
-echo "Rings: $(find rings -name '*.swift' | wc -l | tr -d ' ') Swift files"
-echo "BR-OUTPUT: $(find BR-OUTPUT -name '*.swift' 2>/dev/null | wc -l | tr -d ' ') UI files"
-echo "A2A registry: $(curl -s http://127.0.0.1:9200/a2a/registry | grep -o 'agent' | wc -l | tr -d ' ') agents"
+```
+shell_execute: command = "test -f /Users/playra/BrowserOS-full/trios/trios_app && echo OK || echo MISSING"
+shell_execute: command = "curl -s http://127.0.0.1:9105/health"
+shell_execute: command = "ls /Users/playra/BrowserOS-full/trios/.claude/agents/*.md 2>/dev/null | wc -l"
+shell_execute: command = "ls /Users/playra/BrowserOS-full/trios/.claude/skills/*/SKILL.md 2>/dev/null | wc -l"
 ```
 
 ## Full Mode
 
-Complete diagnostic:
+Complete diagnostic via MCP:
 
-1. **Build Check**: Verify trios_app binary, run ./build.sh if needed
-2. **Git State**: Full git status, branch, recent commits
-3. **Server Health**: MCP server (9105), Agent server (9200)
-4. **File Inventory**: All .swift files by ring layer
-5. **Agent Health**: queen-browseros, other agent definitions
-6. **Skill Health**: All loaded skills, check for orphans
-7. **Memory**: .trinity/experience.md last entry
-8. **A2A Network**: /a2a/registry health
+1. Build Check: Verify trios_app binary
+2. Git State: git status via shell_execute
+3. Server Health: curl http://127.0.0.1:9105/health
+4. File Inventory: find rings/ -name *.swift
+5. Agent Health: queen-browseros.md check
+6. Skill Health: Count loaded skills
+7. Memory: .trinity/experience.md last entry
+8. A2A Network: curl http://127.0.0.1:9200/a2a/registry
 
 ## Audit Mode
 
 Deep project audit:
 - Count LOC per ring layer
-- Check for uncommitted changes
+- Check uncommitted changes
 - Verify build.sh integrity
-- Check for unused imports
+
+## Trinity Compliance
+- L1 TRACEABILITY: GitHub issue linkage
+- L2 GENERATION: No hand-editing generated code
+- L3 PURITY: ASCII-only identifiers
+- L4 TESTABILITY: Build passes after edits
+- L7 UNITY: No .sh/.py scripts; MCP tools only
 
 ## Report Format
-
 ```
 ## TRI Status Report
 

@@ -1,0 +1,5 @@
+.DS_Store
+.trinity/*.log
+.trinity/state/
+trios_app
+trios.app/

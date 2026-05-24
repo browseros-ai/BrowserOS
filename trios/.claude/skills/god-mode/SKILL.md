@@ -1,47 +1,35 @@
 ---
 name: god-mode
-description: GOD MODE — Agent oversight dashboard for trios. Shows agent status, build health, circuit breakers, git activity, rule violations.
+description: GOD MODE — Agent oversight dashboard for trios. No .sh/.py scripts per L7 UNITY.
 argument-hint: [status|agents|tasks|violations|health]
-allowed-tools: Bash(git *), Bash(cat *), Bash(ls *), Bash(grep *), Bash(wc *), Bash(curl *), Read, Edit, Write
+allowed-tools: fs_read, fs_write, fs_edit, shell_execute, fs_list
 ---
 
 # GOD MODE — Agent Oversight Dashboard
 
-## Swarm Status
-- Agent definitions: .claude/agents/*.md
-- Skill definitions: .claude/skills/*/SKILL.md
-- Active processes: trios_app, bun server, browseros-mcp
+## L7 UNITY Compliance
+No ad-hoc .sh/.py scripts. Use MCP tools or tri CLI only.
+
+## Swarm Status (via MCP tools)
+
+```
+shell_execute: "ls /Users/playra/BrowserOS-full/trios/.claude/agents/*.md 2>/dev/null | wc -l"
+shell_execute: "ls /Users/playra/BrowserOS-full/trios/.claude/skills/*/SKILL.md 2>/dev/null | wc -l"
+shell_execute: "curl -s http://127.0.0.1:9105/health"
+```
 
 ## Agent Status
-```bash
-cd /Users/playra/BrowserOS-full/trios
-echo "=== AGENTS ==="
-ls .claude/agents/*.md 2>/dev/null | xargs -n1 basename -s .md
-echo "=== SKILLS ===" 
-ls .claude/skills/*/SKILL.md 2>/dev/null | xargs dirname | xargs basename
-echo "=== PROCESSES ==="
-pgrep -la trios_app 2>/dev/null || echo "trios_app: not running"
-curl -s http://127.0.0.1:9105/health | head -c 50 || echo "MCP: DOWN"
-curl -s http://127.0.0.1:9200/health | head -c 50 2>/dev/null || echo "Agent: DOWN"
-```
+shell_execute: "pgrep -la trios_app 2>/dev/null || echo trios_app: not running"
+shell_execute: "curl -s http://127.0.0.1:9105/health | head -c 50 || echo MCP: DOWN"
 
 ## Git Activity
-```bash
-cd /Users/playra/BrowserOS-full/trios
-git log --oneline -10 --all --graph
-git branch -a | head -10
-```
+shell_execute: "cd /Users/playra/BrowserOS-full/trios && git log --oneline -10 --all --graph"
+shell_execute: "cd /Users/playra/BrowserOS-full/trios && git branch -a | head -10"
 
 ## Rule Violations
 - Dirty .swift files without commit → WARNING
 - Build broken > 30 min → CRITICAL
 - MCP server down > 5 min → CRITICAL
-- No wrap-up in last session → WARNING
-
-## Circuit Breaker State
-- trios_app crash count
-- Build failure streak
-- Auto-recovery attempts
 
 ## Report Format
 ```
@@ -56,8 +44,14 @@ git branch -a | head -10
 - Last: {PASS|FAIL} at {time}
 
 ### Violations
-- {list or "None"}
+- {list or None}
 
 ### Actions
 - {recommendations}
-``
+```
+
+## Trinity Compliance
+- L1 TRACEABILITY: GitHub issue linkage
+- L3 PURITY: ASCII-only identifiers
+- L4 TESTABILITY: Build verification
+- L7 UNITY: No .sh/.py scripts
