@@ -23,6 +23,7 @@ import { getDb } from '../lib/db'
 import { logger } from '../lib/logger'
 import { Sentry } from '../lib/sentry'
 import { getLimaHomeDir, resolveBundledLimactl, VM_NAME } from '../lib/vm'
+import { createA2aRoutes } from './routes/a2a'
 import { createAclRoutes } from './routes/acl'
 import { createAgentRoutes } from './routes/agents'
 import { createChatRoutes } from './routes/chat'
@@ -41,6 +42,7 @@ import { createSkillsRoutes } from './routes/skills'
 import { createSoulRoutes } from './routes/soul'
 import { createStatusRoute } from './routes/status'
 import { createTerminalRoutes } from './routes/terminal'
+import { A2aRegistryService } from './services/a2a/a2a-registry-service'
 import { GlobalAclPolicyService } from './services/acl/global-acl-policy'
 import {
   connectKlavisInBackground,
@@ -95,6 +97,10 @@ export async function createHttpServer(config: HttpServerConfig) {
 
   const aclPolicyService = new GlobalAclPolicyService()
   await aclPolicyService.load()
+
+  const a2aService = new A2aRegistryService(
+    process.env.DATABASE_URL || process.env.RAILWAY_SSOT_URL || undefined,
+  )
 
   // Connect Klavis proxy in background with retry — browser tools available immediately
   const klavisRef: KlavisProxyRef = { handle: null }
@@ -182,6 +188,7 @@ export async function createHttpServer(config: HttpServerConfig) {
       '/shutdown',
       createShutdownRoute({
         onShutdown: () => {
+          a2aService.destroy()
           shutdownOAuth()
           stopKlavisBackground()
           klavisRef.handle?.close().catch((err) =>
@@ -242,6 +249,7 @@ export async function createHttpServer(config: HttpServerConfig) {
       }),
     )
     .route('/agents', agentRoutes)
+    .route('/a2a', createA2aRoutes({ service: a2aService }))
     .route('/claw', clawRoutes)
 
   // Error handler
