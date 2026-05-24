@@ -2,18 +2,29 @@
 
 ## Overview
 
-The TRIOS MCP Bridge connects five components:
+The TRIOS MCP Bridge connects six components:
 - **BrowserOS MCP** (port 9105) — Browser automation and external service integrations
 - **trios-server** (port 9005) — Rust-based Zig workflow server
-- **trios-mcp-bridge** (port 9203) — Vision + GitButler orchestration layer
+- **trios-mcp-bridge** (port 9203) — Vision + GitButler orchestration layer (~44 tools)
 - **trios-mcp-rag** (stdio) — RAG over Railway PostgreSQL (GOLDEN BRIDGE chapters)
 - **trios-railway-mcp** (HTTP) — Railway deployment orchestration (redeploy, deploy, list, fleet health)
+- **trios-mcp-github** (stdio) — GitHub repo lifecycle (issues, PRs, code search, workflows)
 
 ## Railway MCP Integration (trios-railway-mcp)
 
 The bridge connects to Railway MCP via HTTP Streamable transport, reusing the same resilience patterns:
 - **Connection:** HTTP MCP to `trios-railway-mcp-production.up.railway.app`
 - **Tools exposed:** `railway_redeploy`, `railway_deploy`, `railway_list_services`, `railway_fleet_health`
+- **Circuit breaker:** Shared `CircuitBreaker` with 3-failure threshold
+- **Health check:** 30s ping via `listTools()`
+- **Auto-reconnect:** On failure, destroys transport and reconnects on next tool call
+
+## GitHub MCP Integration (trios-mcp-github)
+
+The bridge connects to `trios-mcp-github` via stdio MCP, reusing the same resilience patterns:
+- **Connection:** Stdio subprocess to Bun script (`bun run trios-mcp-github/src/index.ts`)
+- **Auth:** Requires `GITHUB_TOKEN` or `GH_TOKEN` env var with `repo` scope
+- **Tools exposed:** `github_repo_info`, `github_read_file`, `github_list_files`, `github_list_issues`, `github_create_issue`, `github_create_pr`, `github_list_commits`, `github_search_code`, `github_list_branches`, `github_get_workflow_status`, `github_add_comment`, `github_list_pulls`
 - **Circuit breaker:** Shared `CircuitBreaker` with 3-failure threshold
 - **Health check:** 30s ping via `listTools()`
 - **Auto-reconnect:** On failure, destroys transport and reconnects on next tool call
@@ -73,7 +84,8 @@ Response:
   "gitbutler": { "status": "cli_only", "latency_ms": null, "last_ping": null },
   "rag": { "status": "connected", "latency_ms": 42, "last_ping": "2026-05-24T10:58:21Z" },
   "railway": { "status": "connected", "latency_ms": 89, "last_ping": "2026-05-24T10:58:21Z" },
-  "circuit_breaker": { "browseros": "closed", "gitbutler": "closed", "rag": "closed", "railway": "closed" },
+  "github": { "status": "connected", "latency_ms": 10, "last_ping": "2026-05-24T10:58:21Z" },
+  "circuit_breaker": { "browseros": "closed", "gitbutler": "closed", "rag": "closed", "railway": "closed", "github": "closed" },
   "uptime_seconds": 3600
 }
 ```
@@ -90,3 +102,6 @@ Response:
 | RAG query 80 chapters | Latency 1–4ms, all chapters loaded |
 | PhD counters audit | 1,762 theorems, 5 Admitted, 14 refutations |
 | Railway redeploy from chat | Service redeployed, logs streamed back |
+| GitHub read file from chat | README.md returned in < 2s |
+| GitHub create issue dry-run | Preview returned without API call |
+| GitHub search code | 12 matches for "phi" in trinity repo |

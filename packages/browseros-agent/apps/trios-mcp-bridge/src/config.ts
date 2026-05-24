@@ -26,6 +26,8 @@ export interface BridgeConfig {
   databaseUrl: string | null
   /** Railway MCP server URL (default: null) */
   railwayMcpUrl: string | null
+  /** trios-mcp-github binary path (default: "trios-mcp-github") */
+  githubCliPath: string
 }
 
 const DEFAULT_CONFIG: BridgeConfig = {
@@ -39,6 +41,7 @@ const DEFAULT_CONFIG: BridgeConfig = {
   triosRagCliPath: 'trios-mcp-rag',
   databaseUrl: null,
   railwayMcpUrl: null,
+  githubCliPath: 'trios-mcp-github',
 }
 
 export function loadConfig(overrides?: Partial<BridgeConfig>): BridgeConfig {
@@ -61,6 +64,10 @@ export function loadConfig(overrides?: Partial<BridgeConfig>): BridgeConfig {
     databaseUrl:
       process.env.DATABASE_URL || process.env.RAILWAY_SSOT_URL || null,
     railwayMcpUrl: process.env.RAILWAY_MCP_URL || DEFAULT_CONFIG.railwayMcpUrl,
+    githubCliPath:
+      process.env.TRIOS_GITHUB_CLI ||
+      process.env.TRIONS_GITHUB_CLI ||
+      DEFAULT_CONFIG.githubCliPath,
     ...overrides,
   }
 }

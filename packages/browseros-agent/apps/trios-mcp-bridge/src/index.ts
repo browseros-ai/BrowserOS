@@ -4,6 +4,7 @@ import { cors } from 'hono/cors'
 import { createBridgeServer } from './bridge-server.js'
 import { BrowserOSClient } from './clients/browseros-client.js'
 import { GitButlerMcpClient } from './clients/gitbutler-client.js'
+import { GitHubMcpClient } from './clients/github-client.js'
 import { RailwayMcpClient } from './clients/railway-client.js'
 import { TriClient } from './clients/tri-client.js'
 import { TriosRagClient } from './clients/trios-rag-client.js'
@@ -37,6 +38,9 @@ function parseArgs(): Partial<BridgeConfig> {
       case '--railway-mcp-url':
         config.railwayMcpUrl = args[++i]
         break
+      case '--github-cli':
+        config.githubCliPath = args[++i]
+        break
       case '--working-dir':
         config.workingDir = args[++i]
         break
@@ -60,6 +64,7 @@ Options:
   --rag-cli <path>             trios-mcp-rag binary path (default: trios-mcp-rag)
   --database-url <dsn>         PostgreSQL DSN for trios-mcp-rag (env: DATABASE_URL)
   --railway-mcp-url <url>      Railway MCP server URL (env: RAILWAY_MCP_URL)
+  --github-cli <path>           trios-mcp-github binary path (env: TRIOS_GITHUB_CLI)
   --working-dir <path>          Working directory for git (default: cwd)
   --no-internal                  Disable GitButler internal MCP tools
   --log-level <level>           Log level: debug|info|warn|error (default: info)
@@ -99,6 +104,7 @@ async function _main() {
   const railway = config.railwayMcpUrl
     ? new RailwayMcpClient(config.railwayMcpUrl)
     : null
+  const github = new GitHubMcpClient(config.githubCliPath)
 
   console.log(`  Port:         ${config.port}`)
   console.log(`  BrowserOS:    ${config.browserosMcpUrl}`)
@@ -111,6 +117,7 @@ async function _main() {
     `  Database:     ${config.databaseUrl ? 'configured' : 'not configured (will use RAG fallback)'}`,
   )
   console.log(`  Railway MCP:  ${config.railwayMcpUrl || 'not configured'}`)
+  console.log(`  GitHub MCP:   ${config.githubCliPath}`)
   console.log(`  Working Dir:  ${config.workingDir}`)
 
   // Check tri availability (warning only)
@@ -158,6 +165,15 @@ async function _main() {
     railway.startHealthCheck()
   }
 
+  console.log('\n📡 Connecting to GitHub MCP...')
+  await github.connect().catch((err) => {
+    console.warn(`⚠️  GitHub MCP not available yet: ${err}`)
+    console.warn(
+      '   GitHub tools will be unavailable until connection succeeds.',
+    )
+  })
+  github.startHealthCheck()
+
   // Set up HTTP server with Hono
   const app = new Hono()
 
@@ -182,6 +198,7 @@ async function _main() {
         gitbutler: gitbutler.isConnected ? 'connected' : 'disconnected',
         rag: rag.isConnected ? 'connected' : 'disconnected',
         railway: railway?.isConnected ? 'connected' : 'disconnected',
+        github: github.isConnected ? 'connected' : 'disconnected',
       },
       config: {
         port: config.port,
@@ -200,7 +217,7 @@ async function _main() {
     return c.json({
       name: 'trios-mcp-bridge',
       status: 'running',
-      tools: 32,
+      tools: 44,
     })
   })
 
@@ -266,6 +283,21 @@ async function _main() {
       railwayStatus = 'degraded'
     }
 
+    const startGithub = performance.now()
+    let githubStatus = 'disconnected'
+    let githubLatency: number | null = null
+    let githubLastPing: string | null = null
+    try {
+      if (github.isConnected) {
+        await github.listTools()
+        githubLatency = Math.round(performance.now() - startGithub)
+        githubStatus = 'connected'
+        githubLastPing = new Date().toISOString()
+      }
+    } catch {
+      githubStatus = 'degraded'
+    }
+
     return c.json({
       name: 'trios-mcp-bridge',
       version: '0.2.0',
@@ -290,11 +322,17 @@ async function _main() {
         latency_ms: railwayLatency,
         last_ping: railwayLastPing,
       },
+      github: {
+        status: githubStatus,
+        latency_ms: githubLatency,
+        last_ping: githubLastPing,
+      },
       circuit_breaker: {
         browseros: browseros.circuit.currentState,
         gitbutler: gitbutler.circuit.currentState,
         rag: rag.circuit.currentState,
         railway: railway?.circuit.currentState || 'disconnected',
+        github: github.circuit.currentState,
       },
     })
   })
@@ -308,6 +346,7 @@ async function _main() {
       tri,
       rag,
       railway,
+      github,
     })
 
     const transport = new StreamableHTTPTransport({
@@ -338,10 +377,12 @@ async function _main() {
     gitbutler.stopHealthCheck()
     rag.stopHealthCheck()
     railway?.stopHealthCheck()
+    github.stopHealthCheck()
     await browseros.disconnect().catch(() => {})
     await gitbutler.disconnect().catch(() => {})
     await rag.disconnect().catch(() => {})
     await railway?.disconnect().catch(() => {})
+    await github.disconnect().catch(() => {})
     server.stop(true)
     process.exit(0)
   }

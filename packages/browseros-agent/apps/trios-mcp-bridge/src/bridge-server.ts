@@ -10,6 +10,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import type { BrowserOSClient } from '../clients/browseros-client.js'
 import type { GitButlerMcpClient } from '../clients/gitbutler-client.js'
+import type { GitHubMcpClient } from '../clients/github-client.js'
 import type { RailwayMcpClient } from '../clients/railway-client.js'
 import type { TriClient } from '../clients/tri-client.js'
 import type { TriosRagClient } from '../clients/trios-rag-client.js'
@@ -29,6 +30,7 @@ export interface BridgeDeps {
   tri: TriClient
   rag: TriosRagClient
   railway: RailwayMcpClient | null
+  github: GitHubMcpClient | null
 }
 
 const BRIDGE_INSTRUCTIONS = `TRIOS MCP Bridge — Vision-enhanced GitButler workflows.
@@ -43,6 +45,7 @@ This bridge connects BrowserOS (browser vision/control) with GitButler (virtual 
 4. **Research**: Use search_chapters, get_chapter, list_chapters to query the GOLDEN BRIDGE compendium via RAG.
 5. **PhD Pipeline**: Use build_pdf (dry-run by default), build_cover, list_claims, get_honest_counters for PDF generation and claim auditing.
 6. **Deploy**: Use railway_redeploy, railway_deploy, railway_list_services, railway_fleet_health to manage Railway deployments from chat.
+7. **Code**: Use github_repo_info, github_read_file, github_list_issues, github_create_issue, github_create_pr, github_search_code to manage GitHub repos from chat.
 
 ## Key Concepts
 
@@ -1756,6 +1759,137 @@ export function createBridgeServer(deps: BridgeDeps): McpServer {
       }
     },
   )
+
+  // ================================================================
+  // GitHub Tools (proxied to trios-mcp-github stdio server)
+  // ================================================================
+
+  if (deps.github) {
+    const gh = deps.github
+
+    function registerGhTool(
+      name: string,
+      description: string,
+      schema: Record<string, z.ZodTypeAny>,
+    ) {
+      server.tool(name, description, schema, async (args) => {
+        try {
+          const result = await gh.callTool(
+            name,
+            args as Record<string, unknown>,
+          )
+          return {
+            content: [{ type: 'text' as const, text: gh.extractText(result) }],
+          }
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({
+                  ok: false,
+                  reason:
+                    error instanceof Error ? error.message : String(error),
+                }),
+              },
+            ],
+            isError: true,
+          }
+        }
+      })
+    }
+
+    registerGhTool('github_repo_info', 'Get repository metadata.', {
+      owner: z.string(),
+      repo: z.string(),
+    })
+    registerGhTool('github_read_file', 'Read a file from a repository.', {
+      owner: z.string(),
+      repo: z.string(),
+      path: z.string(),
+      ref: z.string().optional(),
+    })
+    registerGhTool(
+      'github_list_files',
+      'List files and directories in a repo path.',
+      {
+        owner: z.string(),
+        repo: z.string(),
+        path: z.string().optional(),
+        ref: z.string().optional(),
+      },
+    )
+    registerGhTool('github_list_issues', 'List issues in a repository.', {
+      owner: z.string(),
+      repo: z.string(),
+      state: z.enum(['open', 'closed', 'all']).optional(),
+      per_page: z.number().int().min(1).max(100).optional(),
+    })
+    registerGhTool(
+      'github_create_issue',
+      'Create an issue. Dry-run by default.',
+      {
+        owner: z.string(),
+        repo: z.string(),
+        title: z.string(),
+        body: z.string().optional(),
+        labels: z.array(z.string()).optional(),
+        dry_run: z.boolean().optional(),
+      },
+    )
+    registerGhTool(
+      'github_create_pr',
+      'Create a pull request. Dry-run by default.',
+      {
+        owner: z.string(),
+        repo: z.string(),
+        title: z.string(),
+        head: z.string(),
+        base: z.string().optional(),
+        body: z.string().optional(),
+        draft: z.boolean().optional(),
+        dry_run: z.boolean().optional(),
+      },
+    )
+    registerGhTool('github_list_commits', 'List recent commits.', {
+      owner: z.string(),
+      repo: z.string(),
+      path: z.string().optional(),
+      per_page: z.number().int().min(1).max(100).optional(),
+    })
+    registerGhTool('github_search_code', 'Search code across GitHub.', {
+      query: z.string(),
+      per_page: z.number().int().min(1).max(100).optional(),
+    })
+    registerGhTool('github_list_branches', 'List branches in a repository.', {
+      owner: z.string(),
+      repo: z.string(),
+      per_page: z.number().int().min(1).max(100).optional(),
+    })
+    registerGhTool('github_get_workflow_status', 'Get workflow run status.', {
+      owner: z.string(),
+      repo: z.string(),
+      workflow_id: z.string().optional(),
+      per_page: z.number().int().min(1).max(30).optional(),
+    })
+    registerGhTool(
+      'github_add_comment',
+      'Add a comment to an issue or PR. Dry-run by default.',
+      {
+        owner: z.string(),
+        repo: z.string(),
+        issue_number: z.number().int(),
+        body: z.string(),
+        dry_run: z.boolean().optional(),
+      },
+    )
+    registerGhTool('github_list_pulls', 'List pull requests.', {
+      owner: z.string(),
+      repo: z.string(),
+      state: z.enum(['open', 'closed', 'all']).optional(),
+      per_page: z.number().int().min(1).max(100).optional(),
+    })
+  }
 
   return server
 }
