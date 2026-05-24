@@ -11,16 +11,7 @@ class E2ETestRunner {
         up?.post(tap: .cghidEventTap)
     }
     
-    static func pressKey(keyCode: CGKeyCode, modifiers: CGEventFlags = []) {
-        let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true)
-        keyDown?.flags = modifiers
-        keyDown?.post(tap: .cghidEventTap)
-        let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false)
-        keyUp?.flags = modifiers
-        keyUp?.post(tap: .cghidEventTap)
-    }
-    
-    static func runHealthTest() -> Bool {
+    static func runHealthTest() {
         let url = URL(string: "http://127.0.0.1:9105/health")!
         let semaphore = DispatchSemaphore(value: 0)
         var result = false
@@ -34,6 +25,8 @@ class E2ETestRunner {
         }
         task.resume()
         semaphore.wait()
-        return result
+        print(result ? "PASS" : "FAIL")
     }
 }
+
+// Usage: call E2ETestRunner.runHealthTest() or E2ETestRunner.click(at:) from test targets
