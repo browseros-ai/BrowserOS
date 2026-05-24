@@ -10,6 +10,20 @@ import { browseros_info } from './browseros-info'
 import { get_console_logs } from './console'
 import { get_dom, search_dom } from './dom'
 import {
+  filesystem_bash,
+  filesystem_edit,
+  filesystem_find,
+  filesystem_grep,
+  filesystem_ls,
+  filesystem_read,
+  filesystem_write,
+  fs_edit,
+  fs_list,
+  fs_read,
+  fs_write,
+  shell_execute,
+} from './filesystem-registry'
+import {
   delete_history_range,
   delete_history_url,
   get_recent_history,
@@ -64,15 +78,6 @@ import {
   update_tab_group,
 } from './tab-groups'
 import { createRegistry } from './tool-registry'
-import {
-  filesystem_bash,
-  filesystem_edit,
-  filesystem_find,
-  filesystem_grep,
-  filesystem_ls,
-  filesystem_read,
-  filesystem_write,
-} from './filesystem-registry'
 import {
   activate_window,
   close_window,
@@ -169,6 +174,13 @@ export const registry = createRegistry([
   filesystem_edit,
   filesystem_find,
   filesystem_grep,
+
+  // Filesystem aliases (5)
+  fs_read,
+  fs_write,
+  fs_list,
+  shell_execute,
+  fs_edit,
 
   // Nudges (2)
   suggest_schedule,
