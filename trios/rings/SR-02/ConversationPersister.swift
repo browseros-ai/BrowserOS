@@ -39,4 +39,18 @@ actor ConversationPersister: ChatPersisterProtocol {
     nonisolated func setCurrentConversationId(_ id: UUID) {
         UserDefaults.standard.set(id.uuidString, forKey: currentIdKey)
     }
+
+    func listAllConversations() async -> [ChatConversation] {
+        var result: [ChatConversation] = []
+        for key in defaults.dictionaryRepresentation().keys {
+            guard key.hasPrefix(keyPrefix) else { continue }
+            let idStr = String(key.dropFirst(keyPrefix.count))
+            guard let id = UUID(uuidString: idStr) else { continue }
+            let messages = await load(conversationId: id)
+            let title = messages.first(where: { $0.role == .user })?.content.prefix(40).trimmingCharacters(in: .whitespacesAndNewlines) ?? "Empty chat"
+            let updated = messages.last?.timestamp ?? Date()
+            result.append(ChatConversation(id: id, title: String(title), updatedAt: updated))
+        }
+        return result.sorted { $0.updatedAt > $1.updatedAt }
+    }
 }

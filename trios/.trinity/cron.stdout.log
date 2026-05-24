@@ -1,1 +1,24 @@
 Compiling 33 Swift files...
+/Users/playra/BrowserOS-full/trios/rings/SR-02/ChatViewModel.swift:48:26: warning: no 'async' operations occur within 'await' expression
+ 46 | 
+ 47 |     func setupConversationId() async {
+ 48 |         conversationId = await persister.currentConversationId()
+    |                          `- warning: no 'async' operations occur within 'await' expression
+ 49 |     }
+ 50 | 
+
+/Users/playra/BrowserOS-full/trios/rings/SR-02/ChatViewModel.swift:52:13: warning: variable 'history' was never mutated; consider changing to 'let' constant
+ 50 | 
+ 51 |     func loadHistory() async {
+ 52 |         var history = await persister.load(conversationId: conversationId)
+    |             `- warning: variable 'history' was never mutated; consider changing to 'let' constant
+ 53 |         for index in history.indices {
+ 54 |             history[index].isStreaming = false
+
+/Users/playra/BrowserOS-full/trios/rings/SR-02/ChatViewModel.swift:160:13: warning: no 'async' operations occur within 'await' expression
+158 |         state = .idle
+159 |         Task {
+160 |             await persister.setCurrentConversationId(conversationId)
+    |             `- warning: no 'async' operations occur within 'await' expression
+161 |         }
+162 |     }

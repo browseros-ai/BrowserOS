@@ -8,6 +8,9 @@ final class ChatViewModel: ObservableObject {
     @Published var inputText: String = ""
     @Published var isServerReachable: Bool = false
     @Published var isA2ARegistered: Bool = false
+    @Published var cronStatus: String = "👑 —"
+    @Published var conversations: [ChatConversation] = []
+    @Published var showHistory = false
 
     private let transport: ChatTransportProtocol
     private let healthCheck: ChatHealthCheckProtocol
@@ -42,6 +45,12 @@ final class ChatViewModel: ObservableObject {
             await loadHistory()
             await checkHealth()
         }
+        // Auto-refresh Queen status every 30s
+        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
+            Task { @MainActor in
+                self.checkCronStatus()
+            }
+        }
     }
 
     func setupConversationId() async {
@@ -55,6 +64,18 @@ final class ChatViewModel: ObservableObject {
         }
         messages = history
         rebuildCache()
+    }
+
+    func loadConversations() async {
+        conversations = await persister.listAllConversations()
+    }
+
+    func switchConversation(id: UUID) async {
+        conversationId = id
+        await persister.setCurrentConversationId(id)
+        await loadHistory()
+        await loadConversations()
+        showHistory = false
     }
 
     func sendMessage() async {
@@ -84,7 +105,7 @@ final class ChatViewModel: ObservableObject {
             mode: "agent",
             origin: "sidepanel",
             userSystemPrompt: nil,
-            previousConversation: messages.filter { !$0.isStreaming },
+            previousConversation: messages,
             browserContext: nil
         ).build() else {
             NSLog("[TriosChat] ChatRequestBuilder failed")
@@ -151,6 +172,40 @@ final class ChatViewModel: ObservableObject {
         isServerReachable = reachable
     }
 
+    func checkCronStatus() {
+        // Read Queen cron state from filesystem
+        let fm = FileManager.default
+        let statePath = "/Users/playra/BrowserOS-full/trios/.trinity/state/last_wake.json"
+        let logPath = "/Users/playra/BrowserOS-full/trios/.trinity/cron.log"
+        
+        if !fm.fileExists(atPath: statePath) {
+            cronStatus = "👑 —"
+            return
+        }
+        
+        do {
+            let data = try Data(contentsOf: URL(fileURLWithPath: statePath))
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let ts = json["ts"] as? TimeInterval {
+                let lastWake = Date(timeIntervalSince1970: ts)
+                let minutes = Int(Date().timeIntervalSince(lastWake) / 60)
+                let health = json["health"] as? String ?? "?"
+                let dirty = json["dirty"] as? Int ?? 0
+                let build = json["build"] as? String ?? "?"
+                
+                if minutes < 20 {
+                    cronStatus = health == "ok" ? "👑 🟢 \(minutes)m" : "👑 🔴 \(minutes)m"
+                } else {
+                    cronStatus = "👑 ⚪ \(minutes)m"
+                }
+            } else {
+                cronStatus = "👑 ?"
+            }
+        } catch {
+            cronStatus = "👑 —"
+        }
+    }
+
     func newConversation() {
         conversationId = UUID()
         messages = []
@@ -158,6 +213,7 @@ final class ChatViewModel: ObservableObject {
         state = .idle
         Task {
             await persister.setCurrentConversationId(conversationId)
+            await loadConversations()
         }
     }
 
@@ -348,6 +404,7 @@ final class ChatViewModel: ObservableObject {
 
     private func saveHistory() async {
         await persister.save(messages: messages, conversationId: conversationId)
+        await loadConversations()
     }
 }
 
@@ -360,7 +417,60 @@ struct ChatRequestBuilder {
     let previousConversation: [ChatMessage]
     let browserContext: BrowserContext?
 
+    private var memoryPrompt: String {
+        """
+        You are TRIOS AGENT, a native macOS AI assistant with full memory of this conversation. \
+        You can see all previous messages, reasoning steps, tool calls, and user instructions. \
+        Reference prior context naturally. If the user refers to "that", "it", or previous topics, \
+        use your memory to understand the reference. Maintain continuity across the entire session.
+        """
+    }
+
     func build() throws -> Data {
+        var messages: [[String: Any]] = []
+
+        // System memory prompt
+        let systemContent = userSystemPrompt.map { "\(memoryPrompt)\n\($0)" } ?? memoryPrompt
+        messages.append(["role": "system", "content": systemContent])
+
+        // Rich conversation history with segments and tool calls
+        for msg in previousConversation {
+            var content = msg.content
+
+            // Append reasoning segments as visible memory
+            let reasoning = msg.segments.compactMap {
+                if case .reasoning(let text) = $0 { return text }
+                return nil
+            }
+            if !reasoning.isEmpty {
+                content += "\n\n[Internal reasoning]: " + reasoning.joined(separator: "\n")
+            }
+
+            // Append tool calls as memory
+            if !msg.toolCalls.isEmpty {
+                let tools = msg.toolCalls.map { tc in
+                    var s = "Tool: \(tc.name)(\(tc.arguments))"
+                    if let out = tc.output { s += " -> \(out)" }
+                    return s
+                }.joined(separator: "\n")
+                content += "\n\n[Tools used]:\n" + tools
+            }
+
+            // Append error segments
+            let errors = msg.segments.compactMap {
+                if case .error(let text) = $0 { return text }
+                return nil
+            }
+            if !errors.isEmpty {
+                content += "\n\n[Errors]: " + errors.joined(separator: "; ")
+            }
+
+            messages.append(["role": msg.role.rawValue, "content": content])
+        }
+
+        // Current user message
+        messages.append(["role": "user", "content": message])
+
         var body: [String: Any] = [
             "conversationId": conversationId.uuidString,
             "message": message,
@@ -369,19 +479,14 @@ struct ChatRequestBuilder {
             "supportsImages": true,
             "provider": ProcessInfo.processInfo.environment["TRIOS_PROVIDER"] ?? "ollama",
             "model": ProcessInfo.processInfo.environment["TRIOS_MODEL"] ?? "kimi-k2.6:cloud",
-            "baseUrl": ProcessInfo.processInfo.environment["TRIOS_BASE_URL"] ?? "http://127.0.0.1:11434/v1"
+            "baseUrl": ProcessInfo.processInfo.environment["TRIOS_BASE_URL"] ?? "http://127.0.0.1:11434/v1",
+            "messages": messages
         ]
 
-        if let prompt = userSystemPrompt {
-            body["userSystemPrompt"] = prompt
-        }
-
+        // Flatten history for backward-compatible servers
         if !previousConversation.isEmpty {
             let history = previousConversation.map { msg in
-                [
-                    "role": msg.role.rawValue,
-                    "content": msg.content
-                ]
+                ["role": msg.role.rawValue, "content": msg.content]
             }
             body["previousConversation"] = history
         }
