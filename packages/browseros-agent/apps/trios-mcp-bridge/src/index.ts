@@ -188,3 +188,8 @@ async function _main() {
 		fetch: app.fetch,
 	});
 }
+
+_main().catch((err) => {
+	console.error("Failed to start bridge:", err);
+	process.exit(1);
+});
