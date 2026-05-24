@@ -14,6 +14,8 @@ protocol ChatPersisterProtocol: Sendable {
     func save(messages: [ChatMessage], conversationId: UUID) async
     func load(conversationId: UUID) async -> [ChatMessage]
     func clear(conversationId: UUID) async
+    func currentConversationId() -> UUID
+    func setCurrentConversationId(_ id: UUID)
 }
 
 protocol ChatHealthCheckProtocol: Sendable {

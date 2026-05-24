@@ -3,6 +3,7 @@ import Foundation
 actor ConversationPersister: ChatPersisterProtocol {
     private let defaults = UserDefaults.standard
     private let keyPrefix = "trios.conversation."
+    private let currentIdKey = "trios.currentConversationId"
 
     func save(messages: [ChatMessage], conversationId: UUID) async {
         let key = keyPrefix + conversationId.uuidString
@@ -23,5 +24,19 @@ actor ConversationPersister: ChatPersisterProtocol {
     func clear(conversationId: UUID) async {
         let key = keyPrefix + conversationId.uuidString
         defaults.removeObject(forKey: key)
+    }
+
+    nonisolated func currentConversationId() -> UUID {
+        guard let str = UserDefaults.standard.string(forKey: currentIdKey),
+              let id = UUID(uuidString: str) else {
+            let newId = UUID()
+            UserDefaults.standard.set(newId.uuidString, forKey: currentIdKey)
+            return newId
+        }
+        return id
+    }
+
+    nonisolated func setCurrentConversationId(_ id: UUID) {
+        UserDefaults.standard.set(id.uuidString, forKey: currentIdKey)
     }
 }

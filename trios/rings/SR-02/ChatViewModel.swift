@@ -38,13 +38,21 @@ final class ChatViewModel: ObservableObject {
         self.a2aClient = a2aClient
 
         Task {
+            await setupConversationId()
             await loadHistory()
             await checkHealth()
         }
     }
 
+    func setupConversationId() async {
+        conversationId = await persister.currentConversationId()
+    }
+
     func loadHistory() async {
-        let history = await persister.load(conversationId: conversationId)
+        var history = await persister.load(conversationId: conversationId)
+        for index in history.indices {
+            history[index].isStreaming = false
+        }
         messages = history
         rebuildCache()
     }
@@ -148,6 +156,9 @@ final class ChatViewModel: ObservableObject {
         messages = []
         messageCache = [:]
         state = .idle
+        Task {
+            await persister.setCurrentConversationId(conversationId)
+        }
     }
 
     // MARK: - A2A Actions

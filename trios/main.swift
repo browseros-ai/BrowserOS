@@ -138,6 +138,30 @@ class KeyWindow: NSWindow {
     override var canBecomeMain: Bool { true }
 }
 
+class KeyView: NSView {
+    override var acceptsFirstResponder: Bool { true }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.command) {
+            let chars = event.charactersIgnoringModifiers ?? ""
+            let selector: Selector?
+            switch chars {
+            case "v": selector = #selector(NSText.paste(_:))
+            case "c": selector = #selector(NSText.copy(_:))
+            case "x": selector = #selector(NSText.cut(_:))
+            case "a": selector = #selector(NSText.selectAll(_:))
+            default: selector = nil
+            }
+            if let sel = selector {
+                if NSApp.sendAction(sel, to: nil, from: self) {
+                    return true
+                }
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     var sidePanel: NSWindow?
@@ -243,10 +267,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.resizePanel(to: width)
         }
         let hc = NSHostingController(rootView: tabView)
-        hc.view.frame = panel.contentView!.bounds
+
+        let container = KeyView(frame: panel.contentView!.bounds)
+        container.autoresizingMask = [.width, .height]
+        panel.contentView = container
+
+        hc.view.frame = container.bounds
         hc.view.autoresizingMask = [.width, .height]
-        panel.contentView = hc.view
-        NSLog("SwiftUI hosting view set as contentView, frame: \(hc.view.frame)")
+        container.addSubview(hc.view)
+        NSLog("SwiftUI hosting view added to KeyView container, frame: \(hc.view.frame)")
 
         self.hostingController = hc
         self.sidePanel = panel
@@ -430,6 +459,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("Panel positioned off-screen at x=\(offscreenX), about to order front")
 
             panel.makeKeyAndOrderFront(nil)
+            panel.makeKey()
             NSApplication.shared.activate(ignoringOtherApps: true)
             NSLog("Panel is key window: \(panel.isKeyWindow), ordered front")
 
