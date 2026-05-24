@@ -2,16 +2,25 @@
 
 ## Overview
 
-The TRIOS MCP Bridge connects three components:
+The TRIOS MCP Bridge connects four components:
 - **BrowserOS MCP** (port 9105) — Browser automation and external service integrations
 - **trios-server** (port 9005) — Rust-based Zig workflow server
 - **trios-mcp-bridge** (port 9203) — Vision + GitButler orchestration layer
+- **trios-mcp-rag** (stdio) — RAG over Railway PostgreSQL (GOLDEN BRIDGE chapters)
 
-## Resilience Patterns
+## RAG Integration (trios-mcp-rag)
+
+The bridge connects to `trios-mcp-rag` via stdio MCP, reusing the same resilience patterns:
+- **Connection:** Stdio subprocess to Rust binary (`target/release/trios-mcp-rag`)
+- **Auth:** Requires `DATABASE_URL` env var pointing to Railway PostgreSQL
+- **Tools exposed:** `search_chapters`, `get_chapter`, `list_chapters`, `forbidden_audit`, `get_claim_status`
+- **Circuit breaker:** Shared `CircuitBreaker` with 3-failure threshold
+- **Health check:** 30s ping via `listTools()`
+- **Auto-reconnect:** On failure, destroys transport and reconnects on next tool call
 
 ### 1. Retry with Exponential Backoff
 
-Both `BrowserOSClient` and `GitButlerMcpClient` implement 3-attempt retry:
+`BrowserOSClient`, `GitButlerMcpClient`, and `TriosRagClient` implement 3-attempt retry:
 - Base delay: 200ms → 400ms → 800ms
 - Applies to initial connection and mid-call reconnects
 
@@ -52,7 +61,8 @@ Response:
 {
   "browseros": { "status": "connected", "latency_ms": 71, "last_ping": "2026-05-24T10:58:21Z" },
   "gitbutler": { "status": "cli_only", "latency_ms": null, "last_ping": null },
-  "circuit_breaker": { "browseros": "closed", "gitbutler": "closed" },
+  "rag": { "status": "connected", "latency_ms": 42, "last_ping": "2026-05-24T10:58:21Z" },
+  "circuit_breaker": { "browseros": "closed", "gitbutler": "closed", "rag": "closed" },
   "uptime_seconds": 3600
 }
 ```
@@ -65,3 +75,5 @@ Response:
 | 50 rapid tool calls | Circuit breaker stays closed, no false positives |
 | WiFi loss 10s | Health check detects disconnect, reconnects on restore |
 | Kill GitButler.app | Bridge marks degraded, continues via git CLI fallback |
+| Kill trios-mcp-rag | Bridge marks rag degraded, reconnects on restart |
+| RAG query 80 chapters | Latency 1–4ms, all chapters loaded |
