@@ -5,7 +5,7 @@ struct RichMessageView: View {
     let isUser: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(blocks, id: \.id) { block in
                 blockView(block)
             }
@@ -19,6 +19,10 @@ struct RichMessageView: View {
     @ViewBuilder
     private func blockView(_ block: TextBlock) -> some View {
         switch block.type {
+        case .heading(let level, let content):
+            HeadingBlockView(level: level, content: content)
+        case .list(let items):
+            ListBlockView(items: items)
         case .code(let language, let code):
             CodeBlockView(language: language, code: code)
         case .text(let markdown):
@@ -33,6 +37,8 @@ private struct TextBlock: Identifiable {
     enum BlockType {
         case text(String)
         case code(language: String?, String)
+        case heading(level: Int, String)
+        case list([String])
     }
 }
 
@@ -121,35 +127,153 @@ private func parseInline(_ text: String) -> [InlineSegment] {
     return segments.isEmpty ? [.plain(text)] : segments
 }
 
+// MARK: - Block Parser
+
 private func parseBlocks(from text: String) -> [TextBlock] {
     var blocks: [TextBlock] = []
-    let pattern = "```(\\w*)\\n(.*?)\\n```"
-    let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators])
-    let nsRange = NSRange(text.startIndex..., in: text)
-    var lastIndex = text.startIndex
+    let lines = text.components(separatedBy: .newlines)
+    var i = 0
 
-    if let matches = regex?.matches(in: text, options: [], range: nsRange) {
-        for match in matches {
-            let matchRange = Range(match.range, in: text)!
-            let prefix = String(text[lastIndex..<matchRange.lowerBound])
-            if !prefix.isEmpty {
-                blocks.append(TextBlock(type: .text(prefix)))
+    while i < lines.count {
+        let line = lines[i]
+
+        // Code block
+        if line.hasPrefix("```") {
+            let lang = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            var codeLines: [String] = []
+            i += 1
+            while i < lines.count && !lines[i].hasPrefix("```") {
+                codeLines.append(lines[i])
+                i += 1
             }
-            let langRange = match.range(at: 1)
-            let lang = langRange.location != NSNotFound ? String(text[Range(langRange, in: text)!]) : nil
-            let codeRange = match.range(at: 2)
-            let code = String(text[Range(codeRange, in: text)!])
-            blocks.append(TextBlock(type: .code(language: lang?.isEmpty ?? true ? nil : lang, code)))
-            lastIndex = matchRange.upperBound
+            blocks.append(TextBlock(type: .code(language: lang.isEmpty ? nil : lang, codeLines.joined(separator: "\n"))))
+            i += 1
+            continue
+        }
+
+        // Heading
+        if let heading = parseHeading(line) {
+            blocks.append(TextBlock(type: .heading(level: heading.level, heading.text)))
+            i += 1
+            continue
+        }
+
+        // List
+        if isListItem(line) {
+            var items: [String] = []
+            while i < lines.count {
+                let current = lines[i]
+                if isListItem(current) {
+                    items.append(stripListPrefix(current))
+                    i += 1
+                } else if current.trimmingCharacters(in: .whitespaces).isEmpty {
+                    i += 1
+                } else {
+                    break
+                }
+            }
+            if !items.isEmpty {
+                blocks.append(TextBlock(type: .list(items)))
+            }
+            continue
+        }
+
+        // Paragraph / text block
+        var paragraphLines: [String] = []
+        while i < lines.count {
+            let current = lines[i]
+            if current.trimmingCharacters(in: .whitespaces).isEmpty {
+                i += 1
+                break
+            }
+            if current.hasPrefix("```") || parseHeading(current) != nil || isListItem(current) {
+                break
+            }
+            paragraphLines.append(current)
+            i += 1
+        }
+        if !paragraphLines.isEmpty {
+            blocks.append(TextBlock(type: .text(paragraphLines.joined(separator: " "))))
         }
     }
 
-    let suffix = String(text[lastIndex...])
-    if !suffix.isEmpty {
-        blocks.append(TextBlock(type: .text(suffix)))
+    return blocks.isEmpty ? [TextBlock(type: .text(text))] : blocks
+}
+
+private func parseHeading(_ line: String) -> (level: Int, text: String)? {
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    guard trimmed.hasPrefix("#") else { return nil }
+    var level = 0
+    for char in trimmed {
+        if char == "#" { level += 1 } else { break }
+    }
+    guard level >= 1 && level <= 6 else { return nil }
+    let text = trimmed.dropFirst(level).trimmingCharacters(in: .whitespaces)
+    return (level, String(text))
+}
+
+private func isListItem(_ line: String) -> Bool {
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    return trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") ||
+        (trimmed.range(of: "^\\d+\\. ", options: .regularExpression) != nil)
+}
+
+private func stripListPrefix(_ line: String) -> String {
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    if trimmed.hasPrefix("- ") { return String(trimmed.dropFirst(2)) }
+    if trimmed.hasPrefix("* ") { return String(trimmed.dropFirst(2)) }
+    if let range = trimmed.range(of: "^\\d+\\. ", options: .regularExpression) {
+        return String(trimmed[range.upperBound...])
+    }
+    return trimmed
+}
+
+// MARK: - Block Views
+
+struct HeadingBlockView: View {
+    let level: Int
+    let content: String
+
+    private var fontSize: CGFloat {
+        switch level {
+        case 1: return 20
+        case 2: return 18
+        case 3: return 16
+        default: return 14
+        }
     }
 
-    return blocks.isEmpty ? [TextBlock(type: .text(text))] : blocks
+    private var fontWeight: Font.Weight {
+        switch level {
+        case 1: return .bold
+        case 2: return .semibold
+        default: return .medium
+        }
+    }
+
+    var body: some View {
+        InlineMarkdownText(text: content, isUser: false)
+            .font(.system(size: fontSize, weight: fontWeight))
+            .padding(.top, level == 1 ? 4 : 2)
+    }
+}
+
+struct ListBlockView: View {
+    let items: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                HStack(alignment: .top, spacing: 6) {
+                    Text("•")
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                    InlineMarkdownText(text: item, isUser: false)
+                        .font(.body)
+                }
+            }
+        }
+    }
 }
 
 struct CodeBlockView: View {

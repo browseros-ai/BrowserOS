@@ -33,9 +33,9 @@ final class QueenStatusViewModel: ObservableObject {
     @Published var isRunningAction: Bool = false
     @Published var overallStatus: ComponentStatus = .unknown
 
-    private let projectRoot = "/Users/playra/BrowserOS-full/trios"
-    private let statePath = "/Users/playra/BrowserOS-full/trios/.trinity/state/last_wake.json"
-    private let logPath = "/Users/playra/BrowserOS-full/trios/.trinity/cron.log"
+    private let projectRoot = ProjectPaths.root
+    private let statePath = ProjectPaths.trinityState
+    private let logPath = ProjectPaths.trinityLog
 
     private var refreshTimer: Timer?
     private var logTimer: Timer?
@@ -129,7 +129,7 @@ final class QueenStatusViewModel: ObservableObject {
     }
 
     private func checkA2A() {
-        let agents = shell("ls /Users/playra/BrowserOS-full/trios/.claude/agents/*.md 2>/dev/null | wc -l | tr -d ' '")
+        let agents = shell("ls \(ProjectPaths.claude("agents"))/*.md 2>/dev/null | wc -l | tr -d ' '")
         let count = Int(agents.trimmingCharacters(in: .whitespaces)) ?? 0
         let detail = count > 0 ? "\(count) agents" : "No agents"
         updateComponent(name: "A2A", icon: "network", status: count > 0 ? .healthy : .warning, detail: detail, action: nil)

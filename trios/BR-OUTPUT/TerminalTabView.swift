@@ -15,7 +15,7 @@ class TerminalViewModel: ObservableObject {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/zsh")
         task.arguments = ["-c", command]
-        task.currentDirectoryURL = URL(fileURLWithPath: "/Users/playra/BrowserOS-full/trios")
+        task.currentDirectoryURL = URL(fileURLWithPath: ProjectPaths.root)
 
         let outPipe = Pipe()
         let errPipe = Pipe()

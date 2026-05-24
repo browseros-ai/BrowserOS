@@ -131,7 +131,7 @@ class TriosScreenManager {
     }
 }
 
-// MARK: - AppDelegate
+// MARK: - KeyWindow / KeyView
 
 class KeyWindow: NSWindow {
     override var canBecomeKey: Bool { true }
@@ -162,42 +162,51 @@ class KeyView: NSView {
     }
 }
 
+// MARK: - AppDelegate
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
-    var sidePanel: NSWindow?
-    var hostingController: NSHostingController<TriosTabView>?
-    var serverTask: Process?
-    var funnelTask: Process?
-    var serverRunning = false
-    var funnelRunning = false
+    let windowManager = WindowManager()
+    let serverManager = ServerManager()
+    let screenManager = TriosScreenManager.shared
+    let compositionRoot = CompositionRoot()
+    lazy var menuBuilder = MenuBuilder(delegate: self, screenManager: screenManager, serverManager: serverManager)
+
+    var chatViewModel: ChatViewModel?
+    var accessibilityGranted = false
+    var accessibilityPromptShown = false
     var windowStates: [(AXUIElement, CGRect)] = []
     let sidebarWidth: CGFloat = 400
     var currentSidebarWidth: CGFloat = 400
-    let compositionRoot = CompositionRoot()
-    var accessibilityGranted = false
-    var accessibilityPromptShown = false
-    var chatViewModel: ChatViewModel?
-    var screenManager = TriosScreenManager.shared
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("applicationDidFinishLaunching called")
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
 
+        setupStatusItem()
+        setupSidePanel()
+        accessibilityGranted = AXIsProcessTrusted()
+        setupGlobalHotkey()
+
+        Task {
+            await chatViewModel?.registerA2A()
+        }
+    }
+
+    private func setupStatusItem() {
         var logoImage: NSImage?
         if let logoURL = Bundle.main.url(forResource: "logo", withExtension: "png"),
            let image = NSImage(contentsOf: logoURL) {
-            NSLog("Logo loaded from \(logoURL)")
             logoImage = image
         } else {
             let fallbackPaths = [
-                "/Users/playra/BrowserOS-full/trios/logo.png",
-                "/Users/playra/BrowserOS-full/trios/trios.app/Contents/Resources/logo.png"
+                ProjectPaths.logoPNG,
+                "\(ProjectPaths.appBundle)/Contents/Resources/logo.png"
             ]
             for path in fallbackPaths {
                 if FileManager.default.fileExists(atPath: path),
                    let image = NSImage(contentsOfFile: path) {
-                    NSLog("Logo loaded from fallback \(path)")
                     logoImage = image
                     break
                 }
@@ -212,94 +221,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             statusItem?.button?.imagePosition = .imageOnly
             statusItem?.button?.title = ""
         } else {
-            NSLog("Logo not found anywhere, using title fallback")
             statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
             statusItem?.button?.title = "Trios"
         }
         statusItem?.button?.toolTip = "TRIOS AGENT"
-
         statusItem?.button?.target = self
         statusItem?.button?.action = #selector(statusBarButtonClicked(_:))
         statusItem?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem?.menu = nil
-
-        setupSidePanel()
-        accessibilityGranted = AXIsProcessTrusted()
-        setupGlobalHotkey()
-
-        Task {
-            await chatViewModel?.registerA2A()
-        }
     }
 
     func setupSidePanel() {
-        NSLog("setupSidePanel called")
-        guard let screen = NSScreen.main else {
-            NSLog("No main screen")
-            return
-        }
-        let screenFrame = screen.visibleFrame
-        let panelHeight = screenFrame.height
-        let x = screenFrame.maxX
-        let y = screenFrame.minY
-
-        let panel = KeyWindow(
-            contentRect: NSRect(x: x, y: y, width: sidebarWidth, height: panelHeight),
-            styleMask: [.borderless, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-
-        panel.level = .floating
-        panel.hidesOnDeactivate = false
-        panel.isMovableByWindowBackground = true
-        panel.backgroundColor = NSColor.clear
-        panel.isOpaque = false
-        panel.hasShadow = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
-        panel.animationBehavior = .none
-        panel.appearance = NSAppearance(named: .darkAqua)
-        panel.isReleasedWhenClosed = false
-
         let viewModel = compositionRoot.makeChatViewModel()
         self.chatViewModel = viewModel
         let tabView = TriosTabView(viewModel: viewModel) { [weak self] width in
-            self?.resizePanel(to: width)
+            self?.windowManager.resize(to: width)
         }
-        let hc = NSHostingController(rootView: tabView)
-
-        let container = KeyView(frame: panel.contentView!.bounds)
-        container.autoresizingMask = [.width, .height]
-        panel.contentView = container
-
-        hc.view.frame = container.bounds
-        hc.view.autoresizingMask = [.width, .height]
-        container.addSubview(hc.view)
-        NSLog("SwiftUI hosting view added to KeyView container, frame: \(hc.view.frame)")
-
-        self.hostingController = hc
-        self.sidePanel = panel
-        screenManager.currentScreen = screen
-    }
-
-    func resizePanel(to width: CGFloat) {
-        guard let panel = sidePanel else { return }
-        guard width != currentSidebarWidth else { return }
-        currentSidebarWidth = width
-
-        let screen = screenManager.currentScreen ?? NSScreen.main
-        let screenFrame = screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1512, height: 982)
-        let panelHeight = screenFrame.height
-        let x = screenFrame.maxX - width
-        let y = screenFrame.minY
-
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.25
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            panel.animator().setFrame(NSRect(x: x, y: y, width: width, height: panelHeight), display: true)
-        }, completionHandler: {
-            NSLog("Panel resized to width \(width)")
-        })
+        _ = windowManager.setupPanel(contentView: AnyView(tabView))
     }
 
     // MARK: - Window Shifting
@@ -397,13 +335,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - UI Actions
 
     @objc func statusBarButtonClicked(_ sender: Any?) {
-        NSLog("statusBarButtonClicked called")
         guard let event = NSApp.currentEvent else {
-            NSLog("No current event, defaulting to toggle panel")
             toggleSidePanel()
             return
         }
-        NSLog("Event type: \(event.type.rawValue)")
         if event.type == .rightMouseUp {
             let menu = createMenu()
             statusItem?.menu = menu
@@ -415,28 +350,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func toggleSidePanel() {
-        NSLog("toggleSidePanel called")
-        guard let panel = sidePanel else {
-            NSLog("sidePanel is nil!")
-            return
-        }
-        NSLog("Panel state — isVisible: \(panel.isVisible), frame: \(panel.frame)")
-
+        guard let panel = windowManager.panel else { return }
         if panel.isVisible {
-            let screen = screenManager.currentScreen ?? NSScreen.main
-            let screenFrame = screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1512, height: 982)
-            let offscreenX = screenFrame.maxX
-            let closeY = panel.frame.origin.y
-            let closeHeight = panel.frame.height
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = 0.35
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                panel.animator().setFrame(NSRect(x: offscreenX, y: closeY, width: self.currentSidebarWidth, height: closeHeight), display: true)
-            }, completionHandler: {
-                panel.orderOut(nil)
-                self.restoreWindows()
-                NSLog("Panel closed")
-            })
+            windowManager.close { [weak self] in
+                self?.restoreWindows()
+            }
         } else {
             accessibilityGranted = AXIsProcessTrusted()
             if accessibilityGranted {
@@ -445,230 +363,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 accessibilityPromptShown = true
                 showAlert("Please grant Trios Accessibility access in:\nSystem Settings → Privacy & Security → Accessibility")
             }
-            guard let screen = screenManager.detectScreenForMouse() ?? NSScreen.main else {
-                return
-            }
-            NSLog("Got screen: \(screen.frame)")
-            let screenFrame = screen.visibleFrame
-            let panelHeight = screenFrame.height
-            let openX = screenFrame.maxX - self.currentSidebarWidth
-            let offscreenX = screenFrame.maxX
-            let y = screenFrame.minY
-
-            panel.setFrame(NSRect(x: offscreenX, y: y, width: self.currentSidebarWidth, height: panelHeight), display: false)
-            NSLog("Panel positioned off-screen at x=\(offscreenX), about to order front")
-
-            panel.makeKeyAndOrderFront(nil)
-            panel.makeKey()
-            NSApplication.shared.activate(ignoringOtherApps: true)
-            NSLog("Panel is key window: \(panel.isKeyWindow), ordered front")
-
-            NSAnimationContext.runAnimationGroup({ context in
-                NSLog("Animation group starting, target x=\(openX)")
-                context.duration = 0.35
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                panel.animator().setFrame(NSRect(x: openX, y: y, width: self.currentSidebarWidth, height: panelHeight), display: true)
-            }, completionHandler: {
-                NSLog("Panel open animation complete, final frame: \(panel.frame), isVisible: \(panel.isVisible)")
-            })
+            windowManager.open()
         }
     }
 
     func createMenu() -> NSMenu {
-        let menu = NSMenu()
-
-        let serverItem = NSMenuItem(
-            title: serverRunning ? "Stop Server" : "Start Server",
-            action: #selector(toggleServer),
-            keyEquivalent: ""
-        )
-        serverItem.target = self
-        menu.addItem(serverItem)
-
-        let funnelItem = NSMenuItem(
-            title: funnelRunning ? "Stop Funnel" : "Start Funnel",
-            action: #selector(toggleFunnel),
-            keyEquivalent: ""
-        )
-        funnelItem.target = self
-        menu.addItem(funnelItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let statusItemMenu = NSMenuItem(
-            title: statusText(),
-            action: nil,
-            keyEquivalent: ""
-        )
-        statusItemMenu.isEnabled = false
-        menu.addItem(statusItemMenu)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let sidePanelItem = NSMenuItem(
-            title: "Toggle Sidebar",
-            action: #selector(toggleSidePanel),
-            keyEquivalent: ""
-        )
-        sidePanelItem.target = self
-        menu.addItem(sidePanelItem)
-
-        let openLocalItem = NSMenuItem(
-            title: "Open http://127.0.0.1:9105",
-            action: #selector(openLocal),
-            keyEquivalent: ""
-        )
-        openLocalItem.target = self
-        menu.addItem(openLocalItem)
-
-        let openPublicItem = NSMenuItem(
-            title: "Open Public URL",
-            action: #selector(openPublic),
-            keyEquivalent: ""
-        )
-        openPublicItem.target = self
-        menu.addItem(openPublicItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        // Panel Mode submenu
-        let modeMenu = NSMenu(title: "Panel Mode")
-        for (index, mode) in TriosPanelMode.allCases.enumerated() {
-            let item = NSMenuItem(title: mode.rawValue, action: #selector(setPanelMode(_:)), keyEquivalent: "")
-            item.tag = index
-            item.target = self
-            item.state = (mode == screenManager.panelMode) ? .on : .off
-            modeMenu.addItem(item)
-        }
-        let modeItem = NSMenuItem(title: "Panel Mode", action: nil, keyEquivalent: "")
-        modeItem.submenu = modeMenu
-        menu.addItem(modeItem)
-
-        // Move to Screen submenu
-        let screenMenu = NSMenu(title: "Move to Screen")
-        for (index, screen) in NSScreen.screens.enumerated() {
-            let name = screen.displayName ?? "Screen \(index + 1)"
-            let item = NSMenuItem(title: name, action: #selector(moveToScreen(_:)), keyEquivalent: "")
-            item.tag = index
-            item.target = self
-            screenMenu.addItem(item)
-        }
-        let screenItem = NSMenuItem(title: "Move to Screen", action: nil, keyEquivalent: "")
-        screenItem.submenu = screenMenu
-        menu.addItem(screenItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let connectItem = NSMenuItem(
-            title: "Connect MCP",
-            action: #selector(connectMCP),
-            keyEquivalent: ""
-        )
-        connectItem.target = self
-        menu.addItem(connectItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let cleanCaptureItem = NSMenuItem(
-            title: "Clean Capture Mode",
-            action: #selector(toggleCleanCaptureMode),
-            keyEquivalent: ""
-        )
-        cleanCaptureItem.target = self
-        menu.addItem(cleanCaptureItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let quitItem = NSMenuItem(
-            title: "Quit",
-            action: #selector(quit),
-            keyEquivalent: "q"
-        )
-        quitItem.target = self
-        menu.addItem(quitItem)
-
-        return menu
+        menuBuilder.buildMenu()
     }
 
     func statusText() -> String {
-        var parts: [String] = []
-        if serverRunning { parts.append("Server: ON") }
-        if funnelRunning { parts.append("Funnel: ON") }
-        return parts.isEmpty ? "Status: Idle" : parts.joined(separator: " | ")
+        menuBuilder.statusText()
     }
 
     func setCleanCaptureMode(_ enabled: Bool) {
-        guard let panel = sidePanel else { return }
+        guard let panel = windowManager.panel else { return }
         screenManager.setCleanCaptureMode(enabled, for: panel)
     }
 
     @objc func toggleCleanCaptureMode() {
-        guard let panel = sidePanel else { return }
+        guard let panel = windowManager.panel else { return }
         setCleanCaptureMode(panel.appearance != nil)
     }
 
     @objc func toggleServer() {
-        if serverRunning {
-            serverTask?.terminate()
-            serverTask = nil
-            serverRunning = false
-        } else {
-            let bunPath = ProcessInfo.processInfo.environment["TRIOS_BUN_PATH"] ?? "/opt/homebrew/bin/bun"
-            guard FileManager.default.fileExists(atPath: bunPath) else {
-                showAlert("bun not found at \(bunPath). Set TRIOS_BUN_PATH or install with: brew install bun")
-                return
-            }
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: bunPath)
-            task.arguments = ["run", "start:server"]
-            task.currentDirectoryURL = URL(fileURLWithPath: "/Users/playra/BrowserOS-full/packages/browseros-agent")
-            task.environment = [
-                "BROWSEROS_CDP_PORT": "9106",
-                "BROWSEROS_SERVER_PORT": "9105",
-                "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-            ]
-            do {
-                try task.run()
-                serverTask = task
-                serverRunning = true
-                task.terminationHandler = { [weak self] _ in
-                    DispatchQueue.main.async {
-                        self?.serverRunning = false
-                    }
-                }
-            } catch {
-                showAlert("Failed to start server: \(error.localizedDescription)")
-            }
-        }
+        serverManager.toggleServer()
     }
 
     @objc func toggleFunnel() {
-        let tailscalePath = ProcessInfo.processInfo.environment["TRIOS_TAILSCALE_PATH"] ?? "/opt/homebrew/bin/tailscale"
-        if funnelRunning {
-            funnelTask?.terminate()
-            funnelTask = nil
-            funnelRunning = false
-            let offTask = Process()
-            offTask.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-            offTask.arguments = [tailscalePath, "serve", "--https=443", "off"]
-            try? offTask.run()
-        } else {
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-            task.arguments = [tailscalePath, "serve", "--https=443", "http://127.0.0.1:9105"]
-            do {
-                try task.run()
-                funnelTask = task
-                funnelRunning = true
-                task.terminationHandler = { [weak self] _ in
-                    DispatchQueue.main.async {
-                        self?.funnelRunning = false
-                    }
-                }
-            } catch {
-                showAlert("Failed to start funnel: \(error.localizedDescription)")
-            }
-        }
+        serverManager.toggleFunnel()
     }
 
     @objc func openLocal() {
@@ -702,8 +424,7 @@ Your filesystem tools will be available!
         Task {
             await chatViewModel?.unregisterA2A()
             await MainActor.run {
-                serverTask?.terminate()
-                funnelTask?.terminate()
+                serverManager.terminateAll()
                 NSApplication.shared.terminate(nil)
             }
         }
@@ -722,7 +443,7 @@ Your filesystem tools will be available!
         let modes = TriosPanelMode.allCases
         guard sender.tag < modes.count else { return }
         screenManager.panelMode = modes[sender.tag]
-        if let panel = sidePanel {
+        if let panel = windowManager.panel {
             screenManager.applyMode(to: panel)
         }
     }
@@ -730,7 +451,7 @@ Your filesystem tools will be available!
     @objc func moveToScreen(_ sender: NSMenuItem) {
         let screens = NSScreen.screens
         guard sender.tag < screens.count else { return }
-        if let panel = sidePanel {
+        if let panel = windowManager.panel {
             screenManager.positionPanel(panel, on: screens[sender.tag], width: sidebarWidth)
         }
     }

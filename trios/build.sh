@@ -21,7 +21,7 @@ swiftc -O -o "$OUTPUT" \
     -framework Combine \
     "${SWIFT_FILES[@]}" 2>&1 | tee /tmp/trios_build.log
 
-if [ $? -eq 0 ]; then
+if [ ${PIPESTATUS[0]} -eq 0 ]; then
     echo "✅ Build successful: $OUTPUT"
     chmod +x "$OUTPUT"
     # Copy to .app bundle

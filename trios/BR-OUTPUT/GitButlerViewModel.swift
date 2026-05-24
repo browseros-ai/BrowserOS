@@ -7,7 +7,7 @@ class GitButlerViewModel: ObservableObject {
     @Published var isApplying = false
     @Published var currentBranch = ""
 
-    let repoPath = "/Users/playra/BrowserOS-full/trios"
+    let repoPath = ProjectPaths.root
 
     init() {
         loadBranches()

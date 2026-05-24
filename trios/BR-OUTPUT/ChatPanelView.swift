@@ -2,6 +2,9 @@ import SwiftUI
 
 struct ChatPanelView: View {
     @ObservedObject var viewModel: ChatViewModel
+    @State private var isNearBottom = true
+    @State private var scrollOffset: CGFloat = 0
+    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,9 +59,7 @@ struct ChatPanelView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(.grokText)
                 Spacer()
-                Button(action: {
-                    viewModel.showHistory = false
-                }) {
+                Button(action: { viewModel.showHistory = false }) {
                     Image(systemName: "xmark")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.grokMuted)
@@ -78,9 +79,7 @@ struct ChatPanelView: View {
             } else {
                 List(viewModel.conversations) { conv in
                     Button(action: {
-                        Task {
-                            await viewModel.switchConversation(id: conv.id)
-                        }
+                        Task { await viewModel.switchConversation(id: conv.id) }
                     }) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(conv.title)
@@ -115,13 +114,24 @@ struct ChatPanelView: View {
     private var messageArea: some View {
         ScrollViewReader { proxy in
             ScrollView {
+                GeometryReader { geo in
+                    Color.clear
+                        .preference(key: ScrollOffsetPreferenceKey.self, value: geo.frame(in: .named("scrollArea")).minY)
+                }
+                .frame(height: 0)
+
                 if viewModel.messages.isEmpty {
                     emptyStateView
                 } else {
                     LazyVStack(spacing: 0) {
-                        ForEach(viewModel.messages) { message in
+                        ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
+                            let isFirstInGroup = index == 0 || viewModel.messages[index - 1].role != message.role
+                            let isLastInGroup = index == viewModel.messages.count - 1 || viewModel.messages[index + 1].role != message.role
+
                             MessageBubbleView(
                                 message: message,
+                                isFirstInGroup: isFirstInGroup,
+                                isLastInGroup: isLastInGroup,
                                 onTaskAction: { taskId, state in
                                     Task { await viewModel.updateTaskState(id: taskId, state: state) }
                                 },
@@ -137,25 +147,39 @@ struct ChatPanelView: View {
                     }
                 }
             }
+            .coordinateSpace(name: "scrollArea")
+            .onPreferenceChange(ScrollOffsetPreferenceKey.self) { offset in
+                scrollOffset = offset
+                // If near bottom (within 100 points), enable auto-scroll
+                let threshold: CGFloat = 100
+                isNearBottom = abs(offset + contentHeight) < threshold
+            }
             .onChange(of: viewModel.messages.count) {
-                if let last = viewModel.messages.last {
-                    withAnimation {
+                if isNearBottom, let last = viewModel.messages.last {
+                    withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
             }
-            .onChange(of: viewModel.messages.last?.content.count) {
-                if let last = viewModel.messages.last {
-                    withAnimation {
+            .onChange(of: viewModel.messages.last?.content) {
+                if isNearBottom, let last = viewModel.messages.last {
+                    withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
             }
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { contentHeight = geo.size.height }
+                        .onChange(of: geo.size.height) { contentHeight = $0 }
+                }
+            )
         }
     }
 
     private var emptyStateView: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 24) {
             Spacer()
 
             logoView(size: CGSize(width: 52, height: 44))
@@ -168,9 +192,34 @@ struct ChatPanelView: View {
                 .font(.system(size: 16, weight: .regular, design: .default))
                 .foregroundColor(.grokMuted)
 
+            // Suggested prompts
+            VStack(spacing: 8) {
+                suggestedPromptChip("Open google.com in BrowserOS")
+                suggestedPromptChip("Take a screenshot of current page")
+                suggestedPromptChip("Run /doctor to check build health")
+                suggestedPromptChip("Show Queen status overview")
+            }
+            .padding(.top, 8)
+
             Spacer()
         }
         .padding(.vertical, 60)
+    }
+
+    private func suggestedPromptChip(_ text: String) -> some View {
+        Button(action: {
+            viewModel.inputText = text
+            Task { await viewModel.sendMessage() }
+        }) {
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundColor(.grokDim)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Color.grokElevated.opacity(0.5))
+                .cornerRadius(16)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Input Bar
@@ -216,6 +265,15 @@ struct ChatPanelView: View {
     }
 }
 
+// MARK: - Scroll Offset Tracking
+
+struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 // MARK: - Logo Helper
 
 private func logoView(size: CGSize) -> some View {
@@ -236,17 +294,16 @@ private func logoView(size: CGSize) -> some View {
                 .aspectRatio(contentMode: .fit)
                 .frame(width: size.width, height: size.height)
                 .foregroundColor(.grokText)
-        } else if FileManager.default.fileExists(atPath: "/Users/playra/BrowserOS-full/trios/logo.svg"),
-                  let nsImage = NSImage(contentsOfFile: "/Users/playra/BrowserOS-full/trios/logo.svg") {
+        } else if FileManager.default.fileExists(atPath: ProjectPaths.logoSVG),
+                  let nsImage = NSImage(contentsOfFile: ProjectPaths.logoSVG) {
             Image(nsImage: nsImage)
                 .resizable()
                 .renderingMode(.template)
                 .aspectRatio(contentMode: .fit)
                 .frame(width: size.width, height: size.height)
                 .foregroundColor(.grokText)
-        } else if FileManager.default.fileExists(atPath: "/Users/playra/BrowserOS-full/trios/logo.png"),
-                  let nsImage = NSImage(contentsOfFile: "/Users/playra/BrowserOS-full/trios/logo.png") {
-            Image(nsImage: nsImage)
+        } else if FileManager.default.fileExists(atPath: ProjectPaths.logoPNG) {
+            Image(nsImage: NSImage(contentsOfFile: ProjectPaths.logoPNG) ?? NSImage())
                 .resizable()
                 .renderingMode(.template)
                 .aspectRatio(contentMode: .fit)
