@@ -77,3 +77,4 @@ Response:
 | Kill GitButler.app | Bridge marks degraded, continues via git CLI fallback |
 | Kill trios-mcp-rag | Bridge marks rag degraded, reconnects on restart |
 | RAG query 80 chapters | Latency 1–4ms, all chapters loaded |
+| PhD counters audit | 1,762 theorems, 5 Admitted, 14 refutations |

@@ -39,6 +39,7 @@ This bridge connects BrowserOS (browser vision/control) with GitButler (virtual 
 2. **Understand**: Use gitbutler_workspace_status to get detailed file/branch information.
 3. **Act**: Use gitbutler_commit_visible, gitbutler_create_branch, gitbutler_push_stack to perform actions.
 4. **Research**: Use search_chapters, get_chapter, list_chapters to query the GOLDEN BRIDGE compendium via RAG.
+5. **PhD Pipeline**: Use build_pdf (dry-run by default), build_cover, list_claims, get_honest_counters for PDF generation and claim auditing.
 
 ## Key Concepts
 
@@ -1252,6 +1253,238 @@ export function createBridgeServer(deps: BridgeDeps): McpServer {
       try {
         const result = await deps.rag.callTool('get_claim_status', {
           query: args.query || '',
+        })
+        const text = deps.rag.extractText(result)
+        return {
+          content: [{ type: 'text', text: text || JSON.stringify(result) }],
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                reason: error instanceof Error ? error.message : String(error),
+              }),
+            },
+          ],
+          isError: true,
+        }
+      }
+    },
+  )
+
+  // ==========================================
+  // Tool 23: Build Cover (PhD)
+  // ==========================================
+  server.tool(
+    'build_cover',
+    'Generate LaTeX titlepage for the GOLDEN BRIDGE compendium. ' +
+      'Returns raw LaTeX that can be compiled with tectonic/pandoc.',
+    {},
+    async () => {
+      try {
+        const result = await deps.rag.callTool('build_cover', {})
+        const text = deps.rag.extractText(result)
+        return {
+          content: [{ type: 'text', text: text || JSON.stringify(result) }],
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                reason: error instanceof Error ? error.message : String(error),
+              }),
+            },
+          ],
+          isError: true,
+        }
+      }
+    },
+  )
+
+  // ==========================================
+  // Tool 24: Build PDF (PhD)
+  // ==========================================
+  server.tool(
+    'build_pdf',
+    'Run the canonical SSOT -> Markdown -> pandoc -> tectonic -> PDF pipeline. ' +
+      'DRY-RUN by default — set dryRun=false to actually build. ' +
+      'Requires pandoc and tectonic installed locally.',
+    {
+      dryRun: z
+        .boolean()
+        .default(true)
+        .describe('If true (default), only shows the plan without building.'),
+      bookMode: z
+        .boolean()
+        .default(false)
+        .describe('If true, builds with TOC and chapter-level structure.'),
+      limit: z
+        .number()
+        .int()
+        .optional()
+        .describe('Limit number of chapters to include.'),
+      pdfName: z.string().optional().describe('Output PDF filename.'),
+      outDir: z.string().optional().describe('Output directory path.'),
+    },
+    async (args) => {
+      try {
+        const result = await deps.rag.callTool('build_pdf', {
+          dry_run: args.dryRun,
+          book_mode: args.bookMode,
+          limit: args.limit,
+          pdf_name: args.pdfName,
+          out_dir: args.outDir,
+        })
+        const text = deps.rag.extractText(result)
+        return {
+          content: [{ type: 'text', text: text || JSON.stringify(result) }],
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                reason: error instanceof Error ? error.message : String(error),
+              }),
+            },
+          ],
+          isError: true,
+        }
+      }
+    },
+  )
+
+  // ==========================================
+  // Tool 25: List Claims (PhD)
+  // ==========================================
+  server.tool(
+    'list_claims',
+    'Scan all GOLDEN BRIDGE chapters for claim-status vocabulary ' +
+      '(Verified, Empirical fit, Open conjecture, High-risk, Falsified, Retracted, Unverified). ' +
+      'Returns per-chapter summary.',
+    {},
+    async () => {
+      try {
+        const result = await deps.rag.callTool('list_claims', {})
+        const text = deps.rag.extractText(result)
+        return {
+          content: [{ type: 'text', text: text || JSON.stringify(result) }],
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                reason: error instanceof Error ? error.message : String(error),
+              }),
+            },
+          ],
+          isError: true,
+        }
+      }
+    },
+  )
+
+  // ==========================================
+  // Tool 26: Get Honest Counters (PhD)
+  // ==========================================
+  server.tool(
+    'get_honest_counters',
+    'Return the corrected, audited snapshot of trinity-s3ai formal proof counters: ' +
+      'machine-checked theorems, open Admitted, axioms, refutation theorems.',
+    {},
+    async () => {
+      try {
+        const result = await deps.rag.callTool('get_honest_counters', {})
+        const text = deps.rag.extractText(result)
+        return {
+          content: [{ type: 'text', text: text || JSON.stringify(result) }],
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                reason: error instanceof Error ? error.message : String(error),
+              }),
+            },
+          ],
+          isError: true,
+        }
+      }
+    },
+  )
+
+  // ==========================================
+  // Tool 27: Preview Chapter Update (PhD)
+  // ==========================================
+  server.tool(
+    'preview_chapter_update',
+    'DRY-RUN only. Show SQL diff and word-count change for a proposed chapter update ' +
+      'before committing to Railway PostgreSQL SSOT.',
+    {
+      slug: z.string().min(1).describe('Chapter slug to preview update for'),
+      newTitle: z.string().optional().describe('Proposed new title'),
+      newBody: z.string().optional().describe('Proposed new body markdown'),
+    },
+    async (args) => {
+      try {
+        const result = await deps.rag.callTool('preview_chapter_update', {
+          slug: args.slug,
+          new_title: args.newTitle,
+          new_body_md: args.newBody,
+        })
+        const text = deps.rag.extractText(result)
+        return {
+          content: [{ type: 'text', text: text || JSON.stringify(result) }],
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                reason: error instanceof Error ? error.message : String(error),
+              }),
+            },
+          ],
+          isError: true,
+        }
+      }
+    },
+  )
+
+  // ==========================================
+  // Tool 28: Backup SSOT (PhD)
+  // ==========================================
+  server.tool(
+    'backup_ssot',
+    'Create a timestamped backup table of the ssot_brochure.chapters table. ' +
+      'Requires confirm=true; returns dry-run SQL otherwise. ' +
+      'Use before any bulk update or migration.',
+    {
+      confirm: z
+        .boolean()
+        .default(false)
+        .describe('Set true to execute backup. Default is dry-run.'),
+    },
+    async (args) => {
+      try {
+        const result = await deps.rag.callTool('backup_ssot', {
+          confirm: args.confirm,
         })
         const text = deps.rag.extractText(result)
         return {

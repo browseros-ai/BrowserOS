@@ -179,7 +179,7 @@ async function _main() {
     return c.json({
       name: 'trios-mcp-bridge',
       status: 'running',
-      tools: 17,
+      tools: 28,
     })
   })
 
