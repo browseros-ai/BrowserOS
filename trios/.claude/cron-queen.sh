@@ -1,42 +1,25 @@
 #!/bin/zsh
-# Queen Cron — Autonomous agent lifecycle for trios
-# Runs every 15 min via launchd
-
+# 👑 Queen — checks build and MCP only (avoids git lock conflicts)
 LOG="/Users/playra/BrowserOS-full/trios/.trinity/cron.log"
-STATE="/Users/playra/BrowserOS-full/trios/.trinity/state"
-mkdir -p "$STATE"
+TS=$(date +%s)
 
-echo "[$(date +%Y-%m-%d_%H:%M:%S)] Queen waking..." >> "$LOG"
-
+echo "[$TS] Queen waking..." >> "$LOG"
 cd /Users/playra/BrowserOS-full/trios
 
-# === 1. HEALTH CHECK ===
-HEALTH=$(curl -s http://127.0.0.1:9105/health 2>/dev/null | grep -o 'ok' || echo 'DOWN')
+HEALTH=$(curl -s http://127.0.0.1:9105/health | grep -o ok || echo DOWN)
+BUILD=$(test -f trios_app && echo OK || echo MISSING)
 
-# === 2. BUILD CHECK ===
-BUILD="MISSING"
-if [ -f trios_app ]; then
-  BUILD="OK"
+echo "  Health=$HEALTH Build=$BUILD" >> "$LOG"
+
+if [ "$BUILD" = "MISSING" ]; then
+  echo "  Building..." >> "$LOG"
+  ./build.sh >> "$LOG" 2>&1 || echo "  Build failed" >> "$LOG"
 fi
 
-# === 3. DIRTY FILES ===
-DIRTY=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+if [ "$HEALTH" = "DOWN" ]; then
+  echo "  Restarting MCP..." >> "$LOG"
+  pm2 restart browseros-mcp >> "$LOG" 2>&1 || true
+fi
 
-# === 4. AGENTS COUNT ===
-AGENTS=$(ls .claude/agents/*.md 2>/dev/null | wc -l | tr -d ' ')
-
-# === 5. SKILLS COUNT ===
-SKILLS=$(ls .claude/skills/*/SKILL.md 2>/dev/null | wc -l | tr -d ' ')
-
-# === 6. LAST COMMIT ===
-LAST_COMMIT=$(git log --oneline -1 2>/dev/null | head -c 40 || echo "none")
-
-# === 7. STATE SNAPSHOT (JSON for UI) ===
-cat > "$STATE/last_wake.json" <<JSONEOF
-{"ts":$(date +%s),"health":"$HEALTH","build":"$BUILD","dirty":$DIRTY,"agents":$AGENTS,"skills":$SKILLS,"last_commit":"$LAST_COMMIT"}
-JSONEOF
-
-# === 8. LOG ENTRY ===
-echo '{"ts":'$(date +%s)',"agent":"queen-cron","action":"wake","health":"'$HEALTH'","build":"'$BUILD'","dirty":'$DIRTY'}' >> ".trinity/event_log.jsonl"
-
-echo "[$(date +%Y-%m-%d_%H:%M:%S)] Queen sleep. Health=$HEALTH Build=$BUILD Dirty=$DIRTY Agents=$AGENTS Skills=$SKILLS" >> "$LOG"
+echo '{"ts":'$TS',"health":"'$HEALTH'","build":"'$BUILD'"}' > ".trinity/state/last_wake.json"
+echo "[$TS] Queen sleep" >> "$LOG"

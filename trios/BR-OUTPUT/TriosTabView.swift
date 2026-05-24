@@ -5,10 +5,12 @@ enum TriosTab: String, CaseIterable {
     case github = "GitHub"
     case gitbutler = "GitButler"
     case terminal = "Terminal"
+    case queen = "Queen"
 
     var width: CGFloat {
         switch self {
         case .chat: return 400
+        case .queen: return 500
         default: return 700
         }
     }
@@ -84,6 +86,8 @@ struct TriosTabView: View {
             GitButlerPanelView()
         case .terminal:
             TerminalTabView()
+        case .queen:
+            QueenTabView()
         }
     }
 }

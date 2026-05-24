@@ -30,12 +30,7 @@ struct ChatPanelView: View {
             HStack(spacing: 10) {
                 StatusDot(isOn: viewModel.isServerReachable, label: "Online", color: viewModel.isServerReachable ? .grokText : .grokDim)
                 StatusDot(isOn: viewModel.isA2ARegistered, label: "A2A", color: viewModel.isA2ARegistered ? .grokText : .grokDim)
-                Text(viewModel.cronStatus)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.grokMuted)
-                    .onAppear {
-                        viewModel.checkCronStatus()
-                    }
+                QueenStatusBadge(viewModel: viewModel.queenStatusVM)
             }
 
             Button(action: {

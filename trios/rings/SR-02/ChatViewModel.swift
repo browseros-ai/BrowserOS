@@ -8,9 +8,10 @@ final class ChatViewModel: ObservableObject {
     @Published var inputText: String = ""
     @Published var isServerReachable: Bool = false
     @Published var isA2ARegistered: Bool = false
-    @Published var cronStatus: String = "👑 —"
     @Published var conversations: [ChatConversation] = []
     @Published var showHistory = false
+
+    let queenStatusVM = QueenStatusViewModel()
 
     private let transport: ChatTransportProtocol
     private let healthCheck: ChatHealthCheckProtocol
@@ -44,12 +45,6 @@ final class ChatViewModel: ObservableObject {
             await setupConversationId()
             await loadHistory()
             await checkHealth()
-        }
-        // Auto-refresh Queen status every 30s
-        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
-            Task { @MainActor in
-                self.checkCronStatus()
-            }
         }
     }
 
@@ -170,40 +165,6 @@ final class ChatViewModel: ObservableObject {
     func checkHealth() async {
         let reachable = await healthCheck.check()
         isServerReachable = reachable
-    }
-
-    func checkCronStatus() {
-        // Read Queen cron state from filesystem
-        let fm = FileManager.default
-        let statePath = "/Users/playra/BrowserOS-full/trios/.trinity/state/last_wake.json"
-        let logPath = "/Users/playra/BrowserOS-full/trios/.trinity/cron.log"
-        
-        if !fm.fileExists(atPath: statePath) {
-            cronStatus = "👑 —"
-            return
-        }
-        
-        do {
-            let data = try Data(contentsOf: URL(fileURLWithPath: statePath))
-            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let ts = json["ts"] as? TimeInterval {
-                let lastWake = Date(timeIntervalSince1970: ts)
-                let minutes = Int(Date().timeIntervalSince(lastWake) / 60)
-                let health = json["health"] as? String ?? "?"
-                let dirty = json["dirty"] as? Int ?? 0
-                let build = json["build"] as? String ?? "?"
-                
-                if minutes < 20 {
-                    cronStatus = health == "ok" ? "👑 🟢 \(minutes)m" : "👑 🔴 \(minutes)m"
-                } else {
-                    cronStatus = "👑 ⚪ \(minutes)m"
-                }
-            } else {
-                cronStatus = "👑 ?"
-            }
-        } catch {
-            cronStatus = "👑 —"
-        }
     }
 
     func newConversation() {

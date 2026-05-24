@@ -1,0 +1,25 @@
+[2026-05-25_00:06:52] ==== QUEEN AWAKES ====
+[2026-05-25_00:06:52] PERCEIVE: reading environment...
+[2026-05-25_00:06:53] THINK: analyzing...
+[2026-05-25_00:06:54] ACT: 2 actions
+[2026-05-25_00:06:54]   - 8 dirty
+[2026-05-25_00:06:54]   - Alive marker
+[2026-05-25_00:06:54] REFLECT: saving...
+[2026-05-25_00:06:54] Done
+
+[2026-05-25_00:07:21] ==== QUEEN AWAKES ====
+[2026-05-25_00:07:21] PERCEIVE: reading environment...
+[2026-05-25_00:07:21] THINK: analyzing...
+[2026-05-25_00:07:21] ACT: 2 actions
+[2026-05-25_00:07:21]   - 11 dirty
+[2026-05-25_00:07:21]   - Alive marker
+[2026-05-25_00:07:21] REFLECT: saving...
+[2026-05-25_00:07:21] Done
+
+
+[1779643048] ════════ 👑 QUEEN AWAKES ════════
+[1779643048] 👁  PERCEIVE: health=ok build=OK
+[1779643048] ⏳ Git lock active (29 sec), skipping git ops
+[1779643048] ⏭️  Skipping Python brain (git busy)
+[1779643048] 📝 Saving state...
+[1779643048] ════════ 👑 QUEEN SLEEPS ════════
