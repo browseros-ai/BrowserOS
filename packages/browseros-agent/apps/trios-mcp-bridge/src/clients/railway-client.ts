@@ -155,27 +155,46 @@ export class RailwayMcpClient {
   }
 
   /** Redeploy a Railway service */
-  async redeploy(serviceId?: string): Promise<string> {
-    const result = await this.callRailwayTool('redeploy', {
-      serviceId: serviceId || null,
+  async redeploy(
+    serviceId?: string,
+    project?: string,
+    environment?: string,
+  ): Promise<string> {
+    const result = await this.callRailwayTool('railway_service_redeploy', {
+      service_id: serviceId || undefined,
+      project: project || undefined,
+      environment: environment || undefined,
     })
     return this.extractText(result)
   }
 
-  /** Get Railway service logs */
-  async getLogs(serviceId?: string, lines?: number): Promise<string> {
-    const result = await this.callRailwayTool('get_logs', {
-      serviceId: serviceId || null,
-      lines: lines || 50,
+  /** Deploy (create or update) a Railway service */
+  async deploy(args: {
+    serviceName: string
+    image?: string
+    env?: Record<string, string>
+    existingServiceId?: string
+    project?: string
+    environment?: string
+  }): Promise<string> {
+    const result = await this.callRailwayTool('railway_service_deploy', {
+      service_name: args.serviceName,
+      image: args.image || undefined,
+      env: args.env || undefined,
+      existing_service_id: args.existingServiceId || undefined,
+      project: args.project || undefined,
+      environment: args.environment || undefined,
     })
     return this.extractText(result)
   }
 
   /** List Railway services in the project */
-  async listServices(): Promise<
-    Array<{ id: string; name: string; status: string }>
-  > {
-    const result = await this.callRailwayTool('list_services', {})
+  async listServices(
+    project?: string,
+  ): Promise<Array<{ id: string; name: string; created_at: string }>> {
+    const result = await this.callRailwayTool('railway_service_list', {
+      project: project || undefined,
+    })
     const text = this.extractText(result)
     try {
       return JSON.parse(text)
@@ -184,11 +203,24 @@ export class RailwayMcpClient {
     }
   }
 
-  /** Get Railway service status */
-  async getStatus(serviceId?: string): Promise<string> {
-    const result = await this.callRailwayTool('get_status', {
-      serviceId: serviceId || null,
+  /** Batch redeploy services on an account */
+  async batchRedeploy(account: number, filter?: string): Promise<string> {
+    const result = await this.callRailwayTool('service_batch_redeploy', {
+      account,
+      filter: filter || undefined,
     })
+    return this.extractText(result)
+  }
+
+  /** Get fleet health across all accounts */
+  async fleetHealth(): Promise<string> {
+    const result = await this.callRailwayTool('fleet_health', {})
+    return this.extractText(result)
+  }
+
+  /** Get worker status from Neon database */
+  async workerStatus(): Promise<string> {
+    const result = await this.callRailwayTool('worker_status', {})
     return this.extractText(result)
   }
 

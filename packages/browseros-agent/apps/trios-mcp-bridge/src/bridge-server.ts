@@ -42,7 +42,7 @@ This bridge connects BrowserOS (browser vision/control) with GitButler (virtual 
 3. **Act**: Use gitbutler_commit_visible, gitbutler_create_branch, gitbutler_push_stack to perform actions.
 4. **Research**: Use search_chapters, get_chapter, list_chapters to query the GOLDEN BRIDGE compendium via RAG.
 5. **PhD Pipeline**: Use build_pdf (dry-run by default), build_cover, list_claims, get_honest_counters for PDF generation and claim auditing.
-6. **Deploy**: Use railway_redeploy, railway_logs, railway_status to manage Railway deployments from chat.
+6. **Deploy**: Use railway_redeploy, railway_deploy, railway_list_services, railway_fleet_health to manage Railway deployments from chat.
 
 ## Key Concepts
 
@@ -1515,13 +1515,21 @@ export function createBridgeServer(deps: BridgeDeps): McpServer {
   // ==========================================
   server.tool(
     'railway_redeploy',
-    'Redeploy a Railway service. If no serviceId is given, redeploys the default service. ' +
+    'Trigger a redeploy on an existing Railway service. ' +
       'Requires Railway MCP connection.',
     {
       serviceId: z
         .string()
         .optional()
-        .describe('Railway service ID to redeploy. Omit for default.'),
+        .describe('Railway service ID to redeploy.'),
+      project: z
+        .string()
+        .optional()
+        .describe('Project UUID. Required for multi-account token dispatch.'),
+      environment: z
+        .string()
+        .optional()
+        .describe('Environment UUID. Defaults to IGLA production.'),
     },
     async (args) => {
       try {
@@ -1540,7 +1548,11 @@ export function createBridgeServer(deps: BridgeDeps): McpServer {
             isError: true,
           }
         }
-        const result = await deps.railway.redeploy(args.serviceId)
+        const result = await deps.railway.redeploy(
+          args.serviceId,
+          args.project,
+          args.environment,
+        )
         return {
           content: [
             {
@@ -1567,21 +1579,30 @@ export function createBridgeServer(deps: BridgeDeps): McpServer {
   )
 
   // ==========================================
-  // Tool 30: Railway Logs
+  // Tool 30: Railway Deploy
   // ==========================================
   server.tool(
-    'railway_logs',
-    'Get deployment logs for a Railway service. ' +
+    'railway_deploy',
+    'Create (or reuse) a Railway service, pin its image, upsert env vars, and trigger a redeploy. ' +
       'Requires Railway MCP connection.',
     {
-      serviceId: z.string().optional().describe('Railway service ID'),
-      lines: z
-        .number()
-        .int()
-        .min(1)
-        .max(500)
-        .default(50)
-        .describe('Number of log lines to fetch'),
+      serviceName: z.string().describe('Name for the new or existing service'),
+      image: z
+        .string()
+        .optional()
+        .describe('Docker image to pin (e.g. nginx:latest)'),
+      existingServiceId: z
+        .string()
+        .optional()
+        .describe('Reuse an existing service instead of creating a new one'),
+      project: z
+        .string()
+        .optional()
+        .describe('Project UUID. Required for multi-account token dispatch.'),
+      environment: z
+        .string()
+        .optional()
+        .describe('Environment UUID. Defaults to IGLA production.'),
     },
     async (args) => {
       try {
@@ -1599,9 +1620,20 @@ export function createBridgeServer(deps: BridgeDeps): McpServer {
             isError: true,
           }
         }
-        const result = await deps.railway.getLogs(args.serviceId, args.lines)
+        const result = await deps.railway.deploy({
+          serviceName: args.serviceName,
+          image: args.image,
+          existingServiceId: args.existingServiceId,
+          project: args.project,
+          environment: args.environment,
+        })
         return {
-          content: [{ type: 'text', text: `## Railway Logs\n\n${result}` }],
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ ok: true, deployResult: result }),
+            },
+          ],
         }
       } catch (error) {
         return {
@@ -1625,10 +1657,15 @@ export function createBridgeServer(deps: BridgeDeps): McpServer {
   // ==========================================
   server.tool(
     'railway_list_services',
-    'List all Railway services in the connected project. ' +
+    'List all Railway services in the IGLA project (or any other project). ' +
       'Returns service IDs, names, and deployment status.',
-    {},
-    async () => {
+    {
+      project: z
+        .string()
+        .optional()
+        .describe('Project UUID. Defaults to the IGLA project.'),
+    },
+    async (args) => {
       try {
         if (!deps.railway) {
           return {
@@ -1644,7 +1681,7 @@ export function createBridgeServer(deps: BridgeDeps): McpServer {
             isError: true,
           }
         }
-        const services = await deps.railway.listServices()
+        const services = await deps.railway.listServices(args.project)
         return {
           content: [
             {
@@ -1671,15 +1708,14 @@ export function createBridgeServer(deps: BridgeDeps): McpServer {
   )
 
   // ==========================================
-  // Tool 32: Railway Status
+  // Tool 32: Railway Fleet Health
   // ==========================================
   server.tool(
-    'railway_status',
-    'Get status of a Railway service or the whole project.',
-    {
-      serviceId: z.string().optional().describe('Railway service ID'),
-    },
-    async (args) => {
+    'railway_fleet_health',
+    'Check fleet health across all Railway accounts. ' +
+      'Returns service counts, project status, and account connectivity.',
+    {},
+    async () => {
       try {
         if (!deps.railway) {
           return {
@@ -1695,12 +1731,12 @@ export function createBridgeServer(deps: BridgeDeps): McpServer {
             isError: true,
           }
         }
-        const result = await deps.railway.getStatus(args.serviceId)
+        const result = await deps.railway.fleetHealth()
         return {
           content: [
             {
               type: 'text',
-              text: `## Railway Status\n\n${result}`,
+              text: `## Railway Fleet Health\n\n${result}`,
             },
           ],
         }

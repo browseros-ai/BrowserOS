@@ -7,13 +7,13 @@ The TRIOS MCP Bridge connects five components:
 - **trios-server** (port 9005) — Rust-based Zig workflow server
 - **trios-mcp-bridge** (port 9203) — Vision + GitButler orchestration layer
 - **trios-mcp-rag** (stdio) — RAG over Railway PostgreSQL (GOLDEN BRIDGE chapters)
-- **trios-railway-mcp** (HTTP) — Railway deployment orchestration (redeploy, logs, status)
+- **trios-railway-mcp** (HTTP) — Railway deployment orchestration (redeploy, deploy, list, fleet health)
 
 ## Railway MCP Integration (trios-railway-mcp)
 
 The bridge connects to Railway MCP via HTTP Streamable transport, reusing the same resilience patterns:
 - **Connection:** HTTP MCP to `trios-railway-mcp-production.up.railway.app`
-- **Tools exposed:** `railway_redeploy`, `railway_logs`, `railway_list_services`, `railway_status`
+- **Tools exposed:** `railway_redeploy`, `railway_deploy`, `railway_list_services`, `railway_fleet_health`
 - **Circuit breaker:** Shared `CircuitBreaker` with 3-failure threshold
 - **Health check:** 30s ping via `listTools()`
 - **Auto-reconnect:** On failure, destroys transport and reconnects on next tool call
