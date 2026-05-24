@@ -3,51 +3,27 @@ import SwiftUI
 struct ChatPanelView: View {
     @ObservedObject var viewModel: ChatViewModel
 
-    private let suggestedPrompts = [
-        "Analyze current page",
-        "Search the web for...",
-        "Create a GitHub task",
-        "Summarize this tab",
-    ]
-
     var body: some View {
         VStack(spacing: 0) {
             headerBar
-            Divider().overlay(Color.gray.opacity(0.3))
+            Divider().overlay(Color.grokDivider)
             messageArea
             inputBar
         }
-        .background(Color.black)
+        .background(Color.clear)
     }
 
     // MARK: - Header
 
     private var headerBar: some View {
         HStack(spacing: 12) {
-            if let logoURL = Bundle.main.url(forResource: "logo", withExtension: "png"),
-               let nsImage = NSImage(contentsOf: logoURL) {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .renderingMode(.template)
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 24, height: 20)
-                    .foregroundColor(.primary)
-            } else if let logoPath = "/Users/playra/BrowserOS-full/trios/logo.png" as String?,
-                      FileManager.default.fileExists(atPath: logoPath),
-                      let nsImage = NSImage(contentsOfFile: logoPath) {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .renderingMode(.template)
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 24, height: 20)
-                    .foregroundColor(.primary)
-            }
+            logoView(size: CGSize(width: 24, height: 20))
 
             Spacer()
 
             HStack(spacing: 10) {
-                StatusDot(isOn: viewModel.isServerReachable, label: "Online", color: viewModel.isServerReachable ? .primary : .gray)
-                StatusDot(isOn: viewModel.isA2ARegistered, label: "A2A", color: viewModel.isA2ARegistered ? .primary : .gray)
+                StatusDot(isOn: viewModel.isServerReachable, label: "Online", color: viewModel.isServerReachable ? .grokText : .grokDim)
+                StatusDot(isOn: viewModel.isA2ARegistered, label: "A2A", color: viewModel.isA2ARegistered ? .grokText : .grokDim)
             }
         }
         .padding(.horizontal, 16)
@@ -102,34 +78,15 @@ struct ChatPanelView: View {
         VStack(spacing: 20) {
             Spacer()
 
-            if let logoURL = Bundle.main.url(forResource: "logo", withExtension: "png"),
-               let nsImage = NSImage(contentsOf: logoURL) {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .renderingMode(.template)
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 52, height: 44)
-                    .foregroundColor(.primary)
-                    .opacity(0.9)
-            } else if let logoPath = "/Users/playra/BrowserOS-full/trios/logo.png" as String?,
-                      FileManager.default.fileExists(atPath: logoPath),
-                      let nsImage = NSImage(contentsOfFile: logoPath) {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .renderingMode(.template)
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 52, height: 44)
-                    .foregroundColor(.primary)
-                    .opacity(0.9)
-            }
+            logoView(size: CGSize(width: 52, height: 44))
 
             Text("TRIOS")
                 .font(.system(size: 36, weight: .bold, design: .default))
-                .foregroundColor(.primary)
+                .foregroundColor(.grokText)
 
             Text("How can I help?")
                 .font(.system(size: 16, weight: .regular, design: .default))
-                .foregroundColor(.secondary)
+                .foregroundColor(.grokMuted)
 
             Spacer()
         }
@@ -140,12 +97,12 @@ struct ChatPanelView: View {
 
     private var inputBar: some View {
         VStack(spacing: 0) {
-            Divider().overlay(Color.gray.opacity(0.3))
+            Divider().overlay(Color.grokDivider)
             HStack(spacing: 12) {
                 TextField("Ask anything...", text: $viewModel.inputText, axis: .vertical)
                     .textFieldStyle(PlainTextFieldStyle())
-                    .font(.body)
-                    .foregroundColor(.primary)
+                    .font(.system(size: 15, weight: .regular, design: .default))
+                    .foregroundColor(.grokText)
                     .lineLimit(1...5)
                     .onSubmit {
                         triggerSend()
@@ -156,11 +113,11 @@ struct ChatPanelView: View {
                 }) {
                     Image(systemName: viewModel.state == .idle ? "arrow.up" : "stop.fill")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .gray : .primary)
+                        .foregroundColor(viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .grokDim : .grokText)
                         .frame(width: 32, height: 32)
                         .background(
                             Circle()
-                                .fill(viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.clear : Color(NSColor.controlBackgroundColor).opacity(0.8))
+                                .fill(viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.clear : Color.grokElevated)
                         )
                 }
                 .buttonStyle(PlainButtonStyle())
@@ -179,6 +136,46 @@ struct ChatPanelView: View {
     }
 }
 
+// MARK: - Logo Helper
+
+private func logoView(size: CGSize) -> some View {
+    Group {
+        if let svgURL = Bundle.main.url(forResource: "logo", withExtension: "svg"),
+           let nsImage = NSImage(contentsOf: svgURL) {
+            Image(nsImage: nsImage)
+                .resizable()
+                .renderingMode(.template)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: size.width, height: size.height)
+                .foregroundColor(.grokText)
+        } else if let pngURL = Bundle.main.url(forResource: "logo", withExtension: "png"),
+                  let nsImage = NSImage(contentsOf: pngURL) {
+            Image(nsImage: nsImage)
+                .resizable()
+                .renderingMode(.template)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: size.width, height: size.height)
+                .foregroundColor(.grokText)
+        } else if FileManager.default.fileExists(atPath: "/Users/playra/BrowserOS-full/trios/logo.svg"),
+                  let nsImage = NSImage(contentsOfFile: "/Users/playra/BrowserOS-full/trios/logo.svg") {
+            Image(nsImage: nsImage)
+                .resizable()
+                .renderingMode(.template)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: size.width, height: size.height)
+                .foregroundColor(.grokText)
+        } else if FileManager.default.fileExists(atPath: "/Users/playra/BrowserOS-full/trios/logo.png"),
+                  let nsImage = NSImage(contentsOfFile: "/Users/playra/BrowserOS-full/trios/logo.png") {
+            Image(nsImage: nsImage)
+                .resizable()
+                .renderingMode(.template)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: size.width, height: size.height)
+                .foregroundColor(.grokText)
+        }
+    }
+}
+
 // MARK: - Status Dot
 
 private struct StatusDot: View {
@@ -189,12 +186,12 @@ private struct StatusDot: View {
     var body: some View {
         HStack(spacing: 4) {
             Circle()
-                .fill(isOn ? color : Color.gray)
+                .fill(isOn ? color : Color.grokDim)
                 .frame(width: 6, height: 6)
             if let label = label {
                 Text(label)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 11, weight: .medium, design: .default))
+                    .foregroundColor(.grokMuted)
             }
         }
     }

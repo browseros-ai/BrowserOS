@@ -3,22 +3,157 @@ import Foundation
 import SwiftUI
 import ApplicationServices
 
+// MARK: - Panel Mode Enum
+
+enum TriosPanelMode: String, CaseIterable {
+    case glassmorphismSidebar = "Glassmorphism Sidebar"
+    case floatingSidebar = "Floating Sidebar"
+    case hudMinimal = "HUD Minimal"
+    case borderlessOverlay = "Borderless Overlay"
+    case stationaryWidget = "Stationary Widget"
+
+    var styleMask: NSWindow.StyleMask {
+        switch self {
+        case .glassmorphismSidebar:
+            return [.fullSizeContentView]
+        case .floatingSidebar:
+            return [.titled, .closable, .utilityWindow]
+        case .hudMinimal:
+            return [.hudWindow, .nonactivatingPanel]
+        case .borderlessOverlay:
+            return [.borderless, .fullSizeContentView]
+        case .stationaryWidget:
+            return [.titled, .closable, .utilityWindow]
+        }
+    }
+
+    var collectionBehavior: NSWindow.CollectionBehavior {
+        switch self {
+        case .glassmorphismSidebar:
+            return [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+        case .floatingSidebar:
+            return [.transient, .canJoinAllSpaces, .fullScreenAuxiliary]
+        case .hudMinimal:
+            return [.transient, .canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        case .borderlessOverlay:
+            return [.transient, .canJoinAllSpaces, .ignoresCycle]
+        case .stationaryWidget:
+            return [.stationary, .canJoinAllSpaces, .ignoresCycle]
+        }
+    }
+
+    var level: NSWindow.Level {
+        switch self {
+        case .glassmorphismSidebar: return .mainMenu
+        case .floatingSidebar: return .normal
+        case .hudMinimal: return .floating
+        case .borderlessOverlay: return .popUpMenu
+        case .stationaryWidget: return .normal
+        }
+    }
+
+    var isFloatingPanel: Bool {
+        switch self {
+        case .glassmorphismSidebar, .hudMinimal: return true
+        default: return false
+        }
+    }
+
+    var isOpaque: Bool {
+        switch self {
+        case .borderlessOverlay, .glassmorphismSidebar: return false
+        default: return true
+        }
+    }
+
+    var backgroundColor: NSColor? {
+        switch self {
+        case .borderlessOverlay, .glassmorphismSidebar: return .clear
+        default: return nil
+        }
+    }
+}
+
+// MARK: - Screen Management
+
+class TriosScreenManager {
+    static let shared = TriosScreenManager()
+
+    var currentScreen: NSScreen?
+    var panelMode: TriosPanelMode = .glassmorphismSidebar
+
+    func detectScreenForMouse() -> NSScreen? {
+        let mouseLocation = NSEvent.mouseLocation
+        return NSScreen.screens.first { screen in
+            screen.frame.contains(mouseLocation)
+        } ?? NSScreen.main
+    }
+
+    func positionPanel(_ panel: NSWindow, on screen: NSScreen? = nil, width: CGFloat = 400) {
+        let targetScreen = screen ?? detectScreenForMouse() ?? NSScreen.main ?? NSScreen.screens.first!
+        let frame = targetScreen.visibleFrame
+
+        let panelHeight = frame.height
+        let x = frame.maxX - width
+        let y = frame.minY
+
+        panel.setFrame(NSRect(x: x, y: y, width: width, height: panelHeight), display: true, animate: false)
+        currentScreen = targetScreen
+    }
+
+    func applyMode(to panel: NSWindow) {
+        panel.styleMask = panelMode.styleMask
+        panel.collectionBehavior = panelMode.collectionBehavior
+        panel.level = panelMode.level
+        panel.isOpaque = panelMode.isOpaque
+        if let color = panelMode.backgroundColor {
+            panel.backgroundColor = color
+        } else {
+            panel.backgroundColor = nil
+        }
+    }
+
+    func setCleanCaptureMode(_ enabled: Bool, for panel: NSWindow) {
+        if enabled {
+            panel.appearance = nil
+            panel.backgroundColor = .black
+            panel.isOpaque = true
+        } else {
+            panel.appearance = NSAppearance(named: .darkAqua)
+            applyMode(to: panel)
+        }
+    }
+
+    func cycleToNextMode() {
+        let all = TriosPanelMode.allCases
+        let nextIndex = (all.firstIndex(of: panelMode)! + 1) % all.count
+        panelMode = all[nextIndex]
+    }
+}
+
 // MARK: - AppDelegate
+
+class KeyWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
-    var sidePanel: NSPanel?
-    var hostingController: NSHostingController<ChatPanelView>?
+    var sidePanel: NSWindow?
+    var hostingController: NSHostingController<TriosTabView>?
     var serverTask: Process?
     var funnelTask: Process?
     var serverRunning = false
     var funnelRunning = false
     var windowStates: [(AXUIElement, CGRect)] = []
     let sidebarWidth: CGFloat = 400
+    var currentSidebarWidth: CGFloat = 400
     let compositionRoot = CompositionRoot()
     var accessibilityGranted = false
     var accessibilityPromptShown = false
     var chatViewModel: ChatViewModel?
+    var screenManager = TriosScreenManager.shared
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("applicationDidFinishLaunching called")
@@ -59,12 +194,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         statusItem?.button?.toolTip = "TRIOS AGENT"
 
+        statusItem?.button?.target = self
         statusItem?.button?.action = #selector(statusBarButtonClicked(_:))
         statusItem?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem?.menu = nil
 
         setupSidePanel()
         accessibilityGranted = AXIsProcessTrusted()
+        setupGlobalHotkey()
 
         Task {
             await chatViewModel?.registerA2A()
@@ -82,43 +219,58 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let x = screenFrame.maxX
         let y = screenFrame.minY
 
-        let panel = NSPanel(
+        let panel = KeyWindow(
             contentRect: NSRect(x: x, y: y, width: sidebarWidth, height: panelHeight),
-            styleMask: [.titled, .nonactivatingPanel, .fullSizeContentView],
+            styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
 
-        panel.isFloatingPanel = true
-        panel.level = .mainMenu
+        panel.level = .floating
         panel.hidesOnDeactivate = false
-        panel.becomesKeyOnlyIfNeeded = true
         panel.isMovableByWindowBackground = true
-        panel.backgroundColor = NSColor.black
-        panel.isOpaque = true
+        panel.backgroundColor = NSColor.clear
+        panel.isOpaque = false
         panel.hasShadow = true
-        panel.titlebarAppearsTransparent = true
-        panel.titleVisibility = .hidden
-        panel.standardWindowButton(.closeButton)?.isHidden = false
-        panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        panel.standardWindowButton(.zoomButton)?.isHidden = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         panel.animationBehavior = .none
         panel.appearance = NSAppearance(named: .darkAqua)
         panel.isReleasedWhenClosed = false
 
         let viewModel = compositionRoot.makeChatViewModel()
         self.chatViewModel = viewModel
-        let chatView = ChatPanelView(viewModel: viewModel)
-        let hc = NSHostingController(rootView: chatView)
-        let hostingView = hc.view
-        hostingView.frame = panel.contentView!.bounds
-        hostingView.autoresizingMask = [.width, .height]
-        panel.contentView?.addSubview(hostingView)
-        NSLog("SwiftUI hosting view added, frame: \(hostingView.frame)")
+        let tabView = TriosTabView(viewModel: viewModel) { [weak self] width in
+            self?.resizePanel(to: width)
+        }
+        let hc = NSHostingController(rootView: tabView)
+        hc.view.frame = panel.contentView!.bounds
+        hc.view.autoresizingMask = [.width, .height]
+        panel.contentView = hc.view
+        NSLog("SwiftUI hosting view set as contentView, frame: \(hc.view.frame)")
 
         self.hostingController = hc
         self.sidePanel = panel
+        screenManager.currentScreen = screen
+    }
+
+    func resizePanel(to width: CGFloat) {
+        guard let panel = sidePanel else { return }
+        guard width != currentSidebarWidth else { return }
+        currentSidebarWidth = width
+
+        let screen = screenManager.currentScreen ?? NSScreen.main
+        let screenFrame = screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let panelHeight = screenFrame.height
+        let x = screenFrame.maxX - width
+        let y = screenFrame.minY
+
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.25
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().setFrame(NSRect(x: x, y: y, width: width, height: panelHeight), display: true)
+        }, completionHandler: {
+            NSLog("Panel resized to width \(width)")
+        })
     }
 
     // MARK: - Window Shifting
@@ -185,7 +337,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func shiftWindows() {
         guard let screen = NSScreen.main else { return }
         let screenFrame = screen.frame
-        let cutoffX = screenFrame.maxX - sidebarWidth
+        let cutoffX = screenFrame.maxX - currentSidebarWidth
         windowStates.removeAll()
         let allWindows = getAllWindows()
         for (window, frame) in allWindows {
@@ -242,12 +394,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("Panel state — isVisible: \(panel.isVisible), frame: \(panel.frame)")
 
         if panel.isVisible {
+            let screen = screenManager.currentScreen ?? NSScreen.main
+            let screenFrame = screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1512, height: 982)
+            let offscreenX = screenFrame.maxX
+            let closeY = panel.frame.origin.y
+            let closeHeight = panel.frame.height
             NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.35
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                guard let screen = NSScreen.main else { return }
-                let targetX = screen.frame.maxX
-                panel.animator().setFrameOrigin(NSPoint(x: targetX, y: panel.frame.origin.y))
+                panel.animator().setFrame(NSRect(x: offscreenX, y: closeY, width: self.currentSidebarWidth, height: closeHeight), display: true)
             }, completionHandler: {
                 panel.orderOut(nil)
                 self.restoreWindows()
@@ -261,28 +416,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 accessibilityPromptShown = true
                 showAlert("Please grant Trios Accessibility access in:\nSystem Settings → Privacy & Security → Accessibility")
             }
-            guard let screen = NSScreen.main else {
+            guard let screen = screenManager.detectScreenForMouse() ?? NSScreen.main else {
                 return
             }
             NSLog("Got screen: \(screen.frame)")
             let screenFrame = screen.visibleFrame
             let panelHeight = screenFrame.height
-            let openX = screenFrame.maxX - sidebarWidth - 12
+            let openX = screenFrame.maxX - self.currentSidebarWidth
             let offscreenX = screenFrame.maxX
             let y = screenFrame.minY
 
-            panel.setFrame(NSRect(x: offscreenX, y: y, width: sidebarWidth, height: panelHeight), display: false)
+            panel.setFrame(NSRect(x: offscreenX, y: y, width: self.currentSidebarWidth, height: panelHeight), display: false)
             NSLog("Panel positioned off-screen at x=\(offscreenX), about to order front")
 
             panel.makeKeyAndOrderFront(nil)
-            NSLog("Panel ordered front, isVisible now: \(panel.isVisible)")
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            NSLog("Panel is key window: \(panel.isKeyWindow), ordered front")
 
             NSAnimationContext.runAnimationGroup({ context in
+                NSLog("Animation group starting, target x=\(openX)")
                 context.duration = 0.35
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                panel.animator().setFrameOrigin(NSPoint(x: openX, y: y))
+                panel.animator().setFrame(NSRect(x: openX, y: y, width: self.currentSidebarWidth, height: panelHeight), display: true)
             }, completionHandler: {
-                NSLog("Panel open animation complete, final frame: \(panel.frame)")
+                NSLog("Panel open animation complete, final frame: \(panel.frame), isVisible: \(panel.isVisible)")
             })
         }
     }
@@ -344,6 +501,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        // Panel Mode submenu
+        let modeMenu = NSMenu(title: "Panel Mode")
+        for (index, mode) in TriosPanelMode.allCases.enumerated() {
+            let item = NSMenuItem(title: mode.rawValue, action: #selector(setPanelMode(_:)), keyEquivalent: "")
+            item.tag = index
+            item.target = self
+            item.state = (mode == screenManager.panelMode) ? .on : .off
+            modeMenu.addItem(item)
+        }
+        let modeItem = NSMenuItem(title: "Panel Mode", action: nil, keyEquivalent: "")
+        modeItem.submenu = modeMenu
+        menu.addItem(modeItem)
+
+        // Move to Screen submenu
+        let screenMenu = NSMenu(title: "Move to Screen")
+        for (index, screen) in NSScreen.screens.enumerated() {
+            let name = screen.displayName ?? "Screen \(index + 1)"
+            let item = NSMenuItem(title: name, action: #selector(moveToScreen(_:)), keyEquivalent: "")
+            item.tag = index
+            item.target = self
+            screenMenu.addItem(item)
+        }
+        let screenItem = NSMenuItem(title: "Move to Screen", action: nil, keyEquivalent: "")
+        screenItem.submenu = screenMenu
+        menu.addItem(screenItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         let connectItem = NSMenuItem(
             title: "Connect MCP",
             action: #selector(connectMCP),
@@ -384,15 +569,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func setCleanCaptureMode(_ enabled: Bool) {
         guard let panel = sidePanel else { return }
-        if enabled {
-            panel.appearance = nil
-            panel.backgroundColor = NSColor.black
-            NSLog("Clean capture mode ON")
-        } else {
-            panel.appearance = NSAppearance(named: .darkAqua)
-            panel.backgroundColor = NSColor.clear
-            NSLog("Clean capture mode OFF")
-        }
+        screenManager.setCleanCaptureMode(enabled, for: panel)
     }
 
     @objc func toggleCleanCaptureMode() {
@@ -508,6 +685,38 @@ Your filesystem tools will be available!
         alert.alertStyle = .warning
         alert.runModal()
     }
+
+    // MARK: - Panel Mode Actions
+
+    @objc func setPanelMode(_ sender: NSMenuItem) {
+        let modes = TriosPanelMode.allCases
+        guard sender.tag < modes.count else { return }
+        screenManager.panelMode = modes[sender.tag]
+        if let panel = sidePanel {
+            screenManager.applyMode(to: panel)
+        }
+    }
+
+    @objc func moveToScreen(_ sender: NSMenuItem) {
+        let screens = NSScreen.screens
+        guard sender.tag < screens.count else { return }
+        if let panel = sidePanel {
+            screenManager.positionPanel(panel, on: screens[sender.tag], width: sidebarWidth)
+        }
+    }
+
+    // MARK: - Global Hotkey
+
+    func setupGlobalHotkey() {
+        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.modifierFlags.contains(.command),
+                  event.modifierFlags.contains(.shift),
+                  event.keyCode == 17 else { return }
+            DispatchQueue.main.async {
+                self?.toggleSidePanel()
+            }
+        }
+    }
 }
 
 // MARK: - Composition Root (Dependency Injection)
@@ -539,6 +748,17 @@ struct CompositionRoot {
             stateMachine: stateMachine,
             a2aClient: a2aClient
         )
+    }
+}
+
+// MARK: - Screen Extension
+
+extension NSScreen {
+    var displayName: String? {
+        guard let screenNumber = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else {
+            return nil
+        }
+        return "Display \(screenNumber)"
     }
 }
 

@@ -220,52 +220,57 @@ struct ReasoningCollapsibleView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button(action: { withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { isExpanded.toggle() } }) {
-                HStack(spacing: 8) {
-                    Image(systemName: "brain.head.profile")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(isExpanded ? "Thought process" : "Thinking...")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.secondary)
+            HStack(spacing: 8) {
+                Image(systemName: "brain.head.profile")
+                    .font(.system(size: 11))
+                    .foregroundColor(.grokMuted)
+                Text(isExpanded ? "Thought process" : "Thinking...")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.grokMuted)
 
-                    if !isExpanded {
-                        Text("\(lineCount) steps")
-                            .font(.caption2)
-                            .foregroundColor(.gray)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color(NSColor.controlBackgroundColor).opacity(0.8))
-                            .cornerRadius(6)
-                    }
-
-                    Spacer()
-
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption2)
-                        .foregroundColor(.gray)
+                if !isExpanded {
+                    Text("\(lineCount) steps")
+                        .font(.system(size: 10))
+                        .foregroundColor(.grokDim)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.grokElevated.opacity(0.6))
+                        .cornerRadius(6)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
+
+                Spacer()
+
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 10))
+                    .foregroundColor(.grokDim)
             }
-            .buttonStyle(PlainButtonStyle())
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                    isExpanded.toggle()
+                }
+            }
 
             if isExpanded {
                 Divider()
-                    .background(Color.gray.opacity(0.3))
+                    .overlay(Color.grokBorder.opacity(0.5))
                     .padding(.horizontal, 12)
 
                 Text(content)
-                    .font(.caption)
-                    .foregroundColor(.gray)
+                    .font(.system(size: 11))
+                    .foregroundColor(.grokDim)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.8))
+        .background(Color.grokElevated.opacity(0.4))
         .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.grokBorder.opacity(0.3), lineWidth: 1)
+        )
     }
 }

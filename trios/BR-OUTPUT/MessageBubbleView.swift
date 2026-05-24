@@ -15,7 +15,7 @@ struct MessageBubbleView: View {
             if message.role == .assistant {
                 assistantContainer
             } else {
-                userContent
+                userBubble
             }
 
             if message.role == .assistant {
@@ -23,22 +23,25 @@ struct MessageBubbleView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
     }
 
     // MARK: - User Message
 
-    private var userContent: some View {
+    private var userBubble: some View {
         Group {
             if !message.content.isEmpty {
                 RichMessageView(text: message.content, isUser: true)
-                    .foregroundColor(.primary)
+                    .font(.system(size: 15, weight: .regular, design: .default))
+                    .foregroundColor(.grokText)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
                     .textSelection(.enabled)
             }
 
             if message.isStreaming && message.content.isEmpty {
                 TypingIndicatorView()
-                    .foregroundColor(.primary)
+                    .foregroundColor(.grokText)
             }
         }
     }
@@ -46,30 +49,29 @@ struct MessageBubbleView: View {
     // MARK: - Assistant Container
 
     private var assistantContainer: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Reasoning (collapsible, hidden by default)
+        VStack(alignment: .leading, spacing: 14) {
+            // Reasoning header
+            if !reasoningSegments.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 11))
+                        .foregroundColor(.grokMuted)
+                    Text("Thought for \(reasoningDuration)")
+                        .font(.system(size: 12, weight: .medium, design: .default))
+                        .foregroundColor(.grokMuted)
+                }
+            }
+
+            // Reasoning (collapsible)
             ForEach(reasoningSegments, id: \.self) { text in
                 ReasoningCollapsibleView(content: text)
-            }
-
-            // Tool calls
-            ForEach(Array(message.toolCalls.enumerated()), id: \.element.id) { index, toolCall in
-                ToolCallCardView(toolCall: toolCall)
-            }
-
-            // Task
-            if let task = message.task {
-                AgentTaskBubbleView(
-                    task: task,
-                    onAccept: { onTaskAction?(task.id, .assigned) },
-                    onReject: { onTaskAction?(task.id, .cancelled) },
-                    onComplete: { onTaskAction?(task.id, .completed) }
-                )
             }
 
             // Main content
             if !message.content.isEmpty {
                 RichMessageView(text: message.content, isUser: false)
+                    .font(.system(size: 15, weight: .regular, design: .default))
+                    .foregroundColor(.grokText)
                     .textSelection(.enabled)
             }
 
@@ -78,19 +80,15 @@ struct MessageBubbleView: View {
                 TypingIndicatorView()
             }
 
-            // Action bar
+            // Inline action bar
             if !message.isStreaming && !message.content.isEmpty {
-                AssistantActionBar(
+                MessageActionBar(
                     content: message.content,
                     onRegenerate: onRegenerate,
                     onFeedback: onFeedback
                 )
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(8)
     }
 
     private var reasoningSegments: [String] {
@@ -99,11 +97,19 @@ struct MessageBubbleView: View {
             return nil
         }
     }
+
+    private var reasoningDuration: String {
+        // Approximate: 1 second per line of reasoning
+        let lines = reasoningSegments.reduce(0) { count, text in
+            count + text.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count
+        }
+        return lines <= 1 ? "1s" : "\(lines)s"
+    }
 }
 
-// MARK: - Assistant Action Bar
+// MARK: - Message Action Bar
 
-private struct AssistantActionBar: View {
+private struct MessageActionBar: View {
     let content: String
     var onRegenerate: (() -> Void)?
     var onFeedback: ((Bool) -> Void)?
@@ -112,7 +118,7 @@ private struct AssistantActionBar: View {
     @State private var liked: Bool? = nil
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 18) {
             Button(action: {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(content, forType: .string)
@@ -122,8 +128,8 @@ private struct AssistantActionBar: View {
                 }
             }) {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 13))
-                    .foregroundColor(copied ? .primary : .gray)
+                    .font(.system(size: 13, weight: .medium, design: .default))
+                    .foregroundColor(copied ? .grokText : .grokDim)
             }
             .buttonStyle(PlainButtonStyle())
             .help("Copy")
@@ -132,8 +138,8 @@ private struct AssistantActionBar: View {
                 onRegenerate?()
             }) {
                 Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 13))
-                    .foregroundColor(.gray)
+                    .font(.system(size: 13, weight: .medium, design: .default))
+                    .foregroundColor(.grokDim)
             }
             .buttonStyle(PlainButtonStyle())
             .help("Regenerate")
@@ -145,8 +151,8 @@ private struct AssistantActionBar: View {
                 onFeedback?(true)
             }) {
                 Image(systemName: liked == true ? "hand.thumbsup.fill" : "hand.thumbsup")
-                    .font(.system(size: 13))
-                    .foregroundColor(liked == true ? .primary : .gray)
+                    .font(.system(size: 13, weight: .medium, design: .default))
+                    .foregroundColor(liked == true ? .grokText : .grokDim)
             }
             .buttonStyle(PlainButtonStyle())
             .help("Good response")
@@ -156,12 +162,12 @@ private struct AssistantActionBar: View {
                 onFeedback?(false)
             }) {
                 Image(systemName: liked == false ? "hand.thumbsdown.fill" : "hand.thumbsdown")
-                    .font(.system(size: 13))
-                    .foregroundColor(liked == false ? .primary : .gray)
+                    .font(.system(size: 13, weight: .medium, design: .default))
+                    .foregroundColor(liked == false ? .grokText : .grokDim)
             }
             .buttonStyle(PlainButtonStyle())
             .help("Bad response")
         }
-        .padding(.top, 4)
+        .padding(.top, 6)
     }
 }

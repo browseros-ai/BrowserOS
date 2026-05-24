@@ -88,7 +88,7 @@
     "@browseros/shared": "workspace:*",
     "@google/gemini-cli-core": "^0.16.0",
     "@google/genai": "1.30.0",
-    "@hono/mcp": "^0.2.3",
+    "@hono/mcp": "0.3.0",
     "@hono/node-server": "^1.19.6",
     "@hono/zod-validator": "^0.4.3",
     "@huggingface/transformers": "^3.4.0",

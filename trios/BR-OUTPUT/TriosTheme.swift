@@ -4,24 +4,23 @@ import SwiftUI
 
 extension Color {
     static let grokBackground = Color.black
-    static let grokSurface = Color(white: 0.04)
-    static let grokElevated = Color(white: 0.07)
-    static let grokBorder = Color(white: 0.12)
-    static let grokDivider = Color(white: 0.15)
-    static let grokTextPrimary = Color.white
-    static let grokTextSecondary = Color(white: 0.55)
-    static let grokTextMuted = Color(white: 0.35)
-    static let grokAccent = Color.white
-    static let grokAccentHover = Color(white: 0.8)
+    static let grokSurface  = Color(white: 0.06)
+    static let grokElevated = Color(white: 0.10)
+    static let grokBorder   = Color(white: 0.18)
+    static let grokDivider  = Color(white: 0.22)
+    static let grokText     = Color.white
+    static let grokMuted    = Color(white: 0.55)
+    static let grokDim      = Color(white: 0.40)
+    static let grokAccent   = Color.white
 
-    // Legacy aliases for existing code compatibility
+    // Legacy aliases
     static let triosGold = grokAccent
     static let triosBackground = grokBackground
     static let triosCardBackground = grokSurface
     static let triosReasoningBackground = grokElevated
     static let triosToolBackground = grokElevated
     static let triosSuccessBackground = grokElevated
-    static let triosErrorBackground = Color(white: 0.04)
+    static let triosErrorBackground = Color(white: 0.06)
 }
 
 // MARK: - Corner Radius Style
