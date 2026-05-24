@@ -24,6 +24,8 @@ export interface BridgeConfig {
   triosRagCliPath: string
   /** PostgreSQL DSN for trios-mcp-rag (default: null — uses RAG binary fallback or env) */
   databaseUrl: string | null
+  /** Railway MCP server URL (default: null) */
+  railwayMcpUrl: string | null
 }
 
 const DEFAULT_CONFIG: BridgeConfig = {
@@ -36,6 +38,7 @@ const DEFAULT_CONFIG: BridgeConfig = {
   logLevel: 'info',
   triosRagCliPath: 'trios-mcp-rag',
   databaseUrl: null,
+  railwayMcpUrl: null,
 }
 
 export function loadConfig(overrides?: Partial<BridgeConfig>): BridgeConfig {
@@ -57,6 +60,7 @@ export function loadConfig(overrides?: Partial<BridgeConfig>): BridgeConfig {
       process.env.TRIONS_RAG_CLI || DEFAULT_CONFIG.triosRagCliPath,
     databaseUrl:
       process.env.DATABASE_URL || process.env.RAILWAY_SSOT_URL || null,
+    railwayMcpUrl: process.env.RAILWAY_MCP_URL || DEFAULT_CONFIG.railwayMcpUrl,
     ...overrides,
   }
 }

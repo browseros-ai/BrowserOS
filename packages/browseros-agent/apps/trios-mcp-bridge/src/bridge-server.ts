@@ -10,6 +10,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import type { BrowserOSClient } from '../clients/browseros-client.js'
 import type { GitButlerMcpClient } from '../clients/gitbutler-client.js'
+import type { RailwayMcpClient } from '../clients/railway-client.js'
 import type { TriClient } from '../clients/tri-client.js'
 import type { TriosRagClient } from '../clients/trios-rag-client.js'
 import type { BridgeConfig } from '../config.js'
@@ -27,6 +28,7 @@ export interface BridgeDeps {
   gitbutler: GitButlerMcpClient
   tri: TriClient
   rag: TriosRagClient
+  railway: RailwayMcpClient | null
 }
 
 const BRIDGE_INSTRUCTIONS = `TRIOS MCP Bridge — Vision-enhanced GitButler workflows.
@@ -40,6 +42,7 @@ This bridge connects BrowserOS (browser vision/control) with GitButler (virtual 
 3. **Act**: Use gitbutler_commit_visible, gitbutler_create_branch, gitbutler_push_stack to perform actions.
 4. **Research**: Use search_chapters, get_chapter, list_chapters to query the GOLDEN BRIDGE compendium via RAG.
 5. **PhD Pipeline**: Use build_pdf (dry-run by default), build_cover, list_claims, get_honest_counters for PDF generation and claim auditing.
+6. **Deploy**: Use railway_redeploy, railway_logs, railway_status to manage Railway deployments from chat.
 
 ## Key Concepts
 
@@ -1489,6 +1492,217 @@ export function createBridgeServer(deps: BridgeDeps): McpServer {
         const text = deps.rag.extractText(result)
         return {
           content: [{ type: 'text', text: text || JSON.stringify(result) }],
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                reason: error instanceof Error ? error.message : String(error),
+              }),
+            },
+          ],
+          isError: true,
+        }
+      }
+    },
+  )
+
+  // ==========================================
+  // Tool 29: Railway Redeploy
+  // ==========================================
+  server.tool(
+    'railway_redeploy',
+    'Redeploy a Railway service. If no serviceId is given, redeploys the default service. ' +
+      'Requires Railway MCP connection.',
+    {
+      serviceId: z
+        .string()
+        .optional()
+        .describe('Railway service ID to redeploy. Omit for default.'),
+    },
+    async (args) => {
+      try {
+        if (!deps.railway) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  ok: false,
+                  reason:
+                    'Railway MCP not configured. Set --railway-mcp-url or RAILWAY_MCP_URL.',
+                }),
+              },
+            ],
+            isError: true,
+          }
+        }
+        const result = await deps.railway.redeploy(args.serviceId)
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ ok: true, redeployResult: result }),
+            },
+          ],
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                reason: error instanceof Error ? error.message : String(error),
+              }),
+            },
+          ],
+          isError: true,
+        }
+      }
+    },
+  )
+
+  // ==========================================
+  // Tool 30: Railway Logs
+  // ==========================================
+  server.tool(
+    'railway_logs',
+    'Get deployment logs for a Railway service. ' +
+      'Requires Railway MCP connection.',
+    {
+      serviceId: z.string().optional().describe('Railway service ID'),
+      lines: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .default(50)
+        .describe('Number of log lines to fetch'),
+    },
+    async (args) => {
+      try {
+        if (!deps.railway) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  ok: false,
+                  reason: 'Railway MCP not configured.',
+                }),
+              },
+            ],
+            isError: true,
+          }
+        }
+        const result = await deps.railway.getLogs(args.serviceId, args.lines)
+        return {
+          content: [{ type: 'text', text: `## Railway Logs\n\n${result}` }],
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                reason: error instanceof Error ? error.message : String(error),
+              }),
+            },
+          ],
+          isError: true,
+        }
+      }
+    },
+  )
+
+  // ==========================================
+  // Tool 31: Railway List Services
+  // ==========================================
+  server.tool(
+    'railway_list_services',
+    'List all Railway services in the connected project. ' +
+      'Returns service IDs, names, and deployment status.',
+    {},
+    async () => {
+      try {
+        if (!deps.railway) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  ok: false,
+                  reason: 'Railway MCP not configured.',
+                }),
+              },
+            ],
+            isError: true,
+          }
+        }
+        const services = await deps.railway.listServices()
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ ok: true, services }, null, 2),
+            },
+          ],
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                reason: error instanceof Error ? error.message : String(error),
+              }),
+            },
+          ],
+          isError: true,
+        }
+      }
+    },
+  )
+
+  // ==========================================
+  // Tool 32: Railway Status
+  // ==========================================
+  server.tool(
+    'railway_status',
+    'Get status of a Railway service or the whole project.',
+    {
+      serviceId: z.string().optional().describe('Railway service ID'),
+    },
+    async (args) => {
+      try {
+        if (!deps.railway) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  ok: false,
+                  reason: 'Railway MCP not configured.',
+                }),
+              },
+            ],
+            isError: true,
+          }
+        }
+        const result = await deps.railway.getStatus(args.serviceId)
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `## Railway Status\n\n${result}`,
+            },
+          ],
         }
       } catch (error) {
         return {
