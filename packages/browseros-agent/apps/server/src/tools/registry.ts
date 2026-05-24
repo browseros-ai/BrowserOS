@@ -65,6 +65,15 @@ import {
 } from './tab-groups'
 import { createRegistry } from './tool-registry'
 import {
+  filesystem_bash,
+  filesystem_edit,
+  filesystem_find,
+  filesystem_grep,
+  filesystem_ls,
+  filesystem_read,
+  filesystem_write,
+} from './filesystem-registry'
+import {
   activate_window,
   close_window,
   create_hidden_window,
@@ -151,6 +160,15 @@ export const registry = createRegistry([
 
   // Info (1)
   browseros_info,
+
+  // Filesystem (7)
+  filesystem_bash,
+  filesystem_ls,
+  filesystem_read,
+  filesystem_write,
+  filesystem_edit,
+  filesystem_find,
+  filesystem_grep,
 
   // Nudges (2)
   suggest_schedule,

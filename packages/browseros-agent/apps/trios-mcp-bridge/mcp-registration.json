@@ -1,0 +1,13 @@
+{
+	"mcpServers": [
+		{
+			"id": "trios-mcp-bridge",
+			"displayName": "TRIOS MCP Bridge — Vision + GitButler",
+			"type": "custom",
+			"config": {
+				"url": "http://127.0.0.1:9200/mcp",
+				"description": "Vision-enhanced GitButler workflows: analyze UI, commit visible changes, create branches, push stacks, undo commits. Connects BrowserOS vision with GitButler virtual branches."
+			}
+		}
+	]
+}

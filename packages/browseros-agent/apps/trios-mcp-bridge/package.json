@@ -1,0 +1,25 @@
+{
+	"name": "@trios/mcp-bridge",
+	"version": "0.1.0",
+	"description": "TRIOS MCP Bridge — Dual-MCP + Vision bridge connecting BrowserOS and GitButler",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"dev": "bun run --watch src/index.ts",
+		"start": "bun run src/index.ts",
+		"test": "bun test",
+		"test:watch": "bun --watch test",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@hono/mcp": "^0.2.5",
+		"@modelcontextprotocol/sdk": "^1.12.1",
+		"hono": "^4.7.10",
+		"simple-git": "^3.36.0",
+		"zod": "^4.3.6"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.2.0",
+		"typescript": "^5.8.0"
+	}
+}
