@@ -220,9 +220,6 @@ export const SCHEDULED_TASK_RETRIED_EVENT = 'settings.scheduled_task.retried'
 export const JTBD_POPUP_DISMISSED_EVENT = 'ui.jtbd_popup.dismissed'
 
 /** @public */
-export const SEARCH_PROVIDER_CHANGED_EVENT = 'settings.search_provider.changed'
-
-/** @public */
 export const ONBOARDING_STARTED_EVENT = 'onboarding.started'
 
 /** @public */

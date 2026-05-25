@@ -1,6 +1,4 @@
 import { useMemo } from 'react'
-import { getProviderConfig } from '@/lib/search-provider/providers'
-import { useSearchProvider } from '@/lib/search-provider/search-provider-storage'
 import { useAITabSuggestions } from '../aiTabSuggestions/useAITabSuggestions'
 import { useBrowserOSSuggestions } from '../browserOSSuggestions/useBrowserOSSuggestions'
 import { useSearchSuggestions } from '../searchSuggestions/useSearchSuggestions'
@@ -16,6 +14,12 @@ interface UseSuggestionsArgs {
   query: string
   selectedTabs: chrome.tabs.Tab[]
 }
+
+const SEARCH_PROVIDER = {
+  id: 'google',
+  name: 'Google',
+  searchUrl: 'https://www.google.com/search?q=',
+} as const
 
 function buildSearchResults(
   query: string,
@@ -44,17 +48,14 @@ function buildSearchResults(
 }
 
 /**
- * @public
+ * Builds the new-tab suggestion sections from BrowserOS actions, tab actions, and fixed Google search results.
  */
 export const useSuggestions = ({ query, selectedTabs }: UseSuggestionsArgs) => {
-  const { provider } = useSearchProvider()
-  const providerConfig = getProviderConfig(provider)
   const trimmedQuery = query.trim()
   const hasQuery = trimmedQuery.length > 0
 
   const { data: searchResultsFromAPI } = useSearchSuggestions({
     query,
-    searchEngine: provider,
   })
 
   const searchResults: string[] = useMemo(() => {
@@ -111,7 +112,7 @@ export const useSuggestions = ({ query, selectedTabs }: UseSuggestionsArgs) => {
       )
       result.push({
         id: 'search',
-        title: `${providerConfig.name} Search`,
+        title: `${SEARCH_PROVIDER.name} Search`,
         items: searchItems,
       })
     }
@@ -123,7 +124,6 @@ export const useSuggestions = ({ query, selectedTabs }: UseSuggestionsArgs) => {
     selectedTabs.length,
     aiTabResults,
     searchResults,
-    providerConfig.name,
   ])
 
   const flatItems = useMemo(
@@ -131,11 +131,11 @@ export const useSuggestions = ({ query, selectedTabs }: UseSuggestionsArgs) => {
     [sections],
   )
 
-  return { sections, flatItems, providerConfig }
+  return { sections, flatItems, providerConfig: SEARCH_PROVIDER }
 }
 
 /**
- * @public
+ * Returns the text Downshift should use when a suggestion is selected or rendered as input text.
  */
 export const getSuggestionLabel = (item: SuggestionItem): string => {
   switch (item.type) {

@@ -7,7 +7,6 @@ import {
   MessageSquare,
   Palette,
   RotateCcw,
-  Search,
   Server,
 } from 'lucide-react'
 import type { FC } from 'react'
@@ -66,7 +65,6 @@ const primarySettingsSections: NavSection[] = [
         to: '/settings/chat',
         icon: MessageSquare,
       },
-      { name: 'Search Provider', to: '/settings/search', icon: Search },
     ],
   },
   {

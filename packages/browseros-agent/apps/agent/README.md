@@ -53,7 +53,7 @@ The service worker that manages:
 Custom new tab replacement featuring:
 - **Unified Search Bar**: Search Google or ask AI directly
 - **Tab Context**: Attach open tabs to provide context for AI queries
-- **Search Suggestions**: Real-time suggestions from multiple providers (Google, Bing, DuckDuckGo, Yahoo, Yandex)
+- **Search Suggestions**: Real-time Google suggestions
 - **AI Suggestions**: Context-aware BrowserOS action suggestions
 - **Top Sites**: Quick access to frequently visited sites
 - **Theme Toggle**: Light/dark mode support

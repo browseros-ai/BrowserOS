@@ -1,22 +1,19 @@
 import { useEffect, useState } from 'react'
 import useSWR from 'swr'
 import { getSearchSuggestions } from './getSearchSuggestions'
-import type { SearchProviders } from './SearchProviders'
 
-interface useSearchSuggestionsArgs {
+interface UseSearchSuggestionsArgs {
   query: string
-  searchEngine: SearchProviders
   debounceMs?: number
 }
 
 /**
- * @public
+ * Debounces new-tab search query changes and loads Google suggestions through SWR.
  */
 export const useSearchSuggestions = ({
   query,
-  searchEngine,
   debounceMs = 300,
-}: useSearchSuggestionsArgs) => {
+}: UseSearchSuggestionsArgs) => {
   const [debouncedQuery, setDebouncedQuery] = useState(query)
 
   useEffect(() => {
@@ -27,9 +24,11 @@ export const useSearchSuggestions = ({
     return () => clearTimeout(timer)
   }, [query, debounceMs])
 
-  return useSWR(
-    debouncedQuery ? [searchEngine, debouncedQuery] : null,
-    getSearchSuggestions,
-    { keepPreviousData: true },
-  )
+  const searchSuggestionsKey = debouncedQuery
+    ? (['google-search-suggestions', debouncedQuery] as const)
+    : null
+
+  return useSWR(searchSuggestionsKey, getSearchSuggestions, {
+    keepPreviousData: true,
+  })
 }
