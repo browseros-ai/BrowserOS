@@ -173,6 +173,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     lazy var menuBuilder = MenuBuilder(delegate: self, screenManager: screenManager, serverManager: serverManager)
 
     var chatViewModel: ChatViewModel?
+    var sessionGuard: SessionGuard?
     var accessibilityGranted = false
     var accessibilityPromptShown = false
     var windowStates: [(AXUIElement, CGRect)] = []
@@ -181,20 +182,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("applicationDidFinishLaunching called")
-        let app = NSApplication.shared
-        app.setActivationPolicy(.accessory)
 
         setupStatusItem()
-        setupSidePanel()
+        Task { @MainActor in
+            setupSidePanel()
+        }
         accessibilityGranted = AXIsProcessTrusted()
         setupGlobalHotkey()
 
-        Task {
+        Task { @MainActor in
+            if let vm = chatViewModel {
+                let guard_ = compositionRoot.makeSessionGuard(for: vm)
+                sessionGuard = guard_
+                guard_.startMonitoring()
+            }
             await chatViewModel?.registerA2A()
         }
     }
 
     private func setupStatusItem() {
+        NSLog("setupStatusItem starting")
         var logoImage: NSImage?
         if let logoURL = Bundle.main.url(forResource: "logo", withExtension: "png"),
            let image = NSImage(contentsOf: logoURL) {
@@ -220,24 +227,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             statusItem?.button?.image = image
             statusItem?.button?.imagePosition = .imageOnly
             statusItem?.button?.title = ""
+            NSLog("setupStatusItem: template image set, size=\(image.size)")
         } else {
             statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-            statusItem?.button?.title = "Trios"
+            statusItem?.button?.title = "T"
+            statusItem?.button?.font = NSFont.systemFont(ofSize: 14, weight: .bold)
+            NSLog("setupStatusItem: no image, using text fallback 'T'")
         }
         statusItem?.button?.toolTip = "TRIOS AGENT"
         statusItem?.button?.target = self
         statusItem?.button?.action = #selector(statusBarButtonClicked(_:))
         statusItem?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem?.menu = nil
+        if let button = statusItem?.button {
+            NSLog("setupStatusItem done — statusItem created, button frame=\(button.frame), image=\(String(describing: button.image))")
+        } else {
+            NSLog("setupStatusItem ERROR: statusItem.button is nil!")
+        }
     }
 
+    @MainActor
     func setupSidePanel() {
-        let viewModel = compositionRoot.makeChatViewModel()
-        self.chatViewModel = viewModel
-        let tabView = TriosTabView(viewModel: viewModel) { [weak self] width in
-            self?.windowManager.resize(to: width)
+        NSLog("setupSidePanel starting")
+        do {
+            let viewModel = compositionRoot.makeChatViewModel()
+            self.chatViewModel = viewModel
+            NSLog("ChatViewModel created")
+            let tabView = TriosTabView(viewModel: viewModel)
+            NSLog("TriosTabView created")
+            let panel = windowManager.setupPanel(contentView: AnyView(tabView))
+            NSLog("Panel created: \(panel)")
+        } catch {
+            NSLog("setupSidePanel ERROR: \(error)")
         }
-        _ = windowManager.setupPanel(contentView: AnyView(tabView))
     }
 
     // MARK: - Window Shifting
@@ -335,10 +357,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - UI Actions
 
     @objc func statusBarButtonClicked(_ sender: Any?) {
+        NSLog("statusBarButtonClicked called")
         guard let event = NSApp.currentEvent else {
+            NSLog("statusBarButtonClicked: no current event, toggling")
             toggleSidePanel()
             return
         }
+        NSLog("statusBarButtonClicked: event.type = \(event.type)")
         if event.type == .rightMouseUp {
             let menu = createMenu()
             statusItem?.menu = menu
@@ -350,20 +375,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func toggleSidePanel() {
-        guard let panel = windowManager.panel else { return }
+        NSLog("toggleSidePanel called")
+        guard let panel = windowManager.panel else {
+            NSLog("toggleSidePanel: panel is nil!")
+            return
+        }
+        NSLog("toggleSidePanel: panel isVisible=\(panel.isVisible), frame=\(panel.frame)")
         if panel.isVisible {
+            NSLog("toggleSidePanel: closing panel")
             windowManager.close { [weak self] in
                 self?.restoreWindows()
             }
         } else {
+            NSLog("toggleSidePanel: opening panel")
             accessibilityGranted = AXIsProcessTrusted()
+            NSLog("toggleSidePanel: accessibilityGranted=\(accessibilityGranted)")
             if accessibilityGranted {
                 shiftWindows()
             } else if !accessibilityPromptShown {
                 accessibilityPromptShown = true
                 showAlert("Please grant Trios Accessibility access in:\nSystem Settings → Privacy & Security → Accessibility")
             }
+            NSLog("toggleSidePanel: calling windowManager.open()")
             windowManager.open()
+            NSLog("toggleSidePanel: windowManager.open() returned")
         }
     }
 
@@ -473,8 +508,11 @@ Your filesystem tools will be available!
 // MARK: - Composition Root (Dependency Injection)
 
 struct CompositionRoot {
+    @MainActor
     func makeChatViewModel() -> ChatViewModel {
+        NSLog("CompositionRoot: creating ChatViewModel...")
         let transport = SSETransport()
+        NSLog("CompositionRoot: SSETransport created")
         let healthCheck = HealthCheckTransport()
         let parser = UIMessageStreamParser()
         let persister = ConversationPersister()
@@ -490,8 +528,9 @@ struct CompositionRoot {
             endpoint: URL(string: "http://127.0.0.1:9105/a2a")
         )
         let a2aClient = A2ARegistryClient(serverURL: serverURL, agentCard: agentCard)
+        NSLog("CompositionRoot: A2ARegistryClient created")
 
-        return ChatViewModel(
+        let vm = ChatViewModel(
             transport: transport,
             healthCheck: healthCheck,
             parser: parser,
@@ -499,6 +538,14 @@ struct CompositionRoot {
             stateMachine: stateMachine,
             a2aClient: a2aClient
         )
+        NSLog("CompositionRoot: ChatViewModel created")
+        return vm
+    }
+
+    @MainActor
+    func makeSessionGuard(for viewModel: ChatViewModel) -> SessionGuard {
+        let healthCheck = HealthCheckTransport()
+        return SessionGuard(healthCheck: healthCheck, a2aClient: viewModel.a2aClient)
     }
 }
 

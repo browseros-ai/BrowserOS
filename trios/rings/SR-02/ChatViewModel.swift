@@ -18,7 +18,7 @@ final class ChatViewModel: ObservableObject {
     private let parser: ChatParserProtocol
     private let persister: ChatPersisterProtocol
     private let stateMachine: ConversationStateMachine
-    private let a2aClient: A2ARegistryClient?
+    let a2aClient: A2ARegistryClient?
     private let throttler = EventThrottler()
 
     private var conversationId: UUID = UUID()
@@ -26,7 +26,7 @@ final class ChatViewModel: ObservableObject {
     private var a2aRouter: A2AMessageRouter?
     private var a2aStreamTask: Task<Void, Never>?
 
-    nonisolated init(
+    init(
         transport: ChatTransportProtocol,
         healthCheck: ChatHealthCheckProtocol,
         parser: ChatParserProtocol,
@@ -34,18 +34,23 @@ final class ChatViewModel: ObservableObject {
         stateMachine: ConversationStateMachine,
         a2aClient: A2ARegistryClient? = nil
     ) {
+        NSLog("ChatViewModel.init starting")
         self.transport = transport
         self.healthCheck = healthCheck
         self.parser = parser
         self.persister = persister
         self.stateMachine = stateMachine
         self.a2aClient = a2aClient
+        NSLog("ChatViewModel.init properties set")
 
         Task {
+            NSLog("ChatViewModel.init Task started")
             await setupConversationId()
             await loadHistory()
             await checkHealth()
+            NSLog("ChatViewModel.init Task done")
         }
+        NSLog("ChatViewModel.init finished")
     }
 
     func setupConversationId() async {
@@ -432,6 +437,8 @@ struct ChatRequestBuilder {
         // Current user message
         messages.append(["role": "user", "content": message])
 
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
+
         var body: [String: Any] = [
             "conversationId": conversationId.uuidString,
             "message": message,
@@ -441,7 +448,8 @@ struct ChatRequestBuilder {
             "provider": ProcessInfo.processInfo.environment["TRIOS_PROVIDER"] ?? "ollama",
             "model": ProcessInfo.processInfo.environment["TRIOS_MODEL"] ?? "kimi-k2.6:cloud",
             "baseUrl": ProcessInfo.processInfo.environment["TRIOS_BASE_URL"] ?? "http://127.0.0.1:11434/v1",
-            "messages": messages
+            "messages": messages,
+            "userWorkingDir": homeDir
         ]
 
         // Flatten history for backward-compatible servers

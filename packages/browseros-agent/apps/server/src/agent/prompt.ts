@@ -538,17 +538,19 @@ function getWorkspace(
 
 Working directory: ${options.workspaceDir}
 
-You can read, write, search, and execute files in this directory:
+You have FULL filesystem and shell access on this macOS system:
 
-- \`filesystem_read\` → read file contents (text or images)
-- \`filesystem_write\` → create or overwrite files
+- \`filesystem_read\` → read any file (text or images) using absolute or relative paths
+- \`filesystem_write\` → create or overwrite files anywhere you have permissions
 - \`filesystem_edit\` → targeted find-and-replace edits
 - \`filesystem_ls\` → list directory contents
-- \`filesystem_find\` → search for files by name pattern
+- \`filesystem_find\` → search for files by name pattern across the system
 - \`filesystem_grep\` → search file contents by regex
-- \`filesystem_bash\` → execute shell commands
+- \`filesystem_bash\` → execute ANY shell command (brew, git, npm, swift, defaults write, etc.)
 
-Use the filesystem to save extracted data, run scripts, or process files.
+**CRITICAL**: Shell commands and absolute paths give you access to the ENTIRE system — not just the working directory. You can read/write system configs, install software, modify dotfiles, and run any macOS command. Use this power responsibly.
+
+Use the filesystem to save extracted data, run scripts, process files, or perform system operations.
 Skills may reference scripts in their directory — use absolute paths.
 </workspace>`
 }

@@ -2,116 +2,28 @@ import SwiftUI
 
 struct ChatPanelView: View {
     @ObservedObject var viewModel: ChatViewModel
+    @StateObject private var browserOSVM = BrowserOSChatViewModel()
     @State private var isNearBottom = true
     @State private var scrollOffset: CGFloat = 0
     @State private var contentHeight: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
-            headerBar
-            Divider().overlay(Color.grokDivider)
-            messageArea
-            inputBar
+            unifiedMessageArea
+            unifiedInputBar
         }
         .background(Color.clear)
-    }
-
-    // MARK: - Header
-
-    private var headerBar: some View {
-        HStack(spacing: 12) {
-            Button(action: {
-                Task { await viewModel.loadConversations() }
-                viewModel.showHistory = true
-            }) {
-                logoView(size: CGSize(width: 24, height: 20))
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-
-            HStack(spacing: 10) {
-                StatusDot(isOn: viewModel.isServerReachable, label: "Online", color: viewModel.isServerReachable ? .grokText : .grokDim)
-                StatusDot(isOn: viewModel.isA2ARegistered, label: "A2A", color: viewModel.isA2ARegistered ? .grokText : .grokDim)
-                QueenStatusBadge(viewModel: viewModel.queenStatusVM)
-            }
-
-            Button(action: {
-                viewModel.newConversation()
-            }) {
-                Image(systemName: "plus")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.grokMuted)
-            }
-            .buttonStyle(.plain)
+        .onAppear {
+            browserOSVM.startPageDetection()
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .sheet(isPresented: $viewModel.showHistory) {
-            historySheet
+        .onDisappear {
+            browserOSVM.stopPageDetection()
         }
     }
 
-    private var historySheet: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("History")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.grokText)
-                Spacer()
-                Button(action: { viewModel.showHistory = false }) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.grokMuted)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+    // MARK: - Unified Messages / Empty State
 
-            Divider().overlay(Color.grokBorder)
-
-            if viewModel.conversations.isEmpty {
-                Text("No history yet")
-                    .font(.system(size: 12))
-                    .foregroundColor(.grokDim)
-                    .padding(.top, 20)
-            } else {
-                List(viewModel.conversations) { conv in
-                    Button(action: {
-                        Task { await viewModel.switchConversation(id: conv.id) }
-                    }) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(conv.title)
-                                .font(.system(size: 12))
-                                .foregroundColor(.grokText)
-                                .lineLimit(1)
-                            Text(conv.updatedAt, style: .relative)
-                                .font(.system(size: 9))
-                                .foregroundColor(.grokDim)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-            }
-
-            Spacer()
-        }
-        .frame(width: 320, height: 400)
-        .background(
-            GlassmorphismBackground(material: .popover, blending: .withinWindow, cornerRadius: 16)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.grokBorder.opacity(0.4), lineWidth: 1)
-        )
-    }
-
-    // MARK: - Messages / Empty State
-
-    private var messageArea: some View {
+    private var unifiedMessageArea: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 GeometryReader { geo in
@@ -120,10 +32,11 @@ struct ChatPanelView: View {
                 }
                 .frame(height: 0)
 
-                if viewModel.messages.isEmpty {
+                if viewModel.messages.isEmpty && browserOSVM.messages.isEmpty {
                     emptyStateView
                 } else {
                     LazyVStack(spacing: 0) {
+                        // Local chat messages
                         ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
                             let isFirstInGroup = index == 0 || viewModel.messages[index - 1].role != message.role
                             let isLastInGroup = index == viewModel.messages.count - 1 || viewModel.messages[index + 1].role != message.role
@@ -144,13 +57,28 @@ struct ChatPanelView: View {
                             )
                             .id(message.id)
                         }
+
+                        // BrowserOS messages
+                        ForEach(browserOSVM.messages) { message in
+                            BrowserOSMessageBubble(message: message)
+                                .id(message.id)
+                        }
+
+                        // Typing indicators
+                        if viewModel.state != .idle {
+                            TypingIndicatorView()
+                                .id("typing-local")
+                        }
+                        if browserOSVM.isStreaming {
+                            TypingIndicatorView()
+                                .id("typing-browseros")
+                        }
                     }
                 }
             }
             .coordinateSpace(name: "scrollArea")
             .onPreferenceChange(ScrollOffsetPreferenceKey.self) { offset in
                 scrollOffset = offset
-                // If near bottom (within 100 points), enable auto-scroll
                 let threshold: CGFloat = 100
                 isNearBottom = abs(offset + contentHeight) < threshold
             }
@@ -163,6 +91,13 @@ struct ChatPanelView: View {
             }
             .onChange(of: viewModel.messages.last?.content) {
                 if isNearBottom, let last = viewModel.messages.last {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+            }
+            .onChange(of: browserOSVM.messages.count) {
+                if isNearBottom, let last = browserOSVM.messages.last {
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
@@ -192,7 +127,6 @@ struct ChatPanelView: View {
                 .font(.system(size: 16, weight: .regular, design: .default))
                 .foregroundColor(.grokMuted)
 
-            // Suggested prompts
             VStack(spacing: 8) {
                 suggestedPromptChip("Open google.com in BrowserOS")
                 suggestedPromptChip("Take a screenshot of current page")
@@ -209,7 +143,7 @@ struct ChatPanelView: View {
     private func suggestedPromptChip(_ text: String) -> some View {
         Button(action: {
             viewModel.inputText = text
-            Task { await viewModel.sendMessage() }
+            triggerSend()
         }) {
             Text(text)
                 .font(.system(size: 12))
@@ -222,9 +156,9 @@ struct ChatPanelView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Input Bar
+    // MARK: - Unified Input Bar
 
-    private var inputBar: some View {
+    private var unifiedInputBar: some View {
         VStack(spacing: 0) {
             Divider().overlay(Color.grokDivider)
             HStack(spacing: 12) {
@@ -240,7 +174,7 @@ struct ChatPanelView: View {
                 Button(action: {
                     triggerSend()
                 }) {
-                    Image(systemName: viewModel.state == .idle ? "arrow.up" : "stop.fill")
+                    Image(systemName: sendButtonIcon)
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundColor(viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .grokDim : .grokText)
                         .frame(width: 32, height: 32)
@@ -258,9 +192,20 @@ struct ChatPanelView: View {
         .padding(.bottom, 20)
     }
 
+    private var sendButtonIcon: String {
+        let isSending = viewModel.state != .idle || browserOSVM.isStreaming
+        return isSending ? "stop.fill" : "arrow.up"
+    }
+
     private func triggerSend() {
-        Task {
-            await viewModel.sendMessage()
+        let text = viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+
+        if browserOSVM.isLikelyCommand(text) {
+            viewModel.inputText = ""
+            browserOSVM.sendMessage(text)
+        } else {
+            Task { await viewModel.sendMessage() }
         }
     }
 }
@@ -310,6 +255,76 @@ private func logoView(size: CGSize) -> some View {
                 .frame(width: size.width, height: size.height)
                 .foregroundColor(.grokText)
         }
+    }
+}
+
+// MARK: - BrowserOS Message Bubble
+
+private struct BrowserOSMessageBubble: View {
+    let message: BrowserOSChatMessage
+
+    var body: some View {
+        HStack {
+            if message.role == .user { Spacer() }
+            VStack(alignment: .leading, spacing: 4) {
+                RichMessageView(text: message.content, isUser: message.role == .user)
+                    .font(.system(size: 14, weight: .regular, design: .default))
+                    .padding(12)
+                    .background(
+                        message.role == .user
+                            ? Color.grokElevated.opacity(0.8)
+                            : Color.grokSurface.opacity(0.6)
+                    )
+                    .foregroundColor(.grokText)
+                    .cornerRadius(16)
+                if !message.toolCalls.isEmpty {
+                    ForEach(message.toolCalls, id: \.name) { tool in
+                        BrowserOSToolCallCard(tool: tool)
+                    }
+                }
+            }
+            if message.role == .assistant || message.role == .system { Spacer() }
+        }
+    }
+}
+
+private struct BrowserOSToolCallCard: View {
+    let tool: BrowserOSToolCall
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: "hammer.fill")
+                    .foregroundColor(.grokMuted)
+                    .font(.caption)
+                Text(tool.name)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.grokText)
+                Spacer()
+                Button(action: { isExpanded.toggle() }) {
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundColor(.grokMuted)
+                }
+                .buttonStyle(.plain)
+            }
+            if isExpanded, let result = tool.result {
+                Text(result)
+                    .font(.system(size: 11))
+                    .foregroundColor(.grokMuted)
+                    .padding(6)
+                    .background(Color.grokElevated.opacity(0.4))
+                    .cornerRadius(6)
+            }
+        }
+        .padding(8)
+        .background(Color.grokSurface.opacity(0.4))
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.grokBorder.opacity(0.3), lineWidth: 1)
+        )
     }
 }
 

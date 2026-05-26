@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 struct GlassmorphismBackground: NSViewRepresentable {
-    var material: NSVisualEffectView.Material = .underWindowBackground
+    var material: NSVisualEffectView.Material = .fullScreenUI
     var blending: NSVisualEffectView.BlendingMode = .behindWindow
     var cornerRadius: CGFloat = 20
 
@@ -16,13 +16,24 @@ struct GlassmorphismBackground: NSViewRepresentable {
         view.layer?.masksToBounds = true
         view.appearance = NSAppearance(named: .darkAqua)
 
+        // Apple-style subtle dark tint over blur
         let tint = NSView()
         tint.wantsLayer = true
-        tint.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.25).cgColor
+        tint.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.12).cgColor
         tint.layer?.cornerRadius = cornerRadius
         tint.layer?.masksToBounds = true
         tint.autoresizingMask = [.width, .height]
         view.addSubview(tint)
+
+        // Frosted edge stroke
+        let border = NSView()
+        border.wantsLayer = true
+        border.layer?.borderWidth = 0.5
+        border.layer?.borderColor = NSColor.white.withAlphaComponent(0.15).cgColor
+        border.layer?.cornerRadius = cornerRadius
+        border.layer?.masksToBounds = true
+        border.autoresizingMask = [.width, .height]
+        view.addSubview(border)
 
         return view
     }
@@ -31,8 +42,8 @@ struct GlassmorphismBackground: NSViewRepresentable {
         nsView.material = material
         nsView.blendingMode = blending
         nsView.layer?.cornerRadius = cornerRadius
-        if let tint = nsView.subviews.first {
-            tint.layer?.cornerRadius = cornerRadius
+        for subview in nsView.subviews {
+            subview.layer?.cornerRadius = cornerRadius
         }
     }
 }
