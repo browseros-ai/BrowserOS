@@ -68,7 +68,7 @@ The Mac Mini must already have:
 
 - Build repo clone, for example `/Users/<user>/code/browseros-release`
 - Chromium checkout, for example `/Users/<user>/code/chromium-release/src`
-- `uv`, depot_tools, Xcode Command Line Tools, and signing/notarization tooling
+- `uv`, `gh`, depot_tools, Xcode Command Line Tools, and signing/notarization tooling
 - `packages/browseros/.env` with signing, notarization, R2, and Slack values
 - `MACOS_KEYCHAIN_PASSWORD` in `.env` so the build can unlock the keychain
 
@@ -105,8 +105,12 @@ Nightly version commits use:
 chore(release): build v<VERSION> [skip ci]
 ```
 
-The persistent clone must already have push credentials for the target branch.
-The workflow's `GITHUB_TOKEN` is read-only.
+Version commits are pushed to a `bot/nightly-macos-version-*` branch and opened
+as pull requests against the target branch. The workflow tries an immediate
+squash merge, then auto-merge, and leaves the PR open if GitHub will not merge it
+yet. The persistent clone must already have credentials that can push bot
+branches. The workflow's `GITHUB_TOKEN` has `contents: write` and
+`pull-requests: write` for the build job so it can create and merge those PRs.
 
 ## Manual Branch Build
 
@@ -153,8 +157,9 @@ and restart the runner service.
 Artifact-only manual run: set `upload_to_r2=false` to package the DMG without
 publishing it to R2.
 
-No version commit: check `commit_version`, the selected bump mode, and the
-persistent clone's push credentials.
+No version commit: check `commit_version`, the selected bump mode, the
+persistent clone's branch push credentials, and any open
+`bot/nightly-macos-version-*` PR.
 
 Long runtime: the release pipeline resets the Chromium tree and wipes
 `out/Default_arm64`, so multi-hour runs are expected.
