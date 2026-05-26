@@ -145,6 +145,7 @@ jobs:
           TARGET_REF: ${{ steps.build_inputs.outputs.target_ref }}
           VERSION: ${{ steps.bump.outputs.version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -169,6 +170,7 @@ jobs:
           fi
 
           pr_url="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
             --base "$TARGET_REF" \
             --head "$branch" \
             --state open \
@@ -176,6 +178,7 @@ jobs:
             --jq '.[0].url // ""')"
           if [ -z "$pr_url" ]; then
             pr_body="$(mktemp)"
+            trap 'rm -f "$pr_body"' EXIT
             cat > "$pr_body" <<EOF
           Automated nightly macOS version bump for v$VERSION.
 
@@ -183,6 +186,7 @@ jobs:
           Target ref: $TARGET_REF
           EOF
             pr_url="$(gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
               --base "$TARGET_REF" \
               --head "$branch" \
               --title "chore(release): build v$VERSION" \
@@ -191,6 +195,7 @@ jobs:
 
           echo "Version bump PR: $pr_url"
           if gh pr merge "$pr_url" \
+            --repo "$GITHUB_REPOSITORY" \
             --squash \
             --delete-branch \
             --subject "chore(release): build v$VERSION [skip ci]" \
@@ -198,16 +203,21 @@ jobs:
             exit 0
           fi
 
-          merge_state="$(gh pr view "$pr_url" --json mergeStateStatus --jq '.mergeStateStatus // "UNKNOWN"')"
+          merge_state="$(gh pr view "$pr_url" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json mergeStateStatus \
+            --jq '.mergeStateStatus // "UNKNOWN"' || echo "UNKNOWN")"
           failed_checks="$(gh pr view "$pr_url" \
+            --repo "$GITHUB_REPOSITORY" \
             --json statusCheckRollup \
-            --jq '[.statusCheckRollup[]? | select((.__typename == "CheckRun" and ((.conclusion // "") == "FAILURE" or (.conclusion // "") == "CANCELLED" or (.conclusion // "") == "TIMED_OUT" or (.conclusion // "") == "ACTION_REQUIRED")) or (.__typename == "StatusContext" and ((.state // "") == "FAILURE" or (.state // "") == "ERROR")))] | length')"
+            --jq '[.statusCheckRollup[]? | select((.__typename == "CheckRun" and ((.conclusion // "") == "FAILURE" or (.conclusion // "") == "CANCELLED" or (.conclusion // "") == "TIMED_OUT" or (.conclusion // "") == "ACTION_REQUIRED")) or (.__typename == "StatusContext" and ((.state // "") == "FAILURE" or (.state // "") == "ERROR")))] | length' || echo "0")"
           if [ "$merge_state" = "DIRTY" ] || [ "$failed_checks" -gt 0 ]; then
             echo "::warning::Leaving version bump PR open (mergeStateStatus=$merge_state, failedChecks=$failed_checks): $pr_url"
             exit 0
           fi
 
           if gh pr merge "$pr_url" \
+            --repo "$GITHUB_REPOSITORY" \
             --auto \
             --squash \
             --delete-branch \
