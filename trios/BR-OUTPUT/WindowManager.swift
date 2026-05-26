@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Manages the side panel window lifecycle, positioning, and animation.
 final class WindowManager {
-    private(set) weak var panel: NSWindow?
+    private(set) var panel: NSWindow?
     private weak var hostingController: NSHostingController<AnyView>?
     private let screenManager = TriosScreenManager.shared
     private var currentSidebarWidth: CGFloat = 400
@@ -15,9 +15,9 @@ final class WindowManager {
             fatalError("No main screen available")
         }
         let frame = screen.visibleFrame
-        let panel = NSWindow(
-            contentRect: NSRect(x: frame.maxX, y: frame.minY, width: defaultWidth, height: frame.height),
-            styleMask: [.borderless, .fullSizeContentView],
+        let panel = KeyWindow(
+            contentRect: NSRect(x: frame.maxX - defaultWidth, y: frame.minY, width: defaultWidth, height: frame.height),
+            styleMask: [.titled, .fullSizeContentView, .resizable, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
@@ -31,6 +31,18 @@ final class WindowManager {
         panel.animationBehavior = .none
         panel.appearance = NSAppearance(named: .darkAqua)
         panel.isReleasedWhenClosed = false
+        panel.titlebarAppearsTransparent = true
+        panel.titleVisibility = .hidden
+
+        // Glassmorphism blur — subview behind everything, does NOT replace contentView
+        let blurView = NSVisualEffectView()
+        blurView.material = .fullScreenUI
+        blurView.blendingMode = .behindWindow
+        blurView.state = .active
+        blurView.wantsLayer = true
+        blurView.frame = panel.contentView!.bounds
+        blurView.autoresizingMask = [.width, .height]
+        panel.contentView?.addSubview(blurView, positioned: .below, relativeTo: nil)
 
         let hc = NSHostingController(rootView: contentView)
         let hostingView = hc.view
@@ -41,6 +53,8 @@ final class WindowManager {
         self.hostingController = hc
         self.panel = panel
         screenManager.currentScreen = screen
+        panel.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
         return panel
     }
 
@@ -50,15 +64,21 @@ final class WindowManager {
     }
 
     func open() {
-        guard let panel = panel else { return }
+        NSLog("WindowManager.open() called")
+        guard let panel = panel else {
+            NSLog("WindowManager.open(): panel is nil!")
+            return
+        }
         let screen = screenManager.detectScreenForMouse() ?? NSScreen.main ?? NSScreen.screens.first!
         let frame = screen.visibleFrame
         let offscreenX = frame.maxX
         let openX = frame.maxX - currentSidebarWidth
         let y = frame.minY
+        NSLog("WindowManager.open(): screen frame=\(frame), offscreenX=\(offscreenX), openX=\(openX)")
         panel.setFrame(NSRect(x: offscreenX, y: y, width: currentSidebarWidth, height: frame.height), display: false)
         panel.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
+        NSLog("WindowManager.open(): makeKeyAndOrderFront called, panel.isVisible=\(panel.isVisible)")
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.35
@@ -66,6 +86,7 @@ final class WindowManager {
             panel.animator().setFrame(NSRect(x: openX, y: y, width: currentSidebarWidth, height: frame.height), display: true)
         }
         onPanelToggle?(true)
+        NSLog("WindowManager.open(): animation done")
     }
 
     func close(completion: (() -> Void)? = nil) {

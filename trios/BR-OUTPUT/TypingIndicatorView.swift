@@ -1,34 +1,25 @@
 import SwiftUI
 
 struct TypingIndicatorView: View {
-    @State private var phase: CGFloat = 0
+    @State private var animate = false
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(0..<3, id: \.self) { index in
+            ForEach(0..<3) { i in
                 Circle()
-                    .fill(Color.gray.opacity(0.6))
+                    .fill(Color.grokMuted)
                     .frame(width: 6, height: 6)
-                    .scaleEffect(scale(for: index))
+                    .offset(y: animate ? -4 : 0)
                     .animation(
-                        Animation.easeInOut(duration: 0.6)
+                        Animation.easeInOut(duration: 0.4)
                             .repeatForever(autoreverses: true)
-                            .delay(Double(index) * 0.2),
-                        value: phase
+                            .delay(Double(i) * 0.15),
+                        value: animate
                     )
             }
         }
-        .padding(.horizontal, 4)
-        .onAppear {
-            phase = 1
-        }
-    }
-
-    private func scale(for index: Int) -> CGFloat {
-        let base = CGFloat(0.6)
-        let amplitude = CGFloat(0.4)
-        let offset = Double(index) * 0.2
-        let value = sin((Double(phase) * .pi * 2) + offset)
-        return base + amplitude * CGFloat(abs(value))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .onAppear { animate = true }
     }
 }

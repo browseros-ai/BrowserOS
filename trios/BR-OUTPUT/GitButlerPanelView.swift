@@ -38,7 +38,22 @@ struct GitButlerPanelView: View {
 
     private var branchList: some View {
         VStack(spacing: 0) {
-            List(vm.branches) { branch in
+            if vm.branches.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 32))
+                        .foregroundColor(.grokDim)
+                    Text("No branches")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.grokText)
+                    Text("Create a new branch to get started")
+                        .font(.system(size: 11))
+                        .foregroundColor(.grokMuted)
+                    Spacer()
+                }
+            } else {
+                List(vm.branches) { branch in
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
                         Circle()
@@ -110,6 +125,7 @@ struct GitButlerPanelView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            }
 
             if !vm.consoleOutput.isEmpty {
                 VStack(spacing: 0) {

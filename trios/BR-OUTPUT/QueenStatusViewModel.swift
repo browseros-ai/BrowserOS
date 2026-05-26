@@ -41,8 +41,11 @@ final class QueenStatusViewModel: ObservableObject {
     private var logTimer: Timer?
 
     init() {
-        refreshAll()
         startTimers()
+        // Defer first refresh so init doesn't block the main thread
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshAll()
+        }
     }
 
     deinit {
@@ -58,43 +61,55 @@ final class QueenStatusViewModel: ObservableObject {
         }
         logTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
             Task { @MainActor in
-                self.loadLogTail()
+                await self.loadLogTailAsync()
             }
         }
     }
 
     func refreshAll() {
-        checkTrios()
-        checkMCP()
-        checkAgent()
-        checkCron()
-        checkA2A()
-        checkFunnel()
-        checkGit()
-        checkBuild()
+        Task { @MainActor in
+            await asyncRefreshAll()
+        }
+    }
+
+    private func asyncRefreshAll() async {
+        // Run all checks concurrently
+        async let trios = checkTriosAsync()
+        async let mcp = checkMCPAsync()
+        async let agent = checkAgentAsync()
+        async let cron = checkCronAsync()
+        async let a2a = checkA2AAsync()
+        async let funnel = checkFunnelAsync()
+        async let git = checkGitAsync()
+        async let build = checkBuildAsync()
+
+        _ = await (trios, mcp, agent, cron, a2a, funnel, git, build)
+
         loadSkills()
-        loadLogTail()
+        await loadLogTailAsync()
         computeOverallStatus()
     }
 
     // MARK: - Component Checks
 
-    private func checkTrios() {
-        let running = shell("pgrep -x trios_app >/dev/null 2>&1 && echo 1 || echo 0").trimmingCharacters(in: .whitespaces) == "1"
+    // MARK: - Async Component Checks
+
+    private func checkTriosAsync() async {
+        let running = await shellAsync("pgrep -x trios_app >/dev/null 2>&1 && echo 1 || echo 0") == "1"
         updateComponent(name: "TRIOS", icon: "macwindow", status: running ? .healthy : .down, detail: running ? "Running" : "Stopped", action: running ? nil : "Start")
     }
 
-    private func checkMCP() {
-        let healthy = shell("curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9105/health 2>/dev/null || echo 000").trimmingCharacters(in: .whitespaces) == "200"
+    private func checkMCPAsync() async {
+        let healthy = await shellAsync("curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9105/health 2>/dev/null || echo 000") == "200"
         updateComponent(name: "MCP", icon: "server.rack", status: healthy ? .healthy : .down, detail: healthy ? "Online" : "Offline", action: healthy ? "Restart" : "Start")
     }
 
-    private func checkAgent() {
-        let healthy = shell("curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9200/health 2>/dev/null || echo 000").trimmingCharacters(in: .whitespaces) == "200"
+    private func checkAgentAsync() async {
+        let healthy = await shellAsync("curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9200/health 2>/dev/null || echo 000") == "200"
         updateComponent(name: "Agent", icon: "cpu", status: healthy ? .healthy : .down, detail: healthy ? "Online" : "Offline", action: healthy ? "Restart" : "Start")
     }
 
-    private func checkCron() {
+    private func checkCronAsync() async {
         let fm = FileManager.default
         guard fm.fileExists(atPath: statePath) else {
             updateComponent(name: "Cron", icon: "clock.arrow.circlepath", status: .unknown, detail: "No state", action: "Run")
@@ -128,31 +143,67 @@ final class QueenStatusViewModel: ObservableObject {
         }
     }
 
-    private func checkA2A() {
-        let agents = shell("ls \(ProjectPaths.claude("agents"))/*.md 2>/dev/null | wc -l | tr -d ' '")
+    private func checkA2AAsync() async {
+        let agents = await shellAsync("ls \(ProjectPaths.claude("agents"))/*.md 2>/dev/null | wc -l | tr -d ' '")
         let count = Int(agents.trimmingCharacters(in: .whitespaces)) ?? 0
         let detail = count > 0 ? "\(count) agents" : "No agents"
         updateComponent(name: "A2A", icon: "network", status: count > 0 ? .healthy : .warning, detail: detail, action: nil)
     }
 
-    private func checkFunnel() {
-        let running = shell("pgrep -x tailscale >/dev/null 2>&1 && echo 1 || echo 0").trimmingCharacters(in: .whitespaces) == "1"
+    private func checkFunnelAsync() async {
+        let running = await shellAsync("pgrep -x tailscale >/dev/null 2>&1 && echo 1 || echo 0") == "1"
         updateComponent(name: "Funnel", icon: "globe", status: running ? .healthy : .warning, detail: running ? "Tailscale active" : "Not running", action: nil)
     }
 
-    private func checkGit() {
-        let branch = shell("cd \(projectRoot) && git branch --show-current 2>/dev/null || echo '—'")
-        let dirty = shell("cd \(projectRoot) && git status --porcelain 2>/dev/null | wc -l | tr -d ' '")
+    private func checkGitAsync() async {
+        let branch = await shellAsync("cd \(projectRoot) && git branch --show-current 2>/dev/null || echo '—'")
+        let dirty = await shellAsync("cd \(projectRoot) && git status --porcelain 2>/dev/null | wc -l | tr -d ' '")
         let dirtyCount = Int(dirty.trimmingCharacters(in: .whitespaces)) ?? 0
         let status: ComponentStatus = dirtyCount > 0 ? .warning : .healthy
         let detail = "\(branch.trimmingCharacters(in: .whitespaces)) · \(dirtyCount) dirty"
         updateComponent(name: "Git", icon: "arrow.triangle.branch", status: status, detail: detail, action: nil)
     }
 
-    private func checkBuild() {
-        let result = shell("cd \(projectRoot) && swiftc -typecheck main.swift rings/**/*.swift BR-OUTPUT/*.swift 2>&1 | head -5")
+    private func checkBuildAsync() async {
+        let result = await shellAsync("cd \(projectRoot) && swiftc -typecheck main.swift rings/**/*.swift BR-OUTPUT/*.swift 2>&1 | head -5")
         let ok = result.trimmingCharacters(in: .whitespaces).isEmpty
         updateComponent(name: "Build", icon: "hammer", status: ok ? .healthy : .down, detail: ok ? "OK" : "Errors", action: nil)
+    }
+
+    private func loadLogTailAsync() async {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: logPath) else {
+            lastLogLines = ["No cron log found"]
+            return
+        }
+        let output = await shellAsync("tail -n 20 \(logPath)")
+        lastLogLines = output.split(separator: "\n").map { String($0) }
+        if lastLogLines.isEmpty {
+            lastLogLines = ["Log empty"]
+        }
+    }
+
+    private func shellAsync(_ command: String) async -> String {
+        await Task.detached {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            task.arguments = ["-c", command]
+            task.currentDirectoryURL = URL(fileURLWithPath: self.projectRoot)
+
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = pipe
+
+            do {
+                try task.run()
+                task.waitUntilExit()
+            } catch {
+                return ""
+            }
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }.value
     }
 
     private func updateComponent(name: String, icon: String, status: ComponentStatus, detail: String, action: String?) {
@@ -192,19 +243,6 @@ final class QueenStatusViewModel: ObservableObject {
     }
 
     // MARK: - Log
-
-    func loadLogTail() {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: logPath) else {
-            lastLogLines = ["No cron log found"]
-            return
-        }
-        let output = shell("tail -n 20 \(logPath)")
-        lastLogLines = output.split(separator: "\n").map { String($0) }
-        if lastLogLines.isEmpty {
-            lastLogLines = ["Log empty"]
-        }
-    }
 
     // MARK: - Actions
 
@@ -278,8 +316,10 @@ final class QueenStatusViewModel: ObservableObject {
         isRunningAction = true
         runAsync("cd \(projectRoot) && \(cmd)")
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            self.loadLogTail()
-            self.isRunningAction = false
+            Task { @MainActor in
+                await self.loadLogTailAsync()
+                self.isRunningAction = false
+            }
         }
     }
 

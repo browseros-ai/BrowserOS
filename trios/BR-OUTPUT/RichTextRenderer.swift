@@ -50,11 +50,11 @@ struct InlineMarkdownText: View {
         if let attributed = renderAttributed() {
             Text(attributed)
                 .font(.body)
-                .foregroundColor(isUser ? .primary : .primary)
+                .foregroundColor(.grokText)
         } else {
             manualMarkdown()
                 .font(.body)
-                .foregroundColor(isUser ? .primary : .primary)
+                .foregroundColor(.grokText)
         }
     }
 
@@ -267,7 +267,7 @@ struct ListBlockView: View {
                 HStack(alignment: .top, spacing: 6) {
                     Text("•")
                         .font(.body)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.grokMuted)
                     InlineMarkdownText(text: item, isUser: false)
                         .font(.body)
                 }
@@ -291,7 +291,7 @@ struct CodeBlockView: View {
                         .font(.caption2)
                         .fontWeight(.semibold)
                 }
-                .foregroundColor(.secondary)
+                .foregroundColor(.grokMuted)
 
                 Spacer()
 
@@ -309,27 +309,27 @@ struct CodeBlockView: View {
                         Text(copied ? "Copied" : "Copy")
                             .font(.caption2)
                     }
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.grokMuted)
                 }
                 .buttonStyle(PlainButtonStyle())
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color(NSColor.controlBackgroundColor).opacity(0.8))
+            .background(Color.grokElevated.opacity(0.5))
 
             ScrollView(.horizontal, showsIndicators: true) {
                 Text(code)
                     .font(.system(.body, design: .monospaced))
-                    .foregroundColor(.primary)
+                    .foregroundColor(.grokText)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
             }
         }
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(Color.grokElevated.opacity(0.4))
         .cornerRadius(8)
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                .stroke(Color.grokBorder.opacity(0.3), lineWidth: 1)
         )
     }
 }
