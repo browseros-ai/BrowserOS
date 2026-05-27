@@ -29,6 +29,16 @@ import type { ScheduledJob, ScheduledJobRun } from './types'
 dayjs.extend(relativeTime)
 dayjs.extend(duration)
 
+const DAYS_OF_WEEK = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+] as const
+
 interface ScheduledTaskCardProps {
   job: ScheduledJob
   onEdit: () => void
@@ -43,6 +53,13 @@ interface ScheduledTaskCardProps {
 function formatSchedule(job: ScheduledJob): string {
   if (job.scheduleType === 'daily' && job.scheduleTime) {
     return `Daily at ${job.scheduleTime}`
+  }
+  if (
+    job.scheduleType === 'weekly' &&
+    job.scheduleTime &&
+    typeof job.dayOfWeek === 'number'
+  ) {
+    return `Every ${DAYS_OF_WEEK[job.dayOfWeek]} at ${job.scheduleTime}`
   }
   if (job.scheduleType === 'hourly' && job.scheduleInterval) {
     return job.scheduleInterval === 1

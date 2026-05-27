@@ -26,7 +26,7 @@ type RemoteScheduledJob = {
   lastRunAt: string | null
 }
 
-const IGNORED_FIELDS = ['id', 'createdAt', 'lastRunAt'] as const
+const IGNORED_FIELDS = ['id', 'createdAt', 'lastRunAt', 'dayOfWeek'] as const
 
 function toComparable(job: ScheduledJob) {
   const data = omit(job, IGNORED_FIELDS)

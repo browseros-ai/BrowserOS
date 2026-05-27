@@ -5,13 +5,28 @@ import {
   scheduledJobRunStorage,
   scheduledJobStorage,
 } from '@/lib/schedules/scheduleStorage'
-import type { ScheduledJobRun } from '@/lib/schedules/scheduleTypes'
+import type { ScheduledJob, ScheduledJobRun } from '@/lib/schedules/scheduleTypes'
 
 const MAX_RUNS_PER_JOB = 15
 const STALE_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000
 
 const runAbortControllers = new Map<string, AbortController>()
+
+const getPreviousWeeklyScheduledTime = (
+  dayOfWeek: NonNullable<ScheduledJob['dayOfWeek']>,
+  timeString: string,
+): number => {
+  const [hours, minutes] = timeString.split(':').map(Number)
+  const scheduled = new Date()
+
+  scheduled.setHours(hours, minutes, 0, 0)
+  scheduled.setDate(
+    scheduled.getDate() - ((scheduled.getDay() - dayOfWeek + 7) % 7),
+  )
+
+  return scheduled.getTime()
+}
 
 export const scheduledJobRuns = async () => {
   const cleanupStaleJobRuns = async () => {
@@ -178,6 +193,16 @@ export const scheduledJobRuns = async () => {
           const scheduledToday = new Date()
           scheduledToday.setHours(hours, minutes, 0, 0)
           if (now < scheduledToday.getTime()) continue
+        }
+
+        if (job.scheduleType === 'weekly') {
+          if (!job.scheduleTime || typeof job.dayOfWeek !== 'number') continue
+
+          const scheduledThisWeek = getPreviousWeeklyScheduledTime(
+            job.dayOfWeek,
+            job.scheduleTime,
+          )
+          if (now < scheduledThisWeek || scheduledThisWeek < cutoff) continue
         }
 
         if (

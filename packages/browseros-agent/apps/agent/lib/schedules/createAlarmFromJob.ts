@@ -15,6 +15,26 @@ const getNextScheduledTime = (timeString: string): number => {
   return scheduled.getTime()
 }
 
+const getNextWeeklyScheduledTime = (
+  dayOfWeek: NonNullable<ScheduledJob['dayOfWeek']>,
+  timeString: string,
+): number => {
+  const [hours, minutes] = timeString.split(':').map(Number)
+  const now = new Date()
+  const scheduled = new Date()
+
+  scheduled.setHours(hours, minutes, 0, 0)
+  scheduled.setDate(
+    scheduled.getDate() + ((dayOfWeek - scheduled.getDay() + 7) % 7),
+  )
+
+  if (scheduled.getTime() <= now.getTime()) {
+    scheduled.setDate(scheduled.getDate() + 7)
+  }
+
+  return scheduled.getTime()
+}
+
 export const createAlarmFromJob = async (job: ScheduledJob) => {
   const alarmName = `scheduled-job-${job.id}`
 
@@ -24,6 +44,15 @@ export const createAlarmFromJob = async (job: ScheduledJob) => {
     time = {
       when: getNextScheduledTime(job.scheduleTime),
       periodInMinutes: 24 * 60, // Repeat every 24 hours
+    }
+  } else if (
+    job.scheduleType === 'weekly' &&
+    job.scheduleTime &&
+    typeof job.dayOfWeek === 'number'
+  ) {
+    time = {
+      when: getNextWeeklyScheduledTime(job.dayOfWeek, job.scheduleTime),
+      periodInMinutes: 7 * 24 * 60,
     }
   } else if (job.scheduleType === 'hourly' && job.scheduleInterval) {
     const intervalInMinutes = job.scheduleInterval * 60

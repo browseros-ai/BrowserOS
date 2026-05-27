@@ -2,9 +2,10 @@ export interface ScheduledJob {
   id: string
   name: string
   query: string
-  scheduleType: 'daily' | 'hourly' | 'minutes'
+  scheduleType: 'daily' | 'hourly' | 'minutes' | 'weekly'
   scheduleTime?: string
   scheduleInterval?: number
+  dayOfWeek?: 0 | 1 | 2 | 3 | 4 | 5 | 6
   enabled: boolean
   providerId?: string
   createdAt: string
