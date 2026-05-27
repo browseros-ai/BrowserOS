@@ -34,6 +34,8 @@ export interface ResolvedAgentConfig {
   reasoningEffort?: string
   reasoningSummary?: string
   contextWindowSize?: number
+  /** Request timeout in milliseconds for providers that support per-request fetch configuration. */
+  requestTimeoutMs?: number
   userSystemPrompt?: string
   workingDir?: string
   /** Whether the model supports image inputs (vision). Defaults to true. */

@@ -23,6 +23,30 @@ type ProviderFactory = (
   config: ResolvedAgentConfig,
 ) => (modelId: string) => unknown
 
+function createRequestTimeoutFetch(
+  requestTimeoutMs?: number,
+): typeof globalThis.fetch | undefined {
+  if (
+    !requestTimeoutMs ||
+    requestTimeoutMs <= 0 ||
+    !Number.isFinite(requestTimeoutMs)
+  ) {
+    return undefined
+  }
+
+  return async (input, init) => {
+    const timeoutSignal = AbortSignal.timeout(requestTimeoutMs)
+    const signal = init?.signal
+      ? AbortSignal.any([init.signal, timeoutSignal])
+      : timeoutSignal
+
+    return globalThis.fetch(input, {
+      ...init,
+      signal,
+    })
+  }
+}
+
 function createAnthropicFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
@@ -71,10 +95,12 @@ function createLMStudioFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
   if (!config.baseUrl) throw new Error('LMStudio provider requires baseUrl')
+  const timeoutFetch = createRequestTimeoutFetch(config.requestTimeoutMs)
   return createOpenAICompatible({
     name: 'lmstudio',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
+    ...(timeoutFetch && { fetch: timeoutFetch }),
   })
 }
 
@@ -82,10 +108,12 @@ function createOllamaFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
   if (!config.baseUrl) throw new Error('Ollama provider requires baseUrl')
+  const timeoutFetch = createRequestTimeoutFetch(config.requestTimeoutMs)
   return createOpenAICompatible({
     name: 'ollama',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
+    ...(timeoutFetch && { fetch: timeoutFetch }),
   })
 }
 
