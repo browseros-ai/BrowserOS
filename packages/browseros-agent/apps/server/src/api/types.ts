@@ -38,6 +38,9 @@ export const ChatRequestSchema = AgentLLMConfigSchema.extend({
   conversationId: z.string().uuid(),
   message: z.string().optional().default(''),
   contextWindowSize: z.number().optional(),
+  // Per-request override for HTTP timeout against Ollama / LM Studio
+  // providers (closes #938). 0 / negative / undefined disables the timeout.
+  requestTimeoutMs: z.number().int().nonnegative().optional(),
   browserContext: BrowserContextSchema.optional(),
   userSystemPrompt: z.string().optional(),
   isScheduledTask: z.boolean().optional().default(false),

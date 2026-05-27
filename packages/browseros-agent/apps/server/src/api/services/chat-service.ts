@@ -65,6 +65,7 @@ export class ChatService {
       origin: request.origin,
       declinedApps: request.declinedApps,
       browserosId: this.deps.browserosId,
+      requestTimeoutMs: request.requestTimeoutMs,
     }
 
     let session = sessionStore.get(request.conversationId)
