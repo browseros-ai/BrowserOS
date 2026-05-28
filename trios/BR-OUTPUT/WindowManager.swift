@@ -4,7 +4,7 @@ import SwiftUI
 /// Manages the side panel window lifecycle, positioning, and animation.
 final class WindowManager {
     private(set) var panel: NSWindow?
-    private weak var hostingController: NSHostingController<AnyView>?
+    private var hostingController: NSHostingController<AnyView>?
     private let screenManager = TriosScreenManager.shared
     private var currentSidebarWidth: CGFloat = 400
     private let defaultWidth: CGFloat = 400

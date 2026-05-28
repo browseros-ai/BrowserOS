@@ -88,6 +88,12 @@ actor A2ARegistryClient {
         heartbeatTask = nil
     }
 
+    private static let dateFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
     func heartbeat() async throws {
         guard registered else { throw A2AError.notRegistered }
         let url = serverURL.appendingPathComponent("a2a/heartbeat")
@@ -96,7 +102,7 @@ actor A2ARegistryClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let payload = HeartbeatPayload(
             agentId: agentCard.id,
-            timestamp: ISO8601DateFormatter().string(from: Date())
+            timestamp: Self.dateFormatter.string(from: Date())
         )
         request.httpBody = try encoder.encode(payload)
 
@@ -196,10 +202,13 @@ actor A2ARegistryClient {
         }
     }
 
-    private func parseSSELine(_ line: String) -> A2AMessage? {
+    nonisolated private func parseSSELine(_ line: String) -> A2AMessage? {
         guard line.hasPrefix("data: ") else { return nil }
         let json = String(line.dropFirst(6))
         guard let data = json.data(using: .utf8) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(A2AMessage.self, from: data)
     }
 }

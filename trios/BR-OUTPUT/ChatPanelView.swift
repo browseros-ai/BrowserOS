@@ -74,14 +74,28 @@ struct ChatPanelView: View {
                             TypingIndicatorView()
                                 .id("typing-browseros")
                         }
+
+                        // Track total content height for scroll math
+                        GeometryReader { geo in
+                            Color.clear
+                                .preference(
+                                    key: ScrollContentHeightPreferenceKey.self,
+                                    value: geo.frame(in: .named("scrollArea")).maxY
+                                )
+                        }
+                        .frame(height: 0)
                     }
                 }
             }
             .coordinateSpace(name: "scrollArea")
             .onPreferenceChange(ScrollOffsetPreferenceKey.self) { offset in
                 scrollOffset = offset
-                let threshold: CGFloat = 100
-                isNearBottom = abs(offset + contentHeight) < threshold
+            }
+            .onPreferenceChange(ScrollContentHeightPreferenceKey.self) { totalHeight in
+                contentHeight = totalHeight
+                // If scroll offset + viewport height is close to total content height, we're near bottom
+                let viewportHeight = scrollOffset.isZero ? totalHeight : abs(scrollOffset)
+                isNearBottom = abs(totalHeight - viewportHeight) < 100
             }
             .onChange(of: viewModel.messages.count) {
                 if isNearBottom, let last = viewModel.messages.last {
@@ -104,13 +118,6 @@ struct ChatPanelView: View {
                     }
                 }
             }
-            .background(
-                GeometryReader { geo in
-                    Color.clear
-                        .onAppear { contentHeight = geo.size.height }
-                        .onChange(of: geo.size.height) { contentHeight = $0 }
-                }
-            )
         }
     }
 
@@ -319,6 +326,13 @@ struct MacTextEditor: NSViewRepresentable {
 // MARK: - Scroll Offset Tracking
 
 struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+struct ScrollContentHeightPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
