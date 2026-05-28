@@ -84,9 +84,18 @@ class BrowserOSChatViewModel: ObservableObject {
 
     func isLikelyCommand(_ text: String) -> Bool {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        // Only explicit command prefixes or slash commands — no broad word matching
-        let explicitPrefixes = ["shell ", "run ", "exec ", "navigate ", "click", "screenshot", "extract", "open ", "go to ", "browse ", "cat ", "ls ", "pwd", "cd ", "mkdir ", "rm ", "git ", "curl ", "wget ", "npm ", "bun ", "node ", "python ", "swift "]
-        return explicitPrefixes.contains { lower.hasPrefix($0) } || lower.hasPrefix("/") || lower.hasPrefix("./")
+        // Strict prefix matching only — all prefixes must end with space to avoid matching innocent words
+        let explicitPrefixes = [
+            "shell ", "run ", "exec ", "navigate ", "click ", "screenshot ", "extract ",
+            "open ", "go to ", "browse ", "cat ", "ls ", "cd ", "mkdir ", "rm ",
+            "git ", "curl ", "wget ", "npm ", "bun ", "node ", "python ", "swift "
+        ]
+        // Single-word commands must match exactly (not as substring)
+        let exactCommands = ["click", "screenshot", "extract", "pwd"]
+        let isPrefixMatch = explicitPrefixes.contains { lower.hasPrefix($0) }
+        let isExactMatch = exactCommands.contains { lower == $0 }
+        let isSlashCommand = lower.hasPrefix("/") || lower.hasPrefix("./")
+        return isPrefixMatch || isExactMatch || isSlashCommand
     }
 
     private func showUsageHint() {
