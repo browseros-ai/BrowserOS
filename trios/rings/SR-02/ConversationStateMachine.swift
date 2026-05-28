@@ -17,6 +17,8 @@ actor ConversationStateMachine {
         case (.error, .idle):
             state = newState
             reconnectAttempts = 0
+        case (.error, .streaming):
+            state = newState
         case (.idle, .reconnecting(let attempt, _)):
             reconnectAttempts = attempt
             state = newState
@@ -50,6 +52,7 @@ actor ConversationStateMachine {
              (.streaming, .idle),
              (.streaming, .error),
              (.error, .idle),
+             (.error, .streaming),     // allow retry immediately after error
              (.idle, .reconnecting),
              (.reconnecting, .idle),
              (.reconnecting, .reconnecting),

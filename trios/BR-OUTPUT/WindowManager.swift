@@ -9,6 +9,7 @@ final class WindowManager {
     private var currentSidebarWidth: CGFloat = 400
     private let defaultWidth: CGFloat = 400
     var onPanelToggle: ((Bool) -> Void)?
+    static weak var inputFirstResponder: NSView?
 
     func setupPanel(contentView: AnyView) -> NSWindow {
         guard let screen = NSScreen.main else {
@@ -34,7 +35,7 @@ final class WindowManager {
         panel.titlebarAppearsTransparent = true
         panel.titleVisibility = .hidden
 
-        // Glassmorphism blur — subview behind everything, does NOT replace contentView
+        // Glassmorphism blur — subview behind everything
         let blurView = NSVisualEffectView()
         blurView.material = .fullScreenUI
         blurView.blendingMode = .behindWindow
@@ -79,6 +80,12 @@ final class WindowManager {
         panel.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
         NSLog("WindowManager.open(): makeKeyAndOrderFront called, panel.isVisible=\(panel.isVisible)")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            if let input = WindowManager.inputFirstResponder {
+                panel.makeFirstResponder(input)
+            }
+        }
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.35

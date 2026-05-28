@@ -131,35 +131,11 @@ class TriosScreenManager {
     }
 }
 
-// MARK: - KeyWindow / KeyView
+// MARK: - KeyWindow
 
 class KeyWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
-}
-
-class KeyView: NSView {
-    override var acceptsFirstResponder: Bool { true }
-
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.contains(.command) {
-            let chars = event.charactersIgnoringModifiers ?? ""
-            let selector: Selector?
-            switch chars {
-            case "v": selector = #selector(NSText.paste(_:))
-            case "c": selector = #selector(NSText.copy(_:))
-            case "x": selector = #selector(NSText.cut(_:))
-            case "a": selector = #selector(NSText.selectAll(_:))
-            default: selector = nil
-            }
-            if let sel = selector {
-                if NSApp.sendAction(sel, to: nil, from: self) {
-                    return true
-                }
-            }
-        }
-        return super.performKeyEquivalent(with: event)
-    }
 }
 
 // MARK: - AppDelegate
@@ -182,6 +158,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("applicationDidFinishLaunching called")
+        NSApplication.shared.setActivationPolicy(.regular)
+        NSApplication.shared.activate(ignoringOtherApps: true)
 
         setupStatusItem()
         Task { @MainActor in

@@ -29,9 +29,7 @@ struct TriosTabView: View {
             Divider().overlay(Color.grokBorder)
             content
         }
-        .background(
-            GlassmorphismBackground(material: .fullScreenUI, blending: .behindWindow, cornerRadius: 20)
-        )
+        .background(Color.clear)
         .sheet(isPresented: $viewModel.showHistory) {
             historySheet
         }

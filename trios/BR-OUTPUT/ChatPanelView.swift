@@ -6,6 +6,7 @@ struct ChatPanelView: View {
     @State private var isNearBottom = true
     @State private var scrollOffset: CGFloat = 0
     @State private var contentHeight: CGFloat = 0
+    @State private var isInputFocused = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -162,16 +163,31 @@ struct ChatPanelView: View {
         VStack(spacing: 0) {
             Divider().overlay(Color.grokDivider)
             HStack(spacing: 12) {
-                TextField("Ask anything...", text: $viewModel.inputText, axis: .vertical)
-                    .textFieldStyle(PlainTextFieldStyle())
-                    .font(.system(size: 15, weight: .regular, design: .default))
-                    .foregroundColor(.grokText)
-                    .lineLimit(1...5)
-                    .onSubmit {
-                        triggerSend()
+                ZStack(alignment: .topLeading) {
+                    MacTextEditor(
+                        text: $viewModel.inputText,
+                        isFocused: $isInputFocused,
+                        onSubmit: { triggerSend() }
+                    )
+                    .frame(minHeight: 28, maxHeight: 120)
+                    .onAppear {
+                        DispatchQueue.main.async {
+                            isInputFocused = true
+                        }
                     }
 
+                    if viewModel.inputText.isEmpty {
+                        Text("Ask anything...")
+                            .font(.system(size: NSFont.systemFontSize))
+                            .foregroundColor(.grokDim)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 4)
+                            .allowsHitTesting(false)
+                    }
+                }
+
                 Button(action: {
+                    NSLog("[ChatPanel] send button clicked")
                     triggerSend()
                 }) {
                     Image(systemName: sendButtonIcon)
@@ -199,13 +215,103 @@ struct ChatPanelView: View {
 
     private func triggerSend() {
         let text = viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        NSLog("[ChatPanel] triggerSend called, text='\(text.prefix(40))', isEmpty=\(text.isEmpty)")
         guard !text.isEmpty else { return }
 
         if browserOSVM.isLikelyCommand(text) {
+            NSLog("[ChatPanel] routing to BrowserOS command")
             viewModel.inputText = ""
             browserOSVM.sendMessage(text)
         } else {
+            NSLog("[ChatPanel] routing to ChatViewModel.sendMessage")
             Task { await viewModel.sendMessage() }
+        }
+    }
+}
+
+// MARK: - MacTextEditor (NSTextView Wrapper)
+
+final class ChatInputTextView: NSTextView {
+    var onSubmit: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        // Return/Enter keyCode = 36, NumpadEnter = 76
+        if event.keyCode == 36 || event.keyCode == 76 {
+            if NSEvent.modifierFlags.contains(.shift) {
+                super.keyDown(with: event)
+                return
+            }
+            NSLog("[ChatInput] Return pressed — triggering onSubmit")
+            onSubmit?()
+            return
+        }
+        super.keyDown(with: event)
+    }
+}
+
+struct MacTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+    var onSubmit: () -> Void
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+
+        let textView = ChatInputTextView()
+        textView.onSubmit = onSubmit
+        textView.isRichText = false
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isFieldEditor = false
+        textView.allowsUndo = true
+        textView.drawsBackground = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        textView.textColor = NSColor.white
+        textView.insertionPointColor = NSColor.white
+        textView.string = text
+        textView.delegate = context.coordinator
+        textView.autoresizingMask = [.width, .height]
+
+        // Register for WindowManager first-responder hook
+        WindowManager.inputFirstResponder = textView
+
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        guard let textView = nsView.documentView as? ChatInputTextView else { return }
+        if textView.string != text {
+            let selected = textView.selectedRanges
+            textView.string = text
+            textView.selectedRanges = selected
+        }
+        if isFocused, let window = textView.window, window.firstResponder != textView {
+            window.makeFirstResponder(textView)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: MacTextEditor
+
+        init(_ parent: MacTextEditor) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            parent.text = textView.string
         }
     }
 }
