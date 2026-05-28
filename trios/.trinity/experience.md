@@ -21,9 +21,65 @@
 - Server: BrowserOS MCP on port 9105
 - A2A: Registry endpoint for agent discovery
 
+## Critical Learnings (2026-05-28)
+
+### 1. Chat Input Fix — NSTextView + First Responder
+**Ring:** BR-OUTPUT  **Agents:** T, H, K  **Road:** A
+- **Problem:** SwiftUI TextField in NSPanel completely non-functional (no type, paste, focus)
+- **Root cause:** NSHostingView doesn't retain NSHostingController (weak ref crash). NSTextField wrong for multi-line chat.
+- **Fix:** NSTextView via NSViewRepresentable, remove weak from hostingController, explicit makeFirstResponder
+- **Files:** `ChatPanelView.swift`, `WindowManager.swift`
+- **Episode:** `.trinity/experience/2026-05-28_chat_input_nstextview.json`
+
+### 2. State Machine Retry — Allow .error → .streaming
+**Ring:** SR-02  **Agents:** T, R, Q  **Road:** A
+- **Problem:** After timeout, all subsequent messages silently dropped
+- **Root cause:** ConversationStateMachine blocked .error → .streaming transition
+- **Fix:** Added .error → .streaming to canTransition()
+- **Episode:** `.trinity/experience/2026-05-28_state_machine_retry.json`
+
+### 3. SSE Manual Buffer — Don't Trust bytes.lines
+**Ring:** SR-01  **Agents:** T, X  **Road:** A
+- **Problem:** SSE stream silently hung, "The request timed out"
+- **Root cause:** AsyncSequence.bytes.lines hung on certain chunk boundaries
+- **Fix:** Manual Data buffer + newline parsing
+- **Episode:** `.trinity/experience/2026-05-28_sse_manual_buffer.json`
+
+### 4. Command Injection — Strict Prefix Matching
+**Ring:** SR-02  **Agents:** T, X, V  **Road:** A
+- **Problem:** Innocent messages like "swift is great" executed as shell commands
+- **Root cause:** isLikelyCommand used fuzzy contains() matching; parseIntent fell through to shell
+- **Fix:** Strict prefix only ("shell ", "run ", "exec ", "/"); return nil for unrecognized
+- **Episode:** `.trinity/experience/2026-05-28_command_injection_fix.json`
+
+### 5. Scroll Geometry — Content Height vs Viewport Height
+**Ring:** BR-OUTPUT  **Agents:** T, H  **Road:** B
+- **Problem:** Auto-scroll never fired for long conversations
+- **Root cause:** Used viewport height instead of scroll content height in isNearBottom math
+- **Fix:** ScrollContentHeightPreferenceKey with GeometryReader inside LazyVStack
+- **Episode:** `.trinity/experience/2026-05-28_scroll_content_height.json`
+
+### 6. Swift 6 Concurrency — Nonisolated Parsers
+**Ring:** SR-02  **Agents:** T, R, V  **Road:** B
+- **Problem:** A2ARegistryClient data race under strict concurrency
+- **Root cause:** Actor-isolated mutable decoder accessed from AsyncStream Task
+- **Fix:** parseSSELine made nonisolated with local decoder; static ISO8601DateFormatter
+- **Episode:** `.trinity/experience/2026-05-28_a2a_concurrency_fix.json`
+
+## Trinity Protocols Ported (2026-05-28)
+- AEL v2.0 loop → `CLAUDE.md`
+- PHI LOOP 9-phase → `.claude/skills/phi-loop/SKILL.md`
+- 7 Invariant Laws (L1-L7) → `CLAUDE.md` + `.trinity/SOUL.md`
+- 27-Agent Alphabet → `AGENTS.md` + `.trinity/agents/registry.json`
+- 3-Roads Planning → `.trinity/state/three-roads.json`
+- Experience Save → `.claude/skills/experience-save/SKILL.md`
+- Mistakes Catalog (MNL) → `.trinity/experience/mistakes-catalog.json`
+- Akashic Log Schema → `.trinity/events/akashic-log-schema.json`
+
 ## Key Decisions
 - Flat swiftc compilation (no SPM/Xcode)
 - Onion ring architecture (Core -> Infra -> App -> UI)
 - Tailscale for remote access
 - BR-OUTPUT/ for new UI components
 - .claude/ for agent/skill definitions
+- .trinity/ for experience, state, and constitutional law

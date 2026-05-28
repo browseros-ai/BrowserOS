@@ -1,0 +1,132 @@
+{
+  "project": "trios",
+  "version": "1.0",
+  "updated": "2026-05-28T00:00:00Z",
+  "description": "Mistake catalog following MNL pattern (Mistake → Not-repeat → Learning). Used by Agent Q for priority decisions.",
+  "schema": {
+    "id": "uuid-or-hash",
+    "date": "YYYY-MM-DD",
+    "severity": "critical|high|medium|low",
+    "mnl_stage": "M | N | L",
+    "agent": "letter of agent who made or discovered the mistake",
+    "ring": "SR-NNN or BR-OUTPUT",
+    "problem": "what went wrong",
+    "root_cause": "why it happened",
+    "fix": "what was changed",
+    "files_changed": ["path1", "path2"],
+    "prevention": "how to avoid next time",
+    "related_episodes": ["episode-id-1", "episode-id-2"],
+    "tags": ["tag1", "tag2"]
+  },
+  "mistakes": [
+    {
+      "id": "mistake-001",
+      "date": "2026-05-28",
+      "severity": "critical",
+      "mnl_stage": "L",
+      "agent": "H",
+      "ring": "BR-OUTPUT",
+      "problem": "Chat input completely non-functional — users could not type, paste, or focus the input field.",
+      "root_cause": "SwiftUI TextField in NSPanel does not receive focus automatically. NSHostingView does not retain NSHostingController (weak reference caused crash). NSTextField wrapper (MacTextField) was wrong control for multi-line chat.",
+      "fix": "Replaced MacTextField with MacTextEditor (NSTextView via NSViewRepresentable). Removed weak from hostingController. Added explicit window.makeFirstResponder() in updateNSView.",
+      "files_changed": [
+        "BR-OUTPUT/ChatPanelView.swift",
+        "BR-OUTPUT/WindowManager.swift"
+      ],
+      "prevention": "Always use NSTextView (not NSTextField) for multi-line chat. Never use weak for NSHostingController. Always call makeFirstResponder explicitly for NSPanel.",
+      "related_episodes": ["2026-05-28_chat_input_nstextview"],
+      "tags": ["firstResponder", "NSTextView", "NSPanel", "NSHostingController", "weak-reference"]
+    },
+    {
+      "id": "mistake-002",
+      "date": "2026-05-28",
+      "severity": "critical",
+      "mnl_stage": "L",
+      "agent": "R",
+      "ring": "SR-02",
+      "problem": "After first message timeout, all subsequent messages failed to send. Text returned to input field silently.",
+      "root_cause": "ConversationStateMachine blocked .error → .streaming transition. After timeout state stuck in .error, tryTransition(to: .streaming) returned false.",
+      "fix": "Added .error → .streaming case to canTransition(), allowing retry immediately after error.",
+      "files_changed": [
+        "rings/SR-02/ConversationStateMachine.swift"
+      ],
+      "prevention": "State machines must allow recovery transitions from error states. Always test retry paths, not just happy path.",
+      "related_episodes": ["2026-05-28_state_machine_retry"],
+      "tags": ["state_machine", "timeout", "retry", "error_recovery"]
+    },
+    {
+      "id": "mistake-003",
+      "date": "2026-05-28",
+      "severity": "high",
+      "mnl_stage": "L",
+      "agent": "X",
+      "ring": "SR-01",
+      "problem": "SSE stream silently hung, causing 'The request timed out' errors on some responses.",
+      "root_cause": "AsyncSequence.bytes.lines never yielded on some SSE streams. Apple's implementation hung on certain chunk boundaries.",
+      "fix": "Replaced bytes.lines with manual Data buffer + for try await chunk in bytes, parsing complete lines from buffer.",
+      "files_changed": [
+        "rings/SR-01/SSETransport.swift"
+      ],
+      "prevention": "Do not rely on Apple's high-level AsyncSequence abstractions for protocol-critical parsing. Manual buffering is more predictable.",
+      "related_episodes": ["2026-05-28_sse_manual_buffer"],
+      "tags": ["SSE", "AsyncSequence", "timeout", "streaming"]
+    },
+    {
+      "id": "mistake-004",
+      "date": "2026-05-28",
+      "severity": "critical",
+      "mnl_stage": "L",
+      "agent": "X",
+      "ring": "SR-02",
+      "problem": "Command injection vulnerability — innocent messages like 'swift is great' triggered raw shell execution.",
+      "root_cause": "isLikelyCommand matched common words (swift, git, node) anywhere in text. parseIntent fell through to filesystem_bash for ANY text matching.",
+      "fix": "isLikelyCommand now only matches explicit prefixes: 'shell ', 'run ', 'exec ', '/'. parseIntent returns nil for unrecognized commands.",
+      "files_changed": [
+        "BR-OUTPUT/BrowserOSChatViewModel.swift"
+      ],
+      "prevention": "Never use fuzzy matching for security-critical intent classification. Use strict prefix or explicit keyword lists.",
+      "related_episodes": ["2026-05-28_command_injection_fix"],
+      "tags": ["security", "command_injection", "intent_parsing", "shell_execution"]
+    },
+    {
+      "id": "mistake-005",
+      "date": "2026-05-28",
+      "severity": "high",
+      "mnl_stage": "L",
+      "agent": "H",
+      "ring": "BR-OUTPUT",
+      "problem": "Auto-scroll never fired for long conversations. User had to manually scroll to see new messages.",
+      "root_cause": "isNearBottom used viewport height from background GeometryReader instead of total scroll content height.",
+      "fix": "Added ScrollContentHeightPreferenceKey with GeometryReader at bottom of LazyVStack to measure actual content height.",
+      "files_changed": [
+        "BR-OUTPUT/ChatPanelView.swift"
+      ],
+      "prevention": "Always distinguish between viewport size and content size in scroll geometry. Use PreferenceKey for accurate content measurement.",
+      "related_episodes": ["2026-05-28_scroll_content_height"],
+      "tags": ["SwiftUI", "scroll", "GeometryReader", "PreferenceKey", "auto_scroll"]
+    },
+    {
+      "id": "mistake-006",
+      "date": "2026-05-28",
+      "severity": "medium",
+      "mnl_stage": "L",
+      "agent": "R",
+      "ring": "SR-02",
+      "problem": "A2ARegistryClient crashed under Swift 6 strict concurrency. parseSSELine called without await inside AsyncStream Task.",
+      "root_cause": "Actor-isolated mutable decoder accessed from concurrent context inside AsyncStream. Strict concurrency flagged data race.",
+      "fix": "Made parseSSELine nonisolated with local JSONDecoder instance. Added shared ISO8601DateFormatter static property.",
+      "files_changed": [
+        "rings/SR-02/A2ARegistryClient.swift"
+      ],
+      "prevention": "Under Swift 6 strict concurrency, never access actor-isolated mutable state from concurrent closures. Use nonisolated with local copies.",
+      "related_episodes": ["2026-05-28_a2a_concurrency_fix"],
+      "tags": ["Swift6", "concurrency", "actor_isolation", "AsyncStream", "data_race"]
+    }
+  ],
+  "mnl_pattern": {
+    "description": "Mistake → Not-repeat → Learning",
+    "M": "Mistake recorded. Agent Q marks task with 1 fail.",
+    "N": "Not-repeat protocol applied. Fix merged. Agent Q watches for recurrence.",
+    "L": "Learning extracted. Episode saved. Similar tasks get priority boost (PICK with learning)."
+  }
+}

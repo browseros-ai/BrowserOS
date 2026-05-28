@@ -1,0 +1,21 @@
+{
+  "id": "2026-05-28_chat_input_nstextview",
+  "date": "2026-05-28",
+  "ring": "BR-OUTPUT",
+  "phase": "impl",
+  "road": "A",
+  "agents_involved": ["T", "H", "K"],
+  "issue": "Chat input completely non-functional — can't type, paste, or focus",
+  "problem": "SwiftUI TextField in NSPanel does not receive focus. NSHostingView does not retain NSHostingController (weak ref crash). MacTextField (NSTextField wrapper) is wrong control for multi-line chat.",
+  "root_cause": "macOS floating NSPanel requires explicit firstResponder management. NSTextField has poor wrapping, no auto-grow, flaky paste. NSHostingView does NOT retain NSHostingController.",
+  "fix": "1. Replaced MacTextField with MacTextEditor wrapping NSTextView via NSViewRepresentable. 2. Removed weak from hostingController in WindowManager. 3. Added explicit panel.makeFirstResponder(input) in WindowManager.open(). 4. Added ChatInputTextView subclass intercepting Return for submit, Shift+Return for newline.",
+  "files_changed": [
+    "BR-OUTPUT/ChatPanelView.swift",
+    "BR-OUTPUT/WindowManager.swift",
+    "main.swift"
+  ],
+  "verification": "build: PASS | e2e: server OK, app running, screenshot captured | manual: type, paste (Cmd+V), select-all (Cmd+A), submit on Return, newline on Shift+Return all work",
+  "pattern": "For macOS floating panel chat input: use NSTextView (not NSTextField), remove weak from hostingController, call makeFirstResponder explicitly after panel.open().",
+  "anti_pattern": "Do NOT use SwiftUI TextField inside NSPanel without firstResponder hooks. Do NOT use NSTextField for multi-line input. Do NOT use weak var hostingController with NSHostingView.",
+  "tags": ["firstResponder", "NSTextView", "NSPanel", "NSHostingController", "chat_input", "macOS"]
+}

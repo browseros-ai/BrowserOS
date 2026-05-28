@@ -1,0 +1,19 @@
+{
+  "id": "2026-05-28_state_machine_retry",
+  "date": "2026-05-28",
+  "ring": "SR-02",
+  "phase": "verify",
+  "road": "A",
+  "agents_involved": ["T", "R", "Q"],
+  "issue": "After first timeout, all subsequent messages fail to send. Text returns to input silently.",
+  "problem": "User sends message → timeout → state stuck in .error → next message tryTransition(to: .streaming) returns false → message dropped, text restored to input.",
+  "root_cause": "ConversationStateMachine.canTransition() did not include .error → .streaming path. After error, the only allowed transition was .error → .idle (which required explicit user action that never happened).",
+  "fix": "Added case (.error, .streaming) to canTransition() allowing immediate retry after error. No other state logic changed.",
+  "files_changed": [
+    "rings/SR-02/ConversationStateMachine.swift"
+  ],
+  "verification": "build: PASS | e2e: server OK, app running | manual: sent 5 messages, forced timeout on 2nd, 3rd-5th all succeeded without stuck state",
+  "pattern": "State machines must always provide a recovery path from error states. Test retry logic explicitly, not just happy path.",
+  "anti_pattern": "Do NOT block all transitions from error states except back to idle. Do NOT assume user will manually reset after every error.",
+  "tags": ["state_machine", "timeout", "retry", "error_recovery", "streaming"]
+}

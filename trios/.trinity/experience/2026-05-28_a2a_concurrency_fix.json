@@ -1,0 +1,19 @@
+{
+  "id": "2026-05-28_a2a_concurrency_fix",
+  "date": "2026-05-28",
+  "ring": "SR-02",
+  "phase": "verify",
+  "road": "B",
+  "agents_involved": ["T", "R", "V"],
+  "issue": "A2ARegistryClient crashed under Swift 6 strict concurrency",
+  "problem": "Compiler/runtime flagged data race in A2ARegistryClient. parseSSELine was called without await inside AsyncStream Task, accessing actor-isolated mutable decoder.",
+  "root_cause": "Under Swift 6 strict concurrency, actor-isolated mutable properties (like JSONDecoder) cannot be accessed from concurrent contexts. AsyncStream's Task runs concurrently with the actor.",
+  "fix": "1. Made parseSSELine nonisolated. 2. Created local JSONDecoder instance inside parseSSELine instead of using actor-isolated property. 3. Added shared ISO8601DateFormatter as static let to avoid per-heartbeat allocation.",
+  "files_changed": [
+    "rings/SR-02/A2ARegistryClient.swift"
+  ],
+  "verification": "build: PASS (no strict concurrency warnings) | e2e: server OK | manual: A2A registry connected, SSE heartbeat received, no crashes",
+  "pattern": "Under Swift 6 strict concurrency: make parser/helper methods nonisolated, use local decoder instances, avoid actor-isolated mutable state in concurrent closures.",
+  "anti_pattern": "Do NOT access actor-isolated mutable properties (var decoder, var formatter) from AsyncStream Tasks or other concurrent closures. Do NOT rely on implicit synchronization.",
+  "tags": ["Swift6", "concurrency", "actor_isolation", "AsyncStream", "data_race", "strict_concurrency"]
+}

@@ -1,0 +1,133 @@
+{
+  "project": "trios",
+  "version": "1.0",
+  "updated": "2026-05-28T00:00:00Z",
+  "description": "Schema for the Akashic event log — append-only journal of all significant agent and system events.",
+  "file": ".trinity/events/akashic-log.jsonl",
+  "format": "jsonl (one JSON object per line, append only)",
+  "schema": {
+    "ts": "integer (unix timestamp)",
+    "agent": "string — agent letter or queen name (e.g., 'T', 'H', 'queen-browseros')",
+    "action": "string — event type from canonical list",
+    "road": "string | null — A, B, C, or null if not applicable",
+    "ring": "string | null — SR-NNN, BR-OUTPUT, or null",
+    "phase": "string | null — PHI LOOP phase or null",
+    "issue": "string | null — GitHub issue #N or null",
+    "status": "string — ok | warning | error | critical",
+    "details": "object | null — free-form contextual data",
+    "hash": "string | null — git commit hash or tri-cell seal hash"
+  },
+  "action_canonical_list": [
+    "wake",
+    "sleep",
+    "plan",
+    "assign",
+    "run",
+    "test",
+    "bench",
+    "verdict",
+    "evolve",
+    "build",
+    "e2e",
+    "health_check",
+    "agent_spawn",
+    "agent_complete",
+    "agent_fail",
+    "experience_save",
+    "mistake_record",
+    "commit",
+    "merge",
+    "rollback",
+    "user_input",
+    "server_restart",
+    "crash"
+  ],
+  "example_entries": [
+    {
+      "ts": 1779947484,
+      "agent": "T",
+      "action": "plan",
+      "road": "A",
+      "ring": "BR-OUTPUT",
+      "phase": "plan",
+      "issue": "#1081",
+      "status": "ok",
+      "details": {
+        "task": "Fix chat input focus",
+        "agents_assigned": ["H", "K"],
+        "estimated_duration_minutes": 30
+      },
+      "hash": null
+    },
+    {
+      "ts": 1779947510,
+      "agent": "H",
+      "action": "run",
+      "road": "A",
+      "ring": "BR-OUTPUT",
+      "phase": "impl",
+      "issue": "#1081",
+      "status": "ok",
+      "details": {
+        "files_changed": ["BR-OUTPUT/ChatPanelView.swift"],
+        "lines_added": 45,
+        "lines_removed": 12
+      },
+      "hash": null
+    },
+    {
+      "ts": 1779947530,
+      "agent": "F",
+      "action": "e2e",
+      "road": "A",
+      "ring": null,
+      "phase": "verify",
+      "issue": "#1081",
+      "status": "ok",
+      "details": {
+        "server_health": "ok",
+        "app_pid": 12345,
+        "screenshot_path": "/tmp/trios_e2e/screenshot_1779947530.png",
+        "errors_found": 0
+      },
+      "hash": null
+    },
+    {
+      "ts": 1779947540,
+      "agent": "T",
+      "action": "verdict",
+      "road": "A",
+      "ring": null,
+      "phase": "verdict",
+      "issue": "#1081",
+      "status": "ok",
+      "details": {
+        "build": "PASS",
+        "e2e": "PASS",
+        "regressions": "NONE",
+        "toxicity": "CLEAN"
+      },
+      "hash": null
+    },
+    {
+      "ts": 1779947550,
+      "agent": "E",
+      "action": "experience_save",
+      "road": "A",
+      "ring": "BR-OUTPUT",
+      "phase": "learn",
+      "issue": "#1081",
+      "status": "ok",
+      "details": {
+        "episode_id": "2026-05-28_chat_input_nstextview",
+        "pattern": "NSTextView + explicit makeFirstResponder for NSPanel chat input"
+      },
+      "hash": "0a6e6e82"
+    }
+  ],
+  "retention_policy": {
+    "raw_log": "append-only, never delete",
+    "compaction": "monthly summary to .trinity/events/akashic-month-YYYY-MM.json",
+    "archive": "after 90 days, compress to .trinity/events/archive/"
+  }
+}

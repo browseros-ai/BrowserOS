@@ -1,0 +1,298 @@
+{
+  "project": "trios",
+  "version": "2.0",
+  "updated": "2026-05-28T00:00:00Z",
+  "description": "Canonical registry of all Trinity agents in the trios repository.",
+  "alphabet": {
+    "A": {
+      "name": "Agent Architect",
+      "letter": "Aleph",
+      "register": "r0",
+      "domain": "Architecture / ADR / SOUL",
+      "file": ".claude/agents/agent-A.md",
+      "status": "active",
+      "reports_to": "tri-orchestrator"
+    },
+    "B": {
+      "name": "Agent Build",
+      "letter": "Beth",
+      "register": "r1",
+      "domain": "Build / Pipeline / swiftc",
+      "file": null,
+      "status": "embodied_in_skill",
+      "skill": ".claude/skills/doctor/SKILL.md",
+      "reports_to": "tri-doctor"
+    },
+    "C": {
+      "name": "Agent Compiler",
+      "letter": "Gimel",
+      "register": "r2",
+      "domain": "Compiler / Swift analysis",
+      "file": ".claude/agents/agent-C.md",
+      "status": "active",
+      "reports_to": "tri-orchestrator"
+    },
+    "D": {
+      "name": "Agent De-Zigfication",
+      "letter": "Daleth",
+      "register": "r3",
+      "domain": "De-Zigfication / Migration",
+      "file": ".claude/agents/agent-D.md",
+      "status": "active",
+      "reports_to": "tri-orchestrator"
+    },
+    "E": {
+      "name": "Agent Experience",
+      "letter": "Heh",
+      "register": "r4",
+      "domain": "Experience / Mistakes / Episodes",
+      "file": ".claude/agents/agent-E.md",
+      "status": "active",
+      "reports_to": "queen-browseros"
+    },
+    "F": {
+      "name": "Agent Formal",
+      "letter": "Vav",
+      "register": "r5",
+      "domain": "Formal Conformance / e2e",
+      "file": ".claude/agents/agent-F.md",
+      "status": "active",
+      "reports_to": "queen-browseros"
+    },
+    "G": {
+      "name": "Agent Graph",
+      "letter": "Gimel (var.)",
+      "register": "r6",
+      "domain": "Graph / Dependency tracking",
+      "file": ".claude/agents/agent-G.md",
+      "status": "active",
+      "reports_to": "tri-orchestrator"
+    },
+    "H": {
+      "name": "Agent Human Interface",
+      "letter": "Heth",
+      "register": "r7",
+      "domain": "Human Interface / SwiftUI arch",
+      "file": ".claude/agents/agent-H.md",
+      "status": "active",
+      "reports_to": "queen-swift"
+    },
+    "I": {
+      "name": "Agent ISA",
+      "letter": "Yod",
+      "register": "r8",
+      "domain": "ISA / Swift internals",
+      "file": ".claude/agents/agent-I.md",
+      "status": "active",
+      "reports_to": "tri-orchestrator"
+    },
+    "J": {
+      "name": "Agent Jobs",
+      "letter": "Yod-extended",
+      "register": "r9",
+      "domain": "Jobs / Task Routing",
+      "file": ".claude/agents/agent-J.md",
+      "status": "active",
+      "reports_to": "tri-orchestrator"
+    },
+    "K": {
+      "name": "Agent Kernel",
+      "letter": "Kaph",
+      "register": "r10",
+      "domain": "Kernel / macOS system layer",
+      "file": ".claude/agents/agent-K.md",
+      "status": "active",
+      "reports_to": "queen-browseros"
+    },
+    "L": {
+      "name": "Agent Language",
+      "letter": "Lamed",
+      "register": "r11",
+      "domain": "Language / Swift syntax vNEXT",
+      "file": ".claude/agents/agent-L.md",
+      "status": "active",
+      "reports_to": "tri-scholar"
+    },
+    "M": {
+      "name": "Agent Metrics",
+      "letter": "Mem",
+      "register": "r12",
+      "domain": "Metrics / Telemetry / Perf",
+      "file": ".claude/agents/agent-M.md",
+      "status": "active",
+      "reports_to": "queen-browseros"
+    },
+    "N": {
+      "name": "Agent Numeric",
+      "letter": "Nun",
+      "register": "r13",
+      "domain": "Numeric / Math in Swift",
+      "file": ".claude/agents/agent-N.md",
+      "status": "active",
+      "reports_to": "tri-scholar"
+    },
+    "O": {
+      "name": "Agent Orchestration",
+      "letter": "Ayin",
+      "register": "r14",
+      "domain": "Orchestration / A2A phases",
+      "file": ".claude/agents/agent-O.md",
+      "status": "active",
+      "reports_to": "tri-orchestrator"
+    },
+    "P": {
+      "name": "Agent Physics",
+      "letter": "Pe",
+      "register": "r15",
+      "domain": "Physics / Sacred constants",
+      "file": ".claude/agents/agent-P.md",
+      "status": "active",
+      "reports_to": "tri-scholar"
+    },
+    "Q": {
+      "name": "Agent Queue",
+      "letter": "Qoph",
+      "register": "r16",
+      "domain": "Queue / Scheduling / MNL",
+      "file": ".claude/agents/agent-Q.md",
+      "status": "active",
+      "reports_to": "tri-orchestrator"
+    },
+    "R": {
+      "name": "Agent Runtime",
+      "letter": "Resh",
+      "register": "r17",
+      "domain": "Runtime / Swift runtime",
+      "file": ".claude/agents/agent-R.md",
+      "status": "active",
+      "reports_to": "queen-browseros"
+    },
+    "S": {
+      "name": "Agent Specs",
+      "letter": "Shin",
+      "register": "r18",
+      "domain": "Specs / Standardization / API",
+      "file": ".claude/agents/agent-S.md",
+      "status": "active",
+      "reports_to": "tri-orchestrator"
+    },
+    "T": {
+      "name": "Queen BrowserOS",
+      "letter": "TAW",
+      "register": "r20",
+      "domain": "Queen / Orchestrator / Lotus",
+      "file": ".claude/agents/queen-browseros.md",
+      "status": "active",
+      "reports_to": null,
+      "is_queen": true
+    },
+    "U": {
+      "name": "Agent Universe",
+      "letter": "Upsilon",
+      "register": "r19",
+      "domain": "Universe / App domains",
+      "file": ".claude/agents/agent-U.md",
+      "status": "active",
+      "reports_to": "queen-browseros"
+    },
+    "V": {
+      "name": "Agent Verdict",
+      "letter": "Vav",
+      "register": "r21",
+      "domain": "Verdict / Bench / Toxicity",
+      "file": ".claude/agents/agent-V.md",
+      "status": "active",
+      "reports_to": "queen-browseros"
+    },
+    "W": {
+      "name": "Agent Workflow",
+      "letter": "Double-Vav",
+      "register": "r22",
+      "domain": "Workflow / tri cell / Hash seal",
+      "file": ".claude/agents/agent-W.md",
+      "status": "active",
+      "reports_to": "queen-browseros"
+    },
+    "X": {
+      "name": "Agent eXternal",
+      "letter": "Chi",
+      "register": "r23",
+      "domain": "eXternal / MCP / BrowserOS bridge",
+      "file": ".claude/agents/agent-X.md",
+      "status": "active",
+      "reports_to": "queen-bridge"
+    },
+    "Y": {
+      "name": "Agent Yield",
+      "letter": "Upsilon/Yod",
+      "register": "r24",
+      "domain": "Yield / Tailscale / Remote",
+      "file": ".claude/agents/agent-Y.md",
+      "status": "active",
+      "reports_to": "queen-bridge"
+    },
+    "Z": {
+      "name": "Agent Zero-Touch",
+      "letter": "Zayin",
+      "register": "r26",
+      "domain": "Zero-Touch UX / Docs / DX",
+      "file": ".claude/agents/agent-Z.md",
+      "status": "active",
+      "reports_to": "queen-browseros"
+    },
+    "27th": {
+      "name": "Agent Security",
+      "letter": "Ti (Ϯ)",
+      "register": "r27",
+      "domain": "Security / AAIF / Secrets",
+      "file": null,
+      "status": "future",
+      "reports_to": "queen-browseros"
+    }
+  },
+  "queens": {
+    "queen-browseros": {
+      "role": "Sovereign",
+      "layer": 0,
+      "file": ".claude/agents/queen-browseros.md"
+    },
+    "queen-bridge": {
+      "role": "Network",
+      "layer": 1,
+      "file": ".claude/agents/queen-bridge.md"
+    },
+    "queen-swift": {
+      "role": "UI",
+      "layer": 1,
+      "file": ".claude/agents/queen-swift.md"
+    },
+    "queen-reviewer": {
+      "role": "Quality",
+      "layer": 2,
+      "file": ".claude/agents/queen-reviewer.md"
+    },
+    "queen-test": {
+      "role": "Verification",
+      "layer": 2,
+      "file": ".claude/agents/queen-test.md"
+    }
+  },
+  "tri_workers": {
+    "tri-doctor": {
+      "role": "Healer",
+      "file": ".claude/agents/tri-doctor.md"
+    },
+    "tri-farmer": {
+      "role": "Deploy",
+      "file": ".claude/agents/tri-farmer.md"
+    },
+    "tri-orchestrator": {
+      "role": "Audit / Coordination",
+      "file": ".claude/agents/tri-orchestrator.md"
+    },
+    "tri-scholar": {
+      "role": "Research",
+      "file": ".claude/agents/tri-scholar.md"
+    }
+  }
+}

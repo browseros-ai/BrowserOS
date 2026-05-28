@@ -1,0 +1,19 @@
+{
+  "id": "2026-05-28_command_injection_fix",
+  "date": "2026-05-28",
+  "ring": "SR-02",
+  "phase": "verify",
+  "road": "A",
+  "agents_involved": ["T", "X", "V"],
+  "issue": "Command injection vulnerability in BrowserOSChatViewModel.parseIntent",
+  "problem": "Messages like 'swift is great' or 'git push' triggered raw shell execution via filesystem_bash. Innocent chat messages were interpreted as commands.",
+  "root_cause": "isLikelyCommand used fuzzy matching (contains swift|git|node|etc.) on entire message text. parseIntent fell through to filesystem_bash for ANY text matching isLikelyCommand.",
+  "fix": "1. isLikelyCommand now uses strict prefix matching only: 'shell ', 'run ', 'exec ', '/'. 2. parseIntent returns nil for unrecognized commands instead of executing shell. 3. Added streamingTask cancellation before starting new one to prevent task leaks.",
+  "files_changed": [
+    "BR-OUTPUT/BrowserOSChatViewModel.swift"
+  ],
+  "verification": "build: PASS | e2e: server OK | manual: typed 'swift is great', 'git commit', 'node server' — all treated as chat messages, not commands. Typed 'shell ls' — correctly executed as command.",
+  "pattern": "Intent classification for security-critical paths must use strict prefix or explicit keyword lists. Fuzzy matching on natural language is unsafe for command execution.",
+  "anti_pattern": "Do NOT use contains() or regex with broad keyword lists for security gates. Do NOT fall through to shell execution as default case in intent parsers.",
+  "tags": ["security", "command_injection", "intent_parsing", "shell_execution", "fuzzy_matching"]
+}

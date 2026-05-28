@@ -1,0 +1,19 @@
+{
+  "id": "2026-05-28_scroll_content_height",
+  "date": "2026-05-28",
+  "ring": "BR-OUTPUT",
+  "phase": "verify",
+  "road": "B",
+  "agents_involved": ["T", "H"],
+  "issue": "Auto-scroll never fired for long conversations",
+  "problem": "When conversation grew beyond viewport, new messages did not trigger auto-scroll. User had to manually scroll down.",
+  "root_cause": "isNearBottom calculation used viewport height from background GeometryReader instead of total scroll content height. For long conversations, offset + contentHeight (viewport) was always near zero, so condition never met.",
+  "fix": "Added ScrollContentHeightPreferenceKey with GeometryReader at bottom of LazyVStack to measure actual content height. Updated isNearBottom to use scrollContentHeight from preference instead of viewport height.",
+  "files_changed": [
+    "BR-OUTPUT/ChatPanelView.swift"
+  ],
+  "verification": "build: PASS | e2e: server OK | manual: sent 20 messages, auto-scroll fired correctly for each. Scroll to middle of conversation → new message does NOT auto-scroll (correct). Scroll to bottom → new message DOES auto-scroll (correct).",
+  "pattern": "In SwiftUI scroll views, always distinguish between viewport size (GeometryReader on background) and content size (GeometryReader inside scroll content + PreferenceKey). Use content size for scroll-position logic.",
+  "anti_pattern": "Do NOT use background GeometryReader dimensions as content height in scroll math. Do NOT assume ScrollViewProxy knows content height implicitly.",
+  "tags": ["SwiftUI", "scroll", "GeometryReader", "PreferenceKey", "auto_scroll", "LazyVStack"]
+}

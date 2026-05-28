@@ -1,0 +1,19 @@
+{
+  "id": "2026-05-28_sse_manual_buffer",
+  "date": "2026-05-28",
+  "ring": "SR-01",
+  "phase": "verify",
+  "road": "A",
+  "agents_involved": ["T", "X"],
+  "issue": "SSE stream silently hung, causing 'The request timed out' errors",
+  "problem": "On some SSE streams, the client never received events after connection. Timeout fired after 30s.",
+  "root_cause": "AsyncSequence.bytes.lines (Apple's high-level abstraction) never yielded lines on certain chunk boundaries. The AsyncSequence hung silently without error.",
+  "fix": "Replaced bytes.lines with manual Data buffer. Used for try await chunk in bytes, appending to buffer, splitting on newline characters, flushing remaining buffer after stream ends.",
+  "files_changed": [
+    "rings/SR-01/SSETransport.swift"
+  ],
+  "verification": "build: PASS | e2e: server OK | manual: streamed 10+ SSE messages, no hangs, all events parsed correctly",
+  "pattern": "For protocol-critical streaming, prefer manual buffering over high-level AsyncSequence abstractions. Apple AsyncSequence edge cases can cause silent hangs.",
+  "anti_pattern": "Do NOT rely on bytes.lines or other high-level AsyncSequence wrappers for SSE/WebSocket parsing where data loss or hangs are unacceptable.",
+  "tags": ["SSE", "AsyncSequence", "streaming", "timeout", "manual_buffer", "Apple_bug"]
+}
