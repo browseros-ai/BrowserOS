@@ -24,12 +24,12 @@ export const AgentLastMessage: FC<AgentLastMessageProps> = ({ message }) => {
   }
   const preview = truncate(firstNonBlankLine(message), PREVIEW_CHARS)
   return (
-    <p className="mt-1.5 flex items-start gap-1.5 text-foreground/85 text-sm italic leading-snug">
+    <p className="mt-1.5 flex min-w-0 items-start gap-1.5 text-foreground/85 text-sm italic leading-snug">
       <Quote
         className="mt-1 size-3 shrink-0 text-muted-foreground/60"
         aria-hidden
       />
-      <span className="truncate">{preview}</span>
+      <span className="min-w-0 flex-1 truncate">{preview}</span>
     </p>
   )
 }

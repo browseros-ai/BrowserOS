@@ -42,7 +42,7 @@ export const AgentRowCard: FC<AgentRowCardProps> = ({
         // visibly perturb neighbouring rows. Only the border tint
         // shifts on hover, and the rail's vertical rhythm stays
         // exactly the same in every state.
-        'group rounded-xl border bg-card p-4 shadow-sm transition-colors',
+        'group w-full min-w-0 rounded-xl border bg-card p-6 shadow-sm transition-colors',
         data.status === 'working'
           ? 'border-[var(--accent-orange)]/40'
           : data.status === 'error'
@@ -50,7 +50,7 @@ export const AgentRowCard: FC<AgentRowCardProps> = ({
             : 'border-border hover:border-[var(--accent-orange)]/30',
       )}
     >
-      <div className="flex items-start gap-4">
+      <div className="flex min-w-0 items-start gap-4">
         <AgentTile
           adapter={data.adapter}
           status={data.status}

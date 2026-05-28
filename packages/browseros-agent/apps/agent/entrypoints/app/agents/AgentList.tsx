@@ -85,7 +85,7 @@ export const AgentList: FC<AgentListProps> = ({
   }
 
   return (
-    <div className="grid gap-3">
+    <div className="grid min-w-0 gap-3">
       {ordered.map((agent) => {
         const harness = harnessAgentLookup?.get(agent.agentId)
         const adapter: HarnessAgentAdapter | 'unknown' =
