@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "rings/RUST-01/clade-build",
+    "rings/RUST-02/clade-e2e",
+    "rings/RUST-03/clade-rollback",
+    "rings/RUST-04/clade-improve",
+    "rings/RUST-05/clade-monitor",
+    "rings/RUST-06/clade-dashboard",
+    "rings/RUST-07/clade-experience",
+    "rings/RUST-08/clade-promote",
+    "rings/RUST-09/clade-launchd",
+    "rings/RUST-10/clade-worktree",
+    "rings/RUST-11/clade-diff",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Trinity Agent <agent@browseros.ai>"]
+license = "MIT"

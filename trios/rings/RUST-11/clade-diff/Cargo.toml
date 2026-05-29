@@ -1,0 +1,16 @@
+[package]
+name = "clade-diff"
+version = "0.1.0"
+edition = "2021"
+authors = ["Trinity Agent <agent@browseros.ai>"]
+license = "MIT"
+
+[dependencies]
+reqwest = { version = "0.12", features = ["blocking"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"
+
+[[bin]]
+name = "clade-diff"
+path = "src/main.rs"
