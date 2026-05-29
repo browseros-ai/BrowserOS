@@ -111,7 +111,10 @@ export const ConversationMessage: FC<ConversationMessageProps> = ({
             </MessageAttachments>
           )}
           {turn.userText && (
-            <pre className="whitespace-pre-wrap font-sans text-sm">
+            <pre
+              className="whitespace-pre-wrap text-start font-sans text-sm"
+              dir="auto"
+            >
               {turn.userText}
             </pre>
           )}

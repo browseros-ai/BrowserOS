@@ -56,7 +56,7 @@ export const MessageContent = ({
 }: MessageContentProps) => (
   <div
     className={cn(
-      'is-user:dark flex w-fit flex-col gap-2 overflow-hidden text-sm',
+      'is-user:dark flex w-fit flex-col gap-2 overflow-hidden text-start text-sm',
       'group-[.is-user]:ml-auto group-[.is-user]:rounded-lg group-[.is-user]:bg-secondary group-[.is-user]:px-4 group-[.is-user]:py-3 group-[.is-user]:text-foreground',
       'group-[.is-assistant]:text-foreground',
       className,
@@ -347,7 +347,7 @@ export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (
     <Streamdown
       className={cn(
-        'size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_[data-streamdown="code-block"]]:w-[calc(100vw-64px)]! [&_[data-streamdown="table-wrapper"]]:w-[calc(100vw-64px)]!',
+        'size-full [unicode-bidi:plaintext] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_*]:text-start [&_[data-streamdown="code-block"]]:w-[calc(100vw-64px)]! [&_[data-streamdown="table-wrapper"]]:w-[calc(100vw-64px)]!',
         className,
       )}
       shikiTheme={themes}
