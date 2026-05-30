@@ -57,11 +57,34 @@ impl ImprovementPipeline {
 
     /// Phase 1+2: Production creates ticket, Staging clones Dev
     pub fn create_dev(&self, ticket_id: &str) -> Result<SandboxedDev, Box<dyn std::error::Error>> {
+        use std::process::{Command, Stdio};
+
+        // Ensure Canary worktree exists and is synced before any dev work
+        println!("[Pipeline] Ensuring Canary worktree...");
+        let ensure = Command::new("cargo")
+            .args(["run", "--bin", "clade-worktree", "--", "ensure"])
+            .env("TRIOS_VARIANT", "staging")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output();
+        match ensure {
+            Ok(ref o) if o.status.success() => {
+                println!("   ✅ Worktree ensured");
+            }
+            Ok(ref o) => {
+                let err = String::from_utf8_lossy(&o.stderr);
+                warn!("[Pipeline] Worktree ensure warning: {}", err.lines().take(3).collect::<Vec<_>>().join("\n"));
+            }
+            Err(e) => {
+                warn!("[Pipeline] Failed to ensure worktree: {}", e);
+            }
+        }
+
         let source = match self.variant {
             Variant::Staging => PathBuf::from("/Users/playra/BrowserOS-full/trios/.worktrees/staging"),
             _ => PathBuf::from("/Users/playra/BrowserOS-full/trios"),
         };
-        
+
         SandboxedDev::create_from_staging(ticket_id, &source)
     }
     
@@ -162,6 +185,38 @@ impl ImprovementPipeline {
         results.push(TestResult {
             name: "no-secrets".to_string(),
             passed: secrets_passed,
+        });
+
+        // Test 6: Differential — no regression vs Sovereign
+        let diff_passed = if self.variant == Variant::Staging {
+            println!("   [test] Running clade-diff (Sovereign vs Canary)...");
+            let diff = Command::new("cargo")
+                .args(["run", "--bin", "clade-diff"])
+                .env("TRIOS_VARIANT", "staging")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output();
+            match diff {
+                Ok(ref o) if o.status.success() => {
+                    println!("   ✅ clade-diff passed");
+                    true
+                }
+                Ok(ref o) => {
+                    let err = String::from_utf8_lossy(&o.stderr);
+                    warn!("[Pipeline] clade-diff failed: {}", err.lines().take(3).collect::<Vec<_>>().join("\n"));
+                    false
+                }
+                Err(e) => {
+                    warn!("[Pipeline] Failed to run clade-diff: {}", e);
+                    false
+                }
+            }
+        } else {
+            true // skip diff in non-staging variants
+        };
+        results.push(TestResult {
+            name: "differential".to_string(),
+            passed: diff_passed,
         });
 
         results
