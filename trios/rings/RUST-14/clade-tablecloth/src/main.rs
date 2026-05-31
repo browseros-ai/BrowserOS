@@ -412,7 +412,57 @@ fn main() {
         (0, 0)
     };
 
+    // Step 6: Write report
+    write_report(&budget, issues_created, fixes_attempted, fixes_passed, 0, dry_run);
+
     println!("\n📊 Summary: {} issues created, {} fixes attempted, {} fixes passed", issues_created, fixes_attempted, fixes_passed);
+}
+
+/// Write `.trinity/state/last_improvement.json` with loop summary.
+fn write_report(
+    budget: &SafetyBudget,
+    issues_created: usize,
+    fixes_attempted: usize,
+    fixes_passed: usize,
+    prs_created: usize,
+    dry_run: bool,
+) {
+    println!("[Step 6/7] Writing improvement report...");
+    let mode = if budget.halted || budget.budget <= 0.0 {
+        "audit-only"
+    } else {
+        "full"
+    };
+
+    let report = ImprovementReport {
+        timestamp: Utc::now().to_rfc3339(),
+        budget_before: budget.budget,
+        budget_after: budget.budget,
+        findings_total: issues_created,
+        issues_created,
+        fixes_attempted,
+        fixes_passed,
+        prs_created,
+        mode: mode.to_string(),
+    };
+
+    let json = serde_json::to_string_pretty(&report).unwrap_or_default();
+    let path = format!("{}/.trinity/state/last_improvement.json", PROJECT_DIR);
+
+    if dry_run {
+        println!("   [DRY-RUN] Would write report to {}", path);
+        println!("   {}", json);
+        return;
+    }
+
+    let _ = fs::create_dir_all(format!("{}/.trinity/state", PROJECT_DIR));
+    match fs::write(&path, &json) {
+        Ok(_) => println!("   ✅ Report written: {}", path),
+        Err(e) => {
+            println!("   ❌ Failed to write report: {}", e);
+            log_event("report_write_fail", &e.to_string());
+        }
+    }
 }
 
 fn log_event(event: &str, details: &str) {
