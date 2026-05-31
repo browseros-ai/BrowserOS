@@ -150,6 +150,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     var chatViewModel: ChatViewModel?
     var sessionGuard: SessionGuard?
+    var cladeGuard: CladeGuard?
     var accessibilityGranted = false
     var accessibilityPromptShown = false
     var windowStates: [(AXUIElement, CGRect)] = []
@@ -157,14 +158,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var currentSidebarWidth: CGFloat = 400
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // SAFETY: Prevent recursive self-launch — enforce single instance
+        guard RecursionGuard.shared.ensureSingleInstance() else {
+            NSLog("applicationDidFinishLaunching: another trios instance is already running — terminating")
+            NSApplication.shared.terminate(nil)
+            return
+        }
         NSLog("applicationDidFinishLaunching called")
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
 
         setupStatusItem()
-        Task { @MainActor in
-            setupSidePanel()
-        }
+        // CRITICAL: setupSidePanel MUST run synchronously before any UI interaction.
+        // Previously it was in Task { @MainActor in } which meant panel was nil
+        // when the user clicked the status bar icon before the task completed.
+        setupSidePanel()
         accessibilityGranted = AXIsProcessTrusted()
         setupGlobalHotkey()
 
@@ -174,16 +182,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 sessionGuard = guard_
                 guard_.startMonitoring()
             }
+            // CladeGuard monitors Sovereign + Canary health and auto-rollback
+            let cg = compositionRoot.makeCladeGuard()
+            cladeGuard = cg
+            cg.startMonitoring()
             await chatViewModel?.registerA2A()
         }
     }
 
     private func setupStatusItem() {
+        // Guard against duplicate status items if this method is called more than once
+        if let existing = statusItem, existing.button != nil {
+            NSLog("setupStatusItem: statusItem already exists, skipping creation")
+            return
+        }
+
         NSLog("setupStatusItem starting")
         var logoImage: NSImage?
+        var isOriginalLogo = false
         if let logoURL = Bundle.main.url(forResource: "logo", withExtension: "png"),
            let image = NSImage(contentsOf: logoURL) {
             logoImage = image
+            isOriginalLogo = true
         } else {
             let fallbackPaths = [
                 ProjectPaths.logoPNG,
@@ -193,19 +213,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 if FileManager.default.fileExists(atPath: path),
                    let image = NSImage(contentsOfFile: path) {
                     logoImage = image
+                    isOriginalLogo = true
                     break
                 }
             }
         }
 
+        // Fallback: generate a solid-color circle icon so the user ALWAYS has a visible status icon
+        if logoImage == nil {
+            logoImage = generateFallbackIcon()
+            NSLog("setupStatusItem: generated fallback circle icon")
+        }
+
         if let image = logoImage {
             statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-            image.isTemplate = true
+            // CRITICAL: isTemplate must be false for the colored fallback icon.
+            // isTemplate = true tells macOS to recolor the image to match the menubar
+            // (black/white), which makes a colored circle invisible. Only use template
+            // mode for the original monochrome logo file.
+            image.isTemplate = isOriginalLogo
             image.size = NSSize(width: 22, height: 22)
             statusItem?.button?.image = image
             statusItem?.button?.imagePosition = .imageOnly
             statusItem?.button?.title = ""
-            NSLog("setupStatusItem: template image set, size=\(image.size)")
+            NSLog("setupStatusItem: image set (template=\(isOriginalLogo)), size=\(image.size)")
         } else {
             statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
             statusItem?.button?.title = "T"
@@ -222,6 +253,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             NSLog("setupStatusItem ERROR: statusItem.button is nil!")
         }
+    }
+
+    /// Generates a solid colored circle NSImage so the status bar icon is always visible
+    private func generateFallbackIcon() -> NSImage {
+        let size = NSSize(width: 22, height: 22)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        let rect = NSRect(origin: .zero, size: size)
+        let path = NSBezierPath(ovalIn: rect)
+        NSColor(red: 0.45, green: 0.55, blue: 1.0, alpha: 1.0).setFill()
+        path.fill()
+        image.unlockFocus()
+        return image
     }
 
     @MainActor
@@ -249,6 +293,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard CFGetTypeID(positionValue) == AXValueGetTypeID() else { return nil }
         var position = CGPoint.zero
+        // CFGetTypeID check above guarantees AXValue type
         guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position) else { return nil }
 
         var sizeValue: CFTypeRef?
@@ -354,8 +399,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func toggleSidePanel() {
         NSLog("toggleSidePanel called")
+        // CRITICAL: Lazy creation — if panel hasn't been built yet, build it now.
+        // This prevents the "click does nothing" bug when setupSidePanel hasn't completed.
+        Task { @MainActor in
+            if windowManager.panel == nil {
+                NSLog("toggleSidePanel: panel is nil — creating lazily")
+                setupSidePanel()
+            }
+            performToggle()
+        }
+    }
+
+    @MainActor
+    private func performToggle() {
         guard let panel = windowManager.panel else {
-            NSLog("toggleSidePanel: panel is nil!")
+            NSLog("toggleSidePanel: panel is STILL nil after lazy creation — critical error")
             return
         }
         NSLog("toggleSidePanel: panel isVisible=\(panel.isVisible), frame=\(panel.frame)")
@@ -434,6 +492,7 @@ Your filesystem tools will be available!
     }
 
     @objc func quit() {
+        RecursionGuard.shared.cleanup()
         Task {
             await chatViewModel?.unregisterA2A()
             await MainActor.run {
@@ -441,6 +500,30 @@ Your filesystem tools will be available!
                 NSApplication.shared.terminate(nil)
             }
         }
+    }
+
+    // MARK: - URL / Reopen Safety Guards
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            let urlString = url.absoluteString.lowercased()
+            // Block any URL that could trigger a recursive self-launch
+            if urlString.contains("trios") || urlString.contains("browseros://settings") {
+                NSLog("[AppDelegate] Blocked recursive URL open: \(url)")
+                continue
+            }
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // If panel is already visible, just focus it instead of creating duplicate state
+        if let panel = windowManager.panel {
+            panel.makeKeyAndOrderFront(nil)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            return false
+        }
+        return true
     }
 
     func showAlert(_ message: String) {
@@ -524,6 +607,11 @@ struct CompositionRoot {
     func makeSessionGuard(for viewModel: ChatViewModel) -> SessionGuard {
         let healthCheck = HealthCheckTransport()
         return SessionGuard(healthCheck: healthCheck, a2aClient: viewModel.a2aClient)
+    }
+
+    @MainActor
+    func makeCladeGuard() -> CladeGuard {
+        return CladeGuard()
     }
 }
 

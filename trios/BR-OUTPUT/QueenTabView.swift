@@ -372,7 +372,7 @@ struct QueenTabView: View {
         switch name {
         case "TRIOS": viewModel.startTrios()
         case "MCP": viewModel.restartMCP()
-        case "Agent": viewModel.restartAgent()
+        case "Agent": viewModel.restartAgentServer()
         case "Cron": viewModel.runCron()
         default: break
         }

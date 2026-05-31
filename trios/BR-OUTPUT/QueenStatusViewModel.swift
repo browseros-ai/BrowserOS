@@ -82,14 +82,14 @@ final class QueenStatusViewModel: ObservableObject {
     }
 
     private func startTimers() {
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
-            Task { @MainActor in
-                self.refreshAll()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshAll()
             }
         }
-        logTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
-            Task { @MainActor in
-                await self.loadLogTailAsync()
+        logTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.loadLogTailAsync()
             }
         }
     }
@@ -306,36 +306,44 @@ final class QueenStatusViewModel: ObservableObject {
     }
 
     func startAgent(_ name: String) {
-        isRunningAction = true
-        switch name {
-        case "clade-monitor":
-            runAsync("cd \(projectRoot) && cargo run --bin clade-monitor &")
-        case "clade-dashboard":
-            runAsync("cd \(projectRoot) && cargo run --bin clade-dashboard &")
-        case "cron-queen":
-            runAsync("cd \(projectRoot) && ./cron-queen.sh &")
-        default:
-            NSLog("[QueenStatus] Unknown agent: \(name)")
+        let binMap: [String: (String, [String])] = [
+            "clade-monitor": ("/usr/bin/env", ["cargo", "run", "--bin", "clade-monitor"]),
+            "clade-dashboard": ("/usr/bin/env", ["cargo", "run", "--bin", "clade-dashboard"]),
+        ]
+        guard let (exe, args) = binMap[name] else {
+            NSLog("[QueenStatus] BLOCKED: unknown agent: \(name)")
+            return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            self.loadAgents()
-            self.isRunningAction = false
+        isRunningAction = true
+        execDirect(exe, arguments: args)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.loadAgents()
+            self?.isRunningAction = false
         }
     }
 
     func stopAgent(_ name: String) {
+        let knownAgents: Set<String> = ["clade-monitor", "clade-dashboard", "cron-queen"]
+        guard knownAgents.contains(name) else {
+            NSLog("[QueenStatus] BLOCKED: unknown agent name: \(name)")
+            return
+        }
         isRunningAction = true
-        runAsync("pkill -x \(name) || pkill -f \(name) || true")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            self.loadAgents()
-            self.isRunningAction = false
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        task.arguments = ["-x", name]
+        try? task.run()
+        task.waitUntilExit()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.loadAgents()
+            self?.isRunningAction = false
         }
     }
 
     func restartAgent(_ name: String) {
         stopAgent(name)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            self.startAgent(name)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.startAgent(name)
         }
     }
 
@@ -410,78 +418,116 @@ final class QueenStatusViewModel: ObservableObject {
                 return
             }
             isRunningAction = true
-            runAsync("cd \(projectRoot) && ./trios_app &")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                self.refreshAll()
-                self.isRunningAction = false
+            let appPath = "\(projectRoot)/trios_app"
+            execDirect(appPath, arguments: [])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.refreshAll()
+                self?.isRunningAction = false
             }
         }
     }
 
     func stopTrios() {
         isRunningAction = true
-        runAsync("pkill -9 trios_app || true")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            self.refreshAll()
-            self.isRunningAction = false
+        execDirect("/usr/bin/pkill", arguments: ["-9", "trios_app"])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.refreshAll()
+            self?.isRunningAction = false
         }
     }
 
     func restartMCP() {
         isRunningAction = true
-        runAsync("pkill -f 'bun.*start:server' || true")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            self.runAsync("cd \(self.projectRoot) && bun run start:server &")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                self.refreshAll()
-                self.isRunningAction = false
+        execDirect("/usr/bin/pkill", arguments: ["-f", "bun.*start:server"])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            let bunPath = ProcessInfo.processInfo.environment["TRIOS_BUN_PATH"] ?? "/opt/homebrew/bin/bun"
+            self?.execDirect(bunPath, arguments: ["run", "start:server"], workDir: self?.projectRoot)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                self?.refreshAll()
+                self?.isRunningAction = false
             }
         }
     }
 
-    func restartAgent() {
+    func restartAgentServer() {
         isRunningAction = true
-        runAsync("pkill -f 'bun.*agent' || true")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            self.runAsync("cd \(self.projectRoot) && bun run start:agent &")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                self.refreshAll()
-                self.isRunningAction = false
+        execDirect("/usr/bin/pkill", arguments: ["-f", "bun.*agent"])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            let bunPath = ProcessInfo.processInfo.environment["TRIOS_BUN_PATH"] ?? "/opt/homebrew/bin/bun"
+            self?.execDirect(bunPath, arguments: ["run", "start:agent"], workDir: self?.projectRoot)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                self?.refreshAll()
+                self?.isRunningAction = false
             }
         }
     }
 
     func runCron() {
         isRunningAction = true
-        runAsync("cd \(projectRoot) && ./cron-queen.sh || true")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            self.refreshAll()
-            self.isRunningAction = false
+        execDirect("/usr/bin/env", arguments: ["cargo", "run", "--bin", "clade-monitor"])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.refreshAll()
+            self?.isRunningAction = false
         }
     }
 
+    private static let knownSkills: Set<String> = ["/tri", "/doctor", "/god-mode", "/bridge"]
+
     func runSkill(name: String) {
+        guard Self.knownSkills.contains(name) else {
+            NSLog("[QueenStatus] BLOCKED: unknown skill: \(name)")
+            return
+        }
         guard let index = skills.firstIndex(where: { $0.name == name }) else { return }
         skills[index] = SkillRun(name: name, lastRun: skills[index].lastRun, success: skills[index].success, isRunning: true)
         objectWillChange.send()
 
-        runAsync("cd \(projectRoot) && claude \(name)")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            if let idx = self.skills.firstIndex(where: { $0.name == name }) {
-                self.skills[idx] = SkillRun(name: name, lastRun: Date(), success: true, isRunning: false)
-                self.objectWillChange.send()
+        execDirect("/usr/bin/env", arguments: ["claude", name])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            if let idx = self?.skills.firstIndex(where: { $0.name == name }) {
+                self?.skills[idx] = SkillRun(name: name, lastRun: Date(), success: true, isRunning: false)
+                self?.objectWillChange.send()
             }
-            self.refreshAll()
+            self?.refreshAll()
         }
     }
 
+    private static let commandAllowlist: [String] = [
+        "git status", "git log", "git diff", "git branch",
+        "cargo check", "cargo build", "cargo run --bin clade-",
+        "curl -s http://127.0.0.1:", "swift --version",
+        "cat .trinity/", "ls ", "wc ", "tail ", "head ",
+        "pgrep", "ps aux"
+    ]
+
     func runCommand(_ cmd: String) {
+        let trimmed = cmd.trimmingCharacters(in: .whitespaces)
+        let blocked = [";", "&&", "||", "|", "`", "$(", ">{", "rm -rf", "curl.*|.*sh"]
+        for b in blocked {
+            if trimmed.range(of: b, options: .regularExpression) != nil {
+                NSLog("[QueenStatus] BLOCKED dangerous pattern in command: \(b)")
+                return
+            }
+        }
+        let allowed = Self.commandAllowlist.contains { trimmed.hasPrefix($0) }
+        guard allowed else {
+            NSLog("[QueenStatus] BLOCKED unlisted command: \(trimmed)")
+            return
+        }
         isRunningAction = true
-        runAsync("cd \(projectRoot) && \(cmd)")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            Task { @MainActor in
-                await self.loadLogTailAsync()
-                self.isRunningAction = false
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        task.arguments = ["-c", trimmed]
+        task.currentDirectoryURL = URL(fileURLWithPath: projectRoot)
+        do {
+            try task.run()
+        } catch {
+            NSLog("[QueenStatus] Command failed: \(error)")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            Task { @MainActor [weak self] in
+                await self?.loadLogTailAsync()
+                self?.isRunningAction = false
             }
         }
     }
@@ -510,15 +556,15 @@ final class QueenStatusViewModel: ObservableObject {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
-    private func runAsync(_ command: String) {
+    private func execDirect(_ executable: String, arguments: [String], workDir: String? = nil) {
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        task.arguments = ["-c", command]
-        task.currentDirectoryURL = URL(fileURLWithPath: projectRoot)
+        task.executableURL = URL(fileURLWithPath: executable)
+        task.arguments = arguments
+        task.currentDirectoryURL = URL(fileURLWithPath: workDir ?? projectRoot)
         do {
             try task.run()
         } catch {
-            NSLog("[QueenStatus] Command failed: \(error)")
+            NSLog("[QueenStatus] execDirect failed (\(executable)): \(error)")
         }
     }
 }

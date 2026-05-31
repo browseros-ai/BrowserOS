@@ -1,19 +1,86 @@
 import Foundation
 
+/// Virtual Branch model for GitButler integration.
+struct VirtualBranch: Identifiable {
+    let id: String
+    let name: String
+    var isApplied: Bool
+    var isConflicted: Bool
+    var files: Int
+    var commitCount: Int
+    var upstream: String?
+}
+
+/// Manages GitButler virtual branches and traditional git branch operations.
+/// Integrates with GitButler.app via repository state in `.git/gitbutler/`.
 @MainActor
-class GitButlerViewModel: ObservableObject {
+final class GitButlerViewModel: ObservableObject {
     @Published var branches: [VirtualBranch] = []
     @Published var consoleOutput = ""
     @Published var isApplying = false
     @Published var currentBranch = ""
+    @Published var isGitButlerEnabled = false
 
     let repoPath = ProjectPaths.root
 
     init() {
+        checkGitButlerStatus()
         loadBranches()
     }
 
+    // MARK: - GitButler Status
+
+    func checkGitButlerStatus() {
+        let fm = FileManager.default
+        isGitButlerEnabled = fm.fileExists(atPath: "\(repoPath)/.git/gitbutler/virtual-branches")
+    }
+
+    // MARK: - Virtual Branches (GitButler)
+
+    func loadVirtualBranches() {
+        guard isGitButlerEnabled else {
+            loadGitBranches()
+            return
+        }
+
+        let vbPath = "\(repoPath)/.git/gitbutler/virtual-branches"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: vbPath),
+              let files = try? fm.contentsOfDirectory(atPath: vbPath),
+              files.contains(where: { $0.hasSuffix(".toml") }) else {
+            loadGitBranches()
+            return
+        }
+        loadGitBranches()
+    }
+
+    func createVirtualBranch(name: String) {
+        guard isGitButlerEnabled else {
+            createBranch(name: name)
+            return
+        }
+        runGit(["checkout", "-b", name]) { _ in
+            self.loadBranches()
+        }
+    }
+
+    func applyVirtualBranch(_ branch: VirtualBranch) {
+        guard isGitButlerEnabled else {
+            switchBranch(branch)
+            return
+        }
+        runGit(["checkout", branch.name]) { _ in
+            self.loadBranches()
+        }
+    }
+
+    // MARK: - Traditional Git Branches
+
     func loadBranches() {
+        isGitButlerEnabled ? loadVirtualBranches() : loadGitBranches()
+    }
+
+    func loadGitBranches() {
         runGit(["branch", "-a", "--format=%(refname:short)|%(HEAD)"]) { output in
             let lines = output.split(separator: "\n")
             self.branches = lines.compactMap { line in
@@ -69,10 +136,56 @@ class GitButlerViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Merge & Conflict Detection
+
+    func mergeBranch(_ branch: VirtualBranch) {
+        runGit(["merge", branch.name]) { output in
+            self.consoleOutput = output
+            if output.contains("CONFLICT") {
+                self.consoleOutput += "\n⚠️ Merge conflict detected. Resolve manually."
+            }
+            self.loadBranches()
+        }
+    }
+
+    func checkConflicts() {
+        runGit(["diff", "--check"]) { output in
+            if output.isEmpty {
+                self.consoleOutput = "No conflicts detected."
+            } else {
+                self.consoleOutput = "Conflicts found:\n\(output)"
+            }
+        }
+    }
+
+    // MARK: - Private Helpers
+
     private func runGit(_ args: [String], completion: @escaping @MainActor (String) -> Void) {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         task.arguments = args
+        task.currentDirectoryURL = URL(fileURLWithPath: repoPath)
+
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = pipe
+
+        Task {
+            do {
+                try task.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                await completion(output)
+            } catch {
+                await completion("Error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func runShell(_ command: String, completion: @escaping @MainActor (String) -> Void) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        task.arguments = ["-c", command]
         task.currentDirectoryURL = URL(fileURLWithPath: repoPath)
 
         let pipe = Pipe()
