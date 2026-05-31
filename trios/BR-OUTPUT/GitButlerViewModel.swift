@@ -182,25 +182,4 @@ final class GitButlerViewModel: ObservableObject {
         }
     }
 
-    private func runShell(_ command: String, completion: @escaping @MainActor (String) -> Void) {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        task.arguments = ["-c", command]
-        task.currentDirectoryURL = URL(fileURLWithPath: repoPath)
-
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = pipe
-
-        Task {
-            do {
-                try task.run()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                await completion(output)
-            } catch {
-                await completion("Error: \(error.localizedDescription)")
-            }
-        }
-    }
 }

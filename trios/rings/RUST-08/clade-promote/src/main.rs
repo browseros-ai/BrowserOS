@@ -3,7 +3,6 @@ use reqwest::blocking::get;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
@@ -33,6 +32,25 @@ struct SealResult {
     cell: &'static str,
     passed: bool,
     detail: String,
+}
+
+/// Count running trios instances (both `trios` from .app bundle and `trios_app` direct binary).
+fn count_trios_instances() -> usize {
+    let count_trios = Command::new("pgrep")
+        .args(["-x", "trios"])
+        .stdout(Stdio::piped())
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().filter(|l| !l.is_empty()).count())
+        .unwrap_or(0);
+    let count_trios_app = Command::new("pgrep")
+        .args(["-x", "trios_app"])
+        .stdout(Stdio::piped())
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().filter(|l| !l.is_empty()).count())
+        .unwrap_or(0);
+    count_trios + count_trios_app
 }
 
 fn main() {
@@ -160,7 +178,7 @@ struct SealMetrics {
     log_error_count: usize,
 }
 
-fn run_seal(clade_id: &str, dry_run: bool) -> (Vec<SealResult>, SealMetrics) {
+fn run_seal(_clade_id: &str, _dry_run: bool) -> (Vec<SealResult>, SealMetrics) {
     let mut results = vec![];
     let mut metrics = SealMetrics {
         build_passed: false,
@@ -195,13 +213,25 @@ fn run_seal(clade_id: &str, dry_run: bool) -> (Vec<SealResult>, SealMetrics) {
 
     // Cell 2: Health
     println!("   Probing health...");
-    let canary_app = format!("{}/.worktrees/staging/trios_app", PROJECT_DIR);
-    let launch_start = Instant::now();
-    let child = Command::new(&canary_app)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok();
+    // SAFETY: Do not launch Canary if multiple instances already running (recursion guard)
+    let pre_instances = count_trios_instances();
+    if pre_instances > 1 {
+        println!("   ⚠️  {} trios instances already running — refusing Canary launch to avoid recursion", pre_instances);
+        metrics.health_passed = false;
+        results.push(SealResult {
+            cell: "Seal-2 Health",
+            passed: false,
+            detail: format!("recursion_guard: {} instances", pre_instances),
+        });
+        println!("   ❌ Health: blocked by recursion guard");
+    } else {
+        let canary_app = format!("{}/.worktrees/staging/trios_app", PROJECT_DIR);
+        let launch_start = Instant::now();
+        let child = Command::new(&canary_app)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok();
 
     std::thread::sleep(std::time::Duration::from_secs(5));
     let health_ok = check_health(CANARY_HEALTH);
@@ -216,6 +246,7 @@ fn run_seal(clade_id: &str, dry_run: bool) -> (Vec<SealResult>, SealMetrics) {
         detail: if health_ok { "status=ok".to_string() } else { "no response".to_string() },
     });
     println!("   {} Health: {}", if health_ok { "✅" } else { "❌" }, if health_ok { "ok" } else { "fail" });
+    }
 
     // Cell 3: Screenshot (skip in headless, check file exists)
     println!("   Checking screenshot capability...");
@@ -306,8 +337,22 @@ fn boot_probe() -> bool {
         return false;
     }
 
-    // 1. Kill existing Sovereign gracefully
+    // 0. Recursion safety: detect and stop ALL trios instances (both `trios` and `trios_app`)
+    let pre_count = count_trios_instances();
+    if pre_count > 1 {
+        println!("   ⚠️  {} trios instances detected before boot — killing all to prevent recursion", pre_count);
+    }
     println!("   Stopping existing Sovereign...");
+    let _ = Command::new("pkill")
+        .args(["-x", "trios"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let _ = Command::new("pkill")
+        .args(["-x", "trios_app"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
     let _ = Command::new("pkill")
         .args(["-f", &format!("{}/trios_app", PROJECT_DIR)])
         .stdout(Stdio::null())
@@ -315,7 +360,7 @@ fn boot_probe() -> bool {
         .status();
     std::thread::sleep(std::time::Duration::from_secs(2));
 
-    // 2. Start new Sovereign
+    // 1. Start new Sovereign
     println!("   Starting new Sovereign...");
     let child = Command::new(&sovereign_app)
         .env("TRIOS_VARIANT", "prod")
@@ -326,6 +371,13 @@ fn boot_probe() -> bool {
 
     if child.is_err() {
         eprintln!("   ❌ Failed to start Sovereign: {:?}", child.err());
+        return false;
+    }
+
+    // 2. Recursion safety: verify we did not spawn multiple instances
+    let post_count = count_trios_instances();
+    if post_count > 1 {
+        eprintln!("   ❌ Recursion detected: {} trios instances after boot — aborting", post_count);
         return false;
     }
 
@@ -363,7 +415,7 @@ fn check_health(url: &str) -> bool {
     }
 }
 
-fn update_state(clade_id: &str) {
+fn update_state(_clade_id: &str) {
     let archive_path = format!("{}/.trinity/clades/archive.json", PROJECT_DIR);
     let fitness_path = format!("{}/.trinity/clades/fitness.csv", PROJECT_DIR);
     println!("   📝 Updated archive: {}", archive_path);
@@ -416,8 +468,9 @@ fn record_fitness(clade_id: &str, metrics: &SealMetrics) {
         .create(true)
         .append(true)
         .open(&csv_path)
-        .unwrap_or_else(|_| {
-            panic!("Cannot open fitness CSV at {}", csv_path);
+        .unwrap_or_else(|e| {
+            eprintln!("[clade-promote] Cannot open fitness CSV at {}: {}", csv_path, e);
+            std::process::exit(1);
         });
 
     if needs_header {

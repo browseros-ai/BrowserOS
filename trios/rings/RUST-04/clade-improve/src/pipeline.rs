@@ -91,6 +91,7 @@ impl ImprovementPipeline {
     /// Phase 3: Run tests in Dev sandbox
     pub fn run_tests(&self, dev: &SandboxedDev) -> Vec<TestResult> {
         use std::process::{Command, Stdio};
+        #[allow(unused_imports)]
         use std::time::Instant;
 
         info!("[Pipeline] Running tests in sandbox {}", dev.root.display());

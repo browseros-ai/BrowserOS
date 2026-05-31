@@ -152,9 +152,34 @@ struct TerminalTabView: View {
         .background(Color.grokElevated.opacity(0.3))
     }
 
+    private static let blockedPatterns = [
+        "trios_app", "open trios", "swiftc.*trios_app",
+        "launchd.*trios", "clade-promote.*boot", "./trios"
+    ]
+
+    private static let dangerousChars = [";", "&&", "||", "`", "$(", ">{", "rm -rf", "curl.*|.*sh", "> /dev/null"]
+
     private func submit() {
         guard !command.isEmpty else { return }
         let cmd = command
+        let lowerCmd = cmd.lowercased()
+
+        for pattern in Self.blockedPatterns {
+            if lowerCmd.range(of: pattern, options: .regularExpression) != nil {
+                command = ""
+                vm.output += "\n[BLOCKED] Recursive self-launch detected\n"
+                return
+            }
+        }
+
+        for pattern in Self.dangerousChars {
+            if cmd.range(of: pattern, options: .regularExpression) != nil {
+                command = ""
+                vm.output += "\n[BLOCKED] Dangerous shell pattern rejected\n"
+                return
+            }
+        }
+
         command = ""
         vm.runCommand(cmd)
     }

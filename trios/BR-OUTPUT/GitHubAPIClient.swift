@@ -8,8 +8,11 @@ actor GitHubAPIClient {
         ProcessInfo.processInfo.environment["GITHUB_TOKEN"]
     }
 
-    private func request(_ endpoint: String) -> URLRequest {
-        var request = URLRequest(url: URL(string: baseURL + endpoint)!)
+    private func request(_ endpoint: String) throws -> URLRequest {
+        guard let url = URL(string: baseURL + endpoint) else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url)
         request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
         if let token = token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -33,7 +36,7 @@ actor GitHubAPIClient {
     }
 
     func createIssue(repo: String, title: String, body: String, labels: [String] = []) async throws -> GitHubIssue {
-        var req = request("/repos/gHashTag/\(repo)/issues")
+        var req = try request("/repos/gHashTag/\(repo)/issues")
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let payload: [String: Any] = [
@@ -47,7 +50,7 @@ actor GitHubAPIClient {
     }
 
     func createPR(repo: String, title: String, body: String, head: String, base: String = "dev") async throws -> GitHubPullRequest {
-        var req = request("/repos/gHashTag/\(repo)/pulls")
+        var req = try request("/repos/gHashTag/\(repo)/pulls")
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let payload: [String: Any] = [
@@ -62,7 +65,7 @@ actor GitHubAPIClient {
     }
 
     func addComment(repo: String, issueNumber: Int, body: String) async throws -> GitHubComment {
-        var req = request("/repos/gHashTag/\(repo)/issues/\(issueNumber)/comments")
+        var req = try request("/repos/gHashTag/\(repo)/issues/\(issueNumber)/comments")
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let payload: [String: Any] = ["body": body]
