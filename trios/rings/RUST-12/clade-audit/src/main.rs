@@ -238,6 +238,72 @@ fn shell_safety_check() -> SecurityCheckResult {
     }
 }
 
+/// Scan for bare try!, as!, and unhandled try? in Swift/Rust.
+fn error_handling_check() -> SecurityCheckResult {
+    let start = Instant::now();
+    let mut findings: Vec<AuditFinding> = vec![];
+    let mut scanned = 0;
+
+    let patterns: Vec<(&str, &str, &str)> = vec![
+        (r"try!\s*\(", "warning", "Bare try! — use try? or do-catch"),
+        (r"as!\s*\w+", "warning", "Force cast as! — use as? with guard"),
+        (r"as!\s*\[", "warning", "Force cast as! — use as? with guard"),
+        (r"try\?\s*\([^)]*\)\s*(?:(?!guard|if\s+let|let\s+_).)*$", "info", "Unhandled try? result"),
+    ];
+
+    let compiled: Vec<(Regex, &str, &str)> = patterns
+        .into_iter()
+        .filter_map(|(pat, sev, msg)| {
+            Regex::new(pat).ok().map(|re| (re, sev, msg))
+        })
+        .collect();
+
+    for entry in WalkDir::new(PROJECT_DIR)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let p = e.path();
+            let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+            (ext == "swift" || ext == "rs") && !p.to_string_lossy().contains("target/")
+        })
+    {
+        scanned += 1;
+        let path = entry.path();
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let file = path.strip_prefix(PROJECT_DIR)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+
+        for (re, severity, message) in &compiled {
+            for (line_idx, line) in content.lines().enumerate() {
+                if re.is_match(line) {
+                    let fingerprint = format!("{}:{}:{}", &file, line_idx + 1, message);
+                    findings.push(AuditFinding {
+                        file: file.clone(),
+                        line: (line_idx + 1) as u32,
+                        severity: (*severity).to_string(),
+                        category: "error_handling".to_string(),
+                        message: (*message).to_string(),
+                        fingerprint,
+                    });
+                }
+            }
+        }
+    }
+
+    SecurityCheckResult {
+        passed: findings.is_empty(),
+        findings,
+        scanned_files: scanned,
+        duration_ms: start.elapsed().as_millis(),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -292,11 +358,26 @@ fn main() {
         println!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
     }
 
+    // Stage 4: Error handling check
+    println!("[Check 4/8] Error handling — try!, as!, unhandled try?");
+    let err = error_handling_check();
+    println!(
+        "   {} Files scanned: {} | Findings: {} | {}ms",
+        if err.passed { "✅" } else { "❌" },
+        err.scanned_files,
+        err.findings.len(),
+        err.duration_ms
+    );
+    for f in &err.findings {
+        println!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
+    }
+
     if json_mode {
         let report = serde_json::json!({
             "build_check": build,
             "security_check": security,
             "shell_safety_check": shell,
+            "error_handling_check": err,
         });
         println!("\n{}", serde_json::to_string_pretty(&report).unwrap_or_default());
     }
