@@ -37,3 +37,19 @@ struct GitHubUser: Codable {
     let login: String
     let avatar_url: String?
 }
+
+struct GitHubPullRequest: Codable, Identifiable {
+    let id: Int
+    let number: Int
+    let title: String
+    let state: String
+    let html_url: String
+    let head: GitHubBranchRef?
+    let base: GitHubBranchRef?
+}
+
+struct GitHubBranchRef: Codable {
+    let ref: String
+    let sha: String
+    let repo: GitHubRepo?
+}
