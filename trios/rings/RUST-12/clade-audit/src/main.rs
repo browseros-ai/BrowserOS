@@ -1,7 +1,6 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Instant;
 use walkdir::WalkDir;

@@ -1,5 +1,24 @@
 .DS_Store
-.trinity/*.log
-.trinity/state/
 trios_app
+
+# Generated Rust build artifacts
+target/
+Cargo.lock
+
+# Git worktrees
+.worktrees/
+
+# Trinity generated state
+.trinity/*.log
+.trinity/snapshots/
+.trinity/experience/
+.trinity/clades/
+
+# Trinity runtime state (auto-generated)
+.trinity/state/
+
+# Tooling
+lefthook.yml
+
+# Built app bundle
 trios.app/

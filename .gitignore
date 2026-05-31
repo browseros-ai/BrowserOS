@@ -30,6 +30,9 @@ AGENTS.md
 
 packages/browseros/build/tools/
 
+.claude/scheduled_tasks.json
+.claude/scheduled_tasks.lock
+
 # AI SDK DevTools traces
 .devtools/
 .omc/
