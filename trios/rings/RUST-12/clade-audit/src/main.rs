@@ -433,6 +433,89 @@ fn todo_check() -> SecurityCheckResult {
     }
 }
 
+/// Heuristic dead-code detection: private func in Swift / non-pub fn in Rust
+/// not referenced in the same file.
+fn unused_code_check() -> SecurityCheckResult {
+    let start = Instant::now();
+    let mut findings: Vec<AuditFinding> = vec![];
+    let mut scanned = 0;
+
+    let swift_private_func = Regex::new(r"private\s+func\s+(\w+)").unwrap();
+    let rust_non_pub_fn = Regex::new(r"^\s*fn\s+(\w+)").unwrap();
+
+    for entry in WalkDir::new(PROJECT_DIR)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let p = e.path();
+            let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+            (ext == "swift" || ext == "rs") && !p.to_string_lossy().contains("target/")
+        })
+    {
+        scanned += 1;
+        let path = entry.path();
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let file = path.strip_prefix(PROJECT_DIR)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+
+        if ext == "swift" {
+            for caps in swift_private_func.captures_iter(&content) {
+                let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                let decl_line = content[..caps.get(0).unwrap().start()]
+                    .lines()
+                    .count() as u32 + 1;
+                let refs = content.matches(name).count();
+                // decl itself counts as 1; if only 1, it's unused
+                if refs <= 1 {
+                    let fingerprint = format!("{}:{}:unused_private_func:{}", &file, decl_line, name);
+                    findings.push(AuditFinding {
+                        file: file.clone(),
+                        line: decl_line,
+                        severity: "info".to_string(),
+                        category: "unused_code".to_string(),
+                        message: format!("Private func '{}' appears unused in file", name),
+                        fingerprint,
+                    });
+                }
+            }
+        } else if ext == "rs" {
+            for caps in rust_non_pub_fn.captures_iter(&content) {
+                let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                let decl_line = content[..caps.get(0).unwrap().start()]
+                    .lines()
+                    .count() as u32 + 1;
+                let refs = content.matches(name).count();
+                if refs <= 1 {
+                    let fingerprint = format!("{}:{}:unused_fn:{}", &file, decl_line, name);
+                    findings.push(AuditFinding {
+                        file: file.clone(),
+                        line: decl_line,
+                        severity: "info".to_string(),
+                        category: "unused_code".to_string(),
+                        message: format!("Non-pub fn '{}' appears unused in file", name),
+                        fingerprint,
+                    });
+                }
+            }
+        }
+    }
+
+    SecurityCheckResult {
+        passed: findings.is_empty(),
+        findings,
+        scanned_files: scanned,
+        duration_ms: start.elapsed().as_millis(),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -529,6 +612,20 @@ fn main() {
         println!("   ⚠️  {}:{} — {} ({})", f.file, f.line, f.message, f.severity);
     }
 
+    // Stage 7: Unused code check
+    println!("[Check 7/8] Unused code — dead private func/fn heuristic");
+    let unused = unused_code_check();
+    println!(
+        "   {} Files scanned: {} | Findings: {} | {}ms",
+        if unused.passed { "✅" } else { "❌" },
+        unused.scanned_files,
+        unused.findings.len(),
+        unused.duration_ms
+    );
+    for f in &unused.findings {
+        println!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
+    }
+
     if json_mode {
         let report = serde_json::json!({
             "build_check": build,
@@ -537,6 +634,7 @@ fn main() {
             "error_handling_check": err,
             "concurrency_check": conc,
             "todo_check": todo,
+            "unused_code_check": unused,
         });
         println!("\n{}", serde_json::to_string_pretty(&report).unwrap_or_default());
     }
