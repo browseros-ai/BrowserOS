@@ -31,4 +31,18 @@ actor GitHubAPIClient {
         let (data, _) = try await URLSession.shared.data(for: request("/repos/gHashTag/\(repo)/issues/\(issueNumber)/comments"))
         return try JSONDecoder().decode([GitHubComment].self, from: data)
     }
+
+    func createIssue(repo: String, title: String, body: String, labels: [String] = []) async throws -> GitHubIssue {
+        var req = request("/repos/gHashTag/\(repo)/issues")
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload: [String: Any] = [
+            "title": title,
+            "body": body,
+            "labels": labels,
+        ]
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, _) = try await URLSession.shared.data(for: req)
+        return try JSONDecoder().decode(GitHubIssue.self, from: data)
+    }
 }
