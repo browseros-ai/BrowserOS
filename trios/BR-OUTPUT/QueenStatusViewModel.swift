@@ -102,15 +102,15 @@ final class QueenStatusViewModel: ObservableObject {
 
     private func asyncRefreshAll() async {
         // Run all checks concurrently
-        async let trios = checkTriosAsync()
-        async let mcp = checkMCPAsync()
-        async let agent = checkAgentAsync()
-        async let cron = checkCronAsync()
-        async let a2a = checkA2AAsync()
-        async let funnel = checkFunnelAsync()
-        async let git = checkGitAsync()
-        async let build = checkBuildAsync()
-        async let improve = checkSelfImprovementAsync()
+        async let trios: Void = checkTriosAsync()
+        async let mcp: Void = checkMCPAsync()
+        async let agent: Void = checkAgentAsync()
+        async let cron: Void = checkCronAsync()
+        async let a2a: Void = checkA2AAsync()
+        async let funnel: Void = checkFunnelAsync()
+        async let git: Void = checkGitAsync()
+        async let build: Void = checkBuildAsync()
+        async let improve: Void = checkSelfImprovementAsync()
 
         _ = await (trios, mcp, agent, cron, a2a, funnel, git, build, improve)
 
@@ -142,12 +142,12 @@ final class QueenStatusViewModel: ObservableObject {
     }
 
     private func checkMCPAsync() async {
-        let healthy = await shellAsync("curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9105/health 2>/dev/null || echo 000") == "200"
+        let healthy = await shellAsync("curl -s -o /dev/null -w '%{http_code}' \(ProjectPaths.browserOSHealthURL) 2>/dev/null || echo 000") == "200"
         updateComponent(name: "MCP", icon: "server.rack", status: healthy ? .healthy : .down, detail: healthy ? "Online" : "Offline", action: healthy ? "Restart" : "Start")
     }
 
     private func checkAgentAsync() async {
-        let healthy = await shellAsync("curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9200/health 2>/dev/null || echo 000") == "200"
+        let healthy = await shellAsync("curl -s -o /dev/null -w '%{http_code}' \(ProjectPaths.agentHealthURL) 2>/dev/null || echo 000") == "200"
         updateComponent(name: "Agent", icon: "cpu", status: healthy ? .healthy : .down, detail: healthy ? "Online" : "Offline", action: healthy ? "Restart" : "Start")
     }
 
@@ -332,8 +332,12 @@ final class QueenStatusViewModel: ObservableObject {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
         task.arguments = ["-x", name]
-        try? task.run()
-        task.waitUntilExit()
+        do {
+            try task.run()
+            task.waitUntilExit()
+        } catch {
+            NSLog("[QueenStatus] Failed to run pkill: \(error)")
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             self?.loadAgents()
             self?.isRunningAction = false

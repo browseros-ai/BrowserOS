@@ -69,7 +69,11 @@ final class SessionGuard: ObservableObject {
             isSessionActive = true
             // Re-register A2A if needed
             if let client = a2aClient {
-                try? await client.register()
+                do {
+                    try await client.register()
+                } catch {
+                    NSLog("[SessionGuard] A2A re-registration failed: \(error)")
+                }
                 await client.startHeartbeat(interval: 30)
             }
         } else {

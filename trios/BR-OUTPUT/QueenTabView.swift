@@ -296,7 +296,7 @@ struct QueenTabView: View {
                     .frame(height: 120)
                     .background(Color.grokElevated.opacity(0.2))
                     .cornerRadius(8)
-                    .onChange(of: viewModel.lastLogLines.count) { _ in
+                    .onChange(of: viewModel.lastLogLines.count) {
                         scrollToBottom = UUID()
                         DispatchQueue.main.async {
                             withAnimation {

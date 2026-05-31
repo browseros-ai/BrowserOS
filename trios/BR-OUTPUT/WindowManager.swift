@@ -70,7 +70,7 @@ final class WindowManager {
             NSLog("WindowManager.open(): panel is nil!")
             return
         }
-        let screen = screenManager.detectScreenForMouse() ?? NSScreen.main ?? NSScreen.screens.first!
+        guard let screen = screenManager.detectScreenForMouse() ?? NSScreen.main ?? NSScreen.screens.first else { return }
         let frame = screen.visibleFrame
         let offscreenX = frame.maxX
         let openX = frame.maxX - currentSidebarWidth

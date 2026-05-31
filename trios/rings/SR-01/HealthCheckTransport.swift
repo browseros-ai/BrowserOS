@@ -3,7 +3,7 @@ import Foundation
 actor HealthCheckTransport: ChatHealthCheckProtocol {
     private let healthURL: URL
 
-    init(healthURL: URL = URL(string: "http://127.0.0.1:9105/health")!) {
+    init(healthURL: URL = URL(string: ProjectPaths.browserOSHealthURL) ?? URL(fileURLWithPath: "/dev/null")) {
         self.healthURL = healthURL
     }
 

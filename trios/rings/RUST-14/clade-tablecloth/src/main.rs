@@ -322,7 +322,10 @@ fn attempt_fix(report: &AuditReport, dry_run: bool) -> (usize, usize, usize) {
         return (0, 0, 0);
     }
 
-    let try_bang = Regex::new(r"try!\s*\(").unwrap();
+    let try_bang = match Regex::new(r"try!\s*\(") {
+        Ok(re) => re,
+        Err(_) => return (0, 0, 0),
+    };
     let branch_prefix = format!("auto-fix/{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
 
     for finding in &report.error_handling_check.findings {

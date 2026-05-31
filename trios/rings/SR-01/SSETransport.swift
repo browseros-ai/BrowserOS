@@ -4,7 +4,7 @@ actor SSETransport: ChatTransportProtocol {
     private let serverURL: URL
     private var session: URLSession
 
-    init(serverURL: URL = URL(string: "http://127.0.0.1:9105/chat")!) {
+    init(serverURL: URL = URL(string: "\(ProjectPaths.mcpBaseURL)/chat") ?? URL(fileURLWithPath: "/dev/null")) {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 300
         config.timeoutIntervalForResource = 600
@@ -36,11 +36,8 @@ actor SSETransport: ChatTransportProtocol {
             let readTask = Task {
                 do {
                     var buffer = Data()
-                    var lastActivity = Date()
-
                     for try await chunk in bytes {
                         buffer.append(chunk)
-                        lastActivity = Date()
 
                         // Parse complete lines from buffer
                         while let newlineIndex = buffer.firstIndex(of: UInt8(10)) {

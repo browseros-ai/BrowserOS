@@ -3,6 +3,9 @@ import CryptoKit
 
 /// Monitors Sovereign and Canary health. Triggers binary rollback on corruption.
 /// Modeled on SessionGuard — same actor isolation, timer-based probing.
+///
+/// SAFETY: Never auto-restarts the app. Rollback replaces the binary on disk;
+/// the user must restart manually. This prevents recursive launch cascades.
 @MainActor
 final class CladeGuard: ObservableObject {
     @Published var sovereignHealthy = false
@@ -16,13 +19,24 @@ final class CladeGuard: ObservableObject {
     private let snapshotDir: String
     private let maxSnapshots = 10
 
+    // SAFETY: Grace period + consecutive-failure threshold prevents
+    // immediate rollback on cold-start before the server is ready.
+    private let bootTimestamp = Date()
+    private let bootGracePeriod: TimeInterval = 60
+    private let maxConsecutiveFailures = 3
+    private let rollbackCooldown: TimeInterval = 30
+    private var consecutiveFailures = 0
+    private var lastRollbackTime: Date?
+
     init(
         sovereignHealthURL: URL? = nil,
         canaryHealthURL: URL? = nil,
         snapshotDir: String? = nil
     ) {
-        let sovereignURL = sovereignHealthURL ?? URL(string: "http://127.0.0.1:9105/health")!
-        let canaryURL = canaryHealthURL ?? URL(string: "http://127.0.0.1:9205/health")!
+        let sovereignURL = sovereignHealthURL ?? URL(string: ProjectPaths.browserOSHealthURL)
+            ?? URL(fileURLWithPath: "/dev/null")
+        let canaryURL = canaryHealthURL ?? URL(string: ProjectPaths.canaryHealthURL)
+            ?? URL(fileURLWithPath: "/dev/null")
         self.sovereignCheck = HealthCheckTransport(healthURL: sovereignURL)
         self.canaryCheck = HealthCheckTransport(healthURL: canaryURL)
         self.snapshotDir = snapshotDir ?? "\(ProjectPaths.trinity)/snapshots"
@@ -49,10 +63,34 @@ final class CladeGuard: ObservableObject {
         sovereignHealthy = await sovereignCheck.check()
         canaryHealthy = await canaryCheck.check()
 
-        if !sovereignHealthy {
-            NSLog("[CladeGuard] Sovereign unhealthy — triggering rollback")
-            await triggerRollback()
+        if sovereignHealthy {
+            consecutiveFailures = 0
+            return
         }
+
+        consecutiveFailures += 1
+        NSLog("[CladeGuard] Sovereign unhealthy (consecutive failures: \(consecutiveFailures))")
+
+        // During boot grace period we only log; we do NOT roll back.
+        let elapsed = Date().timeIntervalSince(bootTimestamp)
+        guard elapsed > bootGracePeriod else {
+            NSLog("[CladeGuard] Within boot grace period (\(Int(elapsed))s < \(Int(bootGracePeriod))s) — skipping rollback")
+            return
+        }
+
+        guard consecutiveFailures >= maxConsecutiveFailures else {
+            NSLog("[CladeGuard] Failure count \(consecutiveFailures) < threshold \(maxConsecutiveFailures) — waiting")
+            return
+        }
+
+        // Cooldown: do not roll back more than once every N seconds.
+        if let last = lastRollbackTime, Date().timeIntervalSince(last) < rollbackCooldown {
+            NSLog("[CladeGuard] Rollback cooldown active — skipping")
+            return
+        }
+
+        NSLog("[CladeGuard] Sovereign unhealthy — triggering rollback")
+        await triggerRollback()
     }
 
     /// Saves a binary snapshot before any risky operation. Computes SHA-256 checksum.
@@ -117,7 +155,11 @@ final class CladeGuard: ObservableObject {
             .filter { $0.hasPrefix("trios_app-") && !$0.hasSuffix(".sha256") }
             .sorted { $0 > $1 } // descending by timestamp (newest first)
         for old in snapshots.dropFirst(maxSnapshots) {
-            try? fm.removeItem(atPath: "\(snapshotDir)/\(old)")
+            do {
+                try fm.removeItem(atPath: "\(snapshotDir)/\(old)")
+            } catch {
+                NSLog("[CladeGuard] Failed to prune snapshot \(old): \(error)")
+            }
             try? fm.removeItem(atPath: "\(snapshotDir)/\(old).sha256")
         }
     }
@@ -129,6 +171,8 @@ final class CladeGuard: ObservableObject {
         }
         isRollingBack = true
         defer { isRollingBack = false }
+
+        lastRollbackTime = Date()
 
         let fm = FileManager.default
 
@@ -156,6 +200,8 @@ final class CladeGuard: ObservableObject {
         await applySnapshot(candidate)
     }
 
+    /// Replaces the on-disk binary with the chosen snapshot.
+    /// Does NOT kill or relaunch the running process — that is the user's decision.
     private func applySnapshot(_ snapshotPath: String) async {
         let fm = FileManager.default
         let targets = [
@@ -175,22 +221,15 @@ final class CladeGuard: ObservableObject {
         }
 
         NSLog("[CladeGuard] Rolled back to \(snapshotPath)")
+        NSLog("[CladeGuard] ⚠️ The binary on disk has been restored. Please restart trios manually to run the restored version.")
 
-        // Restart the Sovereign app
-        Task { @MainActor in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-            task.arguments = ["-n", ProjectPaths.appBundle]
-            try? task.run()
-        }
-
-        // Boot Probe: wait then verify health
-        try? await Task.sleep(nanoseconds: 10 * 1_000_000_000)
+        // Boot Probe: verify the restored binary would work (health via current runtime)
+        try? await Task.sleep(nanoseconds: 2 * 1_000_000_000)
         let healthy = await sovereignCheck.check()
         if healthy {
-            NSLog("[CladeGuard] Boot probe PASSED — Sovereign healthy after rollback")
+            NSLog("[CladeGuard] Boot probe PASSED — Sovereign healthy")
         } else {
-            NSLog("[CladeGuard] Boot probe FAILED — Sovereign still unhealthy after rollback")
+            NSLog("[CladeGuard] Boot probe FAILED — Sovereign still unhealthy after rollback. Manual restart recommended.")
         }
     }
 
@@ -201,6 +240,8 @@ final class CladeGuard: ObservableObject {
     }
 
     /// Boot probe after promotion: verifies Sovereign health within timeout.
+    /// Returns true if healthy; does NOT auto-rollback here —
+    /// the caller decides whether to revert.
     func bootProbe(timeoutSeconds: UInt64 = 15) async -> Bool {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
         while Date() < deadline {
@@ -211,8 +252,7 @@ final class CladeGuard: ObservableObject {
             }
             try? await Task.sleep(nanoseconds: 1 * 1_000_000_000)
         }
-        NSLog("[CladeGuard] Boot probe FAILED — reverting to last snapshot")
-        await triggerRollback()
+        NSLog("[CladeGuard] Boot probe FAILED — manual rollback may be needed")
         return false
     }
 }

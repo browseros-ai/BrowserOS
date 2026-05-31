@@ -161,7 +161,10 @@ fn sync_claude_artifacts() {
         if !Path::new(src).exists() {
             continue;
         }
-        let name = Path::new(src).file_name().unwrap().to_string_lossy();
+        let name = match Path::new(src).file_name() {
+            Some(n) => n.to_string_lossy(),
+            None => continue,
+        };
         let dst = format!("{}/{}", target_base, name);
 
         if Path::new(&dst).exists() {

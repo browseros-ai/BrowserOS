@@ -1,19 +1,19 @@
 [package]
-name = "clade-tablecloth"
+name = "clade-dashboard"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
-description = "TRIOS Clade Tablecloth — autonomous self-improvement loop engine"
+description = "TRIOS Clade Web Dashboard — real-time Sovereign + Canary health monitoring"
 
 [dependencies]
 chrono = "0.4"
+reqwest = { version = "0.12", features = ["blocking"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-walkdir = "2"
-regex = "1"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+tokio = { version = "1", features = ["full"] }
+warp = "0.3"
 
 [lints]
 workspace = true

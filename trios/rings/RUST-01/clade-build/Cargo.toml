@@ -1,0 +1,14 @@
+[package]
+name = "clade-build"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+description = "TRIOS Clade Build System — replaces build.sh"
+
+[dependencies]
+chrono = "0.4"
+
+[lints]
+workspace = true

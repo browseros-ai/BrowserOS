@@ -1,0 +1,11 @@
+[package]
+name = "clade-worktree"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+description = "TRIOS Clade Worktree Guard — dirty detection, auto-commit, sync"
+
+[lints]
+workspace = true

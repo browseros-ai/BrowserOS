@@ -54,14 +54,12 @@ final class ChatViewModel: ObservableObject {
     }
 
     func setupConversationId() async {
-        conversationId = await persister.currentConversationId()
+        conversationId = persister.currentConversationId()
     }
 
     func loadHistory() async {
-        var history = await persister.load(conversationId: conversationId)
-        for index in history.indices {
-            history[index].isStreaming = false
-        }
+        let history = await persister.load(conversationId: conversationId)
+        history.forEach { $0.isStreaming = false }
         messages = history
         rebuildCache()
     }
@@ -72,7 +70,7 @@ final class ChatViewModel: ObservableObject {
 
     func switchConversation(id: UUID) async {
         conversationId = id
-        await persister.setCurrentConversationId(id)
+        persister.setCurrentConversationId(id)
         await loadHistory()
         await loadConversations()
         showHistory = false
@@ -178,7 +176,7 @@ final class ChatViewModel: ObservableObject {
         messageCache = [:]
         state = .idle
         Task {
-            await persister.setCurrentConversationId(conversationId)
+            persister.setCurrentConversationId(conversationId)
             await loadConversations()
         }
     }
@@ -283,8 +281,11 @@ final class ChatViewModel: ObservableObject {
             objectWillChange.send()
 
         case .finishMessage(let messageId):
-            guard let index = messageCache[messageId] else { return }
-            messages[index].isStreaming = false
+            guard let _ = messageCache[messageId] else { return }
+            // Do NOT clear isStreaming here — text may be finished but tool calls
+            // or reasoning may still be in progress. isStreaming is cleared on
+            // streamComplete / streamAborted so the reaction bar only appears
+            // after the *entire* assistant turn is done.
             objectWillChange.send()
 
         case .startSegment(let messageId, let segment):
@@ -342,11 +343,19 @@ final class ChatViewModel: ObservableObject {
             objectWillChange.send()
 
         case .streamComplete:
+            if let lastIndex = messages.indices.last,
+               messages[lastIndex].role == .assistant {
+                messages[lastIndex].isStreaming = false
+            }
             _ = await stateMachine.transition(to: .idle)
             state = await stateMachine.currentState()
             await saveHistory()
 
         case .streamAborted:
+            if let lastIndex = messages.indices.last,
+               messages[lastIndex].role == .assistant {
+                messages[lastIndex].isStreaming = false
+            }
             _ = await stateMachine.transition(to: .idle)
             state = await stateMachine.currentState()
             await saveHistory()

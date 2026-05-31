@@ -1,0 +1,11 @@
+[package]
+name = "clade-launchd"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+description = "TRIOS Clade Launchd — install/uninstall auto-start plists for monitor and dashboard"
+
+[lints]
+workspace = true

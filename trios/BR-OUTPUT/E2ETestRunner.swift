@@ -12,7 +12,10 @@ class E2ETestRunner {
     }
     
     static func runHealthTest() {
-        let url = URL(string: "http://127.0.0.1:9105/health")!
+        guard let url = URL(string: ProjectPaths.browserOSHealthURL) else {
+            print("FAIL")
+            return
+        }
         let semaphore = DispatchSemaphore(value: 0)
         var result = false
         let task = URLSession.shared.dataTask(with: url) { data, _, _ in

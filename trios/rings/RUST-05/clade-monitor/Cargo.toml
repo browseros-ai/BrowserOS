@@ -1,19 +1,17 @@
 [package]
-name = "clade-tablecloth"
+name = "clade-monitor"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
-description = "TRIOS Clade Tablecloth — autonomous self-improvement loop engine"
+description = "TRIOS Clade Cron Monitor — background health + seal + budget checks"
 
 [dependencies]
 chrono = "0.4"
+reqwest = { version = "0.12", features = ["blocking"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-walkdir = "2"
-regex = "1"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
 
 [lints]
 workspace = true

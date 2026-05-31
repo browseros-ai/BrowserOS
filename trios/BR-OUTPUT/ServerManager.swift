@@ -30,7 +30,7 @@ final class ServerManager {
             task.currentDirectoryURL = URL(fileURLWithPath: ProjectPaths.browserOSAgentRoot)
             task.environment = [
                 "BROWSEROS_CDP_PORT": "9106",
-                "BROWSEROS_SERVER_PORT": "9105",
+                "BROWSEROS_SERVER_PORT": ProjectPaths.mcpPort,
                 "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
             ]
             do {
@@ -61,12 +61,16 @@ final class ServerManager {
             let offTask = Process()
             offTask.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
             offTask.arguments = [tailscalePath, "serve", "--https=443", "off"]
-            try? offTask.run()
+            do {
+                try offTask.run()
+            } catch {
+                NSLog("[ServerManager] Failed to stop funnel: \(error)")
+            }
             onStatusChange?()
         } else {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-            task.arguments = [tailscalePath, "serve", "--https=443", "http://127.0.0.1:9105"]
+            task.arguments = [tailscalePath, "serve", "--https=443", "http://127.0.0.1:\(ProjectPaths.mcpPort)"]
             do {
                 try task.run()
                 funnelTask = task

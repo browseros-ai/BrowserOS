@@ -12,7 +12,7 @@ final class TriosMCPClient: ObservableObject {
     @Published var lastError: String?
     @Published var browserState = BrowserState()
 
-    init(serverURL: URL = URL(string: "http://127.0.0.1:9105")!) {
+    init(serverURL: URL = URL(string: ProjectPaths.mcpBaseURL) ?? URL(fileURLWithPath: "/dev/null")) {
         self.serverURL = serverURL
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30

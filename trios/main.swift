@@ -90,7 +90,8 @@ class TriosScreenManager {
     }
 
     func positionPanel(_ panel: NSWindow, on screen: NSScreen? = nil, width: CGFloat = 400) {
-        let targetScreen = screen ?? detectScreenForMouse() ?? NSScreen.main ?? NSScreen.screens.first!
+        let targetScreen = screen ?? detectScreenForMouse() ?? NSScreen.main ?? NSScreen.screens.first ?? NSScreen()
+        guard targetScreen.frame.width > 0 else { return }
         let frame = targetScreen.visibleFrame
 
         let panelHeight = frame.height
@@ -271,17 +272,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     func setupSidePanel() {
         NSLog("setupSidePanel starting")
-        do {
-            let viewModel = compositionRoot.makeChatViewModel()
-            self.chatViewModel = viewModel
-            NSLog("ChatViewModel created")
-            let tabView = TriosTabView(viewModel: viewModel)
-            NSLog("TriosTabView created")
-            let panel = windowManager.setupPanel(contentView: AnyView(tabView))
-            NSLog("Panel created: \(panel)")
-        } catch {
-            NSLog("setupSidePanel ERROR: \(error)")
-        }
+        let viewModel = compositionRoot.makeChatViewModel()
+        self.chatViewModel = viewModel
+        NSLog("ChatViewModel created")
+        let tabView = TriosTabView(viewModel: viewModel)
+        NSLog("TriosTabView created")
+        let panel = windowManager.setupPanel(contentView: AnyView(tabView))
+        NSLog("Panel created: \(panel)")
     }
 
     // MARK: - Window Shifting
@@ -465,7 +462,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func openLocal() {
-        guard let url = URL(string: "http://127.0.0.1:9105") else { return }
+        guard let url = URL(string: ProjectPaths.mcpBaseURL) else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -579,14 +576,14 @@ struct CompositionRoot {
         let persister = ConversationPersister()
         let stateMachine = ConversationStateMachine()
 
-        let serverURL = URL(string: "http://127.0.0.1:9105")!
+        let serverURL = URL(string: ProjectPaths.mcpBaseURL) ?? URL(fileURLWithPath: "/dev/null")
         let agentCard = AgentCard(
             id: AgentId("trios-agent"),
             name: "TRIOS AGENT",
             description: "Commanding General of BrowserOS Agents. Native macOS A2A participant with browser control and chat capabilities.",
             capabilities: [.browserControl, .chat, .orchestrator],
             version: "1.0.0",
-            endpoint: URL(string: "http://127.0.0.1:9105/a2a")
+            endpoint: URL(string: "\(ProjectPaths.mcpBaseURL)/a2a")
         )
         let a2aClient = A2ARegistryClient(serverURL: serverURL, agentCard: agentCard)
         NSLog("CompositionRoot: A2ARegistryClient created")

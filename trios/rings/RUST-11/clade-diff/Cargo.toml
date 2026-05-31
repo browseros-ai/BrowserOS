@@ -14,3 +14,6 @@ chrono = "0.4"
 [[bin]]
 name = "clade-diff"
 path = "src/main.rs"
+
+[lints]
+workspace = true

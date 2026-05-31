@@ -36,8 +36,30 @@ enum ProjectPaths {
     // MARK: - BrowserOS Agent Server
 
     static var browserOSAgentRoot: String { "\(root)/../packages/browseros-agent" }
-    static var browserOSHealthURL: String { "http://127.0.0.1:9105/health" }
-    static var agentHealthURL: String { "http://127.0.0.1:9200/health" }
+
+    /// MCP port from Info.plist (injected at build time via TRIOS_VARIANT)
+    static var mcpPort: String {
+        Bundle.main.infoDictionary?["TRIOS_MCP_PORT"] as? String ?? "9105"
+    }
+
+    /// A2A port from Info.plist
+    static var a2aPort: String {
+        Bundle.main.infoDictionary?["TRIOS_A2A_PORT"] as? String ?? "9200"
+    }
+
+    /// Build variant from Info.plist (prod or staging)
+    static var buildVariant: String {
+        Bundle.main.infoDictionary?["TRIOS_VARIANT"] as? String ?? "prod"
+    }
+
+    static var canaryMcpPort: String {
+        Bundle.main.infoDictionary?["TRIOS_CANARY_MCP_PORT"] as? String ?? "9205"
+    }
+
+    static var mcpBaseURL: String { "http://127.0.0.1:\(mcpPort)" }
+    static var browserOSHealthURL: String { "\(mcpBaseURL)/health" }
+    static var agentHealthURL: String { "http://127.0.0.1:\(a2aPort)/health" }
+    static var canaryHealthURL: String { "http://127.0.0.1:\(canaryMcpPort)/health" }
 
     // MARK: - Trinity State
 

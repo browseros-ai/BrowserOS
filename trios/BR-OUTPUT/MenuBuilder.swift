@@ -53,7 +53,7 @@ final class MenuBuilder {
 
         // URLs
         let openLocalItem = NSMenuItem(
-            title: "Open http://127.0.0.1:9105",
+            title: "Open \(ProjectPaths.mcpBaseURL)",
             action: #selector(AppDelegate.openLocal),
             keyEquivalent: ""
         )

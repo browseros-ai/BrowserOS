@@ -21,3 +21,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Trinity Agent <agent@browseros.ai>"]
 license = "MIT"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"

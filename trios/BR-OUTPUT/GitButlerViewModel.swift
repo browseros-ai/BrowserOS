@@ -59,8 +59,9 @@ final class GitButlerViewModel: ObservableObject {
             createBranch(name: name)
             return
         }
-        runGit(["checkout", "-b", name]) { _ in
-            self.loadBranches()
+        Task {
+            await runGitAsync(["checkout", "-b", name])
+            loadBranches()
         }
     }
 
@@ -69,8 +70,9 @@ final class GitButlerViewModel: ObservableObject {
             switchBranch(branch)
             return
         }
-        runGit(["checkout", branch.name]) { _ in
-            self.loadBranches()
+        Task {
+            await runGitAsync(["checkout", branch.name])
+            loadBranches()
         }
     }
 
@@ -81,9 +83,10 @@ final class GitButlerViewModel: ObservableObject {
     }
 
     func loadGitBranches() {
-        runGit(["branch", "-a", "--format=%(refname:short)|%(HEAD)"]) { output in
+        Task {
+            let output = await runGitAsync(["branch", "-a", "--format=%(refname:short)|%(HEAD)"])
             let lines = output.split(separator: "\n")
-            self.branches = lines.compactMap { line in
+            branches = lines.compactMap { line in
                 let parts = line.split(separator: "|", maxSplits: 1)
                 guard parts.count == 2 else { return nil }
                 let name = String(parts[0])
@@ -98,69 +101,76 @@ final class GitButlerViewModel: ObservableObject {
                     upstream: nil
                 )
             }
-            self.isApplying = self.branches.contains(where: \.isApplied)
-            self.currentBranch = self.branches.first(where: \.isApplied)?.name ?? ""
+            isApplying = branches.contains(where: \.isApplied)
+            currentBranch = branches.first(where: \.isApplied)?.name ?? ""
         }
     }
 
     func createBranch(name: String) {
-        runGit(["checkout", "-b", name]) { _ in
-            self.loadBranches()
+        Task {
+            await runGitAsync(["checkout", "-b", name])
+            loadBranches()
         }
     }
 
     func switchBranch(_ branch: VirtualBranch) {
-        runGit(["checkout", branch.name]) { _ in
-            self.loadBranches()
+        Task {
+            await runGitAsync(["checkout", branch.name])
+            loadBranches()
         }
     }
 
     func deleteBranch(_ branch: VirtualBranch) {
-        runGit(["branch", "-D", branch.name]) { _ in
-            self.loadBranches()
+        Task {
+            await runGitAsync(["branch", "-D", branch.name])
+            loadBranches()
         }
     }
 
     func commitBranch(_ branch: VirtualBranch, message: String) {
-        runGit(["-C", repoPath, "add", "."]) { _ in
-            self.runGit(["-C", self.repoPath, "commit", "-m", message]) { output in
-                self.consoleOutput = output
-                self.loadBranches()
-            }
+        Task {
+            await runGitAsync(["-C", repoPath, "add", "."])
+            let output = await runGitAsync(["-C", repoPath, "commit", "-m", message])
+            consoleOutput = output
+            loadBranches()
         }
     }
 
     func pushBranch(_ branch: VirtualBranch) {
-        runGit(["push", "-u", "origin", branch.name]) { output in
-            self.consoleOutput = output
+        Task {
+            let output = await runGitAsync(["push", "-u", "origin", branch.name])
+            consoleOutput = output
         }
     }
 
     // MARK: - Merge & Conflict Detection
 
     func mergeBranch(_ branch: VirtualBranch) {
-        runGit(["merge", branch.name]) { output in
-            self.consoleOutput = output
+        Task {
+            let output = await runGitAsync(["merge", branch.name])
+            consoleOutput = output
             if output.contains("CONFLICT") {
-                self.consoleOutput += "\n⚠️ Merge conflict detected. Resolve manually."
+                consoleOutput += "\n⚠️ Merge conflict detected. Resolve manually."
             }
-            self.loadBranches()
+            loadBranches()
         }
     }
 
     func checkConflicts() {
-        runGit(["diff", "--check"]) { output in
+        Task {
+            let output = await runGitAsync(["diff", "--check"])
             if output.isEmpty {
-                self.consoleOutput = "No conflicts detected."
+                consoleOutput = "No conflicts detected."
             } else {
-                self.consoleOutput = "Conflicts found:\n\(output)"
+                consoleOutput = "Conflicts found:\n\(output)"
             }
         }
     }
 
     // MARK: - Private Helpers
 
-    private func runGit(_ args: [String], completion: @escaping @MainActor (String) -> Void) {
+    @discardableResult
+    private func runGitAsync(_ args: [String]) async -> String {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         task.arguments = args
@@ -170,15 +180,12 @@ final class GitButlerViewModel: ObservableObject {
         task.standardOutput = pipe
         task.standardError = pipe
 
-        Task {
-            do {
-                try task.run()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                await completion(output)
-            } catch {
-                await completion("Error: \(error.localizedDescription)")
-            }
+        do {
+            try task.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            return String(data: data, encoding: .utf8) ?? ""
+        } catch {
+            return "Error: \(error.localizedDescription)"
         }
     }
 
