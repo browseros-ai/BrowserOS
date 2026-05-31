@@ -3,10 +3,11 @@ use reqwest::blocking::get;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
+use std::os::unix::io::AsRawFd;
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
-const PROJECT_DIR: &str = "/Users/playra/BrowserOS-full/trios";
+fn project_dir() -> String { std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string()) }
 const SOVEREIGN_HEALTH: &str = "http://127.0.0.1:9105/health";
 const CANARY_HEALTH: &str = "http://127.0.0.1:9205/health";
 
@@ -36,20 +37,28 @@ struct SealResult {
 
 /// Count running trios instances (both `trios` from .app bundle and `trios_app` direct binary).
 fn count_trios_instances() -> usize {
-    let count_trios = Command::new("pgrep")
+    let count_trios = match Command::new("pgrep")
         .args(["-x", "trios"])
         .stdout(Stdio::piped())
         .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().filter(|l| !l.is_empty()).count())
-        .unwrap_or(0);
-    let count_trios_app = Command::new("pgrep")
+    {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).lines().filter(|l| !l.is_empty()).count(),
+        Err(e) => {
+            eprintln!("[promote] pgrep trios failed: {}", e);
+            0
+        }
+    };
+    let count_trios_app = match Command::new("pgrep")
         .args(["-x", "trios_app"])
         .stdout(Stdio::piped())
         .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().filter(|l| !l.is_empty()).count())
-        .unwrap_or(0);
+    {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).lines().filter(|l| !l.is_empty()).count(),
+        Err(e) => {
+            eprintln!("[promote] pgrep trios_app failed: {}", e);
+            0
+        }
+    };
     count_trios + count_trios_app
 }
 
@@ -60,7 +69,7 @@ fn main() {
         return;
     }
 
-    let clade_id = args.get(0).map(|s| s.as_str()).unwrap_or("clade-1.0.0");
+    let clade_id = args.first().map(|s| s.as_str()).unwrap_or("clade-1.0.0");
     let dry_run = args.iter().any(|a| a == "--dry-run");
 
     println!("═══════════════════════════════════════════════════════════");
@@ -225,20 +234,28 @@ fn run_seal(_clade_id: &str, _dry_run: bool) -> (Vec<SealResult>, SealMetrics) {
         });
         println!("   ❌ Health: blocked by recursion guard");
     } else {
-        let canary_app = format!("{}/.worktrees/staging/trios_app", PROJECT_DIR);
+        let canary_app = format!("{}/.worktrees/staging/trios_app", &project_dir());
         let launch_start = Instant::now();
-        let child = Command::new(&canary_app)
+        let child = match Command::new(&canary_app)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .ok();
+        {
+            Ok(c) => Some(c),
+            Err(e) => {
+                eprintln!("[promote] Failed to spawn canary {}: {}", canary_app, e);
+                None
+            }
+        };
 
     std::thread::sleep(std::time::Duration::from_secs(5));
     let health_ok = check_health(CANARY_HEALTH);
     metrics.health_launch_ms = launch_start.elapsed().as_millis();
     metrics.health_passed = health_ok;
     if let Some(mut c) = child {
-        let _ = c.kill();
+        if let Err(e) = c.kill() {
+            eprintln!("[promote] Failed to kill canary process: {}", e);
+        }
     }
     results.push(SealResult {
         cell: "Seal-2 Health",
@@ -279,7 +296,7 @@ fn run_seal(_clade_id: &str, _dry_run: bool) -> (Vec<SealResult>, SealMetrics) {
 
     // Cell 5: Log scan (check recent event_log for errors)
     println!("   Scanning logs...");
-    let log_path = format!("{}/.trinity/event_log.jsonl", PROJECT_DIR);
+    let log_path = format!("{}/.trinity/event_log.jsonl", &project_dir());
     let log_ok = match fs::read_to_string(&log_path) {
         Ok(content) => {
             let error_count = content.lines().filter(|l| l.contains("error") || l.contains("fail")).count();
@@ -302,36 +319,63 @@ fn run_seal(_clade_id: &str, _dry_run: bool) -> (Vec<SealResult>, SealMetrics) {
 }
 
 fn snapshot_sovereign(clade_id: &str) {
-    let snapshot_dir = format!("{}/.trinity/snapshots", PROJECT_DIR);
-    let _ = fs::create_dir_all(&snapshot_dir);
+    let snapshot_dir = format!("{}/.trinity/snapshots", &project_dir());
+    if let Err(e) = fs::create_dir_all(&snapshot_dir) {
+        eprintln!("   [snapshot] Failed to create snapshot dir: {}", e);
+        return;
+    }
     let ts = Utc::now().timestamp();
     let name = format!("trios_app-{}-{}", ts, clade_id);
-    let src = format!("{}/trios_app", PROJECT_DIR);
+    let src = format!("{}/trios_app", &project_dir());
     let dst = format!("{}/{}", snapshot_dir, name);
-    let _ = fs::copy(&src, &dst);
-    println!("   💾 Snapshot: {}", dst);
+    match fs::copy(&src, &dst) {
+        Ok(_) => println!("   💾 Snapshot: {}", dst),
+        Err(e) => eprintln!("   [snapshot] Failed to copy binary: {}", e),
+    }
 }
 
 fn atomic_swap() {
-    let canary = format!("{}/.worktrees/staging/trios_app", PROJECT_DIR);
+    let canary = format!("{}/.worktrees/staging/trios_app", &project_dir());
     let targets = vec![
-        format!("{}/trios_app", PROJECT_DIR),
-        format!("{}/trios.app/Contents/MacOS/trios", PROJECT_DIR),
+        format!("{}/trios_app", &project_dir()),
+        format!("{}/trios.app/Contents/MacOS/trios", &project_dir()),
     ];
-    for dst in targets {
-        let _ = fs::remove_file(&dst);
-        if let Some(parent) = std::path::Path::new(&dst).parent() {
-            let _ = fs::create_dir_all(parent);
+    for dst in &targets {
+        if let Some(parent) = std::path::Path::new(dst).parent() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                eprintln!("   [atomic_swap] Failed to create parent dir: {}", e);
+                continue;
+            }
         }
-        let _ = fs::copy(&canary, &dst);
-        println!("   📦 Copied to {}", dst);
+        let tmp = format!("{}.tmp", dst);
+        match fs::copy(&canary, &tmp) {
+            Ok(_) => {
+                match fs::rename(&tmp, dst) {
+                    Ok(_) => println!("   📦 Atomic swap to {}", dst),
+                    Err(e) => {
+                        eprintln!("   [atomic_swap] rename failed, falling back to copy: {}", e);
+                        if let Err(e) = fs::remove_file(dst) {
+                            eprintln!("   [atomic_swap] cleanup old dst: {}", e);
+                        }
+                        match fs::copy(&canary, dst) {
+                            Ok(_) => println!("   📦 Copied to {} (non-atomic fallback)", dst),
+                            Err(e2) => eprintln!("   [atomic_swap] Failed to copy to {}: {}", dst, e2),
+                        }
+                        if let Err(e) = fs::remove_file(&tmp) {
+                            eprintln!("   [atomic_swap] cleanup tmp: {}", e);
+                        }
+                    }
+                }
+            }
+            Err(e) => eprintln!("   [atomic_swap] Failed to stage temp file: {}", e),
+        }
     }
 }
 
 fn boot_probe() -> bool {
     use std::process::Stdio;
 
-    let sovereign_app = format!("{}/trios_app", PROJECT_DIR);
+    let sovereign_app = format!("{}/trios_app", &project_dir());
     if !std::path::Path::new(&sovereign_app).exists() {
         eprintln!("   ❌ Sovereign binary missing: {}", sovereign_app);
         return false;
@@ -343,28 +387,25 @@ fn boot_probe() -> bool {
         println!("   ⚠️  {} trios instances detected before boot — killing all to prevent recursion", pre_count);
     }
     println!("   Stopping existing Sovereign...");
-    let _ = Command::new("pkill")
-        .args(["-x", "trios"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    let _ = Command::new("pkill")
-        .args(["-x", "trios_app"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    let _ = Command::new("pkill")
-        .args(["-f", &format!("{}/trios_app", PROJECT_DIR)])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    for target in &[vec!["-x", "trios"], vec!["-x", "trios_app"], vec!["-f", &format!("{}/trios_app", &project_dir())]] {
+        match Command::new("pkill")
+            .args(target)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
+            Ok(s) if !s.success() => {} // no matching process — expected
+            Err(e) => eprintln!("[promote] pkill {:?} spawn failed: {}", target, e),
+            _ => {}
+        }
+    }
     std::thread::sleep(std::time::Duration::from_secs(2));
 
     // 1. Start new Sovereign
     println!("   Starting new Sovereign...");
     let child = Command::new(&sovereign_app)
         .env("TRIOS_VARIANT", "prod")
-        .current_dir(PROJECT_DIR)
+        .current_dir(project_dir())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
@@ -398,11 +439,16 @@ fn boot_probe() -> bool {
 }
 
 fn emergency_rollback() {
-    let _ = Command::new("cargo")
+    match Command::new("cargo")
         .args(["run", "--bin", "clade-rollback"])
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
-        .status();
+        .status()
+    {
+        Ok(s) if s.success() => println!("   Rollback completed"),
+        Ok(s) => eprintln!("[promote] Rollback exited with code {:?}", s.code()),
+        Err(e) => eprintln!("[promote] CRITICAL: Rollback failed to spawn: {}", e),
+    }
 }
 
 fn check_health(url: &str) -> bool {
@@ -416,52 +462,109 @@ fn check_health(url: &str) -> bool {
 }
 
 fn update_state(_clade_id: &str) {
-    let archive_path = format!("{}/.trinity/clades/archive.json", PROJECT_DIR);
-    let fitness_path = format!("{}/.trinity/clades/fitness.csv", PROJECT_DIR);
+    let archive_path = format!("{}/.trinity/clades/archive.json", &project_dir());
+    let fitness_path = format!("{}/.trinity/clades/fitness.csv", &project_dir());
     println!("   📝 Updated archive: {}", archive_path);
     println!("   📝 Updated fitness: {}", fitness_path);
 }
 
-fn update_budget_on_success() {
-    let path = format!("{}/.trinity/state/safety_budget.json", PROJECT_DIR);
-    if let Ok(content) = fs::read_to_string(&path) {
-        if let Ok(mut budget) = serde_json::from_str::<SafetyBudget>(&content) {
-            budget.budget = (budget.budget + 0.2).min(budget.max_budget);
-            budget.total_trials += 1;
-            let _ = fs::write(&path, serde_json::to_string_pretty(&budget).unwrap_or_default());
-            println!("   💰 Budget +0.2 → {}/{}", budget.budget, budget.max_budget);
+fn update_budget(adjust: f64, is_failure: bool) {
+    let path = format!("{}/.trinity/state/safety_budget.json", &project_dir());
+    let lock_path = format!("{}.lock", path);
+
+    let lock_file = match fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&lock_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("   [budget] Failed to open lock file: {}", e);
+            return;
         }
+    };
+
+    // Acquire exclusive advisory lock (blocks until available)
+    let fd = lock_file.as_raw_fd();
+    let ret = unsafe { libc::flock(fd, libc::LOCK_EX) };
+    if ret != 0 {
+        eprintln!("   [budget] flock failed: {}", std::io::Error::last_os_error());
+        return;
     }
+
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("   [budget] Failed to read budget: {}", e);
+            return;
+        }
+    };
+    let mut budget: SafetyBudget = match serde_json::from_str(&content) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("   [budget] Failed to parse budget: {}", e);
+            return;
+        }
+    };
+
+    budget.budget = (budget.budget + adjust).clamp(0.0, budget.max_budget);
+    budget.total_trials += 1;
+    if is_failure { budget.total_failures += 1; }
+    if budget.budget <= 0.0 { budget.halted = true; }
+
+    let tmp_path = format!("{}.tmp", path);
+    let json = serde_json::to_string_pretty(&budget).unwrap_or_default();
+    if let Err(e) = fs::write(&tmp_path, &json) {
+        eprintln!("   [budget] Failed to write temp: {}", e);
+        return;
+    }
+    if let Err(e) = fs::rename(&tmp_path, &path) {
+        eprintln!("   [budget] Failed to rename: {}", e);
+        return;
+    }
+    // lock_file dropped here → flock released automatically
+
+    let label = if adjust > 0.0 { format!("+{}", adjust) } else { format!("{}", adjust) };
+    println!("   💰 Budget {} → {}/{} (halted={})", label, budget.budget, budget.max_budget, budget.halted);
+}
+
+fn severity_cost(severity: &str) -> f64 {
+    match severity {
+        "critical" => -3.0,
+        "high" => -2.0,
+        "medium" => -1.0,
+        "low" => -0.5,
+        _ => -1.0,
+    }
+}
+
+fn compute_fitness_score(build_passed: bool, e2e_passed: bool, log_error_count: usize) -> f64 {
+    let build_stable = if build_passed { 1.0 } else { 0.0 };
+    let e2e_pass_rate = if e2e_passed { 1.0 } else { 0.0 };
+    let normalized_error_rate = (log_error_count as f64 / 10.0).min(1.0);
+    0.50 * build_stable + 0.30 * e2e_pass_rate + 0.20 * (1.0 - normalized_error_rate)
+}
+
+fn update_budget_on_success() {
+    update_budget(0.2, false);
 }
 
 fn update_budget_on_rejection() {
-    let path = format!("{}/.trinity/state/safety_budget.json", PROJECT_DIR);
-    if let Ok(content) = fs::read_to_string(&path) {
-        if let Ok(mut budget) = serde_json::from_str::<SafetyBudget>(&content) {
-            budget.budget -= 1.0;
-            budget.total_failures += 1;
-            if budget.budget <= 0.0 {
-                budget.halted = true;
-                budget.budget = 0.0;
-            }
-            let _ = fs::write(&path, serde_json::to_string_pretty(&budget).unwrap_or_default());
-            println!("   💰 Budget -1.0 → {}/{} (halted={})", budget.budget, budget.max_budget, budget.halted);
-        }
-    }
+    update_budget(severity_cost("medium"), true);
 }
 
 fn record_fitness(clade_id: &str, metrics: &SealMetrics) {
-    let csv_dir = format!("{}/.trinity/clades", PROJECT_DIR);
+    let csv_dir = format!("{}/.trinity/clades", &project_dir());
     let csv_path = format!("{}/fitness.csv", csv_dir);
-    let _ = fs::create_dir_all(&csv_dir);
+    if let Err(e) = fs::create_dir_all(&csv_dir) {
+        eprintln!("[promote] Failed to create fitness dir {}: {}", csv_dir, e);
+    }
 
-    let binary = format!("{}/.worktrees/staging/trios_app", PROJECT_DIR);
+    let binary = format!("{}/.worktrees/staging/trios_app", &project_dir());
     let binary_size_kb = fs::metadata(&binary).map(|m| m.len() / 1024).unwrap_or(0);
 
-    let build_stable = if metrics.build_passed { 1.0 } else { 0.0 };
-    let e2e_pass_rate = if metrics.e2e_passed { 1.0 } else { 0.0 };
-    let normalized_error_rate = (metrics.log_error_count as f64 / 10.0).min(1.0);
-    let fitness_score = 0.50 * build_stable + 0.30 * e2e_pass_rate + 0.20 * (1.0 - normalized_error_rate);
+    let fitness_score = compute_fitness_score(metrics.build_passed, metrics.e2e_passed, metrics.log_error_count);
 
     let needs_header = !std::path::Path::new(&csv_path).exists();
     let mut file = fs::OpenOptions::new()
@@ -474,14 +577,16 @@ fn record_fitness(clade_id: &str, metrics: &SealMetrics) {
         });
 
     if needs_header {
-        let _ = writeln!(
+        if let Err(e) = writeln!(
             file,
             "timestamp,clade_id,build_time_ms,binary_size_kb,launch_time_ms,build_passed,health_passed,e2e_passed,log_error_count,fitness_score"
-        );
+        ) {
+            eprintln!("[promote] Failed to write CSV header: {}", e);
+        }
     }
 
     let ts = Utc::now().to_rfc3339();
-    let _ = writeln!(
+    if let Err(e) = writeln!(
         file,
         "{},{},{},{},{},{},{},{},{},{:.4}",
         ts,
@@ -494,27 +599,49 @@ fn record_fitness(clade_id: &str, metrics: &SealMetrics) {
         if metrics.e2e_passed { 1 } else { 0 },
         metrics.log_error_count,
         fitness_score
-    );
+    ) {
+        eprintln!("[promote] Failed to write fitness row: {}", e);
+    }
     println!(
         "   📝 Fitness recorded: score={:.4} | build={}ms | size={}KB | errors={}",
         fitness_score, metrics.build_time_ms, binary_size_kb, metrics.log_error_count
     );
 }
 
+fn default_budget() -> SafetyBudget {
+    SafetyBudget { budget: 5.0, max_budget: 5.0, total_trials: 0, total_failures: 0, halted: false }
+}
+
 fn load_budget() -> SafetyBudget {
-    let path = format!("{}/.trinity/state/safety_budget.json", PROJECT_DIR);
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|c| serde_json::from_str(&c).ok())
-        .unwrap_or(SafetyBudget { budget: 5.0, max_budget: 5.0, total_trials: 0, total_failures: 0, halted: false })
+    let path = format!("{}/.trinity/state/safety_budget.json", &project_dir());
+    match fs::read_to_string(&path) {
+        Ok(content) => match serde_json::from_str(&content) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("[promote] Failed to parse {}: {}", path, e);
+                default_budget()
+            }
+        },
+        Err(_) => default_budget(),
+    }
+}
+
+fn default_clade_state() -> CladeState {
+    CladeState { id: "unknown".to_string(), version: "0.0.0".to_string(), status: "unknown".to_string(), e_value: Some(1.0) }
 }
 
 fn load_clade_state() -> CladeState {
-    let path = format!("{}/.trinity/state/clade.json", PROJECT_DIR);
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|c| serde_json::from_str(&c).ok())
-        .unwrap_or(CladeState { id: "unknown".to_string(), version: "0.0.0".to_string(), status: "unknown".to_string(), e_value: Some(1.0) })
+    let path = format!("{}/.trinity/state/clade.json", &project_dir());
+    match fs::read_to_string(&path) {
+        Ok(content) => match serde_json::from_str(&content) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[promote] Failed to parse {}: {}", path, e);
+                default_clade_state()
+            }
+        },
+        Err(_) => default_clade_state(),
+    }
 }
 
 fn print_help() {
@@ -536,4 +663,96 @@ EXAMPLES:
     cargo run --bin clade-promote -- clade-1.1.0 --dry-run
     cargo run --bin clade-promote -- clade-1.1.0
 "#);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn severity_cost_critical() {
+        assert!((severity_cost("critical") - (-3.0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn severity_cost_high() {
+        assert!((severity_cost("high") - (-2.0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn severity_cost_medium() {
+        assert!((severity_cost("medium") - (-1.0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn severity_cost_low() {
+        assert!((severity_cost("low") - (-0.5)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn severity_cost_unknown_defaults_to_medium() {
+        assert!((severity_cost("unknown") - (-1.0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn fitness_all_pass_no_errors() {
+        let score = compute_fitness_score(true, true, 0);
+        assert!((score - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn fitness_build_fail() {
+        let score = compute_fitness_score(false, true, 0);
+        assert!((score - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn fitness_e2e_fail() {
+        let score = compute_fitness_score(true, false, 0);
+        assert!((score - 0.7).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn fitness_with_errors() {
+        let score = compute_fitness_score(true, true, 5);
+        // 0.5 + 0.3 + 0.2*(1 - 0.5) = 0.5 + 0.3 + 0.1 = 0.9
+        assert!((score - 0.9).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn fitness_errors_capped_at_10() {
+        let score = compute_fitness_score(true, true, 20);
+        // 0.5 + 0.3 + 0.2*(1 - 1.0) = 0.8
+        assert!((score - 0.8).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn fitness_all_fail() {
+        let score = compute_fitness_score(false, false, 10);
+        assert!((score - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn severity_ordering() {
+        assert!(severity_cost("critical") < severity_cost("high"));
+        assert!(severity_cost("high") < severity_cost("medium"));
+        assert!(severity_cost("medium") < severity_cost("low"));
+    }
+
+    #[test]
+    fn default_budget_values() {
+        let b = default_budget();
+        assert!((b.budget - 5.0).abs() < f64::EPSILON);
+        assert!(!b.halted);
+        assert_eq!(b.total_trials, 0);
+    }
+
+    #[test]
+    fn default_clade_state_values() {
+        let s = default_clade_state();
+        assert_eq!(s.id, "unknown");
+        assert_eq!(s.version, "0.0.0");
+        assert_eq!(s.status, "unknown");
+        assert!((s.e_value.unwrap_or(0.0) - 1.0).abs() < f64::EPSILON);
+    }
 }

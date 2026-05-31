@@ -80,10 +80,7 @@ impl ImprovementPipeline {
             }
         }
 
-        let source = match self.variant {
-            Variant::Staging => PathBuf::from("/Users/playra/BrowserOS-full/trios/.worktrees/staging"),
-            _ => PathBuf::from("/Users/playra/BrowserOS-full/trios"),
-        };
+        let source = self.variant.working_dir();
 
         SandboxedDev::create_from_staging(ticket_id, &source)
     }
@@ -129,10 +126,7 @@ impl ImprovementPipeline {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .output();
-        let build_passed = match build_output {
-            Ok(ref o) if o.status.success() => true,
-            _ => false,
-        };
+        let build_passed = matches!(build_output, Ok(ref o) if o.status.success());
         results.push(TestResult {
             name: "build".to_string(),
             passed: build_passed,
@@ -152,10 +146,7 @@ impl ImprovementPipeline {
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
                 .output();
-            match swift_build {
-                Ok(ref o) if o.status.success() => true,
-                _ => false,
-            }
+            matches!(swift_build, Ok(ref o) if o.status.success())
         } else {
             true // skip if no swift files
         };
@@ -231,12 +222,11 @@ impl ImprovementPipeline {
                 let path = entry.path();
                 if path.is_file() {
                     if let Ok(content) = fs::read_to_string(&path) {
-                        if content.contains("sk-") || content.contains("api_key") {
-                            if path.extension().map(|e| e == "swift" || e == "rs" || e == "md").unwrap_or(false) {
+                        if (content.contains("sk-") || content.contains("api_key"))
+                            && path.extension().map(|e| e == "swift" || e == "rs" || e == "md").unwrap_or(false) {
                                 found = true;
                                 break;
                             }
-                        }
                     }
                 }
             }

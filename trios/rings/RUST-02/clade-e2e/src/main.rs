@@ -23,6 +23,7 @@ fn main() {
     let screenshot_path = log_dir.join(format!("screenshot_{}_{}.png", v.name, ts));
 
     let mut report = format!("# TRIOS E2E Report {} — Variant: {}\n\n", Local::now().to_rfc2822(), v.name);
+    let mut failures = 0u32;
 
     // 1. Server Health
     let health_url = format!("http://127.0.0.1:{}/health", v.mcp_port);
@@ -33,10 +34,12 @@ fn main() {
                 report.push_str(&format!("- ✅ BrowserOS Server ({}): OK ({})\n", v.name, body));
             } else {
                 report.push_str(&format!("- ❌ BrowserOS Server ({}): DOWN ({})\n", v.name, body));
+                failures += 1;
             }
         }
         Err(e) => {
             report.push_str(&format!("- ❌ BrowserOS Server ({}): DOWN ({})\n", v.name, e));
+            failures += 1;
         }
     }
 
@@ -55,6 +58,7 @@ fn main() {
         report.push_str(&format!("- ✅ Trios App ({}): PID {}\n", v.name, p));
     } else {
         report.push_str(&format!("- ❌ Trios App ({}): NOT RUNNING\n", v.name));
+        failures += 1;
     }
 
     // 3. Screenshot
@@ -125,6 +129,11 @@ fn main() {
         eprintln!("[e2e] Failed to write report: {}", e);
     }
     println!("{}", report_path.display());
+
+    if failures > 0 {
+        eprintln!("[e2e] {} check(s) failed", failures);
+        std::process::exit(1);
+    }
 }
 
 fn resolve_variant(name: &str) -> Variant {
@@ -142,5 +151,34 @@ fn resolve_variant(name: &str) -> Variant {
             app_pattern: "trios.app/Contents/MacOS/trios",
             log_process: "trios",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_variant_prod_defaults() {
+        let v = resolve_variant("prod");
+        assert_eq!(v.name, "prod");
+        assert_eq!(v.mcp_port, "9105");
+        assert!(v.app_pattern.contains("trios.app"));
+        assert_eq!(v.log_process, "trios");
+    }
+
+    #[test]
+    fn resolve_variant_staging_ports() {
+        let v = resolve_variant("staging");
+        assert_eq!(v.name, "staging");
+        assert_eq!(v.mcp_port, "9205");
+        assert!(v.app_pattern.contains("trios-staging"));
+        assert_eq!(v.log_process, "trios-staging");
+    }
+
+    #[test]
+    fn resolve_variant_unknown_is_prod() {
+        let v = resolve_variant("dev");
+        assert_eq!(v.name, "prod");
     }
 }

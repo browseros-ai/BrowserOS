@@ -25,22 +25,39 @@ EXAMPLES:
     clade-improve check
 "#;
 
+enum CliCommand {
+    Help,
+    Improve(Option<String>),
+    Check,
+    Rollback,
+    Constitution,
+    Unknown,
+}
+
+fn parse_command(args: &[String]) -> CliCommand {
+    if args.is_empty() {
+        return CliCommand::Help;
+    }
+    match args[0].as_str() {
+        "improve" => CliCommand::Improve(args.get(1).cloned()),
+        "check" => CliCommand::Check,
+        "rollback" => CliCommand::Rollback,
+        "constitution" => CliCommand::Constitution,
+        _ => CliCommand::Unknown,
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
-    
-    if args.is_empty() {
-        println!("{}", HELP);
-        return;
-    }
-    
     let variant = Variant::from_env();
-    
-    match args[0].as_str() {
-        "improve" => run_improve(args.get(1).map(|s| s.as_str()), variant),
-        "check" => check_status(variant),
-        "rollback" => emergency_rollback(variant),
-        "constitution" => show_constitution(),
-        _ => println!("Unknown command. {}", HELP),
+
+    match parse_command(&args) {
+        CliCommand::Help => println!("{}", HELP),
+        CliCommand::Improve(desc) => run_improve(desc.as_deref(), variant),
+        CliCommand::Check => check_status(variant),
+        CliCommand::Rollback => emergency_rollback(variant),
+        CliCommand::Constitution => show_constitution(),
+        CliCommand::Unknown => println!("Unknown command. {}", HELP),
     }
 }
 
@@ -68,6 +85,7 @@ fn run_improve(description: Option<&str>, variant: Variant) {
     let changes = vec![ChangeSpec {
         target: "agent/core".to_string(),
         rationale: description.unwrap_or("self-improvement").to_string(),
+        diff_content: None,
     }];
     
     println!("[Phase 1] Change specification:");
@@ -220,7 +238,7 @@ fn emergency_rollback(variant: Variant) {
 
 fn show_constitution() {
     use clade_improve::constitution::Constitution;
-    
+
     let c = Constitution::default();
     println!("📜 Safety Constitution v{}", c.version);
     println!();
@@ -230,5 +248,66 @@ fn show_constitution() {
         println!("      {}", p.description);
         println!("      Category: {:?} | Threshold: {}", p.category, p.threshold);
         println!();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_empty_args_is_help() {
+        let args: Vec<String> = vec![];
+        assert!(matches!(parse_command(&args), CliCommand::Help));
+    }
+
+    #[test]
+    fn parse_improve_without_description() {
+        let args = vec!["improve".to_string()];
+        match parse_command(&args) {
+            CliCommand::Improve(desc) => assert!(desc.is_none()),
+            _ => panic!("expected Improve"),
+        }
+    }
+
+    #[test]
+    fn parse_improve_with_description() {
+        let args = vec!["improve".to_string(), "optimize latency".to_string()];
+        match parse_command(&args) {
+            CliCommand::Improve(desc) => assert_eq!(desc.as_deref(), Some("optimize latency")),
+            _ => panic!("expected Improve"),
+        }
+    }
+
+    #[test]
+    fn parse_check() {
+        let args = vec!["check".to_string()];
+        assert!(matches!(parse_command(&args), CliCommand::Check));
+    }
+
+    #[test]
+    fn parse_rollback() {
+        let args = vec!["rollback".to_string()];
+        assert!(matches!(parse_command(&args), CliCommand::Rollback));
+    }
+
+    #[test]
+    fn parse_constitution() {
+        let args = vec!["constitution".to_string()];
+        assert!(matches!(parse_command(&args), CliCommand::Constitution));
+    }
+
+    #[test]
+    #[test]
+    fn parse_unknown_command() {
+        let args = vec!["foobar".to_string()];
+        assert!(matches!(parse_command(&args), CliCommand::Unknown));
+    }
+
+    #[test]
+    fn help_text_contains_usage() {
+        assert!(HELP.contains("USAGE:"));
+        assert!(HELP.contains("clade-improve improve"));
+        assert!(HELP.contains("clade-improve check"));
     }
 }

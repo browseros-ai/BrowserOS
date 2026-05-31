@@ -9,6 +9,7 @@ description = "TRIOS Clade Promote Pipeline — full seal → verdict → swap �
 
 [dependencies]
 chrono = "0.4"
+libc = "0.2"
 reqwest = { version = "0.12", features = ["blocking"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

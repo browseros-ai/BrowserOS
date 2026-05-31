@@ -20,7 +20,7 @@ fn main() {
     println!("═══════════════════════════════════════════════════════════\n");
 
     let results = run_differential_suite();
-    let flip_count = results.iter().filter(|r| r.flip).count();
+    let flip_count = count_flips(&results);
 
     println!("\n📊 Results: {}/{} passed, {} flips",
         results.len() - flip_count, results.len(), flip_count);
@@ -37,10 +37,7 @@ fn main() {
 }
 
 fn run_differential_suite() -> Vec<DiffResult> {
-    let mut results = vec![];
-
-    // Test 1: Health probe
-    results.push(run_health_diff());
+    let mut results = vec![run_health_diff()];
 
     // Test 2: Static response comparison (placeholder for real API tests)
     results.push(DiffResult {
@@ -55,26 +52,90 @@ fn run_differential_suite() -> Vec<DiffResult> {
     results
 }
 
-fn run_health_diff() -> DiffResult {
-    let sovereign = probe(SOVEREIGN_HEALTH);
-    let canary = probe(CANARY_HEALTH);
-
+fn compute_diff(test_id: &str, sovereign: &str, canary: &str) -> DiffResult {
     let s_ok = sovereign.contains("status\":\"ok\"");
     let c_ok = canary.contains("status\":\"ok\"");
 
     DiffResult {
-        test_id: "health_probe".to_string(),
-        sovereign_output: sovereign.clone(),
-        canary_output: canary.clone(),
+        test_id: test_id.to_string(),
+        sovereign_output: sovereign.to_string(),
+        canary_output: canary.to_string(),
         exact_match: sovereign == canary,
         tolerance_passed: s_ok && c_ok,
         flip: s_ok && !c_ok,
     }
 }
 
+fn run_health_diff() -> DiffResult {
+    let sovereign = probe(SOVEREIGN_HEALTH);
+    let canary = probe(CANARY_HEALTH);
+    compute_diff("health_probe", &sovereign, &canary)
+}
+
+fn count_flips(results: &[DiffResult]) -> usize {
+    results.iter().filter(|r| r.flip).count()
+}
+
 fn probe(url: &str) -> String {
     match get(url) {
         Ok(r) => r.text().unwrap_or_default(),
         Err(e) => format!("error: {}", e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_healthy_no_flip() {
+        let r = compute_diff("t1", r#"{"status":"ok"}"#, r#"{"status":"ok"}"#);
+        assert!(!r.flip);
+        assert!(r.exact_match);
+        assert!(r.tolerance_passed);
+    }
+
+    #[test]
+    fn sovereign_ok_canary_fail_is_flip() {
+        let r = compute_diff("t2", r#"{"status":"ok"}"#, r#"{"status":"error"}"#);
+        assert!(r.flip);
+        assert!(!r.tolerance_passed);
+    }
+
+    #[test]
+    fn both_down_no_flip() {
+        let r = compute_diff("t3", "error: connection refused", "error: connection refused");
+        assert!(!r.flip);
+        assert!(r.exact_match);
+    }
+
+    #[test]
+    fn canary_ok_sovereign_down_no_flip() {
+        let r = compute_diff("t4", "error: timeout", r#"{"status":"ok"}"#);
+        assert!(!r.flip);
+    }
+
+    #[test]
+    fn count_flips_mixed() {
+        let results = vec![
+            compute_diff("a", r#"{"status":"ok"}"#, r#"{"status":"ok"}"#),
+            compute_diff("b", r#"{"status":"ok"}"#, "error"),
+            compute_diff("c", r#"{"status":"ok"}"#, "down"),
+        ];
+        assert_eq!(count_flips(&results), 2);
+    }
+
+    #[test]
+    fn count_flips_none() {
+        let results = vec![
+            compute_diff("a", r#"{"status":"ok"}"#, r#"{"status":"ok"}"#),
+        ];
+        assert_eq!(count_flips(&results), 0);
+    }
+
+    #[test]
+    fn count_flips_empty() {
+        let results: Vec<DiffResult> = vec![];
+        assert_eq!(count_flips(&results), 0);
     }
 }

@@ -4,7 +4,7 @@ use std::fs;
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
-const PROJECT_DIR: &str = "/Users/playra/BrowserOS-full/trios";
+fn project_dir() -> String { std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string()) }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct SafetyBudget {
@@ -70,7 +70,7 @@ struct ImprovementReport {
 
 /// Load safety budget from `.trinity/state/safety_budget.json`.
 fn load_budget() -> SafetyBudget {
-    let path = format!("{}/.trinity/state/safety_budget.json", PROJECT_DIR);
+    let path = format!("{}/.trinity/state/safety_budget.json", &project_dir());
     match fs::read_to_string(&path) {
         Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| default_budget()),
         Err(_) => default_budget(),
@@ -93,7 +93,7 @@ fn run_audit() -> Option<AuditReport> {
     let start = Instant::now();
     let output = Command::new("cargo")
         .args(["run", "--bin", "clade-audit", "--", "--json"])
-        .current_dir(PROJECT_DIR)
+        .current_dir(project_dir())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output();
@@ -141,7 +141,7 @@ fn update_awareness(dry_run: bool) {
     if dry_run {
         cmd.arg("--dry-run");
     }
-    cmd.current_dir(PROJECT_DIR)
+    cmd.current_dir(project_dir())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
@@ -178,7 +178,7 @@ fn create_issues(report: &AuditReport, dry_run: bool) -> usize {
     let repo = "trios"; // TODO: read from .trinity/state/github.json
     let mut created = 0;
 
-    let state_path = format!("{}/.trinity/state/auto_issues.json", PROJECT_DIR);
+    let state_path = format!("{}/.trinity/state/auto_issues.json", &project_dir());
     let mut known: Vec<String> = fs::read_to_string(&state_path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -248,8 +248,17 @@ fn create_issues(report: &AuditReport, dry_run: bool) -> usize {
         }
     }
 
-    let _ = fs::create_dir_all(format!("{}/.trinity/state", PROJECT_DIR));
-    let _ = fs::write(&state_path, serde_json::to_string_pretty(&known).unwrap_or_default());
+    if let Err(e) = fs::create_dir_all(format!("{}/.trinity/state", &project_dir())) {
+        eprintln!("[tablecloth] Failed to create state dir: {}", e);
+    }
+    match serde_json::to_string_pretty(&known) {
+        Ok(json) => {
+            if let Err(e) = fs::write(&state_path, &json) {
+                eprintln!("[tablecloth] Failed to write auto_issues.json: {}", e);
+            }
+        }
+        Err(e) => eprintln!("[tablecloth] Failed to serialize auto_issues: {}", e),
+    }
 
     println!("   Issues created: {}", created);
     created
@@ -307,7 +316,7 @@ fn create_pr(repo: &str, title: &str, body: &str, head: &str, base: &str, dry_ru
 }
 
 /// Attempt auto-fix for error-handling findings (try! → try?).
-/// Creates branch, applies regex replacement, runs typecheck subset.
+/// Operates in the staging worktree to avoid dirtying the sovereign repo.
 /// Returns (attempted, passed, prs_created).
 fn attempt_fix(report: &AuditReport, dry_run: bool) -> (usize, usize, usize) {
     use regex::Regex;
@@ -322,6 +331,12 @@ fn attempt_fix(report: &AuditReport, dry_run: bool) -> (usize, usize, usize) {
         return (0, 0, 0);
     }
 
+    let worktree = format!("{}/.worktrees/staging", project_dir());
+    if !std::path::Path::new(&worktree).exists() {
+        println!("   ⚠️  Staging worktree missing — run clade-worktree ensure first");
+        return (0, 0, 0);
+    }
+
     let try_bang = match Regex::new(r"try!\s*\(") {
         Ok(re) => re,
         Err(_) => return (0, 0, 0),
@@ -332,7 +347,7 @@ fn attempt_fix(report: &AuditReport, dry_run: bool) -> (usize, usize, usize) {
         if finding.message != "Bare try! — use try? or do-catch" {
             continue;
         }
-        let file_path = format!("{}/{}", PROJECT_DIR, finding.file);
+        let file_path = format!("{}/{}", &worktree, finding.file);
         let content = match fs::read_to_string(&file_path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -345,28 +360,39 @@ fn attempt_fix(report: &AuditReport, dry_run: bool) -> (usize, usize, usize) {
         attempted += 1;
         let branch = format!("{}-{}", branch_prefix, attempted);
 
-        // Create branch
-        let _ = Command::new("git")
+        match Command::new("git")
             .args(["checkout", "-b", &branch])
-            .current_dir(PROJECT_DIR)
+            .current_dir(&worktree)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .status()
+        {
+            Ok(s) if !s.success() => {
+                println!("   ⚠️  git checkout -b {} failed (exit {:?})", branch, s.code());
+                continue;
+            }
+            Err(e) => {
+                println!("   ⚠️  git checkout -b {} error: {}", branch, e);
+                continue;
+            }
+            _ => {}
+        }
 
-        // Apply fix
         let fixed = try_bang.replace_all(&content, "try?(");
         if let Err(e) = fs::write(&file_path, fixed.as_ref()) {
             println!("   ❌ Failed to write fix: {}", e);
-            let _ = Command::new("git")
+            if let Err(e) = Command::new("git")
                 .args(["checkout", "-"])
-                .current_dir(PROJECT_DIR)
+                .current_dir(&worktree)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .status();
+                .status()
+            {
+                eprintln!("[tablecloth] git checkout - failed: {}", e);
+            }
             continue;
         }
 
-        // Run subset build
         let build_ok = Command::new("swiftc")
             .args(["-typecheck", &file_path])
             .stdout(Stdio::null())
@@ -377,47 +403,64 @@ fn attempt_fix(report: &AuditReport, dry_run: bool) -> (usize, usize, usize) {
 
         if !build_ok {
             println!("   ❌ Fix broke build on {} — discarding branch {}", finding.file, branch);
-            let _ = Command::new("git")
+            if let Err(e) = Command::new("git")
                 .args(["checkout", "-"])
-                .current_dir(PROJECT_DIR)
+                .current_dir(&worktree)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .status();
-            let _ = Command::new("git")
+                .status()
+            {
+                eprintln!("[tablecloth] git checkout - failed: {}", e);
+            }
+            if let Err(e) = Command::new("git")
                 .args(["branch", "-D", &branch])
-                .current_dir(PROJECT_DIR)
+                .current_dir(&worktree)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .status();
-            // Restore file
-            let _ = Command::new("git")
+                .status()
+            {
+                eprintln!("[tablecloth] git branch -D {} failed: {}", branch, e);
+            }
+            if let Err(e) = Command::new("git")
                 .args(["checkout", "--", &finding.file])
-                .current_dir(PROJECT_DIR)
+                .current_dir(&worktree)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .status();
+                .status()
+            {
+                eprintln!("[tablecloth] git checkout -- {} failed: {}", finding.file, e);
+            }
             continue;
         }
 
-        // Commit and push
-        let _ = Command::new("git")
+        if let Err(e) = Command::new("git")
             .args(["add", &finding.file])
-            .current_dir(PROJECT_DIR)
+            .current_dir(&worktree)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
-        let _ = Command::new("git")
-            .args(["commit", "-m", &format!("auto-fix: {} → try? in {}", finding.message, finding.file)])
-            .current_dir(PROJECT_DIR)
+            .status()
+        {
+            eprintln!("[tablecloth] git add {} failed: {}", finding.file, e);
+        }
+        let commit_msg = format!("auto-fix: {} in {}", finding.message, finding.file);
+        if let Err(e) = Command::new("git")
+            .args(["commit", "-m", &commit_msg])
+            .current_dir(&worktree)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
-        let _ = Command::new("git")
+            .status()
+        {
+            eprintln!("[tablecloth] git commit failed: {}", e);
+        }
+        if let Err(e) = Command::new("git")
             .args(["push", "-u", "origin", &branch])
-            .current_dir(PROJECT_DIR)
+            .current_dir(&worktree)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .status()
+        {
+            eprintln!("[tablecloth] git push {} failed: {}", branch, e);
+        }
 
         // Create PR linking to the fix
         let pr_title = format!("[auto-fix] {} in {}", finding.message, finding.file);
@@ -513,7 +556,7 @@ fn write_report(
     };
 
     let json = serde_json::to_string_pretty(&report).unwrap_or_default();
-    let path = format!("{}/.trinity/state/last_improvement.json", PROJECT_DIR);
+    let path = format!("{}/.trinity/state/last_improvement.json", &project_dir());
 
     if dry_run {
         println!("   [DRY-RUN] Would write report to {}", path);
@@ -521,7 +564,9 @@ fn write_report(
         return;
     }
 
-    let _ = fs::create_dir_all(format!("{}/.trinity/state", PROJECT_DIR));
+    if let Err(e) = fs::create_dir_all(format!("{}/.trinity/state", &project_dir())) {
+        println!("   ❌ Failed to create state dir: {}", e);
+    }
     match fs::write(&path, &json) {
         Ok(_) => println!("   ✅ Report written: {}", path),
         Err(e) => {
@@ -537,13 +582,134 @@ fn log_event(event: &str, details: &str) {
         r#"{{"timestamp":"{}","event":"{}","details":"{}"}}"#,
         ts, event, details
     );
-    let path = format!("{}/.trinity/event_log.jsonl", PROJECT_DIR);
-    let _ = fs::OpenOptions::new()
+    let path = format!("{}/.trinity/event_log.jsonl", &project_dir());
+    if let Err(e) = fs::OpenOptions::new()
         .append(true)
         .create(true)
         .open(&path)
         .and_then(|mut f| {
             use std::io::Write;
             writeln!(f, "{}", line)
+        })
+    {
+        eprintln!("[tablecloth] Failed to write event log: {}", e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_budget_values() {
+        let b = default_budget();
+        assert!((b.budget - 5.0).abs() < f64::EPSILON);
+        assert!((b.max_budget - 5.0).abs() < f64::EPSILON);
+        assert_eq!(b.total_trials, 0);
+        assert_eq!(b.total_failures, 0);
+        assert!(!b.halted);
+    }
+
+    #[test]
+    fn default_budget_not_halted() {
+        let b = default_budget();
+        assert!(!b.halted);
+        assert!(b.budget > 0.0);
+    }
+
+    #[test]
+    fn audit_finding_roundtrip() {
+        let finding = AuditFinding {
+            file: "test.rs".to_string(),
+            line: 42,
+            severity: "critical".to_string(),
+            category: "security".to_string(),
+            message: "test finding".to_string(),
+            fingerprint: "abc123".to_string(),
+        };
+        let json = serde_json::to_string(&finding).unwrap_or_default();
+        let parsed: AuditFinding = serde_json::from_str(&json).unwrap_or_else(|_| AuditFinding {
+            file: String::new(), line: 0, severity: String::new(),
+            category: String::new(), message: String::new(), fingerprint: String::new(),
         });
+        assert_eq!(parsed.file, "test.rs");
+        assert_eq!(parsed.line, 42);
+        assert_eq!(parsed.severity, "critical");
+    }
+
+    #[test]
+    fn improvement_report_serializes() {
+        let report = ImprovementReport {
+            timestamp: "2026-06-01T00:00:00Z".to_string(),
+            budget_before: 5.0,
+            budget_after: 4.0,
+            findings_total: 3,
+            issues_created: 2,
+            fixes_attempted: 1,
+            fixes_passed: 1,
+            prs_created: 0,
+            mode: "full".to_string(),
+        };
+        let json = serde_json::to_string(&report).unwrap_or_default();
+        assert!(json.contains("\"mode\":\"full\""));
+        assert!(json.contains("\"findings_total\":3"));
+    }
+
+    #[test]
+    fn halted_budget_blocks_loop() {
+        let b = SafetyBudget {
+            budget: 0.0, max_budget: 5.0, total_trials: 10, total_failures: 5, halted: true,
+        };
+        assert!(b.halted || b.budget <= 0.0);
+    }
+
+    #[test]
+    fn positive_budget_allows_loop() {
+        let b = default_budget();
+        assert!(!b.halted && b.budget > 0.0);
+    }
+
+    #[test]
+    fn build_check_fields() {
+        let bc = BuildCheck {
+            passed: true,
+            swift_ok: true,
+            rust_ok: true,
+            swift_errors: vec![],
+            rust_errors: vec![],
+            duration_ms: 1234,
+        };
+        assert!(bc.passed);
+        assert!(bc.swift_errors.is_empty());
+        assert_eq!(bc.duration_ms, 1234);
+    }
+
+    #[test]
+    fn check_result_passed_logic() {
+        let cr = CheckResult {
+            passed: true,
+            findings: vec![],
+            scanned_files: 42,
+            duration_ms: 100,
+        };
+        assert!(cr.passed);
+        assert_eq!(cr.scanned_files, 42);
+    }
+
+    #[test]
+    fn improvement_report_audit_only_mode() {
+        let report = ImprovementReport {
+            timestamp: "2026-06-01T00:00:00Z".to_string(),
+            budget_before: 0.0,
+            budget_after: 0.0,
+            findings_total: 5,
+            issues_created: 0,
+            fixes_attempted: 0,
+            fixes_passed: 0,
+            prs_created: 0,
+            mode: "audit-only".to_string(),
+        };
+        assert_eq!(report.mode, "audit-only");
+        assert_eq!(report.fixes_attempted, 0);
+    }
 }

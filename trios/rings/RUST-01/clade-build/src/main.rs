@@ -4,7 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const PROJECT_DIR: &str = "/Users/playra/BrowserOS-full/trios";
+fn project_dir() -> String { std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string()) }
 
 struct Variant {
     name: &'static str,
@@ -58,7 +58,9 @@ fn main() {
         Err(e) => { eprintln!("❌ swiftc failed to start: {}", e); std::process::exit(1); }
     };
     let log_path = format!("/tmp/trios_build_{}.log", variant.name);
-    fs::write(&log_path, &output.stderr).ok();
+    if let Err(e) = fs::write(&log_path, &output.stderr) {
+        eprintln!("[build] Failed to write build log {}: {}", log_path, e);
+    }
 
     if !output.status.success() {
         eprintln!("❌ Build failed for variant={}", variant.name);
@@ -67,13 +69,19 @@ fn main() {
     }
 
     println!("✅ Build successful: {}", variant.output.display());
-    let _ = fs::set_permissions(&variant.output, std::fs::Permissions::from_mode(0o755));
+    if let Err(e) = fs::set_permissions(&variant.output, std::fs::Permissions::from_mode(0o755)) {
+        eprintln!("[CladeBuild] Failed to set binary permissions: {}", e);
+    }
 
     // Ensure .app bundle structure
     let macos = variant.app_bundle.join("Contents/MacOS");
     let resources = variant.app_bundle.join("Contents/Resources");
-    fs::create_dir_all(&macos).ok();
-    fs::create_dir_all(&resources).ok();
+    if let Err(e) = fs::create_dir_all(&macos) {
+        eprintln!("[CladeBuild] Failed to create MacOS dir: {}", e);
+    }
+    if let Err(e) = fs::create_dir_all(&resources) {
+        eprintln!("[CladeBuild] Failed to create Resources dir: {}", e);
+    }
 
     // Generate Info.plist
     let plist = format!(
@@ -117,22 +125,22 @@ fn resolve_variant(name: &str) -> Variant {
     if name == "staging" {
         Variant {
             name: "staging",
-            output: PathBuf::from(format!("{}/.worktrees/staging/trios_app", PROJECT_DIR)),
-            app_bundle: PathBuf::from(format!("{}/.worktrees/staging/trios-staging.app", PROJECT_DIR)),
+            output: PathBuf::from(format!("{}/.worktrees/staging/trios_app", &project_dir())),
+            app_bundle: PathBuf::from(format!("{}/.worktrees/staging/trios-staging.app", &project_dir())),
             bundle_id: "com.browseros.trios.staging",
             mcp_port: "9205",
             a2a_port: "9300",
-            build_root: PathBuf::from(format!("{}/.worktrees/staging/trios", PROJECT_DIR)),
+            build_root: PathBuf::from(format!("{}/.worktrees/staging/trios", &project_dir())),
         }
     } else {
         Variant {
             name: "prod",
-            output: PathBuf::from(format!("{}/trios_app", PROJECT_DIR)),
-            app_bundle: PathBuf::from(format!("{}/trios.app", PROJECT_DIR)),
+            output: PathBuf::from(format!("{}/trios_app", &project_dir())),
+            app_bundle: PathBuf::from(format!("{}/trios.app", &project_dir())),
             bundle_id: "com.browseros.trios",
             mcp_port: "9105",
             a2a_port: "9200",
-            build_root: PathBuf::from(PROJECT_DIR),
+            build_root: PathBuf::from(&project_dir()),
         }
     }
 }
@@ -154,5 +162,54 @@ fn capitalize(s: &str) -> String {
     match c.next() {
         None => String::new(),
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capitalize_empty() {
+        assert_eq!(capitalize(""), "");
+    }
+
+    #[test]
+    fn capitalize_single_char() {
+        assert_eq!(capitalize("a"), "A");
+    }
+
+    #[test]
+    fn capitalize_word() {
+        assert_eq!(capitalize("staging"), "Staging");
+    }
+
+    #[test]
+    fn capitalize_already_upper() {
+        assert_eq!(capitalize("Prod"), "Prod");
+    }
+
+    #[test]
+    fn resolve_variant_prod() {
+        let v = resolve_variant("prod");
+        assert_eq!(v.name, "prod");
+        assert_eq!(v.mcp_port, "9105");
+        assert_eq!(v.a2a_port, "9200");
+        assert_eq!(v.bundle_id, "com.browseros.trios");
+    }
+
+    #[test]
+    fn resolve_variant_staging() {
+        let v = resolve_variant("staging");
+        assert_eq!(v.name, "staging");
+        assert_eq!(v.mcp_port, "9205");
+        assert_eq!(v.a2a_port, "9300");
+        assert_eq!(v.bundle_id, "com.browseros.trios.staging");
+    }
+
+    #[test]
+    fn resolve_variant_unknown_defaults_to_prod() {
+        let v = resolve_variant("anything");
+        assert_eq!(v.name, "prod");
     }
 }

@@ -1,17 +1,23 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-const PROJECT_DIR: &str = "/Users/playra/BrowserOS-full/trios";
-const WORKTREE_DIR: &str = "/Users/playra/BrowserOS-full/trios/.worktrees/staging";
+fn project_dir() -> String {
+    std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string())
+}
+
+fn worktree_dir() -> String {
+    format!("{}/.worktrees/staging", project_dir())
+}
+
 const WORKTREE_BRANCH: &str = "canary";
 const DIRTY_THRESHOLD: usize = 5;
 const SYNC_BEHIND_THRESHOLD: usize = 3;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let action = args.get(0).map(|s| s.as_str()).unwrap_or("status");
+    let action = args.first().map(|s| s.as_str()).unwrap_or("status");
 
-    println!("[CladeWorktree] Action: {} | path: {}", action, WORKTREE_DIR);
+    println!("[CladeWorktree] Action: {} | path: {}", action, worktree_dir());
 
     match action {
         "status" => status(),
@@ -30,7 +36,7 @@ fn main() {
 fn git_base(args: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
         .args(args)
-        .current_dir(PROJECT_DIR)
+        .current_dir(project_dir())
         .output()
         .map_err(|e| e.to_string())?;
     if output.status.success() {
@@ -43,7 +49,7 @@ fn git_base(args: &[&str]) -> Result<String, String> {
 fn git_wt(args: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
         .args(args)
-        .current_dir(WORKTREE_DIR)
+        .current_dir(worktree_dir())
         .output()
         .map_err(|e| e.to_string())?;
     if output.status.success() {
@@ -54,8 +60,9 @@ fn git_wt(args: &[&str]) -> Result<String, String> {
 }
 
 fn worktree_exists() -> bool {
-    Path::new(WORKTREE_DIR).exists()
-        && Path::new(&format!("{}/.git", WORKTREE_DIR)).exists()
+    let wt = worktree_dir();
+    Path::new(&wt).exists()
+        && Path::new(&format!("{}/.git", wt)).exists()
 }
 
 fn ensure() {
@@ -64,13 +71,14 @@ fn ensure() {
     // 1. Check worktree exists
     if !worktree_exists() {
         println!("   ⚠️  Worktree missing — creating...");
+        let wt = worktree_dir();
         if let Err(e) = git_base(&[
-            "worktree", "add", WORKTREE_DIR, WORKTREE_BRANCH,
+            "worktree", "add", &wt, WORKTREE_BRANCH,
         ]) {
             println!("   ❌ Failed to create worktree: {}", e);
             std::process::exit(1);
         }
-        println!("   ✅ Created worktree at {} (branch: {})", WORKTREE_DIR, WORKTREE_BRANCH);
+        println!("   ✅ Created worktree at {} (branch: {})", wt, WORKTREE_BRANCH);
     } else {
         println!("   ✅ Worktree exists");
     }
@@ -102,7 +110,7 @@ fn ensure() {
     // 6. Verify buildable
     println!("   [ensure] Verifying build...");
     let build_ok = Command::new("cargo")
-        .args(["check", "--manifest-path", &format!("{}/Cargo.toml", WORKTREE_DIR)])
+        .args(["check", "--manifest-path", &format!("{}/Cargo.toml", worktree_dir())])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -114,7 +122,7 @@ fn ensure() {
         println!("   ⚠️  Cargo check failed — worktree may need manual fix");
     }
 
-    println!("\n   🟢 Worktree ENSURED: {}", WORKTREE_DIR);
+    println!("\n   🟢 Worktree ENSURED: {}", worktree_dir());
 }
 
 fn reset() {
@@ -151,11 +159,11 @@ fn sync_claude_artifacts() {
     use std::fs;
 
     let sources = [
-        format!("{}/.claude/agents", PROJECT_DIR),
-        format!("{}/.claude/rules", PROJECT_DIR),
-        format!("{}/.claude/skills", PROJECT_DIR),
+        format!("{}/.claude/agents", &project_dir()),
+        format!("{}/.claude/rules", &project_dir()),
+        format!("{}/.claude/skills", &project_dir()),
     ];
-    let target_base = format!("{}/.claude", WORKTREE_DIR);
+    let target_base = format!("{}/.claude", worktree_dir());
 
     for src in &sources {
         if !Path::new(src).exists() {
@@ -278,5 +286,38 @@ fn sync() {
             Ok(_) => println!("   ✅ Fast-forwarded"),
             Err(e) => println!("   ❌ Merge failed (diverged?): {}", e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worktree_branch_is_canary() {
+        assert_eq!(WORKTREE_BRANCH, "canary");
+    }
+
+    #[test]
+    fn dirty_threshold_is_5() {
+        assert_eq!(DIRTY_THRESHOLD, 5);
+    }
+
+    #[test]
+    fn sync_behind_threshold_is_3() {
+        assert_eq!(SYNC_BEHIND_THRESHOLD, 3);
+    }
+
+    #[test]
+    fn worktree_dir_contains_staging() {
+        let dir = worktree_dir();
+        assert!(dir.contains(".worktrees/staging"), "worktree_dir should point to .worktrees/staging, got: {}", dir);
+    }
+
+    #[test]
+    fn project_dir_has_fallback() {
+        // When TRIOS_ROOT not set, uses default path
+        let dir = project_dir();
+        assert!(!dir.is_empty());
     }
 }
