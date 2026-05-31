@@ -25,13 +25,41 @@ struct SkillRun: Identifiable {
     let isRunning: Bool
 }
 
+/// Agent control model for A2A agent lifecycle management.
+struct AgentInfo: Identifiable {
+    let id = UUID()
+    let name: String
+    let status: ComponentStatus
+    let pid: Int?
+    let uptime: String
+    let lastAction: String?
+}
+
+struct SelfImprovementStatus {
+    let score: Int
+    let openIssues: Int
+    let lastAuditAgo: String
+    let safetyBudget: String
+    let lastCritique: String
+    let pendingPRs: Int
+}
+
+struct AuditRecord {
+    let timestamp: Date
+    let findings: Int
+    let passed: Bool
+}
+
 @MainActor
 final class QueenStatusViewModel: ObservableObject {
     @Published var components: [StatusComponent] = []
     @Published var skills: [SkillRun] = []
+    @Published var agents: [AgentInfo] = []
     @Published var lastLogLines: [String] = []
     @Published var isRunningAction: Bool = false
     @Published var overallStatus: ComponentStatus = .unknown
+    @Published var selfImprovement: SelfImprovementStatus? = nil
+    @Published var auditHistory: [AuditRecord] = []
 
     private let projectRoot = ProjectPaths.root
     private let statePath = ProjectPaths.trinityState
@@ -82,10 +110,12 @@ final class QueenStatusViewModel: ObservableObject {
         async let funnel = checkFunnelAsync()
         async let git = checkGitAsync()
         async let build = checkBuildAsync()
+        async let improve = checkSelfImprovementAsync()
 
-        _ = await (trios, mcp, agent, cron, a2a, funnel, git, build)
+        _ = await (trios, mcp, agent, cron, a2a, funnel, git, build, improve)
 
         loadSkills()
+        loadAgents()
         await loadLogTailAsync()
         computeOverallStatus()
     }
@@ -95,8 +125,20 @@ final class QueenStatusViewModel: ObservableObject {
     // MARK: - Async Component Checks
 
     private func checkTriosAsync() async {
-        let running = await shellAsync("pgrep -x trios_app >/dev/null 2>&1 && echo 1 || echo 0") == "1"
+        let running = await isTriosRunning()
         updateComponent(name: "TRIOS", icon: "macwindow", status: running ? .healthy : .down, detail: running ? "Running" : "Stopped", action: running ? nil : "Start")
+    }
+
+    /// Robust check: NSRunningApplication by bundle ID, then pgrep for both `trios` and `trios_app`.
+    private func isTriosRunning() async -> Bool {
+        // Method 1: NSRunningApplication (catches .app bundle launches where process name is `trios`)
+        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.browseros.trios")
+        if !apps.isEmpty { return true }
+
+        // Method 2: pgrep for both possible binary names
+        let r1 = await shellAsync("pgrep -x trios >/dev/null 2>&1 && echo 1 || echo 0") == "1"
+        let r2 = await shellAsync("pgrep -x trios_app >/dev/null 2>&1 && echo 1 || echo 0") == "1"
+        return r1 || r2
     }
 
     private func checkMCPAsync() async {
@@ -170,6 +212,66 @@ final class QueenStatusViewModel: ObservableObject {
         updateComponent(name: "Build", icon: "hammer", status: ok ? .healthy : .down, detail: ok ? "OK" : "Errors", action: nil)
     }
 
+    private func checkSelfImprovementAsync() async {
+        let fm = FileManager.default
+        let auditDir = "\(projectRoot)/.trinity/audit"
+        var findings = 0
+        var lastAudit: Date? = nil
+        var passed = true
+
+        if let entries = try? fm.contentsOfDirectory(atPath: auditDir) {
+            let jsons = entries.filter { $0.hasSuffix(".json") }
+            findings = jsons.count
+            for name in jsons {
+                let path = "\(auditDir)/\(name)"
+                if let attr = try? fm.attributesOfItem(atPath: path),
+                   let mod = attr[.modificationDate] as? Date {
+                    if lastAudit == nil || mod > lastAudit! {
+                        lastAudit = mod
+                    }
+                }
+            }
+        }
+
+        let budgetPath = "\(projectRoot)/.trinity/state/safety_budget.json"
+        var budgetText = "—"
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: budgetPath)),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let budget = json["budget"] as? Double,
+           let halted = json["halted"] as? Bool {
+            budgetText = halted ? "HALTED (\(budget))" : "\(budget)"
+            if halted || budget <= 0 { passed = false }
+        }
+
+        let ago = lastAudit.map { timeAgo($0) } ?? "Never"
+        let critique = findings > 0 ? "\(findings) audits on record" : "No audits yet"
+
+        self.selfImprovement = SelfImprovementStatus(
+            score: passed ? 100 : max(0, 100 - findings * 10),
+            openIssues: findings,
+            lastAuditAgo: ago,
+            safetyBudget: budgetText,
+            lastCritique: critique,
+            pendingPRs: 0
+        )
+
+        if let last = lastAudit {
+            auditHistory.append(AuditRecord(timestamp: last, findings: findings, passed: passed))
+            if auditHistory.count > 10 {
+                auditHistory.removeFirst(auditHistory.count - 10)
+            }
+        }
+    }
+
+    private func timeAgo(_ date: Date) -> String {
+        let minutes = Int(Date().timeIntervalSince(date) / 60)
+        if minutes < 1 { return "just now" }
+        if minutes < 60 { return "\(minutes)m ago" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours)h ago" }
+        return "\(hours / 24)d ago"
+    }
+
     private func loadLogTailAsync() async {
         let fm = FileManager.default
         guard fm.fileExists(atPath: logPath) else {
@@ -182,6 +284,62 @@ final class QueenStatusViewModel: ObservableObject {
             lastLogLines = ["Log empty"]
         }
     }
+
+    // MARK: - Agent Management
+
+    func loadAgents() {
+        let agentNames = ["clade-monitor", "clade-dashboard", "cron-queen"]
+        var result: [AgentInfo] = []
+        for name in agentNames {
+            let pid = Int(shell("pgrep -x \(name) 2>/dev/null || echo ''").trimmingCharacters(in: .whitespaces)) ?? nil
+            let status: ComponentStatus = pid != nil ? .healthy : .down
+            let uptime = pid != nil ? shell("ps -o etime= -p \(pid!) 2>/dev/null || echo 'unknown'").trimmingCharacters(in: .whitespaces) : "—"
+            result.append(AgentInfo(
+                name: name,
+                status: status,
+                pid: pid,
+                uptime: uptime,
+                lastAction: nil
+            ))
+        }
+        agents = result
+    }
+
+    func startAgent(_ name: String) {
+        isRunningAction = true
+        switch name {
+        case "clade-monitor":
+            runAsync("cd \(projectRoot) && cargo run --bin clade-monitor &")
+        case "clade-dashboard":
+            runAsync("cd \(projectRoot) && cargo run --bin clade-dashboard &")
+        case "cron-queen":
+            runAsync("cd \(projectRoot) && ./cron-queen.sh &")
+        default:
+            NSLog("[QueenStatus] Unknown agent: \(name)")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            self.loadAgents()
+            self.isRunningAction = false
+        }
+    }
+
+    func stopAgent(_ name: String) {
+        isRunningAction = true
+        runAsync("pkill -x \(name) || pkill -f \(name) || true")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            self.loadAgents()
+            self.isRunningAction = false
+        }
+    }
+
+    func restartAgent(_ name: String) {
+        stopAgent(name)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            self.startAgent(name)
+        }
+    }
+
+    // MARK: - Shell Helpers
 
     private func shellAsync(_ command: String) async -> String {
         await Task.detached {
@@ -242,16 +400,21 @@ final class QueenStatusViewModel: ObservableObject {
         skills = result
     }
 
-    // MARK: - Log
-
     // MARK: - Actions
 
     func startTrios() {
-        isRunningAction = true
-        runAsync("cd \(projectRoot) && ./trios_app &")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            self.refreshAll()
-            self.isRunningAction = false
+        Task { @MainActor in
+            guard await !isTriosRunning() else {
+                NSLog("[QueenStatus] startTrios blocked: TRIOS is already running")
+                refreshAll()
+                return
+            }
+            isRunningAction = true
+            runAsync("cd \(projectRoot) && ./trios_app &")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                self.refreshAll()
+                self.isRunningAction = false
+            }
         }
     }
 
