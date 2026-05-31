@@ -170,6 +170,74 @@ fn security_check() -> SecurityCheckResult {
     }
 }
 
+/// Scan Swift files for Process() shell calls without allowlist (SOUL.md Article IX).
+fn shell_safety_check() -> SecurityCheckResult {
+    let start = Instant::now();
+    let mut findings: Vec<AuditFinding> = vec![];
+    let mut scanned = 0;
+
+    let process_re = Regex::new(r"Process\(\)").unwrap();
+    let shell_re = Regex::new(r#"arguments:\s*\[\s*"-c""#).unwrap();
+
+    let forbidden_substrings: Vec<&str> = vec![
+        "rm -rf /",
+        "curl .* | sh",
+        "> /dev/null",
+        "trios_app",
+        "open trios",
+    ];
+
+    for entry in WalkDir::new(PROJECT_DIR)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let p = e.path();
+            let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+            ext == "swift" && !p.to_string_lossy().contains("target/")
+        })
+    {
+        scanned += 1;
+        let path = entry.path();
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let file = path.strip_prefix(PROJECT_DIR)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+
+        for (line_idx, line) in content.lines().enumerate() {
+            if process_re.is_match(line) && shell_re.is_match(line) {
+                let has_allowlist = forbidden_substrings.iter().any(|pat| {
+                    let pat_re = Regex::new(pat).ok();
+                    pat_re.map_or(false, |re| re.is_match(&content))
+                });
+                if has_allowlist {
+                    continue;
+                }
+                let fingerprint = format!("{}:{}:shell_no_allowlist", &file, line_idx + 1);
+                findings.push(AuditFinding {
+                    file: file.clone(),
+                    line: (line_idx + 1) as u32,
+                    severity: "warning".to_string(),
+                    category: "shell_safety".to_string(),
+                    message: "Process() with zsh -c lacks explicit allowlist".to_string(),
+                    fingerprint,
+                });
+            }
+        }
+    }
+
+    SecurityCheckResult {
+        passed: findings.is_empty(),
+        findings,
+        scanned_files: scanned,
+        duration_ms: start.elapsed().as_millis(),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -210,10 +278,25 @@ fn main() {
         println!("   ⚠️  {}:{} — {} ({})", f.file, f.line, f.message, f.severity);
     }
 
+    // Stage 3: Shell safety check
+    println!("[Check 3/8] Shell safety — Process() allowlist");
+    let shell = shell_safety_check();
+    println!(
+        "   {} Files scanned: {} | Findings: {} | {}ms",
+        if shell.passed { "✅" } else { "❌" },
+        shell.scanned_files,
+        shell.findings.len(),
+        shell.duration_ms
+    );
+    for f in &shell.findings {
+        println!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
+    }
+
     if json_mode {
         let report = serde_json::json!({
             "build_check": build,
             "security_check": security,
+            "shell_safety_check": shell,
         });
         println!("\n{}", serde_json::to_string_pretty(&report).unwrap_or_default());
     }
