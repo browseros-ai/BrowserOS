@@ -12,6 +12,7 @@ members = [
     "rings/RUST-10/clade-worktree",
     "rings/RUST-11/clade-diff",
     "rings/RUST-12/clade-audit",
+    "rings/RUST-14/clade-tablecloth",
 ]
 resolver = "2"
 
