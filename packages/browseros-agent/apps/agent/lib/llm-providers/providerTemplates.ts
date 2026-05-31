@@ -49,9 +49,9 @@ export const providerTemplates: ProviderTemplate[] = [
     id: 'chatgpt-pro',
     name: 'ChatGPT Plus/Pro',
     defaultBaseUrl: 'https://chatgpt.com/backend-api',
-    defaultModelId: 'gpt-5.3-codex',
+    defaultModelId: 'gpt-5.5',
     supportsImages: true,
-    contextWindow: 400000,
+    contextWindow: 1050000,
     setupGuideUrl: 'https://docs.browseros.com/features/chatgpt-pro-oauth',
   },
   {

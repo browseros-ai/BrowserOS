@@ -17,6 +17,7 @@ const CUSTOM_PROVIDER_MODELS: Partial<Record<ProviderType, ModelInfo[]>> = {
   'openai-compatible': [],
   ollama: [],
   'chatgpt-pro': [
+    { modelId: 'gpt-5.5', contextLength: 1050000 },
     { modelId: 'gpt-5.4', contextLength: 400000 },
     { modelId: 'gpt-5.3-codex', contextLength: 400000 },
     { modelId: 'gpt-5.2-codex', contextLength: 400000 },

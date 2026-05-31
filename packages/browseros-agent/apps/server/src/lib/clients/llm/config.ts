@@ -26,7 +26,7 @@ export async function resolveLLMConfig(
     return resolveOAuthConfig(config, browserosId, {
       providerId: 'chatgpt-pro',
       displayName: 'ChatGPT Plus/Pro',
-      defaultModel: 'gpt-5.3-codex',
+      defaultModel: 'gpt-5.5',
       useRefresh: true,
       extraFields: (tokens) => ({
         upstreamProvider: 'openai',
