@@ -516,6 +516,73 @@ fn unused_code_check() -> SecurityCheckResult {
     }
 }
 
+/// Detect retain cycle risks: closures capturing self without [weak self]
+/// in Combine sinks, DispatchQueue.asyncAfter, and URLSession tasks.
+fn retain_cycle_check() -> SecurityCheckResult {
+    let start = Instant::now();
+    let mut findings: Vec<AuditFinding> = vec![];
+    let mut scanned = 0;
+
+    let patterns: Vec<(&str, &str, &str)> = vec![
+        (r"\.sink\s*\{\s*[^\[]*self\.", "warning", "sink closure captures self without [weak self]"),
+        (r"\.assign\(to:\s*\$\w+.*on:\s*self", "warning", "assign(to:on:) retains self strongly"),
+        (r"DispatchQueue\.\w+\.asyncAfter.*\{\s*[^\[]*self\.", "warning", "asyncAfter closure captures self strongly"),
+        (r"URLSession\.shared\.\w+.*\{\s*[^\[]*self\.", "warning", "URLSession closure captures self strongly"),
+    ];
+
+    let compiled: Vec<(Regex, &str, &str)> = patterns
+        .into_iter()
+        .filter_map(|(pat, sev, msg)| {
+            Regex::new(pat).ok().map(|re| (re, sev, msg))
+        })
+        .collect();
+
+    for entry in WalkDir::new(PROJECT_DIR)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let p = e.path();
+            let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+            ext == "swift" && !p.to_string_lossy().contains("target/")
+        })
+    {
+        scanned += 1;
+        let path = entry.path();
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let file = path.strip_prefix(PROJECT_DIR)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+
+        for (re, severity, message) in &compiled {
+            for (line_idx, line) in content.lines().enumerate() {
+                if re.is_match(line) {
+                    let fingerprint = format!("{}:{}:{}", &file, line_idx + 1, message);
+                    findings.push(AuditFinding {
+                        file: file.clone(),
+                        line: (line_idx + 1) as u32,
+                        severity: (*severity).to_string(),
+                        category: "retain_cycle".to_string(),
+                        message: (*message).to_string(),
+                        fingerprint,
+                    });
+                }
+            }
+        }
+    }
+
+    SecurityCheckResult {
+        passed: findings.is_empty(),
+        findings,
+        scanned_files: scanned,
+        duration_ms: start.elapsed().as_millis(),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -626,6 +693,20 @@ fn main() {
         println!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
     }
 
+    // Stage 8: Retain cycle check
+    println!("[Check 8/8] Retain cycles — missing [weak self] in closures");
+    let retain = retain_cycle_check();
+    println!(
+        "   {} Files scanned: {} | Findings: {} | {}ms",
+        if retain.passed { "✅" } else { "❌" },
+        retain.scanned_files,
+        retain.findings.len(),
+        retain.duration_ms
+    );
+    for f in &retain.findings {
+        println!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
+    }
+
     if json_mode {
         let report = serde_json::json!({
             "build_check": build,
@@ -635,6 +716,7 @@ fn main() {
             "concurrency_check": conc,
             "todo_check": todo,
             "unused_code_check": unused,
+            "retain_cycle_check": retain,
         });
         println!("\n{}", serde_json::to_string_pretty(&report).unwrap_or_default());
     }
