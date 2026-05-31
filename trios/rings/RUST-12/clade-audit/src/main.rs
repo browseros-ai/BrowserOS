@@ -593,6 +593,16 @@ fn main() {
     let dry_run = args.iter().any(|a| a == "--dry-run");
     let json_mode = args.iter().any(|a| a == "--json");
 
+    // Subcommand: generate-awareness
+    if args.iter().any(|a| a == "generate-awareness") {
+        println!("═══════════════════════════════════════════════════════════");
+        println!("  CLADE-AUDIT: Self-Awareness Generator");
+        println!("  Dry run: {}", dry_run);
+        println!("═══════════════════════════════════════════════════════════\n");
+        generate_self_awareness(dry_run);
+        return;
+    }
+
     println!("═══════════════════════════════════════════════════════════");
     println!("  CLADE-AUDIT: Trinity Self-Critic");
     println!("  Dry run: {} | JSON: {}", dry_run, json_mode);
@@ -722,15 +732,200 @@ fn main() {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+struct SelfAwareness {
+    generated_at: String,
+    rings: Vec<ComponentInfo>,
+    skills: Vec<ComponentInfo>,
+    agents: Vec<ComponentInfo>,
+    experience_count: usize,
+    latest_experience: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ComponentInfo {
+    id: String,
+    name: String,
+    path: String,
+    language: String,
+    description: Option<String>,
+}
+
+/// Generate `.trinity/self-awareness.json` — machine-readable graph of all components.
+fn generate_self_awareness(dry_run: bool) {
+    let mut rings: Vec<ComponentInfo> = vec![];
+    let mut skills: Vec<ComponentInfo> = vec![];
+    let mut agents: Vec<ComponentInfo> = vec![];
+
+    // Discover Rust rings
+    for entry in WalkDir::new(format!("{}/rings", PROJECT_DIR))
+        .max_depth(3)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name() == "Cargo.toml")
+    {
+        let path = entry.path();
+        let parent = path.parent().unwrap_or(path);
+        let name = parent.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let ring_dir = parent.strip_prefix(PROJECT_DIR).unwrap_or(parent)
+            .to_string_lossy()
+            .to_string();
+
+        let description = fs::read_to_string(path).ok().and_then(|content| {
+            content.lines().find(|l| l.starts_with("description"))
+                .map(|l| l.split("=")
+                    .nth(1)
+                    .unwrap_or("")
+                    .trim()
+                    .trim_matches('"')
+                    .to_string())
+        });
+
+        let ring_id = ring_dir.split('/').nth(1).unwrap_or("RUST-XX").to_string();
+        rings.push(ComponentInfo {
+            id: ring_id,
+            name,
+            path: ring_dir,
+            language: "Rust".to_string(),
+            description,
+        });
+    }
+
+    // Discover Swift modules (SR-*)
+    for entry in WalkDir::new(format!("{}/rings", PROJECT_DIR))
+        .max_depth(2)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let p = e.path();
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            name.starts_with("SR-") && p.is_dir()
+        })
+    {
+        let path = entry.path();
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
+        let ring_dir = path.strip_prefix(PROJECT_DIR).unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+        rings.push(ComponentInfo {
+            id: name.clone(),
+            name: name.clone(),
+            path: ring_dir,
+            language: "Swift".to_string(),
+            description: Some(format!("Swift module {}", name)),
+        });
+    }
+
+    // Discover skills
+    let skills_dir = format!("{}/.claude/skills", PROJECT_DIR);
+    if let Ok(entries) = std::fs::read_dir(&skills_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let skill_path = path.strip_prefix(PROJECT_DIR).unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_string();
+                skills.push(ComponentInfo {
+                    id: name.clone(),
+                    name: name.clone(),
+                    path: skill_path,
+                    language: "markdown".to_string(),
+                    description: Some(format!("Claude skill /{}", name)),
+                });
+            }
+        }
+    }
+
+    // Discover agents
+    let agents_dir = format!("{}/.claude/agents", PROJECT_DIR);
+    if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if let Some(ext) = path.extension() {
+                if ext == "md" {
+                    let stem = path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let agent_path = path.strip_prefix(PROJECT_DIR).unwrap_or(&path)
+                        .to_string_lossy()
+                        .to_string();
+                    agents.push(ComponentInfo {
+                        id: stem.clone(),
+                        name: stem.clone(),
+                        path: agent_path,
+                        language: "markdown".to_string(),
+                        description: Some(format!("Trinity agent {}", stem)),
+                    });
+                }
+            }
+        }
+    }
+
+    // Experience files
+    let exp_dir = format!("{}/.trinity/experience", PROJECT_DIR);
+    let mut experience_count = 0;
+    let mut latest_experience: Option<String> = None;
+    if let Ok(entries) = std::fs::read_dir(&exp_dir) {
+        let mut files: Vec<std::path::PathBuf> = vec![];
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                files.push(path);
+            }
+        }
+        experience_count = files.len();
+        files.sort();
+        latest_experience = files.last().and_then(|p| {
+            p.file_name().and_then(|s| s.to_str()).map(|s| s.to_string())
+        });
+    }
+
+    let awareness = SelfAwareness {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        rings,
+        skills,
+        agents,
+        experience_count,
+        latest_experience,
+    };
+
+    let json = serde_json::to_string_pretty(&awareness).unwrap_or_default();
+    let out_path = format!("{}/.trinity/self-awareness.json", PROJECT_DIR);
+
+    if dry_run {
+        println!("[DRY-RUN] Would write {} rings, {} skills, {} agents to {}",
+            awareness.rings.len(), awareness.skills.len(), awareness.agents.len(), out_path);
+        println!("{}", json);
+    } else {
+        let _ = std::fs::create_dir_all(format!("{}/.trinity", PROJECT_DIR));
+        match std::fs::write(&out_path, &json) {
+            Ok(_) => println!("✅ Self-awareness written: {} rings, {} skills, {} agents | {}",
+                awareness.rings.len(), awareness.skills.len(), awareness.agents.len(), out_path),
+            Err(e) => eprintln!("❌ Failed to write self-awareness: {}", e),
+        }
+    }
+}
+
 fn print_help() {
     println!(
         r#"
 clade-audit — Continuous code critic for Trinity
 
 USAGE:
-    cargo run --bin clade-audit -- [--dry-run] [--json]
+    cargo run --bin clade-audit -- [COMMAND] [--dry-run] [--json]
 
-CHECKS:
+COMMANDS:
+    generate-awareness   Write .trinity/self-awareness.json
+
+CHECKS (default run):
     1. Build gate     — swiftc -typecheck + cargo check --workspace
     2. Security scan  — forbidden patterns, hardcoded secrets
     3. Shell safety   — Process() allowlist compliance (SOUL.md Article IX)
