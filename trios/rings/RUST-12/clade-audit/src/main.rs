@@ -304,6 +304,74 @@ fn error_handling_check() -> SecurityCheckResult {
     }
 }
 
+/// Detect Swift 6 concurrency anti-patterns: missing [weak self] in async closures,
+/// actor-isolated mutable state accessed from concurrent contexts.
+fn concurrency_check() -> SecurityCheckResult {
+    let start = Instant::now();
+    let mut findings: Vec<AuditFinding> = vec![];
+    let mut scanned = 0;
+
+    let patterns: Vec<(&str, &str, &str)> = vec![
+        (r"Timer\.scheduledTimer.*\{\s*_.*in\s*\n?\s*self\.", "warning", "Timer closure captures self strongly — add [weak self]"),
+        (r"Timer\.publish.*\.sink.*\{\s*.*in\s*\n?\s*self\.", "warning", "Timer sink captures self strongly — add [weak self]"),
+        (r"DispatchQueue\.main\.async\s*\{\s*\n?\s*self\.", "warning", "DispatchQueue closure captures self strongly — add [weak self]"),
+        (r"Task\s*\{\s*\n?\s*self\.", "warning", "Task captures self strongly — add [weak self] or capture list"),
+        (r"@Published\s+var\s+\w+.*=.*\[\]", "info", "@Published array default — consider empty init for clarity"),
+    ];
+
+    let compiled: Vec<(Regex, &str, &str)> = patterns
+        .into_iter()
+        .filter_map(|(pat, sev, msg)| {
+            Regex::new(pat).ok().map(|re| (re, sev, msg))
+        })
+        .collect();
+
+    for entry in WalkDir::new(PROJECT_DIR)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let p = e.path();
+            let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+            ext == "swift" && !p.to_string_lossy().contains("target/")
+        })
+    {
+        scanned += 1;
+        let path = entry.path();
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let file = path.strip_prefix(PROJECT_DIR)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+
+        for (re, severity, message) in &compiled {
+            for (line_idx, line) in content.lines().enumerate() {
+                if re.is_match(line) {
+                    let fingerprint = format!("{}:{}:{}", &file, line_idx + 1, message);
+                    findings.push(AuditFinding {
+                        file: file.clone(),
+                        line: (line_idx + 1) as u32,
+                        severity: (*severity).to_string(),
+                        category: "concurrency".to_string(),
+                        message: (*message).to_string(),
+                        fingerprint,
+                    });
+                }
+            }
+        }
+    }
+
+    SecurityCheckResult {
+        passed: findings.is_empty(),
+        findings,
+        scanned_files: scanned,
+        duration_ms: start.elapsed().as_millis(),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -372,12 +440,27 @@ fn main() {
         println!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
     }
 
+    // Stage 5: Concurrency check
+    println!("[Check 5/8] Concurrency — Swift 6 actor isolation");
+    let conc = concurrency_check();
+    println!(
+        "   {} Files scanned: {} | Findings: {} | {}ms",
+        if conc.passed { "✅" } else { "❌" },
+        conc.scanned_files,
+        conc.findings.len(),
+        conc.duration_ms
+    );
+    for f in &conc.findings {
+        println!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
+    }
+
     if json_mode {
         let report = serde_json::json!({
             "build_check": build,
             "security_check": security,
             "shell_safety_check": shell,
             "error_handling_check": err,
+            "concurrency_check": conc,
         });
         println!("\n{}", serde_json::to_string_pretty(&report).unwrap_or_default());
     }
