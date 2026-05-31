@@ -87,6 +87,81 @@ fn default_budget() -> SafetyBudget {
     }
 }
 
+/// Run clade-audit --json and parse the structured report.
+fn run_audit() -> Option<AuditReport> {
+    println!("[Step 2/7] Running clade-audit...");
+    let start = Instant::now();
+    let output = Command::new("cargo")
+        .args(["run", "--bin", "clade-audit", "--", "--json"])
+        .current_dir(PROJECT_DIR)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            // Extract JSON from stdout (audit prints banner then JSON)
+            let json_start = stdout.find('{').unwrap_or(0);
+            let json_str = &stdout[json_start..];
+            match serde_json::from_str::<AuditReport>(json_str) {
+                Ok(report) => {
+                    let total: usize = [
+                        &report.security_check,
+                        &report.shell_safety_check,
+                        &report.error_handling_check,
+                        &report.concurrency_check,
+                        &report.todo_check,
+                        &report.unused_code_check,
+                        &report.retain_cycle_check,
+                    ].iter().map(|c| c.findings.len()).sum();
+                    println!("   ✅ Audit complete: {} findings | {}ms", total, start.elapsed().as_millis());
+                    Some(report)
+                }
+                Err(e) => {
+                    println!("   ❌ Failed to parse audit JSON: {}", e);
+                    log_event("audit_parse_fail", &e.to_string());
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            println!("   ❌ Failed to run clade-audit: {}", e);
+            log_event("audit_run_fail", &e.to_string());
+            None
+        }
+    }
+}
+
+/// Update `.trinity/self-awareness.json` via clade-audit generate-awareness.
+fn update_awareness(dry_run: bool) {
+    println!("[Step 3/7] Updating self-awareness...");
+    let mut cmd = Command::new("cargo");
+    cmd.args(["run", "--bin", "clade-audit", "--", "generate-awareness"]);
+    if dry_run {
+        cmd.arg("--dry-run");
+    }
+    cmd.current_dir(PROJECT_DIR)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    match cmd.status() {
+        Ok(status) => {
+            if status.success() {
+                println!("   ✅ Self-awareness updated");
+                log_event("awareness_updated", "");
+            } else {
+                println!("   ⚠️  Self-awareness exited with code {:?}", status.code());
+                log_event("awareness_exit_code", &format!("{:?}", status.code()));
+            }
+        }
+        Err(e) => {
+            println!("   ❌ Failed to update awareness: {}", e);
+            log_event("awareness_fail", &e.to_string());
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let dry_run = args.iter().any(|a| a == "--dry-run");
@@ -107,6 +182,12 @@ fn main() {
     }
 
     println!("\n🟢 Safety gates passed — continuing loop");
+
+    // Step 2: Run audit
+    let _report = run_audit();
+
+    // Step 3: Update awareness
+    update_awareness(dry_run);
 }
 
 fn log_event(event: &str, details: &str) {
