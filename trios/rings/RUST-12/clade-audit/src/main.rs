@@ -1,6 +1,10 @@
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Instant;
+use walkdir::WalkDir;
 
 const PROJECT_DIR: &str = "/Users/playra/BrowserOS-full/trios";
 
@@ -21,6 +25,14 @@ struct BuildCheckResult {
     rust_ok: bool,
     swift_errors: Vec<String>,
     rust_errors: Vec<String>,
+    duration_ms: u128,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct SecurityCheckResult {
+    passed: bool,
+    findings: Vec<AuditFinding>,
+    scanned_files: usize,
     duration_ms: u128,
 }
 
@@ -88,6 +100,76 @@ fn build_check() -> BuildCheckResult {
     }
 }
 
+/// Scan source files for forbidden security patterns.
+fn security_check() -> SecurityCheckResult {
+    let start = Instant::now();
+    let mut findings: Vec<AuditFinding> = vec![];
+    let mut scanned = 0;
+
+    let forbidden_patterns: Vec<(&str, &str, &str)> = vec![
+        (r"rm\s+-rf\s+/", "critical", "Forbidden: rm -rf /"),
+        (r"curl\s+.*\|\s*sh", "critical", "Forbidden: curl | sh"),
+        (r"try!\s*\(", "warning", "Unsafe: bare try! macro"),
+        (r"as!\s*\w+", "warning", "Unsafe: force cast as!"),
+        (r#"api[_-]?key\s*=\s*[^"']*["']\w{20,}"#, "critical", "Hardcoded API key"),
+        (r#"password\s*=\s*["']\w+["']"#, "warning", "Hardcoded password"),
+        (r#"token\s*=\s*["']\w{20,}["']"#, "critical", "Hardcoded token"),
+        (r"NSLog\s*\(\s*[^)]*secret", "warning", "NSLog may leak secret"),
+        (r"print\s*\(\s*[^)]*secret", "warning", "print may leak secret"),
+    ];
+
+    let compiled: Vec<(Regex, &str, &str)> = forbidden_patterns
+        .into_iter()
+        .filter_map(|(pat, sev, msg)| {
+            Regex::new(pat).ok().map(|re| (re, sev, msg))
+        })
+        .collect();
+
+    for entry in WalkDir::new(PROJECT_DIR)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let p = e.path();
+            let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+            (ext == "swift" || ext == "rs" || ext == "sh") && !p.to_string_lossy().contains("target/")
+        })
+    {
+        scanned += 1;
+        let path = entry.path();
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        for (re, severity, message) in &compiled {
+            for (line_idx, line) in content.lines().enumerate() {
+                if re.is_match(line) {
+                    let file = path.strip_prefix(PROJECT_DIR)
+                        .unwrap_or(path)
+                        .to_string_lossy()
+                        .to_string();
+                    let fingerprint = format!("{}:{}:{}", &file, line_idx + 1, message);
+                    findings.push(AuditFinding {
+                        file,
+                        line: (line_idx + 1) as u32,
+                        severity: (*severity).to_string(),
+                        category: "security".to_string(),
+                        message: (*message).to_string(),
+                        fingerprint,
+                    });
+                }
+            }
+        }
+    }
+
+    SecurityCheckResult {
+        passed: findings.is_empty(),
+        findings,
+        scanned_files: scanned,
+        duration_ms: start.elapsed().as_millis(),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -114,9 +196,24 @@ fn main() {
         build.duration_ms
     );
 
+    // Stage 2: Security check
+    println!("[Check 2/8] Security scan — forbidden patterns");
+    let security = security_check();
+    println!(
+        "   {} Files scanned: {} | Findings: {} | {}ms",
+        if security.passed { "✅" } else { "❌" },
+        security.scanned_files,
+        security.findings.len(),
+        security.duration_ms
+    );
+    for f in &security.findings {
+        println!("   ⚠️  {}:{} — {} ({})", f.file, f.line, f.message, f.severity);
+    }
+
     if json_mode {
         let report = serde_json::json!({
             "build_check": build,
+            "security_check": security,
         });
         println!("\n{}", serde_json::to_string_pretty(&report).unwrap_or_default());
     }
