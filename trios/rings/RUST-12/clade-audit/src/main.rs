@@ -372,6 +372,67 @@ fn concurrency_check() -> SecurityCheckResult {
     }
 }
 
+/// Inventory TODO and FIXME comments with severity categorization.
+fn todo_check() -> SecurityCheckResult {
+    let start = Instant::now();
+    let mut findings: Vec<AuditFinding> = vec![];
+    let mut scanned = 0;
+
+    let todo_re = Regex::new(r"(?i)(TODO|FIXME|HACK|XXX|WARN|BUG)\s*[:\-]?\s*(.*)").unwrap();
+
+    for entry in WalkDir::new(PROJECT_DIR)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let p = e.path();
+            let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+            (ext == "swift" || ext == "rs" || ext == "md") && !p.to_string_lossy().contains("target/")
+        })
+    {
+        scanned += 1;
+        let path = entry.path();
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let file = path.strip_prefix(PROJECT_DIR)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+
+        for (line_idx, line) in content.lines().enumerate() {
+            if let Some(caps) = todo_re.captures(line) {
+                let keyword = caps.get(1).map(|m| m.as_str().to_uppercase()).unwrap_or_default();
+                let desc = caps.get(2).map(|m| m.as_str().trim()).unwrap_or("").to_string();
+                let severity = match keyword.as_str() {
+                    "FIXME" | "BUG" => "critical",
+                    "TODO" => "warning",
+                    "HACK" | "XXX" => "warning",
+                    _ => "info",
+                };
+                let message = format!("{}: {}", keyword, desc);
+                let fingerprint = format!("{}:{}:{}", &file, line_idx + 1, &message);
+                findings.push(AuditFinding {
+                    file: file.clone(),
+                    line: (line_idx + 1) as u32,
+                    severity: severity.to_string(),
+                    category: "todo_inventory".to_string(),
+                    message,
+                    fingerprint,
+                });
+            }
+        }
+    }
+
+    SecurityCheckResult {
+        passed: findings.is_empty(),
+        findings,
+        scanned_files: scanned,
+        duration_ms: start.elapsed().as_millis(),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -454,6 +515,20 @@ fn main() {
         println!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
     }
 
+    // Stage 6: TODO/FIXME inventory
+    println!("[Check 6/8] TODO/FIXME inventory — categorized severity");
+    let todo = todo_check();
+    println!(
+        "   {} Files scanned: {} | Findings: {} | {}ms",
+        if todo.passed { "✅" } else { "❌" },
+        todo.scanned_files,
+        todo.findings.len(),
+        todo.duration_ms
+    );
+    for f in &todo.findings {
+        println!("   ⚠️  {}:{} — {} ({})", f.file, f.line, f.message, f.severity);
+    }
+
     if json_mode {
         let report = serde_json::json!({
             "build_check": build,
@@ -461,6 +536,7 @@ fn main() {
             "shell_safety_check": shell,
             "error_handling_check": err,
             "concurrency_check": conc,
+            "todo_check": todo,
         });
         println!("\n{}", serde_json::to_string_pretty(&report).unwrap_or_default());
     }
