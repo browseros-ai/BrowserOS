@@ -35,6 +35,7 @@ fn main() {
     let mut last_15m = SystemTime::now();
     let mut last_30m = SystemTime::now();
     let mut last_60m = SystemTime::now();
+    let mut last_60m_tablecloth = SystemTime::now();
     let mut last_24h = SystemTime::now();
 
     // Backoff tracking: consecutive_failures -> multiplier
@@ -73,6 +74,17 @@ fn main() {
                 failure_counts.remove("60m");
             } else {
                 *failure_counts.entry("60m".to_string()).or_insert(0) += 1;
+            }
+        }
+
+        // Every 60 min: autonomous self-improvement loop (clade-tablecloth)
+        let backoff_60m_t = calculate_backoff(failure_counts.get("60m_tablecloth").copied().unwrap_or(0));
+        if now.duration_since(last_60m_tablecloth).unwrap_or_default() >= Duration::from_secs(3600 * backoff_60m_t) {
+            last_60m_tablecloth = now;
+            if run_tablecloth("60m_tablecloth") {
+                failure_counts.remove("60m_tablecloth");
+            } else {
+                *failure_counts.entry("60m_tablecloth".to_string()).or_insert(0) += 1;
             }
         }
 
@@ -169,6 +181,36 @@ fn run_deep_audit(interval: &str) -> bool {
     println!("[CladeMonitor][{}] Deep audit: fitness sync + screenshot baseline", interval);
     log_event("deep_audit", &format!("interval_{}", interval));
     true
+}
+
+fn run_tablecloth(interval: &str) -> bool {
+    use std::process::{Command, Stdio};
+    let budget = load_safety_budget();
+    if budget.halted || budget.budget <= 0.0 {
+        println!(
+            "[CladeMonitor][{}] Tablecloth HALTED: budget={} — skipping loop",
+            interval, budget.budget
+        );
+        log_event("tablecloth_halted", &format!("budget_{}", budget.budget));
+        return true; // not a failure, just gated
+    }
+
+    println!("[CladeMonitor][{}] Spawning clade-tablecloth...", interval);
+    let result = Command::new("cargo")
+        .args(["run", "--bin", "clade-tablecloth"])
+        .current_dir(PROJECT_DIR)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if result {
+        log_event("tablecloth", &format!("interval_{}_pass", interval));
+    } else {
+        log_event("tablecloth", &format!("interval_{}_fail", interval));
+    }
+    result
 }
 
 fn check_health(url: &str) -> bool {
