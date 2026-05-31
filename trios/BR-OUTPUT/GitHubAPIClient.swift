@@ -45,4 +45,29 @@ actor GitHubAPIClient {
         let (data, _) = try await URLSession.shared.data(for: req)
         return try JSONDecoder().decode(GitHubIssue.self, from: data)
     }
+
+    func createPR(repo: String, title: String, body: String, head: String, base: String = "dev") async throws -> GitHubPullRequest {
+        var req = request("/repos/gHashTag/\(repo)/pulls")
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload: [String: Any] = [
+            "title": title,
+            "body": body,
+            "head": head,
+            "base": base,
+        ]
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, _) = try await URLSession.shared.data(for: req)
+        return try JSONDecoder().decode(GitHubPullRequest.self, from: data)
+    }
+
+    func addComment(repo: String, issueNumber: Int, body: String) async throws -> GitHubComment {
+        var req = request("/repos/gHashTag/\(repo)/issues/\(issueNumber)/comments")
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload: [String: Any] = ["body": body]
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, _) = try await URLSession.shared.data(for: req)
+        return try JSONDecoder().decode(GitHubComment.self, from: data)
+    }
 }
