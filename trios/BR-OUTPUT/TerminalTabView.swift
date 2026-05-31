@@ -118,7 +118,7 @@ struct TerminalTabView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .id(scrollToBottom)
             }
-            .onChange(of: vm.output) { _ in
+            .onChange(of: vm.output) {
                 scrollToBottom = UUID()
                 DispatchQueue.main.async {
                     withAnimation {
