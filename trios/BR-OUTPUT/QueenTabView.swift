@@ -13,6 +13,7 @@ struct QueenTabView: View {
             ScrollView {
                 LazyVStack(spacing: 12) {
                     healthGrid
+                    selfImprovementSection
                     skillsSection
                     logSection
                 }
@@ -116,6 +117,97 @@ struct QueenTabView: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.grokBorder.opacity(0.3), lineWidth: 1)
         )
+    }
+
+    // MARK: - Self-Improvement Section
+
+    private var selfImprovementSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Self-Critic")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.grokMuted)
+                Spacer()
+                if let status = viewModel.selfImprovement {
+                    Text("Score: \(status.score)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(status.score >= 80 ? Color.green : (status.score >= 50 ? Color.yellow : Color.red))
+                }
+            }
+
+            if let status = viewModel.selfImprovement {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 12) {
+                        metricChip("Issues", value: "\(status.openIssues)")
+                        metricChip("Budget", value: status.safetyBudget)
+                        metricChip("Pending PRs", value: "\(status.pendingPRs)")
+                    }
+
+                    HStack {
+                        Text(status.lastCritique)
+                            .font(.system(size: 10))
+                            .foregroundColor(.grokDim)
+                        Spacer()
+                        Text(status.lastAuditAgo)
+                            .font(.system(size: 9))
+                            .foregroundColor(.grokDim)
+                    }
+
+                    HStack(spacing: 8) {
+                        Button(action: { viewModel.runCommand("cargo run --bin clade-audit -- --json") }) {
+                            Text("Run Audit")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(.grokAccent)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.grokElevated.opacity(0.6))
+                                .cornerRadius(4)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: { viewModel.runCommand("cargo run --bin clade-audit -- generate-awareness") }) {
+                            Text("Awareness")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(.grokAccent)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.grokElevated.opacity(0.6))
+                                .cornerRadius(4)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(10)
+                .background(Color.grokElevated.opacity(0.2))
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.grokBorder.opacity(0.3), lineWidth: 1)
+                )
+            } else {
+                Text("No self-improvement data yet. Run audit to populate.")
+                    .font(.system(size: 10))
+                    .foregroundColor(.grokDim)
+                    .padding(10)
+                    .background(Color.grokElevated.opacity(0.2))
+                    .cornerRadius(8)
+            }
+        }
+    }
+
+    private func metricChip(_ label: String, value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.grokText)
+            Text(label)
+                .font(.system(size: 9))
+                .foregroundColor(.grokDim)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+        .background(Color.grokElevated.opacity(0.3))
+        .cornerRadius(6)
     }
 
     // MARK: - Skills Section
@@ -225,7 +317,6 @@ struct QueenTabView: View {
                 HStack(spacing: 6) {
                     presetButton("git status")
                     presetButton("git pull")
-                    presetButton("./trios_app")
                     presetButton("bun run start:server")
                 }
             }
@@ -290,6 +381,18 @@ struct QueenTabView: View {
     private func submitCommand() {
         guard !commandText.isEmpty else { return }
         let cmd = commandText
+
+        // SAFETY: Block commands that would recursively launch trios
+        let lowerCmd = cmd.lowercased()
+        let blockedPatterns = ["./trios_app", "trios_app", "open trios.app", "swiftc.*trios_app", "launchd.*trios"]
+        for pattern in blockedPatterns {
+            if lowerCmd.range(of: pattern, options: .regularExpression) != nil {
+                commandText = ""
+                viewModel.runCommand("echo 'Blocked: recursive self-launch detected: \(cmd)'")
+                return
+            }
+        }
+
         commandText = ""
         viewModel.runCommand(cmd)
     }
