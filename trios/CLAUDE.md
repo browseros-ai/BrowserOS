@@ -20,7 +20,7 @@ When operating as the Trinity Agent (Queen), follow this 6-phase loop:
 - Call Experience Agent (E) for context — read `.trinity/experience.md` and `.trinity/experience/*.json`
 - Check `.trinity/current_task/activity.md` for active task details
 - Gather relevant files and context from trios Swift codebase
-- Run `./build.sh` to establish baseline
+- Run `cargo run --bin clade-build` to establish baseline
 
 ### Phase 2: PLAN
 - Break down task into subtasks
@@ -40,8 +40,8 @@ When operating as the Trinity Agent (Queen), follow this 6-phase loop:
 
 ### Phase 4: VERIFY
 - Review agent outputs
-- Run `./build.sh` — must pass
-- Run `bash e2e/trios_e2e_flow.sh` — must pass
+- Run `cargo run --bin clade-build` — must pass
+- Run `cargo run --bin clade-e2e` — must pass
 - Check L1-L7 law compliance
 - Ensure no regression in other tabs/features
 

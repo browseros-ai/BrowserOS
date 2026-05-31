@@ -166,6 +166,25 @@ Aligns the repository with TDD-MANDATE: behavior lives in Swift code + build scr
 
 ---
 
+## Article IX: Operational Safety Rules
+
+### §9.1 Checkpoint Rule
+After any build, e2e, audit, or agent run — write a structured checkpoint to `.trinity/experience/YYYY-MM-DD_hh-mm-ss_action.json`. Do not keep results only in session logs.
+
+### §9.2 Shell Whitelist Rule
+`Process()` with `zsh -c` is permitted only if arguments pass an explicit allowlist. Forbidden substrings: `rm -rf /`, `curl .* | sh`, `> /dev/null`, `trios_app`, `open trios`. Violation = hard fail.
+
+### §9.3 Retry Budget Rule
+Any external HTTP call or `Process().run()` has max 3 attempts with exponential backoff. After the 3rd — log `action: "halted_retry_exhausted"` to `event_log.jsonl` and stop. Silent retry is forbidden.
+
+### §9.4 Cleanup Rule
+After feature branch completion or clade promotion — delete `.worktrees/<branch>/`, `target/release/` artifacts, and snapshot files older than 7 days. Clean environment = stable environment.
+
+### §9.5 Boot Grace Rule
+Any health-dependent auto-action (rollback, restart, kill) must have a boot grace period ≥ 60 seconds from process start. Until expired — logging only, no destructive actions.
+
+---
+
 ## Appendix: Quick Reference
 
 | Command | Action |

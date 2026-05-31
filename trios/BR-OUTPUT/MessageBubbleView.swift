@@ -4,9 +4,12 @@ struct MessageBubbleView: View {
     let message: ChatMessage
     let isFirstInGroup: Bool
     let isLastInGroup: Bool
+    var isConversationIdle: Bool = true
     var onTaskAction: ((UUID, AgentTaskState) -> Void)?
     var onRegenerate: (() -> Void)?
     var onFeedback: ((Bool) -> Void)?
+
+    @State private var isHovered = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -139,14 +142,24 @@ struct MessageBubbleView: View {
                 TypingIndicatorView()
             }
 
-            // Inline action bar
-            if !message.isStreaming && !message.content.isEmpty && isLastInGroup {
+            // Inline action bar — only after the entire assistant turn is fully complete
+            if !message.isStreaming && !message.content.isEmpty && isLastInGroup && isConversationIdle {
                 MessageActionBar(
                     content: message.content,
                     onRegenerate: onRegenerate,
                     onFeedback: onFeedback
                 )
             }
+
+            // Hover copy bar — any completed assistant message (ChatGPT / Claude pattern)
+            if !isLastInGroup && !message.isStreaming && !message.content.isEmpty {
+                HoverCopyBar(content: message.content)
+                    .opacity(isHovered ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.15), value: isHovered)
+            }
+        }
+        .onHover { hovered in
+            isHovered = hovered
         }
     }
 
@@ -226,7 +239,7 @@ private struct MessageActionBar: View {
     @State private var liked: Bool? = nil
 
     var body: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 14) {
             Button(action: {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(content, forType: .string)
@@ -236,7 +249,7 @@ private struct MessageActionBar: View {
                 }
             }) {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 13, weight: .medium, design: .default))
+                    .font(.system(size: 12, weight: .medium, design: .default))
                     .foregroundColor(copied ? .grokText : .grokDim)
             }
             .buttonStyle(PlainButtonStyle())
@@ -246,7 +259,7 @@ private struct MessageActionBar: View {
                 onRegenerate?()
             }) {
                 Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 13, weight: .medium, design: .default))
+                    .font(.system(size: 12, weight: .medium, design: .default))
                     .foregroundColor(.grokDim)
             }
             .buttonStyle(PlainButtonStyle())
@@ -259,7 +272,7 @@ private struct MessageActionBar: View {
                 onFeedback?(true)
             }) {
                 Image(systemName: liked == true ? "hand.thumbsup.fill" : "hand.thumbsup")
-                    .font(.system(size: 13, weight: .medium, design: .default))
+                    .font(.system(size: 12, weight: .medium, design: .default))
                     .foregroundColor(liked == true ? .grokText : .grokDim)
             }
             .buttonStyle(PlainButtonStyle())
@@ -270,12 +283,41 @@ private struct MessageActionBar: View {
                 onFeedback?(false)
             }) {
                 Image(systemName: liked == false ? "hand.thumbsdown.fill" : "hand.thumbsdown")
-                    .font(.system(size: 13, weight: .medium, design: .default))
+                    .font(.system(size: 12, weight: .medium, design: .default))
                     .foregroundColor(liked == false ? .grokText : .grokDim)
             }
             .buttonStyle(PlainButtonStyle())
             .help("Bad response")
         }
-        .padding(.top, 6)
+        .padding(.top, 4)
+    }
+}
+
+// MARK: - Hover Copy Bar (ChatGPT / Claude pattern)
+
+private struct HoverCopyBar: View {
+    let content: String
+    @State private var copied = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(content, forType: .string)
+                copied = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    copied = false
+                }
+            }) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 11, weight: .medium, design: .default))
+                    .foregroundColor(copied ? .grokText : .grokDim)
+            }
+            .buttonStyle(PlainButtonStyle())
+            .help("Copy")
+
+            Spacer()
+        }
+        .padding(.top, 2)
     }
 }

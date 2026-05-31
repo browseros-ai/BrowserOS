@@ -15,6 +15,7 @@ class BrowserOSChatViewModel: ObservableObject {
     @Published var inputText: String = ""
 
     private let mcpClient: TriosMCPClient
+    private let llmClient = LLMClient()
     private var cancellables = Set<AnyCancellable>()
     private var streamingTask: Task<Void, Never>?
     private var sessionStartTime: Date = Date()
@@ -78,7 +79,48 @@ class BrowserOSChatViewModel: ObservableObject {
                 showUsageHint()
             }
         } else {
-            showUsageHint()
+            sendToLLM(text)
+        }
+    }
+
+    private func sendToLLM(_ text: String) {
+        isStreaming = true
+        queenStatus = .working
+
+        streamingTask?.cancel()
+        streamingTask = Task {
+            do {
+                let history: [LLMClient.Message] = messages.map { msg in
+                    let role: String
+                    switch msg.role {
+                    case .user: role = "user"
+                    case .assistant: role = "assistant"
+                    case .system: role = "system"
+                    case .tool: role = "assistant"
+                    }
+                    return LLMClient.Message(role: role, content: msg.content)
+                }
+
+                let reply = try await llmClient.complete(messages: history)
+
+                let agentMessage = BrowserOSChatMessage(
+                    role: .assistant,
+                    content: reply,
+                    timestamp: Date()
+                )
+                messages.append(agentMessage)
+                queenStatus = .alive
+
+            } catch {
+                let errorMessage = BrowserOSChatMessage(
+                    role: .system,
+                    content: "Agent error: \(error.localizedDescription)",
+                    timestamp: Date()
+                )
+                messages.append(errorMessage)
+                queenStatus = .error
+            }
+            isStreaming = false
         }
     }
 
@@ -211,6 +253,15 @@ class BrowserOSChatViewModel: ObservableObject {
             let prefixLen = lower.hasPrefix("shell ") ? 6 : (lower.hasPrefix("run ") ? 4 : 5)
             let cmd = String(text.dropFirst(prefixLen)).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !cmd.isEmpty else { return nil }
+
+            // SAFETY: Block commands that would recursively launch trios
+            let lowerCmd = cmd.lowercased()
+            let blocked = ["trios_app", "open trios", "swiftc.*trios", "launchd.*trios", "clade-promote.*boot"]
+            for pattern in blocked {
+                if lowerCmd.range(of: pattern, options: .regularExpression) != nil {
+                    return ("filesystem_bash", ["command": "echo 'Blocked: command may cause recursive self-launch: \(cmd)'", "description": "Blocked self-launch"])
+                }
+            }
             return ("filesystem_bash", ["command": cmd, "description": "User shell command"])
         }
 

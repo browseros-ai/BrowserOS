@@ -46,6 +46,7 @@ struct ChatPanelView: View {
                                 message: message,
                                 isFirstInGroup: isFirstInGroup,
                                 isLastInGroup: isLastInGroup,
+                                isConversationIdle: viewModel.state == .idle,
                                 onTaskAction: { taskId, state in
                                     Task { await viewModel.updateTaskState(id: taskId, state: state) }
                                 },
