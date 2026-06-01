@@ -127,6 +127,25 @@ fn build_check() -> BuildCheckResult {
 }
 
 /// Scan source files for forbidden security patterns.
+/// Content to scan for forbidden patterns, with self-noise removed:
+/// - the auditor's OWN source literally defines the patterns it searches for,
+///   so scanning it is a guaranteed self-match (e.g. the `rm -rf /` regex
+///   string) — skip it entirely;
+/// - test modules (`#[cfg(test)]`) legitimately contain "bad" fixtures
+///   (`api_key="sk_..."`, `try!`, forbidden-pattern strings), so drop the test
+///   tail. Truncating at the marker keeps real findings' line numbers intact.
+/// Without this the scanner emitted ~300 false-positive criticals that would
+/// pollute the autonomous issue/PR pipeline.
+fn scannable_content(path: &std::path::Path, content: &str) -> String {
+    if path.to_string_lossy().contains("clade-audit/src") {
+        return String::new();
+    }
+    match content.find("#[cfg(test)]") {
+        Some(idx) => content[..idx].to_string(),
+        None => content.to_string(),
+    }
+}
+
 fn security_check() -> SecurityCheckResult {
     let start = Instant::now();
     let mut findings: Vec<AuditFinding> = vec![];
@@ -162,10 +181,11 @@ fn security_check() -> SecurityCheckResult {
     {
         scanned += 1;
         let path = entry.path();
-        let content = match read_file_bounded(path) {
+        let raw = match read_file_bounded(path) {
             Some(c) => c,
             None => continue,
         };
+        let content = scannable_content(path, &raw);
 
         for (re, severity, message) in &compiled {
             for (line_idx, line) in content.lines().enumerate() {
@@ -295,10 +315,11 @@ fn error_handling_check() -> SecurityCheckResult {
     {
         scanned += 1;
         let path = entry.path();
-        let content = match read_file_bounded(path) {
+        let raw = match read_file_bounded(path) {
             Some(c) => c,
             None => continue,
         };
+        let content = scannable_content(path, &raw);
 
         let file = relative_audit_path(path);
 
@@ -360,10 +381,11 @@ fn concurrency_check() -> SecurityCheckResult {
     {
         scanned += 1;
         let path = entry.path();
-        let content = match read_file_bounded(path) {
+        let raw = match read_file_bounded(path) {
             Some(c) => c,
             None => continue,
         };
+        let content = scannable_content(path, &raw);
 
         let file = relative_audit_path(path);
 
@@ -573,10 +595,11 @@ fn retain_cycle_check() -> SecurityCheckResult {
     {
         scanned += 1;
         let path = entry.path();
-        let content = match read_file_bounded(path) {
+        let raw = match read_file_bounded(path) {
             Some(c) => c,
             None => continue,
         };
+        let content = scannable_content(path, &raw);
 
         let file = relative_audit_path(path);
 
@@ -1002,6 +1025,31 @@ mod tests {
         let root = project_dir();
         let p = PathBuf::from(format!("{}/rings/RUST-12/x.rs", root));
         assert_eq!(relative_audit_path(&p), "rings/RUST-12/x.rs");
+    }
+
+    #[test]
+    fn scannable_content_skips_auditor_own_source() {
+        use std::path::Path;
+        let p = Path::new("/x/trios/rings/RUST-12/clade-audit/src/main.rs");
+        assert_eq!(scannable_content(p, "rm -rf /"), "");
+    }
+
+    #[test]
+    fn scannable_content_drops_test_module() {
+        use std::path::Path;
+        let p = Path::new("/x/trios/rings/RUST-99/foo/src/main.rs");
+        let src = "fn real() {}\n#[cfg(test)]\nmod tests { let k = \"sk-deadbeef\"; }";
+        let out = scannable_content(p, src);
+        assert!(out.contains("fn real()"));
+        assert!(!out.contains("sk-deadbeef")); // test fixture excluded
+    }
+
+    #[test]
+    fn scannable_content_keeps_nontest_code() {
+        use std::path::Path;
+        let p = Path::new("/x/trios/rings/RUST-99/foo/src/lib.rs");
+        let src = "fn a() {}\nfn b() {}\n";
+        assert_eq!(scannable_content(p, src), src);
     }
 
     #[test]
