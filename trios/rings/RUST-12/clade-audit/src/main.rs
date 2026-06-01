@@ -625,15 +625,26 @@ fn main() {
         return;
     }
 
-    println!("═══════════════════════════════════════════════════════════");
-    println!("  CLADE-AUDIT: Trinity Self-Critic");
-    println!("  Dry run: {} | JSON: {}", dry_run, json_mode);
-    println!("═══════════════════════════════════════════════════════════\n");
+    // In --json mode, stdout must be PURE JSON: clade-tablecloth's parser
+    // slices from the first `{`, so any banner/progress on stdout corrupts it
+    // (root cause of the audit_parse_fail events). Route all human output to
+    // stderr when json_mode (CLI convention: results on stdout, progress on
+    // stderr — Heroku/Salesforce/AWS).
+    macro_rules! note {
+        ($($arg:tt)*) => {{
+            if json_mode { eprintln!($($arg)*); } else { println!($($arg)*); }
+        }};
+    }
+
+    note!("═══════════════════════════════════════════════════════════");
+    note!("  CLADE-AUDIT: Trinity Self-Critic");
+    note!("  Dry run: {} | JSON: {}", dry_run, json_mode);
+    note!("═══════════════════════════════════════════════════════════\n");
 
     // Stage 1: Build check
-    println!("[Check 1/8] Build gate — swiftc + cargo check");
+    note!("[Check 1/8] Build gate — swiftc + cargo check");
     let build = build_check();
-    println!(
+    note!(
         "   {} Swift: {} errors | Rust: {} errors | {}ms",
         if build.passed { "✅" } else { "❌" },
         build.swift_errors.len(),
@@ -642,9 +653,9 @@ fn main() {
     );
 
     // Stage 2: Security check
-    println!("[Check 2/8] Security scan — forbidden patterns");
+    note!("[Check 2/8] Security scan — forbidden patterns");
     let security = security_check();
-    println!(
+    note!(
         "   {} Files scanned: {} | Findings: {} | {}ms",
         if security.passed { "✅" } else { "❌" },
         security.scanned_files,
@@ -652,13 +663,13 @@ fn main() {
         security.duration_ms
     );
     for f in &security.findings {
-        println!("   ⚠️  {}:{} — {} ({})", f.file, f.line, f.message, f.severity);
+        note!("   ⚠️  {}:{} — {} ({})", f.file, f.line, f.message, f.severity);
     }
 
     // Stage 3: Shell safety check
-    println!("[Check 3/8] Shell safety — Process() allowlist");
+    note!("[Check 3/8] Shell safety — Process() allowlist");
     let shell = shell_safety_check();
-    println!(
+    note!(
         "   {} Files scanned: {} | Findings: {} | {}ms",
         if shell.passed { "✅" } else { "❌" },
         shell.scanned_files,
@@ -666,13 +677,13 @@ fn main() {
         shell.duration_ms
     );
     for f in &shell.findings {
-        println!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
+        note!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
     }
 
     // Stage 4: Error handling check
-    println!("[Check 4/8] Error handling — try!, as!, unhandled try?");
+    note!("[Check 4/8] Error handling — try!, as!, unhandled try?");
     let err = error_handling_check();
-    println!(
+    note!(
         "   {} Files scanned: {} | Findings: {} | {}ms",
         if err.passed { "✅" } else { "❌" },
         err.scanned_files,
@@ -680,13 +691,13 @@ fn main() {
         err.duration_ms
     );
     for f in &err.findings {
-        println!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
+        note!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
     }
 
     // Stage 5: Concurrency check
-    println!("[Check 5/8] Concurrency — Swift 6 actor isolation");
+    note!("[Check 5/8] Concurrency — Swift 6 actor isolation");
     let conc = concurrency_check();
-    println!(
+    note!(
         "   {} Files scanned: {} | Findings: {} | {}ms",
         if conc.passed { "✅" } else { "❌" },
         conc.scanned_files,
@@ -694,13 +705,13 @@ fn main() {
         conc.duration_ms
     );
     for f in &conc.findings {
-        println!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
+        note!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
     }
 
     // Stage 6: TODO/FIXME inventory
-    println!("[Check 6/8] TODO/FIXME inventory — categorized severity");
+    note!("[Check 6/8] TODO/FIXME inventory — categorized severity");
     let todo = todo_check();
-    println!(
+    note!(
         "   {} Files scanned: {} | Findings: {} | {}ms",
         if todo.passed { "✅" } else { "❌" },
         todo.scanned_files,
@@ -708,13 +719,13 @@ fn main() {
         todo.duration_ms
     );
     for f in &todo.findings {
-        println!("   ⚠️  {}:{} — {} ({})", f.file, f.line, f.message, f.severity);
+        note!("   ⚠️  {}:{} — {} ({})", f.file, f.line, f.message, f.severity);
     }
 
     // Stage 7: Unused code check
-    println!("[Check 7/8] Unused code — dead private func/fn heuristic");
+    note!("[Check 7/8] Unused code — dead private func/fn heuristic");
     let unused = unused_code_check();
-    println!(
+    note!(
         "   {} Files scanned: {} | Findings: {} | {}ms",
         if unused.passed { "✅" } else { "❌" },
         unused.scanned_files,
@@ -722,13 +733,13 @@ fn main() {
         unused.duration_ms
     );
     for f in &unused.findings {
-        println!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
+        note!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
     }
 
     // Stage 8: Retain cycle check
-    println!("[Check 8/8] Retain cycles — missing [weak self] in closures");
+    note!("[Check 8/8] Retain cycles — missing [weak self] in closures");
     let retain = retain_cycle_check();
-    println!(
+    note!(
         "   {} Files scanned: {} | Findings: {} | {}ms",
         if retain.passed { "✅" } else { "❌" },
         retain.scanned_files,
@@ -736,7 +747,7 @@ fn main() {
         retain.duration_ms
     );
     for f in &retain.findings {
-        println!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
+        note!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
     }
 
     if json_mode {
