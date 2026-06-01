@@ -375,19 +375,27 @@ fn replenish_budget(consecutive_healthy: u32) -> bool {
     }
 }
 
-fn detect_drift(intervals: &[(& str, &SystemTime, u64)]) -> Vec<String> {
-    let now = SystemTime::now();
+/// Pure drift computation — returns drift descriptions, no I/O. Tests call this
+/// directly so they never touch the real event_log. (Prior bug: the unit tests
+/// drove `detect_drift`, whose `log_event` side effect appended bogus
+/// "test_15m: 7200s" drift events to the production `.trinity/event_log.jsonl`
+/// on every `cargo test` run — 337 of them accumulated.)
+fn compute_drift(now: SystemTime, intervals: &[(&str, &SystemTime, u64)]) -> Vec<String> {
     let mut drifted = Vec::new();
     for (name, last_run, expected_secs) in intervals {
         let elapsed = now.duration_since(**last_run).unwrap_or_default().as_secs();
-        let threshold = expected_secs * 2;
-        if elapsed > threshold {
+        if elapsed > expected_secs * 2 {
             drifted.push(format!(
                 "{}: {}s elapsed vs {}s expected ({}x drift)",
                 name, elapsed, expected_secs, elapsed / expected_secs
             ));
         }
     }
+    drifted
+}
+
+fn detect_drift(intervals: &[(&str, &SystemTime, u64)]) -> Vec<String> {
+    let drifted = compute_drift(SystemTime::now(), intervals);
     if !drifted.is_empty() {
         println!("[CladeMonitor] DRIFT DETECTED:");
         for d in &drifted {
@@ -844,23 +852,26 @@ mod tests {
     }
 
     #[test]
-    fn detect_drift_no_drift_on_fresh_timestamps() {
+    fn compute_drift_no_drift_on_fresh_timestamps() {
+        // Call the pure fn (NOT detect_drift) so the test never writes to the
+        // real event_log.
         let now = SystemTime::now();
         let intervals: Vec<(&str, &SystemTime, u64)> = vec![
             ("test_15m", &now, 900),
             ("test_30m", &now, 1800),
         ];
-        let drifted = detect_drift(&intervals);
+        let drifted = compute_drift(now, &intervals);
         assert!(drifted.is_empty());
     }
 
     #[test]
-    fn detect_drift_catches_stale_interval() {
-        let stale = SystemTime::now() - Duration::from_secs(7200);
+    fn compute_drift_catches_stale_interval() {
+        let now = SystemTime::now();
+        let stale = now - Duration::from_secs(7200);
         let intervals: Vec<(&str, &SystemTime, u64)> = vec![
             ("test_15m", &stale, 900),
         ];
-        let drifted = detect_drift(&intervals);
+        let drifted = compute_drift(now, &intervals);
         assert_eq!(drifted.len(), 1);
         assert!(drifted[0].contains("test_15m"));
         assert!(drifted[0].contains("drift"));
