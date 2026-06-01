@@ -5,6 +5,18 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024; // 1MB — matches clade-diff
+
+/// Cap an HTTP response body so a misbehaving/oversized response can't blow up
+/// the report (consistency with clade-diff's MAX_RESPONSE_BYTES guard).
+fn cap_body(body: String) -> String {
+    if body.len() > MAX_RESPONSE_BYTES {
+        format!("error: response too large ({}KB)", body.len() / 1024)
+    } else {
+        body
+    }
+}
+
 struct Variant {
     name: &'static str,
     mcp_port: &'static str,
@@ -29,7 +41,7 @@ fn main() {
     let health_url = format!("http://127.0.0.1:{}/health", v.mcp_port);
     match get(&health_url) {
         Ok(resp) => {
-            let body = resp.text().unwrap_or_default();
+            let body = cap_body(resp.text().unwrap_or_default());
             if body.contains("\"status\":\"ok\"") {
                 report.push_str(&format!("- ✅ BrowserOS Server ({}): OK ({})\n", v.name, body));
             } else {
@@ -157,6 +169,18 @@ fn resolve_variant(name: &str) -> Variant {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cap_body_passes_small() {
+        assert_eq!(cap_body("{\"status\":\"ok\"}".to_string()), "{\"status\":\"ok\"}");
+    }
+
+    #[test]
+    fn cap_body_truncates_oversized() {
+        let big = "x".repeat(MAX_RESPONSE_BYTES + 1);
+        let out = cap_body(big);
+        assert!(out.starts_with("error: response too large"));
+    }
 
     #[test]
     fn resolve_variant_prod_defaults() {
