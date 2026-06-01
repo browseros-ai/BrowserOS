@@ -172,6 +172,19 @@ export class Application {
 
     if (!metrics.isEnabled()) {
       logger.warn('Metrics disabled: missing POSTHOG_API_KEY')
+    } else if (
+      !this.config.instanceClientId &&
+      !this.config.instanceInstallId
+    ) {
+      // captureNow short-circuits when no identity is set, so emits
+      // will silently no-op until the deployment supplies one of these.
+      // Surface the cause so a misconfigured instance doesn't quietly
+      // produce zero analytics.
+      logger.warn(
+        'Metrics will skip events: no instance identity. ' +
+          'Set BROWSEROS_CLIENT_ID or BROWSEROS_INSTALL_ID (env) or ' +
+          'instance.client_id / instance.install_id (config) to opt in.',
+      )
     }
 
     if (!INLINED_ENV.SENTRY_DSN) {
