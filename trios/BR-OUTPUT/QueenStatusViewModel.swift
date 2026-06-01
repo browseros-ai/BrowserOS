@@ -527,9 +527,20 @@ final class QueenStatusViewModel: ObservableObject {
             return
         }
         isRunningAction = true
+        // Shell-free execution: tokenise and run via /usr/bin/env, NOT
+        // `/bin/zsh -c`. Shell metacharacters can no longer be interpreted —
+        // at most they become literal argv — which structurally removes the
+        // command-injection class (CWE-78 / OWASP A03). The blocklist/allowlist
+        // above remain as defense-in-depth. PATH resolution is unchanged (env
+        // inherits the same environment the old `zsh -c` did).
+        let tokens = trimmed.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard !tokens.isEmpty else {
+            isRunningAction = false
+            return
+        }
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        task.arguments = ["-c", trimmed]
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        task.arguments = tokens
         task.currentDirectoryURL = URL(fileURLWithPath: projectRoot)
         do {
             try task.run()
