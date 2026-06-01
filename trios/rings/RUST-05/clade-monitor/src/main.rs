@@ -5,7 +5,7 @@ use std::fs;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
@@ -204,12 +204,14 @@ fn main() {
     println!("[CladeMonitor] Starting cron monitor loop...");
     println!("[CladeMonitor] Press Ctrl+C to stop (graceful shutdown enabled).");
 
-    let mut last_15m = SystemTime::now();
-    let mut last_30m = SystemTime::now();
-    let mut last_60m = SystemTime::now();
-    let mut last_60m_tablecloth = SystemTime::now();
-    let mut last_24h = SystemTime::now();
-    let mut last_heartbeat = SystemTime::now();
+    // Monotonic clock for interval scheduling + drift: immune to wall-clock
+    // (NTP) jumps that would otherwise look like huge drift (false positives).
+    let mut last_15m = Instant::now();
+    let mut last_30m = Instant::now();
+    let mut last_60m = Instant::now();
+    let mut last_60m_tablecloth = Instant::now();
+    let mut last_24h = Instant::now();
+    let mut last_heartbeat = Instant::now();
 
     // Backoff tracking: consecutive_failures -> multiplier
     let mut failure_counts: HashMap<String, u32> = HashMap::new();
@@ -223,10 +225,10 @@ fn main() {
     }
 
     while RUNNING.load(Ordering::Relaxed) {
-        let now = SystemTime::now();
+        let now = Instant::now();
 
         // Drift detection: check if any interval has exceeded 2x expected
-        let drift_intervals: Vec<(&str, &SystemTime, u64)> = vec![
+        let drift_intervals: Vec<(&str, &Instant, u64)> = vec![
             ("15m_health", &last_15m, 900),
             ("30m_build", &last_30m, 1800),
             ("60m_seal", &last_60m, 3600),
@@ -237,7 +239,7 @@ fn main() {
 
         // Every 15 min: health quick
         let backoff_15m = calculate_backoff_with_jitter(failure_counts.get("15m").copied().unwrap_or(0), pid_seed);
-        if now.duration_since(last_15m).unwrap_or_default() >= Duration::from_secs(900 * backoff_15m) {
+        if now.saturating_duration_since(last_15m) >= Duration::from_secs(900 * backoff_15m) {
             last_15m = now;
             if run_health_check("15m", &mut canary_breaker) {
                 failure_counts.remove("15m");
@@ -251,7 +253,7 @@ fn main() {
 
         // Every 30 min: build + dirty + hash tracking
         let backoff_30m = calculate_backoff_with_jitter(failure_counts.get("30m").copied().unwrap_or(0), pid_seed);
-        if now.duration_since(last_30m).unwrap_or_default() >= Duration::from_secs(1800 * backoff_30m) {
+        if now.saturating_duration_since(last_30m) >= Duration::from_secs(1800 * backoff_30m) {
             last_30m = now;
             if run_build_check("30m") {
                 failure_counts.remove("30m");
@@ -265,7 +267,7 @@ fn main() {
 
         // Every 60 min: seal audit + safety budget
         let backoff_60m = calculate_backoff_with_jitter(failure_counts.get("60m").copied().unwrap_or(0), pid_seed);
-        if now.duration_since(last_60m).unwrap_or_default() >= Duration::from_secs(3600 * backoff_60m) {
+        if now.saturating_duration_since(last_60m) >= Duration::from_secs(3600 * backoff_60m) {
             last_60m = now;
             if run_seal_audit("60m") {
                 failure_counts.remove("60m");
@@ -276,7 +278,7 @@ fn main() {
 
         // Every 60 min: autonomous self-improvement loop (clade-tablecloth)
         let backoff_60m_t = calculate_backoff_with_jitter(failure_counts.get("60m_tablecloth").copied().unwrap_or(0), pid_seed);
-        if now.duration_since(last_60m_tablecloth).unwrap_or_default() >= Duration::from_secs(3600 * backoff_60m_t) {
+        if now.saturating_duration_since(last_60m_tablecloth) >= Duration::from_secs(3600 * backoff_60m_t) {
             last_60m_tablecloth = now;
             if run_tablecloth("60m_tablecloth") {
                 failure_counts.remove("60m_tablecloth");
@@ -287,7 +289,7 @@ fn main() {
 
         // Every 24h: deep audit + wrap-up
         let backoff_24h = calculate_backoff_with_jitter(failure_counts.get("24h").copied().unwrap_or(0), pid_seed);
-        if now.duration_since(last_24h).unwrap_or_default() >= Duration::from_secs(86400 * backoff_24h) {
+        if now.saturating_duration_since(last_24h) >= Duration::from_secs(86400 * backoff_24h) {
             last_24h = now;
             if run_deep_audit("24h") {
                 failure_counts.remove("24h");
@@ -297,9 +299,11 @@ fn main() {
         }
 
         // Watchdog heartbeat: every 5 min, log that the monitor is alive
-        if now.duration_since(last_heartbeat).unwrap_or_default() >= Duration::from_secs(300) {
+        if now.saturating_duration_since(last_heartbeat) >= Duration::from_secs(300) {
             last_heartbeat = now;
-            let uptime = now.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+            // Uptime is a calendar value -> read the wall clock here (not the
+            // monotonic `now`, which is not anchored to the epoch).
+            let uptime = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
             log_event("watchdog_heartbeat", &format!("alive_pid_{}_uptime_{}", std::process::id(), uptime));
         }
 
@@ -380,10 +384,10 @@ fn replenish_budget(consecutive_healthy: u32) -> bool {
 /// drove `detect_drift`, whose `log_event` side effect appended bogus
 /// "test_15m: 7200s" drift events to the production `.trinity/event_log.jsonl`
 /// on every `cargo test` run — 337 of them accumulated.)
-fn compute_drift(now: SystemTime, intervals: &[(&str, &SystemTime, u64)]) -> Vec<String> {
+fn compute_drift(now: Instant, intervals: &[(&str, &Instant, u64)]) -> Vec<String> {
     let mut drifted = Vec::new();
     for (name, last_run, expected_secs) in intervals {
-        let elapsed = now.duration_since(**last_run).unwrap_or_default().as_secs();
+        let elapsed = now.saturating_duration_since(**last_run).as_secs();
         if elapsed > expected_secs * 2 {
             drifted.push(format!(
                 "{}: {}s elapsed vs {}s expected ({}x drift)",
@@ -394,8 +398,8 @@ fn compute_drift(now: SystemTime, intervals: &[(&str, &SystemTime, u64)]) -> Vec
     drifted
 }
 
-fn detect_drift(intervals: &[(&str, &SystemTime, u64)]) -> Vec<String> {
-    let drifted = compute_drift(SystemTime::now(), intervals);
+fn detect_drift(intervals: &[(&str, &Instant, u64)]) -> Vec<String> {
+    let drifted = compute_drift(Instant::now(), intervals);
     if !drifted.is_empty() {
         println!("[CladeMonitor] DRIFT DETECTED:");
         for d in &drifted {
@@ -855,8 +859,8 @@ mod tests {
     fn compute_drift_no_drift_on_fresh_timestamps() {
         // Call the pure fn (NOT detect_drift) so the test never writes to the
         // real event_log.
-        let now = SystemTime::now();
-        let intervals: Vec<(&str, &SystemTime, u64)> = vec![
+        let now = Instant::now();
+        let intervals: Vec<(&str, &Instant, u64)> = vec![
             ("test_15m", &now, 900),
             ("test_30m", &now, 1800),
         ];
@@ -866,9 +870,9 @@ mod tests {
 
     #[test]
     fn compute_drift_catches_stale_interval() {
-        let now = SystemTime::now();
+        let now = Instant::now();
         let stale = now - Duration::from_secs(7200);
-        let intervals: Vec<(&str, &SystemTime, u64)> = vec![
+        let intervals: Vec<(&str, &Instant, u64)> = vec![
             ("test_15m", &stale, 900),
         ];
         let drifted = compute_drift(now, &intervals);
