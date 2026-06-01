@@ -881,6 +881,27 @@ mod tests {
         assert!(drifted[0].contains("drift"));
     }
 
+    // Boundary battery: drift fires strictly ABOVE 2x expected (threshold uses
+    // `>`), not at exactly 2x. Locks the threshold against off-by-one drift.
+    #[test]
+    fn compute_drift_boundary_battery() {
+        let now = Instant::now();
+        let expected: u64 = 900;
+        // (elapsed_secs, should_drift)
+        let cases: [(u64, bool); 4] = [
+            (expected, false),          // 1x — fine
+            (expected * 2, false),      // exactly 2x — NOT drift (threshold is >)
+            (expected * 2 + 1, true),   // just over 2x — drift
+            (expected * 8, true),       // 8x — drift
+        ];
+        for (elapsed, should_drift) in cases {
+            let last = now - Duration::from_secs(elapsed);
+            let intervals: Vec<(&str, &Instant, u64)> = vec![("iv", &last, expected)];
+            let drifted = compute_drift(now, &intervals);
+            assert_eq!(!drifted.is_empty(), should_drift, "elapsed={}s expected drift={}", elapsed, should_drift);
+        }
+    }
+
     #[test]
     fn track_build_hash_returns_none_for_missing_binary() {
         std::env::set_var("TRIOS_ROOT", "/tmp/nonexistent-trios-test-dir");
