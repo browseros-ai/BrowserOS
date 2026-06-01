@@ -459,6 +459,32 @@ fn run_health_check(interval: &str, canary_cb: &mut CircuitBreaker) -> bool {
     sovereign
 }
 
+/// Extract a short, log-friendly tail of a build script's stderr: the last few
+/// non-empty lines, length-capped. Keeps event_log.jsonl readable while still
+/// surfacing *why* a build check failed (observability over a silent bool).
+fn build_error_tail(stderr: &str) -> String {
+    let tail: Vec<&str> = stderr
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .take(3)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let joined = tail.join(" | ");
+    // Char-safe cap (never slice mid-UTF-8): keep the last 300 chars.
+    if joined.chars().count() > 300 {
+        let tail_chars: Vec<char> = joined.chars().rev().take(300).collect();
+        tail_chars.into_iter().rev().collect()
+    } else {
+        joined
+    }
+}
+
 fn run_build_check(interval: &str) -> bool {
     use std::path::Path;
     use std::process::{Command, Stdio};
@@ -490,19 +516,32 @@ fn run_build_check(interval: &str) -> bool {
     }
 
     println!("[CladeMonitor][{}] Build check: {}", interval, script);
-    let result = Command::new(&script)
+    // Use output() (not status()) so the piped stderr is actually drained —
+    // an unread pipe can deadlock a chatty build — and so we can distinguish a
+    // spawn failure from a genuine build failure, logging *why* either way.
+    match Command::new(&script)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    if result {
-        log_event("build_check", &format!("interval_{}_pass", interval));
-    } else {
-        log_event("build_check", &format!("interval_{}_fail", interval));
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            log_event("build_check", &format!("interval_{}_pass", interval));
+            true
+        }
+        Ok(out) => {
+            let tail = build_error_tail(&String::from_utf8_lossy(&out.stderr));
+            eprintln!("[CladeMonitor][{}] Build check FAILED (exit {:?}): {}", interval, out.status.code(), tail);
+            log_event("build_check", &format!("interval_{}_fail_exit{:?}: {}", interval, out.status.code(), tail));
+            false
+        }
+        Err(e) => {
+            // Could not even spawn the script (missing exec bit / permission) —
+            // a distinct failure mode from a build that ran and failed.
+            eprintln!("[CladeMonitor][{}] Build check could not spawn {}: {}", interval, script, e);
+            log_event("build_check_spawn_fail", &format!("{}: {}", script, e));
+            false
+        }
     }
-    result
 }
 
 fn run_seal_audit(interval: &str) -> bool {
@@ -683,6 +722,25 @@ mod tests {
     #[test]
     fn backoff_zero_failures() {
         assert_eq!(calculate_backoff(0), 1);
+    }
+
+    #[test]
+    fn build_error_tail_keeps_last_lines() {
+        let stderr = "warn a\nwarn b\nerror: x\nerror: y\nerror: z\n";
+        assert_eq!(build_error_tail(stderr), "error: x | error: y | error: z");
+    }
+
+    #[test]
+    fn build_error_tail_empty_is_empty() {
+        assert_eq!(build_error_tail("\n\n  \n"), "");
+    }
+
+    #[test]
+    fn build_error_tail_is_char_safe_and_capped() {
+        // Multi-byte chars must not cause a mid-UTF-8 panic when capping.
+        let line = "é".repeat(500);
+        let out = build_error_tail(&line);
+        assert!(out.chars().count() <= 300);
     }
 
     #[test]

@@ -55,6 +55,48 @@ fn compute_health_score(sovereign: bool, canary: bool, budget: &SafetyBudget, sn
     HealthScore { score, components }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+struct LoopMetrics {
+    total_events: u64,
+    build_pass: u64,
+    build_fail: u64,
+    build_spawn_fail: u64,
+    audit_parse_fail: u64,
+    constitution_reject: u64,
+    verify_reject: u64,
+    budget_depleted: u64,
+    drift_detected: u64,
+}
+
+/// Aggregate failure-mode counters from event_log JSONL lines. Pure so it can
+/// be unit-tested. Surfaces the agent loop's *process* — rejects, parse fails,
+/// spawn failures, drift — not just the current health bool (observability /
+/// ADLC feedback loop). Malformed lines are skipped, never panic.
+fn compute_loop_metrics(events: &[String]) -> LoopMetrics {
+    let mut m = LoopMetrics::default();
+    for line in events {
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        m.total_events += 1;
+        let event = v.get("event").and_then(|e| e.as_str()).unwrap_or("");
+        let details = v.get("details").and_then(|d| d.as_str()).unwrap_or("");
+        match event {
+            "build_check" if details.contains("pass") => m.build_pass += 1,
+            "build_check" if details.contains("fail") => m.build_fail += 1,
+            "build_check_spawn_fail" => m.build_spawn_fail += 1,
+            "audit_parse_fail" => m.audit_parse_fail += 1,
+            "constitution_reject" => m.constitution_reject += 1,
+            "verify_reject" => m.verify_reject += 1,
+            "budget_depleted" => m.budget_depleted += 1,
+            "drift_detected" => m.drift_detected += 1,
+            _ => {}
+        }
+    }
+    m
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 struct DashboardData {
     health: HealthStatus,
@@ -63,6 +105,7 @@ struct DashboardData {
     clade_id: String,
     snapshots: Vec<String>,
     recent_events: Vec<String>,
+    loop_metrics: LoopMetrics,
 }
 
 #[tokio::main]
@@ -112,13 +155,14 @@ async fn gather_status() -> DashboardData {
         .build()
         .unwrap_or_default();
 
-    let (sovereign, canary, budget, clade_id, snapshots, recent_events) = tokio::join!(
+    let (sovereign, canary, budget, clade_id, snapshots, recent_events, loop_metrics) = tokio::join!(
         check_health(&client, "http://127.0.0.1:9105/health"),
         check_health(&client, "http://127.0.0.1:9205/health"),
         load_safety_budget(),
         load_clade_id(),
         list_snapshots(),
         load_recent_events(10),
+        load_loop_metrics(),
     );
 
     let health_score = compute_health_score(sovereign, canary, &budget, snapshots.len());
@@ -134,7 +178,14 @@ async fn gather_status() -> DashboardData {
         clade_id,
         snapshots,
         recent_events,
+        loop_metrics,
     }
+}
+
+/// Compute loop metrics over a wider window than the displayed recent events.
+async fn load_loop_metrics() -> LoopMetrics {
+    let events = load_recent_events(500).await;
+    compute_loop_metrics(&events)
 }
 
 async fn check_health(client: &reqwest::Client, url: &str) -> bool {
@@ -258,10 +309,54 @@ mod tests {
             clade_id: "test-clade".to_string(),
             snapshots: vec!["snap1".to_string()],
             recent_events: vec![],
+            loop_metrics: LoopMetrics::default(),
         };
         let json = serde_json::to_string(&d).unwrap_or_default();
         assert!(json.contains("\"clade_id\":\"test-clade\""));
         assert!(json.contains("\"snap1\""));
+        assert!(json.contains("\"loop_metrics\""));
+    }
+
+    #[test]
+    fn loop_metrics_counts_event_categories() {
+        let events = vec![
+            r#"{"event":"build_check","details":"interval_15m_pass"}"#.to_string(),
+            r#"{"event":"build_check","details":"interval_15m_fail_exit1"}"#.to_string(),
+            r#"{"event":"build_check_spawn_fail","details":"perm denied"}"#.to_string(),
+            r#"{"event":"audit_parse_fail","details":"bad json"}"#.to_string(),
+            r#"{"event":"constitution_reject","details":"P1"}"#.to_string(),
+            r#"{"event":"verify_reject","details":"residual"}"#.to_string(),
+            r#"{"event":"budget_depleted","details":"budget=0"}"#.to_string(),
+            r#"{"event":"drift_detected","details":"8x"}"#.to_string(),
+            r#"{"event":"watchdog_heartbeat","details":"alive"}"#.to_string(),
+        ];
+        let m = compute_loop_metrics(&events);
+        assert_eq!(m.total_events, 9);
+        assert_eq!(m.build_pass, 1);
+        assert_eq!(m.build_fail, 1);
+        assert_eq!(m.build_spawn_fail, 1);
+        assert_eq!(m.audit_parse_fail, 1);
+        assert_eq!(m.constitution_reject, 1);
+        assert_eq!(m.verify_reject, 1);
+        assert_eq!(m.budget_depleted, 1);
+        assert_eq!(m.drift_detected, 1);
+    }
+
+    #[test]
+    fn loop_metrics_skips_malformed_lines() {
+        let events = vec![
+            "not json at all".to_string(),
+            r#"{"event":"drift_detected","details":"x"}"#.to_string(),
+            "".to_string(),
+        ];
+        let m = compute_loop_metrics(&events);
+        assert_eq!(m.total_events, 1);
+        assert_eq!(m.drift_detected, 1);
+    }
+
+    #[test]
+    fn loop_metrics_empty_is_default() {
+        assert_eq!(compute_loop_metrics(&[]), LoopMetrics::default());
     }
 
     #[test]

@@ -7,6 +7,22 @@ use walkdir::WalkDir;
 
 fn project_dir() -> String { std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string()) }
 
+/// Project-relative path for an audit finding. If the file lies outside the
+/// project root (e.g. reached via a symlink), fall back to the bare file name
+/// instead of leaking the absolute host path (`/Users/...`) into the report —
+/// findings flow into externally-visible GitHub issues downstream.
+fn relative_audit_path(path: &std::path::Path) -> String {
+    match path.strip_prefix(project_dir()) {
+        Ok(rel) => rel.to_string_lossy().to_string(),
+        Err(_) => {
+            eprintln!("[clade-audit] path outside project root, redacting to file name: {}", path.display());
+            path.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "<external>".to_string())
+        }
+    }
+}
+
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10MB
 
 fn read_file_bounded(path: &std::path::Path) -> Option<String> {
@@ -154,10 +170,7 @@ fn security_check() -> SecurityCheckResult {
         for (re, severity, message) in &compiled {
             for (line_idx, line) in content.lines().enumerate() {
                 if re.is_match(line) {
-                    let file = path.strip_prefix(project_dir())
-                        .unwrap_or(path)
-                        .to_string_lossy()
-                        .to_string();
+                    let file = relative_audit_path(path);
                     let fingerprint = format!("{}:{}:{}", &file, line_idx + 1, message);
                     findings.push(AuditFinding {
                         file,
@@ -219,10 +232,7 @@ fn shell_safety_check() -> SecurityCheckResult {
             None => continue,
         };
 
-        let file = path.strip_prefix(project_dir())
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string();
+        let file = relative_audit_path(path);
 
         for (line_idx, line) in content.lines().enumerate() {
             if process_re.is_match(line) && shell_re.is_match(line) {
@@ -290,10 +300,7 @@ fn error_handling_check() -> SecurityCheckResult {
             None => continue,
         };
 
-        let file = path.strip_prefix(project_dir())
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string();
+        let file = relative_audit_path(path);
 
         for (re, severity, message) in &compiled {
             for (line_idx, line) in content.lines().enumerate() {
@@ -358,10 +365,7 @@ fn concurrency_check() -> SecurityCheckResult {
             None => continue,
         };
 
-        let file = path.strip_prefix(project_dir())
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string();
+        let file = relative_audit_path(path);
 
         for (re, severity, message) in &compiled {
             for (line_idx, line) in content.lines().enumerate() {
@@ -415,10 +419,7 @@ fn todo_check() -> SecurityCheckResult {
             None => continue,
         };
 
-        let file = path.strip_prefix(project_dir())
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string();
+        let file = relative_audit_path(path);
 
         for (line_idx, line) in content.lines().enumerate() {
             if let Some(caps) = todo_re.captures(line) {
@@ -484,10 +485,7 @@ fn unused_code_check() -> SecurityCheckResult {
             None => continue,
         };
 
-        let file = path.strip_prefix(project_dir())
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string();
+        let file = relative_audit_path(path);
 
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
 
@@ -580,10 +578,7 @@ fn retain_cycle_check() -> SecurityCheckResult {
             None => continue,
         };
 
-        let file = path.strip_prefix(project_dir())
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string();
+        let file = relative_audit_path(path);
 
         for (re, severity, message) in &compiled {
             for (line_idx, line) in content.lines().enumerate() {
@@ -988,6 +983,23 @@ mod tests {
         assert!(f.fingerprint.contains(&f.file));
         assert!(f.fingerprint.contains(&f.line.to_string()));
         assert_eq!(f.severity, "critical");
+    }
+
+    #[test]
+    fn relative_audit_path_strips_project_root() {
+        use std::path::PathBuf;
+        let root = project_dir();
+        let p = PathBuf::from(format!("{}/rings/RUST-12/x.rs", root));
+        assert_eq!(relative_audit_path(&p), "rings/RUST-12/x.rs");
+    }
+
+    #[test]
+    fn relative_audit_path_redacts_external_path() {
+        use std::path::Path;
+        // A path outside the project root must not leak its absolute host path.
+        let out = relative_audit_path(Path::new("/definitely/outside/secret.rs"));
+        assert_eq!(out, "secret.rs");
+        assert!(!out.contains('/'));
     }
 
     #[test]

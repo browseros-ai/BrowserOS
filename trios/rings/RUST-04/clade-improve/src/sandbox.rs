@@ -87,10 +87,22 @@ pub fn copy_tree_filtered(src: &Path, dst: &Path) -> std::io::Result<()> {
         } else {
             // Skip files with tokens (heuristic: line contains 'sk-')
             if name.ends_with(".env") || name.ends_with(".toml") {
-                let content = fs::read_to_string(&src_path).unwrap_or_default();
-                if content.contains("sk-") || content.contains("api_key") {
-                    fs::write(&dst_path, "# REDACTED — secrets removed by clade-improve\n")?;
-                    continue;
+                // Fail closed: if the file can't be read we cannot prove it is
+                // secret-free, so redact rather than copy it verbatim.
+                match fs::read_to_string(&src_path) {
+                    Ok(content) => {
+                        if content.contains("sk-") || content.contains("api_key") {
+                            fs::write(&dst_path, "# REDACTED — secrets removed by clade-improve\n")?;
+                            continue;
+                        }
+                    }
+                    Err(e) => {
+                        fs::write(
+                            &dst_path,
+                            format!("# REDACTED — unreadable, treated as secret ({e})\n"),
+                        )?;
+                        continue;
+                    }
                 }
             }
             fs::copy(&src_path, &dst_path)?;

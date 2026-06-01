@@ -506,10 +506,18 @@ final class QueenStatusViewModel: ObservableObject {
 
     func runCommand(_ cmd: String) {
         let trimmed = cmd.trimmingCharacters(in: .whitespaces)
-        let blocked = [";", "&&", "||", "|", "`", "$(", ">{", "rm -rf", "curl.*|.*sh"]
+        // Literal (not regex) substring blocklist. The previous
+        // `.regularExpression` match was unsafe: `$(` is an invalid pattern
+        // (unclosed group) so it was never blocked, while `|`/`||` are regex
+        // alternations matching the empty string. Literal `contains` matching
+        // closes both. Per CWE-78 / OWASP A03 this blocklist over a shell is
+        // bypassable (command/argument/wildcard injection), so it is
+        // defense-in-depth only — the robust fix is shell-free `execDirect`.
+        let blocked = [";", "&&", "||", "|", "`", "$(", "${", ">", "<", "..", "~", "rm -rf", "\n", "\r"]
         for b in blocked {
-            if trimmed.range(of: b, options: .regularExpression) != nil {
-                NSLog("[QueenStatus] BLOCKED dangerous pattern in command: \(b)")
+            // Literal substring match (no `.regularExpression` options).
+            if trimmed.range(of: b) != nil {
+                NSLog("[QueenStatus] BLOCKED dangerous token in command: \(b)")
                 return
             }
         }
