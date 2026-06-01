@@ -1163,6 +1163,34 @@ mod tests {
         assert!(constitution_gate("src/app.swift", "try!(foo)", "try?(foo)").is_ok());
     }
 
+    // Table-driven adversarial battery: locks the constitution policy against
+    // regression (boundary cases, case-insensitivity, and false-positive
+    // avoidance that the single-case tests above don't cover). Folding the
+    // adversarial corpus into the regression suite per security-regression
+    // practice.
+    #[test]
+    fn gate_adversarial_battery() {
+        let big_over = "x".repeat(20_001);
+        let big_edge = "x".repeat(20_000);
+        // (name, rel_file, original, fixed, expect_ok)
+        let cases: Vec<(&str, &str, String, String, bool)> = vec![
+            ("p1 lowercase protected", "rings/x/constitution.rs", "a".into(), "b".into(), false),
+            ("p1 UPPERCASE protected (case-insensitive)", "rings/SAFETY_BUDGET.json", "a".into(), "b".into(), false),
+            ("p1 soul", ".trinity/SOUL.md", "a".into(), "b".into(), false),
+            ("p2 added secret rejected", "src/a.swift", "x".into(), "x\nlet k=\"sk-LIVE\"".into(), false),
+            ("p2 preexisting secret not added -> ok", "src/a.swift", "k=\"sk-old\"".into(), "k=\"sk-old\"\nlet y=1".into(), true),
+            ("p3 removes sleep rejected", "src/a.rs", "thread::sleep(d)\nwork()".into(), "work()".into(), false),
+            ("p3 adds guard -> ok", "src/a.rs", "work()".into(), "thread::sleep(d)\nwork()".into(), true),
+            ("p4 oversized rejected", "src/a.swift", String::new(), big_over, false),
+            ("p4 at threshold -> ok", "src/a.swift", String::new(), big_edge, true),
+            ("benign small fix -> ok", "src/a.swift", "try!(f)".into(), "try?(f)".into(), true),
+        ];
+        for (name, file, original, fixed, expect_ok) in cases {
+            let got_ok = constitution_gate(file, &original, &fixed).is_ok();
+            assert_eq!(got_ok, expect_ok, "case '{}' expected ok={}, got {}", name, expect_ok, got_ok);
+        }
+    }
+
     // ---- C2: budget cost accounting ----
     #[test]
     fn fix_outcome_net_cost_on_mixed() {
