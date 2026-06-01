@@ -66,6 +66,8 @@ interface RollupBucket {
 class RollupBuffer {
   private current: RollupBucket | null = null
 
+  constructor(private readonly alignedNow: () => number = defaultAlignedNow) {}
+
   recordMcpRequest(): void {
     this.ensureCurrent().mcp_requests += 1
   }
@@ -112,8 +114,14 @@ class RollupBuffer {
 
   private ensureCurrent(): RollupBucket {
     if (!this.current) {
+      // Anchor period_start_ts to the aligned window boundary, not
+      // to the moment the first event arrived. The flush always fires
+      // on the boundary, so a lazy first-event timestamp would make
+      // interval_seconds, period_start_ts, and period_end_ts disagree
+      // about the window — and rate analyses computed as
+      // `count / interval_seconds` would be wrong.
       this.current = {
-        period_start_ts: new Date().toISOString(),
+        period_start_ts: new Date(this.alignedNow()).toISOString(),
         mcp_requests: 0,
         tool_executions: {
           total: 0,
@@ -125,6 +133,10 @@ class RollupBuffer {
     }
     return this.current
   }
+}
+
+function defaultAlignedNow(): number {
+  return Math.floor(Date.now() / ROLLUP_INTERVAL_MS) * ROLLUP_INTERVAL_MS
 }
 
 class MetricsService {
@@ -193,7 +205,11 @@ class MetricsService {
   private scheduleNextFlush(): void {
     if (this.flushTimer || !this.client) return
     const now = Date.now()
-    const nextTs = Math.ceil(now / ROLLUP_INTERVAL_MS) * ROLLUP_INTERVAL_MS
+    // floor + 1 (not ceil) so a tick that lands exactly on a boundary
+    // schedules to the *next* boundary instead of producing delay = 0
+    // and immediately re-entering the recursive schedule.
+    const nextTs =
+      (Math.floor(now / ROLLUP_INTERVAL_MS) + 1) * ROLLUP_INTERVAL_MS
     const delay = Math.max(nextTs - now, 0)
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null

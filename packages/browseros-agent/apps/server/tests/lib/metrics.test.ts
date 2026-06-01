@@ -39,11 +39,12 @@ const {
   RollupBuffer,
 } = __internal__
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Drain whatever's left in the singleton RollupBuffer + PostHog
+  // client from a prior test so each test is hermetic. shutdown nulls
+  // the client; the initialize calls below re-create it.
+  await metrics.shutdown()
   captureCalls.length = 0
-  // Reset the singleton's internal state between tests by reinitializing.
-  // The service merges over its existing config so an empty config first
-  // drains, then a fresh identity primes the next test.
   metrics.initialize({ client_id: '__reset__' })
   metrics.initialize({ client_id: undefined, install_id: undefined })
 })

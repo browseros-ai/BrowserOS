@@ -14,6 +14,7 @@ const config = {
   executionDir: '/tmp/browseros-execution',
   mcpAllowRemote: false,
   aiSdkDevtoolsEnabled: false,
+  instanceClientId: 'client-test',
 }
 
 describe('Application.start', () => {
@@ -86,6 +87,20 @@ describe('Application.start', () => {
         process.env.BROWSEROS_DIR = originalBrowserosDir
       }
     }
+  })
+
+  it('warns at boot when metrics is enabled but no instance identity is configured', async () => {
+    const { Application, loggerWarn } = await setupApplicationTest()
+    const { instanceClientId: _unused, ...configWithoutIdentity } = config
+    const app = new Application(configWithoutIdentity)
+
+    await app.start()
+
+    const warnedAboutIdentity = loggerWarn.mock.calls.some(
+      (args) =>
+        typeof args[0] === 'string' && args[0].includes('no instance identity'),
+    )
+    expect(warnedAboutIdentity).toBe(true)
   })
 })
 
