@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "rings/RUST-00/trios-config",
     "rings/RUST-01/clade-build",
     "rings/RUST-02/clade-e2e",
     "rings/RUST-03/clade-rollback",

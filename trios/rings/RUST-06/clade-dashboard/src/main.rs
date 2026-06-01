@@ -85,10 +85,19 @@ async fn main() {
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], p));
     match std::net::TcpListener::bind(addr) {
-        Ok(probe) => {
-            drop(probe);
-            println!("[CladeDashboard] Port {} available, binding...", p);
-            warp::serve(routes).run(([127, 0, 0, 1], p)).await;
+        Ok(listener) => {
+            match tokio::net::TcpListener::from_std(listener) {
+                Ok(tokio_listener) => {
+                    println!("[CladeDashboard] Port {} bound, starting server...", p);
+                    warp::serve(routes).run_incoming(
+                        tokio_stream::wrappers::TcpListenerStream::new(tokio_listener),
+                    ).await;
+                }
+                Err(e) => {
+                    eprintln!("[CladeDashboard] Failed to convert listener: {} — exiting", e);
+                    std::process::exit(1);
+                }
+            }
         }
         Err(e) => {
             eprintln!("[CladeDashboard] Cannot bind to port {}: {} — exiting cleanly", p, e);

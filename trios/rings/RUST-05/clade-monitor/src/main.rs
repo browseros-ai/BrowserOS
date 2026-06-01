@@ -1,6 +1,6 @@
-use chrono::{DateTime, Utc};
 use reqwest::blocking::get;
 use serde::{Deserialize, Serialize};
+use sha2::{Sha256, Digest};
 use std::fs;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,9 +13,80 @@ extern "C" fn handle_signal(_sig: libc::c_int) {
     RUNNING.store(false, Ordering::Relaxed);
 }
 
-fn project_dir() -> String { std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string()) }
-const HEALTH_SOVEREIGN: &str = "http://127.0.0.1:9105/health";
-const HEALTH_CANARY: &str = "http://127.0.0.1:9205/health";
+fn project_dir() -> String { trios_config::project_dir() }
+
+const CIRCUIT_BREAKER_TRIP_THRESHOLD: u32 = 3;
+const CIRCUIT_BREAKER_PROBE_INTERVAL_SECS: u64 = 300;
+
+#[derive(Debug, PartialEq)]
+enum CircuitState {
+    Closed,
+    Open { tripped_at: u64 },
+    HalfOpen,
+}
+
+struct CircuitBreaker {
+    state: CircuitState,
+    consecutive_failures: u32,
+    service_name: String,
+}
+
+impl CircuitBreaker {
+    fn new(name: &str) -> Self {
+        Self {
+            state: CircuitState::Closed,
+            consecutive_failures: 0,
+            service_name: name.to_string(),
+        }
+    }
+
+    fn should_probe(&mut self) -> bool {
+        match &self.state {
+            CircuitState::Closed | CircuitState::HalfOpen => true,
+            CircuitState::Open { tripped_at } => {
+                let now = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                if now - tripped_at >= CIRCUIT_BREAKER_PROBE_INTERVAL_SECS {
+                    self.state = CircuitState::HalfOpen;
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    fn record_success(&mut self) {
+        if self.state != CircuitState::Closed {
+            println!("[CircuitBreaker] {} recovered — closing circuit", self.service_name);
+        }
+        self.state = CircuitState::Closed;
+        self.consecutive_failures = 0;
+    }
+
+    fn record_failure(&mut self) {
+        self.consecutive_failures += 1;
+        if self.consecutive_failures >= CIRCUIT_BREAKER_TRIP_THRESHOLD {
+            let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            if self.state == CircuitState::Closed {
+                println!(
+                    "[CircuitBreaker] {} tripped after {} consecutive failures — opening circuit (probe in {}s)",
+                    self.service_name, self.consecutive_failures, CIRCUIT_BREAKER_PROBE_INTERVAL_SECS
+                );
+            }
+            self.state = CircuitState::Open { tripped_at: now };
+        }
+    }
+
+    fn is_open(&self) -> bool {
+        matches!(self.state, CircuitState::Open { .. })
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 struct LastWake {
@@ -63,43 +134,51 @@ fn kill_orphan_monitors() -> usize {
 }
 
 fn acquire_pidfile() -> Option<fs::File> {
-    let path = format!("{}/.trinity/state/clade-monitor.pid", &project_dir());
+    let lock_path = format!("{}/.trinity/state/clade-monitor.lock", &project_dir());
+    let pid_path = format!("{}/.trinity/state/clade-monitor.pid", &project_dir());
     if let Err(e) = fs::create_dir_all(format!("{}/.trinity/state", &project_dir())) {
         eprintln!("[CladeMonitor] Failed to create state dir: {}", e);
         return None;
     }
 
-    if let Ok(existing) = fs::read_to_string(&path) {
-        if let Ok(pid) = existing.trim().parse::<i32>() {
-            let alive = unsafe { libc::kill(pid, 0) } == 0;
-            if alive {
-                eprintln!("[CladeMonitor] Another instance running (PID {}). Exiting.", pid);
-                return None;
-            }
+    // flock-based singleton: auto-releases on crash, no stale file problem
+    let lock_file = match fs::File::create(&lock_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("[CladeMonitor] Failed to create lock file: {}", e);
+            return None;
         }
+    };
+
+    use std::os::unix::io::AsRawFd;
+    let fd = lock_file.as_raw_fd();
+    let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+    if ret != 0 {
+        eprintln!("[CladeMonitor] Another instance holds the lock. Exiting.");
+        return None;
     }
 
-    // Kill any orphan monitors not tracked by PID file
+    // Kill any orphan monitors not tracked by lock
     let orphans = kill_orphan_monitors();
     if orphans > 0 {
         println!("[CladeMonitor] Cleaned up {} orphan process(es)", orphans);
     }
 
-    match fs::File::create(&path) {
+    // Write PID file for monitoring/inspection (not used for locking)
+    match fs::File::create(&pid_path) {
         Ok(mut f) => {
             let pid = std::process::id();
             if let Err(e) = write!(f, "{}", pid) {
                 eprintln!("[CladeMonitor] Failed to write PID file: {}", e);
-                return None;
             }
-            println!("[CladeMonitor] PID file: {} (pid={})", path, pid);
-            Some(f)
+            println!("[CladeMonitor] Lock acquired + PID file: {} (pid={})", pid_path, pid);
         }
         Err(e) => {
-            eprintln!("[CladeMonitor] Failed to create PID file: {}", e);
-            None
+            eprintln!("[CladeMonitor] Failed to create PID file (non-fatal): {}", e);
         }
     }
+
+    Some(lock_file)
 }
 
 fn cleanup_pidfile() {
@@ -112,14 +191,14 @@ fn cleanup_pidfile() {
 fn main() {
     use std::collections::HashMap;
 
-    if acquire_pidfile().is_none() {
-        std::process::exit(1);
-    }
-
-    // Register signal handlers for graceful shutdown
+    // Register signal handlers before pidfile to minimize stale-pidfile window
     unsafe {
         libc::signal(libc::SIGTERM, handle_signal as *const () as libc::sighandler_t);
         libc::signal(libc::SIGINT, handle_signal as *const () as libc::sighandler_t);
+    }
+
+    if acquire_pidfile().is_none() {
+        std::process::exit(1);
     }
 
     println!("[CladeMonitor] Starting cron monitor loop...");
@@ -130,31 +209,55 @@ fn main() {
     let mut last_60m = SystemTime::now();
     let mut last_60m_tablecloth = SystemTime::now();
     let mut last_24h = SystemTime::now();
+    let mut last_heartbeat = SystemTime::now();
 
     // Backoff tracking: consecutive_failures -> multiplier
     let mut failure_counts: HashMap<String, u32> = HashMap::new();
     let pid_seed = std::process::id();
+    let mut consecutive_healthy: u32 = 0;
+    let mut canary_breaker = CircuitBreaker::new("canary");
+
+    // Track initial build hash
+    if let Some((hash, _)) = track_build_hash() {
+        println!("[CladeMonitor] Binary hash tracked: {}...", &hash[..8]);
+    }
 
     while RUNNING.load(Ordering::Relaxed) {
         let now = SystemTime::now();
+
+        // Drift detection: check if any interval has exceeded 2x expected
+        let drift_intervals: Vec<(&str, &SystemTime, u64)> = vec![
+            ("15m_health", &last_15m, 900),
+            ("30m_build", &last_30m, 1800),
+            ("60m_seal", &last_60m, 3600),
+            ("60m_tablecloth", &last_60m_tablecloth, 3600),
+            ("24h_audit", &last_24h, 86400),
+        ];
+        detect_drift(&drift_intervals);
 
         // Every 15 min: health quick
         let backoff_15m = calculate_backoff_with_jitter(failure_counts.get("15m").copied().unwrap_or(0), pid_seed);
         if now.duration_since(last_15m).unwrap_or_default() >= Duration::from_secs(900 * backoff_15m) {
             last_15m = now;
-            if run_health_check("15m") {
+            if run_health_check("15m", &mut canary_breaker) {
                 failure_counts.remove("15m");
+                consecutive_healthy += 1;
+                replenish_budget(consecutive_healthy);
             } else {
                 *failure_counts.entry("15m".to_string()).or_insert(0) += 1;
+                consecutive_healthy = 0;
             }
         }
 
-        // Every 30 min: build + dirty
+        // Every 30 min: build + dirty + hash tracking
         let backoff_30m = calculate_backoff_with_jitter(failure_counts.get("30m").copied().unwrap_or(0), pid_seed);
         if now.duration_since(last_30m).unwrap_or_default() >= Duration::from_secs(1800 * backoff_30m) {
             last_30m = now;
             if run_build_check("30m") {
                 failure_counts.remove("30m");
+                if track_build_hash().is_none() {
+                    eprintln!("[CladeMonitor] Warning: build hash tracking failed");
+                }
             } else {
                 *failure_counts.entry("30m".to_string()).or_insert(0) += 1;
             }
@@ -193,6 +296,13 @@ fn main() {
             }
         }
 
+        // Watchdog heartbeat: every 5 min, log that the monitor is alive
+        if now.duration_since(last_heartbeat).unwrap_or_default() >= Duration::from_secs(300) {
+            last_heartbeat = now;
+            let uptime = now.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+            log_event("watchdog_heartbeat", &format!("alive_pid_{}_uptime_{}", std::process::id(), uptime));
+        }
+
         thread::sleep(Duration::from_secs(60));
     }
 
@@ -222,11 +332,122 @@ fn calculate_backoff_with_jitter(failures: u32, pid_seed: u32) -> u64 {
     base + jitter
 }
 
-fn run_health_check(interval: &str) -> bool {
-    let sovereign = check_health(HEALTH_SOVEREIGN);
-    let canary = check_health(HEALTH_CANARY);
+fn atomic_write(path: &str, content: &str) -> Result<(), String> {
+    let tmp = format!("{}.tmp", path);
+    fs::write(&tmp, content).map_err(|e| format!("write tmp: {}", e))?;
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("rename: {}", e)
+    })
+}
 
-    let status = format!("sovereign={},canary={}", sovereign, canary);
+fn replenish_budget(consecutive_healthy: u32) -> bool {
+    if consecutive_healthy < 3 {
+        return false;
+    }
+    let path = format!("{}/.trinity/state/safety_budget.json", &project_dir());
+    let mut budget = load_safety_budget();
+
+    if budget.halted || budget.budget >= budget.max_budget {
+        return false;
+    }
+
+    let increment = 0.5_f64.min(budget.max_budget - budget.budget);
+    budget.budget += increment;
+    println!(
+        "[CladeMonitor] Budget replenished +{:.1} -> {:.1}/{:.1} (after {} consecutive healthy checks)",
+        increment, budget.budget, budget.max_budget, consecutive_healthy
+    );
+
+    match serde_json::to_string_pretty(&budget) {
+        Ok(json) => {
+            if let Err(e) = atomic_write(&path, &json) {
+                eprintln!("[CladeMonitor] Failed to write budget: {}", e);
+                return false;
+            }
+            log_event("budget_replenish", &format!("budget_{:.1}_after_{}_healthy", budget.budget, consecutive_healthy));
+            true
+        }
+        Err(e) => {
+            eprintln!("[CladeMonitor] Failed to serialize budget: {}", e);
+            false
+        }
+    }
+}
+
+fn detect_drift(intervals: &[(& str, &SystemTime, u64)]) -> Vec<String> {
+    let now = SystemTime::now();
+    let mut drifted = Vec::new();
+    for (name, last_run, expected_secs) in intervals {
+        let elapsed = now.duration_since(**last_run).unwrap_or_default().as_secs();
+        let threshold = expected_secs * 2;
+        if elapsed > threshold {
+            drifted.push(format!(
+                "{}: {}s elapsed vs {}s expected ({}x drift)",
+                name, elapsed, expected_secs, elapsed / expected_secs
+            ));
+        }
+    }
+    if !drifted.is_empty() {
+        println!("[CladeMonitor] DRIFT DETECTED:");
+        for d in &drifted {
+            println!("  - {}", d);
+        }
+        log_event("drift_detected", &drifted.join("; "));
+    }
+    drifted
+}
+
+fn track_build_hash() -> Option<(String, bool)> {
+    let binary_path = format!("{}/trios_app", &project_dir());
+    let hash_path = format!("{}/.trinity/state/build_hash.sha256", &project_dir());
+
+    let data = match fs::read(&binary_path) {
+        Ok(d) => d,
+        Err(_) => return None,
+    };
+
+    let mut hasher = Sha256::new();
+    hasher.update(&data);
+    let current_hash = format!("{:x}", hasher.finalize());
+
+    let previous_hash = fs::read_to_string(&hash_path).ok().map(|s| s.trim().to_string());
+    let changed = previous_hash.as_ref() != Some(&current_hash);
+
+    if let Err(e) = fs::write(&hash_path, &current_hash) {
+        eprintln!("[CladeMonitor] Failed to write build hash: {}", e);
+    }
+
+    if changed {
+        if let Some(prev) = &previous_hash {
+            println!("[CladeMonitor] Binary changed: {}..→ {}...", &prev[..8.min(prev.len())], &current_hash[..8]);
+            log_event("binary_changed", &format!("{}_{}", &prev[..8.min(prev.len())], &current_hash[..8]));
+        } else {
+            println!("[CladeMonitor] Initial binary hash: {}...", &current_hash[..8]);
+            log_event("binary_hash_init", &current_hash[..16]);
+        }
+    }
+
+    Some((current_hash, changed))
+}
+
+fn run_health_check(interval: &str, canary_cb: &mut CircuitBreaker) -> bool {
+    let sovereign = check_health(&trios_config::sovereign_health_url());
+
+    let canary = if canary_cb.should_probe() {
+        let healthy = check_health(&trios_config::canary_health_url());
+        if healthy {
+            canary_cb.record_success();
+        } else {
+            canary_cb.record_failure();
+        }
+        healthy
+    } else {
+        false
+    };
+
+    let canary_label = if canary_cb.is_open() { "OPEN(skipped)" } else if canary { "true" } else { "false" };
+    let status = format!("sovereign={},canary={}", sovereign, canary_label);
     println!("[CladeMonitor][{}] Health: {}", interval, status);
 
     if !sovereign {
@@ -235,7 +456,7 @@ fn run_health_check(interval: &str) -> bool {
     }
 
     update_last_wake(&status, "ok", "clade-1.0.0");
-    sovereign && canary
+    sovereign
 }
 
 fn run_build_check(interval: &str) -> bool {
@@ -243,10 +464,29 @@ fn run_build_check(interval: &str) -> bool {
     use std::process::{Command, Stdio};
 
     let script = format!("{}/.claude/queen-zig.sh", &project_dir());
-    if !Path::new(&script).exists() {
+    let script_path = Path::new(&script);
+    if !script_path.exists() {
         println!("[CladeMonitor][{}] SKIP: {} not found", interval, script);
         log_event("build_check_skip", &format!("missing_script_{}", script));
-        return true; // not a failure, just nothing to do
+        return true;
+    }
+
+    // Verify script is owned by current user and not world-writable
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(meta) = script_path.metadata() {
+            let uid = unsafe { libc::getuid() };
+            if meta.uid() != uid {
+                eprintln!("[CladeMonitor][{}] SECURITY: {} not owned by current user (uid {} vs {})", interval, script, meta.uid(), uid);
+                log_event("build_check_security", &format!("wrong_owner_{}", script));
+                return false;
+            }
+            if meta.mode() & 0o002 != 0 {
+                eprintln!("[CladeMonitor][{}] SECURITY: {} is world-writable", interval, script);
+                log_event("build_check_security", &format!("world_writable_{}", script));
+                return false;
+            }
+        }
     }
 
     println!("[CladeMonitor][{}] Build check: {}", interval, script);
@@ -292,6 +532,8 @@ fn run_deep_audit(interval: &str) -> bool {
     true
 }
 
+const SUBPROCESS_TIMEOUT_SECS: u64 = 600;
+
 fn run_tablecloth(interval: &str) -> bool {
     use std::process::{Command, Stdio};
     let budget = load_safety_budget();
@@ -301,18 +543,18 @@ fn run_tablecloth(interval: &str) -> bool {
             interval, budget.budget
         );
         log_event("tablecloth_halted", &format!("budget_{}", budget.budget));
-        return true; // not a failure, just gated
+        return true;
     }
 
-    println!("[CladeMonitor][{}] Spawning clade-tablecloth...", interval);
-    let result = Command::new("cargo")
-        .args(["run", "--bin", "clade-tablecloth"])
-        .current_dir(project_dir())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    println!("[CladeMonitor][{}] Spawning clade-tablecloth (timeout {}s)...", interval, SUBPROCESS_TIMEOUT_SECS);
+    let result = run_with_timeout(
+        Command::new("cargo")
+            .args(["run", "--bin", "clade-tablecloth"])
+            .current_dir(project_dir())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+        SUBPROCESS_TIMEOUT_SECS,
+    );
 
     if result {
         log_event("tablecloth", &format!("interval_{}_pass", interval));
@@ -320,6 +562,55 @@ fn run_tablecloth(interval: &str) -> bool {
         log_event("tablecloth", &format!("interval_{}_fail", interval));
     }
     result
+}
+
+fn run_with_timeout(cmd: &mut std::process::Command, timeout_secs: u64) -> bool {
+    use std::os::unix::process::CommandExt;
+    // Put child in its own process group so we can kill the entire tree
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[CladeMonitor] Failed to spawn subprocess: {}", e);
+            return false;
+        }
+    };
+
+    let child_pid = child.id() as i32;
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(timeout_secs);
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    eprintln!("[CladeMonitor] Subprocess timed out after {}s, killing process group", timeout_secs);
+                    // Kill the entire process group (child + its subprocesses)
+                    unsafe { libc::killpg(child_pid, libc::SIGTERM); }
+                    thread::sleep(Duration::from_secs(2));
+                    // Force kill if still alive
+                    unsafe { libc::killpg(child_pid, libc::SIGKILL); }
+                    if let Err(e) = child.wait() {
+                        eprintln!("[CladeMonitor] Failed to reap child after kill: {}", e);
+                    }
+                    log_event("subprocess_timeout", &format!("{}s_pgid_{}", timeout_secs, child_pid));
+                    return false;
+                }
+                thread::sleep(Duration::from_secs(5));
+            }
+            Err(e) => {
+                eprintln!("[CladeMonitor] Error waiting for subprocess: {}", e);
+                return false;
+            }
+        }
+    }
 }
 
 fn check_health(url: &str) -> bool {
@@ -379,25 +670,10 @@ fn update_last_wake(health: &str, build: &str, clade_id: &str) {
 }
 
 fn log_event(event: &str, details: &str) {
-    let ts: DateTime<Utc> = Utc::now();
-    let line = format!(
-        r#"{{"timestamp":"{}","event":"{}","details":"{}"}}"#,
-        ts.to_rfc3339(),
-        event,
-        details
-    );
-    let path = format!("{}/.trinity/event_log.jsonl", &project_dir());
-    if let Err(e) = fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(&path)
-        .and_then(|mut f| {
-            use std::io::Write;
-            writeln!(f, "{}", line)
-        })
-    {
-        eprintln!("[monitor] Failed to write event log: {}", e);
-    }
+    use std::sync::OnceLock;
+    static CORR_ID: OnceLock<String> = OnceLock::new();
+    let id = CORR_ID.get_or_init(trios_config::new_correlation_id);
+    trios_config::log_event(id, event, details);
 }
 
 #[cfg(test)]
@@ -460,14 +736,16 @@ mod tests {
 
     #[test]
     fn health_sovereign_url_format() {
-        assert!(HEALTH_SOVEREIGN.starts_with("http://127.0.0.1:"));
-        assert!(HEALTH_SOVEREIGN.ends_with("/health"));
+        let url = trios_config::sovereign_health_url();
+        assert!(url.starts_with("http://127.0.0.1:"));
+        assert!(url.ends_with("/health"));
     }
 
     #[test]
     fn health_canary_url_format() {
-        assert!(HEALTH_CANARY.starts_with("http://127.0.0.1:"));
-        assert!(HEALTH_CANARY.ends_with("/health"));
+        let url = trios_config::canary_health_url();
+        assert!(url.starts_with("http://127.0.0.1:"));
+        assert!(url.ends_with("/health"));
     }
 
     #[test]
@@ -498,5 +776,155 @@ mod tests {
         let b = calculate_backoff_with_jitter(3, 13);
         // seed 0 -> 0% jitter, seed 13 -> 13% jitter — should differ
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn replenish_below_threshold_returns_false() {
+        assert!(!replenish_budget(0));
+        assert!(!replenish_budget(1));
+        assert!(!replenish_budget(2));
+    }
+
+    #[test]
+    fn detect_drift_no_drift_on_fresh_timestamps() {
+        let now = SystemTime::now();
+        let intervals: Vec<(&str, &SystemTime, u64)> = vec![
+            ("test_15m", &now, 900),
+            ("test_30m", &now, 1800),
+        ];
+        let drifted = detect_drift(&intervals);
+        assert!(drifted.is_empty());
+    }
+
+    #[test]
+    fn detect_drift_catches_stale_interval() {
+        let stale = SystemTime::now() - Duration::from_secs(7200);
+        let intervals: Vec<(&str, &SystemTime, u64)> = vec![
+            ("test_15m", &stale, 900),
+        ];
+        let drifted = detect_drift(&intervals);
+        assert_eq!(drifted.len(), 1);
+        assert!(drifted[0].contains("test_15m"));
+        assert!(drifted[0].contains("drift"));
+    }
+
+    #[test]
+    fn track_build_hash_returns_none_for_missing_binary() {
+        std::env::set_var("TRIOS_ROOT", "/tmp/nonexistent-trios-test-dir");
+        let result = track_build_hash();
+        assert!(result.is_none());
+        std::env::remove_var("TRIOS_ROOT");
+    }
+
+    #[test]
+    fn sha256_produces_64_char_hex() {
+        let mut hasher = Sha256::new();
+        hasher.update(b"test data");
+        let hash = format!("{:x}", hasher.finalize());
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn run_with_timeout_succeeds_on_fast_command() {
+        use std::process::Command;
+        let result = run_with_timeout(
+            &mut Command::new("echo").arg("hello"),
+            5,
+        );
+        assert!(result);
+    }
+
+    #[test]
+    fn run_with_timeout_fails_on_bad_command() {
+        use std::process::Command;
+        let result = run_with_timeout(
+            &mut Command::new("/nonexistent-binary-xyz"),
+            5,
+        );
+        assert!(!result);
+    }
+
+    #[test]
+    fn subprocess_timeout_constant_is_reasonable() {
+        assert!(SUBPROCESS_TIMEOUT_SECS >= 60);
+        assert!(SUBPROCESS_TIMEOUT_SECS <= 3600);
+    }
+
+    #[test]
+    fn atomic_write_creates_file() {
+        let path = "/tmp/clade_monitor_atomic_test.json";
+        let _ = std::fs::remove_file(path);
+        let result = atomic_write(path, r#"{"test": true}"#);
+        assert!(result.is_ok());
+        let content = std::fs::read_to_string(path).unwrap_or_default();
+        assert!(content.contains("test"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn atomic_write_no_tmp_left_behind() {
+        let path = "/tmp/clade_monitor_atomic_notmp.json";
+        let tmp_path = format!("{}.tmp", path);
+        let _ = atomic_write(path, "data");
+        assert!(!std::path::Path::new(&tmp_path).exists());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn circuit_breaker_starts_closed() {
+        let mut cb = CircuitBreaker::new("test");
+        assert!(!cb.is_open());
+        assert!(cb.should_probe());
+        assert_eq!(cb.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn circuit_breaker_trips_after_threshold() {
+        let mut cb = CircuitBreaker::new("test");
+        for _ in 0..CIRCUIT_BREAKER_TRIP_THRESHOLD {
+            cb.record_failure();
+        }
+        assert!(cb.is_open());
+    }
+
+    #[test]
+    fn circuit_breaker_stays_closed_below_threshold() {
+        let mut cb = CircuitBreaker::new("test");
+        for _ in 0..CIRCUIT_BREAKER_TRIP_THRESHOLD - 1 {
+            cb.record_failure();
+        }
+        assert!(!cb.is_open());
+    }
+
+    #[test]
+    fn circuit_breaker_resets_on_success() {
+        let mut cb = CircuitBreaker::new("test");
+        for _ in 0..CIRCUIT_BREAKER_TRIP_THRESHOLD {
+            cb.record_failure();
+        }
+        assert!(cb.is_open());
+        cb.record_success();
+        assert!(!cb.is_open());
+        assert_eq!(cb.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn circuit_breaker_open_blocks_probe() {
+        let mut cb = CircuitBreaker::new("test");
+        for _ in 0..CIRCUIT_BREAKER_TRIP_THRESHOLD {
+            cb.record_failure();
+        }
+        assert!(!cb.should_probe());
+    }
+
+    #[test]
+    fn circuit_breaker_probe_interval_constant() {
+        assert_eq!(CIRCUIT_BREAKER_PROBE_INTERVAL_SECS, 300);
+    }
+
+    #[test]
+    fn circuit_breaker_trip_threshold_constant() {
+        assert_eq!(CIRCUIT_BREAKER_TRIP_THRESHOLD, 3);
     }
 }

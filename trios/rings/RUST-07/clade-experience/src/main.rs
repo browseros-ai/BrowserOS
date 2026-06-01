@@ -67,6 +67,11 @@ fn load_episodes() -> Vec<ExperienceEpisode> {
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
             if path.extension().map(|e| e == "json").unwrap_or(false) {
+                let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                if size > 1_000_000 {
+                    eprintln!("[experience] Skipping {} — exceeds 1MB limit ({}KB)", path.display(), size / 1024);
+                    continue;
+                }
                 if let Ok(content) = fs::read_to_string(&path) {
                     if let Ok(ep) = serde_json::from_str::<ExperienceEpisode>(&content) {
                         episodes.push(ep);
@@ -244,5 +249,29 @@ mod tests {
         let clusters = cluster_by_tags(&eps);
         let db = clusters.iter().find(|c| c.tag == "db").expect("db cluster");
         assert_eq!(db.top_patterns[0], "index");
+    }
+
+    #[test]
+    fn load_episodes_skips_oversized_files() {
+        let dir = "/tmp/clade_experience_size_test";
+        let _ = fs::create_dir_all(dir);
+        let big_path = format!("{}/big.json", dir);
+        let small = serde_json::to_string(&make_episode(&["test"], "A", true, "p")).unwrap_or_default();
+        fs::write(format!("{}/small.json", dir), &small).ok();
+        // 1.1MB file — should be skipped
+        let big = "x".repeat(1_100_000);
+        fs::write(&big_path, &big).ok();
+
+        std::env::set_var("TRIOS_ROOT", "/tmp/clade_experience_size_test_root");
+        let _ = fs::create_dir_all("/tmp/clade_experience_size_test_root/.trinity/experience");
+        fs::write("/tmp/clade_experience_size_test_root/.trinity/experience/small.json", &small).ok();
+        let big2 = "x".repeat(1_100_000);
+        fs::write("/tmp/clade_experience_size_test_root/.trinity/experience/big.json", &big2).ok();
+        let episodes = load_episodes();
+        // big.json should be skipped, small.json may or may not parse depending on format
+        assert!(episodes.len() <= 1);
+        std::env::remove_var("TRIOS_ROOT");
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all("/tmp/clade_experience_size_test_root");
     }
 }

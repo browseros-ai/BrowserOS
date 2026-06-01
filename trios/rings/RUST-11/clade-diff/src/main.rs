@@ -1,9 +1,6 @@
 use reqwest::blocking::get;
 use serde::{Deserialize, Serialize};
 
-const SOVEREIGN_HEALTH: &str = "http://127.0.0.1:9105/health";
-const CANARY_HEALTH: &str = "http://127.0.0.1:9205/health";
-
 #[derive(Debug, Serialize, Deserialize)]
 struct DiffResult {
     test_id: String,
@@ -67,8 +64,8 @@ fn compute_diff(test_id: &str, sovereign: &str, canary: &str) -> DiffResult {
 }
 
 fn run_health_diff() -> DiffResult {
-    let sovereign = probe(SOVEREIGN_HEALTH);
-    let canary = probe(CANARY_HEALTH);
+    let sovereign = probe(&trios_config::sovereign_health_url());
+    let canary = probe(&trios_config::canary_health_url());
     compute_diff("health_probe", &sovereign, &canary)
 }
 
@@ -76,9 +73,18 @@ fn count_flips(results: &[DiffResult]) -> usize {
     results.iter().filter(|r| r.flip).count()
 }
 
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024; // 1MB
+
 fn probe(url: &str) -> String {
     match get(url) {
-        Ok(r) => r.text().unwrap_or_default(),
+        Ok(r) => {
+            let body = r.text().unwrap_or_default();
+            if body.len() > MAX_RESPONSE_BYTES {
+                format!("error: response too large ({}KB)", body.len() / 1024)
+            } else {
+                body
+            }
+        }
         Err(e) => format!("error: {}", e),
     }
 }
@@ -137,5 +143,16 @@ mod tests {
     fn count_flips_empty() {
         let results: Vec<DiffResult> = vec![];
         assert_eq!(count_flips(&results), 0);
+    }
+
+    #[test]
+    fn max_response_bytes_is_1mb() {
+        assert_eq!(MAX_RESPONSE_BYTES, 1024 * 1024);
+    }
+
+    #[test]
+    fn probe_unreachable_returns_error() {
+        let result = probe("http://127.0.0.1:1/nonexistent");
+        assert!(result.starts_with("error:"));
     }
 }

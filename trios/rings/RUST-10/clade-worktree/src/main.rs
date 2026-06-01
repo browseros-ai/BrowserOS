@@ -13,6 +13,36 @@ const WORKTREE_BRANCH: &str = "canary";
 const DIRTY_THRESHOLD: usize = 5;
 const SYNC_BEHIND_THRESHOLD: usize = 3;
 
+fn validate_worktree_path() -> bool {
+    let wt = worktree_dir();
+    let proj = project_dir();
+
+    let canonical_wt = match std::fs::canonicalize(&wt) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let canonical_proj = match std::fs::canonicalize(&proj) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    if !canonical_wt.starts_with(&canonical_proj) {
+        eprintln!("[CladeWorktree] SECURITY: worktree {} is outside project {}", canonical_wt.display(), canonical_proj.display());
+        return false;
+    }
+
+    match git_wt(&["rev-parse", "--git-dir"]) {
+        Ok(git_dir) => {
+            if !git_dir.contains(".worktrees") && !git_dir.contains("worktrees") {
+                eprintln!("[CladeWorktree] SECURITY: git-dir {} does not look like a worktree", git_dir);
+                return false;
+            }
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let action = args.first().map(|s| s.as_str()).unwrap_or("status");
@@ -148,8 +178,14 @@ fn reset() {
         }
     }
 
-    // Clean untracked
-    let _ = git_wt(&["clean", "-fd"]); // remove untracked files
+    // Validate worktree is inside project before destructive clean
+    if validate_worktree_path() {
+        if let Err(e) = git_wt(&["clean", "-fd"]) {
+            println!("   ⚠️  Clean untracked failed: {}", e);
+        }
+    } else {
+        println!("   ❌ Worktree path validation failed — skipping git clean");
+    }
 
     println!("   ✅ Canary reset complete");
 }
@@ -316,8 +352,23 @@ mod tests {
 
     #[test]
     fn project_dir_has_fallback() {
-        // When TRIOS_ROOT not set, uses default path
         let dir = project_dir();
         assert!(!dir.is_empty());
+    }
+
+    #[test]
+    fn worktree_dir_is_inside_project() {
+        let wt = worktree_dir();
+        let proj = project_dir();
+        assert!(wt.starts_with(&proj), "worktree {} must be under project {}", wt, proj);
+    }
+
+    #[test]
+    fn validate_worktree_rejects_outside_path() {
+        // If worktree doesn't exist, validation should return false
+        std::env::set_var("TRIOS_ROOT", "/tmp/nonexistent-trios-validate-test");
+        let result = validate_worktree_path();
+        assert!(!result);
+        std::env::remove_var("TRIOS_ROOT");
     }
 }

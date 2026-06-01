@@ -112,11 +112,7 @@ fn run_improve(description: Option<&str>, variant: Variant) {
     let dev = match pipeline.create_dev(&ticket_id) {
         Ok(d) => {
             println!("   ✅ Dev created: {}", d.root.display());
-            println!("   🛡️  Network isolated: {}", d.network_isolated);
-            println!("   ⚡ Resource caps: {}MB RAM, {} CPU, {}s timeout\n",
-                d.resource_caps.max_memory_mb,
-                d.resource_caps.max_cpu_cores,
-                d.resource_caps.max_execution_secs);
+            println!("   📁 Filtered copy (no OS-level isolation)\n");
             d
         }
         Err(e) => {
@@ -138,7 +134,9 @@ fn run_improve(description: Option<&str>, variant: Variant) {
     
     if !all_passed {
         println!("\n🔴 Some tests failed. Stopping.");
-        let _ = dev.clean();
+        if let Err(e) = dev.clean() {
+            eprintln!("[clade-improve] Sandbox cleanup failed: {}", e);
+        }
         std::process::exit(1);
     }
     println!();
@@ -150,7 +148,9 @@ fn run_improve(description: Option<&str>, variant: Variant) {
     match final_decision {
         Decision::Reject => {
             println!("🔴 REJECTED by Oversight");
-            let _ = dev.clean();
+            if let Err(e) = dev.clean() {
+                eprintln!("[clade-improve] Sandbox cleanup failed: {}", e);
+            }
             std::process::exit(1);
         }
         Decision::ShadowMode => {
@@ -175,7 +175,9 @@ fn run_improve(description: Option<&str>, variant: Variant) {
             Err(e) => {
                 error!("Deploy failed: {}", e);
                 println!("🔴 Deploy failed: {}", e);
-                let _ = dev.clean();
+                if let Err(e) = dev.clean() {
+                    eprintln!("[clade-improve] Sandbox cleanup failed: {}", e);
+                }
                 std::process::exit(1);
             }
         }
@@ -297,7 +299,6 @@ mod tests {
         assert!(matches!(parse_command(&args), CliCommand::Constitution));
     }
 
-    #[test]
     #[test]
     fn parse_unknown_command() {
         let args = vec!["foobar".to_string()];

@@ -7,6 +7,17 @@ use walkdir::WalkDir;
 
 fn project_dir() -> String { std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string()) }
 
+const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10MB
+
+fn read_file_bounded(path: &std::path::Path) -> Option<String> {
+    let meta = fs::metadata(path).ok()?;
+    if meta.len() > MAX_FILE_SIZE {
+        eprintln!("[audit] Skipping {} — exceeds {}MB limit ({}MB)", path.display(), MAX_FILE_SIZE / 1024 / 1024, meta.len() / 1024 / 1024);
+        return None;
+    }
+    fs::read_to_string(path).ok()
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct AuditFinding {
     file: String,
@@ -135,9 +146,9 @@ fn security_check() -> SecurityCheckResult {
     {
         scanned += 1;
         let path = entry.path();
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => continue,
+        let content = match read_file_bounded(path) {
+            Some(c) => c,
+            None => continue,
         };
 
         for (re, severity, message) in &compiled {
@@ -203,9 +214,9 @@ fn shell_safety_check() -> SecurityCheckResult {
     {
         scanned += 1;
         let path = entry.path();
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => continue,
+        let content = match read_file_bounded(path) {
+            Some(c) => c,
+            None => continue,
         };
 
         let file = path.strip_prefix(project_dir())
@@ -274,9 +285,9 @@ fn error_handling_check() -> SecurityCheckResult {
     {
         scanned += 1;
         let path = entry.path();
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => continue,
+        let content = match read_file_bounded(path) {
+            Some(c) => c,
+            None => continue,
         };
 
         let file = path.strip_prefix(project_dir())
@@ -342,9 +353,9 @@ fn concurrency_check() -> SecurityCheckResult {
     {
         scanned += 1;
         let path = entry.path();
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => continue,
+        let content = match read_file_bounded(path) {
+            Some(c) => c,
+            None => continue,
         };
 
         let file = path.strip_prefix(project_dir())
@@ -399,9 +410,9 @@ fn todo_check() -> SecurityCheckResult {
     {
         scanned += 1;
         let path = entry.path();
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => continue,
+        let content = match read_file_bounded(path) {
+            Some(c) => c,
+            None => continue,
         };
 
         let file = path.strip_prefix(project_dir())
@@ -468,9 +479,9 @@ fn unused_code_check() -> SecurityCheckResult {
     {
         scanned += 1;
         let path = entry.path();
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => continue,
+        let content = match read_file_bounded(path) {
+            Some(c) => c,
+            None => continue,
         };
 
         let file = path.strip_prefix(project_dir())
@@ -564,9 +575,9 @@ fn retain_cycle_check() -> SecurityCheckResult {
     {
         scanned += 1;
         let path = entry.path();
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => continue,
+        let content = match read_file_bounded(path) {
+            Some(c) => c,
+            None => continue,
         };
 
         let file = path.strip_prefix(project_dir())
@@ -1046,5 +1057,25 @@ mod tests {
         assert!(re.is_match("// HACK workaround"));
         assert!(re.is_match("// BUG: crashes on nil"));
         assert!(!re.is_match("// This is fine"));
+    }
+
+    #[test]
+    fn read_file_bounded_returns_none_for_missing() {
+        let result = read_file_bounded(std::path::Path::new("/tmp/nonexistent_audit_test_file"));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn read_file_bounded_reads_small_file() {
+        let path = "/tmp/clade_audit_bounded_test.txt";
+        fs::write(path, "hello bounded").ok();
+        let result = read_file_bounded(std::path::Path::new(path));
+        assert_eq!(result, Some("hello bounded".to_string()));
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn max_file_size_is_10mb() {
+        assert_eq!(MAX_FILE_SIZE, 10 * 1024 * 1024);
     }
 }

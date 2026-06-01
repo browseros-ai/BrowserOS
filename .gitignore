@@ -36,3 +36,8 @@ packages/browseros/build/tools/
 # AI SDK DevTools traces
 .devtools/
 .omc/
+
+# trios runtime artifacts
+trios/trios_app
+trios/.trinity/event_log.jsonl
+trios/.trinity/state/

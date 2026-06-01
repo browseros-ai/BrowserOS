@@ -2,7 +2,33 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
+
+static API_REMAINING: AtomicU32 = AtomicU32::new(5000);
+const API_REMAINING_FLOOR: u32 = 100;
+const API_BACKOFF_MAX_SECS: u64 = 60;
+
+fn check_rate_limit(response: &reqwest::blocking::Response) {
+    if let Some(remaining) = response.headers().get("x-ratelimit-remaining") {
+        if let Ok(val) = remaining.to_str().unwrap_or("5000").parse::<u32>() {
+            API_REMAINING.store(val, Ordering::Relaxed);
+            if val < API_REMAINING_FLOOR {
+                println!("   ⚠️  GitHub API rate limit low: {} remaining — pausing", val);
+            }
+        }
+    }
+}
+
+fn should_throttle() -> bool {
+    API_REMAINING.load(Ordering::Relaxed) < API_REMAINING_FLOOR
+}
+
+fn backoff_on_rate_limit(attempt: u32) {
+    let secs = (1u64 << attempt.min(6)).min(API_BACKOFF_MAX_SECS);
+    println!("   ⏳ Rate limit backoff: {}s (attempt {})", secs, attempt);
+    std::thread::sleep(std::time::Duration::from_secs(secs));
+}
 
 fn project_dir() -> String { std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string()) }
 
@@ -221,6 +247,11 @@ fn create_issues(report: &AuditReport, dry_run: bool) -> usize {
                 "labels": ["auto-audit"],
             });
 
+            if should_throttle() {
+                println!("   ⏭️  Rate limit floor reached — stopping issue creation");
+                break;
+            }
+
             let response = client
                 .post(&url)
                 .header("Authorization", format!("Bearer {}", token))
@@ -231,10 +262,14 @@ fn create_issues(report: &AuditReport, dry_run: bool) -> usize {
 
             match response {
                 Ok(resp) => {
+                    check_rate_limit(&resp);
                     if resp.status().is_success() {
                         println!("   ✅ Issue created: {}", title);
                         known.push(finding.fingerprint.clone());
                         created += 1;
+                    } else if resp.status().as_u16() == 429 || resp.status().as_u16() == 403 {
+                        println!("   ⚠️  Rate limited ({}), backing off", resp.status());
+                        backoff_on_rate_limit(0);
                     } else {
                         println!("   ❌ Issue creation failed: {:?}", resp.status());
                         log_event("issue_create_fail", &format!("{} {:?}", title, resp.status()));
@@ -264,6 +299,56 @@ fn create_issues(report: &AuditReport, dry_run: bool) -> usize {
     created
 }
 
+fn pr_already_exists(repo: &str, head: &str, token: &str) -> bool {
+    use reqwest::blocking::Client;
+    let client = Client::new();
+    let url = format!(
+        "https://api.github.com/repos/gHashTag/{}/pulls?head=gHashTag:{}&state=open",
+        repo, head
+    );
+    match client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github.v3+json")
+        .header("User-Agent", "clade-tablecloth")
+        .send()
+    {
+        Ok(resp) => {
+            if let Ok(body) = resp.text() {
+                if let Ok(prs) = serde_json::from_str::<Vec<serde_json::Value>>(&body) {
+                    return !prs.is_empty();
+                }
+            }
+            false
+        }
+        Err(_) => false,
+    }
+}
+
+fn branch_exists_remote(repo: &str, branch: &str, token: &str) -> bool {
+    use reqwest::blocking::Client;
+    let client = Client::new();
+    let url = format!(
+        "https://api.github.com/repos/gHashTag/{}/branches/{}",
+        repo, branch
+    );
+    match client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github.v3+json")
+        .header("User-Agent", "clade-tablecloth")
+        .send()
+    {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+fn deterministic_branch_name(fingerprint: &str) -> String {
+    let hash: u64 = fingerprint.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+    format!("tablecloth/fix/{:016x}", hash)
+}
+
 /// Create a GitHub PR for a pushed branch.
 fn create_pr(repo: &str, title: &str, body: &str, head: &str, base: &str, dry_run: bool) -> bool {
     use reqwest::blocking::Client;
@@ -271,6 +356,16 @@ fn create_pr(repo: &str, title: &str, body: &str, head: &str, base: &str, dry_ru
     let token = std::env::var("GITHUB_TOKEN").unwrap_or_default();
     if token.is_empty() {
         println!("   ⚠️  GITHUB_TOKEN not set — skipping PR creation");
+        return false;
+    }
+
+    if should_throttle() {
+        println!("   ⏭️  Rate limit floor reached — skipping PR creation");
+        return false;
+    }
+
+    if pr_already_exists(repo, head, &token) {
+        println!("   ⏭️  PR already exists for branch {} — skipping", head);
         return false;
     }
 
@@ -297,10 +392,15 @@ fn create_pr(repo: &str, title: &str, body: &str, head: &str, base: &str, dry_ru
         .send()
     {
         Ok(resp) => {
+            check_rate_limit(&resp);
             if resp.status().is_success() {
                 println!("   ✅ PR created: {}", title);
                 log_event("pr_created", &format!("{} ← {}", title, head));
                 true
+            } else if resp.status().as_u16() == 429 || resp.status().as_u16() == 403 {
+                println!("   ⚠️  Rate limited ({}) — backing off", resp.status());
+                backoff_on_rate_limit(0);
+                false
             } else {
                 println!("   ❌ PR creation failed: {:?}", resp.status());
                 log_event("pr_create_fail", &format!("{} {:?}", title, resp.status()));
@@ -341,13 +441,26 @@ fn attempt_fix(report: &AuditReport, dry_run: bool) -> (usize, usize, usize) {
         Ok(re) => re,
         Err(_) => return (0, 0, 0),
     };
-    let branch_prefix = format!("auto-fix/{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+    let token = std::env::var("GITHUB_TOKEN").unwrap_or_default();
 
     for finding in &report.error_handling_check.findings {
         if finding.message != "Bare try! — use try? or do-catch" {
             continue;
         }
         let file_path = format!("{}/{}", &worktree, finding.file);
+        // Path traversal guard: reject paths that escape the worktree
+        if finding.file.contains("..") {
+            eprintln!("[tablecloth] SECURITY: path traversal in finding.file: {}", finding.file);
+            continue;
+        }
+        if let Ok(canonical) = std::fs::canonicalize(&file_path) {
+            if let Ok(canonical_wt) = std::fs::canonicalize(&worktree) {
+                if !canonical.starts_with(&canonical_wt) {
+                    eprintln!("[tablecloth] SECURITY: file {} escapes worktree {}", canonical.display(), canonical_wt.display());
+                    continue;
+                }
+            }
+        }
         let content = match fs::read_to_string(&file_path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -358,7 +471,12 @@ fn attempt_fix(report: &AuditReport, dry_run: bool) -> (usize, usize, usize) {
         }
 
         attempted += 1;
-        let branch = format!("{}-{}", branch_prefix, attempted);
+        let branch = deterministic_branch_name(&finding.fingerprint);
+
+        if !token.is_empty() && branch_exists_remote("trios", &branch, &token) {
+            println!("   ⏭️  Branch {} already exists remotely — skipping", branch);
+            continue;
+        }
 
         match Command::new("git")
             .args(["checkout", "-b", &branch])
@@ -711,5 +829,51 @@ mod tests {
         };
         assert_eq!(report.mode, "audit-only");
         assert_eq!(report.fixes_attempted, 0);
+    }
+
+    #[test]
+    fn deterministic_branch_is_stable() {
+        let a = deterministic_branch_name("test:42:some finding");
+        let b = deterministic_branch_name("test:42:some finding");
+        assert_eq!(a, b);
+        assert!(a.starts_with("tablecloth/fix/"));
+    }
+
+    #[test]
+    fn deterministic_branch_varies_by_input() {
+        let a = deterministic_branch_name("file_a.rs:10:bug");
+        let b = deterministic_branch_name("file_b.rs:20:crash");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn deterministic_branch_format_is_hex() {
+        let name = deterministic_branch_name("test");
+        let hex_part = name.strip_prefix("tablecloth/fix/").unwrap_or("");
+        assert_eq!(hex_part.len(), 16);
+        assert!(hex_part.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn rate_limit_floor_constant() {
+        assert_eq!(API_REMAINING_FLOOR, 100);
+    }
+
+    #[test]
+    fn rate_limit_backoff_max() {
+        assert_eq!(API_BACKOFF_MAX_SECS, 60);
+    }
+
+    #[test]
+    fn should_throttle_false_initially() {
+        API_REMAINING.store(5000, Ordering::Relaxed);
+        assert!(!should_throttle());
+    }
+
+    #[test]
+    fn should_throttle_true_below_floor() {
+        API_REMAINING.store(50, Ordering::Relaxed);
+        assert!(should_throttle());
+        API_REMAINING.store(5000, Ordering::Relaxed);
     }
 }

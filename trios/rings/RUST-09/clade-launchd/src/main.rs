@@ -94,7 +94,19 @@ fn launch_agents_dir() -> std::path::PathBuf {
         .unwrap_or_else(|_| std::path::PathBuf::from("/Library/LaunchAgents"))
 }
 
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 fn plist_xml(label: &str, program: &str, working_dir: &str) -> String {
+    let label = xml_escape(label);
+    let program = xml_escape(program);
+    let working_dir = xml_escape(working_dir);
+    let proj = xml_escape(&project_dir());
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -120,7 +132,7 @@ fn plist_xml(label: &str, program: &str, working_dir: &str) -> String {
     <string>{}/.trinity/logs/{}.stderr.log</string>
 </dict>
 </plist>"#,
-        label, program, working_dir, &project_dir(), label, &project_dir(), label
+        label, program, working_dir, proj, label, proj, label
     )
 }
 
@@ -165,5 +177,27 @@ mod tests {
         assert!(xml.starts_with("<?xml"));
         assert!(xml.contains("<plist version=\"1.0\">"));
         assert!(xml.contains("</plist>"));
+    }
+
+    #[test]
+    fn xml_escape_ampersand() {
+        assert_eq!(xml_escape("test&value"), "test&amp;value");
+    }
+
+    #[test]
+    fn xml_escape_angle_brackets() {
+        assert_eq!(xml_escape("<tag>"), "&lt;tag&gt;");
+    }
+
+    #[test]
+    fn xml_escape_clean_string_unchanged() {
+        assert_eq!(xml_escape("/usr/bin/test"), "/usr/bin/test");
+    }
+
+    #[test]
+    fn plist_escapes_special_chars_in_path() {
+        let xml = plist_xml("com.test", "/tmp/test&prog", "/tmp");
+        assert!(xml.contains("test&amp;prog"));
+        assert!(!xml.contains("test&prog"));
     }
 }

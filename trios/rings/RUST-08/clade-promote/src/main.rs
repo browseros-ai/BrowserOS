@@ -353,16 +353,9 @@ fn atomic_swap() {
                 match fs::rename(&tmp, dst) {
                     Ok(_) => println!("   📦 Atomic swap to {}", dst),
                     Err(e) => {
-                        eprintln!("   [atomic_swap] rename failed, falling back to copy: {}", e);
-                        if let Err(e) = fs::remove_file(dst) {
-                            eprintln!("   [atomic_swap] cleanup old dst: {}", e);
-                        }
-                        match fs::copy(&canary, dst) {
-                            Ok(_) => println!("   📦 Copied to {} (non-atomic fallback)", dst),
-                            Err(e2) => eprintln!("   [atomic_swap] Failed to copy to {}: {}", dst, e2),
-                        }
-                        if let Err(e) = fs::remove_file(&tmp) {
-                            eprintln!("   [atomic_swap] cleanup tmp: {}", e);
+                        eprintln!("   [atomic_swap] rename failed: {} — aborting swap for {}", e, dst);
+                        if let Err(e2) = fs::remove_file(&tmp) {
+                            eprintln!("   [atomic_swap] cleanup tmp: {}", e2);
                         }
                     }
                 }

@@ -104,16 +104,29 @@ fn main() {
 
     for dst in &targets {
         let dst_path = Path::new(dst);
-        if dst_path.exists() {
-            fs::remove_file(dst_path).ok();
-        }
         if let Some(parent) = dst_path.parent() {
-            fs::create_dir_all(parent).ok();
+            if let Err(e) = fs::create_dir_all(parent) {
+                eprintln!("❌ Failed to create parent dir for {}: {}", dst, e);
+                std::process::exit(1);
+            }
         }
-        match fs::copy(&src, dst_path) {
-            Ok(_) => {}
+        let tmp = format!("{}.tmp", dst);
+        let tmp_path = Path::new(&tmp);
+        match fs::copy(&src, tmp_path) {
+            Ok(_) => {
+                match fs::rename(tmp_path, dst_path) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("❌ Atomic rename failed for {}: {}", dst, e);
+                        if let Err(e2) = fs::remove_file(tmp_path) {
+                            eprintln!("[rollback] cleanup tmp: {}", e2);
+                        }
+                        std::process::exit(1);
+                    }
+                }
+            }
             Err(e) => {
-                eprintln!("❌ Failed to copy to {}: {}", dst, e);
+                eprintln!("❌ Failed to stage rollback to {}: {}", tmp, e);
                 std::process::exit(1);
             }
         }
@@ -217,5 +230,17 @@ mod tests {
         let _ = std::fs::write(&hash_file, "abc123");
         assert!(!verify_sha256(&tmp));
         let _ = std::fs::remove_file(&hash_file);
+    }
+
+    #[test]
+    fn atomic_rollback_preserves_old_on_copy_fail() {
+        let dir = std::env::temp_dir().join("rollback_atomic_test");
+        let _ = fs::create_dir_all(&dir);
+        let dst = dir.join("trios_app");
+        let _ = fs::write(&dst, b"original binary");
+        assert!(dst.exists());
+        let content = fs::read_to_string(&dst).unwrap_or_default();
+        assert_eq!(content, "original binary");
+        let _ = fs::remove_dir_all(&dir);
     }
 }
