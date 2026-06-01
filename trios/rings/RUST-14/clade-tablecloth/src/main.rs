@@ -1266,6 +1266,24 @@ mod tests {
     }
 
     #[test]
+    fn independent_verify_rejects_missing_file() {
+        // Re-read failure must fail closed (Err), never accept the change.
+        let re = regex::Regex::new(r"try!\s*\(").unwrap();
+        let path = format!("/tmp/clade-verify-absent-{}.swift", std::process::id());
+        fs::remove_file(&path).ok(); // ensure it does not exist
+        assert!(independent_verify(&path, "x", &re).is_err());
+    }
+
+    #[test]
+    fn independent_verify_rejects_empty_file() {
+        let re = regex::Regex::new(r"try!\s*\(").unwrap();
+        let path = format!("/tmp/clade-verify-empty-{}.swift", std::process::id());
+        fs::write(&path, "   \n").unwrap(); // whitespace-only -> empty after trim
+        assert!(independent_verify(&path, "let x = 1", &re).is_err());
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
     fn target_repo_defaults_to_trios() {
         // With no github.json and no GITHUB_REPO set in the test env, the
         // fallback chain ends at "trios". (CI sets neither.)
