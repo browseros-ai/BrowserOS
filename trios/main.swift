@@ -290,7 +290,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard CFGetTypeID(positionValue) == AXValueGetTypeID() else { return nil }
         var position = CGPoint.zero
-        // CFGetTypeID check above guarantees AXValue type
+        // CFGetTypeID check above guarantees AXValue type. `as!` is the required
+        // idiomatic form for CoreFoundation types here — `as?` is rejected by
+        // the compiler ("conditional downcast ... will always succeed").
         guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position) else { return nil }
 
         var sizeValue: CFTypeRef?
@@ -299,6 +301,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
         var size = CGSize.zero
+        // CFGetTypeID-checked; `as!` required for CoreFoundation cast (see above).
         guard AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else { return nil }
 
         return CGRect(origin: position, size: size)
