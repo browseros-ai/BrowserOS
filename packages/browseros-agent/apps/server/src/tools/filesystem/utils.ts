@@ -6,9 +6,9 @@ import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 
 export function resolveSafePath(cwd: string, unsafePath: string): string {
+  const root = resolve(cwd)
   const resolved = resolve(cwd, unsafePath)
-  const normalizedCwd = normalize(cwd)
-  const rel = relative(normalizedCwd, resolved)
+  const rel = relative(root, resolved)
 
   if (rel.startsWith('..') || isAbsolute(rel)) {
     throw new Error(

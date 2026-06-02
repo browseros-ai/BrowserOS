@@ -242,7 +242,12 @@ export abstract class HostProcessAgentRuntime implements AgentRuntime {
       : (await this.deps.resolveBinary?.(binaryName, timeoutMs, env)) ??
         (await resolveHostBinary(binaryName, { env, timeoutMs }))
 
-    if (!resolved) throw new Error(`${binaryName} not found on host PATH`)
+    if (!resolved) {
+      const errorMsg = this.deps.executablePath
+        ? `The provided executable path for ${binaryName} is invalid or not accessible: ${this.deps.executablePath}`
+        : `${binaryName} not found on host PATH. Please ensure it is installed correctly.`
+      throw new Error(errorMsg)
+    }
 
     const proc = Bun.spawn([resolved.path, ...cmd.slice(1)] as string[], {
       stdout: 'pipe',

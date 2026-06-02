@@ -3,11 +3,18 @@ import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:
 const ALGORITHM = 'aes-256-gcm'
 const IV_LENGTH = 12
 
-// In production, BROWSEROS_ENCRYPTION_KEY should be set.
-// If not, we derive a key from a fixed salt for basic protection against casual inspection.
-const ENCRYPTION_KEY_RAW = process.env.BROWSEROS_ENCRYPTION_KEY || 'default-browseros-internal-key-change-me'
+// In production, BROWSEROS_ENCRYPTION_KEY MUST be set.
+const ENCRYPTION_KEY_RAW = process.env.BROWSEROS_ENCRYPTION_KEY
+if (!ENCRYPTION_KEY_RAW && process.env.NODE_ENV === 'production') {
+  throw new Error(
+    'FATAL: BROWSEROS_ENCRYPTION_KEY is not set in production environment.',
+  )
+}
+
+const DEFAULT_DEV_KEY = 'default-browseros-internal-key-change-me'
+const KEY_MATERIAL = ENCRYPTION_KEY_RAW || DEFAULT_DEV_KEY
 const SALT = 'browseros-encryption-salt'
-const KEY = scryptSync(ENCRYPTION_KEY_RAW, SALT, 32)
+const KEY = scryptSync(KEY_MATERIAL, SALT, 32)
 
 export function encrypt(text: string): string {
   const iv = randomBytes(IV_LENGTH)
