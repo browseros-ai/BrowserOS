@@ -31,6 +31,8 @@ import type {
 export interface HostProcessAgentRuntimeDeps {
   /** Host PATH binary name to probe + spawn (e.g. 'claude', 'codex'). */
   binaryName: string
+  /** Explicit path to the binary (overrides binaryName discovery). */
+  executablePath?: string
   /** Override the default `<binary> --version` probe argv. */
   versionProbeArgs?: ReadonlyArray<string>
   /** Cache window for probe results in ms. Default 5 minutes — same
@@ -233,9 +235,13 @@ export abstract class HostProcessAgentRuntime implements AgentRuntime {
     const binaryName = cmd[0]
     if (!binaryName) throw new Error('Host probe command is empty')
     const env = { ...process.env, ...(this.deps.probeEnv ?? {}) }
-    const resolved =
-      (await this.deps.resolveBinary?.(binaryName, timeoutMs, env)) ??
-      (await resolveHostBinary(binaryName, { env, timeoutMs }))
+
+    // Use explicit executablePath if provided, otherwise resolve via PATH
+    const resolved = this.deps.executablePath
+      ? { path: this.deps.executablePath, env }
+      : (await this.deps.resolveBinary?.(binaryName, timeoutMs, env)) ??
+        (await resolveHostBinary(binaryName, { env, timeoutMs }))
+
     if (!resolved) throw new Error(`${binaryName} not found on host PATH`)
 
     const proc = Bun.spawn([resolved.path, ...cmd.slice(1)] as string[], {

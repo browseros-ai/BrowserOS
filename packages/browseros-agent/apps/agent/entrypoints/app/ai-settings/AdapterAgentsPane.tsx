@@ -1,6 +1,8 @@
-import { Plus } from 'lucide-react'
+import { Plus, Settings2 } from 'lucide-react'
 import { type FC, useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { AdapterIcon, adapterLabel } from '@/entrypoints/app/agents/AdapterIcon'
 import { AgentList } from '@/entrypoints/app/agents/AgentList'
 import {
@@ -66,6 +68,29 @@ export const AdapterAgentsPane: FC<AdapterAgentsPaneProps> = ({
   const [createError, setCreateError] = useState<string | null>(null)
   const [pageError, setPageError] = useState<string | null>(null)
   const [deletingAgentKey, setDeletingAgentKey] = useState<string | null>(null)
+  const [executablePath, setExecutablePath] = useState('')
+  const [isSavingPath, setIsSavingPath] = useState(false)
+
+  // Load executable path from storage on mount
+  useEffect(() => {
+    const key = `local:${adapterId}:executablePath`
+    storage.getItem<string>(key).then((val) => {
+      if (val) setExecutablePath(val)
+    })
+  }, [adapterId])
+
+  const saveExecutablePath = async () => {
+    setIsSavingPath(true)
+    try {
+      const key = `local:${adapterId}:executablePath`
+      await storage.setItem(key, executablePath)
+      toast.success('Executable path updated. Restart the server to apply.')
+    } catch (err) {
+      toast.error('Failed to save executable path')
+    } finally {
+      setIsSavingPath(false)
+    }
+  }
 
   useDefaultAgentName(createOpen, setNewName)
   // Seed model/reasoning from the adapter defaults whenever the dialog opens.
@@ -160,6 +185,35 @@ export const AdapterAgentsPane: FC<AdapterAgentsPaneProps> = ({
             {adapter?.health ? (
               <AdapterHealthMeta health={adapter.health} />
             ) : null}
+
+            {/* Advanced: Executable Path Configuration */}
+            {(adapterId === 'claude' || adapterId === 'codex') && (
+              <div className="mt-4 flex flex-col gap-2 rounded-lg border border-border/50 bg-muted/30 p-3">
+                <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium uppercase tracking-wider">
+                  <Settings2 className="size-3" />
+                  Advanced: Executable Path
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder={`e.g. /usr/local/bin/${adapterId}`}
+                    value={executablePath}
+                    onChange={(e) => setExecutablePath(e.target.value)}
+                    className="h-8 text-xs font-mono"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={saveExecutablePath}
+                    disabled={isSavingPath}
+                    className="h-8 px-3 text-xs"
+                  >
+                    {isSavingPath ? 'Saving...' : 'Save'}
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground italic">
+                  Overrides the default PATH-based discovery for this agent.
+                </p>
+              </div>
+            )}
           </div>
           <Button
             onClick={() => setCreateOpen(true)}

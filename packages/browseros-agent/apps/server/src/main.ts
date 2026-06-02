@@ -51,8 +51,12 @@ export class Application {
       resourcesDir: path.resolve(this.config.resourcesDir),
     })
 
-    configureClaudeRuntime()
-    configureCodexRuntime()
+    configureClaudeRuntime({
+      executablePath: process.env.CLAUDE_EXECUTABLE_PATH,
+    })
+    configureCodexRuntime({
+      executablePath: process.env.CODEX_EXECUTABLE_PATH,
+    })
     await this.initCoreServices()
 
     if (!this.config.cdpPort) {

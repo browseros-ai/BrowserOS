@@ -72,6 +72,7 @@ export async function prepareClaudeCodeContext(
 
 export interface ConfigureClaudeRuntimeOptions {
   browserosDir?: string
+  executablePath?: string
 }
 
 export function configureClaudeRuntime(
@@ -79,11 +80,17 @@ export function configureClaudeRuntime(
 ): ClaudeRuntime {
   const browserosDir = options.browserosDir ?? getBrowserosDir()
   const runtime = new ClaudeRuntime(
-    { binaryName: CLAUDE_BINARY },
+    {
+      binaryName: CLAUDE_BINARY,
+      executablePath: options.executablePath,
+    },
     { browserosDir },
   )
   getAgentRuntimeRegistry().register(runtime)
-  logger.debug('ClaudeRuntime registered', { binary: CLAUDE_BINARY })
+  logger.debug('ClaudeRuntime registered', {
+    binary: CLAUDE_BINARY,
+    path: options.executablePath,
+  })
   return runtime
 }
 

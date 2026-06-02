@@ -80,6 +80,7 @@ export async function prepareCodexContext(
 
 export interface ConfigureCodexRuntimeOptions {
   browserosDir?: string
+  executablePath?: string
 }
 
 export function configureCodexRuntime(
@@ -87,11 +88,17 @@ export function configureCodexRuntime(
 ): CodexRuntime {
   const browserosDir = options.browserosDir ?? getBrowserosDir()
   const runtime = new CodexRuntime(
-    { binaryName: CODEX_BINARY },
+    {
+      binaryName: CODEX_BINARY,
+      executablePath: options.executablePath,
+    },
     { browserosDir },
   )
   getAgentRuntimeRegistry().register(runtime)
-  logger.debug('CodexRuntime registered', { binary: CODEX_BINARY })
+  logger.debug('CodexRuntime registered', {
+    binary: CODEX_BINARY,
+    path: options.executablePath,
+  })
   return runtime
 }
 
