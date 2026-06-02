@@ -80,16 +80,26 @@ export const NewTabChat: FC = () => {
   // biome-ignore lint/correctness/useExhaustiveDependencies: must only run once on mount
   useEffect(() => {
     if (hasSentInitialRef.current) return
-    const query = searchParams.get('q')
+    const queryParam = searchParams.get('q')
     const chatMode = searchParams.get('mode')
     const tabIdsParam = searchParams.get('tabs')
-    if (!query) return
+    const source = searchParams.get('source')
+    if (!queryParam) return
 
     hasSentInitialRef.current = true
     if (chatMode === 'chat' || chatMode === 'agent') {
       setMode(chatMode)
     }
     setSearchParams({}, { replace: true })
+
+    const query =
+      source === 'scheduled-task'
+        ? (sessionStorage.getItem(queryParam) ?? queryParam)
+        : queryParam
+
+    if (source === 'scheduled-task') {
+      sessionStorage.removeItem(queryParam)
+    }
 
     const actionType = searchParams.get('actionType')
     const tabName = searchParams.get('tabName')
