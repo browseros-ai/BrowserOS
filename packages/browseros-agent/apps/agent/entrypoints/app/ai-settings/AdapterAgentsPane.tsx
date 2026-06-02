@@ -2,7 +2,6 @@ import { Plus, Settings2 } from 'lucide-react'
 import { type FC, useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { AdapterIcon, adapterLabel } from '@/entrypoints/app/agents/AdapterIcon'
 import { AgentList } from '@/entrypoints/app/agents/AgentList'
 import {
