@@ -1,6 +1,6 @@
 import type { Dirent } from 'node:fs'
 import { readdir } from 'node:fs/promises'
-import { isAbsolute, join, normalize, relative, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
