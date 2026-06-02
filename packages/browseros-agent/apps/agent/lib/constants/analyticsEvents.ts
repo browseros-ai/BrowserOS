@@ -220,6 +220,9 @@ export const SCHEDULED_TASK_CANCELLED_EVENT =
 export const SCHEDULED_TASK_RETRIED_EVENT = 'settings.scheduled_task.retried'
 
 /** @public */
+export const SCHEDULED_TASK_CONTINUE_IN_CHAT_EVENT = 'settings.scheduled_task.continue_in_chat'
+
+/** @public */
 export const JTBD_POPUP_DISMISSED_EVENT = 'ui.jtbd_popup.dismissed'
 
 /** @public */
