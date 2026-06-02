@@ -177,7 +177,14 @@ export const scheduledJobRuns = async () => {
           const [hours, minutes] = job.scheduleTime.split(':').map(Number)
           const scheduledToday = new Date()
           scheduledToday.setHours(hours, minutes, 0, 0)
+          
           if (now < scheduledToday.getTime()) continue
+
+          // If the job was created today AFTER its scheduled time, 
+          // don't treat it as a missed job for today.
+          if (new Date(job.createdAt).getTime() > scheduledToday.getTime()) {
+            continue
+          }
         }
 
         if (
