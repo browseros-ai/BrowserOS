@@ -134,6 +134,7 @@ fn build_check() -> BuildCheckResult {
 /// - test modules (`#[cfg(test)]`) legitimately contain "bad" fixtures
 ///   (`api_key="sk_..."`, `try!`, forbidden-pattern strings), so drop the test
 ///   tail. Truncating at the marker keeps real findings' line numbers intact.
+///
 /// Without this the scanner emitted ~300 false-positive criticals that would
 /// pollute the autonomous issue/PR pipeline.
 fn scannable_content(path: &std::path::Path, content: &str) -> String {

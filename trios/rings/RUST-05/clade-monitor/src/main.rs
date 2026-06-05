@@ -987,7 +987,7 @@ mod tests {
     fn run_with_timeout_succeeds_on_fast_command() {
         use std::process::Command;
         let result = run_with_timeout(
-            &mut Command::new("echo").arg("hello"),
+            Command::new("echo").arg("hello"),
             5,
         );
         assert!(result);
@@ -1005,8 +1005,7 @@ mod tests {
 
     #[test]
     fn subprocess_timeout_constant_is_reasonable() {
-        assert!(SUBPROCESS_TIMEOUT_SECS >= 60);
-        assert!(SUBPROCESS_TIMEOUT_SECS <= 3600);
+        assert!((60..=3600).contains(&SUBPROCESS_TIMEOUT_SECS));
     }
 
     #[test]
