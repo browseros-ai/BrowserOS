@@ -9,6 +9,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
+// Set once the "build-check script not configured" skip has been logged, so the
+// breadcrumb is emitted at most once per process instead of every cycle.
+static BUILD_CHECK_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
+
 extern "C" fn handle_signal(_sig: libc::c_int) {
     RUNNING.store(false, Ordering::Relaxed);
 }
@@ -497,15 +501,44 @@ fn build_error_tail(stderr: &str) -> String {
     }
 }
 
+/// Resolve the build-check script path. Honors the `TRIOS_BUILD_CHECK_SCRIPT`
+/// env override (consistent with `TRIOS_ROOT`/port env handling in
+/// trios-config); otherwise defaults to the conventional location.
+fn resolve_build_check_script(env_override: Option<String>, project_dir: &str) -> String {
+    match env_override {
+        Some(p) if !p.trim().is_empty() => p,
+        _ => format!("{}/.claude/queen-zig.sh", project_dir),
+    }
+}
+
+/// Whether a "skip" breadcrumb should be emitted given whether one was already
+/// emitted this process. Collapses per-cycle skip spam into one event/process.
+fn should_emit_skip_event(already_logged: bool) -> bool {
+    !already_logged
+}
+
 fn run_build_check(interval: &str) -> bool {
     use std::path::Path;
     use std::process::{Command, Stdio};
 
-    let script = format!("{}/.claude/queen-zig.sh", &project_dir());
+    let script = resolve_build_check_script(
+        std::env::var("TRIOS_BUILD_CHECK_SCRIPT").ok(),
+        &project_dir(),
+    );
     let script_path = Path::new(&script);
     if !script_path.exists() {
-        println!("[CladeMonitor][{}] SKIP: {} not found", interval, script);
-        log_event("build_check_skip", &format!("missing_script_{}", script));
+        // The build-check script is intentionally optional. Logging "skip" on
+        // every cycle floods event_log.jsonl with a non-actionable signal that
+        // the dashboard and clade-audit then parse as noise (alert fatigue).
+        // Deduplicate at the source: emit one breadcrumb per process lifetime,
+        // then stay silent. All genuine failure paths below remain loud.
+        if should_emit_skip_event(BUILD_CHECK_SKIP_LOGGED.swap(true, Ordering::Relaxed)) {
+            println!(
+                "[CladeMonitor][{}] SKIP: build-check script not configured ({} absent) — silencing further skips this process",
+                interval, script
+            );
+            log_event("build_check_skip", &format!("missing_script_{}", script));
+        }
         return true;
     }
 
@@ -758,6 +791,37 @@ mod tests {
     #[test]
     fn backoff_one_failure() {
         assert_eq!(calculate_backoff(1), 2);
+    }
+
+    #[test]
+    fn resolve_build_check_script_honors_env_override() {
+        assert_eq!(
+            resolve_build_check_script(Some("/custom/build.sh".to_string()), "/proj"),
+            "/custom/build.sh"
+        );
+    }
+
+    #[test]
+    fn resolve_build_check_script_ignores_blank_override() {
+        assert_eq!(
+            resolve_build_check_script(Some("   ".to_string()), "/proj"),
+            "/proj/.claude/queen-zig.sh"
+        );
+    }
+
+    #[test]
+    fn resolve_build_check_script_defaults_when_unset() {
+        assert_eq!(
+            resolve_build_check_script(None, "/proj"),
+            "/proj/.claude/queen-zig.sh"
+        );
+    }
+
+    #[test]
+    fn skip_event_emits_once_then_silences() {
+        // First time (not yet logged) -> emit; afterwards (already logged) -> silent.
+        assert!(should_emit_skip_event(false));
+        assert!(!should_emit_skip_event(true));
     }
 
     #[test]
