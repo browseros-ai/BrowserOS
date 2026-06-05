@@ -195,6 +195,25 @@ mod tests {
     }
 
     #[test]
+    fn xml_escape_double_quote() {
+        // A label/path containing a double quote must not break out of the
+        // <string> context in the generated plist.
+        assert_eq!(xml_escape("a\"b"), "a&quot;b");
+    }
+
+    #[test]
+    fn xml_escape_apostrophe() {
+        assert_eq!(xml_escape("a'b"), "a&apos;b");
+    }
+
+    #[test]
+    fn xml_escape_ampersand_before_entities() {
+        // Ampersand must be escaped first so already-escaped entities are not
+        // double-encoded into &amp;lt; etc.
+        assert_eq!(xml_escape("<&>"), "&lt;&amp;&gt;");
+    }
+
+    #[test]
     fn plist_escapes_special_chars_in_path() {
         let xml = plist_xml("com.test", "/tmp/test&prog", "/tmp");
         assert!(xml.contains("test&amp;prog"));
