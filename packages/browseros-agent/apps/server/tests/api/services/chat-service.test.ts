@@ -24,10 +24,20 @@ interface StreamResponseOptions {
   onFinish(args: { messages: MockMessage[] }): Promise<void>
 }
 
+type MockStreamChunk =
+  | { type: 'start' }
+  | { type: 'start-step' }
+  | { type: 'text-start'; id: string }
+  | { type: 'text-delta'; id: string; delta: string }
+  | { type: 'text-end'; id: string }
+  | { type: 'finish' }
+  | { type: 'error'; errorText: string }
+
 let agentToReturn: MockAgent | undefined
 let streamResponseHandler:
-  | ((options: StreamResponseOptions) => Promise<Response>)
+  | ((options: StreamResponseOptions) => Promise<MockStreamChunk[] | undefined>)
   | undefined
+let drainedStreamChunks: MockStreamChunk[] = []
 
 const createAgentSpy = mock(async (config: unknown) => {
   if (!agentToReturn) {
@@ -36,12 +46,41 @@ const createAgentSpy = mock(async (config: unknown) => {
   return agentToReturn
 })
 
+const createAgentUIStreamSpy = mock(async (options: StreamResponseOptions) => {
+  if (!streamResponseHandler) {
+    throw new Error('No stream response handler configured')
+  }
+  const chunks = await streamResponseHandler(options)
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(chunk)
+      }
+      controller.close()
+    },
+  })
+})
+
+const createUIMessageStreamResponseSpy = mock(
+  async ({ stream }: { stream: ReadableStream<MockStreamChunk> }) => {
+    drainedStreamChunks = []
+    const reader = stream.getReader()
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      drainedStreamChunks.push(value)
+    }
+    return new Response('ok')
+  },
+)
+
 const createAgentUIStreamResponseSpy = mock(
   async (options: StreamResponseOptions) => {
     if (!streamResponseHandler) {
       throw new Error('No stream response handler configured')
     }
-    return await streamResponseHandler(options)
+    await streamResponseHandler(options)
+    return new Response('ok')
   },
 )
 
@@ -52,6 +91,8 @@ const resolveLLMConfigSpy = mock(async () => ({
 }))
 
 mock.module('ai', () => ({
+  createAgentUIStream: createAgentUIStreamSpy,
+  createUIMessageStreamResponse: createUIMessageStreamResponseSpy,
   createAgentUIStreamResponse: createAgentUIStreamResponseSpy,
 }))
 
@@ -123,7 +164,7 @@ describe('ChatService scheduled task hidden page lifecycle', () => {
     agentToReturn = fakeAgent
     streamResponseHandler = async ({ onFinish, uiMessages }) => {
       await onFinish({ messages: uiMessages ?? fakeAgent.messages })
-      return new Response('ok')
+      return []
     }
 
     const browser = {
@@ -232,7 +273,7 @@ describe('ChatService scheduled task hidden page lifecycle', () => {
     agentToReturn = fakeAgent
     streamResponseHandler = async ({ onFinish, uiMessages }) => {
       await onFinish({ messages: uiMessages ?? fakeAgent.messages })
-      return new Response('ok')
+      return []
     }
 
     const browser = {
@@ -300,7 +341,7 @@ describe('ChatService Klavis session rebuilds', () => {
     streamResponseHandler = async ({ onFinish, uiMessages }) => {
       lastPromptUiMessages = uiMessages
       await onFinish({ messages: uiMessages ?? [] })
-      return new Response('ok')
+      return []
     }
 
     const klavisRef = { handle: null as object | null }
@@ -374,7 +415,7 @@ describe('ChatService Klavis session rebuilds', () => {
     agentToReturn = firstAgent
     streamResponseHandler = async ({ onFinish, uiMessages }) => {
       await onFinish({ messages: uiMessages ?? [] })
-      return new Response('ok')
+      return []
     }
 
     const klavisRef = { handle: null as object | null }
@@ -422,5 +463,234 @@ describe('ChatService Klavis session rebuilds', () => {
     expect(createAgentSpy.mock.calls.length - createCallsBefore).toBe(1)
     expect(firstAgent.dispose).not.toHaveBeenCalled()
     expect(firstAgent.messages).toHaveLength(2)
+  })
+})
+
+describe('ChatService context-limit recovery', () => {
+  it('compacts sidepanel chat history, rebuilds the session, and retries once', async () => {
+    const firstAgent = createFakeAgent()
+    const secondAgent = createFakeAgent()
+    agentToReturn = firstAgent
+
+    let streamCallCount = 0
+    let retryPromptMessages: MockMessage[] | undefined
+    streamResponseHandler = async ({ onFinish, uiMessages }) => {
+      streamCallCount++
+      if (streamCallCount === 1) {
+        agentToReturn = secondAgent
+        return [
+          { type: 'start' },
+          { type: 'start-step' },
+          {
+            type: 'error',
+            errorText:
+              'Your input exceeds the context window of this model. Please adjust your input and try again.',
+          },
+        ]
+      }
+
+      retryPromptMessages = uiMessages
+      await onFinish({
+        messages: [
+          ...(uiMessages ?? []),
+          {
+            id: 'assistant-final',
+            role: 'assistant',
+            parts: [{ type: 'text', text: 'Recovered response.' }],
+          },
+        ],
+      })
+      return [
+        { type: 'start' },
+        { type: 'start-step' },
+        { type: 'text-start', id: 'text-1' },
+        { type: 'text-delta', id: 'text-1', delta: 'Recovered response.' },
+        { type: 'text-end', id: 'text-1' },
+        { type: 'finish' },
+      ]
+    }
+
+    const browser = {
+      resolveTabIds: mock(
+        async (tabIds: number[]) =>
+          new Map(tabIds.map((tabId) => [tabId, tabId + 300])),
+      ),
+      closePage: mock(async () => {}),
+    }
+    const sessionStore = createSessionStore()
+    const service = new ChatService({
+      sessionStore: sessionStore as never,
+      klavisRef: { handle: null },
+      browser: browser as never,
+      registry: {} as never,
+    })
+    const createCallsBefore = createAgentSpy.mock.calls.length
+
+    const previousConversation = Array.from({ length: 8 }, (_, index) => ({
+      role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `prior message ${index}`,
+    }))
+
+    await service.processMessage(
+      {
+        conversationId: crypto.randomUUID(),
+        message: 'continue the research',
+        previousConversation,
+        isScheduledTask: false,
+        mode: 'agent',
+        origin: 'sidepanel',
+        browserContext: {
+          activeTab: {
+            id: 3,
+            url: 'https://example.com',
+            title: 'Example',
+          },
+        },
+      } as never,
+      new AbortController().signal,
+    )
+
+    expect(streamCallCount).toBe(2)
+    expect(createAgentSpy.mock.calls.length - createCallsBefore).toBe(2)
+    expect(firstAgent.dispose).toHaveBeenCalledTimes(1)
+    expect(
+      drainedStreamChunks.some((chunk) => chunk.type === 'error'),
+    ).toBeFalse()
+
+    const retryTexts =
+      retryPromptMessages?.map((message) => message.parts[0]?.text ?? '') ?? []
+    expect(retryTexts[0]).toContain('<continuation_context>')
+    expect(retryTexts[0]).toContain('provider reported')
+    expect(retryTexts.at(-1)).toContain('<USER_QUERY>')
+    expect(retryTexts.at(-1)).toContain('continue the research')
+
+    const persistedTexts = secondAgent.messages.map(
+      (message) => message.parts[0]?.text ?? '',
+    )
+    expect(persistedTexts[0]).toContain('<continuation_context>')
+    expect(persistedTexts).toContain('continue the research')
+    expect(persistedTexts).toContain('Recovered response.')
+  })
+
+  it('retries a context-limit failure after partial assistant output', async () => {
+    const firstAgent = createFakeAgent()
+    const secondAgent = createFakeAgent()
+    agentToReturn = firstAgent
+
+    let streamCallCount = 0
+    let retryPromptMessages: MockMessage[] | undefined
+    streamResponseHandler = async ({ onFinish, uiMessages }) => {
+      streamCallCount++
+      if (streamCallCount === 1) {
+        agentToReturn = secondAgent
+        return [
+          { type: 'start' },
+          { type: 'start-step' },
+          { type: 'text-start', id: 'text-1' },
+          {
+            type: 'text-delta',
+            id: 'text-1',
+            delta: 'I found some sources.',
+          },
+          { type: 'text-end', id: 'text-1' },
+          {
+            type: 'error',
+            errorText:
+              'Your input exceeds the context window of this model. Please adjust your input and try again.',
+          },
+        ]
+      }
+
+      retryPromptMessages = uiMessages
+      await onFinish({
+        messages: [
+          ...(uiMessages ?? []),
+          {
+            id: 'assistant-final',
+            role: 'assistant',
+            parts: [{ type: 'text', text: 'Recovered continuation.' }],
+          },
+        ],
+      })
+      return [
+        { type: 'start' },
+        { type: 'start-step' },
+        { type: 'text-start', id: 'text-2' },
+        {
+          type: 'text-delta',
+          id: 'text-2',
+          delta: 'Recovered continuation.',
+        },
+        { type: 'text-end', id: 'text-2' },
+        { type: 'finish' },
+      ]
+    }
+
+    const browser = {
+      resolveTabIds: mock(
+        async (tabIds: number[]) =>
+          new Map(tabIds.map((tabId) => [tabId, tabId + 400])),
+      ),
+      closePage: mock(async () => {}),
+    }
+    const sessionStore = createSessionStore()
+    const service = new ChatService({
+      sessionStore: sessionStore as never,
+      klavisRef: { handle: null },
+      browser: browser as never,
+      registry: {} as never,
+    })
+    const createCallsBefore = createAgentSpy.mock.calls.length
+
+    const previousConversation = Array.from({ length: 8 }, (_, index) => ({
+      role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `prior message ${index}`,
+    }))
+
+    await service.processMessage(
+      {
+        conversationId: crypto.randomUUID(),
+        message: 'keep checking those forum sources',
+        previousConversation,
+        isScheduledTask: false,
+        mode: 'agent',
+        origin: 'sidepanel',
+        browserContext: {
+          activeTab: {
+            id: 3,
+            url: 'https://example.com',
+            title: 'Example',
+          },
+        },
+      } as never,
+      new AbortController().signal,
+    )
+
+    expect(streamCallCount).toBe(2)
+    expect(createAgentSpy.mock.calls.length - createCallsBefore).toBe(2)
+    expect(firstAgent.dispose).toHaveBeenCalledTimes(1)
+    expect(
+      drainedStreamChunks.some((chunk) => chunk.type === 'error'),
+    ).toBeFalse()
+    expect(
+      drainedStreamChunks.filter((chunk) => chunk.type === 'start'),
+    ).toHaveLength(1)
+    expect(
+      drainedStreamChunks
+        .filter((chunk) => chunk.type === 'text-delta')
+        .map((chunk) => chunk.delta),
+    ).toEqual(['I found some sources.', 'Recovered continuation.'])
+
+    const retryTexts =
+      retryPromptMessages?.map((message) => message.parts[0]?.text ?? '') ?? []
+    expect(retryTexts[0]).toContain('<continuation_context>')
+    expect(retryTexts.at(-1)).toContain('keep checking those forum sources')
+
+    const persistedTexts = secondAgent.messages.map(
+      (message) => message.parts[0]?.text ?? '',
+    )
+    expect(persistedTexts[0]).toContain('<continuation_context>')
+    expect(persistedTexts).toContain('keep checking those forum sources')
+    expect(persistedTexts).toContain('Recovered continuation.')
   })
 })

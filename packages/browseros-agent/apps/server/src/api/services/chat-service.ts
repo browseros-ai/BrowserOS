@@ -4,8 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { createAgentUIStreamResponse, type UIMessage } from 'ai'
+import {
+  createAgentUIStream,
+  createUIMessageStreamResponse,
+  type UIMessage,
+  type UIMessageChunk,
+} from 'ai'
 import { AiSdkAgent } from '../../agent/ai-sdk-agent'
+import { buildChatContinuationMessages } from '../../agent/chat-continuation'
 import { formatUserMessage } from '../../agent/format-message'
 import {
   filterValidMessages,
@@ -15,6 +21,10 @@ import type { AgentSession, SessionStore } from '../../agent/session-store'
 import type { ResolvedAgentConfig } from '../../agent/types'
 import type { Browser } from '../../browser/browser'
 import { resolveLLMConfig } from '../../lib/clients/llm/config'
+import {
+  isContextLimitError,
+  stringifyError,
+} from '../../lib/context-limit-error'
 import { logger } from '../../lib/logger'
 import type { ToolRegistry } from '../../tools/tool-registry'
 import type { KlavisProxyRef } from '../services/klavis/strata-proxy'
@@ -33,6 +43,7 @@ export interface ChatServiceDeps {
 export class ChatService {
   constructor(private deps: ChatServiceDeps) {}
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: this method orchestrates chat session lifecycle, context changes, and stream recovery; split only with a dedicated service refactor.
   async processMessage(
     request: ChatRequest,
     abortSignal: AbortSignal,
@@ -248,8 +259,10 @@ export class ChatService {
       })
     }
 
+    let activeSession = session
+
     const messageContext = request.isScheduledTask
-      ? (session.browserContext ?? request.browserContext)
+      ? (activeSession.browserContext ?? request.browserContext)
       : request.browserContext
     // Scheduled tasks already have correct internal pageIds from browser.newPage();
     // resolving them again would pass those to resolveTabIds, which expects Chrome
@@ -276,50 +289,62 @@ export class ChatService {
     // <selected_text> + <USER_QUERY>) is built as a transient prompt
     // copy below — the LLM sees it, the user-visible state never
     // does.
-    session.agent.appendUserMessage(request.message)
+    activeSession.agent.appendUserMessage(request.message)
     const promptUserText = contextPrefix + userContent
     const wrappedUserMessageId =
-      session.agent.messages[session.agent.messages.length - 1]?.id
+      activeSession.agent.messages[activeSession.agent.messages.length - 1]?.id
 
-    const promptUiMessages = filterValidMessages(session.agent.messages).map(
-      (msg) =>
+    const buildPromptUiMessages = () =>
+      filterValidMessages(activeSession.agent.messages).map((msg) =>
         msg.id === wrappedUserMessageId && msg.role === 'user'
           ? {
               ...msg,
               parts: [{ type: 'text' as const, text: promptUserText }],
             }
           : msg,
-    )
+      )
 
-    return createAgentUIStreamResponse({
-      agent: session.agent.toolLoopAgent,
-      uiMessages: promptUiMessages,
-      abortSignal,
-      onFinish: async ({ messages }: { messages: UIMessage[] }) => {
-        // The agent loop returns `messages` containing the prompt-
-        // wrapped user text. Restore the raw form before persisting
-        // so subsequent turns see the clean text and the client's
-        // local UIMessage matches what was originally typed.
-        const restored = messages.map((msg) =>
-          msg.id === wrappedUserMessageId && msg.role === 'user'
-            ? {
-                ...msg,
-                parts: [{ type: 'text' as const, text: request.message }],
-              }
-            : msg,
-        )
-        session.agent.messages = filterValidMessages(restored)
-        logger.info('Agent execution complete', {
-          conversationId: request.conversationId,
-          totalMessages: restored.length,
-        })
+    const persistFinishedMessages = async ({
+      messages,
+    }: {
+      messages: UIMessage[]
+    }) => {
+      // The agent loop returns `messages` containing the prompt-
+      // wrapped user text. Restore the raw form before persisting
+      // so subsequent turns see the clean text and the client's
+      // local UIMessage matches what was originally typed.
+      const restored = messages.map((msg) =>
+        msg.id === wrappedUserMessageId && msg.role === 'user'
+          ? {
+              ...msg,
+              parts: [{ type: 'text' as const, text: request.message }],
+            }
+          : msg,
+      )
+      activeSession.agent.messages = filterValidMessages(restored)
+      logger.info('Agent execution complete', {
+        conversationId: request.conversationId,
+        totalMessages: restored.length,
+      })
 
-        if (session?.hiddenPageId) {
-          const pageId = session.hiddenPageId
-          session.hiddenPageId = undefined
-          this.closeHiddenPage(pageId, request.conversationId)
-        }
+      if (activeSession.hiddenPageId) {
+        const pageId = activeSession.hiddenPageId
+        activeSession.hiddenPageId = undefined
+        this.closeHiddenPage(pageId, request.conversationId)
+      }
+    }
+
+    return this.createRecoveringAgentUIStreamResponse({
+      request,
+      agentConfig,
+      mcpServerKey,
+      getSession: () => activeSession,
+      setSession: (nextSession) => {
+        activeSession = nextSession
       },
+      getPromptUiMessages: buildPromptUiMessages,
+      abortSignal,
+      onFinish: persistFinishedMessages,
     })
   }
 
@@ -390,6 +415,216 @@ export class ChatService {
     return newSession
   }
 
+  private createRecoveringAgentUIStreamResponse(input: {
+    request: ChatRequest
+    agentConfig: ResolvedAgentConfig
+    mcpServerKey: string
+    getSession: () => AgentSession
+    setSession: (session: AgentSession) => void
+    getPromptUiMessages: () => UIMessage[]
+    abortSignal: AbortSignal
+    onFinish(args: { messages: UIMessage[] }): Promise<void>
+  }): Response {
+    let retriedForContextLimit = false
+
+    const stream = new ReadableStream<UIMessageChunk>({
+      start: async (controller) => {
+        const enqueue = (chunk: UIMessageChunk) => {
+          try {
+            controller.enqueue(chunk)
+          } catch {}
+        }
+
+        const runAttempt = async (
+          options: { suppressStartChunk?: boolean } = {},
+        ): Promise<void> => {
+          const session = input.getSession()
+          const agentStream = await createAgentUIStream({
+            agent: session.agent.toolLoopAgent,
+            uiMessages: input.getPromptUiMessages(),
+            abortSignal: input.abortSignal,
+            onFinish: input.onFinish,
+          })
+
+          await this.pipeAttemptWithContextRecovery({
+            input,
+            source: agentStream,
+            enqueue,
+            shouldRetry: () => !retriedForContextLimit,
+            markRetried: () => {
+              retriedForContextLimit = true
+            },
+            suppressStartChunk: options.suppressStartChunk ?? false,
+            runRetry: runAttempt,
+          })
+        }
+
+        try {
+          await runAttempt()
+        } catch (error) {
+          if (!retriedForContextLimit && isContextLimitError(error)) {
+            retriedForContextLimit = true
+            const retryPrepared = await this.prepareContextLimitRetry(
+              input,
+              error,
+            )
+            if (retryPrepared) {
+              await runAttempt()
+              controller.close()
+              return
+            }
+          }
+          enqueue({ type: 'error', errorText: stringifyError(error) })
+        } finally {
+          try {
+            controller.close()
+          } catch {}
+        }
+      },
+    })
+
+    return createUIMessageStreamResponse({ stream })
+  }
+
+  private async pipeAttemptWithContextRecovery(input: {
+    input: {
+      request: ChatRequest
+      agentConfig: ResolvedAgentConfig
+      mcpServerKey: string
+      getSession: () => AgentSession
+      setSession: (session: AgentSession) => void
+      getPromptUiMessages: () => UIMessage[]
+      abortSignal: AbortSignal
+      onFinish(args: { messages: UIMessage[] }): Promise<void>
+    }
+    source: ReadableStream<UIMessageChunk>
+    enqueue(chunk: UIMessageChunk): void
+    shouldRetry(): boolean
+    markRetried(): void
+    suppressStartChunk: boolean
+    runRetry(options?: { suppressStartChunk?: boolean }): Promise<void>
+  }): Promise<void> {
+    const buffered: UIMessageChunk[] = []
+    let flushed = false
+
+    const flush = () => {
+      if (flushed) return
+      flushed = true
+      for (const bufferedChunk of buffered) {
+        input.enqueue(bufferedChunk)
+      }
+      buffered.length = 0
+    }
+
+    const reader = input.source.getReader()
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        if (input.suppressStartChunk && value.type === 'start') {
+          continue
+        }
+
+        if (
+          value.type === 'error' &&
+          input.shouldRetry() &&
+          isContextLimitError(value.errorText)
+        ) {
+          input.markRetried()
+          const retryPrepared = await this.prepareContextLimitRetry(
+            input.input,
+            value.errorText,
+          )
+          if (retryPrepared) {
+            await reader.cancel().catch(() => {})
+            await input.runRetry({ suppressStartChunk: flushed })
+            return
+          }
+        }
+
+        if (!flushed) {
+          buffered.push(value)
+          if (isMeaningfulStreamChunk(value)) flush()
+          continue
+        }
+
+        input.enqueue(value)
+      }
+    } finally {
+      reader.releaseLock()
+    }
+
+    flush()
+  }
+
+  private async prepareContextLimitRetry(
+    input: {
+      request: ChatRequest
+      agentConfig: ResolvedAgentConfig
+      mcpServerKey: string
+      getSession: () => AgentSession
+      setSession: (session: AgentSession) => void
+    },
+    error: unknown,
+  ): Promise<boolean> {
+    const session = input.getSession()
+    const continuation = buildChatContinuationMessages({
+      messages: session.agent.messages,
+      latestUserMessageId: session.agent.messages.at(-1)?.id,
+      reason: stringifyError(error),
+    })
+
+    if (continuation.compactedMessageCount === 0) {
+      logger.warn(
+        'Context limit retry skipped; no older chat history to compact',
+        {
+          conversationId: input.request.conversationId,
+        },
+      )
+      return false
+    }
+
+    logger.info(
+      'Context limit reached; compacting sidepanel chat and retrying',
+      {
+        conversationId: input.request.conversationId,
+        compactedMessageCount: continuation.compactedMessageCount,
+        retainedMessageCount: continuation.messages.length,
+      },
+    )
+
+    const rebuilt = await this.rebuildSessionWithMessages(
+      session,
+      input.request,
+      input.agentConfig,
+      input.mcpServerKey,
+      continuation.messages,
+    )
+    input.setSession(rebuilt)
+    return true
+  }
+
+  private async rebuildSessionWithMessages(
+    session: AgentSession,
+    request: ChatRequest,
+    agentConfig: ResolvedAgentConfig,
+    mcpServerKey: string,
+    messages: UIMessage[],
+  ): Promise<AgentSession> {
+    const rebuilt = await this.rebuildSession(
+      session,
+      request,
+      agentConfig,
+      mcpServerKey,
+    )
+    rebuilt.agent.messages = sanitizeMessagesForToolset(
+      messages,
+      rebuilt.agent.toolNames,
+    )
+    return rebuilt
+  }
+
   private buildMcpServerKey(browserContext?: BrowserContext): string {
     const managed = browserContext?.enabledMcpServers?.slice().sort() ?? []
     const custom =
@@ -401,5 +636,22 @@ export class ChatService {
           : 'klavis:pending'
         : null
     return [klavisState, ...managed, ...custom].filter(Boolean).join(',')
+  }
+}
+
+function isMeaningfulStreamChunk(chunk: UIMessageChunk): boolean {
+  switch (chunk.type) {
+    case 'start':
+    case 'start-step':
+    case 'text-start':
+    case 'text-end':
+    case 'reasoning-start':
+    case 'reasoning-end':
+    case 'finish-step':
+    case 'finish':
+    case 'message-metadata':
+      return false
+    default:
+      return chunk.type !== 'error'
   }
 }

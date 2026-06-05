@@ -74,13 +74,17 @@ The agent loop uses the [Vercel AI SDK](https://sdk.vercel.ai) to orchestrate mu
 
 - **Multi-provider support** — OpenAI, Anthropic, Google, Azure, Bedrock, OpenRouter, Ollama, LM Studio, and any OpenAI-compatible endpoint
 - **Session management** — conversations persist in a local SQLite database
-- **Context overflow handling** — automatic message compaction when context windows fill up
+- **Context overflow handling** — automatic message compaction when context windows fill up, including sidepanel chat recovery after provider context-limit errors
 - **MCP client** — connects to external MCP servers for additional tool access (40+ app integrations)
 - **Tool adapter** — bridges MCP tool definitions to AI SDK tool format
 
 ### Provider Factory
 
 The provider factory (`src/agent/provider-factory.ts`) creates AI SDK providers from runtime configuration, supporting hot-swapping between providers without restart.
+
+### Sidepanel Chat Context Recovery
+
+If a provider returns a context-limit error during a sidepanel chat turn, BrowserOS compacts older chat history into a structured `<continuation_context>` note, rebuilds the session, and retries once instead of making the user restart the chat. When the error arrives after partial assistant output, BrowserOS preserves the visible progress and suppresses the duplicate retry start event.
 
 ## Directory Structure
 
