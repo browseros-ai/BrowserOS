@@ -175,6 +175,50 @@ pub fn sandbox_exec_argv(profile_path: &Path, program: &str, program_args: &[&st
     argv
 }
 
+/// Whether `sandbox-exec` exists on this host. It is deprecated but still ships
+/// on macOS 14+. Shadow/enforce modes no-op when it is absent (fail-safe).
+pub fn sandbox_exec_available() -> bool {
+    std::process::Command::new("which")
+        .arg("sandbox-exec")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Write the Seatbelt profile for `dev_root` to `<dev_root>/.clade-sandbox.sb`
+/// and return its path, for use as the `-f` argument to `sandbox-exec`.
+pub fn write_seatbelt_profile(dev_root: &Path, home: &Path) -> std::io::Result<PathBuf> {
+    let path = dev_root.join(".clade-sandbox.sb");
+    fs::write(&path, generate_seatbelt_profile(dev_root, home))?;
+    Ok(path)
+}
+
+/// Outcome of comparing the authoritative (un-sandboxed) build result with the
+/// shadow (sandboxed) result. In shadow mode the authoritative result always
+/// wins; this verdict only drives profile tuning before enforcement (P4.3).
+#[derive(Debug, PartialEq, Eq)]
+pub enum ShadowVerdict {
+    /// Both agree — the profile neither over- nor under-restricts this build.
+    Match,
+    /// Real build passed but sandboxed failed — profile is TOO TIGHT and would
+    /// break the build if enforced; needs an allowlist addition before P4.3.
+    TooTight,
+    /// Real build failed but sandboxed passed — anomalous; investigate before
+    /// trusting the shadow signal.
+    Inconsistent,
+}
+
+/// Pure comparison of authoritative vs. sandboxed build success.
+pub fn shadow_verdict(real_ok: bool, sandboxed_ok: bool) -> ShadowVerdict {
+    match (real_ok, sandboxed_ok) {
+        (true, true) | (false, false) => ShadowVerdict::Match,
+        (true, false) => ShadowVerdict::TooTight,
+        (false, true) => ShadowVerdict::Inconsistent,
+    }
+}
+
 #[cfg(test)]
 // Tests legitimately use expect()/unwrap() for fixtures and invariants; the
 // workspace deny/warn policy targets production code paths, not test setup.
@@ -254,6 +298,39 @@ mod tests {
     fn sandbox_exec_argv_builds_wrapped_command() {
         let argv = sandbox_exec_argv(Path::new("/tmp/p.sb"), "swiftc", &["-O", "main.swift"]);
         assert_eq!(argv, vec!["-f", "/tmp/p.sb", "swiftc", "-O", "main.swift"]);
+    }
+
+    #[test]
+    fn shadow_verdict_agreement_is_match() {
+        assert_eq!(shadow_verdict(true, true), ShadowVerdict::Match);
+        assert_eq!(shadow_verdict(false, false), ShadowVerdict::Match);
+    }
+
+    #[test]
+    fn shadow_verdict_real_pass_sandbox_fail_is_too_tight() {
+        assert_eq!(shadow_verdict(true, false), ShadowVerdict::TooTight);
+    }
+
+    #[test]
+    fn shadow_verdict_real_fail_sandbox_pass_is_inconsistent() {
+        assert_eq!(shadow_verdict(false, true), ShadowVerdict::Inconsistent);
+    }
+
+    #[test]
+    fn write_seatbelt_profile_writes_deny_default_file() {
+        let dir = PathBuf::from("/tmp/clade-sb-write-test");
+        fs::create_dir_all(&dir).ok();
+        let path = write_seatbelt_profile(&dir, Path::new("/Users/x")).expect("write ok");
+        assert!(path.ends_with(".clade-sandbox.sb"));
+        let body = fs::read_to_string(&path).expect("read back");
+        assert!(body.contains("(deny default)"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sandbox_exec_available_is_callable() {
+        // Smoke: must not panic. On macOS hosts (trios's target) this is true.
+        let _ = sandbox_exec_available();
     }
 
     #[test]

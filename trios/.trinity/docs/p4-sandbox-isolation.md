@@ -30,10 +30,15 @@ macOS **Seatbelt** via `sandbox-exec -f <profile.sb> <program>`:
 ## Decomposed plan
 - **P4.1 — profile generator (DONE)**: `generate_seatbelt_profile(dev_root, home)` +
   `sandbox_exec_argv(profile, program, args)`. Pure, 5 unit tests. Unwired.
-- **P4.2 — shadow mode**: write the profile to `<dev_root>/.clade-sandbox.sb`; run the
-  build BOTH normally (authoritative) and under `sandbox-exec` (observe-only); log
-  divergences (`sandbox_shadow_pass` / `sandbox_shadow_block`) to event_log. No
-  behavior change. Tune the allowlist until shadow == normal across the e2e suite.
+- **P4.2a — shadow helpers (DONE)**: `write_seatbelt_profile(dev_root, home)` (writes
+  `<dev_root>/.clade-sandbox.sb`), `sandbox_exec_available()` (fail-safe no-op probe),
+  and `shadow_verdict(real_ok, sandboxed_ok) -> {Match, TooTight, Inconsistent}`. Pure
+  + IO, 5 unit tests. Still unwired.
+- **P4.2b — shadow wiring (NEXT)**: in `pipeline.rs`, after the authoritative build,
+  if `sandbox_exec_available()`, also run it under `sandbox-exec` (observe-only), log
+  `shadow_verdict` to event_log. The authoritative result still decides everything.
+  REQUIRES validation: run the full `clade-e2e` suite and confirm verdicts converge to
+  `Match` (tune the allowlist for any `TooTight`) before this lands enabled by default.
 - **P4.3 — enforce (opt-in)**: gate on `TRIOS_SANDBOX=enforce`; run the build ONLY
   under `sandbox-exec`. Fail closed if `sandbox-exec` is missing. Default stays off.
 - **P4.4 — network proxy (optional)**: localhost proxy outside the sandbox if exact
