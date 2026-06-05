@@ -85,6 +85,56 @@ impl ImprovementPipeline {
         SandboxedDev::create_from_staging(ticket_id, &source)
     }
     
+    /// P4.2b shadow mode (observe-only). Re-runs the sandbox build under
+    /// `sandbox-exec` and logs the `ShadowVerdict` vs. the authoritative result.
+    /// Opt-in via `TRIOS_SANDBOX=shadow`; a no-op otherwise, and it NEVER changes
+    /// the pipeline outcome. Fail-safe: any missing precondition just skips.
+    fn shadow_check_build(&self, dev: &SandboxedDev, real_build_ok: bool) {
+        use crate::sandbox::{
+            sandbox_exec_argv, sandbox_exec_available, shadow_mode_enabled, shadow_verdict,
+            write_seatbelt_profile,
+        };
+        use std::process::{Command, Stdio};
+
+        if !shadow_mode_enabled(std::env::var("TRIOS_SANDBOX").ok().as_deref()) {
+            return;
+        }
+        if !sandbox_exec_available() {
+            info!("[Pipeline][shadow] sandbox-exec unavailable — skipping shadow check");
+            return;
+        }
+        let home = match std::env::var("HOME") {
+            Ok(h) => PathBuf::from(h),
+            Err(_) => {
+                warn!("[Pipeline][shadow] HOME unset — skipping shadow check");
+                return;
+            }
+        };
+        let profile = match write_seatbelt_profile(&dev.root, &home) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("[Pipeline][shadow] profile write failed: {} — skipping", e);
+                return;
+            }
+        };
+        let manifest = format!("{}/Cargo.toml", dev.root.display());
+        let argv = sandbox_exec_argv(&profile, "cargo", &["build", "--manifest-path", &manifest]);
+        let sandboxed_ok = matches!(
+            Command::new("sandbox-exec")
+                .args(&argv)
+                .env("TRIOS_VARIANT", "dev")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .output(),
+            Ok(ref o) if o.status.success()
+        );
+        let verdict = shadow_verdict(real_build_ok, sandboxed_ok);
+        info!(
+            "[Pipeline][shadow] verdict={:?} (real_ok={}, sandboxed_ok={})",
+            verdict, real_build_ok, sandboxed_ok
+        );
+    }
+
     /// Phase 3: Run tests in Dev sandbox
     pub fn run_tests(&self, dev: &SandboxedDev) -> Vec<TestResult> {
         use std::process::{Command, Stdio};
@@ -131,6 +181,11 @@ impl ImprovementPipeline {
             name: "build".to_string(),
             passed: build_passed,
         });
+
+        // P4.2b: observe-only shadow sandbox check. Default-off; never affects
+        // `results` or the pipeline outcome — it only logs how a sandboxed build
+        // compares to the authoritative one, to tune the profile before P4.3.
+        self.shadow_check_build(dev, build_passed);
 
         // Test 3: Swift build if main.swift exists
         let swift_path = dev.root.join("main.swift");

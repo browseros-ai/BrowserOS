@@ -34,11 +34,19 @@ macOS **Seatbelt** via `sandbox-exec -f <profile.sb> <program>`:
   `<dev_root>/.clade-sandbox.sb`), `sandbox_exec_available()` (fail-safe no-op probe),
   and `shadow_verdict(real_ok, sandboxed_ok) -> {Match, TooTight, Inconsistent}`. Pure
   + IO, 5 unit tests. Still unwired.
-- **P4.2b — shadow wiring (NEXT)**: in `pipeline.rs`, after the authoritative build,
-  if `sandbox_exec_available()`, also run it under `sandbox-exec` (observe-only), log
-  `shadow_verdict` to event_log. The authoritative result still decides everything.
-  REQUIRES validation: run the full `clade-e2e` suite and confirm verdicts converge to
-  `Match` (tune the allowlist for any `TooTight`) before this lands enabled by default.
+- **P4.2b — shadow wiring (DONE, default-off)**: `pipeline.rs::shadow_check_build`
+  runs after the authoritative build; gated on `TRIOS_SANDBOX=shadow` (pure
+  `shadow_mode_enabled`, unit-tested OFF by default). Observe-only: re-runs the build
+  under `sandbox-exec`, logs `ShadowVerdict` via tracing. NEVER touches `results`.
+  Smoke test of the profile (`sandbox-exec -f <profile> ...`): basic exec + `cargo
+  --version` pass (exit 0); reading `~/.ssh` is blocked (exit 134 / SIGABRT — the
+  sandbox kills on violation rather than returning EPERM). Implication: a build that
+  incidentally touches a denied path is hard-killed, so the allowlist MUST be tuned in
+  shadow mode (collect `TooTight` verdicts) before P4.3.
+- **P4.2c — live shadow validation (NEXT, needs real run)**: run the pipeline with
+  `TRIOS_SANDBOX=shadow` against real variants; confirm verdicts converge to `Match`;
+  route verdicts to event_log (currently tracing only). This needs a live
+  self-improvement run, not just unit tests.
 - **P4.3 — enforce (opt-in)**: gate on `TRIOS_SANDBOX=enforce`; run the build ONLY
   under `sandbox-exec`. Fail closed if `sandbox-exec` is missing. Default stays off.
 - **P4.4 — network proxy (optional)**: localhost proxy outside the sandbox if exact

@@ -210,6 +210,14 @@ pub enum ShadowVerdict {
     Inconsistent,
 }
 
+/// Whether shadow mode is enabled, from the `TRIOS_SANDBOX` env value. Default
+/// (unset / any other value) is OFF — the live pipeline is unaffected unless a
+/// caller explicitly opts in with `TRIOS_SANDBOX=shadow`. Extracted as a pure
+/// function so the default-off guarantee is unit-tested.
+pub fn shadow_mode_enabled(env_val: Option<&str>) -> bool {
+    env_val == Some("shadow")
+}
+
 /// Pure comparison of authoritative vs. sandboxed build success.
 pub fn shadow_verdict(real_ok: bool, sandboxed_ok: bool) -> ShadowVerdict {
     match (real_ok, sandboxed_ok) {
@@ -325,6 +333,14 @@ mod tests {
         let body = fs::read_to_string(&path).expect("read back");
         assert!(body.contains("(deny default)"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shadow_mode_off_by_default() {
+        assert!(!shadow_mode_enabled(None));
+        assert!(!shadow_mode_enabled(Some("")));
+        assert!(!shadow_mode_enabled(Some("enforce")));
+        assert!(shadow_mode_enabled(Some("shadow")));
     }
 
     #[test]
