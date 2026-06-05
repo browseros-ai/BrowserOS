@@ -43,10 +43,23 @@ macOS **Seatbelt** via `sandbox-exec -f <profile.sb> <program>`:
   sandbox kills on violation rather than returning EPERM). Implication: a build that
   incidentally touches a denied path is hard-killed, so the allowlist MUST be tuned in
   shadow mode (collect `TooTight` verdicts) before P4.3.
-- **P4.2c — live shadow validation (NEXT, needs real run)**: run the pipeline with
-  `TRIOS_SANDBOX=shadow` against real variants; confirm verdicts converge to `Match`;
-  route verdicts to event_log (currently tracing only). This needs a live
-  self-improvement run, not just unit tests.
+- **P4.2c — profile tuning (IN PROGRESS)**: validated against a controlled cargo
+  harness (`/tmp` throwaway crate, real `cargo build` vs `sandbox-exec -f <profile>`):
+  - `(allow default)` profile builds fine -> `sandbox-exec` + `cargo build` are
+    compatible; failures are profile-restriction, not a wrapper incompatibility.
+  - Security denies CONFIRMED: `~/.ssh`, `~/.cargo` (when not allowlisted), Keychains
+    all blocked (SIGABRT/134) — the OS kills on violation, not EPERM.
+  - Zero-dep builds reach `Match`; dependency builds were instantly `TooTight` because
+    cargo/rustc live under `~/.cargo/bin` and read `~/.cargo/registry` + `~/.rustup`.
+  - Added the proven-necessary reads (`~/.cargo`, `~/.rustup`) plus standard build
+    needs (`mach-lookup`, `/dev`, `/private/var/folders`, `ipc-posix-shm`). **Still
+    `TooTight`**: a remaining denial kills the build at cargo-startup (zero output)
+    that was not isolated within budget. NEXT: trace it via `sandbox` `(with report)`
+    / `log stream --predicate 'sender == "Sandbox"'`, add the missing allow, repeat
+    until a dependency build reaches `Match`.
+  - Enforcement (P4.3) stays BLOCKED until a real workspace build reaches `Match`.
+    Shadow mode remains observe-only + default-off, so this incompleteness is safe.
+- **P4.2d — route verdicts to event_log** (currently tracing only) for dashboard/audit.
 - **P4.3 — enforce (opt-in)**: gate on `TRIOS_SANDBOX=enforce`; run the build ONLY
   under `sandbox-exec`. Fail closed if `sandbox-exec` is missing. Default stays off.
 - **P4.4 — network proxy (optional)**: localhost proxy outside the sandbox if exact

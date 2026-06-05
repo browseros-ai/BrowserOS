@@ -136,6 +136,9 @@ pub fn generate_seatbelt_profile(dev_root: &Path, home: &Path) -> String {
 (allow process-fork)
 (allow process-exec*)
 (allow sysctl-read)
+(allow mach-lookup)
+(allow ipc-posix-shm)
+(allow signal (target self))
 (allow file-read-metadata)
 (allow file-read*
     (subpath "/usr")
@@ -143,11 +146,17 @@ pub fn generate_seatbelt_profile(dev_root: &Path, home: &Path) -> String {
     (subpath "/sbin")
     (subpath "/System")
     (subpath "/Library")
-    (subpath "/private/var/db")
     (subpath "/opt")
+    (subpath "/dev")
+    (subpath "/private/etc")
+    (subpath "/private/var/db")
+    (subpath "/private/var/folders")
+    (subpath "{home}/.cargo")
+    (subpath "{home}/.rustup")
     (subpath "{dev}"))
 (allow file-write*
     (subpath "{dev}")
+    (subpath "/dev")
     (subpath "/private/tmp")
     (subpath "/private/var/folders")
     (subpath "/tmp"))
@@ -281,6 +290,15 @@ mod tests {
         // dev root writable; temp dirs toolchains need are present.
         assert!(p.contains("(subpath \"/tmp/clade-dev/t1\")"));
         assert!(p.contains("/private/var/folders"));
+    }
+
+    #[test]
+    fn seatbelt_profile_allows_rust_toolchain_reads() {
+        // P4.2c: real dependency builds read the cargo registry and rustc std
+        // libs; without these the sandboxed build is instantly TooTight.
+        let p = generate_seatbelt_profile(Path::new("/tmp/d"), Path::new("/Users/x"));
+        assert!(p.contains("/Users/x/.cargo"));
+        assert!(p.contains("/Users/x/.rustup"));
     }
 
     #[test]
