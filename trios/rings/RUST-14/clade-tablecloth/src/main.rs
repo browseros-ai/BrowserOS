@@ -935,6 +935,9 @@ fn log_event(event: &str, details: &str) {
 }
 
 #[cfg(test)]
+// Tests legitimately use expect()/unwrap() for fixtures and invariants; the
+// workspace deny/warn policy targets production code paths, not test setup.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

@@ -155,6 +155,9 @@ fn generate_child_spec(clusters: &[Cluster]) -> Option<ChildSpec> {
 }
 
 #[cfg(test)]
+// Tests legitimately use expect()/unwrap() for fixtures and invariants; the
+// workspace deny/warn policy targets production code paths, not test setup.
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 
