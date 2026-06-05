@@ -13,6 +13,7 @@ Cargo.lock
 .trinity/snapshots/
 .trinity/experience/
 .trinity/clades/
+.trinity/self-awareness.json
 
 # Trinity runtime state (auto-generated)
 .trinity/state/
