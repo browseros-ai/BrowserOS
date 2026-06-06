@@ -141,6 +141,13 @@ pub fn generate_seatbelt_profile(dev_root: &Path, home: &Path) -> String {
 (allow signal (target self))
 (allow file-read-metadata)
 (allow file-read*
+    ;; root-dir traversal: opening ~/.cargo, ~/.rustup and the dev root requires
+    ;; read access to each ancestor directory ENTRY (not its contents). Literals
+    ;; expose only the listing of /, /Users and $HOME, never file contents — the
+    ;; credential denies below still override.
+    (literal "/")
+    (literal "/Users")
+    (literal "{home}")
     (subpath "/usr")
     (subpath "/bin")
     (subpath "/sbin")
@@ -148,9 +155,11 @@ pub fn generate_seatbelt_profile(dev_root: &Path, home: &Path) -> String {
     (subpath "/Library")
     (subpath "/opt")
     (subpath "/dev")
+    (subpath "/etc")
     (subpath "/private/etc")
     (subpath "/private/var/db")
     (subpath "/private/var/folders")
+    (subpath "/private/tmp")
     (subpath "{home}/.cargo")
     (subpath "{home}/.rustup")
     (subpath "{dev}"))
@@ -299,6 +308,18 @@ mod tests {
         let p = generate_seatbelt_profile(Path::new("/tmp/d"), Path::new("/Users/x"));
         assert!(p.contains("/Users/x/.cargo"));
         assert!(p.contains("/Users/x/.rustup"));
+    }
+
+    #[test]
+    fn seatbelt_profile_allows_root_traversal_and_openssl() {
+        // P4.2c Match recipe: ancestor-dir literals (to traverse into ~/.cargo)
+        // and /private/etc (rustup shim's OpenSSL reads openssl.cnf). Without
+        // these rustc is SIGABRT-killed at startup before any output.
+        let p = generate_seatbelt_profile(Path::new("/tmp/d"), Path::new("/Users/x"));
+        assert!(p.contains("(literal \"/\")"));
+        assert!(p.contains("(literal \"/Users\")"));
+        assert!(p.contains("(literal \"/Users/x\")"));
+        assert!(p.contains("/private/etc"));
     }
 
     #[test]

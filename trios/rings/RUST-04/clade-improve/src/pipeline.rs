@@ -122,6 +122,7 @@ impl ImprovementPipeline {
         let sandboxed_ok = matches!(
             Command::new("sandbox-exec")
                 .args(&argv)
+                .current_dir(&dev.root)
                 .env("TRIOS_VARIANT", "dev")
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())

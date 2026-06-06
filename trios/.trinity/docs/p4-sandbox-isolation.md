@@ -51,14 +51,20 @@ macOS **Seatbelt** via `sandbox-exec -f <profile.sb> <program>`:
     all blocked (SIGABRT/134) — the OS kills on violation, not EPERM.
   - Zero-dep builds reach `Match`; dependency builds were instantly `TooTight` because
     cargo/rustc live under `~/.cargo/bin` and read `~/.cargo/registry` + `~/.rustup`.
-  - Added the proven-necessary reads (`~/.cargo`, `~/.rustup`) plus standard build
-    needs (`mach-lookup`, `/dev`, `/private/var/folders`, `ipc-posix-shm`). **Still
-    `TooTight`**: a remaining denial kills the build at cargo-startup (zero output)
-    that was not isolated within budget. NEXT: trace it via `sandbox` `(with report)`
-    / `log stream --predicate 'sender == "Sandbox"'`, add the missing allow, repeat
-    until a dependency build reaches `Match`.
-  - Enforcement (P4.3) stays BLOCKED until a real workspace build reaches `Match`.
-    Shadow mode remains observe-only + default-off, so this incompleteness is safe.
+  - **MATCH ACHIEVED.** A real dependency build (`libc`) now compiles + finishes
+    under the deny-default profile (exit 0) while `~/.ssh`/Keychains stay denied.
+    The complete recipe, found by bisection (rustc startup was the blocker):
+    1. **Ancestor-dir literals** `(literal "/")`, `(literal "/Users")`, `(literal
+       "$HOME")` — opening `~/.cargo`/`~/.rustup` requires read access to each
+       ancestor directory ENTRY (not contents). Missing -> rustc SIGABRT at startup.
+    2. **`/private/etc`** — the rustup `rustc` shim links OpenSSL and reads
+       `/private/etc/ssl/openssl.cnf` ("Auto configuration failed" otherwise).
+    3. **`/private/tmp`** read (dev roots live under `/tmp` -> `/private/tmp`).
+    4. **cwd = dev root** — rustc calls `getcwd()`; the wrapped command must
+       `current_dir(&dev.root)` (done in `pipeline.rs::shadow_check_build`).
+  - Validated against the EXACT generator output, not a hand-written profile.
+  - Minor accepted leak: the literals expose directory *listings* of `/`, `/Users`,
+    `$HOME` (names only, never contents; credentials still denied).
 - **P4.2d — route verdicts to event_log** (currently tracing only) for dashboard/audit.
 - **P4.3 — enforce (opt-in)**: gate on `TRIOS_SANDBOX=enforce`; run the build ONLY
   under `sandbox-exec`. Fail closed if `sandbox-exec` is missing. Default stays off.
