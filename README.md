@@ -37,7 +37,7 @@ Use your own API keys or run local models with Ollama. Your data never leaves yo
 
 ## Quick Start
 
-1. **Download and install** BrowserOS — [macOS](https://files.browseros.com/download/BrowserOS.dmg) · [Windows](https://files.browseros.com/download/BrowserOS_installer.exe) · [Linux (AppImage)](https://files.browseros.com/download/BrowserOS.AppImage) · [Linux (Debian)](https://cdn.browseros.com/download/BrowserOS.deb)
+1. **Download and install the BrowserOS desktop app** — [macOS](https://files.browseros.com/download/BrowserOS.dmg) · [Windows](https://files.browseros.com/download/BrowserOS_installer.exe) · [Linux (AppImage)](https://files.browseros.com/download/BrowserOS.AppImage) · [Linux (Debian)](https://cdn.browseros.com/download/BrowserOS.deb)
 2. **Import your Chrome data** (optional) — bookmarks, passwords, extensions all carry over
 3. **Connect your AI provider** — Claude, OpenAI, Gemini, ChatGPT Pro via OAuth, or local models via Ollama/LM Studio
 
@@ -84,9 +84,26 @@ https://github.com/user-attachments/assets/9f038216-bc24-4555-abf1-af2adcb7ebc0
 
 <br/><br/>
 
-## Install `browseros-cli`
+## Install the BrowserOS app
 
-Use `browseros-cli` to launch and control BrowserOS from the terminal or from AI coding agents like Claude Code.
+Install the desktop app first. This is the main BrowserOS browser application.
+
+<a href="https://files.browseros.com/download/BrowserOS.dmg">
+  <img src="https://img.shields.io/badge/Download-macOS-black?style=flat&logo=apple&logoColor=white" alt="Download for macOS (beta)" />
+</a>
+<a href="https://files.browseros.com/download/BrowserOS_installer.exe">
+  <img src="https://img.shields.io/badge/Download-Windows-0078D4?style=flat&logo=windows&logoColor=white" alt="Download for Windows (beta)" />
+</a>
+<a href="https://files.browseros.com/download/BrowserOS.AppImage">
+  <img src="https://img.shields.io/badge/Download-Linux-FCC624?style=flat&logo=linux&logoColor=black" alt="Download for Linux (beta)" />
+</a>
+<a href="https://cdn.browseros.com/download/BrowserOS.deb">
+  <img src="https://img.shields.io/badge/Download-Debian-D70A53?style=flat&logo=debian&logoColor=white" alt="Download Debian package" />
+</a>
+
+## Optional: install `browseros-cli`
+
+Use `browseros-cli` to launch and control an installed BrowserOS app from the terminal or from AI coding agents like Claude Code. The curl command below installs only the CLI binary, not the BrowserOS desktop app.
 
 **macOS / Linux:**
 
@@ -100,7 +117,7 @@ curl -fsSL https://cdn.browseros.com/cli/install.sh | bash
 irm https://cdn.browseros.com/cli/install.ps1 | iex
 ```
 
-After install, run `browseros-cli init` to connect the CLI to your running BrowserOS instance.
+After install, make sure `~/.browseros/bin` is on your `PATH`, start the BrowserOS app, then run `browseros-cli init` to connect the CLI to your running BrowserOS instance.
 
 ## LLM Providers
 

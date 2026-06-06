@@ -148,4 +148,15 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
 fi
 
 echo ""
-echo "Run 'browseros-cli --help' to get started."
+echo "This installed ${BINARY} only, NOT the BrowserOS app."
+echo ""
+echo "Download and install the BrowserOS app:"
+echo "  macOS:   https://files.browseros.com/download/BrowserOS.dmg"
+echo "  Windows: https://files.browseros.com/download/BrowserOS_installer.exe"
+echo "  Linux:   https://files.browseros.com/download/BrowserOS.AppImage"
+echo "  Debian:  https://cdn.browseros.com/download/BrowserOS.deb"
+echo ""
+echo "After the BrowserOS app is installed and running, connect the CLI:"
+echo "  ${BINARY} init"
+echo ""
+echo "Run '${BINARY} --help' to get started."
