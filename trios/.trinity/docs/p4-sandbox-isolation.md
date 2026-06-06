@@ -66,8 +66,14 @@ macOS **Seatbelt** via `sandbox-exec -f <profile.sb> <program>`:
   - Minor accepted leak: the literals expose directory *listings* of `/`, `/Users`,
     `$HOME` (names only, never contents; credentials still denied).
 - **P4.2d — route verdicts to event_log** (currently tracing only) for dashboard/audit.
-- **P4.3 — enforce (opt-in)**: gate on `TRIOS_SANDBOX=enforce`; run the build ONLY
-  under `sandbox-exec`. Fail closed if `sandbox-exec` is missing. Default stays off.
+- **P4.3 — enforce (DONE, opt-in)**: `sandbox_mode(env) -> {Off, Shadow, Enforce}`
+  (pure, unit-tested, default `Off`). `pipeline.rs::build_command` wraps the variant's
+  `cargo test`/`cargo build` in `sandbox-exec -f <profile>` (cwd = dev root) when
+  `TRIOS_SANDBOX=enforce`. FAIL-CLOSED: if `sandbox-exec`/`HOME`/profile is
+  unavailable, `build_command` returns `None` and the step is recorded as FAILED.
+  Validated: the enforce-mode invocation (generated profile + cwd=dev root) compiles
+  a real dependency build (exit 0). Default stays `Off`; `swiftc` build still runs bare
+  (follow-up). **Security win: untrusted self-improvement builds are now isolatable.**
 - **P4.4 — network proxy (optional)**: localhost proxy outside the sandbox if exact
   egress allowlisting (not just localhost) is required.
 

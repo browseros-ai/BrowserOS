@@ -136,6 +136,41 @@ impl ImprovementPipeline {
         );
     }
 
+    /// P4.3: construct the Command for `program args`, honoring the sandbox mode.
+    /// In `Enforce` the command is wrapped in `sandbox-exec` with the generated
+    /// profile and cwd = dev root. Returns `None` to FAIL CLOSED when enforcement
+    /// is requested but cannot be applied (no `sandbox-exec`/`HOME`/profile) — the
+    /// caller MUST treat `None` as a failed step. `Off`/`Shadow` run bare.
+    fn build_command(
+        &self,
+        dev: &SandboxedDev,
+        program: &str,
+        args: &[&str],
+        mode: crate::sandbox::SandboxMode,
+    ) -> Option<std::process::Command> {
+        use crate::sandbox::{
+            sandbox_exec_argv, sandbox_exec_available, write_seatbelt_profile, SandboxMode,
+        };
+        use std::process::Command;
+
+        if mode == SandboxMode::Enforce {
+            if !sandbox_exec_available() {
+                warn!("[Pipeline][enforce] sandbox-exec unavailable — failing closed");
+                return None;
+            }
+            let home = std::env::var("HOME").ok()?;
+            let profile = write_seatbelt_profile(&dev.root, std::path::Path::new(&home)).ok()?;
+            let mut cmd = Command::new("sandbox-exec");
+            cmd.args(sandbox_exec_argv(&profile, program, args))
+                .current_dir(&dev.root);
+            Some(cmd)
+        } else {
+            let mut cmd = Command::new(program);
+            cmd.args(args);
+            Some(cmd)
+        }
+    }
+
     /// Phase 3: Run tests in Dev sandbox
     pub fn run_tests(&self, dev: &SandboxedDev) -> Vec<TestResult> {
         use std::process::{Command, Stdio};
@@ -144,48 +179,54 @@ impl ImprovementPipeline {
 
         info!("[Pipeline] Running tests in sandbox {}", dev.root.display());
 
+        let mode = crate::sandbox::sandbox_mode(std::env::var("TRIOS_SANDBOX").ok().as_deref());
+        let manifest = format!("{}/Cargo.toml", dev.root.display());
         let mut results = vec![];
 
-        // Test 1: Cargo test in sandbox
-        let test_output = Command::new("cargo")
-            .args(["test", "--manifest-path", &format!("{}/Cargo.toml", dev.root.display())])
-            .env("TRIOS_VARIANT", "dev")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output();
-        let test_passed = match test_output {
-            Ok(ref o) if o.status.success() => true,
-            Ok(ref o) => {
-                let err = String::from_utf8_lossy(&o.stderr);
-                warn!("[Pipeline] Tests failed: {}", err.lines().take(5).collect::<Vec<_>>().join("\n"));
-                false
-            }
-            Err(e) => {
-                warn!("[Pipeline] Failed to run tests: {}", e);
-                false
-            }
+        // Test 1: Cargo test (under sandbox-exec when TRIOS_SANDBOX=enforce)
+        let test_passed = match self.build_command(dev, "cargo", &["test", "--manifest-path", &manifest], mode) {
+            Some(mut cmd) => match cmd
+                .env("TRIOS_VARIANT", "dev")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+            {
+                Ok(ref o) if o.status.success() => true,
+                Ok(ref o) => {
+                    let err = String::from_utf8_lossy(&o.stderr);
+                    warn!("[Pipeline] Tests failed: {}", err.lines().take(5).collect::<Vec<_>>().join("\n"));
+                    false
+                }
+                Err(e) => {
+                    warn!("[Pipeline] Failed to run tests: {}", e);
+                    false
+                }
+            },
+            None => false, // enforce requested but unsandboxable -> fail closed
         };
         results.push(TestResult {
             name: "unit".to_string(),
             passed: test_passed,
         });
 
-        // Test 2: Build check in sandbox
-        let build_output = Command::new("cargo")
-            .args(["build", "--manifest-path", &format!("{}/Cargo.toml", dev.root.display())])
-            .env("TRIOS_VARIANT", "dev")
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .output();
-        let build_passed = matches!(build_output, Ok(ref o) if o.status.success());
+        // Test 2: Build check (under sandbox-exec when TRIOS_SANDBOX=enforce)
+        let build_passed = match self.build_command(dev, "cargo", &["build", "--manifest-path", &manifest], mode) {
+            Some(mut cmd) => matches!(
+                cmd.env("TRIOS_VARIANT", "dev")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .output(),
+                Ok(ref o) if o.status.success()
+            ),
+            None => false, // fail closed
+        };
         results.push(TestResult {
             name: "build".to_string(),
             passed: build_passed,
         });
 
-        // P4.2b: observe-only shadow sandbox check. Default-off; never affects
-        // `results` or the pipeline outcome — it only logs how a sandboxed build
-        // compares to the authoritative one, to tune the profile before P4.3.
+        // P4.2b: observe-only shadow check. Runs only in Shadow mode (no-op in
+        // Off/Enforce); never affects `results`.
         self.shadow_check_build(dev, build_passed);
 
         // Test 3: Swift build if main.swift exists

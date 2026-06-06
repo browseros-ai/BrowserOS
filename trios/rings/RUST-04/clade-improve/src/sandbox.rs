@@ -233,7 +233,28 @@ pub enum ShadowVerdict {
 /// caller explicitly opts in with `TRIOS_SANDBOX=shadow`. Extracted as a pure
 /// function so the default-off guarantee is unit-tested.
 pub fn shadow_mode_enabled(env_val: Option<&str>) -> bool {
-    env_val == Some("shadow")
+    matches!(sandbox_mode(env_val), SandboxMode::Shadow)
+}
+
+/// Sandbox enforcement level, from the `TRIOS_SANDBOX` env value.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum SandboxMode {
+    /// Default. No sandboxing; builds run bare (current behavior).
+    Off,
+    /// Build runs bare (authoritative) plus an observe-only sandboxed re-run.
+    Shadow,
+    /// Build runs ONLY under `sandbox-exec` and its result is authoritative.
+    Enforce,
+}
+
+/// Parse the sandbox mode. Default (unset / unrecognized) is `Off`, so the live
+/// pipeline is unaffected unless a caller explicitly opts in.
+pub fn sandbox_mode(env_val: Option<&str>) -> SandboxMode {
+    match env_val {
+        Some("shadow") => SandboxMode::Shadow,
+        Some("enforce") => SandboxMode::Enforce,
+        _ => SandboxMode::Off,
+    }
 }
 
 /// Pure comparison of authoritative vs. sandboxed build success.
@@ -380,6 +401,15 @@ mod tests {
         assert!(!shadow_mode_enabled(Some("")));
         assert!(!shadow_mode_enabled(Some("enforce")));
         assert!(shadow_mode_enabled(Some("shadow")));
+    }
+
+    #[test]
+    fn sandbox_mode_parses_and_defaults_off() {
+        assert_eq!(sandbox_mode(None), SandboxMode::Off);
+        assert_eq!(sandbox_mode(Some("")), SandboxMode::Off);
+        assert_eq!(sandbox_mode(Some("nonsense")), SandboxMode::Off);
+        assert_eq!(sandbox_mode(Some("shadow")), SandboxMode::Shadow);
+        assert_eq!(sandbox_mode(Some("enforce")), SandboxMode::Enforce);
     }
 
     #[test]
