@@ -77,6 +77,12 @@ macOS **Seatbelt** via `sandbox-exec -f <profile.sb> <program>`:
   Validated: the enforce-mode invocation (generated profile + cwd=dev root) compiles
   a real dependency build (exit 0). Default stays `Off`; `swiftc` build still runs bare
   (follow-up). **Security win: untrusted self-improvement builds are now isolatable.**
+  - **Validation coverage**: `libc` (build script) and a `serde`/`serde_derive`
+    crate (proc-macro dylib chain: syn/quote/proc-macro2, 12 crates) both compile
+    under the deny-default profile, exit 0 — the two hardest general mechanisms work.
+    STILL UNTESTED: crates that link system libraries via build scripts (e.g.
+    `openssl-sys`, `*-sys` with pkg-config) — the full trios workspace may surface
+    new `TooTight` paths there; shadow mode will catch them before enforce relies on it.
 - **P4.4 — network proxy (optional)**: localhost proxy outside the sandbox if exact
   egress allowlisting (not just localhost) is required.
 
