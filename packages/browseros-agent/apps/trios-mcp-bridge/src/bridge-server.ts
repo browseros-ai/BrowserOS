@@ -8,15 +8,16 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import type { BrowserOSClient } from '../clients/browseros-client.js'
-import type { GitButlerMcpClient } from '../clients/gitbutler-client.js'
-import type { GitHubMcpClient } from '../clients/github-client.js'
-import type { RailwayMcpClient } from '../clients/railway-client.js'
-import type { TriClient } from '../clients/tri-client.js'
-import type { TriosRagClient } from '../clients/trios-rag-client.js'
-import type { BridgeConfig } from '../config.js'
 import { absorbSmart } from './absorb/absorb-engine.js'
 import type { StrategyName } from './absorb/strategies.js'
+import type { BrowserOSClient } from './clients/browseros-client'
+import type { GitButlerMcpClient } from './clients/gitbutler-client'
+import type { GitHubMcpClient } from './clients/github-client'
+import type { RailwayMcpClient } from './clients/railway-client'
+import type { TriClient } from './clients/tri-client'
+import type { TriosRagClient } from './clients/trios-rag-client'
+import type { BridgeConfig } from './config'
+import type { FileChange } from './types'
 import {
   type AnalyzedUI,
   analyzeGitButlerUI,
@@ -131,12 +132,12 @@ export function createBridgeServer(deps: BridgeDeps): McpServer {
             branch: status.branch,
             ahead: status.ahead,
             behind: status.behind,
-            staged: status.staged.map((f) => ({
+            staged: status.staged.map((f: FileChange) => ({
               path: f.path,
               status: f.status,
               oldPath: f.oldPath,
             })),
-            unstaged: status.unstaged.map((f) => ({
+            unstaged: status.unstaged.map((f: FileChange) => ({
               path: f.path,
               status: f.status,
               oldPath: f.oldPath,
@@ -923,11 +924,17 @@ export function createBridgeServer(deps: BridgeDeps): McpServer {
               text: JSON.stringify({
                 ok: true,
                 reason: `Found ${entries.length} experience entry/entries.`,
-                entries: entries.map((e) => ({
-                  fileName: e.fileName,
-                  modified: e.modified,
-                  content: e.content,
-                })),
+                entries: entries.map(
+                  (e: {
+                    fileName: string
+                    modified: string
+                    content: string
+                  }) => ({
+                    fileName: e.fileName,
+                    modified: e.modified,
+                    content: e.content,
+                  }),
+                ),
               }),
             },
           ],
