@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { logger } from '../lib/logger'
 import { defineToolWithCategory } from './framework'
 
-const defineTriosTool = defineToolWithCategory('trios')
+const defineTriosTool = defineToolWithCategory('scripts')
 
 const CLI_PATH =
   '/Users/playra/BrowserOS-full/trios/target/release/clade-improve'
@@ -28,8 +28,9 @@ function runCli(command: CladeCommand): string {
       },
       timeout: 30_000,
     })
-  } catch (e: any) {
-    return `EXIT ${e.status}: ${e.stderr || e.message}`
+  } catch (e) {
+    const err = e as { status?: number; stderr?: string; message?: string }
+    return `EXIT ${err.status}: ${err.stderr || err.message}`
   }
 }
 
@@ -37,20 +38,20 @@ export const cladeImproveStatus = defineTriosTool({
   name: 'cladeImprove_status',
   description:
     'Check which variant (prod/staging/dev) is running, verify safety status',
-  parameters: z.object({}),
-  execute: async () => {
-    logger.info('[cladeImprove] status check')
-    return runCli('check')
+  input: z.object({}),
+  handler: async (_args, _ctx, response) => {
+    logger.info('cladeImprove status check')
+    response.text(runCli('check'))
   },
 })
 
 export const cladeImproveConstitution = defineTriosTool({
   name: 'cladeImprove_constitution',
   description: 'Show the Safety Constitution (9 principles)',
-  parameters: z.object({}),
-  execute: async () => {
-    logger.info('[cladeImprove] constitution')
-    return runCli('constitution')
+  input: z.object({}),
+  handler: async (_args, _ctx, response) => {
+    logger.info('cladeImprove constitution')
+    response.text(runCli('constitution'))
   },
 })
 
@@ -58,10 +59,10 @@ export const cladeImproveRollback = defineTriosTool({
   name: 'cladeImprove_rollback',
   description:
     'Emergency rollback to previous version. Preserves N=5 versions.',
-  parameters: z.object({}),
-  execute: async () => {
-    logger.warn('[cladeImprove] emergency rollback')
-    return runCli('rollback')
+  input: z.object({}),
+  handler: async (_args, _ctx, response) => {
+    logger.warn('cladeImprove emergency rollback')
+    response.text(runCli('rollback'))
   },
 })
 

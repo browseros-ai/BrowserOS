@@ -69,3 +69,36 @@ export async function testProviderConnection(
     }
   }
 }
+
+function extractProviderErrorMessage(
+  error: unknown,
+  _provider: string,
+): string {
+  // generateText preserves APICallError directly, so responseBody is available
+  // on the error object and usually carries the provider's real message.
+  if (
+    error != null &&
+    typeof error === 'object' &&
+    'responseBody' in error &&
+    typeof (error as { responseBody?: string }).responseBody === 'string'
+  ) {
+    try {
+      const parsed = JSON.parse(
+        (error as { responseBody: string }).responseBody,
+      )
+      return (
+        parsed?.error?.message ||
+        parsed?.message ||
+        parsed?.error?.code ||
+        (error instanceof Error ? error.message : String(error))
+      )
+    } catch {
+      // Not valid JSON, fall through
+    }
+  }
+
+  if (error instanceof Error) {
+    return error.message
+  }
+  return String(error)
+}

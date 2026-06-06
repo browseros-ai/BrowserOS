@@ -33,6 +33,7 @@ const PROVIDER_ENV_VARS: Record<SupportedOpenClawProvider, string> = {
   moonshot: 'MOONSHOT_API_KEY',
   openai: 'OPENAI_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+  zai: 'ZAI_API_KEY',
 }
 
 export class UnsupportedOpenClawProviderError extends Error {

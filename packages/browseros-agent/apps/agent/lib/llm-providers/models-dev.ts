@@ -19,10 +19,8 @@ export interface ModelsDevProvider {
   models: ModelsDevModel[]
 }
 
-const modelsDevData: Record<string, ModelsDevProvider> = data as Record<
-  string,
-  ModelsDevProvider
->
+const modelsDevData: Record<string, ModelsDevProvider> =
+  data as unknown as Record<string, ModelsDevProvider>
 
 export function getModelsDevProvider(
   providerId: string,
