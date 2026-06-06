@@ -26,7 +26,9 @@ jobs:
       - name: Setup Biome
         uses: biomejs/setup-biome@v2
         with:
-          version: latest
+          # Pin to the version the repo depends on (package.json @biomejs/biome)
+          # so CI parses the 2.4.8 config; "latest" breaks on config schema drift.
+          version: 2.4.8
 
       - name: Run Biome
         run: biome ci .
