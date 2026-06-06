@@ -92,7 +92,7 @@ impl ImprovementPipeline {
     fn shadow_check_build(&self, dev: &SandboxedDev, real_build_ok: bool) {
         use crate::sandbox::{
             sandbox_exec_argv, sandbox_exec_available, shadow_mode_enabled, shadow_verdict,
-            write_seatbelt_profile,
+            verdict_tag, write_seatbelt_profile,
         };
         use std::process::{Command, Stdio};
 
@@ -133,6 +133,13 @@ impl ImprovementPipeline {
         info!(
             "[Pipeline][shadow] verdict={:?} (real_ok={}, sandboxed_ok={})",
             verdict, real_build_ok, sandboxed_ok
+        );
+        // P4.2d: persist to event_log.jsonl so the dashboard/audit can track
+        // sandbox-profile health (e.g. count `too_tight` over time).
+        trios_config::log_event(
+            &trios_config::new_correlation_id(),
+            "sandbox_shadow_verdict",
+            &format!("{}_real{}_sandboxed{}", verdict_tag(&verdict), real_build_ok, sandboxed_ok),
         );
     }
 

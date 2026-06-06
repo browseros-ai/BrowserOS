@@ -65,7 +65,10 @@ macOS **Seatbelt** via `sandbox-exec -f <profile.sb> <program>`:
   - Validated against the EXACT generator output, not a hand-written profile.
   - Minor accepted leak: the literals expose directory *listings* of `/`, `/Users`,
     `$HOME` (names only, never contents; credentials still denied).
-- **P4.2d — route verdicts to event_log** (currently tracing only) for dashboard/audit.
+- **P4.2d — verdicts to event_log (DONE)**: `shadow_check_build` logs a
+  `sandbox_shadow_verdict` event (details `<tag>_real<bool>_sandboxed<bool>`) via
+  `trios-config::log_event`. `clade-dashboard` counts `sandbox_too_tight` so profile
+  drift is visible in the metrics/ADLC feedback loop.
 - **P4.3 — enforce (DONE, opt-in)**: `sandbox_mode(env) -> {Off, Shadow, Enforce}`
   (pure, unit-tested, default `Off`). `pipeline.rs::build_command` wraps the variant's
   `cargo test`/`cargo build` in `sandbox-exec -f <profile>` (cwd = dev root) when

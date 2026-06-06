@@ -266,6 +266,16 @@ pub fn shadow_verdict(real_ok: bool, sandboxed_ok: bool) -> ShadowVerdict {
     }
 }
 
+/// Stable lowercase tag for a verdict, for the `event_log.jsonl` `details` field
+/// the dashboard/audit parse (avoids depending on Debug formatting).
+pub fn verdict_tag(v: &ShadowVerdict) -> &'static str {
+    match v {
+        ShadowVerdict::Match => "match",
+        ShadowVerdict::TooTight => "too_tight",
+        ShadowVerdict::Inconsistent => "inconsistent",
+    }
+}
+
 #[cfg(test)]
 // Tests legitimately use expect()/unwrap() for fixtures and invariants; the
 // workspace deny/warn policy targets production code paths, not test setup.
@@ -382,6 +392,13 @@ mod tests {
     #[test]
     fn shadow_verdict_real_fail_sandbox_pass_is_inconsistent() {
         assert_eq!(shadow_verdict(false, true), ShadowVerdict::Inconsistent);
+    }
+
+    #[test]
+    fn verdict_tag_is_stable_lowercase() {
+        assert_eq!(verdict_tag(&ShadowVerdict::Match), "match");
+        assert_eq!(verdict_tag(&ShadowVerdict::TooTight), "too_tight");
+        assert_eq!(verdict_tag(&ShadowVerdict::Inconsistent), "inconsistent");
     }
 
     #[test]

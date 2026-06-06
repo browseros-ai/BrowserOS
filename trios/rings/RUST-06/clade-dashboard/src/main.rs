@@ -66,6 +66,7 @@ struct LoopMetrics {
     verify_reject: u64,
     budget_depleted: u64,
     drift_detected: u64,
+    sandbox_too_tight: u64,
 }
 
 /// Aggregate failure-mode counters from event_log JSONL lines. Pure so it can
@@ -91,6 +92,8 @@ fn compute_loop_metrics(events: &[String]) -> LoopMetrics {
             "verify_reject" => m.verify_reject += 1,
             "budget_depleted" => m.budget_depleted += 1,
             "drift_detected" => m.drift_detected += 1,
+            // P4.2d: sandbox shadow build was TooTight — profile needs tuning.
+            "sandbox_shadow_verdict" if details.contains("too_tight") => m.sandbox_too_tight += 1,
             _ => {}
         }
     }
@@ -328,10 +331,12 @@ mod tests {
             r#"{"event":"verify_reject","details":"residual"}"#.to_string(),
             r#"{"event":"budget_depleted","details":"budget=0"}"#.to_string(),
             r#"{"event":"drift_detected","details":"8x"}"#.to_string(),
+            r#"{"event":"sandbox_shadow_verdict","details":"too_tight_realtrue_sandboxedfalse"}"#.to_string(),
+            r#"{"event":"sandbox_shadow_verdict","details":"match_realtrue_sandboxedtrue"}"#.to_string(),
             r#"{"event":"watchdog_heartbeat","details":"alive"}"#.to_string(),
         ];
         let m = compute_loop_metrics(&events);
-        assert_eq!(m.total_events, 9);
+        assert_eq!(m.total_events, 11);
         assert_eq!(m.build_pass, 1);
         assert_eq!(m.build_fail, 1);
         assert_eq!(m.build_spawn_fail, 1);
@@ -340,6 +345,8 @@ mod tests {
         assert_eq!(m.verify_reject, 1);
         assert_eq!(m.budget_depleted, 1);
         assert_eq!(m.drift_detected, 1);
+        // only the too_tight verdict counts; the match one does not.
+        assert_eq!(m.sandbox_too_tight, 1);
     }
 
     #[test]

@@ -16,6 +16,7 @@ sha2 = "0.10"
 hex = "0.4"
 reqwest = { version = "0.12", features = ["blocking"] }
 tracing = "0.1"
+trios-config = { path = "../../RUST-00/trios-config" }
 
 [lints]
 workspace = true
