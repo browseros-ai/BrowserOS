@@ -10,6 +10,7 @@ description = "TRIOS Clade E2E Runner — replaces e2e/trios_e2e_flow.sh"
 [dependencies]
 reqwest = { version = "0.12", features = ["blocking"] }
 chrono = "0.4"
+trios-config = { path = "../../RUST-00/trios-config" }
 
 [lints]
 workspace = true

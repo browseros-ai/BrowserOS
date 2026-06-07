@@ -34,8 +34,17 @@ fn main() {
     let report_path = log_dir.join(format!("report_{}_{}.md", v.name, ts));
     let screenshot_path = log_dir.join(format!("screenshot_{}_{}.png", v.name, ts));
 
-    let mut report = format!("# TRIOS E2E Report {} — Variant: {}\n\n", Local::now().to_rfc2822(), v.name);
+    let mut report = format!(
+        "# TRIOS E2E Report {} — Variant: {}\n\n",
+        Local::now().to_rfc2822(),
+        v.name
+    );
     let mut failures = 0u32;
+
+    // 0. Swift logic unit tests (pre-flight, no running app required)
+    if !run_swift_logic_tests(&mut report) {
+        failures += 1;
+    }
 
     // 1. Server Health
     let health_url = format!("http://127.0.0.1:{}/health", v.mcp_port);
@@ -43,14 +52,23 @@ fn main() {
         Ok(resp) => {
             let body = cap_body(resp.text().unwrap_or_default());
             if body.contains("\"status\":\"ok\"") {
-                report.push_str(&format!("- ✅ BrowserOS Server ({}): OK ({})\n", v.name, body));
+                report.push_str(&format!(
+                    "- ✅ BrowserOS Server ({}): OK ({})\n",
+                    v.name, body
+                ));
             } else {
-                report.push_str(&format!("- ❌ BrowserOS Server ({}): DOWN ({})\n", v.name, body));
+                report.push_str(&format!(
+                    "- ❌ BrowserOS Server ({}): DOWN ({})\n",
+                    v.name, body
+                ));
                 failures += 1;
             }
         }
         Err(e) => {
-            report.push_str(&format!("- ❌ BrowserOS Server ({}): DOWN ({})\n", v.name, e));
+            report.push_str(&format!(
+                "- ❌ BrowserOS Server ({}): DOWN ({})\n",
+                v.name, e
+            ));
             failures += 1;
         }
     }
@@ -63,7 +81,11 @@ fn main() {
         .ok()
         .and_then(|o| {
             let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         });
 
     if let Some(ref p) = pid {
@@ -75,7 +97,12 @@ fn main() {
 
     // 3. Screenshot
     let _ = Command::new("screencapture")
-        .args(["-x", screenshot_path.to_str().unwrap_or("/tmp/trios_screenshot.png")])
+        .args([
+            "-x",
+            screenshot_path
+                .to_str()
+                .unwrap_or("/tmp/trios_screenshot.png"),
+        ])
         .output();
     report.push_str(&format!(
         "- 📸 Screenshot ({}): {}\n",
@@ -116,7 +143,10 @@ fn main() {
         .collect();
 
     if errors.is_empty() {
-        report.push_str(&format!("- ✅ No critical errors in last 5m ({})\n", v.name));
+        report.push_str(&format!(
+            "- ✅ No critical errors in last 5m ({})\n",
+            v.name
+        ));
     } else {
         report.push_str(&format!("- ⚠️ Recent Errors ({})\n", v.name));
         report.push_str("```\n");
@@ -130,8 +160,11 @@ fn main() {
     // 5. UI Anomaly Checklist
     report.push_str(&format!("\n## UI Anomaly Checklist ({})\n", v.name));
     report.push_str("- [ ] Title bar shows correct status (Online green dot, A2A blue dot)\n");
-    report.push_str("- [ ] Tab bar icons visible and not duplicated (Chat/Git/Terminal/Queen/Settings)\n");
-    report.push_str("- [ ] Chat input field visible at bottom with placeholder 'Ask anything...'\n");
+    report.push_str(
+        "- [ ] Tab bar icons visible and not duplicated (Chat/Git/Terminal/Queen/Settings)\n",
+    );
+    report
+        .push_str("- [ ] Chat input field visible at bottom with placeholder 'Ask anything...'\n");
     report.push_str("- [ ] No overlapping views, no black rectangles, no glitched rendering\n");
     report.push_str("- [ ] Glassmorphism blur visible behind panel content\n");
     report.push_str("- [ ] Messages scroll correctly without cutting off bubbles\n");
@@ -145,6 +178,62 @@ fn main() {
     if failures > 0 {
         eprintln!("[e2e] {} check(s) failed", failures);
         std::process::exit(1);
+    }
+}
+
+/// Compile and run the standalone Swift logic tests (ChatLogic). This is the
+/// L7-compliant replacement for a shell test step — invoked from Rust, no .sh.
+/// Returns true on pass; appends a line to the e2e report either way.
+fn run_swift_logic_tests(report: &mut String) -> bool {
+    let dir = trios_config::project_dir();
+    let bin = "/tmp/trios_chat_logic_test";
+
+    let compiled = Command::new("swiftc")
+        .args([
+            "tests/swift/chat_logic_test.swift",
+            "BR-OUTPUT/ChatLogic.swift",
+            "-o",
+            bin,
+        ])
+        .current_dir(&dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output();
+
+    match compiled {
+        Ok(out) if out.status.success() => match Command::new(bin).output() {
+            Ok(run) if run.status.success() => {
+                report.push_str("- ✅ Swift logic tests: passed\n");
+                true
+            }
+            Ok(run) => {
+                let tail = cap_body(String::from_utf8_lossy(&run.stdout).to_string());
+                report.push_str(&format!(
+                    "- ❌ Swift logic tests FAILED\n```\n{}\n```\n",
+                    tail
+                ));
+                false
+            }
+            Err(e) => {
+                report.push_str(&format!("- ❌ Swift logic tests: could not run ({})\n", e));
+                false
+            }
+        },
+        Ok(out) => {
+            let tail = cap_body(String::from_utf8_lossy(&out.stderr).to_string());
+            report.push_str(&format!(
+                "- ❌ Swift logic tests: compile failed\n```\n{}\n```\n",
+                tail
+            ));
+            false
+        }
+        Err(e) => {
+            report.push_str(&format!(
+                "- ❌ Swift logic tests: swiftc unavailable ({})\n",
+                e
+            ));
+            false
+        }
     }
 }
 
@@ -172,7 +261,10 @@ mod tests {
 
     #[test]
     fn cap_body_passes_small() {
-        assert_eq!(cap_body("{\"status\":\"ok\"}".to_string()), "{\"status\":\"ok\"}");
+        assert_eq!(
+            cap_body("{\"status\":\"ok\"}".to_string()),
+            "{\"status\":\"ok\"}"
+        );
     }
 
     #[test]
