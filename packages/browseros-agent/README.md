@@ -69,6 +69,13 @@ packages/
 | 9000 | `BROWSEROS_CDP_PORT` | Chromium CDP server (BrowserOS Server connects as client) |
 | 9300 | `BROWSEROS_EXTENSION_PORT` | Legacy BrowserOS launch arg kept for compatibility; not used by the server |
 
+### LLM Providers
+
+BrowserOS Agent is bring-your-own-key. Built-in providers include Anthropic,
+OpenAI, Google Gemini, OpenRouter, Moonshot, z.ai (GLM), local Ollama/LM Studio,
+and any OpenAI-compatible endpoint. See [docs/llm-providers.md](docs/llm-providers.md)
+for the full list, the z.ai setup steps, and how to wire a new provider.
+
 ## Development
 
 ### Setup

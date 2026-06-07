@@ -13,6 +13,16 @@ const bun = process.execPath
 const testSuites = {
   all: [
     {
+      label: 'shared package tests',
+      cwd: resolve(projectRoot, 'packages/shared'),
+      argv: [bun, 'run', 'test'],
+    },
+    {
+      label: 'cdp-protocol package tests',
+      cwd: resolve(projectRoot, 'packages/cdp-protocol'),
+      argv: [bun, 'run', 'test'],
+    },
+    {
       label: 'server tests',
       cwd: resolve(projectRoot, 'apps/server'),
       argv: [bun, 'run', 'test'],
