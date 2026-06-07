@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { extname, resolve } from 'node:path'
+import { extname } from 'node:path'
 import { tool } from 'ai'
 import { z } from 'zod'
 import {
@@ -9,6 +9,7 @@ import {
   IMAGE_MIME_TYPES,
   MAX_READ_CHARS,
   MAX_READ_LINES,
+  resolveWorkspacePath,
   toModelOutput,
 } from './utils'
 
@@ -99,9 +100,7 @@ export function createReadTool(cwd: string) {
   return tool({
     description: `Read a file from the filesystem. Returns text content with line numbers, or image data for image files. Text reads are limited to ${MAX_READ_LINES} lines and ${MAX_READ_CHARS} characters per call. Use offset and limit to paginate through large files.`,
     inputSchema: z.object({
-      path: z
-        .string()
-        .describe('File path (relative to working directory or absolute)'),
+      path: z.string().describe('File path within the working directory'),
       offset: z
         .number()
         .optional()
@@ -115,7 +114,7 @@ export function createReadTool(cwd: string) {
     }),
     execute: (params) =>
       executeWithMetrics(TOOL_NAME, async () => {
-        const resolved = resolve(cwd, params.path)
+        const resolved = await resolveWorkspacePath(cwd, params.path)
         const ext = extname(resolved).toLowerCase()
 
         if (IMAGE_EXTENSIONS.has(ext)) {

@@ -1,8 +1,13 @@
 import { readdir, stat } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { tool } from 'ai'
 import { z } from 'zod'
-import { DEFAULT_LS_LIMIT, executeWithMetrics, toModelOutput } from './utils'
+import {
+  DEFAULT_LS_LIMIT,
+  executeWithMetrics,
+  resolveWorkspacePath,
+  toModelOutput,
+} from './utils'
 
 const TOOL_NAME = 'filesystem_ls'
 
@@ -20,7 +25,7 @@ export function createLsTool(cwd: string) {
       path: z
         .string()
         .optional()
-        .describe('Directory path (default: working directory)'),
+        .describe('Directory path within the working directory'),
       limit: z
         .number()
         .optional()
@@ -28,7 +33,7 @@ export function createLsTool(cwd: string) {
     }),
     execute: (params) =>
       executeWithMetrics(TOOL_NAME, async () => {
-        const resolved = resolve(cwd, params.path || '.')
+        const resolved = await resolveWorkspacePath(cwd, params.path || '.')
         const limit = params.limit || DEFAULT_LS_LIMIT
         const entries = await readdir(resolved, { withFileTypes: true })
 

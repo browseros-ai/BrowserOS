@@ -1,5 +1,5 @@
 import { readFile, stat } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { tool } from 'ai'
 import { z } from 'zod'
 import {
@@ -8,6 +8,8 @@ import {
   GREP_MAX_LINE_LENGTH,
   isBinaryPath,
   MAX_GREP_FILE_SIZE,
+  resolveWorkspacePath,
+  resolveWorkspaceRoot,
   toModelOutput,
   truncateLine,
   walkFiles,
@@ -98,7 +100,7 @@ export function createGrepTool(cwd: string) {
       path: z
         .string()
         .optional()
-        .describe('Directory or file to search (default: working directory)'),
+        .describe('Directory or file within the working directory'),
       glob: z
         .string()
         .optional()
@@ -120,7 +122,8 @@ export function createGrepTool(cwd: string) {
     execute: (params) =>
       // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: grep tool has many output mode and filtering branches
       executeWithMetrics(TOOL_NAME, async () => {
-        const searchPath = resolve(cwd, params.path || '.')
+        const searchPath = await resolveWorkspacePath(cwd, params.path || '.')
+        const workspaceRoot = await resolveWorkspaceRoot(cwd)
         const limit = params.limit || DEFAULT_GREP_LIMIT
         const context = params.context || 0
 
@@ -173,7 +176,11 @@ export function createGrepTool(cwd: string) {
           allMatches.push(...fileMatches)
           totalMatchCount = fileMatches.filter((m) => m.isMatch).length
         } else {
-          for await (const relPath of walkFiles(searchPath, searchPath)) {
+          for await (const relPath of walkFiles(
+            searchPath,
+            searchPath,
+            workspaceRoot,
+          )) {
             if (isBinaryPath(relPath)) continue
             if (globMatcher && !globMatcher.match(relPath)) continue
 

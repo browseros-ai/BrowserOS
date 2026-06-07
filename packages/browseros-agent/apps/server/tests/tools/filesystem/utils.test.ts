@@ -1,16 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   detectLineEnding,
   isBinaryPath,
   normalizeToLF,
+  resolveWorkspacePath,
+  resolveWorkspaceRoot,
   restoreLineEndings,
   stripBom,
   truncateHead,
   truncateLine,
   truncateTail,
+  WORKSPACE_PATH_ERROR,
   walkFiles,
 } from '../../../src/tools/filesystem/utils'
 
@@ -163,19 +166,105 @@ describe('isBinaryPath', () => {
   })
 })
 
-describe('walkFiles', () => {
+describe('resolveWorkspacePath', () => {
   let tmpDir: string
+  let outsideDir: string
 
   beforeEach(async () => {
-    tmpDir = join(
-      tmpdir(),
-      `fs-walk-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    )
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    tmpDir = join(tmpdir(), `fs-path-test-${suffix}`)
+    outsideDir = join(tmpdir(), `fs-path-outside-${suffix}`)
     await mkdir(tmpDir, { recursive: true })
+    await mkdir(outsideDir, { recursive: true })
   })
 
   afterEach(async () => {
     await rm(tmpDir, { recursive: true, force: true })
+    await rm(outsideDir, { recursive: true, force: true })
+  })
+
+  it('resolves relative paths inside the workspace', async () => {
+    await writeFile(join(tmpDir, 'inside.txt'), 'ok')
+
+    const resolved = await resolveWorkspacePath(tmpDir, 'inside.txt')
+
+    expect(resolved).toBe(join(tmpDir, 'inside.txt'))
+  })
+
+  it('allows absolute paths inside the workspace', async () => {
+    const filePath = join(tmpDir, 'absolute.txt')
+    await writeFile(filePath, 'ok')
+
+    const resolved = await resolveWorkspacePath(tmpDir, filePath)
+
+    expect(resolved).toBe(filePath)
+  })
+
+  it('rejects parent traversal outside the workspace', async () => {
+    await expect(
+      resolveWorkspacePath(tmpDir, '../outside.txt'),
+    ).rejects.toThrow(WORKSPACE_PATH_ERROR)
+  })
+
+  it('rejects absolute paths outside the workspace', async () => {
+    const filePath = join(outsideDir, 'secret.txt')
+    await writeFile(filePath, 'secret')
+
+    await expect(resolveWorkspacePath(tmpDir, filePath)).rejects.toThrow(
+      WORKSPACE_PATH_ERROR,
+    )
+  })
+
+  it('rejects symlinked files outside the workspace', async () => {
+    const filePath = join(outsideDir, 'secret.txt')
+    await writeFile(filePath, 'secret')
+    await symlink(filePath, join(tmpDir, 'secret-link.txt'))
+
+    await expect(
+      resolveWorkspacePath(tmpDir, 'secret-link.txt'),
+    ).rejects.toThrow(WORKSPACE_PATH_ERROR)
+  })
+
+  it('rejects symlinked directories outside the workspace', async () => {
+    await symlink(outsideDir, join(tmpDir, 'external-dir'), 'dir')
+
+    await expect(
+      resolveWorkspacePath(tmpDir, 'external-dir/new.txt'),
+    ).rejects.toThrow(WORKSPACE_PATH_ERROR)
+  })
+
+  it('allows symlinked files that stay inside the workspace', async () => {
+    const filePath = join(tmpDir, 'target.txt')
+    await writeFile(filePath, 'ok')
+    await symlink(filePath, join(tmpDir, 'target-link.txt'))
+
+    const resolved = await resolveWorkspacePath(tmpDir, 'target-link.txt')
+
+    expect(resolved).toBe(join(tmpDir, 'target-link.txt'))
+  })
+
+  it('resolves the workspace root through symlinks', async () => {
+    const root = await resolveWorkspaceRoot(tmpDir)
+
+    expect(root).toBe(await realpath(tmpDir))
+  })
+})
+
+describe('walkFiles', () => {
+  let tmpDir: string
+  let outsideDir: string
+
+  beforeEach(async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    tmpDir = join(tmpdir(), `fs-walk-test-${suffix}`)
+    outsideDir = join(tmpdir(), `fs-walk-outside-${suffix}`)
+    await mkdir(tmpDir, { recursive: true })
+    await mkdir(outsideDir, { recursive: true })
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+    await rm(outsideDir, { recursive: true, force: true })
   })
 
   it('walks files recursively', async () => {
@@ -233,5 +322,20 @@ describe('walkFiles', () => {
       files.push(f)
     }
     expect(files.length).toBe(0)
+  })
+
+  it('skips symlinks that resolve outside the boundary', async () => {
+    const outsideFile = join(outsideDir, 'secret.txt')
+    await writeFile(outsideFile, 'secret')
+    await symlink(outsideFile, join(tmpDir, 'secret-link.txt'))
+    await writeFile(join(tmpDir, 'visible.txt'), '')
+
+    const files: string[] = []
+    for await (const f of walkFiles(tmpDir, tmpDir, tmpDir)) {
+      files.push(f)
+    }
+
+    expect(files).toContain('visible.txt')
+    expect(files).not.toContain('secret-link.txt')
   })
 })

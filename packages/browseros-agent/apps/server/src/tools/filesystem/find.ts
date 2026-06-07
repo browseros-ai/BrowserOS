@@ -1,9 +1,10 @@
-import { resolve } from 'node:path'
 import { tool } from 'ai'
 import { z } from 'zod'
 import {
   DEFAULT_FIND_LIMIT,
   executeWithMetrics,
+  resolveWorkspacePath,
+  resolveWorkspaceRoot,
   toModelOutput,
   walkFiles,
 } from './utils'
@@ -23,7 +24,7 @@ export function createFindTool(cwd: string) {
       path: z
         .string()
         .optional()
-        .describe('Directory to search (default: working directory)'),
+        .describe('Directory within the working directory'),
       limit: z
         .number()
         .optional()
@@ -31,7 +32,8 @@ export function createFindTool(cwd: string) {
     }),
     execute: (params) =>
       executeWithMetrics(TOOL_NAME, async () => {
-        const searchPath = resolve(cwd, params.path || '.')
+        const searchPath = await resolveWorkspacePath(cwd, params.path || '.')
+        const workspaceRoot = await resolveWorkspaceRoot(cwd)
         const limit = params.limit || DEFAULT_FIND_LIMIT
 
         let effectivePattern = params.pattern
@@ -45,7 +47,11 @@ export function createFindTool(cwd: string) {
         const glob = new Bun.Glob(effectivePattern)
         const matches: string[] = []
 
-        for await (const relPath of walkFiles(searchPath, searchPath)) {
+        for await (const relPath of walkFiles(
+          searchPath,
+          searchPath,
+          workspaceRoot,
+        )) {
           if (glob.match(relPath)) {
             matches.push(relPath)
             if (matches.length >= limit) break

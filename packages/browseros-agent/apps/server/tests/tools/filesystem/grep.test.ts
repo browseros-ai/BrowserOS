@@ -1,19 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createGrepTool } from '../../../src/tools/filesystem/grep'
 import type { FilesystemToolResult } from '../../../src/tools/filesystem/utils'
+import { WORKSPACE_PATH_ERROR } from '../../../src/tools/filesystem/utils'
 
 let tmpDir: string
+let outsideDir: string
 let exec: (params: Record<string, unknown>) => Promise<FilesystemToolResult>
 
 beforeEach(async () => {
-  tmpDir = join(
-    tmpdir(),
-    `fs-grep-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  )
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  tmpDir = join(tmpdir(), `fs-grep-test-${suffix}`)
+  outsideDir = join(tmpdir(), `fs-grep-outside-${suffix}`)
   await mkdir(tmpDir, { recursive: true })
+  await mkdir(outsideDir, { recursive: true })
   const tool = createGrepTool(tmpDir)
   // biome-ignore lint/suspicious/noExplicitAny: test helper
   exec = (params) => (tool as any).execute(params)
@@ -21,6 +23,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true })
+  await rm(outsideDir, { recursive: true, force: true })
 })
 
 async function createTestFiles() {
@@ -138,6 +141,39 @@ describe('filesystem_grep', () => {
     const result = await exec({ pattern: 'beta', path: 'single.txt' })
     expect(result.text).toContain('beta')
     expect(result.text).not.toContain('alpha')
+  })
+
+  it('rejects paths outside the workspace', async () => {
+    await writeFile(join(outsideDir, 'secret.txt'), 'secret')
+
+    const result = await exec({ pattern: 'secret', path: outsideDir })
+
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain(WORKSPACE_PATH_ERROR)
+  })
+
+  it('rejects direct symlinked files outside the workspace', async () => {
+    const outsideFile = join(outsideDir, 'secret.txt')
+    await writeFile(outsideFile, 'secret')
+    await symlink(outsideFile, join(tmpDir, 'secret-link.txt'))
+
+    const result = await exec({ pattern: 'secret', path: 'secret-link.txt' })
+
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain(WORKSPACE_PATH_ERROR)
+  })
+
+  it('skips symlinked files outside the workspace during recursive search', async () => {
+    const outsideFile = join(outsideDir, 'secret.txt')
+    await writeFile(outsideFile, 'secret')
+    await writeFile(join(tmpDir, 'visible.txt'), 'secret')
+    await symlink(outsideFile, join(tmpDir, 'secret-link.txt'))
+
+    const result = await exec({ pattern: 'secret' })
+
+    expect(result.isError).toBeUndefined()
+    expect(result.text).toContain('visible.txt')
+    expect(result.text).not.toContain('secret-link.txt')
   })
 
   it('handles regex special characters', async () => {

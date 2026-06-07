@@ -1,19 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createEditTool } from '../../../src/tools/filesystem/edit'
 import type { FilesystemToolResult } from '../../../src/tools/filesystem/utils'
+import { WORKSPACE_PATH_ERROR } from '../../../src/tools/filesystem/utils'
 
 let tmpDir: string
+let outsideDir: string
 let exec: (params: Record<string, unknown>) => Promise<FilesystemToolResult>
 
 beforeEach(async () => {
-  tmpDir = join(
-    tmpdir(),
-    `fs-edit-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  )
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  tmpDir = join(tmpdir(), `fs-edit-test-${suffix}`)
+  outsideDir = join(tmpdir(), `fs-edit-outside-${suffix}`)
   await mkdir(tmpDir, { recursive: true })
+  await mkdir(outsideDir, { recursive: true })
   const tool = createEditTool(tmpDir)
   // biome-ignore lint/suspicious/noExplicitAny: test helper
   exec = (params) => (tool as any).execute(params)
@@ -21,6 +23,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true })
+  await rm(outsideDir, { recursive: true, force: true })
 })
 
 describe('filesystem_edit', () => {
@@ -82,6 +85,33 @@ describe('filesystem_edit', () => {
       new_string: 'y',
     })
     expect(result.isError).toBe(true)
+  })
+
+  it('rejects parent traversal outside the workspace', async () => {
+    const result = await exec({
+      path: '../escaped.ts',
+      old_string: 'x',
+      new_string: 'y',
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain(WORKSPACE_PATH_ERROR)
+  })
+
+  it('rejects editing symlinked files outside the workspace', async () => {
+    const outsideFile = join(outsideDir, 'secret.ts')
+    await writeFile(outsideFile, 'const secret = true')
+    await symlink(outsideFile, join(tmpDir, 'secret-link.ts'))
+
+    const result = await exec({
+      path: 'secret-link.ts',
+      old_string: 'true',
+      new_string: 'false',
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain(WORKSPACE_PATH_ERROR)
+    expect(await readFile(outsideFile, 'utf-8')).toBe('const secret = true')
   })
 
   it('performs fuzzy match when whitespace differs', async () => {

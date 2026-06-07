@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createReadTool } from '../../../src/tools/filesystem/read'
@@ -7,17 +7,19 @@ import type { FilesystemToolResult } from '../../../src/tools/filesystem/utils'
 import {
   MAX_READ_CHARS,
   MAX_READ_LINES,
+  WORKSPACE_PATH_ERROR,
 } from '../../../src/tools/filesystem/utils'
 
 let tmpDir: string
+let outsideDir: string
 let exec: (params: Record<string, unknown>) => Promise<FilesystemToolResult>
 
 beforeEach(async () => {
-  tmpDir = join(
-    tmpdir(),
-    `fs-read-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  )
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  tmpDir = join(tmpdir(), `fs-read-test-${suffix}`)
+  outsideDir = join(tmpdir(), `fs-read-outside-${suffix}`)
   await mkdir(tmpDir, { recursive: true })
+  await mkdir(outsideDir, { recursive: true })
   const tool = createReadTool(tmpDir)
   // biome-ignore lint/suspicious/noExplicitAny: test helper
   exec = (params) => (tool as any).execute(params)
@@ -25,6 +27,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true })
+  await rm(outsideDir, { recursive: true, force: true })
 })
 
 describe('filesystem_read', () => {
@@ -101,11 +104,38 @@ describe('filesystem_read', () => {
     expect(result.text).toContain('nested content')
   })
 
-  it('handles absolute paths', async () => {
+  it('handles absolute paths inside the workspace', async () => {
     const absPath = join(tmpDir, 'abs.txt')
     await writeFile(absPath, 'absolute')
     const result = await exec({ path: absPath })
     expect(result.text).toContain('absolute')
+  })
+
+  it('rejects parent traversal outside the workspace', async () => {
+    const result = await exec({ path: '../secret.txt' })
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain(WORKSPACE_PATH_ERROR)
+  })
+
+  it('rejects absolute paths outside the workspace', async () => {
+    const outsideFile = join(outsideDir, 'secret.txt')
+    await writeFile(outsideFile, 'secret')
+
+    const result = await exec({ path: outsideFile })
+
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain(WORKSPACE_PATH_ERROR)
+  })
+
+  it('rejects symlinked files outside the workspace', async () => {
+    const outsideFile = join(outsideDir, 'secret.txt')
+    await writeFile(outsideFile, 'secret')
+    await symlink(outsideFile, join(tmpDir, 'secret-link.txt'))
+
+    const result = await exec({ path: 'secret-link.txt' })
+
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain(WORKSPACE_PATH_ERROR)
   })
 
   it('errors when a read would exceed the line limit', async () => {

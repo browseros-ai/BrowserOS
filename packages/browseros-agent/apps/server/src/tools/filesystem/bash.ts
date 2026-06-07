@@ -1,9 +1,9 @@
-import { resolve } from 'node:path'
 import { tool } from 'ai'
 import { z } from 'zod'
 import {
   DEFAULT_BASH_TIMEOUT,
   executeWithMetrics,
+  resolveWorkspaceRoot,
   toModelOutput,
   truncateTail,
 } from './utils'
@@ -30,7 +30,7 @@ export function createBashTool(cwd: string) {
       executeWithMetrics(TOOL_NAME, async () => {
         const [shell, flag] = getShellArgs()
         const timeoutMs = (params.timeout || DEFAULT_BASH_TIMEOUT) * 1000
-        const resolvedCwd = resolve(cwd)
+        const resolvedCwd = await resolveWorkspaceRoot(cwd)
 
         const proc = Bun.spawn([shell, flag, params.command], {
           cwd: resolvedCwd,

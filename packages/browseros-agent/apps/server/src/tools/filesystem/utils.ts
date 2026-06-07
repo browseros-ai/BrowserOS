@@ -1,6 +1,6 @@
 import type { Dirent } from 'node:fs'
-import { readdir } from 'node:fs/promises'
-import { join, relative } from 'node:path'
+import { lstat, readdir, realpath } from 'node:fs/promises'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
@@ -27,6 +27,66 @@ export interface TruncationResult {
   truncated: boolean
   totalLines: number
   keptLines: number
+}
+
+export const WORKSPACE_PATH_ERROR = 'Path is outside the allowed workspace.'
+
+function isInsideOrEqual(root: string, path: string): boolean {
+  const rel = relative(root, path)
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function nearestExistingPath(path: string): Promise<string> {
+  let current = path
+  while (!(await pathExists(current))) {
+    const parent = dirname(current)
+    if (parent === current) return current
+    current = parent
+  }
+  return current
+}
+
+export async function resolveWorkspaceRoot(cwd: string): Promise<string> {
+  return realpath(resolve(cwd))
+}
+
+export async function resolveWorkspacePath(
+  cwd: string,
+  userPath: string,
+): Promise<string> {
+  const workspacePath = resolve(cwd)
+  const workspaceRoot = await resolveWorkspaceRoot(cwd)
+  const requestedPath = resolve(workspacePath, userPath || '.')
+
+  if (
+    !isInsideOrEqual(workspacePath, requestedPath) &&
+    !isInsideOrEqual(workspaceRoot, requestedPath)
+  ) {
+    throw new Error(WORKSPACE_PATH_ERROR)
+  }
+
+  const existingPath = await nearestExistingPath(requestedPath)
+  let realExistingPath: string
+  try {
+    realExistingPath = await realpath(existingPath)
+  } catch {
+    throw new Error(WORKSPACE_PATH_ERROR)
+  }
+
+  if (!isInsideOrEqual(workspaceRoot, realExistingPath)) {
+    throw new Error(WORKSPACE_PATH_ERROR)
+  }
+
+  return requestedPath
 }
 
 export function truncateHead(
@@ -204,9 +264,10 @@ export const IMAGE_MIME_TYPES: Record<string, string> = {
   '.ico': 'image/x-icon',
 }
 
-export async function* walkFiles(
+async function* walkFilesWithinBoundary(
   dir: string,
   baseDir: string,
+  boundaryRoot: string,
 ): AsyncGenerator<string> {
   let entries: Dirent[]
   try {
@@ -219,11 +280,34 @@ export async function* walkFiles(
     const fullPath = join(dir, entry.name as string)
     if (entry.isDirectory()) {
       if (IGNORED_DIRS.has(entry.name as string)) continue
-      yield* walkFiles(fullPath, baseDir)
+      yield* walkFilesWithinBoundary(fullPath, baseDir, boundaryRoot)
     } else if (entry.isFile() || entry.isSymbolicLink()) {
+      if (entry.isSymbolicLink()) {
+        let target: string
+        try {
+          target = await realpath(fullPath)
+        } catch {
+          continue
+        }
+        if (!isInsideOrEqual(boundaryRoot, target)) continue
+      }
       yield relative(baseDir, fullPath)
     }
   }
+}
+
+export async function* walkFiles(
+  dir: string,
+  baseDir: string,
+  boundaryDir = baseDir,
+): AsyncGenerator<string> {
+  let boundaryRoot: string
+  try {
+    boundaryRoot = await realpath(boundaryDir)
+  } catch {
+    return
+  }
+  yield* walkFilesWithinBoundary(dir, baseDir, boundaryRoot)
 }
 
 export function toModelOutput({

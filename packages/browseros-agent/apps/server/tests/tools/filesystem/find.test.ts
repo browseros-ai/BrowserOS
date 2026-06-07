@@ -1,19 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createFindTool } from '../../../src/tools/filesystem/find'
 import type { FilesystemToolResult } from '../../../src/tools/filesystem/utils'
+import { WORKSPACE_PATH_ERROR } from '../../../src/tools/filesystem/utils'
 
 let tmpDir: string
+let outsideDir: string
 let exec: (params: Record<string, unknown>) => Promise<FilesystemToolResult>
 
 beforeEach(async () => {
-  tmpDir = join(
-    tmpdir(),
-    `fs-find-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  )
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  tmpDir = join(tmpdir(), `fs-find-test-${suffix}`)
+  outsideDir = join(tmpdir(), `fs-find-outside-${suffix}`)
   await mkdir(tmpDir, { recursive: true })
+  await mkdir(outsideDir, { recursive: true })
   const tool = createFindTool(tmpDir)
   // biome-ignore lint/suspicious/noExplicitAny: test helper
   exec = (params) => (tool as any).execute(params)
@@ -21,6 +23,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true })
+  await rm(outsideDir, { recursive: true, force: true })
 })
 
 async function createFileTree() {
@@ -93,6 +96,13 @@ describe('filesystem_find', () => {
     expect(result.text).toContain('modal.tsx')
   })
 
+  it('rejects paths outside the workspace', async () => {
+    const result = await exec({ pattern: '*', path: outsideDir })
+
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain(WORKSPACE_PATH_ERROR)
+  })
+
   it('skips node_modules', async () => {
     await mkdir(join(tmpDir, 'node_modules', 'pkg'), { recursive: true })
     await writeFile(join(tmpDir, 'node_modules', 'pkg', 'index.js'), '')
@@ -133,5 +143,16 @@ describe('filesystem_find', () => {
     await createFileTree()
     const result = await exec({ pattern: '*.json' })
     expect(result.text).toContain('package.json')
+  })
+
+  it('does not return symlinked files outside the workspace', async () => {
+    await writeFile(join(outsideDir, 'secret.txt'), 'secret')
+    await writeFile(join(tmpDir, 'visible.txt'), '')
+    await symlink(join(outsideDir, 'secret.txt'), join(tmpDir, 'secret.txt'))
+
+    const result = await exec({ pattern: '*.txt' })
+
+    expect(result.text).toContain('visible.txt')
+    expect(result.text).not.toContain('secret.txt')
   })
 })
