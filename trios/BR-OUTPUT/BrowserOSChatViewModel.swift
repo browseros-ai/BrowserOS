@@ -125,19 +125,7 @@ class BrowserOSChatViewModel: ObservableObject {
     }
 
     func isLikelyCommand(_ text: String) -> Bool {
-        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        // Strict prefix matching only — all prefixes must end with space to avoid matching innocent words
-        let explicitPrefixes = [
-            "shell ", "run ", "exec ", "navigate ", "click ", "screenshot ", "extract ",
-            "open ", "go to ", "browse ", "cat ", "ls ", "cd ", "mkdir ", "rm ",
-            "git ", "curl ", "wget ", "npm ", "bun ", "node ", "python ", "swift "
-        ]
-        // Single-word commands must match exactly (not as substring)
-        let exactCommands = ["click", "screenshot", "extract", "pwd"]
-        let isPrefixMatch = explicitPrefixes.contains { lower.hasPrefix($0) }
-        let isExactMatch = exactCommands.contains { lower == $0 }
-        let isSlashCommand = lower.hasPrefix("/") || lower.hasPrefix("./")
-        return isPrefixMatch || isExactMatch || isSlashCommand
+        ChatLogic.isLikelyCommand(text)
     }
 
     private func showUsageHint() {
@@ -282,26 +270,13 @@ class BrowserOSChatViewModel: ObservableObject {
             // JSON-parsed this text, which never matched — page detection always
             // silently failed. Parse the leading page id from the text instead.
             let pagesText = try await mcpClient.listPages()
-            if let id = Self.firstPageId(in: pagesText) {
+            if let id = ChatLogic.firstPageId(in: pagesText) {
                 currentPageId = id
                 return id
             }
             NSLog("[BrowserOSChatViewModel] No page id in list_pages output: \(pagesText.prefix(200))")
         } catch {
             NSLog("[BrowserOSChatViewModel] Page detection failed: \(error)")
-        }
-        return nil
-    }
-
-    /// Extract the first page id from a `list_pages` text listing. Each page
-    /// entry starts with `"<id>. "`; returns the id of the first such entry.
-    static func firstPageId(in text: String) -> Int? {
-        for line in text.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard let dotIndex = trimmed.firstIndex(of: ".") else { continue }
-            if let id = Int(trimmed[..<dotIndex]) {
-                return id
-            }
         }
         return nil
     }
