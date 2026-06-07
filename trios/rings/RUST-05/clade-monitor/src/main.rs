@@ -1,6 +1,6 @@
 use reqwest::blocking::get;
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,15 +9,13 @@ use std::time::{Duration, Instant, SystemTime};
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
-// Set once the "build-check script not configured" skip has been logged, so the
-// breadcrumb is emitted at most once per process instead of every cycle.
-static BUILD_CHECK_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
-
 extern "C" fn handle_signal(_sig: libc::c_int) {
     RUNNING.store(false, Ordering::Relaxed);
 }
 
-fn project_dir() -> String { trios_config::project_dir() }
+fn project_dir() -> String {
+    trios_config::project_dir()
+}
 
 const CIRCUIT_BREAKER_TRIP_THRESHOLD: u32 = 3;
 const CIRCUIT_BREAKER_PROBE_INTERVAL_SECS: u64 = 300;
@@ -64,7 +62,10 @@ impl CircuitBreaker {
 
     fn record_success(&mut self) {
         if self.state != CircuitState::Closed {
-            println!("[CircuitBreaker] {} recovered — closing circuit", self.service_name);
+            println!(
+                "[CircuitBreaker] {} recovered — closing circuit",
+                self.service_name
+            );
         }
         self.state = CircuitState::Closed;
         self.consecutive_failures = 0;
@@ -175,10 +176,16 @@ fn acquire_pidfile() -> Option<fs::File> {
             if let Err(e) = write!(f, "{}", pid) {
                 eprintln!("[CladeMonitor] Failed to write PID file: {}", e);
             }
-            println!("[CladeMonitor] Lock acquired + PID file: {} (pid={})", pid_path, pid);
+            println!(
+                "[CladeMonitor] Lock acquired + PID file: {} (pid={})",
+                pid_path, pid
+            );
         }
         Err(e) => {
-            eprintln!("[CladeMonitor] Failed to create PID file (non-fatal): {}", e);
+            eprintln!(
+                "[CladeMonitor] Failed to create PID file (non-fatal): {}",
+                e
+            );
         }
     }
 
@@ -197,8 +204,14 @@ fn main() {
 
     // Register signal handlers before pidfile to minimize stale-pidfile window
     unsafe {
-        libc::signal(libc::SIGTERM, handle_signal as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGINT, handle_signal as *const () as libc::sighandler_t);
+        libc::signal(
+            libc::SIGTERM,
+            handle_signal as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGINT,
+            handle_signal as *const () as libc::sighandler_t,
+        );
     }
 
     if acquire_pidfile().is_none() {
@@ -242,7 +255,10 @@ fn main() {
         detect_drift(&drift_intervals);
 
         // Every 15 min: health quick
-        let backoff_15m = calculate_backoff_with_jitter(failure_counts.get("15m").copied().unwrap_or(0), pid_seed);
+        let backoff_15m = calculate_backoff_with_jitter(
+            failure_counts.get("15m").copied().unwrap_or(0),
+            pid_seed,
+        );
         if now.saturating_duration_since(last_15m) >= Duration::from_secs(900 * backoff_15m) {
             last_15m = now;
             if run_health_check("15m", &mut canary_breaker) {
@@ -256,7 +272,10 @@ fn main() {
         }
 
         // Every 30 min: build + dirty + hash tracking
-        let backoff_30m = calculate_backoff_with_jitter(failure_counts.get("30m").copied().unwrap_or(0), pid_seed);
+        let backoff_30m = calculate_backoff_with_jitter(
+            failure_counts.get("30m").copied().unwrap_or(0),
+            pid_seed,
+        );
         if now.saturating_duration_since(last_30m) >= Duration::from_secs(1800 * backoff_30m) {
             last_30m = now;
             if run_build_check("30m") {
@@ -270,7 +289,10 @@ fn main() {
         }
 
         // Every 60 min: seal audit + safety budget
-        let backoff_60m = calculate_backoff_with_jitter(failure_counts.get("60m").copied().unwrap_or(0), pid_seed);
+        let backoff_60m = calculate_backoff_with_jitter(
+            failure_counts.get("60m").copied().unwrap_or(0),
+            pid_seed,
+        );
         if now.saturating_duration_since(last_60m) >= Duration::from_secs(3600 * backoff_60m) {
             last_60m = now;
             if run_seal_audit("60m") {
@@ -281,18 +303,28 @@ fn main() {
         }
 
         // Every 60 min: autonomous self-improvement loop (clade-tablecloth)
-        let backoff_60m_t = calculate_backoff_with_jitter(failure_counts.get("60m_tablecloth").copied().unwrap_or(0), pid_seed);
-        if now.saturating_duration_since(last_60m_tablecloth) >= Duration::from_secs(3600 * backoff_60m_t) {
+        let backoff_60m_t = calculate_backoff_with_jitter(
+            failure_counts.get("60m_tablecloth").copied().unwrap_or(0),
+            pid_seed,
+        );
+        if now.saturating_duration_since(last_60m_tablecloth)
+            >= Duration::from_secs(3600 * backoff_60m_t)
+        {
             last_60m_tablecloth = now;
             if run_tablecloth("60m_tablecloth") {
                 failure_counts.remove("60m_tablecloth");
             } else {
-                *failure_counts.entry("60m_tablecloth".to_string()).or_insert(0) += 1;
+                *failure_counts
+                    .entry("60m_tablecloth".to_string())
+                    .or_insert(0) += 1;
             }
         }
 
         // Every 24h: deep audit + wrap-up
-        let backoff_24h = calculate_backoff_with_jitter(failure_counts.get("24h").copied().unwrap_or(0), pid_seed);
+        let backoff_24h = calculate_backoff_with_jitter(
+            failure_counts.get("24h").copied().unwrap_or(0),
+            pid_seed,
+        );
         if now.saturating_duration_since(last_24h) >= Duration::from_secs(86400 * backoff_24h) {
             last_24h = now;
             if run_deep_audit("24h") {
@@ -307,8 +339,14 @@ fn main() {
             last_heartbeat = now;
             // Uptime is a calendar value -> read the wall clock here (not the
             // monotonic `now`, which is not anchored to the epoch).
-            let uptime = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
-            log_event("watchdog_heartbeat", &format!("alive_pid_{}_uptime_{}", std::process::id(), uptime));
+            let uptime = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            log_event(
+                "watchdog_heartbeat",
+                &format!("alive_pid_{}_uptime_{}", std::process::id(), uptime),
+            );
         }
 
         thread::sleep(Duration::from_secs(60));
@@ -373,7 +411,13 @@ fn replenish_budget(consecutive_healthy: u32) -> bool {
                 eprintln!("[CladeMonitor] Failed to write budget: {}", e);
                 return false;
             }
-            log_event("budget_replenish", &format!("budget_{:.1}_after_{}_healthy", budget.budget, consecutive_healthy));
+            log_event(
+                "budget_replenish",
+                &format!(
+                    "budget_{:.1}_after_{}_healthy",
+                    budget.budget, consecutive_healthy
+                ),
+            );
             true
         }
         Err(e) => {
@@ -395,7 +439,10 @@ fn compute_drift(now: Instant, intervals: &[(&str, &Instant, u64)]) -> Vec<Strin
         if elapsed > expected_secs * 2 {
             drifted.push(format!(
                 "{}: {}s elapsed vs {}s expected ({}x drift)",
-                name, elapsed, expected_secs, elapsed / expected_secs
+                name,
+                elapsed,
+                expected_secs,
+                elapsed / expected_secs
             ));
         }
     }
@@ -427,7 +474,9 @@ fn track_build_hash() -> Option<(String, bool)> {
     hasher.update(&data);
     let current_hash = format!("{:x}", hasher.finalize());
 
-    let previous_hash = fs::read_to_string(&hash_path).ok().map(|s| s.trim().to_string());
+    let previous_hash = fs::read_to_string(&hash_path)
+        .ok()
+        .map(|s| s.trim().to_string());
     let changed = previous_hash.as_ref() != Some(&current_hash);
 
     if let Err(e) = fs::write(&hash_path, &current_hash) {
@@ -436,10 +485,20 @@ fn track_build_hash() -> Option<(String, bool)> {
 
     if changed {
         if let Some(prev) = &previous_hash {
-            println!("[CladeMonitor] Binary changed: {}..→ {}...", &prev[..8.min(prev.len())], &current_hash[..8]);
-            log_event("binary_changed", &format!("{}_{}", &prev[..8.min(prev.len())], &current_hash[..8]));
+            println!(
+                "[CladeMonitor] Binary changed: {}..→ {}...",
+                &prev[..8.min(prev.len())],
+                &current_hash[..8]
+            );
+            log_event(
+                "binary_changed",
+                &format!("{}_{}", &prev[..8.min(prev.len())], &current_hash[..8]),
+            );
         } else {
-            println!("[CladeMonitor] Initial binary hash: {}...", &current_hash[..8]);
+            println!(
+                "[CladeMonitor] Initial binary hash: {}...",
+                &current_hash[..8]
+            );
             log_event("binary_hash_init", &current_hash[..16]);
         }
     }
@@ -462,12 +521,21 @@ fn run_health_check(interval: &str, canary_cb: &mut CircuitBreaker) -> bool {
         false
     };
 
-    let canary_label = if canary_cb.is_open() { "OPEN(skipped)" } else if canary { "true" } else { "false" };
+    let canary_label = if canary_cb.is_open() {
+        "OPEN(skipped)"
+    } else if canary {
+        "true"
+    } else {
+        "false"
+    };
     let status = format!("sovereign={},canary={}", sovereign, canary_label);
     println!("[CladeMonitor][{}] Health: {}", interval, status);
 
     if !sovereign {
-        println!("[CladeMonitor][{}] ALERT: Sovereign unhealthy — triggering rollback", interval);
+        println!(
+            "[CladeMonitor][{}] ALERT: Sovereign unhealthy — triggering rollback",
+            interval
+        );
         log_event("health_alert", &format!("sovereign_fail_at_{}", interval));
     }
 
@@ -501,45 +569,44 @@ fn build_error_tail(stderr: &str) -> String {
     }
 }
 
-/// Resolve the build-check script path. Honors the `TRIOS_BUILD_CHECK_SCRIPT`
-/// env override (consistent with `TRIOS_ROOT`/port env handling in
-/// trios-config); otherwise defaults to the conventional location.
-fn resolve_build_check_script(env_override: Option<String>, project_dir: &str) -> String {
+/// Resolve an explicit build-check executable from the `TRIOS_BUILD_CHECK_SCRIPT`
+/// env override (consistent with `TRIOS_ROOT`/port env handling in trios-config).
+///
+/// `None` means "no custom hook configured" — `run_build_check` then falls back
+/// to the canonical `clade-build` ring. We deliberately do NOT default to a
+/// `.sh` path: L7 UNITY forbids shell scripts on the critical path, and a
+/// missing default produced a non-actionable `build_check_skip` every cycle.
+fn resolve_build_check_script(env_override: Option<String>) -> Option<String> {
     match env_override {
-        Some(p) if !p.trim().is_empty() => p,
-        _ => format!("{}/.claude/queen-zig.sh", project_dir),
+        Some(p) if !p.trim().is_empty() => Some(p),
+        _ => None,
     }
-}
-
-/// Whether a "skip" breadcrumb should be emitted given whether one was already
-/// emitted this process. Collapses per-cycle skip spam into one event/process.
-fn should_emit_skip_event(already_logged: bool) -> bool {
-    !already_logged
 }
 
 fn run_build_check(interval: &str) -> bool {
     use std::path::Path;
     use std::process::{Command, Stdio};
 
-    let script = resolve_build_check_script(
-        std::env::var("TRIOS_BUILD_CHECK_SCRIPT").ok(),
-        &project_dir(),
-    );
+    let Some(script) = resolve_build_check_script(std::env::var("TRIOS_BUILD_CHECK_SCRIPT").ok())
+    else {
+        // No custom hook: run the canonical Rust build gate (swiftc via the
+        // clade-build ring). This keeps the daemon self-sufficient — it catches
+        // build regressions even when the agent cron isn't waking — without a
+        // shell script (L7 UNITY).
+        return run_default_build_check(interval);
+    };
+
     let script_path = Path::new(&script);
     if !script_path.exists() {
-        // The build-check script is intentionally optional. Logging "skip" on
-        // every cycle floods event_log.jsonl with a non-actionable signal that
-        // the dashboard and clade-audit then parse as noise (alert fatigue).
-        // Deduplicate at the source: emit one breadcrumb per process lifetime,
-        // then stay silent. All genuine failure paths below remain loud.
-        if should_emit_skip_event(BUILD_CHECK_SKIP_LOGGED.swap(true, Ordering::Relaxed)) {
-            println!(
-                "[CladeMonitor][{}] SKIP: build-check script not configured ({} absent) — silencing further skips this process",
-                interval, script
-            );
-            log_event("build_check_skip", &format!("missing_script_{}", script));
-        }
-        return true;
+        eprintln!(
+            "[CladeMonitor][{}] Build check FAILED: configured script {} not found",
+            interval, script
+        );
+        log_event(
+            "build_check",
+            &format!("interval_{}_missing_{}", interval, script),
+        );
+        return false;
     }
 
     // Verify script is owned by current user and not world-writable
@@ -548,13 +615,25 @@ fn run_build_check(interval: &str) -> bool {
         if let Ok(meta) = script_path.metadata() {
             let uid = unsafe { libc::getuid() };
             if meta.uid() != uid {
-                eprintln!("[CladeMonitor][{}] SECURITY: {} not owned by current user (uid {} vs {})", interval, script, meta.uid(), uid);
+                eprintln!(
+                    "[CladeMonitor][{}] SECURITY: {} not owned by current user (uid {} vs {})",
+                    interval,
+                    script,
+                    meta.uid(),
+                    uid
+                );
                 log_event("build_check_security", &format!("wrong_owner_{}", script));
                 return false;
             }
             if meta.mode() & 0o002 != 0 {
-                eprintln!("[CladeMonitor][{}] SECURITY: {} is world-writable", interval, script);
-                log_event("build_check_security", &format!("world_writable_{}", script));
+                eprintln!(
+                    "[CladeMonitor][{}] SECURITY: {} is world-writable",
+                    interval, script
+                );
+                log_event(
+                    "build_check_security",
+                    &format!("world_writable_{}", script),
+                );
                 return false;
             }
         }
@@ -575,15 +654,83 @@ fn run_build_check(interval: &str) -> bool {
         }
         Ok(out) => {
             let tail = build_error_tail(&String::from_utf8_lossy(&out.stderr));
-            eprintln!("[CladeMonitor][{}] Build check FAILED (exit {:?}): {}", interval, out.status.code(), tail);
-            log_event("build_check", &format!("interval_{}_fail_exit{:?}: {}", interval, out.status.code(), tail));
+            eprintln!(
+                "[CladeMonitor][{}] Build check FAILED (exit {:?}): {}",
+                interval,
+                out.status.code(),
+                tail
+            );
+            log_event(
+                "build_check",
+                &format!(
+                    "interval_{}_fail_exit{:?}: {}",
+                    interval,
+                    out.status.code(),
+                    tail
+                ),
+            );
             false
         }
         Err(e) => {
             // Could not even spawn the script (missing exec bit / permission) —
             // a distinct failure mode from a build that ran and failed.
-            eprintln!("[CladeMonitor][{}] Build check could not spawn {}: {}", interval, script, e);
+            eprintln!(
+                "[CladeMonitor][{}] Build check could not spawn {}: {}",
+                interval, script, e
+            );
             log_event("build_check_spawn_fail", &format!("{}: {}", script, e));
+            false
+        }
+    }
+}
+
+/// Default build gate when no custom hook is set: invoke the `clade-build` ring
+/// (swiftc compile) via cargo from the workspace root. cargo is on PATH in the
+/// same context that launches `clade-monitor`.
+fn run_default_build_check(interval: &str) -> bool {
+    use std::process::{Command, Stdio};
+
+    let dir = project_dir();
+    println!("[CladeMonitor][{}] Build check: clade-build ring", interval);
+    match Command::new("cargo")
+        .args(["run", "--quiet", "--bin", "clade-build"])
+        .current_dir(&dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            log_event("build_check", &format!("interval_{}_pass", interval));
+            true
+        }
+        Ok(out) => {
+            let tail = build_error_tail(&String::from_utf8_lossy(&out.stderr));
+            eprintln!(
+                "[CladeMonitor][{}] Build check FAILED (exit {:?}): {}",
+                interval,
+                out.status.code(),
+                tail
+            );
+            log_event(
+                "build_check",
+                &format!(
+                    "interval_{}_fail_exit{:?}: {}",
+                    interval,
+                    out.status.code(),
+                    tail
+                ),
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!(
+                "[CladeMonitor][{}] Build check could not spawn cargo: {}",
+                interval, e
+            );
+            log_event(
+                "build_check_spawn_fail",
+                &format!("cargo clade-build: {}", e),
+            );
             false
         }
     }
@@ -605,13 +752,19 @@ fn run_seal_audit(interval: &str) -> bool {
         return false;
     }
 
-    println!("[CladeMonitor][{}] Seal audit: checking Canary...", interval);
+    println!(
+        "[CladeMonitor][{}] Seal audit: checking Canary...",
+        interval
+    );
     log_event("seal_audit", &format!("interval_{}", interval));
     true
 }
 
 fn run_deep_audit(interval: &str) -> bool {
-    println!("[CladeMonitor][{}] Deep audit: fitness sync + screenshot baseline", interval);
+    println!(
+        "[CladeMonitor][{}] Deep audit: fitness sync + screenshot baseline",
+        interval
+    );
     log_event("deep_audit", &format!("interval_{}", interval));
     true
 }
@@ -630,7 +783,10 @@ fn run_tablecloth(interval: &str) -> bool {
         return true;
     }
 
-    println!("[CladeMonitor][{}] Spawning clade-tablecloth (timeout {}s)...", interval, SUBPROCESS_TIMEOUT_SECS);
+    println!(
+        "[CladeMonitor][{}] Spawning clade-tablecloth (timeout {}s)...",
+        interval, SUBPROCESS_TIMEOUT_SECS
+    );
     let result = run_with_timeout(
         Command::new("cargo")
             .args(["run", "--bin", "clade-tablecloth"])
@@ -675,16 +831,26 @@ fn run_with_timeout(cmd: &mut std::process::Command, timeout_secs: u64) -> bool 
             Ok(Some(status)) => return status.success(),
             Ok(None) => {
                 if start.elapsed() > timeout {
-                    eprintln!("[CladeMonitor] Subprocess timed out after {}s, killing process group", timeout_secs);
+                    eprintln!(
+                        "[CladeMonitor] Subprocess timed out after {}s, killing process group",
+                        timeout_secs
+                    );
                     // Kill the entire process group (child + its subprocesses)
-                    unsafe { libc::killpg(child_pid, libc::SIGTERM); }
+                    unsafe {
+                        libc::killpg(child_pid, libc::SIGTERM);
+                    }
                     thread::sleep(Duration::from_secs(2));
                     // Force kill if still alive
-                    unsafe { libc::killpg(child_pid, libc::SIGKILL); }
+                    unsafe {
+                        libc::killpg(child_pid, libc::SIGKILL);
+                    }
                     if let Err(e) = child.wait() {
                         eprintln!("[CladeMonitor] Failed to reap child after kill: {}", e);
                     }
-                    log_event("subprocess_timeout", &format!("{}s_pgid_{}", timeout_secs, child_pid));
+                    log_event(
+                        "subprocess_timeout",
+                        &format!("{}s_pgid_{}", timeout_secs, child_pid),
+                    );
                     return false;
                 }
                 thread::sleep(Duration::from_secs(5));
@@ -796,32 +962,21 @@ mod tests {
     #[test]
     fn resolve_build_check_script_honors_env_override() {
         assert_eq!(
-            resolve_build_check_script(Some("/custom/build.sh".to_string()), "/proj"),
-            "/custom/build.sh"
+            resolve_build_check_script(Some("/custom/build".to_string())),
+            Some("/custom/build".to_string())
         );
     }
 
     #[test]
     fn resolve_build_check_script_ignores_blank_override() {
-        assert_eq!(
-            resolve_build_check_script(Some("   ".to_string()), "/proj"),
-            "/proj/.claude/queen-zig.sh"
-        );
+        // Blank override -> None -> fall back to the default clade-build gate.
+        assert_eq!(resolve_build_check_script(Some("   ".to_string())), None);
     }
 
     #[test]
     fn resolve_build_check_script_defaults_when_unset() {
-        assert_eq!(
-            resolve_build_check_script(None, "/proj"),
-            "/proj/.claude/queen-zig.sh"
-        );
-    }
-
-    #[test]
-    fn skip_event_emits_once_then_silences() {
-        // First time (not yet logged) -> emit; afterwards (already logged) -> silent.
-        assert!(should_emit_skip_event(false));
-        assert!(!should_emit_skip_event(true));
+        // Unset -> None -> default clade-build gate (no `.sh`, L7 UNITY).
+        assert_eq!(resolve_build_check_script(None), None);
     }
 
     #[test]
@@ -893,7 +1048,10 @@ mod tests {
             let base = calculate_backoff(2); // 4
             let jittered = calculate_backoff_with_jitter(2, seed);
             assert!(jittered >= base, "jitter should not reduce backoff");
-            assert!(jittered <= base + base / 4, "jitter should be <= 25% of base");
+            assert!(
+                jittered <= base + base / 4,
+                "jitter should be <= 25% of base"
+            );
         }
     }
 
@@ -924,10 +1082,8 @@ mod tests {
         // Call the pure fn (NOT detect_drift) so the test never writes to the
         // real event_log.
         let now = Instant::now();
-        let intervals: Vec<(&str, &Instant, u64)> = vec![
-            ("test_15m", &now, 900),
-            ("test_30m", &now, 1800),
-        ];
+        let intervals: Vec<(&str, &Instant, u64)> =
+            vec![("test_15m", &now, 900), ("test_30m", &now, 1800)];
         let drifted = compute_drift(now, &intervals);
         assert!(drifted.is_empty());
     }
@@ -936,9 +1092,7 @@ mod tests {
     fn compute_drift_catches_stale_interval() {
         let now = Instant::now();
         let stale = now - Duration::from_secs(7200);
-        let intervals: Vec<(&str, &Instant, u64)> = vec![
-            ("test_15m", &stale, 900),
-        ];
+        let intervals: Vec<(&str, &Instant, u64)> = vec![("test_15m", &stale, 900)];
         let drifted = compute_drift(now, &intervals);
         assert_eq!(drifted.len(), 1);
         assert!(drifted[0].contains("test_15m"));
@@ -953,16 +1107,22 @@ mod tests {
         let expected: u64 = 900;
         // (elapsed_secs, should_drift)
         let cases: [(u64, bool); 4] = [
-            (expected, false),          // 1x — fine
-            (expected * 2, false),      // exactly 2x — NOT drift (threshold is >)
-            (expected * 2 + 1, true),   // just over 2x — drift
-            (expected * 8, true),       // 8x — drift
+            (expected, false),        // 1x — fine
+            (expected * 2, false),    // exactly 2x — NOT drift (threshold is >)
+            (expected * 2 + 1, true), // just over 2x — drift
+            (expected * 8, true),     // 8x — drift
         ];
         for (elapsed, should_drift) in cases {
             let last = now - Duration::from_secs(elapsed);
             let intervals: Vec<(&str, &Instant, u64)> = vec![("iv", &last, expected)];
             let drifted = compute_drift(now, &intervals);
-            assert_eq!(!drifted.is_empty(), should_drift, "elapsed={}s expected drift={}", elapsed, should_drift);
+            assert_eq!(
+                !drifted.is_empty(),
+                should_drift,
+                "elapsed={}s expected drift={}",
+                elapsed,
+                should_drift
+            );
         }
     }
 
@@ -986,20 +1146,14 @@ mod tests {
     #[test]
     fn run_with_timeout_succeeds_on_fast_command() {
         use std::process::Command;
-        let result = run_with_timeout(
-            Command::new("echo").arg("hello"),
-            5,
-        );
+        let result = run_with_timeout(Command::new("echo").arg("hello"), 5);
         assert!(result);
     }
 
     #[test]
     fn run_with_timeout_fails_on_bad_command() {
         use std::process::Command;
-        let result = run_with_timeout(
-            &mut Command::new("/nonexistent-binary-xyz"),
-            5,
-        );
+        let result = run_with_timeout(&mut Command::new("/nonexistent-binary-xyz"), 5);
         assert!(!result);
     }
 

@@ -276,24 +276,32 @@ class BrowserOSChatViewModel: ObservableObject {
 
     private func detectPageId() async -> Int? {
         do {
-            let pagesJSON = try await mcpClient.listPages()
-            // Parse JSON array of pages, extract first page ID
-            if let data = pagesJSON.data(using: .utf8),
-               let pages = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-               let first = pages.first,
-               let id = first["id"] as? Int {
+            // `list_pages` returns a human-readable listing, one page per block:
+            //   "0. Title (tab 12)\n   https://example.com"
+            // (see apps/server/src/tools/navigation.ts). The previous version
+            // JSON-parsed this text, which never matched — page detection always
+            // silently failed. Parse the leading page id from the text instead.
+            let pagesText = try await mcpClient.listPages()
+            if let id = Self.firstPageId(in: pagesText) {
                 currentPageId = id
                 return id
             }
-            // Fallback: try parsing as single object
-            if let data = pagesJSON.data(using: .utf8),
-               let page = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let id = page["id"] as? Int {
-                currentPageId = id
-                return id
-            }
+            NSLog("[BrowserOSChatViewModel] No page id in list_pages output: \(pagesText.prefix(200))")
         } catch {
             NSLog("[BrowserOSChatViewModel] Page detection failed: \(error)")
+        }
+        return nil
+    }
+
+    /// Extract the first page id from a `list_pages` text listing. Each page
+    /// entry starts with `"<id>. "`; returns the id of the first such entry.
+    static func firstPageId(in text: String) -> Int? {
+        for line in text.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let dotIndex = trimmed.firstIndex(of: ".") else { continue }
+            if let id = Int(trimmed[..<dotIndex]) {
+                return id
+            }
         }
         return nil
     }
