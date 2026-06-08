@@ -51,6 +51,49 @@ enum ChatLogicTests {
         check(ChatLogic.isLikelyCommand("swift is a great language"),
               "'swift ' prefix is treated as a command attempt (known quirk)")
 
+        // extractURL
+        check(ChatLogic.extractURL(from: "open https://example.com/x now") == "https://example.com/x",
+              "extractURL pulls the first http(s) URL")
+        check(ChatLogic.extractURL(from: "no url here") == nil,
+              "extractURL returns nil when absent")
+
+        // parseIntent — tool routing
+        check(ChatLogic.parseIntent("screenshot", pageId: nil)?.0 == "take_screenshot",
+              "parseIntent maps 'screenshot' -> take_screenshot")
+        check(ChatLogic.parseIntent("extract", pageId: nil)?.0 == "get_page_content",
+              "parseIntent maps 'extract' -> get_page_content")
+        check(ChatLogic.parseIntent("navigate https://x.com", pageId: nil)?.0 == "navigate_page",
+              "parseIntent maps 'navigate ' -> navigate_page")
+        check(ChatLogic.parseIntent("what is the weather", pageId: nil) == nil,
+              "parseIntent returns nil for unrecognized input (no shell fallthrough)")
+
+        // parseIntent — pageId threading + URL extraction
+        if let nav = ChatLogic.parseIntent("open https://example.com", pageId: 7) {
+            check(nav.0 == "navigate_page", "navigate tool name")
+            check((nav.1["url"] as? String) == "https://example.com", "navigate url is extracted")
+            check((nav.1["page"] as? Int) == 7, "navigate threads pageId")
+        } else {
+            check(false, "parseIntent navigate returned nil unexpectedly")
+        }
+
+        // parseIntent — SECURITY: recursive self-launch is blocked, not executed
+        if let blocked = ChatLogic.parseIntent("shell open trios_app", pageId: nil) {
+            check(blocked.0 == "filesystem_bash", "blocked command still routes to filesystem_bash")
+            let cmd = (blocked.1["command"] as? String) ?? ""
+            check(cmd.hasPrefix("echo 'Blocked"),
+                  "recursive self-launch ('trios_app') is rewritten to a safe echo")
+        } else {
+            check(false, "parseIntent shell returned nil unexpectedly")
+        }
+        if let normal = ChatLogic.parseIntent("shell ls -la", pageId: nil) {
+            check((normal.1["command"] as? String) == "ls -la",
+                  "ordinary shell command is passed through verbatim")
+        } else {
+            check(false, "parseIntent shell 'ls' returned nil unexpectedly")
+        }
+        check(ChatLogic.parseIntent("shell    ", pageId: nil) == nil,
+              "empty shell command returns nil")
+
         if failures == 0 {
             print("\nAll ChatLogic tests passed.")
             exit(0)
