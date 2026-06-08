@@ -94,6 +94,19 @@ enum ChatLogicTests {
         check(ChatLogic.parseIntent("shell    ", pageId: nil) == nil,
               "empty shell command returns nil")
 
+        // parseIntent — every recursive-launch pattern must be blocked
+        for cmd in [
+            "shell ./trios_app",          // literal trios_app
+            "shell open trios",           // "open trios"
+            "shell swiftc -o trios x.swift", // "swiftc.*trios"
+            "shell launchd load trios",   // "launchd.*trios"
+            "shell clade-promote --boot", // "clade-promote.*boot"
+        ] {
+            let parsed = ChatLogic.parseIntent(cmd, pageId: nil)
+            let blocked = ((parsed?.1["command"] as? String) ?? "").hasPrefix("echo 'Blocked")
+            check(blocked, "recursive-launch blocked: \(cmd)")
+        }
+
         if failures == 0 {
             print("\nAll ChatLogic tests passed.")
             exit(0)
