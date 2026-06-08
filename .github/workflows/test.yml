@@ -70,6 +70,14 @@ jobs:
             command: (cd apps/eval && bun run test)
             junit_path: test-results/eval.xml
             needs_browser: false
+          - suite: shared
+            command: (cd packages/shared && bun test --reporter=junit --reporter-outfile="$BROWSEROS_JUNIT_PATH")
+            junit_path: test-results/shared.xml
+            needs_browser: false
+          - suite: cdp-protocol
+            command: (cd packages/cdp-protocol && bun test --reporter=junit --reporter-outfile="$BROWSEROS_JUNIT_PATH")
+            junit_path: test-results/cdp-protocol.xml
+            needs_browser: false
           - suite: build
             command: bun run ./scripts/run-bun-test.ts ./scripts/build
             junit_path: test-results/build.xml
