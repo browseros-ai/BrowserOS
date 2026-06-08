@@ -37,10 +37,16 @@ struct ChatPanelView: View {
                     emptyStateView
                 } else {
                     LazyVStack(spacing: 0) {
-                        // Local chat messages
-                        ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
-                            let isFirstInGroup = index == 0 || viewModel.messages[index - 1].role != message.role
-                            let isLastInGroup = index == viewModel.messages.count - 1 || viewModel.messages[index + 1].role != message.role
+                        // Local chat messages.
+                        // CRITICAL: snapshot the array once. Indexing the live
+                        // `viewModel.messages` by an enumerated index crashes
+                        // (EXC_BREAKPOINT) when the array mutates mid-render
+                        // (streaming append, regenerate, conversation switch) —
+                        // the snapshot index then exceeds the shrunk live array.
+                        let localMessages = viewModel.messages
+                        ForEach(Array(localMessages.enumerated()), id: \.element.id) { index, message in
+                            let isFirstInGroup = index == 0 || localMessages[index - 1].role != message.role
+                            let isLastInGroup = index == localMessages.count - 1 || localMessages[index + 1].role != message.role
 
                             MessageBubbleView(
                                 message: message,
