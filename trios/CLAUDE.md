@@ -72,10 +72,18 @@ When operating as the Trinity Agent (Queen), follow this 6-phase loop:
 ## 2. Engineering workflow
 
 - **Build:** `./build.sh` (swiftc direct compilation, no SPM/Xcode)
-- **Run:** `./trios_app` or `open trios.app`
+- **Run:** `open trios.app` (preferred — loads `Bundle.main` resources incl. the
+  menu-bar logo). `./trios_app` works but the bare binary may not resolve bundle assets.
 - **E2E:** `bash e2e/trios_e2e_flow.sh`
 - **Health:** `curl -s http://127.0.0.1:9105/health`
 - **Git:** branch `feat/zai-provider`, main branch is `dev`
+
+> **INVARIANT — menu-bar logo:** the trios status-bar logo must never disappear.
+> It only vanishes when the **app process dies**. After any `./build.sh` /
+> `clade-build` you MUST relaunch the app (`open trios.app`) — the running app
+> otherwise keeps the old binary, and if it was killed the logo is gone until
+> restarted. `clade-monitor`'s app watchdog relaunches it within ~60s as a
+> backstop. See `.claude/rules/cron-life.md` → "INVARIANT: trios menu-bar logo".
 
 ---
 

@@ -349,12 +349,75 @@ fn main() {
             );
         }
 
+        // App watchdog (every loop, ~60s): the trios menu-bar app must always be
+        // running so its status-bar logo is present. If it died (crash, rebuild
+        // without restart, logout) nothing else brings it back — relaunch it.
+        ensure_trios_app_running();
+
         thread::sleep(Duration::from_secs(60));
     }
 
     cleanup_pidfile();
     println!("[CladeMonitor] Graceful shutdown complete.");
     log_event("monitor_shutdown", "graceful");
+}
+
+/// Whether the trios GUI app is running. Matches the exact process names the
+/// app uses (`trios` from the .app bundle, `trios_app` from the bare binary) so
+/// it never confuses itself with the clade-* rings that merely live under a
+/// path containing "trios".
+fn trios_app_running() -> bool {
+    use std::process::Command;
+    for name in ["trios", "trios_app"] {
+        if let Ok(out) = Command::new("pgrep").arg("-x").arg(name).output() {
+            if out.status.success() && !out.stdout.is_empty() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Relaunch the trios app if it is not running. Prefers the `.app` bundle via
+/// `open` so `Bundle.main` resources (the menu-bar logo) resolve; falls back to
+/// the bare binary. trios's own RecursionGuard is the backstop against
+/// duplicate instances, so a benign race here cannot spawn two apps.
+fn ensure_trios_app_running() {
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+
+    if trios_app_running() {
+        return;
+    }
+
+    let dir = project_dir();
+    let bundle = format!("{}/trios.app", dir);
+    let binary = format!("{}/trios_app", dir);
+
+    let launched = if Path::new(&bundle).exists() {
+        Command::new("open").arg(&bundle).status().is_ok()
+    } else if Path::new(&binary).exists() {
+        Command::new(&binary)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok()
+    } else {
+        eprintln!(
+            "[CladeMonitor] App watchdog: neither {} nor {} exists",
+            bundle, binary
+        );
+        log_event("trios_relaunch", "failed_no_artifact");
+        return;
+    };
+
+    if launched {
+        println!("[CladeMonitor] App watchdog: trios was down — relaunched");
+        log_event("trios_relaunch", "relaunched_after_down");
+    } else {
+        eprintln!("[CladeMonitor] App watchdog: relaunch attempt failed");
+        log_event("trios_relaunch", "relaunch_failed");
+    }
 }
 
 fn calculate_backoff(failures: u32) -> u64 {
