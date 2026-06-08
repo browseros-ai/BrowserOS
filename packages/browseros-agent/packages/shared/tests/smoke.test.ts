@@ -12,7 +12,12 @@
 import { describe, it } from 'bun:test'
 import assert from 'node:assert'
 
-import { matchesSitePattern } from '@browseros/shared/acl/match'
+import {
+  compileAclTerms,
+  findMatchingRules,
+  matchesElement,
+  matchesSitePattern,
+} from '@browseros/shared/acl/match'
 import {
   AGENT_LIMITS,
   CONTENT_LIMITS,
@@ -25,7 +30,9 @@ import {
 import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
 import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
 import { BrowserContextSchema } from '@browseros/shared/schemas/browser-context'
-import { sanitize } from '@browseros/shared/sentry/sanitize'
+import { UIMessageStreamEventSchema } from '@browseros/shared/schemas/ui-stream'
+import { sanitize, sanitizeEvent } from '@browseros/shared/sentry/sanitize'
+import type { AclRule, ElementProperties } from '@browseros/shared/types/acl'
 
 describe('@browseros/shared constants', () => {
   it('exposes distinct, defined port sets', () => {
@@ -104,5 +111,127 @@ describe('@browseros/shared acl/match', () => {
       false,
     )
     assert.strictEqual(matchesSitePattern('not a url', 'example.com'), false)
+  })
+
+  it('compileAclTerms includes the normalized textMatch', () => {
+    const rule: AclRule = {
+      id: 'r1',
+      sitePattern: 'example.com',
+      textMatch: 'Submit',
+      enabled: true,
+    }
+    assert.ok(compileAclTerms(rule).includes('submit'))
+  })
+
+  it('matchesElement matches by selector and by text', () => {
+    const button: ElementProperties = {
+      tagName: 'button',
+      textContent: 'Submit order',
+      attributes: {},
+    }
+    const bySelector: AclRule = {
+      id: 'r2',
+      sitePattern: '*',
+      selector: 'button',
+      enabled: true,
+    }
+    const byText: AclRule = {
+      id: 'r3',
+      sitePattern: '*',
+      textMatch: 'submit',
+      enabled: true,
+    }
+    const noMatch: AclRule = {
+      id: 'r4',
+      sitePattern: '*',
+      textMatch: 'delete account',
+      enabled: true,
+    }
+    assert.strictEqual(matchesElement(button, bySelector), true)
+    assert.strictEqual(matchesElement(button, byText), true)
+    assert.strictEqual(matchesElement(button, noMatch), false)
+  })
+
+  it('findMatchingRules filters by site and enabled flag', () => {
+    const props: ElementProperties = {
+      tagName: 'button',
+      textContent: 'Buy now',
+      attributes: {},
+    }
+    const rules: AclRule[] = [
+      {
+        id: 'a',
+        sitePattern: 'example.com',
+        selector: 'button',
+        enabled: true,
+      },
+      { id: 'b', sitePattern: 'other.com', selector: 'button', enabled: true },
+      {
+        id: 'c',
+        sitePattern: 'example.com',
+        selector: 'button',
+        enabled: false,
+      },
+    ]
+    const matched = findMatchingRules('https://example.com/p', props, rules)
+    assert.deepStrictEqual(
+      matched.map((r) => r.id),
+      ['a'],
+    )
+  })
+})
+
+describe('@browseros/shared schemas/ui-stream', () => {
+  it('accepts well-formed stream events', () => {
+    for (const event of [
+      { type: 'start' },
+      { type: 'finish', finishReason: 'stop' },
+      { type: 'error', errorText: 'boom' },
+      { type: 'text-start', id: 'm1' },
+    ]) {
+      assert.strictEqual(
+        UIMessageStreamEventSchema.safeParse(event).success,
+        true,
+        `expected ${event.type} to validate`,
+      )
+    }
+  })
+
+  it('rejects an unknown event type', () => {
+    assert.strictEqual(
+      UIMessageStreamEventSchema.safeParse({ type: 'not-a-real-event' })
+        .success,
+      false,
+    )
+  })
+
+  it('rejects an event missing a required field', () => {
+    // 'finish' requires finishReason
+    assert.strictEqual(
+      UIMessageStreamEventSchema.safeParse({ type: 'finish' }).success,
+      false,
+    )
+  })
+})
+
+describe('@browseros/shared sentry/sanitizeEvent', () => {
+  it('redacts sensitive values inside breadcrumbs, contexts and extra', () => {
+    const event = {
+      breadcrumbs: [
+        { category: 'http', data: { apiKey: 'sk-leak', url: '/x' } },
+      ],
+      contexts: { auth: { token: 'leak', userId: 'u1' } },
+      extra: { password: 'hunter2', note: 'fine' },
+    }
+    const cleaned = sanitizeEvent(event) as typeof event & {
+      contexts: { auth: { token: string; userId: string } }
+      extra: { password: string; note: string }
+    }
+    assert.strictEqual(cleaned.breadcrumbs[0].data.apiKey, '[REDACTED]')
+    assert.strictEqual(cleaned.breadcrumbs[0].data.url, '/x')
+    assert.strictEqual(cleaned.contexts.auth.token, '[REDACTED]')
+    assert.strictEqual(cleaned.contexts.auth.userId, 'u1')
+    assert.strictEqual(cleaned.extra.password, '[REDACTED]')
+    assert.strictEqual(cleaned.extra.note, 'fine')
   })
 })
