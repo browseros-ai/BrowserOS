@@ -27,6 +27,9 @@ export const LLM_PROVIDERS = {
   CHATGPT_PRO: 'chatgpt-pro',
   GITHUB_COPILOT: 'github-copilot',
   QWEN_CODE: 'qwen-code',
+  CLAUDE_CODE: 'claude-code',
+  CODEX: 'codex',
+  ACP_CUSTOM: 'acp-custom',
 } as const
 
 /**
@@ -48,6 +51,9 @@ export const LLMProviderSchema: z.ZodEnum<
     'chatgpt-pro',
     'github-copilot',
     'qwen-code',
+    'claude-code',
+    'codex',
+    'acp-custom',
   ]
 > = z.enum([
   LLM_PROVIDERS.ANTHROPIC,
@@ -64,6 +70,9 @@ export const LLMProviderSchema: z.ZodEnum<
   LLM_PROVIDERS.CHATGPT_PRO,
   LLM_PROVIDERS.GITHUB_COPILOT,
   LLM_PROVIDERS.QWEN_CODE,
+  LLM_PROVIDERS.CLAUDE_CODE,
+  LLM_PROVIDERS.CODEX,
+  LLM_PROVIDERS.ACP_CUSTOM,
 ])
 
 export type LLMProvider = z.infer<typeof LLMProviderSchema>
@@ -84,6 +93,9 @@ export const LLMConfigSchema: z.ZodObject<{
   sessionToken: z.ZodOptional<z.ZodString>
   reasoningEffort: z.ZodOptional<z.ZodEnum<['none', 'low', 'medium', 'high']>>
   reasoningSummary: z.ZodOptional<z.ZodEnum<['auto', 'concise', 'detailed']>>
+  acpAgentId: z.ZodOptional<z.ZodString>
+  acpCommand: z.ZodOptional<z.ZodString>
+  acpFixedWorkspacePath: z.ZodOptional<z.ZodString>
 }> = z.object({
   provider: LLMProviderSchema,
   model: z.string().optional(),
@@ -99,6 +111,13 @@ export const LLMConfigSchema: z.ZodObject<{
   // ChatGPT Pro (Codex)
   reasoningEffort: z.enum(['none', 'low', 'medium', 'high']).optional(),
   reasoningSummary: z.enum(['auto', 'concise', 'detailed']).optional(),
+  // ACP-backed providers (claude-code, codex, acp-custom). agent id
+  // resolves through acpx's registry; command is only used when
+  // provider is 'acp-custom'; workspace is the fixed-path cwd the
+  // user picks at provider-create time.
+  acpAgentId: z.string().optional(),
+  acpCommand: z.string().optional(),
+  acpFixedWorkspacePath: z.string().optional(),
 })
 
 export type LLMConfig = z.infer<typeof LLMConfigSchema>
