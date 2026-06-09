@@ -79,11 +79,11 @@ export class OrchestratorAgent {
     private maxTurns: number,
   ) {}
 
-  static create(
+  static async create(
     resolvedConfig: ResolvedAgentConfig & { maxTurns?: number },
     options: OrchestratorAgentOptions,
-  ): OrchestratorAgent {
-    const model = createLanguageModel(resolvedConfig)
+  ): Promise<OrchestratorAgent> {
+    const { model } = await createLanguageModel(resolvedConfig)
     const state = {
       delegationCount: 0,
       totalExecutorSteps: 0,

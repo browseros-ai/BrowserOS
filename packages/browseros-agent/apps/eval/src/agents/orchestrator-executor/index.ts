@@ -270,8 +270,9 @@ export class OrchestratorExecutorEvaluator implements AgentEvaluator {
         return result
       }
 
-      // Create orchestrator with factory (synchronous — no async init needed)
-      const agent = OrchestratorAgent.create(orchestratorConfig, {
+      // Create orchestrator with factory. async because createLanguageModel
+      // returns a Promise so ACP-backed providers can await on agent spawn.
+      const agent = await OrchestratorAgent.create(orchestratorConfig, {
         executorFactory,
       })
 
