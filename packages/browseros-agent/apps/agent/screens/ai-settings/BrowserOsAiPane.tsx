@@ -29,6 +29,7 @@ import type { ProviderTemplate } from '@/lib/llm-providers/providerTemplates'
 import { testProvider } from '@/lib/llm-providers/testProvider'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
+import type { HarnessAgentAdapter } from '@/modules/agents/agent-harness-types'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useGraphqlMutation } from '@/modules/graphql/graphql-mutation.hooks'
 import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
@@ -238,6 +239,32 @@ export const BrowserOsAiPane: FC = () => {
     setIsNewDialogOpen(true)
   }
 
+  // Coding-agent template cards (Claude Code / Codex) now open the
+  // provider dialog so the saved record participates in the regular
+  // /chat → streamText flow via the acpx-ai-provider runtime. The
+  // server-side provider factory branches on type and spawns the ACP
+  // agent; the LlmProviderConfig carries optional acpAgentId,
+  // acpCommand, and acpFixedWorkspacePath which the factory reads
+  // (with sensible defaults if any are absent).
+  const handleUseCodingAgentTemplate = (adapterId: HarnessAgentAdapter) => {
+    if (adapterId === 'hermes') {
+      // Hermes still routes through the harness; leave the existing
+      // create flow in place.
+      coding.openCreate(adapterId)
+      return
+    }
+    setTemplateValues({
+      type: adapterId === 'codex' ? 'codex' : 'claude-code',
+      name: adapterId === 'codex' ? 'Codex' : 'Claude Code',
+      baseUrl: '',
+      modelId: adapterId === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6',
+      supportsImages: true,
+      contextWindow: adapterId === 'codex' ? 400000 : 200000,
+      temperature: 0.2,
+    })
+    setIsNewDialogOpen(true)
+  }
+
   const handleEditProvider = (provider: LlmProviderConfig) => {
     setEditingProvider(provider)
     setIsEditDialogOpen(true)
@@ -366,7 +393,7 @@ export const BrowserOsAiPane: FC = () => {
 
       <ProviderTemplatesSection
         codingAdapters={coding.adapters}
-        onCreateAgent={coding.openCreate}
+        onCreateAgent={handleUseCodingAgentTemplate}
         onUseTemplate={handleUseTemplate}
       />
 
