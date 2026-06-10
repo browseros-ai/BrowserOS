@@ -8,7 +8,6 @@
  * when a new conversation starts; subsequent turns short-circuit.
  */
 
-import { rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { type BuildSystemPromptOptions, buildSystemPrompt } from '../prompt'
 import { instructionFilenameFor } from './filenames'
@@ -75,9 +74,10 @@ async function defaultWriteFileAtomic(
   path: string,
   contents: string,
 ): Promise<void> {
+  const fs = await import('node:fs/promises')
   const tmp = join(dirname(path), `.${path.split('/').pop()}.browseros-tmp`)
-  await writeFile(tmp, contents, 'utf8')
-  await rename(tmp, path)
+  await fs.writeFile(tmp, contents, 'utf8')
+  await fs.rename(tmp, path)
 }
 
 export async function ensureWorkspaceInstructionFile(

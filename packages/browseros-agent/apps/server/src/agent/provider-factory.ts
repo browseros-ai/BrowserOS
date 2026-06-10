@@ -22,7 +22,10 @@ import { createCodexFetch } from '../lib/clients/oauth/codex-fetch'
 import { createCopilotFetch } from '../lib/clients/oauth/copilot-fetch'
 import { logger } from '../lib/logger'
 import { createOpenRouterCompatibleFetch } from '../lib/openrouter-fetch'
+import { ensureWorkspaceInstructionFile } from './acp-instructions'
 import { ACP_PROVIDER_TYPES, isAcpProvider } from './acp-providers'
+import type { BuildSystemPromptOptions } from './prompt'
+import { readSoulPrompt } from './soul-prompt'
 import type { ResolvedAgentConfig } from './types'
 
 export { isAcpProvider }
@@ -75,6 +78,38 @@ async function createAcpLanguageModel(
       error: err instanceof Error ? err.message : String(err),
     })
   })
+
+  // Plant or refresh the ACP workspace instruction file (CLAUDE.md /
+  // AGENTS.md) on conversation start. Subsequent turns short-circuit
+  // inside the helper. Failures are logged but never thrown so a bad
+  // write does not break the chat.
+  const promptOptions: BuildSystemPromptOptions = {
+    workspaceDir: workspacePath,
+    userSystemPrompt: config.userSystemPrompt,
+    chatMode: config.chatMode,
+    isScheduledTask: config.isScheduledTask,
+    soulContent: await readSoulPrompt(),
+    declinedApps: config.declinedApps,
+    origin: config.origin,
+    acpMode: true,
+  }
+  const ensureResult = await ensureWorkspaceInstructionFile({
+    workspacePath,
+    providerType: config.provider,
+    promptOptions,
+    isNewConversation: config.isNewConversation ?? false,
+  })
+  logger.info('ACP workspace instruction file lifecycle', {
+    conversationId: config.conversationId,
+    providerType: config.provider,
+    workspacePath,
+    action: ensureResult.action,
+    ...('filename' in ensureResult ? { filename: ensureResult.filename } : {}),
+    ...(ensureResult.action === 'failed'
+      ? { error: ensureResult.error.message }
+      : {}),
+  })
+
   const agentRegistryOverrides: Record<string, string> = {}
   if (config.provider === LLM_PROVIDERS.ACP_CUSTOM && config.acpCommand) {
     agentRegistryOverrides[agentId] = config.acpCommand

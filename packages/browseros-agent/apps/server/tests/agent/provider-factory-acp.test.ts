@@ -27,6 +27,7 @@ mock.module('node:fs/promises', () => ({
 
 mock.module('../../src/lib/browseros-dir', () => ({
   getBrowserosDir: () => join(homedir(), '.browseros-test'),
+  getSoulPath: () => join(homedir(), '.browseros-test', 'SOUL.md'),
 }))
 
 mock.module('../../src/lib/agents/acpx-provider/buildAcpxProvider', () => ({
