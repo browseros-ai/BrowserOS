@@ -22,6 +22,13 @@ export interface ProviderConfig {
 export interface ResolvedAgentConfig {
   conversationId: string
   provider: LLMProvider
+  /**
+   * Unique `LlmProviderConfig.id` this request references. Forwarded
+   * from the chat request so the ACP factory can scope the default
+   * workspace path per provider record instead of per provider TYPE
+   * (otherwise every Claude Code provider would share one cwd).
+   */
+  providerId?: string
   model: string
   apiKey?: string
   baseUrl?: string

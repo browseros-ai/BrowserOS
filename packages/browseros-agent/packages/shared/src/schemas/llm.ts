@@ -83,6 +83,7 @@ export type LLMProvider = z.infer<typeof LLMProviderSchema>
  */
 export const LLMConfigSchema: z.ZodObject<{
   provider: typeof LLMProviderSchema
+  providerId: z.ZodOptional<z.ZodString>
   model: z.ZodOptional<z.ZodString>
   apiKey: z.ZodOptional<z.ZodString>
   baseUrl: z.ZodOptional<z.ZodString>
@@ -100,6 +101,11 @@ export const LLMConfigSchema: z.ZodObject<{
   acpFixedWorkspacePath: z.ZodOptional<z.ZodString>
 }> = z.object({
   provider: LLMProviderSchema,
+  // The unique LlmProviderConfig.id this request points at. Used by the
+  // ACP factory to scope the default workspace path so two providers of
+  // the same type (e.g. Claude Opus High vs Claude Sonnet Medium) get
+  // their own isolated working directory instead of sharing one.
+  providerId: z.string().optional(),
   model: z.string().optional(),
   apiKey: z.string().optional(),
   baseUrl: z.string().optional(),
