@@ -155,6 +155,20 @@ You have a session workspace for reading, writing, and executing files. See the 
 }
 
 // -----------------------------------------------------------------------------
+// section: acp-tool-namespace (only rendered when acpMode is true)
+// -----------------------------------------------------------------------------
+
+function getAcpToolNamespace(
+  _exclude: Set<string>,
+  options?: BuildSystemPromptOptions,
+): string {
+  if (!options?.acpMode) return ''
+  return `<acp_tool_namespace>
+You are running through BrowserOS as an ACP-powered agent. The browser tools listed in capabilities reach you over MCP as \`mcp.browseros.<name>\`, so \`navigate\` is \`mcp.browseros.navigate\`, \`act\` is \`mcp.browseros.act\`, \`snapshot\` is \`mcp.browseros.snapshot\`, and so on. Your workspace filesystem is a separate surface from the browser tabs; editing files in the workspace does not change web page content, and reading pages over the browser tools does not touch your workspace. Prefer the BrowserOS MCP tools over your own built-in file, shell, or fetch tools for any browser or web task.
+</acp_tool_namespace>`
+}
+
+// -----------------------------------------------------------------------------
 // section: execution
 // -----------------------------------------------------------------------------
 
@@ -610,6 +624,7 @@ const promptSections: Record<string, PromptSectionFn> = {
   'role-and-mode': getRoleAndMode,
   security: getSecurity,
   capabilities: getCapabilities,
+  'acp-tool-namespace': getAcpToolNamespace,
   execution: getExecution,
   'tool-selection': (
     _exclude: Set<string>,
@@ -639,6 +654,13 @@ export interface BuildSystemPromptOptions {
   declinedApps?: string[]
   /** Where the chat session originates from — determines navigation behavior. */
   origin?: 'sidepanel' | 'newtab'
+  /**
+   * Render the ACP-only tool-namespace addendum. Set to true when the
+   * prompt is being written into a CLAUDE.md / AGENTS.md workspace file
+   * for an ACP-backed agent; leave unset for the cloud LLM tool-loop
+   * path so the section stays out of those prompts.
+   */
+  acpMode?: boolean
 }
 
 export function buildSystemPrompt(options?: BuildSystemPromptOptions): string {

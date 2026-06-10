@@ -1004,6 +1004,49 @@ describe('nudges', () => {
 })
 
 // ---------------------------------------------------------------------------
+// 16. ACP TOOL NAMESPACE
+//
+// Why: ACP-powered agents read this prompt out of CLAUDE.md / AGENTS.md and
+// see browser tools prefixed with `mcp.browseros.*` rather than the bare
+// names the rest of the prompt uses. The addendum resolves the naming
+// mismatch, draws the line between workspace files and browser tabs, and
+// steers the agent toward BrowserOS MCP tools for browser work over its
+// own native filesystem / shell tools. The cloud LLM tool-loop path must
+// never render this section.
+// ---------------------------------------------------------------------------
+describe('acp tool namespace section', () => {
+  it('is absent when acpMode is unset', () => {
+    const prompt = buildRegular()
+    expect(prompt).not.toContain('<acp_tool_namespace>')
+    expect(prompt).not.toContain('mcp.browseros.<name>')
+  })
+
+  it('is absent when acpMode is false', () => {
+    const prompt = buildRegular({ acpMode: false })
+    expect(prompt).not.toContain('<acp_tool_namespace>')
+  })
+
+  it('renders once when acpMode is true', () => {
+    const prompt = buildRegular({ acpMode: true })
+    const matches = prompt.match(/<acp_tool_namespace>/g) ?? []
+    expect(matches).toHaveLength(1)
+    expect(prompt).toContain('mcp.browseros.<name>')
+    expect(prompt).toContain('mcp.browseros.navigate')
+    expect(prompt).toContain('workspace filesystem is a separate surface')
+  })
+
+  it('sits between </capabilities> and <execution> so naming is clarified before the tool tables', () => {
+    const prompt = buildRegular({ acpMode: true })
+    const capsEnd = prompt.indexOf('</capabilities>')
+    const namespaceStart = prompt.indexOf('<acp_tool_namespace>')
+    const executionStart = prompt.indexOf('<execution>')
+    expect(capsEnd).toBeGreaterThan(-1)
+    expect(namespaceStart).toBeGreaterThan(capsEnd)
+    expect(executionStart).toBeGreaterThan(namespaceStart)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 15. NEW-TAB ORIGIN
 //
 // Why: When the user chats from the new-tab page, the active tab IS the chat
