@@ -2,7 +2,7 @@ import { Check, Loader2, Trash2 } from 'lucide-react'
 import type { FC } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { isLocalRuntimeProviderType } from '@/lib/llm-providers/provider-runtime'
+import { canTestProvider } from '@/lib/llm-providers/provider-runtime'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { cn } from '@/lib/utils'
@@ -29,7 +29,7 @@ export const ProviderCard: FC<ProviderCardProps> = ({
   isTesting = false,
 }) => {
   const inputId = `provider-${provider.id}`
-  const canTest = !isLocalRuntimeProviderType(provider.type)
+  const canTest = canTestProvider(provider)
 
   return (
     <label

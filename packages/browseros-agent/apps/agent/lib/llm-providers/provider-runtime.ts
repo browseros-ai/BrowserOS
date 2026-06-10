@@ -10,9 +10,13 @@ export function isLocalRuntimeProviderType(type: ProviderType): boolean {
   return localRuntimeProviderTypes.has(type)
 }
 
-/** Identifies provider configs that can be sent to the generic chat routes. */
-export function isChatProviderType(type: ProviderType): boolean {
-  return !isLocalRuntimeProviderType(type)
+/**
+ * Identifies provider configs that can be sent to the generic chat routes.
+ * ACP-backed types (claude-code, codex, acp-custom) are chat-capable: the
+ * agent server resolves them to an ACP LanguageModelV2 inside streamText.
+ */
+export function isChatProviderType(_type: ProviderType): boolean {
+  return true
 }
 
 /** Finds an exact provider ID only when it is compatible with chat routes. */
@@ -23,6 +27,18 @@ export function findChatProviderById(
   if (!providerId) return null
   const provider = providers.find((candidate) => candidate.id === providerId)
   return provider && isChatProviderType(provider.type) ? provider : null
+}
+
+/**
+ * Saved providers are always testable except acp-custom missing a spawn command:
+ * acpx's built-in registry resolves claude-code / codex commands, but a custom
+ * agent has no fallback so the probe would fail with spawn_failed.
+ */
+export function canTestProvider(provider: LlmProviderConfig): boolean {
+  if (provider.type === 'acp-custom') {
+    return Boolean(provider.acpAgentId && provider.acpCommand)
+  }
+  return true
 }
 
 /** Resolves a chat-compatible provider, skipping local runtime configs. */
