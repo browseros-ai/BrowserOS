@@ -66,4 +66,9 @@ export interface ResolvedAgentConfig {
    *  servers in browserContext. Only consumed by the ACP factory
    *  branch; model-backed factories ignore it. */
   acpMcpServers?: McpServerSpec[]
+
+  /** True iff this is the first turn of the conversation (no session
+   *  cached in the SessionStore). Drives the ACP workspace
+   *  instruction file refresh so subsequent turns do zero fs work. */
+  isNewConversation?: boolean
 }
