@@ -343,6 +343,15 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   const canTest = (): boolean => {
     if (!watchedModelId) return false
 
+    if (isAcpProviderType(watchedType as ProviderType)) {
+      // acp-custom must carry a command for the probe to spawn anything;
+      // built-ins resolve their command through acpx's registry.
+      if (watchedType === 'acp-custom' && !form.getValues('acpCommand')) {
+        return false
+      }
+      return true
+    }
+
     if (
       watchedType === 'chatgpt-pro' ||
       watchedType === 'github-copilot' ||

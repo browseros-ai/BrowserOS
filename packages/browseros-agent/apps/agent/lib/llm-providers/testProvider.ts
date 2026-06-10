@@ -36,6 +36,10 @@ export async function testProvider(
         accessKeyId: provider.accessKeyId,
         secretAccessKey: provider.secretAccessKey,
         sessionToken: provider.sessionToken,
+        // ACP-backed providers reach the probe via the same endpoint.
+        acpAgentId: provider.acpAgentId,
+        acpCommand: provider.acpCommand,
+        acpFixedWorkspacePath: provider.acpFixedWorkspacePath,
       }),
     })
 

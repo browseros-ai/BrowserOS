@@ -51,6 +51,9 @@ export const providerFormSchema = z
       .enum(['none', 'low', 'medium', 'high', 'xhigh', 'max'])
       .optional(),
     reasoningSummary: z.enum(['auto', 'concise', 'detailed']).optional(),
+    acpAgentId: z.string().optional(),
+    acpCommand: z.string().optional(),
+    acpFixedWorkspacePath: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     if (data.type === 'azure') {
