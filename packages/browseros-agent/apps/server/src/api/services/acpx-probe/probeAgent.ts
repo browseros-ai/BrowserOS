@@ -5,12 +5,23 @@
  */
 
 import { type AgentProbeResult, probeAgent as runProbe } from 'acp-probe'
+import { resolveAcpSpawnCommand } from '../../../lib/agents/host-acp/launcher'
+import { logger } from '../../../lib/logger'
 
 export interface ServerAcpxProbeInput {
   agentId?: string
   command?: string
   cwd?: string
   timeoutMs?: number
+  /**
+   * BrowserOS resources directory. When set, the probe prefers the
+   * bundled Bun launcher at <resourcesDir>/bin/third_party/bun for
+   * built-in agents so end-user installs without Node still resolve
+   * the spawn correctly. Production callers thread this from the
+   * HttpServerConfig.
+   */
+  resourcesDir?: string | null
+  platform?: NodeJS.Platform
 }
 
 export interface ServerAcpxProbeModel {
@@ -39,7 +50,12 @@ export interface ServerAcpxProbeResult {
   error?: ServerAcpxProbeError
 }
 
-const DEFAULT_PROBE_TIMEOUT_MS = 10_000
+// 30s mirrors acp-probe's library default. The bottleneck on cold
+// cache is the npm tarball fetch + extract for the adapter package,
+// which the bundled-bun launcher does not eliminate; the spawn part
+// is fast either way. Env override (clamped to 1-60s) lets a CI
+// scenario tighten it.
+const DEFAULT_PROBE_TIMEOUT_MS = 30_000
 
 function resolveTimeout(requested?: number): number {
   const envValue = Number(process.env.BROWSEROS_ACPX_PROBE_TIMEOUT_MS)
@@ -56,9 +72,33 @@ export async function probeAcpAgent(
     throw new Error('Either agentId or command is required')
   }
   const timeoutMs = resolveTimeout(input.timeoutMs)
+
+  // Built-in agent ids (claude, codex) get rewritten to an explicit
+  // command when the bundled-Bun launcher resolves. When the launcher
+  // would fall back to `npx -y …` we deliberately leave the agentId
+  // alone so acpx's built-in registry produces the same command via
+  // its own code path; this keeps callers that have not threaded
+  // resourcesDir yet on the exact pre-existing behaviour.
+  let agentId = input.agentId
+  let command = input.command
+  if (!command && agentId) {
+    const launcher = resolveAcpSpawnCommand({
+      agentType: agentId,
+      resourcesDir: input.resourcesDir,
+      platform: input.platform,
+    })
+    if (launcher?.source === 'bundled-bun') {
+      command = launcher.command
+      agentId = undefined
+      logger.debug('ACP probe using bundled-bun launcher', {
+        originalAgentId: input.agentId,
+      })
+    }
+  }
+
   const result = await runProbe({
-    agent: input.agentId,
-    command: input.command,
+    agent: agentId,
+    command,
     cwd: input.cwd,
     authPolicy: 'skip',
     timeoutMs,

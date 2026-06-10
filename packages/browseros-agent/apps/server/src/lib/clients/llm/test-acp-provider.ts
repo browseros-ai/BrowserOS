@@ -55,7 +55,10 @@ function humanizeProbeError(code: string, fallback: string): string {
 
 export async function testAcpProvider(
   input: TestAcpProviderInput,
-  options: { probe?: ProbeAcpAgentFn } = {},
+  options: {
+    probe?: ProbeAcpAgentFn
+    resourcesDir?: string | null
+  } = {},
 ): Promise<ProviderTestResult> {
   const probe = options.probe ?? probeAcpAgent
   const startTime = performance.now()
@@ -79,6 +82,7 @@ export async function testAcpProvider(
     agentId,
     command: input.acpCommand,
     cwd: input.acpFixedWorkspacePath,
+    resourcesDir: options.resourcesDir,
   })
   const responseTime = Math.round(performance.now() - startTime)
   if (probeResult.error) {

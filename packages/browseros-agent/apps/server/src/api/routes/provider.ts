@@ -14,6 +14,7 @@ import { AgentLLMConfigSchema } from '../types'
 
 interface ProviderRouteDeps {
   browserosId?: string
+  resourcesDir?: string | null
 }
 
 export function createProviderRoutes(deps: ProviderRouteDeps = {}) {
@@ -29,13 +30,16 @@ export function createProviderRoutes(deps: ProviderRouteDeps = {}) {
       })
 
       const result = isAcpProvider(config.provider)
-        ? await testAcpProvider({
-            provider: config.provider,
-            model: config.model,
-            acpAgentId: config.acpAgentId,
-            acpCommand: config.acpCommand,
-            acpFixedWorkspacePath: config.acpFixedWorkspacePath,
-          })
+        ? await testAcpProvider(
+            {
+              provider: config.provider,
+              model: config.model,
+              acpAgentId: config.acpAgentId,
+              acpCommand: config.acpCommand,
+              acpFixedWorkspacePath: config.acpFixedWorkspacePath,
+            },
+            { resourcesDir: deps.resourcesDir },
+          )
         : await testProviderConnection(config, deps.browserosId)
 
       logger.info('Provider test result', {

@@ -88,10 +88,10 @@ describe('probeAcpAgent — input shape', () => {
     expect(lastCall?.cwd).toBe('/tmp/x')
   })
 
-  it('defaults the timeout to 10 seconds', async () => {
+  it('defaults the timeout to 30 seconds', async () => {
     nextResult = baseProbeResult()
     await probeAcpAgent({ agentId: 'claude' })
-    expect(lastCall?.timeoutMs).toBe(10_000)
+    expect(lastCall?.timeoutMs).toBe(30_000)
   })
 
   it('honours an explicit timeoutMs', async () => {
@@ -111,7 +111,65 @@ describe('probeAcpAgent — input shape', () => {
     process.env.BROWSEROS_ACPX_PROBE_TIMEOUT_MS = '999'
     nextResult = baseProbeResult()
     await probeAcpAgent({ agentId: 'claude' })
-    expect(lastCall?.timeoutMs).toBe(10_000)
+    expect(lastCall?.timeoutMs).toBe(30_000)
+  })
+})
+
+describe('probeAcpAgent — bundled-Bun launcher swap', () => {
+  it('rewrites a claude agentId to the bundled-Bun command when the binary exists', async () => {
+    // Mock the bundled-bun resolver to return a fake path. The
+    // probe calls resolveAcpSpawnCommand internally with the
+    // resourcesDir we threaded through; we point it at a stub
+    // implementation via the launcher's resolveBundledBun param
+    // path. Since the probe does not expose that injection,
+    // simulate the same outcome by passing a resourcesDir that
+    // makes the real resolveBundledBun succeed: write a fake bun
+    // into tmpdir/bin/third_party.
+    // Sync fs because some sibling test files partial-mock
+    // `node:fs/promises`. Using the sync API sidesteps that pollution.
+    const fs = await import('node:fs')
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bos-launcher-'))
+    const binDir = path.join(tmpRoot, 'bin', 'third_party')
+    fs.mkdirSync(binDir, { recursive: true })
+    const bunPath = path.join(binDir, 'bun')
+    fs.writeFileSync(bunPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+
+    nextResult = baseProbeResult()
+    await probeAcpAgent({ agentId: 'claude', resourcesDir: tmpRoot })
+    expect(lastCall?.agent).toBeUndefined()
+    expect(lastCall?.command).toContain(bunPath)
+    expect(lastCall?.command).toContain('@agentclientprotocol/claude-agent-acp')
+
+    fs.rmSync(tmpRoot, { recursive: true, force: true })
+  })
+
+  it('leaves agentId in place when no resourcesDir is supplied so acpx resolves the npx command', async () => {
+    nextResult = baseProbeResult()
+    await probeAcpAgent({ agentId: 'claude' })
+    expect(lastCall?.agent).toBe('claude')
+    expect(lastCall?.command).toBeUndefined()
+  })
+
+  it('leaves agentId in place when the bundled bun binary is missing under resourcesDir', async () => {
+    nextResult = baseProbeResult()
+    await probeAcpAgent({
+      agentId: 'codex',
+      resourcesDir: '/nonexistent/path/that/has/no/bundled/bun',
+    })
+    expect(lastCall?.agent).toBe('codex')
+    expect(lastCall?.command).toBeUndefined()
+  })
+
+  it('passes through an explicit command unchanged regardless of resourcesDir', async () => {
+    nextResult = baseProbeResult()
+    await probeAcpAgent({
+      command: 'my-custom-binary acp',
+      resourcesDir: '/some/path',
+    })
+    expect(lastCall?.command).toBe('my-custom-binary acp')
+    expect(lastCall?.agent).toBeUndefined()
   })
 })
 

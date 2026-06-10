@@ -30,16 +30,17 @@ const probeRequestSchema = z
   })
 
 export function createAcpxProbeRoutes(
-  options: { probe?: ProbeAcpAgentFn } = {},
+  options: { probe?: ProbeAcpAgentFn; resourcesDir?: string | null } = {},
 ) {
   const probe = options.probe ?? probeAcpAgent
+  const resourcesDir = options.resourcesDir
   return new Hono().post(
     '/',
     zValidator('json', probeRequestSchema),
     async (c) => {
       const body = c.req.valid('json')
       try {
-        const result = await probe(body)
+        const result = await probe({ ...body, resourcesDir })
         return c.json(result, 200)
       } catch (err) {
         // Probe errors from inside acp-probe (spawn_failed, initialize_timeout,
