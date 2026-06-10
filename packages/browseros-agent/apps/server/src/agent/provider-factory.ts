@@ -12,6 +12,7 @@ import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import type { LanguageModel } from 'ai'
 import { buildAcpxProvider } from '../lib/agents/acpx-provider/buildAcpxProvider'
+import { resolveAcpSpawnCommand } from '../lib/agents/host-acp/launcher'
 import { getBrowserosDir } from '../lib/browseros-dir'
 import { createBrowserOSFetch } from '../lib/browseros-fetch'
 import {
@@ -129,6 +130,20 @@ async function createAcpLanguageModel(
   })
 
   const agentRegistryOverrides: Record<string, string> = {}
+  // Pre-seed the built-in adapters with the bundled-Bun launcher so the
+  // spawned child does not depend on `npx` being on the user's PATH.
+  // We only override when the launcher resolved the bundled binary;
+  // host-npx-fallback would only restate acpx's own registry command,
+  // so we let acpx resolve it directly in that case.
+  for (const builtIn of ['claude', 'codex'] as const) {
+    const launcher = resolveAcpSpawnCommand({
+      agentType: builtIn,
+      resourcesDir: config.resourcesDir,
+    })
+    if (launcher?.source === 'bundled-bun') {
+      agentRegistryOverrides[builtIn] = launcher.command
+    }
+  }
   if (config.provider === LLM_PROVIDERS.ACP_CUSTOM && config.acpCommand) {
     agentRegistryOverrides[agentId] = config.acpCommand
   }

@@ -20,6 +20,10 @@ interface ChatRouteDeps {
   /** Port the BrowserOS server bound to. Threaded to ACP providers so
    *  the spawned agent can dial back into the local /mcp route. */
   serverPort: number
+  /** BrowserOS resources directory. Threaded to ACP providers so the
+   *  bundled-Bun launcher under <resourcesDir>/bin/third_party/bun
+   *  can be located for built-in adapters (claude / codex). */
+  resourcesDir?: string | null
 }
 
 export function createChatRoutes(deps: ChatRouteDeps) {
@@ -34,6 +38,7 @@ export function createChatRoutes(deps: ChatRouteDeps) {
     browserosId,
     aiSdkDevtoolsEnabled: deps.aiSdkDevtoolsEnabled,
     serverPort: deps.serverPort,
+    resourcesDir: deps.resourcesDir,
   })
 
   return new Hono()

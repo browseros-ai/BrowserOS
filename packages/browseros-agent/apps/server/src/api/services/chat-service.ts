@@ -33,6 +33,10 @@ export interface ChatServiceDeps {
   /** Port the BrowserOS server bound to. Forwarded into the ACP MCP
    *  bridge so the spawned agent can dial back into /mcp. */
   serverPort: number
+  /** BrowserOS resources directory. Threaded into ACP-backed config
+   *  resolutions so the bundled-Bun launcher under
+   *  <resourcesDir>/bin/third_party/bun can be located. */
+  resourcesDir?: string | null
 }
 
 export class ChatService {
@@ -92,6 +96,7 @@ export class ChatService {
           })
         : undefined,
       isNewConversation: isFirstTurn,
+      resourcesDir: this.deps.resourcesDir,
     }
 
     let isNewSession = false

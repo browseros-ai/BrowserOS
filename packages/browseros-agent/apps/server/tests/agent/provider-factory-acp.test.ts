@@ -105,9 +105,68 @@ describe('createLanguageModel — ACP providers', () => {
     })
   })
 
-  it('leaves agentRegistryOverrides empty for built-in agents', async () => {
+  it('leaves agentRegistryOverrides empty for built-in agents without a bundled bun', async () => {
+    // baseConfig() has no resourcesDir so the launcher cannot resolve
+    // the bundled Bun and falls back to acpx's own npx command, which
+    // means we deliberately do NOT pre-seed the registry override.
     await createLanguageModel(baseConfig() as never)
     expect(lastBuildArgs?.agentRegistryOverrides).toEqual({})
+  })
+
+  it('pre-seeds the bundled-Bun launcher for claude and codex when resourcesDir points at a real bundled bun', async () => {
+    // Sync `node:fs` because `node:fs/promises` is partial-mocked at
+    // the top of this file. We need real disk IO to make the launcher's
+    // resolveBundledBun.statSync find a real file.
+    const fs = await import('node:fs')
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bos-pf-acp-'))
+    const binDir = path.join(tmpRoot, 'bin', 'third_party')
+    fs.mkdirSync(binDir, { recursive: true })
+    const bunPath = path.join(binDir, 'bun')
+    fs.writeFileSync(bunPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+
+    await createLanguageModel({
+      ...baseConfig(),
+      resourcesDir: tmpRoot,
+    } as never)
+    const overrides = lastBuildArgs?.agentRegistryOverrides as
+      | Record<string, string>
+      | undefined
+    expect(overrides?.claude).toContain(bunPath)
+    expect(overrides?.claude).toContain('@agentclientprotocol/claude-agent-acp')
+    expect(overrides?.codex).toContain(bunPath)
+    expect(overrides?.codex).toContain('@zed-industries/codex-acp')
+
+    fs.rmSync(tmpRoot, { recursive: true, force: true })
+  })
+
+  it('still honours acp-custom user command alongside the built-in pre-seeds', async () => {
+    const fs = await import('node:fs')
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bos-pf-acp-'))
+    const binDir = path.join(tmpRoot, 'bin', 'third_party')
+    fs.mkdirSync(binDir, { recursive: true })
+    fs.writeFileSync(path.join(binDir, 'bun'), '#!/bin/sh\nexit 0\n', {
+      mode: 0o755,
+    })
+
+    await createLanguageModel({
+      ...baseConfig(),
+      provider: 'acp-custom',
+      acpAgentId: 'my-agent',
+      acpCommand: 'my-bin acp',
+      resourcesDir: tmpRoot,
+    } as never)
+    const overrides = lastBuildArgs?.agentRegistryOverrides as
+      | Record<string, string>
+      | undefined
+    expect(overrides?.['my-agent']).toBe('my-bin acp')
+    expect(overrides?.claude).toContain('@agentclientprotocol/claude-agent-acp')
+    expect(overrides?.codex).toContain('@zed-industries/codex-acp')
+
+    fs.rmSync(tmpRoot, { recursive: true, force: true })
   })
 
   it('uses the user-supplied workspace path verbatim', async () => {

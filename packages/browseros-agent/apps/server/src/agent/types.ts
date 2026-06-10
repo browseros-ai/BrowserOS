@@ -78,4 +78,9 @@ export interface ResolvedAgentConfig {
    *  cached in the SessionStore). Drives the ACP workspace
    *  instruction file refresh so subsequent turns do zero fs work. */
   isNewConversation?: boolean
+
+  /** BrowserOS resources directory. Threaded from HttpServerConfig
+   *  into the ACP factory so the bundled-Bun launcher at
+   *  <resourcesDir>/bin/third_party/bun can be located. */
+  resourcesDir?: string | null
 }

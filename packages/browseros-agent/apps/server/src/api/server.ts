@@ -123,8 +123,11 @@ export async function createHttpServer(config: HttpServerConfig) {
       }),
     )
     .route('/status', createStatusRoute({ browser }))
-    .route('/test-provider', createProviderRoutes({ browserosId }))
-    .route('/acpx/probe', createAcpxProbeRoutes())
+    .route(
+      '/test-provider',
+      createProviderRoutes({ browserosId, resourcesDir }),
+    )
+    .route('/acpx/probe', createAcpxProbeRoutes({ resourcesDir }))
     .route('/refine-prompt', createRefinePromptRoutes({ browserosId }))
     .route(
       '/oauth',
@@ -163,6 +166,7 @@ export async function createHttpServer(config: HttpServerConfig) {
         klavisRef,
         aiSdkDevtoolsEnabled: config.aiSdkDevtoolsEnabled,
         serverPort: port,
+        resourcesDir,
       }),
     )
     .route('/screencast', createScreencastRoute({ browser }))
