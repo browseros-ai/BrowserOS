@@ -23,7 +23,7 @@ const probeRequestSchema = z
     agentId: z.string().optional(),
     command: z.string().optional(),
     cwd: z.string().optional(),
-    timeoutMs: z.number().int().min(1_000).max(60_000).optional(),
+    timeoutMs: z.number().int().min(1_000).max(120_000).optional(),
   })
   .refine((v) => Boolean(v.agentId || v.command), {
     message: 'Either agentId or command is required',

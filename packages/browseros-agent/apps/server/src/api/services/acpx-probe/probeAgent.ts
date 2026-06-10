@@ -50,16 +50,21 @@ export interface ServerAcpxProbeResult {
   error?: ServerAcpxProbeError
 }
 
-// 30s mirrors acp-probe's library default. The bottleneck on cold
-// cache is the npm tarball fetch + extract for the adapter package,
-// which the bundled-bun launcher does not eliminate; the spawn part
-// is fast either way. Env override (clamped to 1-60s) lets a CI
-// scenario tighten it.
-const DEFAULT_PROBE_TIMEOUT_MS = 30_000
+// 120s gives the cold-cache tarball fetch + extract enough headroom on
+// slow networks (corp VPN, antivirus scanning extracted files) without
+// stranding the user behind a smaller deadline. Warm-cache spawns still
+// return in well under a second so the ceiling is invisible in steady
+// state. Env override is clamped to [1s, 120s] for the same reason.
+const DEFAULT_PROBE_TIMEOUT_MS = 120_000
+const MAX_PROBE_TIMEOUT_MS = 120_000
 
 function resolveTimeout(requested?: number): number {
   const envValue = Number(process.env.BROWSEROS_ACPX_PROBE_TIMEOUT_MS)
-  if (Number.isFinite(envValue) && envValue >= 1_000 && envValue <= 60_000) {
+  if (
+    Number.isFinite(envValue) &&
+    envValue >= 1_000 &&
+    envValue <= MAX_PROBE_TIMEOUT_MS
+  ) {
     return envValue
   }
   return requested ?? DEFAULT_PROBE_TIMEOUT_MS

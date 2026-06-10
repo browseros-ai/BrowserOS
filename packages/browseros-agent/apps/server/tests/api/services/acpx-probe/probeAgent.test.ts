@@ -88,10 +88,10 @@ describe('probeAcpAgent — input shape', () => {
     expect(lastCall?.cwd).toBe('/tmp/x')
   })
 
-  it('defaults the timeout to 30 seconds', async () => {
+  it('defaults the timeout to 120 seconds', async () => {
     nextResult = baseProbeResult()
     await probeAcpAgent({ agentId: 'claude' })
-    expect(lastCall?.timeoutMs).toBe(30_000)
+    expect(lastCall?.timeoutMs).toBe(120_000)
   })
 
   it('honours an explicit timeoutMs', async () => {
@@ -100,18 +100,25 @@ describe('probeAcpAgent — input shape', () => {
     expect(lastCall?.timeoutMs).toBe(5_000)
   })
 
-  it('honours BROWSEROS_ACPX_PROBE_TIMEOUT_MS when in the [1000, 60000] range', async () => {
-    process.env.BROWSEROS_ACPX_PROBE_TIMEOUT_MS = '20000'
+  it('honours BROWSEROS_ACPX_PROBE_TIMEOUT_MS when in the [1000, 120000] range', async () => {
+    process.env.BROWSEROS_ACPX_PROBE_TIMEOUT_MS = '90000'
     nextResult = baseProbeResult()
     await probeAcpAgent({ agentId: 'claude' })
-    expect(lastCall?.timeoutMs).toBe(20_000)
+    expect(lastCall?.timeoutMs).toBe(90_000)
   })
 
-  it('ignores BROWSEROS_ACPX_PROBE_TIMEOUT_MS when out of range', async () => {
+  it('ignores BROWSEROS_ACPX_PROBE_TIMEOUT_MS when below the floor', async () => {
     process.env.BROWSEROS_ACPX_PROBE_TIMEOUT_MS = '999'
     nextResult = baseProbeResult()
     await probeAcpAgent({ agentId: 'claude' })
-    expect(lastCall?.timeoutMs).toBe(30_000)
+    expect(lastCall?.timeoutMs).toBe(120_000)
+  })
+
+  it('ignores BROWSEROS_ACPX_PROBE_TIMEOUT_MS when above the ceiling', async () => {
+    process.env.BROWSEROS_ACPX_PROBE_TIMEOUT_MS = '300000'
+    nextResult = baseProbeResult()
+    await probeAcpAgent({ agentId: 'claude' })
+    expect(lastCall?.timeoutMs).toBe(120_000)
   })
 })
 
