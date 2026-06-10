@@ -107,9 +107,18 @@ function splitCompoundModels(raw: AgentProbeResult['models']): CompoundSplit {
       })
       continue
     }
+    const bareId = match[1]
+    const rawEffort = match[2] ?? match[3]
+    if (!bareId || !rawEffort) {
+      bareById.set(m.id, {
+        id: m.id,
+        name: m.name,
+        description: m.description,
+      })
+      continue
+    }
     sawCompound = true
-    const bareId = match[1]!
-    const effort = (match[2] ?? match[3]!).toLowerCase()
+    const effort = rawEffort.toLowerCase()
     efforts.add(effort)
     if (!bareById.has(bareId)) {
       bareById.set(bareId, {
@@ -145,8 +154,8 @@ function normalizeProbeResult(r: AgentProbeResult): ServerAcpxProbeResult {
   let models: ServerAcpxProbeModel[]
   let inferredEfforts: string[] | null = null
 
-  if ((pickerOptions ?? []).length) {
-    models = pickerOptions!.map((opt) => ({
+  if (pickerOptions && pickerOptions.length > 0) {
+    models = pickerOptions.map((opt) => ({
       id: opt.value,
       name: opt.name,
       description: opt.description,
