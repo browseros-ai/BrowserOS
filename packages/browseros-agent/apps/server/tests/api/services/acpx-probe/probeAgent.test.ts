@@ -116,29 +116,161 @@ describe('probeAcpAgent — input shape', () => {
 })
 
 describe('probeAcpAgent — normalisation', () => {
-  it('filters advertised models down to modelConfig.values when present', async () => {
+  it('uses the configOptions[id=model] picker as the model source when present', async () => {
     nextResult = baseProbeResult({
       models: [
-        { id: 'sonnet', name: 'Sonnet' },
-        { id: 'haiku', name: 'Haiku' },
-        { id: 'sonnet/high', name: 'Sonnet (high)' },
+        { id: 'sonnet', name: 'Sonnet (display)' },
+        { id: 'haiku', name: 'Haiku (display)' },
+      ],
+      configOptions: [
+        {
+          id: 'model',
+          name: 'Model',
+          type: 'select',
+          currentValue: 'sonnet',
+          options: [
+            { value: 'sonnet', name: 'Sonnet', description: 'Everyday' },
+            { value: 'haiku', name: 'Haiku', description: 'Fast' },
+          ],
+        },
       ],
       modelConfig: { configId: 'model', values: ['sonnet', 'haiku'] },
     })
     const out = await probeAcpAgent({ agentId: 'claude' })
-    expect(out.models.map((m) => m.id)).toEqual(['sonnet', 'haiku'])
+    expect(out.models).toEqual([
+      { id: 'sonnet', name: 'Sonnet', description: 'Everyday' },
+      { id: 'haiku', name: 'Haiku', description: 'Fast' },
+    ])
   })
 
-  it('falls back to advertised models when modelConfig is null', async () => {
+  it('returns the bare codex picker ids even when advertised models are compound <model>/<effort>', async () => {
     nextResult = baseProbeResult({
+      models: [
+        { id: 'gpt-5.5/low', name: 'GPT-5.5 (low)' },
+        { id: 'gpt-5.5/medium', name: 'GPT-5.5 (medium)' },
+        { id: 'gpt-5.3-codex/low', name: 'gpt-5.3-codex (low)' },
+      ],
+      configOptions: [
+        {
+          id: 'model',
+          name: 'Model',
+          type: 'select',
+          currentValue: 'gpt-5.5',
+          options: [
+            { value: 'gpt-5.5', name: 'GPT-5.5' },
+            { value: 'gpt-5.3-codex', name: 'gpt-5.3-codex' },
+          ],
+        },
+      ],
+      modelConfig: {
+        configId: 'model',
+        values: ['gpt-5.5', 'gpt-5.3-codex'],
+        currentValue: 'gpt-5.5',
+      },
+    })
+    const out = await probeAcpAgent({ agentId: 'codex' })
+    expect(out.models.map((m) => m.id)).toEqual(['gpt-5.5', 'gpt-5.3-codex'])
+  })
+
+  it('falls back to advertised models when no configOptions[id=model] picker exists', async () => {
+    nextResult = baseProbeResult({
+      configOptions: [],
       modelConfig: null,
+      reasoning: null,
       models: [
         { id: 'a', name: 'A' },
         { id: 'b', name: 'B' },
       ],
     })
-    const out = await probeAcpAgent({ agentId: 'codex' })
+    const out = await probeAcpAgent({ agentId: 'gemini' })
     expect(out.models.map((m) => m.id)).toEqual(['a', 'b'])
+    expect(out.reasoning).toBeNull()
+  })
+
+  it('splits compound `model[effort]` ids into bare models + effort list when no picker exists', async () => {
+    // Mirrors the actual codex-acp response when supportsConfigOption=false:
+    // no configOptions, reasoning=null, models carry effort in the id.
+    nextResult = baseProbeResult({
+      configOptions: [],
+      modelConfig: null,
+      reasoning: null,
+      supportsConfigOption: false,
+      models: [
+        {
+          id: 'gpt-5.3-codex[low]',
+          name: 'gpt-5.3-codex (low)',
+          description:
+            'Coding-optimized model. Fast responses with lighter reasoning',
+        },
+        {
+          id: 'gpt-5.3-codex[medium]',
+          name: 'gpt-5.3-codex (medium)',
+          description:
+            'Coding-optimized model. Balances speed and reasoning depth for everyday tasks',
+        },
+        {
+          id: 'gpt-5.5[low]',
+          name: 'GPT-5.5 (low)',
+          description:
+            'Frontier model for complex coding, research, and real-world work. Fast responses with lighter reasoning',
+        },
+        {
+          id: 'gpt-5.5[xhigh]',
+          name: 'GPT-5.5 (xhigh)',
+          description:
+            'Frontier model for complex coding, research, and real-world work. Extra high reasoning depth for complex problems',
+        },
+      ],
+    })
+    const out = await probeAcpAgent({ agentId: 'codex' })
+    expect(out.models).toEqual([
+      {
+        id: 'gpt-5.3-codex',
+        name: 'gpt-5.3-codex',
+        description: 'Coding-optimized model.',
+      },
+      {
+        id: 'gpt-5.5',
+        name: 'GPT-5.5',
+        description:
+          'Frontier model for complex coding, research, and real-world work.',
+      },
+    ])
+    expect(out.reasoning).toEqual({
+      values: ['low', 'medium', 'xhigh'],
+      defaultValue: 'medium',
+    })
+  })
+
+  it('handles the documented `model/effort` slash form as well', async () => {
+    nextResult = baseProbeResult({
+      configOptions: [],
+      modelConfig: null,
+      reasoning: null,
+      supportsConfigOption: false,
+      models: [
+        { id: 'gpt-5.5/low', name: 'GPT-5.5 (low)' },
+        { id: 'gpt-5.5/medium', name: 'GPT-5.5 (medium)' },
+      ],
+    })
+    const out = await probeAcpAgent({ agentId: 'codex' })
+    expect(out.models.map((m) => m.id)).toEqual(['gpt-5.5'])
+    expect(out.reasoning?.values).toEqual(['low', 'medium'])
+  })
+
+  it('falls back to medium-or-first when there is no obvious default effort', async () => {
+    nextResult = baseProbeResult({
+      configOptions: [],
+      modelConfig: null,
+      reasoning: null,
+      supportsConfigOption: false,
+      models: [
+        { id: 'foo[low]', name: 'foo (low)' },
+        { id: 'foo[high]', name: 'foo (high)' },
+      ],
+    })
+    const out = await probeAcpAgent({ agentId: 'codex' })
+    expect(out.reasoning?.defaultValue).toBe('low')
   })
 
   it('forwards reasoning values and defaultValue', async () => {

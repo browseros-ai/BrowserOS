@@ -40,7 +40,10 @@ const BUILT_IN_AGENT_BY_TYPE: Partial<Record<ProviderType, string>> = {
   codex: 'codex',
 }
 
-const FIVE_MIN_MS = 5 * 60 * 1000
+// Probe results encode the agent's currently-installed CLI version, which
+// can change underfoot (npm install, codex-acp release). Refetch on every
+// dialog open instead of trusting a stale memory cache.
+const PROBE_STALE_TIME_MS = 0
 
 export function resolveAcpAgentId(
   opts: UseAcpProbeOptions,
@@ -78,7 +81,7 @@ export function useAcpProbe(opts: UseAcpProbeOptions) {
       opts.cwd,
     ],
     enabled,
-    staleTime: FIVE_MIN_MS,
+    staleTime: PROBE_STALE_TIME_MS,
     queryFn: async () => {
       const res = await fetch(`${agentServerUrl}/acpx/probe`, {
         method: 'POST',

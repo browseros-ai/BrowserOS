@@ -66,26 +66,117 @@ export async function probeAcpAgent(
   return normalizeProbeResult(result)
 }
 
+// codex-acp encodes effort into the advertised model id when it does not
+// expose a settable configOptions[id=model] picker. Older builds use
+// `model[effort]`; newer builds use `model/effort`. Both forms appear in
+// the wild so we match either.
+const COMPOUND_MODEL_PATTERN =
+  /^(.+?)(?:\[(low|medium|high|xhigh|max)\]|\/(low|medium|high|xhigh|max))$/i
+
+const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max']
+
+function stripEffortFromName(name: string | undefined): string | undefined {
+  if (!name) return name
+  return name.replace(/\s*\((low|medium|high|xhigh|max)\)\s*$/i, '').trim()
+}
+
+function stripEffortFromDescription(
+  description: string | undefined,
+): string | undefined {
+  if (!description) return description
+  const idx = description.indexOf('. ')
+  return idx > 0 ? description.slice(0, idx + 1) : description
+}
+
+interface CompoundSplit {
+  models: ServerAcpxProbeModel[]
+  efforts: string[] | null
+}
+
+function splitCompoundModels(raw: AgentProbeResult['models']): CompoundSplit {
+  const bareById = new Map<string, ServerAcpxProbeModel>()
+  const efforts = new Set<string>()
+  let sawCompound = false
+  for (const m of raw) {
+    const match = COMPOUND_MODEL_PATTERN.exec(m.id)
+    if (!match) {
+      bareById.set(m.id, {
+        id: m.id,
+        name: m.name,
+        description: m.description,
+      })
+      continue
+    }
+    sawCompound = true
+    const bareId = match[1]!
+    const effort = (match[2] ?? match[3]!).toLowerCase()
+    efforts.add(effort)
+    if (!bareById.has(bareId)) {
+      bareById.set(bareId, {
+        id: bareId,
+        name: stripEffortFromName(m.name) || bareId,
+        description: stripEffortFromDescription(m.description),
+      })
+    }
+  }
+  if (!sawCompound) {
+    return { models: Array.from(bareById.values()), efforts: null }
+  }
+  const ordered = EFFORT_ORDER.filter((e) => efforts.has(e))
+  for (const e of efforts) {
+    if (!ordered.includes(e)) ordered.push(e)
+  }
+  return { models: Array.from(bareById.values()), efforts: ordered }
+}
+
 function normalizeProbeResult(r: AgentProbeResult): ServerAcpxProbeResult {
-  // Prefer the settable list (modelConfig.values). Falls back to the
-  // advertised models when modelConfig is null so the dialog can still
-  // render something for agents that have no settable picker.
-  const settable = r.modelConfig ? new Set(r.modelConfig.values) : null
-  const models = (
-    settable ? r.models.filter((m) => settable.has(m.id)) : r.models
-  ).map((m) => ({
-    id: m.id,
-    name: m.name,
-    description: m.description,
-  }))
+  // Priority for the model dropdown source:
+  //   1. configOptions[id=model].options (bare picker, names + descriptions)
+  //   2. r.models, split when compound `model[effort]` / `model/effort`
+  //      ids are present. Falls through to the raw list when ids are
+  //      already bare (e.g. claude).
+  // Effort dropdown source:
+  //   1. r.reasoning.values when the agent exposes configOptions[category=thought_level]
+  //   2. Efforts extracted from compound model ids
+  const modelOption = r.configOptions.find((o) => o.id === 'model')
+  const pickerOptions =
+    modelOption?.type === 'select' ? modelOption.options : undefined
+
+  let models: ServerAcpxProbeModel[]
+  let inferredEfforts: string[] | null = null
+
+  if ((pickerOptions ?? []).length) {
+    models = pickerOptions!.map((opt) => ({
+      id: opt.value,
+      name: opt.name,
+      description: opt.description,
+    }))
+  } else {
+    const split = splitCompoundModels(r.models)
+    models = split.models
+    inferredEfforts = split.efforts
+  }
+
+  let reasoning: ServerAcpxProbeReasoning | null
+  if (r.reasoning) {
+    reasoning = {
+      values: [...r.reasoning.values],
+      defaultValue: r.reasoning.defaultValue,
+    }
+  } else if (inferredEfforts && inferredEfforts.length) {
+    reasoning = {
+      values: inferredEfforts,
+      defaultValue: inferredEfforts.includes('medium')
+        ? 'medium'
+        : inferredEfforts[0],
+    }
+  } else {
+    reasoning = null
+  }
+
   return {
     models,
-    reasoning: r.reasoning
-      ? {
-          values: [...r.reasoning.values],
-          defaultValue: r.reasoning.defaultValue,
-        }
-      : null,
+    reasoning,
     supportsConfigOption: r.supportsConfigOption,
     agentInfo: r.agentInfo,
     protocolVersion: r.protocolVersion,
