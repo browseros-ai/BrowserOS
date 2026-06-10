@@ -44,7 +44,7 @@ describe('buildAcpxProvider — defaults', () => {
       stateDir: '/tmp/browseros-test/acpx-state',
       resumeSessionId: undefined,
       agentRegistryOverrides: {},
-      permissionMode: 'approve-reads',
+      permissionMode: 'approve-all',
       nonInteractivePermissions: 'deny',
       onPermissionRequest: undefined,
       mcpServers: undefined,

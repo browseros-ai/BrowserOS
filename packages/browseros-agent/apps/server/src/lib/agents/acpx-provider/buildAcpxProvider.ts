@@ -73,10 +73,10 @@ export interface BuildAcpxProviderOptions {
    */
   mcpServers?: McpServerSpec[]
   /**
-   * Default permission policy when `onPermissionRequest` is unset or
-   * resolves to `undefined`. Stays in sync with Herbie's default
-   * ('approve-reads') so the two projects behave identically until the
-   * UI gate lands in a later phase.
+   * Default policy when `onPermissionRequest` is unset or resolves to
+   * `undefined`. BrowserOS ships ACP agents in `approve-all` so read +
+   * write tools run end-to-end without a UI gate; callers that want a
+   * stricter mode pass it explicitly.
    */
   permissionMode?: AcpxPermissionMode
   /**
@@ -105,7 +105,7 @@ export interface BuildAcpxProviderOptions {
   stateDir?: string
 }
 
-const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = 'approve-reads'
+const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = 'approve-all'
 const DEFAULT_NON_INTERACTIVE_PERMISSIONS: AcpxNonInteractivePermissions =
   'deny'
 
