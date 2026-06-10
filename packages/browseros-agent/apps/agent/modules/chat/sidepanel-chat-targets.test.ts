@@ -173,7 +173,7 @@ describe('buildSidepanelChatTargets', () => {
     ])
   })
 
-  it('does not emit local runtime provider configs as generic LLM targets', () => {
+  it('emits local runtime provider configs as LLM targets so the composer can pick them', () => {
     const targets = buildSidepanelChatTargets({
       providers: [...providers, ...localRuntimeProviders],
       adapters,
@@ -183,6 +183,8 @@ describe('buildSidepanelChatTargets', () => {
     expect(targets.map((target) => target.id)).toEqual([
       'browseros',
       'anthropic-sonnet',
+      'codex-provider',
+      'claude-code-provider',
       'agent-codex',
     ])
   })
@@ -235,7 +237,7 @@ describe('resolveSidepanelChatTarget', () => {
     })
   })
 
-  it('falls back to the first chat-compatible LLM when the default is local runtime', () => {
+  it('resolves a local runtime provider as the chat target when it is the default', () => {
     const targets = buildSidepanelChatTargets({
       providers: [...localRuntimeProviders, ...providers],
       adapters,
@@ -249,7 +251,7 @@ describe('resolveSidepanelChatTarget', () => {
       }),
     ).toMatchObject({
       kind: 'llm',
-      id: 'browseros',
+      id: 'codex-provider',
     })
   })
 })
