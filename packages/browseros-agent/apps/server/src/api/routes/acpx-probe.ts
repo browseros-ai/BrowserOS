@@ -8,7 +8,15 @@ import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { logger } from '../../lib/logger'
-import { probeAcpAgent } from '../services/acpx-probe/probeAgent'
+import {
+  probeAcpAgent,
+  type ServerAcpxProbeInput,
+  type ServerAcpxProbeResult,
+} from '../services/acpx-probe/probeAgent'
+
+export type ProbeAcpAgentFn = (
+  input: ServerAcpxProbeInput,
+) => Promise<ServerAcpxProbeResult>
 
 const probeRequestSchema = z
   .object({
@@ -21,14 +29,17 @@ const probeRequestSchema = z
     message: 'Either agentId or command is required',
   })
 
-export function createAcpxProbeRoutes() {
+export function createAcpxProbeRoutes(
+  options: { probe?: ProbeAcpAgentFn } = {},
+) {
+  const probe = options.probe ?? probeAcpAgent
   return new Hono().post(
     '/',
     zValidator('json', probeRequestSchema),
     async (c) => {
       const body = c.req.valid('json')
       try {
-        const result = await probeAcpAgent(body)
+        const result = await probe(body)
         return c.json(result, 200)
       } catch (err) {
         // Probe errors from inside acp-probe (spawn_failed, initialize_timeout,

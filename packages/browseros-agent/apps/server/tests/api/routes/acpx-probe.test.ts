@@ -3,23 +3,29 @@
  * Copyright 2025 BrowserOS
  */
 
-import { beforeEach, describe, expect, it, mock } from 'bun:test'
+import { beforeEach, describe, expect, it } from 'bun:test'
+import { createAcpxProbeRoutes } from '../../../src/api/routes/acpx-probe'
+import type {
+  ServerAcpxProbeInput,
+  ServerAcpxProbeResult,
+} from '../../../src/api/services/acpx-probe/probeAgent'
 
-let nextProbeResult: unknown = null
+// Injection beats mock.module here: a sibling test (`probeAgent.test.ts`)
+// imports the real probeAcpAgent and reads `acp-probe` directly, and bun's
+// mock.module leaks across files in the same test process. Threading the
+// stub through createAcpxProbeRoutes keeps both tests isolated.
+let nextProbeResult: ServerAcpxProbeResult | null = null
 let nextProbeError: Error | null = null
-let lastInput: Record<string, unknown> | null = null
+let lastInput: ServerAcpxProbeInput | null = null
 
-mock.module('../../../src/api/services/acpx-probe/probeAgent', () => ({
-  probeAcpAgent: async (input: Record<string, unknown>) => {
-    lastInput = input
-    if (nextProbeError) throw nextProbeError
-    return nextProbeResult
-  },
-}))
-
-const { createAcpxProbeRoutes } = await import(
-  '../../../src/api/routes/acpx-probe'
-)
+const probeStub = async (
+  input: ServerAcpxProbeInput,
+): Promise<ServerAcpxProbeResult> => {
+  lastInput = input
+  if (nextProbeError) throw nextProbeError
+  if (!nextProbeResult) throw new Error('probe stub: no nextProbeResult set')
+  return nextProbeResult
+}
 
 beforeEach(() => {
   nextProbeResult = null
@@ -28,7 +34,7 @@ beforeEach(() => {
 })
 
 async function call(body: unknown) {
-  const app = createAcpxProbeRoutes()
+  const app = createAcpxProbeRoutes({ probe: probeStub })
   return app.request('/', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

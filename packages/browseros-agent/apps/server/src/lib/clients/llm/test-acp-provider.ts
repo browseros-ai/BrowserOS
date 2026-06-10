@@ -5,8 +5,16 @@
  */
 
 import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
-import { probeAcpAgent } from '../../../api/services/acpx-probe/probeAgent'
+import {
+  probeAcpAgent,
+  type ServerAcpxProbeInput,
+  type ServerAcpxProbeResult,
+} from '../../../api/services/acpx-probe/probeAgent'
 import type { ProviderTestResult } from './test-provider'
+
+export type ProbeAcpAgentFn = (
+  input: ServerAcpxProbeInput,
+) => Promise<ServerAcpxProbeResult>
 
 export interface TestAcpProviderInput {
   provider: string
@@ -47,7 +55,9 @@ function humanizeProbeError(code: string, fallback: string): string {
 
 export async function testAcpProvider(
   input: TestAcpProviderInput,
+  options: { probe?: ProbeAcpAgentFn } = {},
 ): Promise<ProviderTestResult> {
+  const probe = options.probe ?? probeAcpAgent
   const startTime = performance.now()
   const agentId = resolveAgentId(input)
   if (input.provider === LLM_PROVIDERS.ACP_CUSTOM) {
@@ -65,20 +75,23 @@ export async function testAcpProvider(
       responseTime: Math.round(performance.now() - startTime),
     }
   }
-  const probe = await probeAcpAgent({
+  const probeResult = await probe({
     agentId,
     command: input.acpCommand,
     cwd: input.acpFixedWorkspacePath,
   })
   const responseTime = Math.round(performance.now() - startTime)
-  if (probe.error) {
+  if (probeResult.error) {
     return {
       success: false,
-      message: humanizeProbeError(probe.error.code, probe.error.message),
+      message: humanizeProbeError(
+        probeResult.error.code,
+        probeResult.error.message,
+      ),
       responseTime,
     }
   }
-  if (probe.models.length === 0) {
+  if (probeResult.models.length === 0) {
     return {
       success: false,
       message: 'Agent responded but did not advertise any settable models.',
@@ -87,9 +100,9 @@ export async function testAcpProvider(
   }
   const expected = input.model
   if (expected) {
-    const settable = new Set(probe.models.map((m) => m.id))
+    const settable = new Set(probeResult.models.map((m) => m.id))
     if (!settable.has(expected)) {
-      const available = probe.models.map((m) => m.id).join(', ')
+      const available = probeResult.models.map((m) => m.id).join(', ')
       return {
         success: false,
         message: `Agent connected but model "${expected}" is not advertised. Available: ${available}.`,
@@ -98,10 +111,13 @@ export async function testAcpProvider(
     }
   }
   const agentLabel =
-    probe.agentInfo?.title ?? probe.agentInfo?.name ?? agentId ?? 'agent'
+    probeResult.agentInfo?.title ??
+    probeResult.agentInfo?.name ??
+    agentId ??
+    'agent'
   return {
     success: true,
-    message: `Connected to ${agentLabel}; ${probe.models.length} model(s) available.`,
+    message: `Connected to ${agentLabel}; ${probeResult.models.length} model(s) available.`,
     responseTime,
   }
 }
