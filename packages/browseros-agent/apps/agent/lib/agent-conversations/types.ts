@@ -57,12 +57,3 @@ export interface AgentConversationTurn {
   done: boolean
   timestamp: number
 }
-
-export interface AgentConversation {
-  agentId: string
-  agentName: string
-  sessionKey: string
-  turns: AgentConversationTurn[]
-  createdAt: number
-  updatedAt: number
-}

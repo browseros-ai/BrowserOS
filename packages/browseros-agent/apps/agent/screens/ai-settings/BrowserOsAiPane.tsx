@@ -43,6 +43,7 @@ import { CodingAgentsManager } from './CodingAgentsManager'
 import { ConfiguredProvidersList } from './ConfiguredProvidersList'
 import { useCodingAgents } from './coding-agents.hooks'
 import { DeviceCodeDialog } from './DeviceCodeDialog'
+import { useDefaultChatTarget } from './default-chat-target.hooks'
 import {
   DeleteRemoteLlmProviderDocument,
   GetRemoteLlmProvidersDocument,
@@ -110,6 +111,17 @@ export const BrowserOsAiPane: FC = () => {
   const { sessionInfo } = useSessionInfo()
   const queryClient = useQueryClient()
   const coding = useCodingAgents()
+  const defaultTarget = useDefaultChatTarget({
+    providers,
+    agents: coding.agents,
+    defaultProviderId,
+    setDefaultProvider,
+  })
+  const { effectiveTarget } = defaultTarget
+  const selectedProviderId =
+    effectiveTarget.kind === 'llm' ? effectiveTarget.id : null
+  const selectedAgentId =
+    effectiveTarget.kind === 'acp' ? effectiveTarget.id : null
 
   const userId = sessionInfo.user?.id
 
@@ -329,10 +341,6 @@ export const BrowserOsAiPane: FC = () => {
     await saveProvider(provider)
   }
 
-  const handleSelectProvider = (providerId: string) => {
-    setDefaultProvider(providerId)
-  }
-
   const handleTestProvider = async (provider: LlmProviderConfig) => {
     if (!agentServerUrl) {
       toast.error('Test Failed', {
@@ -388,8 +396,9 @@ export const BrowserOsAiPane: FC = () => {
     <div className="fade-in slide-in-from-bottom-5 animate-in space-y-6 duration-500">
       <LlmProvidersHeader
         providers={providers}
-        defaultProviderId={defaultProviderId}
-        onDefaultProviderChange={setDefaultProvider}
+        agents={coding.agents}
+        selectedTarget={effectiveTarget}
+        onSelectTarget={defaultTarget.selectTarget}
         onAddProvider={handleAddProvider}
       />
 
@@ -403,15 +412,19 @@ export const BrowserOsAiPane: FC = () => {
 
       <ConfiguredProvidersList
         providers={providers}
-        selectedProviderId={defaultProviderId}
+        selectedProviderId={selectedProviderId}
         testingProviderId={testingProviderId}
-        onSelectProvider={handleSelectProvider}
+        onSelectProvider={defaultTarget.selectProvider}
         onTestProvider={handleTestProvider}
         onEditProvider={handleEditProvider}
         onDeleteProvider={handleDeleteProvider}
       />
 
-      <CodingAgentsList controller={coding} />
+      <CodingAgentsList
+        controller={coding}
+        selectedAgentId={selectedAgentId}
+        onSelectAgent={defaultTarget.selectAgent}
+      />
 
       <IncompleteProvidersList
         providers={incompleteProviders}

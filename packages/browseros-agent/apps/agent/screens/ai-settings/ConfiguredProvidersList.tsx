@@ -4,7 +4,7 @@ import { ProviderCard } from './ProviderCard'
 
 interface ConfiguredProvidersListProps {
   providers: LlmProviderConfig[]
-  selectedProviderId: string
+  selectedProviderId: string | null
   testingProviderId: string | null
   onSelectProvider: (providerId: string) => void
   onTestProvider: (provider: LlmProviderConfig) => void

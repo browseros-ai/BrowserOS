@@ -31,7 +31,7 @@ export type Message = {
   content: string
 }
 
-export type Phase = 'idle' | 'active' | 'completed' | 'error'
+type Phase = 'idle' | 'active' | 'completed' | 'error'
 
 const INTERVIEW_COMPLETE_MARKER = '__INTERVIEW_COMPLETE__'
 

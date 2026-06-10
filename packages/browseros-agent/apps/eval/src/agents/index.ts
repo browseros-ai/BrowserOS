@@ -14,4 +14,4 @@ export function createAgent(context: AgentContext): AgentEvaluator {
   }
 }
 
-export type { AgentContext, AgentEvaluator, AgentResult } from './types'
+export type { AgentContext, AgentEvaluator } from './types'

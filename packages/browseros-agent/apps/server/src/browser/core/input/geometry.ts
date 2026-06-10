@@ -77,7 +77,7 @@ export async function jsClick(
   })
 }
 
-export async function resolveObjectId(
+async function resolveObjectId(
   session: ProtocolApi,
   backendNodeId: number,
 ): Promise<string> {

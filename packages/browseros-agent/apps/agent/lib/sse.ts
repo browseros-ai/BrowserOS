@@ -2,13 +2,13 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError'
 }
 
-export interface ParsedSSEEvent<T> {
+interface ParsedSSEEvent<T> {
   data: T
   /** Numeric `id:` line on the same SSE event, if any. */
   seq?: number
 }
 
-export function parseSSELines<T>(buffer: string): {
+function parseSSELines<T>(buffer: string): {
   events: ParsedSSEEvent<T>[]
   remainder: string
 } {

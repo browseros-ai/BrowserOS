@@ -49,7 +49,7 @@ export function collectImports(
   return refs
 }
 
-export function resolveTypeExpression(
+function resolveTypeExpression(
   prop: {
     type?: string
     $ref?: string

@@ -23,6 +23,8 @@ export interface UseLlmProvidersReturn {
 }
 
 /** Persists the configured default provider id used by provider selection. */
+// Exported only for llm-providers.hooks.test.ts; fallow's graph skips test imports.
+// fallow-ignore-next-line unused-export
 export async function persistDefaultProviderId(
   providerId: string,
 ): Promise<void> {

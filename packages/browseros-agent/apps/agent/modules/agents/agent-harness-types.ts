@@ -195,17 +195,3 @@ export function mapHarnessAgentToEntry(agent: HarnessAgent): AgentEntry {
     source: 'agent-harness',
   }
 }
-
-export function getModelDisplayName(model: unknown): string | undefined {
-  if (!model) return undefined
-  if (typeof model === 'string') return model
-  if (
-    typeof model === 'object' &&
-    model !== null &&
-    'name' in model &&
-    typeof (model as { name?: unknown }).name === 'string'
-  ) {
-    return (model as { name: string }).name
-  }
-  return undefined
-}

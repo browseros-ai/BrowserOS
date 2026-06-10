@@ -5,8 +5,8 @@ import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 
-export const MAX_LINES = 2000
-export const MAX_BYTES = 50 * 1024
+const MAX_LINES = 2000
+const MAX_BYTES = 50 * 1024
 export const GREP_MAX_LINE_LENGTH = 500
 export const DEFAULT_GREP_LIMIT = 100
 export const DEFAULT_FIND_LIMIT = 1000
@@ -101,7 +101,7 @@ export function truncateLine(
   return `${line.slice(0, maxChars)} [truncated]`
 }
 
-export const IGNORED_DIRS = new Set([
+const IGNORED_DIRS = new Set([
   'node_modules',
   '.git',
   'dist',

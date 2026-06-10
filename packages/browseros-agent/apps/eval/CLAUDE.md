@@ -22,7 +22,7 @@ Tests run through the shared runner with **cwd = the monorepo root** (`packages/
 apps/eval/
 |- src/
 |  |- cli/          Command dispatch: suite | run | grade | publish | legacy (-c)
-|  |- runs/         ACTIVE run pipeline: eval-runner, task-worker-pool, run-manifest
+|  |- runs/         ACTIVE run pipeline: eval-runner, task-worker-pool, task-run-pipeline
 |  |- runner/       Older substrate, still live: task-loader + shared run types
 |  |- suites/       EvalSuite schema, suite loader, variant (model) resolution
 |  |- agents/       Agent evaluators: single, orchestrator-executor, claude-code
@@ -46,7 +46,7 @@ apps/eval/
 
 ## How a run is wired
 
-`src/index.ts` → `runCli` (`src/cli/index.ts`) dispatches on the first arg. The active runner is `src/runs/eval-runner.ts`; `suite`, `run`, and the legacy `-c`/dashboard path all route to it. `src/runner/eval-runner.ts` is kept only so `tests/runs/pipeline-compat.test.ts` can assert the new pipeline matches the old — don't build on it.
+`src/index.ts` → `runCli` (`src/cli/index.ts`) dispatches on the first arg. The active runner is `src/runs/eval-runner.ts`; `suite`, `run`, and the legacy `-c`/dashboard path all route to it.
 
 **Suite vs config.** A `configs/legacy/*.json` is a complete `EvalConfig`. A `configs/suites/*.json` is an `EvalSuite` (dataset + graders + browser settings) whose model comes from a *variant* — CLI flags first, then `EVAL_AGENT_*` env. `resolveSuiteCommand` / `suiteToEvalConfig` (`src/cli/commands/suite.ts`) adapt a suite into an `EvalConfig` before the runner sees it, and that adapter maps the suite agent vocabulary onto the runtime one (`tool-loop`→`single`, `orchestrated`→`orchestrator-executor`). The suite schema (`src/suites/schema.ts`) deliberately accepts more agent `type`s than the runtime factory implements.
 
@@ -67,6 +67,6 @@ Implement `AgentEvaluator` (`src/agents/types.ts`: `execute(): Promise<AgentResu
 - **Types are Zod-first.** Everything in `src/types/*` is an `XSchema` + `type X = z.infer<typeof XSchema>`, consumed via `from '../types'`. `EvalConfigSchema` is the validation gate (`.parse()` on every config/suite). Provider/model shapes extend `@browseros/shared/schemas/llm` — don't redefine them here.
 - **Never leak API keys into persisted output.** `resolveVariant` (`src/suites/resolve-variant.ts`) returns a raw `agent` (with the key) and a `publicMetadata` that drops it (exposing `apiKeyConfigured` / `apiKeyEnv` / `baseUrlHost`). Manifests, reports, and the dashboard get `publicMetadata`; `tests/suites/schema.test.ts` asserts no raw secret ever appears.
 - **Config keys are env-var NAMES, not secrets.** An ALL_CAPS `apiKey` value is resolved from `process.env` at runtime (`src/utils/resolve-env.ts`); anything else is used literally. Keep `.env.example` current when you add a variable.
-- **The viewer manifest is a contract.** Built by `src/viewer/viewer-manifest.ts` (versioned by `VIEWER_MANIFEST_SCHEMA_VERSION`, with per-task `paths`); written to the run dir as `viewer-manifest.json` (`src/runs/artifact-paths.ts`) and published to R2 as `runs/<id>/manifest.json` (`src/publishing/r2-publisher.ts`) — don't confuse it with the run's `run.json`. Keep it and its tests green when you change artifact layout.
+- **The viewer manifest is a contract.** Built by `src/viewer/viewer-manifest.ts` (versioned, with per-task `paths`); published to R2 as `runs/<id>/manifest.json` (`src/publishing/r2-publisher.ts`) — don't confuse it with the run's `run.json`. Keep it and its tests green when you change artifact layout.
 - **Eval-only constants** live in `src/constants.ts`; cross-package values come from `@browseros/shared/constants/*`.
 - The `@eval/*` tsconfig path alias is defined but unused — follow the relative, extensionless imports used throughout `src/`.

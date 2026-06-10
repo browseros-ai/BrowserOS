@@ -1,7 +1,7 @@
 import type { HarnessAgent, HarnessAgentAdapter } from './agent-harness-types'
 import type { AgentListItem } from './agents-page-types'
 
-export function formatHarnessAdapter(adapter: HarnessAgentAdapter): string {
+function formatHarnessAdapter(adapter: HarnessAgentAdapter): string {
   if (adapter === 'claude') return 'Claude Code'
   if (adapter === 'codex') return 'Codex'
   return 'Hermes'

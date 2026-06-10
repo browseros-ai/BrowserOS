@@ -1,12 +1,11 @@
 import { storage } from '@wxt-dev/storage'
-import { useEffect, useState } from 'react'
 import type {
   ConversationExecutionHistory,
   ExecutionHistoryByConversation,
   ExecutionTaskRecord,
 } from './types'
 
-export const executionHistoryStorage =
+const executionHistoryStorage =
   storage.defineItem<ExecutionHistoryByConversation>(
     'local:executionHistoryByConversation',
     {
@@ -61,17 +60,6 @@ export async function upsertConversationExecutionTask(
   })
 }
 
-export async function getConversationExecutionHistory(
-  conversationId: string,
-): Promise<ConversationExecutionHistory | null> {
-  const current = (await executionHistoryStorage.getValue()) ?? {}
-  return current[conversationId] ?? null
-}
-
-export async function getExecutionHistoryByConversation(): Promise<ExecutionHistoryByConversation> {
-  return (await executionHistoryStorage.getValue()) ?? {}
-}
-
 export async function removeConversationExecutionHistory(
   conversationId: string,
 ): Promise<void> {
@@ -80,67 +68,4 @@ export async function removeConversationExecutionHistory(
 
   const { [conversationId]: _removed, ...rest } = current
   await executionHistoryStorage.setValue(rest)
-}
-
-export async function removeConversationExecutionTask(args: {
-  conversationId: string
-  taskId: string
-}): Promise<void> {
-  const current = (await executionHistoryStorage.getValue()) ?? {}
-  const history = current[args.conversationId]
-  if (!history) return
-
-  const nextTasks = history.tasks.filter((task) => task.id !== args.taskId)
-  if (nextTasks.length === history.tasks.length) return
-
-  if (nextTasks.length === 0) {
-    const { [args.conversationId]: _removed, ...rest } = current
-    await executionHistoryStorage.setValue(rest)
-    return
-  }
-
-  await executionHistoryStorage.setValue({
-    ...current,
-    [args.conversationId]: {
-      ...history,
-      updatedAt: Date.now(),
-      tasks: nextTasks,
-    },
-  })
-}
-
-export function useConversationExecutionHistory(conversationId?: string) {
-  const [history, setHistory] = useState<ConversationExecutionHistory | null>(
-    null,
-  )
-
-  useEffect(() => {
-    if (!conversationId) {
-      setHistory(null)
-      return
-    }
-
-    getConversationExecutionHistory(conversationId).then(setHistory)
-    const unwatch = executionHistoryStorage.watch((nextValue) => {
-      setHistory(nextValue?.[conversationId] ?? null)
-    })
-    return () => unwatch()
-  }, [conversationId])
-
-  return history
-}
-
-export function useExecutionHistoryByConversation() {
-  const [historyByConversation, setHistoryByConversation] =
-    useState<ExecutionHistoryByConversation>({})
-
-  useEffect(() => {
-    getExecutionHistoryByConversation().then(setHistoryByConversation)
-    const unwatch = executionHistoryStorage.watch((nextValue) => {
-      setHistoryByConversation(nextValue ?? {})
-    })
-    return () => unwatch()
-  }, [])
-
-  return historyByConversation
 }

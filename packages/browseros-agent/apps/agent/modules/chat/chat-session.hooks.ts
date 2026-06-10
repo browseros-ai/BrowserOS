@@ -15,11 +15,9 @@ import {
   MESSAGE_SENT_EVENT,
   PROVIDER_SELECTED_EVENT,
 } from '@/lib/constants/analyticsEvents'
-import {
-  conversationStorage,
-  useConversations,
-} from '@/lib/conversations/conversationStorage'
+import { conversationStorage } from '@/lib/conversations/conversationStorage'
 import { formatConversationHistory } from '@/lib/conversations/formatConversationHistory'
+import { useConversations } from '@/lib/conversations/useConversations'
 import { declinedAppsStorage } from '@/lib/declined-apps/storage'
 import { resolveChatProvider } from '@/lib/llm-providers/provider-runtime'
 import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
@@ -63,7 +61,7 @@ const getLastUserMessageText = (messages: UIMessage[]) => {
   return ''
 }
 
-export const getResponseAndQueryFromMessageId = (
+const getResponseAndQueryFromMessageId = (
   messages: UIMessage[],
   messageId: string,
 ) => {

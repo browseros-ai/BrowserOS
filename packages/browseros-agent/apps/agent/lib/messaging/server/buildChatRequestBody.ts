@@ -1,7 +1,7 @@
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import type { ChatMode } from '@/modules/chat/chat-types'
 
-export interface ChatHistoryEntry {
+interface ChatHistoryEntry {
   role: 'user' | 'assistant'
   content: string
 }

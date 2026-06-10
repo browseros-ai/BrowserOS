@@ -71,7 +71,7 @@ interface TaskDirEntry {
 }
 
 /** Strip the MCP transport prefix so different agent backends report the same tool. */
-export function normalizeToolName(rawName: string): string {
+function normalizeToolName(rawName: string): string {
   if (rawName.startsWith('mcp__browseros__')) {
     return rawName.slice('mcp__browseros__'.length)
   }
@@ -92,7 +92,7 @@ interface MessageMetrics {
   perTool: Record<string, PerToolCounts>
 }
 
-export function countMessageMetrics(messagesJsonl: string): MessageMetrics {
+function countMessageMetrics(messagesJsonl: string): MessageMetrics {
   let toolCalls = 0
   let toolErrors = 0
   const perTool: Record<string, PerToolCounts> = {}
@@ -180,7 +180,7 @@ function extractCriterionSummary(
   return { total: list.length, passed, softened }
 }
 
-export function buildTaskMetrics(
+function buildTaskMetrics(
   metadata: Record<string, unknown>,
   messageMetrics: MessageMetrics,
   screenshotCount = 0,

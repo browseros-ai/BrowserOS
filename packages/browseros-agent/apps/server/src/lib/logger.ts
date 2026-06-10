@@ -114,7 +114,7 @@ function createConsoleTransport(): pino.TransportSingleOptions | null {
   return null
 }
 
-export class Logger implements LoggerInterface {
+class Logger implements LoggerInterface {
   private consoleLogger: pino.Logger
   private fileLogger: pino.Logger | null = null
   private level: LogLevel

@@ -69,7 +69,7 @@ const HERMES_PROVIDER_MAP: Record<
   },
 }
 
-export function isHermesSupportedProviderType(
+function isHermesSupportedProviderType(
   providerType: string,
 ): providerType is HermesSupportedBrowserosProviderType {
   return (

@@ -4,6 +4,7 @@ import {
   AGENT_DELETED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
+import { sentry } from '@/lib/sentry/sentry'
 import type {
   HarnessAdapterDescriptor,
   HarnessAgent,
@@ -18,6 +19,7 @@ import {
 import { useDefaultAgentName } from '@/modules/agents/agents-page.hooks'
 import type { AgentListItem } from '@/modules/agents/agents-page-types'
 import { toHarnessListItem } from '@/modules/agents/agents-page-utils'
+import { clearSidepanelChatTargetSelectionForAgent } from '@/modules/chat/sidepanel-chat-targets'
 
 type AgentActivity = Record<
   string,
@@ -167,6 +169,17 @@ export function useCodingAgents(): CodingAgentsController {
         runtime: item.source,
         agent_id: item.agentId,
       })
+      // Storage cleanup must not surface as a delete failure — the agent is gone.
+      await clearSidepanelChatTargetSelectionForAgent(item.agentId).catch(
+        (error) => {
+          sentry.captureException(error, {
+            extra: {
+              message: 'Failed to clear chat-target selection after delete',
+              agentId: item.agentId,
+            },
+          })
+        },
+      )
     } catch (err) {
       setPageError(err instanceof Error ? err.message : String(err))
     } finally {

@@ -17,7 +17,7 @@ import { syncOnboardingProfile } from '@/lib/onboarding/syncOnboardingProfile'
 import {
   setupScheduledJobsSyncToBackend,
   syncScheduledJobs,
-} from '@/lib/schedules/scheduleStorage'
+} from '@/lib/schedules/syncSchedulesToBackend'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'

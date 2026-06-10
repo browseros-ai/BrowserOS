@@ -32,7 +32,7 @@ export interface PrepareAcpxAgentContextInput {
   message: string
 }
 
-export interface AcpxAgentAdapter {
+interface AcpxAgentAdapter {
   prepare(
     input: PrepareAcpxAgentContextInput,
   ): Promise<PreparedAcpxAgentContext>
@@ -44,7 +44,7 @@ const ADAPTERS: Record<AgentDefinition['adapter'], AcpxAgentAdapter> = {
   hermes: { prepare: prepareHermesContext },
 }
 
-export function getAcpxAgentAdapter(
+function getAcpxAgentAdapter(
   adapter: AgentDefinition['adapter'],
 ): AcpxAgentAdapter {
   return ADAPTERS[adapter]

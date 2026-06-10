@@ -5,7 +5,7 @@ import {
 } from '../reporting/task-metrics'
 import type { GraderResult, TaskDatasetMetadata } from '../types'
 
-export const VIEWER_MANIFEST_SCHEMA_VERSION = 3
+const VIEWER_MANIFEST_SCHEMA_VERSION = 3
 
 /** Per-criterion entry surfaced from the agisdk_state_diff grader. */
 export interface ViewerCriterion {

@@ -7,7 +7,7 @@ export type ContentItem =
   | { type: 'text'; text: string }
   | { type: 'image'; data: string; mimeType: string }
 
-export type PostAction =
+type PostAction =
   | { type: 'snapshot'; page: number }
   | { type: 'screenshot'; page: number }
   | { type: 'pages' }

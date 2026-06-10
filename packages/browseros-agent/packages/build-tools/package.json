@@ -10,8 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.933.0",
-    "@browseros/shared": "workspace:*"
+    "@aws-sdk/client-s3": "^3.933.0"
   },
   "devDependencies": {
     "@types/node": "^24.3.3"

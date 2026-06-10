@@ -1,6 +1,6 @@
 import { storage } from '@wxt-dev/storage'
 
-export const changelogShownStorage = storage.defineItem<string[]>(
+const changelogShownStorage = storage.defineItem<string[]>(
   'local:changelogShownVersions',
   { fallback: [] },
 )

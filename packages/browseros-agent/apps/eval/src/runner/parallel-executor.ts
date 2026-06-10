@@ -1,5 +1,1 @@
-export {
-  type ProgressCallback,
-  TaskWorkerPool as ParallelExecutor,
-  type TaskWorkerPoolConfig as ParallelExecutorConfig,
-} from '../runs/task-worker-pool'
+export { TaskWorkerPool as ParallelExecutor } from '../runs/task-worker-pool'

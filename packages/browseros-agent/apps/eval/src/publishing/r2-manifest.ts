@@ -1,7 +1,4 @@
-import type {
-  ViewerManifest,
-  ViewerManifestTask,
-} from '../viewer/viewer-manifest'
+import type { ViewerManifest } from '../viewer/viewer-manifest'
 
 export interface R2UploadConfig {
   accountId: string
@@ -10,8 +7,6 @@ export interface R2UploadConfig {
   bucket: string
   cdnBaseUrl: string
 }
-
-export type R2ManifestTask = ViewerManifestTask
 
 export type R2RunManifest = ViewerManifest
 

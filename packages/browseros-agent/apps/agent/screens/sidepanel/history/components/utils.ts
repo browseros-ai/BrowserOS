@@ -13,7 +13,7 @@ export const TIME_GROUP_LABELS: Record<TimeGroup, string> = {
   older: 'Older',
 }
 
-export const getTimeGroup = (timestamp: number): TimeGroup => {
+const getTimeGroup = (timestamp: number): TimeGroup => {
   const date = dayjs(timestamp)
   const now = dayjs()
 

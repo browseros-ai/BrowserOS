@@ -41,7 +41,7 @@ function sanitizeToolName(name: string): string {
   return name.replace(/\./g, '_').slice(0, 80)
 }
 
-export interface MetricsConfig {
+interface MetricsConfig {
   client_id?: string
   install_id?: string
   browseros_version?: string

@@ -20,12 +20,12 @@ interface HarnessAgentsResponse {
 
 export type { AgentHarnessStreamEvent }
 
-export const AGENT_QUERY_KEYS = {
+const AGENT_QUERY_KEYS = {
   adapters: 'agent-harness-adapters',
   agents: 'agent-harness-agents',
 } as const
 
-export async function agentsFetch<T>(
+async function agentsFetch<T>(
   baseUrl: string,
   path: string,
   init?: RequestInit,
@@ -349,13 +349,13 @@ export async function fetchHarnessAgentHistory(
   )
 }
 
-export interface EnqueueMessageInput {
+interface EnqueueMessageInput {
   sessionId?: string
   message: string
   attachments?: ReadonlyArray<unknown>
 }
 
-export async function enqueueHarnessMessage(
+async function enqueueHarnessMessage(
   agentId: string,
   input: EnqueueMessageInput,
 ): Promise<HarnessQueuedMessage> {
@@ -388,7 +388,7 @@ export async function enqueueHarnessMessage(
   return body.queued
 }
 
-export async function removeHarnessQueuedMessage(
+async function removeHarnessQueuedMessage(
   agentId: string,
   messageId: string,
 ): Promise<{ removed: boolean }> {

@@ -43,7 +43,7 @@ const TARGETS: Record<TargetId, BuildTarget> = {
   },
 }
 
-export function supportedTargetIds(): TargetId[] {
+function supportedTargetIds(): TargetId[] {
   return Object.keys(TARGETS) as TargetId[]
 }
 

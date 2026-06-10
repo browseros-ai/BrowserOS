@@ -93,7 +93,7 @@ export async function finishBrowserosManagedContext(input: {
   }
 }
 
-export function stableCommandIdentity(env: Record<string, string>): string {
+function stableCommandIdentity(env: Record<string, string>): string {
   return Object.entries(env)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, value]) => `${key}=${value}`)

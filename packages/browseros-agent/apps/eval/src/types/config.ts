@@ -4,12 +4,12 @@ import {
 } from '@browseros/shared/schemas/llm'
 import { z } from 'zod'
 
-export const SingleAgentConfigSchema = LLMConfigSchema.extend({
+const SingleAgentConfigSchema = LLMConfigSchema.extend({
   type: z.literal('single'),
   supportsImages: z.boolean().optional(),
 })
 
-export const OrchestratorExecutorConfigSchema = z.object({
+const OrchestratorExecutorConfigSchema = z.object({
   type: z.literal('orchestrator-executor'),
   orchestrator: LLMConfigSchema.extend({
     maxTurns: z.number().int().min(1).optional(),
@@ -19,7 +19,7 @@ export const OrchestratorExecutorConfigSchema = z.object({
   }),
 })
 
-export const ClaudeCodeAgentConfigSchema = z
+const ClaudeCodeAgentConfigSchema = z
   .object({
     type: z.literal('claude-code'),
     model: z.string().min(1).optional(),
@@ -59,10 +59,8 @@ export const EvalConfigSchema = z.object({
     .optional(),
 })
 
-export type SingleAgentConfig = z.infer<typeof SingleAgentConfigSchema>
 export type OrchestratorExecutorConfig = z.infer<
   typeof OrchestratorExecutorConfigSchema
 >
 export type ClaudeCodeAgentConfig = z.infer<typeof ClaudeCodeAgentConfigSchema>
-export type AgentConfig = z.infer<typeof AgentConfigSchema>
 export type EvalConfig = z.infer<typeof EvalConfigSchema>

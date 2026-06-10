@@ -1,7 +1,7 @@
 import { sendServerMessage } from '@/lib/messaging/server/serverMessages'
 
-export const HEALTH_CHECK_TIMEOUT_MS = 60_000
-export const HEALTH_CHECK_INTERVAL_MS = 2_000
+const HEALTH_CHECK_TIMEOUT_MS = 60_000
+const HEALTH_CHECK_INTERVAL_MS = 2_000
 
 async function checkServerHealth(): Promise<boolean> {
   try {

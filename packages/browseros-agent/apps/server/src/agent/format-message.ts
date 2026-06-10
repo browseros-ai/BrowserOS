@@ -1,6 +1,6 @@
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 
-export function formatBrowserContext(browserContext?: BrowserContext): string {
+function formatBrowserContext(browserContext?: BrowserContext): string {
   if (!browserContext?.activeTab && !browserContext?.selectedTabs?.length) {
     return ''
   }

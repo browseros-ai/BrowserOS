@@ -18,17 +18,6 @@ export class TaskLoadError extends Error {
   }
 }
 
-export class TaskValidationError extends Error {
-  constructor(
-    message: string,
-    public readonly lineNumber: number,
-    public readonly validationErrors: z.ZodError,
-  ) {
-    super(message)
-    this.name = 'TaskValidationError'
-  }
-}
-
 // ============================================================================
 // Task Loader
 // ============================================================================

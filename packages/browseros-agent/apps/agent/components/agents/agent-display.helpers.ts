@@ -28,16 +28,6 @@ export function canDelete(agent: AgentListItem): boolean {
   return agent.canDelete
 }
 
-export function canRename(_agent: AgentListItem): boolean {
-  return false
-}
-
-export function workspaceLabel(agent: AgentListItem): string | null {
-  if (!agent.detail) return null
-  if (/^(claude|codex|hermes):main$/.test(agent.detail)) return null
-  return agent.detail
-}
-
 const ONE_MINUTE = 60_000
 const ONE_HOUR = 60 * ONE_MINUTE
 const ONE_DAY = 24 * ONE_HOUR

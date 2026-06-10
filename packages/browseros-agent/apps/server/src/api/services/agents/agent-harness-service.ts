@@ -53,12 +53,6 @@ import { logger } from '../../../lib/logger'
 
 export type AgentLiveness = 'working' | 'idle' | 'asleep' | 'error'
 
-export interface AgentActivity {
-  status: AgentLiveness
-  /** Wall-clock ms; null when the agent has never been used. */
-  lastUsedAt: number | null
-}
-
 type SessionActivity = {
   sessionId: AgentSessionId
   status: 'working' | 'error'

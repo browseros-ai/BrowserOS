@@ -7,7 +7,7 @@
 import { accessSync, constants, statSync } from 'node:fs'
 import { join } from 'node:path'
 
-export const BUNDLED_BUN_RELATIVE_PATH = join('bin', 'third_party', 'bun')
+const BUNDLED_BUN_RELATIVE_PATH = join('bin', 'third_party', 'bun')
 const WINDOWS_BUNDLED_BUN_RELATIVE_PATH = join('bin', 'third_party', 'bun.exe')
 
 /** Resolves the packaged Bun executable used to run ACP adapter packages. */

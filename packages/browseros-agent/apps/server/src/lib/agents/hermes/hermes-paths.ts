@@ -13,7 +13,7 @@ import { getBrowserosDir } from '../../browseros-dir'
 
 const HERMES_HOME_FILES = ['config.yaml', '.env'] as const
 
-export function getHermesHostStateDir(browserosDir?: string): string {
+function getHermesHostStateDir(browserosDir?: string): string {
   return join(browserosDir ?? getBrowserosDir(), 'agents', 'hermes')
 }
 

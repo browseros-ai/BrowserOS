@@ -22,7 +22,7 @@ export interface OAuthProviderConfig {
   deviceCodeRequiresPKCE?: boolean
 }
 
-export const OAUTH_PROVIDERS: Record<string, OAuthProviderConfig> = {
+const OAUTH_PROVIDERS: Record<string, OAuthProviderConfig> = {
   'chatgpt-pro': {
     id: 'chatgpt-pro',
     name: 'ChatGPT Plus/Pro',

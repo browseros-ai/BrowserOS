@@ -703,7 +703,7 @@ async function parseCreateAgentBody(c: Context<Env>): Promise<
  * harness strips the prefix and hands raw base64 to acpx, which builds
  * the ACP `image` content block.
  */
-export interface InboundImageAttachment {
+interface InboundImageAttachment {
   mediaType: string
   data: string
 }

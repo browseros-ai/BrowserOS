@@ -2,7 +2,7 @@ import { getBrowserOSAdapter } from './adapter'
 import { Capabilities, Feature } from './capabilities'
 import { BROWSEROS_PREFS } from './prefs'
 
-export class McpPortError extends Error {
+class McpPortError extends Error {
   constructor() {
     super('MCP server port not configured.')
     this.name = 'McpPortError'
@@ -46,7 +46,7 @@ export async function getMcpServerUrl(): Promise<string> {
   return `http://127.0.0.1:${port}/mcp`
 }
 
-export class ProxyPortError extends Error {
+class ProxyPortError extends Error {
   constructor() {
     super('Proxy server port not configured.')
     this.name = 'ProxyPortError'

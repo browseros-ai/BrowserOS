@@ -4,7 +4,7 @@ export interface Tip {
   shortcut?: string
 }
 
-export const TIP_SHOW_PROBABILITY = 0.5
+const TIP_SHOW_PROBABILITY = 0.5
 
 const TIP_DISMISSED_KEY = 'tip-dismissed-session'
 
@@ -85,9 +85,4 @@ export const shouldShowTip = (): boolean => {
 
 export const dismissTip = () => {
   sessionStorage.setItem(TIP_DISMISSED_KEY, Date.now().toString())
-}
-
-export const getRandomTip = (): Tip | null => {
-  if (TIPS.length === 0) return null
-  return TIPS[Math.floor(Math.random() * TIPS.length)]
 }

@@ -1,25 +1,19 @@
 // biome-ignore-all lint/suspicious/noExplicitAny: Low-level browser API adapter requires flexible types
 /// <reference path="./chrome-browser-os.d.ts" />
 
-export type InteractiveNode = chrome.browserOS.InteractiveNode
 export type InteractiveSnapshot = chrome.browserOS.InteractiveSnapshot
 export type InteractiveSnapshotOptions =
   chrome.browserOS.InteractiveSnapshotOptions
-export type InteractiveNodeType = chrome.browserOS.InteractiveNodeType
 export type PageLoadStatus = chrome.browserOS.PageLoadStatus
-export type Rect = chrome.browserOS.Rect
 export type Key = chrome.browserOS.Key
 export type AccessibilityTree = chrome.browserOS.AccessibilityTree
-export type SnapshotItem = chrome.browserOS.SnapshotItem
 export type Snapshot = chrome.browserOS.Snapshot
 export type SnapshotOptions = chrome.browserOS.SnapshotOptions
-export type SnapshotContext = chrome.browserOS.SnapshotContext
 export type PrefObject = chrome.browserOS.PrefObject
-export type SelectionType = chrome.browserOS.SelectionType
 export type ChoosePathOptions = chrome.browserOS.ChoosePathOptions
 export type SelectedPath = chrome.browserOS.SelectedPath
 
-export const SCREENSHOT_SIZES = {
+const SCREENSHOT_SIZES = {
   small: 512,
   medium: 768,
   large: 1028,

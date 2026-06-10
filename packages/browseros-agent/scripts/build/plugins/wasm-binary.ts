@@ -7,10 +7,8 @@
 /**
  * Bun plugin to handle esbuild-style `?binary` WASM imports.
  *
- * Transforms imports like:
- *   import('web-tree-sitter/tree-sitter.wasm?binary')
- *
- * Into inline Uint8Array exports that work in compiled Bun binaries.
+ * Transforms imports of `<package>/<file>.wasm?binary` specifiers into
+ * inline Uint8Array exports that work in compiled Bun binaries.
  */
 
 import { createRequire } from 'node:module'

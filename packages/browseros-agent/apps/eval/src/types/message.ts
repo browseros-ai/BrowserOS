@@ -9,7 +9,7 @@ import { z } from 'zod'
 // ============================================================================
 
 // User's initial query
-export const UserMessageSchema = z.object({
+const UserMessageSchema = z.object({
   type: z.literal('user'),
   timestamp: z.string(),
   content: z.string(),
@@ -19,7 +19,7 @@ export const UserMessageSchema = z.object({
 // Stream event with eval additions (timestamp, screenshot)
 // ============================================================================
 
-export const EvalStreamEventSchema = UIMessageStreamEventSchema.and(
+const EvalStreamEventSchema = UIMessageStreamEventSchema.and(
   z.object({
     timestamp: z.string(),
     screenshot: z.number().optional(),
@@ -46,21 +46,21 @@ export type { UIMessageStreamEvent }
 // ============================================================================
 
 /** Check if message is a text-start event */
-export function isTextStart(
+function isTextStart(
   msg: Message,
 ): msg is EvalStreamEvent & { type: 'text-start' } {
   return msg.type === 'text-start'
 }
 
 /** Check if message is a text-delta event */
-export function isTextDelta(
+function isTextDelta(
   msg: Message,
 ): msg is EvalStreamEvent & { type: 'text-delta'; delta: string } {
   return msg.type === 'text-delta'
 }
 
 /** Check if message is a text-end event */
-export function isTextEnd(
+function isTextEnd(
   msg: Message,
 ): msg is EvalStreamEvent & { type: 'text-end' } {
   return msg.type === 'text-end'
@@ -74,15 +74,6 @@ export function isToolInputAvailable(msg: Message): msg is EvalStreamEvent & {
   input: unknown
 } {
   return msg.type === 'tool-input-available'
-}
-
-/** Check if message is a tool-output-available event */
-export function isToolOutputAvailable(msg: Message): msg is EvalStreamEvent & {
-  type: 'tool-output-available'
-  toolCallId: string
-  output: unknown
-} {
-  return msg.type === 'tool-output-available'
 }
 
 /** Check if message is a tool-output-error event */
@@ -127,26 +118,4 @@ export function extractLastAssistantText(messages: Message[]): string | null {
   }
 
   return lastText || null
-}
-
-/**
- * Count tool invocations in messages
- */
-export function countToolCalls(messages: Message[]): number {
-  return messages.filter(isToolInputAvailable).length
-}
-
-/**
- * Extract tool call messages for action sequence analysis
- */
-export function extractToolCalls(messages: Message[]): Array<{
-  toolName: string
-  toolCallId: string
-  input: unknown
-}> {
-  return messages.filter(isToolInputAvailable).map((msg) => ({
-    toolName: msg.toolName,
-    toolCallId: msg.toolCallId,
-    input: msg.input,
-  }))
 }

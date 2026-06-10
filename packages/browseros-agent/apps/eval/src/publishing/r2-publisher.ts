@@ -55,7 +55,7 @@ export function contentTypeForPath(filePath: string): string {
   return CONTENT_TYPES[extname(filePath)] || 'application/octet-stream'
 }
 
-export function loadR2ConfigFromEnv(
+function loadR2ConfigFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): R2UploadConfig {
   const accountId = env.EVAL_R2_ACCOUNT_ID
@@ -79,7 +79,7 @@ export function loadR2ConfigFromEnv(
   }
 }
 
-export function createR2Client(config: R2UploadConfig): S3Client {
+function createR2Client(config: R2UploadConfig): S3Client {
   return new S3Client({
     region: 'auto',
     endpoint: `https://${config.accountId}.r2.cloudflarestorage.com`,

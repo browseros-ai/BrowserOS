@@ -96,7 +96,7 @@ export function throwIfAborted(signal?: AbortSignal): void {
 }
 
 /** Races tool work against cancellation, including CDP calls that do not accept AbortSignal. */
-export async function abortable<T>(
+async function abortable<T>(
   operation: Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
@@ -118,7 +118,7 @@ export async function abortable<T>(
   }
 }
 
-export function isAbortError(error: unknown): boolean {
+function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError'
 }
 

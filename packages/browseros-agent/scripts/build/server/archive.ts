@@ -14,7 +14,7 @@ function zipPathForArtifact(artifact: StagedArtifact): string {
   )
 }
 
-export async function zipArtifactRoot(
+async function zipArtifactRoot(
   artifactRoot: string,
   outputZipPath: string,
 ): Promise<void> {

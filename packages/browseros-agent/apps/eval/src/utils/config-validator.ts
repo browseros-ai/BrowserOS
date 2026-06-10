@@ -1,13 +1,9 @@
 import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import { type EvalConfig, EvalConfigSchema } from '../types'
 
-// Re-export for backward compatibility
-export { EvalConfigSchema }
-export type ValidatedEvalConfig = EvalConfig
-
 interface ValidationResult {
   valid: boolean
-  config?: ValidatedEvalConfig
+  config?: EvalConfig
   errors: string[]
   warnings: string[]
 }

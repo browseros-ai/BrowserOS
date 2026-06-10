@@ -9,7 +9,18 @@
     "apps/agent/entrypoints/auth.content/index.ts",
     "apps/agent/entrypoints/glow.content/index.ts",
     "apps/agent/entrypoints/selection.content.ts",
-    "scripts/run-bun-test.ts"
+    "scripts/run-bun-test.ts",
+    "scripts/dev/inspect-ui.ts",
+    "scripts/patch-windows-exe.ts",
+    "apps/eval/scripts/generate-report.ts",
+    "apps/eval/scripts/weekly-report.ts"
+  ],
+  "ignoreDependencies": [
+    "tailwind-scrollbar-hide",
+    "tw-animate-css",
+    "@tailwindcss/typography",
+    "pino-pretty",
+    "@browseros/cdp-protocol"
   ],
   "ignorePatterns": [
     "**/*.d.ts",
@@ -20,6 +31,7 @@
     "**/.output/**",
     "**/coverage/**",
     "**/tmp/**",
+    "apps/agent/schema/**",
     "apps/cli/**",
     "apps/agent/assets/**",
     "apps/agent/generated/**",

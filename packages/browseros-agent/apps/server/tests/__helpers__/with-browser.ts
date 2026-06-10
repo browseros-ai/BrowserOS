@@ -14,8 +14,8 @@ import {
   killBrowser,
   spawnBrowser,
 } from './browser'
+import { killProcessOnPort } from './kill-port'
 import { createTestRuntimePlan, type TestRuntimePlan } from './test-runtime'
-import { killProcessOnPort } from './utils'
 
 const mutex = new Mutex()
 let cachedCdp: CdpBackend | null = null

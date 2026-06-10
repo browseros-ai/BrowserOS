@@ -37,12 +37,6 @@ export interface TaskLoadResult {
 // Task Execution
 // ============================================================================
 
-export interface TaskExecutionContext {
-  task: Task
-  config: EvalConfig
-  outputDir: string
-}
-
 export type TaskResult =
   | {
       status: 'completed'

@@ -36,6 +36,68 @@ def get_browseros_server_binary_info(component_path: Path) -> Optional[Dict[str,
     return info
 
 
+SERVER_RESOURCES_SOURCE_REL = Path("chrome/browser/browseros/server/resources")
+SERVER_RESOURCES_BUNDLE_REL = Path(
+    "Contents/Resources/BrowserOSServer/default/resources"
+)
+# Finder droppings in the staged tree must not fail the nightly sign.
+SERVER_RESOURCES_JUNK_FILES = {".DS_Store"}
+
+
+def verify_server_resources_bundle(app_path: Path, chromium_src: Path) -> List[str]:
+    """Check the app bundle ships exactly what the build staged for the server.
+
+    Guards against signing/packaging a stale or incomplete bundle (a leftover
+    out/Default_universal app once shipped for two weeks unnoticed): every file
+    staged under chrome/browser/browseros/server/resources must exist in the
+    bundle with executable bits intact. Returns problem strings; empty = OK.
+    Bundle-only extras and a missing source tree (sign-only flows) just warn.
+
+    Deliberately compares paths + exec bits only, never content/size: universal
+    bundles hold lipo-fat binaries whose bytes differ from the thin staged
+    tree, so same-name content staleness is out of this guard's reach.
+    """
+    source_root = chromium_src / SERVER_RESOURCES_SOURCE_REL
+    bundle_root = app_path / SERVER_RESOURCES_BUNDLE_REL
+
+    if not source_root.is_dir():
+        log_warning(
+            f"Staged server resources not found at {source_root} - "
+            "skipping bundle verification"
+        )
+        return []
+
+    problems: List[str] = []
+    staged = set()
+    for source_file in sorted(source_root.rglob("*")):
+        if not source_file.is_file() or source_file.name in SERVER_RESOURCES_JUNK_FILES:
+            continue
+        rel = source_file.relative_to(source_root)
+        staged.add(rel)
+        bundle_file = bundle_root / rel
+        if not bundle_file.is_file():
+            problems.append(f"missing from app bundle: {rel.as_posix()}")
+            continue
+        if os.access(source_file, os.X_OK) and not os.access(bundle_file, os.X_OK):
+            problems.append(f"lost executable bit in app bundle: {rel.as_posix()}")
+
+    if bundle_root.is_dir():
+        for bundle_file in sorted(bundle_root.rglob("*")):
+            if (
+                not bundle_file.is_file()
+                or bundle_file.name in SERVER_RESOURCES_JUNK_FILES
+            ):
+                continue
+            rel = bundle_file.relative_to(bundle_root)
+            if rel not in staged:
+                log_warning(
+                    f"App bundle has server file not in staged resources "
+                    f"(stale?): {rel.as_posix()}"
+                )
+
+    return problems
+
+
 def run_command(
     cmd: List[str],
     cwd: Optional[Path] = None,
@@ -101,6 +163,7 @@ class MacOSSignModule(CommandModule):
         app_path = ctx.get_app_path()
         env_ok, env_vars = check_environment(ctx.env)
 
+        self._verify_server_resources(app_path, ctx)
         self._clear_extended_attributes(app_path)
         self._sign_all_components(app_path, env_vars["certificate_name"], ctx)
         self._verify_signature(app_path)
@@ -108,6 +171,14 @@ class MacOSSignModule(CommandModule):
 
         ctx.artifact_registry.add("signed_app", app_path)
         log_success("Application signed and notarized successfully")
+
+    def _verify_server_resources(self, app_path: Path, ctx: Context) -> None:
+        problems = verify_server_resources_bundle(app_path, ctx.chromium_src)
+        if problems:
+            raise RuntimeError(
+                "App bundle does not match staged server resources "
+                "(signing a stale build?):\n  " + "\n  ".join(problems)
+            )
 
     def _clear_extended_attributes(self, app_path: Path) -> None:
         log_info("🧹 Clearing extended attributes...")
@@ -782,6 +853,16 @@ def sign_app(ctx: Context, create_dmg: bool = True) -> bool:
     # Verify app exists
     if not app_path.exists():
         log_error(f"App not found at: {app_path}")
+        return False
+
+    problems = verify_server_resources_bundle(app_path, ctx.chromium_src)
+    if problems:
+        log_error(
+            "App bundle does not match staged server resources "
+            "(signing a stale build?):"
+        )
+        for problem in problems:
+            log_error(f"  {problem}")
         return False
 
     try:

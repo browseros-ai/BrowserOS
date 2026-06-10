@@ -38,7 +38,7 @@ export function parseCladoActions(
   return normalized
 }
 
-export function normalizeCladoActionPayload(
+function normalizeCladoActionPayload(
   payload: RawCladoActionPayload,
 ): CladoAction | null {
   if (!payload.action || typeof payload.action !== 'string') {
@@ -65,7 +65,7 @@ export function normalizeCladoActionPayload(
   }
 }
 
-export function parseCladoActionsFromRawResponse(
+function parseCladoActionsFromRawResponse(
   rawResponse: string | undefined,
 ): RawCladoActionPayload[] {
   if (!rawResponse) return []

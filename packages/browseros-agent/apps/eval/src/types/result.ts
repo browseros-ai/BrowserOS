@@ -1,9 +1,8 @@
 import { z } from 'zod'
 import { EvalWarningSchema, TaskErrorSchema } from './errors'
-import { MessageSchema } from './message'
 
 // Grader result
-export const GraderResultSchema = z.object({
+const GraderResultSchema = z.object({
   score: z.number(),
   pass: z.boolean(),
   reasoning: z.string(),
@@ -19,7 +18,7 @@ const AgentConfigMetaSchema = z
   .passthrough()
 
 // LLM token consumption for the task (summed across all LLM calls)
-export const TokenUsageSchema = z.object({
+const TokenUsageSchema = z.object({
   input_tokens: z.number(),
   output_tokens: z.number(),
   cache_read_tokens: z.number(),
@@ -27,7 +26,7 @@ export const TokenUsageSchema = z.object({
 })
 
 // Dataset-derived metadata passed through to the task (AGI SDK fields, etc.)
-export const TaskDatasetMetadataSchema = z
+const TaskDatasetMetadataSchema = z
   .object({
     website: z.string().optional(),
     difficulty: z.string().optional(),
@@ -57,16 +56,8 @@ export const TaskMetadataSchema = z.object({
   task_metadata: TaskDatasetMetadataSchema.optional(),
 })
 
-// Agent result
-export const AgentResultSchema = z.object({
-  metadata: TaskMetadataSchema,
-  messages: z.array(MessageSchema),
-  finalAnswer: z.string().nullable(),
-})
-
 // Export types
 export type GraderResult = z.infer<typeof GraderResultSchema>
 export type TaskMetadata = z.infer<typeof TaskMetadataSchema>
-export type AgentResult = z.infer<typeof AgentResultSchema>
 export type TokenUsage = z.infer<typeof TokenUsageSchema>
 export type TaskDatasetMetadata = z.infer<typeof TaskDatasetMetadataSchema>

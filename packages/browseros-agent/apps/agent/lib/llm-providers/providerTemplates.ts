@@ -179,7 +179,7 @@ export const getProviderTemplate = (
  * Default base URLs for each provider type
  * Auto-fills when user selects a provider type
  */
-export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
+const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   'chatgpt-pro': 'https://chatgpt.com/backend-api',
   'github-copilot': 'https://api.githubcopilot.com',
   'qwen-code': 'https://portal.qwen.ai/v1',

@@ -27,14 +27,6 @@ export const LIMITS = {
 } as const
 
 /**
- * Stream writer interface for capturing UI stream events.
- * Used by CladoActionExecutor.
- */
-export interface StreamWriter {
-  write: (data: string) => Promise<void>
-}
-
-/**
  * Factory function type for creating executor runs.
  * Built in index.ts with Browser + capture callbacks captured in closure.
  */

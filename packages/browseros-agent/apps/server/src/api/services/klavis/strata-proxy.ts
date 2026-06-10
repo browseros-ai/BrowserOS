@@ -58,7 +58,7 @@ interface BackgroundConnectOptions {
   retryDelaysMs?: readonly number[]
 }
 
-export async function connectKlavisProxy(
+async function connectKlavisProxy(
   deps: ConnectDeps,
 ): Promise<KlavisProxyHandle> {
   const allServers = OAUTH_MCP_SERVERS.map((s) => s.name)

@@ -22,7 +22,7 @@ import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { BrowserOSAppManager } from '../../src/runner/browseros-app-manager'
-import { createTaskExecutor } from '../../src/runner/task-executor'
+import { createTaskRunPipeline as createTaskExecutor } from '../../src/runs/task-run-pipeline'
 import { EvalConfigSchema } from '../../src/types/config'
 import { TaskSchema } from '../../src/types/task'
 

@@ -4,7 +4,7 @@ import {
   type CladoViewport,
 } from './types'
 
-export function clampCladoNormalizedCoordinate(value: number): number {
+function clampCladoNormalizedCoordinate(value: number): number {
   return Math.min(999, Math.max(0, Math.round(value)))
 }
 
@@ -169,7 +169,7 @@ export function prepareCladoToolCall(
   }
 }
 
-export function toCladoEvaluateExpression(rawFunction: unknown): string {
+function toCladoEvaluateExpression(rawFunction: unknown): string {
   const source = String(rawFunction).trim()
   if (source.startsWith('() =>') || source.startsWith('async () =>')) {
     return `(${source})()`

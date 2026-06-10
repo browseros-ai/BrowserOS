@@ -67,7 +67,7 @@ export async function runCliRelease(options: CliReleaseOptions): Promise<void> {
   await uploadCliRelease(resolveRootDir(), options)
 }
 
-export async function uploadCliInstallers(rootDir: string): Promise<void> {
+async function uploadCliInstallers(rootDir: string): Promise<void> {
   const { r2 } = loadCliUploadConfig(rootDir)
   const client = createR2Client(r2)
 

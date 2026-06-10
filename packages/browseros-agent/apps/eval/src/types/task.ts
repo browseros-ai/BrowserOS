@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 // Task metadata schema
-export const TaskInputMetadataSchema = z.object({
+const TaskInputMetadataSchema = z.object({
   original_task_id: z.string(),
   website: z.string().optional(),
   category: z.string().optional(),

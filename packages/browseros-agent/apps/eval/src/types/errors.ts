@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 // Error source - where the error originated
-export const ErrorSourceSchema = z.enum([
+const ErrorSourceSchema = z.enum([
   'window_creation',
   'navigation',
   'agent_execution',

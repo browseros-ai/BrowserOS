@@ -1,6 +1,6 @@
 {
   "name": "@browseros/server",
-  "version": "0.0.100",
+  "version": "0.0.101",
   "description": "BrowserOS server",
   "type": "module",
   "main": "./src/index.ts",
@@ -69,7 +69,6 @@
     }
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "0.21.0",
     "@ai-sdk/amazon-bedrock": "^4.0.62",
     "@ai-sdk/anthropic": "^3.0.46",
     "@ai-sdk/azure": "^3.0.31",
@@ -81,10 +80,7 @@
     "@ai-sdk/provider": "^3.0.8",
     "@browseros/cdp-protocol": "workspace:*",
     "@browseros/shared": "workspace:*",
-    "@google/gemini-cli-core": "^0.16.0",
-    "@google/genai": "1.30.0",
     "@hono/mcp": "^0.2.3",
-    "@hono/node-server": "^1.19.6",
     "@hono/zod-validator": "^0.4.3",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@openrouter/ai-sdk-provider": "^2.2.3",
@@ -93,40 +89,24 @@
     "acpx": "^0.10.0",
     "acpx-ai-provider": "^0.0.6",
     "ai": "^6.0.94",
-    "chrome-devtools-frontend": "^1.0.1577886",
     "commander": "^14.0.1",
     "core-js": "3.45.1",
-    "debug": "4.4.3",
     "drizzle-orm": "^0.45.2",
-    "eventsource-parser": "^3.0.0",
-    "fuse.js": "^7.1.0",
     "hono": "^4.12.3",
     "jimp": "^1.6.0",
-    "klavis": "^2.15.0",
     "pino": "^9.6.0",
     "posthog-node": "^4.17.0",
-    "proper-lockfile": "^4.1.2",
-    "puppeteer-core": "24.23.0",
-    "ws": "^8.18.0",
     "zod": "^3.24.2",
     "zod-from-json-schema": "^0.1.0"
   },
   "devDependencies": {
     "@types/bun": "1.3.5",
-    "@types/debug": "^4.1.12",
     "@types/node": "^24.3.3",
-    "@types/proper-lockfile": "^4.1.4",
-    "@types/sinon": "^21.0.0",
-    "@types/ws": "^8.5.13",
     "async-mutex": "^0.5.0",
     "drizzle-kit": "^0.31.10",
     "pino-pretty": "^13.0.0",
     "puppeteer": "24.23.0",
-    "sinon": "^21.0.1",
     "typescript": "^5.9.2"
-  },
-  "optionalDependencies": {
-    "chrome-devtools-mcp": "latest"
   },
   "license": "AGPL-3.0-or-later"
 }

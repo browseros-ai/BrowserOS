@@ -12,7 +12,7 @@ import {
 } from './binary-resolver'
 import type { HostAcpAdapter } from './config'
 
-export const BUNDLED_NATIVE_CLI_DIR_RELATIVE_PATH = join('bin', 'third_party')
+const BUNDLED_NATIVE_CLI_DIR_RELATIVE_PATH = join('bin', 'third_party')
 
 /** Resolves BrowserOS-packaged Claude/Codex binaries before falling back to host PATH. */
 export function resolveBundledNativeBinary(input: {

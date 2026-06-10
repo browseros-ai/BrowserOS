@@ -7,10 +7,6 @@
 import {
   type BrowserContext,
   BrowserContextSchema,
-  type CustomMcpServer,
-  CustomMcpServerSchema,
-  type Tab,
-  TabSchema,
 } from '@browseros/shared/schemas/browser-context'
 import { LLMConfigSchema } from '@browseros/shared/schemas/llm'
 import { z } from 'zod'
@@ -18,21 +14,12 @@ import type { Browser } from '../browser/browser'
 import type { BrowserSession } from '../browser/core/session'
 
 // Re-export browser context types for consumers
-export {
-  type BrowserContext,
-  BrowserContextSchema,
-  type CustomMcpServer,
-  CustomMcpServerSchema,
-  type Tab,
-  TabSchema,
-}
+export type { BrowserContext }
 
 export const AgentLLMConfigSchema = LLMConfigSchema.extend({
   model: z.string().min(1, 'Model name is required'),
   upstreamProvider: z.string().optional(),
 })
-
-export type AgentLLMConfig = z.infer<typeof AgentLLMConfigSchema>
 
 export const ChatRequestSchema = AgentLLMConfigSchema.extend({
   conversationId: z.string().uuid(),

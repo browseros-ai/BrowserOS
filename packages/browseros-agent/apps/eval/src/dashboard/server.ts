@@ -10,14 +10,9 @@ import { EvalConfigSchema, type Task } from '../types'
 // Types
 // ============================================================================
 
-export type TaskStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'timeout'
+type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'timeout'
 
-export interface DashboardTask {
+interface DashboardTask {
   queryId: string
   query: string
   startUrl?: string
@@ -35,7 +30,7 @@ export interface DashboardTask {
   screenshotCount: number
 }
 
-export interface DashboardEvent {
+interface DashboardEvent {
   type: string
   taskId: string
   [key: string]: unknown

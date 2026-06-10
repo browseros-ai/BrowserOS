@@ -1,6 +1,6 @@
 import { storage } from '@wxt-dev/storage'
 
-export interface OnboardingProfile {
+interface OnboardingProfile {
   name: string
   role: string
   company: string

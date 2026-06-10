@@ -16,7 +16,7 @@ import { VERSION } from './version'
 
 const portSchema = z.number().int()
 
-export const ServerConfigSchema = z.object({
+const ServerConfigSchema = z.object({
   cdpPort: portSchema.nullable(),
   serverPort: portSchema,
   agentPort: portSchema,

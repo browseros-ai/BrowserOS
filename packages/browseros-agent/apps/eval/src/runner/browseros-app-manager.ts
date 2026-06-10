@@ -1,8 +1,7 @@
 /**
  * BrowserOS App Manager
  *
- * Manages BrowserOS lifecycle for eval workers.
- * Mirrors scripts/dev/start.ts --manual mode with per-worker isolation:
+ * Manages BrowserOS lifecycle for eval workers, with per-worker isolation:
  *
  *   1. Kill ports
  *   2. Launch Chrome directly with per-worker user-data-dir and ports
@@ -126,9 +125,9 @@ export class BrowserOSAppManager {
   }
 
   /**
-   * Launch Chrome + Server — mirrors start.ts --manual mode.
+   * Launch Chrome + Server.
    *
-   * Chrome flags match startManualBrowser() in scripts/dev/start.ts:
+   * Chrome flags:
    *   --no-first-run, --no-default-browser-check, --use-mock-keychain
    *   --disable-browseros-server  (we run our own server)
    *   --disable-browseros-extensions  (we load them explicitly if needed)

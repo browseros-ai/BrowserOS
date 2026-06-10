@@ -9,7 +9,7 @@ interface UserMCPIntegrationsList {
   count: number
 }
 
-export const INTEGRATIONS_QUERY_KEY = 'klavis-user-integrations'
+const INTEGRATIONS_QUERY_KEY = 'klavis-user-integrations'
 
 const getUserMCPIntegrations = async (
   hostUrl: string,

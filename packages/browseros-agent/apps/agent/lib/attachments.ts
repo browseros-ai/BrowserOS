@@ -9,12 +9,12 @@
  * them as a fenced `<attachment>` block on the user message.
  */
 
-export const MAX_ATTACHMENTS_PER_MESSAGE = 10
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5 MB after compression
-export const MAX_FILE_TEXT_BYTES = 1 * 1024 * 1024 // 1 MB extracted text
-export const IMAGE_LONG_EDGE_CAP = 2048
+const MAX_ATTACHMENTS_PER_MESSAGE = 10
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5 MB after compression
+const MAX_FILE_TEXT_BYTES = 1 * 1024 * 1024 // 1 MB extracted text
+const IMAGE_LONG_EDGE_CAP = 2048
 
-export const ALLOWED_IMAGE_MEDIA_TYPES = [
+const ALLOWED_IMAGE_MEDIA_TYPES = [
   'image/png',
   'image/jpeg',
   'image/jpg',
@@ -22,10 +22,7 @@ export const ALLOWED_IMAGE_MEDIA_TYPES = [
   'image/gif',
 ] as const
 
-export const ALLOWED_FILE_MEDIA_TYPE_PREFIXES = [
-  'text/',
-  'application/json',
-] as const
+const ALLOWED_FILE_MEDIA_TYPE_PREFIXES = ['text/', 'application/json'] as const
 
 export type ServerImageAttachment = {
   kind: 'image'
@@ -250,7 +247,7 @@ export async function stageAttachments(
  * source files are re-encoded to JPEG; PNGs/GIFs that are already small
  * are passed through untouched.
  */
-export async function compressImageIfNeeded(file: File): Promise<Blob> {
+async function compressImageIfNeeded(file: File): Promise<Blob> {
   // Cheap path: small files don't need any transform.
   if (file.size <= 1.5 * 1024 * 1024) return file
 

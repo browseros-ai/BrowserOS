@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
 
-export interface CreditsInfo {
+interface CreditsInfo {
   credits: number
   dailyLimit: number
   lastResetAt?: string

@@ -8,10 +8,16 @@ import type { CodingAgentsController } from './coding-agents.hooks'
 
 interface CodingAgentsListProps {
   controller: CodingAgentsController
+  selectedAgentId: string | null
+  onSelectAgent: (agentId: string) => void
 }
 
 /** Provider-list placement for Claude Code / Codex agents in AI settings. */
-export const CodingAgentsList: FC<CodingAgentsListProps> = ({ controller }) => {
+export const CodingAgentsList: FC<CodingAgentsListProps> = ({
+  controller,
+  selectedAgentId,
+  onSelectAgent,
+}) => {
   const {
     listItems,
     activity,
@@ -56,7 +62,9 @@ export const CodingAgentsList: FC<CodingAgentsListProps> = ({ controller }) => {
             adapter={adapter}
             modelLabel={deriveModelLabel(agent, harness?.modelId)}
             reasoningEffort={harness?.reasoningEffort ?? null}
+            isSelected={selectedAgentId === agent.agentId}
             deleting={deleteIsPending && deletingAgentKey === agent.key}
+            onSelect={() => onSelectAgent(agent.agentId)}
             onDelete={(item) => {
               void handleDelete(item)
             }}

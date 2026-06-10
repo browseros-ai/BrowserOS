@@ -263,9 +263,7 @@ class UniversalBuildModule(CommandModule):
             architecture=arch,
             build_type=base_ctx.build_type,
         )
-        # Set fixed app path to prevent universal auto-detection in get_app_path()
-        # This is critical: after arm64 is built, get_app_path() would otherwise
-        # try to detect the universal dir for x64 context
+        # Pin the app path for this arch's context
         ctx._fixed_app_path = (
             ctx.chromium_src / f"out/Default_{arch}" / ctx.BROWSEROS_APP_NAME
         )

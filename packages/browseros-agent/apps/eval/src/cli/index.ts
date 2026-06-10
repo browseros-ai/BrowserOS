@@ -6,7 +6,7 @@ import { publishRun, runPublishCommand } from './commands/publish'
 import { runRunCommand } from './commands/run'
 import { runSuiteCommand } from './commands/suite'
 
-export function usage(): string {
+function usage(): string {
   return `
 BrowserOS Eval
 

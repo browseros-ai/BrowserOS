@@ -11,9 +11,9 @@ import {
   killBrowser,
   spawnBrowser,
 } from './browser'
+import { killProcessOnPort } from './kill-port'
 import { getServerState, killServer, spawnServer } from './server'
 import { createTestRuntimePlan, type TestRuntimePlan } from './test-runtime'
-import { killProcessOnPort } from './utils'
 
 export interface TestEnvironmentConfig {
   cdpPort: number

@@ -14,7 +14,7 @@ type ChangelogVersionConfig = {
  * '0.0.21': { showChangelog: true }  // opens base changelog URL
  * '0.0.25': { showChangelog: true, anchor: 'v0-0-25' }  // opens changelog#v0-0-25
  */
-export const CHANGELOG_VERSIONS: Record<string, ChangelogVersionConfig> = {
+const CHANGELOG_VERSIONS: Record<string, ChangelogVersionConfig> = {
   '0.0.52': { showChangelog: true },
   '0.0.55': { showChangelog: true, anchor: 'v0-37-0' },
 }

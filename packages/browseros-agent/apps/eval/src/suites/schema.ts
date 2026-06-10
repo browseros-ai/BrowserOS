@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { EvalConfigSchema } from '../types'
 
-export const SuiteAgentSchema = z
+const SuiteAgentSchema = z
   .object({
     type: z.enum([
       'tool-loop',
@@ -39,4 +39,3 @@ export const EvalSuiteSchema = z.object({
 })
 
 export type EvalSuite = z.infer<typeof EvalSuiteSchema>
-export type SuiteAgent = z.infer<typeof SuiteAgentSchema>

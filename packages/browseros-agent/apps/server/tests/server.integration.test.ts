@@ -13,11 +13,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
 import { MOCK_BROWSEROS_RESPONSE_TEXT } from '../src/lib/clients/llm/mock-language-model'
-import {
-  cleanupBrowserOS,
-  ensureBrowserOS,
-  type TestEnvironmentConfig,
-} from './__helpers__/index'
+import { cleanupBrowserOS, ensureBrowserOS } from './__helpers__/index'
+import type { TestEnvironmentConfig } from './__helpers__/setup'
 
 setDefaultTimeout(30000)
 
