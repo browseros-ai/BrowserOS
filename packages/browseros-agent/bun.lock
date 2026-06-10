@@ -178,6 +178,7 @@
         "@modelcontextprotocol/sdk": "^1.27.1",
         "@openrouter/ai-sdk-provider": "^2.2.3",
         "@sentry/bun": "^10.31.0",
+        "acp-probe": "^0.0.2",
         "acpx": "^0.10.0",
         "acpx-ai-provider": "^0.0.6",
         "ai": "^6.0.94",
@@ -1936,6 +1937,8 @@
     "acorn-import-attributes": ["acorn-import-attributes@1.9.5", "", { "peerDependencies": { "acorn": "^8" } }, "sha512-n02Vykv5uA3eHGM/Z2dQrcD56kL8TyDb2p1+0P83PClMnC/nc+anbQRhIOWnSq4Ke/KvDPrY3C9hDtC/A3eHnQ=="],
 
     "acorn-jsx": ["acorn-jsx@5.3.2", "", { "peerDependencies": { "acorn": "^6.0.0 || ^7.0.0 || ^8.0.0" } }, "sha512-rq9s+JNhf0IChjtDXxllJ7g41oZk5SlXtp0LHwyA5cejwn7vKmKp4pPri6YEePv2PU65sAsegbXtIinmDFDXgQ=="],
+
+    "acp-probe": ["acp-probe@0.0.2", "", { "dependencies": { "@agentclientprotocol/sdk": "^0.21.0" }, "peerDependencies": { "acpx": ">=0.7.0" }, "optionalPeers": ["acpx"] }, "sha512-xR0mLngodmIxT9u/doxYtHoa3gkhH4/wcujDiXPGGo6VupgxtEgWK9kcPohDQ47ZiSXm5YR9NtGyrGdEELQucQ=="],
 
     "acpx": ["acpx@0.10.0", "", { "dependencies": { "@agentclientprotocol/sdk": "^0.22.1", "commander": "^14.0.3", "skillflag": "^0.1.4", "tsx": "^4.22.0", "zod": "^4.4.3" }, "bin": { "acpx": "dist/cli.js" } }, "sha512-hd48XV03gG3sd409T1lDrOKJTTz1ap4g0wrndXjxQ590tN85pBYlvfNLyerybvGRrtUGsZjNdt99r1jpIt6ukA=="],
 

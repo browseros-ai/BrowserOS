@@ -89,6 +89,7 @@
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@openrouter/ai-sdk-provider": "^2.2.3",
     "@sentry/bun": "^10.31.0",
+    "acp-probe": "^0.0.2",
     "acpx": "^0.10.0",
     "acpx-ai-provider": "^0.0.6",
     "ai": "^6.0.94",

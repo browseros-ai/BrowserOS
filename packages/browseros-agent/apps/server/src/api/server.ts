@@ -22,6 +22,7 @@ import { getDb } from '../lib/db'
 import { logger } from '../lib/logger'
 import { Sentry } from '../lib/sentry'
 import { requireTrustedOrigin } from './middleware/require-trusted-origin'
+import { createAcpxProbeRoutes } from './routes/acpx-probe'
 import { createAgentRoutes } from './routes/agents'
 import { createChatRoutes } from './routes/chat'
 import { createCreditsRoutes } from './routes/credits'
@@ -123,6 +124,7 @@ export async function createHttpServer(config: HttpServerConfig) {
     )
     .route('/status', createStatusRoute({ browser }))
     .route('/test-provider', createProviderRoutes({ browserosId }))
+    .route('/acpx/probe', createAcpxProbeRoutes())
     .route('/refine-prompt', createRefinePromptRoutes({ browserosId }))
     .route(
       '/oauth',
