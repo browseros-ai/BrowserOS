@@ -16,6 +16,7 @@ export type ProviderType =
   | 'qwen-code'
   | 'codex'
   | 'claude-code'
+  | 'acp-custom'
 
 /**
  * LLM Provider configuration
@@ -60,7 +61,7 @@ export interface LlmProviderConfig {
   sessionToken?: string
 
   // ChatGPT Pro (Codex) fields
-  reasoningEffort?: 'none' | 'low' | 'medium' | 'high'
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   reasoningSummary?: 'auto' | 'concise' | 'detailed'
 }
 

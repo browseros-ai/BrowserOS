@@ -185,6 +185,7 @@ export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   'qwen-code': 'https://portal.qwen.ai/v1',
   codex: '',
   'claude-code': '',
+  'acp-custom': '',
   moonshot: 'https://api.moonshot.ai/v1',
   anthropic: 'https://api.anthropic.com/v1',
   openai: 'https://api.openai.com/v1',

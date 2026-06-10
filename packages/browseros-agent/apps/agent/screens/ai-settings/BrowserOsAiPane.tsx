@@ -257,7 +257,11 @@ export const BrowserOsAiPane: FC = () => {
       type: adapterId === 'codex' ? 'codex' : 'claude-code',
       name: adapterId === 'codex' ? 'Codex' : 'Claude Code',
       baseUrl: '',
-      modelId: adapterId === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6',
+      // Leave modelId empty so the dialog defaults to the probe's
+      // first settable id. Hard-coded guesses (claude-sonnet-4-6,
+      // gpt-5.5, etc.) get rejected by the local adapter's
+      // session/set_config_option call.
+      modelId: '',
       supportsImages: true,
       contextWindow: adapterId === 'codex' ? 400000 : 200000,
       temperature: 0.2,

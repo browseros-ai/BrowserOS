@@ -91,7 +91,9 @@ export const LLMConfigSchema: z.ZodObject<{
   accessKeyId: z.ZodOptional<z.ZodString>
   secretAccessKey: z.ZodOptional<z.ZodString>
   sessionToken: z.ZodOptional<z.ZodString>
-  reasoningEffort: z.ZodOptional<z.ZodEnum<['none', 'low', 'medium', 'high']>>
+  reasoningEffort: z.ZodOptional<
+    z.ZodEnum<['none', 'low', 'medium', 'high', 'xhigh', 'max']>
+  >
   reasoningSummary: z.ZodOptional<z.ZodEnum<['auto', 'concise', 'detailed']>>
   acpAgentId: z.ZodOptional<z.ZodString>
   acpCommand: z.ZodOptional<z.ZodString>
@@ -108,8 +110,13 @@ export const LLMConfigSchema: z.ZodObject<{
   accessKeyId: z.string().optional(),
   secretAccessKey: z.string().optional(),
   sessionToken: z.string().optional(),
-  // ChatGPT Pro (Codex)
-  reasoningEffort: z.enum(['none', 'low', 'medium', 'high']).optional(),
+  // ChatGPT Pro (Codex) shares the lower half; ACP-backed providers
+  // (claude advertises xhigh + max) extend it further. The wider enum
+  // accepts every value any ACP agent emits so the chat path can pass
+  // probe-discovered values through verbatim.
+  reasoningEffort: z
+    .enum(['none', 'low', 'medium', 'high', 'xhigh', 'max'])
+    .optional(),
   reasoningSummary: z.enum(['auto', 'concise', 'detailed']).optional(),
   // ACP-backed providers (claude-code, codex, acp-custom). agent id
   // resolves through acpx's registry; command is only used when
