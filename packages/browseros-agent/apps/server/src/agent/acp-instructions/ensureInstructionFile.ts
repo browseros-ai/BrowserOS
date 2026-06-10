@@ -50,13 +50,18 @@ const fileLocks = new Map<string, FileLock>()
 function withFileLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
   const prev = fileLocks.get(path) ?? Promise.resolve()
   const next = prev.then(fn, fn)
-  fileLocks.set(
-    path,
-    next.then(
-      () => undefined,
-      () => undefined,
-    ),
+  const tail: FileLock = next.then(
+    () => undefined,
+    () => undefined,
   )
+  fileLocks.set(path, tail)
+  // Drop the entry once the chain settles so the Map cannot grow
+  // without bound across long-running processes. The identity check
+  // makes sure a newer queued call that overwrote our tail keeps its
+  // entry; we only clear when nobody else is waiting on this path.
+  tail.then(() => {
+    if (fileLocks.get(path) === tail) fileLocks.delete(path)
+  })
   return next
 }
 
