@@ -35,8 +35,25 @@ const BUILT_IN_ACP_AGENT_BY_PROVIDER: Record<string, string> = {
   [LLM_PROVIDERS.CODEX]: 'codex',
 }
 
-function defaultAcpWorkspacePath(providerId: string): string {
-  return join(getBrowserosDir(), 'workspaces', providerId)
+/**
+ * Per-provider workspace path so two providers of the same TYPE (e.g.
+ * Claude Opus High and Claude Sonnet Medium) get isolated working
+ * directories instead of stomping on each other's files. The provider
+ * type still anchors the top-level folder so the user can browse
+ * `workspaces/claude-code/` to see all their Claude Code provider
+ * records at a glance.
+ *
+ * `providerId` is optional for backwards compatibility with chat
+ * requests from older clients that did not forward the saved
+ * `LlmProviderConfig.id` to the server; those still land on the legacy
+ * shared path. New requests always carry it.
+ */
+function defaultAcpWorkspacePath(
+  providerType: string,
+  providerId: string | undefined,
+): string {
+  const base = join(getBrowserosDir(), 'workspaces', providerType)
+  return providerId ? join(base, providerId) : base
 }
 
 /**
@@ -70,7 +87,8 @@ async function createAcpLanguageModel(
 ): Promise<LanguageModelWithCleanup> {
   const agentId = resolveAcpAgentId(config)
   const workspacePath = expandHomeToken(
-    config.acpFixedWorkspacePath ?? defaultAcpWorkspacePath(config.provider),
+    config.acpFixedWorkspacePath ??
+      defaultAcpWorkspacePath(config.provider, config.providerId),
   )
   await mkdir(workspacePath, { recursive: true }).catch((err: unknown) => {
     logger.warn('Failed to ensure ACP workspace exists; spawn may fail', {

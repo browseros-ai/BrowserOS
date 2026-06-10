@@ -118,18 +118,58 @@ describe('createLanguageModel — ACP providers', () => {
     expect(lastBuildArgs?.workspacePath).toBe('/tmp/some-cwd')
   })
 
-  it('falls back to getBrowserosDir()/workspaces/<provider-id> when no path is set', async () => {
+  it('falls back to getBrowserosDir()/workspaces/<type> when no path or providerId is set', async () => {
     await createLanguageModel(baseConfig() as never)
     expect(lastBuildArgs?.workspacePath).toBe(
       join(homedir(), '.browseros-test', 'workspaces', 'claude-code'),
     )
   })
 
+  it('nests under workspaces/<type>/<providerId> when providerId is supplied', async () => {
+    await createLanguageModel({
+      ...baseConfig(),
+      providerId: 'opus-high-uuid-1',
+    } as never)
+    expect(lastBuildArgs?.workspacePath).toBe(
+      join(
+        homedir(),
+        '.browseros-test',
+        'workspaces',
+        'claude-code',
+        'opus-high-uuid-1',
+      ),
+    )
+  })
+
+  it('isolates two providers of the same type into different directories', async () => {
+    await createLanguageModel({
+      ...baseConfig(),
+      providerId: 'opus-high',
+    } as never)
+    const opusPath = lastBuildArgs?.workspacePath
+    await createLanguageModel({
+      ...baseConfig(),
+      providerId: 'sonnet-medium',
+    } as never)
+    expect(opusPath).not.toBe(lastBuildArgs?.workspacePath)
+    expect(opusPath).toContain('claude-code/opus-high')
+    expect(lastBuildArgs?.workspacePath).toContain('claude-code/sonnet-medium')
+  })
+
   it('mkdir -ps the workspace before handing it to buildAcpxProvider', async () => {
-    await createLanguageModel(baseConfig() as never)
+    await createLanguageModel({
+      ...baseConfig(),
+      providerId: 'opus-high-uuid-1',
+    } as never)
     expect(mkdirCalls).toHaveLength(1)
     expect(mkdirCalls[0]?.path).toBe(
-      join(homedir(), '.browseros-test', 'workspaces', 'claude-code'),
+      join(
+        homedir(),
+        '.browseros-test',
+        'workspaces',
+        'claude-code',
+        'opus-high-uuid-1',
+      ),
     )
     expect(mkdirCalls[0]?.opts).toEqual({ recursive: true })
   })
