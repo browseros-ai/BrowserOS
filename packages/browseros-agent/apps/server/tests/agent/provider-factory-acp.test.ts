@@ -17,6 +17,18 @@ const fakeProvider = {
   },
 }
 
+const mkdirCalls: Array<{ path: string; opts: { recursive?: boolean } }> = []
+
+mock.module('node:fs/promises', () => ({
+  mkdir: async (path: string, opts: { recursive?: boolean }) => {
+    mkdirCalls.push({ path, opts })
+  },
+}))
+
+mock.module('../../src/lib/browseros-dir', () => ({
+  getBrowserosDir: () => join(homedir(), '.browseros-test'),
+}))
+
 mock.module('../../src/lib/agents/acpx-provider/buildAcpxProvider', () => ({
   buildAcpxProvider: async (opts: Record<string, unknown>) => {
     lastBuildArgs = opts
@@ -38,6 +50,7 @@ function baseConfig(): Record<string, unknown> {
 beforeEach(() => {
   lastBuildArgs = null
   closeCalls = 0
+  mkdirCalls.length = 0
 })
 
 describe('createLanguageModel — ACP providers', () => {
@@ -104,10 +117,35 @@ describe('createLanguageModel — ACP providers', () => {
     expect(lastBuildArgs?.workspacePath).toBe('/tmp/some-cwd')
   })
 
-  it('falls back to $HOME/browseros-workspaces/<provider-id> when no path is set', async () => {
+  it('falls back to getBrowserosDir()/workspaces/<provider-id> when no path is set', async () => {
     await createLanguageModel(baseConfig() as never)
     expect(lastBuildArgs?.workspacePath).toBe(
-      join(homedir(), 'browseros-workspaces', 'claude-code'),
+      join(homedir(), '.browseros-test', 'workspaces', 'claude-code'),
+    )
+  })
+
+  it('mkdir -ps the workspace before handing it to buildAcpxProvider', async () => {
+    await createLanguageModel(baseConfig() as never)
+    expect(mkdirCalls).toHaveLength(1)
+    expect(mkdirCalls[0]?.path).toBe(
+      join(homedir(), '.browseros-test', 'workspaces', 'claude-code'),
+    )
+    expect(mkdirCalls[0]?.opts).toEqual({ recursive: true })
+  })
+
+  it('survives mkdir failures with a warn log and still spawns', async () => {
+    mock.module('node:fs/promises', () => ({
+      mkdir: async () => {
+        throw new Error('permission denied')
+      },
+    }))
+    // Re-import the factory so the mkdir mock is picked up.
+    delete require.cache[require.resolve('../../src/agent/provider-factory')]
+    const reloaded = await import('../../src/agent/provider-factory')
+    await reloaded.createLanguageModel(baseConfig() as never)
+    // buildAcpxProvider still called even though mkdir threw.
+    expect(lastBuildArgs?.workspacePath).toBe(
+      join(homedir(), '.browseros-test', 'workspaces', 'claude-code'),
     )
   })
 

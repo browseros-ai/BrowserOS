@@ -1,3 +1,4 @@
+import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock'
@@ -11,6 +12,7 @@ import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import type { LanguageModel } from 'ai'
 import { buildAcpxProvider } from '../lib/agents/acpx-provider/buildAcpxProvider'
+import { getBrowserosDir } from '../lib/browseros-dir'
 import { createBrowserOSFetch } from '../lib/browseros-fetch'
 import {
   createMockBrowserOSLanguageModel,
@@ -31,7 +33,7 @@ const BUILT_IN_ACP_AGENT_BY_PROVIDER: Record<string, string> = {
 }
 
 function defaultAcpWorkspacePath(providerId: string): string {
-  return join(homedir(), 'browseros-workspaces', providerId)
+  return join(getBrowserosDir(), 'workspaces', providerId)
 }
 
 /**
@@ -67,6 +69,12 @@ async function createAcpLanguageModel(
   const workspacePath = expandHomeToken(
     config.acpFixedWorkspacePath ?? defaultAcpWorkspacePath(config.provider),
   )
+  await mkdir(workspacePath, { recursive: true }).catch((err: unknown) => {
+    logger.warn('Failed to ensure ACP workspace exists; spawn may fail', {
+      workspacePath,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  })
   const agentRegistryOverrides: Record<string, string> = {}
   if (config.provider === LLM_PROVIDERS.ACP_CUSTOM && config.acpCommand) {
     agentRegistryOverrides[agentId] = config.acpCommand
