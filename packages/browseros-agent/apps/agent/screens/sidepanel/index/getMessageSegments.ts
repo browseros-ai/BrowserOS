@@ -103,16 +103,29 @@ export const getMessageSegments = (
           isStreaming && i === message.parts.length - 1 && isLastMessage,
       })
       reasoningSegmentCount++
-    } else if (part.type?.startsWith('tool-')) {
+    } else if (part.type?.startsWith('tool-') || part.type === 'dynamic-tool') {
       const toolPart = part as {
         toolCallId: string
         type: string
+        toolName?: string
         state: ToolInvocationState
         input: Record<string, unknown>
         output: unknown
         approval?: { id: string; approved?: boolean; reason?: string }
       }
-      const toolName = toolPart.type?.replace('tool-', '')
+      // Phantom acpx-ai-provider tool-input-* stream emitted under a fresh
+      // blockId ("acpx-N") that never reconciles with the real tool-call
+      // id. The translator emits a paired dynamic-tool part with the real
+      // id and full input + output, so dropping the phantom keeps the UI
+      // honest until upstream fixes the id mismatch.
+      // See: https://github.com/DaniAkash/acpx/issues/37
+      if (toolPart.toolCallId?.startsWith('acpx-')) {
+        continue
+      }
+      const toolName =
+        part.type === 'dynamic-tool'
+          ? (toolPart.toolName ?? 'tool')
+          : toolPart.type.replace('tool-', '')
 
       if (NUDGE_TOOLS.has(toolName) && toolPart.state === 'output-available') {
         flushToolBatch()
