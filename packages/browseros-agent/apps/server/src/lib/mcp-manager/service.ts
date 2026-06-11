@@ -27,6 +27,15 @@ import type {
 export type DetectInstalledAgentsFn = () => Promise<AgentInfo[]>
 
 /**
+ * Agents the upstream library supports but BrowserOS deliberately
+ * does not surface in the Integrations panel. Today: Gemini CLI's
+ * MCP HTTP support is not stable enough to one-click-install
+ * against. Users who actually want it can still copy-paste the
+ * manual setup snippet from the disclosure on the same page.
+ */
+const HIDDEN_AGENTS: ReadonlySet<string> = new Set(['gemini'])
+
+/**
  * Detects every supported agent on disk and reports BrowserOS's link
  * state per agent. Detection is injectable so tests can avoid the
  * real filesystem-walking implementation.
@@ -36,7 +45,8 @@ export async function listAgents(
 ): Promise<McpAgentRow[]> {
   const mgr = getMcpManager()
   const detect = options.detect ?? detectInstalledAgents
-  const [detected, links] = await Promise.all([detect(), mgr.listLinks()])
+  const [detectedRaw, links] = await Promise.all([detect(), mgr.listLinks()])
+  const detected = detectedRaw.filter((a) => !HIDDEN_AGENTS.has(a.id))
   const linkedSet = new Set(
     links
       .filter((l) => l.serverName === BROWSEROS_MCP_SERVER_NAME)

@@ -25,10 +25,6 @@ export const AGENT_PRESENTATION: Record<string, AgentPresentation> = {
     label: 'VS Code',
     installUrl: 'https://code.visualstudio.com',
   },
-  gemini: {
-    label: 'Gemini CLI',
-    installUrl: 'https://github.com/google-gemini/gemini-cli',
-  },
   codex: {
     label: 'Codex',
     installUrl: 'https://github.com/openai/codex',

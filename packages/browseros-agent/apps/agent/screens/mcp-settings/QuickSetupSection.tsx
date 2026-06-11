@@ -10,25 +10,41 @@ export interface QuickSetupSectionProps {
 interface ClientConfig {
   id: string
   name: string
-  type: 'command' | 'json'
+  type: 'command' | 'json' | 'generic'
   getSnippet: (url: string) => string
   fileName?: string
+  /** Short note rendered under the snippet to set expectations. */
+  notes?: string
 }
 
 const clients: ClientConfig[] = [
+  {
+    id: 'generic',
+    name: 'Other agents',
+    type: 'generic',
+    fileName: undefined,
+    getSnippet: (url) =>
+      JSON.stringify(
+        {
+          mcpServers: {
+            browseros: {
+              type: 'http',
+              url,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    notes:
+      "Most MCP-capable agents accept this config block. Drop it into the agent's MCP settings file (often `mcp.json`, `settings.json`, or similar) and restart the agent. If your agent uses a different config schema, the load-bearing values are the URL above and the `http` transport.",
+  },
   {
     id: 'claude-code',
     name: 'Claude Code',
     type: 'command',
     getSnippet: (url) =>
       `claude mcp add --transport http browseros ${url} --scope user`,
-  },
-  {
-    id: 'gemini-cli',
-    name: 'Gemini CLI',
-    type: 'command',
-    getSnippet: (url) =>
-      `gemini mcp add local-server ${url} --transport http --scope user`,
   },
   {
     id: 'codex',
@@ -98,12 +114,25 @@ export const QuickSetupSection: FC<QuickSetupSectionProps> = ({
           <Terminal className="h-6 w-6 text-[var(--accent-orange)]" />
         </div>
         <div className="flex-1">
-          <h2 className="mb-1 font-semibold text-xl">Quick Setup</h2>
-          <p className="mb-4 text-muted-foreground text-sm">
-            Copy and run the command for your tool
+          <h2 className="mb-1 font-semibold text-xl">Manual setup</h2>
+          <p className="mb-3 text-muted-foreground text-sm">
+            Pick your agent below for a copy-paste command. For agents BrowserOS
+            does not list above, use the <strong>Other agents</strong> tab — the
+            URL + HTTP transport is what every MCP-capable client needs, just
+            dropped into whatever config shape that client uses.
           </p>
 
-          <Tabs defaultValue="claude-code">
+          <div className="mb-3 flex items-start gap-2 rounded-lg border border-border bg-background px-3 py-2.5">
+            <span className="font-mono text-muted-foreground text-xs">
+              MCP URL
+            </span>
+            <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs">
+              {serverUrl}
+            </pre>
+            <CopyButton text={serverUrl} />
+          </div>
+
+          <Tabs defaultValue="generic">
             <TabsList className="mb-3 flex-wrap">
               {clients.map((client) => (
                 <TabsTrigger key={client.id} value={client.id}>
@@ -134,6 +163,11 @@ export const QuickSetupSection: FC<QuickSetupSectionProps> = ({
                       </pre>
                       <CopyButton text={snippet} />
                     </div>
+                    {client.notes && (
+                      <p className="text-muted-foreground text-xs leading-relaxed">
+                        {client.notes}
+                      </p>
+                    )}
                   </div>
                 </TabsContent>
               )

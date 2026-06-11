@@ -129,6 +129,31 @@ describe('listAgents', () => {
     })
   })
 
+  it('hides agents BrowserOS does not surface in the panel', async () => {
+    // Today only Gemini CLI is hidden: its HTTP MCP support is not
+    // stable enough for a one-click install. The agent stays
+    // available via the manual setup snippet.
+    stubAgents = [
+      {
+        id: 'claude-code',
+        displayName: 'Claude Code',
+        installed: true,
+        configPath: '/tmp/fake/claude-code.json',
+      },
+      {
+        id: 'gemini',
+        displayName: 'Gemini CLI',
+        installed: true,
+        configPath: '/tmp/fake/gemini.json',
+      },
+    ]
+    const { manager: hiddenManager } = makeManagerStub()
+    setMcpManagerForTesting(hiddenManager)
+
+    const hiddenRows = await listAgents({ detect: stubDetect })
+    expect(hiddenRows.map((r) => r.id)).toEqual(['claude-code'])
+  })
+
   it('ignores manifest links to other server names', async () => {
     stubAgents = [
       {
