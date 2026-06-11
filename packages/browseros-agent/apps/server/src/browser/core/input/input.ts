@@ -262,6 +262,10 @@ export class Input {
         backendNodeId,
       }),
     )
+    await this.withPageSessionRetry((session) =>
+      callOnElement(session, backendNodeId,
+        'function(){this.dispatchEvent(new Event("change",{bubbles:true}));return true}'),
+    )
   }
 
   /**
