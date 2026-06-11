@@ -179,13 +179,8 @@ const AgentRow: FC<AgentRowProps> = ({
         !agent.installed && 'opacity-60 hover:opacity-100',
       )}
     >
-      <div
-        className={cn(
-          'flex h-9 w-9 shrink-0 items-center justify-center rounded-md',
-          presentation.tint,
-        )}
-      >
-        <Mark className="h-5 w-5" />
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-white p-1.5 ring-1 ring-black/5 dark:ring-white/10">
+        <Mark className="h-full w-full" />
       </div>
 
       <div className="min-w-0 flex-1">
