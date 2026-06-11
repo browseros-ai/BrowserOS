@@ -8,6 +8,7 @@ import { run } from './run'
 import { screenshot } from './screenshot'
 import { snapshot } from './snapshot'
 import { tabs } from './tabs'
+import { upload } from './upload'
 import { wait } from './wait'
 
 /** The complete browser tool surface, in a sensible discovery order. */
@@ -17,6 +18,7 @@ export const BROWSER_TOOLS: readonly ToolDefinition[] = [
   snapshot,
   diff,
   act,
+  upload,
   read,
   grep,
   screenshot,

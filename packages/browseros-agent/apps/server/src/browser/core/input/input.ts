@@ -264,6 +264,15 @@ export class Input {
     )
   }
 
+  /**
+   * Upload files to a file input element identified by ref.
+   * Resolves the ref to backendNodeId and calls DOM.setFileInputFiles.
+   */
+  async upload(ref: string, files: string[]): Promise<void> {
+    const { backendNodeId } = await this.observer.resolveRef(ref)
+    await this.uploadFile(backendNodeId, files)
+  }
+
   async handleDialog(accept: boolean, promptText?: string): Promise<void> {
     await this.withPageSessionRetry((session) =>
       session.Page.handleJavaScriptDialog({
