@@ -66,16 +66,3 @@ const FALLBACK_PRESENTATION: AgentPresentation = {
 export function presentationFor(id: string): AgentPresentation {
   return AGENT_PRESENTATION[id] ?? { ...FALLBACK_PRESENTATION, label: id }
 }
-
-/**
- * Collapse `/Users/<name>/` → `~/` and shorten paths under macOS's
- * Library so config locations stay readable in tight rows. Pure helper
- * with no React deps so it's safe to unit test in isolation.
- */
-export function prettifyConfigPath(path: string | null): string | null {
-  if (!path) return null
-  return path
-    .replace(/^\/Users\/[^/]+/, '~')
-    .replace(/^\/home\/[^/]+/, '~')
-    .replace('Library/Application Support', 'Library/AppSupport')
-}

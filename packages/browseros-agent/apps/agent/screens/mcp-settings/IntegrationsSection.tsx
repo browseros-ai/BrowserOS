@@ -7,10 +7,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
-import {
-  presentationFor,
-  prettifyConfigPath,
-} from './integrations-section.helpers'
+import { presentationFor } from './integrations-section.helpers'
 import {
   type McpAgentRow,
   useInstallAgent,
@@ -170,7 +167,6 @@ const AgentRow: FC<AgentRowProps> = ({
 }) => {
   const presentation = presentationFor(agent.id)
   const Mark = presentation.mark
-  const prettyPath = prettifyConfigPath(agent.configPath)
 
   return (
     <div
@@ -201,20 +197,11 @@ const AgentRow: FC<AgentRowProps> = ({
             <span className="text-muted-foreground text-xs">Not installed</span>
           )}
         </div>
-        {(prettyPath || error) && (
-          <div className="mt-1 space-y-0.5">
-            {prettyPath && (
-              <p className="truncate font-mono text-[11px] text-muted-foreground">
-                {prettyPath}
-              </p>
-            )}
-            {error && (
-              <p className="flex items-start gap-1 text-destructive text-xs">
-                <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
-                <span>{error}</span>
-              </p>
-            )}
-          </div>
+        {error && (
+          <p className="mt-1 flex items-start gap-1 text-destructive text-xs">
+            <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+            <span>{error}</span>
+          </p>
         )}
       </div>
 
