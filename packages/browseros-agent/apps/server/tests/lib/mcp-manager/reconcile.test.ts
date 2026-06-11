@@ -28,14 +28,21 @@ function makeManagerStub(initialServers: InstalledServer[]): {
   calls: ManagerCalls
   setServers(servers: InstalledServer[]): void
   setLinkThrows(throws: Set<string>): void
+  failNextAdd(err: Error): void
 } {
   let servers = initialServers
   const calls: ManagerCalls = { add: [], link: [], remove: [] }
   let linkThrows = new Set<string>()
+  let pendingAddFailure: Error | null = null
 
   const manager: McpManager = {
     add: mock(async (opts: AddServerOptions) => {
       calls.add.push(opts)
+      if (pendingAddFailure) {
+        const err = pendingAddFailure
+        pendingAddFailure = null
+        throw err
+      }
       return { name: opts.name, created: true }
     }),
     link: mock(async (opts: LinkServerOptions) => {
@@ -78,6 +85,9 @@ function makeManagerStub(initialServers: InstalledServer[]): {
     },
     setLinkThrows(next) {
       linkThrows = next
+    },
+    failNextAdd(err) {
+      pendingAddFailure = err
     },
   }
 }
@@ -171,6 +181,46 @@ describe('reconcileUrl', () => {
       'claude-code',
       'cursor',
     ])
+  })
+
+  it('best-effort restores the previous spec when add() throws after remove()', async () => {
+    // Simulates the rare partial-write window: remove() succeeded but
+    // add() failed (e.g. disk full while writing the manifest JSON).
+    // Without rollback every linked agent would silently disconnect
+    // with no way to recover until the next manual Connect click.
+    const stub = makeManagerStub([
+      {
+        name: 'browseros',
+        spec: { transport: 'http', url: 'http://127.0.0.1:9100/mcp' },
+        addedAt: '2026-06-11T00:00:00.000Z',
+        links: {
+          'claude-code': {
+            configPath: '/tmp/fake/claude-code.json',
+            createdAt: '2026-06-11T00:00:00.000Z',
+          },
+        },
+      },
+    ])
+    stub.failNextAdd(new Error('disk full'))
+    setMcpManagerForTesting(stub.manager)
+
+    const result = await reconcileUrl({
+      currentUrl: 'http://127.0.0.1:9105/mcp',
+    })
+
+    expect(result.action).toBe('updated')
+    expect(result.affectedAgents).toEqual([])
+    // First add() with the new url failed; rollback add() with the
+    // original spec ran and succeeded.
+    expect(stub.calls.add).toHaveLength(2)
+    expect(stub.calls.add[1].spec).toEqual({
+      transport: 'http',
+      url: 'http://127.0.0.1:9100/mcp',
+    })
+    // No relink attempted after the failed rewrite — the entry exists
+    // again but the previously-linked agents are not re-attached on
+    // this pass.
+    expect(stub.calls.link).toHaveLength(0)
   })
 
   it('warn-logs a per-agent failure without aborting the rest of the reconcile', async () => {

@@ -26,8 +26,13 @@ export function createMcpManagerRoutes(options: McpManagerRouteOptions) {
 
   return new Hono()
     .get('/agents', async (c) => {
-      const agents = await listAgents()
-      return c.json({ agents })
+      try {
+        const agents = await listAgents()
+        return c.json({ agents })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return c.json({ message }, 500)
+      }
     })
     .post('/agents/:id/install', async (c) => {
       const id = c.req.param('id')

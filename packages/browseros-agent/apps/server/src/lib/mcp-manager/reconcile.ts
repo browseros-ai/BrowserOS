@@ -23,6 +23,7 @@
 import type {
   InstalledServer,
   McpHttpSpec,
+  McpManager,
   McpStdioSpec,
 } from 'agent-mcp-manager'
 import { logger } from '../logger'
@@ -73,12 +74,83 @@ function rebuildSpec(
   return { transport: 'http', url: currentUrl }
 }
 
+/**
+ * Wipe stale entry from the manifest + every linked agent's config,
+ * then add the fresh entry. `remove` and `add` are non-atomic: if
+ * `add` throws after `remove` succeeded, every linked agent has just
+ * been silently disconnected. On that path we best-effort restore
+ * the old spec so the user is no worse off than before.
+ *
+ * Returns `true` when the rewrite succeeded and the caller should
+ * proceed to re-link, `false` when it failed (rollback attempted).
+ */
+async function rewriteServerEntry(
+  mgr: McpManager,
+  existing: InstalledServer,
+  currentUrl: string,
+): Promise<boolean> {
+  let removed = false
+  try {
+    await mgr.remove({ serverName: existing.name, unlinkFirst: true })
+    removed = true
+    await mgr.add({
+      name: existing.name,
+      spec: rebuildSpec(existing.name, currentUrl),
+    })
+    return true
+  } catch (err) {
+    logger.warn('MCP manager failed to rewrite server entry', {
+      serverName: existing.name,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    if (!removed) return false
+    try {
+      await mgr.add({ name: existing.name, spec: existing.spec })
+      logger.warn('MCP manager restored previous spec after add failure', {
+        serverName: existing.name,
+      })
+    } catch (restoreErr) {
+      logger.warn('MCP manager failed to restore previous spec', {
+        serverName: existing.name,
+        error:
+          restoreErr instanceof Error ? restoreErr.message : String(restoreErr),
+      })
+    }
+    return false
+  }
+}
+
+/**
+ * Relinks each previously-linked agent against the freshly-rewritten
+ * server entry. Per-agent failures get warn-logged so a single broken
+ * config cannot block the others.
+ */
+async function relinkAgents(
+  mgr: McpManager,
+  serverName: string,
+  agents: McpAgentId[],
+): Promise<McpAgentId[]> {
+  const relinked: McpAgentId[] = []
+  for (const agent of agents) {
+    try {
+      await mgr.link({ serverName, agent })
+      relinked.push(agent)
+    } catch (err) {
+      logger.warn('MCP manager failed to relink agent after URL drift', {
+        agent,
+        serverName,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+  return relinked
+}
+
 export async function reconcileUrl(
   input: ReconcileUrlInput,
 ): Promise<ReconcileResult> {
   const mgr = getMcpManager()
   const servers = await mgr.listServers()
-
   const managedNames = [
     BROWSEROS_MCP_SERVER_NAME,
     BROWSEROS_MCP_STDIO_SERVER_NAME,
@@ -93,24 +165,9 @@ export async function reconcileUrl(
 
     didAnything = true
     const previouslyLinked = Object.keys(existing.links) as McpAgentId[]
-
-    // Wipe stale entry from the manifest + every linked agent's
-    // config, then add the fresh entry and replay the link per agent.
-    await mgr.remove({ serverName: name, unlinkFirst: true })
-    await mgr.add({ name, spec: rebuildSpec(name, input.currentUrl) })
-
-    for (const agent of previouslyLinked) {
-      try {
-        await mgr.link({ serverName: name, agent })
-        affected.push(agent)
-      } catch (err) {
-        logger.warn('MCP manager failed to relink agent after URL drift', {
-          agent,
-          serverName: name,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      }
-    }
+    const ok = await rewriteServerEntry(mgr, existing, input.currentUrl)
+    if (!ok) continue
+    affected.push(...(await relinkAgents(mgr, name, previouslyLinked)))
   }
 
   if (!didAnything) {
