@@ -52,7 +52,7 @@ from ..modules.sign.windows import WindowsSignModule
 from ..modules.sign.linux import LinuxSignModule
 from ..modules.sign.sparkle import SparkleSignModule
 from ..modules.package.macos import MacOSPackageModule
-from ..modules.package.windows import WindowsPackageModule
+from ..modules.package.windows import WindowsPackageModule, MiniInstallerModule
 from ..modules.package.linux import LinuxPackageModule
 
 AVAILABLE_MODULES = {
@@ -78,6 +78,7 @@ AVAILABLE_MODULES = {
     "sign_linux": LinuxSignModule,
     "sparkle_sign": SparkleSignModule,  # macOS Sparkle signing for auto-update
     # Package (platform-specific, validated at runtime)
+    "mini_installer": MiniInstallerModule,  # Unsigned installer build (CI)
     "package_macos": MacOSPackageModule,
     "package_windows": WindowsPackageModule,
     "package_linux": LinuxPackageModule,

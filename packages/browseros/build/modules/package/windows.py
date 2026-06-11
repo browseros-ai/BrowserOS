@@ -20,6 +20,34 @@ from ...common.notify import get_notifier, COLOR_GREEN
 from ..compile.standard import autoninja_command
 
 
+class MiniInstallerModule(CommandModule):
+    """Build mini_installer.exe without signing.
+
+    The signed release flow builds mini_installer inside WindowsSignModule
+    (sign binaries -> build installer -> sign installer). Unsigned CI builds
+    skip sign_windows entirely, so this module provides the installer build
+    step that package_windows requires.
+    """
+
+    produces = []
+    requires = []
+    description = "Build unsigned mini_installer.exe (CI builds without signing)"
+
+    def validate(self, ctx: Context) -> None:
+        if not IS_WINDOWS():
+            raise ValidationError("mini_installer build requires Windows")
+
+        args_file = ctx.get_gn_args_file()
+        if not args_file.exists():
+            raise ValidationError(
+                f"Build not configured - args.gn not found: {args_file}"
+            )
+
+    def execute(self, ctx: Context) -> None:
+        if not build_mini_installer(ctx):
+            raise RuntimeError("Failed to build mini_installer")
+
+
 class WindowsPackageModule(CommandModule):
     produces = ["installer", "installer_zip"]
     requires = []
