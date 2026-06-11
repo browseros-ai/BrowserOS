@@ -30,6 +30,7 @@ import {
 import { initializeDb } from './lib/db'
 import { identity } from './lib/identity'
 import { logger } from './lib/logger'
+import { reconcileUrl } from './lib/mcp-manager'
 import { metrics } from './lib/metrics'
 import { isPortInUseError } from './lib/port-binding'
 import { Sentry } from './lib/sentry'
@@ -104,6 +105,22 @@ export class Application {
         error: error instanceof Error ? error.message : String(error),
       })
     }
+
+    // Reconcile every linked agent's BrowserOS MCP URL against the
+    // port we just bound. Drift only happens on restart when the
+    // previous port is taken, but we run unconditionally because the
+    // listServers check is cheap and the cost of a missed reconcile
+    // is broken agent configs.
+    reconcileUrl({
+      currentUrl: `http://127.0.0.1:${this.config.serverPort}/mcp`,
+    }).catch((err) => {
+      logger.warn(
+        'MCP manager URL reconcile failed; agent configs may be stale',
+        {
+          error: err instanceof Error ? err.message : String(err),
+        },
+      )
+    })
 
     logger.info(
       `HTTP server listening on http://127.0.0.1:${this.config.serverPort}`,

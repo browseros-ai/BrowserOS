@@ -29,6 +29,7 @@ import { createCreditsRoutes } from './routes/credits'
 import { createHealthRoute } from './routes/health'
 import { createKlavisRoutes } from './routes/klavis'
 import { createMcpRoutes } from './routes/mcp'
+import { createMcpManagerRoutes } from './routes/mcp-manager'
 import { createOAuthRoutes } from './routes/oauth'
 import { createProviderRoutes } from './routes/provider'
 import { createRefinePromptRoutes } from './routes/refine-prompt'
@@ -155,6 +156,12 @@ export async function createHttpServer(config: HttpServerConfig) {
         browserSession,
         klavisRef,
         browserUseNewTools: config.browserUseNewTools,
+      }),
+    )
+    .route(
+      '/mcp-manager',
+      createMcpManagerRoutes({
+        getMcpUrl: () => `http://127.0.0.1:${port}/mcp`,
       }),
     )
     .route(
