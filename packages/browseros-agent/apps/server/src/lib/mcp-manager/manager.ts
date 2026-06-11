@@ -13,8 +13,22 @@ import { join } from 'node:path'
 import { createMcpManager, type McpManager } from 'agent-mcp-manager'
 import { getBrowserosDir } from '../browseros-dir'
 
-/** Server-name BrowserOS registers itself under in every agent's config. */
+/**
+ * Server-name BrowserOS registers itself under for agents that speak
+ * MCP over HTTP natively (Claude Code, Claude Desktop, Cursor, VS Code,
+ * Zed). The stdio-only agents get a separate entry — see
+ * `BROWSEROS_MCP_STDIO_SERVER_NAME` below.
+ */
 export const BROWSEROS_MCP_SERVER_NAME = 'browseros'
+
+/**
+ * Server-name BrowserOS registers itself under for stdio-only agents
+ * (today: Codex). The spec wraps `npx mcp-remote <url>` so a stdio
+ * client can speak to the BrowserOS HTTP MCP endpoint. Kept as a
+ * separate manifest entry from the HTTP one so each carries its own
+ * spec and can be reconciled independently.
+ */
+export const BROWSEROS_MCP_STDIO_SERVER_NAME = 'browseros-stdio'
 
 let cached: McpManager | null = null
 

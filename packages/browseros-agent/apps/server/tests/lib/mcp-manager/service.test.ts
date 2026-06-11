@@ -154,6 +154,29 @@ describe('listAgents', () => {
     expect(hiddenRows.map((r) => r.id)).toEqual(['claude-code'])
   })
 
+  it('counts codex as linked when wired up under the stdio server name', async () => {
+    stubAgents = [
+      {
+        id: 'codex',
+        displayName: 'Codex',
+        installed: true,
+        configPath: '/tmp/fake/codex.toml',
+      },
+    ]
+    const { manager } = makeManagerStub({
+      links: [
+        {
+          serverName: 'browseros-stdio',
+          agent: 'codex',
+          configPath: '/tmp/fake/codex.toml',
+        },
+      ],
+    })
+    setMcpManagerForTesting(manager)
+    const rows = await listAgents({ detect: stubDetect })
+    expect(rows.find((r) => r.id === 'codex')?.linked).toBe(true)
+  })
+
   it('ignores manifest links to other server names', async () => {
     stubAgents = [
       {
@@ -187,12 +210,35 @@ describe('installInto', () => {
     const result = await installInto('claude-code', 'http://127.0.0.1:9100/mcp')
     expect(result.success).toBe(true)
     expect(calls.add).toHaveLength(1)
+    expect(calls.add[0].name).toBe('browseros')
     expect(calls.add[0].spec).toEqual({
       transport: 'http',
       url: 'http://127.0.0.1:9100/mcp',
     })
     expect(calls.link).toHaveLength(1)
     expect(calls.link[0].agent).toBe('claude-code')
+    expect(calls.link[0].serverName).toBe('browseros')
+  })
+
+  it('uses a stdio mcp-remote spec under a separate server name for codex', async () => {
+    // Codex rejects HTTP MCP specs; the manager surfaces this as an
+    // InvalidServerSpecError. Wrapping the HTTP url in `npx mcp-remote`
+    // lets a stdio-only client still reach the local HTTP endpoint.
+    const { manager, calls } = makeManagerStub()
+    setMcpManagerForTesting(manager)
+
+    const result = await installInto('codex', 'http://127.0.0.1:9100/mcp')
+    expect(result.success).toBe(true)
+    expect(calls.add).toHaveLength(1)
+    expect(calls.add[0].name).toBe('browseros-stdio')
+    expect(calls.add[0].spec).toEqual({
+      transport: 'stdio',
+      command: 'npx',
+      args: ['mcp-remote', 'http://127.0.0.1:9100/mcp'],
+    })
+    expect(calls.link).toHaveLength(1)
+    expect(calls.link[0].agent).toBe('codex')
+    expect(calls.link[0].serverName).toBe('browseros-stdio')
   })
 
   it('rejects unsupported agent ids', async () => {
@@ -211,6 +257,16 @@ describe('uninstallFrom', () => {
     const out = await uninstallFrom('claude-code')
     expect(out.success).toBe(true)
     expect(calls.unlink).toHaveLength(1)
+    expect(calls.unlink[0].serverName).toBe('browseros')
+  })
+
+  it('unlinks codex from the stdio server name', async () => {
+    const { manager, calls } = makeManagerStub()
+    setMcpManagerForTesting(manager)
+    const out = await uninstallFrom('codex')
+    expect(out.success).toBe(true)
+    expect(calls.unlink).toHaveLength(1)
+    expect(calls.unlink[0].serverName).toBe('browseros-stdio')
   })
 
   it('returns a human message on ForeignEntryError instead of throwing', async () => {

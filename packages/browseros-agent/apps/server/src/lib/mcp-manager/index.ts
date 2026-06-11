@@ -6,6 +6,7 @@
 
 export {
   BROWSEROS_MCP_SERVER_NAME,
+  BROWSEROS_MCP_STDIO_SERVER_NAME,
   getMcpManager,
   resetMcpManagerForTesting,
   setMcpManagerForTesting,
