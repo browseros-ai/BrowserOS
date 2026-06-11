@@ -60,8 +60,14 @@ def get_r2_client():
     if not (account_id and access_key and secret_key):
         return None
 
-    import boto3
-    from boto3.s3.transfer import TransferConfig
+    try:
+        import boto3
+        from boto3.s3.transfer import TransferConfig
+    except ImportError:
+        raise SystemExit(
+            "[r2_cache] boto3 not installed - run via the browseros project env: "
+            "uv run --project packages/browseros python scripts/ci/r2_cache.py ..."
+        )
 
     client = boto3.client(
         "s3",
@@ -89,6 +95,7 @@ def object_exists(client, bucket: str, key: str) -> bool:
 def run_pipeline(producer: list[str], consumer: list[str]) -> None:
     log(f"$ {' '.join(producer)} | {' '.join(consumer)}")
     p1 = subprocess.Popen(producer, stdout=subprocess.PIPE)
+    assert p1.stdout is not None  # guaranteed by stdout=PIPE
     p2 = subprocess.Popen(consumer, stdin=p1.stdout)
     p1.stdout.close()
     rc2 = p2.wait()
