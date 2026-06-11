@@ -1,0 +1,39 @@
+# BrowserOS Windows CI Release Build (unsigned, no upload)
+#
+# Nightly WarpBuild variant of release.windows.yaml. Differences:
+#   - no clean/git_setup: CI runs `--modules clean` and `gclient sync`
+#     itself so the chromium checkout cache stays a pristine post-sync tree
+#   - no sign_windows: unsigned artifacts. mini_installer is normally built
+#     inside sign_windows, so the standalone mini_installer module replaces it
+#   - no upload: artifacts are published via GitHub Actions
+#
+# Run (from packages/browseros, after checkout + clean + sync):
+#   uv run browseros build --config build/config/release.windows.ci.yaml --chromium-src <src>
+
+build:
+  type: release
+  architecture: x64
+
+gn_flags:
+  file: build/config/gn/flags.windows.release.gn
+
+modules:
+  # Patches & Resources
+  - download_resources
+  - resources
+  - bundled_extensions
+  - chromium_replace
+  - string_replaces
+  - series_patches
+  - patches
+
+  # Build
+  - configure
+  - compile
+  - mini_installer
+
+  # Package (unsigned installer + zip)
+  - package_windows
+
+notifications:
+  slack: false

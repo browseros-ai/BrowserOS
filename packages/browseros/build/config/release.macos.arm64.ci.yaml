@@ -1,0 +1,41 @@
+# BrowserOS macOS arm64 CI Release Build (unsigned, no upload)
+#
+# Nightly WarpBuild variant of release.macos.arm64.noupload.yaml. Differences:
+#   - no clean/git_setup: CI runs `--modules clean` and `gclient sync`
+#     itself so the chromium checkout cache stays a pristine post-sync tree
+#   - no sign_macos: package_macos creates an UNSIGNED dmg when the
+#     signed_app artifact is absent
+#   - no required signing envs
+#
+# Run (from packages/browseros, after checkout + clean + sync):
+#   uv run browseros build --config build/config/release.macos.arm64.ci.yaml --chromium-src <src>
+
+build:
+  type: release
+  architecture: arm64
+
+gn_flags:
+  file: build/config/gn/flags.macos.release.gn
+
+modules:
+  # Setup (sparkle_setup re-creates third_party/sparkle itself)
+  - sparkle_setup
+
+  # Patches & Resources
+  - download_resources
+  - resources
+  - bundled_extensions
+  - chromium_replace
+  - string_replaces
+  - series_patches
+  - patches
+
+  # Build
+  - configure
+  - compile
+
+  # Package (unsigned dmg)
+  - package_macos
+
+notifications:
+  slack: false
