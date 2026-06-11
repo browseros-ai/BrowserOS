@@ -1,0 +1,126 @@
+/**
+ * @license
+ * Copyright 2025 BrowserOS
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Typed wrappers around the singleton McpManager. The API + frontend
+ * consume these instead of touching the upstream library directly.
+ */
+
+import {
+  type AgentInfo,
+  AgentNotSupportedError,
+  detectInstalledAgents,
+  ForeignEntryError,
+  isAgentSupported,
+  type McpHttpSpec,
+} from 'agent-mcp-manager'
+import { logger } from '../logger'
+import { BROWSEROS_MCP_SERVER_NAME, getMcpManager } from './manager'
+import type {
+  InstallAgentResult,
+  McpAgentId,
+  McpAgentRow,
+  UninstallAgentResult,
+} from './types'
+
+export type DetectInstalledAgentsFn = () => Promise<AgentInfo[]>
+
+/**
+ * Detects every supported agent on disk and reports BrowserOS's link
+ * state per agent. Detection is injectable so tests can avoid the
+ * real filesystem-walking implementation.
+ */
+export async function listAgents(
+  options: { detect?: DetectInstalledAgentsFn } = {},
+): Promise<McpAgentRow[]> {
+  const mgr = getMcpManager()
+  const detect = options.detect ?? detectInstalledAgents
+  const [detected, links] = await Promise.all([detect(), mgr.listLinks()])
+  const linkedSet = new Set(
+    links
+      .filter((l) => l.serverName === BROWSEROS_MCP_SERVER_NAME)
+      .map((l) => l.agent),
+  )
+  return detected.map((a) => ({
+    id: a.id,
+    displayName: a.displayName,
+    installed: a.installed,
+    linked: linkedSet.has(a.id),
+    configPath: a.configPath,
+  }))
+}
+
+/**
+ * Install BrowserOS into the given agent's config. Idempotent: a
+ * second call against the same agent + URL is a no-op at the disk
+ * layer; if the URL drifted, the older `browseros` entry is replaced
+ * before linking.
+ */
+export async function installInto(
+  agentId: string,
+  currentUrl: string,
+): Promise<InstallAgentResult> {
+  if (!isAgentSupported(agentId)) {
+    throw new AgentNotSupportedError(agentId)
+  }
+  const mgr = getMcpManager()
+  const desiredSpec: McpHttpSpec = { transport: 'http', url: currentUrl }
+
+  // `add` overwrites when the entry already exists; safe to call
+  // unconditionally on every install click so a URL drift gets
+  // caught even outside the boot-time reconciler.
+  await mgr.add({ name: BROWSEROS_MCP_SERVER_NAME, spec: desiredSpec })
+  await mgr.link({ serverName: BROWSEROS_MCP_SERVER_NAME, agent: agentId })
+  logger.info('Installed BrowserOS MCP into agent', { agent: agentId })
+  return { success: true }
+}
+
+/**
+ * Uninstall BrowserOS from the given agent's config. Idempotent on
+ * the manifest side; throws ForeignEntryError when the user has
+ * hand-edited the entry and the disk record no longer matches the
+ * manifest record.
+ */
+export async function uninstallFrom(
+  agentId: string,
+): Promise<UninstallAgentResult> {
+  if (!isAgentSupported(agentId)) {
+    throw new AgentNotSupportedError(agentId)
+  }
+  const mgr = getMcpManager()
+  try {
+    await mgr.unlink({ serverName: BROWSEROS_MCP_SERVER_NAME, agent: agentId })
+    logger.info('Uninstalled BrowserOS MCP from agent', { agent: agentId })
+    return { success: true }
+  } catch (err) {
+    if (err instanceof ForeignEntryError) {
+      return {
+        success: false,
+        message:
+          'Cannot remove a user-edited entry. Please remove BrowserOS from this agent manually and try again.',
+      }
+    }
+    throw err
+  }
+}
+
+export function humaniseInstallError(err: unknown): {
+  message: string
+  status: number
+} {
+  if (err instanceof AgentNotSupportedError) {
+    return { message: `Agent "${err.agent}" is not supported.`, status: 404 }
+  }
+  if (err instanceof ForeignEntryError) {
+    return {
+      message:
+        "Cannot replace a user-edited entry. Please remove BrowserOS from this agent's config manually and try again.",
+      status: 409,
+    }
+  }
+  const message = err instanceof Error ? err.message : String(err)
+  return { message, status: 500 }
+}
+
+export type McpAgentIdentifier = McpAgentId
