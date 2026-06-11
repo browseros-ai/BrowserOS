@@ -2,9 +2,9 @@ import { type FC, useCallback, useEffect, useState } from 'react'
 import { getMcpServerUrl } from '@/lib/browseros/helpers'
 import type { McpTool } from '@/lib/mcp/client'
 import { sendServerMessage } from '@/lib/messaging/server/serverMessages'
+import { IntegrationsSection } from './IntegrationsSection'
 import { MCPServerHeader } from './MCPServerHeader'
 import { MCPToolsSection } from './MCPToolsSection'
-import { QuickSetupSection } from './QuickSetupSection'
 
 /** @public */
 export const MCPSettingsPage: FC = () => {
@@ -83,7 +83,7 @@ export const MCPSettingsPage: FC = () => {
         onServerRestart={loadServerUrlAndTools}
       />
 
-      <QuickSetupSection serverUrl={serverUrl} />
+      <IntegrationsSection serverUrl={serverUrl} />
 
       <MCPToolsSection
         tools={tools}
