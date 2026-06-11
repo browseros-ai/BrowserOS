@@ -107,8 +107,11 @@ function createFakeAgent() {
     toolNames: new Set<string>(),
     messages,
     appendUserMessage(text: string) {
+      // Mirror production's id-per-call: a hardcoded constant would
+      // collide on repeat calls in the same agent instance and corrupt
+      // the id-diff logic the ACP onFinish branch relies on.
       this.messages.push({
-        id: 'user-1',
+        id: crypto.randomUUID(),
         role: 'user',
         parts: [{ type: 'text', text }],
       })

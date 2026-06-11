@@ -361,6 +361,13 @@ export class ChatService {
         // AI SDK reconstructed it. Restore the wrapped user message
         // and replace the entire session history with the result.
         if (isAcp) {
+          // Invariant: an id in both `messages` and session means the
+          // AI SDK handed us back something we already have. With the
+          // single-user-msg input shape that means our own user msg —
+          // the only collision we expect. Any new id is a fresh
+          // assistant entry from this turn. acpx never re-emits prior
+          // turns into the AI SDK stream, so this filter cannot drop a
+          // legitimately new message.
           const existingIds = new Set(session.agent.messages.map((m) => m.id))
           const newMessages = messages.filter((m) => !existingIds.has(m.id))
           const updated = session.agent.messages.map((m) =>
