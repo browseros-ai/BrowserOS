@@ -1,0 +1,285 @@
+name: Nightly Release Build
+
+# Daily UNSIGNED release builds of BrowserOS for all three platforms on
+# WarpBuild runners. Signing is intentionally not wired up yet; see
+# packages/browseros/build/docs/nightly-warpbuild-ci.md for the design and
+# the secret names that enable signing later.
+#
+# The pinned chromium checkout (packages/browseros/CHROMIUM_VERSION) is
+# cached post-`gclient sync`:
+#   - Linux/macOS: WarpCache (WarpBuilds/cache, no size cap)
+#   - Windows:     R2 tarball via scripts/ci/r2_cache.py (WarpCache does
+#                  not support Windows runners; actions/cache caps at 10GB)
+
+on:
+  schedule:
+    # Midnight US Pacific (DST). The signed self-hosted macOS nightly runs
+    # at 05:00 UTC; keep these apart so version-bump PRs don't race.
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: Platforms to build
+        type: choice
+        default: all
+        options:
+          - all
+          - linux
+          - windows
+          - macos
+      publish_nightly:
+        description: Update the rolling `nightly` prerelease (main only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      - name: Resolve build matrix and publish flag
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PLATFORMS: ${{ inputs.platforms || 'all' }}
+          PUBLISH_INPUT: ${{ inputs.publish_nightly }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+
+          matrix='[
+            {"platform":"linux","arch":"x64","runner":"warp-ubuntu-2204-x64-32x","config":"release.linux.ci.yaml","timeout":660},
+            {"platform":"windows","arch":"x64","runner":"warp-windows-2025-x64-32x","config":"release.windows.ci.yaml","timeout":780},
+            {"platform":"macos","arch":"arm64","runner":"warp-macos-15-arm64-12x","config":"release.macos.arm64.ci.yaml","timeout":720}
+          ]'
+          if [ "$PLATFORMS" != "all" ]; then
+            matrix="$(jq -c --arg p "$PLATFORMS" '[ .[] | select(.platform == $p) ]' <<<"$matrix")"
+          else
+            matrix="$(jq -c . <<<"$matrix")"
+          fi
+
+          publish="false"
+          if [ "$REF_NAME" = "$DEFAULT_BRANCH" ]; then
+            if [ "$EVENT_NAME" = "schedule" ] || [ "$PUBLISH_INPUT" = "true" ]; then
+              publish="true"
+            fi
+          fi
+
+          {
+            echo "matrix=$matrix"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: build (${{ matrix.platform }}-${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v8
+
+      - name: Resolve chromium pin and paths
+        id: pin
+        run: |
+          set -euo pipefail
+          . packages/browseros/CHROMIUM_VERSION
+          version="$MAJOR.$MINOR.$BUILD.$PATCH"
+
+          # Keep the checkout outside the workspace so actions/checkout
+          # never touches it. pwd -W yields a native path on Windows.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            parent="$(cd "$GITHUB_WORKSPACE/.." && pwd -W)"
+          else
+            parent="$(cd "$GITHUB_WORKSPACE/.." && pwd)"
+          fi
+
+          {
+            echo "version=$version"
+            echo "cache_key=chromium-src-${{ matrix.platform }}-${{ matrix.arch }}-v1-$version"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "CHROMIUM_ROOT=$parent/chromium"
+            echo "CHROMIUM_SRC=$parent/chromium/src"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore chromium checkout (WarpCache)
+        if: runner.os != 'Windows'
+        id: warpcache
+        uses: WarpBuilds/cache/restore@v1
+        with:
+          path: ${{ env.CHROMIUM_ROOT }}
+          key: ${{ steps.pin.outputs.cache_key }}
+          restore-keys: |
+            chromium-src-${{ matrix.platform }}-${{ matrix.arch }}-v1-
+
+      - name: Restore chromium checkout (R2)
+        if: runner.os == 'Windows'
+        id: r2cache
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          uv run --project packages/browseros python scripts/ci/r2_cache.py restore \
+            --key "${{ steps.pin.outputs.cache_key }}" \
+            --root "$CHROMIUM_ROOT"
+
+      - name: Ensure chromium checkout at pinned tag
+        run: |
+          set -euo pipefail
+          uv run --project packages/browseros python scripts/ci/setup_chromium.py \
+            --chromium-root "$CHROMIUM_ROOT" --step checkout
+
+      - name: Reset chromium tree (clean module)
+        working-directory: packages/browseros
+        run: |
+          set -euo pipefail
+          uv run browseros build --modules clean \
+            --chromium-src "$CHROMIUM_SRC" \
+            --build-type release \
+            --arch "${{ matrix.arch }}"
+
+      - name: Sync chromium dependencies (gclient)
+        run: |
+          set -euo pipefail
+          uv run --project packages/browseros python scripts/ci/setup_chromium.py \
+            --chromium-root "$CHROMIUM_ROOT" --step sync
+
+      # Save immediately after sync: the tree is pristine (no BrowserOS
+      # patches, no out/ dir), which keeps the cache deterministic and as
+      # small as possible.
+      - name: Save chromium checkout (WarpCache)
+        if: runner.os != 'Windows' && steps.warpcache.outputs.cache-hit != 'true'
+        uses: WarpBuilds/cache/save@v1
+        with:
+          path: ${{ env.CHROMIUM_ROOT }}
+          key: ${{ steps.pin.outputs.cache_key }}
+
+      - name: Save chromium checkout (R2)
+        if: runner.os == 'Windows' && steps.r2cache.outputs.cache-hit != 'true'
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          uv run --project packages/browseros python scripts/ci/r2_cache.py save \
+            --key "${{ steps.pin.outputs.cache_key }}" \
+            --root "$CHROMIUM_ROOT"
+
+      - name: Install Linux build deps
+        if: matrix.platform == 'linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # libfuse2: appimagetool is itself an AppImage and needs FUSE
+          sudo apt-get install -y libfuse2
+          "$CHROMIUM_SRC/build/install-build-deps.sh" --no-prompt
+
+      - name: Build BrowserOS (unsigned)
+        working-directory: packages/browseros
+        env:
+          # download_resources pulls BrowserOS Server bundles from R2
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          # --- Signing placeholders (unused until signing is wired up) ---
+          # macOS (sign_macos + notarization):
+          #   MACOS_CERTIFICATE_P12 / MACOS_CERTIFICATE_PWD (import into a CI keychain)
+          #   MACOS_CERTIFICATE_NAME, MACOS_KEYCHAIN_PASSWORD
+          #   PROD_MACOS_NOTARIZATION_APPLE_ID / _TEAM_ID / _PWD
+          #   SPARKLE_PRIVATE_KEY (sparkle_sign)
+          # Windows (sign_windows via SSL.com CodeSignTool):
+          #   ESIGNER_USERNAME / ESIGNER_PASSWORD / ESIGNER_TOTP_SECRET
+          #   ESIGNER_CREDENTIAL_ID, CODE_SIGN_TOOL_PATH (tool install dir)
+        run: |
+          set -euo pipefail
+          uv run browseros build \
+            --config "build/config/${{ matrix.config }}" \
+            --chromium-src "$CHROMIUM_SRC"
+
+      - name: Report disk usage
+        if: always()
+        run: df -h || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: browseros-nightly-${{ matrix.platform }}-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          path: |
+            packages/browseros/releases/*/*.dmg
+            packages/browseros/releases/*/*.AppImage
+            packages/browseros/releases/*/*.deb
+            packages/browseros/releases/*/*_installer.exe
+            packages/browseros/releases/*/*_installer.zip
+
+  publish:
+    needs: [plan, build]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Update rolling nightly prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/*/*.dmg dist/*/*.AppImage dist/*/*.deb dist/*/*_installer.exe dist/*/*_installer.zip dist/*.dmg dist/*.AppImage dist/*.deb dist/*_installer.exe dist/*_installer.zip)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No artifacts found to publish"
+            exit 1
+          fi
+          printf 'Publishing:\n%s\n' "${files[@]}"
+
+          notes_file="$(mktemp)"
+          cat > "$notes_file" <<EOF
+          Automated unsigned nightly build from \`main\` (commit $GITHUB_SHA).
+
+          These artifacts are NOT code signed or notarized — expect OS warnings on install. For signed builds use the regular releases.
+          EOF
+
+          # The `nightly` tag is rolling: recreate it via the API each run
+          # (release delete + create; no git force-push involved).
+          gh release delete nightly --cleanup-tag --yes || true
+          gh release create nightly \
+            --prerelease \
+            --latest=false \
+            --target "$GITHUB_SHA" \
+            --title "BrowserOS Nightly (unsigned) $(date -u +%Y-%m-%d)" \
+            --notes-file "$notes_file" \
+            "${files[@]}"
