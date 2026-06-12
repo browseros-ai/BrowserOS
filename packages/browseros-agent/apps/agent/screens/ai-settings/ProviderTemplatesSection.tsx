@@ -1,5 +1,5 @@
 import { ChevronDown } from 'lucide-react'
-import type { FC } from 'react'
+import { type FC, Fragment } from 'react'
 import {
   Collapsible,
   CollapsibleContent,
@@ -10,6 +10,7 @@ import {
   type ProviderTemplate,
   providerTemplates,
 } from '@/lib/llm-providers/providerTemplates'
+import { REMOTE_HERMES_PROVIDER_TYPE } from '@/lib/llm-providers/types'
 import { cn } from '@/lib/utils'
 import type {
   HarnessAdapterDescriptor,
@@ -33,17 +34,27 @@ export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
 }) => {
   const { supports } = useCapabilities()
 
-  const filteredTemplates = providerTemplates.filter((template) => {
-    if (template.id === 'chatgpt-pro')
-      return supports(Feature.CHATGPT_PRO_SUPPORT)
-    if (template.id === 'github-copilot')
-      return supports(Feature.GITHUB_COPILOT_SUPPORT)
-    if (template.id === 'qwen-code') return supports(Feature.QWEN_CODE_SUPPORT)
-    if (template.id === 'openai-compatible') {
-      return supports(Feature.OPENAI_COMPATIBLE_SUPPORT)
-    }
-    return true
-  })
+  // Remote Hermes is the recommended quick-start path, so pin it to the
+  // top of the grid (and highlight it below). Everything else keeps the
+  // declaration order from providerTemplates.
+  const filteredTemplates = providerTemplates
+    .filter((template) => {
+      if (template.id === 'chatgpt-pro')
+        return supports(Feature.CHATGPT_PRO_SUPPORT)
+      if (template.id === 'github-copilot')
+        return supports(Feature.GITHUB_COPILOT_SUPPORT)
+      if (template.id === 'qwen-code')
+        return supports(Feature.QWEN_CODE_SUPPORT)
+      if (template.id === 'openai-compatible') {
+        return supports(Feature.OPENAI_COMPATIBLE_SUPPORT)
+      }
+      return true
+    })
+    .sort((a, b) => {
+      if (a.id === REMOTE_HERMES_PROVIDER_TYPE) return -1
+      if (b.id === REMOTE_HERMES_PROVIDER_TYPE) return 1
+      return 0
+    })
 
   return (
     <Collapsible defaultOpen className="group/collapsible">
@@ -66,20 +77,30 @@ export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
 
         <CollapsibleContent>
           <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {codingAdapters.map((adapter) => (
-              <CodingAgentTemplateCard
-                key={`coding-${adapter.id}`}
-                adapter={adapter}
-                onCreate={onCreateAgent}
-              />
-            ))}
-            {filteredTemplates.map((template) => (
-              <ProviderTemplateCard
-                key={template.id}
-                template={template}
-                onUseTemplate={onUseTemplate}
-              />
-            ))}
+            {filteredTemplates.map((template, idx) => {
+              // Remote Hermes is pinned first by the sort above; render the
+              // coding-agent cards directly after it so they appear ahead of
+              // the long tail of API providers.
+              const isHermes = template.id === REMOTE_HERMES_PROVIDER_TYPE
+              const codingAfterHermes = idx === 0 && isHermes
+              return (
+                <Fragment key={template.id}>
+                  <ProviderTemplateCard
+                    template={template}
+                    highlighted={isHermes}
+                    onUseTemplate={onUseTemplate}
+                  />
+                  {codingAfterHermes &&
+                    codingAdapters.map((adapter) => (
+                      <CodingAgentTemplateCard
+                        key={`coding-${adapter.id}`}
+                        adapter={adapter}
+                        onCreate={onCreateAgent}
+                      />
+                    ))}
+                </Fragment>
+              )
+            })}
           </div>
         </CollapsibleContent>
       </div>

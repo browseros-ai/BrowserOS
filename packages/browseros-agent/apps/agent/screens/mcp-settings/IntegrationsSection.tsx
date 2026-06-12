@@ -16,7 +16,7 @@ import {
 } from './integrations-section.hooks'
 import { QuickSetupSection } from './QuickSetupSection'
 
-interface IntegrationsSectionProps {
+export interface IntegrationsSectionProps {
   serverUrl: string | null
 }
 

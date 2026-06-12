@@ -217,7 +217,7 @@ function normalizeProbeResult(r: AgentProbeResult): ServerAcpxProbeResult {
       values: [...r.reasoning.values],
       defaultValue: r.reasoning.defaultValue,
     }
-  } else if (inferredEfforts && inferredEfforts.length) {
+  } else if (inferredEfforts?.length) {
     reasoning = {
       values: inferredEfforts,
       defaultValue: inferredEfforts.includes('medium')

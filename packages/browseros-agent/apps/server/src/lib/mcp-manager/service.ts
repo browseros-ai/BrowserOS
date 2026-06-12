@@ -25,7 +25,6 @@ import {
 } from './manager'
 import type {
   InstallAgentResult,
-  McpAgentId,
   McpAgentRow,
   UninstallAgentResult,
 } from './types'
@@ -52,7 +51,7 @@ const STDIO_ONLY_AGENTS: ReadonlySet<string> = new Set(['codex'])
  * The two server-names BrowserOS manages in the manifest. Iterating
  * both is what `listAgents` + `reconcileUrl` need to do.
  */
-export const BROWSEROS_SERVER_NAMES: readonly string[] = [
+const BROWSEROS_SERVER_NAMES: readonly string[] = [
   BROWSEROS_MCP_SERVER_NAME,
   BROWSEROS_MCP_STDIO_SERVER_NAME,
 ]
@@ -63,7 +62,7 @@ interface AgentServerPlan {
 }
 
 /** Pick the server name + spec a given agent should be linked under. */
-export function planFor(agentId: string, currentUrl: string): AgentServerPlan {
+function planFor(agentId: string, currentUrl: string): AgentServerPlan {
   if (STDIO_ONLY_AGENTS.has(agentId)) {
     const spec: McpStdioSpec = {
       transport: 'stdio',
@@ -181,5 +180,3 @@ export function humaniseInstallError(err: unknown): {
   const message = err instanceof Error ? err.message : String(err)
   return { message, status: 500 }
 }
-
-export type McpAgentIdentifier = McpAgentId

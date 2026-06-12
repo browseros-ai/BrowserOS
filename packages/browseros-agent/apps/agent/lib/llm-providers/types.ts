@@ -17,6 +17,13 @@ export type ProviderType =
   | 'codex'
   | 'claude-code'
   | 'acp-custom'
+  | 'remote-hermes'
+
+// Mirror of @browseros/shared/constants/hermes REMOTE_HERMES_PROVIDER_TYPE.
+// Re-declared locally because the agent UI is a WXT/Vite extension and
+// doesn't take a runtime dep on the shared package — keeping a single
+// string literal here avoids scattering 'remote-hermes' across components.
+export const REMOTE_HERMES_PROVIDER_TYPE = 'remote-hermes' as const
 
 /**
  * LLM Provider configuration

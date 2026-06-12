@@ -59,3 +59,26 @@ jobs:
 
       - name: Run Typecheck
         run: bun run typecheck
+
+  fallow:
+    name: runner / Fallow
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/browseros-agent
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun ci
+
+      - name: Run Fallow
+        run: bun fallow

@@ -21,6 +21,8 @@
     "tw-animate-css",
     "@tailwindcss/typography",
     "pino-pretty",
+    "dotenv",
+    "picocolors",
     "@browseros/cdp-protocol",
     "@graphql-typed-document-node/core"
   ],

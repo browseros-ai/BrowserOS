@@ -300,8 +300,23 @@ export const BrowserOsAiPane: FC = () => {
       track(oauthFlow.disconnectedEvent)
     }
 
+    const wasLastRemoteHermes =
+      providerToDelete.type === 'remote-hermes' &&
+      providers.filter((p) => p.type === 'remote-hermes').length === 1
+
     await deleteProvider(providerToDelete.id)
     deleteRemoteProviderMutation.mutate({ rowId: providerToDelete.id })
+
+    if (wasLastRemoteHermes && agentServerUrl) {
+      void fetch(`${agentServerUrl}/remote-hermes/destroy`, {
+        method: 'POST',
+      }).catch(() => {
+        // Best-effort; Fly machine is leaked if this fails. User can
+        // re-add and re-delete to retry, or destroy via the worker
+        // dashboard.
+      })
+    }
+
     setProviderToDelete(null)
   }
 
@@ -339,6 +354,15 @@ export const BrowserOsAiPane: FC = () => {
 
   const handleSaveProvider = async (provider: LlmProviderConfig) => {
     await saveProvider(provider)
+    if (provider.type === 'remote-hermes' && agentServerUrl) {
+      void fetch(`${agentServerUrl}/remote-hermes/start`, {
+        method: 'POST',
+      }).catch(() => {
+        // Best-effort warm; user's first chat will still boot the VM if
+        // this didn't reach the server. No toast — the boot pill handles
+        // the visible feedback path.
+      })
+    }
   }
 
   const handleTestProvider = async (provider: LlmProviderConfig) => {

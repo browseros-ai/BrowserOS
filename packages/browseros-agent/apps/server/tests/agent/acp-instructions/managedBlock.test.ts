@@ -53,10 +53,10 @@ describe('findManagedBlock', () => {
     const block = findManagedBlock(source)
     expect(block).not.toBeNull()
     expect(block?.storedHash).toBe('abc123def456')
-    expect(source.slice(block!.startIndex, block!.endIndex)).toContain(
+    expect(source.slice(block?.startIndex, block?.endIndex)).toContain(
       '<!-- BROWSEROS:BEGIN -->',
     )
-    expect(source.slice(block!.startIndex, block!.endIndex)).toContain(
+    expect(source.slice(block?.startIndex, block?.endIndex)).toContain(
       '<!-- BROWSEROS:END -->',
     )
   })

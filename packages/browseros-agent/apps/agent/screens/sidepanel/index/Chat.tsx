@@ -22,6 +22,7 @@ import { ChatEmptyState } from './ChatEmptyState'
 import { ChatError } from './ChatError'
 import { ChatFooter } from './ChatFooter'
 import { ChatMessages } from './ChatMessages'
+import { RemoteHermesBootPill } from './RemoteHermesBootPill'
 
 /**
  * @public
@@ -44,6 +45,7 @@ export const Chat = () => {
     disliked,
     onClickDislike,
     isRestoringConversation,
+    vmStatus,
   } = useChatSessionContext()
 
   const {
@@ -235,6 +237,8 @@ export const Chat = () => {
           <ChatError error={chatError} providerType={selectedProvider?.type} />
         )}
       </main>
+
+      {vmStatus && <RemoteHermesBootPill vm={vmStatus} />}
 
       <ChatFooter
         mode={mode}
