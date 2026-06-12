@@ -24,7 +24,7 @@ export interface AgentPresentation {
   mark: FC<SVGProps<SVGSVGElement>>
 }
 
-export const AGENT_PRESENTATION: Record<string, AgentPresentation> = {
+const AGENT_PRESENTATION: Record<string, AgentPresentation> = {
   'claude-code': {
     label: 'Claude Code',
     installUrl: 'https://claude.ai/code',
