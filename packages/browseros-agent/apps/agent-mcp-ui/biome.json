@@ -13,14 +13,12 @@
   "overrides": [
     {
       "includes": ["components/ui/**", "components/ai-elements/**"],
-      "linter": {
-        "rules": {
-          "correctness": {
-            "noUnusedImports": "off",
-            "noUnusedVariables": "off"
-          },
-          "nursery": {
-            "useSortedClasses": "off"
+      "formatter": { "enabled": false },
+      "linter": { "enabled": false },
+      "assist": {
+        "actions": {
+          "source": {
+            "organizeImports": "off"
           }
         }
       }
