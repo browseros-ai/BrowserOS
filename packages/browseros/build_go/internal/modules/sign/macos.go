@@ -338,9 +338,14 @@ func SigningOptions(componentPath string) string {
 	return "runtime"
 }
 
-// runProbe runs a read-only Mach-O inspection quietly (no build-log stream).
+// runProbe runs a read-only Mach-O inspection quietly (no Stream → execx
+// captures without logging).
 func runProbe(ctx *buildctx.Context, args ...string) execx.Result {
-	res, _ := ctx.Runner.Run(execx.Cmd{Args: args, Dir: ctx.ChromiumSrc})
+	res, err := ctx.Runner.Run(execx.Cmd{Args: args, Dir: ctx.ChromiumSrc})
+	if err != nil {
+		logx.Warning(fmt.Sprintf("Mach-O probe failed to run (%s): %v", args[0], err))
+		return execx.Result{Code: 1}
+	}
 	return res
 }
 
@@ -358,7 +363,7 @@ func machoArchs(ctx *buildctx.Context, path string) []string {
 // __TEXT,__info_plist section.
 func sliceHasEmbeddedInfoPlist(ctx *buildctx.Context, path, arch string) bool {
 	res := runProbe(ctx, "otool", "-arch", arch, "-l", path)
-	return res.Code == 0 && strings.Contains(res.Stdout, "__info_plist")
+	return res.Code == 0 && strings.Contains(res.Stdout, "sectname __info_plist")
 }
 
 // asymmetricInfoPlistArchs returns the archs of a fat file whose slices
@@ -621,7 +626,9 @@ func VerifySignature(ctx *buildctx.Context, appPath string) error {
 	// --deep seals plain executables under Resources/ as files without
 	// validating their own signatures (Apple's notary does, per slice) —
 	// verify each file-type component directly so a bad slice fails here
-	// instead of after a multi-minute notarization round-trip.
+	// instead of after a multi-minute notarization round-trip. Helpers,
+	// frameworks, and XPC services are proper sub-bundles --deep already
+	// recurses into.
 	comps := FindComponentsToSign(ctx, appPath)
 	for _, comp := range append(append([]string{}, comps.Executables...), comps.Dylibs...) {
 		res := runUnchecked(ctx, "codesign", "--verify", "--verbose=2", comp)

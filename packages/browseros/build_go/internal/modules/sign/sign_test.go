@@ -154,7 +154,9 @@ func TestSignAllComponentsOrderAndArgs(t *testing.T) {
 	}
 
 	// Drop the read-only Mach-O probes signComponent uses for routing; only
-	// the mutating codesign sequence is under test here.
+	// the mutating codesign sequence is under test here. (No Handler is set,
+	// so probes get zero-value results: machoArchs sees no archs and the
+	// per-slice path — lipo -thin/-create — never fires.)
 	var argv []string
 	for _, cmd := range rec.Argv() {
 		if strings.HasPrefix(cmd, "lipo -archs ") || strings.HasPrefix(cmd, "otool ") {
