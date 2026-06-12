@@ -153,7 +153,15 @@ func TestSignAllComponentsOrderAndArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	argv := rec.Argv()
+	// Drop the read-only Mach-O probes signComponent uses for routing; only
+	// the mutating codesign sequence is under test here.
+	var argv []string
+	for _, cmd := range rec.Argv() {
+		if strings.HasPrefix(cmd, "lipo -archs ") || strings.HasPrefix(cmd, "otool ") {
+			continue
+		}
+		argv = append(argv, cmd)
+	}
 	for _, cmd := range argv {
 		if !strings.HasPrefix(cmd, "codesign --sign Developer ID Application: Test --force --timestamp") {
 			t.Errorf("unexpected command: %q", cmd)
@@ -379,5 +387,247 @@ func TestLinuxSignIsNoOp(t *testing.T) {
 	}
 	if len(rec.Cmds) != 0 {
 		t.Errorf("linux sign should run nothing: %v", rec.Argv())
+	}
+}
+
+// --- per-slice signing of asymmetric fat Mach-Os ---
+
+func hasArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+
+func argAfter(args []string, flag string) string {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+// sliceHandler fakes lipo/otool/codesign: two archs, an embedded Info.plist
+// only on the archs in plistArchs, and lipo -output materialized on disk.
+func sliceHandler(t *testing.T, plistArchs map[string]bool, codesignCode int, machO bool) func(execx.Cmd) (execx.Result, error) {
+	t.Helper()
+	return func(c execx.Cmd) (execx.Result, error) {
+		args := c.Args
+		switch {
+		case args[0] == "lipo" && args[1] == "-archs":
+			if !machO {
+				return execx.Result{Code: 1}, nil
+			}
+			return execx.Result{Stdout: "x86_64 arm64\n"}, nil
+		case args[0] == "otool":
+			if plistArchs[args[2]] {
+				return execx.Result{Stdout: "sectname __info_plist\n"}, nil
+			}
+			return execx.Result{Stdout: "sectname __text\n"}, nil
+		case args[0] == "lipo":
+			payload := "thin"
+			if args[1] == "-create" {
+				payload = "signed-fat"
+			}
+			if out := argAfter(args, "-output"); out != "" {
+				if err := os.WriteFile(out, []byte(payload), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return execx.Result{}, nil
+		case args[0] == "codesign":
+			return execx.Result{Code: codesignCode}, nil
+		}
+		return execx.Result{}, nil
+	}
+}
+
+func TestSignComponentAsymmetricFatSignsPerSlice(t *testing.T) {
+	ctx, rec := fixtureCtx(t, macArm)
+	dir := t.TempDir()
+	component := filepath.Join(dir, "claude")
+	writeFile(t, component, "original-fat")
+	if err := os.Chmod(component, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec.Handler = sliceHandler(t, map[string]bool{"arm64": true}, 0, true)
+
+	if err := signComponent(ctx, component, "Cert", "com.browseros.claude", "runtime", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	var codesigns, thins, creates [][]string
+	for _, c := range rec.Cmds {
+		switch {
+		case c.Args[0] == "codesign":
+			codesigns = append(codesigns, c.Args)
+		case c.Args[0] == "lipo" && hasArg(c.Args, "-thin"):
+			thins = append(thins, c.Args)
+		case c.Args[0] == "lipo" && c.Args[1] == "-create":
+			creates = append(creates, c.Args)
+		}
+	}
+	if len(codesigns) != 2 {
+		t.Fatalf("want 2 codesign calls (one per slice), got %d: %v", len(codesigns), rec.Argv())
+	}
+	for _, args := range codesigns {
+		if args[len(args)-1] == component {
+			t.Errorf("codesign ran on the fat file instead of a thin slice: %v", args)
+		}
+		for _, want := range []string{"--force", "--timestamp", "--identifier", "com.browseros.claude", "--options", "runtime"} {
+			if !hasArg(args, want) {
+				t.Errorf("codesign missing %q: %v", want, args)
+			}
+		}
+	}
+	thinArchs := map[string]bool{}
+	for _, args := range thins {
+		thinArchs[argAfter(args, "-thin")] = true
+	}
+	if !thinArchs["x86_64"] || !thinArchs["arm64"] {
+		t.Errorf("want thin extraction for both archs, got %v", thinArchs)
+	}
+	if len(creates) != 1 {
+		t.Fatalf("want 1 lipo -create, got %d", len(creates))
+	}
+	data, err := os.ReadFile(component)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "signed-fat" {
+		t.Errorf("component not replaced with reassembled fat: %q", data)
+	}
+	st, err := os.Stat(component)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o755 {
+		t.Errorf("mode not preserved: %v", st.Mode().Perm())
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("temp artifacts left behind: %v", entries)
+	}
+}
+
+func TestSignComponentSymmetricFatSingleCodesign(t *testing.T) {
+	for name, plistArchs := range map[string]map[string]bool{
+		"both_have_plist": {"x86_64": true, "arm64": true},
+		"neither_has":     {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, rec := fixtureCtx(t, macArm)
+			dir := t.TempDir()
+			component := filepath.Join(dir, "claude")
+			writeFile(t, component, "original-fat")
+			rec.Handler = sliceHandler(t, plistArchs, 0, true)
+
+			if err := signComponent(ctx, component, "Cert", "", "", ""); err != nil {
+				t.Fatal(err)
+			}
+			var codesigns [][]string
+			for _, c := range rec.Cmds {
+				if c.Args[0] == "codesign" {
+					codesigns = append(codesigns, c.Args)
+				}
+				if c.Args[0] == "lipo" && (hasArg(c.Args, "-thin") || c.Args[1] == "-create") {
+					t.Errorf("symmetric fat must not be split: %v", c.Args)
+				}
+			}
+			if len(codesigns) != 1 || codesigns[0][len(codesigns[0])-1] != component {
+				t.Errorf("want a single codesign on the fat file, got %v", codesigns)
+			}
+			data, _ := os.ReadFile(component)
+			if string(data) != "original-fat" {
+				t.Errorf("file must not be rewritten: %q", data)
+			}
+		})
+	}
+}
+
+func TestSignComponentNonMachOSingleCodesign(t *testing.T) {
+	ctx, rec := fixtureCtx(t, macArm)
+	dir := t.TempDir()
+	component := filepath.Join(dir, "wrapper")
+	writeExec(t, component)
+	rec.Handler = sliceHandler(t, nil, 0, false)
+
+	if err := signComponent(ctx, component, "Cert", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	var codesigns [][]string
+	for _, c := range rec.Cmds {
+		if c.Args[0] == "codesign" {
+			codesigns = append(codesigns, c.Args)
+		}
+	}
+	if len(codesigns) != 1 || codesigns[0][len(codesigns[0])-1] != component {
+		t.Errorf("want a single codesign on the file, got %v", codesigns)
+	}
+}
+
+func TestSignComponentPerSliceCodesignFailureKeepsOriginal(t *testing.T) {
+	ctx, rec := fixtureCtx(t, macArm)
+	dir := t.TempDir()
+	component := filepath.Join(dir, "claude")
+	writeFile(t, component, "original-fat")
+	rec.Handler = sliceHandler(t, map[string]bool{"arm64": true}, 1, true)
+
+	if err := signComponent(ctx, component, "Cert", "", "", ""); err == nil {
+		t.Fatal("want error when a slice fails to sign")
+	}
+	data, _ := os.ReadFile(component)
+	if string(data) != "original-fat" {
+		t.Errorf("original file must be left in place: %q", data)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Errorf("temp artifacts left behind: %v", entries)
+	}
+}
+
+func TestVerifySignatureFailsOnInvalidComponent(t *testing.T) {
+	ctx, rec := fixtureCtx(t, macArm)
+	appPath := filepath.Join(t.TempDir(), "BrowserOS.app")
+	claude := filepath.Join(appPath, "Contents", "Resources", "BrowserOSServer",
+		"default", "resources", "bin", "third_party", "claude")
+	writeExec(t, claude)
+
+	rec.Handler = func(c execx.Cmd) (execx.Result, error) {
+		if c.Args[0] == "codesign" && c.Args[len(c.Args)-1] == claude {
+			return execx.Result{Code: 1}, nil
+		}
+		return execx.Result{}, nil
+	}
+	err := VerifySignature(ctx, appPath)
+	if err == nil || !strings.Contains(err.Error(), "claude") {
+		t.Fatalf("want component verification failure naming claude, got %v", err)
+	}
+}
+
+func TestVerifySignaturePassesAndChecksEachComponent(t *testing.T) {
+	ctx, rec := fixtureCtx(t, macArm)
+	appPath := filepath.Join(t.TempDir(), "BrowserOS.app")
+	claude := filepath.Join(appPath, "Contents", "Resources", "BrowserOSServer",
+		"default", "resources", "bin", "third_party", "claude")
+	writeExec(t, claude)
+
+	if err := VerifySignature(ctx, appPath); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range rec.Cmds {
+		if c.Args[0] == "codesign" && hasArg(c.Args, "--verify") && c.Args[len(c.Args)-1] == claude {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("claude was not verified: %v", rec.Argv())
 	}
 }

@@ -338,7 +338,58 @@ func SigningOptions(componentPath string) string {
 	return "runtime"
 }
 
-func signComponent(ctx *buildctx.Context, componentPath, certificate, identifier, options, entitlements string) error {
+// runProbe runs a read-only Mach-O inspection quietly (no build-log stream).
+func runProbe(ctx *buildctx.Context, args ...string) execx.Result {
+	res, _ := ctx.Runner.Run(execx.Cmd{Args: args, Dir: ctx.ChromiumSrc})
+	return res
+}
+
+// machoArchs returns the architectures lipo reports for a file; nil when it
+// is not Mach-O.
+func machoArchs(ctx *buildctx.Context, path string) []string {
+	res := runProbe(ctx, "lipo", "-archs", path)
+	if res.Code != 0 {
+		return nil
+	}
+	return strings.Fields(res.Stdout)
+}
+
+// sliceHasEmbeddedInfoPlist reports whether the given slice carries a
+// __TEXT,__info_plist section.
+func sliceHasEmbeddedInfoPlist(ctx *buildctx.Context, path, arch string) bool {
+	res := runProbe(ctx, "otool", "-arch", arch, "-l", path)
+	return res.Code == 0 && strings.Contains(res.Stdout, "__info_plist")
+}
+
+// asymmetricInfoPlistArchs returns the archs of a fat file whose slices
+// disagree on an embedded Info.plist (macos.py
+// find_asymmetric_info_plist_archs). codesign, signing a fat file, binds the
+// file-level Info.plist into every slice's CodeDirectory — a slice without
+// the section then never validates and Apple's notary rejects it (the
+// upstream claude binary ships the section on arm64 only). nil = thin,
+// symmetric, or not Mach-O.
+func asymmetricInfoPlistArchs(ctx *buildctx.Context, path string) []string {
+	st, err := os.Lstat(path)
+	if err != nil || !st.Mode().IsRegular() {
+		return nil
+	}
+	archs := machoArchs(ctx, path)
+	if len(archs) < 2 {
+		return nil
+	}
+	withPlist := 0
+	for _, arch := range archs {
+		if sliceHasEmbeddedInfoPlist(ctx, path, arch) {
+			withPlist++
+		}
+	}
+	if withPlist == 0 || withPlist == len(archs) {
+		return nil
+	}
+	return archs
+}
+
+func codesignCmd(componentPath, certificate, identifier, options, entitlements string) []string {
 	cmd := []string{"codesign", "--sign", certificate, "--force", "--timestamp"}
 	if identifier != "" {
 		cmd = append(cmd, "--identifier", identifier)
@@ -351,8 +402,55 @@ func signComponent(ctx *buildctx.Context, componentPath, certificate, identifier
 			cmd = append(cmd, "--entitlements", entitlements)
 		}
 	}
-	cmd = append(cmd, componentPath)
-	if _, err := run(ctx, cmd...); err != nil {
+	return append(cmd, componentPath)
+}
+
+// signFatComponentPerSlice signs each slice as a thin file and lipos them
+// back together (macos.py sign_fat_component_per_slice).
+func signFatComponentPerSlice(ctx *buildctx.Context, componentPath, certificate string, archs []string, identifier, options, entitlements string) error {
+	st, err := os.Stat(componentPath)
+	if err != nil {
+		return err
+	}
+	tmpDir, err := os.MkdirTemp(filepath.Dir(componentPath), ".sign-slices-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	name := filepath.Base(componentPath)
+	thins := make([]string, 0, len(archs))
+	for _, arch := range archs {
+		thin := filepath.Join(tmpDir, name+"."+arch)
+		if _, err := run(ctx, "lipo", componentPath, "-thin", arch, "-output", thin); err != nil {
+			return fmt.Errorf("failed to extract %s slice of %s: %w", arch, componentPath, err)
+		}
+		if _, err := run(ctx, codesignCmd(thin, certificate, identifier, options, entitlements)...); err != nil {
+			return fmt.Errorf("failed to sign %s slice of %s: %w", arch, componentPath, err)
+		}
+		thins = append(thins, thin)
+	}
+
+	fat := filepath.Join(tmpDir, name+".fat")
+	args := append([]string{"lipo", "-create"}, thins...)
+	args = append(args, "-output", fat)
+	if _, err := run(ctx, args...); err != nil {
+		return fmt.Errorf("failed to reassemble %s: %w", componentPath, err)
+	}
+	if err := os.Chmod(fat, st.Mode().Perm()); err != nil {
+		return err
+	}
+	return os.Rename(fat, componentPath)
+}
+
+func signComponent(ctx *buildctx.Context, componentPath, certificate, identifier, options, entitlements string) error {
+	if archs := asymmetricInfoPlistArchs(ctx, componentPath); len(archs) > 0 {
+		logx.Warning(fmt.Sprintf(
+			"%s: slices disagree on embedded Info.plist (%s) — signing per-slice",
+			filepath.Base(componentPath), strings.Join(archs, ", ")))
+		return signFatComponentPerSlice(ctx, componentPath, certificate, archs, identifier, options, entitlements)
+	}
+	if _, err := run(ctx, codesignCmd(componentPath, certificate, identifier, options, entitlements)...); err != nil {
 		return fmt.Errorf("failed to sign %s: %w", componentPath, err)
 	}
 	return nil
@@ -519,6 +617,19 @@ func VerifySignature(ctx *buildctx.Context, appPath string) error {
 	if res.Code != 0 {
 		return fmt.Errorf("signature verification failed")
 	}
+
+	// --deep seals plain executables under Resources/ as files without
+	// validating their own signatures (Apple's notary does, per slice) —
+	// verify each file-type component directly so a bad slice fails here
+	// instead of after a multi-minute notarization round-trip.
+	comps := FindComponentsToSign(ctx, appPath)
+	for _, comp := range append(append([]string{}, comps.Executables...), comps.Dylibs...) {
+		res := runUnchecked(ctx, "codesign", "--verify", "--verbose=2", comp)
+		if res.Code != 0 {
+			return fmt.Errorf("component signature verification failed: %s", comp)
+		}
+	}
+
 	logx.Success("Signature verification passed")
 	return nil
 }
