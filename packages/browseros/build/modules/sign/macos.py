@@ -474,7 +474,9 @@ def find_asymmetric_info_plist_archs(path: Path) -> List[str]:
     and Apple's notary service rejects it (the upstream claude binary ships
     the section on arm64 only). Empty result = thin, symmetric, or not Mach-O.
     """
-    if not path.is_file():
+    # Symlinks excluded (matches the Go port's Lstat): os.replace would
+    # silently turn a bundle symlink into a regular file.
+    if path.is_symlink() or not path.is_file():
         return []
     archs = get_macho_archs(path)
     if len(archs) < 2:

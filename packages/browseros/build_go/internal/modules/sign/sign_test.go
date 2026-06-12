@@ -551,6 +551,36 @@ func TestSignComponentSymmetricFatSingleCodesign(t *testing.T) {
 	}
 }
 
+func TestSignComponentThinSingleArchSingleCodesign(t *testing.T) {
+	ctx, rec := fixtureCtx(t, macArm)
+	dir := t.TempDir()
+	component := filepath.Join(dir, "claude")
+	writeFile(t, component, "thin-binary")
+	rec.Handler = func(c execx.Cmd) (execx.Result, error) {
+		if c.Args[0] == "lipo" && c.Args[1] == "-archs" {
+			return execx.Result{Stdout: "arm64\n"}, nil
+		}
+		return execx.Result{}, nil
+	}
+
+	if err := signComponent(ctx, component, "Cert", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	var codesigns [][]string
+	for _, c := range rec.Cmds {
+		if c.Args[0] == "codesign" {
+			codesigns = append(codesigns, c.Args)
+		}
+	}
+	if len(codesigns) != 1 || codesigns[0][len(codesigns[0])-1] != component {
+		t.Errorf("want a single codesign on the thin file, got %v", codesigns)
+	}
+	data, _ := os.ReadFile(component)
+	if string(data) != "thin-binary" {
+		t.Errorf("file must not be rewritten: %q", data)
+	}
+}
+
 func TestSignComponentNonMachOSingleCodesign(t *testing.T) {
 	ctx, rec := fixtureCtx(t, macArm)
 	dir := t.TempDir()

@@ -345,6 +345,25 @@ class SignComponentPerSliceTest(unittest.TestCase):
             self.assertEqual(calls[0][0], "codesign")
             self.assertEqual(calls[0][-1], str(component))
 
+    def test_thin_single_arch_uses_single_codesign(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            component = self._make_component(tmp)
+            calls = []
+            with (
+                mock.patch.object(
+                    macos_module, "_run_probe", _fake_probe(["arm64"], {"arm64"})
+                ),
+                mock.patch.object(
+                    macos_module, "run_command", _fake_run_command(calls)
+                ),
+            ):
+                ok = sign_component(component, "Cert")
+
+            self.assertTrue(ok)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][0], "codesign")
+            self.assertEqual(calls[0][-1], str(component))
+
     def test_failing_slice_codesign_keeps_original_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             component = self._make_component(tmp)
@@ -406,6 +425,10 @@ class VerifySignatureComponentTest(unittest.TestCase):
 
             with mock.patch.object(macos_module, "run_command", run):
                 self.assertFalse(verify_signature(app_path))
+
+            self.assertTrue(
+                any(c[0] == "codesign" and c[-1] == str(claude) for c in calls)
+            )
 
     def test_passes_and_verifies_each_component(self):
         with tempfile.TemporaryDirectory() as tmp:
