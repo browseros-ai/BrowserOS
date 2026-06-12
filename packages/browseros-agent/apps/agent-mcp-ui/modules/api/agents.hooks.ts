@@ -1,0 +1,60 @@
+import { createQuery } from 'react-query-kit'
+import type { RunStatus } from '@/lib/status'
+
+export interface AgentRow {
+  id: string
+  /** Display label, e.g. "Cowork . File expenses". */
+  label: string
+  harness: 'Claude Cowork' | 'Codex' | 'Hermes' | 'OpenClaw' | 'Gemini CLI'
+  site: string
+  task: string
+  status: RunStatus
+  liveLine: string
+  /** Hex color used for the per-agent dot in cross-agent activity rows. */
+  color: string
+}
+
+/**
+ * Mock data. Shape matches what the eventual
+ * `agent-mcp-interface` /agents endpoint will return. Replacing
+ * `fetcher` with a real `$get`-then-parseResponse call is the only
+ * change this hook needs when the backend route lands.
+ */
+const MOCK_AGENTS: AgentRow[] = [
+  {
+    id: 'cld-concur',
+    label: 'Cowork . File expenses',
+    harness: 'Claude Cowork',
+    site: 'concur.com',
+    task: 'See my May invoices and file expenses on SAP Concur',
+    status: 'needs-ok',
+    liveLine: 'Filling 4 expense lines',
+    color: '#F26B2A',
+  },
+  {
+    id: 'cld-li',
+    label: 'Cowork . LinkedIn posts',
+    harness: 'Claude Cowork',
+    site: 'linkedin.com',
+    task: 'Draft and queue 3 LinkedIn posts about the launch',
+    status: 'running',
+    liveLine: 'Typing the 2nd post in the composer',
+    color: '#2F6FE0',
+  },
+  {
+    id: 'cdx-sheet',
+    label: 'Codex . Pricing research',
+    harness: 'Codex',
+    site: 'docs.google.com',
+    task: 'Compile competitor pricing into a Google Sheet',
+    status: 'running',
+    liveLine: 'Pasting row 9 of 12 into the sheet',
+    color: '#1F8A4C',
+  },
+]
+
+export const useAgents = createQuery<AgentRow[]>({
+  queryKey: ['agents'],
+  fetcher: () =>
+    new Promise((resolve) => setTimeout(() => resolve(MOCK_AGENTS), 60)),
+})
