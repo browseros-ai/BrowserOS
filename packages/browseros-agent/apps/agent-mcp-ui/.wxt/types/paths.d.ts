@@ -5,7 +5,7 @@ declare module "wxt/browser" {
   export type PublicPath =
     | ""
     | "/"
-    | "/app.html"
+    | "/newtab.html"
   type HtmlPublicPath = Extract<PublicPath, `${string}.html`>
   export interface WxtRuntime {
     getURL(path: PublicPath): string;
