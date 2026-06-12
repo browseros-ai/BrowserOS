@@ -10,7 +10,19 @@ export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {
     name: 'BrowserOS Agents',
-    permissions: ['storage', 'tabs', 'tabGroups', 'sidePanel', 'notifications'],
+    // `browserOS` is BrowserOS Chromium's gate for the new-tab override
+    // and other agent-cockpit-relevant surfaces. Without it the
+    // `chrome_url_overrides.newtab` declaration silently no-ops and
+    // BrowserOS keeps its default new-tab page.
+    permissions: [
+      'browserOS',
+      'storage',
+      'tabs',
+      'tabGroups',
+      'sidePanel',
+      'notifications',
+      'webNavigation',
+    ],
     host_permissions: ['http://127.0.0.1/*'],
     chrome_url_overrides: { newtab: 'app.html' },
     action: {
