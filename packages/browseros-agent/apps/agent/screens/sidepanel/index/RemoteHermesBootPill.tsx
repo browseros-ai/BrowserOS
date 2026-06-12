@@ -6,7 +6,7 @@ export interface RemoteHermesVmStatus {
   progress?: string
 }
 
-interface RemoteHermesBootPillProps {
+export interface RemoteHermesBootPillProps {
   vm: RemoteHermesVmStatus
 }
 

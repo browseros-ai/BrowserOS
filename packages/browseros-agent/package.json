@@ -61,8 +61,10 @@
     "@types/node": "^24.3.3",
     "@typescript/native-preview": "^7.0.0-dev.20260319.1",
     "commander": "^14.0.1",
+    "dotenv": "^17.2.3",
     "fallow": "^2.85.0",
     "lefthook": "^2.0.12",
+    "picocolors": "^1.1.1",
     "typedoc": "^0.28.15",
     "typescript": "^5.9.2"
   },

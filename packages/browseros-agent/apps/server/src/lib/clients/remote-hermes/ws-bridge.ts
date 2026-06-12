@@ -36,7 +36,7 @@ export interface WsBridgeDeps {
   resolveLocalMcpUrl(server: string): string | null
 }
 
-type SocketState = 'closed' | 'connecting' | 'open'
+export type SocketState = 'closed' | 'connecting' | 'open'
 
 const MODULE = 'remote-hermes'
 

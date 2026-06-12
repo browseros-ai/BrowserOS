@@ -39,6 +39,7 @@ export interface PostTurnInput {
   modelId?: string | null
 }
 
+// fallow-ignore-next-line unused-type
 export interface PostTurnResult {
   taskId: string
 }
