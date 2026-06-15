@@ -32,8 +32,12 @@ export function CockpitShell() {
   }, [])
 
   useEffect(() => {
+    // Snapshot the ref object so the unmount cleanup closes over a stable
+    // reference (the React docs' canonical pattern for refs in effects).
+    const timeoutRef = collapseTimeoutRef
     return () => {
-      if (collapseTimeoutRef.current) clearTimeout(collapseTimeoutRef.current)
+      const id = timeoutRef.current
+      if (id !== null) clearTimeout(id)
     }
   }, [])
 

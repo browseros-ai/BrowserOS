@@ -154,3 +154,22 @@ body {
 ::selection {
   background: var(--color-accent-tint-2);
 }
+
+/* Honour the system "reduce motion" preference (WCAG 2.3.3). Cuts every
+   animation and CSS transition to a near-instant no-op so users with
+   vestibular sensitivities get a static cockpit. Tailwind utilities
+   like animate-pulse-dot and the replay scrubber transitions pick this
+   up automatically since they go through animation / transition
+   shorthands. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    /* biome-ignore-start lint/complexity/noImportantStyles: !important is the canonical reduced-motion override; needed to win over Tailwind's animation/transition utilities */
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+    /* biome-ignore-end lint/complexity/noImportantStyles: see start of block */
+  }
+}
