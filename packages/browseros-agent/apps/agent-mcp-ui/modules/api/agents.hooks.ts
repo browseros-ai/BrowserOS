@@ -1,5 +1,12 @@
-import { createQuery } from 'react-query-kit'
+import { nanoid } from 'nanoid'
+import { createMutation, createQuery } from 'react-query-kit'
 import type { RunStatus } from '@/lib/status'
+import {
+  buildCliCommand,
+  buildMcpUrl,
+  toSlug,
+} from '@/screens/new-agent/new-agent.helpers'
+import type { NewAgentValues } from '@/screens/new-agent/new-agent.schemas'
 
 export interface AgentRow {
   id: string
@@ -57,4 +64,34 @@ export const useAgents = createQuery<AgentRow[]>({
   queryKey: ['agents'],
   fetcher: () =>
     new Promise((resolve) => setTimeout(() => resolve(MOCK_AGENTS), 60)),
+})
+
+export interface CreatedAgent {
+  id: string
+  name: string
+  harness: NewAgentValues['harness']
+  slug: string
+  mcpUrl: string
+  cliCommand: string
+}
+
+/**
+ * Mock createAgent mutation. Mirrors the eventual hono-rpc surface so
+ * swapping `mutationFn` for a real `$post`-then-parseResponse call is
+ * a body-only change. The simulated latency keeps the optimistic UI
+ * states honest.
+ */
+export const useCreateAgent = createMutation<CreatedAgent, NewAgentValues>({
+  mutationFn: async (values) => {
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    const slug = toSlug(values.name || values.harness)
+    return {
+      id: nanoid(8),
+      name: values.name,
+      harness: values.harness,
+      slug,
+      mcpUrl: buildMcpUrl(slug),
+      cliCommand: buildCliCommand(slug),
+    }
+  },
 })
