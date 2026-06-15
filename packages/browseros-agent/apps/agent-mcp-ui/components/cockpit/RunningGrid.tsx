@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router'
 import { isActiveStatus } from '@/lib/status'
 import type { AgentRow } from '@/modules/api/agents.hooks'
 import { AddAgentTile } from './AddAgentTile'
@@ -14,6 +15,7 @@ interface RunningGridProps {
  * surfaces the most-useful at-a-glance metric.
  */
 export function RunningGrid({ agents }: RunningGridProps) {
+  const navigate = useNavigate()
   const liveCount = agents.filter((a) => isActiveStatus(a.status)).length
 
   return (
@@ -30,7 +32,11 @@ export function RunningGrid({ agents }: RunningGridProps) {
       </div>
       <div className="grid grid-cols-[repeat(auto-fill,minmax(258px,1fr))] items-start gap-3.5">
         {agents.map((a) => (
-          <RunningCard key={a.id} agent={a} />
+          <RunningCard
+            key={a.id}
+            agent={a}
+            onWatch={() => navigate(`/run/${a.id}`)}
+          />
         ))}
         <AddAgentTile />
       </div>

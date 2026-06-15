@@ -7,6 +7,7 @@ import { Governance } from '@/screens/governance/Governance'
 import { GrantsTab } from '@/screens/governance/GrantsTab'
 import { PermissionsTab } from '@/screens/governance/PermissionsTab'
 import { SiteRulesTab } from '@/screens/governance/SiteRulesTab'
+import { LiveRun } from '@/screens/live-run/LiveRun'
 import { Mcp } from '@/screens/mcp/Mcp'
 import { NewAgent } from '@/screens/new-agent/NewAgent'
 
@@ -33,6 +34,7 @@ export function App() {
           </Route>
           <Route path="/mcp" element={<Mcp />} />
         </Route>
+        <Route path="/run/:runId" element={<LiveRun />} />
       </Routes>
     </HashRouter>
   )
