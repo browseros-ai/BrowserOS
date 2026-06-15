@@ -150,9 +150,12 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* Selection: tint with the accent so it reads as BrowserOS, not chrome blue. */
+/* Selection: tint with the accent so it reads as BrowserOS, not chrome blue.
+   Foreground is pinned to ink so light-on-dark surfaces (the MCP URL block,
+   for example) stay readable when selected. */
 ::selection {
   background: var(--color-accent-tint-2);
+  color: var(--color-ink);
 }
 
 /* Honour the system "reduce motion" preference (WCAG 2.3.3). Cuts every
