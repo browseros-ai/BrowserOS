@@ -240,3 +240,31 @@ export const useDeleteAgent = createMutation<
     return variables
   },
 })
+
+interface RegenerateMcpVariables {
+  id: string
+}
+
+interface RegenerateMcpResult {
+  id: string
+  mcpUrl: string
+}
+
+/**
+ * Mock mutation that rotates a profile's MCP URL. Shape matches the
+ * eventual hono-rpc surface: server picks a fresh slug, returns the
+ * new URL, the client updates the `agent-profiles` cache row by id.
+ * The user must re-paste the URL into their harness once this fires.
+ */
+export const useRegenerateMcpUrl = createMutation<
+  RegenerateMcpResult,
+  RegenerateMcpVariables
+>({
+  mutationFn: async ({ id }) => {
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    return {
+      id,
+      mcpUrl: `${buildMcpUrl(`${toSlug(id)}-${nanoid(6).toLowerCase()}`)}`,
+    }
+  },
+})
