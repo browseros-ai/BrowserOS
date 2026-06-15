@@ -10,6 +10,7 @@ import { SiteRulesTab } from '@/screens/governance/SiteRulesTab'
 import { LiveRun } from '@/screens/live-run/LiveRun'
 import { Mcp } from '@/screens/mcp/Mcp'
 import { NewAgent } from '@/screens/new-agent/NewAgent'
+import { Replay } from '@/screens/replay/Replay'
 
 /**
  * HashRouter wrapping a single layout route that mounts the sidebar
@@ -35,6 +36,7 @@ export function App() {
           <Route path="/mcp" element={<Mcp />} />
         </Route>
         <Route path="/run/:runId" element={<LiveRun />} />
+        <Route path="/governance/audit/:runId/replay" element={<Replay />} />
       </Routes>
     </HashRouter>
   )
