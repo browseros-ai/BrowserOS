@@ -11,7 +11,7 @@
     "zip": "wxt zip",
     "compile": "wxt prepare && tsc --noEmit",
     "typecheck": "wxt prepare && tsc --noEmit",
-    "lint": "concurrently --group --names biome,doctor -c blue,magenta 'bunx biome check' 'bunx react-doctor@latest -y'",
+    "lint": "concurrently --group --names biome,doctor -c blue,magenta 'bunx biome check' 'bunx react-doctor@latest -y --verbose'",
     "lint:fix": "bunx biome check --write --unsafe"
   },
   "dependencies": {
