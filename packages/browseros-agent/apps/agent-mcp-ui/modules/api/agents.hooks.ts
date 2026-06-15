@@ -95,3 +95,148 @@ export const useCreateAgent = createMutation<CreatedAgent, NewAgentValues>({
     }
   },
 })
+
+export type AgentProfileStatus = 'configured' | 'paused' | 'disabled'
+
+export interface AgentProfile {
+  id: string
+  /** Connector label, e.g. "Cowork . Finance ops". */
+  name: string
+  harness: AgentRow['harness']
+  /** "All sites from current profile" / "All my logins" / "Selective". */
+  loginScopeLabel: string
+  loginCount: number
+  /** Number of selected ACL rules (seed + custom). */
+  aclRuleCount: number
+  /** Number of approval categories set to Block. */
+  blockedActionCount: number
+  /** Number of "Always allow" grants accumulated. */
+  alwaysAllowCount: number
+  /** Relative time, e.g. "2m ago", "Yesterday 17:42", "Never run". */
+  lastRunAt: string
+  status: AgentProfileStatus
+  /** MCP endpoint URL handed to the harness. */
+  mcpUrl: string
+}
+
+const MOCK_AGENT_PROFILES: AgentProfile[] = [
+  {
+    id: 'cld-concur',
+    name: 'Cowork . Finance ops',
+    harness: 'Claude Cowork',
+    loginScopeLabel: 'Current profile (47)',
+    loginCount: 47,
+    aclRuleCount: 3,
+    blockedActionCount: 1,
+    alwaysAllowCount: 4,
+    lastRunAt: '2m ago',
+    status: 'configured',
+    mcpUrl: 'http://127.0.0.1:9000/mcp/cowork-finance-ops',
+  },
+  {
+    id: 'cld-li',
+    name: 'Cowork . Social posts',
+    harness: 'Claude Cowork',
+    loginScopeLabel: 'Selective (5)',
+    loginCount: 5,
+    aclRuleCount: 5,
+    blockedActionCount: 2,
+    alwaysAllowCount: 1,
+    lastRunAt: '4m ago',
+    status: 'configured',
+    mcpUrl: 'http://127.0.0.1:9000/mcp/cowork-social-posts',
+  },
+  {
+    id: 'cdx-sheet',
+    name: 'Codex . Pricing research',
+    harness: 'Codex',
+    loginScopeLabel: 'Selective (8)',
+    loginCount: 8,
+    aclRuleCount: 4,
+    blockedActionCount: 1,
+    alwaysAllowCount: 2,
+    lastRunAt: '8m ago',
+    status: 'configured',
+    mcpUrl: 'http://127.0.0.1:9000/mcp/codex-pricing-research',
+  },
+  {
+    id: 'cdx-leads',
+    name: 'Codex . Pipeline digest',
+    harness: 'Codex',
+    loginScopeLabel: 'Current profile (47)',
+    loginCount: 47,
+    aclRuleCount: 3,
+    blockedActionCount: 1,
+    alwaysAllowCount: 3,
+    lastRunAt: '34m ago',
+    status: 'configured',
+    mcpUrl: 'http://127.0.0.1:9000/mcp/codex-pipeline-digest',
+  },
+  {
+    id: 'hrm-stripe',
+    name: 'Hermes . Refunds',
+    harness: 'Hermes',
+    loginScopeLabel: 'Selective (2)',
+    loginCount: 2,
+    aclRuleCount: 5,
+    blockedActionCount: 2,
+    alwaysAllowCount: 0,
+    lastRunAt: '1h ago',
+    status: 'paused',
+    mcpUrl: 'http://127.0.0.1:9000/mcp/hermes-refunds',
+  },
+  {
+    id: 'hrm-notion',
+    name: 'Hermes . Weekly recap',
+    harness: 'Hermes',
+    loginScopeLabel: 'Current profile (47)',
+    loginCount: 47,
+    aclRuleCount: 2,
+    blockedActionCount: 1,
+    alwaysAllowCount: 1,
+    lastRunAt: 'Yesterday 09:11',
+    status: 'configured',
+    mcpUrl: 'http://127.0.0.1:9000/mcp/hermes-weekly-recap',
+  },
+  {
+    id: 'cdx-onb',
+    name: 'Codex . Onboarding draft',
+    harness: 'Codex',
+    loginScopeLabel: 'Selective (3)',
+    loginCount: 3,
+    aclRuleCount: 4,
+    blockedActionCount: 1,
+    alwaysAllowCount: 0,
+    lastRunAt: 'Never run',
+    status: 'disabled',
+    mcpUrl: 'http://127.0.0.1:9000/mcp/codex-onboarding-draft',
+  },
+]
+
+export const useAgentProfiles = createQuery<AgentProfile[]>({
+  queryKey: ['agent-profiles'],
+  fetcher: () =>
+    new Promise((resolve) =>
+      setTimeout(() => resolve(MOCK_AGENT_PROFILES), 60),
+    ),
+})
+
+interface DeleteAgentVariables {
+  id: string
+}
+
+/**
+ * Mock deleteAgent mutation. The hono-rpc surface will return
+ * `{ id }`; mutating clients update the `agent-profiles` cache with
+ * `setQueryData` instead of refetching since the row goes away on
+ * success.
+ */
+export const useDeleteAgent = createMutation<
+  DeleteAgentVariables,
+  DeleteAgentVariables
+>({
+  mutationFn: async (variables) => {
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    return variables
+  },
+})
