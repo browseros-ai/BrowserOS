@@ -11,8 +11,9 @@
     "zip": "wxt zip",
     "compile": "wxt prepare && tsc --noEmit",
     "typecheck": "wxt prepare && tsc --noEmit",
-    "lint": "concurrently --group --names biome,doctor -c blue,magenta 'bunx biome check' 'bunx react-doctor@latest -y --verbose'",
-    "lint:fix": "bunx biome check --write --unsafe"
+    "lint": "bunx biome check",
+    "lint:fix": "bunx biome check --write --unsafe",
+    "lint:doctor": "bunx react-doctor@latest -y --verbose"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",
@@ -58,7 +59,6 @@
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
     "@wxt-dev/module-react": "^1.1.5",
-    "concurrently": "^10.0.3",
     "tailwindcss": "^4.1.17",
     "typescript": "^5.9.2",
     "wxt": "^0.20.18"
