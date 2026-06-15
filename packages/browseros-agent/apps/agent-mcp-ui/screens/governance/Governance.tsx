@@ -66,8 +66,9 @@ export function Governance() {
               key={key}
               value={key}
               className={cn(
-                'gap-2 px-4 py-2 font-semibold text-ink-3 text-sm',
+                'gap-2 px-4 py-2 font-semibold text-ink-3 text-sm hover:text-ink',
                 'data-active:text-ink',
+                'after:!bg-accent after:!bottom-[-1px]',
                 '[&_svg]:size-3.5 [&_svg]:text-ink-4 data-active:[&_svg]:text-accent',
               )}
             >

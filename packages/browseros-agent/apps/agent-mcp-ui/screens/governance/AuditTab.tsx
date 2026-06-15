@@ -42,7 +42,7 @@ export function AuditTab() {
             <ToggleGroupItem
               key={key}
               value={key}
-              className="h-7 rounded-md border-none px-3 font-semibold text-ink-3 text-xs data-[pressed=true]:bg-card data-[pressed=true]:text-ink"
+              className="h-7 rounded-md border-none bg-transparent px-3 font-semibold text-ink-3 text-xs shadow-none hover:bg-transparent hover:text-ink aria-pressed:bg-card aria-pressed:text-ink aria-pressed:shadow-sm"
             >
               {label}
             </ToggleGroupItem>

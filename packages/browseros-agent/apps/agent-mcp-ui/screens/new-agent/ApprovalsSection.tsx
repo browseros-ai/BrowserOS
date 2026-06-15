@@ -10,9 +10,9 @@ import {
 } from './new-agent.schemas'
 
 const VERDICT_COLORS: Record<ApprovalVerdict, string> = {
-  Auto: 'data-[pressed=true]:text-green data-[pressed=true]:bg-green-tint',
-  Ask: 'data-[pressed=true]:text-amber data-[pressed=true]:bg-amber-tint',
-  Block: 'data-[pressed=true]:text-red data-[pressed=true]:bg-red-tint',
+  Auto: 'aria-pressed:text-green aria-pressed:bg-green-tint',
+  Ask: 'aria-pressed:text-amber aria-pressed:bg-amber-tint',
+  Block: 'aria-pressed:text-red aria-pressed:bg-red-tint',
 }
 
 function availableVerdicts(category: ApprovalCategory): ApprovalVerdict[] {
