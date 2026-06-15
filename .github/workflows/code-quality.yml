@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - dev
+      - feat/agent-mcp-interface-bootstrap
     paths:
       - "packages/browseros-agent/**"
 
