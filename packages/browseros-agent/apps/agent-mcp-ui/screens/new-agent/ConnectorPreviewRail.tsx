@@ -34,14 +34,19 @@ const HARNESS_ICONS: Record<Harness, ComponentType<{ className?: string }>> = {
 }
 
 interface ConnectorPreviewRailProps {
+  mode: 'create' | 'edit'
   createdAgent: CreatedAgent | undefined
-  isCreating: boolean
+  isMutating: boolean
+  /** True once the create or update mutation has resolved. */
+  submitted: boolean
   onDone: () => void
 }
 
 export function ConnectorPreviewRail({
+  mode,
   createdAgent,
-  isCreating,
+  isMutating,
+  submitted,
   onDone,
 }: ConnectorPreviewRailProps) {
   const form = useFormContext<NewAgentValues>()
@@ -55,8 +60,18 @@ export function ConnectorPreviewRail({
   const verdicts = countApprovalVerdicts(values.approvals)
   const HarnessIcon = HARNESS_ICONS[values.harness]
   const aclCount = values.aclRuleIds.length
-  const added = createdAgent !== undefined
   const nameInvalid = values.name.trim().length === 0
+  const isEdit = mode === 'edit'
+  const idleCtaLabel = isEdit
+    ? `Save changes to ${values.harness}`
+    : `Add to ${values.harness}`
+  const pendingCtaLabel = isEdit ? 'Saving…' : 'Adding…'
+  const successHeadline = isEdit
+    ? `${values.harness} updated`
+    : `Added to ${values.harness}`
+  const successDetail = isEdit
+    ? 'Connector settings synced'
+    : 'Endpoint registered · scope: user'
 
   const copyMcpUrl = async () => {
     try {
@@ -122,36 +137,36 @@ export function ConnectorPreviewRail({
 
       <div className="flex-1" />
 
-      {added ? (
+      {submitted ? (
         <div className="flex items-center gap-2 rounded-xl border border-[#BFE3CC] bg-green-tint p-3">
           <CheckCircle2 className="size-5 text-green" />
           <div className="min-w-0">
             <div className="font-bold text-[#15683A] text-sm">
-              Added to {values.harness}
+              {successHeadline}
             </div>
-            <div className="text-ink-2 text-xs">
-              Endpoint registered · scope: user
-            </div>
+            <div className="text-ink-2 text-xs">{successDetail}</div>
           </div>
         </div>
       ) : (
         <Button
           type="submit"
           size="lg"
-          disabled={nameInvalid || isCreating}
+          disabled={nameInvalid || isMutating}
           className="w-full"
         >
           <Link2 className="size-4" />
-          {isCreating ? 'Adding…' : `Add to ${values.harness}`}
+          {isMutating ? pendingCtaLabel : idleCtaLabel}
         </Button>
       )}
 
       <p className="text-center text-[10.5px] text-ink-4">
-        One click registers the endpoint with {values.harness}. CLI:{' '}
+        {isEdit
+          ? 'CLI:'
+          : `One click registers the endpoint with ${values.harness}. CLI:`}{' '}
         <span className="font-mono">{cliCommand}</span>
       </p>
 
-      {added && (
+      {submitted && (
         <Button
           type="button"
           variant="ghost"

@@ -3,6 +3,7 @@ import { ArrowLeft } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Form } from '@/components/ui/form'
+import { Spinner } from '@/components/ui/spinner'
 import type { AgentRow } from '@/modules/api/agents.hooks'
 import { AclRulesSection } from './AclRulesSection'
 import { ApprovalsSection } from './ApprovalsSection'
@@ -10,7 +11,7 @@ import { ConnectorPreviewRail } from './ConnectorPreviewRail'
 import { CopyFromExistingCard } from './CopyFromExistingCard'
 import { HarnessSection } from './HarnessSection'
 import { LoginsSection } from './LoginsSection'
-import { useNewAgentData } from './new-agent.data'
+import { type AgentWizardMode, useAgentWizardData } from './new-agent.data'
 import { SEED_ACL_RULES } from './new-agent.helpers'
 import {
   type NewAgentValues,
@@ -18,15 +19,24 @@ import {
   newAgentSchema,
 } from './new-agent.schemas'
 
-export function NewAgent() {
-  const { agents, createAgent, navigate } = useNewAgentData()
+interface NewAgentProps {
+  /** Defaults to 'create'. Use 'edit' on the `/agents/:id/edit` route. */
+  mode?: AgentWizardMode
+}
+
+export function NewAgent({ mode = 'create' }: NewAgentProps) {
+  const { agentId, agents, createAgent, updateAgent, profileDetail, navigate } =
+    useAgentWizardData(mode)
+
+  const initialDefaults: NewAgentValues = {
+    ...newAgentDefaults,
+    aclRuleIds: SEED_ACL_RULES.map((rule) => rule.id),
+  }
 
   const form = useForm<NewAgentValues>({
     resolver: zodResolver(newAgentSchema),
-    defaultValues: {
-      ...newAgentDefaults,
-      aclRuleIds: SEED_ACL_RULES.map((rule) => rule.id),
-    },
+    defaultValues: initialDefaults,
+    values: mode === 'edit' ? (profileDetail.data ?? undefined) : undefined,
     mode: 'onSubmit',
   })
 
@@ -40,7 +50,31 @@ export function NewAgent() {
     }
   }
 
-  const onSubmit = (values: NewAgentValues) => createAgent.mutate(values)
+  const onSubmit = (values: NewAgentValues) => {
+    if (mode === 'edit' && agentId) {
+      updateAgent.mutate({ id: agentId, ...values })
+      return
+    }
+    createAgent.mutate(values)
+  }
+
+  const isEdit = mode === 'edit'
+  const headerTitle = isEdit ? 'Edit agent' : 'Add an agent'
+  const headerSub = isEdit
+    ? 'tune the harness connector for this agent'
+    : 'connect a harness to BrowserOS'
+  const isMutating = isEdit ? updateAgent.isPending : createAgent.isPending
+  const submitted = isEdit
+    ? updateAgent.isSuccess
+    : createAgent.data !== undefined
+
+  if (isEdit && profileDetail.isLoading) {
+    return (
+      <div className="flex h-full flex-1 items-center justify-center bg-bg-canvas text-ink-3">
+        <Spinner />
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-1 bg-bg-canvas">
@@ -61,19 +95,19 @@ export function NewAgent() {
               </button>
               <span className="h-5 w-px bg-border-2" />
               <span className="font-extrabold text-base text-ink tracking-tight">
-                Add an agent
+                {headerTitle}
               </span>
-              <span className="text-ink-3 text-xs">
-                — connect a harness to BrowserOS
-              </span>
+              <span className="text-ink-3 text-xs">. {headerSub}</span>
             </header>
 
             <div className="mx-auto flex w-full max-w-[600px] flex-col gap-6 px-6 py-6 pb-20">
-              <CopyFromExistingCard
-                agents={agents}
-                selectedId={cloneFromId}
-                onClone={handleClone}
-              />
+              {!isEdit && (
+                <CopyFromExistingCard
+                  agents={agents}
+                  selectedId={cloneFromId}
+                  onClone={handleClone}
+                />
+              )}
               <NumberedSection
                 n={1}
                 title="Harness"
@@ -106,8 +140,10 @@ export function NewAgent() {
           </div>
 
           <ConnectorPreviewRail
+            mode={mode}
             createdAgent={createAgent.data}
-            isCreating={createAgent.isPending}
+            isMutating={isMutating}
+            submitted={submitted}
             onDone={() => navigate('/agents')}
           />
         </form>
@@ -117,7 +153,7 @@ export function NewAgent() {
 }
 
 /* ---------------------------------------------------------------------------
- * Sub-components — kept private to this module to stay under the line budget.
+ * Sub-components, kept private to this module to stay under the line budget.
  * -------------------------------------------------------------------------*/
 
 interface NumberedSectionProps {

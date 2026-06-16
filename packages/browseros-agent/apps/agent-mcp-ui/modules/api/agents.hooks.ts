@@ -4,9 +4,16 @@ import type { RunStatus } from '@/lib/status'
 import {
   buildCliCommand,
   buildMcpUrl,
+  IMPORTED_SITES,
+  SEED_ACL_RULES,
   toSlug,
 } from '@/screens/new-agent/new-agent.helpers'
-import type { NewAgentValues } from '@/screens/new-agent/new-agent.schemas'
+import {
+  APPROVAL_CATEGORIES,
+  type ApprovalVerdict,
+  type LoginMode,
+  type NewAgentValues,
+} from '@/screens/new-agent/new-agent.schemas'
 
 export interface AgentRow {
   id: string
@@ -266,5 +273,84 @@ export const useRegenerateMcpUrl = createMutation<
       id,
       mcpUrl: `${buildMcpUrl(`${toSlug(id)}-${nanoid(6).toLowerCase()}`)}`,
     }
+  },
+})
+
+interface UseAgentProfileDetailVariables {
+  id: string
+}
+
+/**
+ * Derive a full NewAgentValues from a profile summary. The directory
+ * row carries summary fields (loginCount, aclRuleCount,
+ * blockedActionCount); the wizard wants the full schema. The real
+ * backend will persist + return the wizard shape directly; this
+ * mock synthesises a plausible detail from the summary fields so the
+ * edit screen prefills sensibly.
+ */
+function profileToWizardValues(profile: AgentProfile): NewAgentValues {
+  const loginMode = profile.loginScopeLabel.startsWith('Selective')
+    ? ('selective' as LoginMode)
+    : profile.loginScopeLabel.startsWith('All my logins')
+      ? ('all' as LoginMode)
+      : ('profile' as LoginMode)
+  const selectedSites =
+    loginMode === 'selective'
+      ? IMPORTED_SITES.slice(
+          0,
+          Math.min(profile.loginCount, IMPORTED_SITES.length),
+        )
+      : []
+  const approvals = Object.fromEntries(
+    APPROVAL_CATEGORIES.map((category) => [
+      category.id,
+      category.defaultVerdict,
+    ]),
+  ) as Record<string, ApprovalVerdict>
+  const aclRuleIds = SEED_ACL_RULES.slice(
+    0,
+    Math.min(profile.aclRuleCount, SEED_ACL_RULES.length),
+  ).map((rule) => rule.id)
+  return {
+    name: profile.name,
+    harness: profile.harness,
+    loginMode,
+    selectedSites: [...selectedSites],
+    approvals,
+    aclRuleIds,
+    customAclRules: [],
+  }
+}
+
+export const useAgentProfileDetail = createQuery<
+  NewAgentValues | null,
+  UseAgentProfileDetailVariables
+>({
+  queryKey: ['agent-profile-detail'],
+  fetcher: ({ id }) =>
+    new Promise((resolve) =>
+      setTimeout(() => {
+        const profile = MOCK_AGENT_PROFILES.find((p) => p.id === id) ?? null
+        resolve(profile ? profileToWizardValues(profile) : null)
+      }, 80),
+    ),
+})
+
+interface UpdateAgentVariables extends NewAgentValues {
+  id: string
+}
+
+/**
+ * Mock updateAgent mutation. Returns the updated values so the
+ * caller can rewrite the matching agent-profiles row. Surface area
+ * mirrors the eventual hono-rpc `PATCH /agents/:id` route.
+ */
+export const useUpdateAgent = createMutation<
+  UpdateAgentVariables,
+  UpdateAgentVariables
+>({
+  mutationFn: async (variables) => {
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    return variables
   },
 })

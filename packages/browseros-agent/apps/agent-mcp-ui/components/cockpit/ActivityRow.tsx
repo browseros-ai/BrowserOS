@@ -4,9 +4,11 @@ import {
   CheckCircle2,
   ChevronRight,
   ExternalLink,
+  History,
   Lock,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
+import { Link } from 'react-router'
 import { cn } from '@/lib/utils'
 import type { ActivityRow as ActivityRowData } from '@/modules/api/activity.hooks'
 
@@ -162,6 +164,14 @@ export function ActivityRow({ row }: ActivityRowProps) {
           {jumpLabel}
           <ExternalLink className="size-3.5" />
         </button>
+      ) : row.status === 'done' && row.runId ? (
+        <Link
+          to={`/governance/audit/${row.runId}/replay`}
+          className="inline-flex shrink-0 items-center gap-1.5 self-center whitespace-nowrap rounded-md border border-border-2 bg-card px-2.5 py-1.5 font-bold text-[12px] text-accent-ink transition hover:brightness-95"
+        >
+          <History className="size-3.5" />
+          Replay
+        </Link>
       ) : (
         <ChevronRight className="size-4 shrink-0 self-center text-ink-4" />
       )}

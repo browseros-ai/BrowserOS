@@ -15,6 +15,11 @@ export interface ActivityRow {
   action: string
   site?: string
   when: string
+  /**
+   * Run id used to route a done row's Replay link to
+   * `/governance/audit/:runId/replay`. Only required on done rows.
+   */
+  runId?: string
 }
 
 /**
@@ -58,6 +63,7 @@ const MOCK_ACTIVITY: ActivityRow[] = [
     action: 'Exported Q2 pipeline, 42 deals, read-only',
     site: 'app.hubspot.com',
     when: '3 days ago',
+    runId: 'run-concur-may',
   },
 ]
 

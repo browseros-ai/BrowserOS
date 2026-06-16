@@ -27,6 +27,7 @@ export function App() {
           <Route path="/" element={<Cockpit />} />
           <Route path="/agents" element={<Agents />} />
           <Route path="/agents/new" element={<NewAgent />} />
+          <Route path="/agents/:id/edit" element={<NewAgent mode="edit" />} />
           <Route path="/governance" element={<Governance />}>
             <Route index element={<Navigate to="audit" replace />} />
             <Route path="audit" element={<AuditTab />} />
