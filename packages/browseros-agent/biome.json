@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!**/apps/eval/src/dashboard/index.html"]
+    "includes": ["**", "!**/apps/eval/src/dashboard/index.html", "!**/*.svg"]
   },
   "formatter": {
     "enabled": true,
@@ -50,16 +50,6 @@
     }
   },
   "overrides": [
-    {
-      "includes": ["**/*.svg"],
-      "linter": {
-        "rules": {
-          "a11y": {
-            "noSvgWithoutTitle": "off"
-          }
-        }
-      }
-    },
     {
       "includes": ["**/apps/eval/src/dashboard/viewer.html"],
       "linter": {
