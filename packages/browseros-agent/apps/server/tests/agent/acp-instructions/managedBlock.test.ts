@@ -98,7 +98,8 @@ describe('spliceManagedBlock', () => {
     const userBottom = '\n\n## addendum from me\nmore content.\n'
     const source = userTop + oldBlock + userBottom
 
-    const block = findManagedBlock(source)!
+    const block = findManagedBlock(source)
+    if (!block) throw new Error('expected managed block in fixture')
     const fresh = renderManagedBlock('new body', 'newhash')
     const next = spliceManagedBlock(source, block, fresh)
 

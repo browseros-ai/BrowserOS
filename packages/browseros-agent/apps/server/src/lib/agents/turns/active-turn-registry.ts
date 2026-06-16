@@ -327,8 +327,10 @@ export class TurnRegistry {
         const pump = async () => {
           try {
             while (true) {
-              while (pendingFrames.length > 0) {
-                controller.enqueue(pendingFrames.shift()!)
+              let nextFrame = pendingFrames.shift()
+              while (nextFrame !== undefined) {
+                controller.enqueue(nextFrame)
+                nextFrame = pendingFrames.shift()
               }
               if (turn.status !== 'running' && pendingFrames.length === 0) {
                 break
