@@ -17,15 +17,20 @@
   "scripts": {
     "start": "bun --watch src/main.ts",
     "start:ci": "bun src/main.ts",
+    "test": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "bunx biome check",
     "lint:fix": "bunx biome check --write --unsafe"
   },
   "dependencies": {
-    "hono": "^4.12.3"
+    "@browseros/shared": "workspace:*",
+    "@hono/zod-validator": "^0.8.0",
+    "hono": "^4.12.3",
+    "nanoid": "^5.1.11",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "typescript": "^5.9.2",
-    "@types/bun": "^1.3.5"
+    "@types/bun": "^1.3.5",
+    "typescript": "^5.9.2"
   }
 }
