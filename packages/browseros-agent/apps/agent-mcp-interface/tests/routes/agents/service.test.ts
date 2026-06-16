@@ -192,7 +192,7 @@ describe('agents service', () => {
       if (!result) throw new Error('unreachable')
       expect(result.id).toBe(created.id)
       expect(result.mcpUrl).not.toBe(created.mcpUrl)
-      expect(result.mcpUrl).toMatch(/\/mcp\/rotate-[a-z0-9]+$/)
+      expect(result.mcpUrl).toMatch(/\/mcp\/rotate-[a-z0-9-]+$/)
       const detail = await agents.getDetail(created.id)
       expect(detail).not.toBeNull()
     })

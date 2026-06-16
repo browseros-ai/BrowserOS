@@ -209,7 +209,11 @@ export async function regenerateMcpUrl(
       .filter((profile) => profile.id !== id)
       .map((profile) => profile.slug),
   )
-  const base = `${toSlug(existing.name)}-${nanoid(6).toLowerCase()}`
+  // Route the whole base through toSlug so the nanoid suffix can't
+  // smuggle `_` or `-` characters into the slug; the rotated slug
+  // stays in the canonical lowercase-alphanum-with-single-hyphens
+  // shape.
+  const base = toSlug(`${existing.name} ${nanoid(6)}`)
   const slug = uniqueSlug(base, taken)
   const next: StoredAgentProfile = {
     ...existing,
