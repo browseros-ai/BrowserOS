@@ -140,7 +140,7 @@ export const ChatError: FC<ChatErrorProps> = ({
             rel="noopener noreferrer"
             className="underline hover:text-foreground"
           >
-            Learn more
+            About daily limits
           </a>
           {' or '}
           <a
