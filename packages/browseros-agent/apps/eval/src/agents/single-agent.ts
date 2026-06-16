@@ -8,7 +8,7 @@ import { Browser } from '@browseros/server/browser'
 import { CdpBackend } from '@browseros/server/browser/backends/cdp'
 import { CaptchaWaiter } from '../capture/captcha-waiter'
 import { DEFAULT_TIMEOUT_MS } from '../constants'
-import type { TaskMetadata, TokenUsage } from '../types'
+import type { TaskMetadata, TokenUsage, UIMessageStreamEvent } from '../types'
 import { extractDatasetMetadata } from '../utils/dataset-metadata'
 import { resolveProviderConfig } from '../utils/resolve-provider-config'
 import {
@@ -148,12 +148,12 @@ export class SingleAgentEvaluator implements AgentEvaluator {
               addTokenUsageFromAiSdkStep(tokenUsage, step)
               if (toolCalls) {
                 for (const tc of toolCalls) {
-                  const inputEvent = {
+                  const inputEvent: UIMessageStreamEvent = {
                     type: 'tool-input-available',
                     toolCallId: tc.toolCallId,
                     toolName: tc.toolName,
                     input: tc.input,
-                  } as any
+                  }
                   await capture.messageLogger.logStreamEvent(inputEvent)
                   capture.emitEvent(task.query_id, inputEvent)
                 }
@@ -161,11 +161,11 @@ export class SingleAgentEvaluator implements AgentEvaluator {
 
               if (toolResults) {
                 for (const tr of toolResults) {
-                  const outputEvent = {
+                  const outputEvent: UIMessageStreamEvent = {
                     type: 'tool-output-available',
                     toolCallId: tr.toolCallId,
                     output: tr.output,
-                  } as any
+                  }
                   const screenshot = screenshotByToolCallId.get(tr.toolCallId)
                   await capture.messageLogger.logStreamEvent(
                     outputEvent,
@@ -183,13 +183,19 @@ export class SingleAgentEvaluator implements AgentEvaluator {
 
               if (text) {
                 const textId = randomUUID()
-                const startEvent = { type: 'text-start', id: textId } as any
-                const deltaEvent = {
+                const startEvent: UIMessageStreamEvent = {
+                  type: 'text-start',
+                  id: textId,
+                }
+                const deltaEvent: UIMessageStreamEvent = {
                   type: 'text-delta',
                   id: textId,
                   delta: text,
-                } as any
-                const endEvent = { type: 'text-end', id: textId } as any
+                }
+                const endEvent: UIMessageStreamEvent = {
+                  type: 'text-end',
+                  id: textId,
+                }
                 await capture.messageLogger.logStreamEvent(startEvent)
                 await capture.messageLogger.logStreamEvent(deltaEvent)
                 await capture.messageLogger.logStreamEvent(endEvent)

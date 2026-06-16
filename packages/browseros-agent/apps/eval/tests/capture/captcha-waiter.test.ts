@@ -1,17 +1,18 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
+import type { Browser } from '@browseros/server/browser'
 import { CaptchaWaiter } from '../../src/capture/captcha-waiter'
 
 function createMockBrowser(
   evaluateResults: Array<{ value?: unknown; error?: string }>,
-) {
+): Browser {
   let callIndex = 0
   return {
     evaluate: mock(async (_page: number, _expr: string) => {
-      const result = evaluateResults[callIndex] ?? evaluateResults.at(-1)!
+      const result = evaluateResults[callIndex] ?? evaluateResults.at(-1)
       callIndex++
       return result
     }),
-  } as any
+  } as unknown as Browser
 }
 
 describe('CaptchaWaiter', () => {
@@ -113,7 +114,7 @@ describe('CaptchaWaiter', () => {
       evaluate: mock(async () => {
         throw new Error('Connection lost')
       }),
-    } as any
+    } as unknown as Browser
 
     const result = await waiter.waitIfCaptchaPresent(browser, 1)
 
