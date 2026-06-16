@@ -48,5 +48,31 @@
         "organizeImports": "on"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["**/*.svg"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noSvgWithoutTitle": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["**/apps/eval/src/dashboard/viewer.html"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "useValidAnchor": "off"
+          },
+          "complexity": {
+            "noExcessiveCognitiveComplexity": "off",
+            "useOptionalChain": "off"
+          }
+        }
+      }
+    }
+  ]
 }
