@@ -63,6 +63,16 @@
           }
         }
       }
+    },
+    {
+      "includes": ["**/scripts/dev/inspect-ui.ts"],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noExcessiveCognitiveComplexity": "off"
+          }
+        }
+      }
     }
   ]
 }

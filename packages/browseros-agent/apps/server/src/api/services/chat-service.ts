@@ -43,6 +43,7 @@ export interface ChatServiceDeps {
 export class ChatService {
   constructor(private deps: ChatServiceDeps) {}
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: chat request orchestration; refactor tracked separately
   async processMessage(
     request: ChatRequest,
     abortSignal: AbortSignal,
