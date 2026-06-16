@@ -152,4 +152,25 @@ describe('storage', () => {
       )
     })
   })
+
+  test('lateral traversal that stays inside the interface root is still rejected', async () => {
+    await withTempBrowserosDir(async () => {
+      // `agents/../config.json` normalises to `config.json` which sits
+      // INSIDE the interface root but escapes the intended subdirectory.
+      // The guard must catch the raw `..` before normalize collapses it.
+      expect(() => readJson('agents/../config.json', sampleSchema)).toThrow(
+        StorageInvalidPathError,
+      )
+      expect(() =>
+        writeJson(
+          'agents/../config.json',
+          { name: 'x', ok: true },
+          sampleSchema,
+        ),
+      ).toThrow(StorageInvalidPathError)
+      expect(() => removeFile('agents/../config.json')).toThrow(
+        StorageInvalidPathError,
+      )
+    })
+  })
 })

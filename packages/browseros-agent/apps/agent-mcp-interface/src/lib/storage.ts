@@ -56,6 +56,13 @@ export class StorageInvalidPathError extends Error {
 
 function guardRelativePath(relPath: string): void {
   if (isAbsolute(relPath)) throw new StorageInvalidPathError(relPath)
+  // Inspect the raw input first: `normalize` collapses `agents/../config.json`
+  // to `config.json`, which would silently escape the intended
+  // subdirectory while still passing the rooted-prefix check below.
+  // Reject any `..` segment in the input.
+  if (relPath.split(/[\\/]/).includes('..')) {
+    throw new StorageInvalidPathError(relPath)
+  }
   const normalized = normalize(relPath)
   if (normalized.startsWith('..') || normalized.split(sep).includes('..')) {
     throw new StorageInvalidPathError(relPath)

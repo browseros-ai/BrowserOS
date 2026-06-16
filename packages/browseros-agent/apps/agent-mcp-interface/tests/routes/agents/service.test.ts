@@ -204,6 +204,69 @@ describe('agents service', () => {
     })
   })
 
+  test('list skips a corrupt agent file instead of rejecting the whole call', async () => {
+    await withTempBrowserosDir(async (dir) => {
+      const ok = await agents.create(makeInput({ name: 'Healthy' }))
+      // Hand-write a garbage file under agents/. listFiles picks it
+      // up; the per-file readJson rejects; loadAll logs + skips it.
+      const { writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      await writeFile(
+        join(dir, 'mcp-interface/agents', 'broken.json'),
+        '{ this is not valid json',
+        'utf8',
+      )
+      const rows = await agents.list()
+      expect(rows.map((row) => row.id)).toEqual([ok.id])
+      // The directory still serves new writes after a corrupt sibling.
+      const fresh = await agents.create(makeInput({ name: 'After corruption' }))
+      const after = await agents.list()
+      expect(after.map((row) => row.id).sort()).toEqual(
+        [ok.id, fresh.id].sort(),
+      )
+    })
+  })
+
+  test('traversal-shaped ids resolve as not-found across every read/write path', async () => {
+    await withTempBrowserosDir(async () => {
+      await agents.create(makeInput({ name: 'Real' }))
+      // Build a path that LOOKS like a profile id but contains
+      // characters the service must reject before the storage layer
+      // sees them.
+      const evilIds = [
+        '../config',
+        'agents/../config',
+        '..',
+        '../../etc/passwd',
+      ]
+      for (const evilId of evilIds) {
+        expect(await agents.getDetail(evilId)).toBeNull()
+        expect(await agents.update(evilId, makeInput())).toBeNull()
+        expect(await agents.remove(evilId)).toBeNull()
+        expect(await agents.regenerateMcpUrl(evilId)).toBeNull()
+      }
+    })
+  })
+
+  test('ten parallel creates with the same name produce distinct slugs (no TOCTOU race)', async () => {
+    await withTempBrowserosDir(async () => {
+      const count = 10
+      const created = await Promise.all(
+        Array.from({ length: count }, () =>
+          agents.create(makeInput({ name: 'Race' })),
+        ),
+      )
+      const slugs = created.map((c) => c.slug).sort()
+      // Expected slugs are race, race-2, race-3, ..., race-10 (sorted
+      // lexicographically -> race, race-10, race-2, race-3, ...).
+      expect(new Set(slugs).size).toBe(count)
+      expect(slugs).toContain('race')
+      for (let i = 2; i <= count; i++) {
+        expect(slugs).toContain(`race-${i}`)
+      }
+    })
+  })
+
   test('two parallel updates of different profiles do not corrupt each other', async () => {
     await withTempBrowserosDir(async () => {
       const a = await agents.create(makeInput({ name: 'Parallel A' }))

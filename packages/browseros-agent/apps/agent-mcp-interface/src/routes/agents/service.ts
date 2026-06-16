@@ -17,6 +17,8 @@
 
 import { nanoid } from 'nanoid'
 import { env } from '../../env'
+import { AsyncMutex } from '../../lib/async-mutex'
+import { logger } from '../../lib/logger'
 import { toSlug, uniqueSlug } from '../../lib/slug'
 import { listFiles, readJson, removeFile, writeJson } from '../../lib/storage'
 import { getLocalServerUrl } from '../../local-server-url'
@@ -31,6 +33,33 @@ import {
 
 const AGENTS_SUBDIR = 'agents'
 const TOTAL_PROFILE_LOGINS = 47
+
+/**
+ * Serialises every slug-mutating operation (create / update /
+ * regenerateMcpUrl) so the read-snapshot → uniqueSlug → write
+ * window cannot race against itself. Reads (list / getDetail) stay
+ * lock-free; concurrent writes to different ids that don't touch
+ * the slug space could in principle drop the mutex too, but the cost
+ * of the queue is negligible and keeping all three under the same
+ * lock means the slug-uniqueness invariant holds without per-op
+ * reasoning.
+ */
+const slugMutex = new AsyncMutex()
+
+/**
+ * `id` is always a server-generated nanoid(8). Validate it before
+ * forwarding to the filesystem so a traversal-shaped value (e.g.
+ * URL-encoded `..%2Fconfig`) can never reach the storage layer even
+ * if a future route forwards user input directly. Nanoid's default
+ * alphabet is `A-Za-z0-9_-`; we cap the length to keep the file name
+ * predictable.
+ */
+const ID_PATTERN = /^[A-Za-z0-9_-]+$/
+const MAX_ID_LENGTH = 64
+
+export function isValidId(id: string): boolean {
+  return id.length > 0 && id.length <= MAX_ID_LENGTH && ID_PATTERN.test(id)
+}
 
 function fileFor(id: string): string {
   return `${AGENTS_SUBDIR}/${id}.json`
@@ -52,19 +81,41 @@ function buildCliCommand(slug: string): string {
   return `mcp add ${slug}`
 }
 
-/** All stored profiles, in arbitrary order. */
+/**
+ * All readable stored profiles, in arbitrary order. A single corrupt
+ * file is logged + skipped rather than rejecting the whole list, so
+ * one bad agent json (manual edit, partial migration, half-written
+ * file on a weird FS) can't brick the whole package: the directory
+ * still loads and `create` can still write new profiles.
+ */
 async function loadAll(): Promise<StoredAgentProfile[]> {
   const names = await listFiles(AGENTS_SUBDIR)
-  const profiles = await Promise.all(
+  const settled = await Promise.allSettled(
     names.map((name) =>
       readJson(`${AGENTS_SUBDIR}/${name}`, storedAgentProfileSchema),
     ),
   )
+  const profiles: StoredAgentProfile[] = []
+  for (let i = 0; i < settled.length; i++) {
+    const result = settled[i]
+    if (result.status === 'fulfilled') {
+      profiles.push(result.value)
+    } else {
+      logger.warn('skipping unreadable agent profile', {
+        file: `${AGENTS_SUBDIR}/${names[i]}`,
+        error:
+          result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason),
+      })
+    }
+  }
   return profiles
 }
 
 /** Stored profile for an id, or null when the file is missing. */
 async function loadById(id: string): Promise<StoredAgentProfile | null> {
+  if (!isValidId(id)) return null
   try {
     return await readJson(fileFor(id), storedAgentProfileSchema)
   } catch (err) {
@@ -133,67 +184,72 @@ export async function getDetail(id: string): Promise<NewAgentValues | null> {
 }
 
 export async function create(input: NewAgentValues): Promise<CreatedAgent> {
-  const id = nanoid(8)
-  const existing = await loadAll()
-  const slug = uniqueSlug(
-    toSlug(input.name),
-    new Set(existing.map((p) => p.slug)),
-  )
-  const now = nowIso()
-  const profile: StoredAgentProfile = {
-    ...input,
-    id,
-    slug,
-    mcpUrl: buildMcpUrl(slug),
-    status: 'configured',
-    createdAt: now,
-    updatedAt: now,
-  }
-  await writeJson(fileFor(id), profile, storedAgentProfileSchema)
-  return {
-    id,
-    name: profile.name,
-    harness: profile.harness,
-    slug,
-    mcpUrl: profile.mcpUrl,
-    cliCommand: buildCliCommand(slug),
-  }
+  return slugMutex.run(async () => {
+    const id = nanoid(8)
+    const existing = await loadAll()
+    const slug = uniqueSlug(
+      toSlug(input.name),
+      new Set(existing.map((p) => p.slug)),
+    )
+    const now = nowIso()
+    const profile: StoredAgentProfile = {
+      ...input,
+      id,
+      slug,
+      mcpUrl: buildMcpUrl(slug),
+      status: 'configured',
+      createdAt: now,
+      updatedAt: now,
+    }
+    await writeJson(fileFor(id), profile, storedAgentProfileSchema)
+    return {
+      id,
+      name: profile.name,
+      harness: profile.harness,
+      slug,
+      mcpUrl: profile.mcpUrl,
+      cliCommand: buildCliCommand(slug),
+    }
+  })
 }
 
 export async function update(
   id: string,
   input: NewAgentValues,
 ): Promise<StoredAgentProfile | null> {
-  const existing = await loadById(id)
-  if (!existing) return null
-  const existingProfiles = await loadAll()
-  const nameSlug = toSlug(input.name)
-  const slug =
-    nameSlug === toSlug(existing.name)
-      ? existing.slug
-      : uniqueSlug(
-          nameSlug,
-          new Set(
-            existingProfiles
-              .filter((profile) => profile.id !== id)
-              .map((profile) => profile.slug),
-          ),
-        )
-  const next: StoredAgentProfile = {
-    ...existing,
-    ...input,
-    id,
-    slug,
-    mcpUrl: buildMcpUrl(slug),
-    status: existing.status,
-    createdAt: existing.createdAt,
-    updatedAt: nowIso(),
-  }
-  await writeJson(fileFor(id), next, storedAgentProfileSchema)
-  return next
+  return slugMutex.run(async () => {
+    const existing = await loadById(id)
+    if (!existing) return null
+    const existingProfiles = await loadAll()
+    const nameSlug = toSlug(input.name)
+    const slug =
+      nameSlug === toSlug(existing.name)
+        ? existing.slug
+        : uniqueSlug(
+            nameSlug,
+            new Set(
+              existingProfiles
+                .filter((profile) => profile.id !== id)
+                .map((profile) => profile.slug),
+            ),
+          )
+    const next: StoredAgentProfile = {
+      ...existing,
+      ...input,
+      id,
+      slug,
+      mcpUrl: buildMcpUrl(slug),
+      status: existing.status,
+      createdAt: existing.createdAt,
+      updatedAt: nowIso(),
+    }
+    await writeJson(fileFor(id), next, storedAgentProfileSchema)
+    return next
+  })
 }
 
 export async function remove(id: string): Promise<{ id: string } | null> {
+  if (!isValidId(id)) return null
   const existed = await removeFile(fileFor(id))
   return existed ? { id } : null
 }
@@ -201,26 +257,28 @@ export async function remove(id: string): Promise<{ id: string } | null> {
 export async function regenerateMcpUrl(
   id: string,
 ): Promise<RegeneratedMcpUrl | null> {
-  const existing = await loadById(id)
-  if (!existing) return null
-  const profiles = await loadAll()
-  const taken = new Set(
-    profiles
-      .filter((profile) => profile.id !== id)
-      .map((profile) => profile.slug),
-  )
-  // Route the whole base through toSlug so the nanoid suffix can't
-  // smuggle `_` or `-` characters into the slug; the rotated slug
-  // stays in the canonical lowercase-alphanum-with-single-hyphens
-  // shape.
-  const base = toSlug(`${existing.name} ${nanoid(6)}`)
-  const slug = uniqueSlug(base, taken)
-  const next: StoredAgentProfile = {
-    ...existing,
-    slug,
-    mcpUrl: buildMcpUrl(slug),
-    updatedAt: nowIso(),
-  }
-  await writeJson(fileFor(id), next, storedAgentProfileSchema)
-  return { id, mcpUrl: next.mcpUrl }
+  return slugMutex.run(async () => {
+    const existing = await loadById(id)
+    if (!existing) return null
+    const profiles = await loadAll()
+    const taken = new Set(
+      profiles
+        .filter((profile) => profile.id !== id)
+        .map((profile) => profile.slug),
+    )
+    // Route the whole base through toSlug so the nanoid suffix can't
+    // smuggle `_` or `-` characters into the slug; the rotated slug
+    // stays in the canonical lowercase-alphanum-with-single-hyphens
+    // shape.
+    const base = toSlug(`${existing.name} ${nanoid(6)}`)
+    const slug = uniqueSlug(base, taken)
+    const next: StoredAgentProfile = {
+      ...existing,
+      slug,
+      mcpUrl: buildMcpUrl(slug),
+      updatedAt: nowIso(),
+    }
+    await writeJson(fileFor(id), next, storedAgentProfileSchema)
+    return { id, mcpUrl: next.mcpUrl }
+  })
 }
