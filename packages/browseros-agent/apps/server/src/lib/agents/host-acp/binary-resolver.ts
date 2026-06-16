@@ -184,7 +184,7 @@ async function lookupWithCommand(
   const result = await runCommand(cmd, args, { env, timeoutMs }).catch(
     () => null,
   )
-  if (!result || result.exitCode !== 0) return null
+  if (result?.exitCode !== 0) return null
   return firstOutputPath(result.stdout)
 }
 
