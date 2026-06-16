@@ -16,7 +16,10 @@ import {
 export function SiteRulesTab() {
   const { rules, isLoading, addRule, deleteRule } = useSiteRulesData()
 
-  const onAdd = (values: AddSiteRuleVariables) => addRule.mutate(values)
+  const onAdd = (
+    values: AddSiteRuleVariables,
+    options?: { onSuccess?: () => void },
+  ) => addRule.mutate(values, options)
   const onDelete = (rule: SiteRule) => deleteRule.mutate({ id: rule.id })
 
   return (

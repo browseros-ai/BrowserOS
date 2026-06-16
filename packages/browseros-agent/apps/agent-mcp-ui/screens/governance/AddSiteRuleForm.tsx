@@ -30,7 +30,17 @@ import {
 
 interface AddSiteRuleFormProps {
   isSubmitting: boolean
-  onSubmit: (values: AddSiteRuleVariables) => void
+  /**
+   * Receives validated form values plus optional mutation callbacks
+   * so the parent can hand `onSuccess` straight to react-query-kit.
+   * Keeping the form mounted until the mutation resolves means a 4xx
+   * (when a real backend lands) leaves the user's input intact instead
+   * of silently dropping the row.
+   */
+  onSubmit: (
+    values: AddSiteRuleVariables,
+    options?: { onSuccess?: () => void },
+  ) => void
 }
 
 /**
@@ -55,8 +65,7 @@ export function AddSiteRuleForm({
   }
 
   const handleSubmit = form.handleSubmit((values) => {
-    onSubmit(values)
-    close()
+    onSubmit(values, { onSuccess: close })
   })
 
   if (!open) {
