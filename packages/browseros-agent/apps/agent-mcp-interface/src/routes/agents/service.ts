@@ -293,12 +293,17 @@ export async function remove(id: string): Promise<DeletedAgent | null> {
   // and we 404.
   const profile = await loadById(id)
   if (!profile) return null
+  // Remove the file FIRST. Two concurrent deletes both observe the
+  // same profile via loadById, but only the winner's removeFile
+  // returns true; the loser exits with 404 here and never
+  // side-effects the harness. Without this order, both calls would
+  // run uninstallForAgent and the loser would still report 404.
+  const existed = await removeFile(fileFor(id))
+  if (!existed) return null
   const harnessUninstall = await uninstallForAgent({
     slug: profile.slug,
     harness: profile.harness,
   })
-  const existed = await removeFile(fileFor(id))
-  if (!existed) return null
   return { id, harnessUninstall }
 }
 

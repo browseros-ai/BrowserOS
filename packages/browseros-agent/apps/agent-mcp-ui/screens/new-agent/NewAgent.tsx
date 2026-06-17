@@ -64,14 +64,34 @@ export function NewAgent({ mode = 'create' }: NewAgentProps) {
     // hydrate every field. Cached by tanstack so reopening the same
     // card after a clone is instant; the detail endpoint returns the
     // exact NewAgentValues shape `form` already knows about.
-    const detail = await queryClient.fetchQuery(
-      useAgentProfileDetail.getFetchOptions({ id: profile.id }),
-    )
-    if (!detail) return
-    form.reset(
-      { ...detail, name: `Copy of ${profile.name}` },
-      { keepDefaultValues: false },
-    )
+    try {
+      const detail = await queryClient.fetchQuery(
+        useAgentProfileDetail.getFetchOptions({ id: profile.id }),
+      )
+      if (!detail) {
+        // Backend returned 404. Drop the "selected" highlight so the
+        // user can pick another card; the form keeps its current
+        // values rather than wiping to defaults.
+        setCloneFromId(null)
+        return
+      }
+      form.reset(
+        { ...detail, name: `Copy of ${profile.name}` },
+        { keepDefaultValues: false },
+      )
+    } catch (err) {
+      // Network error, 5xx, or the SDK rejected the response. Without
+      // this clear, the chip stays highlighted while the form
+      // continues to render its prior values, which reads as "the
+      // clone worked silently". Log so an operator can diagnose;
+      // toast is intentionally not added here to avoid coupling the
+      // wizard to a notification system we don't have yet.
+      console.warn(
+        '[NewAgent.handleClone] failed to fetch profile detail; clearing selection',
+        err,
+      )
+      setCloneFromId(null)
+    }
   }
 
   const onSubmit = (values: NewAgentValues) => {
