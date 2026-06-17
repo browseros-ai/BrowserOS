@@ -1,9 +1,9 @@
 import { Ban, Check, type LucideIcon, ShieldQuestion } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import {
-  APPROVAL_CATEGORIES,
-  type ApprovalCategory,
-  type ApprovalVerdict,
+import { useApprovalCatalog } from '@/modules/api/permissions.hooks'
+import type {
+  ApprovalCategory,
+  ApprovalVerdict,
 } from '@/screens/new-agent/new-agent.schemas'
 
 /**
@@ -12,7 +12,8 @@ import {
  * agent; this is the system-wide default each agent starts from.
  */
 export function PermissionsTab() {
-  const buckets = bucketise(APPROVAL_CATEGORIES)
+  const { data: catalog = [] } = useApprovalCatalog()
+  const buckets = bucketise(catalog)
   return (
     <section className="flex flex-col gap-4">
       <p className="text-ink-2 text-sm leading-snug">
