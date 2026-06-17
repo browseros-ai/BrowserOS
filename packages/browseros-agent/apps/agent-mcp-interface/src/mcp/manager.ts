@@ -20,16 +20,9 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
-import { getExecutor } from '../executor'
 import { logger } from '../lib/logger'
 import { findBySlug } from '../routes/agents/service'
-import { registerTool } from './register'
-import { attachTool } from './tools/attach'
-import { clickTool } from './tools/click'
-import { navigateTool } from './tools/navigate'
-import { readTool } from './tools/read'
-import { submitTool } from './tools/submit'
-import { typeTool } from './tools/type'
+import { registerBrowserTools } from './register'
 
 const SERVER_NAME = 'browseros-agent-mcp-interface'
 const SERVER_VERSION = '0.0.1'
@@ -57,13 +50,7 @@ export async function handleMcpRequest(
     version: SERVER_VERSION,
   })
 
-  const executor = getExecutor()
-  registerTool(server, agent, executor, navigateTool)
-  registerTool(server, agent, executor, readTool)
-  registerTool(server, agent, executor, clickTool)
-  registerTool(server, agent, executor, typeTool)
-  registerTool(server, agent, executor, attachTool)
-  registerTool(server, agent, executor, submitTool)
+  registerBrowserTools(server, agent)
 
   // Stateless mode: each request gets its own short-lived transport,
   // we return its Response directly. JSON response is enabled so the

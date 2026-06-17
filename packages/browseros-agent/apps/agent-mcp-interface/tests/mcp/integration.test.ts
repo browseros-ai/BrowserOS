@@ -8,10 +8,12 @@
  * `app.fetch`, so we never bind a port. Each test gets a fresh
  * tmp `<browserosDir>` so created agents don't leak.
  *
- * This is the Phase 2 spike: prove Bun + Hono + the SDK's Web
- * Standard transport actually compose end-to-end. The Phase 3
- * commit replaces the smoke `ping` tool with `navigate` and adds
- * permission-gate cases.
+ * The tools surface is the real `@browseros/server` catalogue. Tool
+ * dispatches that pass the permission gate hit the
+ * "session not connected" short-circuit because the cockpit's
+ * runtime is not yet bound to a live Chromium (that happens in a
+ * later commit). The permission-gate paths (Auto / Block / Ask) are
+ * fully exercisable without a session.
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -21,6 +23,19 @@ import type { NewAgentValues } from '../../src/routes/agents/schemas'
 import * as agents from '../../src/routes/agents/service'
 import app from '../../src/server'
 import { withTempBrowserosDir } from '../_helpers/temp-browseros-dir'
+
+const REAL_CATALOGUE = [
+  'act',
+  'diff',
+  'grep',
+  'navigate',
+  'read',
+  'run',
+  'screenshot',
+  'snapshot',
+  'tabs',
+  'wait',
+] as const
 
 function makeAgentInput(): NewAgentValues {
   return {
@@ -132,105 +147,28 @@ describe('/mcp/:slug route', () => {
     })
   })
 
-  test('full handshake: initialize and tools/list returns all 6 tools', async () => {
+  test('tools/list returns the real ten-tool catalogue', async () => {
     await withTempBrowserosDir(async () => {
       const created = await agents.create(makeAgentInput())
       const client = await connectedClientFor(created.slug)
       const tools = await client.listTools()
       const names = tools.tools.map((t) => t.name).sort()
-      expect(names).toEqual([
-        'attach',
-        'click',
-        'navigate',
-        'read',
-        'submit',
-        'type',
-      ])
+      expect(names).toEqual([...REAL_CATALOGUE])
       await client.close()
     })
   })
 
-  test('every non-navigate tool dispatches against the stub on the Auto path', async () => {
-    await withTempBrowserosDir(async () => {
-      // Flip every verb to Auto so the catalog defaults don't gate us.
-      const created = await agents.create({
-        ...makeAgentInput(),
-        approvals: {
-          submit: 'Auto',
-          payment: 'Auto',
-          delete: 'Auto',
-          upload: 'Auto',
-          navigate: 'Auto',
-          input: 'Auto',
-        },
-        selectedSites: ['concur.com'],
-      })
-      const client = await connectedClientFor(created.slug)
-
-      const readRes = await client.callTool({
-        name: 'read',
-        arguments: { selector: '#main' },
-      })
-      expect(readRes.isError).toBeFalsy()
-      expect((readRes.content as Array<{ text: string }>)[0].text).toContain(
-        '(stub) read #main',
-      )
-
-      const clickRes = await client.callTool({
-        name: 'click',
-        arguments: { selector: '.btn' },
-      })
-      expect(clickRes.isError).toBeFalsy()
-      expect((clickRes.content as Array<{ text: string }>)[0].text).toContain(
-        '(stub) clicked .btn',
-      )
-
-      const typeRes = await client.callTool({
-        name: 'type',
-        arguments: { selector: '#q', value: 'hi' },
-      })
-      expect(typeRes.isError).toBeFalsy()
-      expect((typeRes.content as Array<{ text: string }>)[0].text).toContain(
-        '(stub) typed hi into #q',
-      )
-
-      const attachRes = await client.callTool({
-        name: 'attach',
-        arguments: { selector: '#file', filePath: '/tmp/receipt.pdf' },
-      })
-      expect(attachRes.isError).toBeFalsy()
-      expect((attachRes.content as Array<{ text: string }>)[0].text).toContain(
-        '(stub) attached receipt.pdf to #file',
-      )
-
-      const submitRes = await client.callTool({
-        name: 'submit',
-        arguments: { selector: 'form#expenses' },
-      })
-      expect(submitRes.isError).toBeFalsy()
-      expect((submitRes.content as Array<{ text: string }>)[0].text).toContain(
-        '(stub) submitted form#expenses',
-      )
-
-      await client.close()
-    })
-  })
-
-  test('navigate (Auto verdict) returns the stub observation', async () => {
+  test('navigate on the Auto path short-circuits with "session not connected"', async () => {
     await withTempBrowserosDir(async () => {
       const created = await agents.create(makeAgentInput())
       const client = await connectedClientFor(created.slug)
-
       const result = await client.callTool({
         name: 'navigate',
-        arguments: { url: 'https://docs.google.com' },
+        arguments: { page: 0, action: 'url', url: 'https://docs.google.com' },
       })
-      expect(result.isError).toBeFalsy()
+      expect(result.isError).toBe(true)
       const content = result.content as Array<{ type: string; text: string }>
-      expect(content[0].text).toContain(
-        '(stub) navigated to https://docs.google.com',
-      )
-
+      expect(content[0].text).toContain('browser session not connected')
       await client.close()
     })
   })
@@ -238,7 +176,6 @@ describe('/mcp/:slug route', () => {
   test('navigate on a site-rule blocked domain (Block verdict) returns a structured error', async () => {
     await withTempBrowserosDir(async () => {
       const created = await agents.create(makeAgentInput())
-      // Block navigation on any *.google.com via a site rule.
       const { add: addSiteRule } = await import(
         '../../src/routes/site-rules/service'
       )
@@ -250,7 +187,7 @@ describe('/mcp/:slug route', () => {
       const client = await connectedClientFor(created.slug)
       const result = await client.callTool({
         name: 'navigate',
-        arguments: { url: 'https://docs.google.com' },
+        arguments: { page: 0, action: 'url', url: 'https://docs.google.com' },
       })
       expect(result.isError).toBe(true)
       const content = result.content as Array<{ type: string; text: string }>
@@ -263,8 +200,6 @@ describe('/mcp/:slug route', () => {
 
   test('a verb whose agent verdict is Ask returns the deferred-approval error', async () => {
     await withTempBrowserosDir(async () => {
-      // The default agent's navigate is Auto; flip it to Ask to
-      // exercise the deferred path through the same code path.
       const askAgent = await agents.create({
         ...makeAgentInput(),
         name: 'Cowork . MCP ask',
@@ -276,73 +211,11 @@ describe('/mcp/:slug route', () => {
       const client = await connectedClientFor(askAgent.slug)
       const result = await client.callTool({
         name: 'navigate',
-        arguments: { url: 'https://docs.google.com' },
+        arguments: { page: 0, action: 'url', url: 'https://docs.google.com' },
       })
       expect(result.isError).toBe(true)
       const content = result.content as Array<{ type: string; text: string }>
       expect(content[0].text).toContain('approval required for navigate')
-      await client.close()
-    })
-  })
-
-  test('navigate rejects non-http URIs at the schema boundary (no ACL bypass)', async () => {
-    await withTempBrowserosDir(async () => {
-      const created = await agents.create(makeAgentInput())
-      const client = await connectedClientFor(created.slug)
-      // Each of these has an empty `.hostname` and would silently
-      // bypass site-rule matching if it slipped through.
-      const evilUrls = [
-        'javascript:alert(1)',
-        'file:///etc/passwd',
-        'data:text/html,<script>',
-      ]
-      for (const evil of evilUrls) {
-        const call = client.callTool({
-          name: 'navigate',
-          arguments: { url: evil },
-        })
-        // The SDK surfaces a schema-side rejection as a thrown
-        // McpError on the client. We accept either the throw OR a
-        // structured isError result; both mean "the call never
-        // dispatched and the gate was not bypassed".
-        try {
-          const result = await call
-          expect(result.isError).toBe(true)
-        } catch (err) {
-          expect(err).toBeDefined()
-        }
-      }
-      await client.close()
-    })
-  })
-
-  test('attach rejects ".." path segments at the schema boundary', async () => {
-    await withTempBrowserosDir(async () => {
-      const created = await agents.create({
-        ...makeAgentInput(),
-        approvals: {
-          ...makeAgentInput().approvals,
-          upload: 'Auto',
-        },
-      })
-      const client = await connectedClientFor(created.slug)
-      const evilPaths = [
-        '../etc/passwd',
-        '/var/data/../../etc/passwd',
-        '..\\windows\\system32\\config\\sam',
-      ]
-      for (const evil of evilPaths) {
-        const call = client.callTool({
-          name: 'attach',
-          arguments: { selector: '#file', filePath: evil },
-        })
-        try {
-          const result = await call
-          expect(result.isError).toBe(true)
-        } catch (err) {
-          expect(err).toBeDefined()
-        }
-      }
       await client.close()
     })
   })

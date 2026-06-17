@@ -3,154 +3,168 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Shared wrapping helper used by every real tool. Each tool exposes
- * a `ToolDefinition` describing its name + zod input shape + verb +
- * dispatch; the helper handles the boilerplate every tool needs:
+ * Wires every browser tool from `@browseros/server`'s catalogue onto
+ * a per-agent MCP server with a permission gate in front. Each
+ * dispatch:
  *
- *   1. parse the raw args into the typed input,
- *   2. extract the (domain, verb) pair the permission gate needs,
- *   3. call `permissions.check` and short-circuit on `block` / `ask`,
- *   4. start a stub run, dispatch, stop the run, return the
- *      observation as the MCP tool result.
+ *   1. Maps the tool name to a permission verb in the cockpit's
+ *      catalog space.
+ *   2. Looks up a domain hint from the agent (real per-page URL
+ *      tracking is a future-phase concern; today we use the agent's
+ *      first declared site).
+ *   3. Calls `permissions.check(agent, verb, domain)` and
+ *      short-circuits on `block` / `ask`.
+ *   4. Looks up the live BrowserSession; if not yet wired, returns
+ *      a structured "session not connected" error so the wire shape
+ *      stays honest.
+ *   5. Hands off to `executeTool` from `@browseros/server`'s tool
+ *      framework. That handles arg validation, error formatting,
+ *      tab-id metadata, and result composition.
  *
- * Phase 4 will replace the per-call run with a real run lifecycle.
- * For now, every tool call is its own ephemeral run, so the
- * deterministic stub executor stays usable for manual smoke + tests
- * without leaking handles.
+ * Known coarseness: the real catalogue's `act` tool covers every
+ * mutation (click/type/fill/press/hover/scroll). We map it onto the
+ * cockpit's `input` verb today, which means a site rule keyed on
+ * `payments` does NOT clamp an `act({kind:'click'})` on a payment
+ * button. Finer-grained classification (per-arg verb extraction) is
+ * a follow-up.
  */
 
+import { executeTool } from '@browseros/server/tools/browser/framework'
+import { BROWSER_TOOLS } from '@browseros/server/tools/browser/registry'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { ZodRawShape } from 'zod'
-import { z } from 'zod'
-import {
-  type BrowserExecutor,
-  ExecutorRunGoneError,
-  type Observation,
-  type RunHandle,
-} from '../executor'
+import { getBrowserSession } from '../lib/browser-session'
 import type { StoredAgentProfile } from '../routes/agents/schemas'
 import { check } from '../services/permissions'
 import { asRegister, type ToolResult } from './register-fn'
 
-export interface ToolDefinition<Input> {
-  /** MCP tool name (what the harness calls). */
-  readonly name: string
-  readonly description: string
-  /** Permission verb in the catalog space (`submit`, `payment`, etc). */
-  readonly verb: string
-  /** Zod shape passed to the SDK for its tools/list metadata. */
-  readonly inputShape: ZodRawShape
-  /** Parses + validates the raw args at the boundary. Throws on bad input. */
-  parseInput(raw: Record<string, unknown>): Input
-  /** How to derive the permission-check domain from this tool's input + run. */
-  domainFor(input: Input, run: RunHandle): string
-  /** Actually do the thing once permissions clear. */
-  dispatch(
-    executor: BrowserExecutor,
-    run: RunHandle,
-    input: Input,
-  ): Promise<Observation>
+/**
+ * Maps each tool in the real catalogue to a permission verb. `tabs`
+ * and `navigate` mutate site context so they map to `navigate`;
+ * every other tool maps to `input`, the cockpit's catch-all for
+ * "click / type / read / etc.".
+ *
+ * `act` and `run` are intentionally lumped under `input` despite
+ * being the highest-risk tools. A richer classifier (look at the
+ * `kind` arg of `act`, or block `run` unless the agent opts in) is
+ * the follow-up that closes this gap.
+ */
+const TOOL_TO_VERB: Record<string, string> = {
+  tabs: 'navigate',
+  navigate: 'navigate',
+  snapshot: 'input',
+  diff: 'input',
+  act: 'input',
+  read: 'input',
+  grep: 'input',
+  screenshot: 'input',
+  wait: 'input',
+  run: 'input',
 }
 
-const TASK_PLACEHOLDER = 'mcp tool call'
-
 /**
- * Picks a domain for tools whose input doesn't carry one (every tool
- * except `navigate`). Phase 4's real run lifecycle will replace this
- * with the run's actual current URL; for now we use the agent's first
- * declared site as a stable hint, falling back to `'*'` so a user who
- * left `selectedSites` empty still gets covered by wildcard rules.
+ * Picks a domain for the permission check. `navigate` carries the
+ * target URL in its args, which is the cleanest signal we have until
+ * per-page URL tracking ships. Every other tool falls back to the
+ * agent's first declared site, or `'*'` so wildcard site rules still
+ * fire for agents with an empty `selectedSites`.
  */
-export function domainFromAgent(agent: StoredAgentProfile): string {
+function domainForCall(
+  toolName: string,
+  rawArgs: unknown,
+  agent: StoredAgentProfile,
+): string {
+  if (
+    toolName === 'navigate' &&
+    typeof rawArgs === 'object' &&
+    rawArgs !== null
+  ) {
+    const url = (rawArgs as { url?: unknown }).url
+    if (typeof url === 'string' && url.length > 0) {
+      try {
+        const hostname = new URL(url).hostname
+        if (hostname) return hostname
+      } catch {
+        // fall through to the agent hint
+      }
+    }
+  }
   return agent.selectedSites[0] ?? '*'
 }
 
-export function registerTool<Input>(
+export function registerBrowserTools(
   server: McpServer,
   agent: StoredAgentProfile,
-  executor: BrowserExecutor,
-  def: ToolDefinition<Input>,
 ): void {
   const register = asRegister(server)
-  register(
-    def.name,
-    {
-      description: def.description,
-      inputSchema: def.inputShape,
-    },
-    async (rawArgs) => {
-      const input = def.parseInput(rawArgs)
-
-      const run = await executor.startRun({
-        agentId: agent.id,
-        task: TASK_PLACEHOLDER,
-        site: domainFromAgent(agent),
-      })
-      try {
-        const domain = def.domainFor(input, run)
+  for (const tool of BROWSER_TOOLS) {
+    const verb = TOOL_TO_VERB[tool.name] ?? 'input'
+    register(
+      tool.name,
+      {
+        description: tool.description,
+        // The tool's zod shape is v3 (apps/server's pin); our SDK
+        // wrapper is typed against v4. Runtime is compatible — both
+        // produce equivalent JSON Schema for the shapes in use here.
+        // Cast at the boundary keeps the mismatch isolated.
+        inputSchema: tool.input.shape as unknown as ZodRawShape,
+        ...(tool.annotations && {
+          annotations: tool.annotations as Record<string, unknown>,
+        }),
+      },
+      async (rawArgs, extra) => {
+        const domain = domainForCall(tool.name, rawArgs, agent)
         const verdict = await check({
           agentId: agent.id,
-          verb: def.verb,
+          verb,
           domain,
         })
-        if (verdict.verdict === 'block')
-          return blockedResult(verdict.source, def.verb, domain)
-        if (verdict.verdict === 'ask') return deferredResult(def.verb, domain)
-        const observation = await def.dispatch(executor, run, input)
-        return autoResult(observation)
-      } catch (err) {
-        if (err instanceof ExecutorRunGoneError) {
-          return errorResult(`run has been stopped (${err.runId})`)
+        if (verdict.verdict === 'block') {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `blocked by ${verdict.source}: ${tool.name} on ${domain}`,
+              },
+            ],
+            isError: true,
+          } satisfies ToolResult
         }
-        if (err instanceof z.ZodError) {
-          return errorResult(`invalid input: ${err.message}`)
+        if (verdict.verdict === 'ask') {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `approval required for ${tool.name} on ${domain}; the cockpit will surface this once run-lifecycle approvals ship`,
+              },
+            ],
+            isError: true,
+          } satisfies ToolResult
         }
-        throw err
-      } finally {
-        await executor.stop(run)
-      }
-    },
-  )
-}
 
-function autoResult(observation: Observation): ToolResult {
-  return {
-    content: [{ type: 'text', text: observation.summary }],
-    structuredContent: { ...observation } as Record<string, unknown>,
-  }
-}
+        const session = getBrowserSession()
+        if (!session) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'browser session not connected; the cockpit runtime has not been wired to a live Chromium yet',
+              },
+            ],
+            isError: true,
+          } satisfies ToolResult
+        }
 
-function blockedResult(
-  source: string,
-  verb: string,
-  domain: string,
-): ToolResult {
-  return {
-    content: [
-      {
-        type: 'text',
-        text: `blocked by ${source}: ${verb} on ${domain}`,
+        const result = await executeTool(tool, rawArgs, {
+          session,
+          signal: extra?.signal,
+        })
+        return {
+          content: result.content as ToolResult['content'],
+          isError: result.isError,
+          structuredContent: result.structuredContent,
+        }
       },
-    ],
-    isError: true,
-  }
-}
-
-function deferredResult(verb: string, domain: string): ToolResult {
-  return {
-    content: [
-      {
-        type: 'text',
-        text: `approval required for ${verb} on ${domain}; the cockpit will surface this once run-lifecycle approvals ship`,
-      },
-    ],
-    isError: true,
-  }
-}
-
-function errorResult(message: string): ToolResult {
-  return {
-    content: [{ type: 'text', text: message }],
-    isError: true,
+    )
   }
 }
