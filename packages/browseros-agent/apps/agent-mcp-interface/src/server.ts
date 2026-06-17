@@ -18,6 +18,8 @@ import { cors } from 'hono/cors'
 import { HttpError } from './lib/errors'
 import { logger } from './lib/logger'
 import { agentsRoute } from './routes/agents'
+import { permissionsRoute } from './routes/permissions'
+import { siteRulesRoute } from './routes/site-rules'
 import { systemRoute } from './routes/system'
 
 // Telemetry capture is injectable so the server module stays usable
@@ -61,7 +63,11 @@ app.onError((err, c) => {
   return c.json({ error: message }, 500)
 })
 
-const routes = app.route('/', systemRoute).route('/', agentsRoute)
+const routes = app
+  .route('/', systemRoute)
+  .route('/', agentsRoute)
+  .route('/', siteRulesRoute)
+  .route('/', permissionsRoute)
 
 export type AppType = typeof routes
 export default routes
