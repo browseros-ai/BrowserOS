@@ -284,4 +284,66 @@ describe('/mcp/:slug route', () => {
       await client.close()
     })
   })
+
+  test('navigate rejects non-http URIs at the schema boundary (no ACL bypass)', async () => {
+    await withTempBrowserosDir(async () => {
+      const created = await agents.create(makeAgentInput())
+      const client = await connectedClientFor(created.slug)
+      // Each of these has an empty `.hostname` and would silently
+      // bypass site-rule matching if it slipped through.
+      const evilUrls = [
+        'javascript:alert(1)',
+        'file:///etc/passwd',
+        'data:text/html,<script>',
+      ]
+      for (const evil of evilUrls) {
+        const call = client.callTool({
+          name: 'navigate',
+          arguments: { url: evil },
+        })
+        // The SDK surfaces a schema-side rejection as a thrown
+        // McpError on the client. We accept either the throw OR a
+        // structured isError result; both mean "the call never
+        // dispatched and the gate was not bypassed".
+        try {
+          const result = await call
+          expect(result.isError).toBe(true)
+        } catch (err) {
+          expect(err).toBeDefined()
+        }
+      }
+      await client.close()
+    })
+  })
+
+  test('attach rejects ".." path segments at the schema boundary', async () => {
+    await withTempBrowserosDir(async () => {
+      const created = await agents.create({
+        ...makeAgentInput(),
+        approvals: {
+          ...makeAgentInput().approvals,
+          upload: 'Auto',
+        },
+      })
+      const client = await connectedClientFor(created.slug)
+      const evilPaths = [
+        '../etc/passwd',
+        '/var/data/../../etc/passwd',
+        '..\\windows\\system32\\config\\sam',
+      ]
+      for (const evil of evilPaths) {
+        const call = client.callTool({
+          name: 'attach',
+          arguments: { selector: '#file', filePath: evil },
+        })
+        try {
+          const result = await call
+          expect(result.isError).toBe(true)
+        } catch (err) {
+          expect(err).toBeDefined()
+        }
+      }
+      await client.close()
+    })
+  })
 })

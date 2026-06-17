@@ -49,9 +49,13 @@ export class StubBrowserExecutor implements BrowserExecutor {
   }
 
   async stop(run: RunHandle): Promise<void> {
-    const entry = this.runs.get(run.id)
-    if (!entry) return
-    entry.status = 'stopped'
+    // Delete rather than mark-stopped: the executor is a process-
+    // wide singleton, and the MCP layer starts a fresh ephemeral run
+    // per tool call. Leaving "stopped" entries in the Map would leak
+    // monotonically with traffic; deleting them is observationally
+    // identical (assertAlive treats "no entry" the same as
+    // "stopped").
+    this.runs.delete(run.id)
   }
 
   async pause(run: RunHandle): Promise<void> {
