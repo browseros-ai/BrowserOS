@@ -1,9 +1,6 @@
 import { useId } from 'react'
 import { useFormContext } from 'react-hook-form'
-import {
-  HarnessIcon,
-  isExternalHarness,
-} from '@/components/harness/HarnessIcon'
+import { HarnessIcon } from '@/components/harness/HarnessIcon'
 import {
   FormControl,
   FormField,
@@ -65,7 +62,6 @@ export function HarnessSection() {
               >
                 {HARNESSES.map((name) => {
                   const selected = field.value === name
-                  const external = isExternalHarness(name)
                   return (
                     <label
                       key={name}
@@ -86,11 +82,6 @@ export function HarnessSection() {
                       <span className="min-w-0 flex-1 truncate font-semibold text-xs">
                         {name}
                       </span>
-                      {!external && (
-                        <span className="font-medium text-[9.5px] text-ink-3 uppercase tracking-wider">
-                          BrowserOS
-                        </span>
-                      )}
                     </label>
                   )
                 })}
