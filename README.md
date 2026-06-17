@@ -45,18 +45,18 @@ Use your own API keys or run local models with Ollama. Your data never leaves yo
 
 | Feature | Description | Docs |
 |---------|-------------|------|
-| **AI Agent** | 53+ browser automation tools — navigate, click, type, extract data, all with natural language | [Guide](https://docs.browseros.com/getting-started) |
+| **AI Agent** | 53+ browser automation tools — navigate, click, type, extract data, all with natural language | [Guide](https://docs.browseros.com/onboarding) |
 | **MCP Server** | Control the browser from Claude Code, Gemini CLI, or any MCP client | [Setup](https://docs.browseros.com/features/use-with-claude-code) |
 | **Workflows** | Build repeatable browser automations with a visual graph builder | [Docs](https://docs.browseros.com/features/workflows) |
 | **Cowork** | Combine browser automation with local file operations — research the web, save reports to your folder | [Docs](https://docs.browseros.com/features/cowork) |
 | **Scheduled Tasks** | Run agents on autopilot — daily, hourly, or every few minutes | [Docs](https://docs.browseros.com/features/scheduled-tasks) |
 | **Memory** | Persistent memory across conversations — your assistant remembers context over time | [Docs](https://docs.browseros.com/features/memory) |
-| **SOUL.md** | Define your AI's personality and instructions in a single markdown file | [Docs](https://docs.browseros.com/features/soul-md) |
+| **SOUL.md** | Define your AI's personality and instructions in a single markdown file | [Docs](https://docs.browseros.com/features/soul) |
 | **LLM Hub** | Compare Claude, ChatGPT, and Gemini responses side-by-side on any page | [Docs](https://docs.browseros.com/features/llm-chat-hub) |
-| **40+ App Integrations** | Gmail, Slack, GitHub, Linear, Notion, Figma, Salesforce, and more via MCP | [Docs](https://docs.browseros.com/features/connect-apps) |
+| **40+ App Integrations** | Gmail, Slack, GitHub, Linear, Notion, Figma, Salesforce, and more via MCP | [Docs](https://docs.browseros.com/features/connect-mcps) |
 | **Vertical Tabs** | Side-panel tab management — stay organized even with 100+ tabs open | [Docs](https://docs.browseros.com/features/vertical-tabs) |
 | **Ad Blocking** | uBlock Origin + Manifest V2 support — [10x more protection](https://docs.browseros.com/features/ad-blocking) than Chrome | [Docs](https://docs.browseros.com/features/ad-blocking) |
-| **Cloud Sync** | Sync browser config and agent history across devices | [Docs](https://docs.browseros.com/features/sync) |
+| **Cloud Sync** | Sync browser config and agent history across devices | [Docs](https://docs.browseros.com/features/sync-to-cloud) |
 | **Skills** | Custom instruction sets that shape how your AI assistant behaves | [Docs](https://docs.browseros.com/features/skills) |
 | **Smart Nudges** | Contextual suggestions to connect apps and use features at the right moment | [Docs](https://docs.browseros.com/features/smart-nudges) |
 
