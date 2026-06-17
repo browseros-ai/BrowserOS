@@ -20,9 +20,11 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
+import { getExecutor } from '../executor'
 import { logger } from '../lib/logger'
 import { findBySlug } from '../routes/agents/service'
-import { registerSmokeTool } from './tools/ping'
+import { registerTool } from './register'
+import { navigateTool } from './tools/navigate'
 
 const SERVER_NAME = 'browseros-agent-mcp-interface'
 const SERVER_VERSION = '0.0.1'
@@ -50,7 +52,8 @@ export async function handleMcpRequest(
     version: SERVER_VERSION,
   })
 
-  registerSmokeTool(server, agent)
+  const executor = getExecutor()
+  registerTool(server, agent, executor, navigateTool)
 
   // Stateless mode: each request gets its own short-lived transport,
   // we return its Response directly. JSON response is enabled so the

@@ -83,26 +83,82 @@ describe('/mcp/:slug route', () => {
     })
   })
 
-  test('full handshake: initialize → tools/list → tools/call (ping)', async () => {
+  test('full handshake: initialize and tools/list returns the catalog', async () => {
+    await withTempBrowserosDir(async () => {
+      const created = await agents.create(makeAgentInput())
+      const client = await connectedClientFor(created.slug)
+      const tools = await client.listTools()
+      const names = tools.tools.map((t) => t.name)
+      expect(names).toContain('navigate')
+      await client.close()
+    })
+  })
+
+  test('navigate (Auto verdict) returns the stub observation', async () => {
     await withTempBrowserosDir(async () => {
       const created = await agents.create(makeAgentInput())
       const client = await connectedClientFor(created.slug)
 
-      const tools = await client.listTools()
-      const names = tools.tools.map((t) => t.name)
-      expect(names).toContain('ping')
-
       const result = await client.callTool({
-        name: 'ping',
-        arguments: { message: 'hello' },
+        name: 'navigate',
+        arguments: { url: 'https://docs.google.com' },
       })
       expect(result.isError).toBeFalsy()
       const content = result.content as Array<{ type: string; text: string }>
-      expect(content[0].type).toBe('text')
-      expect(content[0].text).toContain('pong from Cowork . MCP smoke')
-      expect(content[0].text).toContain(created.slug)
-      expect(content[0].text).toContain('hello')
+      expect(content[0].text).toContain(
+        '(stub) navigated to https://docs.google.com',
+      )
 
+      await client.close()
+    })
+  })
+
+  test('navigate on a site-rule blocked domain (Block verdict) returns a structured error', async () => {
+    await withTempBrowserosDir(async () => {
+      const created = await agents.create(makeAgentInput())
+      // Block navigation on any *.google.com via a site rule.
+      const { add: addSiteRule } = await import(
+        '../../src/routes/site-rules/service'
+      )
+      await addSiteRule({
+        label: 'no google',
+        domain: '*.google.com',
+        action: 'navigate',
+      })
+      const client = await connectedClientFor(created.slug)
+      const result = await client.callTool({
+        name: 'navigate',
+        arguments: { url: 'https://docs.google.com' },
+      })
+      expect(result.isError).toBe(true)
+      const content = result.content as Array<{ type: string; text: string }>
+      expect(content[0].text).toContain('blocked by site-rule')
+      expect(content[0].text).toContain('navigate')
+      expect(content[0].text).toContain('docs.google.com')
+      await client.close()
+    })
+  })
+
+  test('a verb whose agent verdict is Ask returns the deferred-approval error', async () => {
+    await withTempBrowserosDir(async () => {
+      // The default agent's navigate is Auto; flip it to Ask to
+      // exercise the deferred path through the same code path.
+      const askAgent = await agents.create({
+        ...makeAgentInput(),
+        name: 'Cowork . MCP ask',
+        approvals: {
+          ...makeAgentInput().approvals,
+          navigate: 'Ask',
+        },
+      })
+      const client = await connectedClientFor(askAgent.slug)
+      const result = await client.callTool({
+        name: 'navigate',
+        arguments: { url: 'https://docs.google.com' },
+      })
+      expect(result.isError).toBe(true)
+      const content = result.content as Array<{ type: string; text: string }>
+      expect(content[0].text).toContain('approval required for navigate')
       await client.close()
     })
   })
