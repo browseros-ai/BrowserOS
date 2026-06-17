@@ -13,7 +13,13 @@ import { ApprovalsSection } from './ApprovalsSection'
 import { ConnectorPreviewRail } from './ConnectorPreviewRail'
 import { CopyFromExistingCard } from './CopyFromExistingCard'
 import { HarnessSection } from './HarnessSection'
-import { LoginsSection } from './LoginsSection'
+// TODO(logins-filter): re-enable LoginsSection once the
+// Phase 8 (vault / Chrome import) work lands so the wizard can
+// actually filter the user's saved sessions per agent. Until then
+// the form defaults to loginMode='profile' so every submission is a
+// well-formed value, and the section is hidden from the UI to avoid
+// promising a capability the backend can't honor yet.
+// import { LoginsSection } from './LoginsSection'
 import { type AgentWizardMode, useAgentWizardData } from './new-agent.data'
 import { SEED_ACL_RULES } from './new-agent.helpers'
 import {
@@ -133,22 +139,16 @@ export function NewAgent({ mode = 'create' }: NewAgentProps) {
               >
                 <HarnessSection />
               </NumberedSection>
+              {/* See TODO(logins-filter) at the top of this file.  */}
               <NumberedSection
                 n={2}
-                title="Logins (profile)"
-                sub="Which of your saved sessions this agent may use. Passwords never leave this Mac."
-              >
-                <LoginsSection />
-              </NumberedSection>
-              <NumberedSection
-                n={3}
                 title="Tool approvals"
                 sub="What this agent does automatically vs. what needs your OK."
               >
                 <ApprovalsSection />
               </NumberedSection>
               <NumberedSection
-                n={4}
+                n={3}
                 title="ACL rules"
                 sub="Site-level blocks enforced at the browser, even under prompt injection."
               >
