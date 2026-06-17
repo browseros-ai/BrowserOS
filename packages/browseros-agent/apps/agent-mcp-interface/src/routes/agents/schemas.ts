@@ -79,6 +79,19 @@ export const agentProfileSummarySchema = z.object({
 })
 export type AgentProfileSummary = z.infer<typeof agentProfileSummarySchema>
 
+/**
+ * Outcome of the harness MCP install side-effect that runs alongside
+ * create. The wizard surfaces `installed` and `message` directly; the
+ * `configPath` is filled when a real file was written so the cockpit
+ * can hint at where the entry landed.
+ */
+export const harnessInstallOutcomeSchema = z.object({
+  installed: z.boolean(),
+  message: z.string(),
+  configPath: z.string().optional(),
+})
+export type HarnessInstallOutcome = z.infer<typeof harnessInstallOutcomeSchema>
+
 /** Wire shape: POST / response. Carries the rail's display strings. */
 export const createdAgentSchema = z.object({
   id: z.string(),
@@ -87,6 +100,7 @@ export const createdAgentSchema = z.object({
   slug: z.string(),
   mcpUrl: z.string(),
   cliCommand: z.string(),
+  harnessInstall: harnessInstallOutcomeSchema,
 })
 export type CreatedAgent = z.infer<typeof createdAgentSchema>
 
@@ -97,6 +111,13 @@ export type UpdatedAgent = z.infer<typeof updatedAgentSchema>
 /** Wire shape: DELETE / and regenerate. */
 export const idAckSchema = z.object({ id: z.string() })
 export type IdAck = z.infer<typeof idAckSchema>
+
+/** Wire shape: DELETE / response — carries the uninstall side-effect. */
+export const deletedAgentSchema = z.object({
+  id: z.string(),
+  harnessUninstall: harnessInstallOutcomeSchema,
+})
+export type DeletedAgent = z.infer<typeof deletedAgentSchema>
 
 export const regeneratedMcpUrlSchema = z.object({
   id: z.string(),

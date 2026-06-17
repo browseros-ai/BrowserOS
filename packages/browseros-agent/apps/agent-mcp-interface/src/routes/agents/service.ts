@@ -23,8 +23,13 @@ import { toSlug, uniqueSlug } from '../../lib/slug'
 import { listFiles, readJson, removeFile, writeJson } from '../../lib/storage'
 import { getLocalServerUrl } from '../../local-server-url'
 import {
+  installForAgent,
+  uninstallForAgent,
+} from '../../services/harness-install'
+import {
   type AgentProfileSummary,
   type CreatedAgent,
+  type DeletedAgent,
   type NewAgentValues,
   type RegeneratedMcpUrl,
   type StoredAgentProfile,
@@ -215,6 +220,15 @@ export async function create(input: NewAgentValues): Promise<CreatedAgent> {
       updatedAt: now,
     }
     await writeJson(fileFor(id), profile, storedAgentProfileSchema)
+    // Best-effort harness install. A failure here does NOT roll back
+    // the profile; the user can retry or fix the harness state and
+    // we'll attempt again on the next create. The outcome rides
+    // back in the response so the wizard can surface it.
+    const harnessInstall = await installForAgent({
+      slug: profile.slug,
+      mcpUrl: profile.mcpUrl,
+      harness: profile.harness,
+    })
     return {
       id,
       name: profile.name,
@@ -222,6 +236,7 @@ export async function create(input: NewAgentValues): Promise<CreatedAgent> {
       slug,
       mcpUrl: profile.mcpUrl,
       cliCommand: buildCliCommand(slug),
+      harnessInstall,
     }
   })
 }
@@ -261,10 +276,21 @@ export async function update(
   })
 }
 
-export async function remove(id: string): Promise<{ id: string } | null> {
+export async function remove(id: string): Promise<DeletedAgent | null> {
   if (!isValidId(id)) return null
+  // Load the profile before we wipe it so we can issue the uninstall
+  // with the right harness + slug. A delete that races a parallel
+  // delete may find no profile here; that's the "already gone" path
+  // and we 404.
+  const profile = await loadById(id)
+  if (!profile) return null
+  const harnessUninstall = await uninstallForAgent({
+    slug: profile.slug,
+    harness: profile.harness,
+  })
   const existed = await removeFile(fileFor(id))
-  return existed ? { id } : null
+  if (!existed) return null
+  return { id, harnessUninstall }
 }
 
 export async function regenerateMcpUrl(

@@ -101,8 +101,12 @@ describe('/agents routes', () => {
         param: { id: created.id },
       })
       expect(delRes.status).toBe(200)
-      const del = await delRes.json()
-      expect(del).toEqual({ id: created.id })
+      const del = (await delRes.json()) as {
+        id: string
+        harnessUninstall: { installed: boolean; message: string }
+      }
+      expect(del.id).toBe(created.id)
+      expect(typeof del.harnessUninstall.message).toBe('string')
 
       // listed empty
       const emptyRes = await api.agents.$get()

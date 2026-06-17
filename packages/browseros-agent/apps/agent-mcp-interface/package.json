@@ -26,6 +26,7 @@
     "@browseros/shared": "workspace:*",
     "@hono/zod-validator": "^0.8.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
+    "agent-mcp-manager": "^0.0.1",
     "hono": "^4.12.3",
     "nanoid": "^5.1.11",
     "zod": "^4.4.3"

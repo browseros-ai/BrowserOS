@@ -8,6 +8,12 @@
  * on the shared `env` object (read once at module load), then nudged
  * back to its prior value after the test.
  *
+ * As a safety net every test also gets a no-op `McpManager` stub
+ * swapped in so harness-install side-effects in `agents.create` /
+ * `agents.remove` never touch the user's real `~/.claude.json`. Tests
+ * that want to assert on install behaviour can override the stub
+ * inside the body by calling `setMcpManagerForTesting(myStub)`.
+ *
  * Use as a wrapper:
  *
  *   await withTempBrowserosDir(async () => {
@@ -19,6 +25,11 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../../src/env'
+import {
+  resetMcpManagerForTesting,
+  setMcpManagerForTesting,
+} from '../../src/lib/mcp-manager'
+import { createStubMcpManager } from './stub-mcp-manager'
 
 export async function withTempBrowserosDir<T>(
   body: (dir: string) => Promise<T>,
@@ -26,10 +37,14 @@ export async function withTempBrowserosDir<T>(
   const dir = await mkdtemp(join(tmpdir(), 'browseros-mcp-interface-'))
   const prior = env.browserosDirOverride
   env.browserosDirOverride = dir
+  setMcpManagerForTesting(createStubMcpManager())
   try {
     return await body(dir)
   } finally {
     env.browserosDirOverride = prior
+    // Drop the stub so any test that didn't use `withTempBrowserosDir`
+    // gets a fresh real-or-injected manager next time.
+    resetMcpManagerForTesting()
     await rm(dir, { recursive: true, force: true })
   }
 }
