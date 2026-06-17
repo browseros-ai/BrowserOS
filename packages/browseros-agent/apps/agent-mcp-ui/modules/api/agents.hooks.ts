@@ -61,6 +61,19 @@ export const useAgents = createQuery<AgentRow[]>({
     new Promise((resolve) => setTimeout(() => resolve(MOCK_AGENTS), 60)),
 })
 
+/**
+ * Result of the harness-install side-effect that runs on `POST /agents`.
+ * `installed: false` means the profile was saved but the harness's
+ * MCP config could not be written (locked file, BrowserOS-internal
+ * harness, agent-mcp-manager error). The wizard's success card uses
+ * `message` directly so backend wording flows through.
+ */
+export interface HarnessInstallOutcome {
+  installed: boolean
+  message: string
+  configPath?: string
+}
+
 export interface CreatedAgent {
   id: string
   name: string
@@ -68,6 +81,7 @@ export interface CreatedAgent {
   slug: string
   mcpUrl: string
   cliCommand: string
+  harnessInstall: HarnessInstallOutcome
 }
 
 export const useCreateAgent = createMutation<CreatedAgent, NewAgentValues>({

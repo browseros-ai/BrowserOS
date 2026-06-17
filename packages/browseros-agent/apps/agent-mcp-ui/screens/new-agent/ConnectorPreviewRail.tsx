@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Bot,
   Check,
   CheckCircle2,
@@ -66,12 +67,20 @@ export function ConnectorPreviewRail({
     ? `Save changes to ${values.harness}`
     : `Add to ${values.harness}`
   const pendingCtaLabel = isEdit ? 'Saving…' : 'Adding…'
+  // After a successful create, switch the headline to reflect whether
+  // the harness install side-effect ALSO succeeded. The profile is on
+  // disk either way; the install failure case (locked file, harness
+  // not detected, etc.) is a degraded outcome the user should see.
+  const installOutcome = createdAgent?.harnessInstall
+  const installFailed = installOutcome ? !installOutcome.installed : false
   const successHeadline = isEdit
     ? `${values.harness} updated`
-    : `Added to ${values.harness}`
+    : installFailed
+      ? `${values.harness} install needs attention`
+      : `Added to ${values.harness}`
   const successDetail = isEdit
     ? 'Connector settings synced'
-    : 'Endpoint registered · scope: user'
+    : (installOutcome?.message ?? 'Endpoint registered.')
 
   const copyMcpUrl = async () => {
     try {
@@ -138,15 +147,41 @@ export function ConnectorPreviewRail({
       <div className="flex-1" />
 
       {submitted ? (
-        <div className="flex items-center gap-2 rounded-xl border border-[#BFE3CC] bg-green-tint p-3">
-          <CheckCircle2 className="size-5 text-green" />
-          <div className="min-w-0">
-            <div className="font-bold text-[#15683A] text-sm">
-              {successHeadline}
+        installFailed ? (
+          <div className="flex items-start gap-2 rounded-xl border border-amber-tint bg-amber-tint p-3">
+            <AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber" />
+            <div className="min-w-0">
+              <div className="font-bold text-amber text-sm">
+                {successHeadline}
+              </div>
+              <div className="text-ink-2 text-xs leading-snug">
+                {successDetail}
+              </div>
+              {installOutcome?.configPath && (
+                <div className="mt-1 font-mono text-[10.5px] text-ink-3">
+                  {installOutcome.configPath}
+                </div>
+              )}
             </div>
-            <div className="text-ink-2 text-xs">{successDetail}</div>
           </div>
-        </div>
+        ) : (
+          <div className="flex items-start gap-2 rounded-xl border border-[#BFE3CC] bg-green-tint p-3">
+            <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-green" />
+            <div className="min-w-0">
+              <div className="font-bold text-[#15683A] text-sm">
+                {successHeadline}
+              </div>
+              <div className="text-ink-2 text-xs leading-snug">
+                {successDetail}
+              </div>
+              {installOutcome?.configPath && (
+                <div className="mt-1 font-mono text-[10.5px] text-ink-3">
+                  {installOutcome.configPath}
+                </div>
+              )}
+            </div>
+          </div>
+        )
       ) : (
         <Button
           type="submit"
