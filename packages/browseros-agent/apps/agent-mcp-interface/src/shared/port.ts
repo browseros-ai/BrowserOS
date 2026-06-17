@@ -5,16 +5,22 @@
  */
 
 /**
- * Production API port for the agent-mcp-interface server.
+ * Production API port for the cockpit. The cockpit's Hono app mounts
+ * inside `@browseros/server`'s HTTP runtime (port 9100 by default)
+ * under the `/cockpit` prefix, so the UI base URL is
+ * `http://127.0.0.1:9100/cockpit`.
  *
- * Read by:
- * - src/main.ts when binding the Hono server
- * - src/env.ts as the fallback when no PORT override is set
- * - the future agent-mcp-ui WXT extension when no `?apiUrl=` query is
- *   present (typically packaged builds loading via chrome-extension://)
+ * The standalone `src/main.ts` still binds on `DEV_STANDALONE_PORT`
+ * (9200) for solo dev and tests, but production traffic goes through
+ * `apps/server`.
  *
- * Distinct from @browseros/server (9100) so the two can run side by
- * side. Existing BrowserOS port allocations (per
+ * Existing BrowserOS port allocations (per
  * apps/server/.env.example): CDP=9000, server=9100, extension=9300.
  */
-export const PROD_API_PORT = 9200
+export const PROD_API_PORT = 9100
+
+/** Mount prefix the cockpit's app is routed under inside apps/server. */
+export const COCKPIT_MOUNT_PREFIX = '/cockpit'
+
+/** Standalone dev port for `src/main.ts` when running detached. */
+export const DEV_STANDALONE_PORT = 9200

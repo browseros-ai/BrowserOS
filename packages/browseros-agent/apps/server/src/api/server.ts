@@ -10,6 +10,7 @@
  * - MCP HTTP routes (using @hono/mcp transport)
  */
 
+import { createCockpitRoutes } from '@browseros/agent-mcp-interface/cockpit'
 import { Hono } from 'hono'
 import { websocket } from 'hono/bun'
 import { cors } from 'hono/cors'
@@ -184,6 +185,13 @@ export async function createHttpServer(config: HttpServerConfig) {
       '/mcp-manager',
       createMcpManagerRoutes({
         getMcpUrl: () => `http://127.0.0.1:${port}/mcp`,
+      }),
+    )
+    .route(
+      '/cockpit',
+      createCockpitRoutes({
+        browserSession,
+        serverPort: port,
       }),
     )
     .route(

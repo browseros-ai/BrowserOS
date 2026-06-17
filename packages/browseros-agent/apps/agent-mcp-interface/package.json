@@ -9,6 +9,10 @@
       "types": "./src/server.ts",
       "default": null
     },
+    "./cockpit": {
+      "types": "./src/cockpit.ts",
+      "default": "./src/cockpit.ts"
+    },
     "./shared/port": {
       "types": "./src/shared/port.ts",
       "default": "./src/shared/port.ts"

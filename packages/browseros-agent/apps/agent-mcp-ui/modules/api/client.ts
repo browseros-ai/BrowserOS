@@ -22,7 +22,10 @@
  */
 
 import type { AppType } from '@browseros/agent-mcp-interface/server'
-import { PROD_API_PORT } from '@browseros/agent-mcp-interface/shared/port'
+import {
+  COCKPIT_MOUNT_PREFIX,
+  PROD_API_PORT,
+} from '@browseros/agent-mcp-interface/shared/port'
 import { hc } from 'hono/client'
 
 const API_URL_STORAGE_KEY = 'browseros.agent-mcp-ui.apiUrl'
@@ -32,7 +35,12 @@ function isLoopbackUrl(value: string | null | undefined): value is string {
 }
 
 function resolveApiBaseUrl(): string {
-  const fallback = `http://127.0.0.1:${PROD_API_PORT}`
+  // The cockpit is mounted under `/cockpit` inside apps/server's
+  // runtime; every route handler lives under that prefix. The dev
+  // launcher's `?apiUrl=` query and the sessionStorage cache carry
+  // the full base URL (port + prefix), so they're passed through
+  // verbatim.
+  const fallback = `http://127.0.0.1:${PROD_API_PORT}${COCKPIT_MOUNT_PREFIX}`
   if (typeof window === 'undefined') return fallback
 
   const fromQuery = new URLSearchParams(window.location.search).get('apiUrl')
