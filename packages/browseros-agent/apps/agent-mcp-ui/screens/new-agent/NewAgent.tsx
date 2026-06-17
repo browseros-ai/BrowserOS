@@ -4,7 +4,10 @@ import { type ReactNode, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Form } from '@/components/ui/form'
 import { Spinner } from '@/components/ui/spinner'
-import type { AgentRow } from '@/modules/api/agents.hooks'
+import {
+  type AgentProfile,
+  useAgentProfileDetail,
+} from '@/modules/api/agents.hooks'
 import { AclRulesSection } from './AclRulesSection'
 import { ApprovalsSection } from './ApprovalsSection'
 import { ConnectorPreviewRail } from './ConnectorPreviewRail'
@@ -25,8 +28,15 @@ interface NewAgentProps {
 }
 
 export function NewAgent({ mode = 'create' }: NewAgentProps) {
-  const { agentId, agents, createAgent, updateAgent, profileDetail, navigate } =
-    useAgentWizardData(mode)
+  const {
+    agentId,
+    existingProfiles,
+    queryClient,
+    createAgent,
+    updateAgent,
+    profileDetail,
+    navigate,
+  } = useAgentWizardData(mode)
 
   const initialDefaults: NewAgentValues = {
     ...newAgentDefaults,
@@ -42,12 +52,20 @@ export function NewAgent({ mode = 'create' }: NewAgentProps) {
 
   const [cloneFromId, setCloneFromId] = useState<string | null>(null)
 
-  const handleClone = (agent: AgentRow) => {
-    setCloneFromId(agent.id)
-    form.setValue('harness', agent.harness, { shouldDirty: true })
-    if (form.getValues('name').trim() === '') {
-      form.setValue('name', `Copy of ${agent.label}`, { shouldDirty: true })
-    }
+  const handleClone = async (profile: AgentProfile) => {
+    setCloneFromId(profile.id)
+    // Fetch the full wizard-shape values for the chosen profile and
+    // hydrate every field. Cached by tanstack so reopening the same
+    // card after a clone is instant; the detail endpoint returns the
+    // exact NewAgentValues shape `form` already knows about.
+    const detail = await queryClient.fetchQuery(
+      useAgentProfileDetail.getFetchOptions({ id: profile.id }),
+    )
+    if (!detail) return
+    form.reset(
+      { ...detail, name: `Copy of ${profile.name}` },
+      { keepDefaultValues: false },
+    )
   }
 
   const onSubmit = (values: NewAgentValues) => {
@@ -103,7 +121,7 @@ export function NewAgent({ mode = 'create' }: NewAgentProps) {
             <div className="mx-auto flex w-full max-w-[600px] flex-col gap-6 px-6 py-6 pb-20">
               {!isEdit && (
                 <CopyFromExistingCard
-                  agents={agents}
+                  profiles={existingProfiles}
                   selectedId={cloneFromId}
                   onClone={handleClone}
                 />

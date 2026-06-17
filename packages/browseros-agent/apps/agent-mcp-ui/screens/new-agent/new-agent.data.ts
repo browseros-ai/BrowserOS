@@ -4,7 +4,6 @@ import {
   type AgentProfile,
   useAgentProfileDetail,
   useAgentProfiles,
-  useAgents,
   useCreateAgent,
   useUpdateAgent,
 } from '@/modules/api/agents.hooks'
@@ -13,11 +12,15 @@ export type AgentWizardMode = 'create' | 'edit'
 
 /**
  * Aggregates everything the wizard needs in either mode. In create
- * mode we lean on useAgents (for the clone-from card) + useCreateAgent.
- * In edit mode we additionally fetch the full profile detail via
- * useAgentProfileDetail and route updates through useUpdateAgent,
- * whose onSuccess patches the agent-profiles cache so the directory
- * reflects the rename immediately.
+ * mode we lean on useAgentProfiles (for the clone-from card) +
+ * useCreateAgent. In edit mode we additionally fetch the full
+ * profile detail via useAgentProfileDetail and route updates through
+ * useUpdateAgent, whose onSuccess patches the agent-profiles cache
+ * so the directory reflects the rename immediately.
+ *
+ * Clone-from uses the real configured profiles list (not the mocked
+ * cockpit running grid) so the card only surfaces when the user
+ * actually has agents to copy from.
  */
 export function useAgentWizardData(mode: AgentWizardMode) {
   const navigate = useNavigate()
@@ -25,7 +28,7 @@ export function useAgentWizardData(mode: AgentWizardMode) {
   const { id: paramId } = useParams<{ id: string }>()
   const agentId = mode === 'edit' ? (paramId ?? null) : null
 
-  const { data: agents = [] } = useAgents()
+  const { data: existingProfiles = [] } = useAgentProfiles()
   const createAgent = useCreateAgent()
 
   const profileDetail = useAgentProfileDetail({
@@ -50,7 +53,8 @@ export function useAgentWizardData(mode: AgentWizardMode) {
   return {
     mode,
     agentId,
-    agents,
+    existingProfiles,
+    queryClient,
     createAgent,
     updateAgent,
     profileDetail,
