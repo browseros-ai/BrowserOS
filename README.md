@@ -109,17 +109,17 @@ BrowserOS works with any LLM. Bring your own keys, use OAuth, or run models loca
 | Provider | Type | Auth |
 |----------|------|------|
 | Kimi K2.5 | Cloud (default) | Built-in |
-| ChatGPT Pro/Plus | Cloud | [OAuth](https://docs.browseros.com/features/chatgpt) |
-| GitHub Copilot | Cloud | [OAuth](https://docs.browseros.com/features/github-copilot) |
-| Qwen Code | Cloud | [OAuth](https://docs.browseros.com/features/qwen-code) |
+| ChatGPT Pro/Plus | Cloud | [OAuth](https://docs.browseros.com/features/chatgpt-pro-oauth) |
+| GitHub Copilot | Cloud | [OAuth](https://docs.browseros.com/features/github-copilot-oauth) |
+| Qwen Code | Cloud | [OAuth](https://docs.browseros.com/features/qwen-code-oauth) |
 | Claude (Anthropic) | Cloud | API key |
 | GPT-4o / o3 (OpenAI) | Cloud | API key |
 | Gemini (Google) | Cloud | API key |
 | Azure OpenAI | Cloud | API key |
 | AWS Bedrock | Cloud | IAM credentials |
 | OpenRouter | Cloud | API key |
-| Ollama | Local | [Setup](https://docs.browseros.com/features/ollama) |
-| LM Studio | Local | [Setup](https://docs.browseros.com/features/lm-studio) |
+| Ollama | Local | [Setup](https://docs.browseros.com/features/local-models#ollama) |
+| LM Studio | Local | [Setup]([https://docs.browseros.com/features/lm-studio](https://docs.browseros.com/features/local-models#lm-studio)) |
 
 ## How We Compare
 
