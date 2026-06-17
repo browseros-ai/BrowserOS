@@ -1,20 +1,16 @@
 import {
   AlertTriangle,
-  Bot,
   Check,
   CheckCircle2,
-  Code,
   Copy,
   Globe,
   Link2,
   Lock,
-  MousePointer2,
   Shield,
-  Sparkles,
-  Terminal,
 } from 'lucide-react'
-import { type ComponentType, useState } from 'react'
+import { useState } from 'react'
 import { useFormContext } from 'react-hook-form'
+import { HarnessIcon } from '@/components/harness/HarnessIcon'
 import { Button } from '@/components/ui/button'
 import type { CreatedAgent } from '@/modules/api/agents.hooks'
 import {
@@ -24,15 +20,7 @@ import {
   describeLogins,
   toSlug,
 } from './new-agent.helpers'
-import type { Harness, NewAgentValues } from './new-agent.schemas'
-
-const HARNESS_ICONS: Record<Harness, ComponentType<{ className?: string }>> = {
-  'Claude Cowork': Sparkles,
-  Codex: Code,
-  Hermes: Bot,
-  OpenClaw: MousePointer2,
-  'Gemini CLI': Terminal,
-}
+import type { NewAgentValues } from './new-agent.schemas'
 
 interface ConnectorPreviewRailProps {
   mode: 'create' | 'edit'
@@ -59,7 +47,6 @@ export function ConnectorPreviewRail({
   const cliCommand = createdAgent?.cliCommand ?? buildCliCommand(slug)
   const logins = describeLogins(values.loginMode, values.selectedSites.length)
   const verdicts = countApprovalVerdicts(values.approvals)
-  const HarnessIcon = HARNESS_ICONS[values.harness]
   const aclCount = values.aclRuleIds.length
   const nameInvalid = values.name.trim().length === 0
   const isEdit = mode === 'edit'
@@ -101,7 +88,7 @@ export function ConnectorPreviewRail({
       <div className="rounded-2xl border border-border-2 bg-card p-4 shadow-sm">
         <div className="mb-3 flex items-center gap-2.5">
           <span className="flex size-8 items-center justify-center rounded-lg bg-accent-tint text-accent">
-            <HarnessIcon className="size-4" />
+            <HarnessIcon harness={values.harness} className="size-4" />
           </span>
           <div className="min-w-0 flex-1">
             <div className="truncate font-bold text-ink text-sm">

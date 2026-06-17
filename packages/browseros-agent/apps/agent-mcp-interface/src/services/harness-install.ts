@@ -50,7 +50,11 @@ export interface InstallOutcome {
  * path picks up the new target.
  */
 const HARNESS_TO_AGENT_ID: Record<Harness, AgentId | null> = {
-  'Claude Cowork': 'claude-desktop',
+  'Claude Code': 'claude-code',
+  'Claude Desktop': 'claude-desktop',
+  Cursor: 'cursor',
+  'VS Code': 'vscode',
+  Zed: 'zed',
   Codex: 'codex',
   'Gemini CLI': 'gemini',
   Hermes: null,

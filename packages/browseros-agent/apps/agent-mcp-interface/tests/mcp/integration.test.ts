@@ -25,7 +25,7 @@ import { withTempBrowserosDir } from '../_helpers/temp-browseros-dir'
 function makeAgentInput(): NewAgentValues {
   return {
     name: 'Cowork . MCP smoke',
-    harness: 'Claude Cowork',
+    harness: 'Claude Desktop',
     loginMode: 'profile',
     selectedSites: [],
     approvals: {

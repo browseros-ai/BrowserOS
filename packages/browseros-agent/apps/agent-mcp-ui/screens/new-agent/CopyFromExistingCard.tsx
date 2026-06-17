@@ -1,13 +1,5 @@
-import {
-  Bot,
-  Check,
-  Code,
-  Copy,
-  MousePointer2,
-  Sparkles,
-  Terminal,
-} from 'lucide-react'
-import type { ComponentType } from 'react'
+import { Check, Copy } from 'lucide-react'
+import { HarnessIcon } from '@/components/harness/HarnessIcon'
 import { cn } from '@/lib/utils'
 import type { AgentProfile } from '@/modules/api/agents.hooks'
 
@@ -15,17 +7,6 @@ interface CopyFromExistingCardProps {
   profiles: readonly AgentProfile[]
   selectedId: string | null
   onClone: (profile: AgentProfile) => void
-}
-
-const HARNESS_ICONS: Record<
-  AgentProfile['harness'],
-  ComponentType<{ className?: string }>
-> = {
-  'Claude Cowork': Sparkles,
-  Codex: Code,
-  Hermes: Bot,
-  OpenClaw: MousePointer2,
-  'Gemini CLI': Terminal,
 }
 
 export function CopyFromExistingCard({
@@ -49,7 +30,6 @@ export function CopyFromExistingCard({
       <div className="flex flex-wrap gap-2">
         {profiles.map((profile) => {
           const selected = selectedId === profile.id
-          const HarnessIcon = selected ? Check : HARNESS_ICONS[profile.harness]
           return (
             <button
               key={profile.id}
@@ -62,16 +42,14 @@ export function CopyFromExistingCard({
                   : 'border-border-2 bg-card/60 hover:border-accent/60 hover:bg-card',
               )}
             >
-              <HarnessIcon
-                className={cn(
-                  'size-3.5 shrink-0',
-                  selected
-                    ? 'text-green'
-                    : profile.harness === 'Codex'
-                      ? 'text-ink-3'
-                      : 'text-accent',
-                )}
-              />
+              {selected ? (
+                <Check className="size-3.5 shrink-0 text-green" />
+              ) : (
+                <HarnessIcon
+                  harness={profile.harness}
+                  className="size-3.5 shrink-0 text-accent"
+                />
+              )}
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-semibold text-xs">
                   {profile.name}

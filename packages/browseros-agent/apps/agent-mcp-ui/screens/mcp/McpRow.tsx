@@ -1,10 +1,11 @@
 import { Check, Copy, Link2, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
+import { HarnessIcon } from '@/components/harness/HarnessIcon'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { AgentProfile } from '@/modules/api/agents.hooks'
-import { harnessIconFor, statusMetaFor } from '@/screens/agents/agents.helpers'
+import { statusMetaFor } from '@/screens/agents/agents.helpers'
 import { cliCommandFor, slugFromMcpUrl } from './mcp.helpers'
 
 interface McpRowProps {
@@ -14,7 +15,6 @@ interface McpRowProps {
 }
 
 export function McpRow({ profile, isRegenerating, onRegenerate }: McpRowProps) {
-  const HarnessIcon = harnessIconFor(profile.harness)
   const statusMeta = statusMetaFor(profile.status)
   const slug = slugFromMcpUrl(profile.mcpUrl)
   const cliCommand = cliCommandFor(profile)
@@ -47,7 +47,7 @@ export function McpRow({ profile, isRegenerating, onRegenerate }: McpRowProps) {
               : 'bg-accent-tint text-accent',
           )}
         >
-          <HarnessIcon className="size-4" />
+          <HarnessIcon harness={profile.harness} className="size-4" />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">

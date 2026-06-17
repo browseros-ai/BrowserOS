@@ -1,13 +1,10 @@
 import { Clock, Pencil, Trash2 } from 'lucide-react'
+import { HarnessIcon } from '@/components/harness/HarnessIcon'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { AgentProfile } from '@/modules/api/agents.hooks'
-import {
-  harnessIconFor,
-  scopeSummaryFor,
-  statusMetaFor,
-} from './agents.helpers'
+import { scopeSummaryFor, statusMetaFor } from './agents.helpers'
 
 interface AgentDirectoryRowProps {
   profile: AgentProfile
@@ -27,7 +24,6 @@ export function AgentDirectoryRow({
   onEdit,
   onRevoke,
 }: AgentDirectoryRowProps) {
-  const HarnessIcon = harnessIconFor(profile.harness)
   const statusMeta = statusMetaFor(profile.status)
   return (
     <div className="flex items-center gap-3.5 rounded-xl border border-border bg-card px-4 py-3.5">
@@ -39,7 +35,7 @@ export function AgentDirectoryRow({
             : 'bg-accent-tint text-accent',
         )}
       >
-        <HarnessIcon className="size-4" />
+        <HarnessIcon harness={profile.harness} className="size-4" />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">

@@ -15,12 +15,23 @@
 
 import { z } from 'zod'
 
+/**
+ * The first 7 entries align 1:1 with `agent-mcp-manager`'s AgentId
+ * space. The last 2 are BrowserOS-internal harnesses with no
+ * third-party config to write — they short-circuit as a no-op
+ * inside `services/harness-install`. Keep these in sync with
+ * apps/agent-mcp-ui/screens/new-agent/new-agent.schemas.ts.
+ */
 export const harnessEnum = z.enum([
-  'Claude Cowork',
+  'Claude Code',
+  'Claude Desktop',
+  'Cursor',
+  'VS Code',
+  'Zed',
   'Codex',
+  'Gemini CLI',
   'Hermes',
   'OpenClaw',
-  'Gemini CLI',
 ])
 export type Harness = z.infer<typeof harnessEnum>
 

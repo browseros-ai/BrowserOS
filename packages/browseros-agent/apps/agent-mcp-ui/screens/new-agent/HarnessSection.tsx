@@ -1,6 +1,9 @@
-import { Bot, Code, MousePointer2, Sparkles, Terminal } from 'lucide-react'
-import { type ComponentType, useId } from 'react'
+import { useId } from 'react'
 import { useFormContext } from 'react-hook-form'
+import {
+  HarnessIcon,
+  isExternalHarness,
+} from '@/components/harness/HarnessIcon'
 import {
   FormControl,
   FormField,
@@ -11,20 +14,11 @@ import {
 import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { cn } from '@/lib/utils'
-import type { Harness, NewAgentValues } from './new-agent.schemas'
-
-interface HarnessEntry {
-  name: Harness
-  Icon: ComponentType<{ className?: string }>
-}
-
-const HARNESS_ENTRIES: readonly HarnessEntry[] = [
-  { name: 'Claude Cowork', Icon: Sparkles },
-  { name: 'Codex', Icon: Code },
-  { name: 'Hermes', Icon: Bot },
-  { name: 'OpenClaw', Icon: MousePointer2 },
-  { name: 'Gemini CLI', Icon: Terminal },
-]
+import {
+  HARNESSES,
+  type Harness,
+  type NewAgentValues,
+} from './new-agent.schemas'
 
 export function HarnessSection() {
   const form = useFormContext<NewAgentValues>()
@@ -67,10 +61,11 @@ export function HarnessSection() {
               <RadioGroup
                 value={field.value}
                 onValueChange={(value) => field.onChange(value as Harness)}
-                className="flex flex-wrap gap-2"
+                className="grid grid-cols-2 gap-2 md:grid-cols-3"
               >
-                {HARNESS_ENTRIES.map(({ name, Icon }) => {
+                {HARNESSES.map((name) => {
                   const selected = field.value === name
+                  const external = isExternalHarness(name)
                   return (
                     <label
                       key={name}
@@ -87,8 +82,15 @@ export function HarnessSection() {
                         value={name}
                         className="sr-only"
                       />
-                      <Icon className="size-4" />
-                      <span className="font-semibold text-xs">{name}</span>
+                      <HarnessIcon harness={name} className="size-4 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate font-semibold text-xs">
+                        {name}
+                      </span>
+                      {!external && (
+                        <span className="font-medium text-[9.5px] text-ink-3 uppercase tracking-wider">
+                          BrowserOS
+                        </span>
+                      )}
                     </label>
                   )
                 })}

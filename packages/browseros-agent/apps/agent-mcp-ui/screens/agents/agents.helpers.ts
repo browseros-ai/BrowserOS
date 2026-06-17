@@ -1,27 +1,7 @@
-import {
-  Bot,
-  Code,
-  type LucideIcon,
-  MousePointer2,
-  Sparkles,
-  Terminal,
-} from 'lucide-react'
 import type {
   AgentProfile,
   AgentProfileStatus,
 } from '@/modules/api/agents.hooks'
-
-const HARNESS_ICON: Record<AgentProfile['harness'], LucideIcon> = {
-  'Claude Cowork': Sparkles,
-  Codex: Code,
-  Hermes: Bot,
-  OpenClaw: MousePointer2,
-  'Gemini CLI': Terminal,
-}
-
-export function harnessIconFor(harness: AgentProfile['harness']): LucideIcon {
-  return HARNESS_ICON[harness]
-}
 
 interface ProfileStatusMeta {
   label: string

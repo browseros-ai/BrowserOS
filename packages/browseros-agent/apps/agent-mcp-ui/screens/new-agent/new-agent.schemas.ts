@@ -1,11 +1,22 @@
 import { z } from 'zod'
 
+/**
+ * The first 7 entries align 1:1 with `agent-mcp-manager`'s AgentId
+ * space and trigger a real config write on create. The last 2 are
+ * BrowserOS-internal harnesses that no-op the install. Keep this
+ * list in sync with the backend's harnessEnum at
+ * `apps/agent-mcp-interface/src/routes/agents/schemas.ts`.
+ */
 export const HARNESSES = [
-  'Claude Cowork',
+  'Claude Code',
+  'Claude Desktop',
+  'Cursor',
+  'VS Code',
+  'Zed',
   'Codex',
+  'Gemini CLI',
   'Hermes',
   'OpenClaw',
-  'Gemini CLI',
 ] as const
 
 export type Harness = (typeof HARNESSES)[number]
@@ -79,7 +90,7 @@ export type NewAgentValues = z.infer<typeof newAgentSchema>
 
 export const newAgentDefaults: NewAgentValues = {
   name: '',
-  harness: 'Codex',
+  harness: 'Claude Code',
   loginMode: 'profile',
   selectedSites: ['concur.com', 'stripe.com'],
   approvals: Object.fromEntries(

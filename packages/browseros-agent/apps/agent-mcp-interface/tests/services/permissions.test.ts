@@ -18,7 +18,7 @@ import { withTempBrowserosDir } from '../_helpers/temp-browseros-dir'
 function makeProfile(overrides: Partial<NewAgentValues> = {}): NewAgentValues {
   return {
     name: 'Cowork . Finance ops',
-    harness: 'Claude Cowork',
+    harness: 'Claude Desktop',
     loginMode: 'profile',
     selectedSites: [],
     approvals: {

@@ -52,7 +52,7 @@ const CONCUR_REPLAY: ReplayDetail = {
   id: 'run-concur-may',
   agentLabel: 'Cowork . File expenses',
   taskTitle: 'See my May invoices and file expenses on SAP Concur',
-  harness: 'Claude Cowork',
+  harness: 'Claude Code',
   status: 'done',
   site: 'app.concur.com',
   startedAt: 'Jun 1, 2026',

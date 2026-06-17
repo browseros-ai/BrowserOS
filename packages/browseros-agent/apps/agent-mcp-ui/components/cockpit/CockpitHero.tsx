@@ -16,7 +16,7 @@ export function CockpitHero() {
         right now?
       </h1>
       <p className="text-ink-3 text-sm">
-        Tasks start in Claude Cowork &amp; Codex. BrowserOS is where you watch,
+        Tasks start in Claude Code &amp; Codex. BrowserOS is where you watch,
         approve, and audit them.
       </p>
     </header>

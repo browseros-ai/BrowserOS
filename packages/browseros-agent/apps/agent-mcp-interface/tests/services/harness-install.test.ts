@@ -18,7 +18,7 @@ import { withTempBrowserosDir } from '../_helpers/temp-browseros-dir'
 function makeInput(): NewAgentValues {
   return {
     name: 'Install Smoke',
-    harness: 'Claude Cowork',
+    harness: 'Claude Desktop',
     loginMode: 'profile',
     selectedSites: [],
     approvals: {
@@ -35,7 +35,7 @@ function makeInput(): NewAgentValues {
 }
 
 describe('harness install service', () => {
-  test('installForAgent on Claude Cowork links the slug under claude-desktop', async () => {
+  test('installForAgent on Claude Desktop links the slug under claude-desktop', async () => {
     await withTempBrowserosDir(async () => {
       const stub = createStubMcpManager()
       setMcpManagerForTesting(stub)
@@ -51,7 +51,7 @@ describe('harness install service', () => {
         agent: 'claude-desktop',
       })
       expect(created.harnessInstall.installed).toBe(true)
-      expect(created.harnessInstall.message).toContain('Claude Cowork')
+      expect(created.harnessInstall.message).toContain('Claude Desktop')
     })
   })
 
@@ -100,7 +100,7 @@ describe('harness install service', () => {
     await withTempBrowserosDir(async () => {
       const stub = createStubMcpManager()
       setMcpManagerForTesting(stub)
-      await uninstallForAgent({ slug: 'gone-slug', harness: 'Claude Cowork' })
+      await uninstallForAgent({ slug: 'gone-slug', harness: 'Claude Desktop' })
       const methods = stub.calls.map((c) => c.method)
       expect(methods).toContain('unlink')
       expect(methods).toContain('remove')
@@ -118,10 +118,10 @@ describe('harness install service', () => {
       const outcome = await installForAgent({
         slug: 'broken',
         mcpUrl: 'http://127.0.0.1:9200/mcp/broken',
-        harness: 'Claude Cowork',
+        harness: 'Claude Desktop',
       })
       expect(outcome.installed).toBe(false)
-      expect(outcome.message).toContain('Claude Cowork')
+      expect(outcome.message).toContain('Claude Desktop')
       expect(outcome.message).toContain('disk full')
     })
   })

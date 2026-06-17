@@ -1,12 +1,8 @@
 import { createQuery } from 'react-query-kit'
 import type { RunStatus } from '@/lib/status'
+import type { Harness } from '@/screens/new-agent/new-agent.schemas'
 
-export type RunHarness =
-  | 'Claude Cowork'
-  | 'Codex'
-  | 'Hermes'
-  | 'OpenClaw'
-  | 'Gemini CLI'
+export type RunHarness = Harness
 
 export interface RunRow {
   id: string
@@ -39,7 +35,7 @@ const MOCK_RUNS: RunRow[] = [
     id: 'run-concur-may',
     agentId: 'cld-concur',
     agentLabel: 'Cowork . File expenses',
-    harness: 'Claude Cowork',
+    harness: 'Claude Code',
     status: 'needs-ok',
     title: 'See my May invoices and file expenses on SAP Concur',
     when: '2m ago',
@@ -52,7 +48,7 @@ const MOCK_RUNS: RunRow[] = [
     id: 'run-linkedin',
     agentId: 'cld-li',
     agentLabel: 'Cowork . LinkedIn posts',
-    harness: 'Claude Cowork',
+    harness: 'Claude Code',
     status: 'running',
     title: 'Draft and queue 3 LinkedIn posts about the launch',
     when: '4m ago',
@@ -104,7 +100,7 @@ const MOCK_RUNS: RunRow[] = [
     id: 'run-amazon-restock',
     agentId: 'cld-amazon',
     agentLabel: 'Cowork . Office restock',
-    harness: 'Claude Cowork',
+    harness: 'Claude Code',
     status: 'needs-human',
     title: 'Restock the team snacks and ship to the office',
     when: '2h ago',
