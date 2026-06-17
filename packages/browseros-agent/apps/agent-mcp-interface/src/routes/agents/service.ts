@@ -24,6 +24,7 @@ import { listFiles, readJson, removeFile, writeJson } from '../../lib/storage'
 import { getLocalServerUrl } from '../../local-server-url'
 import {
   installForAgent,
+  reconcileHarnessLink,
   uninstallForAgent,
 } from '../../services/harness-install'
 import {
@@ -272,6 +273,14 @@ export async function update(
       updatedAt: nowIso(),
     }
     await writeJson(fileFor(id), next, storedAgentProfileSchema)
+    // Best-effort harness reconcile: if the harness or slug rotated,
+    // wire the new entry into the new harness and drop the old one.
+    // Failures are logged inside the helpers and do NOT roll back the
+    // profile rewrite.
+    await reconcileHarnessLink({
+      before: { slug: existing.slug, harness: existing.harness },
+      after: { slug: next.slug, mcpUrl: next.mcpUrl, harness: next.harness },
+    })
     return next
   })
 }
@@ -318,6 +327,14 @@ export async function regenerateMcpUrl(
       updatedAt: nowIso(),
     }
     await writeJson(fileFor(id), next, storedAgentProfileSchema)
+    // The whole point of rotating is to issue a fresh URL to the
+    // harness; reconcile the link so the harness picks it up
+    // automatically. Harness is unchanged so only the slug pair
+    // differs.
+    await reconcileHarnessLink({
+      before: { slug: existing.slug, harness: existing.harness },
+      after: { slug: next.slug, mcpUrl: next.mcpUrl, harness: next.harness },
+    })
     return { id, mcpUrl: next.mcpUrl }
   })
 }

@@ -142,6 +142,35 @@ export async function uninstallForAgent(
   }
 }
 
+/**
+ * Re-sync the harness MCP config after a profile mutation that
+ * either rotated the slug or swapped the harness (or both). Always
+ * installs the new (harness, slug) FIRST so the harness has a
+ * working entry continuously; the stale entry under the old
+ * (harness, slug) is unlinked afterwards.
+ *
+ * No-op when both the harness and slug stayed the same. Returns the
+ * install + uninstall outcomes so callers can log them (today) or
+ * surface them in the response (later).
+ */
+export async function reconcileHarnessLink(input: {
+  before: Pick<StoredAgentProfile, 'slug' | 'harness'>
+  after: Pick<StoredAgentProfile, 'slug' | 'mcpUrl' | 'harness'>
+}): Promise<{
+  install: InstallOutcome | null
+  uninstall: InstallOutcome | null
+}> {
+  const { before, after } = input
+  const harnessChanged = before.harness !== after.harness
+  const slugChanged = before.slug !== after.slug
+  if (!harnessChanged && !slugChanged) {
+    return { install: null, uninstall: null }
+  }
+  const install = await installForAgent(after)
+  const uninstall = await uninstallForAgent(before)
+  return { install, uninstall }
+}
+
 function failure(err: unknown, harness: Harness): InstallOutcome {
   if (err instanceof ForeignEntryError) {
     logger.warn('harness entry exists but was not written by us', {

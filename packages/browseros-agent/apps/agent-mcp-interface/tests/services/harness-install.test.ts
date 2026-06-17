@@ -15,7 +15,7 @@ import {
 import { createStubMcpManager } from '../_helpers/stub-mcp-manager'
 import { withTempBrowserosDir } from '../_helpers/temp-browseros-dir'
 
-function makeInput(): NewAgentValues {
+function makeInput(overrides: Partial<NewAgentValues> = {}): NewAgentValues {
   return {
     name: 'Install Smoke',
     harness: 'Claude Desktop',
@@ -31,6 +31,7 @@ function makeInput(): NewAgentValues {
     },
     aclRuleIds: [],
     customAclRules: [],
+    ...overrides,
   }
 }
 
@@ -123,6 +124,98 @@ describe('harness install service', () => {
       expect(outcome.installed).toBe(false)
       expect(outcome.message).toContain('Claude Desktop')
       expect(outcome.message).toContain('disk full')
+    })
+  })
+
+  test('update with a slug rotation re-links the new slug then unlinks the old one', async () => {
+    await withTempBrowserosDir(async () => {
+      const stub = createStubMcpManager()
+      setMcpManagerForTesting(stub)
+      const created = await agents.create(makeInput({ name: 'Original Name' }))
+      // Drop the create calls so the assertion below only sees the reconcile.
+      stub.reset()
+      await agents.update(created.id, makeInput({ name: 'Renamed Profile' }))
+      const order = stub.calls.map((c) => ({
+        method: c.method,
+        name:
+          (c.payload as { name?: string; serverName?: string }).name ??
+          (c.payload as { serverName?: string }).serverName,
+      }))
+      // Reconcile installs the new slug FIRST so the harness has a
+      // working entry continuously, then unlinks the old slug.
+      expect(order[0]).toEqual({ method: 'add', name: 'renamed-profile' })
+      expect(order[1]).toEqual({ method: 'link', name: 'renamed-profile' })
+      const unlinkIdx = order.findIndex(
+        (o) => o.method === 'unlink' && o.name === 'original-name',
+      )
+      const removeIdx = order.findIndex(
+        (o) => o.method === 'remove' && o.name === 'original-name',
+      )
+      expect(unlinkIdx).toBeGreaterThan(1)
+      expect(removeIdx).toBeGreaterThan(unlinkIdx)
+    })
+  })
+
+  test('update with a harness change writes the new harness and unlinks the old one', async () => {
+    await withTempBrowserosDir(async () => {
+      const stub = createStubMcpManager()
+      setMcpManagerForTesting(stub)
+      const created = await agents.create(
+        makeInput({ name: 'Stable Name', harness: 'Claude Code' }),
+      )
+      stub.reset()
+      await agents.update(
+        created.id,
+        makeInput({ name: 'Stable Name', harness: 'Cursor' }),
+      )
+      const linkCall = stub.calls.find((c) => c.method === 'link')
+      const unlinkCall = stub.calls.find((c) => c.method === 'unlink')
+      expect(linkCall?.payload).toMatchObject({ agent: 'cursor' })
+      expect(unlinkCall?.payload).toMatchObject({ agent: 'claude-code' })
+    })
+  })
+
+  test('update with no harness or slug change skips the reconcile entirely', async () => {
+    await withTempBrowserosDir(async () => {
+      const stub = createStubMcpManager()
+      setMcpManagerForTesting(stub)
+      const created = await agents.create(makeInput({ name: 'Same' }))
+      stub.reset()
+      // Mutate something irrelevant to the harness link (approvals).
+      await agents.update(created.id, {
+        ...makeInput({ name: 'Same' }),
+        approvals: {
+          submit: 'Block',
+          payment: 'Block',
+          delete: 'Block',
+          upload: 'Block',
+          navigate: 'Block',
+          input: 'Block',
+        },
+      })
+      expect(stub.calls).toEqual([])
+      void created
+    })
+  })
+
+  test('regenerateMcpUrl re-links the new slug and unlinks the old one', async () => {
+    await withTempBrowserosDir(async () => {
+      const stub = createStubMcpManager()
+      setMcpManagerForTesting(stub)
+      const created = await agents.create(makeInput({ name: 'Rotate Me' }))
+      stub.reset()
+      const rotated = await agents.regenerateMcpUrl(created.id)
+      expect(rotated).not.toBeNull()
+      const linkCall = stub.calls.find((c) => c.method === 'link')
+      const unlinkCall = stub.calls.find((c) => c.method === 'unlink')
+      expect(linkCall?.payload).toMatchObject({
+        serverName: rotated?.mcpUrl.split('/').pop(),
+        agent: 'claude-desktop',
+      })
+      expect(unlinkCall?.payload).toMatchObject({
+        serverName: created.slug,
+        agent: 'claude-desktop',
+      })
     })
   })
 })
