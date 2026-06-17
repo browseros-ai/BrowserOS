@@ -20,7 +20,15 @@ export const useApprovalCatalog = createQuery<readonly ApprovalCategory[]>({
     try {
       const response = await api.permissions.catalog.$get()
       return await parseResponse<ApprovalCategory[]>(response)
-    } catch {
+    } catch (err) {
+      // Surface a single line so operators can tell "intentional
+      // offline fallback" apart from "the backend changed schema
+      // under us". Returning the local constant keeps the tab
+      // usable; the warn is the diagnostic seam.
+      console.warn(
+        '[permissions.useApprovalCatalog] backend catalog fetch failed, using local fallback',
+        err,
+      )
       return APPROVAL_CATEGORIES
     }
   },

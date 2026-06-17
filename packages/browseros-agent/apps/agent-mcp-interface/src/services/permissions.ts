@@ -53,6 +53,12 @@ export interface CheckResult {
  * site-rule action space. `input` (click & type) is intentionally
  * not domain-scoped: site rules clamp meaningful actions, not every
  * keystroke.
+ *
+ * `admin` has no catalog counterpart but is a first-class site-rule
+ * action; we still want a verb that callers can use to ask "is this
+ * admin operation blocked on this domain?" so a configured admin
+ * rule attributes the block to `'site-rule'` instead of falling
+ * through to the unknown-verb safety default.
  */
 const VERB_TO_RULE_ACTION: Record<string, SiteRuleAction> = {
   submit: 'submit',
@@ -60,6 +66,7 @@ const VERB_TO_RULE_ACTION: Record<string, SiteRuleAction> = {
   delete: 'delete',
   upload: 'upload',
   navigate: 'navigate',
+  admin: 'admin',
 }
 
 const CATALOG_BY_ID: Record<string, ApprovalCategory> = Object.fromEntries(

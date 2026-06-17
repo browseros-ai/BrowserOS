@@ -196,6 +196,40 @@ describe('permissions.check', () => {
     })
   })
 
+  test('admin verb is enforced by matching site rules', async () => {
+    await withTempBrowserosDir(async () => {
+      const agent = await agentsService.create(makeProfile())
+      await siteRulesService.add({
+        label: 'Org billing',
+        domain: 'admin.*',
+        action: 'admin',
+      })
+      // Configured admin rule must attribute the block to the rule,
+      // not to the unknown-verb safety default. If this regresses,
+      // the cockpit will show "blocked by default" instead of
+      // "blocked by the rule you configured".
+      const result = await permissions.check({
+        agentId: agent.id,
+        verb: 'admin',
+        domain: 'admin.workspace.google.com',
+      })
+      expect(result).toEqual({ verdict: 'block', source: 'site-rule' })
+
+      // Without a matching rule, admin still defaults to block
+      // (catalog has no admin verdict), but sourced from the
+      // permission-default safety net.
+      const noRule = await permissions.check({
+        agentId: agent.id,
+        verb: 'admin',
+        domain: 'docs.google.com',
+      })
+      expect(noRule).toEqual({
+        verdict: 'block',
+        source: 'permission-default',
+      })
+    })
+  })
+
   test('input verb is not domain-scoped: site rules do not clamp it', async () => {
     await withTempBrowserosDir(async () => {
       const agent = await agentsService.create(makeProfile())
