@@ -60,11 +60,20 @@ export class ToolLoopExecutorBackend implements ExecutorBackend {
         browserUseNewTools: true,
       })
 
+      // biome-ignore lint/suspicious/noExplicitAny: see comment below.
+      // `as any` keeps the call compiling when the workspace's zod
+      // major versions cross-pollute the ai-sdk's `generate()`
+      // option type (cockpit pins zod v4, server pins v3). The
+      // `experimental_on*` callbacks ARE valid on the runtime
+      // ai-sdk; only TS's view of them gets dropped under the
+      // mixed-version resolution. Tracked alongside the cockpit's
+      // dynamic-import workaround in apps/server/src/api/server.ts.
       await agent.toolLoopAgent.generate({
         prompt: instruction,
         abortSignal: signal,
 
-        experimental_onToolCallStart: ({ toolCall }) => {
+        // biome-ignore lint/suspicious/noExplicitAny: see toolCall typing note in the function header above.
+        experimental_onToolCallStart: ({ toolCall }: { toolCall: any }) => {
           const input = toolCall.input as Record<string, unknown> | undefined
           if (input && typeof input.url === 'string' && input.url.length > 0) {
             this.currentUrl = input.url
@@ -81,7 +90,16 @@ export class ToolLoopExecutorBackend implements ExecutorBackend {
           await this.options.callbacks?.onToolCallFinish?.()
         },
 
-        onStepFinish: async ({ toolCalls, toolResults, text }) => {
+        // biome-ignore lint/suspicious/noExplicitAny: cascade from the call-site cast; ai-sdk's step type widens to `any` once the literal is cast.
+        onStepFinish: async ({
+          toolCalls,
+          toolResults,
+          text,
+        }: {
+          toolCalls?: any
+          toolResults?: any
+          text?: string
+        }) => {
           if (toolCalls) {
             for (const toolCall of toolCalls) {
               if (!toolsUsed.includes(toolCall.toolName)) {
@@ -98,7 +116,8 @@ export class ToolLoopExecutorBackend implements ExecutorBackend {
             text,
           })
         },
-      })
+        // biome-ignore lint/suspicious/noExplicitAny: ai-sdk option-type widening under mixed workspace zod versions; see top-of-call comment.
+      } as any)
     } catch {
       status = signal?.aborted ? 'timeout' : 'blocked'
     } finally {
