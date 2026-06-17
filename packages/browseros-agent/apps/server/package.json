@@ -66,6 +66,18 @@
     "./browser/backends/cdp": {
       "types": "./src/browser/backends/cdp.ts",
       "default": "./src/browser/backends/cdp.ts"
+    },
+    "./browser/core/session": {
+      "types": "./src/browser/core/session.ts",
+      "default": "./src/browser/core/session.ts"
+    },
+    "./tools/browser/framework": {
+      "types": "./src/tools/browser/framework.ts",
+      "default": "./src/tools/browser/framework.ts"
+    },
+    "./tools/browser/registry": {
+      "types": "./src/tools/browser/registry.ts",
+      "default": "./src/tools/browser/registry.ts"
     }
   },
   "dependencies": {
