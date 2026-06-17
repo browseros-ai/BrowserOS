@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
 import {
   type AgentProfile,
+  useAgentProfileDetail,
   useAgentProfiles,
   useDeleteAgent,
 } from '@/modules/api/agents.hooks'
@@ -9,8 +10,9 @@ import {
 /**
  * Aggregates the Agents directory's server state. Delete mutation
  * writes back to the `agent-profiles` cache via `setQueryData` so the
- * row disappears immediately without a refetch, per the project
- * convention of treating server-cached lists as the source of truth.
+ * row disappears immediately without a refetch, then invalidates the
+ * detail cache for the removed id so a stale snapshot can't show up
+ * if the user navigates back via history.
  */
 export function useAgentsDirectoryData() {
   const navigate = useNavigate()
@@ -23,6 +25,9 @@ export function useAgentsDirectoryData() {
         useAgentProfiles.getKey(),
         (prev) => (prev ?? []).filter((profile) => profile.id !== id),
       )
+      void queryClient.invalidateQueries({
+        queryKey: useAgentProfileDetail.getKey({ id }),
+      })
     },
   })
 

@@ -29,13 +29,29 @@ export function useAgentWizardData(mode: AgentWizardMode) {
   const agentId = mode === 'edit' ? (paramId ?? null) : null
 
   const { data: existingProfiles = [] } = useAgentProfiles()
-  const createAgent = useCreateAgent()
+
+  // Create: invalidate the profiles list so the directory picks up
+  // the new row (and its server-derived fields like loginScopeLabel,
+  // blockedActionCount, alwaysAllowCount) on next render.
+  const createAgent = useCreateAgent({
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: useAgentProfiles.getKey(),
+      })
+    },
+  })
 
   const profileDetail = useAgentProfileDetail({
     variables: { id: agentId ?? '' },
     enabled: mode === 'edit' && agentId !== null,
   })
 
+  // Update: optimistic patch keeps instant feedback for the cheap
+  // fields (name, harness) and an invalidate catches every
+  // server-derived field that we'd otherwise leave stale: approvals
+  // counts, ACL rule count, slug/mcpUrl rotation after a rename.
+  // Detail cache for THIS id also gets invalidated so a re-open of
+  // the edit wizard rehydrates from the server.
   const updateAgent = useUpdateAgent({
     onSuccess: (variables) => {
       queryClient.setQueryData<AgentProfile[]>(
@@ -47,6 +63,12 @@ export function useAgentWizardData(mode: AgentWizardMode) {
               : profile,
           ),
       )
+      void queryClient.invalidateQueries({
+        queryKey: useAgentProfiles.getKey(),
+      })
+      void queryClient.invalidateQueries({
+        queryKey: useAgentProfileDetail.getKey({ id: variables.id }),
+      })
     },
   })
 
