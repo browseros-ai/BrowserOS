@@ -267,6 +267,22 @@ describe('agents service', () => {
     })
   })
 
+  test('findBySlug returns the profile owning the slug, null otherwise', async () => {
+    await withTempBrowserosDir(async () => {
+      const a = await agents.create(makeInput({ name: 'Find Me' }))
+      const b = await agents.create(makeInput({ name: 'Other Agent' }))
+      const found = await agents.findBySlug(a.slug)
+      expect(found?.id).toBe(a.id)
+      const other = await agents.findBySlug(b.slug)
+      expect(other?.id).toBe(b.id)
+      expect(await agents.findBySlug('does-not-exist')).toBeNull()
+      // Empty directory after wipe (separate temp dir is the simplest).
+    })
+    await withTempBrowserosDir(async () => {
+      expect(await agents.findBySlug('any-slug')).toBeNull()
+    })
+  })
+
   test('two parallel updates of different profiles do not corrupt each other', async () => {
     await withTempBrowserosDir(async () => {
       const a = await agents.create(makeInput({ name: 'Parallel A' }))

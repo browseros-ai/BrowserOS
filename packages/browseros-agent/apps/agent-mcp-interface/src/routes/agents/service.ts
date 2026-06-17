@@ -113,6 +113,19 @@ async function loadAll(): Promise<StoredAgentProfile[]> {
   return profiles
 }
 
+/**
+ * Stored profile for a slug, or null when no agent owns that slug.
+ * Used by the MCP route to resolve `/mcp/:slug` against the agents
+ * directory. Slugs are unique per Phase 1's `uniqueSlug` invariant so
+ * the linear scan never collides.
+ */
+export async function findBySlug(
+  slug: string,
+): Promise<StoredAgentProfile | null> {
+  const all = await loadAll()
+  return all.find((profile) => profile.slug === slug) ?? null
+}
+
 /** Stored profile for an id, or null when the file is missing. */
 async function loadById(id: string): Promise<StoredAgentProfile | null> {
   if (!isValidId(id)) return null
