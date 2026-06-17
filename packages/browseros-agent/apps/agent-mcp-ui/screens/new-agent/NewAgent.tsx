@@ -101,7 +101,11 @@ export function NewAgent({ mode = 'create' }: NewAgentProps) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-1 bg-bg-canvas">
+    // h-screen (not h-full) so the rail's internal overflow-y-auto
+    // anchors against the viewport. Without this, an unconstrained
+    // parent lets the rail grow to the document height, pushing the
+    // "Add to ..." CTA off-screen below the form.
+    <div className="flex h-screen min-h-0 flex-1 bg-bg-canvas">
       <Form {...form}>
         <form
           onSubmit={form.handleSubmit(onSubmit)}
