@@ -83,13 +83,86 @@ describe('/mcp/:slug route', () => {
     })
   })
 
-  test('full handshake: initialize and tools/list returns the catalog', async () => {
+  test('full handshake: initialize and tools/list returns all 6 tools', async () => {
     await withTempBrowserosDir(async () => {
       const created = await agents.create(makeAgentInput())
       const client = await connectedClientFor(created.slug)
       const tools = await client.listTools()
-      const names = tools.tools.map((t) => t.name)
-      expect(names).toContain('navigate')
+      const names = tools.tools.map((t) => t.name).sort()
+      expect(names).toEqual([
+        'attach',
+        'click',
+        'navigate',
+        'read',
+        'submit',
+        'type',
+      ])
+      await client.close()
+    })
+  })
+
+  test('every non-navigate tool dispatches against the stub on the Auto path', async () => {
+    await withTempBrowserosDir(async () => {
+      // Flip every verb to Auto so the catalog defaults don't gate us.
+      const created = await agents.create({
+        ...makeAgentInput(),
+        approvals: {
+          submit: 'Auto',
+          payment: 'Auto',
+          delete: 'Auto',
+          upload: 'Auto',
+          navigate: 'Auto',
+          input: 'Auto',
+        },
+        selectedSites: ['concur.com'],
+      })
+      const client = await connectedClientFor(created.slug)
+
+      const readRes = await client.callTool({
+        name: 'read',
+        arguments: { selector: '#main' },
+      })
+      expect(readRes.isError).toBeFalsy()
+      expect((readRes.content as Array<{ text: string }>)[0].text).toContain(
+        '(stub) read #main',
+      )
+
+      const clickRes = await client.callTool({
+        name: 'click',
+        arguments: { selector: '.btn' },
+      })
+      expect(clickRes.isError).toBeFalsy()
+      expect((clickRes.content as Array<{ text: string }>)[0].text).toContain(
+        '(stub) clicked .btn',
+      )
+
+      const typeRes = await client.callTool({
+        name: 'type',
+        arguments: { selector: '#q', value: 'hi' },
+      })
+      expect(typeRes.isError).toBeFalsy()
+      expect((typeRes.content as Array<{ text: string }>)[0].text).toContain(
+        '(stub) typed hi into #q',
+      )
+
+      const attachRes = await client.callTool({
+        name: 'attach',
+        arguments: { selector: '#file', filePath: '/tmp/receipt.pdf' },
+      })
+      expect(attachRes.isError).toBeFalsy()
+      expect((attachRes.content as Array<{ text: string }>)[0].text).toContain(
+        '(stub) attached receipt.pdf to #file',
+      )
+
+      const submitRes = await client.callTool({
+        name: 'submit',
+        arguments: { selector: 'form#expenses' },
+      })
+      expect(submitRes.isError).toBeFalsy()
+      expect((submitRes.content as Array<{ text: string }>)[0].text).toContain(
+        '(stub) submitted form#expenses',
+      )
+
       await client.close()
     })
   })
