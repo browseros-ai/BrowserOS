@@ -58,6 +58,55 @@ async function connectedClientFor(slug: string): Promise<Client> {
 }
 
 describe('/mcp/:slug route', () => {
+  test('deleted agent slug starts 404-ing immediately on the next request', async () => {
+    await withTempBrowserosDir(async () => {
+      const created = await agents.create(makeAgentInput())
+      const before = await app.fetch(
+        new Request(`http://localhost/mcp/${created.slug}`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json, text/event-stream',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: {
+              protocolVersion: '2024-11-05',
+              capabilities: {},
+              clientInfo: { name: 'test', version: '0' },
+            },
+          }),
+        }),
+      )
+      expect(before.status).toBe(200)
+
+      await agents.remove(created.id)
+
+      const after = await app.fetch(
+        new Request(`http://localhost/mcp/${created.slug}`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json, text/event-stream',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'initialize',
+            params: {
+              protocolVersion: '2024-11-05',
+              capabilities: {},
+              clientInfo: { name: 'test', version: '0' },
+            },
+          }),
+        }),
+      )
+      expect(after.status).toBe(404)
+    })
+  })
+
   test('unknown slug returns 404 at the route layer', async () => {
     await withTempBrowserosDir(async () => {
       const res = await app.fetch(
