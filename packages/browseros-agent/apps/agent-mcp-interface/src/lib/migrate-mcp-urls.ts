@@ -49,9 +49,29 @@ export async function migrateMcpUrls(
       const updated: StoredAgentProfile = { ...profile, mcpUrl: next }
       await writeJson(file, updated, storedAgentProfileSchema)
       // Drop the stale harness entry first, then install the new
-      // URL. Both are best-effort; a failed uninstall (e.g. the
-      // user removed the entry by hand) does not abort the install.
-      await uninstallForAgent({ slug: profile.slug, harness: profile.harness })
+      // URL. The uninstall is wrapped in its own try/catch so a
+      // throw here (e.g. the user removed the entry by hand and a
+      // future agent-mcp-manager build escalates that to an
+      // exception) does NOT abort the install. Without this
+      // isolation, the profile JSON would carry the new URL while
+      // the harness config still points at the dead old one, and
+      // the next migration pass would skip the row as "already
+      // migrated".
+      try {
+        await uninstallForAgent({
+          slug: profile.slug,
+          harness: profile.harness,
+        })
+      } catch (uninstallErr) {
+        logger.warn('migration uninstall step threw; continuing install', {
+          file,
+          slug: profile.slug,
+          error:
+            uninstallErr instanceof Error
+              ? uninstallErr.message
+              : String(uninstallErr),
+        })
+      }
       await installForAgent({
         slug: updated.slug,
         mcpUrl: updated.mcpUrl,

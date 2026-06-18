@@ -34,9 +34,21 @@ import { BROWSER_TOOLS } from '@browseros/server/tools/browser/registry'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { ZodRawShape } from 'zod'
 import { getBrowserSession } from '../lib/browser-session'
+import { logger } from '../lib/logger'
 import type { StoredAgentProfile } from '../routes/agents/schemas'
 import { check } from '../services/permissions'
 import { asRegister, type ToolResult } from './register-fn'
+
+/**
+ * Schemes the cockpit refuses to forward to `navigate`, regardless of
+ * what the parent server's tool schema would accept. The real navigate
+ * tool's zod input is `z.string().optional()` with no scheme check, so
+ * without this guard a `javascript:`, `file:`, or `data:` URL would
+ * pass the permission gate and reach the CDP layer. Re-asserts the
+ * defense the old per-tool wrapper had before we switched to the real
+ * catalogue.
+ */
+const NAVIGATE_BLOCKED_SCHEMES = new Set(['javascript:', 'file:', 'data:'])
 
 /**
  * Maps each tool in the real catalogue to a permission verb. `tabs`
@@ -113,6 +125,23 @@ export function registerBrowserTools(
         }),
       },
       async (rawArgs, extra) => {
+        if (tool.name === 'navigate') {
+          const url = (rawArgs as { url?: unknown } | null | undefined)?.url
+          if (typeof url === 'string' && url.length > 0) {
+            const scheme = url.slice(0, url.indexOf(':') + 1).toLowerCase()
+            if (NAVIGATE_BLOCKED_SCHEMES.has(scheme)) {
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: `navigate refuses ${scheme} URLs; only http(s) is allowed`,
+                  },
+                ],
+                isError: true,
+              } satisfies ToolResult
+            }
+          }
+        }
         const domain = domainForCall(tool.name, rawArgs, agent)
         const verdict = await check({
           agentId: agent.id,
@@ -155,6 +184,18 @@ export function registerBrowserTools(
           } satisfies ToolResult
         }
 
+        if (tool.name === 'run') {
+          // `run` executes arbitrary JS in the page's context. It maps
+          // to the same `input` verb as low-risk reads today, so an
+          // agent with `input: 'Auto'` runs scripts without
+          // confirmation. A dedicated `run` verb in the catalog (and
+          // a UI surface for it) is the proper fix; this log keeps the
+          // dispatch auditable until that lands. See PR review.
+          logger.warn('cockpit dispatched run (arbitrary script)', {
+            agentId: agent.id,
+            domain,
+          })
+        }
         const result = await executeTool(tool, rawArgs, {
           session,
           signal: extra?.signal,

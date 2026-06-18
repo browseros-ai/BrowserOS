@@ -198,6 +198,27 @@ describe('/mcp/:slug route', () => {
     })
   })
 
+  test('navigate refuses javascript:, file:, and data: URIs at the cockpit layer', async () => {
+    await withTempBrowserosDir(async () => {
+      const created = await agents.create(makeAgentInput())
+      const client = await connectedClientFor(created.slug)
+      for (const url of [
+        'javascript:alert(1)',
+        'file:///etc/passwd',
+        'data:text/html,<script>1</script>',
+      ]) {
+        const result = await client.callTool({
+          name: 'navigate',
+          arguments: { page: 0, action: 'url', url },
+        })
+        expect(result.isError).toBe(true)
+        const content = result.content as Array<{ type: string; text: string }>
+        expect(content[0].text).toContain('only http(s) is allowed')
+      }
+      await client.close()
+    })
+  })
+
   test('a verb whose agent verdict is Ask returns the deferred-approval error', async () => {
     await withTempBrowserosDir(async () => {
       const askAgent = await agents.create({

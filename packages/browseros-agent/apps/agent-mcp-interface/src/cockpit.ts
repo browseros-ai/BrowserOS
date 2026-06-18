@@ -55,14 +55,24 @@ export function createCockpitRoutes(deps: CockpitDeps): typeof app {
   // Fire the migration in the background; one bad profile must not
   // block server startup. Result is logged so an operator can see
   // how many rows moved.
-  void migrateMcpUrls(buildMcpUrlFromPort(deps.serverPort, prefix)).then(
-    (result) =>
+  void migrateMcpUrls(buildMcpUrlFromPort(deps.serverPort, prefix))
+    .then((result) =>
       logger.info('mcpUrl migration finished', {
         migrated: result.migrated,
         skipped: result.skipped,
         failed: result.failed,
       }),
-  )
+    )
+    .catch((err: unknown) =>
+      // `migrateMcpUrls` guards per-profile errors, but `listFiles` at its
+      // start can still throw (EACCES, ENOTDIR, etc.). Without this `.catch`
+      // the rejection lands as an unhandled promise rejection that Bun
+      // discards silently. Logging keeps the failure visible to operators
+      // without preventing the rest of the cockpit from coming up.
+      logger.error('mcpUrl migration failed unexpectedly', {
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
   return app
 }
 
