@@ -1,16 +1,26 @@
 import { PlugZap, Plus } from 'lucide-react'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import type { AgentProfile } from '@/modules/api/agents.hooks'
 import { McpRow } from './McpRow'
 import { useMcpRegistryData } from './mcp.data'
+import { RegenerateUrlDialog } from './RegenerateUrlDialog'
 
 export function Mcp() {
   const { profiles, isLoading, regenerate, navigate } = useMcpRegistryData()
+  const [pendingRotate, setPendingRotate] = useState<AgentProfile | null>(null)
 
   const onAdd = () => navigate('/agents/new')
-  const onRegenerate = (profile: AgentProfile) =>
-    regenerate.mutate({ id: profile.id })
+
+  const onConfirmRotate = (profile: AgentProfile) => {
+    regenerate.mutate(
+      { id: profile.id },
+      {
+        onSettled: () => setPendingRotate(null),
+      },
+    )
+  }
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col px-8 pt-6 pb-20">
@@ -30,9 +40,10 @@ export function Mcp() {
             )}
           </div>
           <p className="mt-0.5 text-ink-2 text-sm">
-            Every agent profile gets a slug-routed MCP endpoint. Copy the URL
-            into your harness, or use one-click add if the harness exposes a
-            connector install API.
+            Every agent profile gets a slug-routed MCP endpoint that is
+            installed into its harness when the agent is created. Copy the URL
+            here for places the harness can't reach (CI configs, manual
+            scripts).
           </p>
         </div>
         <Button type="button" onClick={onAdd}>
@@ -56,11 +67,20 @@ export function Mcp() {
               isRegenerating={
                 regenerate.isPending && regenerate.variables?.id === profile.id
               }
-              onRegenerate={onRegenerate}
+              onRegenerate={setPendingRotate}
             />
           ))}
         </div>
       )}
+
+      <RegenerateUrlDialog
+        profile={pendingRotate}
+        isRegenerating={
+          regenerate.isPending && regenerate.variables?.id === pendingRotate?.id
+        }
+        onConfirm={onConfirmRotate}
+        onCancel={() => setPendingRotate(null)}
+      />
     </div>
   )
 }
@@ -80,7 +100,8 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
       </h2>
       <p className="max-w-md text-ink-3 text-sm leading-snug">
         Endpoints land here when you add an agent profile. Each profile gets a
-        unique slug-routed MCP URL plus a one-click "Add to harness" handoff.
+        unique slug-routed MCP URL and is auto-installed into its chosen
+        harness.
       </p>
       <Button type="button" onClick={onAdd}>
         <Plus className="size-4" />

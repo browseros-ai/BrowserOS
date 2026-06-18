@@ -1,4 +1,4 @@
-import { Check, Copy, Link2, RotateCcw } from 'lucide-react'
+import { Check, Copy, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
 import { HarnessIcon } from '@/components/harness/HarnessIcon'
 import { Badge } from '@/components/ui/badge'
@@ -19,7 +19,6 @@ export function McpRow({ profile, isRegenerating, onRegenerate }: McpRowProps) {
   const slug = slugFromMcpUrl(profile.mcpUrl)
   const cliCommand = cliCommandFor(profile)
   const [copied, setCopied] = useState(false)
-  const [added, setAdded] = useState(false)
 
   const copyMcpUrl = async () => {
     try {
@@ -29,11 +28,6 @@ export function McpRow({ profile, isRegenerating, onRegenerate }: McpRowProps) {
     } catch {
       setCopied(false)
     }
-  }
-
-  const onAdd = () => {
-    setAdded(true)
-    window.setTimeout(() => setAdded(false), 1800)
   }
 
   return (
@@ -97,25 +91,6 @@ export function McpRow({ profile, isRegenerating, onRegenerate }: McpRowProps) {
             className={cn('size-3.5', isRegenerating && 'animate-spin')}
           />
           {isRegenerating ? 'Rotating…' : 'Regenerate URL'}
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          onClick={onAdd}
-          disabled={added}
-          className="gap-1.5"
-        >
-          {added ? (
-            <>
-              <Check className="size-3.5" />
-              Added to {profile.harness}
-            </>
-          ) : (
-            <>
-              <Link2 className="size-3.5" />
-              Add to {profile.harness}
-            </>
-          )}
         </Button>
       </div>
     </div>
