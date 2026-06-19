@@ -24,7 +24,7 @@ export const IntegrationsSection: FC<IntegrationsSectionProps> = ({
   serverUrl,
 }) => {
   const agentsQuery = useMcpAgents()
-  const install = useInstallAgent()
+  const install = useInstallAgent(serverUrl)
   const uninstall = useUninstallAgent()
   const [errors, setErrors] = useState<Record<string, string | null>>({})
 

@@ -241,6 +241,30 @@ describe('installInto', () => {
     expect(calls.link[0].serverName).toBe('browseros-stdio')
   })
 
+  it('uses a stdio mcp-remote spec under the stdio server name for claude-desktop', async () => {
+    // Claude Desktop only accepts stdio MCP entries; an http spec is
+    // silently dropped on launch. The agent-mcp-manager catalog flags
+    // it as stdio-only and `planFor` honours that.
+    const { manager, calls } = makeManagerStub()
+    setMcpManagerForTesting(manager)
+
+    const result = await installInto(
+      'claude-desktop',
+      'http://127.0.0.1:9100/mcp',
+    )
+    expect(result.success).toBe(true)
+    expect(calls.add).toHaveLength(1)
+    expect(calls.add[0].name).toBe('browseros-stdio')
+    expect(calls.add[0].spec).toEqual({
+      transport: 'stdio',
+      command: 'npx',
+      args: ['mcp-remote', 'http://127.0.0.1:9100/mcp'],
+    })
+    expect(calls.link).toHaveLength(1)
+    expect(calls.link[0].agent).toBe('claude-desktop')
+    expect(calls.link[0].serverName).toBe('browseros-stdio')
+  })
+
   it('rejects unsupported agent ids', async () => {
     const { manager } = makeManagerStub()
     setMcpManagerForTesting(manager)

@@ -88,7 +88,7 @@
     "acp-probe": "^0.0.2",
     "acpx": "^0.10.0",
     "acpx-ai-provider": "^0.0.6",
-    "agent-mcp-manager": "^0.0.1",
+    "agent-mcp-manager": "^0.0.2",
     "ai": "^6.0.94",
     "commander": "^14.0.1",
     "core-js": "3.45.1",

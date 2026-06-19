@@ -158,7 +158,7 @@
         "acp-probe": "^0.0.2",
         "acpx": "^0.10.0",
         "acpx-ai-provider": "^0.0.6",
-        "agent-mcp-manager": "^0.0.1",
+        "agent-mcp-manager": "^0.0.2",
         "ai": "^6.0.94",
         "commander": "^14.0.1",
         "core-js": "3.45.1",
@@ -1757,7 +1757,7 @@
 
     "agent-base": ["agent-base@6.0.2", "", { "dependencies": { "debug": "4" } }, "sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ=="],
 
-    "agent-mcp-manager": ["agent-mcp-manager@0.0.1", "", { "dependencies": { "@iarna/toml": "^2.2.5", "jsonc-parser": "^3.3.1" } }, "sha512-lU6gc4/2+/5wXNl38DWEJuDKO5vkBid6KAWpxkbEGS1F1T1yXurbBPxEsaUohcByqj/Xt3rGHCjSbjKCRASMXw=="],
+    "agent-mcp-manager": ["agent-mcp-manager@0.0.2", "", { "dependencies": { "@iarna/toml": "^2.2.5", "jsonc-parser": "^3.3.1" } }, "sha512-1wyJqzeLKSRSpD5URfGI/H9WjwBcDwxyU/ltYNedIgnb6QV12DYd6jy6WigqLlevs0rTkBYhKs3kkHmyes2Dvw=="],
 
     "ahooks": ["ahooks@3.9.6", "", { "dependencies": { "@babel/runtime": "^7.21.0", "@types/js-cookie": "^3.0.6", "dayjs": "^1.9.1", "intersection-observer": "^0.12.0", "js-cookie": "^3.0.5", "lodash": "^4.17.21", "react-fast-compare": "^3.2.2", "resize-observer-polyfill": "^1.5.1", "screenfull": "^5.0.0", "tslib": "^2.4.1" }, "peerDependencies": { "react": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0", "react-dom": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0" } }, "sha512-Mr7f05swd5SmKlR9SZo5U6M0LsL4ErweLzpdgXjA1JPmnZ78Vr6wzx0jUtvoxrcqGKYnX0Yjc02iEASVxHFPjQ=="],
 

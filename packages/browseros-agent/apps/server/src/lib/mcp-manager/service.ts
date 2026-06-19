@@ -8,6 +8,7 @@
  */
 
 import {
+  type AgentId,
   type AgentInfo,
   AgentNotSupportedError,
   detectInstalledAgents,
@@ -16,6 +17,8 @@ import {
   type McpHttpSpec,
   type McpServerSpec,
   type McpStdioSpec,
+  resolveAgentSurface,
+  UnsupportedTransportError,
 } from 'agent-mcp-manager'
 import { logger } from '../logger'
 import {
@@ -41,13 +44,6 @@ export type DetectInstalledAgentsFn = () => Promise<AgentInfo[]>
 const HIDDEN_AGENTS: ReadonlySet<string> = new Set(['gemini'])
 
 /**
- * Agents that reject HTTP MCP specs and only accept stdio. We install
- * BrowserOS into these via `npx mcp-remote <url>` so a stdio client
- * still ends up talking to the local HTTP MCP endpoint.
- */
-const STDIO_ONLY_AGENTS: ReadonlySet<string> = new Set(['codex'])
-
-/**
  * The two server-names BrowserOS manages in the manifest. Iterating
  * both is what `listAgents` + `reconcileUrl` need to do.
  */
@@ -61,9 +57,20 @@ interface AgentServerPlan {
   spec: McpServerSpec
 }
 
-/** Pick the server name + spec a given agent should be linked under. */
-function planFor(agentId: string, currentUrl: string): AgentServerPlan {
-  if (STDIO_ONLY_AGENTS.has(agentId)) {
+/**
+ * Pick the server name + spec a given agent should be linked under.
+ *
+ * Transport routing is sourced from the library's catalog via
+ * `resolveAgentSurface` so we stay in lock-step with whatever
+ * upstream agent-mcp-manager classifies as http-capable. Agents
+ * that only accept stdio (claude-desktop, codex, …) get wrapped
+ * via `npx mcp-remote <url>` so a stdio client still ends up
+ * talking to the local HTTP MCP endpoint.
+ */
+function planFor(agentId: AgentId, currentUrl: string): AgentServerPlan {
+  const surface = resolveAgentSurface(agentId, 'system')
+  const supportsHttp = surface.supportedTransports.includes('http')
+  if (!supportsHttp) {
     const spec: McpStdioSpec = {
       transport: 'stdio',
       command: 'npx',
@@ -175,6 +182,12 @@ export function humaniseInstallError(err: unknown): {
       message:
         "Cannot replace a user-edited entry. Please remove BrowserOS from this agent's config manually and try again.",
       status: 409,
+    }
+  }
+  if (err instanceof UnsupportedTransportError) {
+    return {
+      message: `This agent does not support BrowserOS's MCP transport. ${err.message}`,
+      status: 400,
     }
   }
   const message = err instanceof Error ? err.message : String(err)

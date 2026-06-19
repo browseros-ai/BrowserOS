@@ -106,20 +106,30 @@ export class Application {
     }
 
     // Reconcile every linked agent's BrowserOS MCP URL against the
-    // port we just bound. Drift only happens on restart when the
-    // previous port is taken, but we run unconditionally because the
-    // listServers check is cheap and the cost of a missed reconcile
-    // is broken agent configs.
-    reconcileUrl({
-      currentUrl: `http://127.0.0.1:${this.config.serverPort}/mcp`,
-    }).catch((err) => {
-      logger.warn(
-        'MCP manager URL reconcile failed; agent configs may be stale',
-        {
-          error: err instanceof Error ? err.message : String(err),
-        },
+    // proxy URL external clients actually reach. The agent server's
+    // own `serverPort` is NOT that URL — in production the browser
+    // proxies `/mcp` from a separately-configured proxy port. We
+    // only reconcile when the launching process passes the public
+    // URL via `BROWSEROS_MCP_PUBLIC_URL`; otherwise we'd rewrite
+    // every agent config with the wrong port and break installs that
+    // were previously working. The UI's install flow records the
+    // correct URL per click; reconcile is the boot-time recovery
+    // path for port drift.
+    const publicMcpUrl = process.env.BROWSEROS_MCP_PUBLIC_URL
+    if (publicMcpUrl) {
+      reconcileUrl({ currentUrl: publicMcpUrl }).catch((err) => {
+        logger.warn(
+          'MCP manager URL reconcile failed; agent configs may be stale',
+          {
+            error: err instanceof Error ? err.message : String(err),
+          },
+        )
+      })
+    } else {
+      logger.debug(
+        'Skipping MCP manager URL reconcile — BROWSEROS_MCP_PUBLIC_URL not set',
       )
-    })
+    }
 
     logger.info(
       `HTTP server listening on http://127.0.0.1:${this.config.serverPort}`,
