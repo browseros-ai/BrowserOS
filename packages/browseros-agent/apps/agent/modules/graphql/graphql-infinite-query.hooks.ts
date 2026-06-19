@@ -13,8 +13,7 @@ import { getQueryKeyFromDocument } from '@/lib/graphql/getQueryKeyFromDocument'
  */
 export const useGraphqlInfiniteQuery = <
   TQueryFnData,
-  // biome-ignore lint/suspicious/noExplicitAny: TODO(dani) type GraphQL variables properly
-  TVariables extends Record<string, any> | undefined = undefined,
+  TVariables extends Record<string, unknown> = Record<string, never>,
   TPageParam extends string | undefined | number = undefined,
 >(
   query: TypedDocumentString<TQueryFnData, TVariables>,

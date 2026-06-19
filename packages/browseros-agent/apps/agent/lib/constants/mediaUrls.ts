@@ -30,21 +30,18 @@ export const QUICK_SEARCH_GIF_URL =
 
 /**
  * @public
- * TODO: Replace with actual video URL
  */
 export const COWORK_DEMO_URL =
   'https://pub-80f8a01e6e8b4239ae53a7652ef85877.r2.dev/resources/organize%20files%20on%20desktop%201.4x.mp4'
 
 /**
  * @public
- * TODO: Replace with actual video URL
  */
 export const WORKFLOWS_DEMO_URL =
   'https://pub-80f8a01e6e8b4239ae53a7652ef85877.r2.dev/resources/browseros-workflow-demo.mp4'
 
 /**
  * @public
- * TODO: Replace with actual video URL
  */
 export const AGENTIC_CODING_DEMO_URL =
   'https://pub-80f8a01e6e8b4239ae53a7652ef85877.r2.dev/resources/cowork-hn-extract-demo.mp4'
