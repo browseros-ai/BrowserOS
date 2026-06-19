@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/browseros-ai-browseros-badge.png)](https://mseep.ai/app/browseros-ai-browseros)
+
 <div align="center">
 <img width="693" height="379" alt="github-banner" src="https://github.com/user-attachments/assets/1e37941c-4dbc-4662-9c8c-3bbe9971301d" />
 
