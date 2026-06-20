@@ -114,6 +114,13 @@ export async function listAgents(
  * layer; if the URL drifted, the older entry is replaced before
  * linking. Stdio-only agents are linked under a separate server
  * name so each transport keeps its own manifest entry.
+ *
+ * Also sweeps the OPPOSITE server name's link for this agent.
+ * Without this, an agent that was first installed under the http
+ * server `browseros` and later re-routed to stdio by the upstream
+ * catalog (or vice versa) would end up double-linked, with the
+ * stale entry surviving every uninstall click that targets only
+ * the current planFor() server.
  */
 export async function installInto(
   agentId: string,
@@ -124,6 +131,8 @@ export async function installInto(
   }
   const mgr = getMcpManager()
   const { serverName, spec } = planFor(agentId, currentUrl)
+
+  await sweepLegacyLinks(agentId, serverName)
 
   // `add` overwrites when the entry already exists; safe to call
   // unconditionally on every install click so a URL drift gets
@@ -138,10 +147,18 @@ export async function installInto(
 }
 
 /**
- * Uninstall BrowserOS from the given agent's config. Idempotent on
- * the manifest side; throws ForeignEntryError when the user has
- * hand-edited the entry and the disk record no longer matches the
- * manifest record.
+ * Uninstall BrowserOS from the given agent's config. Tries every
+ * server name BrowserOS manages because the same agent may be
+ * linked under either `browseros` (http) or `browseros-stdio`
+ * depending on when it was last installed: the upstream catalog's
+ * transport classification for a given agent can flip between
+ * library versions, and a stale link under the prior server name
+ * would otherwise survive forever.
+ *
+ * Returns success when at least one server-name unlink completed.
+ * Surfaces ForeignEntryError when the user hand-edited the disk
+ * entry past what the manifest tracks; that case can only be
+ * cleaned up manually.
  */
 export async function uninstallFrom(
   agentId: string,
@@ -150,23 +167,52 @@ export async function uninstallFrom(
     throw new AgentNotSupportedError(agentId)
   }
   const mgr = getMcpManager()
-  const { serverName } = planFor(agentId, '')
-  try {
-    await mgr.unlink({ serverName, agent: agentId })
-    logger.info('Uninstalled BrowserOS MCP from agent', {
-      agent: agentId,
-      serverName,
-    })
-    return { success: true }
-  } catch (err) {
-    if (err instanceof ForeignEntryError) {
-      return {
-        success: false,
-        message:
-          'Cannot remove a user-edited entry. Please remove BrowserOS from this agent manually and try again.',
+  let foreignError: ForeignEntryError | null = null
+  for (const serverName of BROWSEROS_SERVER_NAMES) {
+    try {
+      await mgr.unlink({ serverName, agent: agentId })
+      logger.info('Uninstalled BrowserOS MCP from agent', {
+        agent: agentId,
+        serverName,
+      })
+    } catch (err) {
+      if (err instanceof ForeignEntryError) {
+        foreignError = err
+        continue
       }
+      throw err
     }
-    throw err
+  }
+  if (foreignError) {
+    return {
+      success: false,
+      message:
+        'Cannot remove a user-edited entry. Please remove BrowserOS from this agent manually and try again.',
+    }
+  }
+  return { success: true }
+}
+
+/**
+ * Cleans any pre-existing BrowserOS link for `agentId` under server
+ * names other than the one we're about to link under. Best-effort:
+ * ForeignEntryError is swallowed (the user hand-edited the foreign
+ * entry; let them keep it and overwrite the manifest below). Any
+ * other error rethrows so install fails loudly.
+ */
+async function sweepLegacyLinks(
+  agentId: AgentId,
+  targetServerName: string,
+): Promise<void> {
+  const mgr = getMcpManager()
+  for (const serverName of BROWSEROS_SERVER_NAMES) {
+    if (serverName === targetServerName) continue
+    try {
+      await mgr.unlink({ serverName, agent: agentId })
+    } catch (err) {
+      if (err instanceof ForeignEntryError) continue
+      throw err
+    }
   }
 }
 
