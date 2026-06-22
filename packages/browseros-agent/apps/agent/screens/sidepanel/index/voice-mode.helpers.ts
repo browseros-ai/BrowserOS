@@ -17,6 +17,11 @@ export function chipTextFor(
       return 'Transcribing'
     case 'responding':
       return 'BrowserOS Agent is working'
+    case 'barge_in_pending':
+      // Do not advertise that the agent has been interrupted. The
+      // interruption is still tentative; the agent is still working
+      // until the transcript is confirmed real.
+      return 'BrowserOS Agent is working'
     case 'closed':
     case 'idle':
       return ''
@@ -38,6 +43,7 @@ export function orbStateFor(input: {
       return 'speaking'
     case 'capturing':
     case 'listening':
+    case 'barge_in_pending':
       return 'listening'
     default:
       return 'idle'

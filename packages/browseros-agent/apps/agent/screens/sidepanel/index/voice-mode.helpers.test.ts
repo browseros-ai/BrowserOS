@@ -46,6 +46,7 @@ describe('showsDots', () => {
     expect(showsDots('transcribing')).toBe(true)
     expect(showsDots('listening')).toBe(false)
     expect(showsDots('responding')).toBe(false)
+    expect(showsDots('barge_in_pending')).toBe(false)
     expect(showsDots('idle')).toBe(false)
     expect(showsDots('closed')).toBe(false)
     expect(showsDots('error')).toBe(false)
@@ -72,6 +73,12 @@ describe('orbStateFor', () => {
       'listening',
     )
     expect(orbStateFor({ state: 'capturing', isWarmingUp: false })).toBe(
+      'listening',
+    )
+  })
+
+  it('maps barge_in_pending to listening', () => {
+    expect(orbStateFor({ state: 'barge_in_pending', isWarmingUp: false })).toBe(
       'listening',
     )
   })

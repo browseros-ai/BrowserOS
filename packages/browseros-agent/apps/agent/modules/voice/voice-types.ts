@@ -6,8 +6,15 @@ export type VoiceState =
   | 'capturing'
   | 'transcribing'
   | 'responding'
+  | 'barge_in_pending'
   | 'error'
   | 'closed'
+
+// `origin` records whether the in-flight transcription came from a
+// normal listening turn or from a tentative barge-in. The
+// TRANSCRIBE_OK / TRANSCRIBE_DROPPED handlers branch on this to
+// decide whether the in-flight agent reply should be cancelled.
+export type TurnOrigin = 'normal' | 'barge_in_pending'
 
 export interface VoiceContext {
   state: VoiceState
@@ -15,6 +22,7 @@ export interface VoiceContext {
   errorMessage: string | null
   isBargingIn: boolean
   isWarmingUp: boolean
+  origin: TurnOrigin
 }
 
 // The api exposes the underlying store and a small set of stable

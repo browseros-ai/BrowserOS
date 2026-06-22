@@ -51,6 +51,7 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
   const transcribeAbortRef = useRef<AbortController | null>(null)
   const warmUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const interruptedIdsRef = useRef<Set<string>>(new Set())
+  const stateSubRef = useRef<{ unsubscribe: () => void } | null>(null)
 
   // Poll the chat session's status from the ref instead of subscribing
   // to it via React deps. The chat session updates dozens of times a
@@ -135,6 +136,8 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
       }
     }
     recorderRef.current = null
+    stateSubRef.current?.unsubscribe()
+    stateSubRef.current = null
     vadRef.current?.stop()
     vadRef.current = null
     monitorRef.current?.stop()
@@ -199,15 +202,25 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
 
       const vad = createVad(capture, monitor, {
         onSpeechStart: () => {
-          if (store.getSnapshot().context.state === 'responding') {
+          const current = store.getSnapshot().context.state
+          if (current === 'responding') {
+            // Tentative barge-in: start recording but keep the agent
+            // running. The store will only cancel after the transcript
+            // is confirmed real by the sanitizer.
             track(SIDEPANEL_VOICE_MODE_BARGE_IN_EVENT)
+            voiceDebug('barge-in tentative')
+            startTurnRecorder()
+            store.send({ type: 'BARGE_IN_TENTATIVE' })
+            return
           }
+          voiceDebug('speech start')
           startTurnRecorder()
           store.send({ type: 'SPEECH_START' })
         },
         onSpeechEnd: () => {
           // The recorder's onstop handler dispatches SPEECH_END with
           // the freshly framed WebM blob; we just stop it here.
+          voiceDebug('speech end')
           const rec = recorderRef.current
           recorderRef.current = null
           if (rec && rec.state !== 'inactive') {
@@ -217,6 +230,14 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
       })
       vad.start()
       vadRef.current = vad
+
+      // Mirror responding-state into VAD barge-in mode so ambient
+      // blips don't trigger speech-start during agent work.
+      const stateSub = store.subscribe((snapshot) => {
+        const s = snapshot.context.state
+        vad.setBargeInMode(s === 'responding' || s === 'barge_in_pending')
+      })
+      stateSubRef.current = stateSub
 
       warmUpTimerRef.current = setTimeout(() => {
         store.send({ type: 'WARM_UP_DONE' })
