@@ -45,11 +45,13 @@ export function VoiceMode({ api }: VoiceModeProps) {
       <div className="relative flex flex-1 flex-col items-center justify-center">
         <div
           aria-hidden
-          className="absolute rounded-full bg-accent/30 blur-xl transition-[width,height,opacity]"
+          className="absolute rounded-full blur-xl transition-[width,height,opacity]"
           style={{
             width: `${64 + halo * 64}px`,
             height: `${64 + halo * 64}px`,
-            opacity: 0.4 + halo * 0.5,
+            opacity: 0.25 + halo * 0.45,
+            background:
+              'color-mix(in oklab, var(--accent-orange) 60%, transparent)',
           }}
         />
         <VoicePersona

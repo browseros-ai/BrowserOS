@@ -24,10 +24,14 @@ export function VoicePersona({
     <div className={cn('relative grid place-items-center', className)}>
       <div
         className={cn(
-          'size-12 rounded-full bg-gradient-to-br from-accent to-accent/60 transition-transform duration-150',
+          'size-12 rounded-full shadow-lg ring-2 ring-white/30 transition-transform duration-150',
           animation,
         )}
-        style={{ transform: `scale(${scale.toFixed(3)})` }}
+        style={{
+          transform: `scale(${scale.toFixed(3)})`,
+          background:
+            'radial-gradient(circle at 30% 30%, var(--accent-orange-bright), var(--accent-orange) 60%, color-mix(in oklab, var(--accent-orange) 70%, black) 100%)',
+        }}
         aria-hidden
       />
     </div>

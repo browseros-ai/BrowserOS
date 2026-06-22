@@ -53,7 +53,6 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
   const monitorRef = useRef<AudioLevelMonitor | null>(null)
   const vadRef = useRef<VadHandle | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
-  const chunksRef = useRef<Blob[]>([])
   const transcribeAbortRef = useRef<AbortController | null>(null)
   const warmUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const messagesRef = useRef(opts.chatSession.messages)
@@ -142,7 +141,6 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
       }
     }
     recorderRef.current = null
-    chunksRef.current = []
     vadRef.current?.stop()
     vadRef.current = null
     monitorRef.current?.stop()
@@ -181,24 +179,55 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : 'audio/webm'
-      const recorder = new MediaRecorder(capture.stream, { mimeType })
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data)
+
+      const startTurnRecorder = () => {
+        const chunks: Blob[] = []
+        const rec = new MediaRecorder(capture.stream, { mimeType })
+        rec.ondataavailable = (e) => {
+          if (e.data.size > 0) chunks.push(e.data)
+        }
+        rec.onstop = () => {
+          if (chunks.length === 0) return
+          const blob = new Blob(chunks, { type: mimeType })
+          store.send({ type: 'SPEECH_END', blob })
+        }
+        rec.start()
+        recorderRef.current = rec
       }
-      recorder.start(250)
-      recorderRef.current = recorder
 
       const vad = await createVad(capture, monitor, {
         onSpeechStart: () => {
           if (store.getSnapshot().context.state === 'responding') {
             track(SIDEPANEL_VOICE_MODE_BARGE_IN_EVENT)
           }
+          startTurnRecorder()
           store.send({ type: 'SPEECH_START' })
         },
         onSpeechEnd: (samples) => {
-          const blob = blobForTurn(samples, chunksRef.current, mimeType)
-          chunksRef.current = []
-          store.send({ type: 'SPEECH_END', blob })
+          if (samples.length > 0) {
+            // Silero gave us a complete PCM segment; emit WAV directly.
+            const rec = recorderRef.current
+            recorderRef.current = null
+            if (rec && rec.state !== 'inactive') {
+              try {
+                rec.stop()
+              } catch {
+                // ignore
+              }
+            }
+            store.send({
+              type: 'SPEECH_END',
+              blob: pcmFloat32ToWavBlob(samples),
+            })
+            return
+          }
+          // Energy strategy: stop the per-turn recorder; its onstop
+          // dispatches SPEECH_END with the freshly framed WebM blob.
+          const rec = recorderRef.current
+          recorderRef.current = null
+          if (rec && rec.state !== 'inactive') {
+            rec.stop()
+          }
         },
       })
       vad.start()
@@ -244,15 +273,6 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
     stopAgentActivity,
     retry,
   }
-}
-
-function blobForTurn(
-  samples: Float32Array,
-  webmChunks: Blob[],
-  webmMime: string,
-): Blob {
-  if (samples.length > 0) return pcmFloat32ToWavBlob(samples)
-  return new Blob(webmChunks, { type: webmMime })
 }
 
 function lastAssistantId(messages: UIMessage[]): string | null {
