@@ -30,7 +30,9 @@ export async function createSileroVad(
   const sampleRate = 16000
   const msPerFrame = (frameSamples / sampleRate) * 1000
   const minSpeechMs = opts.minSpeechDurationMs ?? 400
-  const silenceMs = opts.silenceThresholdMs ?? 700
+  // Give natural mid-sentence pauses room to breathe. 1200ms catches
+  // "what happens... if there's a delay" as one turn instead of two.
+  const silenceMs = opts.silenceThresholdMs ?? 1200
   const minSpeechFrames = Math.max(1, Math.round(minSpeechMs / msPerFrame))
   const redemptionFrames = Math.max(1, Math.round(silenceMs / msPerFrame))
 

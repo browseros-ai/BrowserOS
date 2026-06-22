@@ -33,7 +33,10 @@ export interface VadOptions {
   bargeInUpperThreshold?: number
 }
 
-const DEFAULT_SILENCE_MS = 700
+// Tolerate mid-sentence pauses ("...what happens... if I pause") as one
+// turn. Industry voice modes settle around 1-1.5s; 1200ms feels natural
+// without making real turn-ends feel laggy.
+const DEFAULT_SILENCE_MS = 1200
 const DEFAULT_MIN_SPEECH_MS = 400
 const DEFAULT_BARGE_IN_MIN_SPEECH_MS = 700
 const DEFAULT_UPPER = 50
