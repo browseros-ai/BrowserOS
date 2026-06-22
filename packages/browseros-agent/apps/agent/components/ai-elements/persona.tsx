@@ -1,21 +1,24 @@
 'use client'
 
-import type { RiveParameters } from '@rive-app/react-webgl2'
+import { RuntimeLoader } from '@rive-app/canvas'
+import type { RiveParameters } from '@rive-app/react-canvas'
 import {
   useRive,
   useStateMachineInput,
   useViewModel,
   useViewModelInstance,
   useViewModelInstanceColor,
-} from '@rive-app/react-webgl2'
-import { RuntimeLoader } from '@rive-app/webgl2'
+} from '@rive-app/react-canvas'
 import type { FC, ReactNode } from 'react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 
 // Rive's WASM loads from unpkg / jsdelivr by default. MV3 extensions
 // cannot fetch arbitrary external code, so point the loader at WASM
-// bundled in public/persona/ before any useRive runs.
+// bundled in public/persona/ before any useRive runs. We use the
+// Canvas2D renderer (not WebGL2) so the persona is not subject to
+// the browser's per-tab WebGL2 context cap that crashes the page in
+// Vite dev mode (see vercel/ai-elements#391).
 if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
   RuntimeLoader.setWasmUrl(chrome.runtime.getURL('persona/rive.wasm'))
   RuntimeLoader.setWasmFallbackUrl(
