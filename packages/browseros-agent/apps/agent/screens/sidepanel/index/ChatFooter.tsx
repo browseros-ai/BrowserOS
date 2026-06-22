@@ -13,11 +13,13 @@ import { cn } from '@/lib/utils'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { useGetUserMCPIntegrations } from '@/modules/mcp/user-integrations.hooks'
 import type { VoiceInputState } from '@/modules/voice/voice.hooks'
+import type { VoiceLoopApi } from '@/modules/voice/voice-types'
 import { useWorkspace } from '@/modules/workspace/workspace.hooks'
 import { ChatAttachedTabs } from './ChatAttachedTabs'
 import { ChatInput, type ChatInputHandle } from './ChatInput'
 import { ChatModeToggle } from './ChatModeToggle'
 import { ChatSelectedText } from './ChatSelectedText'
+import { VoiceMode } from './VoiceMode'
 
 export interface ChatFooterProps {
   mode: ChatMode
@@ -32,6 +34,9 @@ export interface ChatFooterProps {
   onToggleTab: (tab: chrome.tabs.Tab) => void
   onRemoveTab: (tabId?: number) => void
   voice?: VoiceInputState
+  voiceLoop?: VoiceLoopApi
+  voiceModeEnabled?: boolean
+  onOpenVoiceMode?: () => void
 }
 
 export const ChatFooter: FC<ChatFooterProps> = ({
@@ -47,6 +52,9 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   onToggleTab,
   onRemoveTab,
   voice,
+  voiceLoop,
+  voiceModeEnabled,
+  onOpenVoiceMode,
 }) => {
   const { selectedFolder } = useWorkspace()
   const { servers: mcpServers } = useMcpServers()
@@ -217,20 +225,31 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           <div className="mt-1 text-destructive text-xs">{voice.error}</div>
         )}
 
-        <ChatInput
-          input={input}
-          status={status}
-          mode={mode}
-          sendDisabled={sendDisabled}
-          onInputChange={onInputChange}
-          onSubmit={onSubmit}
-          onStop={onStop}
-          selectedTabs={attachedTabs}
-          onToggleTab={onToggleTab}
-          onTabMentionOpenChange={setIsTabMentionOpen}
-          voice={voice}
-          ref={chatInputRef}
-        />
+        <div className="relative">
+          <ChatInput
+            input={input}
+            status={status}
+            mode={mode}
+            sendDisabled={sendDisabled}
+            onInputChange={onInputChange}
+            onSubmit={onSubmit}
+            onStop={onStop}
+            selectedTabs={attachedTabs}
+            onToggleTab={onToggleTab}
+            onTabMentionOpenChange={setIsTabMentionOpen}
+            voice={voice}
+            voiceModeEnabled={voiceModeEnabled}
+            onOpenVoiceMode={onOpenVoiceMode}
+            ref={chatInputRef}
+          />
+          {voiceLoop &&
+            voiceLoop.state !== 'idle' &&
+            voiceLoop.state !== 'closed' && (
+              <div className="absolute inset-0 -m-2 h-[calc(100%+1rem)] w-[calc(100%+1rem)]">
+                <VoiceMode api={voiceLoop} />
+              </div>
+            )}
+        </div>
       </div>
     </footer>
   )
