@@ -12,8 +12,10 @@ describe('chipTextFor', () => {
     expect(chipTextFor('responding', true, null)).toBe('Listening over agent')
   })
 
-  it('returns Responding when responding without barge-in', () => {
-    expect(chipTextFor('responding', false, null)).toBe('Responding')
+  it('returns the agent-working chip when responding without barge-in', () => {
+    expect(chipTextFor('responding', false, null)).toBe(
+      'BrowserOS Agent is working',
+    )
   })
 
   it('returns the error message when in error state', () => {

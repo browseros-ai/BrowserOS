@@ -16,7 +16,7 @@ export function chipTextFor(
     case 'transcribing':
       return 'Transcribing'
     case 'responding':
-      return 'Responding'
+      return 'BrowserOS Agent is working'
     case 'closed':
     case 'idle':
       return ''
