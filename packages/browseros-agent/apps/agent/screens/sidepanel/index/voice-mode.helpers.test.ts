@@ -8,35 +8,33 @@ import {
 } from './voice-mode.helpers'
 
 describe('chipTextFor', () => {
-  it('returns Listening over agent when responding + isBargingIn', () => {
-    expect(chipTextFor('responding', true, null)).toBe('Listening over agent')
+  it('returns the agent-working chip when responding', () => {
+    expect(chipTextFor('responding', null)).toBe('BrowserOS Agent is working')
   })
 
-  it('returns the agent-working chip when responding without barge-in', () => {
-    expect(chipTextFor('responding', false, null)).toBe(
+  it('returns the agent-working chip during barge_in_pending', () => {
+    expect(chipTextFor('barge_in_pending', null)).toBe(
       'BrowserOS Agent is working',
     )
   })
 
   it('returns the error message when in error state', () => {
-    expect(chipTextFor('error', false, 'Microphone denied')).toBe(
-      'Microphone denied',
-    )
+    expect(chipTextFor('error', 'Microphone denied')).toBe('Microphone denied')
   })
 
   it('falls back to generic error when state is error but message is null', () => {
-    expect(chipTextFor('error', false, null)).toBe('Something went wrong')
+    expect(chipTextFor('error', null)).toBe('Something went wrong')
   })
 
   it('maps each non-terminal state to a single-word chip', () => {
-    expect(chipTextFor('listening', false, null)).toBe('Listening')
-    expect(chipTextFor('capturing', false, null)).toBe('Capturing')
-    expect(chipTextFor('transcribing', false, null)).toBe('Transcribing')
+    expect(chipTextFor('listening', null)).toBe('Listening')
+    expect(chipTextFor('capturing', null)).toBe('Capturing')
+    expect(chipTextFor('transcribing', null)).toBe('Transcribing')
   })
 
   it('returns empty string for closed and idle so the chip slot collapses', () => {
-    expect(chipTextFor('closed', false, null)).toBe('')
-    expect(chipTextFor('idle', false, null)).toBe('')
+    expect(chipTextFor('closed', null)).toBe('')
+    expect(chipTextFor('idle', null)).toBe('')
   })
 })
 

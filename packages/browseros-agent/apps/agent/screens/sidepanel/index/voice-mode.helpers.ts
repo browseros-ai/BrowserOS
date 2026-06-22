@@ -3,11 +3,9 @@ import type { VoiceOrbState } from './VoiceOrb'
 
 export function chipTextFor(
   state: VoiceState,
-  isBargingIn: boolean,
   errorMessage: string | null,
 ): string {
   if (state === 'error') return errorMessage ?? 'Something went wrong'
-  if (state === 'responding' && isBargingIn) return 'Listening over agent'
   switch (state) {
     case 'listening':
       return 'Listening'

@@ -20,9 +20,13 @@ export interface VoiceContext {
   state: VoiceState
   audioLevels: number[]
   errorMessage: string | null
-  isBargingIn: boolean
   isWarmingUp: boolean
   origin: TurnOrigin
+  // Set when the chat session finishes streaming while the loop is
+  // mid-barge-in (pending or transcribing). Consumed by the
+  // TRANSCRIBE_DROPPED / TRANSCRIBE_FAIL pending branches to unwind
+  // to listening instead of a stuck `responding`.
+  chatStreamEndedWhilePending: boolean
 }
 
 // The api exposes the underlying store and a small set of stable

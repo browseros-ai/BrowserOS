@@ -6,9 +6,9 @@ export const INITIAL_CONTEXT: VoiceContext = {
   state: 'idle',
   audioLevels: [0, 0, 0, 0, 0],
   errorMessage: null,
-  isBargingIn: false,
   isWarmingUp: false,
   origin: 'normal',
+  chatStreamEndedWhilePending: false,
 }
 
 export function createVoiceLoopStore() {
@@ -26,9 +26,9 @@ export function createVoiceLoopStore() {
         ...ctx,
         state: 'listening' as const,
         errorMessage: null,
-        isBargingIn: false,
         isWarmingUp: true,
         origin: 'normal' as const,
+        chatStreamEndedWhilePending: false,
       }),
 
       WARM_UP_DONE: (ctx, _e: object) => ({
@@ -53,6 +53,7 @@ export function createVoiceLoopStore() {
           ...ctx,
           state: 'barge_in_pending' as const,
           origin: 'barge_in_pending' as const,
+          chatStreamEndedWhilePending: false,
         }
       },
 
@@ -86,20 +87,32 @@ export function createVoiceLoopStore() {
         return {
           ...ctx,
           state: 'responding' as const,
-          isBargingIn: false,
           origin: 'normal' as const,
+          chatStreamEndedWhilePending: false,
         }
       },
 
       TRANSCRIBE_DROPPED: (ctx, _event: { reason: DropReason }) => {
         if (ctx.state !== 'transcribing') return ctx
-        // Tentative barge-in turned out to be noise. Resume responding
-        // as if nothing happened; the agent is still working.
         if (ctx.origin === 'barge_in_pending') {
+          // The agent finished streaming while we were in
+          // pending/transcribing. Returning to responding would deadlock
+          // because the streaming->idle edge has already passed; go
+          // straight to listening instead.
+          if (ctx.chatStreamEndedWhilePending) {
+            return {
+              ...ctx,
+              state: 'listening' as const,
+              origin: 'normal' as const,
+              chatStreamEndedWhilePending: false,
+            }
+          }
+          // Tentative barge-in turned out to be noise. Resume
+          // responding as if nothing happened; the agent is still
+          // working.
           return {
             ...ctx,
             state: 'responding' as const,
-            isBargingIn: false,
             origin: 'normal' as const,
           }
         }
@@ -114,12 +127,20 @@ export function createVoiceLoopStore() {
         if (ctx.state !== 'transcribing') return ctx
         // A failed transcribe during pending barge-in must not surface
         // an error chip and must not interrupt the agent. Treat it as
-        // a quiet "noise" drop and return to responding.
+        // a quiet "noise" drop. If the chat stream already ended,
+        // unwind to listening to avoid the deadlocked-responding bug.
         if (ctx.origin === 'barge_in_pending') {
+          if (ctx.chatStreamEndedWhilePending) {
+            return {
+              ...ctx,
+              state: 'listening' as const,
+              origin: 'normal' as const,
+              chatStreamEndedWhilePending: false,
+            }
+          }
           return {
             ...ctx,
             state: 'responding' as const,
-            isBargingIn: false,
             origin: 'normal' as const,
           }
         }
@@ -127,8 +148,21 @@ export function createVoiceLoopStore() {
       },
 
       CHAT_STREAMING_ENDED: (ctx, _e: object) => {
-        if (ctx.state !== 'responding') return ctx
-        return { ...ctx, state: 'listening' as const, isBargingIn: false }
+        if (ctx.state === 'responding') {
+          return { ...ctx, state: 'listening' as const }
+        }
+        // We caught the streaming->idle edge while the loop was busy
+        // handling a tentative barge-in. Stash the fact so the
+        // eventual TRANSCRIBE_DROPPED/FAIL knows to unwind to listening
+        // instead of returning to a state the chat session has
+        // already left.
+        if (
+          ctx.state === 'barge_in_pending' ||
+          (ctx.state === 'transcribing' && ctx.origin === 'barge_in_pending')
+        ) {
+          return { ...ctx, chatStreamEndedWhilePending: true }
+        }
+        return ctx
       },
 
       STOP_AGENT: (ctx, _e: object, enqueue) => {
@@ -139,8 +173,8 @@ export function createVoiceLoopStore() {
         return {
           ...ctx,
           state: 'listening' as const,
-          isBargingIn: false,
           origin: 'normal' as const,
+          chatStreamEndedWhilePending: false,
         }
       },
 

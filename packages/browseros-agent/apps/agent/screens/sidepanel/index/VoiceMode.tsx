@@ -20,10 +20,9 @@ export const VoiceMode = memo(function VoiceMode({ api }: VoiceModeProps) {
   const state = useSelector(api.store, (s) => s.context.state)
   const audioLevels = useSelector(api.store, (s) => s.context.audioLevels)
   const errorMessage = useSelector(api.store, (s) => s.context.errorMessage)
-  const isBargingIn = useSelector(api.store, (s) => s.context.isBargingIn)
   const isWarmingUp = useSelector(api.store, (s) => s.context.isWarmingUp)
 
-  const chip = chipTextFor(state, isBargingIn, errorMessage)
+  const chip = chipTextFor(state, errorMessage)
   const orbState = orbStateFor({ state, isWarmingUp })
   const halo = haloAmplitudeFor({ state, audioLevels })
   const dots = showsDots(state)

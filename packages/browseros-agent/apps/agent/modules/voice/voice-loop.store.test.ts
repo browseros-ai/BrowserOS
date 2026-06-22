@@ -9,9 +9,10 @@ describe('voice loop store', () => {
     const ctx = store.getSnapshot().context
     expect(ctx.state).toBe('idle')
     expect(ctx.errorMessage).toBeNull()
-    expect(ctx.isBargingIn).toBe(false)
     expect(ctx.isWarmingUp).toBe(false)
     expect(ctx.audioLevels).toEqual([0, 0, 0, 0, 0])
+    expect(ctx.origin).toBe('normal')
+    expect(ctx.chatStreamEndedWhilePending).toBe(false)
   })
 
   it('OPEN sets isWarmingUp true; WARM_UP_DONE clears it', () => {
@@ -94,7 +95,6 @@ describe('voice loop store', () => {
     store.send({ type: 'SPEECH_START' })
     const ctx = store.getSnapshot().context
     expect(ctx.state).toBe('responding')
-    expect(ctx.isBargingIn).toBe(false)
     expect(ctx.origin).toBe('normal')
   })
 
@@ -187,6 +187,64 @@ describe('voice loop store', () => {
     store.send({ type: 'SPEECH_END', blob: blob() })
     store.send({ type: 'TRANSCRIBE_DROPPED', reason: 'empty' })
     expect(store.getSnapshot().context.state).toBe('listening')
+  })
+
+  it('CHAT_STREAMING_ENDED during barge_in_pending stashes the flag', () => {
+    const store = createVoiceLoopStore()
+    store.send({ type: 'OPEN' })
+    store.send({ type: 'SPEECH_START' })
+    store.send({ type: 'SPEECH_END', blob: blob() })
+    store.send({ type: 'TRANSCRIBE_OK', text: 'first' })
+    store.send({ type: 'BARGE_IN_TENTATIVE' })
+    store.send({ type: 'CHAT_STREAMING_ENDED' })
+    const ctx = store.getSnapshot().context
+    expect(ctx.state).toBe('barge_in_pending')
+    expect(ctx.chatStreamEndedWhilePending).toBe(true)
+  })
+
+  it('CHAT_STREAMING_ENDED during transcribing+barge_in_pending stashes the flag', () => {
+    const store = createVoiceLoopStore()
+    store.send({ type: 'OPEN' })
+    store.send({ type: 'SPEECH_START' })
+    store.send({ type: 'SPEECH_END', blob: blob() })
+    store.send({ type: 'TRANSCRIBE_OK', text: 'first' })
+    store.send({ type: 'BARGE_IN_TENTATIVE' })
+    store.send({ type: 'SPEECH_END', blob: blob() })
+    store.send({ type: 'CHAT_STREAMING_ENDED' })
+    const ctx = store.getSnapshot().context
+    expect(ctx.state).toBe('transcribing')
+    expect(ctx.chatStreamEndedWhilePending).toBe(true)
+  })
+
+  it('TRANSCRIBE_DROPPED after chat ended during pending unwinds to listening', () => {
+    const store = createVoiceLoopStore()
+    store.send({ type: 'OPEN' })
+    store.send({ type: 'SPEECH_START' })
+    store.send({ type: 'SPEECH_END', blob: blob() })
+    store.send({ type: 'TRANSCRIBE_OK', text: 'first' })
+    store.send({ type: 'BARGE_IN_TENTATIVE' })
+    store.send({ type: 'SPEECH_END', blob: blob() })
+    store.send({ type: 'CHAT_STREAMING_ENDED' })
+    store.send({ type: 'TRANSCRIBE_DROPPED', reason: 'hallucination_only' })
+    const ctx = store.getSnapshot().context
+    expect(ctx.state).toBe('listening')
+    expect(ctx.chatStreamEndedWhilePending).toBe(false)
+  })
+
+  it('TRANSCRIBE_FAIL after chat ended during pending unwinds to listening', () => {
+    const store = createVoiceLoopStore()
+    store.send({ type: 'OPEN' })
+    store.send({ type: 'SPEECH_START' })
+    store.send({ type: 'SPEECH_END', blob: blob() })
+    store.send({ type: 'TRANSCRIBE_OK', text: 'first' })
+    store.send({ type: 'BARGE_IN_TENTATIVE' })
+    store.send({ type: 'SPEECH_END', blob: blob() })
+    store.send({ type: 'CHAT_STREAMING_ENDED' })
+    store.send({ type: 'TRANSCRIBE_FAIL', message: 'net' })
+    const ctx = store.getSnapshot().context
+    expect(ctx.state).toBe('listening')
+    expect(ctx.errorMessage).toBeNull()
+    expect(ctx.chatStreamEndedWhilePending).toBe(false)
   })
 
   it('STOP_AGENT in responding cancels and returns to listening', () => {
