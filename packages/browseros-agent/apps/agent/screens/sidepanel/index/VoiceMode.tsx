@@ -17,10 +17,11 @@ interface VoiceModeProps {
 export function VoiceMode({ api }: VoiceModeProps) {
   const chip = chipTextFor(api.state, api.isBargingIn, api.errorMessage)
   const personaState = personaStateFor(api)
-  const halo = haloAmplitudeFor(api, performance.now())
+  const halo = haloAmplitudeFor(api)
   const dots = showsDots(api.state)
   const stopEnabled = api.state === 'responding'
   const isError = api.state === 'error'
+  const isResponding = api.state === 'responding'
 
   return (
     <section
@@ -45,11 +46,15 @@ export function VoiceMode({ api }: VoiceModeProps) {
       <div className="relative flex flex-1 flex-col items-center justify-center">
         <div
           aria-hidden
-          className="absolute rounded-full blur-xl transition-[width,height,opacity]"
+          className={cn(
+            'absolute rounded-full blur-xl transition-[width,height,opacity] duration-150',
+            isResponding &&
+              'animate-[voice-halo-pulse_1100ms_ease-in-out_infinite]',
+          )}
           style={{
-            width: `${64 + halo * 64}px`,
-            height: `${64 + halo * 64}px`,
-            opacity: 0.25 + halo * 0.45,
+            width: `${96 + halo * 64}px`,
+            height: `${96 + halo * 64}px`,
+            opacity: isResponding ? 0.55 : 0.25 + halo * 0.45,
             background:
               'color-mix(in oklab, var(--accent-orange) 60%, transparent)',
           }}

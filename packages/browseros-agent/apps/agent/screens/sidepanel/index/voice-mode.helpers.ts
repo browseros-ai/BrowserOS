@@ -51,16 +51,9 @@ export function aggregateLevel(levels: number[]): number {
   return sum / levels.length
 }
 
-export function synthesizedSpeakingEnvelope(nowMs: number): number {
-  const phase = (nowMs / 1000) * Math.PI * 2 * 1.5
-  return 0.45 + 0.15 * Math.sin(phase)
-}
-
 export function haloAmplitudeFor(
   api: Pick<VoiceLoopApi, 'state' | 'audioLevels'>,
-  nowMs: number,
 ): number {
   if (api.state === 'capturing') return aggregateLevel(api.audioLevels) / 100
-  if (api.state === 'responding') return synthesizedSpeakingEnvelope(nowMs)
   return 0
 }

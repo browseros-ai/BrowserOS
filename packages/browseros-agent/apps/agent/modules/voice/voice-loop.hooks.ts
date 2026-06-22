@@ -170,7 +170,15 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
       const monitor = createAudioLevelMonitor({
         bandCount: WAVEFORM_BAND_COUNT,
       })
+      // Throttle the React-side audio levels to ~12 Hz. The monitor
+      // itself runs at rAF (~60 Hz); without the throttle the React
+      // re-render rate competes with Rive's own rAF canvas loop and
+      // pegs the main thread on persona mount.
+      let lastLevelsAt = 0
       monitor.subscribe((sample) => {
+        const now = performance.now()
+        if (now - lastLevelsAt < 80) return
+        lastLevelsAt = now
         store.send({ type: 'AUDIO_LEVELS', levels: sample.levels })
       })
       monitor.start(capture.analyser)

@@ -5,7 +5,6 @@ import {
   haloAmplitudeFor,
   personaStateFor,
   showsDots,
-  synthesizedSpeakingEnvelope,
 } from './voice-mode.helpers'
 
 describe('chipTextFor', () => {
@@ -92,42 +91,36 @@ describe('aggregateLevel', () => {
   })
 })
 
-describe('synthesizedSpeakingEnvelope', () => {
-  it('stays between 0.3 and 0.6 for any input', () => {
-    for (let t = 0; t < 10000; t += 17) {
-      const v = synthesizedSpeakingEnvelope(t)
-      expect(v).toBeGreaterThanOrEqual(0.3)
-      expect(v).toBeLessThanOrEqual(0.6)
-    }
-  })
-})
-
 describe('haloAmplitudeFor', () => {
   it('returns aggregate-of-levels normalized to 0..1 while capturing', () => {
-    const a = haloAmplitudeFor(
-      { state: 'capturing', audioLevels: [50, 50, 50, 50, 50] },
-      0,
-    )
+    const a = haloAmplitudeFor({
+      state: 'capturing',
+      audioLevels: [50, 50, 50, 50, 50],
+    })
     expect(a).toBe(0.5)
   })
 
-  it('returns the synthesized envelope while responding', () => {
-    const a = haloAmplitudeFor(
-      { state: 'responding', audioLevels: [0, 0, 0, 0, 0] },
-      0,
-    )
-    expect(a).toBe(synthesizedSpeakingEnvelope(0))
+  it('returns 0 while responding (CSS pulse handles the visual)', () => {
+    expect(
+      haloAmplitudeFor({
+        state: 'responding',
+        audioLevels: [0, 0, 0, 0, 0],
+      }),
+    ).toBe(0)
   })
 
   it('returns 0 in other states regardless of levels', () => {
     expect(
-      haloAmplitudeFor(
-        { state: 'listening', audioLevels: [99, 99, 99, 99, 99] },
-        0,
-      ),
+      haloAmplitudeFor({
+        state: 'listening',
+        audioLevels: [99, 99, 99, 99, 99],
+      }),
     ).toBe(0)
     expect(
-      haloAmplitudeFor({ state: 'idle', audioLevels: [50, 50, 50, 50, 50] }, 0),
+      haloAmplitudeFor({
+        state: 'idle',
+        audioLevels: [50, 50, 50, 50, 50],
+      }),
     ).toBe(0)
   })
 })
