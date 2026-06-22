@@ -231,6 +231,50 @@ describe('voice loop store', () => {
     expect(ctx.chatStreamEndedWhilePending).toBe(false)
   })
 
+  it('SPEECH_ABORTED from capturing returns to listening', () => {
+    const store = createVoiceLoopStore()
+    store.send({ type: 'OPEN' })
+    store.send({ type: 'SPEECH_START' })
+    expect(store.getSnapshot().context.state).toBe('capturing')
+    store.send({ type: 'SPEECH_ABORTED' })
+    expect(store.getSnapshot().context.state).toBe('listening')
+  })
+
+  it('SPEECH_ABORTED from barge_in_pending returns to responding', () => {
+    const store = createVoiceLoopStore()
+    store.send({ type: 'OPEN' })
+    store.send({ type: 'SPEECH_START' })
+    store.send({ type: 'SPEECH_END', blob: blob() })
+    store.send({ type: 'TRANSCRIBE_OK', text: 'first' })
+    store.send({ type: 'BARGE_IN_TENTATIVE' })
+    expect(store.getSnapshot().context.state).toBe('barge_in_pending')
+    store.send({ type: 'SPEECH_ABORTED' })
+    const ctx = store.getSnapshot().context
+    expect(ctx.state).toBe('responding')
+    expect(ctx.origin).toBe('normal')
+  })
+
+  it('SPEECH_ABORTED from barge_in_pending after chat ended unwinds to listening', () => {
+    const store = createVoiceLoopStore()
+    store.send({ type: 'OPEN' })
+    store.send({ type: 'SPEECH_START' })
+    store.send({ type: 'SPEECH_END', blob: blob() })
+    store.send({ type: 'TRANSCRIBE_OK', text: 'first' })
+    store.send({ type: 'BARGE_IN_TENTATIVE' })
+    store.send({ type: 'CHAT_STREAMING_ENDED' })
+    store.send({ type: 'SPEECH_ABORTED' })
+    const ctx = store.getSnapshot().context
+    expect(ctx.state).toBe('listening')
+    expect(ctx.chatStreamEndedWhilePending).toBe(false)
+  })
+
+  it('SPEECH_ABORTED from other states is a no-op', () => {
+    const store = createVoiceLoopStore()
+    store.send({ type: 'OPEN' })
+    store.send({ type: 'SPEECH_ABORTED' })
+    expect(store.getSnapshot().context.state).toBe('listening')
+  })
+
   it('TRANSCRIBE_FAIL after chat ended during pending unwinds to listening', () => {
     const store = createVoiceLoopStore()
     store.send({ type: 'OPEN' })

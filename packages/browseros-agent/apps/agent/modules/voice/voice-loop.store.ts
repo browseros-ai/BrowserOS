@@ -57,6 +57,33 @@ export function createVoiceLoopStore() {
         }
       },
 
+      // The VAD reported speech-start but the segment never met the
+      // minimum duration. Unwind to the previous state. We also use
+      // chatStreamEndedWhilePending here so a sub-minimum barge-in
+      // blip that happens after the agent already finished streaming
+      // ends up in listening instead of a stuck responding.
+      SPEECH_ABORTED: (ctx, _e: object) => {
+        if (ctx.state === 'capturing') {
+          return { ...ctx, state: 'listening' as const }
+        }
+        if (ctx.state === 'barge_in_pending') {
+          if (ctx.chatStreamEndedWhilePending) {
+            return {
+              ...ctx,
+              state: 'listening' as const,
+              origin: 'normal' as const,
+              chatStreamEndedWhilePending: false,
+            }
+          }
+          return {
+            ...ctx,
+            state: 'responding' as const,
+            origin: 'normal' as const,
+          }
+        }
+        return ctx
+      },
+
       SPEECH_END: (ctx, event: { blob: Blob }, enqueue) => {
         if (ctx.state === 'capturing') {
           enqueue.emit.runTranscribe({ blob: event.blob })

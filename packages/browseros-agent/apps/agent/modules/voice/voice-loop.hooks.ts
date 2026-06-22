@@ -243,6 +243,26 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
             rec.stop()
           }
         },
+        onSpeechAbort: () => {
+          // Energy VAD speculatively fired speech-start but the
+          // segment was too short. Detach the onstop handler so the
+          // discarded recorder does not dispatch SPEECH_END, stop it
+          // to release the encoder, and unwind the store.
+          voiceDebug('speech abort')
+          const rec = recorderRef.current
+          recorderRef.current = null
+          if (rec) {
+            rec.onstop = null
+            if (rec.state !== 'inactive') {
+              try {
+                rec.stop()
+              } catch {
+                // ignore
+              }
+            }
+          }
+          store.send({ type: 'SPEECH_ABORTED' })
+        },
       })
       vad.start()
       vadRef.current = vad

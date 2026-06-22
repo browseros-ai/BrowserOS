@@ -6,6 +6,13 @@ import { voiceDebug } from './voice-debug'
 export interface VadEvents {
   onSpeechStart(): void
   onSpeechEnd(): void
+  // Fired when the VAD speculatively reported speech-start but the
+  // segment never met the minimum duration. The hook must stop any
+  // recorder it started on speech-start; no SPEECH_END goes to the
+  // store. Silero never fires this (its minSpeechFrames filter runs
+  // before any callback). Energy uses it because it has no buffer
+  // to confirm minimum duration before reporting speech-start.
+  onSpeechAbort?(): void
 }
 
 export interface VadHandle {
@@ -114,6 +121,12 @@ function createEnergyVad(
       if (now - silenceStartedAt >= silenceMs) {
         if (now - speechStartedAt >= currentMinSpeech()) {
           events.onSpeechEnd()
+        } else {
+          // Speech-start fired but the segment never reached the
+          // minimum duration. Signal the hook so it stops the
+          // recorder it speculatively started; no SPEECH_END is
+          // dispatched, the loop quietly returns to listening.
+          events.onSpeechAbort?.()
         }
         isSpeaking = false
         silenceStartedAt = 0
