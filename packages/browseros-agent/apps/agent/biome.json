@@ -8,7 +8,8 @@
     "useIgnoreFile": true
   },
   "files": {
-    "ignoreUnknown": false
+    "ignoreUnknown": false,
+    "includes": ["**", "!public", "!dist"]
   },
   "formatter": {
     "enabled": true,
