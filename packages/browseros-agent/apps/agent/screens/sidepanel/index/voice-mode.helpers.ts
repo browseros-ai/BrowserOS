@@ -3,11 +3,9 @@ import type { VoiceOrbState } from './VoiceOrb'
 
 export function chipTextFor(
   state: VoiceState,
-  isBargingIn: boolean,
   errorMessage: string | null,
 ): string {
   if (state === 'error') return errorMessage ?? 'Something went wrong'
-  if (state === 'responding' && isBargingIn) return 'Listening over agent'
   switch (state) {
     case 'listening':
       return 'Listening'
@@ -16,6 +14,11 @@ export function chipTextFor(
     case 'transcribing':
       return 'Transcribing'
     case 'responding':
+      return 'BrowserOS Agent is working'
+    case 'barge_in_pending':
+      // Do not advertise that the agent has been interrupted. The
+      // interruption is still tentative; the agent is still working
+      // until the transcript is confirmed real.
       return 'BrowserOS Agent is working'
     case 'closed':
     case 'idle':
@@ -38,6 +41,7 @@ export function orbStateFor(input: {
       return 'speaking'
     case 'capturing':
     case 'listening':
+    case 'barge_in_pending':
       return 'listening'
     default:
       return 'idle'

@@ -20,7 +20,9 @@ import {
   type AudioLevelMonitor,
   createAudioLevelMonitor,
 } from './audio-level-monitor'
+import { sanitize } from './transcript-sanitizer'
 import { createVad, type VadHandle } from './vad'
+import { voiceDebug } from './voice-debug'
 import { createVoiceLoopStore } from './voice-loop.store'
 import type { VoiceLoopApi } from './voice-types'
 
@@ -49,6 +51,7 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
   const transcribeAbortRef = useRef<AbortController | null>(null)
   const warmUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const interruptedIdsRef = useRef<Set<string>>(new Set())
+  const stateSubRef = useRef<{ unsubscribe: () => void } | null>(null)
 
   // Poll the chat session's status from the ref instead of subscribing
   // to it via React deps. The chat session updates dozens of times a
@@ -60,6 +63,7 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
     const id = setInterval(() => {
       const next = opts.chatSessionRef.current?.status
       if (prev === 'streaming' && next !== 'streaming') {
+        voiceDebug('chat streaming ended', next)
         store.send({ type: 'CHAT_STREAMING_ENDED' })
       }
       prev = next
@@ -75,27 +79,37 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
         const ac = new AbortController()
         transcribeAbortRef.current = ac
         try {
-          const text = await transcribeAudio(blob)
+          voiceDebug('transcribe request', { bytes: blob.size })
+          const result = await transcribeAudio(blob)
           if (ac.signal.aborted) return
-          const trimmed = text.trim()
-          if (!trimmed) {
-            track(SIDEPANEL_VOICE_MODE_TRANSCRIBE_FAILED_EVENT, {
-              reason: 'empty',
-            })
-            store.send({
-              type: 'TRANSCRIBE_FAIL',
-              message: 'No speech detected',
-            })
+          voiceDebug('transcribe response', {
+            chars: result.text.length,
+            avgLogprob: result.avgLogprob,
+          })
+          const verdict = sanitize(result.text, {
+            avgLogprob: result.avgLogprob,
+          })
+          if (verdict.action === 'drop') {
+            voiceDebug('sanitize drop', verdict.reason)
+            store.send({ type: 'TRANSCRIBE_DROPPED', reason: verdict.reason })
             return
           }
+          voiceDebug('sanitize send', { chars: verdict.text.length })
+          // Only count a barge-in once the transcript clears the
+          // sanitizer; tentative triggers (chair scrape, chime, brief
+          // cough) used to inflate this metric.
+          if (store.getSnapshot().context.origin === 'barge_in_pending') {
+            track(SIDEPANEL_VOICE_MODE_BARGE_IN_EVENT)
+          }
           track(SIDEPANEL_VOICE_MODE_TURN_CAPTURED_EVENT, {
-            chars: trimmed.length,
+            chars: verdict.text.length,
           })
-          store.send({ type: 'TRANSCRIBE_OK', text: trimmed })
+          store.send({ type: 'TRANSCRIBE_OK', text: verdict.text })
         } catch (err) {
           if (ac.signal.aborted) return
           const message =
             err instanceof Error ? err.message : 'Transcription failed'
+          voiceDebug('transcribe error', message)
           track(SIDEPANEL_VOICE_MODE_TRANSCRIBE_FAILED_EVENT, {
             reason: 'error',
           })
@@ -103,9 +117,11 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
         }
       }),
       store.on('sendChatMessage', ({ text }) => {
+        voiceDebug('send chat message', { chars: text.length })
         opts.chatSessionRef.current?.sendMessage({ text })
       }),
       store.on('cancelChatStream', () => {
+        voiceDebug('cancel chat stream')
         opts.chatSessionRef.current?.stop()
       }),
       store.on('markLastAssistantInterrupted', () => {
@@ -136,6 +152,8 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
       }
     }
     recorderRef.current = null
+    stateSubRef.current?.unsubscribe()
+    stateSubRef.current = null
     vadRef.current?.stop()
     vadRef.current = null
     monitorRef.current?.stop()
@@ -198,17 +216,27 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
         recorderRef.current = rec
       }
 
-      const vad = createVad(capture, monitor, {
+      const vad = await createVad(capture, monitor, {
         onSpeechStart: () => {
-          if (store.getSnapshot().context.state === 'responding') {
-            track(SIDEPANEL_VOICE_MODE_BARGE_IN_EVENT)
+          const current = store.getSnapshot().context.state
+          if (current === 'responding') {
+            // Tentative barge-in: start recording but keep the agent
+            // running. The store will only cancel after the transcript
+            // is confirmed real by the sanitizer; the BARGE_IN_EVENT
+            // analytic fires there too, not here.
+            voiceDebug('barge-in tentative')
+            startTurnRecorder()
+            store.send({ type: 'BARGE_IN_TENTATIVE' })
+            return
           }
+          voiceDebug('speech start')
           startTurnRecorder()
           store.send({ type: 'SPEECH_START' })
         },
         onSpeechEnd: () => {
           // The recorder's onstop handler dispatches SPEECH_END with
           // the freshly framed WebM blob; we just stop it here.
+          voiceDebug('speech end')
           const rec = recorderRef.current
           recorderRef.current = null
           if (rec && rec.state !== 'inactive') {
@@ -218,6 +246,19 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
       })
       vad.start()
       vadRef.current = vad
+
+      // Mirror responding-state into VAD barge-in mode so ambient
+      // blips don't trigger speech-start during agent work.
+      let prevLoggedState: string | null = null
+      const stateSub = store.subscribe((snapshot) => {
+        const s = snapshot.context.state
+        if (s !== prevLoggedState) {
+          voiceDebug('state', prevLoggedState, '->', s)
+          prevLoggedState = s
+        }
+        vad.setBargeInMode(s === 'responding' || s === 'barge_in_pending')
+      })
+      stateSubRef.current = stateSub
 
       warmUpTimerRef.current = setTimeout(() => {
         store.send({ type: 'WARM_UP_DONE' })
