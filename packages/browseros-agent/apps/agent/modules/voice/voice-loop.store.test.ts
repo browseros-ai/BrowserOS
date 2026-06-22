@@ -10,7 +10,16 @@ describe('voice loop store', () => {
     expect(ctx.state).toBe('idle')
     expect(ctx.errorMessage).toBeNull()
     expect(ctx.isBargingIn).toBe(false)
+    expect(ctx.isWarmingUp).toBe(false)
     expect(ctx.audioLevels).toEqual([0, 0, 0, 0, 0])
+  })
+
+  it('OPEN sets isWarmingUp true; WARM_UP_DONE clears it', () => {
+    const store = createVoiceLoopStore()
+    store.send({ type: 'OPEN' })
+    expect(store.getSnapshot().context.isWarmingUp).toBe(true)
+    store.send({ type: 'WARM_UP_DONE' })
+    expect(store.getSnapshot().context.isWarmingUp).toBe(false)
   })
 
   it('OPEN moves idle -> listening', () => {

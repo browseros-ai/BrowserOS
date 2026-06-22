@@ -1,5 +1,5 @@
-import { useSelector } from '@xstate/store/react'
 import type { UIMessage } from 'ai'
+import type { RefObject } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import {
   SIDEPANEL_VOICE_MODE_BARGE_IN_EVENT,
@@ -26,8 +26,9 @@ import type { VoiceLoopApi } from './voice-types'
 
 const WARM_UP_MS = 800
 const WAVEFORM_BAND_COUNT = 5
+const STATUS_POLL_MS = 200
 
-interface ChatSessionLike {
+export interface ChatSessionLike {
   sendMessage: (params: { text: string }) => void
   stop: () => void
   status: string
@@ -35,19 +36,11 @@ interface ChatSessionLike {
 }
 
 export interface UseVoiceLoopOptions {
-  chatSession: ChatSessionLike
+  chatSessionRef: RefObject<ChatSessionLike | null>
 }
 
 export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
   const [store] = useState(() => createVoiceLoopStore())
-  const state = useSelector(store, (s) => s.context.state)
-  const audioLevels = useSelector(store, (s) => s.context.audioLevels)
-  const errorMessage = useSelector(store, (s) => s.context.errorMessage)
-  const isBargingIn = useSelector(store, (s) => s.context.isBargingIn)
-  const [isWarmingUp, setIsWarmingUp] = useState(false)
-  const [interruptedMessageIds, setInterruptedMessageIds] = useState<
-    ReadonlySet<string>
-  >(() => new Set())
 
   const captureRef = useRef<AudioCaptureHandle | null>(null)
   const monitorRef = useRef<AudioLevelMonitor | null>(null)
@@ -55,23 +48,27 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
   const recorderRef = useRef<MediaRecorder | null>(null)
   const transcribeAbortRef = useRef<AbortController | null>(null)
   const warmUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const messagesRef = useRef(opts.chatSession.messages)
-  messagesRef.current = opts.chatSession.messages
-  const prevStatusRef = useRef(opts.chatSession.status)
+  const interruptedIdsRef = useRef<Set<string>>(new Set())
 
+  // Poll the chat session's status from the ref instead of subscribing
+  // to it via React deps. The chat session updates dozens of times a
+  // second while a reply is streaming; consuming `status` as a render
+  // dep used to re-run this whole hook every token. The poll is a
+  // 5 Hz timer that does nothing besides compare two strings.
   useEffect(() => {
-    const prev = prevStatusRef.current
-    const next = opts.chatSession.status
-    prevStatusRef.current = next
-    if (prev === 'streaming' && next !== 'streaming') {
-      store.send({ type: 'CHAT_STREAMING_ENDED' })
-    }
-  }, [opts.chatSession.status, store])
+    let prev = opts.chatSessionRef.current?.status
+    const id = setInterval(() => {
+      const next = opts.chatSessionRef.current?.status
+      if (prev === 'streaming' && next !== 'streaming') {
+        store.send({ type: 'CHAT_STREAMING_ENDED' })
+      }
+      prev = next
+    }, STATUS_POLL_MS)
+    return () => clearInterval(id)
+  }, [opts.chatSessionRef, store])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: releaseResources is a stable local helper; depending on it would re-subscribe emits on every render
   useEffect(() => {
-    const sendMessage = opts.chatSession.sendMessage
-    const stopChat = opts.chatSession.stop
     const subs = [
       store.on('runTranscribe', async ({ blob }) => {
         transcribeAbortRef.current?.abort()
@@ -106,20 +103,18 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
         }
       }),
       store.on('sendChatMessage', ({ text }) => {
-        sendMessage({ text })
+        opts.chatSessionRef.current?.sendMessage({ text })
       }),
       store.on('cancelChatStream', () => {
-        stopChat()
+        opts.chatSessionRef.current?.stop()
       }),
       store.on('markLastAssistantInterrupted', () => {
-        const last = lastAssistantId(messagesRef.current)
-        if (!last) return
-        setInterruptedMessageIds((prev) => {
-          if (prev.has(last)) return prev
-          const next = new Set(prev)
-          next.add(last)
-          return next
-        })
+        const messages = opts.chatSessionRef.current?.messages
+        if (!messages) return
+        const last = lastAssistantId(messages)
+        if (last && !interruptedIdsRef.current.has(last)) {
+          interruptedIdsRef.current.add(last)
+        }
       }),
       store.on('releaseCapture', () => {
         releaseResources()
@@ -128,7 +123,7 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
     return () => {
       for (const s of subs) s.unsubscribe()
     }
-  }, [opts.chatSession.sendMessage, opts.chatSession.stop, store])
+  }, [store, opts.chatSessionRef])
 
   const releaseResources = () => {
     transcribeAbortRef.current?.abort()
@@ -151,7 +146,6 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
       clearTimeout(warmUpTimerRef.current)
       warmUpTimerRef.current = null
     }
-    setIsWarmingUp(false)
   }
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: cleanup runs only on unmount; closing over latest refs is intentional
@@ -170,10 +164,11 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
       const monitor = createAudioLevelMonitor({
         bandCount: WAVEFORM_BAND_COUNT,
       })
-      // Throttle the React-side audio levels to ~12 Hz. The monitor
-      // itself runs at rAF (~60 Hz); without the throttle the React
-      // re-render rate competes with Rive's own rAF canvas loop and
-      // pegs the main thread on persona mount.
+      // Throttle the AUDIO_LEVELS store dispatch to ~12 Hz. The
+      // monitor itself ticks at the display's rAF rate (60-120 Hz).
+      // 12 Hz is fast enough for the persona halo to track the voice
+      // smoothly and slow enough that React reconciliation does not
+      // compete with Rive's canvas loop on the main thread.
       let lastLevelsAt = 0
       monitor.subscribe((sample) => {
         const now = performance.now()
@@ -213,7 +208,6 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
         },
         onSpeechEnd: (samples) => {
           if (samples.length > 0) {
-            // Silero gave us a complete PCM segment; emit WAV directly.
             const rec = recorderRef.current
             recorderRef.current = null
             if (rec && rec.state !== 'inactive') {
@@ -229,8 +223,6 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
             })
             return
           }
-          // Energy strategy: stop the per-turn recorder; its onstop
-          // dispatches SPEECH_END with the freshly framed WebM blob.
           const rec = recorderRef.current
           recorderRef.current = null
           if (rec && rec.state !== 'inactive') {
@@ -241,9 +233,8 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
       vad.start()
       vadRef.current = vad
 
-      setIsWarmingUp(true)
       warmUpTimerRef.current = setTimeout(() => {
-        setIsWarmingUp(false)
+        store.send({ type: 'WARM_UP_DONE' })
         warmUpTimerRef.current = null
       }, WARM_UP_MS)
 
@@ -269,18 +260,29 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
     store.send({ type: 'RETRY' })
   }
 
-  return {
-    state,
-    audioLevels,
-    errorMessage,
-    isBargingIn,
-    isWarmingUp,
-    interruptedMessageIds,
-    open,
-    close,
-    stopAgentActivity,
-    retry,
-  }
+  // The api is constructed once via lazy useState and stays
+  // referentially stable across renders. Callers passing this
+  // object as a prop (e.g. ChatFooter -> VoiceMode) never see it
+  // change identity, so memoized children skip cleanly.
+  const openRef = useRef(open)
+  const closeRef = useRef(close)
+  const stopAgentRef = useRef(stopAgentActivity)
+  const retryRef = useRef(retry)
+  openRef.current = open
+  closeRef.current = close
+  stopAgentRef.current = stopAgentActivity
+  retryRef.current = retry
+
+  const [api] = useState<VoiceLoopApi>(() => ({
+    store,
+    interruptedMessageIds: interruptedIdsRef.current,
+    open: () => openRef.current(),
+    close: () => closeRef.current(),
+    stopAgentActivity: () => stopAgentRef.current(),
+    retry: () => retryRef.current(),
+  }))
+
+  return api
 }
 
 function lastAssistantId(messages: UIMessage[]): string | null {

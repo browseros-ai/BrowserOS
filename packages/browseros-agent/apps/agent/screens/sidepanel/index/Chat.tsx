@@ -18,7 +18,10 @@ import { useChatSessionContext } from '@/modules/chat/chat-session-context'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { useJtbdPopup } from '@/modules/jtbd-popup/jtbd-popup.hooks'
 import { useVoiceInput } from '@/modules/voice/voice.hooks'
-import { useVoiceLoop } from '@/modules/voice/voice-loop.hooks'
+import {
+  type ChatSessionLike,
+  useVoiceLoop,
+} from '@/modules/voice/voice-loop.hooks'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatError } from './ChatError'
 import { ChatFooter } from './ChatFooter'
@@ -59,9 +62,9 @@ export const Chat = () => {
   } = useJtbdPopup()
 
   const voice = useVoiceInput()
-  const voiceLoop = useVoiceLoop({
-    chatSession: { sendMessage, stop, status, messages },
-  })
+  const chatSessionRef = useRef<ChatSessionLike | null>(null)
+  chatSessionRef.current = { sendMessage, stop, status, messages }
+  const voiceLoop = useVoiceLoop({ chatSessionRef })
 
   const [input, setInput] = useState('')
   const [attachedTabs, setAttachedTabs] = useState<chrome.tabs.Tab[]>([])

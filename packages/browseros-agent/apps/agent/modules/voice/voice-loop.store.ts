@@ -6,6 +6,7 @@ export const INITIAL_CONTEXT: VoiceContext = {
   audioLevels: [0, 0, 0, 0, 0],
   errorMessage: null,
   isBargingIn: false,
+  isWarmingUp: false,
 }
 
 export function createVoiceLoopStore() {
@@ -24,6 +25,12 @@ export function createVoiceLoopStore() {
         state: 'listening' as const,
         errorMessage: null,
         isBargingIn: false,
+        isWarmingUp: true,
+      }),
+
+      WARM_UP_DONE: (ctx, _e: object) => ({
+        ...ctx,
+        isWarmingUp: false,
       }),
 
       SPEECH_START: (ctx, _e: object) => {

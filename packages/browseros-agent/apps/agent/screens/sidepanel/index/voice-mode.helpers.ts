@@ -1,5 +1,5 @@
 import type { PersonaState } from '@/components/ai-elements/persona'
-import type { VoiceLoopApi, VoiceState } from '@/modules/voice/voice-types'
+import type { VoiceState } from '@/modules/voice/voice-types'
 
 export function chipTextFor(
   state: VoiceState,
@@ -27,11 +27,12 @@ export function showsDots(state: VoiceState): boolean {
   return state === 'capturing' || state === 'transcribing'
 }
 
-export function personaStateFor(
-  api: Pick<VoiceLoopApi, 'state' | 'isWarmingUp'>,
-): PersonaState {
-  if (api.isWarmingUp) return 'idle'
-  switch (api.state) {
+export function personaStateFor(input: {
+  state: VoiceState
+  isWarmingUp: boolean
+}): PersonaState {
+  if (input.isWarmingUp) return 'idle'
+  switch (input.state) {
     case 'responding':
       return 'speaking'
     case 'transcribing':
@@ -51,9 +52,11 @@ export function aggregateLevel(levels: number[]): number {
   return sum / levels.length
 }
 
-export function haloAmplitudeFor(
-  api: Pick<VoiceLoopApi, 'state' | 'audioLevels'>,
-): number {
-  if (api.state === 'capturing') return aggregateLevel(api.audioLevels) / 100
+export function haloAmplitudeFor(input: {
+  state: VoiceState
+  audioLevels: number[]
+}): number {
+  if (input.state === 'capturing')
+    return aggregateLevel(input.audioLevels) / 100
   return 0
 }

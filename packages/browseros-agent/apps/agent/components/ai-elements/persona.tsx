@@ -14,9 +14,8 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 
 // Rive's WASM loads from unpkg / jsdelivr by default. MV3 extensions
-// cannot fetch arbitrary external code, and Rive's failure path on a
-// blocked fetch is messy enough to take down the renderer. Point the
-// loader at WASM bundled in public/persona/ before any useRive runs.
+// cannot fetch arbitrary external code, so point the loader at WASM
+// bundled in public/persona/ before any useRive runs.
 if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
   RuntimeLoader.setWasmUrl(chrome.runtime.getURL('persona/rive.wasm'))
   RuntimeLoader.setWasmFallbackUrl(
@@ -292,22 +291,39 @@ export const Persona: FC<PersonaProps> = memo(
     const speakingInput = useStateMachineInput(rive, stateMachine, 'speaking')
     const asleepInput = useStateMachineInput(rive, stateMachine, 'asleep')
 
+    // Stabilize input refs so the state-setting effect does not re-run
+    // every time Rive's internal state updates. useStateMachineInput
+    // may return fresh references on Rive's rAF tick; depending on
+    // those references creates a render-effect-render loop the moment
+    // rive becomes non-null. The refs read the latest input objects
+    // on demand from inside the effect, without participating in the
+    // effect's dependency tracking.
+    const listeningInputRef = useRef(listeningInput)
+    const thinkingInputRef = useRef(thinkingInput)
+    const speakingInputRef = useRef(speakingInput)
+    const asleepInputRef = useRef(asleepInput)
+    listeningInputRef.current = listeningInput
+    thinkingInputRef.current = thinkingInput
+    speakingInputRef.current = speakingInput
+    asleepInputRef.current = asleepInput
+
     // Rive state machine inputs are mutable objects that must be set via direct
     // property assignment — this is the intended Rive API, not a React anti-pattern.
+    // biome-ignore lint/correctness/useExhaustiveDependencies: input refs are captured above and read latest values via .current; depending on the inputs themselves can cause a render loop because Rive may rotate their references on every internal frame
     useEffect(() => {
-      if (listeningInput) {
-        listeningInput.value = state === 'listening'
+      if (listeningInputRef.current) {
+        listeningInputRef.current.value = state === 'listening'
       }
-      if (thinkingInput) {
-        thinkingInput.value = state === 'thinking'
+      if (thinkingInputRef.current) {
+        thinkingInputRef.current.value = state === 'thinking'
       }
-      if (speakingInput) {
-        speakingInput.value = state === 'speaking'
+      if (speakingInputRef.current) {
+        speakingInputRef.current.value = state === 'speaking'
       }
-      if (asleepInput) {
-        asleepInput.value = state === 'asleep'
+      if (asleepInputRef.current) {
+        asleepInputRef.current.value = state === 'asleep'
       }
-    }, [state, listeningInput, thinkingInput, speakingInput, asleepInput])
+    }, [state])
 
     const Component = source.hasModel ? PersonaWithModel : PersonaWithoutModel
 

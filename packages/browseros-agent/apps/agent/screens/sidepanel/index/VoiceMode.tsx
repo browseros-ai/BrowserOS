@@ -1,4 +1,6 @@
+import { useSelector } from '@xstate/store/react'
 import { X } from 'lucide-react'
+import { memo } from 'react'
 import { Persona } from '@/components/ai-elements/persona'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -14,14 +16,20 @@ interface VoiceModeProps {
   api: VoiceLoopApi
 }
 
-export function VoiceMode({ api }: VoiceModeProps) {
-  const chip = chipTextFor(api.state, api.isBargingIn, api.errorMessage)
-  const personaState = personaStateFor(api)
-  const halo = haloAmplitudeFor(api)
-  const dots = showsDots(api.state)
-  const stopEnabled = api.state === 'responding'
-  const isError = api.state === 'error'
-  const isResponding = api.state === 'responding'
+export const VoiceMode = memo(function VoiceMode({ api }: VoiceModeProps) {
+  const state = useSelector(api.store, (s) => s.context.state)
+  const audioLevels = useSelector(api.store, (s) => s.context.audioLevels)
+  const errorMessage = useSelector(api.store, (s) => s.context.errorMessage)
+  const isBargingIn = useSelector(api.store, (s) => s.context.isBargingIn)
+  const isWarmingUp = useSelector(api.store, (s) => s.context.isWarmingUp)
+
+  const chip = chipTextFor(state, isBargingIn, errorMessage)
+  const personaState = personaStateFor({ state, isWarmingUp })
+  const halo = haloAmplitudeFor({ state, audioLevels })
+  const dots = showsDots(state)
+  const stopEnabled = state === 'responding'
+  const isError = state === 'error'
+  const isResponding = state === 'responding'
 
   return (
     <section
@@ -110,7 +118,7 @@ export function VoiceMode({ api }: VoiceModeProps) {
       </footer>
     </section>
   )
-}
+})
 
 function LoadingDots() {
   return (

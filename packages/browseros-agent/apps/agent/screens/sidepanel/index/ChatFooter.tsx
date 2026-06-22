@@ -19,7 +19,7 @@ import { ChatAttachedTabs } from './ChatAttachedTabs'
 import { ChatInput, type ChatInputHandle } from './ChatInput'
 import { ChatModeToggle } from './ChatModeToggle'
 import { ChatSelectedText } from './ChatSelectedText'
-import { VoiceMode } from './VoiceMode'
+import { VoiceModeArea } from './VoiceModeArea'
 
 export interface ChatFooterProps {
   mode: ChatMode
@@ -223,39 +223,23 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           <div className="mt-1 text-destructive text-xs">{voice.error}</div>
         )}
 
-        {(() => {
-          const voiceActive =
-            !!voiceLoop &&
-            voiceLoop.state !== 'idle' &&
-            voiceLoop.state !== 'closed'
-          return (
-            <div
-              className={cn(
-                'relative transition-[min-height] duration-200',
-                voiceActive ? 'min-h-[15rem]' : 'min-h-[2.625rem]',
-              )}
-            >
-              <div className={cn(voiceActive && 'invisible')}>
-                <ChatInput
-                  input={input}
-                  status={status}
-                  mode={mode}
-                  sendDisabled={sendDisabled}
-                  onInputChange={onInputChange}
-                  onSubmit={onSubmit}
-                  onStop={onStop}
-                  selectedTabs={attachedTabs}
-                  onToggleTab={onToggleTab}
-                  onTabMentionOpenChange={setIsTabMentionOpen}
-                  voice={voice}
-                  onOpenVoiceMode={onOpenVoiceMode}
-                  ref={chatInputRef}
-                />
-              </div>
-              {voiceActive && voiceLoop && <VoiceMode api={voiceLoop} />}
-            </div>
-          )
-        })()}
+        <VoiceModeArea voiceLoop={voiceLoop}>
+          <ChatInput
+            input={input}
+            status={status}
+            mode={mode}
+            sendDisabled={sendDisabled}
+            onInputChange={onInputChange}
+            onSubmit={onSubmit}
+            onStop={onStop}
+            selectedTabs={attachedTabs}
+            onToggleTab={onToggleTab}
+            onTabMentionOpenChange={setIsTabMentionOpen}
+            voice={voice}
+            onOpenVoiceMode={onOpenVoiceMode}
+            ref={chatInputRef}
+          />
+        </VoiceModeArea>
       </div>
     </footer>
   )
