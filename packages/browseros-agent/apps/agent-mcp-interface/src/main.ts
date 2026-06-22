@@ -69,7 +69,20 @@ async function start(): Promise<void> {
     logger.info('cockpit attached to browseros browser', {
       cdpPort: env.cdpPort,
     })
+    // `exiting` guards against double-cleanup when a supervisor sends
+    // SIGINT and SIGTERM back-to-back. `process.once` removes each
+    // handler independently, so without the flag a SIGTERM that
+    // arrives while the SIGINT cleanup is still in flight would
+    // restart `disconnect()` on an already-closing CDP connection.
+    // The kill switch guarantees forward progress: a hung
+    // `cdp.disconnect()` (half-open socket, network stall) would
+    // otherwise leave the process stuck because both handlers have
+    // already been removed and only SIGKILL could recover it.
+    let exiting = false
     const cleanup = (): void => {
+      if (exiting) return
+      exiting = true
+      setTimeout(() => process.exit(1), 5_000).unref()
       bootstrap.disconnect().finally(() => process.exit(0))
     }
     process.once('SIGINT', cleanup)

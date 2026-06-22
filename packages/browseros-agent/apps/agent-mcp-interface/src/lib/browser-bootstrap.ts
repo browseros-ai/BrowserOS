@@ -47,26 +47,35 @@ export interface CdpClient {
   disconnect(): Promise<void>
 }
 
-export interface BrowserBootstrapDeps {
-  /** Builds the CDP client. Defaulted to a real `CdpBackend` in production. */
-  cdpFactory?: (port: number) => CdpClient
-  /** Builds the `BrowserSession` from a connected CDP client. */
-  buildSession?: (cdp: CdpClient) => BrowserSession
+/**
+ * Test seam for swapping out the CDP attach machinery as a single
+ * unit. `cdpFactory` and `buildSession` are deliberately bundled here
+ * rather than exposed as two independent optional overrides: the
+ * default `buildSession` casts its argument to a real `CdpBackend`
+ * before instantiating `Browser`, so mixing a stub `cdpFactory` with
+ * the default `buildSession` would compile but blow up at the first
+ * `Browser` call. Callers either pass no `inject` (production) or
+ * pass both factories (tests).
+ */
+export interface BrowserBootstrapInjection {
+  cdpFactory: (port: number) => CdpClient
+  buildSession: (cdp: CdpClient) => BrowserSession
 }
 
-const defaultCdpFactory: NonNullable<BrowserBootstrapDeps['cdpFactory']> = (
-  port,
-) => new CdpBackend({ port, exitOnReconnectFailure: false })
+export interface BrowserBootstrapDeps {
+  /** Test-only: replace the entire CDP attach machinery with stubs. */
+  inject?: BrowserBootstrapInjection
+}
 
-const defaultBuildSession: NonNullable<BrowserBootstrapDeps['buildSession']> = (
-  cdp,
-) => new Browser(cdp as unknown as CdpBackend).session
+const defaultInjection: BrowserBootstrapInjection = {
+  cdpFactory: (port) => new CdpBackend({ port, exitOnReconnectFailure: false }),
+  buildSession: (cdp) => new Browser(cdp as unknown as CdpBackend).session,
+}
 
 export async function bootstrapBrowserosBrowser(
   deps: BrowserBootstrapDeps = {},
 ): Promise<BrowserBootstrap | null> {
-  const cdpFactory = deps.cdpFactory ?? defaultCdpFactory
-  const buildSession = deps.buildSession ?? defaultBuildSession
+  const { cdpFactory, buildSession } = deps.inject ?? defaultInjection
   const port = env.cdpPort
   const cdp = cdpFactory(port)
   try {

@@ -48,10 +48,12 @@ describe('bootstrapBrowserosBrowser', () => {
     const cdp = makeStubCdp()
     const seenCdps: CdpClient[] = []
     const result = await bootstrapBrowserosBrowser({
-      cdpFactory: () => cdp,
-      buildSession: (c) => {
-        seenCdps.push(c)
-        return fakeSession
+      inject: {
+        cdpFactory: () => cdp,
+        buildSession: (c) => {
+          seenCdps.push(c)
+          return fakeSession
+        },
       },
     })
     expect(result).not.toBeNull()
@@ -66,10 +68,12 @@ describe('bootstrapBrowserosBrowser', () => {
     const cdp = makeStubCdp({ connectThrows: new Error('ECONNREFUSED') })
     let buildSessionCalls = 0
     const result = await bootstrapBrowserosBrowser({
-      cdpFactory: () => cdp,
-      buildSession: () => {
-        buildSessionCalls++
-        return fakeSession
+      inject: {
+        cdpFactory: () => cdp,
+        buildSession: () => {
+          buildSessionCalls++
+          return fakeSession
+        },
       },
     })
     expect(result).toBeNull()
@@ -85,8 +89,10 @@ describe('bootstrapBrowserosBrowser', () => {
       },
     }
     const result = await bootstrapBrowserosBrowser({
-      cdpFactory: () => cdp,
-      buildSession: () => fakeSession,
+      inject: {
+        cdpFactory: () => cdp,
+        buildSession: () => fakeSession,
+      },
     })
     expect(result).not.toBeNull()
     // The disconnect must not throw — the signal-handler path in
@@ -98,11 +104,13 @@ describe('bootstrapBrowserosBrowser', () => {
     const seenPorts: number[] = []
     const cdp = makeStubCdp()
     await bootstrapBrowserosBrowser({
-      cdpFactory: (port) => {
-        seenPorts.push(port)
-        return cdp
+      inject: {
+        cdpFactory: (port) => {
+          seenPorts.push(port)
+          return cdp
+        },
+        buildSession: () => fakeSession,
       },
-      buildSession: () => fakeSession,
     })
     expect(seenPorts).toHaveLength(1)
     expect(seenPorts[0]).toBeGreaterThan(0)
