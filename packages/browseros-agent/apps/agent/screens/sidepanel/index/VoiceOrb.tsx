@@ -31,7 +31,6 @@ export function VoiceOrb({
   stateRef.current = state
   accentRef.current = accent
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: state and accent are read from refs inside the animation loop; depending on them would tear down and re-create the canvas every state change instead of letting the loop ease into the new amplitude target
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return

@@ -9,7 +9,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!public", "!dist"]
+    "includes": ["**", "!public", "!dist", "!**/*.svg"]
   },
   "formatter": {
     "enabled": true,
