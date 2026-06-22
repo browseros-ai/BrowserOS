@@ -12,6 +12,9 @@ const BUNDLE_DIR = join(TMP_ROOT, 'bundle')
 const BUNDLE_ENTRY = join(BUNDLE_DIR, 'index.js')
 const BINARIES_DIR = join(TMP_ROOT, 'binaries')
 
+// Bun embeds native addons by extracting hidden temp `.node` files at runtime.
+export const COMPILED_SERVER_EXEC_ARGV = ['--no-addons']
+
 function compiledBinaryPath(target: BuildTarget): string {
   return join(
     BINARIES_DIR,
@@ -63,9 +66,11 @@ async function compileTarget(
     '--outfile',
     binaryPath,
     `--target=${target.bunTarget}`,
+    `--compile-exec-argv=${COMPILED_SERVER_EXEC_ARGV.join(' ')}`,
     '--external=node-pty',
   ]
   await runCommand('bun', args, env)
+  await adHocSignMacBinary(target, binaryPath, env)
 
   if (target.os === 'windows') {
     if (ci) {
@@ -80,6 +85,25 @@ async function compileTarget(
   }
 
   return binaryPath
+}
+
+/** Keeps local macOS server artifacts valid until release signing replaces the ad-hoc signature. */
+async function adHocSignMacBinary(
+  target: BuildTarget,
+  binaryPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  if (target.os !== 'macos') return
+  if (process.platform !== 'darwin') {
+    log.warn(`Skipping ad-hoc signing for ${target.id} outside macOS`)
+    return
+  }
+
+  await runCommand(
+    'codesign',
+    ['--force', '--sign', '-', '--timestamp=none', binaryPath],
+    env,
+  )
 }
 
 export async function compileServerBinaries(

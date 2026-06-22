@@ -104,13 +104,34 @@ describe('server build config', () => {
     expect(config.envVars.AGENT_RUNNER_JWT_SECRET).toBeUndefined()
   })
 
-  async function writeProdRoot(env: Record<string, string>): Promise<string> {
+  it('does not require a production env file in CI mode', async () => {
+    const rootDir = await writeProdRoot({}, { envFile: false })
+
+    const config = loadBuildConfig(rootDir, { ci: true })
+
+    expect(config.envVars).toEqual({
+      BROWSEROS_CONFIG_URL:
+        'https://browseros.invalid/api/browseros-server/config',
+      LOG_LEVEL: 'info',
+      NODE_ENV: 'production',
+      POSTHOG_API_KEY: 'phc_browseros_ci',
+      SENTRY_DSN: 'https://ci@sentry.invalid/1',
+    })
+    expect(config.r2).toBeUndefined()
+  })
+
+  async function writeProdRoot(
+    env: Record<string, string>,
+    options: { envFile?: boolean } = {},
+  ): Promise<string> {
     tempRoot = await mkdtemp(join(tmpdir(), 'browseros-build-config-test-'))
     const serverDir = join(tempRoot, 'apps/server')
     await mkdir(serverDir, { recursive: true })
     await writeFile(join(serverDir, 'package.json'), '{"version":"0.0.0-test"}')
     await writeFile(join(serverDir, '.env.production.example'), '')
-    await writeFile(join(serverDir, '.env.production'), formatEnv(env))
+    if (options.envFile !== false) {
+      await writeFile(join(serverDir, '.env.production'), formatEnv(env))
+    }
     return tempRoot
   }
 })
