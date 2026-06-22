@@ -60,7 +60,6 @@ export const Chat = () => {
 
   const voice = useVoiceInput()
   const voiceLoop = useVoiceLoop({
-    enabled: true,
     chatSession: { sendMessage, stop, status, messages },
   })
 
@@ -259,7 +258,6 @@ export const Chat = () => {
         onRemoveTab={removeTab}
         voice={voiceState}
         voiceLoop={voiceLoop}
-        voiceModeEnabled={true}
         onOpenVoiceMode={voiceLoop.open}
       />
     </>

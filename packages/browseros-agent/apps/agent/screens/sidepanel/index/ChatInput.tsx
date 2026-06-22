@@ -38,7 +38,6 @@ interface ChatInputProps {
   onToggleTab: (tab: chrome.tabs.Tab) => void
   onTabMentionOpenChange?: (isOpen: boolean) => void
   voice?: VoiceInputState
-  voiceModeEnabled?: boolean
   onOpenVoiceMode?: () => void
 }
 
@@ -63,7 +62,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       onToggleTab,
       onTabMentionOpenChange,
       voice,
-      voiceModeEnabled,
       onOpenVoiceMode,
     },
     ref,
@@ -397,7 +395,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           />
         )}
         <div className="absolute right-1.5 bottom-1.5 flex items-center gap-1">
-          {voiceModeEnabled && onOpenVoiceMode && !voice?.isRecording && (
+          {onOpenVoiceMode && !voice?.isRecording && (
             <button
               type="button"
               onClick={onOpenVoiceMode}

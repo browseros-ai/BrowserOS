@@ -1,6 +1,15 @@
 import { useSelector } from '@xstate/store/react'
 import type { UIMessage } from 'ai'
 import { useEffect, useRef, useState } from 'react'
+import {
+  SIDEPANEL_VOICE_MODE_BARGE_IN_EVENT,
+  SIDEPANEL_VOICE_MODE_CLOSED_EVENT,
+  SIDEPANEL_VOICE_MODE_OPENED_EVENT,
+  SIDEPANEL_VOICE_MODE_STOP_AGENT_EVENT,
+  SIDEPANEL_VOICE_MODE_TRANSCRIBE_FAILED_EVENT,
+  SIDEPANEL_VOICE_MODE_TURN_CAPTURED_EVENT,
+} from '@/lib/constants/analyticsEvents'
+import { track } from '@/lib/metrics/track'
 import { transcribeAudio } from '@/lib/voice/transcribe-audio'
 import {
   type AudioCaptureHandle,
@@ -26,7 +35,6 @@ interface ChatSessionLike {
 }
 
 export interface UseVoiceLoopOptions {
-  enabled: boolean
   chatSession: ChatSessionLike
 }
 
@@ -75,17 +83,26 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
           if (ac.signal.aborted) return
           const trimmed = text.trim()
           if (!trimmed) {
+            track(SIDEPANEL_VOICE_MODE_TRANSCRIBE_FAILED_EVENT, {
+              reason: 'empty',
+            })
             store.send({
               type: 'TRANSCRIBE_FAIL',
               message: 'No speech detected',
             })
             return
           }
+          track(SIDEPANEL_VOICE_MODE_TURN_CAPTURED_EVENT, {
+            chars: trimmed.length,
+          })
           store.send({ type: 'TRANSCRIBE_OK', text: trimmed })
         } catch (err) {
           if (ac.signal.aborted) return
           const message =
             err instanceof Error ? err.message : 'Transcription failed'
+          track(SIDEPANEL_VOICE_MODE_TRANSCRIBE_FAILED_EVENT, {
+            reason: 'error',
+          })
           store.send({ type: 'TRANSCRIBE_FAIL', message })
         }
       }),
@@ -147,7 +164,6 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
   }, [])
 
   const open = async (): Promise<void> => {
-    if (!opts.enabled) return
     if (captureRef.current) return
     try {
       const capture = await openAudioCapture()
@@ -174,6 +190,9 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
 
       const vad = await createVad(capture, monitor, {
         onSpeechStart: () => {
+          if (store.getSnapshot().context.state === 'responding') {
+            track(SIDEPANEL_VOICE_MODE_BARGE_IN_EVENT)
+          }
           store.send({ type: 'SPEECH_START' })
         },
         onSpeechEnd: (samples) => {
@@ -191,6 +210,7 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
         warmUpTimerRef.current = null
       }, WARM_UP_MS)
 
+      track(SIDEPANEL_VOICE_MODE_OPENED_EVENT, { vadStrategy: vad.strategy })
       store.send({ type: 'OPEN' })
     } catch (err) {
       releaseResources()
@@ -199,10 +219,12 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
   }
 
   const close = () => {
+    track(SIDEPANEL_VOICE_MODE_CLOSED_EVENT)
     store.send({ type: 'CLOSE' })
   }
 
   const stopAgentActivity = () => {
+    track(SIDEPANEL_VOICE_MODE_STOP_AGENT_EVENT)
     store.send({ type: 'STOP_AGENT' })
   }
 

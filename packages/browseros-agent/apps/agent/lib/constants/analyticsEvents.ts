@@ -273,3 +273,25 @@ export const SIDEPANEL_VOICE_TRANSCRIPTION_COMPLETED_EVENT =
 
 /** @public */
 export const SIDEPANEL_VOICE_ERROR_EVENT = 'sidepanel.voice.error'
+
+/** @public */
+export const SIDEPANEL_VOICE_MODE_OPENED_EVENT = 'sidepanel.voice_mode.opened'
+
+/** @public */
+export const SIDEPANEL_VOICE_MODE_CLOSED_EVENT = 'sidepanel.voice_mode.closed'
+
+/** @public */
+export const SIDEPANEL_VOICE_MODE_TURN_CAPTURED_EVENT =
+  'sidepanel.voice_mode.turn_captured'
+
+/** @public */
+export const SIDEPANEL_VOICE_MODE_BARGE_IN_EVENT =
+  'sidepanel.voice_mode.barge_in'
+
+/** @public */
+export const SIDEPANEL_VOICE_MODE_STOP_AGENT_EVENT =
+  'sidepanel.voice_mode.stop_agent'
+
+/** @public */
+export const SIDEPANEL_VOICE_MODE_TRANSCRIBE_FAILED_EVENT =
+  'sidepanel.voice_mode.transcribe_failed'

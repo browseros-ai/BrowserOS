@@ -35,7 +35,6 @@ export interface ChatFooterProps {
   onRemoveTab: (tabId?: number) => void
   voice?: VoiceInputState
   voiceLoop?: VoiceLoopApi
-  voiceModeEnabled?: boolean
   onOpenVoiceMode?: () => void
 }
 
@@ -53,7 +52,6 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   onRemoveTab,
   voice,
   voiceLoop,
-  voiceModeEnabled,
   onOpenVoiceMode,
 }) => {
   const { selectedFolder } = useWorkspace()
@@ -238,7 +236,6 @@ export const ChatFooter: FC<ChatFooterProps> = ({
             onToggleTab={onToggleTab}
             onTabMentionOpenChange={setIsTabMentionOpen}
             voice={voice}
-            voiceModeEnabled={voiceModeEnabled}
             onOpenVoiceMode={onOpenVoiceMode}
             ref={chatInputRef}
           />
