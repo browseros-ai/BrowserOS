@@ -95,6 +95,12 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
             return
           }
           voiceDebug('sanitize send', { chars: verdict.text.length })
+          // Only count a barge-in once the transcript clears the
+          // sanitizer; tentative triggers (chair scrape, chime, brief
+          // cough) used to inflate this metric.
+          if (store.getSnapshot().context.origin === 'barge_in_pending') {
+            track(SIDEPANEL_VOICE_MODE_BARGE_IN_EVENT)
+          }
           track(SIDEPANEL_VOICE_MODE_TURN_CAPTURED_EVENT, {
             chars: verdict.text.length,
           })
@@ -216,8 +222,8 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
           if (current === 'responding') {
             // Tentative barge-in: start recording but keep the agent
             // running. The store will only cancel after the transcript
-            // is confirmed real by the sanitizer.
-            track(SIDEPANEL_VOICE_MODE_BARGE_IN_EVENT)
+            // is confirmed real by the sanitizer; the BARGE_IN_EVENT
+            // analytic fires there too, not here.
             voiceDebug('barge-in tentative')
             startTurnRecorder()
             store.send({ type: 'BARGE_IN_TENTATIVE' })
