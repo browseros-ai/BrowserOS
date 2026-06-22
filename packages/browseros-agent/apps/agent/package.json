@@ -44,6 +44,7 @@
     "@radix-ui/react-use-controllable-state": "^1.2.2",
     "@ricky0123/vad-web": "^0.0.17",
     "@rive-app/react-webgl2": "^4.29.1",
+    "@rive-app/webgl2": "^2.38.1",
     "@sentry/react": "^10.31.0",
     "@sentry/vite-plugin": "^4.6.1",
     "@tanstack/query-async-storage-persister": "^5.95.2",

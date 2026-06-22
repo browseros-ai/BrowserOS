@@ -8,9 +8,21 @@ import {
   useViewModelInstance,
   useViewModelInstanceColor,
 } from '@rive-app/react-webgl2'
+import { RuntimeLoader } from '@rive-app/webgl2'
 import type { FC, ReactNode } from 'react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
+
+// Rive's WASM loads from unpkg / jsdelivr by default. MV3 extensions
+// cannot fetch arbitrary external code, and Rive's failure path on a
+// blocked fetch is messy enough to take down the renderer. Point the
+// loader at WASM bundled in public/persona/ before any useRive runs.
+if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
+  RuntimeLoader.setWasmUrl(chrome.runtime.getURL('persona/rive.wasm'))
+  RuntimeLoader.setWasmFallbackUrl(
+    chrome.runtime.getURL('persona/rive_fallback.wasm'),
+  )
+}
 
 // Delays Rive initialization by one frame so that React Strict Mode's
 // immediate unmount cycle never creates a WebGL2 context. Only the
