@@ -189,11 +189,6 @@ export function createVoiceLoopStore() {
         errorMessage: event.message,
       }),
 
-      RETRY: (ctx, _e: object) => {
-        if (ctx.state !== 'error') return ctx
-        return { ...ctx, state: 'listening' as const, errorMessage: null }
-      },
-
       AUDIO_LEVELS: (ctx, event: { levels: number[] }) => ({
         ...ctx,
         audioLevels: event.levels,

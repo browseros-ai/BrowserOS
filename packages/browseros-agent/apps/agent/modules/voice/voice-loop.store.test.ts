@@ -274,11 +274,13 @@ describe('voice loop store', () => {
     expect(released).toBe(true)
   })
 
-  it('RETRY in error returns to listening and clears errorMessage', () => {
+  it('OPEN from error state clears the error and returns to listening', () => {
+    // retry() in useVoiceLoop calls open(), which on success emits
+    // OPEN. The error state must therefore yield cleanly to OPEN.
     const store = createVoiceLoopStore()
     store.send({ type: 'ERROR', message: 'mic denied' })
     expect(store.getSnapshot().context.errorMessage).toBe('mic denied')
-    store.send({ type: 'RETRY' })
+    store.send({ type: 'OPEN' })
     const ctx = store.getSnapshot().context
     expect(ctx.state).toBe('listening')
     expect(ctx.errorMessage).toBeNull()
@@ -329,13 +331,6 @@ describe('voice loop store', () => {
     store.send({ type: 'STOP_AGENT' })
     expect(store.getSnapshot().context.state).toBe('listening')
     expect(emitCount).toBe(0)
-  })
-
-  it('no-op: RETRY from listening does not change state', () => {
-    const store = createVoiceLoopStore()
-    store.send({ type: 'OPEN' })
-    store.send({ type: 'RETRY' })
-    expect(store.getSnapshot().context.state).toBe('listening')
   })
 
   it('OPEN after CLOSE returns to listening', () => {

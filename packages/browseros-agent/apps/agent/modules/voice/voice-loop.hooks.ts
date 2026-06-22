@@ -284,7 +284,13 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
   }
 
   const retry = () => {
-    store.send({ type: 'RETRY' })
+    // Error state reaches this point only after releaseResources()
+    // ran in open()'s catch, so capture/vad/monitor refs are all
+    // null. Dispatching a store-only RETRY would put the chip back
+    // to "Listening" with no live capture behind it. Re-running
+    // open() reacquires the mic and re-emits OPEN, which clears the
+    // error chip naturally.
+    void open()
   }
 
   // The api is constructed once via lazy useState and stays
