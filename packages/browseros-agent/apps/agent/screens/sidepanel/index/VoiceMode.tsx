@@ -1,8 +1,8 @@
 import { X } from 'lucide-react'
+import { Persona } from '@/components/ai-elements/persona'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { VoiceLoopApi } from '@/modules/voice/voice-types'
-import { VoicePersona } from './VoicePersona'
 import {
   chipTextFor,
   haloAmplitudeFor,
@@ -54,10 +54,10 @@ export function VoiceMode({ api }: VoiceModeProps) {
               'color-mix(in oklab, var(--accent-orange) 60%, transparent)',
           }}
         />
-        <VoicePersona
+        <Persona
+          variant="opal"
           state={personaState}
-          amplitude={halo}
-          className="relative size-16"
+          className="relative size-24"
         />
         <div
           className={cn(

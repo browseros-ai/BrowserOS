@@ -1,5 +1,5 @@
+import type { PersonaState } from '@/components/ai-elements/persona'
 import type { VoiceLoopApi, VoiceState } from '@/modules/voice/voice-types'
-import type { VoicePersonaState } from './VoicePersona'
 
 export function chipTextFor(
   state: VoiceState,
@@ -29,8 +29,8 @@ export function showsDots(state: VoiceState): boolean {
 
 export function personaStateFor(
   api: Pick<VoiceLoopApi, 'state' | 'isWarmingUp'>,
-): VoicePersonaState {
-  if (api.isWarmingUp) return 'asleep'
+): PersonaState {
+  if (api.isWarmingUp) return 'idle'
   switch (api.state) {
     case 'responding':
       return 'speaking'

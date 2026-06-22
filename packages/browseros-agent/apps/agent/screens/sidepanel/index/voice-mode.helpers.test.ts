@@ -52,12 +52,12 @@ describe('showsDots', () => {
 })
 
 describe('personaStateFor', () => {
-  it('returns asleep during the warm-up window regardless of state', () => {
+  it('returns idle during the warm-up window regardless of state', () => {
     expect(personaStateFor({ state: 'listening', isWarmingUp: true })).toBe(
-      'asleep',
+      'idle',
     )
     expect(personaStateFor({ state: 'capturing', isWarmingUp: true })).toBe(
-      'asleep',
+      'idle',
     )
   })
 
