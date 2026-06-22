@@ -20,7 +20,7 @@ import {
   type AudioLevelMonitor,
   createAudioLevelMonitor,
 } from './audio-level-monitor'
-import { createVad, pcmFloat32ToWavBlob, type VadHandle } from './vad'
+import { createVad, type VadHandle } from './vad'
 import { createVoiceLoopStore } from './voice-loop.store'
 import type { VoiceLoopApi } from './voice-types'
 
@@ -198,7 +198,7 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
         recorderRef.current = rec
       }
 
-      const vad = await createVad(capture, monitor, {
+      const vad = createVad(capture, monitor, {
         onSpeechStart: () => {
           if (store.getSnapshot().context.state === 'responding') {
             track(SIDEPANEL_VOICE_MODE_BARGE_IN_EVENT)
@@ -206,23 +206,9 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
           startTurnRecorder()
           store.send({ type: 'SPEECH_START' })
         },
-        onSpeechEnd: (samples) => {
-          if (samples.length > 0) {
-            const rec = recorderRef.current
-            recorderRef.current = null
-            if (rec && rec.state !== 'inactive') {
-              try {
-                rec.stop()
-              } catch {
-                // ignore
-              }
-            }
-            store.send({
-              type: 'SPEECH_END',
-              blob: pcmFloat32ToWavBlob(samples),
-            })
-            return
-          }
+        onSpeechEnd: () => {
+          // The recorder's onstop handler dispatches SPEECH_END with
+          // the freshly framed WebM blob; we just stop it here.
           const rec = recorderRef.current
           recorderRef.current = null
           if (rec && rec.state !== 'inactive') {

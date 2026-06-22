@@ -3,7 +3,7 @@ import {
   aggregateLevel,
   chipTextFor,
   haloAmplitudeFor,
-  personaStateFor,
+  orbStateFor,
   showsDots,
 } from './voice-mode.helpers'
 
@@ -50,34 +50,34 @@ describe('showsDots', () => {
   })
 })
 
-describe('personaStateFor', () => {
+describe('orbStateFor', () => {
   it('returns idle during the warm-up window regardless of state', () => {
-    expect(personaStateFor({ state: 'listening', isWarmingUp: true })).toBe(
-      'idle',
+    expect(orbStateFor({ state: 'listening', isWarmingUp: true })).toBe('idle')
+    expect(orbStateFor({ state: 'capturing', isWarmingUp: true })).toBe('idle')
+  })
+
+  it('maps responding and transcribing to speaking', () => {
+    expect(orbStateFor({ state: 'responding', isWarmingUp: false })).toBe(
+      'speaking',
     )
-    expect(personaStateFor({ state: 'capturing', isWarmingUp: true })).toBe(
-      'idle',
+    expect(orbStateFor({ state: 'transcribing', isWarmingUp: false })).toBe(
+      'speaking',
     )
   })
 
-  it('maps the voice state to a persona presentational state', () => {
-    expect(personaStateFor({ state: 'responding', isWarmingUp: false })).toBe(
-      'speaking',
-    )
-    expect(personaStateFor({ state: 'transcribing', isWarmingUp: false })).toBe(
-      'thinking',
-    )
-    expect(personaStateFor({ state: 'listening', isWarmingUp: false })).toBe(
+  it('maps listening and capturing to listening', () => {
+    expect(orbStateFor({ state: 'listening', isWarmingUp: false })).toBe(
       'listening',
     )
-    expect(personaStateFor({ state: 'capturing', isWarmingUp: false })).toBe(
+    expect(orbStateFor({ state: 'capturing', isWarmingUp: false })).toBe(
       'listening',
     )
-    expect(personaStateFor({ state: 'idle', isWarmingUp: false })).toBe('idle')
-    expect(personaStateFor({ state: 'closed', isWarmingUp: false })).toBe(
-      'idle',
-    )
-    expect(personaStateFor({ state: 'error', isWarmingUp: false })).toBe('idle')
+  })
+
+  it('falls back to idle for closed, idle, and error', () => {
+    expect(orbStateFor({ state: 'idle', isWarmingUp: false })).toBe('idle')
+    expect(orbStateFor({ state: 'closed', isWarmingUp: false })).toBe('idle')
+    expect(orbStateFor({ state: 'error', isWarmingUp: false })).toBe('idle')
   })
 })
 

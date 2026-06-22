@@ -1,5 +1,5 @@
-import type { PersonaState } from '@/components/ai-elements/persona'
 import type { VoiceState } from '@/modules/voice/voice-types'
+import type { VoiceOrbState } from './VoiceOrb'
 
 export function chipTextFor(
   state: VoiceState,
@@ -27,16 +27,15 @@ export function showsDots(state: VoiceState): boolean {
   return state === 'capturing' || state === 'transcribing'
 }
 
-export function personaStateFor(input: {
+export function orbStateFor(input: {
   state: VoiceState
   isWarmingUp: boolean
-}): PersonaState {
+}): VoiceOrbState {
   if (input.isWarmingUp) return 'idle'
   switch (input.state) {
     case 'responding':
-      return 'speaking'
     case 'transcribing':
-      return 'thinking'
+      return 'speaking'
     case 'capturing':
     case 'listening':
       return 'listening'

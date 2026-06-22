@@ -1,14 +1,14 @@
 import { useSelector } from '@xstate/store/react'
 import { X } from 'lucide-react'
 import { memo } from 'react'
-import { Persona } from '@/components/ai-elements/persona'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { VoiceLoopApi } from '@/modules/voice/voice-types'
+import { VoiceOrb } from './VoiceOrb'
 import {
   chipTextFor,
   haloAmplitudeFor,
-  personaStateFor,
+  orbStateFor,
   showsDots,
 } from './voice-mode.helpers'
 
@@ -24,7 +24,7 @@ export const VoiceMode = memo(function VoiceMode({ api }: VoiceModeProps) {
   const isWarmingUp = useSelector(api.store, (s) => s.context.isWarmingUp)
 
   const chip = chipTextFor(state, isBargingIn, errorMessage)
-  const personaState = personaStateFor({ state, isWarmingUp })
+  const orbState = orbStateFor({ state, isWarmingUp })
   const halo = haloAmplitudeFor({ state, audioLevels })
   const dots = showsDots(state)
   const stopEnabled = state === 'responding'
@@ -67,11 +67,7 @@ export const VoiceMode = memo(function VoiceMode({ api }: VoiceModeProps) {
               'color-mix(in oklab, var(--accent-orange) 60%, transparent)',
           }}
         />
-        <Persona
-          variant="opal"
-          state={personaState}
-          className="relative size-24"
-        />
+        <VoiceOrb state={orbState} size={120} className="relative" />
         <div
           className={cn(
             'mt-2 flex items-center gap-1.5 font-medium text-muted-foreground text-xs',
