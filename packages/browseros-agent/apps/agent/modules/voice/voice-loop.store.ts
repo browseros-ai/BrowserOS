@@ -1,4 +1,5 @@
 import { createStore } from '@xstate/store'
+import type { DropReason } from './transcript-sanitizer'
 import type { VoiceContext } from './voice-types'
 
 export const INITIAL_CONTEXT: VoiceContext = {
@@ -61,6 +62,11 @@ export function createVoiceLoopStore() {
         if (ctx.state !== 'transcribing') return ctx
         enqueue.emit.sendChatMessage({ text: event.text })
         return { ...ctx, state: 'responding' as const }
+      },
+
+      TRANSCRIBE_DROPPED: (ctx, _event: { reason: DropReason }) => {
+        if (ctx.state !== 'transcribing') return ctx
+        return { ...ctx, state: 'listening' as const }
       },
 
       TRANSCRIBE_FAIL: (ctx, event: { message: string }) => {

@@ -135,9 +135,10 @@ export function useVoiceInput(): UseVoiceInputReturn {
 
     setIsTranscribing(true)
     try {
-      const text = await transcribeAudio(audioBlob)
-      if (text.trim()) {
-        setTranscript(text.trim())
+      const { text } = await transcribeAudio(audioBlob)
+      const trimmed = text.trim()
+      if (trimmed) {
+        setTranscript(trimmed)
       } else {
         setError('No speech detected')
       }

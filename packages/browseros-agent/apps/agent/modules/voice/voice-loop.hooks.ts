@@ -20,7 +20,9 @@ import {
   type AudioLevelMonitor,
   createAudioLevelMonitor,
 } from './audio-level-monitor'
+import { sanitize } from './transcript-sanitizer'
 import { createVad, type VadHandle } from './vad'
+import { voiceDebug } from './voice-debug'
 import { createVoiceLoopStore } from './voice-loop.store'
 import type { VoiceLoopApi } from './voice-types'
 
@@ -75,23 +77,20 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
         const ac = new AbortController()
         transcribeAbortRef.current = ac
         try {
-          const text = await transcribeAudio(blob)
+          const result = await transcribeAudio(blob)
           if (ac.signal.aborted) return
-          const trimmed = text.trim()
-          if (!trimmed) {
-            track(SIDEPANEL_VOICE_MODE_TRANSCRIBE_FAILED_EVENT, {
-              reason: 'empty',
-            })
-            store.send({
-              type: 'TRANSCRIBE_FAIL',
-              message: 'No speech detected',
-            })
+          const verdict = sanitize(result.text, {
+            avgLogprob: result.avgLogprob,
+          })
+          if (verdict.action === 'drop') {
+            voiceDebug('sanitize drop', verdict.reason)
+            store.send({ type: 'TRANSCRIBE_DROPPED', reason: verdict.reason })
             return
           }
           track(SIDEPANEL_VOICE_MODE_TURN_CAPTURED_EVENT, {
-            chars: trimmed.length,
+            chars: verdict.text.length,
           })
-          store.send({ type: 'TRANSCRIBE_OK', text: trimmed })
+          store.send({ type: 'TRANSCRIBE_OK', text: verdict.text })
         } catch (err) {
           if (ac.signal.aborted) return
           const message =
