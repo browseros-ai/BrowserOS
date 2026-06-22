@@ -63,6 +63,7 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
     const id = setInterval(() => {
       const next = opts.chatSessionRef.current?.status
       if (prev === 'streaming' && next !== 'streaming') {
+        voiceDebug('chat streaming ended', next)
         store.send({ type: 'CHAT_STREAMING_ENDED' })
       }
       prev = next
@@ -78,8 +79,13 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
         const ac = new AbortController()
         transcribeAbortRef.current = ac
         try {
+          voiceDebug('transcribe request', { bytes: blob.size })
           const result = await transcribeAudio(blob)
           if (ac.signal.aborted) return
+          voiceDebug('transcribe response', {
+            chars: result.text.length,
+            avgLogprob: result.avgLogprob,
+          })
           const verdict = sanitize(result.text, {
             avgLogprob: result.avgLogprob,
           })
@@ -88,6 +94,7 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
             store.send({ type: 'TRANSCRIBE_DROPPED', reason: verdict.reason })
             return
           }
+          voiceDebug('sanitize send', { chars: verdict.text.length })
           track(SIDEPANEL_VOICE_MODE_TURN_CAPTURED_EVENT, {
             chars: verdict.text.length,
           })
@@ -96,6 +103,7 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
           if (ac.signal.aborted) return
           const message =
             err instanceof Error ? err.message : 'Transcription failed'
+          voiceDebug('transcribe error', message)
           track(SIDEPANEL_VOICE_MODE_TRANSCRIBE_FAILED_EVENT, {
             reason: 'error',
           })
@@ -103,9 +111,11 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
         }
       }),
       store.on('sendChatMessage', ({ text }) => {
+        voiceDebug('send chat message', { chars: text.length })
         opts.chatSessionRef.current?.sendMessage({ text })
       }),
       store.on('cancelChatStream', () => {
+        voiceDebug('cancel chat stream')
         opts.chatSessionRef.current?.stop()
       }),
       store.on('markLastAssistantInterrupted', () => {
@@ -233,8 +243,13 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
 
       // Mirror responding-state into VAD barge-in mode so ambient
       // blips don't trigger speech-start during agent work.
+      let prevLoggedState: string | null = null
       const stateSub = store.subscribe((snapshot) => {
         const s = snapshot.context.state
+        if (s !== prevLoggedState) {
+          voiceDebug('state', prevLoggedState, '->', s)
+          prevLoggedState = s
+        }
         vad.setBargeInMode(s === 'responding' || s === 'barge_in_pending')
       })
       stateSubRef.current = stateSub
