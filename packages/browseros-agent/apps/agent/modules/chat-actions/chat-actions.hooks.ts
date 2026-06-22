@@ -4,6 +4,7 @@ import { track } from '@/lib/metrics/track'
 import { useChatSessionContext } from '@/modules/chat/chat-session-context'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { useVoiceInput } from '@/modules/voice/voice.hooks'
+import { useVoiceLoop } from '@/modules/voice/voice-loop.hooks'
 
 export interface ChatActionsConfig {
   /** Analytics event names scoped to the origin */
@@ -25,9 +26,12 @@ export interface ChatActionsConfig {
 
 export function useChatActions(config: ChatActionsConfig) {
   const session = useChatSessionContext()
-  const { mode, setMode, sendMessage, stop, messages } = session
+  const { mode, setMode, sendMessage, stop, messages, status } = session
 
   const voice = useVoiceInput()
+  const voiceLoop = useVoiceLoop({
+    chatSession: { sendMessage, stop, status, messages },
+  })
 
   const [input, setInput] = useState('')
   const [attachedTabs, setAttachedTabs] = useState<chrome.tabs.Tab[]>([])
@@ -161,6 +165,7 @@ export function useChatActions(config: ChatActionsConfig) {
     setAttachedTabs,
     mounted,
     voiceState,
+    voiceLoop,
     handleModeChange,
     handleStop,
     toggleTabSelection,

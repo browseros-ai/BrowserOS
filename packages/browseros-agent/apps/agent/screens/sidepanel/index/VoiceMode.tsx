@@ -1,8 +1,8 @@
 import { X } from 'lucide-react'
-import { Persona } from '@/components/ai-elements/persona'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { VoiceLoopApi } from '@/modules/voice/voice-types'
+import { VoicePersona } from './VoicePersona'
 import {
   chipTextFor,
   haloAmplitudeFor,
@@ -52,7 +52,11 @@ export function VoiceMode({ api }: VoiceModeProps) {
             opacity: 0.4 + halo * 0.5,
           }}
         />
-        <Persona state={personaState} className="relative size-16" />
+        <VoicePersona
+          state={personaState}
+          amplitude={halo}
+          className="relative size-16"
+        />
         <div
           className={cn(
             'mt-2 flex items-center gap-1.5 font-medium text-muted-foreground text-xs',

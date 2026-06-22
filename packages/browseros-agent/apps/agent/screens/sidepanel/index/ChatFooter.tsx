@@ -223,30 +223,39 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           <div className="mt-1 text-destructive text-xs">{voice.error}</div>
         )}
 
-        <div className="relative">
-          <ChatInput
-            input={input}
-            status={status}
-            mode={mode}
-            sendDisabled={sendDisabled}
-            onInputChange={onInputChange}
-            onSubmit={onSubmit}
-            onStop={onStop}
-            selectedTabs={attachedTabs}
-            onToggleTab={onToggleTab}
-            onTabMentionOpenChange={setIsTabMentionOpen}
-            voice={voice}
-            onOpenVoiceMode={onOpenVoiceMode}
-            ref={chatInputRef}
-          />
-          {voiceLoop &&
+        {(() => {
+          const voiceActive =
+            !!voiceLoop &&
             voiceLoop.state !== 'idle' &&
-            voiceLoop.state !== 'closed' && (
-              <div className="absolute inset-0 -m-2 h-[calc(100%+1rem)] w-[calc(100%+1rem)]">
-                <VoiceMode api={voiceLoop} />
+            voiceLoop.state !== 'closed'
+          return (
+            <div
+              className={cn(
+                'relative transition-[min-height] duration-200',
+                voiceActive ? 'min-h-[15rem]' : 'min-h-[2.625rem]',
+              )}
+            >
+              <div className={cn(voiceActive && 'invisible')}>
+                <ChatInput
+                  input={input}
+                  status={status}
+                  mode={mode}
+                  sendDisabled={sendDisabled}
+                  onInputChange={onInputChange}
+                  onSubmit={onSubmit}
+                  onStop={onStop}
+                  selectedTabs={attachedTabs}
+                  onToggleTab={onToggleTab}
+                  onTabMentionOpenChange={setIsTabMentionOpen}
+                  voice={voice}
+                  onOpenVoiceMode={onOpenVoiceMode}
+                  ref={chatInputRef}
+                />
               </div>
-            )}
-        </div>
+              {voiceActive && voiceLoop && <VoiceMode api={voiceLoop} />}
+            </div>
+          )
+        })()}
       </div>
     </footer>
   )

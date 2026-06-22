@@ -31,7 +31,11 @@ export async function createVad(
   events: VadEvents,
   opts: VadOptions = {},
 ): Promise<VadHandle> {
-  const strategy = opts.strategy ?? 'silero'
+  // Default to energy detection in v1 to avoid the AudioWorklet + ONNX
+  // wasm load path, which has crashed the renderer process in MV3
+  // contexts. Silero stays opt-in via opts.strategy until that load
+  // path is hardened.
+  const strategy = opts.strategy ?? 'energy'
   if (strategy === 'silero') {
     try {
       return await createSileroVad(capture, events, opts)
