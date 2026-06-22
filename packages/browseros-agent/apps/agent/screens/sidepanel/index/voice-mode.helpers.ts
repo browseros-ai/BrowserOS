@@ -16,7 +16,7 @@ export function chipTextFor(
     case 'transcribing':
       return 'Transcribing'
     case 'responding':
-      return 'Speaking'
+      return 'Responding'
     case 'closed':
     case 'idle':
       return ''
