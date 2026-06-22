@@ -200,7 +200,7 @@ export function useVoiceLoop(opts: UseVoiceLoopOptions): VoiceLoopApi {
         recorderRef.current = rec
       }
 
-      const vad = createVad(capture, monitor, {
+      const vad = await createVad(capture, monitor, {
         onSpeechStart: () => {
           const current = store.getSnapshot().context.state
           if (current === 'responding') {

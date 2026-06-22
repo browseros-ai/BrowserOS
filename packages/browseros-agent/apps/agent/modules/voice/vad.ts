@@ -1,5 +1,7 @@
 import type { AudioCaptureHandle } from './audio-capture'
 import type { AudioLevelMonitor } from './audio-level-monitor'
+import { createSileroVad } from './vad.silero'
+import { voiceDebug } from './voice-debug'
 
 export interface VadEvents {
   onSpeechStart(): void
@@ -14,12 +16,15 @@ export interface VadHandle {
   // Raise the bar while the agent is responding. Short blips that
   // would pass the normal listening floor are rejected in this mode
   // so notifications, keyboard clicks, and brief coughs never reach
-  // the transcription stage during agent work.
+  // the transcription stage during agent work. Silero's parameters
+  // are baked in at construction, so the energy fallback is the only
+  // strategy that actually uses this flag; for Silero this is a no-op.
   setBargeInMode(active: boolean): void
   readonly strategy: 'energy' | 'silero'
 }
 
 export interface VadOptions {
+  strategy?: 'silero' | 'energy'
   silenceThresholdMs?: number
   minSpeechDurationMs?: number
   bargeInMinSpeechMs?: number
@@ -35,6 +40,30 @@ const DEFAULT_UPPER = 50
 const DEFAULT_LOWER = 30
 const DEFAULT_BARGE_IN_UPPER = 60
 
+// Default to Silero (ML-based speech detection). Energy is the soft
+// fallback when Silero can't load (asset fetch failure, MV3 CSP weirdness,
+// onnxruntime init crash). Callers can also force the energy path by
+// passing `strategy: 'energy'`.
+export async function createVad(
+  capture: AudioCaptureHandle,
+  monitor: AudioLevelMonitor,
+  events: VadEvents,
+  opts: VadOptions = {},
+): Promise<VadHandle> {
+  const strategy = opts.strategy ?? 'silero'
+  if (strategy === 'silero') {
+    try {
+      const vad = await createSileroVad(capture, events, opts)
+      voiceDebug('vad strategy', 'silero')
+      return vad
+    } catch (err) {
+      voiceDebug('silero load failed, falling back to energy', err)
+    }
+  }
+  voiceDebug('vad strategy', 'energy')
+  return createEnergyVad(monitor, events, opts)
+}
+
 // Energy-threshold VAD driven by the existing AudioLevelMonitor's
 // aggregate amplitude. Speech start fires the first time the aggregate
 // crosses the upper threshold; speech end fires after the aggregate
@@ -42,8 +71,7 @@ const DEFAULT_BARGE_IN_UPPER = 60
 // between the two thresholds prevents flicker. Barge-in mode raises
 // the upper threshold and the minimum speech duration so the agent is
 // not cancelled by ambient blips.
-export function createVad(
-  _capture: AudioCaptureHandle,
+function createEnergyVad(
   monitor: AudioLevelMonitor,
   events: VadEvents,
   opts: VadOptions = {},
