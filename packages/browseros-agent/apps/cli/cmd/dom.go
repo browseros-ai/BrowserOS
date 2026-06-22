@@ -24,11 +24,12 @@ func init() {
 			}
 
 			toolArgs := map[string]any{"page": pageID}
+			toolArgs["format"] = "markdown"
 			if selector != "" {
 				toolArgs["selector"] = selector
 			}
 
-			result, err := c.CallTool("get_dom", toolArgs)
+			result, err := c.CallTool("read", toolArgs)
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}
@@ -56,10 +57,11 @@ func init() {
 				output.Error(err.Error(), 2)
 			}
 
-			result, err := c.CallTool("search_dom", map[string]any{
-				"page":  pageID,
-				"query": query,
-				"limit": limit,
+			result, err := c.CallTool("grep", map[string]any{
+				"page":    pageID,
+				"pattern": query,
+				"over":    "ax",
+				"limit":   limit,
 			})
 			if err != nil {
 				output.Error(err.Error(), 1)

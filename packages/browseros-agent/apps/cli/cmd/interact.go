@@ -15,7 +15,7 @@ func init() {
 		Annotations: map[string]string{"group": "Input:"},
 		Short:       "Hover over an element",
 		Args:        cobra.ExactArgs(1),
-		Run:   elementAction("hover"),
+		Run:         elementAction("hover"),
 	}
 
 	focusCmd := &cobra.Command{
@@ -23,7 +23,9 @@ func init() {
 		Annotations: map[string]string{"group": "Input:"},
 		Short:       "Focus an element",
 		Args:        cobra.ExactArgs(1),
-		Run:   elementAction("focus"),
+		Run: func(cmd *cobra.Command, args []string) {
+			unsupportedByCurrentMCP("focus")
+		},
 	}
 
 	checkCmd := &cobra.Command{
@@ -31,7 +33,7 @@ func init() {
 		Annotations: map[string]string{"group": "Input:"},
 		Short:       "Check a checkbox or radio button",
 		Args:        cobra.ExactArgs(1),
-		Run:   elementAction("check"),
+		Run:         elementAction("click"),
 	}
 
 	uncheckCmd := &cobra.Command{
@@ -39,7 +41,7 @@ func init() {
 		Annotations: map[string]string{"group": "Input:"},
 		Short:       "Uncheck a checkbox",
 		Args:        cobra.ExactArgs(1),
-		Run:   elementAction("uncheck"),
+		Run:         elementAction("click"),
 	}
 
 	selectCmd := &cobra.Command{
@@ -59,10 +61,11 @@ func init() {
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
-			result, err := c.CallTool("select_option", map[string]any{
-				"page":    pageID,
-				"element": element,
-				"value":   value,
+			result, err := c.CallTool("act", map[string]any{
+				"page":  pageID,
+				"kind":  "select",
+				"ref":   elementRef(element),
+				"value": value,
 			})
 			if err != nil {
 				output.Error(err.Error(), 1)
@@ -87,24 +90,9 @@ func init() {
 			}
 			target, _ := cmd.Flags().GetInt("to")
 
-			c := newClient()
-			pageID, err := resolvePageID(c)
-			if err != nil {
-				output.Error(err.Error(), 2)
-			}
-			result, err := c.CallTool("drag", map[string]any{
-				"page":          pageID,
-				"sourceElement": source,
-				"targetElement": target,
-			})
-			if err != nil {
-				output.Error(err.Error(), 1)
-			}
-			if jsonOut {
-				output.JSON(result)
-			} else {
-				output.Confirm(result.TextContent())
-			}
+			unsupportedByCurrentMCP("drag by element")
+			_ = source
+			_ = target
 		},
 	}
 	dragCmd.Flags().Int("to", 0, "Target element ID")
@@ -126,10 +114,10 @@ func init() {
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
-			result, err := c.CallTool("upload_file", map[string]any{
-				"page":    pageID,
-				"element": element,
-				"files":   args[1:],
+			result, err := c.CallTool("upload", map[string]any{
+				"page":  pageID,
+				"ref":   elementRef(element),
+				"files": args[1:],
 			})
 			if err != nil {
 				output.Error(err.Error(), 1)
@@ -159,9 +147,14 @@ func elementAction(toolName string) func(*cobra.Command, []string) {
 			output.Error(err.Error(), 2)
 		}
 
-		result, err := c.CallTool(toolName, map[string]any{
-			"page":    pageID,
-			"element": element,
+		if toolName == "clear" {
+			toolName = "fill"
+		}
+		result, err := c.CallTool("act", map[string]any{
+			"page":  pageID,
+			"kind":  toolName,
+			"ref":   elementRef(element),
+			"value": "",
 		})
 		if err != nil {
 			output.Error(err.Error(), 1)

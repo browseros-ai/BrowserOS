@@ -41,9 +41,10 @@ func init() {
 				output.Error(err.Error(), 2)
 			}
 
-			result, err := c.CallTool("click", map[string]any{
+			result, err := c.CallTool("act", map[string]any{
 				"page":       pageID,
-				"element":    element,
+				"kind":       "click",
+				"ref":        elementRef(element),
 				"button":     button,
 				"clickCount": clickCount,
 			})
@@ -82,8 +83,9 @@ func init() {
 				output.Error(err.Error(), 2)
 			}
 
-			result, err := c.CallTool("click_at", map[string]any{
+			result, err := c.CallTool("act", map[string]any{
 				"page": pageID,
+				"kind": "click_at",
 				"x":    x,
 				"y":    y,
 			})

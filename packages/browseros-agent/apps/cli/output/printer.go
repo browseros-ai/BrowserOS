@@ -80,6 +80,9 @@ func PageList(result *mcp.ToolResult) {
 			continue
 		}
 		pageID := intVal(page["pageId"])
+		if pageID == 0 {
+			pageID = intVal(page["page"])
+		}
 		tabID := intVal(page["tabId"])
 		title := strVal(page["title"])
 		url := strVal(page["url"])
@@ -103,7 +106,30 @@ func ActivePage(result *mcp.ToolResult) {
 	}
 
 	sc := result.StructuredContent
+	if pages, ok := sc["pages"].([]any); ok && len(pages) > 0 {
+		selected := false
+		for _, item := range pages {
+			page, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if boolVal(page["isActive"]) {
+				sc = page
+				selected = true
+				break
+			}
+		}
+		if !selected {
+			if page, ok := pages[0].(map[string]any); ok {
+				sc = page
+			}
+		}
+	}
+
 	pageID := intVal(sc["pageId"])
+	if pageID == 0 {
+		pageID = intVal(sc["page"])
+	}
 	tabID := intVal(sc["tabId"])
 	title := strVal(sc["title"])
 	url := strVal(sc["url"])

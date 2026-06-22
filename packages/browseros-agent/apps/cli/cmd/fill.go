@@ -29,11 +29,12 @@ func init() {
 				output.Error(err.Error(), 2)
 			}
 
-			result, err := c.CallTool("fill", map[string]any{
-				"page":    pageID,
-				"element": element,
-				"text":    text,
-				"clear":   !noClear,
+			result, err := c.CallTool("act", map[string]any{
+				"page":  pageID,
+				"kind":  "fill",
+				"ref":   elementRef(element),
+				"value": text,
+				"clear": !noClear,
 			})
 			if err != nil {
 				output.Error(err.Error(), 1)
@@ -52,7 +53,7 @@ func init() {
 		Annotations: map[string]string{"group": "Input:"},
 		Short:       "Clear text content of an input element",
 		Args:        cobra.ExactArgs(1),
-		Run:   elementAction("clear"),
+		Run:         elementAction("clear"),
 	}
 
 	keyCmd := &cobra.Command{
@@ -66,8 +67,9 @@ func init() {
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
-			result, err := c.CallTool("press_key", map[string]any{
+			result, err := c.CallTool("act", map[string]any{
 				"page": pageID,
+				"kind": "press",
 				"key":  args[0],
 			})
 			if err != nil {

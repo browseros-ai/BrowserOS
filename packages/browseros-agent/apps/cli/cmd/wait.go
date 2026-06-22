@@ -32,13 +32,15 @@ func init() {
 				"timeout": waitTimeout,
 			}
 			if text != "" {
-				toolArgs["text"] = text
+				toolArgs["for"] = "text"
+				toolArgs["value"] = text
 			}
 			if selector != "" {
-				toolArgs["selector"] = selector
+				toolArgs["for"] = "selector"
+				toolArgs["value"] = selector
 			}
 
-			result, err := c.CallTool("wait_for", toolArgs)
+			result, err := c.CallTool("wait", toolArgs)
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}

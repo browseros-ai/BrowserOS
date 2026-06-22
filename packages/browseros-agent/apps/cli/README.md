@@ -180,27 +180,27 @@ apps/cli/
 │   ├── root.go         # Root command, global flags
 │   ├── init.go         # Server URL configuration (URL arg or interactive)
 │   ├── launch.go       # launch (find and start BrowserOS, wait for server)
-│   ├── open.go         # open (new_page / new_hidden_page)
+│   ├── open.go         # open (tabs action=new)
 │   ├── nav.go          # nav, back, forward, reload
 │   ├── pages.go        # pages, active, close
-│   ├── snap.go         # snap (take_snapshot / take_enhanced_snapshot)
+│   ├── snap.go         # snap (snapshot)
 │   ├── text.go         # text, links
-│   ├── screenshot.go   # ss (take_screenshot / save_screenshot)
-│   ├── eval.go         # eval (evaluate_script)
+│   ├── screenshot.go   # ss (screenshot)
+│   ├── eval.go         # eval (evaluate)
 │   ├── click.go        # click, click-at
 │   ├── fill.go         # fill, clear, key
 │   ├── interact.go     # hover, focus, check, uncheck, select, drag, upload
 │   ├── scroll.go       # scroll
-│   ├── dialog.go       # dialog (handle_dialog)
-│   ├── wait.go         # wait (wait_for)
+│   ├── dialog.go       # dialog (unsupported by current MCP server)
+│   ├── wait.go         # wait (wait)
 │   ├── file_actions.go # pdf, download
 │   ├── dom.go          # dom, dom-search
 │   ├── window.go       # window {list,create,close,activate}
-│   ├── bookmark.go     # bookmark {list,create,remove,update,move,search}
-│   ├── history.go      # history {search,recent,delete,delete-range}
+│   ├── bookmark.go     # bookmark commands (unsupported by current MCP server)
+│   ├── history.go      # history commands (unsupported by current MCP server)
 │   ├── group.go        # group {list,create,update,ungroup,close}
 │   ├── health.go       # health, status (REST endpoints)
-│   └── info.go         # info (browseros_info)
+│   └── info.go         # info (unsupported by current MCP server)
 ├── mcp/
 │   ├── client.go       # MCP JSON-RPC 2.0 client (initialize + tools/call)
 │   └── types.go        # JSON-RPC and MCP type definitions

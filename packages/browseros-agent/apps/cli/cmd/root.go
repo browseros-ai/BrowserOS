@@ -195,6 +195,14 @@ func resolvePageID(c *mcp.Client) (int, error) {
 	return c.ResolvePageID(nil)
 }
 
+func elementRef(element int) string {
+	return fmt.Sprintf("e%d", element)
+}
+
+func unsupportedByCurrentMCP(feature string) {
+	output.Errorf(1, "%s is not supported by the current BrowserOS MCP server", feature)
+}
+
 func envBool(key string) bool {
 	v := os.Getenv(key)
 	return v == "1" || v == "true"

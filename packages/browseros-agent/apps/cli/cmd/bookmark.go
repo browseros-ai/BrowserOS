@@ -1,10 +1,6 @@
 package cmd
 
-import (
-	"browseros-cli/output"
-
-	"github.com/spf13/cobra"
-)
+import "github.com/spf13/cobra"
 
 func init() {
 	bookmarkCmd := &cobra.Command{
@@ -18,16 +14,7 @@ func init() {
 		Short: "List all bookmarks",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			c := newClient()
-			result, err := c.CallTool("get_bookmarks", nil)
-			if err != nil {
-				output.Error(err.Error(), 1)
-			}
-			if jsonOut {
-				output.JSON(result)
-			} else {
-				output.Text(result)
-			}
+			unsupportedByCurrentMCP("bookmark list")
 		},
 	}
 
@@ -44,16 +31,8 @@ func init() {
 			if parent != "" {
 				toolArgs["parentId"] = parent
 			}
-			c := newClient()
-			result, err := c.CallTool("create_bookmark", toolArgs)
-			if err != nil {
-				output.Error(err.Error(), 1)
-			}
-			if jsonOut {
-				output.JSON(result)
-			} else {
-				output.Confirm(result.TextContent())
-			}
+			_ = toolArgs
+			unsupportedByCurrentMCP("bookmark create")
 		},
 	}
 	createCmd.Flags().String("parent", "", "Parent folder ID")
@@ -63,16 +42,7 @@ func init() {
 		Short: "Remove a bookmark or folder",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			c := newClient()
-			result, err := c.CallTool("remove_bookmark", map[string]any{"id": args[0]})
-			if err != nil {
-				output.Error(err.Error(), 1)
-			}
-			if jsonOut {
-				output.JSON(result)
-			} else {
-				output.Confirm(result.TextContent())
-			}
+			unsupportedByCurrentMCP("bookmark remove")
 		},
 	}
 
@@ -90,16 +60,8 @@ func init() {
 			if url != "" {
 				toolArgs["url"] = url
 			}
-			c := newClient()
-			result, err := c.CallTool("update_bookmark", toolArgs)
-			if err != nil {
-				output.Error(err.Error(), 1)
-			}
-			if jsonOut {
-				output.JSON(result)
-			} else {
-				output.Confirm(result.TextContent())
-			}
+			_ = toolArgs
+			unsupportedByCurrentMCP("bookmark update")
 		},
 	}
 	updateCmd.Flags().String("title", "", "New title")
@@ -119,16 +81,8 @@ func init() {
 			if cmd.Flags().Changed("index") {
 				toolArgs["index"] = index
 			}
-			c := newClient()
-			result, err := c.CallTool("move_bookmark", toolArgs)
-			if err != nil {
-				output.Error(err.Error(), 1)
-			}
-			if jsonOut {
-				output.JSON(result)
-			} else {
-				output.Confirm(result.TextContent())
-			}
+			_ = toolArgs
+			unsupportedByCurrentMCP("bookmark move")
 		},
 	}
 	moveCmd.Flags().String("parent", "", "Target parent folder ID")
@@ -139,16 +93,7 @@ func init() {
 		Short: "Search bookmarks",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			c := newClient()
-			result, err := c.CallTool("search_bookmarks", map[string]any{"query": args[0]})
-			if err != nil {
-				output.Error(err.Error(), 1)
-			}
-			if jsonOut {
-				output.JSON(result)
-			} else {
-				output.Text(result)
-			}
+			unsupportedByCurrentMCP("bookmark search")
 		},
 	}
 

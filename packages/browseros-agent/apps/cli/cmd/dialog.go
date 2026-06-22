@@ -20,29 +20,15 @@ func init() {
 
 			promptText, _ := cmd.Flags().GetString("text")
 
-			c := newClient()
-			pageID, err := resolvePageID(c)
-			if err != nil {
-				output.Error(err.Error(), 2)
-			}
-
 			toolArgs := map[string]any{
-				"page":   pageID,
 				"accept": action == "accept",
 			}
 			if promptText != "" {
 				toolArgs["promptText"] = promptText
 			}
 
-			result, err := c.CallTool("handle_dialog", toolArgs)
-			if err != nil {
-				output.Error(err.Error(), 1)
-			}
-			if jsonOut {
-				output.JSON(result)
-			} else {
-				output.Confirm(result.TextContent())
-			}
+			_ = toolArgs
+			unsupportedByCurrentMCP("dialog")
 		},
 	}
 

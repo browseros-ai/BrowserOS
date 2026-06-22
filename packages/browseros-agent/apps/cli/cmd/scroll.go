@@ -32,14 +32,15 @@ func init() {
 
 			toolArgs := map[string]any{
 				"page":      pageID,
+				"kind":      "scroll",
 				"direction": direction,
 				"amount":    amount,
 			}
 			if cmd.Flags().Changed("element") {
-				toolArgs["element"] = element
+				toolArgs["ref"] = elementRef(element)
 			}
 
-			result, err := c.CallTool("scroll", toolArgs)
+			result, err := c.CallTool("act", toolArgs)
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}

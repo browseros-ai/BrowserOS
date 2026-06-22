@@ -16,7 +16,7 @@ func init() {
 		Args:        cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			c := newClient()
-			result, err := c.CallTool("list_pages", nil)
+			result, err := c.CallTool("tabs", map[string]any{"action": "list"})
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}
@@ -35,7 +35,7 @@ func init() {
 		Args:        cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			c := newClient()
-			result, err := c.CallTool("get_active_page", nil)
+			result, err := c.CallTool("tabs", map[string]any{"action": "list"})
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}
@@ -67,7 +67,10 @@ func init() {
 					output.Error(err.Error(), 2)
 				}
 			}
-			result, err := c.CallTool("close_page", map[string]any{"page": pageID})
+			result, err := c.CallTool("tabs", map[string]any{
+				"action": "close",
+				"page":   pageID,
+			})
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}

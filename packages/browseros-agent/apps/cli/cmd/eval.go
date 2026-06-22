@@ -21,9 +21,9 @@ func init() {
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
-			result, err := c.CallTool("evaluate_script", map[string]any{
-				"page":       pageID,
-				"expression": expression,
+			result, err := c.CallTool("evaluate", map[string]any{
+				"page": pageID,
+				"code": "return (" + expression + ")",
 			})
 			if err != nil {
 				output.Error(err.Error(), 1)

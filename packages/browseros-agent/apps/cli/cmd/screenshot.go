@@ -40,14 +40,27 @@ func init() {
 				if cmd.Flags().Changed("quality") {
 					toolArgs["quality"] = quality
 				}
-				result, err := c.CallTool("save_screenshot", toolArgs)
+				delete(toolArgs, "path")
+				result, err := c.CallTool("screenshot", toolArgs)
 				if err != nil {
 					output.Error(err.Error(), 1)
 				}
 				if jsonOut {
 					output.JSON(result)
 				} else {
-					output.Confirm(result.TextContent())
+					img := result.ImageContent()
+					if img == nil {
+						output.Confirm("Screenshot taken (no image data returned)")
+						return
+					}
+					data, err := base64.StdEncoding.DecodeString(img.Data)
+					if err != nil {
+						output.Errorf(1, "decode image: %s", err)
+					}
+					if err := os.WriteFile(outFile, data, 0644); err != nil {
+						output.Errorf(1, "write file: %s", err)
+					}
+					fmt.Printf("Screenshot saved: %s\n", outFile)
 				}
 				return
 			}
@@ -63,7 +76,7 @@ func init() {
 				toolArgs["quality"] = quality
 			}
 
-			result, err := c.CallTool("take_screenshot", toolArgs)
+			result, err := c.CallTool("screenshot", toolArgs)
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}

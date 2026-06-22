@@ -21,7 +21,7 @@ func init() {
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			c := newClient()
-			result, err := c.CallTool("list_windows", nil)
+			result, err := c.CallTool("windows", map[string]any{"action": "list"})
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}
@@ -41,13 +41,12 @@ func init() {
 			hidden, _ := cmd.Flags().GetBool("hidden")
 
 			c := newClient()
-			toolName := "create_window"
-			toolArgs := map[string]any{}
-			if hidden {
-				toolName = "create_hidden_window"
+			toolArgs := map[string]any{
+				"action": "create",
+				"hidden": hidden,
 			}
 
-			result, err := c.CallTool(toolName, toolArgs)
+			result, err := c.CallTool("windows", toolArgs)
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}
@@ -70,7 +69,10 @@ func init() {
 				output.Errorf(3, "invalid window ID: %s", args[0])
 			}
 			c := newClient()
-			result, err := c.CallTool("close_window", map[string]any{"windowId": windowID})
+			result, err := c.CallTool("windows", map[string]any{
+				"action":   "close",
+				"windowId": windowID,
+			})
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}
@@ -92,7 +94,10 @@ func init() {
 				output.Errorf(3, "invalid window ID: %s", args[0])
 			}
 			c := newClient()
-			result, err := c.CallTool("activate_window", map[string]any{"windowId": windowID})
+			result, err := c.CallTool("windows", map[string]any{
+				"action":   "activate",
+				"windowId": windowID,
+			})
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}

@@ -117,9 +117,9 @@ func (c *Client) ResolvePageID(explicit *int) (int, error) {
 	if explicit != nil {
 		return *explicit, nil
 	}
-	result, err := c.CallTool("get_active_page", nil)
+	result, err := c.CallTool("tabs", map[string]any{"action": "list"})
 	if err != nil {
-		return 0, fmt.Errorf("no active page: %w", err)
+		return 0, fmt.Errorf("no pages available: %w", err)
 	}
 
 	if pageID, ok := extractPageID(result.StructuredContent); ok {
@@ -136,15 +136,36 @@ func extractPageID(sc map[string]any) (int, bool) {
 	if pageID, ok := intValue(sc["pageId"]); ok {
 		return pageID, true
 	}
+	if pageID, ok := intValue(sc["page"]); ok {
+		return pageID, true
+	}
 	page, ok := sc["page"].(map[string]any)
 	if !ok {
+		pages, ok := sc["pages"].([]any)
+		if !ok || len(pages) == 0 {
+			return 0, false
+		}
+		for _, item := range pages {
+			pageInfo, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if isActive, _ := pageInfo["isActive"].(bool); isActive {
+				if pageID, ok := extractPageID(pageInfo); ok {
+					return pageID, true
+				}
+			}
+		}
+		if first, ok := pages[0].(map[string]any); ok {
+			return extractPageID(first)
+		}
 		return 0, false
 	}
 	pageID, ok := intValue(page["pageId"])
-	if !ok {
-		return 0, false
+	if ok {
+		return pageID, true
 	}
-	return pageID, true
+	return intValue(page["page"])
 }
 
 func intValue(v any) (int, bool) {

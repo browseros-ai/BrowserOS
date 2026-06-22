@@ -1,10 +1,6 @@
 package cmd
 
-import (
-	"browseros-cli/output"
-
-	"github.com/spf13/cobra"
-)
+import "github.com/spf13/cobra"
 
 func init() {
 	historyCmd := &cobra.Command{
@@ -19,20 +15,12 @@ func init() {
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			max, _ := cmd.Flags().GetInt("max")
-			c := newClient()
 			toolArgs := map[string]any{"query": args[0]}
 			if cmd.Flags().Changed("max") {
 				toolArgs["maxResults"] = max
 			}
-			result, err := c.CallTool("search_history", toolArgs)
-			if err != nil {
-				output.Error(err.Error(), 1)
-			}
-			if jsonOut {
-				output.JSON(result)
-			} else {
-				output.Text(result)
-			}
+			_ = toolArgs
+			unsupportedByCurrentMCP("history search")
 		},
 	}
 	searchCmd.Flags().Int("max", 0, "Max results")
@@ -43,20 +31,12 @@ func init() {
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			max, _ := cmd.Flags().GetInt("max")
-			c := newClient()
 			toolArgs := map[string]any{}
 			if cmd.Flags().Changed("max") {
 				toolArgs["maxResults"] = max
 			}
-			result, err := c.CallTool("get_recent_history", toolArgs)
-			if err != nil {
-				output.Error(err.Error(), 1)
-			}
-			if jsonOut {
-				output.JSON(result)
-			} else {
-				output.Text(result)
-			}
+			_ = toolArgs
+			unsupportedByCurrentMCP("history recent")
 		},
 	}
 	recentCmd.Flags().Int("max", 0, "Max results")
@@ -66,16 +46,7 @@ func init() {
 		Short: "Delete a URL from history",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			c := newClient()
-			result, err := c.CallTool("delete_history_url", map[string]any{"url": args[0]})
-			if err != nil {
-				output.Error(err.Error(), 1)
-			}
-			if jsonOut {
-				output.JSON(result)
-			} else {
-				output.Confirm(result.TextContent())
-			}
+			unsupportedByCurrentMCP("history delete")
 		},
 	}
 
@@ -86,19 +57,12 @@ func init() {
 		Run: func(cmd *cobra.Command, args []string) {
 			start, _ := cmd.Flags().GetInt("start")
 			end, _ := cmd.Flags().GetInt("end")
-			c := newClient()
-			result, err := c.CallTool("delete_history_range", map[string]any{
+			toolArgs := map[string]any{
 				"startTime": start,
 				"endTime":   end,
-			})
-			if err != nil {
-				output.Error(err.Error(), 1)
 			}
-			if jsonOut {
-				output.JSON(result)
-			} else {
-				output.Confirm(result.TextContent())
-			}
+			_ = toolArgs
+			unsupportedByCurrentMCP("history delete-range")
 		},
 	}
 	deleteRangeCmd.Flags().Int("start", 0, "Start time (epoch ms)")

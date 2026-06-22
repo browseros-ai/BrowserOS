@@ -19,6 +19,7 @@ func init() {
 
 			c := newClient()
 			toolArgs := map[string]any{
+				"action":     "new",
 				"url":        args[0],
 				"hidden":     hidden,
 				"background": bg,
@@ -27,16 +28,7 @@ func init() {
 				toolArgs["windowId"] = windowID
 			}
 
-			toolName := "new_page"
-			if hidden {
-				toolName = "new_hidden_page"
-				toolArgs = map[string]any{"url": args[0]}
-				if cmd.Flags().Changed("window") {
-					toolArgs["windowId"] = windowID
-				}
-			}
-
-			result, err := c.CallTool(toolName, toolArgs)
+			result, err := c.CallTool("tabs", toolArgs)
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"browseros-cli/output"
 
@@ -20,17 +21,25 @@ func init() {
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
-			result, err := c.CallTool("save_pdf", map[string]any{
+			result, err := c.CallTool("pdf", map[string]any{
 				"page": pageID,
-				"path": args[0],
 			})
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}
+			if path, ok := result.StructuredContent["path"].(string); ok && path != args[0] {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					output.Errorf(1, "read generated PDF: %s", err)
+				}
+				if err := os.WriteFile(args[0], data, 0644); err != nil {
+					output.Errorf(1, "write PDF: %s", err)
+				}
+			}
 			if jsonOut {
 				output.JSON(result)
 			} else {
-				output.Confirm(result.TextContent())
+				output.Confirm("PDF saved: " + args[0])
 			}
 		},
 	}
@@ -51,10 +60,10 @@ func init() {
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
-			result, err := c.CallTool("download_file", map[string]any{
-				"page":    pageID,
-				"element": element,
-				"path":    args[1],
+			_ = args[1]
+			result, err := c.CallTool("download", map[string]any{
+				"page": pageID,
+				"ref":  elementRef(element),
 			})
 			if err != nil {
 				output.Error(err.Error(), 1)

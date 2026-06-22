@@ -20,12 +20,9 @@ func init() {
 				output.Error(err.Error(), 2)
 			}
 
-			toolName := "take_snapshot"
-			if enhanced {
-				toolName = "take_enhanced_snapshot"
-			}
+			_ = enhanced
 
-			result, err := c.CallTool(toolName, map[string]any{"page": pageID})
+			result, err := c.CallTool("snapshot", map[string]any{"page": pageID})
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}

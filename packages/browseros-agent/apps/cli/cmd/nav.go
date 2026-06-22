@@ -18,7 +18,7 @@ func init() {
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
-			result, err := c.CallTool("navigate_page", map[string]any{
+			result, err := c.CallTool("navigate", map[string]any{
 				"page":   pageID,
 				"action": "url",
 				"url":    args[0],
@@ -39,7 +39,7 @@ func init() {
 		Annotations: map[string]string{"group": "Navigate:"},
 		Short:       "Navigate back",
 		Args:        cobra.NoArgs,
-		Run:   navAction("back"),
+		Run:         navAction("back"),
 	}
 
 	forwardCmd := &cobra.Command{
@@ -47,7 +47,7 @@ func init() {
 		Annotations: map[string]string{"group": "Navigate:"},
 		Short:       "Navigate forward",
 		Args:        cobra.NoArgs,
-		Run:   navAction("forward"),
+		Run:         navAction("forward"),
 	}
 
 	reloadCmd := &cobra.Command{
@@ -55,7 +55,7 @@ func init() {
 		Annotations: map[string]string{"group": "Navigate:"},
 		Short:       "Reload the current page",
 		Args:        cobra.NoArgs,
-		Run:   navAction("reload"),
+		Run:         navAction("reload"),
 	}
 
 	rootCmd.AddCommand(navCmd, backCmd, forwardCmd, reloadCmd)
@@ -68,7 +68,7 @@ func navAction(action string) func(*cobra.Command, []string) {
 		if err != nil {
 			output.Error(err.Error(), 2)
 		}
-		result, err := c.CallTool("navigate_page", map[string]any{
+		result, err := c.CallTool("navigate", map[string]any{
 			"page":   pageID,
 			"action": action,
 		})
