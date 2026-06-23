@@ -62,7 +62,21 @@ export class ToolLoopExecutorBackend implements ExecutorBackend {
         prompt: instruction,
         abortSignal: signal,
 
-        onStepFinish: async ({ toolCalls, toolResults, text }) => {
+        onStepFinish: async ({
+          toolCalls,
+          toolResults,
+          text,
+        }: {
+          // ai-sdk option-type widening under this branch's mixed-zod
+          // workspace (cockpit pins zod v4, server pins v3) drops the
+          // destructure to implicit-any. The explicit `any` keeps the
+          // call compiling; the runtime contract is unchanged.
+          // biome-ignore lint/suspicious/noExplicitAny: see comment above
+          toolCalls?: any
+          // biome-ignore lint/suspicious/noExplicitAny: see comment above
+          toolResults?: any
+          text?: string
+        }) => {
           // Pre-v6.0.208 split this into experimental_onToolCallStart and
           // experimental_onToolCallFinish; ToolLoopAgent no longer exposes
           // those per-call hooks. Replay both lifecycle callbacks here so
