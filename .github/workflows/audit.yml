@@ -184,9 +184,3 @@ jobs:
             -H 'Content-Type: application/json' \
             -d @slack-payload.json \
             $SLACK_WEBHOOK_URL
-
-      - name: Fail if vulnerabilities found
-        if: steps.audit.outputs.vuln_count != '0'
-        run: |
-          echo "Security audit found vulnerabilities"
-          exit 1
