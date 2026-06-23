@@ -1,21 +1,21 @@
 import type { AgentProfile } from '@/modules/api/agents.hooks'
+import {
+  buildMcpCliCommand,
+  slugFromMcpEndpointUrl,
+} from '@/modules/api/mcp-endpoint'
+
+// Slug parsing is sourced from `@/modules/api/mcp-endpoint` so the
+// directory and the wizard agree on the URL shape (the canonical
+// builder lives there too). Re-exported so existing call sites do not
+// have to change import paths.
+export { slugFromMcpEndpointUrl as slugFromMcpUrl } from '@/modules/api/mcp-endpoint'
 
 /**
- * Pulls the slug segment out of an MCP URL.
- * `http://127.0.0.1:9000/mcp/cowork-finance-ops` -> `cowork-finance-ops`.
- * Returns an empty string if the URL doesn't follow the `/mcp/<slug>` shape.
- */
-export function slugFromMcpUrl(url: string): string {
-  const match = url.match(/\/mcp\/([^/?#]+)/)
-  return match?.[1] ?? ''
-}
-
-/**
- * Mirrors `new-agent.helpers.ts`'s buildCliCommand so the directory
- * shows the same CLI snippet the wizard's right rail printed when the
- * profile was created.
+ * Profile-shaped wrapper around `buildMcpCliCommand`. Falls back to
+ * the profile id when the saved `mcpUrl` does not parse, which can
+ * happen with legacy rows written before the cockpit-mount cutover.
  */
 export function cliCommandFor(profile: AgentProfile): string {
-  const slug = slugFromMcpUrl(profile.mcpUrl) || profile.id
-  return `mcp add ${slug}`
+  const slug = slugFromMcpEndpointUrl(profile.mcpUrl) || profile.id
+  return buildMcpCliCommand(slug)
 }

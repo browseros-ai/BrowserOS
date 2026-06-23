@@ -48,13 +48,15 @@ export function toSlug(input: string): string {
   return cleaned || 'agent'
 }
 
-export function buildMcpUrl(slug: string): string {
-  return `http://127.0.0.1:9000/mcp/${slug}`
-}
-
-export function buildCliCommand(slug: string): string {
-  return `mcp add ${slug}`
-}
+// MCP endpoint URL + CLI command are sourced from
+// `@/modules/api/mcp-endpoint` so the create wizard, the edit flow,
+// and the directory all render an identical "copy URL" widget and
+// identical host-agent config snippets. See that module's header for
+// the temporary cockpit-mount caveat.
+export {
+  buildMcpCliCommand as buildCliCommand,
+  buildMcpEndpointUrl as buildMcpUrl,
+} from '@/modules/api/mcp-endpoint'
 
 export function describeLogins(
   mode: LoginMode,
