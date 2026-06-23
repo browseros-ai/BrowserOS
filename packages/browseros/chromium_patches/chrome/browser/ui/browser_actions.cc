@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/browser_actions.cc b/chrome/browser/ui/browser_actions.cc
-index 8a43e7c2fcde5..95eff82226b48 100644
+index 8a43e7c2fcde5..505e079c15c5f 100644
 --- a/chrome/browser/ui/browser_actions.cc
 +++ b/chrome/browser/ui/browser_actions.cc
 @@ -17,6 +17,7 @@
@@ -25,7 +25,7 @@ index 8a43e7c2fcde5..95eff82226b48 100644
  #include "chrome/browser/ui/autofill/address_bubbles_icon_controller.h"
  #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
  #include "chrome/browser/ui/autofill/payments/filled_card_information_bubble_controller_impl.h"
-@@ -310,6 +318,110 @@ void BrowserActions::InitializeSidePanelActions() {
+@@ -310,6 +318,91 @@ void BrowserActions::InitializeSidePanelActions() {
              .Build());
    }
  
@@ -37,25 +37,6 @@ index 8a43e7c2fcde5..95eff82226b48 100644
 +                        IDS_THIRD_PARTY_LLM_TITLE,
 +                        vector_icons::kChatOrangeIcon,
 +                        kActionSidePanelShowThirdPartyLlm, bwi, true)
-+            .Build());
-+  }
-+
-+  // Add Clash of GPTs action if feature is enabled
-+  if (base::FeatureList::IsEnabled(features::kClashOfGpts)) {
-+    root_action_item_->AddChild(
-+        ChromeMenuAction(
-+            base::BindRepeating(
-+                [](BrowserWindowInterface* bwi, actions::ActionItem* item,
-+                   actions::ActionInvocationContext context) {
-+                  if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(bwi)) {
-+                    chrome::ExecuteCommand(browser_view->browser(), IDC_OPEN_CLASH_OF_GPTS);
-+                  }
-+                },
-+                bwi),
-+            kActionSidePanelShowClashOfGpts,
-+            IDS_CLASH_OF_GPTS_TITLE,
-+            IDS_CLASH_OF_GPTS_TOOLTIP,
-+            vector_icons::kClashOfGptsIcon)
 +            .Build());
 +  }
 +

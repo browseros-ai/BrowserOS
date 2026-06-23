@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { createGrepTool } from '../../../src/tools/filesystem/grep'
-import type { FilesystemToolResult } from '../../../src/tools/filesystem/utils'
+import {
+  type FilesystemToolResult,
+  MAX_GREP_FILE_SIZE,
+} from '../../../src/tools/filesystem/utils'
 
 let tmpDir: string
 let exec: (params: Record<string, unknown>) => Promise<FilesystemToolResult>
@@ -140,6 +143,18 @@ describe('filesystem_grep', () => {
     expect(result.text).not.toContain('alpha')
   })
 
+  it('does not read oversized single-file targets', async () => {
+    await writeFile(
+      join(tmpDir, 'large.log'),
+      'x'.repeat(MAX_GREP_FILE_SIZE + 1),
+    )
+
+    const result = await exec({ pattern: 'x', path: 'large.log' })
+
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain('Unable to read file')
+  })
+
   it('handles regex special characters', async () => {
     await writeFile(join(tmpDir, 'regex.txt'), 'price is $42.00\nno match')
     const result = await exec({ pattern: '\\$\\d+\\.\\d+' })
@@ -151,5 +166,46 @@ describe('filesystem_grep', () => {
     await writeFile(join(tmpDir, 'long.txt'), longLine)
     const result = await exec({ pattern: 'x' })
     expect(result.text).toContain('[truncated]')
+  })
+
+  it('rejects absolute search paths', async () => {
+    const result = await exec({ pattern: 'anything', path: tmpDir })
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain('relative to the selected workspace')
+  })
+
+  it('rejects traversal outside the workspace', async () => {
+    const outsideDir = join(
+      tmpdir(),
+      `fs-grep-outside-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    )
+    await mkdir(outsideDir, { recursive: true })
+    try {
+      const result = await exec({
+        pattern: 'secret',
+        path: `../${basename(outsideDir)}`,
+      })
+      expect(result.isError).toBe(true)
+      expect(result.text).toContain('outside the selected workspace')
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not search symlinks that point outside the workspace', async () => {
+    const outsideDir = join(
+      tmpdir(),
+      `fs-grep-symlink-outside-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    )
+    await mkdir(outsideDir, { recursive: true })
+    try {
+      await writeFile(join(outsideDir, 'secret.txt'), 'secret-token')
+      await symlink(join(outsideDir, 'secret.txt'), join(tmpDir, 'secret-link'))
+      const result = await exec({ pattern: 'secret-token' })
+      expect(result.isError).toBeUndefined()
+      expect(result.text).toBe('No matches found.')
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
   })
 })

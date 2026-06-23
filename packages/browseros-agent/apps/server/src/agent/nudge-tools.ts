@@ -1,8 +1,10 @@
 import { type ToolSet, tool } from 'ai'
 import { z } from 'zod'
-import { OAUTH_MCP_SERVERS } from '../lib/clients/klavis/oauth-mcp-servers'
+import { getConnectorCatalog } from '../api/services/klavis'
 
-const appNames = OAUTH_MCP_SERVERS.map((s) => s.name).join(', ')
+const appNames = getConnectorCatalog()
+  .map((server) => server.name)
+  .join(', ')
 
 // UI-control sentinel tools: the JSON text they return is intercepted by the chat UI to render
 // interactive cards (schedule / app-connection). They are not browser actions, so they live with

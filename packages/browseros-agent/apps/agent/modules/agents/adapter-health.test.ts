@@ -60,9 +60,9 @@ describe('adapter health helpers', () => {
       adapterHealthMeta({
         healthy: true,
         checkedAt: 1,
-        version: 'hermes 0.9.0',
+        version: 'custom 0.9.0',
         adapterLaunchSource: 'host-cli',
       }),
-    ).toBe('hermes 0.9.0 · host CLI')
+    ).toBe('custom 0.9.0 · host CLI')
   })
 })

@@ -1,9 +1,9 @@
 diff --git a/chrome/common/extensions/api/browser_os.idl b/chrome/common/extensions/api/browser_os.idl
 new file mode 100644
-index 0000000000000..c6044b5071033
+index 0000000000000..baeb98959b39a
 --- /dev/null
 +++ b/chrome/common/extensions/api/browser_os.idl
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,138 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -43,21 +43,6 @@ index 0000000000000..c6044b5071033
 +    DOMString name;
 +  };
 +
-+  // Page load status information
-+  dictionary PageLoadStatus {
-+    boolean isResourcesLoading;
-+    boolean isDOMContentLoaded;
-+    boolean isPageComplete;
-+  };
-+
-+  // Standard response for all interaction methods
-+  dictionary InteractionResponse {
-+    boolean success;
-+  };
-+
-+  callback InteractionCallback = void(InteractionResponse response);
-+  callback GetPageLoadStatusCallback = void(PageLoadStatus status);
-+
 +  // Settings-related types
 +  dictionary PrefObject {
 +    DOMString key;
@@ -68,7 +53,6 @@ index 0000000000000..c6044b5071033
 +  // Callback for settings functions
 +  callback GetPrefCallback = void(PrefObject pref);
 +  callback SetPrefCallback = void(boolean success);
-+  callback GetAllPrefsCallback = void(PrefObject[] prefs);
 +
 +  // Callback for metrics logging
 +  callback VoidCallback = void();
@@ -76,45 +60,18 @@ index 0000000000000..c6044b5071033
 +  // Callback for getting version number
 +  callback GetVersionNumberCallback = void(DOMString version);
 +
-+  // Callback for executeJavaScript
-+  callback ExecuteJavaScriptCallback = void(any result);
-+
 +  // Callback for choosePath.
 +  // |result|: Selected path info, or null if user cancelled.
 +  callback ChoosePathCallback = void(optional SelectedPath result);
 +
++  // Callback for showToast.
++  // |shown|: True if the toast was displayed, false if it was suppressed.
++  callback ShowToastCallback = void(boolean shown);
++
++  // Callback for showInfoBar.
++  callback ShowInfoBarCallback = void(boolean shown);
++
 +  interface Functions {
-+    // Gets the page load status for a tab
-+    // |tabId|: The tab to check. Defaults to active tab.
-+    // |callback|: Called with the page load status.
-+    static void getPageLoadStatus(
-+        optional long tabId,
-+        GetPageLoadStatusCallback callback);
-+
-+    // Clicks at specific coordinates on the page
-+    // |tabId|: The tab to click in. Defaults to active tab.
-+    // |x|: X coordinate in CSS pixels from viewport origin.
-+    // |y|: Y coordinate in CSS pixels from viewport origin.
-+    // |callback|: Called when the click is complete.
-+    static void clickCoordinates(
-+        optional long tabId,
-+        double x,
-+        double y,
-+        InteractionCallback callback);
-+
-+    // Types text after clicking at coordinates to focus element
-+    // |tabId|: The tab to type in. Defaults to active tab.
-+    // |x|: X coordinate to click for focus.
-+    // |y|: Y coordinate to click for focus.
-+    // |text|: Text to type after focusing.
-+    // |callback|: Called when the operation is complete.
-+    static void typeAtCoordinates(
-+        optional long tabId,
-+        double x,
-+        double y,
-+        DOMString text,
-+        InteractionCallback callback);
-+
 +    // Settings API functions - compatible with chrome.settingsPrivate
 +    // Gets a specific preference value
 +    // |name|: The preference name (e.g., "nxtscape.default_provider").
@@ -133,11 +90,6 @@ index 0000000000000..c6044b5071033
 +        any value,
 +        optional DOMString pageId,
 +        SetPrefCallback callback);
-+
-+    // Gets all preferences (filtered to nxtscape.* prefs)
-+    // |callback|: Called with array of preference objects.
-+    static void getAllPrefs(
-+        GetAllPrefsCallback callback);
 +
 +    // Logs a metric event with optional properties
 +    // |eventName|: The name of the event to log (e.g., "extension.action").
@@ -158,15 +110,6 @@ index 0000000000000..c6044b5071033
 +    static void getBrowserosVersionNumber(
 +        GetVersionNumberCallback callback);
 +
-+    // Executes JavaScript code in the specified tab
-+    // |tabId|: The tab to execute JavaScript in. Defaults to active tab.
-+    // |code|: The JavaScript code to execute.
-+    // |callback|: Called with the result of the execution.
-+    static void executeJavaScript(
-+        optional long tabId,
-+        DOMString code,
-+        ExecuteJavaScriptCallback callback);
-+
 +    // Opens a native OS file/folder picker dialog.
 +    // Returns the selected path or null if the user cancels.
 +    //
@@ -178,5 +121,24 @@ index 0000000000000..c6044b5071033
 +    static void choosePath(
 +        optional ChoosePathOptions options,
 +        ChoosePathCallback callback);
++
++    // Shows a transient toast notification in the active browser window. The
++    // message is supplied dynamically, so no resource string is required.
++    // |message|: The text to display in the toast.
++    // |durationMs|: How long the toast stays visible, in milliseconds. Clamped
++    //     to [1000, 30000]. Defaults to the standard toast timeout if omitted.
++    // |callback|: Called with true if the toast was shown, false if it was
++    //     suppressed (e.g. by the user's toast alert-level setting).
++    static void showToast(
++        DOMString message,
++        optional long durationMs,
++        ShowToastCallback callback);
++
++    // Shows a simple alert infobar in the active browser tab.
++    // |message|: Text to display.
++    // |callback|: Called with whether the infobar was shown.
++    static void showInfoBar(
++        DOMString message,
++        ShowInfoBarCallback callback);
 +  };
 +};

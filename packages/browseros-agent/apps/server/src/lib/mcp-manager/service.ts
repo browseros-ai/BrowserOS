@@ -8,6 +8,7 @@
  */
 
 import {
+  type AgentId,
   type AgentInfo,
   AgentNotSupportedError,
   detectInstalledAgents,
@@ -16,6 +17,8 @@ import {
   type McpHttpSpec,
   type McpServerSpec,
   type McpStdioSpec,
+  resolveAgentSurface,
+  UnsupportedTransportError,
 } from 'agent-mcp-manager'
 import { logger } from '../logger'
 import {
@@ -25,7 +28,6 @@ import {
 } from './manager'
 import type {
   InstallAgentResult,
-  McpAgentId,
   McpAgentRow,
   UninstallAgentResult,
 } from './types'
@@ -42,17 +44,10 @@ export type DetectInstalledAgentsFn = () => Promise<AgentInfo[]>
 const HIDDEN_AGENTS: ReadonlySet<string> = new Set(['gemini'])
 
 /**
- * Agents that reject HTTP MCP specs and only accept stdio. We install
- * BrowserOS into these via `npx mcp-remote <url>` so a stdio client
- * still ends up talking to the local HTTP MCP endpoint.
- */
-const STDIO_ONLY_AGENTS: ReadonlySet<string> = new Set(['codex'])
-
-/**
  * The two server-names BrowserOS manages in the manifest. Iterating
  * both is what `listAgents` + `reconcileUrl` need to do.
  */
-export const BROWSEROS_SERVER_NAMES: readonly string[] = [
+const BROWSEROS_SERVER_NAMES: readonly string[] = [
   BROWSEROS_MCP_SERVER_NAME,
   BROWSEROS_MCP_STDIO_SERVER_NAME,
 ]
@@ -62,9 +57,20 @@ interface AgentServerPlan {
   spec: McpServerSpec
 }
 
-/** Pick the server name + spec a given agent should be linked under. */
-export function planFor(agentId: string, currentUrl: string): AgentServerPlan {
-  if (STDIO_ONLY_AGENTS.has(agentId)) {
+/**
+ * Pick the server name + spec a given agent should be linked under.
+ *
+ * Transport routing is sourced from the library's catalog via
+ * `resolveAgentSurface` so we stay in lock-step with whatever
+ * upstream agent-mcp-manager classifies as http-capable. Agents
+ * that only accept stdio (claude-desktop, codex, …) get wrapped
+ * via `npx mcp-remote <url>` so a stdio client still ends up
+ * talking to the local HTTP MCP endpoint.
+ */
+function planFor(agentId: AgentId, currentUrl: string): AgentServerPlan {
+  const surface = resolveAgentSurface(agentId, 'system')
+  const supportsHttp = surface.supportedTransports.includes('http')
+  if (!supportsHttp) {
     const spec: McpStdioSpec = {
       transport: 'stdio',
       command: 'npx',
@@ -108,6 +114,13 @@ export async function listAgents(
  * layer; if the URL drifted, the older entry is replaced before
  * linking. Stdio-only agents are linked under a separate server
  * name so each transport keeps its own manifest entry.
+ *
+ * Also sweeps the OPPOSITE server name's link for this agent.
+ * Without this, an agent that was first installed under the http
+ * server `browseros` and later re-routed to stdio by the upstream
+ * catalog (or vice versa) would end up double-linked, with the
+ * stale entry surviving every uninstall click that targets only
+ * the current planFor() server.
  */
 export async function installInto(
   agentId: string,
@@ -118,6 +131,8 @@ export async function installInto(
   }
   const mgr = getMcpManager()
   const { serverName, spec } = planFor(agentId, currentUrl)
+
+  await sweepLegacyLinks(agentId, serverName)
 
   // `add` overwrites when the entry already exists; safe to call
   // unconditionally on every install click so a URL drift gets
@@ -132,10 +147,18 @@ export async function installInto(
 }
 
 /**
- * Uninstall BrowserOS from the given agent's config. Idempotent on
- * the manifest side; throws ForeignEntryError when the user has
- * hand-edited the entry and the disk record no longer matches the
- * manifest record.
+ * Uninstall BrowserOS from the given agent's config. Tries every
+ * server name BrowserOS manages because the same agent may be
+ * linked under either `browseros` (http) or `browseros-stdio`
+ * depending on when it was last installed: the upstream catalog's
+ * transport classification for a given agent can flip between
+ * library versions, and a stale link under the prior server name
+ * would otherwise survive forever.
+ *
+ * Returns success when at least one server-name unlink completed.
+ * Surfaces ForeignEntryError when the user hand-edited the disk
+ * entry past what the manifest tracks; that case can only be
+ * cleaned up manually.
  */
 export async function uninstallFrom(
   agentId: string,
@@ -144,23 +167,52 @@ export async function uninstallFrom(
     throw new AgentNotSupportedError(agentId)
   }
   const mgr = getMcpManager()
-  const { serverName } = planFor(agentId, '')
-  try {
-    await mgr.unlink({ serverName, agent: agentId })
-    logger.info('Uninstalled BrowserOS MCP from agent', {
-      agent: agentId,
-      serverName,
-    })
-    return { success: true }
-  } catch (err) {
-    if (err instanceof ForeignEntryError) {
-      return {
-        success: false,
-        message:
-          'Cannot remove a user-edited entry. Please remove BrowserOS from this agent manually and try again.',
+  let foreignError: ForeignEntryError | null = null
+  for (const serverName of BROWSEROS_SERVER_NAMES) {
+    try {
+      await mgr.unlink({ serverName, agent: agentId })
+      logger.info('Uninstalled BrowserOS MCP from agent', {
+        agent: agentId,
+        serverName,
+      })
+    } catch (err) {
+      if (err instanceof ForeignEntryError) {
+        foreignError = err
+        continue
       }
+      throw err
     }
-    throw err
+  }
+  if (foreignError) {
+    return {
+      success: false,
+      message:
+        'Cannot remove a user-edited entry. Please remove BrowserOS from this agent manually and try again.',
+    }
+  }
+  return { success: true }
+}
+
+/**
+ * Cleans any pre-existing BrowserOS link for `agentId` under server
+ * names other than the one we're about to link under. Best-effort:
+ * ForeignEntryError is swallowed (the user hand-edited the foreign
+ * entry; let them keep it and overwrite the manifest below). Any
+ * other error rethrows so install fails loudly.
+ */
+async function sweepLegacyLinks(
+  agentId: AgentId,
+  targetServerName: string,
+): Promise<void> {
+  const mgr = getMcpManager()
+  for (const serverName of BROWSEROS_SERVER_NAMES) {
+    if (serverName === targetServerName) continue
+    try {
+      await mgr.unlink({ serverName, agent: agentId })
+    } catch (err) {
+      if (err instanceof ForeignEntryError) continue
+      throw err
+    }
   }
 }
 
@@ -178,8 +230,12 @@ export function humaniseInstallError(err: unknown): {
       status: 409,
     }
   }
+  if (err instanceof UnsupportedTransportError) {
+    return {
+      message: `This agent does not support BrowserOS's MCP transport. ${err.message}`,
+      status: 400,
+    }
+  }
   const message = err instanceof Error ? err.message : String(err)
   return { message, status: 500 }
 }
-
-export type McpAgentIdentifier = McpAgentId

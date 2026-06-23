@@ -100,6 +100,12 @@ class MockChromium:
         sparkle.mkdir(parents=True, exist_ok=True)
         return sparkle
 
+    def with_winsparkle(self) -> Path:
+        """Create the third_party/winsparkle directory marker."""
+        winsparkle = self.src / "third_party" / "winsparkle"
+        winsparkle.mkdir(parents=True, exist_ok=True)
+        return winsparkle
+
     def with_pkg_dmg(self) -> Path:
         """Create the chrome/installer/mac/pkg-dmg tool marker."""
         return self.add_file("chrome/installer/mac/pkg-dmg", "#!/bin/sh\n")

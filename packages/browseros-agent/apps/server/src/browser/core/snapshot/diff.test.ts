@@ -35,6 +35,22 @@ describe('diffSnapshots', () => {
     expect(d.text).toContain('+   link "About" [ref=e2]')
   })
 
+  test('stable refs turn top insertions into one added line', () => {
+    const before = '- button "A" [ref=e1]\n- link "B" [ref=e2]'
+    const after = [
+      '- button "X" [ref=e3]',
+      '- button "A" [ref=e1]',
+      '- link "B" [ref=e2]',
+    ].join('\n')
+
+    const d = diffSnapshots(before, after)
+
+    expect(d.added).toBe(1)
+    expect(d.removed).toBe(0)
+    expect(d.text).toContain('+ button "X" [ref=e3]')
+    expect(d.text).toContain('1 added, 0 removed')
+  })
+
   test('collapses far-apart context with an ellipsis', () => {
     const before = Array.from({ length: 30 }, (_, i) => `- item ${i}`).join(
       '\n',

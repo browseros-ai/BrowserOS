@@ -1,10 +1,11 @@
 import { ZodError, z } from 'zod'
 
+export function parseAlphaFeaturesFlag(value: string | undefined): boolean {
+  return (value ?? 'true') === 'true'
+}
+
 const EnvSchema = z.object({
-  VITE_ALPHA_FEATURES: z
-    .string()
-    .optional()
-    .transform((value) => value === 'true'),
+  VITE_ALPHA_FEATURES: z.string().optional().transform(parseAlphaFeaturesFlag),
   VITE_PUBLIC_POSTHOG_KEY: z.string().optional(),
   VITE_PUBLIC_POSTHOG_HOST: z.string().optional(),
   VITE_PUBLIC_SENTRY_DSN: z.string().optional(),

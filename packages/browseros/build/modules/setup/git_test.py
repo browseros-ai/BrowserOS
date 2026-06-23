@@ -4,8 +4,9 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from .git import GitSetupModule
+from .git import GitSetupModule, BROWSEROS_BRANCH
 from ...common.context import Context
 from ...common.module import ValidationError
 from ...common.testing import MockBrowserOSRoot, MockChromium, make_context
@@ -48,6 +49,63 @@ class GitSetupValidateTest(unittest.TestCase):
             GitSetupModule().validate(ctx)
 
 
+class GitSetupExecuteTest(unittest.TestCase):
+    def setUp(self):
+        self._chromium_tmp = tempfile.TemporaryDirectory()
+        self._root_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._chromium_tmp.cleanup)
+        self.addCleanup(self._root_tmp.cleanup)
+        self.ctx = make_context(
+            MockChromium(Path(self._chromium_tmp.name)),
+            MockBrowserOSRoot(Path(self._root_tmp.name)),
+        )
+
+    def test_checks_out_tag_as_browseros_branch(self):
+        commands = []
+
+        def fake_run_command(cmd, cwd=None):
+            commands.append(cmd)
+
+        with (
+            mock.patch("build.modules.setup.git.run_command", fake_run_command),
+            mock.patch("build.modules.setup.git.IS_LINUX", return_value=False),
+            mock.patch("build.modules.setup.git.IS_WINDOWS", return_value=False),
+            mock.patch.object(GitSetupModule, "_verify_tag_exists", return_value=None),
+        ):
+            GitSetupModule().execute(self.ctx)
+
+        tag_ref = f"tags/{self.ctx.chromium_version}"
+        # One checkout creates the branch straight from the tag; the redundant
+        # detached-HEAD checkout that #1216 shipped (and was reverted) is gone.
+        self.assertEqual(
+            commands,
+            [
+                ["git", "fetch", "--tags", "--force"],
+                ["git", "checkout", "-B", BROWSEROS_BRANCH, tag_ref],
+                ["gclient", "sync", "-D", "--no-history", "--shallow"],
+            ],
+        )
+
+    def test_missing_tag_stops_before_checkout(self):
+        commands = []
+
+        def fake_run_command(cmd, cwd=None):
+            commands.append(cmd)
+
+        with (
+            mock.patch("build.modules.setup.git.run_command", fake_run_command),
+            mock.patch.object(
+                GitSetupModule,
+                "_verify_tag_exists",
+                side_effect=ValidationError("missing"),
+            ),
+        ):
+            with self.assertRaises(ValidationError):
+                GitSetupModule().execute(self.ctx)
+
+        self.assertEqual(commands, [["git", "fetch", "--tags", "--force"]])
+
+
 class EnsureGclientTargetCpusTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -76,9 +134,7 @@ class EnsureGclientTargetCpusTest(unittest.TestCase):
         self.assertIn("solutions = [", content)
 
     def test_merges_missing_archs_into_existing_list(self):
-        self.gclient.write_text(
-            self.gclient.read_text() + "\ntarget_cpus = ['x64']\n"
-        )
+        self.gclient.write_text(self.gclient.read_text() + "\ntarget_cpus = ['x64']\n")
 
         self.module._ensure_gclient_target_cpus(self.ctx, ["x64", "arm64"])
 

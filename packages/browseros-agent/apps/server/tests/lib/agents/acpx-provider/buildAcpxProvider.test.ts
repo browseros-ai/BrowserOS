@@ -88,7 +88,7 @@ describe('buildAcpxProvider — defaults', () => {
 
 describe('buildAcpxProvider — agentRegistryOverrides', () => {
   it('passes overrides verbatim to createAcpxProvider', async () => {
-    const overrides = { hermes: 'hermes acp', custom: 'my-bin acp' }
+    const overrides = { reviewer: 'reviewer acp', custom: 'my-bin acp' }
     await buildAcpxProvider({
       conversationId: 'conv-6',
       agentId: 'custom',

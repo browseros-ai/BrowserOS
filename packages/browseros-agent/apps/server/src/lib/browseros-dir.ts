@@ -1,10 +1,22 @@
 import { unlinkSync } from 'node:fs'
-import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readdir,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { PATHS } from '@browseros/shared/constants/paths'
 import type { ServerDiscoveryConfig } from '@browseros/shared/types/server-config'
 import { logger } from './logger'
+
+export const TOOL_OUTPUT_DIR_MODE = 0o700
+export const TOOL_OUTPUT_FILE_MODE = 0o600
 
 export function getBrowserosDir(): string {
   const override = process.env.BROWSEROS_DIR?.trim()
@@ -31,18 +43,54 @@ export function getCacheDir(): string {
   return join(getBrowserosDir(), PATHS.CACHE_DIR_NAME)
 }
 
+/** Returns the ready-to-use directory for large generated tool outputs. */
+export async function getToolOutputDir(): Promise<string> {
+  const outputDirPath = join(getBrowserosDir(), 'tool-output')
+  await mkdir(outputDirPath, {
+    recursive: true,
+    mode: TOOL_OUTPUT_DIR_MODE,
+  })
+  const info = await lstat(outputDirPath)
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    throw new Error('BrowserOS tool output directory must be a real directory.')
+  }
+  const outputDir = await realpath(outputDirPath)
+  await chmod(outputDir, TOOL_OUTPUT_DIR_MODE)
+  return outputDir
+}
+
+/** Writes a generated tool output file with private owner-only permissions. */
+export async function writeToolOutputFile(
+  filePath: string,
+  content: string,
+): Promise<void> {
+  await writeFile(filePath, content, {
+    encoding: 'utf-8',
+    flag: 'wx',
+    mode: TOOL_OUTPUT_FILE_MODE,
+  })
+  await chmod(filePath, TOOL_OUTPUT_FILE_MODE)
+}
+
+/** Writes binary tool output (PDFs, downloads) with the same owner-only permissions. */
+export async function writeToolOutputBinaryFile(
+  filePath: string,
+  content: Uint8Array,
+): Promise<void> {
+  await writeFile(filePath, content, {
+    flag: 'wx',
+    mode: TOOL_OUTPUT_FILE_MODE,
+  })
+  await chmod(filePath, TOOL_OUTPUT_FILE_MODE)
+}
+
 /** Returns the durable SQLite database path for local BrowserOS server state. */
 export function getDbPath(): string {
   return join(getBrowserosDir(), PATHS.DB_DIR_NAME, PATHS.DB_FILE_NAME)
 }
 
-export function getServerConfigPath(): string {
+function getServerConfigPath(): string {
   return join(getBrowserosDir(), PATHS.SERVER_CONFIG_FILE_NAME)
-}
-
-/** Returns the user-managed SOUL.md path used as passive agent prompt context. */
-export function getSoulPath(): string {
-  return join(getBrowserosDir(), PATHS.SOUL_FILE_NAME)
 }
 
 export async function writeServerConfig(
@@ -62,6 +110,7 @@ export function removeServerConfigSync(): void {
 export async function ensureBrowserosDir(): Promise<void> {
   logDevelopmentBrowserosDir()
   await mkdir(getSessionsDir(), { recursive: true })
+  await getToolOutputDir()
 }
 
 export async function cleanOldSessions(): Promise<void> {

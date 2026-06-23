@@ -173,8 +173,7 @@ function createGitHubCopilotModel(config: ResolvedLLMConfig): LanguageModel {
 }
 
 function createChatGPTProModel(config: ResolvedLLMConfig): LanguageModel {
-  if (!config.apiKey)
-    throw new Error('ChatGPT Plus/Pro requires OAuth authentication')
+  if (!config.apiKey) throw new Error('ChatGPT requires OAuth authentication')
   return createOpenAI({
     apiKey: config.apiKey,
     fetch: createCodexFetch(config.accountId) as typeof globalThis.fetch,

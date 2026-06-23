@@ -57,6 +57,9 @@ def run_command(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,  # Merge stderr into stdout
             text=True,
+            # Native Windows tools emit ANSI-codepage bytes; strict decode
+            # would raise mid-stream and kill a multi-hour build.
+            errors="replace",
             bufsize=1,
             universal_newlines=True,
         )

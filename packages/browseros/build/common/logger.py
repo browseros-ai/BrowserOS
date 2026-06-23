@@ -4,9 +4,21 @@ Logging utilities for the build system
 Provides consistent logging with Typer output and file logging
 """
 
+import io
+import sys
+from contextlib import suppress
+
 import typer
-from pathlib import Path
 from datetime import datetime
+
+# Windows pipes default to the ANSI codepage (cp1252), which cannot encode
+# the emoji these helpers emit — the first log line killed the Windows CI
+# build with UnicodeEncodeError. Degrade to escape sequences instead
+# (backslashreplace matches stderr's native fallback behavior).
+for _stream in (sys.stdout, sys.stderr):
+    if isinstance(_stream, io.TextIOWrapper):
+        with suppress(Exception):
+            _stream.reconfigure(errors="backslashreplace")
 
 # Global log file handle
 _log_file = None

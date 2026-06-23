@@ -19,13 +19,14 @@ import type { BrowserSession } from '../../browser/core/session'
 import { buildAcpMcpServers } from '../../lib/agents/acpx-provider/buildAcpMcpServers'
 import { resolveLLMConfig } from '../../lib/clients/llm/config'
 import { logger } from '../../lib/logger'
-import type { KlavisProxyRef } from '../services/klavis/strata-proxy'
+import { createBrowserOutputFileAccess } from '../../tools/browser/output-file'
+import type { KlavisService } from '../services/klavis'
 import type { BrowserContext, ChatRequest } from '../types'
 import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'
 
 export interface ChatServiceDeps {
   sessionStore: SessionStore
-  klavisRef?: KlavisProxyRef
+  klavis?: KlavisService
   browser: Browser
   browserSession: BrowserSession
   browserosId?: string
@@ -42,6 +43,7 @@ export interface ChatServiceDeps {
 export class ChatService {
   constructor(private deps: ChatServiceDeps) {}
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: chat request orchestration; refactor tracked separately
   async processMessage(
     request: ChatRequest,
     abortSignal: AbortSignal,
@@ -92,6 +94,7 @@ export class ChatService {
             conversationId: request.conversationId,
             providerId: llmConfig.provider,
             defaultWindowId: request.browserContext?.windowId,
+            enabledMcpServers: request.browserContext?.enabledMcpServers,
             customMcpServers: request.browserContext?.customMcpServers,
           })
         : undefined,
@@ -146,8 +149,8 @@ export class ChatService {
       }
       if (parts.length === 0) {
         if (
-          oldKlavisState === 'klavis:pending' &&
-          newKlavisState === 'klavis:connected' &&
+          oldKlavisState !== 'klavis:ready' &&
+          newKlavisState === 'klavis:ready' &&
           newServers.size > 0
         ) {
           parts.push(
@@ -179,16 +182,40 @@ export class ChatService {
 
       if (!request.userWorkingDir) {
         contextChanges.push(
-          'The user disconnected the workspace during this conversation. Filesystem tools (filesystem_read, filesystem_write, filesystem_edit, filesystem_bash, filesystem_grep, filesystem_find, filesystem_ls) are no longer available. Return all output directly in chat. If the user asks for file operations, suggest they select a working directory from the chat toolbar.',
+          [
+            'The user disconnected the workspace during this conversation.',
+            'Workspace filesystem tools (filesystem_write, filesystem_edit, filesystem_bash, filesystem_grep, filesystem_find, filesystem_ls, and workspace file reads) are no longer available.',
+            'filesystem_read can only read BrowserOS-generated output files returned in this session.',
+            'Return other output directly in chat.',
+            'If the user asks for file operations, suggest they select a working directory from the chat toolbar.',
+          ].join(' '),
         )
       } else if (!previousWorkingDir) {
-        contextChanges.push(
-          `The user connected a workspace during this conversation. Filesystem tools are now available. Working directory: ${request.userWorkingDir}`,
-        )
+        if (agentConfig.chatMode) {
+          contextChanges.push(
+            [
+              'The user connected a workspace during this conversation, but read-only chat mode cannot use workspace filesystem tools.',
+              'filesystem_read can only read BrowserOS-generated output files returned in this session.',
+            ].join(' '),
+          )
+        } else {
+          contextChanges.push(
+            `The user connected a workspace during this conversation. Filesystem tools are now available. Working directory: ${request.userWorkingDir}`,
+          )
+        }
       } else {
-        contextChanges.push(
-          `The user switched workspace during this conversation. Filesystem tools now use the new working directory: ${request.userWorkingDir}`,
-        )
+        if (agentConfig.chatMode) {
+          contextChanges.push(
+            [
+              'The user switched workspace during this conversation, but read-only chat mode cannot use workspace filesystem tools.',
+              'filesystem_read can only read BrowserOS-generated output files returned in this session.',
+            ].join(' '),
+          )
+        } else {
+          contextChanges.push(
+            `The user switched workspace during this conversation. Filesystem tools now use the new working directory: ${request.userWorkingDir}`,
+          )
+        }
       }
     }
 
@@ -245,13 +272,15 @@ export class ChatService {
         }
       }
 
+      const outputFileAccess = createBrowserOutputFileAccess()
       const agent = await AiSdkAgent.create({
         resolvedConfig: agentConfig,
         browserSession: this.deps.browserSession,
         browserContext,
-        klavisRef: this.deps.klavisRef,
+        klavis: this.deps.klavis,
         browserosId: this.deps.browserosId,
         aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
+        outputFileAccess,
       })
       session = {
         agent,
@@ -259,6 +288,7 @@ export class ChatService {
         browserContext,
         mcpServerKey,
         workingDir: request.userWorkingDir,
+        outputFileAccess,
       }
       sessionStore.set(request.conversationId, session)
     }
@@ -450,13 +480,16 @@ export class ChatService {
           this.deps.browser,
           request.browserContext,
         )
+    const outputFileAccess =
+      session.outputFileAccess ?? createBrowserOutputFileAccess()
     const agent = await AiSdkAgent.create({
       resolvedConfig: agentConfig,
       browserSession: this.deps.browserSession,
       browserContext,
-      klavisRef: this.deps.klavisRef,
+      klavis: this.deps.klavis,
       browserosId: this.deps.browserosId,
       aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
+      outputFileAccess,
     })
     const newSession: AgentSession = {
       agent,
@@ -464,6 +497,7 @@ export class ChatService {
       browserContext,
       mcpServerKey,
       workingDir: request.userWorkingDir,
+      outputFileAccess,
     }
     newSession.agent.messages = sanitizeMessagesForToolset(
       previousMessages,
@@ -479,9 +513,7 @@ export class ChatService {
       browserContext?.customMcpServers?.map((s) => s.url).sort() ?? []
     const klavisState =
       managed.length > 0
-        ? this.deps.klavisRef?.handle
-          ? 'klavis:connected'
-          : 'klavis:pending'
+        ? `klavis:${this.deps.klavis?.getProxyStatus().state ?? 'disabled'}`
         : null
     return [klavisState, ...managed, ...custom].filter(Boolean).join(',')
   }

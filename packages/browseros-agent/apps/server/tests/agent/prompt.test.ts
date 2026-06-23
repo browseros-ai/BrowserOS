@@ -210,6 +210,23 @@ describe('workspace gating (P11)', () => {
       expect(prompt).not.toContain('### Filesystem')
     })
 
+    it('documents output-only reads for BrowserOS-generated files', () => {
+      const prompt = buildRegular({
+        workspaceDir: undefined,
+        generatedOutputReadAvailable: true,
+      })
+      expect(prompt).toContain('### Browser Output Files')
+      expect(prompt).toContain('filesystem_read')
+      expect(prompt).toContain('BrowserOS-generated output files')
+      expect(prompt).not.toContain('filesystem_write')
+    })
+
+    it('omits output-only read guidance when the tool is unavailable', () => {
+      const prompt = buildRegular({ workspaceDir: undefined })
+      expect(prompt).not.toContain('### Browser Output Files')
+      expect(prompt).not.toContain('filesystem_read')
+    })
+
     it('omits filesystem error recovery patterns', () => {
       const prompt = buildRegular({ workspaceDir: undefined })
       expect(prompt).not.toContain('### Filesystem errors')
@@ -288,6 +305,23 @@ describe('mode-aware framing', () => {
     // because it can only observe, not navigate or manage pages
     const prompt = buildChatMode()
     expect(prompt).not.toContain('<page_context>')
+  })
+
+  it('chat mode includes generated-output read guidance when the tool is registered', () => {
+    const prompt = buildChatMode({ generatedOutputReadAvailable: true })
+    expect(prompt).toContain('### Browser Output Files')
+    expect(prompt).toContain('filesystem_read')
+  })
+
+  it('chat mode with a selected workspace does not advertise workspace tools when only output reads are registered', () => {
+    const prompt = buildChatMode({
+      workspaceDir: '/tmp/browseros-workspace',
+      generatedOutputReadAvailable: true,
+    })
+    expect(prompt).toContain('### Browser Output Files')
+    expect(prompt).not.toContain('<workspace>')
+    expect(prompt).not.toContain('filesystem_write')
+    expect(prompt).not.toContain('filesystem_bash')
   })
 
   it('scheduled task includes starting pageId in page context', () => {
@@ -417,6 +451,7 @@ describe('capability coverage', () => {
     const prompt = buildRegular()
     const browserTools = [
       'tabs',
+      'windows',
       'navigate',
       'snapshot',
       'diff',
@@ -425,6 +460,7 @@ describe('capability coverage', () => {
       'grep',
       'screenshot',
       'wait',
+      'evaluate',
       'run',
     ]
     for (const tool of browserTools) {
@@ -1043,6 +1079,12 @@ describe('acp tool namespace section', () => {
     expect(capsEnd).toBeGreaterThan(-1)
     expect(namespaceStart).toBeGreaterThan(capsEnd)
     expect(executionStart).toBeGreaterThan(namespaceStart)
+  })
+
+  it('omits output-only read guidance when no ACP filesystem tool is registered', () => {
+    const prompt = buildRegular({ acpMode: true, workspaceDir: undefined })
+    expect(prompt).not.toContain('### Browser Output Files')
+    expect(prompt).not.toContain('filesystem_read')
   })
 })
 

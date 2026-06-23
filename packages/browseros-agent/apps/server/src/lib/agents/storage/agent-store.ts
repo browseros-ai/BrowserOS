@@ -11,11 +11,6 @@ export interface CreateAgentInput {
   adapter: AgentAdapter
   modelId?: string
   reasoningEffort?: string
-  providerType?: string
-  providerName?: string
-  baseUrl?: string
-  apiKey?: string
-  supportsImages?: boolean
 }
 
 export interface AgentStore {

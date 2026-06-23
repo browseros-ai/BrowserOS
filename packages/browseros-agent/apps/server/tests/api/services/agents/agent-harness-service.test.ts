@@ -4,10 +4,6 @@
  */
 
 import { describe, expect, it } from 'bun:test'
-import { mkdtempSync, readFileSync } from 'node:fs'
-import { rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { AgentHarnessService } from '../../../../src/api/services/agents/agent-harness-service'
 import type {
   AgentDefinition,
@@ -492,158 +488,6 @@ describe('AgentHarnessService', () => {
     held.release(sessionId)
   })
 
-  it('writes a per-agent Hermes config.yaml + .env when adapter=hermes and provider config complete', async () => {
-    await withHermesBrowserosDir(async ({ browserosDir, service }) => {
-      const agent = await service.createAgent({
-        name: 'Hermes bot',
-        adapter: 'hermes',
-        providerType: 'openrouter',
-        apiKey: 'sk-or-v1-test-key',
-        modelId: 'anthropic/claude-haiku-4.5',
-      })
-
-      const homeDir = join(
-        browserosDir,
-        'agents',
-        'hermes',
-        'harness',
-        agent.id,
-        'home',
-      )
-      const yaml = readFileSync(join(homeDir, 'config.yaml'), 'utf8')
-      const env = readFileSync(join(homeDir, '.env'), 'utf8')
-      expect(yaml).toContain('"openrouter"')
-      expect(yaml).toContain('"anthropic/claude-haiku-4.5"')
-      expect(env).toContain('OPENROUTER_API_KEY=sk-or-v1-test-key')
-    })
-  })
-
-  it('rejects Hermes agent creation when apiKey is missing', async () => {
-    await withHermesBrowserosDir(async ({ agents, service }) => {
-      await expect(
-        service.createAgent({
-          name: 'Hermes bot',
-          adapter: 'hermes',
-          providerType: 'openrouter',
-          modelId: 'anthropic/claude-haiku-4.5',
-        }),
-      ).rejects.toThrow(/apiKey/i)
-      expect(agents).toHaveLength(0)
-    })
-  })
-
-  it('rejects Hermes agent creation when providerType is missing', async () => {
-    await withHermesBrowserosDir(async ({ agents, service }) => {
-      await expect(
-        service.createAgent({ name: 'Hermes bot', adapter: 'hermes' }),
-      ).rejects.toThrow(/providerType/i)
-      expect(agents).toHaveLength(0)
-    })
-  })
-
-  it('rejects Hermes agent creation when modelId is missing', async () => {
-    await withHermesBrowserosDir(async ({ agents, service }) => {
-      await expect(
-        service.createAgent({
-          name: 'Hermes bot',
-          adapter: 'hermes',
-          providerType: 'openrouter',
-          apiKey: 'sk-or-v1-test-key',
-        }),
-      ).rejects.toThrow(/modelId/i)
-      expect(agents).toHaveLength(0)
-    })
-  })
-
-  it('writes provider:custom + base_url for openai-compatible providers', async () => {
-    await withHermesBrowserosDir(async ({ browserosDir, service }) => {
-      const agent = await service.createAgent({
-        name: 'Custom Hermes',
-        adapter: 'hermes',
-        providerType: 'openai-compatible',
-        apiKey: 'sk-test',
-        modelId: 'my-model',
-        baseUrl: 'https://api.example.com/v1',
-      })
-
-      const homeDir = join(
-        browserosDir,
-        'agents',
-        'hermes',
-        'harness',
-        agent.id,
-        'home',
-      )
-      const yaml = readFileSync(join(homeDir, 'config.yaml'), 'utf8')
-      const env = readFileSync(join(homeDir, '.env'), 'utf8')
-      // Hermes has no provider key called "openai" — the canonical shape
-      // for any OpenAI-compatible endpoint is `provider: custom` with
-      // `base_url` set. Hermes then short-circuits provider lookup and
-      // calls the URL directly using OPENAI_API_KEY.
-      expect(yaml).toContain('"custom"')
-      expect(yaml).toContain('"my-model"')
-      expect(yaml).toContain('"https://api.example.com/v1"')
-      expect(env).toContain('OPENAI_API_KEY=sk-test')
-    })
-  })
-
-  it('falls back to OpenAI default base_url for the openai provider type', async () => {
-    await withHermesBrowserosDir(async ({ browserosDir, service }) => {
-      const agent = await service.createAgent({
-        name: 'OpenAI Hermes',
-        adapter: 'hermes',
-        providerType: 'openai',
-        apiKey: 'sk-openai-test',
-        modelId: 'gpt-4o-mini',
-        // No baseUrl supplied — provider:custom still requires one,
-        // so the mapping's defaultBaseUrl must take over.
-      })
-
-      const homeDir = join(
-        browserosDir,
-        'agents',
-        'hermes',
-        'harness',
-        agent.id,
-        'home',
-      )
-      const yaml = readFileSync(join(homeDir, 'config.yaml'), 'utf8')
-      expect(yaml).toContain('"custom"')
-      expect(yaml).toContain('"gpt-4o-mini"')
-      expect(yaml).toContain('"https://api.openai.com/v1"')
-    })
-  })
-
-  it('rejects openai-compatible Hermes agent creation when baseUrl is missing', async () => {
-    await withHermesBrowserosDir(async ({ agents, service }) => {
-      await expect(
-        service.createAgent({
-          name: 'Custom Hermes',
-          adapter: 'hermes',
-          providerType: 'openai-compatible',
-          apiKey: 'sk-test',
-          modelId: 'my-model',
-        }),
-      ).rejects.toThrow(/baseUrl/i)
-      expect(agents).toHaveLength(0)
-    })
-  })
-
-  it('rejects Hermes agent creation when providerType is not in the supported set', async () => {
-    await withHermesBrowserosDir(async ({ agents, service }) => {
-      await expect(
-        service.createAgent({
-          name: 'Unknown Hermes',
-          adapter: 'hermes',
-          providerType: 'bedrock',
-          apiKey: 'sk-test',
-          modelId: 'm',
-        }),
-      ).rejects.toThrow(/not supported/i)
-      expect(agents).toHaveLength(0)
-    })
-  })
-
   it('strips browser-context scaffolding from the active-turn prompt', () => {
     const { registry, service } = serviceWithRegistry()
     registry.register('agent-1', 'main', {
@@ -691,27 +535,6 @@ function serviceWithRegistry(): {
     turnRegistry: registry,
   })
   return { registry, service }
-}
-
-async function withHermesBrowserosDir<T>(
-  run: (input: {
-    agents: AgentDefinition[]
-    browserosDir: string
-    service: AgentHarnessService
-  }) => Promise<T>,
-): Promise<T> {
-  const browserosDir = mkdtempSync(join(tmpdir(), 'browseros-hermes-test-'))
-  const agents: AgentDefinition[] = []
-  try {
-    const service = new AgentHarnessService({
-      agentStore: createAgentStore(agents) as AgentStore,
-      browserosDir,
-      runtime: stubRuntime(),
-    })
-    return await run({ agents, browserosDir, service })
-  } finally {
-    await rm(browserosDir, { recursive: true, force: true })
-  }
 }
 
 function stubRuntime(): AgentRuntime {

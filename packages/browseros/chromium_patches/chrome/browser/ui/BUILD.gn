@@ -1,8 +1,16 @@
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
-index 5907498d01115..e4e49f3221f22 100644
+index 5907498d01115..a741ba1ff4ae6 100644
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
-@@ -1349,6 +1349,8 @@ static_library("ui") {
+@@ -8,6 +8,7 @@ import("//build/config/features.gni")
+ import("//build/config/ozone.gni")
+ import("//build/config/ui.gni")
+ import("//chrome/browser/buildflags.gni")
++import("//chrome/browser/sparkle_buildflags.gni")
+ import("//chrome/common/features.gni")
+ import("//components/captive_portal/core/features.gni")
+ import("//components/compose/features.gni")
+@@ -1349,6 +1350,8 @@ static_library("ui") {
        "webui/settings/search_engines_handler.h",
        "webui/settings/security_settings_provider.cc",
        "webui/settings/security_settings_provider.h",
@@ -11,7 +19,7 @@ index 5907498d01115..e4e49f3221f22 100644
        "webui/settings/settings_clear_browsing_data_handler.cc",
        "webui/settings/settings_clear_browsing_data_handler.h",
        "webui/settings/settings_localized_strings_privacy_sandbox_provider.cc",
-@@ -3356,6 +3358,8 @@ static_library("ui") {
+@@ -3356,6 +3359,8 @@ static_library("ui") {
        "views/frame/immersive_mode_overlay_views_mac.mm",
        "views/tab_contents/chrome_web_contents_view_delegate_views_mac.h",
        "views/tab_contents/chrome_web_contents_view_delegate_views_mac.mm",
@@ -20,3 +28,16 @@ index 5907498d01115..e4e49f3221f22 100644
        "webui/help/version_updater_mac.mm",
        "webui/settings/mac_system_settings_handler.cc",
        "webui/settings/mac_system_settings_handler.h",
+@@ -3497,6 +3502,12 @@ static_library("ui") {
+       ]
+     } else {
+       sources += [ "webui/help/version_updater_basic.cc" ]
++      if (enable_winsparkle) {
++        sources += [
++          "webui/help/winsparkle_version_updater_win.cc",
++          "webui/help/winsparkle_version_updater_win.h",
++        ]
++      }
+     }
+   }
+ 

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-export type AgentAdapter = 'claude' | 'codex' | 'hermes'
+export type AgentAdapter = 'claude' | 'codex'
 
 export type AgentPermissionMode = 'approve-all'
 

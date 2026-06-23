@@ -1,9 +1,10 @@
 import type { Dirent } from 'node:fs'
-import { readdir } from 'node:fs/promises'
+import { readdir, realpath } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
+import { isPathInside } from './path-boundary'
 
 const MAX_LINES = 2000
 const MAX_BYTES = 50 * 1024
@@ -15,6 +16,15 @@ export const DEFAULT_BASH_TIMEOUT = 120
 export const MAX_GREP_FILE_SIZE = 2 * 1024 * 1024
 export const MAX_READ_LINES = TOOL_LIMITS.FILESYSTEM_READ_MAX_LINES
 export const MAX_READ_CHARS = TOOL_LIMITS.FILESYSTEM_READ_MAX_CHARS
+
+export {
+  isBrowserosStatePath,
+  resolveBrowserToolOutputPath,
+  resolveWorkspacePath,
+  resolveWorkspacePathFromRoot,
+  resolveWorkspaceRoot,
+  resolveWorkspaceWritePath,
+} from './path-boundary'
 
 export interface FilesystemToolResult {
   text: string
@@ -204,10 +214,18 @@ export const IMAGE_MIME_TYPES: Record<string, string> = {
   '.ico': 'image/x-icon',
 }
 
+export interface WalkFileEntry {
+  path: string
+  realPath: string
+}
+
+/** Walks visible files while preserving both display and canonical read paths. */
 export async function* walkFiles(
   dir: string,
   baseDir: string,
-): AsyncGenerator<string> {
+  boundaryRoot?: string,
+): AsyncGenerator<WalkFileEntry> {
+  const root = boundaryRoot ?? (await realpath(baseDir))
   let entries: Dirent[]
   try {
     entries = (await readdir(dir, { withFileTypes: true })) as Dirent[]
@@ -219,9 +237,14 @@ export async function* walkFiles(
     const fullPath = join(dir, entry.name as string)
     if (entry.isDirectory()) {
       if (IGNORED_DIRS.has(entry.name as string)) continue
-      yield* walkFiles(fullPath, baseDir)
+      yield* walkFiles(fullPath, baseDir, root)
     } else if (entry.isFile() || entry.isSymbolicLink()) {
-      yield relative(baseDir, fullPath)
+      const canonical = await realpath(fullPath).catch(() => null)
+      if (!canonical || !isPathInside(root, canonical)) continue
+      yield {
+        path: relative(baseDir, fullPath),
+        realPath: canonical,
+      }
     }
   }
 }

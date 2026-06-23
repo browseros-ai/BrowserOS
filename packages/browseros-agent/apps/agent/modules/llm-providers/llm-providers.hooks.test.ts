@@ -97,6 +97,22 @@ mock.module('@/lib/llm-providers/uploadLlmProvidersToGraphql', () => ({
 
 const timestamp = 1000
 
+function providerConfig(
+  overrides: Partial<LlmProviderConfig> & Pick<LlmProviderConfig, 'id'>,
+): LlmProviderConfig {
+  return {
+    type: 'openai',
+    name: 'OpenAI',
+    modelId: 'gpt-5',
+    supportsImages: true,
+    contextWindow: 400000,
+    temperature: 0.2,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    ...overrides,
+  }
+}
+
 const providers: LlmProviderConfig[] = [
   {
     id: 'browseros',
@@ -134,9 +150,12 @@ const providers: LlmProviderConfig[] = [
 ]
 
 let persistDefaultProviderId: (providerId: string) => Promise<void>
+let upsertProviderConfig: typeof import('./llm-providers.hooks').upsertProviderConfig
 
 beforeAll(async () => {
-  ;({ persistDefaultProviderId } = await import('./llm-providers.hooks'))
+  ;({ persistDefaultProviderId, upsertProviderConfig } = await import(
+    './llm-providers.hooks'
+  ))
 })
 
 beforeEach(() => {
@@ -172,6 +191,84 @@ describe('persistDefaultProviderId', () => {
     expect(storageValues.get('local:default-provider-id')).toBe(
       'claude-code-provider',
     )
+  })
+})
+
+describe('upsertProviderConfig', () => {
+  it('replaces an existing OAuth provider by type while preserving its id', () => {
+    const existing = providerConfig({
+      id: 'chatgpt-pro-existing',
+      type: 'chatgpt-pro',
+      name: 'Old ChatGPT',
+      modelId: 'gpt-5.1-codex',
+      createdAt: 1111,
+      updatedAt: 1111,
+    })
+    const incoming = providerConfig({
+      id: 'chatgpt-pro-9999',
+      type: 'chatgpt-pro',
+      name: 'ChatGPT',
+      modelId: 'gpt-5.5',
+      contextWindow: 1050000,
+    })
+
+    const result = upsertProviderConfig(
+      [providers[0], existing],
+      incoming,
+      2222,
+    )
+
+    expect(result).toHaveLength(2)
+    expect(result[1]).toMatchObject({
+      id: 'chatgpt-pro-existing',
+      type: 'chatgpt-pro',
+      name: 'ChatGPT',
+      modelId: 'gpt-5.5',
+      contextWindow: 1050000,
+      createdAt: 1111,
+      updatedAt: 2222,
+    })
+  })
+
+  it('removes extra same-type OAuth rows on save', () => {
+    const first = providerConfig({
+      id: 'chatgpt-pro-first',
+      type: 'chatgpt-pro',
+      name: 'First ChatGPT',
+    })
+    const second = providerConfig({
+      id: 'chatgpt-pro-second',
+      type: 'chatgpt-pro',
+      name: 'Second ChatGPT',
+    })
+    const incoming = providerConfig({
+      id: 'chatgpt-pro-new',
+      type: 'chatgpt-pro',
+      name: 'Fresh ChatGPT',
+    })
+
+    const result = upsertProviderConfig([providers[0], first, second], incoming)
+
+    expect(
+      result.filter((provider) => provider.type === 'chatgpt-pro'),
+    ).toEqual([
+      expect.objectContaining({
+        id: 'chatgpt-pro-first',
+        name: 'Fresh ChatGPT',
+      }),
+    ])
+  })
+
+  it('allows multiple non-OAuth providers of the same type', () => {
+    const first = providerConfig({ id: 'openai-first', name: 'OpenAI 1' })
+    const second = providerConfig({ id: 'openai-second', name: 'OpenAI 2' })
+
+    const result = upsertProviderConfig([first], second, 2222)
+
+    expect(result.map((provider) => provider.id)).toEqual([
+      'openai-first',
+      'openai-second',
+    ])
   })
 })
 

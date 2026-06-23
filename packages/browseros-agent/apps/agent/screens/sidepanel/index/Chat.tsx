@@ -18,10 +18,15 @@ import { useChatSessionContext } from '@/modules/chat/chat-session-context'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { useJtbdPopup } from '@/modules/jtbd-popup/jtbd-popup.hooks'
 import { useVoiceInput } from '@/modules/voice/voice.hooks'
+import {
+  type ChatSessionLike,
+  useVoiceLoop,
+} from '@/modules/voice/voice-loop.hooks'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatError } from './ChatError'
 import { ChatFooter } from './ChatFooter'
 import { ChatMessages } from './ChatMessages'
+import { RemoteHermesBootPill } from './RemoteHermesBootPill'
 
 /**
  * @public
@@ -44,6 +49,7 @@ export const Chat = () => {
     disliked,
     onClickDislike,
     isRestoringConversation,
+    vmStatus,
   } = useChatSessionContext()
 
   const {
@@ -56,6 +62,9 @@ export const Chat = () => {
   } = useJtbdPopup()
 
   const voice = useVoiceInput()
+  const chatSessionRef = useRef<ChatSessionLike | null>(null)
+  chatSessionRef.current = { sendMessage, stop, status, messages }
+  const voiceLoop = useVoiceLoop({ chatSessionRef })
 
   const [input, setInput] = useState('')
   const [attachedTabs, setAttachedTabs] = useState<chrome.tabs.Tab[]>([])
@@ -236,6 +245,8 @@ export const Chat = () => {
         )}
       </main>
 
+      {vmStatus && <RemoteHermesBootPill vm={vmStatus} />}
+
       <ChatFooter
         mode={mode}
         onModeChange={handleModeChange}
@@ -249,6 +260,8 @@ export const Chat = () => {
         onToggleTab={toggleTabSelection}
         onRemoveTab={removeTab}
         voice={voiceState}
+        voiceLoop={voiceLoop}
+        onOpenVoiceMode={voiceLoop.open}
       />
     </>
   )

@@ -239,7 +239,7 @@ async function probeVersion(
     env: binary.env,
     timeoutMs,
   }).catch(() => null)
-  if (!result || result.exitCode !== 0) return { ok: false }
+  if (result?.exitCode !== 0) return { ok: false }
   const firstLine = result.stdout.trim().split(/\r?\n/)[0]?.trim()
   return {
     ok: true,
@@ -253,8 +253,6 @@ async function probeAuth(
   runCommand: HostCommandRunner,
   timeoutMs: number,
 ): Promise<AdapterAuthState> {
-  if (adapter === 'hermes') return 'not-applicable'
-
   if (adapter === 'claude') {
     const result = await runCommand(binary.path, ['auth', 'status'], {
       env: binary.env,

@@ -14,7 +14,7 @@ import type { HarnessAgent } from '@/modules/agents/agent-harness-types'
 export interface ConversationHeaderProps {
   agent: HarnessAgent | null
   fallbackName: string
-  fallbackAdapter: 'claude' | 'codex' | 'hermes' | 'unknown'
+  fallbackAdapter: 'claude' | 'codex' | 'unknown'
   adapterHealth: AgentAdapterHealth | null
   backLabel: string
   backTarget: 'home' | 'page'

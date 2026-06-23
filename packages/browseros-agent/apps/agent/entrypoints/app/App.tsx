@@ -3,8 +3,6 @@ import { HashRouter, Navigate, Route, Routes, useParams } from 'react-router'
 import { AuthLayout } from '@/components/layout/AuthLayout'
 import { SettingsSidebarLayout } from '@/components/layout/SettingsSidebarLayout'
 import { SidebarLayout } from '@/components/layout/SidebarLayout'
-import { Feature } from '@/lib/browseros/capabilities'
-import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { AgentCommandConversation } from '@/screens/agent-command/AgentCommandConversation'
 import { AgentCommandHome } from '@/screens/agent-command/AgentCommandHome'
 import { AgentCommandLayout } from '@/screens/agent-command/AgentCommandLayout'
@@ -16,7 +14,6 @@ import { CustomizationPage } from '@/screens/customization/CustomizationPage'
 import { SurveyPage } from '@/screens/jtbd-agent/SurveyPage'
 import { LlmHubPage } from '@/screens/llm-hub/LlmHubPage'
 import { MCPSettingsPage } from '@/screens/mcp-settings/MCPSettingsPage'
-import { NewTab } from '@/screens/newtab/index/NewTab'
 import { NewTabChat } from '@/screens/newtab/index/NewTabChat'
 import { NewTabLayout } from '@/screens/newtab/layout/NewTabLayout'
 import { Personalize } from '@/screens/newtab/personalize/Personalize'
@@ -64,53 +61,37 @@ const OptionsRedirect: FC = () => {
 
 export const App: FC = () => {
   const surveyParams = getSurveyParams()
-  const { supports } = useCapabilities()
-  const alphaEnabled = supports(Feature.ALPHA_FEATURES_SUPPORT)
 
   return (
     <HashRouter>
       <Routes>
-        {/* Public auth routes */}
         <Route element={<AuthLayout />}>
           <Route path="login" element={<LoginPage />} />
           <Route path="logout" element={<LogoutPage />} />
           <Route path="profile" element={<ProfilePage />} />
         </Route>
 
-        {/* Main app with sidebar */}
         <Route element={<SidebarLayout />}>
-          {/* Home routes */}
-          <Route
-            path="home"
-            element={<NewTabLayout useChatSessionOnHome={!alphaEnabled} />}
-          >
-            {alphaEnabled ? (
-              <>
-                <Route element={<AgentCommandLayout />}>
-                  <Route index element={<AgentCommandHome />} />
-                  <Route
-                    path="agents/:agentId"
-                    element={<AgentCommandConversation />}
-                  />
-                  <Route
-                    path="agents/:agentId/sessions/:sessionId"
-                    element={<AgentCommandConversation />}
-                  />
-                </Route>
-                <Route path="chat" element={<NewTabChat />} />
-                <Route path="personalize" element={<Personalize />} />
-              </>
-            ) : (
-              <Route index element={<NewTab />} />
-            )}
+          <Route path="home" element={<NewTabLayout />}>
+            <Route element={<AgentCommandLayout />}>
+              <Route index element={<AgentCommandHome />} />
+              <Route
+                path="agents/:agentId"
+                element={<AgentCommandConversation />}
+              />
+              <Route
+                path="agents/:agentId/sessions/:sessionId"
+                element={<AgentCommandConversation />}
+              />
+            </Route>
+            <Route path="chat" element={<NewTabChat />} />
+            <Route path="personalize" element={<Personalize />} />
           </Route>
 
-          {/* Primary nav routes */}
           <Route path="connect-apps" element={<ConnectMCP />} />
           <Route path="scheduled" element={<ScheduledTasksPage />} />
         </Route>
 
-        {/* Settings with dedicated sidebar */}
         <Route element={<SettingsSidebarLayout />}>
           <Route path="settings">
             <Route index element={<Navigate to="/settings/ai" replace />} />
@@ -128,7 +109,6 @@ export const App: FC = () => {
           </Route>
         </Route>
 
-        {/* Onboarding routes - no sidebar, no auth required */}
         <Route path="onboarding">
           <Route index element={<Onboarding />} />
           <Route path="steps/:stepId" element={<StepsLayout />} />
@@ -136,16 +116,10 @@ export const App: FC = () => {
           <Route path="features" element={<FeaturesPage />} />
         </Route>
 
-        {/* Backward compatibility redirects */}
         <Route path="/" element={<Navigate to="/home" replace />} />
         <Route
           path="/personalize"
-          element={
-            <Navigate
-              to={alphaEnabled ? '/home/personalize' : '/home'}
-              replace
-            />
-          }
+          element={<Navigate to="/home/personalize" replace />}
         />
         <Route
           path="/settings/connect-mcp"
@@ -164,7 +138,6 @@ export const App: FC = () => {
         <Route path="/agents/:agentId" element={<LegacyAgentRedirect />} />
         <Route path="/options/*" element={<OptionsRedirect />} />
 
-        {/* Fallback to home */}
         <Route path="*" element={<Navigate to="/home" replace />} />
       </Routes>
     </HashRouter>

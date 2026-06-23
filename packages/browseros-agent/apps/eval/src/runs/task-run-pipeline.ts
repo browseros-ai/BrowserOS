@@ -79,6 +79,7 @@ class TaskRunPipeline {
     return 1
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: task-run orchestration; refactor tracked separately
   async execute(task: Task): Promise<TaskResult> {
     const startTime = Date.now()
     const mcpUrl = `${this.config.browseros.server_url}/mcp`

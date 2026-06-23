@@ -1,8 +1,7 @@
 # BrowserOS Linux Release Build Configuration
 #
-# Pinned to arm64-only to validate the cross-compile sysroot bootstrap
-# end-to-end on a Linux x64 host. Flip back to `[x64, arm64]` once arm64
-# is green.
+# Pinned to x64 for the manual Linux release path. Add arm64 back as a
+# second architecture once the cross-compile path is ready for release.
 #
 # Run:
 #   browseros build --config build/config/release.linux.yaml
@@ -13,7 +12,7 @@
 
 build:
   type: release
-  architecture: arm64
+  architecture: x64
 
 gn_flags:
   file: build/config/gn/flags.linux.release.gn

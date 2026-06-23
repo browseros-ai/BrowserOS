@@ -1,8 +1,8 @@
 diff --git a/components/vector_icons/BUILD.gn b/components/vector_icons/BUILD.gn
-index 7db6d4d0799db..a4cfed96cdd14 100644
+index 7db6d4d0799db..1768431b24e87 100644
 --- a/components/vector_icons/BUILD.gn
 +++ b/components/vector_icons/BUILD.gn
-@@ -56,9 +56,11 @@ if (current_toolchain == default_toolchain) {
+@@ -56,6 +56,7 @@ if (current_toolchain == default_toolchain) {
        "certificate.icon",
        "certificate_off.icon",
        "chat.icon",
@@ -10,7 +10,3 @@ index 7db6d4d0799db..a4cfed96cdd14 100644
        "chat_spark.icon",
        "check_circle.icon",
        "checklist.icon",
-+      "clash_of_gpts.icon",
-       "close.icon",
-       "close_chrome_refresh.icon",
-       "close_rounded.icon",

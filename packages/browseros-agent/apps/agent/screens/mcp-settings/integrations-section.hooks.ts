@@ -33,12 +33,14 @@ async function callMutation(
   agentServerUrl: string,
   agentId: string,
   action: 'install' | 'uninstall',
+  payload?: Record<string, unknown>,
 ): Promise<MutationResponse> {
   const res = await fetch(
     `${agentServerUrl}/mcp-manager/agents/${encodeURIComponent(agentId)}/${action}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload ?? {}),
     },
   )
   const body = (await res.json().catch(() => ({}))) as MutationResponse
@@ -62,14 +64,32 @@ export function useMcpAgents() {
   })
 }
 
-/** Mutation: install BrowserOS as MCP into a single agent. */
-export function useInstallAgent() {
+/**
+ * Mutation: install BrowserOS as MCP into a single agent. Takes the
+ * proxy-facing MCP URL so the agent's on-disk config records the
+ * URL external clients can actually reach (NOT the agent server's
+ * internal port — those differ in production where the browser
+ * proxies `/mcp` to the agent server).
+ *
+ * Throws synchronously if `mcpUrl` is null. Omitting it would let
+ * the server fall back to its own internal URL — exactly the wrong
+ * value, since that's the bug this whole surface fixes. The Connect
+ * button is disabled when the URL hasn't resolved yet, but this
+ * guard means a stale render or programmatic caller can't bypass
+ * that.
+ */
+export function useInstallAgent(mcpUrl: string | null) {
   const { baseUrl } = useAgentServerUrl()
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (agentId: string) => {
       if (!baseUrl) throw new Error('Agent server URL is unavailable')
-      return callMutation(baseUrl, agentId, 'install')
+      if (!mcpUrl) {
+        throw new Error(
+          'MCP server URL is not ready yet. Wait for the page to finish loading and try again.',
+        )
+      }
+      return callMutation(baseUrl, agentId, 'install', { mcpUrl })
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: AGENTS_QUERY_KEY })

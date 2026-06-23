@@ -27,12 +27,15 @@ import {
   type AgentSessionId,
   MAIN_AGENT_SESSION_ID,
 } from '../agent-types'
-import { resolveBundledBun } from '../host-acp/bundled-bun'
 import {
-  resolveBundledNativeBinary,
-  withBundledNativeBinaryPath,
-} from '../host-acp/bundled-native-binary'
-import { HOST_ACP_ADAPTER_CONFIG } from '../host-acp/config'
+  resolveBundledBun,
+  withBundledBunAcpAdapterEnv,
+} from '../host-acp/bundled-bun'
+import { withBundledNativeBinaryPath } from '../host-acp/bundled-native-binary'
+import {
+  DANGEROUS_ALLOW_MODE_CANDIDATES,
+  HOST_ACP_ADAPTER_CONFIG,
+} from '../host-acp/config'
 import type {
   AgentHistoryPage,
   AgentPromptInput,
@@ -775,14 +778,6 @@ function createBrowserosAgentRegistry(input: {
     resolve(agentName) {
       const lower = agentName.trim().toLowerCase()
 
-      if (lower === 'hermes') {
-        const launch = resolveHermesHostAcpAdapterCommand({
-          resourcesDir: input.resourcesDir,
-          commandEnv: input.commandEnv,
-        })
-        return wrapCommandWithEnv(launch.command, launch.commandEnv)
-      }
-
       if (lower === 'claude' || lower === 'codex') {
         const launch = resolveBrowserosHostAcpAdapterCommand({
           adapter: lower,
@@ -794,47 +789,18 @@ function createBrowserosAgentRegistry(input: {
         })
         return wrapCommandWithEnv(
           launch.command,
-          launch.addBundledBunAdapterEnv
-            ? withBundledBunAcpAdapterEnv(commandEnv, input.browserosDir)
+          launch.bundledBunPath
+            ? withBundledBunAcpAdapterEnv({
+                bunPath: launch.bundledBunPath,
+                browserosDir: input.browserosDir,
+                env: commandEnv,
+              })
             : commandEnv,
         )
       }
 
       return registry.resolve(agentName)
     },
-  }
-}
-
-/** Resolves Hermes ACP launch through bundled CLI or the user's login shell. */
-function resolveHermesHostAcpAdapterCommand(input: {
-  resourcesDir: string | null
-  commandEnv: Record<string, string>
-}): { command: string; commandEnv: Record<string, string> } {
-  const commandEnv = withBundledNativeBinaryPath({
-    env: input.commandEnv,
-    resourcesDir: input.resourcesDir,
-  })
-  const bundledHermes = resolveBundledNativeBinary({
-    adapter: 'hermes',
-    resourcesDir: input.resourcesDir,
-    env: commandEnv,
-  })
-  if (bundledHermes) {
-    return {
-      command: `${shellQuote(bundledHermes.path)} acp`,
-      commandEnv,
-    }
-  }
-
-  const command = HOST_ACP_ADAPTER_CONFIG.hermes.acpCommand
-  if (process.platform === 'win32') {
-    return { command, commandEnv }
-  }
-
-  const shell = process.env.SHELL?.trim() || 'sh'
-  return {
-    command: `${shellQuote(shell)} -lic ${shellQuote(command)}`,
-    commandEnv,
   }
 }
 
@@ -847,31 +813,20 @@ function resolveHermesHostAcpAdapterCommand(input: {
 function resolveBrowserosHostAcpAdapterCommand(input: {
   adapter: 'claude' | 'codex'
   resourcesDir: string | null
-}): { command: string; addBundledBunAdapterEnv: boolean } {
+}): { command: string; bundledBunPath: string | null } {
   const bun = resolveBundledBun({ resourcesDir: input.resourcesDir })
   if (bun) {
     const config = HOST_ACP_ADAPTER_CONFIG[input.adapter]
     return {
       command: `${shellQuote(bun)} x --bun --silent --package ${shellQuote(config.acpPackageSpec)} ${shellQuote(config.acpBin)}`,
-      addBundledBunAdapterEnv: true,
+      bundledBunPath: bun,
     }
   }
 
   const config = HOST_ACP_ADAPTER_CONFIG[input.adapter]
   return {
     command: config.acpCommand,
-    addBundledBunAdapterEnv: false,
-  }
-}
-
-/** Adds the minimum env needed for BrowserOS-managed bundled Bun package installs. */
-function withBundledBunAcpAdapterEnv(
-  env: Record<string, string>,
-  browserosDir: string,
-): Record<string, string> {
-  return {
-    ...env,
-    BUN_INSTALL_CACHE_DIR: join(browserosDir, 'cache', 'bun-install'),
+    bundledBunPath: null,
   }
 }
 
@@ -932,53 +887,66 @@ async function applyRuntimeControls(
   return events
 }
 
+/**
+ * Lifts approve-all sessions into the adapter's full-permission mode via
+ * ACP `session/set_mode` — otherwise the adapter inherits the user's own
+ * CLI permission defaults. Candidates are tried in order because the two
+ * codex-acp packages advertise different ids for the same full-access
+ * preset.
+ */
 async function applyPermissionBypass(
   runtime: AcpxCoreRuntime,
   handle: AcpRuntimeHandle,
   input: AgentPromptInput,
 ): Promise<AgentStreamEvent[]> {
-  if (
-    input.permissionMode !== 'approve-all' ||
-    input.agent.adapter !== 'claude'
-  ) {
-    return []
-  }
+  if (input.permissionMode !== 'approve-all') return []
+  const candidates = DANGEROUS_ALLOW_MODE_CANDIDATES[input.agent.adapter]
+  if (!candidates?.length) return []
+
+  const requested = `${HOST_ACP_ADAPTER_CONFIG[input.agent.adapter].displayName} ${candidates.join(' / ')}`
 
   if (!runtime.setMode) {
     return [
       {
         type: 'status',
-        text: 'Requested Claude bypassPermissions mode, but this acpx/runtime version does not expose mode control.',
+        text: `Requested ${requested} mode, but this acpx/runtime version does not expose mode control.`,
       },
     ]
   }
 
-  try {
-    await runtime.setMode({ handle, mode: 'bypassPermissions' })
-    logger.debug('Agent harness acpx mode applied', {
-      agentId: input.agent.id,
-      adapter: input.agent.adapter,
-      sessionKey: input.sessionKey,
-      mode: 'bypassPermissions',
-    })
-  } catch (err) {
-    logger.warn('Agent harness acpx mode unavailable', {
-      agentId: input.agent.id,
-      adapter: input.agent.adapter,
-      sessionKey: input.sessionKey,
-      mode: 'bypassPermissions',
-      error: err instanceof Error ? err.message : String(err),
-    })
-    return [
-      {
-        type: 'status',
-        text: `Could not apply Claude bypassPermissions mode; continuing with the adapter default. ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      },
-    ]
+  let lastError: unknown
+  for (const mode of candidates) {
+    try {
+      await runtime.setMode({ handle, mode })
+      logger.debug('Agent harness acpx mode applied', {
+        agentId: input.agent.id,
+        adapter: input.agent.adapter,
+        sessionKey: input.sessionKey,
+        mode,
+      })
+      return []
+    } catch (err) {
+      lastError = err
+      // debug, not warn: the harness always spawns @zed-industries/codex-acp
+      // (mode id `full-access`), so codex's first candidate is expected to
+      // be rejected on the happy path. Only the all-rejected case below warns.
+      logger.debug('Agent harness acpx mode candidate rejected', {
+        agentId: input.agent.id,
+        adapter: input.agent.adapter,
+        sessionKey: input.sessionKey,
+        mode,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
   }
-  return []
+  return [
+    {
+      type: 'status',
+      text: `Could not apply ${requested} mode; continuing with the adapter default. ${
+        lastError instanceof Error ? lastError.message : String(lastError)
+      }`,
+    },
+  ]
 }
 
 function mapRuntimeEvent(event: AcpRuntimeEvent): AgentStreamEvent {

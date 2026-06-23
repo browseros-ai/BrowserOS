@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h b/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h
-index 9f7cbd0272c0a..a47f90c1ae192 100644
+index 9f7cbd0272c0a..c9be4ae585551 100644
 --- a/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h
 +++ b/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h
 @@ -55,6 +55,9 @@ class PinnedToolbarActionsModel : public KeyedService {
@@ -18,7 +18,7 @@ index 9f7cbd0272c0a..a47f90c1ae192 100644
  
 +  // Ensures that certain actions are always pinned to the toolbar.
 +  // This is called during initialization to ensure specific actions
-+  // (like Third Party LLM and Clash of GPTs) are always visible.
++  // (like Third Party LLM) are always visible.
 +  void EnsureAlwaysPinnedActions();
 +
    // Returns the ordered list of pinned ActionIds.

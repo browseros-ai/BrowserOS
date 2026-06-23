@@ -6,7 +6,6 @@ import {
   type ToolResult,
   textResult,
 } from './framework'
-import { wrapUntrusted } from './trust-boundary'
 
 type InputApi = ReturnType<BrowserSession['input']>
 
@@ -57,32 +56,15 @@ export const act = defineTool({
     clickCount: z.number().int().optional(),
     clear: z.boolean().optional(),
   }),
-  handler: async (args, ctx) => {
+  handler: async (args, ctx, response) => {
     const input = ctx.session.input(args.page)
 
     const err = await runKind(args, input)
     if (err) return err
 
-    const diff = await ctx.session.observe(args.page).diff()
-    const origin =
-      diff.afterUrl ?? ctx.session.pages.getInfo(args.page)?.url ?? 'unknown'
-    const body = diff.urlChanged
-      ? `page URL changed; returning full current snapshot instead of a diff:\n${wrapUntrusted(diff.text || '(empty page)', origin)}`
-      : diff.changed
-        ? `page changed:\n${wrapUntrusted(diff.text, origin)}`
-        : 'no visible change'
-    const structured: Record<string, unknown> = {
-      kind: args.kind,
-      changed: diff.changed,
-    }
-    if (diff.urlChanged) {
-      Object.assign(structured, {
-        urlChanged: true,
-        beforeUrl: diff.beforeUrl,
-        afterUrl: diff.afterUrl,
-      })
-    }
-    return textResult(`ok (${args.kind}) · ${body}`, structured)
+    response.data({ kind: args.kind })
+    response.includeDiff(args.page, { includeStructured: true })
+    return textResult(`ok (${args.kind})`)
   },
 })
 

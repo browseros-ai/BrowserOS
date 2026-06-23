@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/buildflags.gni b/chrome/browser/buildflags.gni
-index 095e232be0479..804f948c34bbb 100644
+index 095e232be0479..55b11261c28cf 100644
 --- a/chrome/browser/buildflags.gni
 +++ b/chrome/browser/buildflags.gni
 @@ -3,6 +3,7 @@
@@ -10,12 +10,14 @@ index 095e232be0479..804f948c34bbb 100644
  
  # IMPORTANT
  # We are not accepting any new build flags in //chrome. See
-@@ -16,6 +17,6 @@ declare_args() {
+@@ -16,6 +17,8 @@ declare_args() {
    enable_updater = is_chrome_branded && !is_fuchsia && target_os != "android"
  
    # Detect updates and notify the user for Google Chrome across all platforms.
 -  # Chromium does not use an auto-updater.
 -  enable_update_notifications = is_chrome_branded
-+  # Chromium does not use an auto-updater. Enable for Sparkle builds on macOS.
-+  enable_update_notifications = is_chrome_branded || enable_sparkle
++  # Chromium does not use an auto-updater. Enable for Sparkle builds on macOS
++  # and WinSparkle builds on Windows.
++  enable_update_notifications =
++      is_chrome_branded || enable_sparkle || enable_winsparkle
  }

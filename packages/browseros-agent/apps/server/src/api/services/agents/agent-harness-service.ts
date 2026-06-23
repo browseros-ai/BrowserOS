@@ -13,11 +13,6 @@ import {
   type AgentSessionId,
   MAIN_AGENT_SESSION_ID,
 } from '../../../lib/agents/agent-types'
-import {
-  getHermesHarnessHostDir,
-  writeHermesPerAgentProvider,
-} from '../../../lib/agents/hermes/hermes-paths'
-import { getHermesProviderMapping } from '../../../lib/agents/hermes/hermes-provider-map'
 import type {
   AgentStore,
   CreateAgentInput,
@@ -40,7 +35,6 @@ export {
   type QueuedMessageAttachment,
 } from '../../../lib/agents/storage/message-queue'
 
-import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
   AgentHistoryPage,
@@ -482,72 +476,7 @@ export class AgentHarnessService {
   }
 
   async createAgent(input: CreateAgentInput): Promise<AgentDefinition> {
-    if (input.adapter === 'hermes') {
-      // Validate before touching the store so we don't leave an orphan
-      // record on the unhappy path.
-      assertHermesProviderInputValid(input)
-    }
-
-    const agent = await this.agentStore.create(input)
-
-    if (agent.adapter === 'hermes') {
-      try {
-        await this.writeHermesPerAgentProvider(agent.id, input)
-      } catch (err) {
-        await this.agentStore.delete(agent.id).catch(() => {})
-        await this.deleteHermesPerAgentProvider(agent.id).catch(
-          (cleanupErr) => {
-            logger.warn('Hermes provider config cleanup failed', {
-              agentId: agent.id,
-              error:
-                cleanupErr instanceof Error
-                  ? cleanupErr.message
-                  : String(cleanupErr),
-            })
-          },
-        )
-        throw err
-      }
-      return agent
-    }
-
-    return agent
-  }
-
-  /**
-   * Write Hermes' per-agent config.yaml + .env into the on-host home
-   * dir. Caller must have already run assertHermesProviderInputValid;
-   * any throw here is a real I/O failure and must roll back the agent
-   * record.
-   */
-  private async writeHermesPerAgentProvider(
-    agentId: string,
-    input: CreateAgentInput,
-  ): Promise<void> {
-    // Non-null assertions are safe: assertHermesProviderInputValid ran
-    // first and rejects when any required field is missing.
-    const mapping = getHermesProviderMapping(input.providerType as string)
-    if (!mapping) {
-      throw new HermesProviderConfigInvalidError(
-        `Provider type "${input.providerType}" is not supported by Hermes`,
-      )
-    }
-    await writeHermesPerAgentProvider({
-      browserosDir: this.browserosDir,
-      agentId,
-      providerId: mapping.hermesProvider,
-      envVarName: mapping.envVarName,
-      apiKey: (input.apiKey as string).trim(),
-      modelId: (input.modelId as string).trim(),
-      baseUrl: input.baseUrl?.trim() || mapping.defaultBaseUrl,
-    })
-  }
-
-  private async deleteHermesPerAgentProvider(agentId: string): Promise<void> {
-    await rm(join(getHermesHarnessHostDir(this.browserosDir), agentId), {
-      recursive: true,
-      force: true,
-    })
+    return this.agentStore.create(input)
   }
 
   async deleteAgent(agentId: string): Promise<boolean> {
@@ -847,48 +776,6 @@ export class InvalidAgentUpdateError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'InvalidAgentUpdateError'
-  }
-}
-
-/**
- * Thrown when a Hermes adapter agent is created without a complete
- * provider config (provider type, API key, model id; base URL when the
- * provider mapping requires it). Surfaces as a 400 in the route layer.
- */
-export class HermesProviderConfigInvalidError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'HermesProviderConfigInvalidError'
-  }
-}
-
-function assertHermesProviderInputValid(input: CreateAgentInput): void {
-  const providerType = input.providerType?.trim()
-  if (!providerType) {
-    throw new HermesProviderConfigInvalidError(
-      'Hermes agent requires providerType (pick a provider configured in BrowserOS AI Settings)',
-    )
-  }
-  const mapping = getHermesProviderMapping(providerType)
-  if (!mapping) {
-    throw new HermesProviderConfigInvalidError(
-      `Provider type "${providerType}" is not supported by Hermes`,
-    )
-  }
-  if (!input.apiKey?.trim()) {
-    throw new HermesProviderConfigInvalidError(
-      'Hermes agent requires apiKey from the selected provider',
-    )
-  }
-  if (!input.modelId?.trim()) {
-    throw new HermesProviderConfigInvalidError(
-      'Hermes agent requires modelId from the selected provider',
-    )
-  }
-  if (mapping.requiresBaseUrl && !input.baseUrl?.trim()) {
-    throw new HermesProviderConfigInvalidError(
-      `Provider type "${providerType}" requires baseUrl`,
-    )
   }
 }
 

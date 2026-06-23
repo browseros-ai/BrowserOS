@@ -1,5 +1,5 @@
 import type { AXNode } from './ax-types'
-import type { FrameId, RefMap } from './refs'
+import type { DocumentId, FrameId, RefMap } from './refs'
 import { INTERACTIVE_ROLES, ROOT_ROLES, SKIP_ROLES, VALUE_ROLES } from './roles'
 
 const IFRAME_ROLES: ReadonlySet<string> = new Set(['Iframe', 'iframe'])
@@ -21,21 +21,15 @@ export interface RenderResult {
 export interface RenderOptions {
   /** Shared across all frames of a page so refs form one global namespace. */
   refs: RefMap
-  /** Frame this subtree belongs to; undefined ⇒ main frame. */
   frameId?: FrameId
+  documentId?: DocumentId
   /** backendNodeId → reasons, from the DOM cursor-augmentation pass. */
   cursorHits?: Map<number, string[]>
   /** Extra indent levels to prepend (used when splicing a child frame under its iframe line). */
   baseDepth?: number
 }
 
-/**
- * Renders a CDP accessibility tree into the canonical agent-facing snapshot: an indented
- * semantic tree where every actionable node carries a stable `[ref=eN]` handle and mutates the
- * shared RefMap. Structureless wrappers are dropped so indentation reflects meaning. Iframe
- * nodes are reported as stitch points (their content lives in a child frame) rather than
- * recursed. Pure and deterministic — DOM/CDP-derived signals are injected via opts.
- */
+/** Renders a CDP accessibility tree into the canonical agent-facing snapshot. */
 export function renderSnapshot(
   nodes: AXNode[],
   opts: RenderOptions,
@@ -134,6 +128,7 @@ function formatLine(
       backendNodeId: backendNodeId as number,
       role,
       name,
+      documentId: opts.documentId,
       frameId: opts.frameId,
     })
     line += ` [ref=${ref}]`

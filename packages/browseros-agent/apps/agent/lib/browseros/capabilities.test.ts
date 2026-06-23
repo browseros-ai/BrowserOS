@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   checkFeatureSupport,
   Feature,
+  resolveFeatureStaticSupport,
   resolveStaticFeatureSupport,
 } from './capabilities'
 
@@ -43,6 +44,72 @@ describe('resolveStaticFeatureSupport', () => {
       }),
     ).toBeNull()
   })
+
+  it('enables development-only features in development', () => {
+    expect(
+      resolveStaticFeatureSupport({
+        isDevelopment: true,
+        alphaFeaturesEnabled: false,
+        requiresDevelopmentFlag: true,
+      }),
+    ).toBe(true)
+  })
+
+  it('disables development-only features outside development', () => {
+    expect(
+      resolveStaticFeatureSupport({
+        isDevelopment: false,
+        alphaFeaturesEnabled: true,
+        requiresDevelopmentFlag: true,
+      }),
+    ).toBe(false)
+  })
+})
+
+describe('resolveFeatureStaticSupport', () => {
+  it('gates Hermes support on alpha before server version checks', () => {
+    expect(
+      resolveFeatureStaticSupport({
+        feature: Feature.HERMES_AGENT_SUPPORT,
+        isDevelopment: true,
+        alphaFeaturesEnabled: false,
+      }),
+    ).toBe(true)
+
+    expect(
+      resolveFeatureStaticSupport({
+        feature: Feature.HERMES_AGENT_SUPPORT,
+        isDevelopment: false,
+        alphaFeaturesEnabled: false,
+      }),
+    ).toBe(false)
+
+    expect(
+      resolveFeatureStaticSupport({
+        feature: Feature.HERMES_AGENT_SUPPORT,
+        isDevelopment: false,
+        alphaFeaturesEnabled: true,
+      }),
+    ).toBeNull()
+  })
+
+  it('preserves alpha-gated support for alpha features', () => {
+    expect(
+      resolveFeatureStaticSupport({
+        feature: Feature.ALPHA_FEATURES_SUPPORT,
+        isDevelopment: false,
+        alphaFeaturesEnabled: false,
+      }),
+    ).toBe(false)
+
+    expect(
+      resolveFeatureStaticSupport({
+        feature: Feature.ALPHA_FEATURES_SUPPORT,
+        isDevelopment: false,
+        alphaFeaturesEnabled: true,
+      }),
+    ).toBe(true)
+  })
 })
 
 describe('checkFeatureSupport — AGENT_HARNESS_SUPPORT', () => {
@@ -65,12 +132,19 @@ describe('checkFeatureSupport — AGENT_HARNESS_SUPPORT', () => {
 })
 
 describe('checkFeatureSupport — HERMES_AGENT_SUPPORT', () => {
-  it('has no version dependency once the static alpha gate allows it', () => {
-    expect(
-      checkFeatureSupport(
-        { browserOSVersion: null, serverVersion: null },
-        Feature.HERMES_AGENT_SUPPORT,
-      ),
-    ).toBe(true)
+  const at = (serverVersion: number[] | null) =>
+    checkFeatureSupport(
+      { browserOSVersion: null, serverVersion },
+      Feature.HERMES_AGENT_SUPPORT,
+    )
+
+  it('hides Hermes below server 0.0.116 or when version is unknown', () => {
+    expect(at(null)).toBe(false)
+    expect(at([0, 0, 115])).toBe(false)
+  })
+
+  it('shows Hermes at or above server 0.0.116', () => {
+    expect(at([0, 0, 116])).toBe(true)
+    expect(at([0, 0, 117])).toBe(true)
   })
 })

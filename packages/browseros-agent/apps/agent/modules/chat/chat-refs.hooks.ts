@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import useDeepCompareEffect from 'use-deep-compare-effect'
-import { Feature } from '@/lib/browseros/capabilities'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { type McpServer, useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import { usePersonalization } from '@/lib/personalization/personalizationStorage'
@@ -8,7 +7,6 @@ import {
   useAgentAdapters,
   useHarnessAgents,
 } from '@/modules/agents/agents.hooks'
-import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
 import {
   buildSidepanelChatTargets,
@@ -44,8 +42,6 @@ export const useChatRefs = () => {
   } = useLlmProviders()
   const { adapters, loading: isLoadingAdapters } = useAgentAdapters()
   const { harnessAgents, loading: isLoadingAgents } = useHarnessAgents()
-  const { supports } = useCapabilities()
-  const hermesAgentSupported = supports(Feature.HERMES_AGENT_SUPPORT)
   const { personalization } = usePersonalization()
   const [targetSelection, setTargetSelection] =
     useState<SidepanelChatTargetSelection | null>(null)
@@ -66,9 +62,8 @@ export const useChatRefs = () => {
         providers: llmProviders,
         adapters,
         agents: harnessAgents,
-        hermesAgentSupported,
       }),
-    [llmProviders, adapters, harnessAgents, hermesAgentSupported],
+    [llmProviders, adapters, harnessAgents],
   )
 
   const selectedChatTarget = useMemo(

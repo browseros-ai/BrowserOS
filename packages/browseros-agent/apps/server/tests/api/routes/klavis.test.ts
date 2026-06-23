@@ -3,20 +3,22 @@
  * Copyright 2025 BrowserOS
  */
 
-import { afterEach, beforeEach, describe, it } from 'bun:test'
+import { afterEach, describe, it } from 'bun:test'
 import assert from 'node:assert'
 import { createKlavisRoutes } from '../../../src/api/routes/klavis'
-import { klavisStrataCache } from '../../../src/api/services/klavis/strata-cache'
+import { KlavisService } from '../../../src/api/services/klavis'
 
 const originalFetch = globalThis.fetch
-
-beforeEach(() => {
-  klavisStrataCache.clear()
-})
 
 afterEach(() => {
   globalThis.fetch = originalFetch
 })
+
+function createRoute(browserosId = 'user-123') {
+  return createKlavisRoutes({
+    klavis: new KlavisService({ browserosId }),
+  })
+}
 
 describe('createKlavisRoutes', () => {
   it('normalizes string integrations into unauthenticated entries', async () => {
@@ -25,7 +27,7 @@ describe('createKlavisRoutes', () => {
         integrations: ['Google Docs', 'Slack'],
       })) as typeof fetch
 
-    const route = createKlavisRoutes({ browserosId: 'user-123' })
+    const route = createRoute()
     const response = await route.request('/user-integrations')
     const body = await response.json()
 
@@ -48,7 +50,7 @@ describe('createKlavisRoutes', () => {
         ],
       })) as typeof fetch
 
-    const route = createKlavisRoutes({ browserosId: 'user-123' })
+    const route = createRoute()
     const response = await route.request('/user-integrations')
     const body = await response.json()
 
@@ -74,7 +76,7 @@ describe('createKlavisRoutes', () => {
         },
       })) as typeof fetch
 
-    const route = createKlavisRoutes({ browserosId: 'user-123' })
+    const route = createRoute()
     const response = await route.request('/servers/add', {
       method: 'POST',
       headers: {
@@ -93,5 +95,31 @@ describe('createKlavisRoutes', () => {
       oauthUrl: 'https://oauth.example.com/google-docs',
       apiKeyUrl: 'https://auth.example.com/setup?instance_id=abc123',
     })
+  })
+
+  it('rejects unsupported API-key connector names with 400', async () => {
+    let called = false
+    globalThis.fetch = (async () => {
+      called = true
+      return Response.json({})
+    }) as typeof fetch
+
+    const route = createRoute()
+    const response = await route.request('/servers/submit-api-key', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        serverName: 'Unknown App',
+        apiKey: 'secret',
+        apiKeyUrl: 'https://auth.example.com/setup?instance_id=abc123',
+      }),
+    })
+    const body = await response.json()
+
+    assert.strictEqual(response.status, 400)
+    assert.deepStrictEqual(body, { error: 'Invalid server: Unknown App' })
+    assert.strictEqual(called, false)
   })
 })

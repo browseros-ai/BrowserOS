@@ -1,5 +1,6 @@
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 import { logger } from '../lib/logger'
+import type { BrowserOutputFileAccess } from '../tools/browser/output-file'
 import type { AiSdkAgent } from './ai-sdk-agent'
 
 export interface AgentSession {
@@ -11,6 +12,8 @@ export interface AgentSession {
   mcpServerKey?: string
   /** Workspace directory when the session was created, for change detection. */
   workingDir?: string
+  /** Browser-generated output paths returned during this conversation. */
+  outputFileAccess?: BrowserOutputFileAccess
 }
 
 export class SessionStore {

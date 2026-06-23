@@ -86,7 +86,7 @@ export class OAuthTokenManager {
     private readonly callbackServer: OAuthCallbackServer,
   ) {}
 
-  // --- PKCE flow (ChatGPT Plus/Pro) ---
+  // --- PKCE flow (ChatGPT) ---
 
   async generateAuthorizationUrl(
     providerId: string,

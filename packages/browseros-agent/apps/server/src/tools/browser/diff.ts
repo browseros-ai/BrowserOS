@@ -1,6 +1,6 @@
 import { z } from 'zod'
+import { formatDiffResult } from './diff-format'
 import { defineTool, textResult } from './framework'
-import { wrapUntrusted } from './trust-boundary'
 
 export const diff = defineTool({
   name: 'diff',
@@ -10,24 +10,9 @@ export const diff = defineTool({
   annotations: { readOnlyHint: true },
   handler: async (args, ctx) => {
     const d = await ctx.session.observe(args.page).diff()
-    if (!d.changed) return textResult('no change since last snapshot')
     const origin =
       d.afterUrl ?? ctx.session.pages.getInfo(args.page)?.url ?? 'unknown'
-    if (d.urlChanged) {
-      return textResult(
-        `URL changed; returning full current snapshot instead of a diff:\n${wrapUntrusted(d.text || '(empty page)', origin)}`,
-        {
-          added: d.added,
-          removed: d.removed,
-          urlChanged: true,
-          beforeUrl: d.beforeUrl,
-          afterUrl: d.afterUrl,
-        },
-      )
-    }
-    return textResult(wrapUntrusted(d.text, origin), {
-      added: d.added,
-      removed: d.removed,
-    })
+    const formatted = await formatDiffResult(d, origin)
+    return textResult(formatted.text, formatted.structured)
   },
 })

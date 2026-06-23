@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 97b17f850c30d..df33111248beb 100644
+index 97b17f850c30d..3676d4608aca8 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
 @@ -12,6 +12,7 @@ import("//build/config/features.gni")
@@ -10,15 +10,16 @@ index 97b17f850c30d..df33111248beb 100644
  import("//chrome/browser/downgrade/buildflags.gni")
  import("//chrome/common/features.gni")
  import("//chrome/common/request_header_integrity/buildflags.gni")
-@@ -95,6 +96,7 @@ if (is_win) {
+@@ -95,6 +96,8 @@ if (is_win) {
  buildflag_header("buildflags") {
    header = "buildflags.h"
    flags = [
 +    "ENABLE_SPARKLE=$enable_sparkle",
++    "ENABLE_WINSPARKLE=$enable_winsparkle",
      "ENABLE_UPDATER=$enable_updater",
      "ENABLE_UPDATE_NOTIFICATIONS=$enable_update_notifications",
      "USE_MINIKIN_HYPHENATION=$use_minikin_hyphenation",
-@@ -1443,6 +1445,7 @@ static_library("browser") {
+@@ -1443,6 +1446,7 @@ static_library("browser") {
      "//chrome/browser/bookmarks",
      "//chrome/browser/bookmarks:impl",
      "//chrome/browser/breadcrumbs",
@@ -26,7 +27,7 @@ index 97b17f850c30d..df33111248beb 100644
      "//chrome/browser/browsing_data",
      "//chrome/browser/browsing_data:constants",
      "//chrome/browser/browsing_topics",
-@@ -6204,6 +6207,16 @@ static_library("browser") {
+@@ -6204,6 +6208,27 @@ static_library("browser") {
      ]
    }
  
@@ -38,6 +39,17 @@ index 97b17f850c30d..df33111248beb 100644
 +
 +    # Headers config for compilation (linking handled by chrome_framework)
 +    public_configs = [ "//third_party/sparkle:sparkle_link_framework" ]
++  }
++
++  if (is_win && enable_winsparkle) {
++    sources += [
++      "win/winsparkle_glue.cc",
++      "win/winsparkle_glue.h",
++    ]
++
++    # Link flags (import lib + /DELAYLOAD) propagate to every binary linking
++    # this target via all_dependent_configs on the group.
++    deps += [ "//third_party/winsparkle" ]
 +  }
 +
    if (is_android || is_mac || is_win || is_chromeos) {

@@ -1,0 +1,38 @@
+# BrowserOS Linux CI Release Build (unsigned, no upload)
+#
+# Nightly WarpBuild variant of release.linux.yaml. Differences:
+#   - x64 only (runner arch); arm64 cross-compile can be re-added later
+#   - no clean/git_setup: CI runs `--modules clean` and `gclient sync`
+#     itself so the chromium checkout cache stays a pristine post-sync tree
+#     (git_setup's `git fetch --tags` is unusable on the shallow CI clone)
+#   - no upload: artifacts are published via GitHub Actions
+#
+# Run (from packages/browseros, after checkout + clean + sync):
+#   uv run browseros build --config build/config/release.linux.ci.yaml --chromium-src <src>
+
+build:
+  type: release
+  architecture: x64
+
+gn_flags:
+  file: build/config/gn/flags.linux.release.gn
+
+modules:
+  # Patches & Resources
+  - download_resources
+  - resources
+  - bundled_extensions
+  - chromium_replace
+  - string_replaces
+  - series_patches
+  - patches
+
+  # Build
+  - configure
+  - compile
+
+  # Package (Linux is not code signed)
+  - package_linux
+
+notifications:
+  slack: false

@@ -9,6 +9,18 @@ from .context import Context
 
 
 class GetAppPathTest(unittest.TestCase):
+    def test_extensions_manifest_url_uses_dedicated_bundled_manifest(self):
+        ctx = Context(
+            chromium_src=Path("/nonexistent-src"),
+            architecture="arm64",
+            build_type="release",
+        )
+
+        self.assertEqual(
+            ctx.get_extensions_manifest_url(),
+            "https://cdn.browseros.com/extensions/bundled-manifest.xml",
+        )
+
     def test_arch_build_ignores_stale_universal_app(self):
         # Regression: a leftover out/Default_universal app must never hijack
         # an arch-specific build's sign/package stages.

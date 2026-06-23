@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc
 new file mode 100644
-index 0000000000000..387f32e0d07a5
+index 0000000000000..5b60a5f2373df
 --- /dev/null
 +++ b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc
-@@ -0,0 +1,1192 @@
+@@ -0,0 +1,1174 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -79,7 +79,6 @@ index 0000000000000..387f32e0d07a5
 +#include "third_party/blink/public/common/mediastream/media_stream_request.h"
 +#include "content/public/browser/render_frame_host.h"
 +#include "chrome/browser/browseros/metrics/browseros_metrics.h"
-+#include "chrome/browser/ui/views/side_panel/clash_of_gpts/clash_of_gpts_coordinator.h"
 +
 +namespace {
 +
@@ -1124,12 +1123,7 @@ index 0000000000000..387f32e0d07a5
 +      IDC_OPEN_IN_NEW_TAB,
 +      u"Open in new tab",
 +      ui::ImageModel::FromVectorIcon(vector_icons::kLaunchIcon));
-+  menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
-+  menu_model_->AddItemWithIcon(
-+      IDC_CLASH_OF_GPTS,
-+      u"Popout LLM Hub",
-+      ui::ImageModel::FromVectorIcon(kTabGroupIcon));
-+  
++
 +  // Create and run menu
 +  menu_runner_ = std::make_unique<views::MenuRunner>(
 +      menu_model_.get(), views::MenuRunner::HAS_MNEMONICS);
@@ -1157,9 +1151,6 @@ index 0000000000000..387f32e0d07a5
 +    case IDC_OPEN_IN_NEW_TAB:
 +      event_name = "llmchat.menu.newtab";
 +      break;
-+    case IDC_CLASH_OF_GPTS:
-+      event_name = "llmchat.menu.hub";
-+      break;
 +  }
 +  if (!event_name.empty()) {
 +    browseros_metrics::BrowserOSMetrics::Log(event_name);
@@ -1177,15 +1168,6 @@ index 0000000000000..387f32e0d07a5
 +      break;
 +    case IDC_OPEN_IN_NEW_TAB:
 +      OnOpenInNewTab();
-+      break;
-+    case IDC_CLASH_OF_GPTS:
-+      if (BrowserWindowInterface* window =
-+              GetLastActiveBrowserWindowInterfaceWithAnyProfile()) {
-+        if (auto* coordinator =
-+                window->GetFeatures().clash_of_gpts_coordinator()) {
-+          coordinator->Show();
-+        }
-+      }
 +      break;
 +  }
 +}

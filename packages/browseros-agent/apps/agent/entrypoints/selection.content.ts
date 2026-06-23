@@ -1,3 +1,7 @@
+import {
+  RuntimeMessageType,
+  sendRuntimeMessage,
+} from '@/lib/messaging/runtime/runtimeMessages'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 
 const MAX_SELECTED_TEXT_LENGTH = 5000
@@ -6,7 +10,7 @@ export default defineContentScript({
   matches: ['*://*/*'],
   runAt: 'document_idle',
   async main() {
-    const response = await chrome.runtime.sendMessage({ type: 'get-tab-id' })
+    const response = await sendRuntimeMessage(RuntimeMessageType.getTabId)
     const tabId: number | undefined = response?.tabId
     if (!tabId) return
 
@@ -29,7 +33,6 @@ export default defineContentScript({
           })
         })
       } else {
-        // User clicked without selecting — clear this tab's entry only
         selectedTextStorage.getValue().then((map) => {
           if (map[key]) {
             const { [key]: _, ...rest } = map

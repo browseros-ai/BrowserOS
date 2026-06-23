@@ -1,5 +1,4 @@
 import { getBrowserOSAdapter } from './adapter'
-import { Capabilities, Feature } from './capabilities'
 import { BROWSEROS_PREFS } from './prefs'
 
 class McpPortError extends Error {
@@ -33,16 +32,9 @@ async function getMcpPort(): Promise<number> {
   throw new McpPortError()
 }
 
-/**
- * @public
- */
+/** Returns the MCP proxy endpoint for local server connections. */
 export async function getMcpServerUrl(): Promise<string> {
-  const supportsProxy = await Capabilities.supports(Feature.PROXY_SUPPORT)
-  if (supportsProxy) {
-    const port = await getProxyPort()
-    return `http://127.0.0.1:${port}/mcp`
-  }
-  const port = await getMcpPort()
+  const port = await getProxyPort()
   return `http://127.0.0.1:${port}/mcp`
 }
 
@@ -68,23 +60,8 @@ export async function getProxyPort(): Promise<number> {
   throw new ProxyPortError()
 }
 
-/**
- * @public
- */
-export async function getProxyServerUrl(): Promise<string> {
-  const port = await getProxyPort()
-  return `http://127.0.0.1:${port}`
-}
-
-/**
- * @public
- */
+/** Returns the MCP proxy health-check endpoint. */
 export async function getHealthCheckUrl(): Promise<string> {
-  const supportsProxy = await Capabilities.supports(Feature.PROXY_SUPPORT)
-  if (supportsProxy) {
-    const port = await getProxyPort()
-    return `http://127.0.0.1:${port}/health`
-  }
-  const port = await getMcpPort()
+  const port = await getProxyPort()
   return `http://127.0.0.1:${port}/health`
 }

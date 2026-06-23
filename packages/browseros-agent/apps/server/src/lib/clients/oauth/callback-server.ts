@@ -84,7 +84,10 @@ export class OAuthCallbackServer {
   }
 
   private bind(): void {
-    const tokenManager = this.tokenManager!
+    const tokenManager = this.tokenManager
+    if (!tokenManager) {
+      throw new Error('OAuth callback server not initialized')
+    }
 
     this.server = Bun.serve({
       port: OAUTH_CALLBACK_PORT,

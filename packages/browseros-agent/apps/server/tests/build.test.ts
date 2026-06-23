@@ -151,7 +151,9 @@ describe('server build', () => {
       0,
       `Binary --version exited non-zero:\n${versionStderr}`,
     )
-    assert.strictEqual(versionOutput.trim(), expectedVersion)
+    const actualVersion = versionOutput.trim()
+    assert.strictEqual(actualVersion, expectedVersion)
+    assert.notStrictEqual(actualVersion, Bun.version)
   }, 300_000)
 
   it('archives CI builds without R2 config or production env secrets', async () => {

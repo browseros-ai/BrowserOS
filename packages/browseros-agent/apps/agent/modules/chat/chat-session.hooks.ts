@@ -5,7 +5,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { Provider } from '@/components/chat/chatComponentTypes'
-import { Capabilities, Feature } from '@/lib/browseros/capabilities'
+import {
+  getWindowConversation,
+  setWindowConversation,
+} from '@/lib/browseros/perWindowConversationStorage'
+import { sidePanelPerWindowStorage } from '@/lib/browseros/sidePanelOpenStateStorage'
 import type { ChatAction } from '@/lib/chat-actions/types'
 import {
   CONVERSATION_RESET_EVENT,
@@ -38,6 +42,7 @@ import {
   toProviderOption,
 } from './chat-session-request'
 import type { ChatMode } from './chat-types'
+import { addContentFilterNotice } from './content-filter-notice'
 import { useExecutionHistoryTracker } from './execution-history-tracker.hooks'
 import { useNotifyActiveTab } from './notify-active-tab.hooks'
 import { useRemoteConversationSave } from './remote-conversation-save.hooks'
@@ -164,6 +169,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isLoadingProviders,
   } = useChatRefs()
   const invalidateCredits = useInvalidateCredits()
+  const [vmStatus, setVmStatus] = useState<{
+    status: 'booting' | 'error'
+    progress?: string
+  } | null>(null)
 
   const {
     baseUrl: agentServerUrl,
@@ -204,6 +213,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const [disliked, setDisliked] = useState<Record<string, boolean>>({})
   const [conversationId, setConversationId] = useState(crypto.randomUUID())
   const conversationIdRef = useRef(conversationId)
+  // The window this panel belongs to, resolved on mount in per-window scope.
+  const windowIdRef = useRef<number | null>(null)
 
   useEffect(() => {
     conversationIdRef.current = conversationId
@@ -337,20 +348,12 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         })
 
         const declinedApps = await declinedAppsStorage.getValue()
-        const supportsArrayConversation = await Capabilities.supports(
-          Feature.PREVIOUS_CONVERSATION_ARRAY,
-        )
-
         const previousMessages = messagesRef.current
         const history =
           previousMessages.length > 0
             ? formatConversationHistory(previousMessages)
             : undefined
-        const previousConversation = history?.length
-          ? supportsArrayConversation
-            ? history
-            : history.map((m) => `${m.role}: ${m.content}`).join('\n')
-          : undefined
+        const previousConversation = history?.length ? history : undefined
 
         const userSystemPrompt = getUserSystemPrompt(
           options?.origin,
@@ -404,9 +407,35 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         return result
       },
     }),
-    onFinish: async ({ message, isAbort, isError }) => {
+    onData: (part) => {
+      if (part.type !== 'data-vm-status') return
+      const data = part.data as
+        | { status?: string; progress?: string }
+        | undefined
+      const status = data?.status
+      if (!status || status === 'running') {
+        setVmStatus(null)
+        return
+      }
+      setVmStatus({
+        status: status as 'booting' | 'error',
+        progress: data?.progress,
+      })
+    },
+    onFinish: async ({ message, messages, isAbort, isError, finishReason }) => {
+      setVmStatus(null)
+      const nextMessages = addContentFilterNotice(
+        messages,
+        message,
+        finishReason,
+      )
+      if (nextMessages !== messages) {
+        setMessages(nextMessages)
+      }
+      const responseMessage =
+        nextMessages.find((each) => each.id === message.id) ?? message
       await finishExecutionTask({
-        responseText: getLastMessageText([message]),
+        responseText: getLastMessageText([responseMessage]),
         isAbort,
         isError,
       })
@@ -484,6 +513,45 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       restoreLocal()
     }
   }, [conversationIdParam, remoteConversationData, isLoggedIn])
+
+  // Per-window scope: resume this window's conversation when the panel
+  // (re)mounts (e.g. closed + reopened) instead of starting a blank chat.
+  // No-op in per-tab scope. Tab switches keep the same panel instance, so this
+  // only matters for a fresh mount.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only; reads refs
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      if (!(await sidePanelPerWindowStorage.getValue())) return
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      })
+      const windowId = tab?.windowId
+      if (windowId == null || cancelled) return
+      windowIdRef.current = windowId
+      const stored = await getWindowConversation(windowId)
+      if (cancelled) return
+      if (stored && stored !== conversationIdRef.current) {
+        setSearchParams({ conversationId: stored })
+      } else if (!stored) {
+        await setWindowConversation(windowId, conversationIdRef.current)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Remember the conversation this window is on so a remount can resume it.
+  useEffect(() => {
+    const windowId = windowIdRef.current
+    if (windowId == null) return
+    ;(async () => {
+      if (!(await sidePanelPerWindowStorage.getValue())) return
+      await setWindowConversation(windowId, conversationId)
+    })()
+  }, [conversationId])
 
   // Keep messagesRef in sync on every change (cheap ref assignment)
   useEffect(() => {
@@ -721,5 +789,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     disliked,
     onClickDislike,
     conversationId,
+    vmStatus,
   }
 }

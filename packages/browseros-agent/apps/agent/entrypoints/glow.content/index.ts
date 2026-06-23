@@ -1,4 +1,8 @@
 import confetti from 'canvas-confetti'
+import {
+  RuntimeMessageType,
+  sendRuntimeMessage,
+} from '@/lib/messaging/runtime/runtimeMessages'
 import type { GlowMessage } from './GlowMessage'
 
 const GLOW_OVERLAY_ID = 'browseros-glow-overlay'
@@ -119,8 +123,7 @@ function startGlow(): void {
     '<svg width="16" height="16" viewBox="0 0 16 16" fill="white" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="1" width="14" height="14" rx="2"/></svg>'
   button.addEventListener('click', () => {
     if (activeConversationId) {
-      browser.runtime.sendMessage({
-        type: 'stop-agent',
+      void sendRuntimeMessage(RuntimeMessageType.stopAgent, {
         conversationId: activeConversationId,
       })
     }

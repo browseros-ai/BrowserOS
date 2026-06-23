@@ -13,7 +13,6 @@ describe('route-utils', () => {
     expect(isAgentConversationPath('/home')).toBe(false)
     expect(isAgentConversationPath('/home/agents/main')).toBe(true)
     expect(shouldUseChatSession('/home')).toBe(false)
-    expect(shouldUseChatSession('/home', true)).toBe(true)
     expect(shouldUseChatSession('/home/agents/main')).toBe(false)
     expect(shouldUseChatSession('/home/chat')).toBe(true)
   })

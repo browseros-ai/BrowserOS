@@ -12,9 +12,17 @@ const REQUIRED_PROD_VARS = [
 ]
 const INLINED_ENV_VARS = [
   ...REQUIRED_PROD_VARS,
+  'AGENT_RUNNER_JWT_SECRET',
   'NODE_ENV',
   'LOG_LEVEL',
 ] as const
+const CI_INLINE_ENV_DEFAULTS = {
+  BROWSEROS_CONFIG_URL: 'https://browseros.invalid/api/browseros-server/config',
+  LOG_LEVEL: 'info',
+  NODE_ENV: 'production',
+  POSTHOG_API_KEY: 'phc_browseros_ci',
+  SENTRY_DSN: 'https://ci@sentry.invalid/1',
+} satisfies Partial<Record<(typeof INLINED_ENV_VARS)[number], string>>
 const PROD_ENV_PATH = join('apps', 'server', '.env.production')
 const PROD_ENV_TEMPLATE_PATH = join('apps', 'server', '.env.production.example')
 
@@ -32,9 +40,14 @@ function pickEnv(name: string, fileEnv: Record<string, string>): string {
   return value
 }
 
-function loadProdEnv(rootDir: string): Record<string, string> {
+function loadProdEnv(
+  rootDir: string,
+  options: { required?: boolean } = {},
+): Record<string, string> {
   const prodEnvPath = join(rootDir, PROD_ENV_PATH)
   if (!existsSync(prodEnvPath)) {
+    if (options.required === false) return {}
+
     const prodEnvTemplatePath = join(rootDir, PROD_ENV_TEMPLATE_PATH)
     if (existsSync(prodEnvTemplatePath)) {
       throw new Error(
@@ -54,7 +67,7 @@ function buildInlineEnv(
   const inlineEnv: Record<string, string> = {}
   for (const key of INLINED_ENV_VARS) {
     const value = process.env[key] ?? fileEnv[key]
-    if (value !== undefined) {
+    if (value !== undefined && value.trim().length > 0) {
       inlineEnv[key] = value
     }
   }
@@ -81,8 +94,13 @@ export function loadBuildConfig(
   rootDir: string,
   options: LoadBuildConfigOptions = {},
 ): BuildConfig {
-  const fileEnv = loadProdEnv(rootDir)
+  const fileEnv = loadProdEnv(rootDir, { required: !options.ci })
   const envVars = buildInlineEnv(fileEnv)
+  if (options.ci) {
+    for (const [key, value] of Object.entries(CI_INLINE_ENV_DEFAULTS)) {
+      envVars[key] ??= value
+    }
+  }
   if (!options.ci) {
     validateProductionEnv(envVars)
   }

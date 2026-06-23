@@ -10,8 +10,8 @@ import {
   Square,
   XCircle,
 } from 'lucide-react'
-import type { FC } from 'react'
-import { useMemo, useState } from 'react'
+import { type FC, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { RunResultDialog } from '@/components/ai-elements/run-result-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -31,16 +31,13 @@ import {
   useScheduledJobRuns,
   useScheduledJobs,
 } from '@/lib/schedules/scheduleStorage'
-import type {
-  ScheduledJob,
-  ScheduledJobRun,
-} from '@/lib/schedules/scheduleTypes'
+import {
+  countRunningRuns,
+  type JobRunWithDetails,
+  selectDisplayedRuns,
+} from './schedule-results.helpers'
 
 dayjs.extend(relativeTime)
-
-interface JobRunWithDetails extends ScheduledJobRun {
-  job: ScheduledJob | undefined
-}
 
 const MAX_DISPLAY_COUNT = 3
 const SCHEDULE_RESULTS_COLLAPSED_KEY = 'schedule-results-collapsed'
@@ -59,6 +56,7 @@ const getStatusIcon = (status: JobRunWithDetails['status']) => {
 const formatTimestamp = (dateString: string) => dayjs(dateString).fromNow()
 
 export const ScheduleResults: FC = () => {
+  const navigate = useNavigate()
   const [isOpen, setIsOpen] = useState(() => {
     const stored = localStorage.getItem(SCHEDULE_RESULTS_COLLAPSED_KEY)
     return stored !== 'true'
@@ -73,33 +71,11 @@ export const ScheduleResults: FC = () => {
   const { jobRuns, cancelJobRun } = useScheduledJobRuns()
   const { jobs, runJob } = useScheduledJobs()
 
-  const runningCount = jobRuns.filter((r) => r.status === 'running').length
-
-  const displayedRuns: JobRunWithDetails[] = useMemo(() => {
-    const enrichWithJob = (run: ScheduledJobRun): JobRunWithDetails => ({
-      ...run,
-      job: jobs.find((j) => j.id === run.jobId),
-    })
-
-    const runningJobs = jobRuns
-      .filter((r) => r.status === 'running')
-      .map(enrichWithJob)
-
-    if (runningJobs.length >= MAX_DISPLAY_COUNT) {
-      return runningJobs
-    }
-
-    const completedOrFailed = jobRuns
-      .filter((r) => r.status === 'completed' || r.status === 'failed')
-      .sort(
-        (a, b) =>
-          new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
-      )
-      .slice(0, MAX_DISPLAY_COUNT - runningJobs.length)
-      .map(enrichWithJob)
-
-    return [...runningJobs, ...completedOrFailed]
-  }, [jobRuns, jobs])
+  const runningCount = countRunningRuns(jobRuns)
+  const displayedRuns = useMemo(
+    () => selectDisplayedRuns(jobRuns, jobs, MAX_DISPLAY_COUNT),
+    [jobRuns, jobs],
+  )
 
   const viewRun = (run: JobRunWithDetails) => {
     track(SCHEDULED_TASK_VIEW_RESULTS_IN_NEWTAB_EVENT)
@@ -117,13 +93,18 @@ export const ScheduleResults: FC = () => {
     track(SCHEDULED_TASK_RETRIED_EVENT)
   }
 
+  const handleViewMore = () => {
+    track(SCHEDULED_TASK_VIEW_MORE_IN_NEWTAB_EVENT)
+    navigate('/scheduled')
+  }
+
   if (!displayedRuns.length) return null
 
   return (
     <Collapsible
       open={isOpen}
       onOpenChange={handleOpenChange}
-      className="mx-auto mb-16 w-lg space-y-3 md:w-2xl"
+      className="space-y-3"
     >
       <CollapsibleTrigger asChild>
         <Button
@@ -204,14 +185,8 @@ export const ScheduleResults: FC = () => {
             </div>
           </Button>
         ))}
-        <Button variant="ghost" asChild className="w-full">
-          {/* biome-ignore lint/a11y/useValidAnchor: click handler is passive */}
-          <a
-            href="/app.html#/scheduled"
-            onClick={() => track(SCHEDULED_TASK_VIEW_MORE_IN_NEWTAB_EVENT)}
-          >
-            View more
-          </a>
+        <Button variant="ghost" onClick={handleViewMore} className="w-full">
+          View more
         </Button>
       </CollapsibleContent>
 

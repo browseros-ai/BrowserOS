@@ -77,6 +77,7 @@ export class CladoActionExecutor {
     await this.mcpClient.close()
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: action-loop orchestration; refactor tracked separately
   async execute(
     instruction: string,
     signal?: AbortSignal,

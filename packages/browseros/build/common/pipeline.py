@@ -35,7 +35,7 @@ def show_available_modules(available_modules: Dict[str, Type[CommandModule]]) ->
 
     # Group modules by prefix
     groups = {
-        "Setup & Environment": ["clean", "git_setup", "sparkle_setup", "configure"],
+        "Setup & Environment": ["clean", "git_setup", "sparkle_setup", "winsparkle_setup", "configure"],
         "Patches & Resources": ["patches", "chromium_replace", "string_replaces", "resources"],
         "Build": ["compile"],
         "Code Signing": ["sign_macos", "sign_windows", "sign_linux"],

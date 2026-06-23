@@ -36,8 +36,7 @@ proprietary_codecs = true
 enable_platform_hevc = true
 disable_fieldtrial_testing_config = true
 
-# Windows doesn't support Sparkle (macOS update framework)
-# enable_sparkle = false
+enable_winsparkle = true
 
 # Disable Windows-specific features that macOS doesn't use
 enable_nacl = false

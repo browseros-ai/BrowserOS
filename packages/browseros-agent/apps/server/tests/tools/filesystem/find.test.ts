@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { createFindTool } from '../../../src/tools/filesystem/find'
 import type { FilesystemToolResult } from '../../../src/tools/filesystem/utils'
 
@@ -133,5 +133,46 @@ describe('filesystem_find', () => {
     await createFileTree()
     const result = await exec({ pattern: '*.json' })
     expect(result.text).toContain('package.json')
+  })
+
+  it('rejects absolute search roots', async () => {
+    const result = await exec({ pattern: '*', path: tmpDir })
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain('relative to the selected workspace')
+  })
+
+  it('rejects traversal outside the workspace', async () => {
+    const outsideDir = join(
+      tmpdir(),
+      `fs-find-outside-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    )
+    await mkdir(outsideDir, { recursive: true })
+    try {
+      const result = await exec({
+        pattern: '*',
+        path: `../${basename(outsideDir)}`,
+      })
+      expect(result.isError).toBe(true)
+      expect(result.text).toContain('outside the selected workspace')
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it('skips symlinks that point outside the workspace', async () => {
+    const outsideDir = join(
+      tmpdir(),
+      `fs-find-symlink-outside-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    )
+    await mkdir(outsideDir, { recursive: true })
+    try {
+      await writeFile(join(outsideDir, 'secret.txt'), '')
+      await symlink(outsideDir, join(tmpDir, 'outside-link'))
+      const result = await exec({ pattern: '*' })
+      expect(result.text).not.toContain('outside-link')
+      expect(result.text).not.toContain('secret.txt')
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
   })
 })

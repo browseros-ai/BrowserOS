@@ -1,16 +1,29 @@
 import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
-import type { Browser } from '../browser/browser'
 import type { BrowserSession } from '../browser/core/session'
-import { wrapUntrusted } from './browser/trust-boundary'
+import type { SnapshotDiff } from '../browser/core/snapshot/diff'
+import { formatDiffResult } from './browser/diff-format'
+import { formatSnapshotResult } from './browser/snapshot-format'
 
 export type ContentItem =
   | { type: 'text'; text: string }
   | { type: 'image'; data: string; mimeType: string }
 
 type PostAction =
-  | { type: 'snapshot'; page: number }
+  | SnapshotPostAction
   | { type: 'screenshot'; page: number }
+  | DiffPostAction
   | { type: 'pages' }
+
+type SnapshotPostAction = {
+  type: 'snapshot'
+  page: number
+}
+
+type DiffPostAction = {
+  type: 'diff'
+  page: number
+  includeStructured?: boolean
+}
 
 export interface ToolResultMetadata {
   tabId?: number
@@ -86,43 +99,19 @@ export class ToolResponse {
     this.postActions.push({ type: 'screenshot', page })
   }
 
-  includePages(): void {
-    this.postActions.push({ type: 'pages' })
+  includeDiff(
+    page: number,
+    options: { includeStructured?: boolean } = {},
+  ): void {
+    this.postActions.push({
+      type: 'diff',
+      page,
+      includeStructured: options.includeStructured,
+    })
   }
 
-  private async runPostAction(
-    action: PostAction,
-    browser: Browser,
-  ): Promise<void> {
-    switch (action.type) {
-      case 'snapshot': {
-        const tree = await browser.snapshot(action.page)
-        if (tree) this.text(`[Page ${action.page} snapshot]\n${tree}`)
-        return
-      }
-      case 'screenshot': {
-        const result = await browser.screenshot(action.page, {
-          format: 'png',
-          fullPage: false,
-        })
-        this.text(`[Page ${action.page} screenshot]`)
-        this.image(result.data, result.mimeType)
-        return
-      }
-      case 'pages': {
-        const pages = await browser.listPages()
-        if (pages.length === 0) {
-          this.text('[Open pages] None')
-        } else {
-          const lines = pages.map(
-            (p) =>
-              `  ${p.pageId}. ${p.title || '(untitled)'} — ${p.url}${p.isActive ? ' [ACTIVE]' : ''}`,
-          )
-          this.text(`[Open pages]\n${lines.join('\n')}`)
-        }
-        return
-      }
-    }
+  includePages(): void {
+    this.postActions.push({ type: 'pages' })
   }
 
   private async runSessionPostAction(
@@ -133,9 +122,7 @@ export class ToolResponse {
       case 'snapshot': {
         const { text } = await session.observe(action.page).snapshot()
         const origin = session.pages.getInfo(action.page)?.url ?? 'unknown'
-        this.text(
-          `[Page ${action.page} snapshot]\n${wrapUntrusted(text || '(empty page)', origin)}`,
-        )
+        await this.appendSnapshotPostAction(action, text, origin)
         return
       }
       case 'screenshot': {
@@ -148,6 +135,13 @@ export class ToolResponse {
         })
         this.text(`[Page ${action.page} screenshot]`)
         this.image(result.data, 'image/png')
+        return
+      }
+      case 'diff': {
+        const d = await session.observe(action.page).diff()
+        const origin =
+          d.afterUrl ?? session.pages.getInfo(action.page)?.url ?? 'unknown'
+        await this.appendDiffPostAction(action, d, origin)
         return
       }
       case 'pages': {
@@ -166,6 +160,34 @@ export class ToolResponse {
     }
   }
 
+  private async appendSnapshotPostAction(
+    action: SnapshotPostAction,
+    snapshot: string,
+    origin: string,
+  ): Promise<void> {
+    const formatted = await formatSnapshotResult(snapshot, origin)
+    this.text(`[Page ${action.page} snapshot]\n${formatted.text}`)
+  }
+
+  private async appendDiffPostAction(
+    action: DiffPostAction,
+    diff: SnapshotDiff,
+    origin: string,
+  ): Promise<void> {
+    const formatted = await formatDiffResult(diff, origin)
+    this.text(`[Page ${action.page} diff]\n${formatted.text}`)
+    if (action.includeStructured) {
+      this.data({
+        changed: diff.changed,
+        ...(diff.urlChanged && {
+          urlChanged: true,
+          beforeUrl: diff.beforeUrl,
+          afterUrl: diff.afterUrl,
+        }),
+      })
+    }
+  }
+
   private async withTimeout<T>(task: Promise<T>): Promise<T> {
     let timeoutId: ReturnType<typeof setTimeout> | undefined
     try {
@@ -180,21 +202,6 @@ export class ToolResponse {
     } finally {
       if (timeoutId !== undefined) clearTimeout(timeoutId)
     }
-  }
-
-  async build(browser: Browser): Promise<ToolResult> {
-    if (this.postActions.length > 0) {
-      this.text('\n--- Additional context (auto-included) ---')
-    }
-
-    for (const action of this.postActions) {
-      try {
-        await this.withTimeout(this.runPostAction(action, browser))
-      } catch {
-        // Post-action failure doesn't fail the tool
-      }
-    }
-    return this.toResult()
   }
 
   /** Builds a compact browser-tool result after running BrowserSession post-actions. */

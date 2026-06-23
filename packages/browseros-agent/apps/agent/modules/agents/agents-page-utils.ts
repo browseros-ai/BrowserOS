@@ -3,8 +3,7 @@ import type { AgentListItem } from './agents-page-types'
 
 function formatHarnessAdapter(adapter: HarnessAgentAdapter): string {
   if (adapter === 'claude') return 'Claude Code'
-  if (adapter === 'codex') return 'Codex'
-  return 'Hermes'
+  return 'Codex'
 }
 
 export function toHarnessListItem(agent: HarnessAgent): AgentListItem {

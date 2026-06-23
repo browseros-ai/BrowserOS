@@ -40,7 +40,11 @@ async function isLive(
 ): Promise<boolean> {
   try {
     const resolved = await session.DOM.resolveNode({ backendNodeId })
-    return Boolean(resolved.object?.objectId)
+    const objectId = resolved.object?.objectId
+    if (objectId) {
+      await session.Runtime.releaseObject({ objectId }).catch(() => {})
+    }
+    return Boolean(objectId)
   } catch {
     return false
   }

@@ -255,12 +255,17 @@ export class Input {
     return false
   }
 
-  async uploadFile(backendNodeId: number, files: string[]): Promise<void> {
+  async uploadFile(ref: string, files: string[]): Promise<void>
+  async uploadFile(backendNodeId: number, files: string[]): Promise<void>
+  async uploadFile(target: string | number, files: string[]): Promise<void> {
+    if (typeof target === 'string') {
+      const { session, backendNodeId } = await this.observer.resolveRef(target)
+      await session.DOM.setFileInputFiles({ files, backendNodeId })
+      return
+    }
+
     await this.withPageSessionRetry((session) =>
-      session.DOM.setFileInputFiles({
-        files,
-        backendNodeId,
-      }),
+      session.DOM.setFileInputFiles({ files, backendNodeId: target }),
     )
   }
 

@@ -35,7 +35,6 @@ import type { AgentHistoryPage, AgentStreamEvent } from '../../lib/agents/types'
 import {
   type AgentDefinitionWithActivity,
   AgentHarnessService,
-  HermesProviderConfigInvalidError,
   InvalidAgentUpdateError,
   MessageQueueFullError,
   type QueuedMessage,
@@ -53,11 +52,6 @@ type AgentRouteService = {
     adapter: AgentAdapter
     modelId?: string
     reasoningEffort?: string
-    providerType?: string
-    providerName?: string
-    baseUrl?: string
-    apiKey?: string
-    supportsImages?: boolean
   }): Promise<AgentDefinition>
   getAgent(agentId: string): Promise<AgentDefinition | null>
   deleteAgent(agentId: string): Promise<boolean>
@@ -645,11 +639,6 @@ async function parseCreateAgentBody(c: Context<Env>): Promise<
       adapter: AgentAdapter
       modelId?: string
       reasoningEffort?: string
-      providerType?: string
-      providerName?: string
-      baseUrl?: string
-      apiKey?: string
-      supportsImages?: boolean
     }
   | { error: string }
 > {
@@ -676,12 +665,7 @@ async function parseCreateAgentBody(c: Context<Env>): Promise<
       ? record.reasoningEffort.trim()
       : undefined
 
-  // Hermes resolves its model from per-agent provider config rather
-  // than from the harness catalog.
-  if (
-    record.adapter !== 'hermes' &&
-    !isSupportedAgentModel(record.adapter, modelId)
-  ) {
+  if (!isSupportedAgentModel(record.adapter, modelId)) {
     return { error: 'Invalid modelId' }
   }
   if (!isSupportedReasoningEffort(record.adapter, reasoningEffort)) {
@@ -693,14 +677,6 @@ async function parseCreateAgentBody(c: Context<Env>): Promise<
     adapter: record.adapter,
     modelId,
     reasoningEffort,
-    providerType: readOptionalTrimmedString(record, 'providerType'),
-    providerName: readOptionalTrimmedString(record, 'providerName'),
-    baseUrl: readOptionalTrimmedString(record, 'baseUrl'),
-    apiKey: readOptionalTrimmedString(record, 'apiKey'),
-    supportsImages:
-      typeof record.supportsImages === 'boolean'
-        ? record.supportsImages
-        : undefined,
   }
 }
 
@@ -919,7 +895,11 @@ function isAgentSessionId(value: string): value is AgentSessionId {
 function parseSessionIdParam(
   c: Context<Env>,
 ): { value: AgentSessionId } | { error: string } {
+  // hono@4.12.26 widened c.req.param() to `string | undefined`. Treat a
+  // missing param the same as an invalid one — both reply with the same
+  // 400 message.
   const sessionId = c.req.param('sessionId')
+  if (!sessionId) return { error: 'sessionId must be "main" or a UUID' }
   return isAgentSessionId(sessionId)
     ? { value: sessionId }
     : { error: 'sessionId must be "main" or a UUID' }
@@ -946,9 +926,6 @@ function handleAgentRouteError(c: Context<Env>, err: unknown) {
     return c.json({ error: err.message }, 404)
   }
   if (err instanceof InvalidAgentUpdateError) {
-    return c.json({ error: err.message }, 400)
-  }
-  if (err instanceof HermesProviderConfigInvalidError) {
     return c.json({ error: err.message }, 400)
   }
   if (err instanceof MessageQueueFullError) {

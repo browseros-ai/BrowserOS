@@ -6,7 +6,7 @@
 
 build:
   type: release
-  architecture: x64  # Windows builds are typically x64
+  architecture: x64 # Windows builds are typically x64
 
 gn_flags:
   file: build/config/gn/flags.windows.release.gn
@@ -16,6 +16,7 @@ modules:
   # Phase 1: Setup
   - clean
   - git_setup
+  - winsparkle_setup
 
   # Phase 2: Patches & Resources
   - download_resources
@@ -33,6 +34,9 @@ modules:
   # Phase 4: Sign & Package
   - sign_windows
   - package_windows
+  # Ed25519-sign the packaged installer for WinSparkle (after authenticode
+  # signing so the signature covers the final bytes)
+  - sparkle_sign
 
   # Phase 5: Upload
   - upload
@@ -40,10 +44,11 @@ modules:
 # Required environment variables
 # Note: CHROMIUM_SRC can be provided via --chromium-src CLI flag, YAML config, or env var
 required_envs:
-  - CODE_SIGN_TOOL_PATH         # Path to CodeSignTool directory
-  - ESIGNER_USERNAME            # SSL.com eSigner username
-  - ESIGNER_PASSWORD            # SSL.com eSigner password
-  - ESIGNER_TOTP_SECRET         # SSL.com eSigner TOTP secret
+  - CODE_SIGN_TOOL_PATH # Path to CodeSignTool directory
+  - ESIGNER_USERNAME # SSL.com eSigner username
+  - ESIGNER_PASSWORD # SSL.com eSigner password
+  - ESIGNER_TOTP_SECRET # SSL.com eSigner TOTP secret
+  - SPARKLE_PRIVATE_KEY # Ed25519 key for WinSparkle update signing
 
 # Notification settings
 notifications:

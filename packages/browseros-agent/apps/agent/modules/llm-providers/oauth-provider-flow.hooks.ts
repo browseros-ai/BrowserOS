@@ -5,6 +5,7 @@ import {
   requestDeviceCode,
   startTokenPolling,
 } from '@/lib/llm-providers/client-oauth'
+import { CHATGPT_PROVIDER_DISPLAY_NAME } from '@/lib/llm-providers/provider-display-names'
 import { getProviderTemplate } from '@/lib/llm-providers/providerTemplates'
 import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
@@ -34,54 +35,90 @@ export interface OAuthProviderFlowReturn {
   clearDeviceCode: () => void
 }
 
+export interface SaveOAuthProviderInput {
+  config: OAuthProviderFlowConfig
+  status: { email?: string }
+  saveProvider: (provider: LlmProviderConfig) => Promise<void> | void
+  now?: number
+}
+
+/** Persists the local provider row created after an OAuth account authenticates. */
+export async function saveOAuthProviderFromStatus({
+  config,
+  status,
+  saveProvider,
+  now = Date.now(),
+}: SaveOAuthProviderInput): Promise<LlmProviderConfig> {
+  const template = getProviderTemplate(config.providerType)
+  const providerName =
+    config.providerType === 'chatgpt-pro'
+      ? CHATGPT_PROVIDER_DISPLAY_NAME
+      : `${config.displayName}${status.email ? ` (${status.email})` : ''}`
+  const provider: LlmProviderConfig = {
+    id: `${config.providerType}-${now}`,
+    type: config.providerType,
+    name: providerName,
+    modelId: template?.defaultModelId ?? '',
+    supportsImages: template?.supportsImages ?? true,
+    contextWindow: template?.contextWindow ?? 128000,
+    temperature: 0.2,
+    createdAt: now,
+    updatedAt: now,
+  }
+  if (config.providerType === 'chatgpt-pro') {
+    provider.reasoningEffort = 'medium'
+    provider.reasoningSummary = 'auto'
+  }
+
+  await saveProvider(provider)
+  return provider
+}
+
+/** Coordinates OAuth launch, status polling, and local provider creation. */
 export function useOAuthProviderFlow(
   config: OAuthProviderFlowConfig,
-  providers: LlmProviderConfig[],
+  _providers: LlmProviderConfig[],
   saveProvider: (provider: LlmProviderConfig) => Promise<void> | void,
 ): OAuthProviderFlowReturn {
   const { status, startPolling, disconnect } = useOAuthStatus(
     config.providerType,
   )
   const flowStartedRef = useRef(false)
+  const providerSaveRef = useRef<Promise<LlmProviderConfig> | null>(null)
   const [pendingDeviceCode, setPendingDeviceCode] =
     useState<PendingDeviceCode | null>(null)
 
-  // Auto-create provider when OAuth completes
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — only trigger on auth status change
   useEffect(() => {
     if (!status?.authenticated) return
     if (!flowStartedRef.current) return
-    if (providers.some((p) => p.type === config.providerType)) return
+    if (providerSaveRef.current) return
 
-    const now = Date.now()
-    try {
-      const template = getProviderTemplate(config.providerType)
-      saveProvider({
-        id: `${config.providerType}-${now}`,
-        type: config.providerType,
-        name: `${config.displayName}${status.email ? ` (${status.email})` : ''}`,
-        modelId: template?.defaultModelId ?? '',
-        supportsImages: template?.supportsImages ?? true,
-        contextWindow: template?.contextWindow ?? 128000,
-        temperature: 0.2,
-        createdAt: now,
-        updatedAt: now,
+    providerSaveRef.current = saveOAuthProviderFromStatus({
+      config,
+      status,
+      saveProvider,
+    })
+
+    providerSaveRef.current
+      .then(() => {
+        setPendingDeviceCode(null)
+        track(config.completedEvent, { email: status.email })
+        toast.success(`${config.displayName} Connected`, {
+          description: status.email
+            ? `Authenticated as ${status.email}`
+            : `Successfully authenticated with ${config.displayName}`,
+        })
+        flowStartedRef.current = false
       })
-      setPendingDeviceCode(null)
-      track(config.completedEvent, { email: status.email })
-      toast.success(`${config.displayName} Connected`, {
-        description: status.email
-          ? `Authenticated as ${status.email}`
-          : `Successfully authenticated with ${config.displayName}`,
+      .catch((err) => {
+        toast.error(`Failed to create ${config.displayName} provider`, {
+          description: err instanceof Error ? err.message : 'Unknown error',
+        })
       })
-    } catch (err) {
-      toast.error(`Failed to create ${config.displayName} provider`, {
-        description: err instanceof Error ? err.message : 'Unknown error',
+      .finally(() => {
+        providerSaveRef.current = null
       })
-    } finally {
-      flowStartedRef.current = false
-    }
-  }, [status?.authenticated])
+  }, [config, saveProvider, status])
 
   async function startOAuthFlow(agentServerUrl: string | undefined) {
     if (!agentServerUrl) {
@@ -107,7 +144,6 @@ export function useOAuthProviderFlow(
     }
   }
 
-  // Client-side: extension handles device code + polling, sends token to server
   async function handleClientAuth(auth: ClientAuthConfig, serverUrl: string) {
     const { deviceData, codeVerifier } = await requestDeviceCode(auth)
 
@@ -131,7 +167,6 @@ export function useOAuthProviderFlow(
     })
   }
 
-  // Server-side: server handles device code + polling
   async function handleServerAuth(agentServerUrl: string) {
     const res = await fetch(
       `${agentServerUrl}/oauth/${config.providerType}/start`,
@@ -162,7 +197,6 @@ export function useOAuthProviderFlow(
       return
     }
 
-    // PKCE redirect flow
     if (!res.ok) throw new Error(`Server returned ${res.status}`)
     window.open(res.url, '_blank')
     startPolling()

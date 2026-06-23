@@ -11,7 +11,7 @@ import requests
 
 from ...common.context import Context
 from ...common.module import CommandModule, ValidationError
-from ...common.utils import log_info, log_success, log_error
+from ...common.utils import log_info, log_success
 
 
 class ExtensionInfo(NamedTuple):

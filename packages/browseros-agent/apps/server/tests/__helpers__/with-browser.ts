@@ -3,12 +3,6 @@ import { Mutex } from 'async-mutex'
 import { CdpBackend } from '../../src/browser/backends/cdp'
 import { Browser } from '../../src/browser/browser'
 import {
-  executeTool,
-  type ToolDefinition,
-  type ToolResult,
-  type ToolSessionContext,
-} from '../tools/browser/helpers'
-import {
   type BrowserConfig,
   isBrowserRunning,
   killBrowser,
@@ -69,8 +63,10 @@ async function getOrCreateBrowser(): Promise<Browser> {
   return cachedBrowser
 }
 
+/** Tears down the cached browser/CDP pair used by withBrowser tests. */
 export async function cleanupWithBrowser(): Promise<void> {
   await mutex.runExclusive(async () => {
+    await cachedCdp?.disconnect().catch(() => {})
     await killBrowser()
     cachedCdp = null
     cachedBrowser = null
@@ -80,11 +76,6 @@ export async function cleanupWithBrowser(): Promise<void> {
 
 export interface WithBrowserContext {
   browser: Browser
-  execute: (
-    tool: ToolDefinition,
-    args: unknown,
-    session?: ToolSessionContext,
-  ) => Promise<ToolResult>
 }
 
 export async function withBrowser(
@@ -94,17 +85,6 @@ export async function withBrowser(
     const browser = await getOrCreateBrowser()
     await cb({
       browser,
-      execute: (tool, args, session) =>
-        executeTool(
-          tool,
-          args,
-          {
-            browser,
-            directories: { workingDir: process.cwd() },
-            session,
-          },
-          AbortSignal.timeout(30_000),
-        ),
     })
   })
 }

@@ -101,7 +101,9 @@ def generate_release_json(
         "artifacts": {},
     }
 
-    if platform == "macos":
+    # Sparkle (macOS) and WinSparkle (Windows) both compare against this
+    # BUILD.PATCH version in the appcast.
+    if platform in ("macos", "win"):
         release_data["sparkle_version"] = ctx.get_sparkle_version()
 
     base_url = f"{env.r2_cdn_base_url}/{ctx.get_release_path(platform)}"
@@ -176,9 +178,9 @@ def _get_artifact_key(filename: str, platform: str) -> str:
 
     elif platform == "win":
         if "installer.exe" in lower:
-            return "x64_installer"
+            return "arm64_installer" if "arm64" in lower else "x64_installer"
         elif "installer.zip" in lower:
-            return "x64_zip"
+            return "arm64_zip" if "arm64" in lower else "x64_zip"
 
     elif platform == "linux":
         artifact_key = _get_linux_artifact_key(filename)
@@ -274,9 +276,10 @@ def upload_release_artifacts(
         artifact_metadata.append(metadata)
 
     release_data = generate_release_json(ctx, artifact_metadata, platform)
-    if platform == "linux":
-        # Linux x64 and arm64 release jobs must be sequenced. A parallel
-        # fetch-merge-upload flow can still race and drop one architecture.
+    if platform in ("linux", "win"):
+        # Per-arch release jobs (linux x64/arm64, win x64/arm64) must be
+        # sequenced. A parallel fetch-merge-upload flow can still race and
+        # drop one architecture.
         existing_release_data = get_release_json(
             ctx.get_semantic_version(), platform, env
         )
@@ -291,7 +294,7 @@ def upload_release_artifacts(
     log_success(f"\nSuccessfully uploaded {len(artifacts)} artifact(s) to R2")
     log_info("\nRelease metadata:")
     log_info(f"  Version: {release_data['version']}")
-    if platform == "macos":
+    if platform in ("macos", "win"):
         log_info(f"  Sparkle version: {release_data.get('sparkle_version', 'N/A')}")
     log_info(f"  Artifacts: {list(release_data['artifacts'].keys())}")
 

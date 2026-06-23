@@ -1,0 +1,43 @@
+{
+  "name": "@browseros/agent-mcp-interface",
+  "type": "module",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Hono backend exposing the BrowserOS v2 agent surface: typed JSON API + per-agent MCP route mux. File-based config under <browserosDir>/mcp-interface/.",
+  "exports": {
+    "./server": {
+      "types": "./src/server.ts",
+      "default": null
+    },
+    "./cockpit": {
+      "types": "./src/cockpit.ts",
+      "default": "./src/cockpit.ts"
+    },
+    "./shared/port": {
+      "types": "./src/shared/port.ts",
+      "default": "./src/shared/port.ts"
+    }
+  },
+  "scripts": {
+    "start": "bun --watch src/main.ts",
+    "start:ci": "bun src/main.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "lint": "bunx biome check",
+    "lint:fix": "bunx biome check --write --unsafe"
+  },
+  "dependencies": {
+    "@browseros/server": "workspace:*",
+    "@browseros/shared": "workspace:*",
+    "@hono/zod-validator": "^0.8.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "agent-mcp-manager": "^0.0.1",
+    "hono": "^4.12.3",
+    "nanoid": "^5.1.11",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.5",
+    "typescript": "^5.9.2"
+  }
+}

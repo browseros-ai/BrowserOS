@@ -25,19 +25,13 @@
           "features/bring-your-own-llm",
           "features/chatgpt-pro-oauth",
           "features/github-copilot-oauth",
-          "features/qwen-code-oauth",
           "features/local-models",
-          "features/workflows",
           "features/scheduled-tasks",
           "features/cowork",
           "features/connect-mcps",
-          "features/skills",
           "features/smart-nudges",
           "features/use-with-claude-code",
-          "features/soul",
-          "features/memory",
           "features/sync-to-cloud",
-          "features/llm-chat-hub",
           "features/ad-blocking",
           "features/vertical-tabs"
         ]
@@ -64,6 +58,14 @@
       }
     ]
   },
+  "redirects": [
+    { "source": "/features/skills", "destination": "/" },
+    { "source": "/features/soul", "destination": "/" },
+    { "source": "/features/memory", "destination": "/" },
+    { "source": "/features/llm-chat-hub", "destination": "/" },
+    { "source": "/features/workflows", "destination": "/features/scheduled-tasks" },
+    { "source": "/features/qwen-code-oauth", "destination": "/features/bring-your-own-llm" }
+  ],
   "logo": {
     "light": "/logo/logo44.png",
     "dark": "/logo/logo44.png"

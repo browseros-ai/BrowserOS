@@ -94,6 +94,40 @@ describe('renderSnapshot', () => {
     })
   })
 
+  test('reuses refs for same-document backend nodes after insertion', () => {
+    const refs = new RefMap()
+    const before: AXNode[] = [
+      ax('1', 'RootWebArea', { children: ['2', '3'] }),
+      ax('2', 'button', { name: name('A'), backendDOMNodeId: 1 }),
+      ax('3', 'link', { name: name('B'), backendDOMNodeId: 2 }),
+    ]
+    const after: AXNode[] = [
+      ax('1', 'RootWebArea', { children: ['4', '2', '3'] }),
+      ax('4', 'button', { name: name('X'), backendDOMNodeId: 3 }),
+      ax('2', 'button', { name: name('A'), backendDOMNodeId: 1 }),
+      ax('3', 'link', { name: name('B'), backendDOMNodeId: 2 }),
+    ]
+
+    const first = renderSnapshot(before, {
+      refs,
+      documentId: 'main:loader-1',
+    })
+    refs.beginSnapshot()
+    const second = renderSnapshot(after, {
+      refs,
+      documentId: 'main:loader-1',
+    })
+
+    expect(first.text).toBe('- button "A" [ref=e1]\n- link "B" [ref=e2]')
+    expect(second.text).toBe(
+      [
+        '- button "X" [ref=e3]',
+        '- button "A" [ref=e1]',
+        '- link "B" [ref=e2]',
+      ].join('\n'),
+    )
+  })
+
   test('marks cursor-augmented non-ARIA nodes actionable', () => {
     const nodes: AXNode[] = [
       ax('1', 'RootWebArea', { children: ['2'] }),

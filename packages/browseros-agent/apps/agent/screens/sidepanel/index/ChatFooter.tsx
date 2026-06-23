@@ -4,22 +4,22 @@ import { useEffect, useRef, useState } from 'react'
 import { AppSelector } from '@/components/elements/AppSelector'
 import { WorkspaceSelector } from '@/components/elements/workspace-selector'
 import { McpServerIcon } from '@/components/mcp/McpServerIcon'
-import { Feature } from '@/lib/browseros/capabilities'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import {
   type SelectedTextData,
   selectedTextStorage,
 } from '@/lib/selected-text/selectedTextStorage'
 import { cn } from '@/lib/utils'
-import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { useGetUserMCPIntegrations } from '@/modules/mcp/user-integrations.hooks'
 import type { VoiceInputState } from '@/modules/voice/voice.hooks'
+import type { VoiceLoopApi } from '@/modules/voice/voice-types'
 import { useWorkspace } from '@/modules/workspace/workspace.hooks'
 import { ChatAttachedTabs } from './ChatAttachedTabs'
 import { ChatInput, type ChatInputHandle } from './ChatInput'
 import { ChatModeToggle } from './ChatModeToggle'
 import { ChatSelectedText } from './ChatSelectedText'
+import { VoiceModeArea } from './VoiceModeArea'
 
 export interface ChatFooterProps {
   mode: ChatMode
@@ -34,6 +34,8 @@ export interface ChatFooterProps {
   onToggleTab: (tab: chrome.tabs.Tab) => void
   onRemoveTab: (tabId?: number) => void
   voice?: VoiceInputState
+  voiceLoop?: VoiceLoopApi
+  onOpenVoiceMode?: () => void
 }
 
 export const ChatFooter: FC<ChatFooterProps> = ({
@@ -49,9 +51,10 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   onToggleTab,
   onRemoveTab,
   voice,
+  voiceLoop,
+  onOpenVoiceMode,
 }) => {
   const { selectedFolder } = useWorkspace()
-  const { supports } = useCapabilities()
   const { servers: mcpServers } = useMcpServers()
   const { data: userMCPIntegrations } = useGetUserMCPIntegrations()
   const chatInputRef = useRef<ChatInputHandle>(null)
@@ -155,68 +158,64 @@ export const ChatFooter: FC<ChatFooterProps> = ({
               <ChevronDown className="h-3 w-3" />
             </button>
 
-            {supports(Feature.WORKSPACE_FOLDER_SUPPORT) && (
-              <WorkspaceSelector side="top">
-                <button
-                  type="button"
-                  className={cn(
-                    'flex cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-colors hover:bg-muted/50 data-[state=open]:bg-accent',
-                    selectedFolder
-                      ? 'text-foreground'
-                      : 'text-muted-foreground hover:text-foreground',
+            <WorkspaceSelector side="top">
+              <button
+                type="button"
+                className={cn(
+                  'flex cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-colors hover:bg-muted/50 data-[state=open]:bg-accent',
+                  selectedFolder
+                    ? 'text-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+                title={
+                  selectedFolder
+                    ? selectedFolder.name
+                    : 'Select workspace folder'
+                }
+              >
+                <div className="relative">
+                  <Folder className="h-4 w-4" />
+                  {selectedFolder && (
+                    <div className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-[var(--accent-orange)]" />
                   )}
-                  title={
-                    selectedFolder
-                      ? selectedFolder.name
-                      : 'Select workspace folder'
-                  }
-                >
-                  <div className="relative">
-                    <Folder className="h-4 w-4" />
-                    {selectedFolder && (
-                      <div className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-[var(--accent-orange)]" />
-                    )}
-                  </div>
-                  <ChevronDown className="h-3 w-3" />
-                </button>
-              </WorkspaceSelector>
-            )}
+                </div>
+                <ChevronDown className="h-3 w-3" />
+              </button>
+            </WorkspaceSelector>
 
-            {supports(Feature.MANAGED_MCP_SUPPORT) && (
-              <AppSelector side="top">
-                <button
-                  type="button"
-                  className="flex cursor-pointer items-center gap-1 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
-                  title="Connect apps"
-                >
-                  {connectedManagedServers.length > 0 ? (
-                    <>
-                      <div className="flex items-center -space-x-1">
-                        {connectedManagedServers.slice(0, 3).map((s) => (
-                          <div
-                            key={s.id}
-                            className="rounded-full ring-2 ring-background"
-                          >
-                            <McpServerIcon
-                              serverName={s.managedServerName ?? ''}
-                              size={14}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                      {connectedManagedServers.length > 3 && (
-                        <span className="font-medium text-xs">
-                          +{connectedManagedServers.length - 3}
-                        </span>
-                      )}
-                    </>
-                  ) : (
-                    <PlugZap className="h-4 w-4" />
-                  )}
-                  <ChevronDown className="h-3 w-3" />
-                </button>
-              </AppSelector>
-            )}
+            <AppSelector side="top">
+              <button
+                type="button"
+                className="flex cursor-pointer items-center gap-1 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
+                title="Connect apps"
+              >
+                {connectedManagedServers.length > 0 ? (
+                  <>
+                    <div className="flex items-center -space-x-1">
+                      {connectedManagedServers.slice(0, 3).map((s) => (
+                        <div
+                          key={s.id}
+                          className="rounded-full ring-2 ring-background"
+                        >
+                          <McpServerIcon
+                            serverName={s.managedServerName ?? ''}
+                            size={14}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    {connectedManagedServers.length > 3 && (
+                      <span className="font-medium text-xs">
+                        +{connectedManagedServers.length - 3}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <PlugZap className="h-4 w-4" />
+                )}
+                <ChevronDown className="h-3 w-3" />
+              </button>
+            </AppSelector>
           </div>
         </div>
 
@@ -224,20 +223,23 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           <div className="mt-1 text-destructive text-xs">{voice.error}</div>
         )}
 
-        <ChatInput
-          input={input}
-          status={status}
-          mode={mode}
-          sendDisabled={sendDisabled}
-          onInputChange={onInputChange}
-          onSubmit={onSubmit}
-          onStop={onStop}
-          selectedTabs={attachedTabs}
-          onToggleTab={onToggleTab}
-          onTabMentionOpenChange={setIsTabMentionOpen}
-          voice={voice}
-          ref={chatInputRef}
-        />
+        <VoiceModeArea voiceLoop={voiceLoop}>
+          <ChatInput
+            input={input}
+            status={status}
+            mode={mode}
+            sendDisabled={sendDisabled}
+            onInputChange={onInputChange}
+            onSubmit={onSubmit}
+            onStop={onStop}
+            selectedTabs={attachedTabs}
+            onToggleTab={onToggleTab}
+            onTabMentionOpenChange={setIsTabMentionOpen}
+            voice={voice}
+            onOpenVoiceMode={onOpenVoiceMode}
+            ref={chatInputRef}
+          />
+        </VoiceModeArea>
       </div>
     </footer>
   )

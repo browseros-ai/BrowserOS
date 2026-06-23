@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">
+  <app appid="adlpneommgkgeanpaekgoaolcpncohkf">
+    <updatecheck codebase="https://cdn.browseros.com/extensions/bugreporter-52.0.0.0.crx" version="52.0.0.0"/>
+  </app>
+  <app appid="bflpfmnmnokmjhmgnolecpppdbdophmk">
+    <updatecheck codebase="https://cdn.browseros.com/extensions/agent-0.0.115.0.crx" version="0.0.115.0"/>
+  </app>
+</gupdate>

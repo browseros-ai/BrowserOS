@@ -4,10 +4,21 @@
  */
 
 import { afterEach, describe, expect, it } from 'bun:test'
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { resolveBundledBun } from '../../../src/lib/agents/host-acp/bundled-bun'
+import {
+  resolveBundledBun,
+  withBundledBunAcpAdapterEnv,
+} from '../../../src/lib/agents/host-acp/bundled-bun'
 
 describe('bundled Bun helpers', () => {
   const tempDirs: string[] = []
@@ -83,5 +94,55 @@ describe('bundled Bun helpers', () => {
     await writeFile(bunPath, '#!/bin/sh\n')
 
     expect(resolveBundledBun({ resourcesDir, platform: 'freebsd' })).toBeNull()
+  })
+
+  it('creates a private node shim for Unix ACP adapter launches', async () => {
+    const resourcesDir = await mkdtemp(join(tmpdir(), 'browseros-bun-'))
+    const browserosDir = await mkdtemp(join(tmpdir(), 'browseros-dir-'))
+    tempDirs.push(resourcesDir, browserosDir)
+    const bunPath = join(resourcesDir, 'bin', 'third_party', 'bun')
+    await mkdir(dirname(bunPath), { recursive: true })
+    await writeFile(bunPath, '#!/bin/sh\n')
+    await chmod(bunPath, 0o755)
+
+    const env = withBundledBunAcpAdapterEnv({
+      bunPath,
+      browserosDir,
+      env: { PATH: '/usr/bin' },
+      platform: 'darwin',
+    })
+
+    const shimPath = join(browserosDir, 'cache', 'acp-node-shim', 'node')
+    expect(env.PATH.split(':').slice(0, 3)).toEqual([
+      dirname(shimPath),
+      dirname(bunPath),
+      '/usr/bin',
+    ])
+    expect(env.BUN_INSTALL_CACHE_DIR).toBe(
+      join(browserosDir, 'cache', 'bun-install'),
+    )
+    expect(await readFile(shimPath, 'utf8')).toContain(bunPath)
+    expect((await stat(shimPath)).mode & 0o111).not.toBe(0)
+  })
+
+  it('prepends the bundled Bun directory even without a writable BrowserOS dir', async () => {
+    const resourcesDir = await mkdtemp(join(tmpdir(), 'browseros-bun-'))
+    tempDirs.push(resourcesDir)
+    const bunPath = join(resourcesDir, 'bin', 'third_party', 'bun')
+    await mkdir(dirname(bunPath), { recursive: true })
+    await writeFile(bunPath, '#!/bin/sh\n')
+    await chmod(bunPath, 0o755)
+
+    const env = withBundledBunAcpAdapterEnv({
+      bunPath,
+      env: { PATH: '/usr/bin' },
+      platform: 'linux',
+    })
+
+    expect(env.PATH.split(':').slice(0, 2)).toEqual([
+      dirname(bunPath),
+      '/usr/bin',
+    ])
+    expect(env.BUN_INSTALL_CACHE_DIR).toBeUndefined()
   })
 })

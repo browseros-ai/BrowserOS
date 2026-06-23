@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { createEditTool } from '../../../src/tools/filesystem/edit'
 import type { FilesystemToolResult } from '../../../src/tools/filesystem/utils'
 
@@ -178,5 +178,58 @@ describe('filesystem_edit', () => {
 
     const content = await readFile(join(tmpDir, 'shrink.ts'), 'utf-8')
     expect(content).toBe('a\nreplaced\ne')
+  })
+
+  it('rejects absolute paths', async () => {
+    const absPath = join(tmpDir, 'abs.ts')
+    await writeFile(absPath, 'const x = 1')
+    const result = await exec({
+      path: absPath,
+      old_string: 'const x = 1',
+      new_string: 'const x = 2',
+    })
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain('relative to the selected workspace')
+  })
+
+  it('rejects traversal outside the workspace', async () => {
+    const outsideDir = join(
+      tmpdir(),
+      `fs-edit-outside-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    )
+    await mkdir(outsideDir, { recursive: true })
+    try {
+      await writeFile(join(outsideDir, 'secret.ts'), 'const secret = true')
+      const result = await exec({
+        path: `../${basename(outsideDir)}/secret.ts`,
+        old_string: 'true',
+        new_string: 'false',
+      })
+      expect(result.isError).toBe(true)
+      expect(result.text).toContain('outside the selected workspace')
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects symlinks that point outside the workspace', async () => {
+    const outsideDir = join(
+      tmpdir(),
+      `fs-edit-symlink-outside-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    )
+    await mkdir(outsideDir, { recursive: true })
+    try {
+      await writeFile(join(outsideDir, 'secret.ts'), 'const secret = true')
+      await symlink(join(outsideDir, 'secret.ts'), join(tmpDir, 'secret-link'))
+      const result = await exec({
+        path: 'secret-link',
+        old_string: 'true',
+        new_string: 'false',
+      })
+      expect(result.isError).toBe(true)
+      expect(result.text).toContain('outside the selected workspace')
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
   })
 })

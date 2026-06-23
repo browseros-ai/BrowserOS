@@ -29,7 +29,6 @@ const ServerConfigSchema = z.object({
   instanceBrowserosVersion: z.string().optional(),
   instanceChromiumVersion: z.string().optional(),
   aiSdkDevtoolsEnabled: z.boolean(),
-  browserUseNewTools: z.boolean(),
 })
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>
@@ -46,32 +45,28 @@ interface ParsedCliArgs {
   overrides: PartialConfig
 }
 
+/** Loads and validates server config from CLI, file, env, and defaults. */
 export function loadServerConfig(
   argv: string[] = process.argv,
 ): ConfigResult<ServerConfig> {
-  // 1. Parse CLI args
   const cli = parseCliArgs(argv)
   if (!cli.ok) return cli
 
-  // 2. Parse config file (only if --config provided)
   const file = parseConfigFile(cli.value.configPath)
   if (!file.ok) return file
 
-  // 3. Parse runtime environment variables
   const runtimeEnv = parseRuntimeEnv()
+  if (!runtimeEnv.ok) return runtimeEnv
 
-  // 4. Merge: Defaults < Env < File < CLI
   const merged = mergeConfigs(
     getDefaults(cli.value.cwd),
-    runtimeEnv,
+    runtimeEnv.value,
     file.value,
     cli.value.overrides,
   )
 
-  // 5. agentPort is deprecated - always equals serverPort
   merged.agentPort = merged.serverPort
 
-  // 6. Validate with Zod
   const result = ServerConfigSchema.safeParse(merged)
   if (!result.success) {
     const errors = result.error.issues
@@ -83,7 +78,6 @@ export function loadServerConfig(
     }
   }
 
-  // 7. Validate required inlined env vars for production
   const inlinedValidation = validateInlinedEnv()
   if (!inlinedValidation.ok) return inlinedValidation
 
@@ -247,30 +241,33 @@ function parseConfigFile(filePath?: string): ConfigResult<PartialConfig> {
   }
 }
 
-function parseRuntimeEnv(): PartialConfig {
+function parseRuntimeEnv(): ConfigResult<PartialConfig> {
   const cwd = process.cwd()
-  return omitUndefined({
-    cdpPort: process.env.BROWSEROS_CDP_PORT
-      ? safeParseInt(process.env.BROWSEROS_CDP_PORT)
-      : undefined,
-    serverPort: process.env.BROWSEROS_SERVER_PORT
-      ? safeParseInt(process.env.BROWSEROS_SERVER_PORT)
-      : undefined,
-    extensionPort: process.env.BROWSEROS_EXTENSION_PORT
-      ? safeParseInt(process.env.BROWSEROS_EXTENSION_PORT)
-      : undefined,
-    resourcesDir: process.env.BROWSEROS_RESOURCES_DIR
-      ? toAbsolutePath(process.env.BROWSEROS_RESOURCES_DIR, cwd)
-      : undefined,
-    executionDir: process.env.BROWSEROS_EXECUTION_DIR
-      ? toAbsolutePath(process.env.BROWSEROS_EXECUTION_DIR, cwd)
-      : undefined,
-    instanceInstallId: process.env.BROWSEROS_INSTALL_ID,
-    instanceClientId: process.env.BROWSEROS_CLIENT_ID,
-    aiSdkDevtoolsEnabled:
-      process.env.BROWSEROS_AI_SDK_DEVTOOLS === 'true' ? true : undefined,
-    browserUseNewTools: parseOptionalBoolean(process.env.BROWSER_USE_NEW_TOOLS),
-  })
+
+  return {
+    ok: true,
+    value: omitUndefined({
+      cdpPort: process.env.BROWSEROS_CDP_PORT
+        ? safeParseInt(process.env.BROWSEROS_CDP_PORT)
+        : undefined,
+      serverPort: process.env.BROWSEROS_SERVER_PORT
+        ? safeParseInt(process.env.BROWSEROS_SERVER_PORT)
+        : undefined,
+      extensionPort: process.env.BROWSEROS_EXTENSION_PORT
+        ? safeParseInt(process.env.BROWSEROS_EXTENSION_PORT)
+        : undefined,
+      resourcesDir: process.env.BROWSEROS_RESOURCES_DIR
+        ? toAbsolutePath(process.env.BROWSEROS_RESOURCES_DIR, cwd)
+        : undefined,
+      executionDir: process.env.BROWSEROS_EXECUTION_DIR
+        ? toAbsolutePath(process.env.BROWSEROS_EXECUTION_DIR, cwd)
+        : undefined,
+      instanceInstallId: process.env.BROWSEROS_INSTALL_ID,
+      instanceClientId: process.env.BROWSEROS_CLIENT_ID,
+      aiSdkDevtoolsEnabled:
+        process.env.BROWSEROS_AI_SDK_DEVTOOLS === 'true' ? true : undefined,
+    }),
+  }
 }
 
 function validateInlinedEnv(): ConfigResult<void> {
@@ -303,7 +300,6 @@ function getDefaults(cwd: string): PartialConfig {
     executionDir: cwd,
     mcpAllowRemote: false,
     aiSdkDevtoolsEnabled: false,
-    browserUseNewTools: false,
   }
 }
 
@@ -322,14 +318,6 @@ function mergeConfigs(...configs: PartialConfig[]): PartialConfig {
 function safeParseInt(value: string): number | undefined {
   const num = parseInt(value, 10)
   return Number.isNaN(num) ? undefined : num
-}
-
-function parseOptionalBoolean(value: string | undefined): boolean | undefined {
-  if (value === undefined) return undefined
-  const normalized = value.trim().toLowerCase()
-  if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true
-  if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false
-  return undefined
 }
 
 function omitUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {

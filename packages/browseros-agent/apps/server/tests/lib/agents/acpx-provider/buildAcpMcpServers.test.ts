@@ -61,6 +61,18 @@ describe('buildAcpMcpServers', () => {
     ).toBe('11')
   })
 
+  it('forwards enabled managed server names into the BrowserOS entry headers', () => {
+    const out = buildAcpMcpServers({
+      ...baseOpts,
+      enabledMcpServers: ['Slack', 'Google Docs'],
+    })
+    if (out[0]?.type !== 'http') throw new Error('expected http entry')
+    expect(
+      out[0].headers.find((h) => h.name === 'X-BrowserOS-Managed-Mcp-Servers')
+        ?.value,
+    ).toBe('Slack,Google%20Docs')
+  })
+
   it('handles an undefined customMcpServers list', () => {
     const out = buildAcpMcpServers(baseOpts)
     expect(out).toHaveLength(1)

@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Shared sign metadata for BrowserOS Server binaries.
-
-Consumed by both the Chromium-build signing path (build/modules/sign/) and the
-OTA release path (build/modules/ota/). Adding a new third-party binary here
-means both paths pick it up automatically.
-"""
+"""Shared sign metadata for BrowserOS Server binaries."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,11 +8,7 @@ from typing import Dict, List, Optional
 
 @dataclass(frozen=True)
 class SignSpec:
-    """Per-binary codesign metadata.
-
-    ``entitlements`` is the filename of the plist under
-    ``resources/entitlements/``; ``None`` means no extra entitlements.
-    """
+    """Per-binary codesign metadata."""
 
     identifier_suffix: str
     options: str
@@ -30,7 +21,6 @@ MACOS_SERVER_BINARIES: Dict[str, SignSpec] = {
     ),
     "bun": SignSpec("bun", "runtime", "browseros-executable-entitlements.plist"),
     "codex": SignSpec("codex", "runtime"),
-    "claude": SignSpec("claude", "runtime"),
     "rg": SignSpec("rg", "runtime"),
 }
 
@@ -38,12 +28,11 @@ MACOS_SERVER_BINARIES: Dict[str, SignSpec] = {
 WINDOWS_SERVER_BINARIES: List[str] = [
     "browseros_server.exe",
     "third_party/codex.exe",
-    "third_party/claude.exe",
 ]
 
 
 def macos_sign_spec_for(binary_path: Path) -> Optional[SignSpec]:
-    """Look up sign metadata by file stem, such as ``codex`` or ``claude``."""
+    """Look up sign metadata by file stem."""
     return MACOS_SERVER_BINARIES.get(binary_path.stem)
 
 

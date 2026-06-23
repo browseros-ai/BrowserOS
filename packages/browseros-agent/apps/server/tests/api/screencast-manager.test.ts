@@ -57,7 +57,7 @@ describe('ScreencastManager', () => {
   // composition for off-screen windows).
   it('subscribes, emits frames, displaces a prior subscriber, and stops on unsubscribe', async () => {
     await withBrowser(async ({ browser }) => {
-      const { windowId } = await browser.createWindow()
+      const { windowId } = await browser.session.windows.create()
 
       try {
         const manager = new ScreencastManager(browser)
@@ -92,7 +92,7 @@ describe('ScreencastManager', () => {
         manager.unsubscribe(handleA, subA.ws)
         manager.unsubscribe(handleB, subB.ws)
       } finally {
-        await browser.closeWindow(windowId)
+        await browser.session.windows.close(windowId)
       }
     })
   }, 60_000)

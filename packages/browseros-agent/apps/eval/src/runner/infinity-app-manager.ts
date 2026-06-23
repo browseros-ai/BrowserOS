@@ -14,10 +14,7 @@ export class InfinityAppManager {
   private port: number
   private infinityDir: string
 
-  constructor(
-    private workerIndex: number,
-    private basePort: number = 8000,
-  ) {
+  constructor(workerIndex: number, basePort: number = 8000) {
     this.port = basePort + workerIndex
     this.infinityDir = process.env.WEBARENA_INFINITY_DIR || ''
   }

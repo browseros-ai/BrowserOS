@@ -68,10 +68,7 @@ export default defineConfig({
       'webNavigation',
       'downloads',
     ],
-    host_permissions: [
-      'http://127.0.0.1/*',
-      'https://suggestqueries.google.com/*',
-    ],
+    host_permissions: ['http://127.0.0.1/*'],
   },
   vite: () => ({
     build: {

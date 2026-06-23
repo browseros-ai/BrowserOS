@@ -4,7 +4,6 @@
 import shutil
 import zipfile
 from pathlib import Path
-from typing import List
 from ...common.module import CommandModule, ValidationError
 from ...common.context import Context
 from ...common.utils import (
@@ -20,29 +19,57 @@ from ...common.notify import get_notifier, COLOR_GREEN
 from ..compile.standard import autoninja_command
 
 
+class MiniInstallerModule(CommandModule):
+    """Build mini_installer.exe without signing.
+
+    The signed release flow builds mini_installer inside WindowsSignModule
+    (sign binaries -> build installer -> sign installer). Unsigned CI builds
+    skip sign_windows entirely, so this module provides the installer build
+    step that package_windows requires.
+    """
+
+    produces = []
+    requires = []
+    description = "Build unsigned mini_installer.exe (CI builds without signing)"
+
+    def validate(self, context: Context) -> None:
+        if not IS_WINDOWS():
+            raise ValidationError("mini_installer build requires Windows")
+
+        args_file = context.get_gn_args_file()
+        if not args_file.exists():
+            raise ValidationError(
+                f"Build not configured - args.gn not found: {args_file}"
+            )
+
+    def execute(self, context: Context) -> None:
+        if not build_mini_installer(context):
+            raise RuntimeError("Failed to build mini_installer")
+
+
 class WindowsPackageModule(CommandModule):
     produces = ["installer", "installer_zip"]
     requires = []
     description = "Create Windows installer and portable ZIP"
 
-    def validate(self, ctx: Context) -> None:
+    def validate(self, context: Context) -> None:
         if not IS_WINDOWS():
             raise ValidationError("Windows packaging requires Windows")
 
-        build_output_dir = join_paths(ctx.chromium_src, ctx.out_dir)
+        build_output_dir = join_paths(context.chromium_src, context.out_dir)
         mini_installer_path = build_output_dir / "mini_installer.exe"
 
         if not mini_installer_path.exists():
             raise ValidationError(f"mini_installer.exe not found: {mini_installer_path}")
 
-    def execute(self, ctx: Context) -> None:
+    def execute(self, context: Context) -> None:
         log_info("\n📦 Creating Windows packages...")
 
-        installer_path = self._create_installer(ctx)
-        zip_path = self._create_portable_zip(ctx)
+        installer_path = self._create_installer(context)
+        zip_path = self._create_portable_zip(context)
 
-        ctx.artifact_registry.add("installer", installer_path)
-        ctx.artifact_registry.add("installer_zip", zip_path)
+        context.artifact_registry.add("installer", installer_path)
+        context.artifact_registry.add("installer_zip", zip_path)
 
         log_success("Windows packages created successfully")
 
@@ -53,7 +80,7 @@ class WindowsPackageModule(CommandModule):
             "Windows packages created successfully",
             {
                 "Artifacts": f"{installer_path.name}, {zip_path.name}",
-                "Version": ctx.semantic_version,
+                "Version": context.semantic_version,
             },
             color=COLOR_GREEN,
         )
@@ -233,13 +260,6 @@ def create_portable_zip(ctx: Context) -> bool:
 # - sign_with_codesigntool()
 # - get_browseros_server_binary_paths()
 # These are now in modules/sign/windows.py
-
-
-def package_universal(contexts: List[Context]) -> bool:
-    """Windows doesn't support universal binaries like macOS"""
-    log_warning("Universal binaries are not supported on Windows")
-    log_info("Consider creating separate packages for each architecture")
-    return True
 
 
 def get_target_cpu(build_output_dir: Path) -> str:

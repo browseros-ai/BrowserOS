@@ -7,6 +7,7 @@
 import type { McpServerSpec } from './buildAcpxProvider'
 
 const BROWSEROS_SELF_MCP_NAME = 'browseros'
+const MANAGED_MCP_SERVERS_HEADER = 'X-BrowserOS-Managed-Mcp-Servers'
 
 export interface BuildBrowserOsSelfMcpOptions {
   /** Port the BrowserOS HTTP server is bound to. */
@@ -30,6 +31,8 @@ export interface BuildBrowserOsSelfMcpOptions {
    * commit can populate it without changing this signature.
    */
   defaultTabGroupId?: string
+  /** Managed Klavis connector names selected for this chat/session. */
+  enabledMcpServers?: readonly string[]
 }
 
 /**
@@ -55,6 +58,12 @@ export function buildBrowserOsSelfMcpEntry(
     headers.push({
       name: 'X-BrowserOS-Default-Tab-Group-Id',
       value: opts.defaultTabGroupId,
+    })
+  }
+  if (opts.enabledMcpServers?.length) {
+    headers.push({
+      name: MANAGED_MCP_SERVERS_HEADER,
+      value: opts.enabledMcpServers.map(encodeURIComponent).join(','),
     })
   }
   return {

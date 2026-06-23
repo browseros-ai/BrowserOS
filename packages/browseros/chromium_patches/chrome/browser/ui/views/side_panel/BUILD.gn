@@ -1,19 +1,13 @@
 diff --git a/chrome/browser/ui/views/side_panel/BUILD.gn b/chrome/browser/ui/views/side_panel/BUILD.gn
-index 555a27ca0c171..d7acc5cf3453e 100644
+index 555a27ca0c171..42afed39a3469 100644
 --- a/chrome/browser/ui/views/side_panel/BUILD.gn
 +++ b/chrome/browser/ui/views/side_panel/BUILD.gn
-@@ -56,8 +56,20 @@ source_set("side_panel") {
+@@ -56,8 +56,14 @@ source_set("side_panel") {
      "side_panel_toolbar_pinning_controller.h",
      "side_panel_web_ui_view.cc",
      "side_panel_web_ui_view.h",
 +    "browseros_simple_page_extractor.cc",
 +    "browseros_simple_page_extractor.h",
-+    "clash_of_gpts/clash_of_gpts_coordinator.cc",
-+    "clash_of_gpts/clash_of_gpts_coordinator.h",
-+    "clash_of_gpts/clash_of_gpts_view.cc",
-+    "clash_of_gpts/clash_of_gpts_view.h",
-+    "clash_of_gpts/clash_of_gpts_window.cc",
-+    "clash_of_gpts/clash_of_gpts_window.h",
      "tabs_from_other_devices/tabs_from_other_devices_side_panel_coordinator.cc",
      "tabs_from_other_devices/tabs_from_other_devices_side_panel_coordinator.h",
 +    "third_party_llm/third_party_llm_panel_coordinator.cc",
@@ -23,7 +17,7 @@ index 555a27ca0c171..d7acc5cf3453e 100644
    ]
    public_deps = [
      "//base",
-@@ -76,6 +88,7 @@ source_set("side_panel") {
+@@ -76,6 +82,7 @@ source_set("side_panel") {
      "//chrome/browser/ui/webui/side_panel/customize_chrome",
      "//chrome/common",
      "//chrome/common/read_anything:mojo_bindings",

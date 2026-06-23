@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.cc b/chrome/browser/browseros/core/browseros_prefs.cc
 new file mode 100644
-index 0000000000000..c191fb3963968
+index 0000000000000..cbc95b13018f2
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.cc
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,89 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -21,7 +21,6 @@ index 0000000000000..c191fb3963968
 +void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
 +  // Toolbar visibility prefs
 +  registry->RegisterBooleanPref(prefs::kShowLLMChat, true);
-+  registry->RegisterBooleanPref(prefs::kShowLLMHub, false);
 +  registry->RegisterBooleanPref(prefs::kShowToolbarLabels, true);
 +
 +  // Vertical tabs pref
@@ -38,10 +37,6 @@ index 0000000000000..c191fb3963968
 +
 +bool ShouldShowLLMChat(PrefService* pref_service) {
 +  return pref_service->GetBoolean(prefs::kShowLLMChat);
-+}
-+
-+bool ShouldShowLLMHub(PrefService* pref_service) {
-+  return pref_service->GetBoolean(prefs::kShowLLMHub);
 +}
 +
 +bool ShouldShowToolbarLabels(PrefService* pref_service) {
@@ -84,8 +79,6 @@ index 0000000000000..c191fb3963968
 +  switch (id) {
 +    case kActionSidePanelShowThirdPartyLlm:
 +      return prefs::kShowLLMChat;
-+    case kActionSidePanelShowClashOfGpts:
-+      return prefs::kShowLLMHub;
 +    default:
 +      return nullptr;
 +  }

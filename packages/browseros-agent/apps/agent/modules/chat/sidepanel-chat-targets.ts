@@ -4,9 +4,6 @@ import type {
   HarnessAgent,
   HarnessAgentAdapter,
 } from '@/modules/agents/agent-harness-types'
-// Relative (not `@/`) so this module stays loadable under `bun test`, which
-// resolves tsconfig `@/` aliases for erased type imports only, not values.
-import { visibleHarnessAgents } from '../../lib/chat/adapter-visibility'
 import {
   isChatProviderType,
   resolveChatProvider,
@@ -45,7 +42,6 @@ export interface BuildSidepanelChatTargetsInput {
   providers: LlmProviderConfig[]
   adapters: HarnessAdapterDescriptor[]
   agents?: HarnessAgent[]
-  hermesAgentSupported?: boolean
 }
 
 export interface ResolveSidepanelChatTargetInput {
@@ -80,15 +76,12 @@ export function buildSidepanelChatTargets({
   providers,
   adapters,
   agents = [],
-  hermesAgentSupported = false,
 }: BuildSidepanelChatTargetsInput): SidepanelChatTarget[] {
   return [
     ...providers
       .filter((provider) => isChatProviderType(provider.type))
       .map(toLlmTarget),
-    ...visibleHarnessAgents(agents, hermesAgentSupported).map((agent) =>
-      toAcpTargetForAgent(agent, adapters),
-    ),
+    ...agents.map((agent) => toAcpTargetForAgent(agent, adapters)),
   ]
 }
 
@@ -125,7 +118,6 @@ function toAcpTargetForAgent(
 function formatAdapterName(adapter: HarnessAgentAdapter): string {
   if (adapter === 'claude') return 'Claude Code'
   if (adapter === 'codex') return 'Codex'
-  if (adapter === 'hermes') return 'Hermes'
   return adapter
 }
 

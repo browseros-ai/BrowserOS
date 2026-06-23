@@ -2,9 +2,12 @@
 """Git operations module for BrowserOS build system"""
 
 import re
+import shutil
 import subprocess
 import tarfile
 import urllib.request
+import zipfile
+from pathlib import Path
 from typing import List
 
 from ...common.module import CommandModule, ValidationError
@@ -19,6 +22,8 @@ from ...common.utils import (
     IS_WINDOWS,
     safe_rmtree,
 )
+
+BROWSEROS_BRANCH = "browseros"
 
 
 class GitSetupModule(CommandModule):
@@ -41,8 +46,7 @@ class GitSetupModule(CommandModule):
 
         self._verify_tag_exists(ctx)
 
-        log_info(f"🔀 Checking out tag: {ctx.chromium_version}")
-        run_command(["git", "checkout", f"tags/{ctx.chromium_version}"], cwd=ctx.chromium_src)
+        self._checkout_browseros_branch(ctx)
 
         # On Linux, depot_tools fetches per-arch sysroots automatically when
         # `.gclient` declares `target_cpus`. Ensure both x64 and arm64 are
@@ -52,11 +56,30 @@ class GitSetupModule(CommandModule):
 
         log_info("📥 Syncing dependencies (this may take a while)...")
         if IS_WINDOWS():
-            run_command(["gclient.bat", "sync", "-D", "--no-history", "--shallow"], cwd=ctx.chromium_src)
+            run_command(
+                ["gclient.bat", "sync", "-D", "--no-history", "--shallow"],
+                cwd=ctx.chromium_src,
+            )
         else:
-            run_command(["gclient", "sync", "-D", "--no-history", "--shallow"], cwd=ctx.chromium_src)
+            run_command(
+                ["gclient", "sync", "-D", "--no-history", "--shallow"],
+                cwd=ctx.chromium_src,
+            )
 
         log_success("Git setup complete")
+
+    def _checkout_browseros_branch(self, ctx: Context) -> None:
+        """Create/reset local `browseros` branch at the pinned tag, not detached HEAD."""
+        # `-B` creates or force-resets in one step from an explicit start-point,
+        # so no redundant detached-HEAD checkout is needed first. gclient's
+        # solution is `managed: False`, so the later sync ignores this branch.
+        log_info(
+            f"🔀 Checking out tag {ctx.chromium_version} as branch: {BROWSEROS_BRANCH}"
+        )
+        run_command(
+            ["git", "checkout", "-B", BROWSEROS_BRANCH, f"tags/{ctx.chromium_version}"],
+            cwd=ctx.chromium_src,
+        )
 
     def _ensure_gclient_target_cpus(self, ctx: Context, required: List[str]) -> None:
         """Idempotently add `target_cpus` to .gclient so depot_tools fetches
@@ -88,12 +111,8 @@ class GitSetupModule(CommandModule):
                 return
             merged = sorted(set(existing) | set(required))
             new_line = f"target_cpus = {merged!r}"
-            content = (
-                content[: match.start()] + new_line + content[match.end() :]
-            )
-            log_info(
-                f"📝 Updating .gclient target_cpus: {existing} → {merged}"
-            )
+            content = content[: match.start()] + new_line + content[match.end() :]
+            log_info(f"📝 Updating .gclient target_cpus: {existing} → {merged}")
         else:
             new_line = f"\ntarget_cpus = {required!r}\n"
             content = content.rstrip() + "\n" + new_line
@@ -130,6 +149,7 @@ class SparkleSetupModule(CommandModule):
 
     def validate(self, ctx: Context) -> None:
         from ...common.utils import IS_MACOS
+
         if not IS_MACOS():
             raise ValidationError("Sparkle setup requires macOS")
 
@@ -156,3 +176,72 @@ class SparkleSetupModule(CommandModule):
         sparkle_archive.unlink()
 
         log_success("Sparkle setup complete")
+
+
+class WinSparkleSetupModule(CommandModule):
+    produces = []
+    requires = []
+    description = "Download and setup WinSparkle library (Windows only)"
+
+    def validate(self, ctx: Context) -> None:
+        if not IS_WINDOWS():
+            raise ValidationError("WinSparkle setup requires Windows")
+
+    def execute(self, ctx: Context) -> None:
+        log_info("\n✨ Setting up WinSparkle library...")
+
+        winsparkle_dir = ctx.get_winsparkle_dir()
+
+        if winsparkle_dir.exists():
+            safe_rmtree(winsparkle_dir)
+
+        winsparkle_dir.mkdir(parents=True)
+
+        winsparkle_url = ctx.get_winsparkle_url()
+        winsparkle_archive = winsparkle_dir / "winsparkle.zip"
+
+        log_info(f"Downloading WinSparkle from {winsparkle_url}...")
+        urllib.request.urlretrieve(winsparkle_url, winsparkle_archive)
+
+        log_info("Extracting WinSparkle...")
+        extract_winsparkle_zip(winsparkle_archive, winsparkle_dir)
+
+        winsparkle_archive.unlink()
+
+        log_success("WinSparkle setup complete")
+
+
+def extract_winsparkle_zip(archive: Path, dest: Path) -> None:
+    """Extract the release zip stripping its top-level WinSparkle-<version>/
+    directory, so //third_party/winsparkle paths stay version-independent
+    (include/, x64/Release/, ...) and match the vendored BUILD.gn.
+    """
+    with zipfile.ZipFile(archive) as zf:
+        infos = zf.infolist()
+
+        # The official archive wraps everything in a single version dir; a
+        # different layout would silently produce a broken tree, so fail fast.
+        top_levels = {
+            Path(info.filename).parts[0] for info in infos if info.filename.strip("/")
+        }
+        if len(top_levels) != 1:
+            raise RuntimeError(
+                f"Expected a single top-level directory in {archive.name}, "
+                f"got: {sorted(top_levels)}"
+            )
+
+        resolved_dest = dest.resolve()
+        for info in infos:
+            parts = Path(info.filename).parts
+            if len(parts) <= 1:
+                continue
+            target = dest.joinpath(*parts[1:])
+            # Guards against zip-slip (.., absolute or drive-relative paths).
+            if not target.resolve().is_relative_to(resolved_dest):
+                raise RuntimeError(f"Unsafe path in archive: {info.filename}")
+            if info.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(info) as src, open(target, "wb") as out:
+                shutil.copyfileobj(src, out)

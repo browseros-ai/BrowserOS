@@ -33,6 +33,18 @@ const config: CodegenConfig = {
       preset: 'client',
       config: {
         documentMode: 'string',
+        // Pre-codegen-7 implicitly typed custom scalars as `any`,
+        // which let our app code use them as strings without casts.
+        // codegen 7's client-preset v6 narrowed unmapped scalars to
+        // `unknown`. Pin our two custom scalars back to `string` so
+        // call-sites that do `.endsWith(…)` / `new Date(…)` keep
+        // typechecking. JSON stays `any` for the same reason.
+        scalars: {
+          Cursor: 'string',
+          Datetime: 'string',
+          // biome-ignore lint/suspicious/noExplicitAny: matches previous behaviour
+          JSON: 'any',
+        },
       },
     },
     './generated/graphql/schema.graphql': {

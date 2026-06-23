@@ -10,7 +10,6 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { getBrowserOSAdapter } from '@/lib/browseros/adapter'
-import { Capabilities, Feature } from '@/lib/browseros/capabilities'
 import { getProxyPort } from '@/lib/browseros/helpers'
 import { BROWSEROS_PREFS } from '@/lib/browseros/prefs'
 import { MCP_PROXY_PORT_CHANGED_EVENT } from '@/lib/constants/analyticsEvents'
@@ -31,17 +30,10 @@ async function readCurrentPort(): Promise<number> {
   }
 }
 
-/**
- * Pencil-triggered popover for editing the MCP proxy port (the port external
- * clients connect to). Writing the proxy_port pref makes BrowserOS rebind the
- * proxy and restart the server, so saving polls health before reporting back.
- * Renders nothing on builds without proxy support, where the URL is driven by
- * a different, non-editable port.
- */
+/** Popover for editing the MCP proxy port and waiting for BrowserOS to rebind it. */
 export const ServerPortEditor: FC<ServerPortEditorProps> = ({
   onPortChanged,
 }) => {
-  const [supported, setSupported] = useState(false)
   const [open, setOpen] = useState(false)
   const [value, setValue] = useState('')
   const [currentPort, setCurrentPort] = useState<number | null>(null)
@@ -55,24 +47,6 @@ export const ServerPortEditor: FC<ServerPortEditorProps> = ({
       isMountedRef.current = false
     }
   }, [])
-
-  useEffect(() => {
-    let cancelled = false
-    Capabilities.supports(Feature.PROXY_SUPPORT)
-      .then((ok) => {
-        if (!cancelled) setSupported(ok)
-      })
-      .catch(() => {
-        // API unavailable — leave supported false and render nothing
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  if (!supported) {
-    return null
-  }
 
   const handleOpenChange = async (next: boolean) => {
     if (!next && isSaving) return

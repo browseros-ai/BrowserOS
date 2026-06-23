@@ -59,23 +59,6 @@ export const AGENT_ADAPTER_CATALOG: AgentAdapterDescriptor[] = [
       { id: 'xhigh', label: 'Extra high' },
     ],
   },
-  {
-    id: 'hermes',
-    name: 'Hermes',
-    // 'default' means whatever the user configured via `hermes setup` —
-    // Hermes' config.yaml is the source of truth for the model. ACP exposes
-    // session/set_model but we don't surface it in Phase A.
-    defaultModelId: 'default',
-    defaultReasoningEffort: 'medium',
-    modelControl: 'best-effort',
-    // Empty list signals "no per-session model picker".
-    models: [],
-    reasoningEfforts: [
-      { id: 'low', label: 'Low' },
-      { id: 'medium', label: 'Medium', recommended: true },
-      { id: 'high', label: 'High' },
-    ],
-  },
 ]
 
 export function getAgentAdapterDescriptor(
@@ -85,7 +68,7 @@ export function getAgentAdapterDescriptor(
 }
 
 export function isAgentAdapter(value: unknown): value is AgentAdapter {
-  return value === 'claude' || value === 'codex' || value === 'hermes'
+  return value === 'claude' || value === 'codex'
 }
 
 export function resolveDefaultModelId(adapter: AgentAdapter): string {

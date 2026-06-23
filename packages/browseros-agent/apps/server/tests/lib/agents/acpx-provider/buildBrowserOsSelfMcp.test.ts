@@ -97,4 +97,18 @@ describe('buildBrowserOsSelfMcpEntry', () => {
         ?.value,
     ).toBe('0')
   })
+
+  it('encodes selected managed MCP server names into the scope header', () => {
+    const entry = buildBrowserOsSelfMcpEntry({
+      serverPort: 9100,
+      conversationId: 'conv-1',
+      providerId: 'codex',
+      enabledMcpServers: ['Slack', 'Google Docs'],
+    })
+    if (entry.type !== 'http') throw new Error('expected http entry')
+    expect(
+      entry.headers.find((h) => h.name === 'X-BrowserOS-Managed-Mcp-Servers')
+        ?.value,
+    ).toBe('Slack,Google%20Docs')
+  })
 })

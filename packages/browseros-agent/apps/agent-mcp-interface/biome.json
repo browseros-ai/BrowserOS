@@ -1,0 +1,15 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.8/schema.json",
+  "root": false,
+  "extends": "//",
+  "linter": {
+    "rules": {
+      "suspicious": {
+        "noConsole": "error"
+      },
+      "style": {
+        "noProcessEnv": "error"
+      }
+    }
+  }
+}

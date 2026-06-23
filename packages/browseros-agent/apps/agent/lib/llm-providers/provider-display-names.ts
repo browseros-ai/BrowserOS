@@ -1,0 +1,1 @@
+export const CHATGPT_PROVIDER_DISPLAY_NAME = 'ChatGPT'

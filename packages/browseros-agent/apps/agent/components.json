@@ -19,6 +19,7 @@
   },
   "iconLibrary": "lucide",
   "registries": {
-    "@svgl": "https://svgl.app/r/{name}.json"
+    "@svgl": "https://svgl.app/r/{name}.json",
+    "@ai-elements": "https://elements.ai-sdk.dev/api/registry/{name}.json"
   }
 }

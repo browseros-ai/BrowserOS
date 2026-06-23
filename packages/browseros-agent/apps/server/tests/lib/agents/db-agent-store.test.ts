@@ -78,17 +78,13 @@ describe('DbAgentStore', () => {
     expect(new Set(listed.map((agent) => agent.id)).size).toBe(created.length)
   })
 
-  it('persists adapter config with the agent record', async () => {
+  it('does not persist adapter config for built-in agents', async () => {
     const { db, store } = createStoreWithDb()
 
     const agent = await store.create({
-      name: 'Hermes bot',
-      adapter: 'hermes',
-      providerType: 'openai-compatible',
-      providerName: 'Kimi',
-      baseUrl: 'https://api.fireworks.ai/inference/v1',
-      apiKey: 'test-key',
-      supportsImages: true,
+      name: 'Codex bot',
+      adapter: 'codex',
+      modelId: 'gpt-5.5',
     })
 
     const row = db
@@ -97,13 +93,7 @@ describe('DbAgentStore', () => {
       .where(eq(agentDefinitions.id, agent.id))
       .get()
 
-    expect(JSON.parse(row?.adapterConfigJson ?? '{}')).toEqual({
-      providerType: 'openai-compatible',
-      providerName: 'Kimi',
-      baseUrl: 'https://api.fireworks.ai/inference/v1',
-      apiKey: 'test-key',
-      supportsImages: true,
-    })
+    expect(row?.adapterConfigJson).toBeNull()
   })
 
   it('upserts existing records idempotently', async () => {
@@ -128,22 +118,38 @@ describe('DbAgentStore', () => {
   it('ignores stale rows with unsupported adapter ids', async () => {
     const { db, store } = createStoreWithDb()
     db.insert(agentDefinitions)
-      .values({
-        id: 'stale-agent',
-        name: 'Stale agent',
-        adapter: 'removed-adapter' as never,
-        modelId: 'default',
-        reasoningEffort: 'medium',
-        permissionMode: 'approve-all',
-        sessionKey: 'agent:stale-agent:main',
-        pinned: false,
-        adapterConfigJson: null,
-        createdAt: 1000,
-        updatedAt: 1000,
-      })
+      .values([
+        {
+          id: 'stale-agent',
+          name: 'Stale agent',
+          adapter: 'removed-adapter' as never,
+          modelId: 'default',
+          reasoningEffort: 'medium',
+          permissionMode: 'approve-all',
+          sessionKey: 'agent:stale-agent:main',
+          pinned: false,
+          adapterConfigJson: null,
+          createdAt: 1000,
+          updatedAt: 1000,
+        },
+        {
+          id: 'legacy-hermes-agent',
+          name: 'Legacy Hermes agent',
+          adapter: 'hermes' as never,
+          modelId: 'default',
+          reasoningEffort: 'medium',
+          permissionMode: 'approve-all',
+          sessionKey: 'agent:legacy-hermes-agent:main',
+          pinned: false,
+          adapterConfigJson: null,
+          createdAt: 1000,
+          updatedAt: 1000,
+        },
+      ])
       .run()
 
     expect(await store.get('stale-agent')).toBeNull()
+    expect(await store.get('legacy-hermes-agent')).toBeNull()
     expect(await store.list()).toEqual([])
   })
 

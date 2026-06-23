@@ -1,22 +1,16 @@
-import { useEffect, useMemo, useState } from 'react'
-import {
-  AGENT_CREATED_EVENT,
-  AGENT_DELETED_EVENT,
-} from '@/lib/constants/analyticsEvents'
+import { useMemo, useState } from 'react'
+import { AGENT_DELETED_EVENT } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
 import { sentry } from '@/lib/sentry/sentry'
 import type {
   HarnessAdapterDescriptor,
   HarnessAgent,
-  HarnessAgentAdapter,
 } from '@/modules/agents/agent-harness-types'
 import {
   useAgentAdapters,
-  useCreateHarnessAgent,
   useDeleteHarnessAgent,
   useHarnessAgents,
 } from '@/modules/agents/agents.hooks'
-import { useDefaultAgentName } from '@/modules/agents/agents-page.hooks'
 import type { AgentListItem } from '@/modules/agents/agents-page-types'
 import { toHarnessListItem } from '@/modules/agents/agents-page-utils'
 import { clearSidepanelChatTargetSelectionForAgent } from '@/modules/chat/sidepanel-chat-targets'
@@ -37,39 +31,16 @@ export interface CodingAgentsController {
   dismissPageError: () => void
   deletingAgentKey: string | null
   deleteIsPending: boolean
-  createOpen: boolean
-  createAdapter: HarnessAdapterDescriptor | undefined
-  createAdapterId: HarnessAgentAdapter | null
-  newName: string
-  modelId: string
-  reasoningEffort: string
-  createError: string | null
-  creating: boolean
-  openCreate: (adapterId: HarnessAgentAdapter) => void
-  closeCreate: () => void
-  handleCreate: () => Promise<void>
   handleDelete: (item: AgentListItem) => Promise<void>
-  setNewName: (value: string) => void
-  setModelId: (value: string) => void
-  setReasoningEffort: (value: string) => void
 }
 
-/**
- * Owns all state for the quick coding-agent (Claude Code / Codex) surface so
- * the trigger cards (in the provider-templates grid) and the management list
- * (at the bottom of the pane) can share one create dialog. Hermes is filtered
- * out here regardless of capability — it's hidden for now.
- */
+/** Owns state for Claude Code / Codex agent listing and deletion in AI settings. */
 export function useCodingAgents(): CodingAgentsController {
   const { adapters: allAdapters } = useAgentAdapters()
   const { harnessAgents, loading } = useHarnessAgents()
-  const createHarnessAgent = useCreateHarnessAgent()
   const deleteHarnessAgent = useDeleteHarnessAgent()
 
-  const adapters = useMemo(
-    () => allAdapters.filter((adapter) => adapter.id !== 'hermes'),
-    [allAdapters],
-  )
+  const adapters = allAdapters
   const adapterIds = useMemo(
     () => new Set(adapters.map((adapter) => adapter.id)),
     [adapters],
@@ -79,29 +50,8 @@ export function useCodingAgents(): CodingAgentsController {
     [harnessAgents, adapterIds],
   )
 
-  const [createAdapterId, setCreateAdapterId] =
-    useState<HarnessAgentAdapter | null>(null)
-  const [newName, setNewName] = useState('')
-  const [modelId, setModelId] = useState('')
-  const [reasoningEffort, setReasoningEffort] = useState('')
-  const [createError, setCreateError] = useState<string | null>(null)
   const [pageError, setPageError] = useState<string | null>(null)
   const [deletingAgentKey, setDeletingAgentKey] = useState<string | null>(null)
-
-  const createOpen = createAdapterId !== null
-  const createAdapter = adapters.find(
-    (adapter) => adapter.id === createAdapterId,
-  )
-
-  useDefaultAgentName(createOpen, setNewName)
-  // Seed model/reasoning from the chosen adapter's defaults when the dialog opens.
-  useEffect(() => {
-    if (!createOpen || !createAdapter) return
-    setModelId((current) => current || createAdapter.defaultModelId)
-    setReasoningEffort(
-      (current) => current || createAdapter.defaultReasoningEffort,
-    )
-  }, [createOpen, createAdapter])
 
   const listItems = useMemo<AgentListItem[]>(
     () => agents.map(toHarnessListItem),
@@ -123,42 +73,6 @@ export function useCodingAgents(): CodingAgentsController {
     }
     return map
   }, [agents])
-
-  const openCreate = (adapterId: HarnessAgentAdapter) => {
-    setCreateError(null)
-    setModelId('')
-    setReasoningEffort('')
-    setCreateAdapterId(adapterId)
-  }
-
-  const closeCreate = () => {
-    setCreateAdapterId(null)
-    setCreateError(null)
-    setNewName('')
-    createHarnessAgent.reset()
-  }
-
-  const handleCreate = async () => {
-    if (!newName.trim() || !createAdapterId) return
-    setCreateError(null)
-    try {
-      await createHarnessAgent.mutateAsync({
-        name: newName.trim(),
-        adapter: createAdapterId,
-        modelId: modelId || undefined,
-        reasoningEffort: reasoningEffort || undefined,
-      })
-      track(AGENT_CREATED_EVENT, {
-        runtime: createAdapterId,
-        model_id: modelId || undefined,
-        reasoning_effort: reasoningEffort || undefined,
-      })
-      setCreateAdapterId(null)
-      setNewName('')
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : String(err))
-    }
-  }
 
   const handleDelete = async (item: AgentListItem) => {
     setDeletingAgentKey(item.key)
@@ -198,20 +112,6 @@ export function useCodingAgents(): CodingAgentsController {
     dismissPageError: () => setPageError(null),
     deletingAgentKey,
     deleteIsPending: deleteHarnessAgent.isPending,
-    createOpen,
-    createAdapter,
-    createAdapterId,
-    newName,
-    modelId,
-    reasoningEffort,
-    createError,
-    creating: createHarnessAgent.isPending,
-    openCreate,
-    closeCreate,
-    handleCreate,
     handleDelete,
-    setNewName,
-    setModelId,
-    setReasoningEffort,
   }
 }

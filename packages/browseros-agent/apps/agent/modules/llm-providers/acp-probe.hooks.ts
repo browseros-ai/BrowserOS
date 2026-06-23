@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import type { ProviderType } from '@/lib/llm-providers/types'
-import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
+import { useAgentServerUrl } from '../browseros/agent-server-url.hooks'
 
 interface AcpProbeModel {
   id: string

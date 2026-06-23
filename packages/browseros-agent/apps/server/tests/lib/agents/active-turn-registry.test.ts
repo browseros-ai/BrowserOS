@@ -93,7 +93,8 @@ describe('TurnRegistry', () => {
       stream: 'output',
     })
 
-    const stream = registry.subscribe(turn.turnId, { fromSeq: -1 })!
+    const stream = registry.subscribe(turn.turnId, { fromSeq: -1 })
+    if (!stream) throw new Error('expected subscribe to return a stream')
     // Push more after subscribe — both buffered and live frames should
     // arrive in order.
     registry.pushEvent(turn.turnId, {
@@ -123,7 +124,8 @@ describe('TurnRegistry', () => {
     }
     registry.pushEvent(turn.turnId, { type: 'done', stopReason: 'end_turn' })
 
-    const stream = registry.subscribe(turn.turnId, { fromSeq: 2 })!
+    const stream = registry.subscribe(turn.turnId, { fromSeq: 2 })
+    if (!stream) throw new Error('expected subscribe to return a stream')
     const frames = await collect(stream)
     expect(frames.map((f) => f.seq)).toEqual([3, 4])
   })
@@ -131,7 +133,8 @@ describe('TurnRegistry', () => {
   it('marks status `cancelled` and emits a synthetic terminal on cancel', async () => {
     const registry = makeRegistry()
     const turn = registry.register('agent-1')
-    const stream = registry.subscribe(turn.turnId, { fromSeq: -1 })!
+    const stream = registry.subscribe(turn.turnId, { fromSeq: -1 })
+    if (!stream) throw new Error('expected subscribe to return a stream')
 
     registry.pushEvent(turn.turnId, {
       type: 'text_delta',

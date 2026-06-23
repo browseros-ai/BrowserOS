@@ -2,7 +2,7 @@ import type { ProtocolApi } from '@browseros/cdp-protocol/protocol-api'
 import type { FrameId } from '../connection'
 import type { PageManager } from '../pages'
 import { diffSnapshotObservations, type SnapshotDiff } from '../snapshot/diff'
-import { RefMap } from '../snapshot/refs'
+import { type DocumentId, RefMap } from '../snapshot/refs'
 import { renderSnapshot } from '../snapshot/render'
 import { fetchAxTree } from './ax-tree'
 import { findCursorHits } from './cursor-augment'
@@ -18,10 +18,36 @@ export interface SnapshotResult {
   url: string
 }
 
+interface MainFrameState {
+  url: string
+  documentId?: DocumentId
+  frameDocuments: Map<FrameId | undefined, DocumentId>
+}
+
+interface RefScope {
+  documentId: DocumentId
+  url: string
+}
+
+interface CaptureResult extends SnapshotResult {
+  scope?: RefScope
+}
+
+interface FrameTreeNode {
+  frame: {
+    id: FrameId
+    loaderId?: string
+    url?: string
+    urlFragment?: string
+  }
+  childFrames?: FrameTreeNode[]
+}
+
 /** Per-page snapshot, ref, and diff state for one BrowserOS page id. */
 export class Observer {
   private baseline?: { text: string; url: string }
   private refs = new RefMap()
+  private refScope?: RefScope
 
   constructor(
     private readonly pages: PageManager,
@@ -60,17 +86,25 @@ export class Observer {
     return resolveRefEntry(session, entry, axParams)
   }
 
-  private async capture(): Promise<SnapshotResult> {
+  private async capture(): Promise<CaptureResult> {
     const pageSession = await this.pages.getSession(this.pageId)
     for (let attempt = 0; attempt < MAX_STABLE_CAPTURE_ATTEMPTS; attempt++) {
-      const beforeUrl = await this.readCurrentUrl(pageSession.session)
-      const refs = new RefMap()
-      const text = await this.captureFrame(undefined, refs, 0, new Set())
-      const afterUrl = await this.readCurrentUrl(pageSession.session)
-      if (!knownUrlsDiffer(beforeUrl, afterUrl))
-        return { text, refs, url: afterUrl }
+      const before = await this.readMainFrameState(pageSession.session)
+      const refs = this.refsForCapture(before)
+      const text = await this.captureFrame(
+        undefined,
+        refs,
+        0,
+        new Set(),
+        pageSession.session,
+        before.frameDocuments,
+      )
+      const after = await this.readMainFrameState(pageSession.session)
+      if (!knownMainFrameChanged(before, after)) {
+        return { text, refs, url: after.url, scope: refScopeFrom(after) }
+      }
     }
-    throw new Error('Page URL changed during snapshot capture; retry.')
+    throw new Error('Page document changed during snapshot capture; retry.')
   }
 
   /** Render a frame, then splice each child iframe's rendered tree under its `- iframe` line. */
@@ -79,6 +113,8 @@ export class Observer {
     refs: RefMap,
     baseDepth: number,
     visited: Set<FrameId>,
+    rootSession: ProtocolApi,
+    frameDocuments: Map<FrameId | undefined, DocumentId>,
   ): Promise<string> {
     if (frameId !== undefined) {
       if (visited.has(frameId)) return ''
@@ -93,9 +129,15 @@ export class Observer {
     const cursorHits = await findCursorHits(session).catch(
       () => new Map<number, string[]>(),
     )
+    const documentId = await this.stableDocumentIdForFrame(
+      rootSession,
+      frameId,
+      frameDocuments,
+    )
     const { text, iframes } = renderSnapshot(nodes, {
       refs,
       frameId,
+      documentId,
       baseDepth,
       cursorHits,
     })
@@ -114,39 +156,75 @@ export class Observer {
         refs,
         stitch.depth + 1,
         visited,
+        rootSession,
+        frameDocuments,
       ).catch(() => '')
       if (childText) lines.splice(stitch.lineIndex + 1, 0, childText)
     }
     return lines.join('\n')
   }
 
-  private commit(result: SnapshotResult): void {
+  private commit(result: CaptureResult): void {
     this.baseline = { text: result.text, url: result.url }
     this.refs = result.refs
+    this.refScope = result.scope
   }
 
-  private async readCurrentUrl(session: ProtocolApi): Promise<string> {
-    return readCurrentUrl(session, async () => {
-      const refreshed = await this.pages.refresh(this.pageId)
-      return refreshed?.url
-    })
+  private refsForCapture(state: MainFrameState): RefMap {
+    if (shouldResetRefs(this.refScope, state)) return new RefMap()
+    return this.refs.forkForSnapshot()
   }
-}
 
-/** Reads the live main-frame URL, falling back to the tab registry during teardown. */
-async function readCurrentUrl(
-  session: ProtocolApi,
-  fallback: () => Promise<string | undefined>,
-): Promise<string> {
-  try {
+  private async readMainFrameState(
+    session: ProtocolApi,
+  ): Promise<MainFrameState> {
+    try {
+      const result = await session.Page.getFrameTree()
+      const tree = result.frameTree as FrameTreeNode
+      return {
+        url: frameUrl(tree.frame),
+        documentId: frameDocumentId(tree.frame),
+        frameDocuments: collectFrameDocuments(tree),
+      }
+    } catch {
+      return {
+        url: await this.readRegistryUrl(),
+        frameDocuments: new Map(),
+      }
+    }
+  }
+
+  /** Reads the tab registry URL after frame-tree lookup has already failed. */
+  private async readRegistryUrl(): Promise<string> {
+    try {
+      return (await this.pages.refresh(this.pageId))?.url ?? 'unknown'
+    } catch {
+      return 'unknown'
+    }
+  }
+
+  private async stableDocumentIdForFrame(
+    rootSession: ProtocolApi,
+    frameId: FrameId | undefined,
+    frameDocuments: Map<FrameId | undefined, DocumentId>,
+  ): Promise<DocumentId | undefined> {
+    const beforeDocumentId = frameDocuments.get(frameId)
+    if (frameId === undefined || beforeDocumentId === undefined) {
+      return beforeDocumentId
+    }
+
+    const latest = await this.readFrameDocuments(rootSession).catch(
+      () => undefined,
+    )
+    const afterDocumentId = latest?.get(frameId)
+    return afterDocumentId === beforeDocumentId ? beforeDocumentId : undefined
+  }
+
+  private async readFrameDocuments(
+    session: ProtocolApi,
+  ): Promise<Map<FrameId | undefined, DocumentId>> {
     const result = await session.Page.getFrameTree()
-    const frame = result.frameTree.frame
-    if (frame.url) return `${frame.url}${frame.urlFragment ?? ''}`
-  } catch {}
-  try {
-    return (await fallback()) || 'unknown'
-  } catch {
-    return 'unknown'
+    return collectFrameDocuments(result.frameTree as FrameTreeNode)
   }
 }
 
@@ -154,6 +232,61 @@ function knownUrlsDiffer(beforeUrl: string, afterUrl: string): boolean {
   return (
     beforeUrl !== 'unknown' && afterUrl !== 'unknown' && beforeUrl !== afterUrl
   )
+}
+
+function knownMainFrameChanged(
+  before: MainFrameState,
+  after: MainFrameState,
+): boolean {
+  if (knownUrlsDiffer(before.url, after.url)) return true
+  return (
+    before.documentId !== undefined &&
+    after.documentId !== undefined &&
+    before.documentId !== after.documentId
+  )
+}
+
+function shouldResetRefs(
+  current: RefScope | undefined,
+  next: MainFrameState,
+): boolean {
+  if (current === undefined || next.documentId === undefined) return true
+  if (current.documentId !== next.documentId) return true
+  return knownUrlsDiffer(current.url, next.url)
+}
+
+function refScopeFrom(state: MainFrameState): RefScope | undefined {
+  if (state.documentId === undefined) return undefined
+  return { documentId: state.documentId, url: state.url }
+}
+
+function collectFrameDocuments(
+  tree: FrameTreeNode,
+): Map<FrameId | undefined, DocumentId> {
+  const documents = new Map<FrameId | undefined, DocumentId>()
+
+  function visit(node: FrameTreeNode, isRoot: boolean): void {
+    const documentId = frameDocumentId(node.frame)
+    if (documentId !== undefined) {
+      documents.set(isRoot ? undefined : node.frame.id, documentId)
+      documents.set(node.frame.id, documentId)
+    }
+    for (const child of node.childFrames ?? []) visit(child, false)
+  }
+
+  visit(tree, true)
+  return documents
+}
+
+function frameDocumentId(
+  frame: FrameTreeNode['frame'],
+): DocumentId | undefined {
+  if (frame.loaderId === undefined) return undefined
+  return `${frame.id}:${frame.loaderId}`
+}
+
+function frameUrl(frame: FrameTreeNode['frame']): string {
+  return frame.url ? `${frame.url}${frame.urlFragment ?? ''}` : 'unknown'
 }
 
 /** Resolve an iframe element to the frameId of its embedded document. */

@@ -6,7 +6,6 @@ import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { buildAgentApiUrl } from './agent-api-url'
 import {
   type AgentHarnessStreamEvent,
-  type CreateHarnessAgentInput,
   type HarnessAdapterDescriptor,
   type HarnessAgent,
   type HarnessAgentHistoryPage,
@@ -113,30 +112,6 @@ export function useHarnessAgents(enabled = true) {
     error: agentsSupported ? (query.error ?? urlError) : null,
     refetch: query.refetch,
   }
-}
-
-export function useCreateHarnessAgent() {
-  const { baseUrl, isLoading: urlLoading } = useAgentServerUrl()
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: async (input: CreateHarnessAgentInput) => {
-      if (!baseUrl || urlLoading) {
-        throw new Error('BrowserOS agent server URL is not ready')
-      }
-      const data = await agentsFetch<{ agent: HarnessAgent }>(baseUrl, '/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(input),
-      })
-      return data.agent
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: [AGENT_QUERY_KEYS.agents],
-      })
-    },
-  })
 }
 
 /**

@@ -34,12 +34,13 @@ class MacosServerBinariesTest(unittest.TestCase):
         self.assertIsNone(macos_sign_spec_for(Path("/x/not_a_known_binary")))
 
     def test_agent_cli_entries_use_plain_hardened_runtime(self):
-        for binary in ["codex", "claude"]:
+        for binary in ["codex"]:
             spec = macos_sign_spec_for(Path(f"/x/{binary}"))
             assert spec is not None
             self.assertEqual(spec.identifier_suffix, binary)
             self.assertEqual(spec.options, "runtime")
             self.assertIsNone(spec.entitlements)
+        self.assertIsNone(macos_sign_spec_for(Path("/x/claude")))
 
     def test_lima_is_not_registered_for_signing(self):
         keys = set(MACOS_SERVER_BINARIES.keys())
@@ -71,7 +72,6 @@ class WindowsServerBinariesTest(unittest.TestCase):
 
     def test_windows_includes_agent_cli_entries(self):
         self.assertIn("third_party/codex.exe", WINDOWS_SERVER_BINARIES)
-        self.assertIn("third_party/claude.exe", WINDOWS_SERVER_BINARIES)
 
     def test_expected_windows_binary_paths_joins_root(self):
         root = Path("/tmp/fake/resources/bin")
@@ -87,6 +87,7 @@ class WindowsServerBinariesTest(unittest.TestCase):
             "third_party/podman/win-sshproxy.exe",
             "third_party/bun.exe",
             "third_party/rg.exe",
+            "third_party/claude.exe",
         }
         leftover = forbidden & set(WINDOWS_SERVER_BINARIES)
         self.assertFalse(leftover, f"stale entries still present: {leftover}")

@@ -22,7 +22,7 @@ jobs:
         run: |
           git config --global "url.https://x-access-token:${TOKEN}@github.com/.insteadOf" "git@github.com:"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           token: ${{ secrets.INTERNAL_DOCS_SYNC_TOKEN }}
           submodules: true

@@ -57,14 +57,14 @@ export const read = defineTool({
     const path = await writeTempToolOutputFile({
       toolName: 'read',
       extension: args.format === 'markdown' ? 'md' : 'txt',
-      content: text,
+      content: wrapUntrusted(text, origin),
     })
     const truncated = text.slice(0, TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS)
     return textResult(
-      wrapUntrusted(
-        `${truncated}\n\n[Content truncated at ${TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS} chars. Full content (${text.length} chars) saved to: ${path}]`,
-        origin,
-      ),
+      [
+        wrapUntrusted(truncated, origin),
+        `Content truncated at ${TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS} chars. Full content (${text.length} chars) saved to: ${path}`,
+      ].join('\n\n'),
       {
         page: args.page,
         format: args.format,

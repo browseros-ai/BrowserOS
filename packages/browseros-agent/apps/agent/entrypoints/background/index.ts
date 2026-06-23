@@ -2,7 +2,13 @@ import { storage } from '@wxt-dev/storage'
 import { sessionStorage } from '@/lib/auth/sessionStorage'
 import { Capabilities } from '@/lib/browseros/capabilities'
 import { getHealthCheckUrl, getMcpServerUrl } from '@/lib/browseros/helpers'
-import { openSidePanel, toggleSidePanel } from '@/lib/browseros/toggleSidePanel'
+import {
+  ensureSidePanelRuntimeStateLoaded,
+  openSidePanel,
+  registerSidePanelOpenStateListeners,
+  setSidePanelPerWindowPreference,
+  toggleSidePanel,
+} from '@/lib/browseros/toggleSidePanel'
 import { checkAndShowChangelog } from '@/lib/changelog/changelog-notifier'
 import {
   setupLlmProvidersBackupToBrowserOS,
@@ -10,6 +16,10 @@ import {
   syncLlmProviders,
 } from '@/lib/llm-providers/storage'
 import { fetchMcpTools } from '@/lib/mcp/client'
+import {
+  onRuntimeMessage,
+  RuntimeMessageType,
+} from '@/lib/messaging/runtime/runtimeMessages'
 import { onServerMessage } from '@/lib/messaging/server/serverMessages'
 import { onOpenSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanelWithSearch'
 import { authRedirectPathStorage } from '@/lib/onboarding/onboardingStorage'
@@ -38,7 +48,8 @@ const cleanupLegacyToolApprovalStorage = async () => {
 }
 
 export default defineBackground(() => {
-  chrome.sidePanel.setOptions({ enabled: false })
+  registerSidePanelOpenStateListeners()
+  ensureSidePanelRuntimeStateLoaded().catch(() => null)
 
   Capabilities.initialize().catch(() => null)
   setupLlmProvidersBackupToBrowserOS()
@@ -48,8 +59,8 @@ export default defineBackground(() => {
   scheduledJobRuns()
 
   chrome.action.onClicked.addListener(async (tab) => {
-    if (tab.id) {
-      await toggleSidePanel(tab.id)
+    if (typeof tab.id === 'number' && typeof tab.windowId === 'number') {
+      await toggleSidePanel({ tabId: tab.id, windowId: tab.windowId })
     }
   })
 
@@ -58,9 +69,15 @@ export default defineBackground(() => {
       active: true,
       currentWindow: true,
     })
-    const currentTab = currentTabsList?.[0]?.id
-    if (currentTab) {
-      const { opened } = await openSidePanel(currentTab)
+    const currentTab = currentTabsList?.[0]
+    if (
+      typeof currentTab?.id === 'number' &&
+      typeof currentTab.windowId === 'number'
+    ) {
+      const { opened } = await openSidePanel({
+        tabId: currentTab.id,
+        windowId: currentTab.windowId,
+      })
 
       if (opened) {
         setTimeout(() => {
@@ -83,39 +100,43 @@ export default defineBackground(() => {
     }
   })
 
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'get-tab-id') {
-      sendResponse({ tabId: sender.tab?.id })
-      return true
-    }
+  onRuntimeMessage(RuntimeMessageType.getTabId, ({ sender }) => {
+    return { tabId: sender.tab?.id }
+  })
 
-    if (message?.type === 'AUTH_SUCCESS' && sender.tab?.id) {
-      const tabId = sender.tab.id
-      authRedirectPathStorage
-        .getValue()
-        .then((redirectPath) => {
-          const hash = redirectPath || '/home'
-          chrome.tabs.update(tabId, {
-            url: chrome.runtime.getURL(`app.html#${hash}`),
-          })
-          if (redirectPath) authRedirectPathStorage.removeValue()
-        })
-        .catch(() => {
-          chrome.tabs.update(tabId, {
-            url: chrome.runtime.getURL('app.html#/home'),
-          })
-        })
-    }
+  onRuntimeMessage(RuntimeMessageType.authSuccess, async ({ sender }) => {
+    if (!sender.tab?.id) return
 
-    if (message?.type === 'stop-agent' && message?.conversationId) {
-      stopAgentStorage.setValue({
-        conversationId: message.conversationId,
-        timestamp: Date.now(),
+    const tabId = sender.tab.id
+
+    try {
+      const redirectPath = await authRedirectPathStorage.getValue()
+      const hash = redirectPath || '/home'
+      await chrome.tabs.update(tabId, {
+        url: chrome.runtime.getURL(`app.html#${hash}`),
+      })
+      if (redirectPath) await authRedirectPathStorage.removeValue()
+    } catch {
+      await chrome.tabs.update(tabId, {
+        url: chrome.runtime.getURL('app.html#/home'),
       })
     }
   })
 
-  // Clean up selected text storage when a tab is closed
+  onRuntimeMessage(RuntimeMessageType.stopAgent, async ({ data }) => {
+    await stopAgentStorage.setValue({
+      conversationId: data.conversationId,
+      timestamp: Date.now(),
+    })
+  })
+
+  onRuntimeMessage(
+    RuntimeMessageType.sidePanelScopeChanged,
+    async ({ data }) => {
+      await setSidePanelPerWindowPreference(data.perWindow)
+    },
+  )
+
   chrome.tabs.onRemoved.addListener((tabId) => {
     const key = String(tabId)
     selectedTextStorage.getValue().then((map) => {

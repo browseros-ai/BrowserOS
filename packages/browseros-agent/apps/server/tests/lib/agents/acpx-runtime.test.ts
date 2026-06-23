@@ -73,6 +73,7 @@ describe('AcpxRuntime', () => {
     expect(calls.map((call) => call.method)).toEqual([
       'createRuntime',
       'ensureSession',
+      'setMode',
       'setConfigOption',
       'startTurn',
     ])
@@ -88,13 +89,16 @@ describe('AcpxRuntime', () => {
       cwd,
     })
     expect(calls[2]?.input).toMatchObject({
+      mode: 'agent-full-access',
+    })
+    expect(calls[3]?.input).toMatchObject({
       key: 'reasoning_effort',
       value: 'medium',
     })
-    expect(calls[3]?.input).toMatchObject({
+    expect(calls[4]?.input).toMatchObject({
       mode: 'prompt',
     })
-    expect(getStartTurnText(calls[3]?.input)).toContain(
+    expect(getStartTurnText(calls[4]?.input)).toContain(
       '<user_request>\nsay hello\n</user_request>',
     )
     expect(events).toEqual([
@@ -1200,89 +1204,11 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
         `'${bunPath}' x --bun --silent --package '@zed-industries/codex-acp@^0.12.0' 'codex-acp'`,
       )
       expect(codexCommand).toContain('BUN_INSTALL_CACHE_DIR=')
-      expect(codexCommand).toContain(`PATH='${dirname(bunPath)}'`)
+      expect(codexCommand).toContain('cache/acp-node-shim')
+      expect(codexCommand).toContain(dirname(bunPath))
       expect(codexCommand).not.toContain('npx -y')
     },
   )
-
-  it('resolves the Hermes adapter to a host-process `hermes acp` command', async () => {
-    const browserosDir = await mkdtemp(
-      join(tmpdir(), 'browseros-acpx-browseros-'),
-    )
-    const stateDir = await mkdtemp(join(tmpdir(), 'browseros-acpx-state-'))
-    tempDirs.push(browserosDir, stateDir)
-    const calls: Array<{ method: string; input: unknown }> = []
-    const runtime = new AcpxRuntime({
-      browserosDir,
-      stateDir,
-      runtimeFactory: (options) => {
-        calls.push({ method: 'createRuntime', input: options })
-        return createFakeAcpRuntime(calls)
-      },
-    })
-    const agent = makeAgent({ id: 'agent-1', adapter: 'hermes' })
-
-    await collectStream(
-      await runtime.send({
-        agent,
-        sessionId: 'main',
-        sessionKey: agent.sessionKey,
-        message: 'hi',
-        permissionMode: 'approve-all',
-      }),
-    )
-
-    const command =
-      getCreateRuntimeOptions(calls).agentRegistry.resolve('hermes')
-    expect(command).toContain('hermes acp')
-    expect(command).toContain('env HERMES_HOME=')
-    if (process.platform !== 'win32') {
-      expect(command).toContain(' -lic ')
-    }
-    expect(command).not.toContain('limactl')
-    expect(command).not.toContain('nerdctl')
-    expect(command).not.toContain('bash -c')
-    expect(command).not.toContain('tee /dev/null')
-  })
-
-  it('launches bundled Hermes by absolute path when packaged resources include it', async () => {
-    const browserosDir = await mkdtemp(
-      join(tmpdir(), 'browseros-acpx-browseros-'),
-    )
-    const stateDir = await mkdtemp(join(tmpdir(), 'browseros-acpx-state-'))
-    const resourcesDir = await mkdtemp(
-      join(tmpdir(), 'browseros-acpx-resources-'),
-    )
-    tempDirs.push(browserosDir, stateDir, resourcesDir)
-    const hermesPath = await writeFakeBundledNative(resourcesDir, 'hermes')
-    const calls: Array<{ method: string; input: unknown }> = []
-    const runtime = new AcpxRuntime({
-      browserosDir,
-      resourcesDir,
-      stateDir,
-      runtimeFactory: (options) => {
-        calls.push({ method: 'createRuntime', input: options })
-        return createFakeAcpRuntime(calls)
-      },
-    })
-    const agent = makeAgent({ id: 'agent-1', adapter: 'hermes' })
-
-    await collectStream(
-      await runtime.send({
-        agent,
-        sessionId: 'main',
-        sessionKey: agent.sessionKey,
-        message: 'hi',
-        permissionMode: 'approve-all',
-      }),
-    )
-
-    const command =
-      getCreateRuntimeOptions(calls).agentRegistry.resolve('hermes')
-    expect(command).toContain(`'${hermesPath}' acp`)
-    expect(command).toContain('env HERMES_HOME=')
-    expect(command).not.toContain(' -lic ')
-  })
 
   it('does not reuse an Acpx runtime across different command identities', async () => {
     const browserosDir = await mkdtemp(
@@ -1398,7 +1324,7 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
     expect(events).toEqual([
       {
         type: 'status',
-        text: 'Requested Claude bypassPermissions mode, but this acpx/runtime version does not expose mode control.',
+        text: 'Requested Claude Code bypassPermissions mode, but this acpx/runtime version does not expose mode control.',
       },
       {
         type: 'text_delta',
@@ -1419,6 +1345,103 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
         stopReason: 'end_turn',
       },
     ])
+  })
+
+  it('sets Codex approve-all sessions to full access before starting a turn', async () => {
+    const calls: Array<{ method: string; input: unknown }> = []
+    const runtime = new AcpxRuntime({
+      cwd: '/tmp/browseros-acpx-runtime',
+      stateDir: '/tmp/browseros-acpx-state',
+      runtimeFactory: () => createFakeAcpRuntime(calls),
+    })
+    const agent = makeAgent({ id: 'agent-1', adapter: 'codex' })
+
+    await collectStream(
+      await runtime.send({
+        agent,
+        sessionId: 'main',
+        sessionKey: agent.sessionKey,
+        message: 'open example.com',
+        permissionMode: 'approve-all',
+      }),
+    )
+
+    expect(calls.map((call) => call.method)).toEqual([
+      'ensureSession',
+      'setMode',
+      'startTurn',
+    ])
+    expect(calls[1]?.input).toMatchObject({
+      mode: 'agent-full-access',
+    })
+  })
+
+  it('falls back to the zed codex mode id when the first candidate is rejected', async () => {
+    const calls: Array<{ method: string; input: unknown }> = []
+    const runtime = new AcpxRuntime({
+      cwd: '/tmp/browseros-acpx-runtime',
+      stateDir: '/tmp/browseros-acpx-state',
+      runtimeFactory: () =>
+        createFakeAcpRuntime(calls, { rejectModes: ['agent-full-access'] }),
+    })
+    const agent = makeAgent({ id: 'agent-1', adapter: 'codex' })
+
+    const events = await collectStream(
+      await runtime.send({
+        agent,
+        sessionId: 'main',
+        sessionKey: agent.sessionKey,
+        message: 'open example.com',
+        permissionMode: 'approve-all',
+      }),
+    )
+
+    expect(calls.map((call) => call.method)).toEqual([
+      'ensureSession',
+      'setMode',
+      'setMode',
+      'startTurn',
+    ])
+    expect(calls[1]?.input).toMatchObject({ mode: 'agent-full-access' })
+    expect(calls[2]?.input).toMatchObject({ mode: 'full-access' })
+    expect(events.filter((event) => event.type === 'status')).toEqual([])
+  })
+
+  it('continues the turn when every codex mode candidate is rejected', async () => {
+    const calls: Array<{ method: string; input: unknown }> = []
+    const runtime = new AcpxRuntime({
+      cwd: '/tmp/browseros-acpx-runtime',
+      stateDir: '/tmp/browseros-acpx-state',
+      runtimeFactory: () =>
+        createFakeAcpRuntime(calls, {
+          rejectModes: ['agent-full-access', 'full-access'],
+        }),
+    })
+    const agent = makeAgent({ id: 'agent-1', adapter: 'codex' })
+
+    const events = await collectStream(
+      await runtime.send({
+        agent,
+        sessionId: 'main',
+        sessionKey: agent.sessionKey,
+        message: 'open example.com',
+        permissionMode: 'approve-all',
+      }),
+    )
+
+    expect(calls.map((call) => call.method)).toEqual([
+      'ensureSession',
+      'setMode',
+      'setMode',
+      'startTurn',
+    ])
+    expect(events[0]).toMatchObject({
+      type: 'status',
+      text: expect.stringContaining(
+        'Could not apply Codex agent-full-access / full-access mode',
+      ),
+    })
+    expect(events.at(-1)).toEqual({ type: 'done', stopReason: 'end_turn' })
   })
 
   it('reuses cached runtime instances across per-turn timeouts', async () => {
@@ -1587,7 +1610,11 @@ function getCreateRuntimeOptions(
 
 function createFakeAcpRuntime(
   calls: Array<{ method: string; input: unknown }>,
-  options: { failConfig?: boolean; omitModeControl?: boolean } = {},
+  options: {
+    failConfig?: boolean
+    omitModeControl?: boolean
+    rejectModes?: string[]
+  } = {},
 ): AcpxCoreRuntime {
   const runtime: AcpxCoreRuntime = {
     async ensureSession(input) {
@@ -1642,6 +1669,9 @@ function createFakeAcpRuntime(
   if (!options.omitModeControl) {
     runtime.setMode = async (input) => {
       calls.push({ method: 'setMode', input })
+      if (options.rejectModes?.includes(input.mode)) {
+        throw new Error(`mode ${input.mode} is not supported`)
+      }
     }
   }
   return runtime

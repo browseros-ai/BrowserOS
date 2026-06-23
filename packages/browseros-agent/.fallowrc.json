@@ -2,6 +2,8 @@
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
   "entry": [
     "apps/server/src/index.ts",
+    "apps/server/src/compiled-bootstrap.ts",
+    "apps/agent-mcp-interface/src/main.ts",
     "apps/agent/entrypoints/app/main.tsx",
     "apps/agent/entrypoints/sidepanel/main.tsx",
     "apps/agent/entrypoints/background/index.ts",
@@ -20,6 +22,8 @@
     "tw-animate-css",
     "@tailwindcss/typography",
     "pino-pretty",
+    "dotenv",
+    "picocolors",
     "@browseros/cdp-protocol",
     "@graphql-typed-document-node/core"
   ],
@@ -41,6 +45,7 @@
     "apps/cli/**",
     "apps/agent/assets/**",
     "apps/agent/generated/**",
+    "apps/agent/public/**",
     "apps/eval/data/**",
     "apps/server/src/lib/db/migrations/**",
     "packages/cdp-protocol/src/generated/**",

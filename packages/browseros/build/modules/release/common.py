@@ -120,8 +120,13 @@ def generate_appcast_item(
     version: str,
     sparkle_version: str,
     build_date: str,
+    platform: str = "macos",
 ) -> str:
-    """Generate Sparkle <item> XML for an artifact"""
+    """Generate a Sparkle/WinSparkle <item> XML for an artifact
+
+    macOS items carry a minimumSystemVersion; Windows items instead tag the
+    enclosure with sparkle:os="windows" so WinSparkle accepts it.
+    """
     try:
         dt = datetime.fromisoformat(build_date.replace("Z", "+00:00"))
         pub_date = dt.strftime("%a, %d %b %Y %H:%M:%S %z")
@@ -131,6 +136,18 @@ def generate_appcast_item(
     signature = artifact.get("sparkle_signature", "")
     length = artifact.get("sparkle_length", artifact.get("size", 0))
 
+    os_attr = '\n    sparkle:os="windows"' if platform == "win" else ""
+    footer = (
+        ""
+        if platform == "win"
+        else "\n  <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>"
+    )
+    enclosure = f"""<enclosure
+    url="{artifact['url']}"{os_attr}
+    sparkle:edSignature="{signature}"
+    length="{length}"
+    type="application/octet-stream" />"""
+
     return f"""<item>
   <title>BrowserOS - {version}</title>
   <description sparkle:format="plain-text">
@@ -139,12 +156,7 @@ def generate_appcast_item(
   <sparkle:shortVersionString>{version}</sparkle:shortVersionString>
   <pubDate>{pub_date}</pubDate>
   <link>https://browseros.com</link>
-  <enclosure
-    url="{artifact['url']}"
-    sparkle:edSignature="{signature}"
-    length="{length}"
-    type="application/octet-stream" />
-  <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
+  {enclosure}{footer}
 </item>"""
 
 

@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """Tests for macOS app signing discovery."""
 
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
 from ...common.context import Context
+from . import macos as macos_module
 from .macos import (
     SERVER_RESOURCES_SOURCE_REL,
     MacOSSignModule,
     find_components_to_sign,
+    sign_component,
     verify_server_resources_bundle,
+    verify_signature,
 )
 
 
@@ -51,7 +57,7 @@ class MacOSSignDiscoveryTest(unittest.TestCase):
             self.assertIn(server_bin / "browseros_server", executables)
             self.assertIn(server_bin / "third_party" / "rg", executables)
             self.assertIn(server_bin / "third_party" / "codex", executables)
-            self.assertIn(server_bin / "third_party" / "claude", executables)
+            self.assertNotIn(server_bin / "third_party" / "claude", executables)
             self.assertNotIn(
                 server_bin / "third_party" / "lima" / "bin" / "limactl",
                 executables,
@@ -205,6 +211,241 @@ class SignModuleGuardWiringTest(unittest.TestCase):
             )
 
             MacOSSignModule()._verify_server_resources(app_path, ctx)
+
+
+def _completed(cmd, returncode=0, stdout=""):
+    return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr="")
+
+
+def _fake_probe(archs, plist_archs, macho=True):
+    """Stub for macos._run_probe: lipo -archs and otool -l answers."""
+
+    def probe(cmd):
+        if cmd[:2] == ["lipo", "-archs"]:
+            if not macho:
+                return _completed(cmd, returncode=1)
+            return _completed(cmd, stdout=" ".join(archs) + "\n")
+        if cmd[0] == "otool":
+            arch = cmd[2]
+            section = "__info_plist" if arch in plist_archs else "__text"
+            return _completed(cmd, stdout=f"Section\n  sectname {section}\n")
+        raise AssertionError(f"unexpected probe command: {cmd}")
+
+    return probe
+
+
+def _fake_run_command(calls, fail_predicate=None):
+    """Stub for macos.run_command: records calls, materializes lipo outputs."""
+
+    def run(cmd, cwd=None, check=True):
+        calls.append(cmd)
+        if fail_predicate and fail_predicate(cmd):
+            raise subprocess.CalledProcessError(1, cmd)
+        if cmd[0] == "lipo" and "-output" in cmd:
+            payload = b"signed-fat" if "-create" in cmd else b"thin"
+            Path(cmd[cmd.index("-output") + 1]).write_bytes(payload)
+        return _completed(cmd)
+
+    return run
+
+
+class SignComponentPerSliceTest(unittest.TestCase):
+    """Fat binaries whose slices disagree on an embedded Info.plist must be
+    signed slice-by-slice: codesign on the fat file binds the file-level
+    Info.plist into every slice's CodeDirectory, which the plist-less slice
+    can never satisfy (Apple notarization rejects it)."""
+
+    def _make_component(self, tmp):
+        component = Path(tmp) / "tool"
+        component.write_bytes(b"original-fat")
+        component.chmod(0o755)
+        return component
+
+    def test_asymmetric_fat_signs_each_slice_and_reassembles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            component = self._make_component(tmp)
+            calls = []
+            with (
+                mock.patch.object(
+                    macos_module,
+                    "_run_probe",
+                    _fake_probe(["x86_64", "arm64"], {"arm64"}),
+                ),
+                mock.patch.object(
+                    macos_module, "run_command", _fake_run_command(calls)
+                ),
+            ):
+                ok = sign_component(
+                    component, "Cert", "com.browseros.tool", "runtime"
+                )
+
+            self.assertTrue(ok)
+            codesign_calls = [c for c in calls if c[0] == "codesign"]
+            self.assertEqual(len(codesign_calls), 2)
+            for cmd in codesign_calls:
+                self.assertNotEqual(cmd[-1], str(component))
+                self.assertIn("--force", cmd)
+                self.assertIn("--timestamp", cmd)
+                self.assertIn("--identifier", cmd)
+                self.assertIn("com.browseros.tool", cmd)
+                self.assertIn("--options", cmd)
+                self.assertIn("runtime", cmd)
+            thin_calls = [c for c in calls if c[0] == "lipo" and "-thin" in c]
+            self.assertEqual(
+                {c[c.index("-thin") + 1] for c in thin_calls}, {"x86_64", "arm64"}
+            )
+            create_calls = [c for c in calls if c[0] == "lipo" and "-create" in c]
+            self.assertEqual(len(create_calls), 1)
+            self.assertEqual(component.read_bytes(), b"signed-fat")
+            self.assertTrue(os.access(component, os.X_OK))
+            self.assertEqual(
+                sorted(p.name for p in Path(tmp).iterdir()), ["tool"]
+            )
+
+    def test_symmetric_fat_uses_single_codesign(self):
+        for plist_archs in ({"x86_64", "arm64"}, set()):
+            with self.subTest(plist_archs=plist_archs):
+                with tempfile.TemporaryDirectory() as tmp:
+                    component = self._make_component(tmp)
+                    calls = []
+                    with (
+                        mock.patch.object(
+                            macos_module,
+                            "_run_probe",
+                            _fake_probe(["x86_64", "arm64"], plist_archs),
+                        ),
+                        mock.patch.object(
+                            macos_module, "run_command", _fake_run_command(calls)
+                        ),
+                    ):
+                        ok = sign_component(component, "Cert")
+
+                    self.assertTrue(ok)
+                    self.assertEqual(len(calls), 1)
+                    self.assertEqual(calls[0][0], "codesign")
+                    self.assertEqual(calls[0][-1], str(component))
+                    self.assertEqual(component.read_bytes(), b"original-fat")
+
+    def test_non_macho_executable_uses_single_codesign(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            component = self._make_component(tmp)
+            calls = []
+            with (
+                mock.patch.object(
+                    macos_module, "_run_probe", _fake_probe([], set(), macho=False)
+                ),
+                mock.patch.object(
+                    macos_module, "run_command", _fake_run_command(calls)
+                ),
+            ):
+                ok = sign_component(component, "Cert")
+
+            self.assertTrue(ok)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][0], "codesign")
+            self.assertEqual(calls[0][-1], str(component))
+
+    def test_thin_single_arch_uses_single_codesign(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            component = self._make_component(tmp)
+            calls = []
+            with (
+                mock.patch.object(
+                    macos_module, "_run_probe", _fake_probe(["arm64"], {"arm64"})
+                ),
+                mock.patch.object(
+                    macos_module, "run_command", _fake_run_command(calls)
+                ),
+            ):
+                ok = sign_component(component, "Cert")
+
+            self.assertTrue(ok)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][0], "codesign")
+            self.assertEqual(calls[0][-1], str(component))
+
+    def test_failing_slice_codesign_keeps_original_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            component = self._make_component(tmp)
+            calls = []
+            with (
+                mock.patch.object(
+                    macos_module,
+                    "_run_probe",
+                    _fake_probe(["x86_64", "arm64"], {"arm64"}),
+                ),
+                mock.patch.object(
+                    macos_module,
+                    "run_command",
+                    _fake_run_command(
+                        calls, fail_predicate=lambda cmd: cmd[0] == "codesign"
+                    ),
+                ),
+            ):
+                ok = sign_component(component, "Cert")
+
+            self.assertFalse(ok)
+            self.assertEqual(component.read_bytes(), b"original-fat")
+            self.assertTrue(os.access(component, os.X_OK))
+            self.assertEqual(
+                sorted(p.name for p in Path(tmp).iterdir()), ["tool"]
+            )
+
+
+class VerifySignatureComponentTest(unittest.TestCase):
+    """The app-level --deep verify seals Resources executables as plain files
+    without validating their own signatures; verify_signature must check each
+    file-type component directly so a bad slice fails locally, not at Apple."""
+
+    def _build_app(self, tmp):
+        app_path = Path(tmp) / "BrowserOS.app"
+        codex = (
+            app_path
+            / "Contents"
+            / "Resources"
+            / "BrowserOSServer"
+            / "default"
+            / "resources"
+            / "bin"
+            / "third_party"
+            / "codex"
+        )
+        _write_exec(codex)
+        return app_path, codex
+
+    def test_fails_when_component_signature_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app_path, codex = self._build_app(tmp)
+            calls = []
+
+            def run(cmd, cwd=None, check=True):
+                calls.append(cmd)
+                returncode = 1 if cmd[-1] == str(codex) else 0
+                return _completed(cmd, returncode=returncode)
+
+            with mock.patch.object(macos_module, "run_command", run):
+                self.assertFalse(verify_signature(app_path))
+
+            self.assertTrue(
+                any(c[0] == "codesign" and c[-1] == str(codex) for c in calls)
+            )
+
+    def test_passes_and_verifies_each_component(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app_path, codex = self._build_app(tmp)
+            calls = []
+
+            with mock.patch.object(
+                macos_module, "run_command", _fake_run_command(calls)
+            ):
+                self.assertTrue(verify_signature(app_path))
+
+            self.assertTrue(
+                any(
+                    c[0] == "codesign" and "--verify" in c and c[-1] == str(codex)
+                    for c in calls
+                )
+            )
 
 
 if __name__ == "__main__":

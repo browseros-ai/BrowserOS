@@ -1,15 +1,10 @@
-/**
- * Fetches models.dev/api.json and generates a compact models data file
- * for BrowserOS. Run: bun scripts/generate-models.ts
- */
-
 const API_URL = 'https://models.dev/api.json'
 const OUTPUT_PATH = new URL(
   '../apps/agent/lib/llm-providers/models-dev-data.json',
   import.meta.url,
 ).pathname
 
-interface ModelsDevModel {
+export interface ModelsDevModel {
   id: string
   name: string
   family?: string
@@ -30,7 +25,7 @@ interface ModelsDevModel {
   last_updated: string
 }
 
-interface ModelsDevProvider {
+export interface ModelsDevProvider {
   id: string
   name: string
   npm: string
@@ -40,7 +35,7 @@ interface ModelsDevProvider {
   models: Record<string, ModelsDevModel>
 }
 
-interface OutputModel {
+export interface OutputModel {
   id: string
   name: string
   contextWindow: number
@@ -52,15 +47,14 @@ interface OutputModel {
   outputCost?: number
 }
 
-interface OutputProvider {
+export interface OutputProvider {
   name: string
   api?: string
   doc: string
   models: OutputModel[]
 }
 
-// models.dev ID → BrowserOS provider ID
-const PROVIDER_MAP: Record<string, string> = {
+export const PROVIDER_MAP: Record<string, string> = {
   anthropic: 'anthropic',
   openai: 'openai',
   google: 'google',
@@ -72,8 +66,31 @@ const PROVIDER_MAP: Record<string, string> = {
   'github-copilot': 'github-copilot',
 }
 
-function transformModel(model: ModelsDevModel): OutputModel | null {
+const NON_CHAT_MODEL_CLASS_TERMS = [
+  'embedding',
+  'image',
+  'audio',
+  'tts',
+  'transcribe',
+  'whisper',
+  'moderation',
+]
+
+function isNonChatModelClass(model: ModelsDevModel): boolean {
+  return [model.id, model.name, model.family ?? ''].some((value) => {
+    const normalized = value.toLowerCase()
+
+    return NON_CHAT_MODEL_CLASS_TERMS.some((term) => normalized.includes(term))
+  })
+}
+
+/** Converts a models.dev model into the compact BrowserOS snapshot shape. */
+export function transformModel(model: ModelsDevModel): OutputModel | null {
   if (model.status === 'deprecated') return null
+  if (isNonChatModelClass(model)) return null
+  if (!model.modalities.input.includes('text')) return null
+  if (!model.modalities.output.includes('text')) return null
+  if (model.limit.context <= 0 || model.limit.output <= 0) return null
 
   const supportsImages =
     model.attachment || model.modalities.input.includes('image')
@@ -93,31 +110,50 @@ function transformModel(model: ModelsDevModel): OutputModel | null {
   }
 }
 
-async function main() {
-  console.log(`Fetching ${API_URL}...`)
-  const response = await fetch(API_URL)
-  if (!response.ok) throw new Error(`Failed to fetch: ${response.status}`)
+function assertUniqueModels(providerId: string, models: OutputModel[]) {
+  const seen = new Set<string>()
 
-  const data: Record<string, ModelsDevProvider> = await response.json()
-  console.log(`Fetched ${Object.keys(data).length} providers`)
+  for (const model of models) {
+    if (seen.has(model.id)) {
+      throw new Error(`Duplicate model id for ${providerId}: ${model.id}`)
+    }
 
+    seen.add(model.id)
+  }
+}
+
+/** Builds the BrowserOS provider snapshot from raw models.dev API data. */
+export function generateModelsData(
+  data: Record<string, ModelsDevProvider>,
+  providerMap: Record<string, string> = PROVIDER_MAP,
+): Record<string, OutputProvider> {
   const output: Record<string, OutputProvider> = {}
 
-  for (const [modelsDevId, browserosId] of Object.entries(PROVIDER_MAP)) {
+  for (const [modelsDevId, browserosId] of Object.entries(providerMap)) {
     const provider = data[modelsDevId]
     if (!provider) {
-      console.warn(`Provider not found in models.dev: ${modelsDevId}`)
-      continue
+      throw new Error(`Provider not found in models.dev: ${modelsDevId}`)
     }
 
     const models = Object.values(provider.models)
-      .map(transformModel)
-      .filter((m): m is OutputModel => m !== null)
-      .sort((a, b) => {
-        const dateA = provider.models[a.id]?.last_updated ?? ''
-        const dateB = provider.models[b.id]?.last_updated ?? ''
-        return dateB.localeCompare(dateA)
+      .map((model) => {
+        const transformed = transformModel(model)
+
+        return transformed
+          ? { lastUpdated: model.last_updated, model: transformed }
+          : null
       })
+      .filter(
+        (m): m is { lastUpdated: string; model: OutputModel } => m !== null,
+      )
+      .sort((a, b) => {
+        const byLastUpdated = b.lastUpdated.localeCompare(a.lastUpdated)
+
+        return byLastUpdated || a.model.id.localeCompare(b.model.id)
+      })
+      .map(({ model }) => model)
+
+    assertUniqueModels(browserosId, models)
 
     output[browserosId] = {
       name: provider.name,
@@ -127,6 +163,26 @@ async function main() {
     }
   }
 
+  return output
+}
+
+export function formatModelsData(
+  output: Record<string, OutputProvider>,
+): string {
+  return `${JSON.stringify(output, null, 2)}\n`
+}
+
+/** Fetches live models.dev data and writes the checked-in BrowserOS snapshot. */
+export async function main() {
+  console.log(`Fetching ${API_URL}...`)
+  const response = await fetch(API_URL)
+  if (!response.ok) throw new Error(`Failed to fetch: ${response.status}`)
+
+  const data: Record<string, ModelsDevProvider> = await response.json()
+  console.log(`Fetched ${Object.keys(data).length} providers`)
+
+  const output = generateModelsData(data)
+
   const totalModels = Object.values(output).reduce(
     (sum, p) => sum + p.models.length,
     0,
@@ -135,11 +191,13 @@ async function main() {
     `Generated ${Object.keys(output).length} providers with ${totalModels} models`,
   )
 
-  await Bun.write(OUTPUT_PATH, JSON.stringify(output, null, 2))
+  await Bun.write(OUTPUT_PATH, formatModelsData(output))
   console.log(`Written to ${OUTPUT_PATH}`)
 }
 
-main().catch((err) => {
-  console.error(err)
-  process.exit(1)
-})
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error(err)
+    process.exit(1)
+  })
+}

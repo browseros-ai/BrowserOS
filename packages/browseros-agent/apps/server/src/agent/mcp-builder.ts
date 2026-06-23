@@ -85,7 +85,15 @@ async function connectMcpClient(
         ),
       ),
     ])
-    return { client, tools: clientTools }
+    // Cast keeps the call green when this package compiles in a
+    // workspace that also has zod v4 present (the cockpit at
+    // apps/agent-mcp-interface). The two zod majors export
+    // compatible runtime values but TypeScript's inferred type for
+    // `client.tools()` widens from `ZodType<never>` to
+    // `ZodType<unknown>` in that resolution context, which the AI
+    // SDK's strict `ToolSet` rejects. The cast is shape-correct;
+    // `clientTools` IS a `ToolSet` at runtime.
+    return { client, tools: clientTools as ToolSet }
   } catch (error) {
     logger.warn('Failed to connect MCP client, skipping', {
       name: spec.name,

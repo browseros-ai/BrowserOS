@@ -3,8 +3,7 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Constructs the spawn command for a built-in ACP adapter (claude /
- * codex). Prefers the BrowserOS-shipped Bun at
+ * Constructs the spawn command for a built-in ACP adapter. Prefers the BrowserOS-shipped Bun at
  * <resourcesDir>/bin/third_party/bun so end-user installs without Node
  * still have a working launcher; falls back to the existing
  * `npx -y …` command when the bundled binary is unavailable
@@ -12,7 +11,7 @@
  * outside darwin / linux / win32).
  */
 
-import { resolveBundledBun } from './bundled-bun'
+import { resolveBundledBun, withBundledBunAcpAdapterEnv } from './bundled-bun'
 import {
   HOST_ACP_ADAPTER_CONFIG,
   type HostAcpAdapter,
@@ -28,6 +27,8 @@ export interface AcpLauncherResolution {
 
 export interface ResolveAcpSpawnCommandInput {
   agentType: string
+  browserosDir?: string | null
+  env?: NodeJS.ProcessEnv
   resourcesDir?: string | null
   platform?: NodeJS.Platform
   /** Injected for tests; production callers leave it unset. */
@@ -40,8 +41,7 @@ export interface ResolveAcpSpawnCommandInput {
  * Returns null when:
  *   - the agent type is not a known built-in (e.g. acp-custom; caller
  *     uses the user-supplied command instead), OR
- *   - the registry entry has no package spec (hermes today, which
- *     spawns from a host CLI).
+ *   - the registry entry has no package spec.
  */
 export function resolveAcpSpawnCommand(
   input: ResolveAcpSpawnCommandInput,
@@ -56,15 +56,34 @@ export function resolveAcpSpawnCommand(
     platform: input.platform,
   })
   if (bunPath) {
-    // `bun x <pkg>@<range>` mirrors `npx -y <pkg>@<range>`. Quote the
-    // bun path because the BrowserOS resources directory can include
-    // spaces (on macOS the resources sit inside the .app bundle which
-    // can include "Application Support" or similar). acpx's splitArgv
-    // honours both single and double quotes.
     return {
-      command: `"${bunPath}" x ${config.acpPackageSpec}`,
+      command: wrapCommandWithEnv(
+        `${quoteAcpCommandToken(bunPath)} x --bun --silent --package ${quoteAcpCommandToken(config.acpPackageSpec)} ${quoteAcpCommandToken(config.acpBin)}`,
+        withBundledBunAcpAdapterEnv({
+          bunPath,
+          browserosDir: input.browserosDir,
+          env: input.env,
+          platform: input.platform,
+        }),
+      ),
       source: 'bundled-bun',
     }
   }
   return { command: config.acpCommand, source: 'host-npx-fallback' }
+}
+
+/** Quotes a token for acpx command splitting while preserving Windows backslashes. */
+function quoteAcpCommandToken(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`
+}
+
+function wrapCommandWithEnv(
+  command: string,
+  env: Record<string, string>,
+): string {
+  const prefix = Object.entries(env)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${quoteAcpCommandToken(value)}`)
+    .join(' ')
+  return prefix ? `env ${prefix} ${command}` : command
 }

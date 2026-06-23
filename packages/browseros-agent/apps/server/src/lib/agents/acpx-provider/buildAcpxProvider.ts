@@ -92,9 +92,8 @@ export interface BuildAcpxProviderOptions {
    */
   onPermissionRequest?: PermissionRequestHandler
   /**
-   * Extra agent-id → shell-command mappings on top of acpx's built-in
-   * registry. Hermes and user-supplied custom agents flow through here.
-   * Phase 1 leaves it empty; later phases populate it from settings.
+   * Extra agent-id → shell-command mappings on top of acpx's built-in registry.
+   * User-supplied custom agents flow through here.
    */
   agentRegistryOverrides?: Record<string, string>
   /**

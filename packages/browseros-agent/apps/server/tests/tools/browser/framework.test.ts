@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'bun:test'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { z } from 'zod'
 import type { BrowserSession } from '../../../src/browser/core/session'
 import {
@@ -47,6 +50,40 @@ function textOf(result: { content?: unknown }): string {
     .join('\n')
 }
 
+async function withBrowserosDir<T>(run: () => Promise<T>): Promise<T> {
+  const previous = process.env.BROWSEROS_DIR
+  const browserosDir = mkdtempSync(join(tmpdir(), 'browseros-framework-test-'))
+  process.env.BROWSEROS_DIR = browserosDir
+  try {
+    return await run()
+  } finally {
+    if (previous === undefined) {
+      delete process.env.BROWSEROS_DIR
+    } else {
+      process.env.BROWSEROS_DIR = previous
+    }
+    rmSync(browserosDir, { recursive: true, force: true })
+  }
+}
+
+async function withBrowserosFile<T>(run: () => Promise<T>): Promise<T> {
+  const previous = process.env.BROWSEROS_DIR
+  const parentDir = mkdtempSync(join(tmpdir(), 'browseros-framework-test-'))
+  const browserosPath = join(parentDir, 'not-a-directory')
+  writeFileSync(browserosPath, 'not a directory')
+  process.env.BROWSEROS_DIR = browserosPath
+  try {
+    return await run()
+  } finally {
+    if (previous === undefined) {
+      delete process.env.BROWSEROS_DIR
+    } else {
+      process.env.BROWSEROS_DIR = previous
+    }
+    rmSync(parentDir, { recursive: true, force: true })
+  }
+}
+
 describe('browser tool framework post-actions', () => {
   it('runs compact ToolResponse post-actions after the handler', async () => {
     const events: string[] = []
@@ -91,6 +128,216 @@ describe('browser tool framework post-actions', () => {
     expect(text).toContain('[UNTRUSTED_PAGE_CONTENT')
     expect(text).toContain('- button "Submit" [ref=e1]')
     expect(text).toContain('[END_UNTRUSTED_PAGE_CONTENT')
+  })
+
+  it('writes large snapshot post-actions to a BrowserOS output file', async () => {
+    await withBrowserosDir(async () => {
+      const firstMarker = 'first-node'
+      const lastMarker = 'last-node'
+      const largeSnapshot = `${firstMarker}\n${'x '.repeat(23_000)}${lastMarker}`
+      const postActionTool = defineTool({
+        name: 'large_snapshot_post_action_test',
+        description: 'Test large snapshot post-action execution.',
+        input: z.object({ page: z.number().int() }),
+        handler: async (args, _ctx, response) => {
+          response.includeSnapshot(args.page)
+        },
+      })
+      const session = {
+        observe: () => ({
+          snapshot: async () => ({ text: largeSnapshot }),
+        }),
+        pages: {
+          getInfo: () => ({ url: 'https://example.com/large-snapshot' }),
+          getTabId: () => undefined,
+        },
+      } as unknown as BrowserSession
+
+      const result = await executeTool(postActionTool, { page: 8 }, { session })
+      const text = textOf(result)
+      const savedPath = text.match(/saved to: (.+\.md)/)?.[1]
+
+      expect(result.isError).toBeFalsy()
+      expect(text).toContain('[Page 8 snapshot]')
+      expect(text).toContain('estimated tokens')
+      expect(savedPath).toBeTruthy()
+      expect(text).toContain('Showing the first 5000 estimated tokens inline')
+      expect(text).toContain('[UNTRUSTED_PAGE_CONTENT')
+      expect(text).toContain(firstMarker)
+      expect(text).not.toContain(lastMarker)
+      expect(readFileSync(savedPath ?? '', 'utf8')).toContain(lastMarker)
+    })
+  })
+
+  it('keeps large snapshot post-actions visible when output file writes fail', async () => {
+    await withBrowserosFile(async () => {
+      const firstMarker = 'first-node'
+      const lastMarker = 'last-node'
+      const largeSnapshot = `${firstMarker}\n${'x '.repeat(23_000)}${lastMarker}`
+      const postActionTool = defineTool({
+        name: 'large_snapshot_post_action_failure_test',
+        description: 'Test failed large snapshot post-action output.',
+        input: z.object({ page: z.number().int() }),
+        handler: async (args, _ctx, response) => {
+          response.includeSnapshot(args.page)
+        },
+      })
+      const session = {
+        observe: () => ({
+          snapshot: async () => ({ text: largeSnapshot }),
+        }),
+        pages: {
+          getInfo: () => ({ url: 'https://example.com/large-snapshot' }),
+          getTabId: () => undefined,
+        },
+      } as unknown as BrowserSession
+
+      const result = await executeTool(postActionTool, { page: 8 }, { session })
+      const text = textOf(result)
+
+      expect(result.isError).toBeFalsy()
+      expect(text).toContain('[Page 8 snapshot]')
+      expect(text).toContain('could not be saved to a BrowserOS output file')
+      expect(text).toContain('Showing the first')
+      expect(text).toContain('[UNTRUSTED_PAGE_CONTENT')
+      expect(text).toContain(firstMarker)
+      expect(text).toContain('x x x')
+      expect(text).not.toContain(lastMarker)
+    })
+  })
+
+  it('runs diff post-actions through ToolResponse', async () => {
+    const events: string[] = []
+    const postActionTool = defineTool({
+      name: 'diff_post_action_test',
+      description: 'Test diff post-action execution.',
+      input: z.object({ page: z.number().int() }),
+      handler: async (args, _ctx, response) => {
+        events.push('handler')
+        response.text('handler output')
+        response.includeDiff(args.page)
+      },
+    })
+    const session = {
+      observe: (page: number) => ({
+        diff: async () => {
+          events.push(`diff:${page}`)
+          return {
+            changed: true,
+            text: '+   button "Saved" [ref=e1]\n1 added, 0 removed',
+            added: 1,
+            removed: 0,
+            afterUrl: 'https://example.com/current',
+          }
+        },
+      }),
+      pages: {
+        getInfo: () => ({ url: 'https://example.com/stale' }),
+        getTabId: () => undefined,
+      },
+    } as unknown as BrowserSession
+
+    const result = await executeTool(postActionTool, { page: 3 }, { session })
+    const text = textOf(result)
+
+    expect(events).toEqual(['handler', 'diff:3'])
+    expect(result.isError).toBeFalsy()
+    expect(text.indexOf('handler output')).toBeLessThan(
+      text.indexOf('--- Additional context'),
+    )
+    expect(text).toContain('[Page 3 diff]')
+    expect(text).toContain('origin=https://example.com/current')
+    expect(text).toContain('[UNTRUSTED_PAGE_CONTENT')
+    expect(text).toContain('+   button "Saved" [ref=e1]')
+    expect(text).not.toContain('origin=https://example.com/stale')
+  })
+
+  it('writes large diff post-actions to a BrowserOS output file', async () => {
+    await withBrowserosDir(async () => {
+      const firstMarker = 'first-diff-node'
+      const lastMarker = 'last-diff-node'
+      const largeDiff = `${firstMarker}\n${'x'.repeat(30_001)}\n${lastMarker}`
+      const postActionTool = defineTool({
+        name: 'large_diff_post_action_test',
+        description: 'Test large diff post-action execution.',
+        input: z.object({ page: z.number().int() }),
+        handler: async (args, _ctx, response) => {
+          response.includeDiff(args.page)
+        },
+      })
+      const session = {
+        observe: () => ({
+          diff: async () => ({
+            changed: true,
+            text: largeDiff,
+            added: 1,
+            removed: 0,
+            afterUrl: 'https://example.com/large',
+          }),
+        }),
+        pages: {
+          getInfo: () => ({ url: 'https://example.com/large' }),
+          getTabId: () => undefined,
+        },
+      } as unknown as BrowserSession
+
+      const result = await executeTool(postActionTool, { page: 4 }, { session })
+      const text = textOf(result)
+      const savedPath = text.match(/saved to: (.+\.md)/)?.[1]
+
+      expect(result.isError).toBeFalsy()
+      expect(text).toContain('[Page 4 diff]')
+      expect(text).toContain('estimated tokens')
+      expect(savedPath).toBeTruthy()
+      expect(text).toContain('Showing the first 5000 estimated tokens inline')
+      expect(text).toContain('[UNTRUSTED_PAGE_CONTENT')
+      expect(text).toContain(firstMarker)
+      expect(text).not.toContain(lastMarker)
+      expect(readFileSync(savedPath ?? '', 'utf8')).toContain(lastMarker)
+    })
+  })
+
+  it('keeps large diff post-actions visible when output file writes fail', async () => {
+    await withBrowserosFile(async () => {
+      const firstMarker = 'first-diff-node'
+      const lastMarker = 'last-diff-node'
+      const largeDiff = `${firstMarker}\n${'x'.repeat(30_001)}\n${lastMarker}`
+      const postActionTool = defineTool({
+        name: 'large_diff_post_action_failure_test',
+        description: 'Test failed large diff post-action output.',
+        input: z.object({ page: z.number().int() }),
+        handler: async (args, _ctx, response) => {
+          response.includeDiff(args.page)
+        },
+      })
+      const session = {
+        observe: () => ({
+          diff: async () => ({
+            changed: true,
+            text: largeDiff,
+            added: 1,
+            removed: 0,
+            afterUrl: 'https://example.com/large',
+          }),
+        }),
+        pages: {
+          getInfo: () => ({ url: 'https://example.com/large' }),
+          getTabId: () => undefined,
+        },
+      } as unknown as BrowserSession
+
+      const result = await executeTool(postActionTool, { page: 4 }, { session })
+      const text = textOf(result)
+
+      expect(result.isError).toBeFalsy()
+      expect(text).toContain('[Page 4 diff]')
+      expect(text).toContain('saving it to a BrowserOS output file failed')
+      expect(text).toContain('Showing the first')
+      expect(text).toContain('[UNTRUSTED_PAGE_CONTENT')
+      expect(text).toContain(firstMarker)
+      expect(text).toContain('xxx')
+      expect(text).not.toContain(lastMarker)
+    })
   })
 
   it('keeps compact error results from running undeclared post-actions', async () => {

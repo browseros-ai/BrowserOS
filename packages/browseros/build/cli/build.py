@@ -35,7 +35,11 @@ from ..common.utils import (
 
 # Import all module classes
 from ..modules.setup.clean import CleanModule
-from ..modules.setup.git import GitSetupModule, SparkleSetupModule
+from ..modules.setup.git import (
+    GitSetupModule,
+    SparkleSetupModule,
+    WinSparkleSetupModule,
+)
 from ..modules.setup.configure import ConfigureModule
 from ..modules.compile import CompileModule, UniversalBuildModule
 from ..modules.patches.patches import PatchesModule
@@ -52,7 +56,7 @@ from ..modules.sign.windows import WindowsSignModule
 from ..modules.sign.linux import LinuxSignModule
 from ..modules.sign.sparkle import SparkleSignModule
 from ..modules.package.macos import MacOSPackageModule
-from ..modules.package.windows import WindowsPackageModule
+from ..modules.package.windows import WindowsPackageModule, MiniInstallerModule
 from ..modules.package.linux import LinuxPackageModule
 
 AVAILABLE_MODULES = {
@@ -60,6 +64,7 @@ AVAILABLE_MODULES = {
     "clean": CleanModule,
     "git_setup": GitSetupModule,
     "sparkle_setup": SparkleSetupModule,
+    "winsparkle_setup": WinSparkleSetupModule,
     "configure": ConfigureModule,
     # Patches & Resources
     "patches": PatchesModule,
@@ -76,8 +81,9 @@ AVAILABLE_MODULES = {
     "sign_macos": MacOSSignModule,
     "sign_windows": WindowsSignModule,
     "sign_linux": LinuxSignModule,
-    "sparkle_sign": SparkleSignModule,  # macOS Sparkle signing for auto-update
+    "sparkle_sign": SparkleSignModule,  # Sparkle/WinSparkle Ed25519 signing for auto-update
     # Package (platform-specific, validated at runtime)
+    "mini_installer": MiniInstallerModule,  # Unsigned installer build (CI)
     "package_macos": MacOSPackageModule,
     "package_windows": WindowsPackageModule,
     "package_linux": LinuxPackageModule,
@@ -112,10 +118,20 @@ def _get_package_module():
         sys.exit(1)
 
 
+def _get_setup_modules():
+    """Setup phase modules; the Sparkle/WinSparkle download is platform-bound."""
+    modules = ["clean", "git_setup"]
+    if IS_MACOS():
+        modules.append("sparkle_setup")
+    elif IS_WINDOWS():
+        modules.append("winsparkle_setup")
+    return modules
+
+
 # Fixed execution order - flags enable/disable phases, order is always the same
 EXECUTION_ORDER = [
     # Phase 1: Setup & Clean
-    ("setup", ["clean", "git_setup", "sparkle_setup"]),
+    ("setup", _get_setup_modules()),
     # Phase 2: Patches & Resources
     (
         "prep",
@@ -264,7 +280,7 @@ def main(
     setup: bool = typer.Option(
         False,
         "--setup",
-        help="Run setup phase (clean, git_setup, sparkle_setup)",
+        help="Run setup phase (clean, git_setup, sparkle_setup/winsparkle_setup)",
     ),
     prep: bool = typer.Option(
         False,

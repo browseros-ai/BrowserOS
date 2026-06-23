@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { OAUTH_MCP_SERVERS } from '../lib/clients/klavis/oauth-mcp-servers'
+import { getConnectorCatalog } from '../api/services/klavis'
 
 /**
  * BrowserOS Agent System Prompt v6
@@ -15,7 +15,7 @@ import { OAUTH_MCP_SERVERS } from '../lib/clients/klavis/oauth-mcp-servers'
  * - Added tool selection strategy
  * - Added safety rules
  * - Expanded security to cover all untrusted data sources
- * - Workspace-gated filesystem: tools only available when user selects directory
+ * - Workspace-gated filesystem: full tools only available when user selects directory
  * - Expanded error recovery per tool category
  * - Removed dangling tab-grouping reference
  * - Added mode-aware framing (regular/scheduled/chat)
@@ -30,7 +30,7 @@ function getRoleAndMode(
   _exclude: Set<string>,
   options?: BuildSystemPromptOptions,
 ): string {
-  const hasWorkspace = !!options?.workspaceDir
+  const hasWorkspace = !!options?.workspaceDir && !options?.chatMode
 
   let role: string
   if (hasWorkspace) {
@@ -121,15 +121,17 @@ function getCapabilities(
   _exclude: Set<string>,
   options?: BuildSystemPromptOptions,
 ): string {
-  const hasWorkspace = !!options?.workspaceDir
+  const hasWorkspace = !!options?.workspaceDir && !options?.chatMode
+  const hasGeneratedOutputRead = !!options?.generatedOutputReadAvailable
 
   let capabilities = `<capabilities>
 ## Your Capabilities
 
-### Browser Control (10 tools)
+### Browser Control (11 tools)
 You control a Chromium browser through a compact tool surface:
 
 - \`tabs\` → list pages, open background/hidden pages, close pages
+- \`windows\` → list, create, close, focus, show, and hide browser windows
 - \`navigate\` → go to URL, back, forward, reload; returns a fresh snapshot
 - \`snapshot\` → accessibility tree with refs like [ref=e12] for acting
 - \`diff\` → what changed since the last snapshot/diff
@@ -138,7 +140,8 @@ You control a Chromium browser through a compact tool surface:
 - \`grep\` → search snapshot/content without dumping the whole page
 - \`screenshot\` → visual capture
 - \`wait\` → wait for text, selector, or time
-- \`run\` → page-context JavaScript for small DOM/page-state scripts
+- \`evaluate\` → page-context JavaScript for small DOM/page-state scripts
+- \`run\` → server-runtime JavaScript against the browser SDK for multi-step flows
 
 ### External App Integrations (Strata)
 For connected apps, you can read and write data via direct API access (faster and more reliable than browser automation). See the External Integrations section for the full protocol.`
@@ -148,6 +151,11 @@ For connected apps, you can read and write data via direct API access (faster an
 
 ### Filesystem
 You have a session workspace for reading, writing, and executing files. See the Workspace section for tools and guidance.`
+  } else if (hasGeneratedOutputRead) {
+    capabilities += `
+
+### Browser Output Files
+Browser tools may save large snapshots, page reads, or diffs to BrowserOS-generated output files. Use \`filesystem_read\` only with those absolute saved paths to inspect them. This is not general workspace access.`
   }
 
   capabilities += '\n</capabilities>'
@@ -316,7 +324,7 @@ function getExternalIntegrations(
 ): string {
   const connectedApps = options?.connectedApps ?? []
   const declinedApps = options?.declinedApps ?? []
-  const allServerNames = OAUTH_MCP_SERVERS.map((s) => s.name)
+  const allServerNames = getConnectorCatalog().map((server) => server.name)
 
   const connectedList =
     connectedApps.length > 0
@@ -387,7 +395,7 @@ function getErrorRecovery(
   _exclude: Set<string>,
   options?: BuildSystemPromptOptions,
 ): string {
-  const hasWorkspace = !!options?.workspaceDir
+  const hasWorkspace = !!options?.workspaceDir && !options?.chatMode
 
   let recovery = `<error_recovery>
 ## Error Recovery
@@ -432,7 +440,7 @@ function getWorkspace(
   _exclude: Set<string>,
   options?: BuildSystemPromptOptions,
 ): string {
-  if (!options?.workspaceDir) return ''
+  if (!options?.workspaceDir || options.chatMode) return ''
   return `<workspace>
 ## Workspace
 
@@ -494,7 +502,8 @@ function getStyle(
   _exclude: Set<string>,
   options?: BuildSystemPromptOptions,
 ): string {
-  const hasWorkspace = !!options?.workspaceDir
+  const hasWorkspace = !!options?.workspaceDir && !options?.chatMode
+  const hasGeneratedOutputRead = !!options?.generatedOutputReadAvailable
 
   let style = `<style_rules>
 ## Style
@@ -517,9 +526,12 @@ This is essential because the user can't see the background tabs — chat is the
 - Report outcomes, not step-by-step process.
 - For data-rich responses (emails, calendar events, file contents, memory recalls), present the data clearly — don't over-summarize it.`
 
-  if (!hasWorkspace) {
+  if (!hasWorkspace && hasGeneratedOutputRead) {
     style += `
-- You have no filesystem workspace. Return all output directly in chat. If the user needs file output, suggest: "To save this to a file, select a working directory from the chat toolbar."`
+- You have no filesystem workspace. Return user-requested output directly in chat. If a browser tool says full content was saved to an absolute BrowserOS-generated output file, use \`filesystem_read\` with that exact path. If the user needs you to create or edit files, suggest: "To save this to a file, select a working directory from the chat toolbar."`
+  } else if (!hasWorkspace) {
+    style += `
+- You have no filesystem workspace. Return user-requested output directly in chat. If the user needs you to create or edit files, suggest: "To save this to a file, select a working directory from the chat toolbar."`
   }
 
   style += '\n</style_rules>'
@@ -654,6 +666,8 @@ export interface BuildSystemPromptOptions {
   declinedApps?: string[]
   /** Where the chat session originates from — determines navigation behavior. */
   origin?: 'sidepanel' | 'newtab'
+  /** Whether this prompt's tool set includes output-only filesystem_read. */
+  generatedOutputReadAvailable?: boolean
   /**
    * Render the ACP-only tool-namespace addendum. Set to true when the
    * prompt is being written into a CLAUDE.md / AGENTS.md workspace file

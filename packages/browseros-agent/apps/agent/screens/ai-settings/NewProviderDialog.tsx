@@ -60,12 +60,20 @@ import {
 } from '@/lib/constants/analyticsEvents'
 import { isLocalRuntimeProviderType } from '@/lib/llm-providers/provider-runtime'
 import {
+  type FeatureSupport,
+  visibleProviderTypeOptions,
+} from '@/lib/llm-providers/provider-visibility'
+import {
   getDefaultBaseUrlForProviders,
   getProviderTemplate,
   providerTypeOptions,
 } from '@/lib/llm-providers/providerTemplates'
 import { type TestResult, testProvider } from '@/lib/llm-providers/testProvider'
-import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
+import {
+  type LlmProviderConfig,
+  type ProviderType,
+  REMOTE_HERMES_PROVIDER_TYPE,
+} from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
 import { cn } from '@/lib/utils'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
@@ -89,6 +97,18 @@ function isAcpProviderType(type: ProviderType | undefined): boolean {
   return type !== undefined && ACP_PROVIDER_TYPES.has(type)
 }
 
+function isRemoteHermesType(type: ProviderType | undefined): boolean {
+  return type === REMOTE_HERMES_PROVIDER_TYPE
+}
+
+function showsStandardModelField(type: ProviderType): boolean {
+  return !isAcpProviderType(type) && !isRemoteHermesType(type)
+}
+
+function defaultReasoningEffort(type?: ProviderType) {
+  return type === 'chatgpt-pro' ? 'medium' : 'high'
+}
+
 const EFFORT_LABEL: Record<string, string> = {
   none: 'None',
   low: 'Low',
@@ -103,6 +123,66 @@ function formatContextWindow(tokens: number): string {
     return `${(tokens / 1000000).toFixed(tokens % 1000000 === 0 ? 0 : 1)}M`
   if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`
   return `${tokens}`
+}
+
+function setupGuideLabel(type: ProviderType, providerName?: string): string {
+  if (type === 'moonshot') return 'How to get a Kimi API key'
+  return providerName ? `${providerName} setup guide` : 'Provider setup guide'
+}
+
+function isProviderTypeOptionSupported(
+  value: ProviderType,
+  supports: FeatureSupport,
+): boolean {
+  if (value === 'chatgpt-pro') return supports(Feature.CHATGPT_PRO_SUPPORT)
+  if (value === 'github-copilot')
+    return supports(Feature.GITHUB_COPILOT_SUPPORT)
+  if (value === 'qwen-code') return supports(Feature.QWEN_CODE_SUPPORT)
+  return true
+}
+
+function getVisibleProviderTypeOptions(supports: FeatureSupport) {
+  return visibleProviderTypeOptions(providerTypeOptions, supports).filter(
+    (opt) => isProviderTypeOptionSupported(opt.value, supports),
+  )
+}
+
+function isProviderTestable(input: {
+  type: ProviderType
+  modelId: string
+  baseUrl?: string
+  apiKey?: string
+  acpCommand?: string
+  resourceName?: string
+  accessKeyId?: string
+  secretAccessKey?: string
+  region?: string
+}): boolean {
+  if (!input.modelId) return false
+
+  if (isAcpProviderType(input.type)) {
+    return input.type !== 'acp-custom' || Boolean(input.acpCommand)
+  }
+
+  if (
+    input.type === 'chatgpt-pro' ||
+    input.type === 'github-copilot' ||
+    input.type === 'qwen-code'
+  ) {
+    return true
+  }
+
+  if (input.type === 'azure') {
+    return Boolean((input.resourceName || input.baseUrl) && input.apiKey)
+  }
+  if (input.type === 'bedrock') {
+    return Boolean(input.accessKeyId && input.secretAccessKey && input.region)
+  }
+  if (!input.baseUrl) return false
+  if (!['ollama', 'lmstudio'].includes(input.type) && !input.apiKey) {
+    return false
+  }
+  return true
 }
 
 export interface NewProviderDialogProps {
@@ -126,17 +206,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   const { supports } = useCapabilities()
   const { baseUrl: agentServerUrl } = useAgentServerUrl()
 
-  const filteredProviderTypeOptions = providerTypeOptions.filter((opt) => {
-    if (opt.value === 'chatgpt-pro')
-      return supports(Feature.CHATGPT_PRO_SUPPORT)
-    if (opt.value === 'github-copilot')
-      return supports(Feature.GITHUB_COPILOT_SUPPORT)
-    if (opt.value === 'qwen-code') return supports(Feature.QWEN_CODE_SUPPORT)
-    if (opt.value === 'openai-compatible') {
-      return supports(Feature.OPENAI_COMPATIBLE_SUPPORT)
-    }
-    return true
-  })
+  const filteredProviderTypeOptions = getVisibleProviderTypeOptions(supports)
 
   const form = useForm<ProviderFormValues>({
     resolver: zodResolver(providerFormSchema),
@@ -155,7 +225,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       secretAccessKey: initialValues?.secretAccessKey || '',
       region: initialValues?.region || '',
       sessionToken: initialValues?.sessionToken || '',
-      reasoningEffort: initialValues?.reasoningEffort || 'high',
+      reasoningEffort:
+        initialValues?.reasoningEffort ||
+        defaultReasoningEffort(initialValues?.type),
       reasoningSummary: initialValues?.reasoningSummary || 'auto',
     },
   })
@@ -243,6 +315,13 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       form.setValue('region', '')
       form.setValue('sessionToken', '')
     }
+    if (isRemoteHermesType(newType)) {
+      form.setValue('apiKey', '')
+      form.setValue('modelId', 'default')
+      if (!form.getValues('name')) form.setValue('name', 'Remote Hermes')
+      return
+    }
+    form.setValue('reasoningEffort', defaultReasoningEffort(newType))
     form.setValue('modelId', '')
   }
 
@@ -278,7 +357,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         secretAccessKey: initialValues.secretAccessKey || '',
         region: initialValues.region || '',
         sessionToken: initialValues.sessionToken || '',
-        reasoningEffort: initialValues.reasoningEffort || 'high',
+        reasoningEffort:
+          initialValues.reasoningEffort ||
+          defaultReasoningEffort(initialValues.type),
         reasoningSummary: initialValues.reasoningSummary || 'auto',
       })
     }
@@ -301,7 +382,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         secretAccessKey: '',
         region: '',
         sessionToken: '',
-        reasoningEffort: 'high',
+        reasoningEffort: defaultReasoningEffort(defaultType),
         reasoningSummary: 'auto',
       })
     }
@@ -340,37 +421,17 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     onOpenChange(false)
   }
 
-  const canTest = (): boolean => {
-    if (!watchedModelId) return false
-
-    if (isAcpProviderType(watchedType as ProviderType)) {
-      // acp-custom must carry a command for the probe to spawn anything;
-      // built-ins resolve their command through acpx's registry.
-      if (watchedType === 'acp-custom' && !form.getValues('acpCommand')) {
-        return false
-      }
-      return true
-    }
-
-    if (
-      watchedType === 'chatgpt-pro' ||
-      watchedType === 'github-copilot' ||
-      watchedType === 'qwen-code'
-    )
-      return true
-
-    if (watchedType === 'azure') {
-      return !!(watchedResourceName || watchedBaseUrl) && !!watchedApiKey
-    }
-    if (watchedType === 'bedrock') {
-      return !!watchedAccessKeyId && !!watchedSecretAccessKey && !!watchedRegion
-    }
-    if (!watchedBaseUrl) return false
-    if (!['ollama', 'lmstudio'].includes(watchedType) && !watchedApiKey) {
-      return false
-    }
-    return true
-  }
+  const canTest = isProviderTestable({
+    type: watchedType as ProviderType,
+    modelId: watchedModelId,
+    baseUrl: watchedBaseUrl,
+    apiKey: watchedApiKey,
+    acpCommand: form.getValues('acpCommand'),
+    resourceName: watchedResourceName,
+    accessKeyId: watchedAccessKeyId,
+    secretAccessKey: watchedSecretAccessKey,
+    region: watchedRegion,
+  })
 
   const handleTest = async () => {
     if (!agentServerUrl) {
@@ -423,12 +484,10 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   const providerTemplate = getProviderTemplate(watchedType as ProviderType)
   const setupGuideUrl = providerTemplate?.setupGuideUrl
   const providerName = providerTemplate?.name
-  const setupGuideText =
-    watchedType === 'moonshot'
-      ? 'How to get a Kimi API key'
-      : providerName
-        ? `${providerName} setup guide`
-        : 'Provider setup guide'
+  const setupGuideText = setupGuideLabel(
+    watchedType as ProviderType,
+    providerName,
+  )
 
   const handleSetupGuideClick = (e: React.MouseEvent) => {
     e.preventDefault()
@@ -439,6 +498,14 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   }
 
   const renderProviderSpecificFields = () => {
+    if (isRemoteHermesType(watchedType as ProviderType)) {
+      return (
+        <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 text-sm dark:border-green-800 dark:bg-green-950 dark:text-green-300">
+          Remote Hermes runs in a managed VM. No API key, base URL, or model
+          selection is required.
+        </div>
+      )
+    }
     if (isAcpProviderType(watchedType as ProviderType)) {
       return renderAcpFields()
     }
@@ -627,7 +694,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                   <FormLabel>Reasoning Effort</FormLabel>
                   <Select
                     onValueChange={field.onChange}
-                    value={field.value || 'high'}
+                    value={field.value || 'medium'}
                   >
                     <FormControl>
                       <SelectTrigger className="w-full">
@@ -929,7 +996,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 
             {renderProviderSpecificFields()}
 
-            {!isAcpProviderType(watchedType as ProviderType) && (
+            {showsStandardModelField(watchedType as ProviderType) && (
               <FormField
                 control={form.control}
                 name="modelId"
@@ -1186,7 +1253,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                 type="button"
                 variant="outline"
                 onClick={handleTest}
-                disabled={!canTest() || isTesting}
+                disabled={!canTest || isTesting}
               >
                 {isTesting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {isTesting ? 'Testing...' : 'Test'}

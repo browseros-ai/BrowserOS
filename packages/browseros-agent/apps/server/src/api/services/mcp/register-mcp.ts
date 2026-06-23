@@ -1,19 +1,23 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { Browser } from '../../../browser/browser'
 import type { BrowserSession } from '../../../browser/core/session'
+import type { BrowserOutputFileAccess } from '../../../tools/browser/output-file'
 import {
   type BrowserToolDefaults,
   registerBrowserTools,
 } from '../../../tools/browser/register'
-import { registerLegacyBrowserTools } from '../../../tools/legacy/register'
+import { registerFilesystemMcpTools } from '../../../tools/filesystem/register-mcp'
 
-export interface RegisterToolsDeps extends BrowserToolDefaults {
-  browser: Browser
-  browserSession: BrowserSession
-  useNewTools?: boolean
+export interface RemoteAgentHarnessTools {
+  outputFileAccess: BrowserOutputFileAccess
 }
 
-/** Registers the active BrowserOS browser tools for MCP requests. */
+export interface RegisterToolsDeps extends BrowserToolDefaults {
+  browserSession: BrowserSession
+  executionDir: string
+  remoteAgentHarness?: RemoteAgentHarnessTools
+}
+
+/** Registers BrowserOS MCP tools for the current request. */
 export function registerTools(
   mcpServer: McpServer,
   deps: RegisterToolsDeps,
@@ -23,10 +27,13 @@ export function registerTools(
     defaultTabGroupId: deps.defaultTabGroupId,
   }
 
-  if (deps.useNewTools === true) {
-    registerBrowserTools(mcpServer, deps.browserSession, defaults)
-    return
-  }
+  registerBrowserTools(mcpServer, deps.browserSession, defaults, {
+    outputFileAccess: deps.remoteAgentHarness?.outputFileAccess,
+  })
 
-  registerLegacyBrowserTools(mcpServer, deps.browser, defaults)
+  if (deps.remoteAgentHarness) {
+    registerFilesystemMcpTools(mcpServer, deps.executionDir, {
+      outputFileAccess: deps.remoteAgentHarness.outputFileAccess,
+    })
+  }
 }

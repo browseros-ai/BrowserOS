@@ -22,6 +22,13 @@
       "when": 1777902205667,
       "tag": "0002_chemical_whirlwind",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1781916712443,
+      "tag": "0003_scrub_hermes_credentials",
+      "breakpoints": true
     }
   ]
 }

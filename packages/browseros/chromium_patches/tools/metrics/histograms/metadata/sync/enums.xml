@@ -1,13 +1,12 @@
 diff --git a/tools/metrics/histograms/metadata/sync/enums.xml b/tools/metrics/histograms/metadata/sync/enums.xml
-index 0c2b6d7182b61..be93d67bca506 100644
+index 0c2b6d7182b61..e59afa6ff0657 100644
 --- a/tools/metrics/histograms/metadata/sync/enums.xml
 +++ b/tools/metrics/histograms/metadata/sync/enums.xml
-@@ -858,6 +858,8 @@ chromium-metrics-reviews@google.com.
+@@ -858,6 +858,7 @@ chromium-metrics-reviews@google.com.
    <int value="100378" label="iOSPriceTrackingPromoOptOut"/>
    <int value="100379" label="AccessibilityReadAnythingLineFocusEnabledMode"/>
    <int value="100380" label="AppRatingPromptShown"/>
 +  <int value="100381" label="PinnedThirdPartyLlmMigrationComplete"/>
-+  <int value="100382" label="PinnedClashOfGptsMigrationComplete"/>
  <!-- LINT.ThenChange(/chrome/browser/sync/prefs/chrome_syncable_prefs_database.cc:ChromeSyncablePref)-->
  
  <!-- LINT.IfChange(IosSyncablePref) -->

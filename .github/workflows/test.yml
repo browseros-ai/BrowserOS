@@ -73,7 +73,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -99,7 +99,7 @@ jobs:
       - name: Restore BrowserOS cache
         if: matrix.needs_browser == true
         id: browseros-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5.0.5
         with:
           path: packages/browseros-agent/.ci/bin/BrowserOS.AppImage
           key: ${{ steps.browseros-cache-key.outputs.key }}
@@ -277,7 +277,7 @@ jobs:
           PY
 
       - name: Upsert sticky PR comment
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');

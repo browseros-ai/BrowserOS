@@ -3,21 +3,40 @@
  * Copyright 2025 BrowserOS
  */
 
-import { beforeEach, describe, expect, it, mock } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 let lastBuildArgs: Record<string, unknown> | null = null
 const fakeLanguageModel = { kind: 'fake-acp-model' }
 let closeCalls = 0
+let prepareCalls = 0
+let prepareError: Error | null = null
+const setModeCalls: string[] = []
+let rejectModes: string[] = []
+let omitRuntimeSetMode = false
 const fakeProvider = {
   languageModel: () => fakeLanguageModel,
   close: async () => {
     closeCalls += 1
   },
+  prepare: async () => {
+    prepareCalls += 1
+    if (prepareError) throw prepareError
+  },
+  setMode: async (mode: string) => {
+    setModeCalls.push(mode)
+    if (rejectModes.includes(mode)) {
+      throw new Error(`mode ${mode} is not supported`)
+    }
+  },
+  get runtime() {
+    return omitRuntimeSetMode ? {} : { setMode: async () => {} }
+  },
 }
 
 const mkdirCalls: Array<{ path: string; opts: { recursive?: boolean } }> = []
+let lastInstructionArgs: Record<string, unknown> | null = null
 
 mock.module('node:fs/promises', () => ({
   mkdir: async (path: string, opts: { recursive?: boolean }) => {
@@ -27,7 +46,6 @@ mock.module('node:fs/promises', () => ({
 
 mock.module('../../src/lib/browseros-dir', () => ({
   getBrowserosDir: () => join(homedir(), '.browseros-test'),
-  getSoulPath: () => join(homedir(), '.browseros-test', 'SOUL.md'),
 }))
 
 mock.module('../../src/lib/agents/acpx-provider/buildAcpxProvider', () => ({
@@ -38,7 +56,12 @@ mock.module('../../src/lib/agents/acpx-provider/buildAcpxProvider', () => ({
 }))
 
 const mod = await import('../../src/agent/provider-factory')
-const { createLanguageModel } = mod
+const { createLanguageModel, setEnsureWorkspaceInstructionFileForTesting } = mod
+
+afterAll(() => {
+  setEnsureWorkspaceInstructionFileForTesting(null)
+  mock.restore()
+})
 
 function baseConfig(): Record<string, unknown> {
   return {
@@ -51,7 +74,17 @@ function baseConfig(): Record<string, unknown> {
 beforeEach(() => {
   lastBuildArgs = null
   closeCalls = 0
+  prepareCalls = 0
+  prepareError = null
+  setModeCalls.length = 0
+  rejectModes = []
+  omitRuntimeSetMode = false
   mkdirCalls.length = 0
+  lastInstructionArgs = null
+  setEnsureWorkspaceInstructionFileForTesting(async (opts) => {
+    lastInstructionArgs = opts as unknown as Record<string, unknown>
+    return { action: 'skipped-not-new-conversation' }
+  })
 })
 
 describe('createLanguageModel — ACP providers', () => {
@@ -200,6 +233,18 @@ describe('createLanguageModel — ACP providers', () => {
     )
   })
 
+  it('does not pass legacy root soul content to ACP instruction prompts', async () => {
+    await createLanguageModel({
+      ...baseConfig(),
+      isNewConversation: true,
+    } as never)
+    const promptOptions = lastInstructionArgs?.promptOptions as
+      | Record<string, unknown>
+      | undefined
+    expect(promptOptions).toBeDefined()
+    expect(promptOptions).not.toHaveProperty('soulContent')
+  })
+
   it('isolates two providers of the same type into different directories', async () => {
     await createLanguageModel({
       ...baseConfig(),
@@ -268,6 +313,87 @@ describe('createLanguageModel — ACP providers', () => {
       acpFixedWorkspacePath: '/tmp/x/$HOME/y',
     } as never)
     expect(lastBuildArgs?.workspacePath).toBe('/tmp/x/$HOME/y')
+  })
+})
+
+describe('createLanguageModel — ACP dangerously-allow mode', () => {
+  it('prepares the session and sets bypassPermissions for claude-code', async () => {
+    const { model } = await createLanguageModel(baseConfig() as never)
+    expect(model).toBe(fakeLanguageModel as never)
+    expect(prepareCalls).toBe(1)
+    expect(setModeCalls).toEqual(['bypassPermissions'])
+  })
+
+  it('sets agent-full-access for codex', async () => {
+    await createLanguageModel({ ...baseConfig(), provider: 'codex' } as never)
+    expect(setModeCalls).toEqual(['agent-full-access'])
+  })
+
+  it('falls back to the zed codex mode id when the first candidate is rejected', async () => {
+    rejectModes = ['agent-full-access']
+    const { model } = await createLanguageModel({
+      ...baseConfig(),
+      provider: 'codex',
+    } as never)
+    expect(model).toBe(fakeLanguageModel as never)
+    expect(setModeCalls).toEqual(['agent-full-access', 'full-access'])
+  })
+
+  it('still returns a model when every mode candidate is rejected', async () => {
+    rejectModes = ['agent-full-access', 'full-access']
+    const { model } = await createLanguageModel({
+      ...baseConfig(),
+      provider: 'codex',
+    } as never)
+    expect(model).toBe(fakeLanguageModel as never)
+    expect(setModeCalls).toEqual(['agent-full-access', 'full-access'])
+  })
+
+  it('still returns a model when prepare() fails, without attempting setMode', async () => {
+    prepareError = new Error('spawn failed')
+    const { model } = await createLanguageModel(baseConfig() as never)
+    expect(model).toBe(fakeLanguageModel as never)
+    expect(prepareCalls).toBe(1)
+    expect(setModeCalls).toEqual([])
+  })
+
+  it('skips mode control when the runtime does not expose setMode', async () => {
+    omitRuntimeSetMode = true
+    const { model } = await createLanguageModel(baseConfig() as never)
+    expect(model).toBe(fakeLanguageModel as never)
+    expect(prepareCalls).toBe(1)
+    expect(setModeCalls).toEqual([])
+  })
+
+  it('does not touch modes for acp-custom agents', async () => {
+    await createLanguageModel({
+      ...baseConfig(),
+      provider: 'acp-custom',
+      acpAgentId: 'my-agent',
+      acpCommand: 'my-bin acp',
+    } as never)
+    expect(prepareCalls).toBe(0)
+    expect(setModeCalls).toEqual([])
+  })
+
+  it('does not touch modes when acpAgentId overrides the built-in default', async () => {
+    await createLanguageModel({
+      ...baseConfig(),
+      acpAgentId: 'claude-experimental',
+    } as never)
+    expect(prepareCalls).toBe(0)
+    expect(setModeCalls).toEqual([])
+  })
+
+  it('does not touch modes for an acp-custom agent named like a built-in', async () => {
+    await createLanguageModel({
+      ...baseConfig(),
+      provider: 'acp-custom',
+      acpAgentId: 'claude',
+      acpCommand: 'my-bin acp',
+    } as never)
+    expect(prepareCalls).toBe(0)
+    expect(setModeCalls).toEqual([])
   })
 })
 

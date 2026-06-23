@@ -74,7 +74,6 @@ const primarySettingsSections: NavSection[] = [
         name: 'Customize BrowserOS',
         to: '/settings/customization',
         icon: Palette,
-        feature: Feature.CUSTOMIZATION_SUPPORT,
       },
       { name: 'BrowserOS as MCP', to: '/settings/mcp', icon: Server },
       {

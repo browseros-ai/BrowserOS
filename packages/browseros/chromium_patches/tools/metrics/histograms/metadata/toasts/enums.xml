@@ -1,0 +1,12 @@
+diff --git a/tools/metrics/histograms/metadata/toasts/enums.xml b/tools/metrics/histograms/metadata/toasts/enums.xml
+index de288d30cc6c3..e20afd52721e3 100644
+--- a/tools/metrics/histograms/metadata/toasts/enums.xml
++++ b/tools/metrics/histograms/metadata/toasts/enums.xml
+@@ -92,6 +92,7 @@ chromium-metrics-reviews@google.com.
+   <int value="31" label="Filter Suggestion"/>
+   <int value="32" label="Filter Suggestion Recent"/>
+   <int value="33" label="Saved Skill without Invoke Button"/>
++  <int value="34" label="BrowserOS extension toast"/>
+ </enum>
+ 
+ <!-- LINT.ThenChange(/chrome/browser/ui/toasts/api/toast_id.h:ToastId) -->

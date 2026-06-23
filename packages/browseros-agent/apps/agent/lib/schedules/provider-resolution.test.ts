@@ -1,12 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
-import { getAgentServerUrl } from '../browseros/helpers'
 import { buildChatRequestBody } from '../messaging/server/buildChatRequestBody'
 
 const storageValues = new Map<string, unknown>()
 const fetchBodies: Array<Record<string, unknown>> = []
 const originalFetch = globalThis.fetch
-const originalChrome = globalThis.chrome
 
 const createBrowserOSProvider = () => ({
   id: 'browseros',
@@ -43,7 +41,10 @@ mock.module('@/lib/llm-providers/storage', () => ({
 }))
 
 mock.module('@/lib/browseros/helpers', () => ({
-  getAgentServerUrl,
+  getAgentServerUrl: async () => 'http://127.0.0.1:9105',
+  getMcpServerUrl: async () => 'http://127.0.0.1:9106/mcp',
+  getHealthCheckUrl: async () => 'http://127.0.0.1:9106/health',
+  getProxyPort: async () => 9106,
 }))
 
 mock.module('@/lib/mcp/mcpServerStorage', () => ({
@@ -67,14 +68,6 @@ beforeEach(() => {
   fetchBodies.length = 0
   storageValues.set('providers', providers)
   storageValues.set('defaultProviderId', 'anthropic-sonnet')
-  globalThis.chrome = {
-    runtime: {},
-    browserOS: {
-      getPref(_name: string, callback: (pref: { value?: unknown }) => void) {
-        callback({ value: 9105 })
-      },
-    },
-  } as typeof chrome
   globalThis.fetch = mock(async (_url, init) => {
     fetchBodies.push(JSON.parse(String(init?.body ?? '{}')))
     return new Response(
@@ -95,7 +88,6 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch
-  globalThis.chrome = originalChrome
 })
 
 describe('scheduled provider resolution', () => {

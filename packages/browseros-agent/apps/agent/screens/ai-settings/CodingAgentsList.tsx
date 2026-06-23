@@ -81,7 +81,6 @@ function inferAdapterFromLabel(
   const lower = agent.runtimeLabel?.toLowerCase()
   if (lower === 'claude code') return 'claude'
   if (lower === 'codex') return 'codex'
-  if (lower === 'hermes') return 'hermes'
   return 'unknown'
 }
 

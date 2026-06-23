@@ -14,16 +14,16 @@ features:
       - chrome/browser/prefs/browser_prefs.cc
       - chrome/browser/prefs/BUILD.gn
       - chrome/common/pref_names.h
-      # Shared command/action registrations (llm-chat + llm-hub + pin-ext + agent-v2)
+      # Shared command/action registrations (llm-chat + pin-ext + agent-v2)
       - chrome/app/chrome_command_ids.h
       - chrome/browser/ui/actions/chrome_action_id.h
       - chrome/browser/ui/browser_actions.cc
       - chrome/browser/ui/browser_command_controller.cc
-      # Shared keyboard shortcut infra (llm-chat + llm-hub + keyboard-shortcuts)
+      # Shared keyboard shortcut infra (llm-chat + keyboard-shortcuts)
       - chrome/browser/global_keyboard_shortcuts_mac.mm
-      # Shared toolbar pref (llm-chat + llm-hub + pin-chat + disable-chrome-labs)
+      # Shared toolbar pref (llm-chat + pin-chat + disable-chrome-labs)
       - chrome/browser/ui/toolbar/toolbar_pref_names.cc
-      # Shared pinned button (llm-hub + pin-chat + settings-page)
+      # Shared pinned button (pin-chat + settings-page)
       - chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc
 
   branding:
@@ -60,7 +60,6 @@ features:
       # Custom vector icons
       - components/vector_icons/BUILD.gn
       - components/vector_icons/chat_orange.icon
-      - components/vector_icons/clash_of_gpts.icon
 
   # ── LAYER 2: PLATFORM PATCHES ─────────────────────────────
 
@@ -112,6 +111,28 @@ features:
     files:
       - third_party/sparkle/
 
+  win-sparkle-updater:
+    description: "feat: win winsparkle updater"
+    files:
+      - chrome/browser/BUILD.gn
+      - chrome/browser/buildflags.gni
+      - chrome/browser/chrome_browser_main_win.cc
+      - chrome/browser/sparkle_buildflags.gni
+      - chrome/browser/ui/BUILD.gn
+      - chrome/browser/ui/webui/help/version_updater_basic.cc
+      - chrome/browser/ui/webui/help/winsparkle_version_updater_win.cc
+      - chrome/browser/ui/webui/help/winsparkle_version_updater_win.h
+      - chrome/browser/upgrade_detector/upgrade_detector_impl.cc
+      - chrome/browser/win/winsparkle_glue.cc
+      - chrome/browser/win/winsparkle_glue.h
+      - chrome/installer/mini_installer/BUILD.gn
+      - chrome/installer/mini_installer/chrome.release
+
+  winsparkle-third-party:
+    description: "feat: winsparkle third party library (downloaded on-the-fly)"
+    files:
+      - third_party/winsparkle/
+
   server:
     description: "feat: browseros server"
     files:
@@ -154,6 +175,11 @@ features:
       - chrome/browser/extensions/chrome_extensions_browser_api_provider.cc
       - chrome/browser/media/extension_media_access_handler.cc
       - chrome/browser/ui/extensions/extension_side_panel_utils.h
+      - chrome/browser/ui/toasts/api/toast_id.cc
+      - chrome/browser/ui/toasts/api/toast_id.h
+      - chrome/browser/ui/toasts/toast_controller.cc
+      - chrome/browser/ui/toasts/toast_controller.h
+      - chrome/browser/ui/toasts/toast_service.cc
       - chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc
       - chrome/common/extensions/api/_api_features.json
       - chrome/common/extensions/api/_permission_features.json
@@ -165,6 +191,7 @@ features:
       - extensions/browser/extension_function_histogram_value.h
       - extensions/common/mojom/api_permission_id.mojom
       - tools/metrics/histograms/metadata/extensions/enums.xml
+      - tools/metrics/histograms/metadata/toasts/enums.xml
 
   ota-updater:
     description: "feat: extensions ota updater"
@@ -247,7 +274,7 @@ features:
   llm-chat:
     description: "feat: llm chat side panel"
     files:
-      # Shared side panel infra (also used by llm-hub, committed here first)
+      # Shared side panel infra
       - chrome/app/generated_resources.grd
       - chrome/browser/ui/ui_features.cc
       - chrome/browser/ui/ui_features.h
@@ -264,16 +291,7 @@ features:
       - chrome/browser/ui/views/side_panel/browseros_simple_page_extractor.h
       - chrome/browser/ui/views/side_panel/third_party_llm/
 
-  llm-hub:
-    description: "feat: llm hub side panel"
-    files:
-      - chrome/browser/ui/views/side_panel/clash_of_gpts/
-      - chrome/browser/ui/webui/BUILD.gn
-      - chrome/browser/ui/webui/clash_of_gpts/clash_of_gpts_ui.cc
-      - chrome/browser/ui/webui/clash_of_gpts/clash_of_gpts_ui.h
-      - chrome/common/webui_url_constants.h
-
-  pin-chat-and-hub:
+  pin-chat:
     description: "feat: pin browseros native panels"
     files:
       - chrome/browser/sync/prefs/chrome_syncable_prefs_database.cc

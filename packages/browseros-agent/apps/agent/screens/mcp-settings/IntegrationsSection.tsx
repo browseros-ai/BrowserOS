@@ -16,7 +16,7 @@ import {
 } from './integrations-section.hooks'
 import { QuickSetupSection } from './QuickSetupSection'
 
-interface IntegrationsSectionProps {
+export interface IntegrationsSectionProps {
   serverUrl: string | null
 }
 
@@ -24,7 +24,7 @@ export const IntegrationsSection: FC<IntegrationsSectionProps> = ({
   serverUrl,
 }) => {
   const agentsQuery = useMcpAgents()
-  const install = useInstallAgent()
+  const install = useInstallAgent(serverUrl)
   const uninstall = useUninstallAgent()
   const [errors, setErrors] = useState<Record<string, string | null>>({})
 
@@ -123,6 +123,7 @@ export const IntegrationsSection: FC<IntegrationsSectionProps> = ({
                   (uninstall.isPending && uninstall.variables === agent.id)
                 }
                 error={errors[agent.id] ?? null}
+                canConnect={serverUrl !== null}
                 onInstall={handleInstall}
                 onUninstall={handleUninstall}
               />
@@ -154,6 +155,8 @@ interface AgentRowProps {
   agent: McpAgentRow
   busy: boolean
   error: string | null
+  /** False while the proxy URL hasn't resolved yet — disables Connect. */
+  canConnect: boolean
   onInstall: (id: string) => void
   onUninstall: (id: string) => void
 }
@@ -162,6 +165,7 @@ const AgentRow: FC<AgentRowProps> = ({
   agent,
   busy,
   error,
+  canConnect,
   onInstall,
   onUninstall,
 }) => {
@@ -224,7 +228,16 @@ const AgentRow: FC<AgentRowProps> = ({
           </Button>
         )}
         {agent.installed && !agent.linked && (
-          <Button size="sm" disabled={busy} onClick={() => onInstall(agent.id)}>
+          <Button
+            size="sm"
+            disabled={busy || !canConnect}
+            onClick={() => onInstall(agent.id)}
+            title={
+              !canConnect
+                ? 'Waiting for the MCP server URL to load…'
+                : undefined
+            }
+          >
             {busy && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
             Connect
           </Button>

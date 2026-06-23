@@ -31,18 +31,28 @@ class AppcastModule(CommandModule):
         version = ctx.release_version
         metadata = fetch_all_release_metadata(version, ctx.env)
 
-        if "macos" not in metadata:
-            log_info(f"No macOS release metadata found for version {version}")
+        if "macos" not in metadata and "win" not in metadata:
+            log_info(
+                f"No macOS or Windows release metadata found for version {version}"
+            )
             return
-
-        release = metadata["macos"]
-        sparkle_version = release.get("sparkle_version", "")
-        build_date = release.get("build_date", "")
-        artifacts = release.get("artifacts", {})
 
         log_info(f"\n{'='*60}")
         log_info(f"APPCAST SNIPPETS FOR v{version}")
         log_info(f"{'='*60}")
+
+        if "macos" in metadata:
+            self._print_macos_items(metadata["macos"], version)
+
+        if "win" in metadata:
+            self._print_windows_items(metadata["win"], version)
+
+        log_info(f"\n{'='*60}")
+
+    def _print_macos_items(self, release: dict, version: str) -> None:
+        sparkle_version = release.get("sparkle_version", "")
+        build_date = release.get("build_date", "")
+        artifacts = release.get("artifacts", {})
 
         arch_to_file = {
             "arm64": "appcast.xml",
@@ -61,4 +71,29 @@ class AppcastModule(CommandModule):
             log_info(f"\n{arch_to_file[arch]} ({arch}):")
             print(generate_appcast_item(artifact, version, sparkle_version, build_date))
 
-        log_info(f"\n{'='*60}")
+    def _print_windows_items(self, release: dict, version: str) -> None:
+        sparkle_version = release.get("sparkle_version", "")
+        build_date = release.get("build_date", "")
+        artifacts = release.get("artifacts", {})
+
+        # WinSparkle feeds, one per arch (chrome/browser/win/winsparkle_glue.cc
+        # picks the matching URL at compile time).
+        key_to_file = {
+            "x64_installer": "appcast-win.xml",
+            "arm64_installer": "appcast-win-arm64.xml",
+        }
+
+        for key, appcast_file in key_to_file.items():
+            if key not in artifacts:
+                continue
+
+            artifact = artifacts[key]
+            if "sparkle_signature" not in artifact:
+                log_warning(f"{key} artifact missing sparkle_signature")
+
+            log_info(f"\n{appcast_file} ({key}):")
+            print(
+                generate_appcast_item(
+                    artifact, version, sparkle_version, build_date, platform="win"
+                )
+            )

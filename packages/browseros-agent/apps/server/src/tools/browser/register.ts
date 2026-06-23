@@ -3,7 +3,12 @@ import type { ZodRawShape } from 'zod'
 import type { BrowserSession } from '../../browser/core/session'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
+import { shouldLogToolRegistration } from '../registration-log-sampling'
 import { executeTool } from './framework'
+import {
+  type BrowserOutputFileAccess,
+  withBrowserOutputFileAccess,
+} from './output-file'
 import { BROWSER_TOOLS } from './registry'
 
 // The SDK's registerTool is heavily overloaded/generic; retyping it to a concrete signature
@@ -30,6 +35,10 @@ export interface BrowserToolDefaults {
   defaultTabGroupId?: string
 }
 
+export interface BrowserToolRegistrationOptions {
+  outputFileAccess?: BrowserOutputFileAccess
+}
+
 /**
  * Registers the browser-core tool surface on an MCP server, all bound to one BrowserSession.
  */
@@ -37,6 +46,7 @@ export function registerBrowserTools(
   server: McpServer,
   session: BrowserSession,
   defaults: BrowserToolDefaults = {},
+  options: BrowserToolRegistrationOptions = {},
 ): void {
   const register = server.registerTool.bind(server) as unknown as RegisterFn
 
@@ -53,11 +63,15 @@ export function registerBrowserTools(
       async (args, extra) => {
         const startTime = performance.now()
         try {
-          const result = await executeTool(tool, args, {
-            session,
-            ...defaults,
-            signal: extra?.signal,
-          })
+          const result = await withBrowserOutputFileAccess(
+            options.outputFileAccess,
+            () =>
+              executeTool(tool, args, {
+                session,
+                ...defaults,
+                signal: extra?.signal,
+              }),
+          )
           metrics.log('tool_executed', {
             tool_name: tool.name,
             duration_ms: Math.round(performance.now() - startTime),
@@ -88,7 +102,9 @@ export function registerBrowserTools(
     )
   }
 
-  logger.info(
-    `Registered ${BROWSER_TOOLS.length} browser tools: ${BROWSER_TOOLS.map((t) => t.name).join(', ')}`,
-  )
+  if (shouldLogToolRegistration()) {
+    logger.info(
+      `Registered ${BROWSER_TOOLS.length} browser tools: ${BROWSER_TOOLS.map((t) => t.name).join(', ')}`,
+    )
+  }
 }

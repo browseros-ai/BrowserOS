@@ -10,6 +10,9 @@ import { spawn, spawnSync } from 'node:child_process'
 import { rmSync } from 'node:fs'
 
 const TEST_USER_DATA_PREFIX = 'browseros-test-'
+// Keep teardown below Bun's default 5s hook timeout.
+const BROWSER_EXIT_GRACE_MS = 1_500
+const BROWSER_FORCED_EXIT_MS = 1_000
 
 export interface BrowserConfig {
   cdpPort: number
@@ -60,13 +63,15 @@ export function getBrowserState(): BrowserState | null {
   return browserState
 }
 
-function killOrphanedTestBrowsers(): void {
+function killOrphanedTestBrowsers(
+  message = 'Killed orphaned test browsers from a previous run',
+): void {
   // Matches only BrowserOS processes launched with a test user-data-dir
   // (e.g., /var/folders/.../browseros-test-XXXX). Never matches a dev
   // BrowserOS run from ~/Library/Application Support/BrowserOS.
   const result = spawnSync('pkill', ['-9', '-f', TEST_USER_DATA_PREFIX])
   if (result.status === 0) {
-    console.log('Killed orphaned test browsers from a previous run')
+    console.log(message)
   }
 }
 
@@ -103,7 +108,7 @@ export async function spawnBrowser(
       ...(config.headless ? ['--headless=new'] : []),
       ...config.extraArgs,
       `--user-data-dir=${config.userDataDir}`,
-      // TODO: replace with --browseros-cdp-port once we fix the browseros bug
+      // BrowserOS tests still need Chromium's remote debugging flag here.
       `--remote-debugging-port=${config.cdpPort}`,
       `--browseros-mcp-port=${config.serverPort}`,
       `--browseros-extension-port=${config.extensionPort}`,
@@ -144,32 +149,51 @@ export async function spawnBrowser(
   return browserState
 }
 
+/** Stops the shared BrowserOS test process and removes its temp profile. */
 export async function killBrowser(): Promise<void> {
-  if (!browserState) {
+  const state = browserState
+  if (!state) {
     return
   }
 
   console.log('Shutting down BrowserOS...')
-  browserState.process.kill('SIGTERM')
+  state.process.kill('SIGTERM')
 
   await new Promise<void>((resolve) => {
-    const timeout = setTimeout(() => {
-      browserState?.process.kill('SIGKILL')
-      resolve()
-    }, 5000)
+    let settled = false
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    let forcedTimeout: ReturnType<typeof setTimeout> | undefined
 
-    browserState?.process.on('exit', () => {
-      clearTimeout(timeout)
+    const finish = () => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      if (timeout) clearTimeout(timeout)
+      if (forcedTimeout) clearTimeout(forcedTimeout)
+      state.process.off('exit', finish)
       resolve()
-    })
+    }
+
+    timeout = setTimeout(() => {
+      state.process.kill('SIGKILL')
+      forcedTimeout = setTimeout(finish, BROWSER_FORCED_EXIT_MS)
+    }, BROWSER_EXIT_GRACE_MS)
+
+    state.process.once('exit', finish)
+    if (state.process.exitCode !== null || state.process.signalCode !== null) {
+      finish()
+    }
   })
 
   console.log('BrowserOS stopped')
+  killOrphanedTestBrowsers('Killed dangling BrowserOS test processes')
 
-  if (browserState.userDataDir) {
-    console.log(`Cleaning up temp profile: ${browserState.userDataDir}`)
+  if (state.userDataDir) {
+    console.log(`Cleaning up temp profile: ${state.userDataDir}`)
     try {
-      rmSync(browserState.userDataDir, { recursive: true, force: true })
+      rmSync(state.userDataDir, { recursive: true, force: true })
     } catch (error) {
       console.error('Failed to clean up temp directory:', error)
     }

@@ -67,34 +67,12 @@
       "executable": true
     },
     {
-      "name": "Claude Code - macOS ARM64",
-      "source": {
-        "type": "r2",
-        "key": "third_party/claude-code/claude-darwin-arm64"
-      },
-      "destination": "resources/bin/third_party/claude",
-      "os": ["macos"],
-      "arch": ["arm64"],
-      "executable": true
-    },
-    {
       "name": "Codex - macOS x64",
       "source": {
         "type": "r2",
         "key": "third_party/codex/codex-darwin-x64"
       },
       "destination": "resources/bin/third_party/codex",
-      "os": ["macos"],
-      "arch": ["x64"],
-      "executable": true
-    },
-    {
-      "name": "Claude Code - macOS x64",
-      "source": {
-        "type": "r2",
-        "key": "third_party/claude-code/claude-darwin-x64"
-      },
-      "destination": "resources/bin/third_party/claude",
       "os": ["macos"],
       "arch": ["x64"],
       "executable": true
@@ -111,34 +89,12 @@
       "executable": true
     },
     {
-      "name": "Claude Code - Linux ARM64",
-      "source": {
-        "type": "r2",
-        "key": "third_party/claude-code/claude-linux-arm64"
-      },
-      "destination": "resources/bin/third_party/claude",
-      "os": ["linux"],
-      "arch": ["arm64"],
-      "executable": true
-    },
-    {
       "name": "Codex - Linux x64",
       "source": {
         "type": "r2",
         "key": "third_party/codex/codex-linux-x64"
       },
       "destination": "resources/bin/third_party/codex",
-      "os": ["linux"],
-      "arch": ["x64"],
-      "executable": true
-    },
-    {
-      "name": "Claude Code - Linux x64",
-      "source": {
-        "type": "r2",
-        "key": "third_party/claude-code/claude-linux-x64"
-      },
-      "destination": "resources/bin/third_party/claude",
       "os": ["linux"],
       "arch": ["x64"],
       "executable": true
@@ -155,26 +111,13 @@
       "executable": true
     },
     {
-      "name": "Claude Code - Windows x64",
-      "source": {
-        "type": "r2",
-        "key": "third_party/claude-code/claude-windows-x64.exe"
-      },
-      "destination": "resources/bin/third_party/claude.exe",
-      "os": ["windows"],
-      "arch": ["x64"],
-      "executable": true
-    },
-    {
       "name": "Drizzle migrations",
       "source": {
         "type": "local",
         "path": "apps/server/src/lib/db/migrations"
       },
       "destination": "resources/db/migrations",
-      "recursive": true,
-      "os": ["macos"],
-      "arch": ["arm64", "x64"]
+      "recursive": true
     }
   ]
 }

@@ -17,6 +17,8 @@ import {
 } from './mock-language-model'
 import type { ResolvedLLMConfig } from './types'
 
+const CHATGPT_PROVIDER_DISPLAY_NAME = 'ChatGPT'
+
 export async function resolveLLMConfig(
   config: LLMConfig,
   browserosId?: string,
@@ -25,8 +27,8 @@ export async function resolveLLMConfig(
   if (config.provider === LLM_PROVIDERS.CHATGPT_PRO) {
     return resolveOAuthConfig(config, browserosId, {
       providerId: 'chatgpt-pro',
-      displayName: 'ChatGPT Plus/Pro',
-      defaultModel: 'gpt-5.3-codex',
+      displayName: CHATGPT_PROVIDER_DISPLAY_NAME,
+      defaultModel: 'gpt-5.5',
       useRefresh: true,
       extraFields: (tokens) => ({
         upstreamProvider: 'openai',

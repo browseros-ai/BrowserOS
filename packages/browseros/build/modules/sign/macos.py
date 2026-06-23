@@ -5,6 +5,7 @@ import os
 import sys
 import subprocess
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 from ...common.module import CommandModule, ValidationError
@@ -166,7 +167,7 @@ class MacOSSignModule(CommandModule):
         self._verify_server_resources(app_path, ctx)
         self._clear_extended_attributes(app_path)
         self._sign_all_components(app_path, env_vars["certificate_name"], ctx)
-        self._verify_signature(app_path)
+        self._verify_signature(app_path, ctx)
         self._notarize(app_path, env_vars, ctx)
 
         ctx.artifact_registry.add("signed_app", app_path)
@@ -188,8 +189,8 @@ class MacOSSignModule(CommandModule):
         if not sign_all_components(app_path, certificate_name, ctx.root_dir, ctx):
             raise RuntimeError("Failed to sign all components")
 
-    def _verify_signature(self, app_path: Path) -> None:
-        if not verify_signature(app_path):
+    def _verify_signature(self, app_path: Path, ctx: Optional[Context] = None) -> None:
+        if not verify_signature(app_path, ctx):
             raise RuntimeError("Signature verification failed")
 
     def _notarize(self, app_path: Path, env_vars: Dict[str, str], ctx: Context) -> None:
@@ -443,14 +444,57 @@ def get_signing_options(component_path: Path) -> str:
     return "runtime"
 
 
-def sign_component(
+def _run_probe(cmd: List[str]) -> subprocess.CompletedProcess:
+    """Run a read-only Mach-O inspection quietly (no build-log streaming)."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True)
+    except OSError as e:
+        log_warning(f"Mach-O probe failed to run ({cmd[0]}): {e}")
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+
+
+def get_macho_archs(path: Path) -> List[str]:
+    """Architectures lipo reports for a file; empty when it is not Mach-O."""
+    result = _run_probe(["lipo", "-archs", str(path)])
+    if result.returncode != 0:
+        return []
+    return result.stdout.split()
+
+
+def slice_has_embedded_info_plist(path: Path, arch: str) -> bool:
+    """True if the given slice carries a __TEXT,__info_plist section."""
+    result = _run_probe(["otool", "-arch", arch, "-l", str(path)])
+    return result.returncode == 0 and "sectname __info_plist" in result.stdout
+
+
+def find_asymmetric_info_plist_archs(path: Path) -> List[str]:
+    """Archs of a fat file whose slices disagree on an embedded Info.plist.
+
+    codesign, signing a fat file, binds the file-level Info.plist into every
+    slice's CodeDirectory — a slice without the section then never validates
+    and Apple's notary service rejects it (the upstream claude binary ships
+    the section on arm64 only). Empty result = thin, symmetric, or not Mach-O.
+    """
+    # Symlinks excluded (matches the Go port's Lstat): os.replace would
+    # silently turn a bundle symlink into a regular file.
+    if path.is_symlink() or not path.is_file():
+        return []
+    archs = get_macho_archs(path)
+    if len(archs) < 2:
+        return []
+    with_plist = sum(1 for arch in archs if slice_has_embedded_info_plist(path, arch))
+    if with_plist in (0, len(archs)):
+        return []
+    return archs
+
+
+def _codesign_cmd(
     component_path: Path,
     certificate_name: str,
     identifier: Optional[str] = None,
     options: Optional[str] = None,
     entitlements: Optional[Path] = None,
-) -> bool:
-    """Sign a single component"""
+) -> List[str]:
     cmd = ["codesign", "--sign", certificate_name, "--force", "--timestamp"]
 
     if identifier:
@@ -463,9 +507,75 @@ def sign_component(
         cmd.extend(["--entitlements", str(entitlements)])
 
     cmd.append(str(component_path))
+    return cmd
+
+
+def sign_fat_component_per_slice(
+    component_path: Path,
+    certificate_name: str,
+    archs: List[str],
+    identifier: Optional[str] = None,
+    options: Optional[str] = None,
+    entitlements: Optional[Path] = None,
+) -> bool:
+    """Sign each slice as a thin file and lipo them back together."""
+    try:
+        with tempfile.TemporaryDirectory(dir=component_path.parent) as tmp:
+            tmp_dir = Path(tmp)
+            thin_paths = []
+            for arch in archs:
+                thin = tmp_dir / f"{component_path.name}.{arch}"
+                run_command(
+                    ["lipo", str(component_path), "-thin", arch, "-output", str(thin)]
+                )
+                run_command(
+                    _codesign_cmd(
+                        thin, certificate_name, identifier, options, entitlements
+                    )
+                )
+                thin_paths.append(thin)
+
+            fat = tmp_dir / f"{component_path.name}.fat"
+            run_command(
+                ["lipo", "-create", *[str(p) for p in thin_paths], "-output", str(fat)]
+            )
+            shutil.copymode(component_path, fat)
+            os.replace(fat, component_path)
+        return True
+    except Exception as e:
+        log_error(f"Failed to sign {component_path} per-slice: {e}")
+        return False
+
+
+def sign_component(
+    component_path: Path,
+    certificate_name: str,
+    identifier: Optional[str] = None,
+    options: Optional[str] = None,
+    entitlements: Optional[Path] = None,
+) -> bool:
+    """Sign a single component"""
+    asymmetric_archs = find_asymmetric_info_plist_archs(component_path)
+    if asymmetric_archs:
+        log_warning(
+            f"{component_path.name}: slices disagree on embedded Info.plist "
+            f"({', '.join(asymmetric_archs)}) — signing per-slice"
+        )
+        return sign_fat_component_per_slice(
+            component_path,
+            certificate_name,
+            asymmetric_archs,
+            identifier,
+            options,
+            entitlements,
+        )
 
     try:
-        run_command(cmd)
+        run_command(
+            _codesign_cmd(
+                component_path, certificate_name, identifier, options, entitlements
+            )
+        )
         return True
     except Exception as e:
         log_error(f"Failed to sign {component_path}: {e}")
@@ -675,7 +785,7 @@ def sign_all_components(
     return True
 
 
-def verify_signature(app_path: Path) -> bool:
+def verify_signature(app_path: Path, ctx: Optional[Context] = None) -> bool:
     """Verify application signature"""
     log_info("\n🔍 Verifying application signature integrity...")
 
@@ -687,6 +797,22 @@ def verify_signature(app_path: Path) -> bool:
     if result.returncode != 0:
         log_error("Signature verification failed!")
         return False
+
+    # --deep seals plain executables under Resources/ as files without
+    # validating their own signatures (Apple's notary does, per slice) —
+    # verify each file-type component directly so a bad slice fails here
+    # instead of after a multi-minute notarization round-trip. Helpers,
+    # frameworks, and XPC services are proper sub-bundles --deep already
+    # recurses into.
+    components = find_components_to_sign(app_path, ctx)
+    for component in components["executables"] + components["dylibs"]:
+        result = run_command(
+            ["codesign", "--verify", "--verbose=2", str(component)],
+            check=False,
+        )
+        if result.returncode != 0:
+            log_error(f"Component signature verification failed: {component}")
+            return False
 
     log_success("Signature verification passed")
     return True
@@ -877,7 +1003,7 @@ def sign_app(ctx: Context, create_dmg: bool = True) -> bool:
             return False
 
         # Verify signature
-        if not verify_signature(app_path):
+        if not verify_signature(app_path, ctx):
             return False
 
         # Notarize app

@@ -6,6 +6,8 @@
 
 import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
 
+const CHATGPT_PROVIDER_DISPLAY_NAME = 'ChatGPT'
+
 export interface OAuthProviderConfig {
   id: string
   name: string
@@ -25,7 +27,7 @@ export interface OAuthProviderConfig {
 const OAUTH_PROVIDERS: Record<string, OAuthProviderConfig> = {
   'chatgpt-pro': {
     id: 'chatgpt-pro',
-    name: 'ChatGPT Plus/Pro',
+    name: CHATGPT_PROVIDER_DISPLAY_NAME,
     clientId: 'app_EMoamEEZ73f0CkXaXp7hrann',
     authEndpoint: EXTERNAL_URLS.OPENAI_AUTH,
     tokenEndpoint: EXTERNAL_URLS.OPENAI_TOKEN,

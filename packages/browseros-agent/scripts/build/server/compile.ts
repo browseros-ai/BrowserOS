@@ -9,8 +9,10 @@ import type { BuildTarget, CompiledServerBinary } from './types'
 const DIST_PROD_ROOT = 'dist/prod/server'
 const TMP_ROOT = join(DIST_PROD_ROOT, '.tmp')
 const BUNDLE_DIR = join(TMP_ROOT, 'bundle')
-const BUNDLE_ENTRY = join(BUNDLE_DIR, 'index.js')
+const BUNDLE_ENTRY = join(BUNDLE_DIR, 'compiled-bootstrap.js')
 const BINARIES_DIR = join(TMP_ROOT, 'binaries')
+
+export const SERVER_BUNDLE_ENTRYPOINT = 'apps/server/src/compiled-bootstrap.ts'
 
 function compiledBinaryPath(target: BuildTarget): string {
   return join(
@@ -27,7 +29,7 @@ async function bundleServer(
   mkdirSync(BUNDLE_DIR, { recursive: true })
 
   const result = await Bun.build({
-    entrypoints: ['apps/server/src/index.ts'],
+    entrypoints: [SERVER_BUNDLE_ENTRYPOINT],
     outdir: BUNDLE_DIR,
     target: 'bun',
     minify: true,
@@ -66,6 +68,7 @@ async function compileTarget(
     '--external=node-pty',
   ]
   await runCommand('bun', args, env)
+  await adHocSignMacBinary(target, binaryPath, env)
 
   if (target.os === 'windows') {
     if (ci) {
@@ -80,6 +83,25 @@ async function compileTarget(
   }
 
   return binaryPath
+}
+
+/** Keeps local macOS server artifacts valid until release signing replaces the ad-hoc signature. */
+async function adHocSignMacBinary(
+  target: BuildTarget,
+  binaryPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  if (target.os !== 'macos') return
+  if (process.platform !== 'darwin') {
+    log.warn(`Skipping ad-hoc signing for ${target.id} outside macOS`)
+    return
+  }
+
+  await runCommand(
+    'codesign',
+    ['--force', '--sign', '-', '--timestamp=none', binaryPath],
+    env,
+  )
 }
 
 export async function compileServerBinaries(

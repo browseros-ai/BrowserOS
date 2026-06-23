@@ -10,8 +10,13 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
 import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
+import type { AcpxProvider } from 'acpx-ai-provider'
 import type { LanguageModel } from 'ai'
 import { buildAcpxProvider } from '../lib/agents/acpx-provider/buildAcpxProvider'
+import {
+  DANGEROUS_ALLOW_MODE_CANDIDATES,
+  isHostAcpAdapter,
+} from '../lib/agents/host-acp/config'
 import { resolveAcpSpawnCommand } from '../lib/agents/host-acp/launcher'
 import { getBrowserosDir } from '../lib/browseros-dir'
 import { createBrowserOSFetch } from '../lib/browseros-fetch'
@@ -23,10 +28,9 @@ import { createCodexFetch } from '../lib/clients/oauth/codex-fetch'
 import { createCopilotFetch } from '../lib/clients/oauth/copilot-fetch'
 import { logger } from '../lib/logger'
 import { createOpenRouterCompatibleFetch } from '../lib/openrouter-fetch'
-import { ensureWorkspaceInstructionFile } from './acp-instructions'
+import { ensureWorkspaceInstructionFile } from './acp-instructions/ensureInstructionFile'
 import { ACP_PROVIDER_TYPES, isAcpProvider } from './acp-providers'
 import type { BuildSystemPromptOptions } from './prompt'
-import { readSoulPrompt } from './soul-prompt'
 import type { ResolvedAgentConfig } from './types'
 
 export { isAcpProvider }
@@ -34,6 +38,19 @@ export { isAcpProvider }
 const BUILT_IN_ACP_AGENT_BY_PROVIDER: Record<string, string> = {
   [LLM_PROVIDERS.CLAUDE_CODE]: 'claude',
   [LLM_PROVIDERS.CODEX]: 'codex',
+}
+
+export type EnsureWorkspaceInstructionFile =
+  typeof ensureWorkspaceInstructionFile
+
+let ensureWorkspaceInstructionFileForTesting: EnsureWorkspaceInstructionFile | null =
+  null
+
+/** Overrides ACP instruction-file writes in tests without Bun module mocks. */
+export function setEnsureWorkspaceInstructionFileForTesting(
+  fn: EnsureWorkspaceInstructionFile | null,
+): void {
+  ensureWorkspaceInstructionFileForTesting = fn
 }
 
 /**
@@ -107,12 +124,13 @@ async function createAcpLanguageModel(
     userSystemPrompt: config.userSystemPrompt,
     chatMode: config.chatMode,
     isScheduledTask: config.isScheduledTask,
-    soulContent: await readSoulPrompt(),
     declinedApps: config.declinedApps,
     origin: config.origin,
     acpMode: true,
   }
-  const ensureResult = await ensureWorkspaceInstructionFile({
+  const ensure =
+    ensureWorkspaceInstructionFileForTesting ?? ensureWorkspaceInstructionFile
+  const ensureResult = await ensure({
     workspacePath,
     providerType: config.provider,
     promptOptions,
@@ -138,6 +156,7 @@ async function createAcpLanguageModel(
   for (const builtIn of ['claude', 'codex'] as const) {
     const launcher = resolveAcpSpawnCommand({
       agentType: builtIn,
+      browserosDir: getBrowserosDir(),
       resourcesDir: config.resourcesDir,
     })
     if (launcher?.source === 'bundled-bun') {
@@ -154,12 +173,92 @@ async function createAcpLanguageModel(
     agentRegistryOverrides,
     mcpServers: config.acpMcpServers,
   })
+  // Only built-in claude/codex providers resolving to their default
+  // agent id get a danger mode. A user-overridden acpAgentId or an
+  // acp-custom agent (even one named 'claude') has unknown mode ids.
+  if (BUILT_IN_ACP_AGENT_BY_PROVIDER[config.provider] === agentId) {
+    await applyDangerouslyAllowMode(provider, agentId, config.conversationId)
+  }
   return {
     model: provider.languageModel() as LanguageModel,
     // acpx-ai-provider's docs put close() ownership on the caller: skip
     // it and the spawned agent process outlives the conversation.
     close: () => provider.close(),
   }
+}
+
+/**
+ * Lifts a freshly built ACP session into the adapter's full-permission
+ * mode (ACP `session/set_mode`) — the equivalent of `claude
+ * --dangerously-skip-permissions` / `codex
+ * --dangerously-bypass-approvals-and-sandbox`. Without it the adapter
+ * inherits the user's own CLI defaults (e.g. Claude `permissions.
+ * defaultMode: "dontAsk"`), which silently auto-denies the BrowserOS MCP
+ * tools. Only built-in agent ids get a mode; custom agents' mode ids are
+ * unknown. Every failure is log-and-continue so the chat never breaks —
+ * worst case is today's behavior.
+ */
+async function applyDangerouslyAllowMode(
+  provider: AcpxProvider,
+  agentId: string,
+  conversationId: string,
+): Promise<void> {
+  const candidates = isHostAcpAdapter(agentId)
+    ? DANGEROUS_ALLOW_MODE_CANDIDATES[agentId]
+    : undefined
+  if (!candidates?.length) return
+
+  try {
+    await provider.prepare()
+  } catch (err) {
+    logger.warn('ACP session prepare failed; mode left at adapter default', {
+      conversationId,
+      agentId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return
+  }
+
+  // AcpxProvider.setMode silently no-ops when the runtime lacks mode
+  // control; check explicitly so we never log a false "applied".
+  if (typeof provider.runtime.setMode !== 'function') {
+    logger.warn('acpx runtime does not expose mode control', {
+      conversationId,
+      agentId,
+      candidates,
+    })
+    return
+  }
+
+  let lastError: unknown
+  for (const mode of candidates) {
+    try {
+      await provider.setMode(mode)
+      logger.info('ACP session dangerously-allow mode applied', {
+        conversationId,
+        agentId,
+        mode,
+      })
+      return
+    } catch (err) {
+      lastError = err
+      // debug, not warn: codex's first candidate is expected to be
+      // rejected whenever the spawned package advertises the other id.
+      // Only the all-rejected case below warns.
+      logger.debug('ACP session mode candidate rejected', {
+        conversationId,
+        agentId,
+        mode,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+  logger.warn('ACP session left at adapter default permission mode', {
+    conversationId,
+    agentId,
+    candidates,
+    error: lastError instanceof Error ? lastError.message : String(lastError),
+  })
 }
 
 type ProviderFactory = (
@@ -338,8 +437,7 @@ function createGitHubCopilotFactory(
 function createChatGPTProFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
-  if (!config.apiKey)
-    throw new Error('ChatGPT Plus/Pro requires OAuth authentication')
+  if (!config.apiKey) throw new Error('ChatGPT requires OAuth authentication')
   return createOpenAI({
     apiKey: config.apiKey,
     fetch: createCodexFetch(config.accountId) as typeof globalThis.fetch,

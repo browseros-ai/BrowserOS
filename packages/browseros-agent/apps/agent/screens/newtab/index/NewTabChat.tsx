@@ -29,6 +29,7 @@ import { ChatMessages } from '@/screens/sidepanel/index/ChatMessages'
 export const NewTabChat: FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
   const hasSentInitialRef = useRef(false)
+  const hasOpenedVoiceRef = useRef(false)
 
   const {
     mode,
@@ -54,6 +55,7 @@ export const NewTabChat: FC = () => {
     attachedTabs,
     mounted,
     voiceState,
+    voiceLoop,
     handleModeChange,
     handleStop,
     toggleTabSelection,
@@ -122,6 +124,20 @@ export const NewTabChat: FC = () => {
     } else {
       sendMessage({ text: query })
     }
+  }, [])
+
+  // Honour the `?voice=open` deep link from the home composer's voice-mode
+  // entry button: open the voice loop once after mount and strip the param
+  // so a refresh doesn't reopen it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: must only run once on mount
+  useEffect(() => {
+    if (hasOpenedVoiceRef.current) return
+    if (searchParams.get('voice') !== 'open') return
+    hasOpenedVoiceRef.current = true
+    const next = new URLSearchParams(searchParams)
+    next.delete('voice')
+    setSearchParams(next, { replace: true })
+    void voiceLoop.open()
   }, [])
 
   const handleNewConversation = () => {
@@ -195,6 +211,8 @@ export const NewTabChat: FC = () => {
           onToggleTab={toggleTabSelection}
           onRemoveTab={removeTab}
           voice={voiceState}
+          voiceLoop={voiceLoop}
+          onOpenVoiceMode={voiceLoop.open}
         />
       </div>
     </div>

@@ -22,6 +22,12 @@ export interface UseLlmProvidersReturn {
   deleteProvider: (providerId: string) => Promise<void>
 }
 
+const SINGLE_INSTANCE_PROVIDER_TYPES = new Set<LlmProviderConfig['type']>([
+  'chatgpt-pro',
+  'github-copilot',
+  'qwen-code',
+])
+
 /** Persists the configured default provider id used by provider selection. */
 // Exported only for llm-providers.hooks.test.ts; fallow's graph skips test imports.
 // fallow-ignore-next-line unused-export
@@ -29,6 +35,67 @@ export async function persistDefaultProviderId(
   providerId: string,
 ): Promise<void> {
   await defaultProviderIdStorage.setValue(providerId)
+}
+
+/** Applies provider-save semantics before writing the full provider list. */
+export function upsertProviderConfig(
+  currentProviders: LlmProviderConfig[],
+  provider: LlmProviderConfig,
+  now = Date.now(),
+): LlmProviderConfig[] {
+  if (SINGLE_INSTANCE_PROVIDER_TYPES.has(provider.type)) {
+    return upsertSingleInstanceProvider(currentProviders, provider, now)
+  }
+
+  const existingIndex = currentProviders.findIndex(
+    (candidate) => candidate.id === provider.id,
+  )
+  if (existingIndex >= 0) {
+    const updatedProviders = [...currentProviders]
+    updatedProviders[existingIndex] = { ...provider, updatedAt: now }
+    return updatedProviders
+  }
+
+  return [
+    ...currentProviders,
+    {
+      ...provider,
+      createdAt: now,
+      updatedAt: now,
+    },
+  ]
+}
+
+function upsertSingleInstanceProvider(
+  currentProviders: LlmProviderConfig[],
+  provider: LlmProviderConfig,
+  now: number,
+): LlmProviderConfig[] {
+  const existing =
+    currentProviders.find((candidate) => candidate.id === provider.id) ??
+    currentProviders.find((candidate) => candidate.type === provider.type)
+  const savedProvider = {
+    ...provider,
+    id: existing?.id ?? provider.id,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  }
+  let inserted = false
+
+  const updatedProviders = currentProviders.flatMap((candidate) => {
+    if (candidate.id === savedProvider.id) {
+      if (inserted) return []
+      inserted = true
+      return [savedProvider]
+    }
+    if (candidate.type === provider.type || candidate.id === provider.id) {
+      return []
+    }
+    return [candidate]
+  })
+
+  if (!inserted) updatedProviders.push(savedProvider)
+  return updatedProviders
 }
 
 /** Hook for managing LLM provider configurations. */
@@ -94,28 +161,7 @@ export function useLlmProviders(): UseLlmProvidersReturn {
 
   const saveProvider = async (provider: LlmProviderConfig) => {
     const currentProviders = (await providersStorage.getValue()) || []
-    const existingIndex = currentProviders.findIndex(
-      (p) => p.id === provider.id,
-    )
-
-    let updatedProviders: LlmProviderConfig[]
-    if (existingIndex >= 0) {
-      updatedProviders = [...currentProviders]
-      updatedProviders[existingIndex] = {
-        ...provider,
-        updatedAt: Date.now(),
-      }
-    } else {
-      updatedProviders = [
-        ...currentProviders,
-        {
-          ...provider,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        },
-      ]
-    }
-
+    const updatedProviders = upsertProviderConfig(currentProviders, provider)
     await providersStorage.setValue(updatedProviders)
   }
 

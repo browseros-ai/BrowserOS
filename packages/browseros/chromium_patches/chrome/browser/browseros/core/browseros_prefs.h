@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.h b/chrome/browser/browseros/core/browseros_prefs.h
 new file mode 100644
-index 0000000000000..a94b14e0664ca
+index 0000000000000..048f60b720339
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.h
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,80 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -25,9 +25,6 @@ index 0000000000000..a94b14e0664ca
 +// Toolbar visibility prefs
 +// Boolean: Show LLM Chat in toolbar (default: true)
 +inline constexpr char kShowLLMChat[] = "browseros.show_llm_chat";
-+
-+// Boolean: Show LLM Hub in toolbar (default: false)
-+inline constexpr char kShowLLMHub[] = "browseros.show_llm_hub";
 +
 +// Boolean: Show labels on BrowserOS toolbar actions (default: true)
 +inline constexpr char kShowToolbarLabels[] = "browseros.show_toolbar_labels";
@@ -55,9 +52,6 @@ index 0000000000000..a94b14e0664ca
 +
 +// Check if LLM Chat should be shown in toolbar.
 +bool ShouldShowLLMChat(PrefService* pref_service);
-+
-+// Check if LLM Hub should be shown in toolbar.
-+bool ShouldShowLLMHub(PrefService* pref_service);
 +
 +// Check if toolbar labels should be shown for BrowserOS actions.
 +bool ShouldShowToolbarLabels(PrefService* pref_service);

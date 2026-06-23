@@ -31,6 +31,24 @@ class UploadMetadataTest(unittest.TestCase):
             "arm64_deb",
         )
 
+    def test_windows_installer_artifacts_use_arch_keys(self) -> None:
+        self.assertEqual(
+            _get_artifact_key("BrowserOS_v1.2.3_x64_installer.exe", "win"),
+            "x64_installer",
+        )
+        self.assertEqual(
+            _get_artifact_key("BrowserOS_v1.2.3_x64_installer.zip", "win"),
+            "x64_zip",
+        )
+        self.assertEqual(
+            _get_artifact_key("BrowserOS_v1.2.3_arm64_installer.exe", "win"),
+            "arm64_installer",
+        )
+        self.assertEqual(
+            _get_artifact_key("BrowserOS_v1.2.3_arm64_installer.zip", "win"),
+            "arm64_zip",
+        )
+
     def test_merge_release_metadata_preserves_existing_artifacts(self) -> None:
         existing = {
             "platform": "linux",

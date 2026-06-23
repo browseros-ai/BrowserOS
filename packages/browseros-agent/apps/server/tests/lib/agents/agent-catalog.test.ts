@@ -16,7 +16,6 @@ describe('AGENT_ADAPTER_CATALOG', () => {
     expect(AGENT_ADAPTER_CATALOG.map((adapter) => adapter.id)).toEqual([
       'claude',
       'codex',
-      'hermes',
     ])
 
     expect(getAgentAdapterDescriptor('claude')).toMatchObject({

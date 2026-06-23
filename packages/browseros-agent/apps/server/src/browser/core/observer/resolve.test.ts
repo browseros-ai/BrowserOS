@@ -10,6 +10,7 @@ import { resolveRefEntry } from './resolve'
 function stubSession(opts: {
   live: Set<number>
   axTree?: AXNode[]
+  releases?: string[]
 }): ProtocolApi {
   return {
     DOM: {
@@ -20,6 +21,11 @@ function stubSession(opts: {
     },
     Accessibility: {
       getFullAXTree: async () => ({ nodes: opts.axTree ?? [] }),
+    },
+    Runtime: {
+      releaseObject: async ({ objectId }: { objectId: string }) => {
+        opts.releases?.push(objectId)
+      },
     },
   } as unknown as ProtocolApi
 }
@@ -35,13 +41,15 @@ function axButton(nodeId: string, name: string, backendId: number): AXNode {
 
 describe('resolveRefEntry', () => {
   test('tier 1 returns the cached backendNodeId when still live', async () => {
+    const releases: string[] = []
     const refs = new RefMap()
     const ref = refs.mint({ backendNodeId: 10, role: 'button', name: 'OK' })
     const resolved = await resolveRefEntry(
-      stubSession({ live: new Set([10]) }),
+      stubSession({ live: new Set([10]), releases }),
       refs.get(ref) as never,
     )
     expect(resolved.backendNodeId).toBe(10)
+    expect(releases).toEqual(['obj-10'])
   })
 
   test('tier 2 re-queries by role+name+nth when the cached node is stale', async () => {

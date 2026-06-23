@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { S3Client } from '@aws-sdk/client-s3'
 import { getTargetRules, loadManifest } from './manifest'
 import { stageCompiledArtifact, stageTargetArtifact } from './stage'
+import { resolveTargets } from './targets'
 import type { BuildTarget, R2Config, ResourceRule } from './types'
 
 describe('server artifact staging', () => {
@@ -42,8 +43,6 @@ describe('server artifact staging', () => {
             },
             destination: 'resources/db/migrations',
             recursive: true,
-            os: ['macos'],
-            arch: ['arm64', 'x64'],
           },
         ],
       }),
@@ -202,7 +201,26 @@ describe('server artifact staging', () => {
     expect(destinations).toContain('resources/db/migrations')
   })
 
-  it('downloads bundled agent CLIs for Linux targets and marks them executable', async () => {
+  it('selects Drizzle migrations for every production server target', () => {
+    const manifest = loadManifest(
+      'scripts/build/config/server-prod-resources.json',
+    )
+
+    for (const target of resolveTargets('all')) {
+      const migrationRules = getTargetRules(manifest, target).filter(
+        (rule) => rule.name === 'Drizzle migrations',
+      )
+
+      expect(migrationRules).toEqual([
+        expect.objectContaining({
+          destination: 'resources/db/migrations',
+          recursive: true,
+        }),
+      ])
+    }
+  })
+
+  it('downloads bundled Codex CLI for Linux targets and marks it executable', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'browseros-stage-test-'))
     const sourceRoot = join(tempDir, 'source')
     const distRoot = join(tempDir, 'dist')
@@ -213,27 +231,22 @@ describe('server artifact staging', () => {
       distRoot,
       binaryPath,
       linuxArm64Target,
-      [codexLinuxArm64Rule, claudeLinuxArm64Rule],
+      [codexLinuxArm64Rule],
       sourceRoot,
       fakeObjectClient({
         'artifacts/vendor/third_party/codex/codex-linux-arm64':
           '#!/bin/sh\ncodex\n',
-        'artifacts/vendor/third_party/claude-code/claude-linux-arm64':
-          '#!/bin/sh\nclaude\n',
       }),
       fakeR2Config,
       '0.0.0-test',
     )
 
     const codexPath = join(artifact.resourcesDir, 'bin/third_party/codex')
-    const claudePath = join(artifact.resourcesDir, 'bin/third_party/claude')
     expect(await readFile(codexPath, 'utf8')).toBe('#!/bin/sh\ncodex\n')
-    expect(await readFile(claudePath, 'utf8')).toBe('#!/bin/sh\nclaude\n')
     expect((await stat(codexPath)).mode & 0o111).not.toBe(0)
-    expect((await stat(claudePath)).mode & 0o111).not.toBe(0)
   })
 
-  it('downloads bundled agent CLIs for Windows targets without chmod', async () => {
+  it('downloads bundled Codex CLI for Windows targets without chmod', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'browseros-stage-test-'))
     const sourceRoot = join(tempDir, 'source')
     const distRoot = join(tempDir, 'dist')
@@ -244,23 +257,18 @@ describe('server artifact staging', () => {
       distRoot,
       binaryPath,
       windowsX64Target,
-      [codexWindowsX64Rule, claudeWindowsX64Rule],
+      [codexWindowsX64Rule],
       sourceRoot,
       fakeObjectClient({
         'artifacts/vendor/third_party/codex/codex-windows-x64.exe': 'codex.exe',
-        'artifacts/vendor/third_party/claude-code/claude-windows-x64.exe':
-          'claude.exe',
       }),
       fakeR2Config,
       '0.0.0-test',
     )
 
     const codexPath = join(artifact.resourcesDir, 'bin/third_party/codex.exe')
-    const claudePath = join(artifact.resourcesDir, 'bin/third_party/claude.exe')
     expect(await readFile(codexPath, 'utf8')).toBe('codex.exe')
-    expect(await readFile(claudePath, 'utf8')).toBe('claude.exe')
     expect((await stat(codexPath)).mode & 0o111).toBe(0)
-    expect((await stat(claudePath)).mode & 0o111).toBe(0)
   })
 
   it('loads target-filtered bundled CLI rules from the production manifest', () => {
@@ -269,6 +277,12 @@ describe('server artifact staging', () => {
     )
     const linuxRules = getTargetRules(manifest, linuxArm64Target)
     const windowsRules = getTargetRules(manifest, windowsX64Target)
+    const claudeRules = manifest.resources.filter(
+      (rule) =>
+        rule.name.includes('Claude Code') ||
+        rule.destination.includes('third_party/claude') ||
+        (rule.source.type === 'r2' && rule.source.key.includes('claude-code')),
+    )
 
     expect(linuxRules).toEqual(
       expect.arrayContaining([
@@ -279,15 +293,6 @@ describe('server artifact staging', () => {
             key: 'third_party/codex/codex-linux-arm64',
           },
           destination: 'resources/bin/third_party/codex',
-          executable: true,
-        }),
-        expect.objectContaining({
-          name: 'Claude Code - Linux ARM64',
-          source: {
-            type: 'r2',
-            key: 'third_party/claude-code/claude-linux-arm64',
-          },
-          destination: 'resources/bin/third_party/claude',
           executable: true,
         }),
       ]),
@@ -303,17 +308,9 @@ describe('server artifact staging', () => {
           destination: 'resources/bin/third_party/codex.exe',
           executable: true,
         }),
-        expect.objectContaining({
-          name: 'Claude Code - Windows x64',
-          source: {
-            type: 'r2',
-            key: 'third_party/claude-code/claude-windows-x64.exe',
-          },
-          destination: 'resources/bin/third_party/claude.exe',
-          executable: true,
-        }),
       ]),
     )
+    expect(claudeRules).toEqual([])
     expect(linuxRules.find((rule) => rule.name === 'Codex - Windows x64')).toBe(
       undefined,
     )
@@ -373,8 +370,6 @@ const migrationRule: ResourceRule = {
   },
   destination: 'resources/db/migrations',
   recursive: true,
-  os: ['macos'],
-  arch: ['arm64', 'x64'],
 }
 
 const bunRule: ResourceRule = {
@@ -401,18 +396,6 @@ const codexLinuxArm64Rule: ResourceRule = {
   executable: true,
 }
 
-const claudeLinuxArm64Rule: ResourceRule = {
-  name: 'Claude Code - Linux ARM64',
-  source: {
-    type: 'r2',
-    key: 'third_party/claude-code/claude-linux-arm64',
-  },
-  destination: 'resources/bin/third_party/claude',
-  os: ['linux'],
-  arch: ['arm64'],
-  executable: true,
-}
-
 const codexWindowsX64Rule: ResourceRule = {
   name: 'Codex - Windows x64',
   source: {
@@ -420,18 +403,6 @@ const codexWindowsX64Rule: ResourceRule = {
     key: 'third_party/codex/codex-windows-x64.exe',
   },
   destination: 'resources/bin/third_party/codex.exe',
-  os: ['windows'],
-  arch: ['x64'],
-  executable: true,
-}
-
-const claudeWindowsX64Rule: ResourceRule = {
-  name: 'Claude Code - Windows x64',
-  source: {
-    type: 'r2',
-    key: 'third_party/claude-code/claude-windows-x64.exe',
-  },
-  destination: 'resources/bin/third_party/claude.exe',
   os: ['windows'],
   arch: ['x64'],
   executable: true,

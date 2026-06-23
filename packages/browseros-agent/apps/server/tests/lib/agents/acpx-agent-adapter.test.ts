@@ -4,7 +4,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'bun:test'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prepareAcpxAgentContext } from '../../../src/lib/agents/acpx/agent-adapter'
@@ -118,49 +118,6 @@ describe('prepareAcpxAgentContext', () => {
         sessionId,
         runtimeSessionKey: prepared.runtimeSessionKey,
       }),
-    )
-  })
-
-  it('prepares Hermes with HERMES_HOME pointing at the host agent home', async () => {
-    const browserosDir = await mkdtemp(join(tmpdir(), 'browseros-adapters-'))
-    tempDirs.push(browserosDir)
-    const legacyHome = join(
-      browserosDir,
-      'vm',
-      'hermes',
-      'harness',
-      'hermes-agent',
-      'home',
-    )
-    await mkdir(legacyHome, { recursive: true })
-    await writeFile(join(legacyHome, 'config.yaml'), 'legacy config\n')
-    await writeFile(join(legacyHome, '.env'), 'LEGACY_KEY=1\n')
-
-    const prepared = await prepareAcpxAgentContext({
-      browserosDir,
-      agent: makeAgent('hermes'),
-      sessionId: 'main',
-      sessionKey: 'agent:hermes-agent:main',
-      cwdOverride: null,
-      isSelectedCwd: false,
-      message: 'remember this',
-    })
-
-    expect(prepared.commandEnv.HERMES_HOME).toBe(
-      join(browserosDir, 'agents', 'hermes', 'harness', 'hermes-agent', 'home'),
-    )
-    await expect(
-      readFile(join(prepared.commandEnv.HERMES_HOME, 'config.yaml'), 'utf8'),
-    ).resolves.toBe('legacy config\n')
-    await expect(
-      readFile(join(prepared.commandEnv.HERMES_HOME, '.env'), 'utf8'),
-    ).resolves.toBe('LEGACY_KEY=1\n')
-    expect(prepared.commandEnv).not.toHaveProperty('AGENT_HOME')
-    expect(prepared.commandEnv).not.toHaveProperty('CODEX_HOME')
-    expect(prepared.commandEnv).not.toHaveProperty('CLAUDE_CONFIG_DIR')
-    expect(prepared.useBrowserosMcp).toBe(true)
-    expect(prepared.runtimeSessionKey).toMatch(
-      /^agent:hermes-agent:main:[a-f0-9]{16}$/,
     )
   })
 })

@@ -79,7 +79,7 @@ describe('createAgentRoutes', () => {
       body.adapters.map(
         (adapter: { id: AgentDefinition['adapter'] }) => adapter.id,
       ),
-    ).toContain('hermes')
+    ).toEqual(['claude', 'codex'])
   })
 
   it('creates and lists harness agents', async () => {
@@ -105,6 +105,21 @@ describe('createAgentRoutes', () => {
     expect(await list.json()).toMatchObject({
       agents: [{ name: 'Review bot', adapter: 'codex' }],
     })
+  })
+
+  it('rejects the removed Hermes harness adapter', async () => {
+    const route = createMountedRoutes([])
+    const response = await route.request('/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Hermes bot',
+        adapter: 'hermes',
+      }),
+    })
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: 'Invalid adapter' })
   })
 
   it('streams chat for an agent main session', async () => {
@@ -1020,7 +1035,7 @@ function createFakeService(agents: AgentDefinition[]) {
     },
     async createAgent(input: {
       name: string
-      adapter: 'claude' | 'codex' | 'hermes'
+      adapter: 'claude' | 'codex'
       modelId?: string
       reasoningEffort?: string
     }) {

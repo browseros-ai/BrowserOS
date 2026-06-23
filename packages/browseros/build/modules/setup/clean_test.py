@@ -38,12 +38,14 @@ class CleanExecuteTest(unittest.TestCase):
             )
             out_dir = chromium.with_out_dir("x64", args_gn="is_debug = false\n")
             sparkle = chromium.with_sparkle()
+            winsparkle = chromium.with_winsparkle()
 
             with mock.patch.object(clean, "run_command") as run_cmd:
                 clean.CleanModule().execute(ctx)
 
             self.assertFalse(out_dir.exists())
             self.assertFalse(sparkle.exists())
+            self.assertFalse(winsparkle.exists())
 
             git_commands = [call.args[0] for call in run_cmd.call_args_list]
             self.assertEqual(
