@@ -1,5 +1,4 @@
 import type { ActivityRow } from '@/modules/api/activity.hooks'
-import type { AgentRow } from '@/modules/api/agents.hooks'
 import { useTabsActivity } from '@/modules/api/tabs.hooks'
 import {
   type ApprovalItem,
@@ -7,10 +6,14 @@ import {
   useApprovals,
   useHandoffs,
 } from '@/modules/api/waiting.hooks'
-import { tabsToActivityRows, tabsToAgentRows } from './cockpit.helpers'
+import {
+  type AgentActivityRecord,
+  tabsToActivityRows,
+  tabsToAgentActivity,
+} from './cockpit.helpers'
 
 export interface CockpitData {
-  agents: AgentRow[]
+  agents: AgentActivityRecord[]
   activity: ActivityRow[]
   approvals: ApprovalItem[]
   handoffs: HandoffItem[]
@@ -19,10 +22,12 @@ export interface CockpitData {
 
 /**
  * Single data aggregation hook for the homepage. Per the project
- * convention, the screen calls this and nothing else. PR 1 wires the
- * running grid and recent activity to the real
- * `GET /cockpit/tabs/activity` registry; approvals and handoffs
- * remain on their mocked hooks until later PRs supply them.
+ * convention, the screen calls this and nothing else. PR 3 rolls up
+ * the running grid by agent so each card represents one logical run
+ * across however many tabs it touches. The recent-activity section
+ * stays tab-level by design: "Cowork did read on Stripe 12m ago" is
+ * more informative than "Cowork did 14 things". Approvals and
+ * handoffs remain on their mocked hooks until later PRs supply them.
  */
 export function useCockpitData(): CockpitData {
   const tabs = useTabsActivity()
@@ -35,7 +40,10 @@ export function useCockpitData(): CockpitData {
   const records = tabs.data?.tabs ?? []
   const now = Date.now()
   return {
-    agents: tabsToAgentRows(records),
+    // The rollup only considers active records so an agent that is
+    // currently idle drops out of the running grid; its individual
+    // tabs still appear in the recent activity list below.
+    agents: tabsToAgentActivity(records.filter((r) => r.status === 'active')),
     activity: tabsToActivityRows(records, now),
     approvals: approvals.data ?? [],
     handoffs: handoffs.data ?? [],

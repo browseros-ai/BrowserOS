@@ -1,22 +1,21 @@
 import { useNavigate } from 'react-router'
-import { isActiveStatus } from '@/lib/status'
-import type { AgentRow } from '@/modules/api/agents.hooks'
+import type { AgentActivityRecord } from '@/screens/cockpit/cockpit.helpers'
 import { AddAgentTile } from './AddAgentTile'
-import { RunningCard } from './RunningCard'
+import { AgentRunningCard } from './AgentRunningCard'
 
 interface RunningGridProps {
-  agents: AgentRow[]
+  agents: AgentActivityRecord[]
 }
 
 /**
- * Uniform card grid. Renders one card per agent plus a trailing
- * AddAgentTile so "create another profile" reads as adding to the
- * set, not a floating header CTA. The live-count chip on the header
- * surfaces the most-useful at-a-glance metric.
+ * Uniform card grid. PR 3 rolls the per-tab records up by agent so
+ * each card represents one logical run across however many tabs that
+ * agent currently drives. The trailing AddAgentTile reads as "create
+ * another profile" so the section feels like a set.
  */
 export function RunningGrid({ agents }: RunningGridProps) {
   const navigate = useNavigate()
-  const liveCount = agents.filter((a) => isActiveStatus(a.status)).length
+  const liveCount = agents.filter((a) => a.status === 'active').length
 
   return (
     <section className="space-y-3">
@@ -32,10 +31,10 @@ export function RunningGrid({ agents }: RunningGridProps) {
       </div>
       <div className="grid grid-cols-[repeat(auto-fill,minmax(258px,1fr))] items-start gap-3.5">
         {agents.map((a) => (
-          <RunningCard
-            key={a.id}
+          <AgentRunningCard
+            key={a.agentId}
             agent={a}
-            onWatch={() => navigate(`/run/${a.id}`)}
+            onWatch={() => navigate(`/run/${a.currentFocus.targetId}`)}
           />
         ))}
         <AddAgentTile />
