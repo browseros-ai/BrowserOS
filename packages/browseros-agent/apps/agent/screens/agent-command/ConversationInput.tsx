@@ -1,5 +1,6 @@
 import {
   ArrowRight,
+  AudioLines,
   Bot,
   ChevronDown,
   FileText,
@@ -65,6 +66,12 @@ export interface ConversationInputProps {
    * button (legacy behaviour for the home composer).
    */
   onStop?: () => void
+  /**
+   * When set, a voice-mode entry button surfaces next to the dictation
+   * mic. Home uses this to hand off to the chat surface where the full
+   * voice-loop overlay lives. Absent → button hidden.
+   */
+  onOpenVoiceMode?: () => void
 }
 
 function InputActionButton({
@@ -112,6 +119,22 @@ function StopButton({ onStop }: { onStop: () => void }) {
       className="h-8 w-8 flex-shrink-0 rounded-lg bg-destructive/10 text-destructive transition-colors hover:bg-destructive/15 hover:text-destructive"
     >
       <Square className="h-3.5 w-3.5 fill-current" />
+    </Button>
+  )
+}
+
+function VoiceModeEntryButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      onClick={onClick}
+      className="h-10 w-10 flex-shrink-0 rounded-xl text-muted-foreground transition-colors hover:text-foreground"
+      title="Open voice mode"
+      aria-label="Open voice mode"
+    >
+      <AudioLines className="h-5 w-5" />
     </Button>
   )
 }
@@ -359,6 +382,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   attachmentsEnabled = true,
   variant = 'conversation',
   onStop,
+  onOpenVoiceMode,
 }) => {
   const [input, setInput] = useState('')
   const [selectedTabs, setSelectedTabs] = useState<chrome.tabs.Tab[]>([])
@@ -578,6 +602,9 @@ export const ConversationInput: FC<ConversationInputProps> = ({
             />
           </div>
           {streaming && onStop ? <StopButton onStop={onStop} /> : null}
+          {onOpenVoiceMode ? (
+            <VoiceModeEntryButton onClick={onOpenVoiceMode} />
+          ) : null}
           <VoiceButton
             isRecording={voice.isRecording}
             isTranscribing={voice.isTranscribing}

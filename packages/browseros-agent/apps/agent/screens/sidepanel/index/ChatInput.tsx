@@ -347,6 +347,22 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       )
     }
 
+    // The floating button cluster (voice mode + dictation + send) sits
+    // absolutely on top of the input, so its width has to be reserved as
+    // padding on the input or text slides under the icons. Derive the
+    // padding from the count of buttons that will actually render — the
+    // cluster grows/shrinks with props and recording state.
+    const showVoiceMode = !!onOpenVoiceMode && !voice?.isRecording
+    const showDictation = !!voice
+    const visibleButtonCount =
+      1 + (showVoiceMode ? 1 : 0) + (showDictation ? 1 : 0)
+    const inputPaddingRight =
+      visibleButtonCount === 3
+        ? 'pr-32'
+        : visibleButtonCount === 2
+          ? 'pr-20'
+          : 'pr-11'
+
     return (
       <form
         onSubmit={handleSubmit}
@@ -362,7 +378,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           anchorRef={textareaRef}
         />
         {voice?.isRecording ? (
-          <div className="flex min-h-[42px] flex-1 items-center justify-center gap-1 rounded-2xl border border-red-500/50 bg-muted/50 px-4 py-2.5 pr-[4.5rem]">
+          <div
+            className={cn(
+              'flex min-h-[42px] flex-1 items-center justify-center gap-1 rounded-2xl border border-red-500/50 bg-muted/50 px-4 py-2.5',
+              inputPaddingRight,
+            )}
+          >
             {voice.audioLevels.map((level, i) => (
               <div
                 key={i.toString()}
@@ -378,7 +399,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             ref={textareaRef}
             className={cn(
               'field-sizing-content max-h-60 min-h-[42px] flex-1 resize-none overflow-hidden rounded-2xl border border-border/50 bg-muted/50 px-4 py-2.5 text-sm outline-none transition-colors placeholder:text-muted-foreground/70 hover:border-border focus:border-[var(--accent-orange)]',
-              voice ? 'pr-[4.5rem]' : 'pr-11',
+              inputPaddingRight,
             )}
             value={input}
             onChange={(e) => handleInputChange(e.target.value)}
