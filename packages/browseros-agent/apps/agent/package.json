@@ -22,7 +22,7 @@
     "@ai-sdk/react": "^3.0.210",
     "@browseros/server": "workspace:*",
     "@hookform/resolvers": "^5.4.0",
-    "@lobehub/icons": "^5.10.0",
+    "@lobehub/icons": "^2.48.0",
     "@mdxeditor/editor": "^4.0.4",
     "@posthog/react": "^1.10.2",
     "@radix-ui/react-alert-dialog": "^1.1.17",
