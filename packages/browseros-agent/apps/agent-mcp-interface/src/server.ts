@@ -22,6 +22,7 @@ import { mcpRoute } from './routes/mcp'
 import { permissionsRoute } from './routes/permissions'
 import { siteRulesRoute } from './routes/site-rules'
 import { systemRoute } from './routes/system'
+import { tabsRoute } from './routes/tabs'
 
 // Telemetry capture is injectable so the server module stays usable
 // from the bun-test runner without pulling Sentry into the import
@@ -70,6 +71,7 @@ const routes = app
   .route('/', siteRulesRoute)
   .route('/', permissionsRoute)
   .route('/', mcpRoute)
+  .route('/', tabsRoute)
 
 export type AppType = typeof routes
 export default routes

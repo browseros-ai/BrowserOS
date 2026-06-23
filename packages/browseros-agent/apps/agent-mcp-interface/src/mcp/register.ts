@@ -35,6 +35,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { ZodRawShape } from 'zod'
 import { getBrowserSession } from '../lib/browser-session'
 import { logger } from '../lib/logger'
+import { extractPageId, tabActivityRegistry } from '../lib/tab-activity'
 import type { StoredAgentProfile } from '../routes/agents/schemas'
 import { check } from '../services/permissions'
 import { asRegister, type ToolResult } from './register-fn'
@@ -115,6 +116,32 @@ function domainForCall(
     }
   }
   return agent.selectedSites[0] ?? '*'
+}
+
+/**
+ * Records a successful dispatch into the tab-activity registry. The
+ * homepage attributes the tab to the agent and surfaces the latest
+ * tool name. Failed dispatches and tools without a `page` arg are
+ * skipped at the call site by `extractPageId` returning `null`.
+ */
+function recordSuccessfulDispatch(args: {
+  toolName: string
+  rawArgs: unknown
+  agent: StoredAgentProfile
+  session: ReturnType<typeof getBrowserSession>
+}): void {
+  if (!args.session) return
+  const pageId = extractPageId(args.toolName, args.rawArgs)
+  if (pageId === null) return
+  const live = args.session.pages.getInfo(pageId)
+  if (!live) return
+  tabActivityRegistry.recordTool({
+    agentId: args.agent.id,
+    slug: args.agent.slug,
+    pageId,
+    targetId: live.targetId,
+    toolName: args.toolName,
+  })
 }
 
 export function registerBrowserTools(
@@ -214,6 +241,14 @@ export function registerBrowserTools(
           session,
           signal: extra?.signal,
         })
+        if (!result.isError) {
+          recordSuccessfulDispatch({
+            toolName: tool.name,
+            rawArgs,
+            agent,
+            session,
+          })
+        }
         return {
           content: result.content as ToolResult['content'],
           isError: result.isError,
