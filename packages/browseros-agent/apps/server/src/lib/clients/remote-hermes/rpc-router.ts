@@ -11,12 +11,7 @@ const MODULE = 'remote-hermes'
 export interface RpcRouterDeps {
   /** Returns the local MCP base URL for a given logical server name. */
   resolveBaseUrl(server: string): string | null
-  /**
-   * Scope id to attach as `X-BrowserOS-Scope-Id`. v1 uses a constant per
-   * install (the browserosId) so all remote-hermes tool calls share state;
-   * threading per-turn conversationId requires the worker to propagate it
-   * in the rpc.request frame (Open Item #2 in the design doc).
-   */
+  /** Scope id attached as `X-BrowserOS-Scope-Id` for local MCP attribution. */
   scopeId: string
   /** Provider id forwarded as `X-BrowserOS-Agent-Id` for audit. */
   agentId: string

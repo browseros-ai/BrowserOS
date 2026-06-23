@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { transcribeAudio } from '@/lib/voice/transcribe-audio'
+import {
+  type AudioCaptureHandle,
+  describeCaptureError,
+  openAudioCapture,
+} from './audio-capture'
+import {
+  type AudioLevelMonitor,
+  createAudioLevelMonitor,
+  emptySample,
+} from './audio-level-monitor'
 
 const WAVEFORM_BAND_COUNT = 5
 
@@ -24,7 +34,7 @@ export interface UseVoiceInputReturn {
   clearTranscript: () => void
 }
 
-const EMPTY_LEVELS = Array(WAVEFORM_BAND_COUNT).fill(0)
+const EMPTY_LEVELS = emptySample(WAVEFORM_BAND_COUNT).levels
 
 export function useVoiceInput(): UseVoiceInputReturn {
   const [isRecording, setIsRecording] = useState(false)
@@ -34,23 +44,16 @@ export function useVoiceInput(): UseVoiceInputReturn {
   const [audioLevels, setAudioLevels] = useState<number[]>(EMPTY_LEVELS)
   const [error, setError] = useState<string | null>(null)
 
+  const captureRef = useRef<AudioCaptureHandle | null>(null)
+  const monitorRef = useRef<AudioLevelMonitor | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const streamRef = useRef<MediaStream | null>(null)
   const chunksRef = useRef<Blob[]>([])
-  const audioContextRef = useRef<AudioContext | null>(null)
-  const analyserRef = useRef<AnalyserNode | null>(null)
-  const animationFrameRef = useRef<number | null>(null)
 
-  const stopAudioLevelMonitoring = () => {
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current)
-      animationFrameRef.current = null
-    }
-    if (audioContextRef.current?.state !== 'closed') {
-      audioContextRef.current?.close()
-    }
-    audioContextRef.current = null
-    analyserRef.current = null
+  const releaseAll = () => {
+    monitorRef.current?.stop()
+    monitorRef.current = null
+    captureRef.current?.close()
+    captureRef.current = null
     setAudioLevel(0)
     setAudioLevels(EMPTY_LEVELS)
   }
@@ -58,58 +61,12 @@ export function useVoiceInput(): UseVoiceInputReturn {
   // biome-ignore lint/correctness/useExhaustiveDependencies: cleanup only needs to run on unmount
   useEffect(() => {
     return () => {
-      streamRef.current?.getTracks().forEach((track) => {
-        track.stop()
-      })
       if (mediaRecorderRef.current?.state === 'recording') {
         mediaRecorderRef.current.stop()
       }
-      stopAudioLevelMonitoring()
+      releaseAll()
     }
   }, [])
-
-  const startAudioLevelMonitoring = (stream: MediaStream) => {
-    const audioContext = new AudioContext()
-    const analyser = audioContext.createAnalyser()
-    analyser.fftSize = 256
-
-    const source = audioContext.createMediaStreamSource(stream)
-    source.connect(analyser)
-
-    audioContextRef.current = audioContext
-    analyserRef.current = analyser
-
-    const updateLevel = () => {
-      if (!analyserRef.current) return
-
-      const dataArray = new Uint8Array(analyserRef.current.fftSize)
-      analyserRef.current.getByteTimeDomainData(dataArray)
-
-      const binCount = dataArray.length
-      const levels: number[] = []
-      let totalPeak = 0
-
-      for (let band = 0; band < WAVEFORM_BAND_COUNT; band++) {
-        const start = Math.floor((band / WAVEFORM_BAND_COUNT) * binCount)
-        const end = Math.floor(((band + 1) / WAVEFORM_BAND_COUNT) * binCount)
-        let peak = 0
-        for (let j = start; j < end; j++) {
-          const amplitude = Math.abs(dataArray[j] - 128)
-          if (amplitude > peak) peak = amplitude
-        }
-        const normalized = Math.round(Math.min(100, (peak / 50) * 100))
-        levels.push(normalized)
-        totalPeak += normalized
-      }
-
-      setAudioLevels(levels)
-      setAudioLevel(Math.round(totalPeak / WAVEFORM_BAND_COUNT))
-
-      animationFrameRef.current = requestAnimationFrame(updateLevel)
-    }
-
-    updateLevel()
-  }
 
   const startRecording = async (): Promise<boolean> => {
     try {
@@ -117,23 +74,24 @@ export function useVoiceInput(): UseVoiceInputReturn {
       setTranscript('')
       chunksRef.current = []
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
-      })
+      const capture = await openAudioCapture()
+      captureRef.current = capture
 
-      streamRef.current = stream
-      startAudioLevelMonitoring(stream)
+      const monitor = createAudioLevelMonitor({
+        bandCount: WAVEFORM_BAND_COUNT,
+      })
+      monitor.subscribe((sample) => {
+        setAudioLevels(sample.levels)
+        setAudioLevel(sample.aggregate)
+      })
+      monitor.start(capture.analyser)
+      monitorRef.current = monitor
 
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : 'audio/webm'
 
-      const mediaRecorder = new MediaRecorder(stream, { mimeType })
+      const mediaRecorder = new MediaRecorder(capture.stream, { mimeType })
       mediaRecorderRef.current = mediaRecorder
 
       mediaRecorder.ondataavailable = (e) => {
@@ -146,23 +104,8 @@ export function useVoiceInput(): UseVoiceInputReturn {
       setIsRecording(true)
       return true
     } catch (err) {
-      streamRef.current?.getTracks().forEach((track) => {
-        track.stop()
-      })
-      streamRef.current = null
-      stopAudioLevelMonitoring()
-
-      if (err instanceof Error) {
-        if (err.name === 'NotAllowedError') {
-          setError('Microphone permission denied')
-        } else if (err.name === 'NotFoundError') {
-          setError('No microphone found')
-        } else {
-          setError(err.message)
-        }
-      } else {
-        setError('Failed to start recording')
-      }
+      releaseAll()
+      setError(describeCaptureError(err))
       return false
     }
   }
@@ -179,11 +122,7 @@ export function useVoiceInput(): UseVoiceInputReturn {
       mediaRecorder.stop()
     })
 
-    streamRef.current?.getTracks().forEach((track) => {
-      track.stop()
-    })
-    streamRef.current = null
-    stopAudioLevelMonitoring()
+    releaseAll()
     setIsRecording(false)
 
     const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' })
@@ -196,9 +135,10 @@ export function useVoiceInput(): UseVoiceInputReturn {
 
     setIsTranscribing(true)
     try {
-      const text = await transcribeAudio(audioBlob)
-      if (text.trim()) {
-        setTranscript(text.trim())
+      const { text } = await transcribeAudio(audioBlob)
+      const trimmed = text.trim()
+      if (trimmed) {
+        setTranscript(trimmed)
       } else {
         setError('No speech detected')
       }

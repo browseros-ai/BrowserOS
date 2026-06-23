@@ -10,16 +10,19 @@ import type { BrowserSession } from '../../browser/core/session'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
+import { createBrowserOutputFileAccess } from '../../tools/browser/output-file'
 import type { KlavisService } from '../services/klavis'
 import { createMcpServer } from '../services/mcp/mcp-server'
 import type { Env } from '../types'
 
 export const MANAGED_MCP_SERVERS_HEADER = 'X-BrowserOS-Managed-Mcp-Servers'
+export const REMOTE_AGENT_HARNESS_MCP_SOURCE = 'remote-agent-harness'
 
 interface McpRouteDeps {
   version: string
   browserSession: BrowserSession
   klavis?: KlavisService
+  executionDir: string
 }
 
 function parseOptionalNumber(value: string | undefined): number | undefined {
@@ -55,6 +58,9 @@ export function parseManagedMcpServersHeader(
 
 export function createMcpRoutes(deps: McpRouteDeps) {
   const app = new Hono<Env>()
+  const remoteAgentHarness = {
+    outputFileAccess: createBrowserOutputFileAccess(),
+  }
 
   app.get('/', (c) =>
     c.json({
@@ -76,6 +82,11 @@ export function createMcpRoutes(deps: McpRouteDeps) {
       c.req.header(MANAGED_MCP_SERVERS_HEADER),
     )
 
+    const harness =
+      c.req.query('source') === REMOTE_AGENT_HARNESS_MCP_SOURCE
+        ? remoteAgentHarness
+        : undefined
+
     // Per-request server + transport: no shared state, no race conditions,
     // no ID collisions. Required by MCP SDK 1.26.0+ security fix (GHSA-345p-7cg4-v4c7).
     const mcpServer = createMcpServer({
@@ -85,6 +96,8 @@ export function createMcpRoutes(deps: McpRouteDeps) {
       connectorScope: { selectedServerNames },
       defaultWindowId,
       defaultTabGroupId,
+      executionDir: deps.executionDir,
+      remoteAgentHarness: harness,
     })
     const transport = new StreamableHTTPTransport({
       sessionIdGenerator: undefined,

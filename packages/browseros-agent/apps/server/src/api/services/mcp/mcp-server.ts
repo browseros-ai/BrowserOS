@@ -9,7 +9,7 @@ import { SetLevelRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { BrowserSession } from '../../../browser/core/session'
 import type { ConnectorToolScope, KlavisService } from '../klavis'
 import { MCP_INSTRUCTIONS } from './mcp-prompt'
-import { registerTools } from './register-mcp'
+import { type RemoteAgentHarnessTools, registerTools } from './register-mcp'
 
 export interface McpServiceDeps {
   version: string
@@ -18,8 +18,11 @@ export interface McpServiceDeps {
   connectorScope?: ConnectorToolScope
   defaultWindowId?: number
   defaultTabGroupId?: string
+  executionDir: string
+  remoteAgentHarness?: RemoteAgentHarnessTools
 }
 
+/** Creates a per-request BrowserOS MCP server with tools for the requested surface. */
 export function createMcpServer(deps: McpServiceDeps): McpServer {
   const server = new McpServer(
     {
@@ -38,6 +41,8 @@ export function createMcpServer(deps: McpServiceDeps): McpServer {
     browserSession: deps.browserSession,
     defaultWindowId: deps.defaultWindowId,
     defaultTabGroupId: deps.defaultTabGroupId,
+    executionDir: deps.executionDir,
+    remoteAgentHarness: deps.remoteAgentHarness,
   })
 
   deps.klavis?.registerMcpTools(server, deps.connectorScope)

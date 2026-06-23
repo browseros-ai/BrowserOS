@@ -621,3 +621,37 @@
 .dark .mdx-editor-themed .mdxeditor [class*="linkDialogPopover"] {
   filter: drop-shadow(0 4px 16px rgb(0 0 0 / 0.4));
 }
+
+@keyframes voice-persona-breath {
+  0%,
+  100% {
+    transform: scale(0.92);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 1;
+  }
+}
+
+@keyframes voice-persona-pulse {
+  0%,
+  100% {
+    transform: scale(0.96);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+}
+
+@keyframes voice-halo-pulse {
+  0%,
+  100% {
+    transform: scale(0.95);
+  }
+  50% {
+    transform: scale(1.15);
+  }
+}

@@ -54,6 +54,7 @@ export const NewTabChat: FC = () => {
     attachedTabs,
     mounted,
     voiceState,
+    voiceLoop,
     handleModeChange,
     handleStop,
     toggleTabSelection,
@@ -195,6 +196,8 @@ export const NewTabChat: FC = () => {
           onToggleTab={toggleTabSelection}
           onRemoveTab={removeTab}
           voice={voiceState}
+          voiceLoop={voiceLoop}
+          onOpenVoiceMode={voiceLoop.open}
         />
       </div>
     </div>

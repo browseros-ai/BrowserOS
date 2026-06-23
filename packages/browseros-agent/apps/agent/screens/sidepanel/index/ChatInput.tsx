@@ -1,4 +1,11 @@
-import { Loader2, Mic, Send, Square, SquareStop } from 'lucide-react'
+import {
+  AudioLines,
+  Loader2,
+  Mic,
+  Send,
+  Square,
+  SquareStop,
+} from 'lucide-react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import {
   forwardRef,
@@ -31,6 +38,7 @@ interface ChatInputProps {
   onToggleTab: (tab: chrome.tabs.Tab) => void
   onTabMentionOpenChange?: (isOpen: boolean) => void
   voice?: VoiceInputState
+  onOpenVoiceMode?: () => void
 }
 
 export interface ChatInputHandle {
@@ -54,6 +62,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       onToggleTab,
       onTabMentionOpenChange,
       voice,
+      onOpenVoiceMode,
     },
     ref,
   ) => {
@@ -386,6 +395,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           />
         )}
         <div className="absolute right-1.5 bottom-1.5 flex items-center gap-1">
+          {onOpenVoiceMode && !voice?.isRecording && (
+            <button
+              type="button"
+              onClick={onOpenVoiceMode}
+              title="Voice mode"
+              aria-label="Voice mode"
+              className="cursor-pointer rounded-full p-2 text-muted-foreground transition-all duration-200 hover:bg-muted hover:text-foreground"
+            >
+              <AudioLines className="h-3.5 w-3.5" />
+            </button>
+          )}
           {renderVoiceButton()}
           {renderSendButton()}
         </div>

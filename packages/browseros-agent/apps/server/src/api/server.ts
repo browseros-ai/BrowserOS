@@ -14,6 +14,7 @@ import { getDb } from '../lib/db'
 import { logger } from '../lib/logger'
 import { Sentry } from '../lib/sentry'
 import { createApiRoutes } from './routes'
+import { REMOTE_AGENT_HARNESS_MCP_SOURCE } from './routes/mcp'
 import { KlavisService } from './services/klavis'
 import { RemoteHermesService } from './services/remote-hermes/remote-hermes-service'
 import type { HttpServerConfig } from './types'
@@ -66,7 +67,9 @@ export async function createHttpServer(config: HttpServerConfig) {
             jwtSecret: INLINED_ENV.AGENT_RUNNER_JWT_SECRET,
           }),
           resolveLocalMcpUrl: (server) =>
-            server === 'browseros' ? `http://127.0.0.1:${port}/mcp` : null,
+            server === 'browseros'
+              ? `http://127.0.0.1:${port}/mcp?source=${REMOTE_AGENT_HARNESS_MCP_SOURCE}`
+              : null,
         })
       : null
   if (!remoteHermes) {

@@ -13,11 +13,13 @@ import { cn } from '@/lib/utils'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { useGetUserMCPIntegrations } from '@/modules/mcp/user-integrations.hooks'
 import type { VoiceInputState } from '@/modules/voice/voice.hooks'
+import type { VoiceLoopApi } from '@/modules/voice/voice-types'
 import { useWorkspace } from '@/modules/workspace/workspace.hooks'
 import { ChatAttachedTabs } from './ChatAttachedTabs'
 import { ChatInput, type ChatInputHandle } from './ChatInput'
 import { ChatModeToggle } from './ChatModeToggle'
 import { ChatSelectedText } from './ChatSelectedText'
+import { VoiceModeArea } from './VoiceModeArea'
 
 export interface ChatFooterProps {
   mode: ChatMode
@@ -32,6 +34,8 @@ export interface ChatFooterProps {
   onToggleTab: (tab: chrome.tabs.Tab) => void
   onRemoveTab: (tabId?: number) => void
   voice?: VoiceInputState
+  voiceLoop?: VoiceLoopApi
+  onOpenVoiceMode?: () => void
 }
 
 export const ChatFooter: FC<ChatFooterProps> = ({
@@ -47,6 +51,8 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   onToggleTab,
   onRemoveTab,
   voice,
+  voiceLoop,
+  onOpenVoiceMode,
 }) => {
   const { selectedFolder } = useWorkspace()
   const { servers: mcpServers } = useMcpServers()
@@ -217,20 +223,23 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           <div className="mt-1 text-destructive text-xs">{voice.error}</div>
         )}
 
-        <ChatInput
-          input={input}
-          status={status}
-          mode={mode}
-          sendDisabled={sendDisabled}
-          onInputChange={onInputChange}
-          onSubmit={onSubmit}
-          onStop={onStop}
-          selectedTabs={attachedTabs}
-          onToggleTab={onToggleTab}
-          onTabMentionOpenChange={setIsTabMentionOpen}
-          voice={voice}
-          ref={chatInputRef}
-        />
+        <VoiceModeArea voiceLoop={voiceLoop}>
+          <ChatInput
+            input={input}
+            status={status}
+            mode={mode}
+            sendDisabled={sendDisabled}
+            onInputChange={onInputChange}
+            onSubmit={onSubmit}
+            onStop={onStop}
+            selectedTabs={attachedTabs}
+            onToggleTab={onToggleTab}
+            onTabMentionOpenChange={setIsTabMentionOpen}
+            voice={voice}
+            onOpenVoiceMode={onOpenVoiceMode}
+            ref={chatInputRef}
+          />
+        </VoiceModeArea>
       </div>
     </footer>
   )

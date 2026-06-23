@@ -20,6 +20,7 @@ const TOOL_NAME = 'filesystem_read'
 
 export interface ReadToolOptions {
   allowedOutputPaths?: ReadonlySet<string>
+  requireAllowedOutputPath?: boolean
 }
 
 function createImageResult(
@@ -133,6 +134,7 @@ async function resolveReadPath(
   cwd: string | undefined,
   inputPath: string,
   allowedOutputPaths: ReadonlySet<string>,
+  requireAllowedOutputPath: boolean,
 ): Promise<string> {
   if (!cwd)
     return await resolveGeneratedOutputPath(inputPath, allowedOutputPaths)
@@ -141,6 +143,9 @@ async function resolveReadPath(
     return await resolveWorkspacePath(cwd, inputPath)
   } catch (error) {
     if (error instanceof Error && (await isBrowserosStatePath(inputPath))) {
+      if (requireAllowedOutputPath) {
+        return await resolveGeneratedOutputPath(inputPath, allowedOutputPaths)
+      }
       return await resolveBrowserToolOutputPath(inputPath)
     }
     throw error
@@ -150,17 +155,18 @@ async function resolveReadPath(
 /** Creates the read tool for workspace files, or generated browser outputs when no workspace exists. */
 export function createReadTool(cwd?: string, options: ReadToolOptions = {}) {
   const allowedOutputPaths = options.allowedOutputPaths ?? new Set<string>()
+  const supportsGeneratedOutputs = Boolean(options.allowedOutputPaths)
 
   return tool({
     description: cwd
-      ? `Read a file from the filesystem. Returns text content with line numbers, or image data for image files. Text reads are limited to ${MAX_READ_LINES} lines and ${MAX_READ_CHARS} characters per call. Use offset and limit to paginate through large files.`
+      ? `Read a file from the filesystem. Returns text content with line numbers, or image data for image files. Text reads are limited to ${MAX_READ_LINES} lines and ${MAX_READ_CHARS} characters per call. Use offset and limit to paginate through large files.${supportsGeneratedOutputs ? ' Also accepts absolute BrowserOS-generated output file paths returned by browser tools.' : ''}`
       : `Read BrowserOS-generated tool output files by absolute path. Returns text content with line numbers, or image data for image files. Text reads are limited to ${MAX_READ_LINES} lines and ${MAX_READ_CHARS} characters per call. Use offset and limit to paginate through large files.`,
     inputSchema: z.object({
       path: z
         .string()
         .describe(
           cwd
-            ? 'File path relative to the selected workspace'
+            ? `File path relative to the selected workspace${supportsGeneratedOutputs ? ', or an absolute BrowserOS-generated output path returned by a browser tool' : ''}`
             : 'Absolute BrowserOS-generated tool output path returned by a browser tool',
         ),
       offset: z
@@ -180,6 +186,7 @@ export function createReadTool(cwd?: string, options: ReadToolOptions = {}) {
           cwd,
           params.path,
           allowedOutputPaths,
+          options.requireAllowedOutputPath ?? false,
         )
         const ext = extname(resolved).toLowerCase()
 

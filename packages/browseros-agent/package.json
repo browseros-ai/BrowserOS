@@ -41,9 +41,9 @@
     "test:main": "bun run ./scripts/run-test-suite.ts main",
     "check": "bun run lint && bun run typecheck && bun run fallow",
     "typecheck": "bun run --filter '*' typecheck",
-    "lint": "bunx biome check",
+    "lint": "bunx @biomejs/biome check",
     "fallow": "fallow check",
-    "lint:fix": "bunx biome check --write --unsafe",
+    "lint:fix": "bunx @biomejs/biome check --write --unsafe",
     "gen:cdp": "bun scripts/codegen/cdp-protocol.ts",
     "generate:models": "bun scripts/generate-models.ts"
   },

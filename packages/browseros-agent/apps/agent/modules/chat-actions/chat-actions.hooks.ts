@@ -1,9 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createBrowserOSAction } from '@/lib/chat-actions/types'
 import { track } from '@/lib/metrics/track'
 import { useChatSessionContext } from '@/modules/chat/chat-session-context'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { useVoiceInput } from '@/modules/voice/voice.hooks'
+import {
+  type ChatSessionLike,
+  useVoiceLoop,
+} from '@/modules/voice/voice-loop.hooks'
 
 export interface ChatActionsConfig {
   /** Analytics event names scoped to the origin */
@@ -25,9 +29,16 @@ export interface ChatActionsConfig {
 
 export function useChatActions(config: ChatActionsConfig) {
   const session = useChatSessionContext()
-  const { mode, setMode, sendMessage, stop, messages } = session
+  const { mode, setMode, sendMessage, stop, messages, status } = session
 
   const voice = useVoiceInput()
+  // Stable ref the voice loop reads on demand. Mutating .current is a
+  // plain property write, not a React state change, so the chat
+  // session updating on every streamed token does not propagate into
+  // the voice loop's render cycle.
+  const chatSessionRef = useRef<ChatSessionLike | null>(null)
+  chatSessionRef.current = { sendMessage, stop, status, messages }
+  const voiceLoop = useVoiceLoop({ chatSessionRef })
 
   const [input, setInput] = useState('')
   const [attachedTabs, setAttachedTabs] = useState<chrome.tabs.Tab[]>([])
@@ -161,6 +172,7 @@ export function useChatActions(config: ChatActionsConfig) {
     setAttachedTabs,
     mounted,
     voiceState,
+    voiceLoop,
     handleModeChange,
     handleStop,
     toggleTabSelection,

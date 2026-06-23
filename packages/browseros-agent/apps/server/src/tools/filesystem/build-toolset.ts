@@ -4,12 +4,19 @@ import { createEditTool } from './edit'
 import { createFindTool } from './find'
 import { createGrepTool } from './grep'
 import { createLsTool } from './ls'
-import { createReadTool } from './read'
+import { createReadTool, type ReadToolOptions } from './read'
 import { createWriteTool } from './write'
 
-export function buildFilesystemToolSet(cwd: string): ToolSet {
+export interface FilesystemToolSetOptions {
+  read?: ReadToolOptions
+}
+
+export function buildFilesystemToolSet(
+  cwd: string,
+  options: FilesystemToolSetOptions = {},
+): ToolSet {
   return {
-    filesystem_read: createReadTool(cwd),
+    filesystem_read: createReadTool(cwd, options.read),
     filesystem_write: createWriteTool(cwd),
     filesystem_edit: createEditTool(cwd),
     filesystem_bash: createBashTool(cwd),
