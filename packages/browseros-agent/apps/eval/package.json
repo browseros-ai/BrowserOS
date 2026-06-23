@@ -9,17 +9,17 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.63",
-    "@aws-sdk/client-s3": "^3.1014.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.141",
+    "@aws-sdk/client-s3": "^3.1068.0",
     "@browseros/server": "workspace:*",
     "@browseros/shared": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.25.2",
-    "ai": "^6.0.94",
-    "hono": "^4.6.0",
-    "zod": "^3.22.4"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ai": "^6.0.208",
+    "hono": "^4.12.26",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "typescript": "^5.0.0"
+    "typescript": "^5.9.3"
   }
 }

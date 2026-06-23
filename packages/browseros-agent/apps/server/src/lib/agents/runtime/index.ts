@@ -7,21 +7,17 @@
 export type { AgentRuntime } from './agent-runtime'
 export {
   ClaudeRuntime,
-  type ClaudeRuntimeConfig,
-  type ConfigureClaudeRuntimeOptions,
   configureClaudeRuntime,
   getClaudeRuntime,
   prepareClaudeCodeContext,
 } from './claude-host-process-runtime'
 export {
   CodexRuntime,
-  type CodexRuntimeConfig,
-  type ConfigureCodexRuntimeOptions,
   configureCodexRuntime,
   getCodexRuntime,
   prepareCodexContext,
 } from './codex-host-process-runtime'
-export { ActionNotSupportedError, RuntimeNotReadyError } from './errors'
+export { ActionNotSupportedError } from './errors'
 export {
   HostProcessAgentRuntime,
   type HostProcessAgentRuntimeDeps,
@@ -31,14 +27,4 @@ export {
   getAgentRuntimeRegistry,
   resetAgentRuntimeRegistry,
 } from './registry'
-export type {
-  ExecSpec,
-  Platform,
-  RuntimeAction,
-  RuntimeCapability,
-  RuntimeDescriptor,
-  RuntimeState,
-  RuntimeStatusSnapshot,
-  StateListener,
-  Unsubscribe,
-} from './types'
+export type { RuntimeStatusSnapshot } from './types'

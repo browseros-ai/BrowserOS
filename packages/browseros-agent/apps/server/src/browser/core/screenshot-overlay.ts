@@ -2,7 +2,7 @@ import type { ProtocolApi } from '@browseros/cdp-protocol/protocol-api'
 
 const ANNOTATION_OVERLAY_ATTR = 'data-browseros-screenshot-annotation'
 
-interface OverlayAnnotation {
+export interface OverlayAnnotation {
   number: number
   rect: {
     x: number

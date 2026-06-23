@@ -62,26 +62,33 @@ export class ToolLoopExecutorBackend implements ExecutorBackend {
         prompt: instruction,
         abortSignal: signal,
 
-        experimental_onToolCallStart: ({ toolCall }) => {
-          const input = toolCall.input as Record<string, unknown> | undefined
-          if (input && typeof input.url === 'string' && input.url.length > 0) {
-            this.currentUrl = input.url
-          }
-          this.options.callbacks?.onToolCallStart?.({
-            toolCallId: toolCall.toolCallId,
-            toolName: toolCall.toolName,
-            input: toolCall.input,
-          })
-        },
-
-        experimental_onToolCallFinish: async () => {
-          this.stepsUsed++
-          await this.options.callbacks?.onToolCallFinish?.()
-        },
-
         onStepFinish: async ({ toolCalls, toolResults, text }) => {
+          // Pre-v6.0.208 split this into experimental_onToolCallStart and
+          // experimental_onToolCallFinish; ToolLoopAgent no longer exposes
+          // those per-call hooks. Replay both lifecycle callbacks here so
+          // outer observers still see per-tool-call events, and update
+          // step-level state once per tool call within the step.
           if (toolCalls) {
             for (const toolCall of toolCalls) {
+              const input = toolCall.input as
+                | Record<string, unknown>
+                | undefined
+              if (
+                input &&
+                typeof input.url === 'string' &&
+                input.url.length > 0
+              ) {
+                this.currentUrl = input.url
+              }
+              this.options.callbacks?.onToolCallStart?.({
+                toolCallId: toolCall.toolCallId,
+                toolName: toolCall.toolName,
+                input: toolCall.input,
+              })
+
+              this.stepsUsed++
+              await this.options.callbacks?.onToolCallFinish?.()
+
               if (!toolsUsed.includes(toolCall.toolName)) {
                 toolsUsed.push(toolCall.toolName)
               }

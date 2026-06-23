@@ -81,12 +81,11 @@ export class SingleAgentEvaluator implements AgentEvaluator {
 
     let agent: AiSdkAgent | null = null
     const tokenUsage: TokenUsage = emptyTokenUsage()
-    // Screenshots are taken in onToolCallFinish (per tool call). Track them by
-    // toolCallId so we can stamp the matching tool-output event in messages.jsonl
-    // with `screenshot: N` — this is what lets the viewer sync the agent stream
-    // to the currently displayed screenshot.
+    // Screenshots are taken in onStepFinish (per tool call within each step).
+    // Tracked by toolCallId so we can stamp the matching tool-output event in
+    // messages.jsonl with `screenshot: N` — this is what lets the viewer sync
+    // the agent stream to the currently displayed screenshot.
     const screenshotByToolCallId = new Map<string, number>()
-    let currentToolCallId: string | null = null
 
     try {
       agent = await AiSdkAgent.create({
@@ -108,44 +107,42 @@ export class SingleAgentEvaluator implements AgentEvaluator {
             prompt,
             abortSignal: signal,
 
-            experimental_onToolCallStart: ({ toolCall }) => {
-              currentToolCallId = toolCall.toolCallId
-              const input = toolCall.input as
-                | Record<string, unknown>
-                | undefined
-              if (input && typeof input.page === 'number') {
-                capture.setActivePageId(input.page)
-              }
-            },
-
-            experimental_onToolCallFinish: async () => {
-              try {
-                if (captchaWaiter) {
-                  await captchaWaiter.waitIfCaptchaPresent(
-                    browser,
-                    capture.getActivePageId(),
-                  )
-                }
-                const screenshotNum = await capture.screenshot.capture(
-                  capture.getActivePageId(),
-                )
-                if (currentToolCallId) {
-                  screenshotByToolCallId.set(currentToolCallId, screenshotNum)
-                }
-                capture.emitEvent(task.query_id, {
-                  type: 'screenshot-captured',
-                  screenshot: screenshotNum,
-                })
-              } catch {
-                // Screenshot failures are non-fatal
-              }
-            },
-
             onStepFinish: async (step) => {
               const { toolCalls, toolResults, text } = step
               addTokenUsageFromAiSdkStep(tokenUsage, step)
               if (toolCalls) {
                 for (const tc of toolCalls) {
+                  // Mirror the pre-v6.0.208 experimental_onToolCallStart
+                  // behaviour: capture the active page id from the tool input
+                  // so subsequent screenshots target the right tab. Each
+                  // tool call within a step is treated independently.
+                  const input = tc.input as Record<string, unknown> | undefined
+                  if (input && typeof input.page === 'number') {
+                    capture.setActivePageId(input.page)
+                  }
+
+                  // Take a screenshot per tool call after the step settles —
+                  // the equivalent of the old experimental_onToolCallFinish.
+                  // Screenshot failures are non-fatal.
+                  try {
+                    if (captchaWaiter) {
+                      await captchaWaiter.waitIfCaptchaPresent(
+                        browser,
+                        capture.getActivePageId(),
+                      )
+                    }
+                    const screenshotNum = await capture.screenshot.capture(
+                      capture.getActivePageId(),
+                    )
+                    screenshotByToolCallId.set(tc.toolCallId, screenshotNum)
+                    capture.emitEvent(task.query_id, {
+                      type: 'screenshot-captured',
+                      screenshot: screenshotNum,
+                    })
+                  } catch {
+                    // Screenshot failures are non-fatal.
+                  }
+
                   const inputEvent: UIMessageStreamEvent = {
                     type: 'tool-input-available',
                     toolCallId: tc.toolCallId,
