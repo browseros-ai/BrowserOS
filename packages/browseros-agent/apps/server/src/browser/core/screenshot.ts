@@ -50,7 +50,7 @@ export interface ScreenshotCaptureResult {
   annotations: ScreenshotAnnotation[]
 }
 
-interface CaptureInput {
+export interface CaptureInput {
   pageSession: ProtocolApi
   observer: Observer
   options: ScreenshotCaptureOptions

@@ -58,48 +58,37 @@ export class ToolLoopExecutorBackend implements ExecutorBackend {
         browserContext,
       })
 
-      // biome-ignore lint/suspicious/noExplicitAny: see comment below.
-      // `as any` keeps the call compiling when the workspace's zod
-      // major versions cross-pollute the ai-sdk's `generate()`
-      // option type (cockpit pins zod v4, server pins v3). The
-      // `experimental_on*` callbacks ARE valid on the runtime
-      // ai-sdk; only TS's view of them gets dropped under the
-      // mixed-version resolution. Tracked alongside the cockpit's
-      // dynamic-import workaround in apps/server/src/api/server.ts.
       await agent.toolLoopAgent.generate({
         prompt: instruction,
         abortSignal: signal,
 
-        // biome-ignore lint/suspicious/noExplicitAny: see toolCall typing note in the function header above.
-        experimental_onToolCallStart: ({ toolCall }: { toolCall: any }) => {
-          const input = toolCall.input as Record<string, unknown> | undefined
-          if (input && typeof input.url === 'string' && input.url.length > 0) {
-            this.currentUrl = input.url
-          }
-          this.options.callbacks?.onToolCallStart?.({
-            toolCallId: toolCall.toolCallId,
-            toolName: toolCall.toolName,
-            input: toolCall.input,
-          })
-        },
-
-        experimental_onToolCallFinish: async () => {
-          this.stepsUsed++
-          await this.options.callbacks?.onToolCallFinish?.()
-        },
-
-        // biome-ignore lint/suspicious/noExplicitAny: cascade from the call-site cast; ai-sdk's step type widens to `any` once the literal is cast.
-        onStepFinish: async ({
-          toolCalls,
-          toolResults,
-          text,
-        }: {
-          toolCalls?: any
-          toolResults?: any
-          text?: string
-        }) => {
+        onStepFinish: async ({ toolCalls, toolResults, text }) => {
+          // Pre-v6.0.208 split this into experimental_onToolCallStart and
+          // experimental_onToolCallFinish; ToolLoopAgent no longer exposes
+          // those per-call hooks. Replay both lifecycle callbacks here so
+          // outer observers still see per-tool-call events, and update
+          // step-level state once per tool call within the step.
           if (toolCalls) {
             for (const toolCall of toolCalls) {
+              const input = toolCall.input as
+                | Record<string, unknown>
+                | undefined
+              if (
+                input &&
+                typeof input.url === 'string' &&
+                input.url.length > 0
+              ) {
+                this.currentUrl = input.url
+              }
+              this.options.callbacks?.onToolCallStart?.({
+                toolCallId: toolCall.toolCallId,
+                toolName: toolCall.toolName,
+                input: toolCall.input,
+              })
+
+              this.stepsUsed++
+              await this.options.callbacks?.onToolCallFinish?.()
+
               if (!toolsUsed.includes(toolCall.toolName)) {
                 toolsUsed.push(toolCall.toolName)
               }

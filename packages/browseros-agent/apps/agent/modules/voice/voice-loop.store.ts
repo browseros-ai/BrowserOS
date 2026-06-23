@@ -2,7 +2,7 @@ import { createStore } from '@xstate/store'
 import type { DropReason } from './transcript-sanitizer'
 import type { VoiceContext } from './voice-types'
 
-export const INITIAL_CONTEXT: VoiceContext = {
+const INITIAL_CONTEXT: VoiceContext = {
   state: 'idle',
   audioLevels: [0, 0, 0, 0, 0],
   errorMessage: null,

@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 import type { VoiceLoopApi } from '@/modules/voice/voice-types'
 import { VoiceMode } from './VoiceMode'
 
-interface VoiceModeAreaProps {
+export interface VoiceModeAreaProps {
   voiceLoop?: VoiceLoopApi
   children: ReactNode
 }

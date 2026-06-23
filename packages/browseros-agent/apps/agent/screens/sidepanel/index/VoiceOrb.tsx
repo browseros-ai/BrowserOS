@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 
 export type VoiceOrbState = 'idle' | 'listening' | 'speaking'
 
-interface VoiceOrbProps {
+export interface VoiceOrbProps {
   size?: number
   state?: VoiceOrbState
   accent?: string

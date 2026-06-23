@@ -23,15 +23,3 @@ export class ActionNotSupportedError extends Error {
     this.name = 'ActionNotSupportedError'
   }
 }
-
-/** Higher-level "runtime is not ready to take a turn" error. */
-export class RuntimeNotReadyError extends Error {
-  constructor(
-    public readonly adapterId: string,
-    public readonly state: string,
-    public readonly hint: string,
-  ) {
-    super(`Runtime "${adapterId}" is not ready (state=${state}): ${hint}`)
-    this.name = 'RuntimeNotReadyError'
-  }
-}

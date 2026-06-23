@@ -45,6 +45,7 @@
     "apps/cli/**",
     "apps/agent/assets/**",
     "apps/agent/generated/**",
+    "apps/agent/public/**",
     "apps/eval/data/**",
     "apps/server/src/lib/db/migrations/**",
     "packages/cdp-protocol/src/generated/**",

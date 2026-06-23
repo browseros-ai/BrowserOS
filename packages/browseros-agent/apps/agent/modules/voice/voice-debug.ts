@@ -13,7 +13,7 @@ const envFlag =
   (import.meta as ImportMeta & { env?: Record<string, string> }).env
     ?.VITE_VOICE_DEBUG === '1'
 
-export function isVoiceDebugOn(): boolean {
+function isVoiceDebugOn(): boolean {
   if (envFlag) return true
   return typeof window !== 'undefined' && window.__VOICE_DEBUG__ === true
 }

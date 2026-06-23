@@ -171,7 +171,10 @@ export const ReasoningContent = memo(
       )}
       {...props}
     >
-      <Streamdown {...props}>{children}</Streamdown>
+      {/* Don't forward Collapsible's HTMLAttributes into Streamdown —
+          streamdown@2 narrowed `dir` from `string` to a literal union
+          and the spread leaks Radix's incompatible type. */}
+      <Streamdown>{children}</Streamdown>
     </CollapsibleContent>
   ),
 )

@@ -3,6 +3,11 @@
 @import "tailwind-scrollbar-hide/v4";
 @plugin "@tailwindcss/typography";
 
+/* streamdown@2 ships its own component classes that Tailwind needs
+   to scan for utilities. Without this, Tailwind purges classes that
+   streamdown emits at runtime (e.g. code-block layout). */
+@source "../../../node_modules/streamdown/dist/*.js";
+
 @custom-variant dark (&:is(.dark *));
 
 /* Geist Sans Variable Font */

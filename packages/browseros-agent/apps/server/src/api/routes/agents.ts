@@ -888,7 +888,11 @@ function isAgentSessionId(value: string): value is AgentSessionId {
 function parseSessionIdParam(
   c: Context<Env>,
 ): { value: AgentSessionId } | { error: string } {
+  // hono@4.12.26 widened c.req.param() to `string | undefined`. Treat a
+  // missing param the same as an invalid one — both reply with the same
+  // 400 message.
   const sessionId = c.req.param('sessionId')
+  if (!sessionId) return { error: 'sessionId must be "main" or a UUID' }
   return isAgentSessionId(sessionId)
     ? { value: sessionId }
     : { error: 'sessionId must be "main" or a UUID' }
