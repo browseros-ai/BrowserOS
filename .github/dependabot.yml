@@ -32,6 +32,11 @@ updates:
     open-pull-requests-limit: 5
     cooldown:
       default-days: 3
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
     commit-message:
       prefix: "chore(ci)"
       include: "scope"
