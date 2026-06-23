@@ -23,6 +23,19 @@ export interface AgentRow {
   liveLine: string
   /** Hex color used for the per-agent dot in cross-agent activity rows. */
   color: string
+  /**
+   * Total tool dispatches recorded against this tab since the agent
+   * first touched it. Surfaced as a small badge on the running card.
+   */
+  toolCount?: number
+  /** Epoch ms of the first tool dispatch on this tab. Surfaces as "started Xm ago". */
+  startedAt?: number
+  /**
+   * Short formatted trail of the last few tool names, e.g.
+   * `navigate -> snapshot -> act`. Empty string when no trail is
+   * available; the card hides the row in that case.
+   */
+  trail?: string
 }
 
 const MOCK_AGENTS: AgentRow[] = [

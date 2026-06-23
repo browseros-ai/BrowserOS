@@ -20,6 +20,10 @@ export interface ActivityRow {
    * `/governance/audit/:runId/replay`. Only required on done rows.
    */
   runId?: string
+  /** Total tool dispatches recorded against this tab. Surfaces as a badge. */
+  toolCount?: number
+  /** Short trail of recent tool names, e.g. `navigate -> snapshot -> act`. */
+  trail?: string
 }
 
 /**

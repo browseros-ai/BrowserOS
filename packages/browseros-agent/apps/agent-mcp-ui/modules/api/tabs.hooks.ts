@@ -4,15 +4,27 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Polls `GET /cockpit/tabs/activity` so the homepage can render a
- * live view of which tabs each agent has touched and how recently.
- * Backed by the in-memory registry in
+ * live view of which tabs each agent has touched, how recently, and
+ * what sequence of tool calls produced the current state. Backed by
+ * the in-memory registry in
  * `apps/agent-mcp-interface/src/lib/tab-activity/`; refer to that
- * module for the record shape and the active-window threshold.
+ * module for the record shape, the active-window threshold, and the
+ * RECENT_TOOLS_CAP that bounds `recentTools`.
+ *
+ * The route enriches each record with the agent profile (label,
+ * harness, color), falling back to slug / null when the profile has
+ * been deleted between record and read. The hook surfaces those
+ * enriched fields directly so the screen does not have to join again.
  */
 
 import { createQuery } from 'react-query-kit'
 import { api } from './client'
 import { parseResponse } from './parseResponse'
+
+export interface ToolEvent {
+  name: string
+  at: number
+}
 
 export interface TabActivityRecord {
   targetId: string
@@ -21,9 +33,15 @@ export interface TabActivityRecord {
   title: string
   agentId: string
   slug: string
+  firstToolAt: number
   lastToolAt: number
   lastToolName: string
+  toolCount: number
+  recentTools: ToolEvent[]
   status: 'active' | 'idle'
+  agentLabel: string
+  harness: string | null
+  color: string | null
 }
 
 interface TabsActivityResponse {

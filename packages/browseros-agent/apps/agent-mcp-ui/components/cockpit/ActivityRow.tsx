@@ -150,7 +150,23 @@ export function ActivityRow({ row }: ActivityRowProps) {
               </span>
             </>
           )}
+          {row.toolCount !== undefined && row.toolCount > 0 && (
+            <>
+              {' . '}
+              <span className="font-mono text-[11.5px] text-ink-3">
+                {row.toolCount} {row.toolCount === 1 ? 'action' : 'actions'}
+              </span>
+            </>
+          )}
         </div>
+        {row.trail && (
+          <div
+            className="mt-0.5 truncate font-mono text-[10.5px] text-ink-3"
+            title={row.trail}
+          >
+            {row.trail}
+          </div>
+        )}
       </div>
       {flagged && jumpLabel ? (
         <button

@@ -60,7 +60,20 @@ export function RunningCard({ agent, onWatch, onStop }: RunningCardProps) {
                 ? 'Stopped by you'
                 : 'Completed'}
           </span>
+          {agent.toolCount !== undefined && agent.toolCount > 0 && (
+            <span className="shrink-0 rounded-full bg-bg-sunken px-1.5 py-0.5 font-mono text-[10.5px] text-ink-2">
+              {agent.toolCount} {agent.toolCount === 1 ? 'action' : 'actions'}
+            </span>
+          )}
         </div>
+        {agent.trail && (
+          <code
+            className="truncate font-mono text-[10.5px] text-ink-3"
+            title={agent.trail}
+          >
+            {agent.trail}
+          </code>
+        )}
         <div className="flex gap-2 border-border border-t pt-2.5">
           <button
             type="button"
