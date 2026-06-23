@@ -19,7 +19,7 @@ jobs:
         working-directory: packages/browseros-agent/apps/agent
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 

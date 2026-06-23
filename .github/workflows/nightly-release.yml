@@ -153,7 +153,7 @@ jobs:
       # its subprocesses (gclient, hooks). No-op on Linux/macOS.
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # v8.x.y releases exist but astral-sh publishes no floating `v8`
       # major tag — `@v8` is unresolvable and kills the job in Set up job.
@@ -308,7 +308,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v4
         with:

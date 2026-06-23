@@ -101,7 +101,7 @@ jobs:
             echo "release_server=$release_server"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ steps.workflow_inputs.outputs.target_ref }}
 
