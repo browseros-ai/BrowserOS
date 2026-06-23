@@ -151,7 +151,7 @@ export function createNudgeMcpRoute(deps: NudgeMcpRouteDeps) {
           }
         }
 
-        turnRegistry.pushEvent(turn.turnId, {
+        const pushed = turnRegistry.pushEvent(turn.turnId, {
           type: 'app_connection_request',
           // Fresh id so the renderer dedups on this card's identity
           // rather than the upstream acpx tool-call id (which the
@@ -160,6 +160,27 @@ export function createNudgeMcpRoute(deps: NudgeMcpRouteDeps) {
           appName: typedArgs.appName,
           reason: typedArgs.reason,
         })
+
+        // pushEvent returns null when the turn ended between
+        // getActiveFor and pushEvent (status flipped to terminal).
+        // Without surfacing that the LLM would honour the STOP-and-wait
+        // directive below and deadlock waiting for a reply to a card
+        // the user will never see.
+        if (!pushed) {
+          logger.warn('nudge tool: event dropped (turn ended mid-call)', {
+            agentId,
+            sessionId,
+          })
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text' as const,
+                text: 'The conversation turn ended before the connect card could be delivered. Ask the user to repeat their request.',
+              },
+            ],
+          }
+        }
 
         return {
           content: [

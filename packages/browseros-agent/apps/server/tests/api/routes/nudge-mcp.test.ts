@@ -17,15 +17,18 @@ interface StubTurnInfo {
 
 interface StubRegistry {
   getActiveFor(agentId: string, sessionId: string): StubTurnInfo | undefined
-  pushEvent(turnId: string, event: AgentStreamEvent): null
+  pushEvent(turnId: string, event: AgentStreamEvent): unknown
   events: Array<{ turnId: string; event: AgentStreamEvent }>
 }
 
-function makeStubRegistry(active?: {
-  agentId: string
-  sessionId: string
-  turnId: string
-}): StubRegistry {
+function makeStubRegistry(
+  active?: {
+    agentId: string
+    sessionId: string
+    turnId: string
+  },
+  options: { pushReturnsNull?: boolean } = {},
+): StubRegistry {
   const events: Array<{ turnId: string; event: AgentStreamEvent }> = []
   return {
     events,
@@ -41,7 +44,10 @@ function makeStubRegistry(active?: {
     },
     pushEvent(turnId, event) {
       events.push({ turnId, event })
-      return null
+      // Real TurnRegistry returns a TurnFrame on success and null when
+      // the turn flipped to a terminal status mid-call. Tests use this
+      // sentinel to exercise the deadlock-guard branch.
+      return options.pushReturnsNull ? null : { id: turnId, seq: 0 }
     },
   }
 }
@@ -146,6 +152,22 @@ describe('createNudgeMcpRoute', () => {
 
     expect(registry.events).toHaveLength(0)
     expect(body).toContain('No in-flight turn')
+    expect(body).toContain('isError')
+  })
+
+  it('returns an isError response when the turn ends mid-call (pushEvent returns null)', async () => {
+    const registry = makeStubRegistry(
+      { agentId: 'agent-A', sessionId: 'main', turnId: 'turn-1' },
+      { pushReturnsNull: true },
+    )
+
+    const { body } = await callTool(registry, {
+      [NUDGE_AGENT_ID_HEADER]: 'agent-A',
+      [NUDGE_SESSION_ID_HEADER]: 'main',
+    })
+
+    expect(registry.events).toHaveLength(1)
+    expect(body).toContain('turn ended before the connect card')
     expect(body).toContain('isError')
   })
 })

@@ -201,20 +201,23 @@ function enqueueToolCall(
   controller: ReadableStreamDefaultController<UIMessageChunk>,
   state: AcpUIMessageStreamState,
 ): void {
-  const toolCallId = event.id ?? nextToolCallId(state)
   // Match against the raw title BEFORE normalization so the
   // namespace-prefixed form `nudge/suggest_app_connection` still
   // matches via the endsWith check. normalizeToolName would rewrite
   // the slash and the suffix check would silently miss.
   const rawTitle = event.title || event.rawType || ''
-  const toolName =
-    state.toolNames.get(toolCallId) ?? normalizeToolName(rawTitle || 'acp_tool')
 
   // Drop the upstream tool_call rendering for nudge tools. The real
   // connect card arrives via app_connection_request; without this
   // suppression the renderer would briefly show a generic tool block
   // next to the card. Mirrors agent-company's StreamTranslator drop.
+  // Checked BEFORE nextToolCallId so suppressed events don't bump
+  // state.toolCallCount and skew ids for later non-nudge tools.
   if (isNudgeToolName(rawTitle)) return
+
+  const toolCallId = event.id ?? nextToolCallId(state)
+  const toolName =
+    state.toolNames.get(toolCallId) ?? normalizeToolName(rawTitle || 'acp_tool')
 
   state.toolNames.set(toolCallId, toolName)
 
