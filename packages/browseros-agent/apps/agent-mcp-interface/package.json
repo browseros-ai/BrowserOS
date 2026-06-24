@@ -16,6 +16,10 @@
     "./shared/port": {
       "types": "./src/shared/port.ts",
       "default": "./src/shared/port.ts"
+    },
+    "./shared/mcp-url": {
+      "types": "./src/shared/mcp-url.ts",
+      "default": "./src/shared/mcp-url.ts"
     }
   },
   "scripts": {

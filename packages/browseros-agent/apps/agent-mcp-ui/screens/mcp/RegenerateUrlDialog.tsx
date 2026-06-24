@@ -1,3 +1,10 @@
+/**
+ * TODO(v2-restore-per-agent): the v2 MCP page does not render this
+ * dialog because the v2 endpoint is a single slugless URL with no
+ * per-agent rotate flow. Component returns when per-agent profiles
+ * return (post the SQLite audit phase).
+ */
+
 import {
   AlertDialog,
   AlertDialogAction,

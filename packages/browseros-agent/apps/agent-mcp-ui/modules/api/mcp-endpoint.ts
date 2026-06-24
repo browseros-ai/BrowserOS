@@ -17,6 +17,10 @@
  */
 
 import {
+  BROWSEROS_MCP_SERVER_NAME,
+  MCP_PATH,
+} from '@browseros/agent-mcp-interface/shared/mcp-url'
+import {
   COCKPIT_MOUNT_PREFIX,
   PROD_API_PORT,
 } from '@browseros/agent-mcp-interface/shared/port'
@@ -90,4 +94,24 @@ export function slugFromMcpEndpointUrl(url: string): string {
  */
 export function buildMcpCliCommand(slug: string): string {
   return `mcp add ${slug}`
+}
+
+/**
+ * Canonical v2 URL the MCP page advertises: one slugless endpoint
+ * for the whole cockpit. Uses the same base resolution as
+ * `buildMcpEndpointUrl` so dev-launcher overrides and query-string
+ * apiUrl forwarding stay consistent across both shapes.
+ */
+export function buildCanonicalMcpEndpointUrl(): string {
+  return `${resolveMcpBaseUrl()}${MCP_PATH}`
+}
+
+/**
+ * Canonical CLI snippet for one-click harnesses that ship their own
+ * MCP CLI. Anthropic's `claude` CLI is the lead consumer; other
+ * harnesses get the "Connect" button on the MCP page instead.
+ */
+export function buildCanonicalMcpCliCommand(): string {
+  const url = buildCanonicalMcpEndpointUrl()
+  return `claude mcp add ${BROWSEROS_MCP_SERVER_NAME} ${url} --transport http --scope user`
 }

@@ -1,3 +1,9 @@
+/**
+ * TODO(v2-restore-per-agent): the v2 MCP page no longer renders one
+ * row per agent profile; the v2 endpoint is a single slugless URL.
+ * Component returns when per-agent profiles return.
+ */
+
 import { Check, Copy, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
 import { HarnessIcon } from '@/components/harness/HarnessIcon'

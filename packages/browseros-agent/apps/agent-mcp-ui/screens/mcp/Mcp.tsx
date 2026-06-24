@@ -1,112 +1,130 @@
-import { PlugZap, Plus } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
-import type { AgentProfile } from '@/modules/api/agents.hooks'
-import { McpRow } from './McpRow'
-import { useMcpRegistryData } from './mcp.data'
-import { RegenerateUrlDialog } from './RegenerateUrlDialog'
+import {
+  useBrowserosConnections,
+  useConnectBrowseros,
+  useDisconnectBrowseros,
+} from '@/modules/api/connections.hooks'
+import {
+  buildCanonicalMcpCliCommand,
+  buildCanonicalMcpEndpointUrl,
+} from '@/modules/api/mcp-endpoint'
+import type { Harness } from '@/screens/new-agent/new-agent.schemas'
+import { ConnectionRow } from './ConnectionRow'
+import { HeroCard } from './HeroCard'
 
+/**
+ * v2 MCP page. Hero card with the single canonical endpoint plus a
+ * per-harness "Connect" board that drives `agent-mcp-manager` so the
+ * user installs BrowserOS into Claude Code / Cursor / VS Code / Codex
+ * with one click. Hermes and OpenClaw are BrowserOS-internal and
+ * render as "Built-in" rows.
+ *
+ * Live MCP-session state (who is connected right now) is surfaced on
+ * the homepage's running grid, not here; this page is the install
+ * board.
+ */
 export function Mcp() {
-  const { profiles, isLoading, regenerate, navigate } = useMcpRegistryData()
-  const [pendingRotate, setPendingRotate] = useState<AgentProfile | null>(null)
+  const url = buildCanonicalMcpEndpointUrl()
+  const cli = buildCanonicalMcpCliCommand()
+  const connections = useBrowserosConnections()
+  const connect = useConnectBrowseros()
+  const disconnect = useDisconnectBrowseros()
+  const queryClient = useQueryClient()
+  const [errors, setErrors] = useState<Partial<Record<Harness, string>>>({})
 
-  const onAdd = () => navigate('/agents/new')
+  const isLoading = connections.isPending && !connections.data
+  const list = connections.data?.connections ?? []
+  const externalRows = list.filter((c) => c.agentId !== null)
+  const externalConnected = externalRows.filter((c) => c.installed).length
+  const externalTotal = externalRows.length
 
-  const onConfirmRotate = (profile: AgentProfile) => {
-    regenerate.mutate(
-      { id: profile.id },
-      {
-        onSettled: () => setPendingRotate(null),
-      },
-    )
+  const onConnect = async (harness: Harness) => {
+    setErrors((prev) => ({ ...prev, [harness]: undefined }))
+    try {
+      const result = await connect.mutateAsync({ harness })
+      if (!result.installed) {
+        setErrors((prev) => ({ ...prev, [harness]: result.message }))
+      }
+      void queryClient.invalidateQueries({
+        queryKey: useBrowserosConnections.getKey(),
+      })
+    } catch (err) {
+      setErrors((prev) => ({
+        ...prev,
+        [harness]: err instanceof Error ? err.message : 'Failed to connect.',
+      }))
+    }
   }
 
+  const onDisconnect = async (harness: Harness) => {
+    setErrors((prev) => ({ ...prev, [harness]: undefined }))
+    try {
+      await disconnect.mutateAsync({ harness })
+      void queryClient.invalidateQueries({
+        queryKey: useBrowserosConnections.getKey(),
+      })
+    } catch (err) {
+      setErrors((prev) => ({
+        ...prev,
+        [harness]: err instanceof Error ? err.message : 'Failed to disconnect.',
+      }))
+    }
+  }
+
+  const pendingHarness =
+    connect.isPending && connect.variables
+      ? connect.variables.harness
+      : disconnect.isPending && disconnect.variables
+        ? disconnect.variables.harness
+        : null
+
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col px-8 pt-6 pb-20">
-      <header className="mb-5 flex items-start gap-3">
-        <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-accent-tint text-accent">
-          <PlugZap className="size-5" />
-        </span>
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <h1 className="font-extrabold text-2xl text-ink tracking-tight">
-              MCP
-            </h1>
-            {profiles.length > 0 && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-accent-tint px-2.5 py-0.5 font-bold text-accent-ink text-xs">
-                {profiles.length} endpoint{profiles.length === 1 ? '' : 's'}
-              </span>
-            )}
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-8 pt-6 pb-20">
+      <HeroCard url={url} cli={cli} />
+      <section className="rounded-2xl border border-border-2 bg-card">
+        <div className="flex items-start gap-3 border-border-2 border-b px-4 py-4">
+          <div className="flex-1">
+            <h2 className="font-bold text-base">Connected agents</h2>
+            <p className="mt-0.5 text-ink-3 text-sm">
+              Add BrowserOS as an MCP server in your AI agents. No copy-paste
+              required.
+            </p>
           </div>
-          <p className="mt-0.5 text-ink-2 text-sm">
-            Every agent profile gets a slug-routed MCP endpoint that is
-            installed into its harness when the agent is created. Copy the URL
-            here for places the harness can't reach (CI configs, manual
-            scripts).
-          </p>
+          {!isLoading && (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-bg-sunken px-3 py-1 font-bold text-[12px] text-ink-2">
+              {externalConnected} of {externalTotal} connected
+            </span>
+          )}
         </div>
-        <Button type="button" onClick={onAdd}>
-          <Plus className="size-4" />
-          Add agent
-        </Button>
-      </header>
-
-      {isLoading ? (
-        <div className="flex justify-center py-12 text-ink-3">
-          <Spinner />
-        </div>
-      ) : profiles.length === 0 ? (
-        <EmptyState onAdd={onAdd} />
-      ) : (
-        <div className="flex flex-col gap-2.5">
-          {profiles.map((profile) => (
-            <McpRow
-              key={profile.id}
-              profile={profile}
-              isRegenerating={
-                regenerate.isPending && regenerate.variables?.id === profile.id
-              }
-              onRegenerate={setPendingRotate}
-            />
-          ))}
-        </div>
-      )}
-
-      <RegenerateUrlDialog
-        profile={pendingRotate}
-        isRegenerating={
-          regenerate.isPending && regenerate.variables?.id === pendingRotate?.id
-        }
-        onConfirm={onConfirmRotate}
-        onCancel={() => setPendingRotate(null)}
-      />
-    </div>
-  )
-}
-
-/* ---------------------------------------------------------------------------
- * Sub-components, kept private to the registry screen.
- * -------------------------------------------------------------------------*/
-
-function EmptyState({ onAdd }: { onAdd: () => void }) {
-  return (
-    <div className="flex flex-col items-start gap-3 rounded-2xl border border-border border-dashed bg-card px-6 py-10">
-      <span className="flex size-9 items-center justify-center rounded-lg bg-accent-tint text-accent-ink">
-        <PlugZap className="size-4" />
-      </span>
-      <h2 className="font-bold text-ink text-lg tracking-tight">
-        No endpoints yet
-      </h2>
-      <p className="max-w-md text-ink-3 text-sm leading-snug">
-        Endpoints land here when you add an agent profile. Each profile gets a
-        unique slug-routed MCP URL and is auto-installed into its chosen
-        harness.
+        {isLoading ? (
+          <div className="flex justify-center py-10 text-ink-3">
+            <Spinner />
+          </div>
+        ) : connections.isError ? (
+          <div className="px-4 py-6 text-center text-ink-3 text-sm">
+            Could not load the connection list. Check that the cockpit server is
+            running.
+          </div>
+        ) : (
+          <div className="flex flex-col">
+            {list.map((state) => (
+              <ConnectionRow
+                key={state.harness}
+                state={state}
+                isPending={pendingHarness === state.harness}
+                errorMessage={errors[state.harness] ?? null}
+                onConnect={() => onConnect(state.harness)}
+                onDisconnect={() => onDisconnect(state.harness)}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+      <p className="text-[12px] text-ink-3 leading-relaxed">
+        Hermes and OpenClaw run inside BrowserOS and don't need a config write.
       </p>
-      <Button type="button" onClick={onAdd}>
-        <Plus className="size-4" />
-        Add your first agent
-      </Button>
     </div>
   )
 }

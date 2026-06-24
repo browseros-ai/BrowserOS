@@ -1,3 +1,10 @@
+/**
+ * TODO(v2-restore-per-agent): the v2 MCP page does not consume these
+ * helpers because the v2 URL is slugless. Re-exports stay for the
+ * legacy wizard and the new-agent screen, both of which still use
+ * the slug builder when VITE_COCKPIT_LEGACY_UI=1.
+ */
+
 import type { AgentProfile } from '@/modules/api/agents.hooks'
 import {
   buildMcpCliCommand,

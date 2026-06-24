@@ -22,11 +22,12 @@
  * no-op success.
  */
 
-import type { AgentId, McpServerSpec } from 'agent-mcp-manager'
+import type { AgentId } from 'agent-mcp-manager'
 import { AgentNotSupportedError, ForeignEntryError } from 'agent-mcp-manager'
 import { logger } from '../lib/logger'
 import { getMcpManager } from '../lib/mcp-manager'
 import type { Harness, StoredAgentProfile } from '../routes/agents/schemas'
+import { specFor } from './spec-for'
 
 export interface InstallOutcome {
   /** True iff the harness config was written successfully (or no-op for internal harnesses). */
@@ -49,7 +50,7 @@ export interface InstallOutcome {
  * If a mapping is wrong, change it here and every install/uninstall
  * path picks up the new target.
  */
-const HARNESS_TO_AGENT_ID: Record<Harness, AgentId | null> = {
+export const HARNESS_TO_AGENT_ID: Record<Harness, AgentId | null> = {
   'Claude Code': 'claude-code',
   'Claude Desktop': 'claude-desktop',
   Cursor: 'cursor',
@@ -59,24 +60,6 @@ const HARNESS_TO_AGENT_ID: Record<Harness, AgentId | null> = {
   'Gemini CLI': 'gemini',
   Hermes: null,
   OpenClaw: null,
-}
-
-/**
- * Codex (and any future stdio-only target) cannot speak HTTP MCP, so
- * we wrap the URL in `npx mcp-remote` the same way `apps/server`
- * does. Other agents take the URL directly as `transport: 'http'`.
- */
-const STDIO_ONLY: ReadonlySet<AgentId> = new Set<AgentId>(['codex'])
-
-function specFor(agentId: AgentId, mcpUrl: string): McpServerSpec {
-  if (STDIO_ONLY.has(agentId)) {
-    return {
-      transport: 'stdio',
-      command: 'npx',
-      args: ['mcp-remote', mcpUrl],
-    }
-  }
-  return { transport: 'http', url: mcpUrl }
 }
 
 export async function installForAgent(

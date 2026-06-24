@@ -1,3 +1,9 @@
+/**
+ * TODO(v2-restore-per-agent): the v2 MCP page reads from
+ * `connections.hooks`, not the agent-profile directory. This hook
+ * stays on disk for the day per-agent profiles return.
+ */
+
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
 import {
