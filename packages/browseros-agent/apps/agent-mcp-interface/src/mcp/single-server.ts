@@ -98,8 +98,19 @@ export async function handleSingleMcpRequest(
     if (existing) {
       return existing.transport.handleRequest(request)
     }
-    // Unknown session id; fall through to fresh-transport handling
-    // so the SDK produces its own structured "missing session" error.
+    // Unknown session id. Reject upfront with a structured 404 so
+    // the client knows to drop the stale header and re-initialize.
+    // Falling through to buildSession() would attach a fresh server
+    // + transport that the SDK immediately rejects in validateSession
+    // (no matching session id), leaving the pair connected and
+    // un-tracked: a per-request leak.
+    return new Response(
+      JSON.stringify({
+        error: 'unknown mcp-session-id',
+        hint: 'drop the mcp-session-id header and send an initialize request to start a new session',
+      }),
+      { status: 404, headers: { 'content-type': 'application/json' } },
+    )
   }
 
   const session = buildSession()

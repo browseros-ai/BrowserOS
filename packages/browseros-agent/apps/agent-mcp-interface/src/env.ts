@@ -74,10 +74,6 @@ export const env = {
   cdpPort: readCdpPort(),
   browserosDirOverride: readBrowserosDirOverride(),
   isDevelopment: readIsDevelopment(),
-  // Legacy multi-agent UI (agents directory, wizard, governance).
-  // OFF by default for v2; the standalone homepage + MCP page ship
-  // without the per-agent surfaces. Set to '1' to restore.
-  cockpitLegacyUi: readBoolFlag('COCKPIT_LEGACY_UI'),
 }
 
 /**

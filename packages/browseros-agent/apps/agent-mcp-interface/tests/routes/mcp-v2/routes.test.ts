@@ -87,6 +87,31 @@ describe('POST /cockpit/mcp (single endpoint)', () => {
     await client.close()
   })
 
+  test('an unknown mcp-session-id header is rejected with 404 without leaking a session', async () => {
+    const res = await app.fetch(
+      new Request('http://localhost/mcp', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          'mcp-session-id': 'definitely-not-a-known-session',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/list',
+          params: {},
+        }),
+      }),
+    )
+    expect(res.status).toBe(404)
+    const body = (await res.json()) as { error?: string; hint?: string }
+    expect(body.error).toBe('unknown mcp-session-id')
+    expect(body.hint).toContain('initialize')
+    // No leak: nothing was added to the identity map.
+    expect(identityService.size()).toBe(0)
+  })
+
   test('navigate refuses javascript:/file:/data: at the cockpit layer', async () => {
     const { client } = await connect('claude-code')
     for (const url of [
