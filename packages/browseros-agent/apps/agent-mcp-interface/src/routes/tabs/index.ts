@@ -20,11 +20,13 @@
  */
 
 import { Hono } from 'hono'
+import { agentIdentityFromClient, identityService } from '../../lib/mcp-session'
 import {
   type TabActivityRecord,
   tabActivityRegistry,
 } from '../../lib/tab-activity'
 import { list as listAgents } from '../agents/service'
+import { resolveAgentDisplay } from './agent-display'
 
 export interface EnrichedTabRecord extends TabActivityRecord {
   agentLabel: string
@@ -40,19 +42,27 @@ export const tabsRoute = new Hono().get('/tabs/activity', async (c) => {
   if (tabs.length === 0) {
     return c.json({ tabs: [] as EnrichedTabRecord[] })
   }
-  // O(records + profiles) join. The agents directory reads from disk
-  // on every call today; if the read becomes a bottleneck we can add
-  // a stale-while-revalidate cache next to the registry.
+  // O(records + profiles + identities) join. The agents directory
+  // reads from disk on every call today; identity records live in
+  // memory. The resolver picks profile, then identity, then slug.
   const profiles = await listAgents()
-  const byId = new Map(profiles.map((p) => [p.id, p]))
-  const enriched: EnrichedTabRecord[] = tabs.map((tab) => {
-    const profile = byId.get(tab.agentId)
-    return {
-      ...tab,
-      agentLabel: profile?.name ?? tab.slug,
-      harness: profile?.harness ?? null,
-      color: null,
+  const profilesById = new Map(profiles.map((p) => [p.id, p]))
+  const identitiesByAgentId = new Map<
+    string,
+    ReturnType<typeof identityService.list>[number]
+  >()
+  for (const identity of identityService.list()) {
+    const { agentId } = agentIdentityFromClient(identity)
+    if (!identitiesByAgentId.has(agentId)) {
+      identitiesByAgentId.set(agentId, identity)
     }
+  }
+  const enriched: EnrichedTabRecord[] = tabs.map((tab) => {
+    const display = resolveAgentDisplay(tab.agentId, tab.slug, {
+      profilesById,
+      identitiesByAgentId,
+    })
+    return { ...tab, ...display }
   })
   return c.json({ tabs: enriched })
 })

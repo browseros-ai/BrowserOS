@@ -43,6 +43,8 @@ export interface IdentityService {
   }): ClientIdentity
   getIdentity(sessionId: string): ClientIdentity | null
   dropSession(sessionId: string): void
+  /** Snapshot of every live identity. Used by the tabs route to enrich registry records by agentId. */
+  list(): ClientIdentity[]
   // Test-only escape hatches mirroring the tab-activity registry.
   size(): number
   clear(): void
@@ -78,6 +80,9 @@ export function createIdentityService(
     },
     dropSession(sessionId) {
       records.delete(sessionId)
+    },
+    list() {
+      return Array.from(records.values())
     },
     size() {
       return records.size
