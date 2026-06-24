@@ -9,6 +9,12 @@ interface WaitingStripProps {
 }
 
 /**
+ * TODO(v2-restore-approvals): the mocked approval and handoff hooks
+ * have no server-side signal source in v2, so the strip is unwired
+ * from the cockpit homepage. The surface returns when the permission
+ * gate ships in a later phase (per-agent tab groups and the SQLite
+ * audit log on the same wire).
+ *
  * Sticky-attention strip surfaced above the running grid. Renders
  * nothing when both arrays are empty (no count chip, no header). The
  * count chip on the header is bright amber so it draws the eye

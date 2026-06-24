@@ -7,6 +7,10 @@ interface ApprovalBannerProps {
 }
 
 /**
+ * TODO(v2-restore-approvals): only rendered through WaitingStrip,
+ * which is currently unwired in the v2 cockpit. Returns when the
+ * permission gate ships.
+ *
  * Inline "approval needed" card. Three actions: allow once, always
  * allow (scoped), block. Matches dashboard.jsx's ApprovalBanner: a
  * 3px accent gradient strip on top, then a row of agent label,

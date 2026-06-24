@@ -2,12 +2,6 @@ import { useRef } from 'react'
 import type { ActivityRow } from '@/modules/api/activity.hooks'
 import { useTabsActivity } from '@/modules/api/tabs.hooks'
 import {
-  type ApprovalItem,
-  type HandoffItem,
-  useApprovals,
-  useHandoffs,
-} from '@/modules/api/waiting.hooks'
-import {
   type AgentActivityRecord,
   tabsToActivityRows,
   tabsToAgentActivity,
@@ -16,8 +10,6 @@ import {
 export interface CockpitData {
   agents: AgentActivityRecord[]
   activity: ActivityRow[]
-  approvals: ApprovalItem[]
-  handoffs: HandoffItem[]
   isPending: boolean
 }
 
@@ -39,8 +31,6 @@ export interface CockpitData {
  */
 export function useCockpitData(): CockpitData {
   const tabs = useTabsActivity()
-  const approvals = useApprovals()
-  const handoffs = useHandoffs()
 
   // The ref is the canonical store for last-seen focus: render N
   // reads from it; render N+1 sees what render N wrote. We mutate in
@@ -76,8 +66,6 @@ export function useCockpitData(): CockpitData {
   return {
     agents,
     activity: tabsToActivityRows(records, now),
-    approvals: approvals.data ?? [],
-    handoffs: handoffs.data ?? [],
-    isPending: tabs.isPending || approvals.isPending || handoffs.isPending,
+    isPending: tabs.isPending,
   }
 }

@@ -2,10 +2,15 @@ import { Plus } from 'lucide-react'
 import { Link } from 'react-router'
 
 /**
+ * TODO(v2-restore-multi-agent): v2 has no per-agent profile directory,
+ * so "New profile" links to a route the v2 router no longer registers
+ * (the `/agents/new` route only mounts when VITE_COCKPIT_LEGACY_UI=1).
+ * The running grid no longer renders this tile in the default v2
+ * build. The component returns when the per-agent story does, which
+ * is post the SQLite audit work.
+ *
  * Add-tile that sits as the last item in the running grid. Reads as
- * adding to the set rather than a floating CTA. Links to
- * /agents/new which currently renders the placeholder; gets replaced
- * with the real wizard in a follow-up.
+ * adding to the set rather than a floating CTA.
  */
 export function AddAgentTile() {
   return (

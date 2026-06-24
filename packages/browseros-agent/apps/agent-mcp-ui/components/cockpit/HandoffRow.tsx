@@ -6,6 +6,10 @@ interface HandoffRowProps {
 }
 
 /**
+ * TODO(v2-restore-approvals): only rendered through WaitingStrip,
+ * which is currently unwired in the v2 cockpit. Returns when the
+ * permission gate ships.
+ *
  * Inline "your turn" handoff row (CAPTCHA / MFA / security challenge).
  * Single action: Take over, which jumps the user into the live run
  * window where they finish the challenge in-place. Amber-themed to

@@ -1,6 +1,7 @@
-import { Lock } from 'lucide-react'
+import { History, Lock } from 'lucide-react'
 import type { ActivityRow as ActivityRowData } from '@/modules/api/activity.hooks'
 import { ActivityRow } from './ActivityRow'
+import { EmptyState } from './EmptyState'
 
 interface RecentActivityProps {
   rows: ActivityRowData[]
@@ -10,7 +11,9 @@ interface RecentActivityProps {
  * Cross-agent recent activity log. Lives under the running grid so
  * the user can scan WHAT happened and WHICH agent did it, with the
  * flagged statuses (blocked, needs-human) called out by a chip in
- * the header rather than buried in a long list.
+ * the header rather than buried in a long list. Renders an empty
+ * state when no rows are present so the page rhythm stays intact on
+ * a fresh install.
  */
 export function RecentActivity({ rows }: RecentActivityProps) {
   const flaggedCount = rows.filter(
@@ -30,11 +33,19 @@ export function RecentActivity({ rows }: RecentActivityProps) {
         <div className="flex-1" />
         <span className="text-ink-3 text-xs">Across all agents</span>
       </div>
-      <div className="space-y-2">
-        {rows.map((row) => (
-          <ActivityRow key={row.id} row={row} />
-        ))}
-      </div>
+      {rows.length === 0 ? (
+        <EmptyState
+          title="No recent activity"
+          hint="Tool calls from connected agents will appear here."
+          icon={<History className="size-5" />}
+        />
+      ) : (
+        <div className="space-y-2">
+          {rows.map((row) => (
+            <ActivityRow key={row.id} row={row} />
+          ))}
+        </div>
+      )}
     </section>
   )
 }
