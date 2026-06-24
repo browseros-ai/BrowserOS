@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import type { ActivityRow } from '@/modules/api/activity.hooks'
 import { useTabsActivity } from '@/modules/api/tabs.hooks'
 import {
@@ -28,22 +29,42 @@ export interface CockpitData {
  * stays tab-level by design: "Cowork did read on Stripe 12m ago" is
  * more informative than "Cowork did 14 things". Approvals and
  * handoffs remain on their mocked hooks until later PRs supply them.
+ *
+ * Sticky focus is applied across polls so the card surface does not
+ * flicker when one agent fires a parallel burst of tool calls across
+ * several tabs. The hook holds the last poll's per-agent focus in a
+ * useRef and passes it back into the rollup as a hint; the rollup
+ * keeps that target as focus while it remains in the agent's active
+ * set, and re-elects to the freshest tab otherwise.
  */
 export function useCockpitData(): CockpitData {
   const tabs = useTabsActivity()
   const approvals = useApprovals()
   const handoffs = useHandoffs()
 
+  // The ref is the canonical store for last-seen focus: render N
+  // reads from it; render N+1 sees what render N wrote. We mutate in
+  // place rather than calling setState so the rollup -> render -> ref
+  // loop stays linear and React does not see a second update.
+  const stickyFocusRef = useRef<Map<string, string>>(new Map())
+
   // We pass `Date.now()` at render time; the slight non-determinism
   // is fine for a 1.5s-polling display and avoids dragging a clock
   // injection through the component tree.
   const records = tabs.data?.tabs ?? []
   const now = Date.now()
+  const agents = tabsToAgentActivity(
+    records.filter((r) => r.status === 'active'),
+    { stickyFocus: stickyFocusRef.current },
+  )
+  // Replace (not mutate) the map so an agent that drops out of the
+  // running grid does not pin a stale focus through future polls.
+  const nextFocus = new Map<string, string>()
+  for (const a of agents) nextFocus.set(a.agentId, a.currentFocus.targetId)
+  stickyFocusRef.current = nextFocus
+
   return {
-    // The rollup only considers active records so an agent that is
-    // currently idle drops out of the running grid; its individual
-    // tabs still appear in the recent activity list below.
-    agents: tabsToAgentActivity(records.filter((r) => r.status === 'active')),
+    agents,
     activity: tabsToActivityRows(records, now),
     approvals: approvals.data ?? [],
     handoffs: handoffs.data ?? [],

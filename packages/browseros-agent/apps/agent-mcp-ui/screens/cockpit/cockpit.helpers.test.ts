@@ -372,3 +372,113 @@ describe('tabsToAgentActivity', () => {
     expect(tabsToAgentActivity([])).toEqual([])
   })
 })
+
+describe('tabsToAgentActivity sticky focus', () => {
+  it('falls back to freshest when no sticky map is supplied (PR 3 behaviour preserved)', () => {
+    const agents = tabsToAgentActivity([
+      record({ targetId: 't-old', lastToolAt: 1_000 }),
+      record({ targetId: 't-fresh', lastToolAt: 2_000 }),
+    ])
+    expect(agents[0].currentFocus.targetId).toBe('t-fresh')
+  })
+
+  it('keeps the focus anchored to the previous target when it is still active', () => {
+    const tabs = [
+      record({
+        targetId: 't-anchor',
+        url: 'https://anchor.example/',
+        title: 'Anchor',
+        lastToolAt: 1_000,
+        lastToolName: 'snapshot',
+      }),
+      record({
+        targetId: 't-newer',
+        url: 'https://newer.example/',
+        title: 'Newer',
+        lastToolAt: 2_000,
+        lastToolName: 'read',
+      }),
+    ]
+    const sticky = new Map([['a1', 't-anchor']])
+    const agents = tabsToAgentActivity(tabs, { stickyFocus: sticky })
+    expect(agents[0].currentFocus.targetId).toBe('t-anchor')
+    // Live line reflects the focus tab; the action chip / sort still
+    // see the agent's true freshness so the multi-agent ordering on
+    // the homepage stays correct.
+    expect(agents[0].lastToolName).toBe('snapshot')
+    expect(agents[0].lastToolAt).toBe(2_000)
+  })
+
+  it('re-elects to the freshest tab when the previously-focused target has dropped out of the active set', () => {
+    const sticky = new Map([['a1', 't-ghost']])
+    const agents = tabsToAgentActivity(
+      [
+        record({ targetId: 't-old', lastToolAt: 1_000 }),
+        record({ targetId: 't-fresh', lastToolAt: 2_000 }),
+      ],
+      { stickyFocus: sticky },
+    )
+    expect(agents[0].currentFocus.targetId).toBe('t-fresh')
+  })
+
+  it('keeps focus stable across two consecutive polls even when newer tabs land between them', () => {
+    // Render 1: only the anchor tab is present.
+    const first = tabsToAgentActivity([
+      record({
+        targetId: 't-anchor',
+        url: 'https://anchor.example/',
+        title: 'Anchor',
+        lastToolAt: 1_000,
+      }),
+    ])
+    expect(first[0].currentFocus.targetId).toBe('t-anchor')
+
+    // Render 2: a second tab fires a fresher tool. The previous
+    // render's focus (anchor) is passed back in via the sticky map;
+    // the rollup keeps anchor as focus.
+    const sticky = new Map<string, string>()
+    for (const agent of first)
+      sticky.set(agent.agentId, agent.currentFocus.targetId)
+
+    const second = tabsToAgentActivity(
+      [
+        record({
+          targetId: 't-anchor',
+          url: 'https://anchor.example/',
+          title: 'Anchor',
+          lastToolAt: 1_000,
+        }),
+        record({
+          targetId: 't-fresher',
+          url: 'https://fresher.example/',
+          title: 'Fresher',
+          lastToolAt: 2_500,
+        }),
+      ],
+      { stickyFocus: sticky },
+    )
+    expect(second[0].currentFocus.targetId).toBe('t-anchor')
+    expect(second[0].tabs).toHaveLength(2)
+  })
+
+  it('per-agent sticky maps do not cross-talk', () => {
+    const sticky = new Map([
+      ['a1', 't1-anchor'],
+      ['a2', 't2-anchor'],
+    ])
+    const agents = tabsToAgentActivity(
+      [
+        record({ agentId: 'a1', targetId: 't1-anchor', lastToolAt: 1_000 }),
+        record({ agentId: 'a1', targetId: 't1-fresh', lastToolAt: 2_000 }),
+        record({ agentId: 'a2', targetId: 't2-anchor', lastToolAt: 3_000 }),
+        record({ agentId: 'a2', targetId: 't2-fresh', lastToolAt: 4_000 }),
+      ],
+      { stickyFocus: sticky },
+    )
+    const byAgent = Object.fromEntries(
+      agents.map((a) => [a.agentId, a.currentFocus.targetId]),
+    )
+    expect(byAgent.a1).toBe('t1-anchor')
+    expect(byAgent.a2).toBe('t2-anchor')
+  })
+})

@@ -105,9 +105,11 @@ export function tabsToAgentRows(records: TabActivityRecord[]): AgentRow[] {
  * Roll-up shape for the homepage's RunningGrid. PR 1 / PR 2 rendered
  * one card per tab; in practice one agent often drives multiple tabs
  * and the user wants one card per agent with the tabs nested inside.
- * The `currentFocus` is the tab whose `lastToolAt` is freshest; the
- * card uses its url + title for the visible surface and lists the
- * other tabs in a popover.
+ * The `currentFocus` is the tab the card surfaces. By default it is
+ * the tab whose `lastToolAt` is freshest, but callers can pass a
+ * `stickyFocus` map keyed by agent id to anchor focus across polls
+ * so the card does not flicker as new tool calls land on other tabs.
+ * See `RollupOptions`.
  */
 export interface AgentActivityRecord {
   agentId: string
@@ -129,15 +131,29 @@ export interface AgentActivityRecord {
 }
 
 /**
+ * Caller hint that lets the rollup keep the same `currentFocus`
+ * across polls. The value is keyed by `agentId` and carries the
+ * focus target id chosen on the previous render. When the
+ * previously-focused tab is still in the agent's active set, the
+ * rollup keeps it as focus; otherwise it re-elects using the
+ * freshest `lastToolAt`. Without this hint the rollup behaves as
+ * PR 3 shipped (freshest wins every time).
+ */
+export interface RollupOptions {
+  stickyFocus?: ReadonlyMap<string, string>
+}
+
+/**
  * Groups tabs by `agentId` so the homepage renders one card per agent
- * instead of one per tab. Pure: same input always produces the same
- * output. The status is `active` if any of the agent's tabs are
- * active; `firstToolAt` is the oldest first-touch across the bunch
- * (the moment this agent first started working); `lastToolName` is
- * whichever tab is currently the focus.
+ * instead of one per tab. Pure: same input + same options always
+ * produces the same output. The status is `active` if any of the
+ * agent's tabs are active; `firstToolAt` is the oldest first-touch
+ * across the bunch (the moment this agent first started working);
+ * `lastToolName` is whichever tab is currently the focus.
  */
 export function tabsToAgentActivity(
   records: TabActivityRecord[],
+  options?: RollupOptions,
 ): AgentActivityRecord[] {
   const byAgent = new Map<string, TabActivityRecord[]>()
   for (const record of records) {
@@ -145,10 +161,15 @@ export function tabsToAgentActivity(
     if (bucket) bucket.push(record)
     else byAgent.set(record.agentId, [record])
   }
+  const sticky = options?.stickyFocus
   const out: AgentActivityRecord[] = []
   for (const [agentId, tabs] of byAgent) {
     const sorted = [...tabs].sort((a, b) => b.lastToolAt - a.lastToolAt)
-    const focus = sorted[0]
+    const previousFocusTargetId = sticky?.get(agentId)
+    const stickyTab = previousFocusTargetId
+      ? sorted.find((t) => t.targetId === previousFocusTargetId)
+      : undefined
+    const focus = stickyTab ?? sorted[0]
     const mergedTrail = sorted
       .flatMap((t) => t.recentTools)
       .sort((a, b) => a.at - b.at)
@@ -160,7 +181,13 @@ export function tabsToAgentActivity(
       harness: harnessForRow(focus.harness),
       color: focus.color ?? colorForSlug(focus.slug),
       firstToolAt: Math.min(...tabs.map((t) => t.firstToolAt)),
-      lastToolAt: focus.lastToolAt,
+      // lastToolAt is agent-level freshness (max across tabs) so the
+      // multi-agent sort below keeps the busiest agent on top even
+      // when the sticky focus rule is anchored to an older tab.
+      lastToolAt: Math.max(...tabs.map((t) => t.lastToolAt)),
+      // lastToolName tracks the focus tab so the card's live-line
+      // ("snapshot -> example.com") stays stable across polls even
+      // when other tabs are firing.
       lastToolName: focus.lastToolName,
       toolCount: tabs.reduce((sum, t) => sum + t.toolCount, 0),
       recentTools: mergedTrail,
