@@ -51,6 +51,20 @@ function readIsDevelopment(): boolean {
 }
 
 /**
+ * Two opt-in escape hatches for legacy surfaces while the v2 cockpit
+ * is the default. Both default to `false` so that the legacy is
+ * invisible out of the box; setting either flag to `1` or `true`
+ * brings the corresponding code path back.
+ */
+function readBoolFlag(name: string): boolean {
+  // biome-ignore lint/style/noProcessEnv: env.ts is the sanctioned env-reader for the package
+  const raw = process.env[name]
+  if (raw === undefined) return false
+  const normalised = raw.trim().toLowerCase()
+  return normalised === '1' || normalised === 'true'
+}
+
+/**
  * Reads happen once at module load. Tests that need different values
  * mutate this object before importing the rest of the source graph;
  * production code treats it as immutable.
@@ -60,4 +74,12 @@ export const env = {
   cdpPort: readCdpPort(),
   browserosDirOverride: readBrowserosDirOverride(),
   isDevelopment: readIsDevelopment(),
+  // Legacy multi-agent UI (agents directory, wizard, governance).
+  // OFF by default for v2; the standalone homepage + MCP page ship
+  // without the per-agent surfaces. Set to '1' to restore.
+  cockpitLegacyUi: readBoolFlag('COCKPIT_LEGACY_UI'),
+  // Legacy per-slug MCP route `/cockpit/mcp/:slug`. OFF by default
+  // for v2; the standard endpoint at `/cockpit/mcp` replaces it.
+  // Set to '1' to keep the old URLs alive during the transition.
+  cockpitLegacyPerAgentMcp: readBoolFlag('COCKPIT_LEGACY_PER_AGENT_MCP'),
 }
