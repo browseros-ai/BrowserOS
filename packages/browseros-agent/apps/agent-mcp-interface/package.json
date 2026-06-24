@@ -28,7 +28,9 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "bunx biome check",
-    "lint:fix": "bunx biome check --write --unsafe"
+    "lint:fix": "bunx biome check --write --unsafe",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
   },
   "dependencies": {
     "@browseros/server": "workspace:*",
@@ -36,12 +38,14 @@
     "@hono/zod-validator": "^0.8.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "agent-mcp-manager": "^0.0.1",
+    "drizzle-orm": "^0.45.2",
     "hono": "^4.12.3",
     "nanoid": "^5.1.11",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/bun": "^1.3.5",
+    "drizzle-kit": "^0.31.10",
     "typescript": "^5.9.2"
   }
 }

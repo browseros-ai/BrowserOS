@@ -41,6 +41,7 @@ import {
 } from '../lib/mcp-session'
 import { extractPageId, tabActivityRegistry } from '../lib/tab-activity'
 import type { StoredAgentProfile } from '../routes/agents/schemas'
+import { recordToolDispatch } from '../services/audit-log'
 import { check } from '../services/permissions'
 import { ensureAgentTabGroup } from '../services/tab-group-ops'
 import { asRegister, type ToolResult } from './register-fn'
@@ -361,10 +362,12 @@ export function registerBrowserToolsForSingleServer(
           })
         }
 
+        const dispatchStart = Date.now()
         const result = await executeTool(tool, rawArgs, {
           session,
           signal: extra?.signal,
         })
+        const durationMs = Date.now() - dispatchStart
 
         if (!result.isError) {
           const identity = resolveIdentity(extra?.sessionId)
@@ -374,6 +377,37 @@ export function registerBrowserToolsForSingleServer(
               rawArgs,
               identity,
               session,
+            })
+            // v2 audit log: persist every successful dispatch to
+            // SQLite. Snapshot agentLabel, url, title at dispatch
+            // time so renames / navigations later do not rewrite
+            // history. Best-effort write; never blocks the agent.
+            const { agentId, slug } = agentIdentityFromClient(identity)
+            const agentLabel =
+              identity.clientTitle && identity.clientTitle.length > 0
+                ? identity.clientTitle
+                : identity.clientName.length > 0
+                  ? identity.clientName
+                  : slug
+            const pageId = extractPageId(tool.name, rawArgs)
+            const live = pageId !== null ? session.pages.getInfo(pageId) : null
+            recordToolDispatch({
+              agentId,
+              slug,
+              agentLabel,
+              sessionId: extra?.sessionId ?? '',
+              toolName: tool.name,
+              pageId: pageId,
+              targetId: live?.targetId ?? null,
+              url: live?.url ?? null,
+              title: live?.title ?? null,
+              rawArgs,
+              durationMs,
+              result: {
+                isError: result.isError ?? false,
+                structuredContent: result.structuredContent,
+                content: result.content,
+              },
             })
             // v2 cockpit-owned tab grouping: when the agent opens a
             // new tab, auto-add it to the agent's tab group. The

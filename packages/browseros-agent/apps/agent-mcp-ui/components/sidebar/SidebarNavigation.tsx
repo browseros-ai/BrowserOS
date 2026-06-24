@@ -1,4 +1,10 @@
-import { Bot, LayoutDashboard, PlugZap, ShieldCheck } from 'lucide-react'
+import {
+  Bot,
+  LayoutDashboard,
+  PlugZap,
+  ScrollText,
+  ShieldCheck,
+} from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 import { NavLink, useLocation } from 'react-router'
 import {
@@ -28,6 +34,7 @@ const legacyUi = import.meta.env.VITE_COCKPIT_LEGACY_UI === '1'
 const v2NavItems: NavItem[] = [
   { name: 'Cockpit', to: '/', icon: LayoutDashboard },
   { name: 'MCP', to: '/mcp', icon: PlugZap },
+  { name: 'Audit', to: '/audit', icon: ScrollText },
 ]
 
 const legacyNavItems: NavItem[] = [
@@ -35,6 +42,7 @@ const legacyNavItems: NavItem[] = [
   { name: 'Agents', to: '/agents', icon: Bot },
   { name: 'Governance', to: '/governance', icon: ShieldCheck },
   { name: 'MCP', to: '/mcp', icon: PlugZap },
+  { name: 'Audit', to: '/audit', icon: ScrollText },
 ]
 
 const navItems: NavItem[] = legacyUi ? legacyNavItems : v2NavItems

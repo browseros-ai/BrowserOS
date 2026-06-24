@@ -18,6 +18,7 @@ import { cors } from 'hono/cors'
 import { HttpError } from './lib/errors'
 import { logger } from './lib/logger'
 import { agentsRoute } from './routes/agents'
+import { auditRoute } from './routes/audit'
 import { connectionsRoute } from './routes/connections'
 import { mcpRoute } from './routes/mcp'
 import { mcpV2Route } from './routes/mcp-v2'
@@ -83,6 +84,7 @@ const routes = app
   .route('/', tabsRoute)
   .route('/', tabsFocusRoute)
   .route('/', connectionsRoute)
+  .route('/', auditRoute)
 
 export type AppType = typeof routes
 export default routes

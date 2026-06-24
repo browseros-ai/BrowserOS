@@ -1,6 +1,7 @@
 import { HashRouter, Navigate, Route, Routes } from 'react-router'
 import { CockpitShell } from '@/components/layout/CockpitShell'
 import { Agents } from '@/screens/agents/Agents'
+import { Audit } from '@/screens/audit/Audit'
 import { Cockpit } from '@/screens/cockpit/Cockpit'
 import { AuditTab } from '@/screens/governance/AuditTab'
 import { Governance } from '@/screens/governance/Governance'
@@ -36,6 +37,7 @@ export function App() {
         <Route element={<CockpitShell />}>
           <Route path="/" element={<Cockpit />} />
           <Route path="/mcp" element={<Mcp />} />
+          <Route path="/audit" element={<Audit />} />
           {legacyUi && (
             <>
               <Route path="/agents" element={<Agents />} />
