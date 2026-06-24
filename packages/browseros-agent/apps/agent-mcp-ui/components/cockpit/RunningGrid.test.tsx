@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
+import type { TabActivityRecord } from '@/modules/api/tabs.hooks'
 import type { AgentActivityRecord } from '@/screens/cockpit/cockpit.helpers'
 import { RunningGrid } from './RunningGrid'
 
@@ -8,29 +9,47 @@ function renderWithRouter(ui: React.ReactNode): string {
   return renderToStaticMarkup(<MemoryRouter>{ui}</MemoryRouter>)
 }
 
+function tab(over: Partial<TabActivityRecord> = {}): TabActivityRecord {
+  return {
+    targetId: 't1',
+    pageId: 1,
+    url: 'https://example.com/foo',
+    title: 'Example',
+    agentId: 'claude-code',
+    slug: 'claude-code',
+    firstToolAt: 0,
+    lastToolAt: 0,
+    lastToolName: 'navigate',
+    toolCount: 3,
+    recentTools: [{ name: 'navigate', at: 0 }],
+    status: 'active',
+    agentLabel: 'claude-code',
+    harness: null,
+    color: null,
+    ...over,
+  }
+}
+
 function agent(over: Partial<AgentActivityRecord> = {}): AgentActivityRecord {
+  const focus = tab()
   return {
     agentId: 'claude-code',
     slug: 'claude-code',
     agentLabel: 'claude-code',
-    harness: null,
+    harness: 'Claude Code',
     color: '#000',
     status: 'active',
+    firstToolAt: 0,
     lastToolAt: 0,
     lastToolName: 'navigate',
     toolCount: 3,
-    recentTools: ['navigate', 'read', 'tabs'],
-    tabs: [],
-    currentFocus: {
-      targetId: 't1',
-      pageId: 1,
-      url: 'https://example.com/foo',
-      title: 'Example',
-      lastToolAt: 0,
-      lastToolName: 'navigate',
-      toolCount: 3,
-      recentTools: ['navigate'],
-    } as AgentActivityRecord['currentFocus'],
+    recentTools: [
+      { name: 'navigate', at: 0 },
+      { name: 'read', at: 0 },
+      { name: 'tabs', at: 0 },
+    ],
+    tabs: [focus],
+    currentFocus: focus,
     ...over,
   }
 }
