@@ -35,6 +35,10 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { ZodRawShape } from 'zod'
 import { getBrowserSession } from '../lib/browser-session'
 import { logger } from '../lib/logger'
+import {
+  agentIdentityFromClient,
+  type ClientIdentity,
+} from '../lib/mcp-session'
 import { extractPageId, tabActivityRegistry } from '../lib/tab-activity'
 import type { StoredAgentProfile } from '../routes/agents/schemas'
 import { check } from '../services/permissions'
@@ -249,6 +253,138 @@ export function registerBrowserTools(
             session,
           })
         }
+        return {
+          content: result.content as ToolResult['content'],
+          isError: result.isError,
+          structuredContent: result.structuredContent,
+        }
+      },
+    )
+  }
+}
+
+/**
+ * v2 dispatch record helper. The single MCP endpoint does not know
+ * which `StoredAgentProfile` produced the call, so the registry write
+ * sources its identity from the per-session `ClientIdentity` instead.
+ * The shape matches the legacy `recordSuccessfulDispatch` so the
+ * homepage / rollup / trail wiring stays unchanged.
+ */
+function recordSuccessfulDispatchV2(args: {
+  toolName: string
+  rawArgs: unknown
+  identity: ClientIdentity
+  session: ReturnType<typeof getBrowserSession>
+}): void {
+  if (!args.session) return
+  const pageId = extractPageId(args.toolName, args.rawArgs)
+  if (pageId === null) return
+  const live = args.session.pages.getInfo(pageId)
+  if (!live) return
+  const { agentId, slug } = agentIdentityFromClient(args.identity)
+  tabActivityRegistry.recordTool({
+    agentId,
+    slug,
+    pageId,
+    targetId: live.targetId,
+    toolName: args.toolName,
+  })
+}
+
+/**
+ * Registers the same browser-tool catalogue against the v2 single
+ * MCP server. The per-tool dispatch reads the connecting client's
+ * identity from `extra.sessionId` via the supplied resolver so the
+ * tab-activity registry can attribute calls to specific agents even
+ * though every agent shares the same endpoint.
+ *
+ * v2 deliberately skips the per-agent permission gate: there is no
+ * `StoredAgentProfile` to look up. The navigate-scheme guard stays
+ * (it is a hard security check on the URL shape, not a per-agent
+ * policy). A future "global permissions" surface can grow back into
+ * this code path when product needs it.
+ */
+export function registerBrowserToolsForSingleServer(
+  server: McpServer,
+  resolveIdentity: (sessionId: string | undefined) => ClientIdentity | null,
+): void {
+  const register = asRegister(server)
+  for (const tool of BROWSER_TOOLS) {
+    register(
+      tool.name,
+      {
+        description: tool.description,
+        inputSchema: tool.input.shape as unknown as ZodRawShape,
+        ...(tool.annotations && {
+          annotations: tool.annotations as Record<string, unknown>,
+        }),
+      },
+      async (rawArgs, extra) => {
+        if (tool.name === 'navigate') {
+          const url = (rawArgs as { url?: unknown } | null | undefined)?.url
+          if (typeof url === 'string' && url.length > 0) {
+            const scheme = url.slice(0, url.indexOf(':') + 1).toLowerCase()
+            if (NAVIGATE_BLOCKED_SCHEMES.has(scheme)) {
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: `navigate refuses ${scheme} URLs; only http(s) is allowed`,
+                  },
+                ],
+                isError: true,
+              } satisfies ToolResult
+            }
+          }
+        }
+
+        const session = getBrowserSession()
+        if (!session) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'browser session not connected; the cockpit runtime has not been wired to a live Chromium yet',
+              },
+            ],
+            isError: true,
+          } satisfies ToolResult
+        }
+
+        if (ARBITRARY_SCRIPT_TOOLS.has(tool.name)) {
+          // Same audit log as the per-agent path; identity is the
+          // mcp-session id when the client did not name itself.
+          logger.warn('cockpit v2 dispatched arbitrary-script tool', {
+            tool: tool.name,
+            sessionId: extra?.sessionId,
+          })
+        }
+
+        const result = await executeTool(tool, rawArgs, {
+          session,
+          signal: extra?.signal,
+        })
+
+        if (!result.isError) {
+          const identity = resolveIdentity(extra?.sessionId)
+          if (identity) {
+            recordSuccessfulDispatchV2({
+              toolName: tool.name,
+              rawArgs,
+              identity,
+              session,
+            })
+          } else {
+            // Initialize was skipped or the session id is unknown;
+            // the dispatch still succeeded but the homepage will not
+            // see this call. Log so the operator can diagnose.
+            logger.warn('cockpit v2 dispatch missing identity', {
+              tool: tool.name,
+              sessionId: extra?.sessionId,
+            })
+          }
+        }
+
         return {
           content: result.content as ToolResult['content'],
           isError: result.isError,

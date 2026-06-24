@@ -15,10 +15,13 @@
 
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { env } from './env'
 import { HttpError } from './lib/errors'
 import { logger } from './lib/logger'
 import { agentsRoute } from './routes/agents'
 import { mcpRoute } from './routes/mcp'
+import { mcpDisabledRoute } from './routes/mcp-legacy'
+import { mcpV2Route } from './routes/mcp-v2'
 import { permissionsRoute } from './routes/permissions'
 import { siteRulesRoute } from './routes/site-rules'
 import { systemRoute } from './routes/system'
@@ -65,12 +68,22 @@ app.onError((err, c) => {
   return c.json({ error: message }, 500)
 })
 
+// v2 single-MCP route always mounts. The per-slug legacy route is
+// only mounted when `COCKPIT_LEGACY_PER_AGENT_MCP=1`; otherwise a
+// stub that returns 404 with a helpful body takes its place so a
+// harness with a stale URL fails loudly. The conditional resolves
+// once at boot so AppType inference stays static.
+const legacyMcpRoute = env.cockpitLegacyPerAgentMcp
+  ? mcpRoute
+  : mcpDisabledRoute
+
 const routes = app
   .route('/', systemRoute)
   .route('/', agentsRoute)
   .route('/', siteRulesRoute)
   .route('/', permissionsRoute)
-  .route('/', mcpRoute)
+  .route('/', mcpV2Route)
+  .route('/', legacyMcpRoute)
   .route('/', tabsRoute)
 
 export type AppType = typeof routes

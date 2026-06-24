@@ -28,7 +28,11 @@ export interface ToolResult {
 
 export type ToolHandler = (
   args: Record<string, unknown>,
-  extra?: { signal?: AbortSignal },
+  // `extra` mirrors the SDK's `RequestHandlerExtra` for our narrow
+  // needs. `sessionId` is what the v2 single-MCP path uses to look
+  // up the connecting client's identity; the per-slug path ignores
+  // it. The SDK fills both fields on every dispatch.
+  extra?: { signal?: AbortSignal; sessionId?: string },
 ) => Promise<ToolResult>
 
 export type RegisterFn = (
