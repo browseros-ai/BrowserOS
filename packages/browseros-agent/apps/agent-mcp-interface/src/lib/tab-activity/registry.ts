@@ -48,7 +48,16 @@ export interface TabActivityRecord {
   status: 'active' | 'idle'
 }
 
-export const ACTIVE_WINDOW_MS = 5000
+// PR 1 shipped 5 s as a v1 guess. In practice the cockpit serialises
+// `tools/call` per slug and CDP serialises per-target ops, so a
+// parallel N-call burst lands in the registry over roughly the same
+// duration as the old window. By the time the last write hits, the
+// earliest records have already crossed the 5 s threshold and dropped
+// from the running grid, so the homepage chip stepped `1 -> 3 -> 5 ->
+// 4 -> 2 -> 0` during what was actually a single coherent agent
+// burst. 30 s lets the rollup stay stable across the whole burst
+// without changing the wire shape; tune from dogfooding.
+export const ACTIVE_WINDOW_MS = 30_000
 export const RECENT_TOOLS_CAP = 8
 
 export interface RegistryDeps {

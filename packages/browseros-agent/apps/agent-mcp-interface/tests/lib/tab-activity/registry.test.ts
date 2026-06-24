@@ -185,6 +185,14 @@ describe('TabActivityRegistry', () => {
     expect(registry.snapshot()[0].status).toBe('idle')
   })
 
+  it('ACTIVE_WINDOW_MS is 30 seconds (regression guard)', () => {
+    // Reverting this to a smaller value would silently re-introduce
+    // the homepage flicker observed when a single agent fires a
+    // parallel burst of tool calls across several tabs. Tune
+    // intentionally; do not edit blindly.
+    expect(ACTIVE_WINDOW_MS).toBe(30_000)
+  })
+
   it('evicts records whose pageId no longer maps to the original targetId', () => {
     pages.set(1, { targetId: 't1', url: 'https://example.com/', title: 'Ex' })
     registry.recordTool({
