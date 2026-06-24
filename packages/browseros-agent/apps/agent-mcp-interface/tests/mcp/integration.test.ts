@@ -16,13 +16,34 @@
  * fully exercisable without a session.
  */
 
-import { describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { NewAgentValues } from '../../src/routes/agents/schemas'
 import * as agents from '../../src/routes/agents/service'
 import app from '../../src/server'
 import { withTempBrowserosDir } from '../_helpers/temp-browseros-dir'
+
+// The legacy `/mcp/:slug` route is 404-gated by default. Each test
+// here drives a per-agent MCP session, so the suite explicitly opts
+// in to the legacy path. v2 single-MCP coverage lives in its own
+// integration test.
+let prevLegacyFlag: string | undefined
+beforeAll(() => {
+  // biome-ignore lint/style/noProcessEnv: legacy-route gate is sourced from process.env at request time; tests must drive it directly
+  prevLegacyFlag = process.env.COCKPIT_LEGACY_PER_AGENT_MCP
+  // biome-ignore lint/style/noProcessEnv: legacy-route gate is sourced from process.env at request time; tests must drive it directly
+  process.env.COCKPIT_LEGACY_PER_AGENT_MCP = '1'
+})
+afterAll(() => {
+  if (prevLegacyFlag === undefined) {
+    // biome-ignore lint/style/noProcessEnv: legacy-route gate is sourced from process.env at request time; tests must drive it directly
+    delete process.env.COCKPIT_LEGACY_PER_AGENT_MCP
+  } else {
+    // biome-ignore lint/style/noProcessEnv: legacy-route gate is sourced from process.env at request time; tests must drive it directly
+    process.env.COCKPIT_LEGACY_PER_AGENT_MCP = prevLegacyFlag
+  }
+})
 
 const REAL_CATALOGUE = [
   'act',

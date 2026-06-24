@@ -12,9 +12,8 @@
  */
 
 import { Hono } from 'hono'
-import { getSingleMcpInstance } from '../../mcp/single-server'
+import { handleSingleMcpRequest } from '../../mcp/single-server'
 
 export const mcpV2Route = new Hono().all('/mcp', async (c) => {
-  const { transport } = getSingleMcpInstance()
-  return transport.handleRequest(c.req.raw)
+  return handleSingleMcpRequest(c.req.raw)
 })

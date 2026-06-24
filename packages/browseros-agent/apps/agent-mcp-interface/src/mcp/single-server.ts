@@ -3,19 +3,16 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Single MCP server for the v2 cockpit. Replaces the per-slug pattern
- * in `manager.ts` with one shared `McpServer` + one shared transport
- * mounted at `POST /cockpit/mcp`. The transport runs in stateful
- * mode (`sessionIdGenerator` returns a fresh uuid per initialize) so
- * many agents can share the same endpoint without colliding on
- * session state. Identity is captured at handshake via
- * `onsessioninitialized` and dropped at `onsessionclosed`; per-tool
- * dispatch reads it back through `extra.sessionId` inside the
- * register wrapper.
- *
- * Construction is lazy and idempotent. The route handler calls
- * `getSingleMcpInstance()` per request and reuses the same instance;
- * `server.connect(transport)` happens exactly once.
+ * v2 single MCP endpoint. Every agent connects to the same public
+ * URL (`POST /cockpit/mcp`); the SDK's stateful Streamable HTTP
+ * transport supports one session per transport instance, so we keep
+ * a `sessionId -> { server, transport }` map and route each request
+ * to its session's transport. Identity is captured on the client's
+ * InitializedNotification (by then both `transport.sessionId` and
+ * the server's stored `clientInfo` are set) and dropped when the
+ * session ends. Tool dispatch reads identity back via
+ * `extra.sessionId`, the same id the transport stamps onto the
+ * session at handshake.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -28,77 +25,97 @@ const SERVER_NAME = 'browseros-agent-mcp-interface'
 const SERVER_TITLE = 'BrowserOS'
 const SERVER_VERSION = '0.0.1'
 
-interface SingleMcpInstance {
+interface Session {
   server: McpServer
   transport: WebStandardStreamableHTTPServerTransport
-  /** Mirror of the SDK's per-session capture; passed into the register wrapper. */
-  resolveIdentity(sessionId: string | undefined): ClientIdentity | null
 }
 
-let cached: SingleMcpInstance | null = null
+const sessions = new Map<string, Session>()
 
-export function getSingleMcpInstance(): SingleMcpInstance {
-  if (cached) return cached
+function resolveIdentity(sessionId: string | undefined): ClientIdentity | null {
+  if (!sessionId) return null
+  return identityService.getIdentity(sessionId)
+}
 
+function buildSession(): Session {
   const server = new McpServer({
     name: SERVER_NAME,
     title: SERVER_TITLE,
     version: SERVER_VERSION,
   })
 
+  registerBrowserToolsForSingleServer(server, resolveIdentity)
+
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
     enableJsonResponse: true,
-    onsessioninitialized(sessionId) {
-      const clientInfo = server.server.getClientVersion()
-      identityService.registerInitialize({
-        sessionId,
-        clientInfo: {
-          name: clientInfo?.name,
-          version: clientInfo?.version,
-          title: clientInfo?.title,
-        },
-      })
-      logger.info('cockpit v2 mcp session opened', {
-        sessionId,
-        clientName: clientInfo?.name ?? '',
-      })
-    },
     onsessionclosed(sessionId) {
+      sessions.delete(sessionId)
       identityService.dropSession(sessionId)
       logger.info('cockpit v2 mcp session closed', { sessionId })
     },
   })
 
-  const instance: SingleMcpInstance = {
-    server,
-    transport,
-    resolveIdentity(sessionId) {
-      if (!sessionId) return null
-      return identityService.getIdentity(sessionId)
-    },
+  // `oninitialized` fires on the InitializedNotification, by which
+  // point both `transport.sessionId` and `server._clientVersion` are
+  // set. Reading clientInfo any earlier (eg from the transport's
+  // `onsessioninitialized`) gets undefined because the server has
+  // not yet processed the initialize request body.
+  server.server.oninitialized = () => {
+    const sessionId = transport.sessionId
+    if (!sessionId) return
+    const clientInfo = server.server.getClientVersion()
+    identityService.registerInitialize({
+      sessionId,
+      clientInfo: {
+        name: clientInfo?.name,
+        version: clientInfo?.version,
+        title: clientInfo?.title,
+      },
+    })
+    logger.info('cockpit v2 mcp session opened', {
+      sessionId,
+      clientName: clientInfo?.name ?? '',
+    })
   }
 
-  registerBrowserToolsForSingleServer(server, instance.resolveIdentity)
-
-  // Connect once. Subsequent `transport.handleRequest` calls
-  // multiplex through the same connection. The SDK rejects a
-  // second `connect` so we must guard this.
-  void server.connect(transport).catch((err) => {
-    logger.error('cockpit v2 server.connect failed', {
-      error: err instanceof Error ? err.message : String(err),
-    })
-  })
-
-  cached = instance
-  return instance
+  return { server, transport }
 }
 
 /**
- * Test-only escape hatch. Drops the cached instance so a subsequent
- * `getSingleMcpInstance` call rebuilds. Production must never call
- * this; the connect cost is small but a duplicate transport leaks.
+ * Routes one incoming request to its session-bound transport. An
+ * initialize call without an `mcp-session-id` header mints a fresh
+ * (server, transport) pair, lets the SDK assign the session id, and
+ * persists the pair in the session map. Subsequent requests on the
+ * same session land back on the same pair via the header.
+ */
+export async function handleSingleMcpRequest(
+  request: Request,
+): Promise<Response> {
+  const headerSessionId = request.headers.get('mcp-session-id')
+  if (headerSessionId) {
+    const existing = sessions.get(headerSessionId)
+    if (existing) {
+      return existing.transport.handleRequest(request)
+    }
+    // Unknown session id; fall through to fresh-transport handling
+    // so the SDK produces its own structured "missing session" error.
+  }
+
+  const session = buildSession()
+  await session.server.connect(session.transport)
+  const response = await session.transport.handleRequest(request)
+  const assignedId = session.transport.sessionId
+  if (assignedId) {
+    sessions.set(assignedId, session)
+  }
+  return response
+}
+
+/**
+ * Test-only escape hatch. Drops every cached session so a subsequent
+ * request rebuilds from scratch.
  */
 export function resetSingleMcpInstanceForTesting(): void {
-  cached = null
+  sessions.clear()
 }

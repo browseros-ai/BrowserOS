@@ -78,8 +78,15 @@ export const env = {
   // OFF by default for v2; the standalone homepage + MCP page ship
   // without the per-agent surfaces. Set to '1' to restore.
   cockpitLegacyUi: readBoolFlag('COCKPIT_LEGACY_UI'),
-  // Legacy per-slug MCP route `/cockpit/mcp/:slug`. OFF by default
-  // for v2; the standard endpoint at `/cockpit/mcp` replaces it.
-  // Set to '1' to keep the old URLs alive during the transition.
-  cockpitLegacyPerAgentMcp: readBoolFlag('COCKPIT_LEGACY_PER_AGENT_MCP'),
+}
+
+/**
+ * Request-time read of the legacy per-slug MCP gate. Evaluated at
+ * call time (not once at module load) so the existing per-slug
+ * integration tests can flip the flag from `beforeAll` without
+ * juggling import order. Default is `false`: the legacy URL shape
+ * returns 404 unless the flag is explicitly set.
+ */
+export function isCockpitLegacyPerAgentMcpEnabled(): boolean {
+  return readBoolFlag('COCKPIT_LEGACY_PER_AGENT_MCP')
 }
