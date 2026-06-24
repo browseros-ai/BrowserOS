@@ -18,12 +18,26 @@ interface NavItem {
   icon: ComponentType<SVGProps<SVGSVGElement>>
 }
 
-const navItems: NavItem[] = [
+const legacyUi = import.meta.env.VITE_COCKPIT_LEGACY_UI === '1'
+
+/**
+ * Agents and Governance route entries are only registered in App.tsx
+ * when `VITE_COCKPIT_LEGACY_UI=1`, so the sidebar drops them from the
+ * v2 default to avoid dead links. Same flag, same source of truth.
+ */
+const v2NavItems: NavItem[] = [
+  { name: 'Cockpit', to: '/', icon: LayoutDashboard },
+  { name: 'MCP', to: '/mcp', icon: PlugZap },
+]
+
+const legacyNavItems: NavItem[] = [
   { name: 'Cockpit', to: '/', icon: LayoutDashboard },
   { name: 'Agents', to: '/agents', icon: Bot },
   { name: 'Governance', to: '/governance', icon: ShieldCheck },
   { name: 'MCP', to: '/mcp', icon: PlugZap },
 ]
+
+const navItems: NavItem[] = legacyUi ? legacyNavItems : v2NavItems
 
 /**
  * `/agents/new` lives under `/agents` so the Agents item should stay
