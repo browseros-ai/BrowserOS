@@ -59,6 +59,16 @@ export function useCockpitData(): CockpitData {
   )
   // Replace (not mutate) the map so an agent that drops out of the
   // running grid does not pin a stale focus through future polls.
+  //
+  // Mutating a ref during render looks like a side effect, but it is
+  // safe here under both React Strict Mode and concurrent rendering
+  // because `tabsToAgentActivity` is pure: for the same `records` and
+  // the same `stickyFocus` input it always produces the same focus
+  // map. Strict Mode's double-invocation in dev therefore commits the
+  // same value, and a concurrent-mode render that is interrupted and
+  // retried lands on the same commit too. The alternative of writing
+  // through `useEffect` would lag a frame and reintroduce the
+  // first-render flicker we are explicitly trying to suppress.
   const nextFocus = new Map<string, string>()
   for (const a of agents) nextFocus.set(a.agentId, a.currentFocus.targetId)
   stickyFocusRef.current = nextFocus
