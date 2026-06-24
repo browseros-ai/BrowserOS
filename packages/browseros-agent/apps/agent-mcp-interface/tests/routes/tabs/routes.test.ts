@@ -145,7 +145,9 @@ describe('/tabs/activity route', () => {
       expect(body.tabs).toHaveLength(1)
       expect(body.tabs[0].agentLabel).toBe('orphan-slug')
       expect(body.tabs[0].harness).toBeNull()
-      expect(body.tabs[0].color).toBeNull()
+      // Phase 4 fills colour from the deterministic agent-tab-groups
+      // hex even when no identity record is around.
+      expect(body.tabs[0].color).toMatch(/^#[0-9A-F]{6}$/)
     })
   })
 })

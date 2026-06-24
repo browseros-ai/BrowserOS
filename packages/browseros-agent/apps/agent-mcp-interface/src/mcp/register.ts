@@ -42,6 +42,7 @@ import {
 import { extractPageId, tabActivityRegistry } from '../lib/tab-activity'
 import type { StoredAgentProfile } from '../routes/agents/schemas'
 import { check } from '../services/permissions'
+import { ensureAgentTabGroup } from '../services/tab-group-ops'
 import { asRegister, type ToolResult } from './register-fn'
 
 /**
@@ -374,6 +375,28 @@ export function registerBrowserToolsForSingleServer(
               identity,
               session,
             })
+            // v2 cockpit-owned tab grouping: when the agent opens a
+            // new tab, auto-add it to the agent's tab group. The
+            // orchestrator handles create-on-first-call and
+            // serialises across racing tabs/new dispatches.
+            if (tool.name === 'tabs') {
+              const args = rawArgs as { action?: string } | null | undefined
+              if (args?.action === 'new') {
+                const pageId = (
+                  result.structuredContent as { page?: number } | undefined
+                )?.page
+                if (typeof pageId === 'number') {
+                  const { agentId, slug } = agentIdentityFromClient(identity)
+                  void ensureAgentTabGroup({
+                    agentId,
+                    slug,
+                    pageId,
+                    session,
+                    signal: extra?.signal,
+                  })
+                }
+              }
+            }
           } else {
             // Initialize was skipped or the session id is unknown;
             // the dispatch still succeeded but the homepage will not

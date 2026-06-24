@@ -11,15 +11,15 @@
  *      profile (PR 2 behaviour). Use the profile's `name`, `harness`.
  *   2. v2 path: the registry's `agentId` matches a live identity
  *      record (a slugified `clientInfo.name`). Use the identity's
- *      `clientTitle ?? clientName` as the label.
+ *      `clientTitle ?? clientName` as the label, and the hex matching
+ *      the agent's BrowserOS tab group colour so the homepage card's
+ *      left border visually matches the tab strip.
  *   3. final: the identity is gone (e.g. session closed before the
- *      homepage polled). Use the slug itself, harness/colour `null`.
- *
- * Colour is always `null` from the resolver; the UI applies its
- * slug-hash palette when the wire emits `null`. A future profile
- * schema can grow a stored colour without changing this helper.
+ *      homepage polled). Use the slug itself, harness null, colour
+ *      derived from the slug for stability.
  */
 
+import { hexForSlug } from '../../lib/agent-tab-groups'
 import type { ClientIdentity } from '../../lib/mcp-session'
 
 export interface AgentDisplay {
@@ -63,12 +63,12 @@ export function resolveAgentDisplay(
     return {
       agentLabel: label,
       harness: null,
-      color: null,
+      color: hexForSlug(slug),
     }
   }
   return {
     agentLabel: slug,
     harness: null,
-    color: null,
+    color: hexForSlug(slug),
   }
 }

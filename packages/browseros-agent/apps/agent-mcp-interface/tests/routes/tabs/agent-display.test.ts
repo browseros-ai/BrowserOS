@@ -40,7 +40,7 @@ describe('resolveAgentDisplay', () => {
     })
   })
 
-  test('identity wins when no profile, prefers clientTitle', () => {
+  test('identity wins when no profile, prefers clientTitle, and the colour matches the tab-group hex', () => {
     const result = resolveAgentDisplay('claude-code', 'claude-code', {
       profilesById: new Map(),
       identitiesByAgentId: new Map([
@@ -54,11 +54,9 @@ describe('resolveAgentDisplay', () => {
         ],
       ]),
     })
-    expect(result).toEqual({
-      agentLabel: 'Claude Code',
-      harness: null,
-      color: null,
-    })
+    expect(result.agentLabel).toBe('Claude Code')
+    expect(result.harness).toBeNull()
+    expect(result.color).toMatch(/^#[0-9A-F]{6}$/)
   })
 
   test('identity falls back to clientName when title missing', () => {
@@ -75,15 +73,13 @@ describe('resolveAgentDisplay', () => {
     expect(result.harness).toBeNull()
   })
 
-  test('no profile, no identity falls back to slug', () => {
+  test('no profile, no identity falls back to slug and still emits a hex colour', () => {
     const result = resolveAgentDisplay('unknown-abc123', 'unknown-abc123', {
       profilesById: new Map(),
       identitiesByAgentId: new Map(),
     })
-    expect(result).toEqual({
-      agentLabel: 'unknown-abc123',
-      harness: null,
-      color: null,
-    })
+    expect(result.agentLabel).toBe('unknown-abc123')
+    expect(result.harness).toBeNull()
+    expect(result.color).toMatch(/^#[0-9A-F]{6}$/)
   })
 })

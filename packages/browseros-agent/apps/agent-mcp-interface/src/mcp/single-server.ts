@@ -17,8 +17,15 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
+import { tabGroupTracker } from '../lib/agent-tab-groups'
+import { getBrowserSession } from '../lib/browser-session'
 import { logger } from '../lib/logger'
-import { type ClientIdentity, identityService } from '../lib/mcp-session'
+import {
+  agentIdentityFromClient,
+  type ClientIdentity,
+  identityService,
+} from '../lib/mcp-session'
+import { closeAgentTabGroupForAgent } from '../services/tab-group-ops'
 import { registerBrowserToolsForSingleServer } from './register'
 
 const SERVER_NAME = 'browseros-agent-mcp-interface'
@@ -50,6 +57,19 @@ function buildSession(): Session {
     sessionIdGenerator: () => crypto.randomUUID(),
     enableJsonResponse: true,
     onsessionclosed(sessionId) {
+      // Read identity BEFORE dropping it so the cleanup hook can
+      // resolve the agentId.
+      const identity = identityService.getIdentity(sessionId)
+      if (identity) {
+        const { agentId } = agentIdentityFromClient(identity)
+        const browserSession = getBrowserSession()
+        if (browserSession) {
+          void closeAgentTabGroupForAgent({
+            agentId,
+            session: browserSession,
+          })
+        }
+      }
       sessions.delete(sessionId)
       identityService.dropSession(sessionId)
       logger.info('cockpit v2 mcp session closed', { sessionId })
@@ -65,7 +85,7 @@ function buildSession(): Session {
     const sessionId = transport.sessionId
     if (!sessionId) return
     const clientInfo = server.server.getClientVersion()
-    identityService.registerInitialize({
+    const identity = identityService.registerInitialize({
       sessionId,
       clientInfo: {
         name: clientInfo?.name,
@@ -73,6 +93,11 @@ function buildSession(): Session {
         title: clientInfo?.title,
       },
     })
+    // Bump the tab-group tracker's per-agentId ref count so the
+    // close path only deletes the group when the last session for
+    // this agent ends.
+    const { agentId } = agentIdentityFromClient(identity)
+    tabGroupTracker.incrementSession(agentId)
     logger.info('cockpit v2 mcp session opened', {
       sessionId,
       clientName: clientInfo?.name ?? '',

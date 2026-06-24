@@ -10,6 +10,8 @@ interface AgentRunningCardProps {
   agent: AgentActivityRecord
   onWatch?: () => void
   onStop?: () => void
+  /** When the focus mutation is in flight for this card. */
+  isFocusPending?: boolean
 }
 
 /**
@@ -26,6 +28,7 @@ export function AgentRunningCard({
   agent,
   onWatch,
   onStop,
+  isFocusPending,
 }: AgentRunningCardProps) {
   const focus = agent.currentFocus
   const active = agent.status === 'active'
@@ -35,7 +38,8 @@ export function AgentRunningCard({
   return (
     <Card
       data-agent-card
-      className="group flex cursor-pointer flex-col overflow-hidden border-border-2 p-0 transition hover:border-border-strong hover:shadow-card"
+      className="group flex cursor-pointer flex-col overflow-hidden border-border-2 border-l-4 p-0 transition hover:border-border-strong hover:shadow-card"
+      style={{ borderLeftColor: agent.color }}
     >
       <MiniScreencast site={siteOf(focus.url)} live={active} />
       <div className="flex flex-1 flex-col gap-2 p-3.5">
@@ -79,9 +83,15 @@ export function AgentRunningCard({
           <button
             type="button"
             onClick={onWatch}
-            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 font-semibold text-[12.5px] text-ink-2 transition hover:bg-bg-sunken hover:text-ink"
+            disabled={isFocusPending}
+            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 font-semibold text-[12.5px] text-ink-2 transition hover:bg-bg-sunken hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <ExternalLink className="size-3.5" /> Watch
+            {isFocusPending ? (
+              <RefreshCw className="size-3.5 animate-spin" />
+            ) : (
+              <ExternalLink className="size-3.5" />
+            )}{' '}
+            Watch
           </button>
           {active && (
             <button

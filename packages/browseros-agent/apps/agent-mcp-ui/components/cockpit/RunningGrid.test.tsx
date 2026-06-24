@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import type { TabActivityRecord } from '@/modules/api/tabs.hooks'
@@ -6,7 +7,14 @@ import type { AgentActivityRecord } from '@/screens/cockpit/cockpit.helpers'
 import { RunningGrid } from './RunningGrid'
 
 function renderWithRouter(ui: React.ReactNode): string {
-  return renderToStaticMarkup(<MemoryRouter>{ui}</MemoryRouter>)
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  return renderToStaticMarkup(
+    <QueryClientProvider client={client}>
+      <MemoryRouter>{ui}</MemoryRouter>
+    </QueryClientProvider>,
+  )
 }
 
 function tab(over: Partial<TabActivityRecord> = {}): TabActivityRecord {
