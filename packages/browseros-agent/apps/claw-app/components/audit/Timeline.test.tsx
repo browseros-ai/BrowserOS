@@ -89,4 +89,31 @@ describe('Timeline', () => {
       /<button[^>]*data-disabled=""[^>]*timeline-collapse-all/,
     )
   })
+
+  it('renders a copy button per block (args, result, page) on an expanded row', () => {
+    const html = render([
+      dispatch({
+        id: 1,
+        toolName: 'act',
+        argsJson: '{"kind":"click"}',
+        resultMeta: '{"isError":false}',
+        url: 'https://example.com',
+      }),
+    ])
+    expect(html).toContain('data-testid="timeline-block-copy-args"')
+    expect(html).toContain('data-testid="timeline-block-copy-result"')
+    expect(html).toContain('data-testid="timeline-block-copy-page"')
+  })
+
+  it('does not render a copy button on the screenshot block (image, not text)', () => {
+    const html = render([
+      dispatch({
+        id: 2,
+        toolName: 'screenshot',
+        argsJson: '{"page":1}',
+        resultMeta: '{"isError":false}',
+      }),
+    ])
+    expect(html).not.toContain('data-testid="timeline-block-copy-screenshot"')
+  })
 })

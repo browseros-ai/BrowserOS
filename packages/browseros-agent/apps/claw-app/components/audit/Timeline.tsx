@@ -1,8 +1,10 @@
 import {
+  Check,
   ChevronDown,
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
+  Copy,
   Image as ImageIcon,
 } from 'lucide-react'
 import { useState } from 'react'
@@ -136,7 +138,7 @@ function TimelineRow({
   return (
     <li
       className={cn(
-        'rounded-lg border border-transparent px-2 py-1.5 transition hover:border-border-2 hover:bg-bg-sunken',
+        'rounded-lg border border-transparent px-2 py-1.5',
         highRisk && 'border-amber-500/30 bg-amber-500/5',
         isError && 'border-red-500/30 bg-red-500/5',
       )}
@@ -144,7 +146,13 @@ function TimelineRow({
       <button
         type="button"
         onClick={onToggle}
-        className="grid w-full grid-cols-[auto_5rem_minmax(0,1fr)_auto_auto] items-center gap-3 text-left"
+        className={cn(
+          'grid w-full grid-cols-[auto_5rem_minmax(0,1fr)_auto_auto] items-center gap-3 rounded-md px-1 py-1 text-left transition-colors',
+          // Hover-tint only the header, never the body. Otherwise the
+          // tint matches the args / result codeblock backgrounds and the
+          // codeblocks visually disappear into the row.
+          'hover:bg-card-tint',
+        )}
       >
         {expanded ? (
           <ChevronDown className="size-3.5 text-ink-3" />
@@ -174,14 +182,14 @@ function TimelineRow({
       {expanded && (
         <div className="mt-2 space-y-2 border-border-2 border-t px-1 pt-2">
           {dispatch.argsJson && (
-            <Block label="args">
+            <Block label="args" copyText={dispatch.argsJson}>
               <pre className="overflow-x-auto whitespace-pre-wrap break-all text-[11.5px]">
                 {dispatch.argsJson}
               </pre>
             </Block>
           )}
           {dispatch.resultMeta && (
-            <Block label="result">
+            <Block label="result" copyText={dispatch.resultMeta}>
               <pre className="overflow-x-auto whitespace-pre-wrap break-all text-[11.5px]">
                 {dispatch.resultMeta}
               </pre>
@@ -206,7 +214,7 @@ function TimelineRow({
             </Block>
           )}
           {dispatch.url && (
-            <Block label="page">
+            <Block label="page" copyText={dispatch.url}>
               <a
                 href={dispatch.url}
                 target="_blank"
@@ -234,15 +242,43 @@ function TimelineRow({
 
 function Block({
   label,
+  copyText,
   children,
 }: {
   label: string
+  copyText?: string
   children: React.ReactNode
 }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = (): void => {
+    if (!copyText) return
+    void navigator.clipboard.writeText(copyText).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
   return (
     <div className="space-y-1">
-      <div className="font-mono font-semibold text-[10.5px] text-ink-3 uppercase tracking-wide">
-        {label}
+      <div className="flex items-center justify-between gap-2">
+        <div className="font-mono font-semibold text-[10.5px] text-ink-3 uppercase tracking-wide">
+          {label}
+        </div>
+        {copyText && (
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-ink-3 uppercase tracking-wide transition-colors hover:bg-card-tint hover:text-ink-1"
+            aria-label={`Copy ${label}`}
+            data-testid={`timeline-block-copy-${label}`}
+          >
+            {copied ? (
+              <Check className="size-3" />
+            ) : (
+              <Copy className="size-3" />
+            )}
+            {copied ? 'copied' : 'copy'}
+          </button>
+        )}
       </div>
       <div className="rounded-md bg-bg-sunken p-2">{children}</div>
     </div>
