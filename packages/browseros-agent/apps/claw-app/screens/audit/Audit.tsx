@@ -1,33 +1,75 @@
+import {
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  type SortingState,
+  useReactTable,
+} from '@tanstack/react-table'
 import { ScrollText } from 'lucide-react'
-import { AgentFilterPills } from '@/components/audit/AgentFilterPills'
-import { DispatchRow } from '@/components/audit/DispatchRow'
+import { useMemo } from 'react'
+import { useNavigate } from 'react-router'
+import { FilterBar } from '@/components/audit/FilterBar'
 import { EmptyState } from '@/components/cockpit/EmptyState'
-import { Spinner } from '@/components/ui/spinner'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import type { TaskSummary } from '@/modules/api/audit.hooks'
+import { buildTaskColumns } from './audit.columns'
 import { useAuditScreenData } from './audit.data'
 
 /**
- * v2 audit log screen. Streams every persisted tool dispatch from
- * `<browserosDir>/mcp-interface/audit.sqlite` via the `useDispatches`
- * infinite query. Filter pills above the list narrow to one agent;
- * each row click reveals the args + result meta. The list updates
- * every 3 seconds via the hook's refetchInterval.
+ * Task-centric audit screen. Each MCP session becomes one row. Click
+ * a row to navigate to its full timeline at `/audit/:sessionId`.
+ * Filters round-trip through URL search params so browser back
+ * restores the prior view.
  */
 export function Audit() {
   const {
-    rows,
-    chips,
+    tasks,
+    agentOptions,
+    statusOptions,
+    siteOptions,
     isLoading,
     isError,
     hasNextPage,
     isFetchingNextPage,
     fetchNextPage,
-    selectedAgentId,
-    setSelectedAgentId,
+    filters,
+    setAgentFilter,
+    setStatusFilter,
+    setSiteFilter,
+    setSearch,
+    setSort,
     now,
   } = useAuditScreenData()
+  const navigate = useNavigate()
+  const columns = useMemo(() => buildTaskColumns(now), [now])
+  const sorting = useMemo<SortingState>(
+    () => (filters.sort ? [filters.sort] : []),
+    [filters.sort],
+  )
+
+  const table = useReactTable<TaskSummary>({
+    data: tasks,
+    columns,
+    state: { sorting },
+    onSortingChange: (updater) => {
+      const next = typeof updater === 'function' ? updater(sorting) : updater
+      setSort(next[0] ?? null)
+    },
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  })
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-8 pt-10 pb-20">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-8 pt-10 pb-20">
       <header className="space-y-2">
         <div className="flex items-center gap-2.5">
           <span className="flex size-9 items-center justify-center rounded-xl bg-accent-tint text-accent">
@@ -36,53 +78,120 @@ export function Audit() {
           <div>
             <h1 className="font-extrabold text-2xl tracking-tight">Audit</h1>
             <p className="text-ink-3 text-sm">
-              Every successful tool dispatch persisted to local SQLite. Filter
-              by agent, expand a row for arguments and result.
+              Tasks across every BrowserClaw session. Click a row to open its
+              timeline.
             </p>
           </div>
         </div>
       </header>
 
-      {!isLoading && !isError && rows.length > 0 && (
-        <AgentFilterPills
-          chips={chips}
-          selectedAgentId={selectedAgentId}
-          onSelect={setSelectedAgentId}
+      {!isLoading && !isError && tasks.length > 0 && (
+        <FilterBar
+          agentOptions={agentOptions}
+          statusOptions={statusOptions}
+          siteOptions={siteOptions}
+          selectedAgentId={filters.agentId}
+          selectedStatus={filters.status}
+          selectedSite={filters.site}
+          search={filters.search}
+          onAgentChange={setAgentFilter}
+          onStatusChange={setStatusFilter}
+          onSiteChange={setSiteFilter}
+          onSearchChange={setSearch}
         />
       )}
 
       {isLoading ? (
-        <div className="flex justify-center py-12 text-ink-3">
-          <Spinner />
+        <div className="space-y-2 rounded-2xl border border-border-2 bg-card p-4">
+          {['s1', 's2', 's3', 's4', 's5', 's6'].map((id) => (
+            <Skeleton key={id} className="h-10 w-full" />
+          ))}
         </div>
       ) : isError ? (
         <EmptyState
           title="Could not load audit log"
           hint="Check that the cockpit server is running and the audit database is reachable."
         />
-      ) : rows.length === 0 ? (
+      ) : tasks.length === 0 ? (
         <EmptyState
-          title="No dispatches yet"
-          hint="Connect an agent via the MCP page and run a tool. Successful dispatches land here within a few seconds."
+          title="No tasks in this view"
+          hint="Connect an agent via the MCP page and run a tool. Successful sessions land here within a few seconds."
         />
       ) : (
-        <section className="overflow-hidden rounded-2xl border border-border-2 bg-card">
-          {rows.map((row) => (
-            <DispatchRow key={row.id} row={row} now={now} />
-          ))}
+        <div className="overflow-hidden rounded-2xl border border-border-2 bg-card">
+          <Table>
+            <TableHeader>
+              {table.getHeaderGroups().map((hg) => (
+                <TableRow key={hg.id} className="hover:bg-transparent">
+                  {hg.headers.map((h) => {
+                    const canSort = h.column.getCanSort()
+                    return (
+                      <TableHead
+                        key={h.id}
+                        onClick={
+                          canSort
+                            ? h.column.getToggleSortingHandler()
+                            : undefined
+                        }
+                        className={canSort ? 'cursor-pointer select-none' : ''}
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          {h.isPlaceholder
+                            ? null
+                            : flexRender(
+                                h.column.columnDef.header,
+                                h.getContext(),
+                              )}
+                          {canSort &&
+                            ({
+                              asc: ' ▲',
+                              desc: ' ▼',
+                            }[h.column.getIsSorted() as string] ??
+                              null)}
+                        </span>
+                      </TableHead>
+                    )
+                  })}
+                </TableRow>
+              ))}
+            </TableHeader>
+            <TableBody>
+              {table.getRowModel().rows.map((row) => (
+                <TableRow
+                  key={row.id}
+                  data-testid={`task-row-${row.original.sessionId}`}
+                  onClick={() =>
+                    navigate(
+                      `/audit/${encodeURIComponent(row.original.sessionId)}`,
+                    )
+                  }
+                  className="cursor-pointer"
+                >
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id}>
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext(),
+                      )}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
           {hasNextPage && (
             <div className="border-border-2 border-t bg-bg-canvas px-4 py-3 text-center">
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={fetchNextPage}
                 disabled={isFetchingNextPage}
-                className="inline-flex items-center gap-2 rounded-md bg-bg-sunken px-3 py-1.5 font-semibold text-[12.5px] text-ink-2 transition hover:bg-card-tint disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isFetchingNextPage ? 'Loading...' : 'Load older dispatches'}
-              </button>
+                {isFetchingNextPage ? 'Loading...' : 'Load older tasks'}
+              </Button>
             </div>
           )}
-        </section>
+        </div>
       )}
     </div>
   )

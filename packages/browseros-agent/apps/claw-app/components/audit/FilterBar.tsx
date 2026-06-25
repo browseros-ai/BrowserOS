@@ -1,0 +1,182 @@
+import { Check, ChevronDown, Search, X } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
+import type { TaskStatus } from '@/modules/api/audit.hooks'
+import type { AgentChip } from '@/screens/audit/audit.helpers'
+import { AgentDot } from './AgentDot'
+import { StatusBadge } from './StatusBadge'
+
+interface FilterBarProps {
+  agentOptions: AgentChip[]
+  statusOptions: { status: TaskStatus; count: number }[]
+  siteOptions: { site: string; count: number }[]
+  selectedAgentId: string | null
+  selectedStatus: TaskStatus | null
+  selectedSite: string | null
+  search: string
+  onAgentChange: (agentId: string | null) => void
+  onStatusChange: (status: TaskStatus | null) => void
+  onSiteChange: (site: string | null) => void
+  onSearchChange: (q: string) => void
+}
+
+export function FilterBar({
+  agentOptions,
+  statusOptions,
+  siteOptions,
+  selectedAgentId,
+  selectedStatus,
+  selectedSite,
+  search,
+  onAgentChange,
+  onStatusChange,
+  onSiteChange,
+  onSearchChange,
+}: FilterBarProps) {
+  const selectedAgent = agentOptions.find((a) => a.agentId === selectedAgentId)
+  const hasFilters =
+    selectedAgentId !== null ||
+    selectedStatus !== null ||
+    selectedSite !== null ||
+    search.length > 0
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border-2 bg-card px-3 py-2.5">
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={<Button variant="ghost" size="sm" className="gap-1.5" />}
+        >
+          {selectedAgent ? (
+            <>
+              <AgentDot slug={selectedAgent.slug} />
+              {selectedAgent.agentLabel}
+            </>
+          ) : (
+            'Agent'
+          )}
+          <ChevronDown className="size-3.5 text-ink-3" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="min-w-52">
+          <DropdownMenuLabel>Filter by agent</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => onAgentChange(null)}>
+            <span className="flex-1">All</span>
+            {selectedAgentId === null && <Check className="size-3.5" />}
+          </DropdownMenuItem>
+          {agentOptions.map((opt) => (
+            <DropdownMenuItem
+              key={opt.agentId}
+              onSelect={() => onAgentChange(opt.agentId)}
+            >
+              <AgentDot slug={opt.slug} className="mr-1.5" />
+              <span className="flex-1">{opt.agentLabel}</span>
+              <span className="ml-2 text-[11.5px] text-ink-3">{opt.count}</span>
+              {selectedAgentId === opt.agentId && (
+                <Check className="ml-2 size-3.5" />
+              )}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={<Button variant="ghost" size="sm" className="gap-1.5" />}
+        >
+          {selectedStatus ? <StatusBadge status={selectedStatus} /> : 'Status'}
+          <ChevronDown className="size-3.5 text-ink-3" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="min-w-44">
+          <DropdownMenuLabel>Filter by status</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => onStatusChange(null)}>
+            <span className="flex-1">All</span>
+            {selectedStatus === null && <Check className="size-3.5" />}
+          </DropdownMenuItem>
+          {statusOptions.map((opt) => (
+            <DropdownMenuItem
+              key={opt.status}
+              onSelect={() => onStatusChange(opt.status)}
+            >
+              <StatusBadge status={opt.status} className="mr-2" />
+              <span className="ml-1 text-[11.5px] text-ink-3">{opt.count}</span>
+              {selectedStatus === opt.status && (
+                <Check className="ml-auto size-3.5" />
+              )}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {siteOptions.length > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={<Button variant="ghost" size="sm" className="gap-1.5" />}
+          >
+            {selectedSite ?? 'Site'}
+            <ChevronDown className="size-3.5 text-ink-3" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            className="max-h-64 min-w-52 overflow-y-auto"
+          >
+            <DropdownMenuLabel>Filter by site</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => onSiteChange(null)}>
+              <span className="flex-1">All</span>
+              {selectedSite === null && <Check className="size-3.5" />}
+            </DropdownMenuItem>
+            {siteOptions.map((opt) => (
+              <DropdownMenuItem
+                key={opt.site}
+                onSelect={() => onSiteChange(opt.site)}
+              >
+                <span className="flex-1 truncate">{opt.site}</span>
+                <span className="ml-2 text-[11.5px] text-ink-3">
+                  {opt.count}
+                </span>
+                {selectedSite === opt.site && (
+                  <Check className="ml-2 size-3.5" />
+                )}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+
+      <div className="relative ml-auto flex items-center">
+        <Search className="absolute left-2.5 size-3.5 text-ink-3" aria-hidden />
+        <Input
+          value={search}
+          onChange={(e) => onSearchChange(e.target.value)}
+          placeholder="Search title or agent"
+          className="h-8 w-56 pl-8 text-[12.5px]"
+        />
+      </div>
+
+      {hasFilters && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            onAgentChange(null)
+            onStatusChange(null)
+            onSiteChange(null)
+            onSearchChange('')
+          }}
+          className="gap-1 text-ink-3"
+        >
+          <X className="size-3.5" />
+          Clear
+        </Button>
+      )}
+    </div>
+  )
+}

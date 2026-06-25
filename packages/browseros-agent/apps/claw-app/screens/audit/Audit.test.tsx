@@ -1,24 +1,37 @@
 /**
- * Static-markup checks for the Audit screen. Stubs the data hook so
- * the test does not need a running backend.
+ * Static-markup checks for the task-centric Audit screen. Stubs the
+ * data hook so the test does not need a running backend.
  */
 
 import { describe, expect, it, mock } from 'bun:test'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
+import type { TaskSummary } from '@/modules/api/audit.hooks'
 import type { AuditScreenData } from './audit.data'
 
 const baseData: AuditScreenData = {
-  rows: [],
-  chips: [],
+  tasks: [],
+  agentOptions: [],
+  statusOptions: [],
+  siteOptions: [],
   isLoading: false,
   isError: false,
   hasNextPage: false,
   isFetchingNextPage: false,
   fetchNextPage: () => undefined,
-  selectedAgentId: null,
-  setSelectedAgentId: () => undefined,
+  filters: {
+    agentId: null,
+    status: null,
+    site: null,
+    search: '',
+    sort: null,
+  },
+  setAgentFilter: () => undefined,
+  setStatusFilter: () => undefined,
+  setSiteFilter: () => undefined,
+  setSearch: () => undefined,
+  setSort: () => undefined,
   now: Date.now(),
 }
 
@@ -43,24 +56,43 @@ function renderApp(): string {
   )
 }
 
+const sampleTask: TaskSummary = {
+  sessionId: 'sess-1',
+  agentId: 'claude-code',
+  slug: 'claude-code',
+  agentLabel: 'Claude Code',
+  title: 'Browsed example.com',
+  site: 'example.com',
+  startedAt: Date.now() - 12000,
+  endedAt: Date.now(),
+  durationMs: 12000,
+  dispatchCount: 4,
+  toolSequence: ['tabs', 'snapshot', 'read', 'screenshot'],
+  status: 'done',
+  errorCount: 0,
+  lastScreenshotDispatchId: 7,
+  cursorId: 8,
+}
+
 describe('Audit screen', () => {
-  it('renders the header and hint', () => {
+  it('renders the header + hint', () => {
     dataOverride = { ...baseData }
     const html = renderApp()
     expect(html).toContain('Audit')
-    expect(html).toContain('Every successful tool dispatch')
+    expect(html).toContain('Tasks across every BrowserClaw session')
   })
 
-  it('shows the empty state when there are no dispatches', () => {
+  it('shows the empty state when there are no tasks', () => {
     dataOverride = { ...baseData }
     const html = renderApp()
-    expect(html).toContain('No dispatches yet')
+    expect(html).toContain('No tasks in this view')
   })
 
-  it('shows the loading spinner while the first page is pending', () => {
+  it('shows skeleton loading rows while the first page is pending', () => {
     dataOverride = { ...baseData, isLoading: true }
     const html = renderApp()
-    expect(html).toMatch(/<svg|Spinner/)
+    // shadcn Skeleton renders a div with animate-pulse
+    expect(html).toMatch(/animate-pulse/)
   })
 
   it('shows the error empty state when the query fails', () => {
@@ -69,68 +101,34 @@ describe('Audit screen', () => {
     expect(html).toContain('Could not load audit log')
   })
 
-  it('renders one row per dispatch and the agent filter pill', () => {
+  it('renders one row per task with title + agent + site', () => {
     dataOverride = {
       ...baseData,
-      rows: [
-        {
-          id: 1,
-          createdAt: Date.now(),
-          agentId: 'claude-code',
-          slug: 'claude-code',
-          agentLabel: 'claude-code',
-          sessionId: 'sess-1',
-          toolName: 'navigate',
-          pageId: 1,
-          targetId: 't1',
-          url: 'https://example.com',
-          title: 'Example',
-          argsJson: '{}',
-          resultMeta:
-            '{"isError":false,"contentSummary":"1 block(s)","structuredKeys":[]}',
-          durationMs: 12,
-        },
-      ],
-      chips: [
+      tasks: [sampleTask],
+      agentOptions: [
         {
           agentId: 'claude-code',
           slug: 'claude-code',
-          agentLabel: 'claude-code',
-          color: '#F26B2A',
+          agentLabel: 'Claude Code',
           count: 1,
         },
       ],
+      statusOptions: [{ status: 'done', count: 1 }],
+      siteOptions: [{ site: 'example.com', count: 1 }],
     }
     const html = renderApp()
-    expect(html).toContain('claude-code')
-    expect(html).toContain('navigate')
-    expect(html).toContain('example.com')
+    expect(html).toContain('Claude Code')
+    expect(html).toContain('Browsed example.com')
+    expect(html).toContain('Done')
   })
 
-  it('renders the Load older dispatches button when hasNextPage is true', () => {
+  it('renders the Load older tasks button when hasNextPage is true', () => {
     dataOverride = {
       ...baseData,
+      tasks: [sampleTask],
       hasNextPage: true,
-      rows: [
-        {
-          id: 1,
-          createdAt: Date.now(),
-          agentId: 'a',
-          slug: 'a',
-          agentLabel: 'a',
-          sessionId: 's',
-          toolName: 'navigate',
-          pageId: null,
-          targetId: null,
-          url: null,
-          title: null,
-          argsJson: null,
-          resultMeta: null,
-          durationMs: null,
-        },
-      ],
     }
     const html = renderApp()
-    expect(html).toContain('Load older dispatches')
+    expect(html).toContain('Load older tasks')
   })
 })
