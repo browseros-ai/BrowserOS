@@ -57,11 +57,11 @@ export function FilterBar({
     return () => clearTimeout(id)
   }, [localSearch, search, onSearchChange])
 
-  const hasFilters =
-    selectedAgentId !== null ||
-    selectedStatus !== null ||
-    selectedSite !== null ||
-    search.length > 0
+  const clearSearch = (): void => {
+    setLocalSearch('')
+    onSearchChange('')
+  }
+
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border-2 bg-card px-3 py-2.5">
       <DropdownMenu>
@@ -166,26 +166,22 @@ export function FilterBar({
           value={localSearch}
           onChange={(e) => setLocalSearch(e.target.value)}
           placeholder="Search title or agent"
-          className="h-8 w-56 pl-8 text-[12.5px]"
+          // pr-7 reserves space for the inline clear button so the
+          // text never sits under the icon.
+          className="h-8 w-56 pr-7 pl-8 text-[12.5px]"
         />
+        {localSearch.length > 0 && (
+          <button
+            type="button"
+            onClick={clearSearch}
+            aria-label="Clear search"
+            data-testid="filter-search-clear"
+            className="absolute right-1.5 inline-flex size-5 items-center justify-center rounded text-ink-3 transition-colors hover:bg-card-tint hover:text-ink-1"
+          >
+            <X className="size-3.5" />
+          </button>
+        )}
       </div>
-
-      {hasFilters && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            onAgentChange(null)
-            onStatusChange(null)
-            onSiteChange(null)
-            onSearchChange('')
-          }}
-          className="gap-1 text-ink-3"
-        >
-          <X className="size-3.5" />
-          Clear
-        </Button>
-      )}
     </div>
   )
 }
