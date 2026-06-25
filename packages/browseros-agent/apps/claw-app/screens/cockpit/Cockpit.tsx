@@ -11,13 +11,13 @@ import { useCockpitData } from './cockpit.data'
  * back when the permission gate ships in a later phase.
  */
 export function Cockpit() {
-  const { agents, activity } = useCockpitData()
+  const { agents } = useCockpitData()
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-8 px-8 pt-10 pb-20">
       <CockpitHero />
       <RunningGrid agents={agents} />
-      <RecentActivity rows={activity} />
+      <RecentActivity />
     </div>
   )
 }

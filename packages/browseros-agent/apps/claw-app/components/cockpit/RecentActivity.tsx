@@ -1,48 +1,46 @@
-import { History, Lock } from 'lucide-react'
-import type { ActivityRow as ActivityRowData } from '@/modules/api/activity.hooks'
-import { ActivityRow } from './ActivityRow'
+import { History } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
+import { useTasks } from '@/modules/api/audit.hooks'
 import { EmptyState } from './EmptyState'
+import { TaskCard } from './TaskCard'
 
-interface RecentActivityProps {
-  rows: ActivityRowData[]
-}
+const HOME_TASK_LIMIT = 5
 
 /**
- * Cross-agent recent activity log. Lives under the running grid so
- * the user can scan WHAT happened and WHICH agent did it, with the
- * flagged statuses (blocked, needs-human) called out by a chip in
- * the header rather than buried in a long list. Renders an empty
- * state when no rows are present so the page rhythm stays intact on
- * a fresh install.
+ * Homepage Recent activity strip. Renders one TaskCard per recent
+ * MCP session (newest first). Skeleton while loading; the empty
+ * state appears only when the loaded page is empty.
  */
-export function RecentActivity({ rows }: RecentActivityProps) {
-  const flaggedCount = rows.filter(
-    (r) => r.status === 'blocked' || r.status === 'needs-human',
-  ).length
+export function RecentActivity() {
+  const query = useTasks({ variables: { limit: HOME_TASK_LIMIT } })
+  const tasks = (query.data?.pages ?? [])
+    .flatMap((p) => p.tasks)
+    .slice(0, HOME_TASK_LIMIT)
+  const now = Date.now()
 
   return (
     <section className="space-y-3">
       <div className="flex items-center gap-2.5">
         <h2 className="font-bold text-base">Recent activity</h2>
-        {flaggedCount > 0 && (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-red-tint px-2 py-0.5 font-bold text-[11px] text-red">
-            <Lock className="size-3" />
-            {flaggedCount} flagged
-          </span>
-        )}
         <div className="flex-1" />
         <span className="text-ink-3 text-xs">Across all agents</span>
       </div>
-      {rows.length === 0 ? (
+      {query.isPending ? (
+        <div className="space-y-3">
+          {['s1', 's2', 's3'].map((id) => (
+            <Skeleton key={id} className="h-28 w-full rounded-2xl" />
+          ))}
+        </div>
+      ) : tasks.length === 0 ? (
         <EmptyState
           title="No recent activity"
           hint="Tool calls from connected agents will appear here."
           icon={<History className="size-5" />}
         />
       ) : (
-        <div className="space-y-2">
-          {rows.map((row) => (
-            <ActivityRow key={row.id} row={row} />
+        <div className="space-y-3">
+          {tasks.map((task) => (
+            <TaskCard key={task.sessionId} task={task} now={now} />
           ))}
         </div>
       )}

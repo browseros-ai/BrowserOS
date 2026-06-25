@@ -1,59 +1,82 @@
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, mock } from 'bun:test'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
-import type { ActivityRow } from '@/modules/api/activity.hooks'
-import { RecentActivity } from './RecentActivity'
+import type { TaskSummary } from '@/modules/api/audit.hooks'
 
-function renderWithRouter(ui: React.ReactNode): string {
-  return renderToStaticMarkup(<MemoryRouter>{ui}</MemoryRouter>)
+interface MockQueryShape {
+  data?: { pages: { tasks: TaskSummary[] }[] }
+  isPending: boolean
 }
 
-function row(over: Partial<ActivityRow> = {}): ActivityRow {
-  return {
-    id: 'r1',
-    agentLabel: 'claude-code',
-    color: '#000',
-    status: 'running',
-    action: 'navigate to example.com',
-    site: 'example.com',
-    when: 'just now',
-    ...over,
-  }
+let queryOverride: MockQueryShape = { isPending: true }
+
+mock.module('@/modules/api/audit.hooks', () => ({
+  useTasks: () => queryOverride,
+  taskScreenshotUrl: (id: number) => `/audit/screenshot/${id}`,
+}))
+
+const { RecentActivity } = await import('./RecentActivity')
+
+function render(): string {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  return renderToStaticMarkup(
+    <QueryClientProvider client={client}>
+      <MemoryRouter>
+        <RecentActivity />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  )
+}
+
+const sampleTask: TaskSummary = {
+  sessionId: 'sess-1',
+  agentId: 'claude-code',
+  slug: 'claude-code',
+  agentLabel: 'Claude Code',
+  title: 'Browsed example.com',
+  site: 'example.com',
+  startedAt: Date.now() - 12000,
+  endedAt: Date.now(),
+  durationMs: 12000,
+  dispatchCount: 4,
+  toolSequence: ['tabs', 'snapshot', 'read', 'screenshot'],
+  status: 'done',
+  errorCount: 0,
+  lastScreenshotDispatchId: 7,
+  cursorId: 8,
 }
 
 describe('RecentActivity', () => {
-  it('renders the empty-state card when no rows are present', () => {
-    const html = renderWithRouter(<RecentActivity rows={[]} />)
-    expect(html).toContain('No recent activity')
-    expect(html).toContain('Tool calls from connected agents will appear here.')
+  it('renders skeleton while pending', () => {
+    queryOverride = { isPending: true }
+    const html = render()
+    expect(html).toMatch(/animate-pulse/)
   })
 
-  it('still renders the section header in the empty state', () => {
-    const html = renderWithRouter(<RecentActivity rows={[]} />)
+  it('renders the empty state when there are no tasks', () => {
+    queryOverride = { isPending: false, data: { pages: [{ tasks: [] }] } }
+    const html = render()
+    expect(html).toContain('No recent activity')
+  })
+
+  it('renders one TaskCard per task', () => {
+    queryOverride = {
+      isPending: false,
+      data: { pages: [{ tasks: [sampleTask] }] },
+    }
+    const html = render()
+    expect(html).toContain('Browsed example.com')
+    expect(html).toContain('Claude Code')
+    expect(html).toContain('Done')
+  })
+
+  it('renders the section header in the empty state', () => {
+    queryOverride = { isPending: false, data: { pages: [{ tasks: [] }] } }
+    const html = render()
     expect(html).toContain('Recent activity')
     expect(html).toContain('Across all agents')
-  })
-
-  it('renders one row per ActivityRow when rows are present', () => {
-    const html = renderWithRouter(
-      <RecentActivity
-        rows={[
-          row({ id: 'r1', action: 'first' }),
-          row({ id: 'r2', action: 'second' }),
-        ]}
-      />,
-    )
-    expect(html).toContain('first')
-    expect(html).toContain('second')
-    expect(html).not.toContain('No recent activity')
-  })
-
-  it('surfaces a flagged count chip when at least one row is flagged', () => {
-    const html = renderWithRouter(
-      <RecentActivity
-        rows={[row({ id: 'r1', status: 'blocked', action: 'blocked-thing' })]}
-      />,
-    )
-    expect(html).toContain('1 flagged')
   })
 })

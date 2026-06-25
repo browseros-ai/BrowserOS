@@ -20,6 +20,16 @@ mock.module('./cockpit.data', () => ({
   }),
 }))
 
+// RecentActivity now consumes useTasks directly. Stub it to return an
+// empty page so the empty-state branch renders.
+mock.module('@/modules/api/audit.hooks', () => ({
+  useTasks: () => ({
+    data: { pages: [{ tasks: [], nextCursor: null }] },
+    isPending: false,
+  }),
+  taskScreenshotUrl: (id: number) => `/audit/screenshot/${id}`,
+}))
+
 const { Cockpit } = await import('./Cockpit')
 
 function renderApp(): string {
