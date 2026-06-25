@@ -3,17 +3,20 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * react-query-kit factory for the v2 audit screen. Infinite-query
- * because the dispatch log grows fast in a dogfood session and the
- * screen surfaces it via a virtualised list with on-scroll page fetch.
+ * react-query-kit factories for the v2 audit surfaces.
  *
- * Cursor pagination uses `id`-based cursors (autoincrement, monotonic
- * with insertion order) so identical-millisecond dispatches do not
- * tie and drop pages.
+ * useTasks         paginated task list (homepage + audit screen)
+ * useTaskDetail    one task's full dispatch list + screenshot ids
+ * useDispatches    legacy flat dispatch stream (kept for callers
+ *                  that want raw rows)
+ *
+ * taskScreenshotUrl builds the absolute URL to the binary screenshot
+ * route so an <img src> can render the persisted JPEG without going
+ * through the rpc client (which is JSON-only).
  */
 
-import { createInfiniteQuery } from 'react-query-kit'
-import { api } from './client'
+import { createInfiniteQuery, createQuery } from 'react-query-kit'
+import { api, apiBaseUrl } from './client'
 import { parseResponse } from './parseResponse'
 
 export interface ToolDispatchRow {
@@ -63,3 +66,96 @@ export const useDispatches = createInfiniteQuery<
   getNextPageParam: (last) => last.nextCursor ?? undefined,
   refetchInterval: 3000,
 })
+
+export type TaskStatus = 'live' | 'done' | 'failed'
+
+export interface TaskSummary {
+  sessionId: string
+  agentId: string
+  slug: string
+  agentLabel: string
+  title: string
+  site: string | null
+  startedAt: number
+  endedAt: number | null
+  durationMs: number
+  dispatchCount: number
+  toolSequence: string[]
+  status: TaskStatus
+  errorCount: number
+  lastScreenshotDispatchId: number | null
+  cursorId: number
+}
+
+export interface ListTasksResponse {
+  tasks: TaskSummary[]
+  nextCursor: number | null
+}
+
+export interface UseTasksVars {
+  agentId?: string
+  status?: TaskStatus
+  site?: string
+  search?: string
+  since?: number
+  limit?: number
+}
+
+export const useTasks = createInfiniteQuery<
+  ListTasksResponse,
+  UseTasksVars,
+  Error,
+  number | undefined
+>({
+  queryKey: ['audit', 'tasks'],
+  fetcher: async (vars, { pageParam }) => {
+    const query: Record<string, string> = {}
+    if (vars?.agentId) query.agentId = vars.agentId
+    if (vars?.status) query.status = vars.status
+    if (vars?.site) query.site = vars.site
+    if (vars?.search) query.search = vars.search
+    if (typeof vars?.since === 'number') query.since = String(vars.since)
+    if (typeof vars?.limit === 'number') query.limit = String(vars.limit)
+    if (pageParam !== undefined) query.cursor = String(pageParam)
+    const response = await api.audit.tasks.$get({ query })
+    return parseResponse<ListTasksResponse>(response)
+  },
+  initialPageParam: undefined,
+  getNextPageParam: (last) => last.nextCursor ?? undefined,
+  refetchInterval: 3000,
+})
+
+export interface TaskDetail extends TaskSummary {
+  dispatches: ToolDispatchRow[]
+  screenshotDispatchIds: number[]
+  startEvent: {
+    createdAt: number
+    clientName: string
+    clientVersion: string
+  } | null
+  endEvent: {
+    createdAt: number
+    kind: 'closed' | 'errored'
+    reason: string | null
+  } | null
+}
+
+export const useTaskDetail = createQuery<
+  TaskDetail,
+  { sessionId: string },
+  Error
+>({
+  queryKey: ['audit', 'task'],
+  fetcher: async ({ sessionId }) => {
+    const response = await api.audit.tasks[':sessionId'].$get({
+      param: { sessionId },
+    })
+    return parseResponse<TaskDetail>(response)
+  },
+  refetchInterval: (q) => (q.state.data?.status === 'live' ? 3000 : false),
+})
+
+/** Absolute URL for the persisted screenshot of one dispatch. */
+export function taskScreenshotUrl(dispatchId: number): string {
+  return `${apiBaseUrl()}/audit/screenshot/${dispatchId}`
+}

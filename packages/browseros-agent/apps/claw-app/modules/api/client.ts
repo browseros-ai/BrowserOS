@@ -34,6 +34,16 @@ import {
   resolveApiBaseUrlFromSources,
 } from './client.helpers'
 
+/**
+ * Public helper for surfaces that need to embed the resolved base
+ * URL directly (eg. an `<img src>` to a streamed screenshot route)
+ * rather than going through the hc-proxied JSON client. Uses the
+ * same resolution chain as the rpc client.
+ */
+export function apiBaseUrl(): string {
+  return resolveApiBaseUrl()
+}
+
 function resolveApiBaseUrl(): string {
   const fallback = `http://127.0.0.1:${CLAW_API_PORT_DEFAULT}${COCKPIT_MOUNT_PREFIX}`
   if (typeof window === 'undefined') return fallback
