@@ -1,4 +1,5 @@
 import { Check, ChevronDown, Search, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -11,6 +12,8 @@ import type { TaskStatus } from '@/modules/api/audit.hooks'
 import type { AgentChip } from '@/screens/audit/audit.helpers'
 import { AgentDot } from './AgentDot'
 import { StatusBadge } from './StatusBadge'
+
+const SEARCH_DEBOUNCE_MS = 250
 
 interface FilterBarProps {
   agentOptions: AgentChip[]
@@ -40,6 +43,20 @@ export function FilterBar({
   onSearchChange,
 }: FilterBarProps) {
   const selectedAgent = agentOptions.find((a) => a.agentId === selectedAgentId)
+  // Local search state so each keystroke updates the input
+  // immediately, but the URL + refetch only fires after the operator
+  // has paused typing. Without this every character triggered a
+  // re-render + network request, stacking up while the user typed.
+  const [localSearch, setLocalSearch] = useState(search)
+  useEffect(() => {
+    setLocalSearch(search)
+  }, [search])
+  useEffect(() => {
+    if (localSearch === search) return
+    const id = setTimeout(() => onSearchChange(localSearch), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(id)
+  }, [localSearch, search, onSearchChange])
+
   const hasFilters =
     selectedAgentId !== null ||
     selectedStatus !== null ||
@@ -146,8 +163,8 @@ export function FilterBar({
       <div className="relative ml-auto flex items-center">
         <Search className="absolute left-2.5 size-3.5 text-ink-3" aria-hidden />
         <Input
-          value={search}
-          onChange={(e) => onSearchChange(e.target.value)}
+          value={localSearch}
+          onChange={(e) => setLocalSearch(e.target.value)}
           placeholder="Search title or agent"
           className="h-8 w-56 pl-8 text-[12.5px]"
         />

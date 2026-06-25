@@ -32,7 +32,6 @@ const baseData: AuditScreenData = {
   setSiteFilter: () => undefined,
   setSearch: () => undefined,
   setSort: () => undefined,
-  now: Date.now(),
 }
 
 let dataOverride: AuditScreenData = baseData

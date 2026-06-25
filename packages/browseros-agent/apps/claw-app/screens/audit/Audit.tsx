@@ -21,7 +21,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import type { TaskSummary } from '@/modules/api/audit.hooks'
-import { buildTaskColumns } from './audit.columns'
+import { TASK_COLUMNS } from './audit.columns'
 import { useAuditScreenData } from './audit.data'
 
 /**
@@ -29,6 +29,13 @@ import { useAuditScreenData } from './audit.data'
  * a row to navigate to its full timeline at `/audit/:sessionId`.
  * Filters round-trip through URL search params so browser back
  * restores the prior view.
+ *
+ * All of `useReactTable`'s options come from stable references
+ * (module-level columns, useMemo'd data + state) so the table never
+ * re-builds its core or sort row models when nothing relevant
+ * changed. Per tanstack-table v8, passing fresh references on every
+ * render forces an internal re-process each tick and the page
+ * locks up under typing / filter cascades.
  */
 export function Audit() {
   const {
@@ -47,19 +54,29 @@ export function Audit() {
     setSiteFilter,
     setSearch,
     setSort,
-    now,
   } = useAuditScreenData()
   const navigate = useNavigate()
-  const columns = useMemo(() => buildTaskColumns(now), [now])
+
+  // Mirror the URL-derived sort tuple into a memoised SortingState
+  // array. Use the primitive id / desc as deps so the array reference
+  // is stable across renders that did not change the sort (the
+  // filters.sort object itself is rebuilt on every paramsToFilters
+  // call even when nothing changed).
+  const sortId = filters.sort?.id
+  const sortDesc = filters.sort?.desc
   const sorting = useMemo<SortingState>(
-    () => (filters.sort ? [filters.sort] : []),
-    [filters.sort],
+    () =>
+      sortId !== undefined && sortDesc !== undefined
+        ? [{ id: sortId, desc: sortDesc }]
+        : [],
+    [sortId, sortDesc],
   )
+  const state = useMemo(() => ({ sorting }), [sorting])
 
   const table = useReactTable<TaskSummary>({
     data: tasks,
-    columns,
-    state: { sorting },
+    columns: TASK_COLUMNS,
+    state,
     onSortingChange: (updater) => {
       const next = typeof updater === 'function' ? updater(sorting) : updater
       setSort(next[0] ?? null)

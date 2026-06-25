@@ -33,7 +33,6 @@ export interface AuditScreenData {
   setSiteFilter: (site: string | null) => void
   setSearch: (q: string) => void
   setSort: (sort: AuditFilters['sort']) => void
-  now: number
 }
 
 /**
@@ -41,6 +40,12 @@ export interface AuditScreenData {
  * search params so browser back / forward restores prior views; the
  * useTasks infinite query is variables-keyed off the same filter
  * shape so changing a filter starts a fresh paginated stream.
+ *
+ * Every returned value (`tasks`, `agentOptions`, etc.) is memoised so
+ * the consumer can pass them to `useReactTable` without triggering a
+ * re-process on every render. tanstack-table requires `data` to be a
+ * stable reference; an inline `flatMap` here would create a new array
+ * each render and put the table in a render storm.
  */
 export function useAuditScreenData(): AuditScreenData {
   const [params, setParams] = useSearchParams()
@@ -56,8 +61,11 @@ export function useAuditScreenData(): AuditScreenData {
     },
   })
 
-  const tasks = (query.data?.pages ?? []).flatMap((p) => p.tasks)
-  const now = Date.now()
+  const pages = query.data?.pages
+  const tasks = useMemo(() => (pages ?? []).flatMap((p) => p.tasks), [pages])
+  const agentOptions = useMemo(() => agentChipsFor(tasks), [tasks])
+  const statusOpts = useMemo(() => statusOptionsOf(tasks), [tasks])
+  const siteOpts = useMemo(() => siteOptionsOf(tasks), [tasks])
 
   const update = (patch: Partial<AuditFilters>): void => {
     const next: AuditFilters = { ...filters, ...patch }
@@ -66,9 +74,9 @@ export function useAuditScreenData(): AuditScreenData {
 
   return {
     tasks,
-    agentOptions: agentChipsFor(tasks),
-    statusOptions: statusOptionsOf(tasks),
-    siteOptions: siteOptionsOf(tasks),
+    agentOptions,
+    statusOptions: statusOpts,
+    siteOptions: siteOpts,
     isLoading: query.isPending,
     isError: query.isError,
     hasNextPage: Boolean(query.hasNextPage),
@@ -82,6 +90,5 @@ export function useAuditScreenData(): AuditScreenData {
     setSiteFilter: (site) => update({ site }),
     setSearch: (search) => update({ search }),
     setSort: (sort) => update({ sort }),
-    now,
   }
 }
