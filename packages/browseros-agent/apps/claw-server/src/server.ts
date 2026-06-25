@@ -19,6 +19,8 @@ import { HttpError } from './lib/errors'
 import { logger } from './lib/logger'
 import { agentsRoute } from './routes/agents'
 import { auditRoute } from './routes/audit'
+import { auditScreenshotsRoute } from './routes/audit/screenshots'
+import { auditTasksRoute } from './routes/audit/tasks'
 import { connectionsRoute } from './routes/connections'
 import { mcpRoute } from './routes/mcp'
 import { mcpV2Route } from './routes/mcp-v2'
@@ -85,6 +87,8 @@ const routes = app
   .route('/', tabsFocusRoute)
   .route('/', connectionsRoute)
   .route('/', auditRoute)
+  .route('/', auditTasksRoute)
+  .route('/', auditScreenshotsRoute)
 
 export type AppType = typeof routes
 export default routes
