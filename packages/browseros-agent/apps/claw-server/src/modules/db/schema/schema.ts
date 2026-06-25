@@ -8,4 +8,6 @@
  * point. One file per table, re-exported here.
  */
 
+export * from './agent-session-ends.sql'
+export * from './agent-session-starts.sql'
 export * from './tool-dispatches.sql'
