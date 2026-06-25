@@ -949,6 +949,15 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
           url: 'http://127.0.0.1:9321/mcp',
           headers: [],
         },
+        {
+          type: 'http',
+          name: 'nudge',
+          url: 'http://127.0.0.1:9321/mcp/nudge',
+          headers: [
+            { name: 'X-BrowserOS-Agent-Id', value: 'agent-1' },
+            { name: 'X-BrowserOS-Session-Id', value: 'main' },
+          ],
+        },
       ],
     })
     const startTurnInput = calls.find(

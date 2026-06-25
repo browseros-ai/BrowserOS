@@ -132,6 +132,73 @@ Do not store memory files in the project workspace.
 - Correct stale memory when new evidence proves it wrong.
 - When in doubt, leave the candidate in daily notes.
 `,
+  'app-connections': `---
+name: app-connections
+description: Use when a task needs a third-party SaaS app (Gmail, Google Calendar/Docs/Drive/Sheets, Slack, GitHub, Linear, Jira, Notion, Figma, Salesforce, HubSpot, Stripe, Discord, LinkedIn, Cal.com, Resend, Asana, ClickUp, Monday, Outlook Mail/Calendar, Microsoft Teams, Supabase, Vercel, Cloudflare, Dropbox, OneDrive, WordPress, YouTube, Box, Shopify, Zendesk, Intercom, Airtable, Confluence, PostHog, Mixpanel, WhatsApp, Brave Search, Mem0, Postman, Google Forms, GitLab) or when a tool call returns 401/Unauthorized or a response surfaces an authUrl / apiKeyUrl. Drives the connect, discover, execute flow over BrowserOS's MCP integration surface.
+---
+
+# app-connections
+
+BrowserOS exposes third-party SaaS apps through two MCP namespaces:
+
+- \`browseros/*\` for browser automation and Klavis Strata tools (discover, execute).
+- \`nudge/suggest_app_connection\` to render an interactive Connect card to the user. This is your only path to ask for authorization.
+
+Both namespaces are always on the wire whenever BrowserOS is running. Do not try to install anything.
+
+## Decision
+
+When a turn needs a service:
+
+1. If the system prompt's Connected apps block lists the service, use the Strata flow (discover -> get_action_details -> execute_action) under \`browseros/*\`.
+2. If the service is in the Declined apps block, use browser automation only. Do not call \`suggest_app_connection\` for a declined app in the same session.
+3. Otherwise, call \`nudge/suggest_app_connection\`, then STOP.
+
+The same flow applies mid-turn for a 401 / Unauthorized response: call \`nudge/suggest_app_connection\` with a re-auth reason, STOP, then retry the same tool call.
+
+## Connect ritual (non-negotiable)
+
+When you decide to ask for a connection:
+
+1. Emit exactly one tool call: \`nudge/suggest_app_connection({ appName, reason })\`.
+2. Your assistant message must contain only that tool call. No prose. No URL. No "I'll connect Gmail now" preamble.
+3. After the tool returns, stop generating. The UI is now showing a Connect card. The user will OAuth or paste an API key.
+4. The user's next message will be either "I've connected <app>, continue" or "Continue without connecting <app>, do it manually". Branch accordingly.
+
+Any text or URL you add duplicates the card. The Connect card is the single source of truth for authorization UX. Your job is to call the tool and get out of the way.
+
+## appName casing
+
+Pass the exact display name from the BrowserOS catalog. Proper-case, spaces preserved. Wrong casing yields a 400.
+
+Right: \`Gmail\`, \`Google Calendar\`, \`Slack\`, \`GitHub\`, \`Cal.com\`, \`Microsoft Teams\`.
+Wrong: \`gmail\`, \`google-calendar\`, \`Gcalendar\`, \`Github\`, \`MS Teams\`.
+
+## reason
+
+One short sentence the user actually reads, starting with "to":
+
+- "to read your Linear issues for the standup"
+- "to send the Slack message you drafted"
+
+Avoid jargon and uninformative reasons.
+
+## When NOT to use this tool
+
+- Service is in Declined apps for this session. Use browser automation.
+- Inside the connect ritual itself. Do not chain other tools onto a \`suggest_app_connection\` reply.
+- Task is to read a single public page. Static fetch or browser automation is the right path.
+
+## Mid-flow 401
+
+If \`execute_action\` (or any Strata call) returns 401 / Unauthorized for an app that was previously connected:
+
+1. Call \`nudge/suggest_app_connection({ appName, reason: "to re-authenticate <app>, the session expired" })\`.
+2. Same rules as above: only the tool call, then stop.
+3. After the user replies, retry the same \`execute_action\` with the same parameters. Skip rediscovery.
+
+Never open the auth URL yourself with browser automation. The Connect card owns the OAuth window.
+`,
   soul: `---
 name: soul
 description: Maintain this agent's behavior and operating style.

@@ -59,8 +59,16 @@ jobs:
             junit_path: test-results/server-root.xml
             needs_browser: false
           - suite: agent
-            command: (cd apps/agent && bun run test)
+            command: (cd apps/app && bun run test)
             junit_path: test-results/agent.xml
+            needs_browser: false
+          - suite: claw-app
+            command: (cd apps/claw-app && bun run test)
+            junit_path: test-results/claw-app.xml
+            needs_browser: false
+          - suite: claw-server
+            command: (cd apps/claw-server && bun run test)
+            junit_path: test-results/claw-server.xml
             needs_browser: false
           - suite: eval
             command: (cd apps/eval && bun run test)
@@ -73,7 +81,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -99,7 +107,7 @@ jobs:
       - name: Restore BrowserOS cache
         if: matrix.needs_browser == true
         id: browseros-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5.0.5
         with:
           path: packages/browseros-agent/.ci/bin/BrowserOS.AppImage
           key: ${{ steps.browseros-cache-key.outputs.key }}
@@ -277,7 +285,7 @@ jobs:
           PY
 
       - name: Upsert sticky PR comment
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');

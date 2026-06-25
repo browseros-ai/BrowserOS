@@ -141,6 +141,78 @@ describe('createAcpUIMessageStream', () => {
     })
   })
 
+  it('emits byok-shaped tool parts for app_connection_request', async () => {
+    // The wire shape must match the byok sentinel verbatim so the
+    // sidepanel's existing nudge parser and ConnectAppCard handle it
+    // without any code change. Output.content[0].text is a JSON
+    // string of { type, appName, reason } that getMessageSegments
+    // parses to render the card.
+    const chunks = await collectChunks([
+      {
+        type: 'app_connection_request',
+        toolCallId: 'nudge-1',
+        appName: 'Linear',
+        reason: 'to read your Linear issues',
+      },
+      { type: 'done', stopReason: 'end_turn' },
+    ])
+
+    expect(chunks).toContainEqual({
+      type: 'tool-input-available',
+      toolCallId: 'nudge-1',
+      toolName: 'suggest_app_connection',
+      input: { appName: 'Linear', reason: 'to read your Linear issues' },
+      dynamic: true,
+    })
+    expect(chunks).toContainEqual({
+      type: 'tool-output-available',
+      toolCallId: 'nudge-1',
+      output: {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              type: 'app_connection',
+              appName: 'Linear',
+              reason: 'to read your Linear issues',
+            }),
+          },
+        ],
+        isError: false,
+      },
+      dynamic: true,
+    })
+  })
+
+  it('suppresses upstream tool_call rendering for nudge tools', async () => {
+    // Without suppression the renderer would briefly show a generic
+    // tool block ("Tool: nudge/suggest_app_connection") next to the
+    // real card. Mirrors agent-company's StreamTranslator drop.
+    const chunks = await collectChunks([
+      {
+        type: 'tool_call',
+        id: 'tool-x',
+        title: 'nudge/suggest_app_connection',
+        text: 'Calling tool',
+        status: 'completed',
+      },
+      { type: 'done', stopReason: 'end_turn' },
+    ])
+
+    expect(
+      chunks.some(
+        (c) =>
+          c.type === 'tool-input-available' &&
+          c.toolName === 'nudge/suggest_app_connection',
+      ),
+    ).toBe(false)
+    expect(
+      chunks.some(
+        (c) => c.type === 'tool-output-available' && c.toolCallId === 'tool-x',
+      ),
+    ).toBe(false)
+  })
+
   it('keeps ACP status events transient', async () => {
     const chunks = await collectChunks([
       { type: 'status', text: 'Using adapter default' },

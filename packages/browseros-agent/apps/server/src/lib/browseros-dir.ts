@@ -89,13 +89,8 @@ export function getDbPath(): string {
   return join(getBrowserosDir(), PATHS.DB_DIR_NAME, PATHS.DB_FILE_NAME)
 }
 
-export function getServerConfigPath(): string {
+function getServerConfigPath(): string {
   return join(getBrowserosDir(), PATHS.SERVER_CONFIG_FILE_NAME)
-}
-
-/** Returns the user-managed SOUL.md path used as passive agent prompt context. */
-export function getSoulPath(): string {
-  return join(getBrowserosDir(), PATHS.SOUL_FILE_NAME)
 }
 
 export async function writeServerConfig(

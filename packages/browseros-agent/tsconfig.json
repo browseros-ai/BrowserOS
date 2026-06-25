@@ -25,7 +25,12 @@
     "declaration": true,
     "declarationMap": true
   },
-  "references": [{ "path": "./apps/server" }],
+  "references": [
+    { "path": "./packages/browser-core" },
+    { "path": "./packages/browser-mcp" },
+    { "path": "./apps/server" },
+    { "path": "./apps/claw-server" }
+  ],
   "include": [],
   "exclude": ["node_modules", "dist", "build", "*.config.js"]
 }

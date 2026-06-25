@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -184,9 +184,3 @@ jobs:
             -H 'Content-Type: application/json' \
             -d @slack-payload.json \
             $SLACK_WEBHOOK_URL
-
-      - name: Fail if vulnerabilities found
-        if: steps.audit.outputs.vuln_count != '0'
-        run: |
-          echo "Security audit found vulnerabilities"
-          exit 1

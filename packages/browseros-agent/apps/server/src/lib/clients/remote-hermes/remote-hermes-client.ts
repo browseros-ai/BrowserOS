@@ -51,9 +51,7 @@ export interface RemoteHermesClientOptions {
 }
 
 export class RemoteHermesClient {
-  /** Stable per-install identifier. Exposed so the WS bridge can use it
-   *  as the `X-BrowserOS-Scope-Id` for tool calls dispatched back into
-   *  the laptop's local MCP. */
+  /** Stable per-install identifier used for worker auth and local MCP attribution. */
   readonly browserosId: string
   private readonly jwtSecret: string
   private readonly baseUrl: string

@@ -34,6 +34,11 @@ func DefaultLocalPorts() Ports {
 }
 
 func ResolveWatchPorts(useRandom bool) (Ports, *PortReservations, error) {
+	return ResolveWatchPortsWithDefaults(DefaultLocalPorts(), useRandom)
+}
+
+// ResolveWatchPortsWithDefaults reserves watch ports using caller-selected preferred ports.
+func ResolveWatchPortsWithDefaults(defaultPorts Ports, useRandom bool) (Ports, *PortReservations, error) {
 	reserved := make(map[int]struct{}, 3)
 	reservations := &PortReservations{}
 	if useRandom {
@@ -59,7 +64,6 @@ func ResolveWatchPorts(useRandom bool) (Ports, *PortReservations, error) {
 		return Ports{CDP: cdp, Server: server, Extension: extension}, reservations, nil
 	}
 
-	defaultPorts := DefaultLocalPorts()
 	cdp, cdpListener, err := selectPreferredPort(defaultPorts.CDP, reserved)
 	if err != nil {
 		reservations.ReleaseAll()

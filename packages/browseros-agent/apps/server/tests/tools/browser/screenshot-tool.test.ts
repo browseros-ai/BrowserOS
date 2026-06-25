@@ -2,10 +2,10 @@ import { describe, expect, it } from 'bun:test'
 import type {
   ScreenshotCaptureOptions,
   ScreenshotCaptureResult,
-} from '../../../src/browser/core/screenshot'
-import type { BrowserSession } from '../../../src/browser/core/session'
-import { executeTool } from '../../../src/tools/browser/framework'
-import { screenshot } from '../../../src/tools/browser/screenshot'
+} from '@browseros/browser-core/core/screenshot'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
+import { executeTool } from '@browseros/browser-mcp/tools/framework'
+import { screenshot } from '@browseros/browser-mcp/tools/screenshot'
 
 describe('screenshot tool', () => {
   it('defaults annotate to true and returns inline JPEG content', async () => {
@@ -70,6 +70,9 @@ describe('screenshot tool', () => {
     ])
     expect(result.structuredContent).toEqual({
       page: 3,
+      format: 'jpeg',
+      bytes: Buffer.from('jpeg-data', 'base64').length,
+      image: 'jpeg-data',
       annotations: [
         {
           ref: 'e1',
@@ -116,6 +119,11 @@ describe('screenshot tool', () => {
     expect(result.content).toEqual([
       { type: 'image', data: 'jpeg-data', mimeType: 'image/jpeg' },
     ])
-    expect(result.structuredContent).toBeUndefined()
+    expect(result.structuredContent).toEqual({
+      page: 3,
+      format: 'jpeg',
+      bytes: Buffer.from('jpeg-data', 'base64').length,
+      image: 'jpeg-data',
+    })
   })
 })

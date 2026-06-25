@@ -1,0 +1,14 @@
+{
+  "$schema": "https://www.react.doctor/schema.json",
+  "deadCode": false,
+  "ignore": {
+    "files": [
+      "components/ui/**",
+      "components/ai-elements/**",
+      ".wxt/**",
+      ".output/**",
+      "dist/**",
+      "node_modules/**"
+    ]
+  }
+}

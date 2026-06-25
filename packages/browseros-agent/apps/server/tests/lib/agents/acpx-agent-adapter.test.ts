@@ -55,7 +55,7 @@ describe('prepareAcpxAgentContext', () => {
       /^agent:claude-agent:main:[a-f0-9]{16}$/,
     )
     expect(prepared.runPrompt).toContain(
-      'Available skills: browseros, memory, soul',
+      'Available skills: app-connections, browseros, memory, soul',
     )
     expect(
       await readFile(`${prepared.commandEnv.AGENT_HOME}/MEMORY.md`, 'utf8'),

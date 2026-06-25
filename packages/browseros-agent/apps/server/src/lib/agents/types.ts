@@ -58,6 +58,18 @@ export type AgentStreamEvent =
       message: string
       code?: string
     }
+  | {
+      // Side-channel emitted by the in-process /mcp/nudge tool handler
+      // when the host agent calls suggest_app_connection. The acpx
+      // tool-result wire shape is lossy (acpx-ai-provider collapses MCP
+      // content to a status string), so structured input is delivered
+      // here instead of through the tool_call path and surfaces as a
+      // byok-shaped tool part at the UI stream boundary.
+      type: 'app_connection_request'
+      toolCallId: string
+      appName: string
+      reason: string
+    }
 
 /**
  * Inline image attachment forwarded to the ACP `prompt` request as an

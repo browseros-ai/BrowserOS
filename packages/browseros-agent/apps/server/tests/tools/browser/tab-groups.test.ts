@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test'
-import type { BrowserSession } from '../../../src/browser/core/session'
-import type { TabGroup } from '../../../src/browser/tab-groups'
-import { executeTool } from '../../../src/tools/browser/framework'
-import { tab_groups } from '../../../src/tools/browser/tab-groups'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
+import type { TabGroup } from '@browseros/browser-core/tab-groups'
+import { executeTool } from '@browseros/browser-mcp/tools/framework'
+import { tab_groups } from '@browseros/browser-mcp/tools/tab-groups'
 
 interface FakeOpts {
   // page id -> tab id (drives getInfo/resolveTabIds in both directions)

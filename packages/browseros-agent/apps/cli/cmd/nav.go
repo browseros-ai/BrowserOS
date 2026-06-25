@@ -13,11 +13,11 @@ func init() {
 		Short:       "Navigate the current page to a URL",
 		Args:        cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			c := newClient()
-			pageID, err := resolvePageID(c)
+			pageID, err := resolvePageID(nil)
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
+			c := newClient()
 			result, err := c.CallTool("navigate", map[string]any{
 				"page":   pageID,
 				"action": "url",
@@ -63,11 +63,11 @@ func init() {
 
 func navAction(action string) func(*cobra.Command, []string) {
 	return func(cmd *cobra.Command, args []string) {
-		c := newClient()
-		pageID, err := resolvePageID(c)
+		pageID, err := resolvePageID(nil)
 		if err != nil {
 			output.Error(err.Error(), 2)
 		}
+		c := newClient()
 		result, err := c.CallTool("navigate", map[string]any{
 			"page":   pageID,
 			"action": action,

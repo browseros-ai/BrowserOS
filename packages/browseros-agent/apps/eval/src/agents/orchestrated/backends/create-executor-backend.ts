@@ -1,5 +1,5 @@
+import type { Browser } from '@browseros/browser-core/browser'
 import type { ResolvedAgentConfig } from '@browseros/server/agent/types'
-import type { Browser } from '@browseros/server/browser'
 import type {
   ExecutorBackend,
   ExecutorBackendKind,

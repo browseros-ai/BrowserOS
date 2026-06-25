@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'bun:test'
-import type { ToolContext } from '../../../src/tools/browser/framework'
+import type { ToolResponse } from '@browseros/browser-mcp/response'
+import type { ToolContext } from '@browseros/browser-mcp/tools/framework'
 import {
   DEFAULT_PAUSE_MS,
   parseWaitMs,
   wait,
-} from '../../../src/tools/browser/wait'
-import type { ToolResponse } from '../../../src/tools/response'
+} from '@browseros/browser-mcp/tools/wait'
 
 describe('wait schema', () => {
   it('defaults for to "time" so a bare page just pauses', () => {

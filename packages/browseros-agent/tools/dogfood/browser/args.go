@@ -37,7 +37,7 @@ func BuildArgs(cfg ArgsConfig) []string {
 	if cfg.ProfileDir != "" {
 		args = append(args, fmt.Sprintf("--profile-directory=%s", cfg.ProfileDir))
 	}
-	args = append(args, fmt.Sprintf("--load-extension=%s", filepath.Join(cfg.AgentRoot, "apps/agent/dist/chrome-mv3-dev")))
+	args = append(args, fmt.Sprintf("--load-extension=%s", filepath.Join(cfg.AgentRoot, "apps/app/dist/chrome-mv3-dev")))
 	if cfg.Headless {
 		args = append(args, "--headless=new")
 	}

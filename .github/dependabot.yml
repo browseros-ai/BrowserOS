@@ -1,0 +1,45 @@
+version: 2
+
+updates:
+  - package-ecosystem: "bun"
+    directory: "/packages/browseros-agent"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 3
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github-actions"

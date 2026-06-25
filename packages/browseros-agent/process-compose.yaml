@@ -15,7 +15,7 @@ processes:
         condition: process_completed_successfully
 
   agent-codegen:
-    command: bun --cwd apps/agent codegen --watch
+    command: bun --cwd apps/app codegen --watch
     availability:
       restart: always
     depends_on:

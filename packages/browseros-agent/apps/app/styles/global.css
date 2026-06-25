@@ -1,0 +1,662 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "tailwind-scrollbar-hide/v4";
+@plugin "@tailwindcss/typography";
+
+/* streamdown@2 ships its own component classes that Tailwind needs
+   to scan for utilities. Without this, Tailwind purges classes that
+   streamdown emits at runtime (e.g. code-block layout). */
+@source "../../../node_modules/streamdown/dist/*.js";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Geist Sans Variable Font */
+@font-face {
+  font-family: "Geist";
+  src: url("../geist/Geist[wght].woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist";
+  src: url("../geist/Geist-Italic[wght].woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+/* Geist Mono Variable Font */
+@font-face {
+  font-family: "Geist Mono";
+  src: url("../geist-mono/GeistMono[wght].woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("../geist-mono/GeistMono-Italic[wght].woff2")
+    format("woff2-variations");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+:root {
+  --radius: 0.65rem;
+  --background: oklch(0.985 0.002 85);
+  --foreground: oklch(0.141 0.005 285.823);
+  --card: oklch(0.99 0.001 85);
+  --card-foreground: oklch(0.141 0.005 285.823);
+  --popover: oklch(0.99 0.001 85);
+  --popover-foreground: oklch(0.141 0.005 285.823);
+  --primary: oklch(0.646 0.222 41.116);
+  --primary-foreground: oklch(0.98 0.016 73.684);
+  --secondary: oklch(0.97 0.002 85);
+  --secondary-foreground: oklch(0.21 0.006 285.885);
+  --muted: oklch(0.97 0.002 85);
+  --muted-foreground: oklch(0.552 0.016 285.938);
+  --accent: oklch(0.97 0.002 85);
+  --accent-foreground: oklch(0.21 0.006 285.885);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.99 0 0);
+  --border: oklch(0.92 0.004 286.32);
+  --input: oklch(0.92 0.004 286.32);
+  --ring: oklch(0.75 0.183 55.934);
+  --chart-1: oklch(0.837 0.128 66.29);
+  --chart-2: oklch(0.705 0.213 47.604);
+  --chart-3: oklch(0.646 0.222 41.116);
+  --chart-4: oklch(0.553 0.195 38.402);
+  --chart-5: oklch(0.47 0.157 37.304);
+  --sidebar: oklch(0.98 0.002 85);
+  --sidebar-foreground: oklch(0.141 0.005 285.823);
+  --sidebar-primary: oklch(0.646 0.222 41.116);
+  --sidebar-primary-foreground: oklch(0.98 0.016 73.684);
+  --sidebar-accent: oklch(0.92 0.004 85);
+  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
+  --sidebar-border: oklch(0.92 0.004 286.32);
+  --sidebar-ring: oklch(0.75 0.183 55.934);
+  /* Custom accent color for BrowserOS branding */
+  --accent-orange: oklch(0.6781 0.1663 43.21);
+  /* Added brighter orange variant for shimmer animation */
+  --accent-orange-bright: oklch(0.7531 0.1963 43.21);
+}
+
+.dark {
+  --background: oklch(0.25 0.01 265);
+  --foreground: oklch(0.92 0 0);
+  --card: oklch(0.28 0.01 265);
+  --card-foreground: oklch(0.92 0 0);
+  --popover: oklch(0.28 0.01 265);
+  --popover-foreground: oklch(0.92 0 0);
+  --primary: oklch(0.705 0.213 47.604);
+  --primary-foreground: oklch(0.98 0.016 73.684);
+  --secondary: oklch(0.32 0.01 265);
+  --secondary-foreground: oklch(0.92 0 0);
+  --muted: oklch(0.32 0.01 265);
+  --muted-foreground: oklch(0.65 0 0);
+  --accent: oklch(0.32 0.01 265);
+  --accent-foreground: oklch(0.92 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.92 0 0);
+  --border: oklch(0.38 0.01 265);
+  --input: oklch(0.38 0.01 265);
+  --ring: oklch(0.408 0.123 38.172);
+  --chart-1: oklch(0.837 0.128 66.29);
+  --chart-2: oklch(0.705 0.213 47.604);
+  --chart-3: oklch(0.646 0.222 41.116);
+  --chart-4: oklch(0.553 0.195 38.402);
+  --chart-5: oklch(0.47 0.157 37.304);
+  --sidebar: oklch(0.25 0.01 265);
+  --sidebar-foreground: oklch(0.92 0 0);
+  --sidebar-primary: oklch(0.705 0.213 47.604);
+  --sidebar-primary-foreground: oklch(0.92 0 0);
+  --sidebar-accent: oklch(0.32 0.01 265);
+  --sidebar-accent-foreground: oklch(0.92 0 0);
+  --sidebar-border: oklch(0.38 0.01 265);
+  --sidebar-ring: oklch(0.408 0.123 38.172);
+}
+
+@theme inline {
+  --font-sans: "Geist", "Geist Fallback";
+  --font-mono: "Geist Mono", "Geist Mono Fallback";
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-accent-orange: var(--accent-orange);
+  /* Added brighter orange to theme */
+  --color-accent-orange-bright: var(--accent-orange-bright);
+
+  /* Custom keyframe animations for hero section */
+  --animate-float: float 3s ease-in-out infinite;
+  --animate-shimmer: shimmer 3s ease-in-out infinite;
+  --animate-pulse-slow: pulse-slow 4s ease-in-out infinite;
+  --animate-pulse-slow-delayed: pulse-slow 4s ease-in-out infinite 2s;
+  /* Added one-time glow animation for BrowserOS text */
+  --animate-glow-once: glow-once 1.5s ease-out 1s forwards;
+  /* Added shine animation for card hover highlight effect */
+  --animate-shine: shine 0.8s ease-in-out;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans! antialiased;
+  }
+
+  /* Styled scrollbar with stable gutter and theme-aware colors */
+  .styled-scrollbar {
+    /* Firefox support */
+    scrollbar-width: thin;
+    scrollbar-color: oklch(from var(--border) l c h / 0.4) transparent;
+  }
+
+  /* Webkit browsers (Chrome, Safari, Edge) */
+  .styled-scrollbar::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .styled-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .styled-scrollbar::-webkit-scrollbar-thumb {
+    background: oklch(from var(--border) l c h / 0.4);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .styled-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: oklch(from var(--border) l c h / 0.6);
+    background-clip: padding-box;
+  }
+
+  /* Dark mode adjustments */
+  .dark .styled-scrollbar {
+    scrollbar-color: oklch(from var(--border) l c h / 0.6) transparent;
+  }
+
+  .dark .styled-scrollbar::-webkit-scrollbar-thumb {
+    background: oklch(from var(--border) l c h / 0.6);
+    background-clip: padding-box;
+  }
+
+  .dark .styled-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: oklch(from var(--border) l c h / 0.8);
+    background-clip: padding-box;
+  }
+
+  /* Custom animation keyframes for minimal, elegant hero animations */
+  @keyframes float {
+    0%,
+    100% {
+      transform: translateY(0px);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+
+  @keyframes shimmer {
+    0% {
+      background-position: -200% center;
+    }
+    100% {
+      background-position: 200% center;
+    }
+  }
+
+  @keyframes pulse-slow {
+    0%,
+    100% {
+      opacity: 0.3;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.5;
+      transform: scale(1.05);
+    }
+  }
+
+  /* Added subtle one-time glow animation that draws focus then settles */
+  @keyframes glow-once {
+    0% {
+      text-shadow: none;
+      transform: scale(1);
+    }
+    50% {
+      text-shadow:
+        0 0 20px rgba(214, 123, 68, 0.6),
+        0 0 40px rgba(214, 123, 68, 0.4),
+        0 0 60px rgba(214, 123, 68, 0.2);
+      transform: scale(1.02);
+    }
+    100% {
+      text-shadow: none;
+      transform: scale(1);
+    }
+  }
+
+  /* Added shine animation for card hover highlight effect */
+  @keyframes shine {
+    0% {
+      transform: translateX(-100%) translateY(-100%) rotate(30deg);
+    }
+    100% {
+      transform: translateX(100%) translateY(100%) rotate(30deg);
+    }
+  }
+
+  /* Collapsible animations for smooth expand/collapse */
+  @keyframes collapsible-down {
+    from {
+      height: 0;
+      opacity: 0;
+    }
+    to {
+      height: var(--radix-collapsible-content-height);
+      opacity: 1;
+    }
+  }
+
+  @keyframes collapsible-up {
+    from {
+      height: var(--radix-collapsible-content-height);
+      opacity: 1;
+    }
+    to {
+      height: 0;
+      opacity: 0;
+    }
+  }
+
+  .bg-grid-pattern {
+    background-image:
+      linear-gradient(to right, rgba(0, 0, 0, 0.03) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(0, 0, 0, 0.03) 1px, transparent 1px);
+    background-size: 60px 60px;
+  }
+
+  .dark .bg-grid-pattern {
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+    background-size: 60px 60px;
+  }
+
+  .bg-gradient-radial-focus {
+    background: radial-gradient(
+      circle at center,
+      transparent 0%,
+      transparent 30%,
+      var(--background) 70%
+    );
+  }
+
+  /* Animation utility classes */
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+
+  .animate-shimmer {
+    animation: shimmer 3s ease-in-out infinite;
+  }
+
+  .animate-pulse-slow {
+    animation: pulse-slow 4s ease-in-out infinite;
+  }
+
+  .animate-pulse-slow-delayed {
+    animation: pulse-slow 4s ease-in-out infinite 2s;
+  }
+
+  /* Added utility class for one-time glow animation */
+  .animate-glow-once {
+    animation: glow-once 1.5s ease-out forwards;
+  }
+
+  /* Added utility class for shine animation on card hover */
+  .animate-shine {
+    animation: shine 0.8s ease-in-out;
+  }
+
+  /* Collapsible animation utility classes */
+  .animate-collapsible-down {
+    animation: collapsible-down 0.2s ease-out;
+  }
+
+  .animate-collapsible-up {
+    animation: collapsible-up 0.2s ease-out;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* MDXEditor — positioning shell (non-scrolling) */
+.mdx-editor-outer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  overflow: clip;
+}
+
+/* MDXEditor — scrollable inner area */
+.mdx-editor-themed {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* MDXEditor theme overrides — must target .mdxeditor directly to beat _editorRoot specificity */
+.mdx-editor-themed .mdxeditor {
+  --basePageBg: var(--card);
+  --baseBase: var(--card);
+  --baseBgSubtle: var(--secondary);
+  --baseBg: var(--muted);
+  --baseBgHover: var(--accent);
+  --baseBgActive: var(--accent);
+  --baseLine: var(--border);
+  --baseBorder: var(--border);
+  --baseBorderHover: var(--foreground);
+  --baseSolid: var(--muted-foreground);
+  --baseSolidHover: var(--foreground);
+  --baseText: var(--muted-foreground);
+  --baseTextContrast: var(--foreground);
+  --accentBase: var(--accent-orange);
+  --accentBgSubtle: oklch(from var(--accent-orange) l c h / 0.08);
+  --accentBg: oklch(from var(--accent-orange) l c h / 0.12);
+  --accentBgActive: oklch(from var(--accent-orange) l c h / 0.18);
+  --accentLine: oklch(from var(--accent-orange) l c h / 0.3);
+  --accentSolid: var(--accent-orange);
+  --accentText: var(--accent-orange);
+  --font-body: var(--font-sans);
+  --font-mono: var(--font-mono);
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--foreground);
+}
+
+.mdx-editor-themed .mdxeditor [role="textbox"]:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.mdx-editor-themed .mdxeditor [data-placeholder]::before {
+  color: var(--muted-foreground);
+  opacity: 0.6;
+}
+
+/* Content area */
+.mdx-content-editable {
+  background: transparent;
+}
+
+.mdx-content-editable h1,
+.mdx-content-editable h2,
+.mdx-content-editable h3 {
+  color: var(--foreground);
+}
+
+/* Checklist — align checkbox with text baseline */
+.mdx-content-editable [class*="listItemChecked"]::before,
+.mdx-content-editable [class*="listItemUnchecked"]::before {
+  top: 0.2em;
+}
+
+.mdx-content-editable [class*="listItemChecked"]::after {
+  top: calc(0.2em + 2px);
+}
+
+/* ── Copy button bar ── */
+.mdx-copy-bar {
+  display: flex;
+  justify-content: flex-end;
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.mdx-copy-button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.mdx-copy-button:hover {
+  color: var(--foreground);
+  border-color: var(--foreground);
+}
+
+/* ── Toolbar ── */
+.mdx-editor-themed .mdxeditor [role="toolbar"] {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 10px;
+  gap: 4px;
+}
+
+/* Toggle groups — add gap so active buttons don't touch */
+.mdx-editor-themed .mdxeditor [role="toolbar"] [role="group"] {
+  gap: 3px;
+}
+
+/* Toolbar buttons — idle */
+.mdx-editor-themed .mdxeditor [role="toolbar"] button,
+.mdx-editor-themed .mdxeditor [role="toolbar"] [role="radio"] {
+  color: var(--muted-foreground);
+  border-radius: 6px;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+/* Toolbar buttons — hover */
+.mdx-editor-themed .mdxeditor [role="toolbar"] button:hover,
+.mdx-editor-themed .mdxeditor [role="toolbar"] [role="radio"]:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+/* Toolbar buttons — active / toggled on */
+.mdx-editor-themed .mdxeditor [role="toolbar"] button[data-state="on"],
+.mdx-editor-themed .mdxeditor [role="toolbar"] [role="radio"][data-state="on"] {
+  background: var(--accent-orange);
+  color: white;
+}
+
+/* Toolbar buttons — disabled */
+.mdx-editor-themed .mdxeditor [role="toolbar"] button[data-disabled],
+.mdx-editor-themed .mdxeditor [role="toolbar"] [role="radio"][data-disabled] {
+  opacity: 0.35;
+}
+
+/* Toolbar separator */
+.mdx-editor-themed .mdxeditor [role="toolbar"] [role="separator"] {
+  border-color: var(--border);
+  margin-inline: 4px;
+}
+
+/* ── Block-type select trigger ── */
+.mdx-editor-themed .mdxeditor [class*="selectTrigger"],
+.mdx-editor-themed .mdxeditor [class*="SelectTrigger"] {
+  background: var(--card);
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  padding: 3px 8px;
+  transition: border-color 0.15s;
+}
+
+.mdx-editor-themed .mdxeditor [class*="selectTrigger"]:hover,
+.mdx-editor-themed .mdxeditor [class*="SelectTrigger"]:hover {
+  border-color: var(--foreground);
+}
+
+/* ── Block-type select dropdown ── */
+.mdx-editor-themed .mdxeditor [class*="selectContainer"],
+.mdx-editor-themed .mdxeditor [class*="SelectContent"] {
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  filter: drop-shadow(0 4px 12px rgb(0 0 0 / 0.15));
+}
+
+.mdx-editor-themed .mdxeditor [class*="selectItem"],
+.mdx-editor-themed .mdxeditor [class*="SelectItem"] {
+  color: var(--foreground);
+  padding: 6px 10px;
+  font-size: 0.8125rem;
+}
+
+.mdx-editor-themed .mdxeditor [class*="selectItem"][data-highlighted],
+.mdx-editor-themed .mdxeditor [class*="SelectItem"][data-highlighted] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+.mdx-editor-themed .mdxeditor [class*="selectItem"][data-state="checked"],
+.mdx-editor-themed .mdxeditor [class*="SelectItem"][data-state="checked"] {
+  background: oklch(from var(--accent-orange) l c h / 0.1);
+  color: var(--accent-orange);
+}
+
+/* ── Link dialog ── */
+.mdx-editor-themed .mdxeditor [class*="linkDialogPopover"] {
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--foreground);
+  filter: drop-shadow(0 4px 12px rgb(0 0 0 / 0.15));
+}
+
+.mdx-editor-themed .mdxeditor [class*="linkDialogPopover"] input {
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--foreground);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.mdx-editor-themed .mdxeditor [class*="linkDialogPopover"] input:focus {
+  border-color: var(--accent-orange);
+  outline: none;
+  box-shadow: 0 0 0 2px oklch(from var(--accent-orange) l c h / 0.15);
+}
+
+.mdx-editor-themed .mdxeditor [class*="linkDialogPopover"] button {
+  color: var(--foreground);
+}
+
+/* ── Dark mode adjustments ── */
+.dark .mdx-editor-themed .mdxeditor [class*="selectContainer"],
+.dark .mdx-editor-themed .mdxeditor [class*="SelectContent"] {
+  filter: drop-shadow(0 4px 16px rgb(0 0 0 / 0.4));
+}
+
+.dark .mdx-editor-themed .mdxeditor [class*="linkDialogPopover"] {
+  filter: drop-shadow(0 4px 16px rgb(0 0 0 / 0.4));
+}
+
+@keyframes voice-persona-breath {
+  0%,
+  100% {
+    transform: scale(0.92);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 1;
+  }
+}
+
+@keyframes voice-persona-pulse {
+  0%,
+  100% {
+    transform: scale(0.96);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+}
+
+@keyframes voice-halo-pulse {
+  0%,
+  100% {
+    transform: scale(0.95);
+  }
+  50% {
+    transform: scale(1.15);
+  }
+}

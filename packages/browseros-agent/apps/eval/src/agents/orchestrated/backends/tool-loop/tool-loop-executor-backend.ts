@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import type { Browser } from '@browseros/browser-core/browser'
 import { AiSdkAgent } from '@browseros/server/agent/tool-loop'
 import type { ResolvedAgentConfig } from '@browseros/server/agent/types'
-import type { Browser } from '@browseros/server/browser'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 import type {
   DelegationResult,
@@ -62,26 +62,47 @@ export class ToolLoopExecutorBackend implements ExecutorBackend {
         prompt: instruction,
         abortSignal: signal,
 
-        experimental_onToolCallStart: ({ toolCall }) => {
-          const input = toolCall.input as Record<string, unknown> | undefined
-          if (input && typeof input.url === 'string' && input.url.length > 0) {
-            this.currentUrl = input.url
-          }
-          this.options.callbacks?.onToolCallStart?.({
-            toolCallId: toolCall.toolCallId,
-            toolName: toolCall.toolName,
-            input: toolCall.input,
-          })
-        },
-
-        experimental_onToolCallFinish: async () => {
-          this.stepsUsed++
-          await this.options.callbacks?.onToolCallFinish?.()
-        },
-
-        onStepFinish: async ({ toolCalls, toolResults, text }) => {
+        onStepFinish: async ({
+          toolCalls,
+          toolResults,
+          text,
+        }: {
+          // ai-sdk option-type widening under this branch's mixed-zod
+          // workspace (cockpit pins zod v4, server pins v3) drops the
+          // destructure to implicit-any. The explicit `any` keeps the
+          // call compiling; the runtime contract is unchanged.
+          // biome-ignore lint/suspicious/noExplicitAny: see comment above
+          toolCalls?: any
+          // biome-ignore lint/suspicious/noExplicitAny: see comment above
+          toolResults?: any
+          text?: string
+        }) => {
+          // Pre-v6.0.208 split this into experimental_onToolCallStart and
+          // experimental_onToolCallFinish; ToolLoopAgent no longer exposes
+          // those per-call hooks. Replay both lifecycle callbacks here so
+          // outer observers still see per-tool-call events, and update
+          // step-level state once per tool call within the step.
           if (toolCalls) {
             for (const toolCall of toolCalls) {
+              const input = toolCall.input as
+                | Record<string, unknown>
+                | undefined
+              if (
+                input &&
+                typeof input.url === 'string' &&
+                input.url.length > 0
+              ) {
+                this.currentUrl = input.url
+              }
+              this.options.callbacks?.onToolCallStart?.({
+                toolCallId: toolCall.toolCallId,
+                toolName: toolCall.toolName,
+                input: toolCall.input,
+              })
+
+              this.stepsUsed++
+              await this.options.callbacks?.onToolCallFinish?.()
+
               if (!toolsUsed.includes(toolCall.toolName)) {
                 toolsUsed.push(toolCall.toolName)
               }
@@ -96,7 +117,8 @@ export class ToolLoopExecutorBackend implements ExecutorBackend {
             text,
           })
         },
-      })
+        // biome-ignore lint/suspicious/noExplicitAny: ai-sdk option-type widening under mixed workspace zod versions; see top-of-call comment.
+      } as any)
     } catch {
       status = signal?.aborted ? 'timeout' : 'blocked'
     } finally {

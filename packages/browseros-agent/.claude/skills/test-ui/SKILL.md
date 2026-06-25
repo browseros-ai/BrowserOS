@@ -1,16 +1,16 @@
 ---
 name: test-ui
-description: Test the BrowserOS agent extension UI by starting the dev environment and visually verifying changes via CDP. Covers the new tab page (left sidebar — Home, Scheduled Tasks, Settings, etc.) and the right side panel (chat interface). Use after making UI changes to apps/agent/.
+description: Test the BrowserOS app extension UI by starting the dev environment and visually verifying changes via CDP. Covers the new tab page (left sidebar — Home, Scheduled Tasks, Settings, etc.) and the right side panel (chat interface). Use after making UI changes to apps/app/.
 argument-hint: [what to test, e.g. "verify the new settings page renders correctly"]
 ---
 
-# Test Agent UI
+# Test App UI
 
-Visually test the BrowserOS agent extension UI — both the new tab page (left sidebar) and the right side panel (chat) — by starting the dev environment and inspecting via CDP.
+Visually test the BrowserOS app extension UI — both the new tab page (left sidebar) and the right side panel (chat) — by starting the dev environment and inspecting via CDP.
 
 ## When to use
 
-After making code changes to `apps/agent/` (the Chrome extension), use this skill to:
+After making code changes to `apps/app/` (the Chrome extension), use this skill to:
 - Verify new UI components render correctly
 - Check navigation between views works
 - Confirm layout/styling changes look right
@@ -33,7 +33,7 @@ This single command handles everything:
 - Picks random available ports (avoids conflicts)
 - Creates a fresh browser profile
 - Builds controller-ext
-- Runs GraphQL codegen if `apps/agent/generated/graphql/` doesn't exist
+- Runs GraphQL codegen if `apps/app/generated/graphql/` doesn't exist
 - Starts the agent extension with WXT HMR (hot module replacement)
 - Waits for CDP to be ready
 - Starts the MCP server
@@ -202,7 +202,7 @@ Use `screenshot` only when visual layout verification is needed (CSS changes, fi
 
 ### After making code changes
 
-1. Fix the code in `apps/agent/`
+1. Fix the code in `apps/app/`
 2. WXT HMR will hot-reload the extension automatically (watch mode)
 3. Wait 2-3 seconds for the reload to complete
 4. **Re-snapshot** — element IDs WILL change after HMR reload

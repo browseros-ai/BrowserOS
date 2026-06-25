@@ -1,0 +1,178 @@
+@import "tailwindcss";
+
+/*
+ * BrowserOS Agents cockpit palette.
+ *
+ * The shadcn base-vega primitives we installed all read --color-background,
+ * --color-foreground, --color-primary etc. We re-point those at the
+ * design's warm-cream + orange palette so shadcn Cards, Badges and Buttons
+ * sit cleanly inside the cockpit. The bespoke BrowserOS tokens (bg-canvas,
+ * accent-ink, status colors, etc.) live alongside as additional utility
+ * classes.
+ *
+ * The palette is the design prototype's tokens translated from raw hex to
+ * HSL (which tailwind 4 + shadcn expect) so it composes with the rest of
+ * the utility set.
+ */
+@theme inline {
+  /* shadcn primitives: re-pointed to BrowserOS surfaces */
+  --color-background: hsl(40 25% 97%);
+  --color-foreground: hsl(40 8% 10%);
+  --color-card: hsl(0 0% 100%);
+  --color-card-foreground: hsl(40 8% 10%);
+  --color-popover: hsl(0 0% 100%);
+  --color-popover-foreground: hsl(40 8% 10%);
+  --color-primary: hsl(19 89% 56%);
+  --color-primary-foreground: hsl(0 0% 100%);
+  --color-secondary: hsl(40 22% 95%);
+  --color-secondary-foreground: hsl(40 8% 10%);
+  --color-muted: hsl(40 18% 94%);
+  --color-muted-foreground: hsl(35 5% 51%);
+  --color-accent: hsl(19 89% 56%);
+  --color-accent-foreground: hsl(0 0% 100%);
+  --color-destructive: hsl(4 56% 50%);
+  --color-destructive-foreground: hsl(0 0% 100%);
+  --color-border: hsl(40 22% 91%);
+  --color-input: hsl(40 22% 91%);
+  --color-ring: hsl(19 89% 56%);
+  --color-sidebar: hsl(40 22% 95%);
+  --color-sidebar-foreground: hsl(40 8% 10%);
+  --color-sidebar-accent: hsl(25 88% 94%);
+  --color-sidebar-accent-foreground: hsl(22 86% 38%);
+  --color-sidebar-border: hsl(40 22% 91%);
+
+  /* BrowserOS bespoke surfaces */
+  --color-bg-canvas: hsl(40 30% 98%);
+  --color-bg-sunken: hsl(40 18% 94%);
+  --color-card-tint: hsl(40 35% 98.5%);
+  --color-border-2: hsl(40 18% 88%);
+  --color-border-strong: hsl(40 14% 83%);
+
+  /* Ink scale (typography hierarchy) */
+  --color-ink: hsl(40 8% 10%);
+  --color-ink-2: hsl(35 6% 32%);
+  --color-ink-3: hsl(35 5% 51%);
+  --color-ink-4: hsl(35 5% 66%);
+
+  /* Accent ink (high-contrast orange text on tinted backgrounds) */
+  --color-accent-2: hsl(20 79% 49%);
+  --color-accent-ink: hsl(22 86% 38%);
+  --color-accent-tint: hsl(25 88% 94%);
+  --color-accent-tint-2: hsl(25 87% 90%);
+
+  /* Status palette */
+  --color-green: hsl(140 65% 33%);
+  --color-green-tint: hsl(140 35% 92%);
+  --color-amber: hsl(35 80% 40%);
+  --color-amber-tint: hsl(40 75% 92%);
+  --color-red: hsl(4 56% 50%);
+  --color-red-tint: hsl(4 65% 95%);
+  --color-blue: hsl(217 75% 53%);
+
+  /* Type families. Variable fonts get the "Variable" suffix; Newsreader is
+     not currently variable so it ships as a plain family. */
+  --font-sans: "Schibsted Grotesk Variable", system-ui, sans-serif;
+  --font-serif: "Newsreader", Georgia, serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+
+  /* Shadows from the design's --shadow-* tokens */
+  --shadow-card:
+    0 1px 2px hsl(35 35% 12% / 0.04), 0 1px 3px hsl(35 35% 12% / 0.03);
+  --shadow-pop:
+    0 8px 30px hsl(35 35% 12% / 0.14), 0 2px 8px hsl(35 35% 12% / 0.08);
+
+  /* Animations referenced by JSX utilities (animate-pulse-dot, etc.) */
+  --animate-pulse-dot: pulse-dot 1.4s ease-in-out infinite;
+  --animate-fade-up: fade-up 0.4s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  --animate-fade-in: fade-in 0.35s ease both;
+}
+
+/* Keyframes lifted from the design prototype's <style> block */
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Base layout. #root fills the viewport so the sidebar's `inset-y-0`
+   spans the whole page even when the cockpit body is shorter than the
+   viewport. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  /* The design's body has a layered gradient on warm cream. We replicate
+     the same three layers so the cockpit chrome reads as the design,
+     not a flat white page. */
+  background:
+    radial-gradient(
+      1200px 700px at 18% -8%,
+      hsl(160 12% 91%) 0%,
+      hsl(160 12% 91% / 0) 60%
+    ),
+    radial-gradient(
+      1000px 800px at 100% 110%,
+      hsl(35 25% 90%) 0%,
+      hsl(35 25% 90% / 0) 55%
+    ),
+    linear-gradient(155deg, hsl(170 10% 88%) 0%, hsl(35 18% 89%) 100%);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Selection: tint with the accent so it reads as BrowserOS, not chrome blue.
+   Foreground is pinned to ink so light-on-dark surfaces (the MCP URL block,
+   for example) stay readable when selected. */
+::selection {
+  background: var(--color-accent-tint-2);
+  color: var(--color-ink);
+}
+
+/* Honour the system "reduce motion" preference (WCAG 2.3.3). Cuts every
+   animation and CSS transition to a near-instant no-op so users with
+   vestibular sensitivities get a static cockpit. Tailwind utilities
+   like animate-pulse-dot and the replay scrubber transitions pick this
+   up automatically since they go through animation / transition
+   shorthands. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    /* biome-ignore-start lint/complexity/noImportantStyles: !important is the canonical reduced-motion override; needed to win over Tailwind's animation/transition utilities */
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+    /* biome-ignore-end lint/complexity/noImportantStyles: see start of block */
+  }
+}

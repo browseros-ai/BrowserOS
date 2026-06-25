@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
-import { getToolOutputDir } from '../../../src/lib/browseros-dir'
 import {
   createBrowserOutputFileAccess,
   withBrowserOutputFileAccess,
-} from '../../../src/tools/browser/output-file'
-import { read as browserRead } from '../../../src/tools/browser/read'
+} from '@browseros/browser-mcp/output-file'
+import { getToolOutputDir } from '@browseros/browser-mcp/tool-output-dir'
+import { read as browserRead } from '@browseros/browser-mcp/tools/read'
+import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
 import {
   createReadTool,
   type ReadToolOptions,

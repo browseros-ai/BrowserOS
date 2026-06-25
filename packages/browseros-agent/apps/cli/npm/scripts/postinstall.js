@@ -6,7 +6,8 @@ const { execSync } = require('node:child_process')
 const { createHash } = require('node:crypto')
 
 const VERSION = require('../package.json').version
-const GITHUB_RELEASE_BASE = `https://github.com/browseros-ai/BrowserOS/releases/download/browseros-cli-v${VERSION}`
+const GITHUB_RELEASE_TAG = `cli/v${VERSION}`
+const GITHUB_RELEASE_BASE = `https://github.com/browseros-ai/BrowserOS/releases/download/${encodeURIComponent(GITHUB_RELEASE_TAG)}`
 const BINARY_DIR = path.join(__dirname, '..', '.binary')
 const EXT = process.platform === 'win32' ? '.exe' : ''
 const BINARY_PATH = path.join(BINARY_DIR, `browseros-cli${EXT}`)

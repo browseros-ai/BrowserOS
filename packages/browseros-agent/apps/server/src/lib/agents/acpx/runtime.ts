@@ -204,6 +204,8 @@ export class AcpxRuntime implements AgentRuntime {
       commandIdentity: prepared.commandIdentity,
       useBrowserosMcp: prepared.useBrowserosMcp,
       browserosMcpHost: prepared.browserosMcpHost,
+      agentId: input.agent.id,
+      sessionId: input.sessionId,
     })
 
     return createAcpxEventStream(runtime, input, {
@@ -310,8 +312,17 @@ export class AcpxRuntime implements AgentRuntime {
     commandIdentity: string
     useBrowserosMcp: boolean
     browserosMcpHost?: string
+    // Identifies the active turn so the nudge MCP entry's headers
+    // route suggest_app_connection events back to the correct
+    // ReadableStream via TurnRegistry.pushEvent.
+    agentId: string
+    sessionId: AgentSessionId
   }): AcpxCoreRuntime {
     const mcpHost = input.browserosMcpHost ?? '127.0.0.1'
+    // agentId + sessionId are part of the key because they're baked
+    // into the spawned host's MCP config headers; a different turn
+    // identity needs a different runtime even if everything else
+    // matches.
     const key = JSON.stringify({
       cwd: input.cwd,
       permissionMode: input.permissionMode,
@@ -319,6 +330,8 @@ export class AcpxRuntime implements AgentRuntime {
       commandIdentity: input.commandIdentity,
       useBrowserosMcp: input.useBrowserosMcp,
       browserosMcpHost: mcpHost,
+      agentId: input.agentId,
+      sessionId: input.sessionId,
     })
     const existing = this.runtimes.get(key)
     if (existing) return existing
@@ -332,7 +345,10 @@ export class AcpxRuntime implements AgentRuntime {
         browserosDir: this.browserosDir,
       }),
       mcpServers: input.useBrowserosMcp
-        ? createBrowserosMcpServers(this.browserosServerPort, mcpHost)
+        ? createBrowserosMcpServers(this.browserosServerPort, mcpHost, {
+            agentId: input.agentId,
+            sessionId: input.sessionId,
+          })
         : [],
       permissionMode: input.permissionMode,
       nonInteractivePermissions: input.nonInteractivePermissions,
@@ -347,6 +363,8 @@ export class AcpxRuntime implements AgentRuntime {
       browserosMcpHost: mcpHost,
       commandIdentity: input.commandIdentity,
       useBrowserosMcp: input.useBrowserosMcp,
+      agentId: input.agentId,
+      sessionId: input.sessionId,
     })
     return runtime
   }
@@ -719,7 +737,8 @@ function createAcpxEventStream(
 
 function createBrowserosMcpServers(
   browserosServerPort: number,
-  host = '127.0.0.1',
+  host: string,
+  turnIdentity: { agentId: string; sessionId: AgentSessionId },
 ): NonNullable<AcpRuntimeOptions['mcpServers']> {
   return [
     {
@@ -727,6 +746,20 @@ function createBrowserosMcpServers(
       name: 'browseros',
       url: `http://${host}:${browserosServerPort}/mcp`,
       headers: [],
+    },
+    // Second entry: in-process nudge MCP server. Host LLMs see this as
+    // `nudge/suggest_app_connection` and call it whenever a connection
+    // is needed. The headers identify the active turn so the handler
+    // can push the resulting app_connection_request event onto the
+    // right stream via TurnRegistry.pushEvent.
+    {
+      type: 'http',
+      name: 'nudge',
+      url: `http://${host}:${browserosServerPort}/mcp/nudge`,
+      headers: [
+        { name: 'X-BrowserOS-Agent-Id', value: turnIdentity.agentId },
+        { name: 'X-BrowserOS-Session-Id', value: turnIdentity.sessionId },
+      ],
     },
   ]
 }

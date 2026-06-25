@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
+import { CdpBackend } from '@browseros/browser-core/backends/cdp'
+import { Browser } from '@browseros/browser-core/browser'
 import { Mutex } from 'async-mutex'
-import { CdpBackend } from '../../src/browser/backends/cdp'
-import { Browser } from '../../src/browser/browser'
 import {
   type BrowserConfig,
   isBrowserRunning,

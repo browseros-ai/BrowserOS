@@ -1,10 +1,17 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
+import {
+  createMcpRoutes,
+  MANAGED_MCP_SERVERS_HEADER,
+  parseManagedMcpServersHeader,
+} from '../../../src/api/routes/mcp'
 import type {
   ConnectorToolScope,
   KlavisProxyStatus,
 } from '../../../src/api/services/klavis'
 
 interface McpServerCreation {
+  executionDir: string | undefined
+  remoteAgentHarness: { outputFileAccess?: unknown } | undefined
   proxyStatus: KlavisProxyStatus | null
   selectedServerNames: readonly string[] | undefined
 }
@@ -21,12 +28,20 @@ class FakeTransport {
   handleRequest = mock(async () => Response.json({ ok: true }))
 }
 
+const createMcpTransportSpy = mock((options: unknown) => {
+  return new FakeTransport(options)
+})
+
 const createMcpServerSpy = mock(
   (deps: {
     klavis?: { getProxyStatus(): KlavisProxyStatus }
     connectorScope?: ConnectorToolScope
+    executionDir?: string
+    remoteAgentHarness?: { outputFileAccess?: unknown }
   }) => {
     serverCreations.push({
+      executionDir: deps.executionDir,
+      remoteAgentHarness: deps.remoteAgentHarness,
       proxyStatus: deps.klavis?.getProxyStatus() ?? null,
       selectedServerNames: deps.connectorScope?.selectedServerNames,
     })
@@ -39,31 +54,33 @@ const createMcpServerSpy = mock(
   },
 )
 
-mock.module('@hono/mcp', () => ({
-  StreamableHTTPTransport: FakeTransport,
-}))
-
-mock.module('../../../src/api/services/mcp/mcp-server', () => ({
-  createMcpServer: createMcpServerSpy,
-}))
-
-const {
-  MANAGED_MCP_SERVERS_HEADER,
-  createMcpRoutes,
-  parseManagedMcpServersHeader,
-} = await import('../../../src/api/routes/mcp')
-
 beforeEach(() => {
   serverCreations.length = 0
   transportInstances.length = 0
   connectCalls.length = 0
+  createMcpServerSpy.mockClear()
+  createMcpTransportSpy.mockClear()
 })
+
+function createTestMcpRoutes(
+  overrides: Partial<Parameters<typeof createMcpRoutes>[0]> = {},
+) {
+  return createMcpRoutes({
+    version: '0.0.0-test',
+    browserSession: {} as never,
+    executionDir: '/tmp/browseros-execution',
+    createMcpServer: createMcpServerSpy as never,
+    createMcpTransport: createMcpTransportSpy as never,
+    ...overrides,
+  })
+}
 
 async function postMcp(
   app: ReturnType<typeof createMcpRoutes>,
   headers: Record<string, string> = {},
+  path = '/',
 ) {
-  return app.request('/', {
+  return app.request(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify({
@@ -99,9 +116,7 @@ describe('createMcpRoutes', () => {
     const klavis = {
       getProxyStatus: () => status,
     }
-    const app = createMcpRoutes({
-      version: '0.0.0-test',
-      browserSession: {} as never,
+    const app = createTestMcpRoutes({
       klavis: klavis as never,
     })
 
@@ -115,13 +130,59 @@ describe('createMcpRoutes', () => {
     expect(first.status).toBe(200)
     expect(second.status).toBe(200)
     expect(serverCreations).toEqual([
-      { proxyStatus: { state: 'connecting' }, selectedServerNames: [] },
       {
+        executionDir: '/tmp/browseros-execution',
+        remoteAgentHarness: undefined,
+        proxyStatus: { state: 'connecting' },
+        selectedServerNames: [],
+      },
+      {
+        executionDir: '/tmp/browseros-execution',
+        remoteAgentHarness: undefined,
         proxyStatus: { state: 'ready', toolCount: 3 },
         selectedServerNames: ['Slack', 'Google Docs'],
       },
     ])
     expect(transportInstances).toHaveLength(2)
     expect(connectCalls).toEqual(transportInstances)
+  })
+
+  it('sets the remote agent harness context only for the remote harness source', async () => {
+    const app = createTestMcpRoutes()
+
+    const defaultResponse = await postMcp(app)
+    const remoteHarnessResponse = await postMcp(
+      app,
+      {},
+      '/?source=remote-agent-harness',
+    )
+
+    expect(defaultResponse.status).toBe(200)
+    expect(remoteHarnessResponse.status).toBe(200)
+    expect(serverCreations).toEqual([
+      {
+        executionDir: '/tmp/browseros-execution',
+        remoteAgentHarness: undefined,
+        proxyStatus: null,
+        selectedServerNames: [],
+      },
+      {
+        executionDir: '/tmp/browseros-execution',
+        remoteAgentHarness: { outputFileAccess: expect.any(Object) },
+        proxyStatus: null,
+        selectedServerNames: [],
+      },
+    ])
+  })
+
+  it('keeps remote agent harness context stable by source', async () => {
+    const app = createTestMcpRoutes()
+
+    await postMcp(app, {}, '/?source=remote-agent-harness')
+    await postMcp(app, {}, '/?source=remote-agent-harness')
+
+    expect(serverCreations[0].remoteAgentHarness).toBe(
+      serverCreations[1].remoteAgentHarness,
+    )
   })
 })

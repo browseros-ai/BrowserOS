@@ -18,8 +18,18 @@ const testSuites = {
       argv: [bun, 'run', 'test'],
     },
     {
+      label: 'claw-app tests',
+      cwd: resolve(projectRoot, 'apps/claw-app'),
+      argv: [bun, 'run', 'test'],
+    },
+    {
+      label: 'claw-server tests',
+      cwd: resolve(projectRoot, 'apps/claw-server'),
+      argv: [bun, 'run', 'test'],
+    },
+    {
       label: 'agent tests',
-      cwd: resolve(projectRoot, 'apps/agent'),
+      cwd: resolve(projectRoot, 'apps/app'),
       argv: [bun, 'run', 'test'],
     },
     {
@@ -30,6 +40,10 @@ const testSuites = {
     {
       label: 'build script tests',
       argv: [bun, 'run', './scripts/run-bun-test.ts', './scripts/build'],
+    },
+    {
+      label: 'release script tests',
+      argv: [bun, 'run', './scripts/run-bun-test.ts', './scripts/release'],
     },
   ],
   main: [

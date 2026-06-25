@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { Browser } from '@browseros/browser-core/browser'
 import { AGENT_HARNESS_LIMITS } from '@browseros/shared/constants/limits'
 import {
   type BrowserContext,
@@ -12,7 +13,6 @@ import {
 import { type Context, Hono } from 'hono'
 import { stream } from 'hono/streaming'
 import { formatUserMessage } from '../../agent/format-message'
-import type { Browser } from '../../browser/browser'
 import { createAcpUIMessageStreamResponse } from '../../lib/agents/acp/ui-message-stream'
 import {
   AGENT_ADAPTER_CATALOG,
@@ -105,6 +105,12 @@ type AgentRouteDeps = {
   /** Optional override; defaults to a fresh in-memory checker. */
   adapterHealth?: Pick<AdapterHealthChecker, 'getHealth'>
   onTurnLifecycle?: import('../services/agents/agent-harness-service').TurnLifecycleListener
+  /**
+   * Shared with the /mcp/nudge route so the in-process nudge tool
+   * handler can push app_connection_request events into the same
+   * active turn the user is watching.
+   */
+  turnRegistry?: import('../../lib/agents/turns/active-turn-registry').TurnRegistry
 }
 
 type SidepanelAgentChatRequest = {
@@ -124,6 +130,7 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
     new AgentHarnessService({
       browserosServerPort: deps.browserosServerPort,
       resourcesDir: deps.resourcesDir,
+      turnRegistry: deps.turnRegistry,
     })
   if (deps.onTurnLifecycle && service instanceof AgentHarnessService) {
     service.onTurnLifecycle(deps.onTurnLifecycle)
@@ -888,7 +895,11 @@ function isAgentSessionId(value: string): value is AgentSessionId {
 function parseSessionIdParam(
   c: Context<Env>,
 ): { value: AgentSessionId } | { error: string } {
+  // hono@4.12.26 widened c.req.param() to `string | undefined`. Treat a
+  // missing param the same as an invalid one — both reply with the same
+  // 400 message.
   const sessionId = c.req.param('sessionId')
+  if (!sessionId) return { error: 'sessionId must be "main" or a UUID' }
   return isAgentSessionId(sessionId)
     ? { value: sessionId }
     : { error: 'sessionId must be "main" or a UUID' }

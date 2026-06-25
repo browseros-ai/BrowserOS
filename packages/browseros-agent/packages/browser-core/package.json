@@ -1,0 +1,43 @@
+{
+  "name": "@browseros/browser-core",
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@browseros/cdp-protocol": "workspace:*",
+    "@browseros/shared": "workspace:*"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./browser": {
+      "types": "./src/browser.ts",
+      "default": "./src/browser.ts"
+    },
+    "./backends/cdp": {
+      "types": "./src/backends/cdp.ts",
+      "default": "./src/backends/cdp.ts"
+    },
+    "./backends/types": {
+      "types": "./src/backends/types.ts",
+      "default": "./src/backends/types.ts"
+    },
+    "./content-markdown": {
+      "types": "./src/content-markdown.ts",
+      "default": "./src/content-markdown.ts"
+    },
+    "./core/*": {
+      "types": "./src/core/*.ts",
+      "default": "./src/core/*.ts"
+    },
+    "./tab-groups": {
+      "types": "./src/tab-groups.ts",
+      "default": "./src/tab-groups.ts"
+    }
+  }
+}

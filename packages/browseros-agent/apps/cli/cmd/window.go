@@ -41,12 +41,10 @@ func init() {
 			hidden, _ := cmd.Flags().GetBool("hidden")
 
 			c := newClient()
-			toolArgs := map[string]any{
+			result, err := c.CallTool("windows", map[string]any{
 				"action": "create",
 				"hidden": hidden,
-			}
-
-			result, err := c.CallTool("windows", toolArgs)
+			})
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}

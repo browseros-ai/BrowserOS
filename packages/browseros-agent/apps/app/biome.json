@@ -1,0 +1,75 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.0/schema.json",
+  "root": false,
+  "extends": "//",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": false,
+    "includes": ["**", "!public", "!dist", "!**/*.svg"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error",
+        "noPrivateImports": {
+          "level": "error",
+          "options": {
+            "defaultVisibility": "package"
+          }
+        }
+      },
+      "suspicious": {
+        "noConsole": "error"
+      },
+      "style": {
+        "noProcessEnv": "error"
+      },
+      "nursery": {
+        "useSortedClasses": "error"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "asNeeded"
+    }
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["components/ui/svgs/**"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noSvgWithoutTitle": "off"
+          }
+        }
+      }
+    }
+  ]
+}

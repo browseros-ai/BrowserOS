@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
-import type { Browser } from '@browseros/server/browser'
+import type { Browser } from '@browseros/browser-core/browser'
 import { CaptchaWaiter } from '../../src/capture/captcha-waiter'
 
 function createMockBrowser(

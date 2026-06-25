@@ -4,9 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { BrowserSession } from '@browseros/browser-core/core/session'
+import { createBrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
 import { StreamableHTTPTransport } from '@hono/mcp'
 import { Hono } from 'hono'
-import type { BrowserSession } from '../../browser/core/session'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
@@ -15,11 +16,20 @@ import { createMcpServer } from '../services/mcp/mcp-server'
 import type { Env } from '../types'
 
 export const MANAGED_MCP_SERVERS_HEADER = 'X-BrowserOS-Managed-Mcp-Servers'
+export const REMOTE_AGENT_HARNESS_MCP_SOURCE = 'remote-agent-harness'
+
+type CreateMcpServerFn = typeof createMcpServer
+type CreateMcpTransportFn = (
+  options: ConstructorParameters<typeof StreamableHTTPTransport>[0],
+) => InstanceType<typeof StreamableHTTPTransport>
 
 interface McpRouteDeps {
   version: string
   browserSession: BrowserSession
   klavis?: KlavisService
+  executionDir: string
+  createMcpServer?: CreateMcpServerFn
+  createMcpTransport?: CreateMcpTransportFn
 }
 
 function parseOptionalNumber(value: string | undefined): number | undefined {
@@ -55,6 +65,13 @@ export function parseManagedMcpServersHeader(
 
 export function createMcpRoutes(deps: McpRouteDeps) {
   const app = new Hono<Env>()
+  const makeMcpServer = deps.createMcpServer ?? createMcpServer
+  const makeMcpTransport =
+    deps.createMcpTransport ??
+    ((options) => new StreamableHTTPTransport(options))
+  const remoteAgentHarness = {
+    outputFileAccess: createBrowserOutputFileAccess(),
+  }
 
   app.get('/', (c) =>
     c.json({
@@ -76,17 +93,24 @@ export function createMcpRoutes(deps: McpRouteDeps) {
       c.req.header(MANAGED_MCP_SERVERS_HEADER),
     )
 
+    const harness =
+      c.req.query('source') === REMOTE_AGENT_HARNESS_MCP_SOURCE
+        ? remoteAgentHarness
+        : undefined
+
     // Per-request server + transport: no shared state, no race conditions,
     // no ID collisions. Required by MCP SDK 1.26.0+ security fix (GHSA-345p-7cg4-v4c7).
-    const mcpServer = createMcpServer({
+    const mcpServer = makeMcpServer({
       version: deps.version,
       browserSession: deps.browserSession,
       klavis: deps.klavis,
       connectorScope: { selectedServerNames },
       defaultWindowId,
       defaultTabGroupId,
+      executionDir: deps.executionDir,
+      remoteAgentHarness: harness,
     })
-    const transport = new StreamableHTTPTransport({
+    const transport = makeMcpTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     })

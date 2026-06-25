@@ -25,7 +25,7 @@ const eventPrefix = "browseros.cli."
 var svc *service
 
 type service struct {
-	client    posthog.Client
+	client     posthog.Client
 	distinctID string
 }
 

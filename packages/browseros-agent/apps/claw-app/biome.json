@@ -1,0 +1,27 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.0/schema.json",
+  "root": false,
+  "extends": "//",
+  "files": {
+    "includes": ["**", "!.wxt", "!.output", "!dist"]
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["components/ui/**", "components/ai-elements/**"],
+      "formatter": { "enabled": false },
+      "linter": { "enabled": false },
+      "assist": {
+        "actions": {
+          "source": {
+            "organizeImports": "off"
+          }
+        }
+      }
+    }
+  ]
+}

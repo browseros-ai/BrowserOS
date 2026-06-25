@@ -2,7 +2,7 @@ import { describe, it } from 'bun:test'
 import assert from 'node:assert'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { BROWSER_TOOLS } from '../../src/tools/browser/registry'
+import { BROWSER_TOOLS } from '@browseros/browser-mcp/registry'
 
 const compactBrowserToolFiles = [
   'act.ts',
@@ -46,21 +46,24 @@ const legacyOnlyToolNames = [
 ]
 
 describe('browser tool boundary', () => {
-  it('keeps the compact browser tools under src/tools/browser', () => {
-    const toolsDir = join(import.meta.dir, '../../src/tools')
+  it('keeps the compact browser tools under the browser-mcp package', () => {
+    const toolsDir = join(
+      import.meta.dir,
+      '../../../../packages/browser-mcp/src/tools',
+    )
 
     for (const file of compactBrowserToolFiles) {
-      assert.ok(
-        existsSync(join(toolsDir, 'browser', file)),
-        `Expected browser/${file}`,
-      )
+      assert.ok(existsSync(join(toolsDir, file)), `Expected ${file}`)
     }
   })
 
   it('does not keep legacy browser tool modules', () => {
-    const toolsDir = join(import.meta.dir, '../../src/tools')
+    const toolsDir = join(
+      import.meta.dir,
+      '../../../../packages/browser-mcp/src/tools',
+    )
 
-    assert.ok(!existsSync(join(toolsDir, 'legacy')))
+    assert.ok(!existsSync(join(toolsDir, '../legacy')))
   })
 
   it('does not register the legacy-only browser tool names', () => {

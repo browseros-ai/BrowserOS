@@ -10,10 +10,10 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { CdpBackend } from '@browseros/browser-core/backends/cdp'
+import { Browser } from '@browseros/browser-core/browser'
 import { EXIT_CODES } from '@browseros/shared/constants/exit-codes'
 import { createHttpServer } from './api/server'
-import { CdpBackend } from './browser/backends/cdp'
-import { Browser } from './browser/browser'
 import type { ServerConfig } from './config'
 import { INLINED_ENV } from './env'
 import {

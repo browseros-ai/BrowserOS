@@ -32,6 +32,6 @@ bun run test
 ## Where to look
 
 - For server-specific guidance, see `apps/server/CLAUDE.md`.
-- For extension/agent UI specifics, see `apps/agent/CLAUDE.md`.
+- For extension/app UI specifics, see `apps/app/CLAUDE.md`.
 - For the BrowserOS CLI (Go module — Go idioms, not the TS rules above), see `apps/cli/CLAUDE.md`.
 - For the eval harness (benchmarks, graders, suites, runs), see `apps/eval/CLAUDE.md`.

@@ -3,6 +3,11 @@ import type {
   LanguageModelV3,
   LanguageModelV3Middleware,
 } from '@ai-sdk/provider'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
+import {
+  type BrowserOutputFileAccess,
+  createBrowserOutputFileAccess,
+} from '@browseros/browser-mcp/output-file'
 import { AGENT_LIMITS } from '@browseros/shared/constants/limits'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
@@ -16,13 +21,8 @@ import {
   wrapLanguageModel,
 } from 'ai'
 import type { KlavisService } from '../api/services/klavis'
-import type { BrowserSession } from '../browser/core/session'
 import { logger } from '../lib/logger'
 import { metrics } from '../lib/metrics'
-import {
-  type BrowserOutputFileAccess,
-  createBrowserOutputFileAccess,
-} from '../tools/browser/output-file'
 import { buildFilesystemToolSet } from '../tools/filesystem/build-toolset'
 import { createReadTool } from '../tools/filesystem/read'
 import { isAcpProvider } from './acp-providers'

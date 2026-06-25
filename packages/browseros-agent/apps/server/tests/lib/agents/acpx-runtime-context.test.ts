@@ -155,7 +155,7 @@ describe('acpx runtime context helpers', () => {
 
     const skills = await ensureRuntimeSkills(paths.runtimeSkillsDir)
 
-    expect(skills).toEqual(['browseros', 'memory', 'soul'])
+    expect(skills).toEqual(['app-connections', 'browseros', 'memory', 'soul'])
     expect(
       await readFile(
         join(paths.runtimeSkillsDir, 'browseros', 'SKILL.md'),
@@ -282,7 +282,7 @@ describe('acpx runtime context helpers', () => {
     const prompt = buildAcpxRuntimePromptPrefix({
       agent,
       paths,
-      skillNames: ['browseros', 'memory', 'soul'],
+      skillNames: ['app-connections', 'browseros', 'memory', 'soul'],
     })
 
     expect(prompt).toContain('You are BrowserOS')
@@ -293,7 +293,9 @@ describe('acpx runtime context helpers', () => {
     expect(prompt).toContain(
       'Skill root: /tmp/browseros/agents/harness/runtime-skills',
     )
-    expect(prompt).toContain('Available skills: browseros, memory, soul')
+    expect(prompt).toContain(
+      'Available skills: app-connections, browseros, memory, soul',
+    )
   })
 
   it('routes explicit memory requests to BrowserOS AGENT_HOME files', () => {

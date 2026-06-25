@@ -24,20 +24,25 @@ func init() {
 			}
 			element, _ := cmd.Flags().GetInt("element")
 
-			c := newClient()
-			pageID, err := resolvePageID(c)
+			pageID, err := resolvePageID(nil)
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
+			c := newClient()
 
 			toolArgs := map[string]any{
 				"page":      pageID,
-				"kind":      "scroll",
 				"direction": direction,
 				"amount":    amount,
 			}
 			if cmd.Flags().Changed("element") {
-				toolArgs["ref"] = elementRef(element)
+				toolArgs["element"] = element
+			}
+
+			toolArgs["kind"] = "scroll"
+			if cmd.Flags().Changed("element") {
+				toolArgs["ref"] = fmt.Sprintf("e%d", element)
+				delete(toolArgs, "element")
 			}
 
 			result, err := c.CallTool("act", toolArgs)

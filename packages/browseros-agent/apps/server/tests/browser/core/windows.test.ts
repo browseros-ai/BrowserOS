@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'bun:test'
-import type { CdpConnection } from '../../../src/browser/core/connection'
+import type { CdpConnection } from '@browseros/browser-core/core/connection'
 import {
   type WindowInfo,
   WindowManager,
-} from '../../../src/browser/core/windows'
+} from '@browseros/browser-core/core/windows'
 
 function makeWindow(
   windowId: number,
