@@ -1,4 +1,5 @@
-import { History } from 'lucide-react'
+import { ArrowRight, History } from 'lucide-react'
+import { NavLink } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useTasks } from '@/modules/api/audit.hooks'
 import { EmptyState } from './EmptyState'
@@ -23,7 +24,13 @@ export function RecentActivity() {
       <div className="flex items-center gap-2.5">
         <h2 className="font-bold text-base">Recent activity</h2>
         <div className="flex-1" />
-        <span className="text-ink-3 text-xs">Across all agents</span>
+        <NavLink
+          to="/audit"
+          className="group inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium text-[12.5px] text-ink-3 transition hover:bg-card-tint hover:text-ink-1"
+        >
+          View all activity
+          <ArrowRight className="size-3.5 transition group-hover:translate-x-0.5" />
+        </NavLink>
       </div>
       {query.isPending ? (
         <div className="space-y-3">

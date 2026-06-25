@@ -73,10 +73,11 @@ describe('RecentActivity', () => {
     expect(html).toContain('Done')
   })
 
-  it('renders the section header in the empty state', () => {
+  it('renders the section header + view-all CTA in the empty state', () => {
     queryOverride = { isPending: false, data: { pages: [{ tasks: [] }] } }
     const html = render()
     expect(html).toContain('Recent activity')
-    expect(html).toContain('Across all agents')
+    expect(html).toContain('View all activity')
+    expect(html).toContain('href="/audit"')
   })
 })
