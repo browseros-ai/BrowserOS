@@ -62,14 +62,14 @@ export function FilterBar({
           <ChevronDown className="size-3.5 text-ink-3" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-52">
-          <DropdownMenuItem onSelect={() => onAgentChange(null)}>
+          <DropdownMenuItem onClick={() => onAgentChange(null)}>
             <span className="flex-1">All</span>
             {selectedAgentId === null && <Check className="size-3.5" />}
           </DropdownMenuItem>
           {agentOptions.map((opt) => (
             <DropdownMenuItem
               key={opt.agentId}
-              onSelect={() => onAgentChange(opt.agentId)}
+              onClick={() => onAgentChange(opt.agentId)}
             >
               <AgentDot slug={opt.slug} className="mr-1.5" />
               <span className="flex-1">{opt.agentLabel}</span>
@@ -90,14 +90,14 @@ export function FilterBar({
           <ChevronDown className="size-3.5 text-ink-3" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-44">
-          <DropdownMenuItem onSelect={() => onStatusChange(null)}>
+          <DropdownMenuItem onClick={() => onStatusChange(null)}>
             <span className="flex-1">All</span>
             {selectedStatus === null && <Check className="size-3.5" />}
           </DropdownMenuItem>
           {statusOptions.map((opt) => (
             <DropdownMenuItem
               key={opt.status}
-              onSelect={() => onStatusChange(opt.status)}
+              onClick={() => onStatusChange(opt.status)}
             >
               <StatusBadge status={opt.status} className="mr-2" />
               <span className="ml-1 text-[11.5px] text-ink-3">{opt.count}</span>
@@ -121,14 +121,14 @@ export function FilterBar({
             align="start"
             className="max-h-64 min-w-52 overflow-y-auto"
           >
-            <DropdownMenuItem onSelect={() => onSiteChange(null)}>
+            <DropdownMenuItem onClick={() => onSiteChange(null)}>
               <span className="flex-1">All</span>
               {selectedSite === null && <Check className="size-3.5" />}
             </DropdownMenuItem>
             {siteOptions.map((opt) => (
               <DropdownMenuItem
                 key={opt.site}
-                onSelect={() => onSiteChange(opt.site)}
+                onClick={() => onSiteChange(opt.site)}
               >
                 <span className="flex-1 truncate">{opt.site}</span>
                 <span className="ml-2 text-[11.5px] text-ink-3">
