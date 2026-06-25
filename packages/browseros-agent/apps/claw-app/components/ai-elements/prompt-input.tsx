@@ -61,6 +61,7 @@ import type {
   FormEventHandler,
   HTMLAttributes,
   KeyboardEventHandler,
+  MouseEvent as ReactMouseEvent,
   PropsWithChildren,
   ReactNode,
   RefObject,
@@ -422,8 +423,11 @@ export const PromptInputActionAddAttachments = ({
 }: PromptInputActionAddAttachmentsProps) => {
   const attachments = usePromptInputAttachments();
 
-  const handleSelect = useCallback(
-    (e: Event) => {
+  // Base UI's MenuItem fires onClick, not onSelect (the Radix
+  // API). Using onSelect here silently dropped the callback so the
+  // file dialog never opened. Wire onClick instead.
+  const handleClick = useCallback(
+    (e: ReactMouseEvent<HTMLDivElement>) => {
       e.preventDefault();
       attachments.openFileDialog();
     },
@@ -431,7 +435,7 @@ export const PromptInputActionAddAttachments = ({
   );
 
   return (
-    <DropdownMenuItem {...props} onSelect={handleSelect}>
+    <DropdownMenuItem {...props} onClick={handleClick}>
       <ImageIcon className="mr-2 size-4" /> {label}
     </DropdownMenuItem>
   );
@@ -445,14 +449,17 @@ export type PromptInputActionAddScreenshotProps = ComponentProps<
 
 export const PromptInputActionAddScreenshot = ({
   label = "Take screenshot",
-  onSelect,
+  onClick,
   ...props
 }: PromptInputActionAddScreenshotProps) => {
   const attachments = usePromptInputAttachments();
 
-  const handleSelect = useCallback(
-    async (event: Event) => {
-      onSelect?.(event);
+  // Base UI's MenuItem fires onClick, not onSelect (the Radix
+  // API). Using onSelect here silently dropped the callback so the
+  // screenshot capture never started.
+  const handleClick = useCallback(
+    async (event: ReactMouseEvent<HTMLDivElement>) => {
+      onClick?.(event);
       if (event.defaultPrevented) {
         return;
       }
@@ -472,11 +479,11 @@ export const PromptInputActionAddScreenshot = ({
         throw error;
       }
     },
-    [onSelect, attachments]
+    [onClick, attachments]
   );
 
   return (
-    <DropdownMenuItem {...props} onSelect={handleSelect}>
+    <DropdownMenuItem {...props} onClick={handleClick}>
       <Monitor className="mr-2 size-4" />
       {label}
     </DropdownMenuItem>
