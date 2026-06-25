@@ -134,14 +134,22 @@ export function listTasks(query: ListTasksQuery): ListTasksResult {
     .orderBy(toolDispatches.id)
     .all()
 
-  // 3. Session-end rows for the page sessions.
+  // 3. Session-end rows for the page sessions. orderBy(id) so that a
+  //    session with multiple end rows (e.g. transport.onerror followed
+  //    by onsessionclosed) resolves to the FIRST row consistently,
+  //    matching getTask's `ends[0]` choice. Without this, listTasks
+  //    and getTask could disagree on a task's status.
   const ends = db
     .select()
     .from(agentSessionEnds)
     .where(inArray(agentSessionEnds.sessionId, sessionIds))
+    .orderBy(agentSessionEnds.id)
     .all()
 
-  const endBySession = new Map(ends.map((e) => [e.sessionId, e]))
+  const endBySession = new Map<string, (typeof ends)[number]>()
+  for (const e of ends) {
+    if (!endBySession.has(e.sessionId)) endBySession.set(e.sessionId, e)
+  }
   const dispatchesBySession = new Map<string, ToolDispatchRow[]>()
   for (const d of allDispatches) {
     const arr = dispatchesBySession.get(d.sessionId) ?? []
@@ -235,7 +243,12 @@ export function getTask(sessionId: string): TaskDetail | null {
     ...summary,
     dispatches,
     screenshotDispatchIds: dispatches
-      .filter((d) => d.toolName === 'screenshot')
+      // Skip dispatches whose result was an error: persistScreenshot
+      // never wrote a file for them, so referencing those ids in the
+      // strip would render broken thumbnails.
+      .filter(
+        (d) => d.toolName === 'screenshot' && !resultIsError(d.resultMeta),
+      )
       .map((d) => d.id),
     startEvent: starts[0]
       ? {
@@ -275,7 +288,10 @@ function buildSummary(input: BuildSummaryInput): TaskSummary {
   const first = ds[0]
   const lastScreenshot = [...ds]
     .reverse()
-    .find((d) => d.toolName === 'screenshot')
+    // Same reason as getTask's screenshotDispatchIds filter:
+    // error-result screenshot dispatches have no file on disk, so
+    // using their id as the hero would 404 on every TaskCard.
+    .find((d) => d.toolName === 'screenshot' && !resultIsError(d.resultMeta))
   const site = firstSiteOf(ds)
   const title = site
     ? `Browsed ${site}`

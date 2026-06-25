@@ -159,4 +159,44 @@ describe('getTask', () => {
     expect(detail.endEvent?.kind).toBe('closed')
     expect(detail.status).toBe('done')
   })
+
+  it('excludes error-result screenshot dispatches from the strip', () => {
+    dispatch('cc-err', 'tabs', { url: 'https://e.com' })
+    const ok = dispatch('cc-err', 'screenshot')
+    dispatch('cc-err', 'screenshot', { isError: true })
+    const detail = getTask('cc-err')!
+    expect(detail.screenshotDispatchIds).toEqual([ok!])
+  })
+})
+
+describe('listTasks / getTask consistency on double end rows', () => {
+  beforeEach(() => setAuditDbForTesting())
+  afterEach(() => resetAuditDbForTesting())
+
+  it('agrees on status when a session has both errored + closed ends', () => {
+    dispatch('cc-doubled', 'tabs', { url: 'https://e.com' })
+    // Earliest insert wins for status; matches the real-world order
+    // (transport.onerror first, then onsessionclosed).
+    recordSessionEnd({
+      sessionId: 'cc-doubled',
+      kind: 'errored',
+      reason: 'transport',
+    })
+    recordSessionEnd({ sessionId: 'cc-doubled', kind: 'closed' })
+
+    const list = listTasks({}).tasks[0]!
+    const detail = getTask('cc-doubled')!
+
+    expect(list.sessionId).toBe('cc-doubled')
+    expect(list.status).toBe(detail.status)
+    expect(list.endedAt).toBe(detail.endedAt)
+  })
+
+  it('lastScreenshotDispatchId skips error screenshots in listTasks', () => {
+    dispatch('cc-last', 'tabs', { url: 'https://e.com' })
+    const ok = dispatch('cc-last', 'screenshot')
+    dispatch('cc-last', 'screenshot', { isError: true })
+    const list = listTasks({}).tasks[0]!
+    expect(list.lastScreenshotDispatchId).toBe(ok)
+  })
 })
