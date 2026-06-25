@@ -1,6 +1,13 @@
-import { ChevronDown, ChevronRight, Image as ImageIcon } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Image as ImageIcon,
+} from 'lucide-react'
 import { useState } from 'react'
 import { AspectRatio } from '@/components/ui/aspect-ratio'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
   type ToolDispatchRow,
@@ -21,19 +28,74 @@ interface TimelineProps {
 
 const HIGH_RISK_TOOLS = new Set(['act', 'evaluate', 'run', 'download'])
 
+function defaultExpandedSet(dispatches: ToolDispatchRow[]): Set<number> {
+  const ids = new Set<number>()
+  for (const d of dispatches) {
+    if (HIGH_RISK_TOOLS.has(d.toolName)) ids.add(d.id)
+  }
+  return ids
+}
+
 export function Timeline({
   dispatches,
   startedAt,
   endEvent,
   onScreenshotClick,
 }: TimelineProps) {
+  // Initial state: HIGH RISK rows pre-expanded. Lazy init so the
+  // dispatch list is only walked once per mount; future polling
+  // updates do not reset the user's manual toggles.
+  const [expanded, setExpanded] = useState<Set<number>>(() =>
+    defaultExpandedSet(dispatches),
+  )
+  const toggle = (id: number): void => {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const expandAll = (): void =>
+    setExpanded(new Set(dispatches.map((d) => d.id)))
+  const collapseAll = (): void => setExpanded(new Set())
+  const allExpanded =
+    dispatches.length > 0 && dispatches.every((d) => expanded.has(d.id))
+  const noneExpanded = expanded.size === 0
+
   return (
     <section className="rounded-2xl border border-border-2 bg-card p-4">
-      <header className="flex items-baseline justify-between pb-3">
+      <header className="flex items-center justify-between gap-3 pb-3">
         <h2 className="font-semibold text-ink-1">Timeline</h2>
-        <span className="text-[12.5px] text-ink-3">
-          {dispatches.length} event{dispatches.length === 1 ? '' : 's'}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={expandAll}
+            disabled={allExpanded || dispatches.length === 0}
+            className="h-7 gap-1 px-2 text-[11.5px] text-ink-3 hover:text-ink-1"
+            data-testid="timeline-expand-all"
+          >
+            <ChevronsUpDown className="size-3.5" />
+            Expand all
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={collapseAll}
+            disabled={noneExpanded}
+            className="h-7 gap-1 px-2 text-[11.5px] text-ink-3 hover:text-ink-1"
+            data-testid="timeline-collapse-all"
+          >
+            <ChevronsDownUp className="size-3.5" />
+            Collapse all
+          </Button>
+          <span className="pl-2 text-[12.5px] text-ink-3">
+            {dispatches.length} event{dispatches.length === 1 ? '' : 's'}
+          </span>
+        </div>
       </header>
       <ol className="space-y-1.5">
         {dispatches.map((d) => (
@@ -41,6 +103,8 @@ export function Timeline({
             key={d.id}
             dispatch={d}
             offsetMs={Math.max(0, d.createdAt - startedAt)}
+            expanded={expanded.has(d.id)}
+            onToggle={() => toggle(d.id)}
             onScreenshotClick={onScreenshotClick}
           />
         ))}
@@ -53,16 +117,19 @@ export function Timeline({
 interface TimelineRowProps {
   dispatch: ToolDispatchRow
   offsetMs: number
+  expanded: boolean
+  onToggle: () => void
   onScreenshotClick: (dispatchId: number) => void
 }
 
 function TimelineRow({
   dispatch,
   offsetMs,
+  expanded,
+  onToggle,
   onScreenshotClick,
 }: TimelineRowProps) {
   const highRisk = HIGH_RISK_TOOLS.has(dispatch.toolName)
-  const [expanded, setExpanded] = useState(highRisk)
   const meta = parseResultMeta(dispatch.resultMeta)
   const isError = meta?.isError ?? false
   const isScreenshot = dispatch.toolName === 'screenshot' && !isError
@@ -76,7 +143,7 @@ function TimelineRow({
     >
       <button
         type="button"
-        onClick={() => setExpanded((v) => !v)}
+        onClick={onToggle}
         className="grid w-full grid-cols-[auto_5rem_minmax(0,1fr)_auto_auto] items-center gap-3 text-left"
       >
         {expanded ? (
