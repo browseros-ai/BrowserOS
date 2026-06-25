@@ -62,6 +62,11 @@ export function Audit() {
   // is stable across renders that did not change the sort (the
   // filters.sort object itself is rebuilt on every paramsToFilters
   // call even when nothing changed).
+  const hasActiveFilters =
+    filters.agentId !== null ||
+    filters.status !== null ||
+    filters.site !== null ||
+    filters.search.length > 0
   const sortId = filters.sort?.id
   const sortDesc = filters.sort?.desc
   const sorting = useMemo<SortingState>(
@@ -102,7 +107,12 @@ export function Audit() {
         </div>
       </header>
 
-      {!isLoading && !isError && tasks.length > 0 && (
+      {/* Keep the FilterBar visible whenever ANY filter is active even
+          if the current query has zero matches. Otherwise the user
+          gets soft-locked: they can not edit / clear their search or
+          switch filters because the bar that owns those controls just
+          unmounted. */}
+      {!isLoading && !isError && (tasks.length > 0 || hasActiveFilters) && (
         <FilterBar
           agentOptions={agentOptions}
           statusOptions={statusOptions}
@@ -130,10 +140,17 @@ export function Audit() {
           hint="Check that the cockpit server is running and the audit database is reachable."
         />
       ) : tasks.length === 0 ? (
-        <EmptyState
-          title="No tasks in this view"
-          hint="Connect an agent via the MCP page and run a tool. Successful sessions land here within a few seconds."
-        />
+        hasActiveFilters ? (
+          <EmptyState
+            title="No tasks match these filters"
+            hint="Adjust the search or filter dropdowns above, or clear them to see every session again."
+          />
+        ) : (
+          <EmptyState
+            title="No tasks in this view"
+            hint="Connect an agent via the MCP page and run a tool. Successful sessions land here within a few seconds."
+          />
+        )
       ) : (
         <div className="overflow-hidden rounded-2xl border border-border-2 bg-card">
           <Table>

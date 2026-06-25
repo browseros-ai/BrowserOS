@@ -130,4 +130,31 @@ describe('Audit screen', () => {
     const html = renderApp()
     expect(html).toContain('Load older tasks')
   })
+
+  it('keeps the FilterBar visible when a filter yields zero results', () => {
+    dataOverride = {
+      ...baseData,
+      tasks: [],
+      filters: {
+        agentId: null,
+        status: null,
+        site: null,
+        search: 'nothing-matches',
+        sort: null,
+      },
+    }
+    const html = renderApp()
+    // FilterBar's search input still on screen so the user can clear /
+    // edit their query without a soft-lock.
+    expect(html).toMatch(/placeholder="Search title or agent"/)
+    expect(html).toContain('No tasks match these filters')
+    expect(html).toContain('Adjust the search or filter dropdowns')
+  })
+
+  it('hides the FilterBar when there are no tasks AND no active filters', () => {
+    dataOverride = { ...baseData, tasks: [] }
+    const html = renderApp()
+    expect(html).not.toMatch(/placeholder="Search title or agent"/)
+    expect(html).toContain('No tasks in this view')
+  })
 })
