@@ -43,6 +43,7 @@ import { extractPageId, tabActivityRegistry } from '../lib/tab-activity'
 import type { StoredAgentProfile } from '../routes/agents/schemas'
 import { recordToolDispatch } from '../services/audit-log'
 import { check } from '../services/permissions'
+import { persistScreenshot } from '../services/screenshots'
 import { ensureAgentTabGroup } from '../services/tab-group-ops'
 import { asRegister, type ToolResult } from './register-fn'
 
@@ -391,7 +392,7 @@ export function registerBrowserToolsForSingleServer(
                   : slug
             const pageId = extractPageId(tool.name, rawArgs)
             const live = pageId !== null ? session.pages.getInfo(pageId) : null
-            recordToolDispatch({
+            const dispatchId = recordToolDispatch({
               agentId,
               slug,
               agentLabel,
@@ -409,6 +410,16 @@ export function registerBrowserToolsForSingleServer(
                 content: result.content,
               },
             })
+            if (dispatchId !== null) {
+              persistScreenshot({
+                dispatchId,
+                toolName: tool.name,
+                result: {
+                  isError: result.isError ?? false,
+                  structuredContent: result.structuredContent,
+                },
+              })
+            }
             // v2 cockpit-owned tab grouping: when the agent opens a
             // new tab, auto-add it to the agent's tab group. The
             // orchestrator handles create-on-first-call and

@@ -38,11 +38,18 @@ export interface RecordToolDispatchInput {
   }
 }
 
-/** Fire-and-forget. Never throws. */
-export function recordToolDispatch(input: RecordToolDispatchInput): void {
+/**
+ * Fire-and-forget. Never throws.
+ * Returns the inserted row id (used by the screenshot writer to name
+ * its file) or null when the write failed.
+ */
+export function recordToolDispatch(
+  input: RecordToolDispatchInput,
+): number | null {
   try {
     const db = getAuditDb()
-    db.insert(toolDispatches)
+    const rows = db
+      .insert(toolDispatches)
       .values({
         agentId: input.agentId,
         slug: input.slug,
@@ -57,13 +64,16 @@ export function recordToolDispatch(input: RecordToolDispatchInput): void {
         resultMeta: summariseResult(input.result),
         durationMs: input.durationMs,
       })
-      .run()
+      .returning({ id: toolDispatches.id })
+      .all()
+    return rows[0]?.id ?? null
   } catch (err) {
     logger.warn('audit log write failed', {
       agentId: input.agentId,
       tool: input.toolName,
       error: err instanceof Error ? err.message : String(err),
     })
+    return null
   }
 }
 
