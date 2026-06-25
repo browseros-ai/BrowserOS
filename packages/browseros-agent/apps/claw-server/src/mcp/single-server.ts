@@ -25,6 +25,10 @@ import {
   type ClientIdentity,
   identityService,
 } from '../lib/mcp-session'
+import {
+  recordSessionEnd,
+  recordSessionStart,
+} from '../services/session-events'
 import { closeAgentTabGroupForAgent } from '../services/tab-group-ops'
 import { registerBrowserToolsForSingleServer } from './register'
 
@@ -72,9 +76,20 @@ function buildSession(): Session {
       }
       sessions.delete(sessionId)
       identityService.dropSession(sessionId)
+      recordSessionEnd({ sessionId, kind: 'closed' })
       logger.info('cockpit v2 mcp session closed', { sessionId })
     },
   })
+
+  transport.onerror = (err) => {
+    const sessionId = transport.sessionId
+    if (!sessionId) return
+    recordSessionEnd({
+      sessionId,
+      kind: 'errored',
+      reason: err instanceof Error ? err.message : String(err),
+    })
+  }
 
   // `oninitialized` fires on the InitializedNotification, by which
   // point both `transport.sessionId` and `server._clientVersion` are
@@ -96,8 +111,22 @@ function buildSession(): Session {
     // Bump the tab-group tracker's per-agentId ref count so the
     // close path only deletes the group when the last session for
     // this agent ends.
-    const { agentId } = agentIdentityFromClient(identity)
+    const { agentId, slug } = agentIdentityFromClient(identity)
     tabGroupTracker.incrementSession(agentId)
+    const agentLabel =
+      identity.clientTitle && identity.clientTitle.length > 0
+        ? identity.clientTitle
+        : identity.clientName.length > 0
+          ? identity.clientName
+          : slug
+    recordSessionStart({
+      sessionId,
+      agentId,
+      slug,
+      agentLabel,
+      clientName: identity.clientName,
+      clientVersion: identity.clientVersion,
+    })
     logger.info('cockpit v2 mcp session opened', {
       sessionId,
       clientName: clientInfo?.name ?? '',
