@@ -1,8 +1,6 @@
-import { Link } from 'react-router'
 import { useFocusAgent } from '@/modules/api/focus.hooks'
 import type { AgentActivityRecord } from '@/screens/cockpit/cockpit.helpers'
 import { AgentRunningCard } from './AgentRunningCard'
-import { EmptyState } from './EmptyState'
 
 interface RunningGridProps {
   agents: AgentActivityRecord[]
@@ -14,12 +12,16 @@ interface RunningGridProps {
  * AddAgentTile file stays on disk with a TODO header that names what
  * brings it back. Watch focuses the agent's tab group in BrowserOS
  * via `POST /cockpit/tabs/focus/:agentId`. When the registry is
- * empty, the section keeps its header and renders a centred
- * empty-state card pointing the operator at the MCP page.
+ * empty, the section returns null so the homepage does not carry an
+ * empty card that adds noise without information. The operator's
+ * entry point to connect agents is the MCP link in the sidebar /
+ * the hero copy above the section.
  */
 export function RunningGrid({ agents }: RunningGridProps) {
   const focus = useFocusAgent()
   const liveCount = agents.filter((a) => a.status === 'active').length
+
+  if (agents.length === 0) return null
 
   const onWatch = (agentId: string) => {
     focus.mutate(
@@ -49,34 +51,16 @@ export function RunningGrid({ agents }: RunningGridProps) {
           {liveCount} live
         </span>
       </div>
-      {agents.length === 0 ? (
-        <EmptyState
-          title="No agents connected"
-          hint={
-            <>
-              Open the{' '}
-              <Link
-                to="/mcp"
-                className="font-semibold text-accent-ink underline-offset-2 hover:underline"
-              >
-                MCP page
-              </Link>{' '}
-              for the URL to paste into Claude Code, Cursor, or Codex.
-            </>
-          }
-        />
-      ) : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(258px,1fr))] items-start gap-3.5">
-          {agents.map((a) => (
-            <AgentRunningCard
-              key={a.agentId}
-              agent={a}
-              onWatch={() => onWatch(a.agentId)}
-              isFocusPending={pendingAgentId === a.agentId}
-            />
-          ))}
-        </div>
-      )}
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(258px,1fr))] items-start gap-3.5">
+        {agents.map((a) => (
+          <AgentRunningCard
+            key={a.agentId}
+            agent={a}
+            onWatch={() => onWatch(a.agentId)}
+            isFocusPending={pendingAgentId === a.agentId}
+          />
+        ))}
+      </div>
     </section>
   )
 }

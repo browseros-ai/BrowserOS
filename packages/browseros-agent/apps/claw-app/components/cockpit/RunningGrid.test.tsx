@@ -63,17 +63,15 @@ function agent(over: Partial<AgentActivityRecord> = {}): AgentActivityRecord {
 }
 
 describe('RunningGrid', () => {
-  it('renders the empty-state card when no agents are present', () => {
+  it('renders nothing when no agents are connected', () => {
     const html = renderWithRouter(<RunningGrid agents={[]} />)
-    expect(html).toContain('No agents connected')
-    expect(html).toContain('MCP page')
-    expect(html).toContain('/mcp')
+    expect(html).toBe('')
   })
 
-  it('still renders the "Running now · 0 live" header in the empty state', () => {
+  it('hides the header entirely in the empty case', () => {
     const html = renderWithRouter(<RunningGrid agents={[]} />)
-    expect(html).toContain('Running now')
-    expect(html).toContain('0 live')
+    expect(html).not.toContain('Running now')
+    expect(html).not.toContain('0 live')
   })
 
   it('does not render the legacy AddAgentTile when agents are present', () => {
