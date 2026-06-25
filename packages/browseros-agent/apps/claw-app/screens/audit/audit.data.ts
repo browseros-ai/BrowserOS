@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router'
 import {
   type TaskStatus,
@@ -16,6 +16,16 @@ import {
   filtersToParams,
   paramsToFilters,
 } from './audit.search-params'
+
+/**
+ * Hard cap on how many extra pages this hook will auto-fetch when
+ * the JS-layer filters (status / site / search / since) shrink the
+ * current page to zero matches. With `limit: 100` per page this caps
+ * the scan at `(1 + cap) * 100 = 600` sessions before the operator
+ * sees the empty state. Prevents a no-match filter from scanning the
+ * entire audit log.
+ */
+const AUTO_FETCH_CAP = 5
 
 export interface AuditScreenData {
   tasks: TaskSummary[]
@@ -46,6 +56,15 @@ export interface AuditScreenData {
  * re-process on every render. tanstack-table requires `data` to be a
  * stable reference; an inline `flatMap` here would create a new array
  * each render and put the table in a render storm.
+ *
+ * Auto-pagination on filtered emptiness: status / site / search / since
+ * filter in JS after the SQL page is fetched. If the first 100 sessions
+ * are all wrong-status (etc.) the response is `{tasks: [], nextCursor}`
+ * and the operator sees "No tasks match these filters" even when
+ * matches exist further back. This hook detects that case and chains
+ * `fetchNextPage()` automatically up to `AUTO_FETCH_CAP` pages so the
+ * operator gets the first real match or a true empty state, not a
+ * premature one.
  */
 export function useAuditScreenData(): AuditScreenData {
   const [params, setParams] = useSearchParams()
@@ -67,6 +86,47 @@ export function useAuditScreenData(): AuditScreenData {
   const statusOpts = useMemo(() => statusOptionsOf(tasks), [tasks])
   const siteOpts = useMemo(() => siteOptionsOf(tasks), [tasks])
 
+  // Filters applied in JS by the server-side tasks deriver. These are
+  // the ones that can shrink a SQL page to zero matches.
+  const hasJsLevelFilter =
+    filters.status !== null ||
+    filters.site !== null ||
+    filters.search.length > 0
+
+  // Reset the auto-fetch counter whenever the filter combo changes.
+  // Each variable set gets its own budget; the counter is a poor-man's
+  // per-query state we cannot get from react-query directly.
+  const autoFetchCount = useRef(0)
+  const filterKey = useMemo(
+    () =>
+      `${filters.agentId ?? ''}|${filters.status ?? ''}|${filters.site ?? ''}|${filters.search}`,
+    [filters.agentId, filters.status, filters.site, filters.search],
+  )
+  const prevFilterKey = useRef(filterKey)
+  if (prevFilterKey.current !== filterKey) {
+    prevFilterKey.current = filterKey
+    autoFetchCount.current = 0
+  }
+
+  const shouldAutoPaginate =
+    hasJsLevelFilter &&
+    pages !== undefined &&
+    tasks.length === 0 &&
+    Boolean(query.hasNextPage) &&
+    !query.isFetchingNextPage &&
+    autoFetchCount.current < AUTO_FETCH_CAP
+
+  useEffect(() => {
+    if (!shouldAutoPaginate) return
+    autoFetchCount.current += 1
+    void query.fetchNextPage()
+  }, [shouldAutoPaginate, query.fetchNextPage])
+
+  const isAutoPaginating =
+    hasJsLevelFilter &&
+    tasks.length === 0 &&
+    (query.isFetchingNextPage || shouldAutoPaginate)
+
   const update = (patch: Partial<AuditFilters>): void => {
     const next: AuditFilters = { ...filters, ...patch }
     setParams(filtersToParams(next), { replace: true })
@@ -77,7 +137,7 @@ export function useAuditScreenData(): AuditScreenData {
     agentOptions,
     statusOptions: statusOpts,
     siteOptions: siteOpts,
-    isLoading: query.isPending,
+    isLoading: query.isPending || isAutoPaginating,
     isError: query.isError,
     hasNextPage: Boolean(query.hasNextPage),
     isFetchingNextPage: query.isFetchingNextPage,

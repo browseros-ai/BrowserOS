@@ -157,4 +157,26 @@ describe('Audit screen', () => {
     expect(html).not.toMatch(/placeholder="Search title or agent"/)
     expect(html).toContain('No tasks in this view')
   })
+
+  it('shows skeleton (not empty state) when auto-paginating a filtered query', () => {
+    // The data hook reports isLoading=true while auto-paginating
+    // through SQL pages looking for filter matches; the screen must
+    // show skeleton, not "No tasks match" prematurely.
+    dataOverride = {
+      ...baseData,
+      isLoading: true,
+      tasks: [],
+      filters: {
+        agentId: null,
+        status: 'live',
+        site: null,
+        search: '',
+        sort: null,
+      },
+    }
+    const html = renderApp()
+    expect(html).toMatch(/animate-pulse/)
+    expect(html).not.toContain('No tasks match these filters')
+    expect(html).not.toContain('No tasks in this view')
+  })
 })
