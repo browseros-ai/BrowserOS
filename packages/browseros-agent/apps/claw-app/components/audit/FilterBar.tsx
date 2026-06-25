@@ -4,8 +4,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
@@ -64,8 +62,6 @@ export function FilterBar({
           <ChevronDown className="size-3.5 text-ink-3" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-52">
-          <DropdownMenuLabel>Filter by agent</DropdownMenuLabel>
-          <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => onAgentChange(null)}>
             <span className="flex-1">All</span>
             {selectedAgentId === null && <Check className="size-3.5" />}
@@ -94,8 +90,6 @@ export function FilterBar({
           <ChevronDown className="size-3.5 text-ink-3" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-44">
-          <DropdownMenuLabel>Filter by status</DropdownMenuLabel>
-          <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => onStatusChange(null)}>
             <span className="flex-1">All</span>
             {selectedStatus === null && <Check className="size-3.5" />}
@@ -127,8 +121,6 @@ export function FilterBar({
             align="start"
             className="max-h-64 min-w-52 overflow-y-auto"
           >
-            <DropdownMenuLabel>Filter by site</DropdownMenuLabel>
-            <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => onSiteChange(null)}>
               <span className="flex-1">All</span>
               {selectedSite === null && <Check className="size-3.5" />}
