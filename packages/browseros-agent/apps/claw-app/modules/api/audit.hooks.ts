@@ -123,6 +123,12 @@ export const useTasks = createInfiniteQuery<
   initialPageParam: undefined,
   getNextPageParam: (last) => last.nextCursor ?? undefined,
   refetchInterval: 3000,
+  // Keep the previously-fetched pages visible while a new variable
+  // set is fetching. Without this every filter / search change
+  // briefly clears the table to the loading skeleton, which also
+  // unmounts adjacent surfaces (FilterBar) and steals focus from
+  // the search input mid-typing.
+  placeholderData: (prev) => prev,
 })
 
 export interface TaskDetail extends TaskSummary {

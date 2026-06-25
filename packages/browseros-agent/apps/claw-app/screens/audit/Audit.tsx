@@ -107,12 +107,14 @@ export function Audit() {
         </div>
       </header>
 
-      {/* Keep the FilterBar visible whenever ANY filter is active even
-          if the current query has zero matches. Otherwise the user
-          gets soft-locked: they can not edit / clear their search or
-          switch filters because the bar that owns those controls just
-          unmounted. */}
-      {!isLoading && !isError && (tasks.length > 0 || hasActiveFilters) && (
+      {/* Keep the FilterBar mounted across every state EXCEPT the
+          first-load and error cases. Without this, a debounced search
+          keystroke triggers a refetch -> isLoading flips true ->
+          FilterBar unmounts -> the input the operator is typing into
+          loses focus. The gate is intentionally permissive: as soon
+          as either the user has tasks OR an active filter, the bar
+          stays. */}
+      {!isError && (tasks.length > 0 || hasActiveFilters) && (
         <FilterBar
           agentOptions={agentOptions}
           statusOptions={statusOptions}
