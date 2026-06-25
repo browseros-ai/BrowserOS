@@ -273,11 +273,10 @@ interface BuildSummaryInput {
 function buildSummary(input: BuildSummaryInput): TaskSummary {
   const ds = input.dispatches
   const first = ds[0]
-  const firstTabs = ds.find((d) => d.toolName === 'tabs')
   const lastScreenshot = [...ds]
     .reverse()
     .find((d) => d.toolName === 'screenshot')
-  const site = firstTabs?.url ? hostnameOf(firstTabs.url) : null
+  const site = firstSiteOf(ds)
   const title = site
     ? `Browsed ${site}`
     : `Session on ${first?.agentLabel ?? 'agent'}`
@@ -325,6 +324,42 @@ function deriveStatus(input: {
 function hostnameOf(url: string): string | null {
   try {
     return new URL(url).hostname || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Returns the first non-null hostname found across the session's
+ * dispatches. The `url` column on each row is captured from
+ * `session.pages.getInfo(pageId)`, which is null on tool calls that
+ * do not take a `page` arg (tabs.new is the most common case). Fall
+ * back to argsJson which carries the raw call args including url.
+ */
+function firstSiteOf(ds: ToolDispatchRow[]): string | null {
+  for (const d of ds) {
+    if (d.url) {
+      const h = hostnameOf(d.url)
+      if (h) return h
+    }
+  }
+  for (const d of ds) {
+    const url = urlFromArgs(d.argsJson)
+    if (url) {
+      const h = hostnameOf(url)
+      if (h) return h
+    }
+  }
+  return null
+}
+
+function urlFromArgs(argsJson: string | null): string | null {
+  if (!argsJson) return null
+  try {
+    const parsed = JSON.parse(argsJson) as { url?: unknown }
+    return typeof parsed.url === 'string' && parsed.url.length > 0
+      ? parsed.url
+      : null
   } catch {
     return null
   }
