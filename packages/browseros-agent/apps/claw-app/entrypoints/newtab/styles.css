@@ -133,7 +133,14 @@ body {
   font-family: var(--font-sans);
   /* The design's body has a layered gradient on warm cream. We replicate
      the same three layers so the cockpit chrome reads as the design,
-     not a flat white page. */
+     not a flat white page.
+
+     background-attachment: fixed anchors the gradient to the viewport
+     instead of the body box. Without it, the gradient is sized to body
+     height (== viewport since `html, body { height: 100% }`) and scrolls
+     away when content overflows; the user sees the gradient stop mid
+     scroll and bare white below. With fixed, the gradient stays anchored
+     to the viewport regardless of how tall the scrolled content is. */
   background:
     radial-gradient(
       1200px 700px at 18% -8%,
@@ -146,6 +153,7 @@ body {
       hsl(35 25% 90% / 0) 55%
     ),
     linear-gradient(155deg, hsl(170 10% 88%) 0%, hsl(35 18% 89%) 100%);
+  background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
