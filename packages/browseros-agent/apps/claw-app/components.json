@@ -5,8 +5,8 @@
   "tsx": true,
   "tailwind": {
     "config": "",
-    "css": "entrypoints/app/styles.css",
-    "baseColor": "neutral",
+    "css": "entrypoints/newtab/styles.css",
+    "baseColor": "zinc",
     "cssVariables": true,
     "prefix": ""
   },
