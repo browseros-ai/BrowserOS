@@ -132,9 +132,7 @@ function truncate(s: string): string {
 
 function summariseResult(r: RecordToolDispatchInput['result']): string {
   const structuredKeys =
-    r.structuredContent &&
-    typeof r.structuredContent === 'object' &&
-    r.structuredContent !== null
+    r.structuredContent && typeof r.structuredContent === 'object'
       ? Object.keys(r.structuredContent as Record<string, unknown>)
       : []
   const contentSummary = Array.isArray(r.content)
