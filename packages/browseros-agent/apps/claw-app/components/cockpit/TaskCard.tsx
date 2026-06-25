@@ -21,7 +21,13 @@ export function TaskCard({ task, now }: TaskCardProps) {
     <NavLink
       to={`/audit/${encodeURIComponent(task.sessionId)}`}
       className={cn(
-        'group block rounded-2xl border border-border-2 bg-card p-4 transition hover:border-accent/40 hover:shadow-sm',
+        // Restrict the transition to color + shadow so the inner image
+        // is not re-rasterized on parent paints. The generic
+        // Tailwind `transition` shorthand transitions transform too,
+        // which causes the subpixel red-line rendering on the hero
+        // screenshot to shift slightly during the hover window and
+        // reads as "the image is animating".
+        'group block rounded-2xl border border-border-2 bg-card p-4 transition-[border-color,box-shadow] duration-150 hover:border-accent/40 hover:shadow-sm',
         task.status === 'live' && 'border-accent/30',
       )}
       data-testid={`task-card-${task.sessionId}`}
@@ -34,18 +40,21 @@ export function TaskCard({ task, now }: TaskCardProps) {
         <span className="text-[12px] text-ink-3">
           {formatRelative(task.startedAt, now)}
         </span>
-        <ChevronRight className="size-4 text-ink-3 transition group-hover:translate-x-0.5" />
+        {/* No translate on hover; the slide animation near the hero
+            screenshot was reading as motion of the image itself. */}
+        <ChevronRight className="size-4 text-ink-3" />
       </header>
 
       <div className="mt-3 flex items-center gap-4">
         {task.lastScreenshotDispatchId !== null ? (
-          <div className="w-32 shrink-0 overflow-hidden rounded-md border border-border-2 bg-bg-sunken">
+          <div className="w-32 shrink-0 transform-gpu overflow-hidden rounded-md border border-border-2 bg-bg-sunken">
             <AspectRatio ratio={16 / 10}>
               <img
                 src={taskScreenshotUrl(task.lastScreenshotDispatchId)}
                 alt={`Hero from ${task.agentLabel}`}
                 className="h-full w-full object-cover"
                 loading="lazy"
+                decoding="async"
               />
             </AspectRatio>
           </div>
