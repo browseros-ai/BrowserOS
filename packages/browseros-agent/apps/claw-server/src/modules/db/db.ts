@@ -16,7 +16,7 @@ import { Database } from 'bun:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite'
-import { resolveInterfacePath } from '../../lib/browseros-dir'
+import { resolveClawServerPath } from '../../lib/browseros-dir'
 import { runMigrations } from './migrator'
 import * as schema from './schema/schema'
 
@@ -25,7 +25,7 @@ export type AuditDb = BunSQLiteDatabase<typeof schema>
 let cached: { db: AuditDb; raw: Database } | null = null
 
 function resolveAuditDbPath(): string {
-  return resolveInterfacePath('audit.sqlite')
+  return resolveClawServerPath('audit.sqlite')
 }
 
 export function getAuditDb(): AuditDb {
