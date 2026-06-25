@@ -8,24 +8,19 @@ import (
 
 func init() {
 	cmd := &cobra.Command{
-		Use:         "snap",
+		Use:         "snapshot",
+		Aliases:     []string{"snap"},
 		Annotations: map[string]string{"group": "Observe:"},
-		Short:       "Snapshot interactive elements on the page",
+		Short:       "Capture the page accessibility tree",
 		Args:        cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			enhanced, _ := cmd.Flags().GetBool("enhanced")
-			c := newClient()
-			pageID, err := resolvePageID(c)
+			pageID, err := resolvePageID(nil)
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
+			c := newClient()
 
-			toolName := "take_snapshot"
-			if enhanced {
-				toolName = "take_enhanced_snapshot"
-			}
-
-			result, err := c.CallTool(toolName, map[string]any{"page": pageID})
+			result, err := c.CallTool("snapshot", map[string]any{"page": pageID})
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}
@@ -37,6 +32,5 @@ func init() {
 		},
 	}
 
-	cmd.Flags().BoolP("enhanced", "e", false, "Detailed accessibility tree with structural context")
 	rootCmd.AddCommand(cmd)
 }

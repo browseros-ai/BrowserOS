@@ -90,8 +90,8 @@ describe('Application.start', () => {
 
 async function setupApplicationTest() {
   const apiServer = await import('../src/api/server')
-  const browserModule = await import('../src/browser/browser')
-  const cdpModule = await import('../src/browser/backends/cdp')
+  const browserModule = await import('@browseros/browser-core/browser')
+  const cdpModule = await import('@browseros/browser-core/backends/cdp')
   const runtimeModule = await import('../src/lib/agents/runtime')
   const browserosDir = await import('../src/lib/browseros-dir')
   const dbModule = await import('../src/lib/db')

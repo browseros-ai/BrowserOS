@@ -1,6 +1,6 @@
 const API_URL = 'https://models.dev/api.json'
 const OUTPUT_PATH = new URL(
-  '../apps/agent/lib/llm-providers/models-dev-data.json',
+  '../apps/app/lib/llm-providers/models-dev-data.json',
   import.meta.url,
 ).pathname
 

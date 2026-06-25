@@ -170,7 +170,7 @@ export function buildCliReleaseManifest(options: {
   return {
     version: options.version,
     published_at: options.published_at ?? new Date().toISOString(),
-    tag: `browseros-cli-v${options.version}`,
+    tag: `cli/v${options.version}`,
     assets,
   }
 }

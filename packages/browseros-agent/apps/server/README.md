@@ -151,6 +151,19 @@ bun scripts/build/server.ts --target=darwin-arm64,linux-x64
 bun scripts/build/server.ts --target=all --no-upload
 ```
 
+## Release Flow
+
+Server releases use annotated component tags. First bump `packages/browseros-agent/apps/server/package.json` in a PR, merge that version commit to the default branch, then tag the merged commit:
+
+```bash
+git tag -a agent-server/v0.0.122 -m "agent-server v0.0.122"
+git push origin agent-server/v0.0.122
+```
+
+The release workflow validates that the tag version matches `apps/server/package.json`, that the tagged commit is reachable from the default branch, and that the version is newer than existing `browseros-server-v*` and `agent-server/v*` tags. Legacy `browseros-server-vX.Y.Z` tags remain historical; new GitHub Releases use `agent-server/vX.Y.Z`.
+
+The workflow-call and nightly paths can still build/upload server artifacts without publishing a GitHub Release by setting `publish_github_release=false`; that preserves the existing `bump_server_version.py` flow for target-specific builds.
+
 ## Ports
 
 | Port | Env Variable | Purpose |

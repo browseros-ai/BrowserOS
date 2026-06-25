@@ -68,7 +68,7 @@ describe('buildCliReleaseManifest', () => {
     expect(manifest).toEqual({
       version: '1.2.3',
       published_at: '2026-03-27T19:00:00Z',
-      tag: 'browseros-cli-v1.2.3',
+      tag: 'cli/v1.2.3',
       assets: {
         'darwin/arm64': {
           filename: 'browseros-cli_1.2.3_darwin_arm64.tar.gz',

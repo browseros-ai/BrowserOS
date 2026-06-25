@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { Browser } from '@browseros/browser-core/browser'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
-import type { Browser } from '../../browser/browser'
 import { logger } from '../../lib/logger'
 
 export async function resolveBrowserContextPageIds(

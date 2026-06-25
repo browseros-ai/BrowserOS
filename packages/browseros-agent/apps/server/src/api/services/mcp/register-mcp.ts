@@ -1,11 +1,14 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { BrowserSession } from '../../../browser/core/session'
-import type { BrowserOutputFileAccess } from '../../../tools/browser/output-file'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
+import type { BrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
 import {
   type BrowserToolDefaults,
   registerBrowserTools,
-} from '../../../tools/browser/register'
+} from '@browseros/browser-mcp/register'
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { logger } from '../../../lib/logger'
+import { metrics } from '../../../lib/metrics'
 import { registerFilesystemMcpTools } from '../../../tools/filesystem/register-mcp'
+import { shouldLogToolRegistration } from '../../../tools/registration-log-sampling'
 
 export interface RemoteAgentHarnessTools {
   outputFileAccess: BrowserOutputFileAccess
@@ -29,6 +32,10 @@ export function registerTools(
 
   registerBrowserTools(mcpServer, deps.browserSession, defaults, {
     outputFileAccess: deps.remoteAgentHarness?.outputFileAccess,
+    logger,
+    onToolExecuted: (event) => metrics.log('tool_executed', event),
+    shouldLogToolRegistration,
+    source: 'mcp',
   })
 
   if (deps.remoteAgentHarness) {

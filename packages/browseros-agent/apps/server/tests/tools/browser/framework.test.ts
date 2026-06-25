@@ -2,14 +2,14 @@ import { describe, expect, it } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { z } from 'zod'
-import type { BrowserSession } from '../../../src/browser/core/session'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
+import { registerBrowserTools } from '@browseros/browser-mcp/register'
 import {
   defineTool,
   errorResult,
   executeTool,
-} from '../../../src/tools/browser/framework'
-import { registerBrowserTools } from '../../../src/tools/browser/register'
+} from '@browseros/browser-mcp/tools/framework'
+import { z } from 'zod'
 
 type RegisteredHandler = (args: Record<string, unknown>) => Promise<{
   content: unknown

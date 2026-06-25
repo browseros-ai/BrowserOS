@@ -1,7 +1,10 @@
 import type { LanguageModelV2ToolResultOutput } from '@ai-sdk/provider'
-import { type ToolSet, tool } from 'ai'
-import type { BrowserSession } from '../browser/core/session'
-import { metrics } from '../lib/metrics'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
+import {
+  type BrowserOutputFileAccess,
+  withBrowserOutputFileAccess,
+} from '@browseros/browser-mcp/output-file'
+import { BROWSER_TOOLS } from '@browseros/browser-mcp/registry'
 import {
   type ToolDefinition as BrowserToolDefinition,
   type ToolResult as BrowserToolResult,
@@ -9,12 +12,9 @@ import {
   errorResult,
   executeTool as executeBrowserTool,
   throwIfAborted,
-} from '../tools/browser/framework'
-import {
-  type BrowserOutputFileAccess,
-  withBrowserOutputFileAccess,
-} from '../tools/browser/output-file'
-import { BROWSER_TOOLS } from '../tools/browser/registry'
+} from '@browseros/browser-mcp/tools/framework'
+import { type ToolSet, tool } from 'ai'
+import { metrics } from '../lib/metrics'
 
 export interface BrowserToolSetOptions {
   readOnly?: boolean
@@ -134,6 +134,6 @@ function readOnlyGuard(
     typeof params.action === 'string'
       ? params.action
       : 'list'
-  if (action === 'list') return null
-  return errorResult('tabs: chat mode only supports action="list".')
+  if (action === 'list' || action === 'active') return null
+  return errorResult('tabs: chat mode only supports action="list" or "active".')
 }

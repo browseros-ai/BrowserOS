@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
-import { captureScreenshotWithAnnotations } from '../../../src/browser/core/screenshot'
-import { RefMap } from '../../../src/browser/core/snapshot/refs'
+import { captureScreenshotWithAnnotations } from '@browseros/browser-core/core/screenshot'
+import { RefMap } from '@browseros/browser-core/core/snapshot/refs'
 
 function createRefs(): RefMap {
   const refs = new RefMap()

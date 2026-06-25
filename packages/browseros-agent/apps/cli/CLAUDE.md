@@ -46,7 +46,7 @@ Pattern: see `cmd/open.go` and `cmd/snap.go`; grouped commands in `cmd/window.go
 
 ### Conventions inside a command
 
-- **MCP tool names are the contract.** A command only shapes args; the server owns the tool. A flag often just switches the tool name (`open --hidden` → `new_hidden_page`, `snap -e` → `take_enhanced_snapshot`). Keep tool names and arg keys in sync with `apps/server`'s registry.
+- **MCP tool names are the contract.** A command only shapes args; the server owns the tool. Keep command tool names and arg keys in sync with the compact MCP surface (`snap` → `snapshot`, `fill` → `act` with `kind=fill`).
 - **Page targeting:** always resolve through `resolvePageID(c)` (`--page/-p` flag > `BROWSEROS_PAGE` env > server `get_active_page`) and pass it as the `"page"` arg. Don't reinvent it (`cmd/click.go`).
 - **Output:** branch on the global `jsonOut`. JSON path → `output.JSON(result)` (emits `structuredContent` when present). Human path → `output.Text` / `output.Confirm` / a domain formatter (`output.PageList`, `output.ActivePage`). Color comes from `fatih/color` and auto-disables off a TTY.
 - **Errors & exit codes:** route every error through `output.Error(msg, code)` / `output.Errorf(code, ...)` — red, to stderr, and they `os.Exit`. Never `fmt.Println` an error or call `os.Exit` directly. Codes follow a convention across `cmd/`: **1** = tool/RPC call failed, **2** = page resolution failed (`health`/`status` reuse it for an unreachable server), **3** = invalid CLI argument.

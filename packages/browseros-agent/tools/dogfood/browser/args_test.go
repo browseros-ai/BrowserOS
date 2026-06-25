@@ -28,7 +28,7 @@ func TestBuildArgs(t *testing.T) {
 		"--disable-browseros-extensions",
 		"--browseros-dock-icon=alpha",
 		"--enable-logging=stderr",
-		"--load-extension=/repo/packages/browseros-agent/apps/agent/dist/chrome-mv3-dev",
+		"--load-extension=/repo/packages/browseros-agent/apps/app/dist/chrome-mv3-dev",
 		"chrome://newtab",
 	} {
 		if !strings.Contains(joined, want) {

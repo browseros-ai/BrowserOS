@@ -1,6 +1,6 @@
+import type { BrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 import { logger } from '../lib/logger'
-import type { BrowserOutputFileAccess } from '../tools/browser/output-file'
 import type { AiSdkAgent } from './ai-sdk-agent'
 
 export interface AgentSession {

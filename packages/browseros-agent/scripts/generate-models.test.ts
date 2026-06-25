@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import modelsDevData from '../apps/agent/lib/llm-providers/models-dev-data.json'
+import modelsDevData from '../apps/app/lib/llm-providers/models-dev-data.json'
 import {
   formatModelsData,
   generateModelsData,

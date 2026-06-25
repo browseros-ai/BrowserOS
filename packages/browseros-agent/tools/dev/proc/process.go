@@ -66,13 +66,17 @@ func AcquireWatchRunLockInDir(baseDir string, identity WatchRunIdentity, timeout
 	}
 
 	paths := watchRunPaths(baseDir, identity)
+	stoppedOtherOwners, err := stopOtherWatchRunOwners(baseDir, identity, paths.State, timeout)
+	if err != nil {
+		return nil, false, err
+	}
 	lock, err := tryAcquireWatchRunLock(paths.Lock, paths.State)
 	if err == nil {
 		if err := lock.writeState(identity); err != nil {
 			lock.Close()
 			return nil, false, err
 		}
-		return lock, false, nil
+		return lock, stoppedOtherOwners, nil
 	}
 	if !errors.Is(err, errWatchRunLocked) {
 		return nil, false, err
@@ -82,7 +86,7 @@ func AcquireWatchRunLockInDir(baseDir string, identity WatchRunIdentity, timeout
 	if err != nil {
 		return nil, false, fmt.Errorf("dev watch lock is held but state is unreadable at %s: %w", paths.State, err)
 	}
-	if state.Identity != identity {
+	if !sameWatchRunOwner(state.Identity, identity) {
 		return nil, false, fmt.Errorf("dev watch lock state identity mismatch at %s", paths.State)
 	}
 	if state.PGID <= 0 {
@@ -115,7 +119,7 @@ func AcquireWatchRunLockInDir(baseDir string, identity WatchRunIdentity, timeout
 }
 
 // DefaultWatchRunBaseDir returns the shared location for dev watch lock files.
-// Individual runs are separated by a hash of profile, ports, and mode.
+// Individual runs are separated by a hash of profile and mode.
 func DefaultWatchRunBaseDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -162,6 +166,57 @@ func StopAllWatchProcessesInDir(baseDir string, timeout time.Duration) (int, err
 				}
 			}
 			return len(pgids), nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// stopOtherWatchRunOwners tears down stale owners from older lock-key schemes.
+func stopOtherWatchRunOwners(baseDir string, identity WatchRunIdentity, currentStatePath string, timeout time.Duration) (bool, error) {
+	statePaths, err := filepath.Glob(filepath.Join(baseDir, "watch-*.json"))
+	if err != nil {
+		return false, err
+	}
+	currentStatePath = filepath.Clean(currentStatePath)
+	seen := map[int]struct{}{}
+	var pids []int
+	for _, statePath := range statePaths {
+		if filepath.Clean(statePath) == currentStatePath {
+			continue
+		}
+		state, err := ReadWatchRunState(statePath)
+		if err != nil || state.PID <= 0 || !sameWatchRunOwner(state.Identity, identity) || !processLive(state.PID) {
+			continue
+		}
+		if _, ok := seen[state.PID]; ok {
+			continue
+		}
+		seen[state.PID] = struct{}{}
+		pids = append(pids, state.PID)
+	}
+	if len(pids) == 0 {
+		return false, nil
+	}
+	sort.Ints(pids)
+	for _, pid := range pids {
+		if err := signalProcess(pid, syscall.SIGTERM); err != nil {
+			return false, err
+		}
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := livePIDs(pids)
+		if len(remaining) == 0 {
+			return true, nil
+		}
+		if time.Now().After(deadline) {
+			for _, pid := range remaining {
+				if err := signalProcess(pid, syscall.SIGKILL); err != nil {
+					return false, err
+				}
+			}
+			return true, nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -293,11 +348,29 @@ func livePGIDs(pgids []int) []int {
 	return remaining
 }
 
+func livePIDs(pids []int) []int {
+	remaining := make([]int, 0, len(pids))
+	for _, pid := range pids {
+		if processLive(pid) {
+			remaining = append(remaining, pid)
+		}
+	}
+	return remaining
+}
+
 func processGroupLive(pgid int) bool {
 	if pgid <= 0 {
 		return false
 	}
 	err := syscall.Kill(-pgid, 0)
+	return err == nil || err == syscall.EPERM
+}
+
+func processLive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
 	return err == nil || err == syscall.EPERM
 }
 
@@ -356,12 +429,9 @@ func isBrowserProcessForUserDataDir(command string, userDataDirs []string, inclu
 
 func watchRunPaths(baseDir string, identity WatchRunIdentity) watchRunPathsResult {
 	identity = normalizeWatchRunIdentity(identity)
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%d",
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s",
 		identity.Mode,
 		identity.Profile,
-		identity.Ports.CDP,
-		identity.Ports.Server,
-		identity.Ports.Extension,
 	)))
 	key := hex.EncodeToString(sum[:])
 	return watchRunPathsResult{
@@ -373,6 +443,12 @@ func watchRunPaths(baseDir string, identity WatchRunIdentity) watchRunPathsResul
 func normalizeWatchRunIdentity(identity WatchRunIdentity) WatchRunIdentity {
 	identity.Profile = filepath.Clean(identity.Profile)
 	return identity
+}
+
+func sameWatchRunOwner(a WatchRunIdentity, b WatchRunIdentity) bool {
+	a = normalizeWatchRunIdentity(a)
+	b = normalizeWatchRunIdentity(b)
+	return a.Mode == b.Mode && a.Profile == b.Profile
 }
 
 func tryAcquireWatchRunLock(lockPath string, statePath string) (*WatchRunLock, error) {

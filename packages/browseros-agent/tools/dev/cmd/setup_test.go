@@ -29,7 +29,7 @@ func TestBuildSetupPlanIfNeededSkipsExistingGeneratedGraphQL(t *testing.T) {
 
 func TestBuildSetupPlanIfNeededRunsCodegenWhenGeneratedGraphQLEmpty(t *testing.T) {
 	root := t.TempDir()
-	generatedDir := filepath.Join(root, "apps/agent/generated/graphql")
+	generatedDir := filepath.Join(root, "apps/app/generated/graphql")
 	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestBuildSetupPlanExplicitSetupRunsCodegen(t *testing.T) {
 
 func writeGeneratedGraphQLSentinels(t *testing.T, root string) {
 	t.Helper()
-	generatedDir := filepath.Join(root, "apps/agent/generated/graphql")
+	generatedDir := filepath.Join(root, "apps/app/generated/graphql")
 	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

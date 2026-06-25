@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
-import type { CdpConnection } from '../../../src/browser/core/connection'
-import { PageManager } from '../../../src/browser/core/pages'
+import type { CdpConnection } from '@browseros/browser-core/core/connection'
+import { PageManager } from '@browseros/browser-core/core/pages'
 
 type FakeWindow = {
   windowId: number

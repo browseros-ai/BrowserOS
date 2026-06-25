@@ -103,7 +103,7 @@ Modes:
 			green.Printf("Connected! Config saved to %s\n", config.Path())
 			fmt.Println()
 			dim.Println("Try: browseros-cli health")
-			dim.Println("     browseros-cli pages")
+			dim.Println("     browseros-cli tabs")
 		},
 	}
 

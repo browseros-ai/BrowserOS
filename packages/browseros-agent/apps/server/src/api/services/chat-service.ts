@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { Browser } from '@browseros/browser-core/browser'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
+import { createBrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
 import { createAgentUIStreamResponse, type UIMessage } from 'ai'
 import { isAcpProvider } from '../../agent/acp-providers'
 import { AiSdkAgent } from '../../agent/ai-sdk-agent'
@@ -14,12 +17,9 @@ import {
 } from '../../agent/message-validation'
 import type { AgentSession, SessionStore } from '../../agent/session-store'
 import type { ResolvedAgentConfig } from '../../agent/types'
-import type { Browser } from '../../browser/browser'
-import type { BrowserSession } from '../../browser/core/session'
 import { buildAcpMcpServers } from '../../lib/agents/acpx-provider/buildAcpMcpServers'
 import { resolveLLMConfig } from '../../lib/clients/llm/config'
 import { logger } from '../../lib/logger'
-import { createBrowserOutputFileAccess } from '../../tools/browser/output-file'
 import type { KlavisService } from '../services/klavis'
 import type { BrowserContext, ChatRequest } from '../types'
 import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'

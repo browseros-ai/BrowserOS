@@ -1,8 +1,11 @@
 import { describe, expect, test } from 'bun:test'
+import type { FrameRegistry } from '@browseros/browser-core/core/observer/frames'
+import { Observer } from '@browseros/browser-core/core/observer/observer'
+import type {
+  PageManager,
+  PageSession,
+} from '@browseros/browser-core/core/pages'
 import type { ProtocolApi } from '@browseros/cdp-protocol/protocol-api'
-import type { FrameRegistry } from '../../../src/browser/core/observer/frames'
-import { Observer } from '../../../src/browser/core/observer/observer'
-import type { PageManager, PageSession } from '../../../src/browser/core/pages'
 
 type HarnessOptions = {
   frameTreeUrl?: string

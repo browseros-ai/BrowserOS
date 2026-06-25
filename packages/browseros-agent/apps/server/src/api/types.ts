@@ -4,14 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { Browser } from '@browseros/browser-core/browser'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
 import {
   type BrowserContext,
   BrowserContextSchema,
 } from '@browseros/shared/schemas/browser-context'
 import { LLMConfigSchema } from '@browseros/shared/schemas/llm'
 import { z } from 'zod'
-import type { Browser } from '../browser/browser'
-import type { BrowserSession } from '../browser/core/session'
 
 // Re-export browser context types for consumers
 export type { BrowserContext }

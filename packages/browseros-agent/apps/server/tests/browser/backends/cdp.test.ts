@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it } from 'bun:test'
 import assert from 'node:assert'
+import { CdpBackend } from '@browseros/browser-core/backends/cdp'
 import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
-import { CdpBackend } from '../../../src/browser/backends/cdp'
 
 class MockWebSocket {
   static instances: MockWebSocket[] = []

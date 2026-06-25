@@ -4,12 +4,15 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { SetLevelRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import type { BrowserSession } from '../../../browser/core/session'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
+import { createBrowserMcpServer } from '@browseros/browser-mcp/mcp-server'
+import { logger } from '../../../lib/logger'
+import { metrics } from '../../../lib/metrics'
+import { registerFilesystemMcpTools } from '../../../tools/filesystem/register-mcp'
+import { shouldLogToolRegistration } from '../../../tools/registration-log-sampling'
 import type { ConnectorToolScope, KlavisService } from '../klavis'
 import { MCP_INSTRUCTIONS } from './mcp-prompt'
-import { type RemoteAgentHarnessTools, registerTools } from './register-mcp'
+import type { RemoteAgentHarnessTools } from './register-mcp'
 
 export interface McpServiceDeps {
   version: string
@@ -23,27 +26,29 @@ export interface McpServiceDeps {
 }
 
 /** Creates a per-request BrowserOS MCP server with tools for the requested surface. */
-export function createMcpServer(deps: McpServiceDeps): McpServer {
-  const server = new McpServer(
-    {
-      name: 'browseros_mcp',
-      title: 'BrowserOS MCP server',
-      version: deps.version,
-    },
-    { capabilities: { logging: {} }, instructions: MCP_INSTRUCTIONS },
-  )
-
-  server.server.setRequestHandler(SetLevelRequestSchema, () => {
-    return {}
-  })
-
-  registerTools(server, {
+export function createMcpServer(deps: McpServiceDeps) {
+  const server = createBrowserMcpServer({
+    name: 'browseros_mcp',
+    title: 'BrowserOS MCP server',
+    version: deps.version,
     browserSession: deps.browserSession,
     defaultWindowId: deps.defaultWindowId,
     defaultTabGroupId: deps.defaultTabGroupId,
-    executionDir: deps.executionDir,
-    remoteAgentHarness: deps.remoteAgentHarness,
+    instructions: MCP_INSTRUCTIONS,
+    registration: {
+      outputFileAccess: deps.remoteAgentHarness?.outputFileAccess,
+      logger,
+      onToolExecuted: (event) => metrics.log('tool_executed', event),
+      shouldLogToolRegistration,
+      source: 'mcp',
+    },
   })
+
+  if (deps.remoteAgentHarness) {
+    registerFilesystemMcpTools(server, deps.executionDir, {
+      outputFileAccess: deps.remoteAgentHarness.outputFileAccess,
+    })
+  }
 
   deps.klavis?.registerMcpTools(server, deps.connectorScope)
 

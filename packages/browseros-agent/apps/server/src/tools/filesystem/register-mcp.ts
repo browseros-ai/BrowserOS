@@ -9,10 +9,10 @@
  * affects external remote-harness MCP callers.
  */
 
+import type { BrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { z } from 'zod'
 import { logger } from '../../lib/logger'
-import type { BrowserOutputFileAccess } from '../browser/output-file'
 import { shouldLogToolRegistration } from '../registration-log-sampling'
 import { buildFilesystemToolSet } from './build-toolset'
 import type { FilesystemToolResult } from './utils'

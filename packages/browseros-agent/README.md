@@ -7,7 +7,7 @@ The agent platform powering [BrowserOS](https://github.com/browseros-ai/BrowserO
 ```
 apps/
   server/          # Bun server - MCP endpoints + agent loop
-  agent/           # Agent UI (Chrome extension)
+  app/             # BrowserOS app UI (Chrome extension)
   cli/             # Go CLI for controlling BrowserOS from the terminal
   eval/            # Evaluation framework for benchmarking agents
 
@@ -19,7 +19,7 @@ packages/
 | Package | Description |
 |---------|-------------|
 | `apps/server` | Bun server exposing MCP tools and running the agent loop |
-| `apps/agent` | Agent UI — Chrome extension for the chat interface |
+| `apps/app` | BrowserOS app UI — Chrome extension for the chat interface |
 | `apps/cli` | Go CLI — control BrowserOS from the terminal or AI coding agents |
 | `apps/eval` | Benchmark framework — WebVoyager, Mind2Web evaluation |
 | `packages/cdp-protocol` | Auto-generated CDP type bindings used by the server |
@@ -28,7 +28,7 @@ packages/
 ## Architecture
 
 - `apps/server`: Bun server which contains the agent loop and tools.
-- `apps/agent`: Agent UI (Chrome extension).
+- `apps/app`: BrowserOS app UI (Chrome extension).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -76,7 +76,7 @@ packages/
 ```bash
 # Copy environment files for each package
 cp apps/server/.env.example apps/server/.env.development
-cp apps/agent/.env.example apps/agent/.env.development
+cp apps/app/.env.example apps/app/.env.development
 cp apps/server/.env.production.example apps/server/.env.production
 
 # Install deps and generate agent code
@@ -86,7 +86,7 @@ bun run dev:setup
 bun run dev:watch
 ```
 
-`dev:watch` starts the server and agent UI immediately.
+`dev:watch` starts the server and app UI immediately.
 
 ### Environment Variables
 
@@ -94,7 +94,7 @@ Runtime uses `.env.development`, while production artifact builds use `.env.prod
 
 - `apps/server/.env.development` - Server runtime configuration for local dev
 - `apps/server/.env.production` - Server production artifact build configuration
-- `apps/agent/.env.development` - Agent UI configuration
+- `apps/app/.env.development` - App UI configuration
 
 **Server Variables** (`apps/server/.env.development`)
 
@@ -127,7 +127,7 @@ Copy from `apps/server/.env.production.example` before running `build:server`.
 | `R2_DOWNLOAD_PREFIX` | - | Optional prefix prepended to third-party resource object keys |
 | `R2_UPLOAD_PREFIX` | `server/prod-resources` | Optional prefix for uploaded artifact zips |
 
-**Agent Variables** (`apps/agent/.env.development`)
+**App Variables** (`apps/app/.env.development`)
 
 | Variable | Default | Description |
 |----------|---------|-------------|

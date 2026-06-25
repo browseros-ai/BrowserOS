@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { Browser } from '@browseros/browser-core/browser'
 import type { ProtocolApi } from '@browseros/cdp-protocol/protocol-api'
 import { SCREENCAST_LIMITS } from '@browseros/shared/constants/limits'
 import type { WSContext } from 'hono/ws'
-import type { Browser } from '../../../browser/browser'
 import { logger } from '../../../lib/logger'
 
 export interface ScreencastFrameMessage {

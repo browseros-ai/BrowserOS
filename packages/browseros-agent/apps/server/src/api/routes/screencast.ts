@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { Browser } from '@browseros/browser-core/browser'
 import { Hono } from 'hono'
 import { upgradeWebSocket } from 'hono/bun'
-import type { Browser } from '../../browser/browser'
 import { logger } from '../../lib/logger'
 import {
   ScreencastManager,

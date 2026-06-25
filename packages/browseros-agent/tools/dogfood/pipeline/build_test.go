@@ -13,7 +13,7 @@ func TestBuildRunsExpectedCommands(t *testing.T) {
 	}
 	want := []string{
 		"./tools/dev/setup.sh",
-		"bun --cwd apps/agent --env-file=.env.development wxt build --mode development",
+		"bun --cwd apps/app --env-file=.env.development wxt build --mode development",
 	}
 	for i := range want {
 		if r.Commands[i] != want[i] {

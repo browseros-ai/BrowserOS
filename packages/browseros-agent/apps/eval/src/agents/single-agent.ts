@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto'
+import { CdpBackend } from '@browseros/browser-core/backends/cdp'
+import { Browser } from '@browseros/browser-core/browser'
 import {
   AiSdkAgent,
   formatUserMessage,
 } from '@browseros/server/agent/tool-loop'
 import type { ResolvedAgentConfig } from '@browseros/server/agent/types'
-import { Browser } from '@browseros/server/browser'
-import { CdpBackend } from '@browseros/server/browser/backends/cdp'
 import { CaptchaWaiter } from '../capture/captcha-waiter'
 import { DEFAULT_TIMEOUT_MS } from '../constants'
 import type { TaskMetadata, TokenUsage, UIMessageStreamEvent } from '../types'

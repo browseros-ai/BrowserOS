@@ -25,17 +25,20 @@ var watchCmd = &cobra.Command{
 }
 
 var (
-	watchNew                bool
-	watchManual             bool
-	watchBrowserOSForAgents bool
+	watchNew    bool
+	watchManual bool
+	watchClaw   bool
 )
 
-const watchRunLockMode = "watch"
+const (
+	watchRunLockMode           = "watch"
+	defaultClawWatchServerPort = 9200
+)
 
 func init() {
 	watchCmd.Flags().BoolVar(&watchNew, "new", false, "Use random available ports in 9000-9999 and create a fresh user-data directory")
 	watchCmd.Flags().BoolVar(&watchManual, "manual", false, "Build agent statically instead of WXT HMR mode")
-	watchCmd.Flags().BoolVar(&watchBrowserOSForAgents, "agent-mcp", false, "Run the agent MCP UI and standalone interface")
+	watchCmd.Flags().BoolVar(&watchClaw, "claw", false, "Run the BrowserClaw UI and standalone server")
 	rootCmd.AddCommand(watchCmd)
 }
 
@@ -53,7 +56,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	defaultPorts, err := resolveTargetPorts(root, "")
+	defaultPorts, err := resolveWatchDefaultPorts(root, watchClaw)
 	if err != nil {
 		return err
 	}
@@ -66,7 +69,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	var runLock *proc.WatchRunLock
 	acquireRunLock := func(ports proc.Ports) error {
 		lock, stopped, err := proc.AcquireWatchRunLock(proc.WatchRunIdentity{
-			// All watch variants share one identity so they cannot supervise the same profile and ports concurrently.
+			// All watch variants share one owner so they cannot supervise the same profile concurrently.
 			Mode:    watchRunLockMode,
 			Profile: userDataDir,
 			Ports:   ports,
@@ -117,7 +120,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 			proc.LogMsgf(proc.TagInfo, "Stopped %d BrowserOS process(es) for profile %s", killedBrowsers, userDataDir)
 		}
 
-		p, reservations, err = proc.ResolveWatchPorts(false)
+		p, reservations, err = proc.ResolveWatchPortsWithDefaults(defaultPorts, false)
 		if err != nil {
 			return err
 		}
@@ -147,8 +150,8 @@ func runWatch(cmd *cobra.Command, args []string) error {
 
 	env := proc.BuildEnv(p, "development")
 	env = append(env, fmt.Sprintf("BROWSEROS_USER_DATA_DIR=%s", userDataDir))
-	if watchBrowserOSForAgents {
-		env = buildBrowserOSForAgentsWatchEnv(env, p)
+	if watchClaw {
+		env = buildClawWatchEnv(env, p)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -160,8 +163,8 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	var wg sync.WaitGroup
 	var procs []*proc.ManagedProc
 
-	if watchBrowserOSForAgents {
-		procs = startBrowserOSForAgentsWatch(ctx, &wg, root, env, p, reservations)
+	if watchClaw {
+		procs = startClawWatch(ctx, &wg, root, env, p, reservations)
 	} else {
 		procs, err = startBrowserOSWatch(ctx, &wg, root, env, p, reservations, userDataDir, watchManual)
 		if err != nil {
@@ -194,11 +197,11 @@ func runWatch(cmd *cobra.Command, args []string) error {
 
 // watchMode resolves the user-facing mode label for logs.
 func watchMode() (string, error) {
-	if watchManual && watchBrowserOSForAgents {
-		return "", fmt.Errorf("--manual cannot be combined with --agent-mcp")
+	if watchManual && watchClaw {
+		return "", fmt.Errorf("--manual cannot be combined with --claw")
 	}
-	if watchBrowserOSForAgents {
-		return "BrowserOSForAgents", nil
+	if watchClaw {
+		return "BrowserClaw", nil
 	}
 	if watchManual {
 		return "BrowserOS manual", nil
@@ -206,20 +209,32 @@ func watchMode() (string, error) {
 	return "BrowserOS", nil
 }
 
-// buildBrowserOSForAgentsWatchEnv bridges shared dev ports into the standalone MCP apps.
-func buildBrowserOSForAgentsWatchEnv(env []string, p proc.Ports) []string {
+// resolveWatchDefaultPorts picks preferred watch ports for the selected app stack.
+func resolveWatchDefaultPorts(root string, claw bool) (proc.Ports, error) {
+	ports, err := resolveTargetPorts(root, "")
+	if err != nil {
+		return proc.Ports{}, err
+	}
+	if claw {
+		ports.Server = defaultClawWatchServerPort
+	}
+	return ports, nil
+}
+
+// buildClawWatchEnv bridges shared dev ports into the standalone BrowserClaw apps.
+func buildClawWatchEnv(env []string, p proc.Ports) []string {
 	apiURL := fmt.Sprintf("http://127.0.0.1:%d/cockpit", p.Server)
 	return append(env,
-		fmt.Sprintf("BROWSEROS_AGENT_MCP_INTERFACE_PORT=%d", p.Server),
-		fmt.Sprintf("BROWSEROS_COCKPIT_CDP_PORT=%d", p.CDP),
-		fmt.Sprintf("VITE_BROWSEROS_AGENT_MCP_API_URL=%s", apiURL),
+		fmt.Sprintf("CLAW_SERVER_PORT=%d", p.Server),
+		fmt.Sprintf("BROWSEROS_CLAW_CDP_PORT=%d", p.CDP),
+		fmt.Sprintf("VITE_BROWSEROS_CLAW_API_URL=%s", apiURL),
 	)
 }
 
 // startBrowserOSWatch supervises the BrowserOS agent extension plus server dev pair.
 func startBrowserOSWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []string, p proc.Ports, reservations *proc.PortReservations, userDataDir string, manual bool) ([]*proc.ManagedProc, error) {
 	var procs []*proc.ManagedProc
-	agentDir := filepath.Join(root, "apps/agent")
+	agentDir := filepath.Join(root, "apps/app")
 
 	if manual {
 		proc.LogMsg(proc.TagBuild, "Building agent (dev)...")
@@ -269,14 +284,14 @@ func startBrowserOSWatch(ctx context.Context, wg *sync.WaitGroup, root string, e
 	return procs, nil
 }
 
-// startBrowserOSForAgentsWatch supervises the MCP cockpit UI plus standalone interface.
-func startBrowserOSForAgentsWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []string, p proc.Ports, reservations *proc.PortReservations) []*proc.ManagedProc {
+// startClawWatch supervises the BrowserClaw UI plus standalone server.
+func startClawWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []string, p proc.Ports, reservations *proc.PortReservations) []*proc.ManagedProc {
 	var procs []*proc.ManagedProc
 
 	reservations.ReleaseCDP()
 	procs = append(procs, proc.StartManaged(ctx, wg, proc.ProcConfig{
 		Tag:     proc.TagAgent,
-		Dir:     filepath.Join(root, "apps/agent-mcp-ui"),
+		Dir:     filepath.Join(root, "apps/claw-app"),
 		Env:     env,
 		Restart: true,
 		Cmd:     []string{"bun", "--env-file=.env.development", "wxt"},
@@ -288,7 +303,7 @@ func startBrowserOSForAgentsWatch(ctx context.Context, wg *sync.WaitGroup, root 
 	reservations.ReleaseExtension()
 	procs = append(procs, proc.StartManaged(ctx, wg, proc.ProcConfig{
 		Tag:     proc.TagServer,
-		Dir:     filepath.Join(root, "apps/agent-mcp-interface"),
+		Dir:     filepath.Join(root, "apps/claw-server"),
 		Env:     env,
 		Restart: true,
 		Cmd:     []string{"bun", "--watch", "--env-file=.env.development", "src/main.ts"},

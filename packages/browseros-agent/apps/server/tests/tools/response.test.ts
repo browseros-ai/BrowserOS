@@ -3,8 +3,8 @@ import assert from 'node:assert'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { BrowserSession } from '../../src/browser/core/session'
-import { ToolResponse } from '../../src/tools/response'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
+import { ToolResponse } from '@browseros/browser-mcp/response'
 
 function textOf(result: {
   content: { type: string; text?: string }[]

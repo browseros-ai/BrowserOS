@@ -2,8 +2,9 @@ BINARY := browseros-cli
 SOURCES := $(shell find . -name '*.go')
 VERSION ?= dev
 POSTHOG_API_KEY ?=
+BUILD_TIMESTAMP ?= $(shell date +%y%m%d-%H%M)
 DIST := dist
-LDFLAGS := -X main.version=$(VERSION) -X browseros-cli/analytics.posthogAPIKey=$(POSTHOG_API_KEY)
+LDFLAGS := -X main.version=$(VERSION) -X main.buildTimestamp=$(BUILD_TIMESTAMP) -X browseros-cli/analytics.posthogAPIKey=$(POSTHOG_API_KEY)
 HOST_OS := $(shell go env GOOS)
 HOST_ARCH := $(shell go env GOARCH)
 HOST_EXT := $(if $(filter windows,$(HOST_OS)),.exe,)

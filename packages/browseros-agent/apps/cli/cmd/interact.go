@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"fmt"
 	"strings"
 
 	"browseros-cli/output"
@@ -15,7 +14,7 @@ func init() {
 		Annotations: map[string]string{"group": "Input:"},
 		Short:       "Hover over an element",
 		Args:        cobra.ExactArgs(1),
-		Run:   elementAction("hover"),
+		Run:         elementAction("hover", nil),
 	}
 
 	focusCmd := &cobra.Command{
@@ -23,7 +22,7 @@ func init() {
 		Annotations: map[string]string{"group": "Input:"},
 		Short:       "Focus an element",
 		Args:        cobra.ExactArgs(1),
-		Run:   elementAction("focus"),
+		Run:         elementAction("focus", nil),
 	}
 
 	checkCmd := &cobra.Command{
@@ -31,7 +30,7 @@ func init() {
 		Annotations: map[string]string{"group": "Input:"},
 		Short:       "Check a checkbox or radio button",
 		Args:        cobra.ExactArgs(1),
-		Run:   elementAction("check"),
+		Run:         elementAction("check", nil),
 	}
 
 	uncheckCmd := &cobra.Command{
@@ -39,7 +38,7 @@ func init() {
 		Annotations: map[string]string{"group": "Input:"},
 		Short:       "Uncheck a checkbox",
 		Args:        cobra.ExactArgs(1),
-		Run:   elementAction("uncheck"),
+		Run:         elementAction("uncheck", nil),
 	}
 
 	selectCmd := &cobra.Command{
@@ -48,21 +47,22 @@ func init() {
 		Short:       "Select a dropdown option",
 		Args:        cobra.MinimumNArgs(2),
 		Run: func(cmd *cobra.Command, args []string) {
-			var element int
-			if _, err := fmt.Sscanf(args[0], "%d", &element); err != nil {
-				output.Errorf(3, "invalid element ID: %s", args[0])
+			ref, err := elementRef(args[0])
+			if err != nil {
+				output.Error(err.Error(), 3)
 			}
 			value := strings.Join(args[1:], " ")
 
-			c := newClient()
-			pageID, err := resolvePageID(c)
+			pageID, err := resolvePageID(nil)
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
-			result, err := c.CallTool("select_option", map[string]any{
-				"page":    pageID,
-				"element": element,
-				"value":   value,
+			c := newClient()
+			result, err := c.CallTool("act", map[string]any{
+				"page":  pageID,
+				"kind":  "select",
+				"ref":   ref,
+				"value": value,
 			})
 			if err != nil {
 				output.Error(err.Error(), 1)
@@ -81,21 +81,26 @@ func init() {
 		Short:       "Drag from one element to another",
 		Args:        cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			var source int
-			if _, err := fmt.Sscanf(args[0], "%d", &source); err != nil {
-				output.Errorf(3, "invalid source element: %s", args[0])
+			sourceRef, err := elementRef(args[0])
+			if err != nil {
+				output.Error(err.Error(), 3)
 			}
-			target, _ := cmd.Flags().GetInt("to")
+			target, _ := cmd.Flags().GetString("to")
+			targetRef, err := elementRef(target)
+			if err != nil {
+				output.Error(err.Error(), 3)
+			}
 
-			c := newClient()
-			pageID, err := resolvePageID(c)
+			pageID, err := resolvePageID(nil)
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
-			result, err := c.CallTool("drag", map[string]any{
-				"page":          pageID,
-				"sourceElement": source,
-				"targetElement": target,
+			c := newClient()
+			result, err := c.CallTool("act", map[string]any{
+				"page":      pageID,
+				"kind":      "drag",
+				"ref":       sourceRef,
+				"targetRef": targetRef,
 			})
 			if err != nil {
 				output.Error(err.Error(), 1)
@@ -107,7 +112,7 @@ func init() {
 			}
 		},
 	}
-	dragCmd.Flags().Int("to", 0, "Target element ID")
+	dragCmd.Flags().String("to", "", "Target element ID or ref")
 	_ = dragCmd.MarkFlagRequired("to")
 
 	uploadCmd := &cobra.Command{
@@ -116,20 +121,20 @@ func init() {
 		Short:       "Upload files to a file input",
 		Args:        cobra.MinimumNArgs(2),
 		Run: func(cmd *cobra.Command, args []string) {
-			var element int
-			if _, err := fmt.Sscanf(args[0], "%d", &element); err != nil {
-				output.Errorf(3, "invalid element ID: %s", args[0])
+			ref, err := elementRef(args[0])
+			if err != nil {
+				output.Error(err.Error(), 3)
 			}
 
-			c := newClient()
-			pageID, err := resolvePageID(c)
+			pageID, err := resolvePageID(nil)
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
-			result, err := c.CallTool("upload_file", map[string]any{
-				"page":    pageID,
-				"element": element,
-				"files":   args[1:],
+			c := newClient()
+			result, err := c.CallTool("upload", map[string]any{
+				"page":  pageID,
+				"ref":   ref,
+				"files": args[1:],
 			})
 			if err != nil {
 				output.Error(err.Error(), 1)
@@ -145,24 +150,28 @@ func init() {
 	rootCmd.AddCommand(hoverCmd, focusCmd, checkCmd, uncheckCmd, selectCmd, dragCmd, uploadCmd)
 }
 
-// elementAction creates a simple element-based tool command.
-func elementAction(toolName string) func(*cobra.Command, []string) {
+func elementAction(kind string, extra map[string]any) func(*cobra.Command, []string) {
 	return func(cmd *cobra.Command, args []string) {
-		var element int
-		if _, err := fmt.Sscanf(args[0], "%d", &element); err != nil {
-			output.Errorf(3, "invalid element ID: %s", args[0])
+		ref, err := elementRef(args[0])
+		if err != nil {
+			output.Error(err.Error(), 3)
 		}
 
-		c := newClient()
-		pageID, err := resolvePageID(c)
+		pageID, err := resolvePageID(nil)
 		if err != nil {
 			output.Error(err.Error(), 2)
 		}
+		c := newClient()
 
-		result, err := c.CallTool(toolName, map[string]any{
-			"page":    pageID,
-			"element": element,
-		})
+		toolArgs := map[string]any{
+			"page": pageID,
+			"kind": kind,
+			"ref":  ref,
+		}
+		for key, value := range extra {
+			toolArgs[key] = value
+		}
+		result, err := c.CallTool("act", toolArgs)
 		if err != nil {
 			output.Error(err.Error(), 1)
 		}

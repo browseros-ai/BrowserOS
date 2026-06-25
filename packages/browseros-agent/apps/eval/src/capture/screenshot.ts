@@ -8,7 +8,7 @@
 
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { Browser } from '@browseros/server/browser'
+import type { Browser } from '@browseros/browser-core/browser'
 import { callMcpTool } from '../utils/mcp-client'
 
 export class ScreenshotCapture {

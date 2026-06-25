@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import type { Browser } from '@browseros/browser-core/browser'
 import { AiSdkAgent } from '@browseros/server/agent/tool-loop'
 import type { ResolvedAgentConfig } from '@browseros/server/agent/types'
-import type { Browser } from '@browseros/server/browser'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 import type {
   DelegationResult,

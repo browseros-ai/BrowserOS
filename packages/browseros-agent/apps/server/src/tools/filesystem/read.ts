@@ -1,8 +1,8 @@
 import { readFile } from 'node:fs/promises'
 import { extname } from 'node:path'
+import { wrapUntrusted } from '@browseros/browser-mcp/tools/trust-boundary'
 import { tool } from 'ai'
 import { z } from 'zod'
-import { wrapUntrusted } from '../browser/trust-boundary'
 import {
   executeWithMetrics,
   type FilesystemToolResult,

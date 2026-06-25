@@ -49,7 +49,7 @@ func BuildArgs(cfg ArgsConfig) []string {
 	)
 
 	if cfg.LoadDevExtensions {
-		agentExtDir := filepath.Join(cfg.Root, "apps/agent/dist/chrome-mv3-dev")
+		agentExtDir := filepath.Join(cfg.Root, "apps/app/dist/chrome-mv3-dev")
 		args = append(args, fmt.Sprintf("--load-extension=%s", agentExtDir))
 		args = append(args, "chrome://newtab")
 	}

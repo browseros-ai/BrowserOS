@@ -35,7 +35,7 @@ import { logger } from '../../lib/logger'
 
 // The MCP SDK's registerTool is overloaded heavily enough to trigger
 // TS2589 "excessively deep" on this small surface. The browser tools
-// at src/tools/browser/register.ts re-type the same call signature
+// at @browseros/browser-mcp/register re-type the same call signature
 // for the same reason; we follow the pattern.
 type RegisterToolFn = (
   name: string,

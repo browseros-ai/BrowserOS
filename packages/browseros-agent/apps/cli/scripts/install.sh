@@ -129,8 +129,10 @@ fi
 mkdir -p "$INSTALL_DIR"
 mv "$BINARY_PATH" "${INSTALL_DIR}/${BINARY}"
 chmod +x "${INSTALL_DIR}/${BINARY}"
+ln -sf "${BINARY}" "${INSTALL_DIR}/bos"
 
 echo "Installed ${BINARY} to ${INSTALL_DIR}/${BINARY}"
+echo "Installed bos alias to ${INSTALL_DIR}/bos"
 
 # ── PATH hint ────────────────────────────────────────────────────────────────
 
@@ -148,4 +150,4 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
 fi
 
 echo ""
-echo "Run 'browseros-cli --help' to get started."
+echo "Run 'browseros-cli --help' or 'bos --help' to get started."

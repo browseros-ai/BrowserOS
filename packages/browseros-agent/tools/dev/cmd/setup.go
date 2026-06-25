@@ -47,7 +47,7 @@ func buildSetupPlan(root string, ifNeeded bool) setupPlan {
 
 func generatedGraphQLExists(root string) bool {
 	for _, file := range []string{"gql.ts", "graphql.ts", "schema.graphql"} {
-		info, err := os.Stat(filepath.Join(root, "apps/agent/generated/graphql", file))
+		info, err := os.Stat(filepath.Join(root, "apps/app/generated/graphql", file))
 		if err != nil || info.IsDir() {
 			return false
 		}

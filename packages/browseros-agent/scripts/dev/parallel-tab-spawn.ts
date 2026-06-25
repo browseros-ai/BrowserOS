@@ -20,8 +20,8 @@
  *
  * Optional flags:
  *
- *   --cockpit-url=http://127.0.0.1:9100/cockpit   default
- *   --origin=chrome-extension://...                default uses the agent-mcp-ui pinned key
+ *   --cockpit-url=http://127.0.0.1:9200/cockpit   default
+ *   --origin=chrome-extension://...                default uses the claw-app pinned key
  *   --poll-seconds=30                              total window to observe
  *   --hold-seconds=3                               PASS requires the active count to hold for at least this many consecutive samples at N
  *
@@ -30,7 +30,7 @@
  * PASS line into the PR description.
  */
 
-const DEFAULT_COCKPIT_URL = 'http://127.0.0.1:9100/cockpit'
+const DEFAULT_COCKPIT_URL = 'http://127.0.0.1:9200/cockpit'
 const DEFAULT_ORIGIN = 'chrome-extension://cbjjhiahclaiijedfmgafnkmejjoemga'
 const DEFAULT_POLL_SECONDS = 30
 const DEFAULT_HOLD_SECONDS = 3

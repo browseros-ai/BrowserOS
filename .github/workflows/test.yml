@@ -59,8 +59,16 @@ jobs:
             junit_path: test-results/server-root.xml
             needs_browser: false
           - suite: agent
-            command: (cd apps/agent && bun run test)
+            command: (cd apps/app && bun run test)
             junit_path: test-results/agent.xml
+            needs_browser: false
+          - suite: claw-app
+            command: (cd apps/claw-app && bun run test)
+            junit_path: test-results/claw-app.xml
+            needs_browser: false
+          - suite: claw-server
+            command: (cd apps/claw-server && bun run test)
+            junit_path: test-results/claw-server.xml
             needs_browser: false
           - suite: eval
             command: (cd apps/eval && bun run test)

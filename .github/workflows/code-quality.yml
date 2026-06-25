@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - dev
-      - feat/agent-mcp-interface-bootstrap
+      - feat/claw-server-bootstrap
     paths:
       - "packages/browseros-agent/**"
 
@@ -53,10 +53,10 @@ jobs:
         run: bun ci
 
       - name: Prepare wxt
-        run: VITE_PUBLIC_BROWSEROS_API=http://localhost:3000 bun run --cwd apps/agent wxt prepare
+        run: VITE_PUBLIC_BROWSEROS_API=http://localhost:3000 bun run --cwd apps/app wxt prepare
 
       - name: Run codegen
-        run: bun run --cwd apps/agent codegen
+        run: bun run --cwd apps/app codegen
 
       - name: Run Typecheck
         run: bun run typecheck

@@ -1,6 +1,6 @@
 {
   "name": "@browseros/server",
-  "version": "0.0.121",
+  "version": "0.0.122",
   "description": "BrowserOS server",
   "type": "module",
   "main": "./src/index.ts",
@@ -58,26 +58,6 @@
     "./agent/tool-loop/provider-factory": {
       "types": "./src/agent/provider-factory.ts",
       "default": "./src/agent/provider-factory.ts"
-    },
-    "./browser": {
-      "types": "./src/browser/browser.ts",
-      "default": "./src/browser/browser.ts"
-    },
-    "./browser/backends/cdp": {
-      "types": "./src/browser/backends/cdp.ts",
-      "default": "./src/browser/backends/cdp.ts"
-    },
-    "./browser/core/session": {
-      "types": "./src/browser/core/session.ts",
-      "default": "./src/browser/core/session.ts"
-    },
-    "./tools/browser/framework": {
-      "types": "./src/tools/browser/framework.ts",
-      "default": "./src/tools/browser/framework.ts"
-    },
-    "./tools/browser/registry": {
-      "types": "./src/tools/browser/registry.ts",
-      "default": "./src/tools/browser/registry.ts"
     }
   },
   "dependencies": {
@@ -90,7 +70,8 @@
     "@ai-sdk/openai": "^3.0.73",
     "@ai-sdk/openai-compatible": "^2.0.51",
     "@ai-sdk/provider": "^3.0.10",
-    "@browseros/agent-mcp-interface": "workspace:*",
+    "@browseros/browser-core": "workspace:*",
+    "@browseros/browser-mcp": "workspace:*",
     "@browseros/cdp-protocol": "workspace:*",
     "@browseros/shared": "workspace:*",
     "@hono/mcp": "^0.2.5",

@@ -10,24 +10,24 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
-import { z } from 'zod'
-import { CHAT_MODE_ALLOWED_TOOLS } from '../../../src/agent/chat-mode'
-import { buildBrowserToolSet } from '../../../src/agent/tool-adapter'
-import type { BrowserSession } from '../../../src/browser/core/session'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
+import { createBrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
+import { registerBrowserTools } from '@browseros/browser-mcp/register'
+import { BROWSER_TOOLS } from '@browseros/browser-mcp/registry'
 import {
   getToolOutputDir,
   TOOL_OUTPUT_DIR_MODE,
   TOOL_OUTPUT_FILE_MODE,
-} from '../../../src/lib/browseros-dir'
+} from '@browseros/browser-mcp/tool-output-dir'
 import {
   defineTool,
   executeTool,
   textResult,
-} from '../../../src/tools/browser/framework'
-import { createBrowserOutputFileAccess } from '../../../src/tools/browser/output-file'
-import { registerBrowserTools } from '../../../src/tools/browser/register'
-import { BROWSER_TOOLS } from '../../../src/tools/browser/registry'
+} from '@browseros/browser-mcp/tools/framework'
+import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
+import { z } from 'zod'
+import { CHAT_MODE_ALLOWED_TOOLS } from '../../../src/agent/chat-mode'
+import { buildBrowserToolSet } from '../../../src/agent/tool-adapter'
 import { createReadTool } from '../../../src/tools/filesystem/read'
 
 type RegisteredHandler = (args: Record<string, unknown>) => Promise<{
@@ -154,6 +154,12 @@ describe('registerBrowserTools', () => {
       fake.handlers.get('screenshot')?.({ page: 1 }),
     ).resolves.toEqual({
       content: [{ type: 'image', data: 'jpeg-data', mimeType: 'image/jpeg' }],
+      structuredContent: {
+        page: 1,
+        format: 'jpeg',
+        bytes: Buffer.from('jpeg-data', 'base64').length,
+        image: 'jpeg-data',
+      },
     })
     await expect(
       fake.handlers.get('screenshot')?.({
@@ -163,6 +169,12 @@ describe('registerBrowserTools', () => {
       }),
     ).resolves.toEqual({
       content: [{ type: 'image', data: 'jpeg-data', mimeType: 'image/jpeg' }],
+      structuredContent: {
+        page: 1,
+        format: 'jpeg',
+        bytes: Buffer.from('jpeg-data', 'base64').length,
+        image: 'jpeg-data',
+      },
     })
     expect(captureOptions).toEqual([
       {
@@ -244,11 +256,23 @@ describe('registerBrowserTools', () => {
       }),
     ).resolves.toEqual({
       content: [{ type: 'image', data: 'png-data', mimeType: 'image/png' }],
+      structuredContent: {
+        page: 1,
+        format: 'png',
+        bytes: Buffer.from('png-data', 'base64').length,
+        image: 'png-data',
+      },
     })
     await expect(
       fake.handlers.get('screenshot')?.({ page: 1, fullPage: true }),
     ).resolves.toEqual({
       content: [{ type: 'image', data: 'jpeg-data', mimeType: 'image/jpeg' }],
+      structuredContent: {
+        page: 1,
+        format: 'jpeg',
+        bytes: Buffer.from('jpeg-data', 'base64').length,
+        image: 'jpeg-data',
+      },
     })
 
     expect(layoutMetricCalls).toBe(1)
@@ -598,7 +622,11 @@ return { title: pages[0].title }
     })
 
     expect(result?.isError).toBeFalsy()
-    expect(result?.structuredContent).toEqual({ ok: true })
+    expect(result?.structuredContent).toEqual({
+      ok: true,
+      value: { title: 'Example' },
+      logs: ['pages 1', 'warn: {\n  "pageId": 7\n}'],
+    })
     expect(result?.content).toEqual([
       expect.objectContaining({
         type: 'text',
@@ -617,6 +645,28 @@ return { title: pages[0].title }
         text: expect.stringContaining('logs:\npages 1\nwarn:'),
       }),
     ])
+  })
+
+  it('keeps run structured values JSON-safe', async () => {
+    const fake = createFakeServer()
+    const session = { pages: {} } as unknown as BrowserSession
+
+    registerBrowserTools(fake.server as never, session)
+
+    const result = await fake.handlers.get('run')?.({
+      code: `
+const value = { id: 1n }
+value.self = value
+return value
+`,
+    })
+
+    expect(result?.isError).toBeFalsy()
+    expect(result?.structuredContent).toEqual({
+      ok: true,
+      value: { id: '1', self: '[Circular]' },
+      logs: [],
+    })
   })
 
   it('returns run syntax errors without invoking the browser session', async () => {
@@ -662,7 +712,11 @@ throw new Error('boom')
     })
 
     expect(result?.isError).toBe(true)
-    expect(result?.structuredContent).toEqual({ ok: false })
+    expect(result?.structuredContent).toEqual({
+      ok: false,
+      logs: ['before boom'],
+      error: 'boom',
+    })
     expect(result?.content).toEqual([
       expect.objectContaining({
         type: 'text',
@@ -692,7 +746,11 @@ return 'late'
     })
 
     expect(result?.isError).toBe(true)
-    expect(result?.structuredContent).toEqual({ ok: false })
+    expect(result?.structuredContent).toEqual({
+      ok: false,
+      logs: [],
+      error: 'run exceeded 1ms',
+    })
     expect(result?.content).toEqual([
       expect.objectContaining({
         type: 'text',
@@ -811,6 +869,31 @@ return 'late'
       expect.objectContaining({
         type: 'text',
         text: expect.not.stringContaining('origin=https://example.com/stale'),
+      }),
+    ])
+  })
+
+  it('reports an unchanged diff with a changed:false discriminator', async () => {
+    const fake = createFakeServer()
+    const session = {
+      observe: () => ({
+        diff: async () => ({ changed: false, text: '', added: 0, removed: 0 }),
+      }),
+      pages: {
+        getInfo: () => ({ url: 'https://example.com' }),
+      },
+    } as unknown as BrowserSession
+
+    registerBrowserTools(fake.server as never, session)
+
+    const result = await fake.handlers.get('diff')?.({ page: 1 })
+
+    expect(result?.isError).toBeFalsy()
+    expect(result?.structuredContent).toEqual({ changed: false })
+    expect(result?.content).toEqual([
+      expect.objectContaining({
+        type: 'text',
+        text: 'no change since last snapshot',
       }),
     ])
   })
@@ -1624,8 +1707,13 @@ return 'late'
       press: async () => calls.push('press'),
       hover: async () => calls.push('hover'),
       hoverAt: async () => calls.push('hoverAt'),
+      focus: async (ref: string) => calls.push(`focus:${ref}`),
+      check: async (ref: string) => calls.push(`check:${ref}`),
+      uncheck: async (ref: string) => calls.push(`uncheck:${ref}`),
       selectOption: async () => calls.push('selectOption'),
       scroll: async () => calls.push('scroll'),
+      drag: async (source: string, target: string) =>
+        calls.push(`drag:${source}->${target}`),
       dragAt: async () => calls.push('dragAt'),
     }
     const session = {
@@ -1720,6 +1808,27 @@ return 'late'
         ref: 'e1',
       }),
     ).toMatchObject({ structuredContent: { kind: 'click', changed: true } })
+    await fake.handlers.get('act')?.({
+      page: 1,
+      kind: 'focus',
+      ref: 'e1',
+    })
+    await fake.handlers.get('act')?.({
+      page: 1,
+      kind: 'check',
+      ref: 'e2',
+    })
+    await fake.handlers.get('act')?.({
+      page: 1,
+      kind: 'uncheck',
+      ref: 'e3',
+    })
+    await fake.handlers.get('act')?.({
+      page: 1,
+      kind: 'drag',
+      ref: 'e4',
+      targetRef: 'e5',
+    })
     expect(calls).toEqual([
       'goto',
       'snapshot',
@@ -1727,6 +1836,14 @@ return 'late'
       'diff',
       'snapshot',
       'click',
+      'diff',
+      'focus:e1',
+      'diff',
+      'check:e2',
+      'diff',
+      'uncheck:e3',
+      'diff',
+      'drag:e4->e5',
       'diff',
     ])
   })
@@ -1854,14 +1971,25 @@ describe('buildBrowserToolSet', () => {
     })
   })
 
-  it('allows chat mode to list tabs without allowing tab mutation', async () => {
+  it('allows chat mode to read tabs without allowing tab mutation', async () => {
     expect(CHAT_MODE_ALLOWED_TOOLS.has('tabs')).toBe(true)
     const calls: string[] = []
+    const activePage = {
+      pageId: 1,
+      targetId: 'target-1',
+      tabId: 11,
+      url: 'https://example.com',
+      title: 'Example',
+      isActive: true,
+      isLoading: false,
+      loadProgress: 1,
+      isPinned: false,
+      isHidden: false,
+    }
     const session = {
       pages: {
-        list: async () => [
-          { pageId: 1, url: 'https://example.com', title: 'Example' },
-        ],
+        list: async () => [activePage],
+        getActive: async () => activePage,
         newPage: async () => {
           calls.push('newPage')
           return 2
@@ -1873,12 +2001,16 @@ describe('buildBrowserToolSet', () => {
     const listResult = await tools.tabs.execute?.({ action: 'list' }, {
       abortSignal: new AbortController().signal,
     } as never)
+    const activeResult = await tools.tabs.execute?.({ action: 'active' }, {
+      abortSignal: new AbortController().signal,
+    } as never)
     const newResult = await tools.tabs.execute?.(
       { action: 'new', url: 'https://example.com' },
       { abortSignal: new AbortController().signal } as never,
     )
 
     expect(listResult).toMatchObject({ isError: false })
+    expect(activeResult).toMatchObject({ isError: false })
     expect(newResult).toMatchObject({ isError: true })
     expect(calls).toEqual([])
   })

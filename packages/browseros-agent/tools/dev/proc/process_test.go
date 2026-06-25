@@ -1,7 +1,10 @@
 package proc
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +24,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestWatchRunPathsStableAndDistinct(t *testing.T) {
+func TestWatchRunPathsStableAndSharedAcrossPortChanges(t *testing.T) {
 	baseDir := t.TempDir()
 	identity := WatchRunIdentity{
 		Mode:    "watch",
@@ -38,8 +41,15 @@ func TestWatchRunPathsStableAndDistinct(t *testing.T) {
 	withDifferentPort := identity
 	withDifferentPort.Ports.Server = 9106
 	third := watchRunPaths(baseDir, withDifferentPort)
-	if third.Lock == first.Lock || third.State == first.State {
-		t.Fatalf("expected distinct paths for different ports, got %#v and %#v", first, third)
+	if third != first {
+		t.Fatalf("expected same paths for different ports, got %#v and %#v", first, third)
+	}
+
+	withDifferentProfile := identity
+	withDifferentProfile.Profile = "/tmp/browseros-dev-other"
+	fourth := watchRunPaths(baseDir, withDifferentProfile)
+	if fourth.Lock == first.Lock || fourth.State == first.State {
+		t.Fatalf("expected distinct paths for different profiles, got %#v and %#v", first, fourth)
 	}
 }
 
@@ -192,6 +202,122 @@ func TestAcquireWatchRunLockStopsExistingOwnerByStatePGID(t *testing.T) {
 	}
 }
 
+func TestAcquireWatchRunLockStopsExistingOwnerWithDifferentPorts(t *testing.T) {
+	baseDir := t.TempDir()
+	readyPath := filepath.Join(baseDir, "ready")
+	ownerIdentity := WatchRunIdentity{
+		Mode:    "watch",
+		Profile: "/tmp/browseros-dev",
+		Ports:   Ports{CDP: 9005, Server: 9105, Extension: 9305},
+	}
+	takeoverIdentity := ownerIdentity
+	takeoverIdentity.Ports.Server = 9200
+	identityJSON, err := json.Marshal(ownerIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestMain")
+	cmd.Env = append(os.Environ(),
+		watchLockHelperEnv+"=1",
+		"BROWSEROS_DEV_WATCH_LOCK_BASE="+baseDir,
+		"BROWSEROS_DEV_WATCH_LOCK_READY="+readyPath,
+		"BROWSEROS_DEV_WATCH_LOCK_IDENTITY="+string(identityJSON),
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting helper: %v", err)
+	}
+	defer cmd.Process.Kill()
+
+	waitForFile(t, readyPath, 3*time.Second)
+
+	lock, stopped, err := AcquireWatchRunLockInDir(baseDir, takeoverIdentity, 3*time.Second)
+	if err != nil {
+		t.Fatalf("AcquireWatchRunLockInDir returned error: %v", err)
+	}
+	defer lock.Close()
+	if !stopped {
+		t.Fatal("expected takeover to stop existing owner")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("expected helper process to exit after takeover")
+	}
+}
+
+func TestAcquireWatchRunLockStopsLegacyPortKeyedOwner(t *testing.T) {
+	baseDir := t.TempDir()
+	legacyIdentity := WatchRunIdentity{
+		Mode:    "watch",
+		Profile: "/tmp/browseros-dev",
+		Ports:   Ports{CDP: 9005, Server: 9105, Extension: 9305},
+	}
+	takeoverIdentity := legacyIdentity
+	takeoverIdentity.Ports.Server = 9200
+
+	helperBaseDir := t.TempDir()
+	legacyPaths := legacyPortKeyedWatchRunPaths(baseDir, legacyIdentity)
+	identityJSON, err := json.Marshal(legacyIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readyPath := filepath.Join(baseDir, "legacy-ready")
+	cmd := exec.Command(os.Args[0], "-test.run=TestMain")
+	cmd.Env = append(os.Environ(),
+		watchLockHelperEnv+"=1",
+		"BROWSEROS_DEV_WATCH_LOCK_BASE="+helperBaseDir,
+		"BROWSEROS_DEV_WATCH_LOCK_READY="+readyPath,
+		"BROWSEROS_DEV_WATCH_LOCK_IDENTITY="+string(identityJSON),
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting legacy owner: %v", err)
+	}
+	defer cmd.Process.Kill()
+
+	waitForFile(t, readyPath, 3*time.Second)
+	helperState, err := ReadWatchRunState(watchRunPaths(helperBaseDir, legacyIdentity).State)
+	if err != nil {
+		t.Fatalf("reading helper state: %v", err)
+	}
+	legacyState := helperState
+	legacyState.Identity = legacyIdentity
+	data, err := json.MarshalIndent(legacyState, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPaths.State, append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	lock, stopped, err := AcquireWatchRunLockInDir(baseDir, takeoverIdentity, 3*time.Second)
+	if err != nil {
+		t.Fatalf("AcquireWatchRunLockInDir returned error: %v", err)
+	}
+	defer lock.Close()
+	if !stopped {
+		t.Fatal("expected takeover to stop legacy owner")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("expected legacy owner process to exit after takeover")
+	}
+}
+
 func runWatchLockHelper() {
 	baseDir := os.Getenv("BROWSEROS_DEV_WATCH_LOCK_BASE")
 	readyPath := os.Getenv("BROWSEROS_DEV_WATCH_LOCK_READY")
@@ -209,6 +335,22 @@ func runWatchLockHelper() {
 		os.Exit(4)
 	}
 	time.Sleep(30 * time.Second)
+}
+
+func legacyPortKeyedWatchRunPaths(baseDir string, identity WatchRunIdentity) watchRunPathsResult {
+	identity = normalizeWatchRunIdentity(identity)
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%d",
+		identity.Mode,
+		identity.Profile,
+		identity.Ports.CDP,
+		identity.Ports.Server,
+		identity.Ports.Extension,
+	)))
+	key := hex.EncodeToString(sum[:])
+	return watchRunPathsResult{
+		Lock:  filepath.Join(baseDir, "watch-"+key+".lock"),
+		State: filepath.Join(baseDir, "watch-"+key+".json"),
+	}
 }
 
 func waitForFile(t *testing.T, path string, timeout time.Duration) {

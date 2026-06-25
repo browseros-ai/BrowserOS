@@ -87,7 +87,7 @@ async function connectMcpClient(
     ])
     // Cast keeps the call green when this package compiles in a
     // workspace that also has zod v4 present (the cockpit at
-    // apps/agent-mcp-interface). The two zod majors export
+    // apps/claw-server). The two zod majors export
     // compatible runtime values but TypeScript's inferred type for
     // `client.tools()` widens from `ZodType<never>` to
     // `ZodType<unknown>` in that resolution context, which the AI

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"time"
 
@@ -18,6 +17,7 @@ type Client struct {
 	HTTPClient *http.Client
 	Version    string
 	Debug      bool
+	session    *sdkmcp.ClientSession
 }
 
 func NewClient(baseURL, version string, timeout time.Duration) *Client {
@@ -54,12 +54,36 @@ func (c *Client) CallTool(name string, args map[string]any) (*ToolResult, error)
 	ctx, cancel := context.WithTimeout(context.Background(), c.HTTPClient.Timeout)
 	defer cancel()
 
+	if c.session != nil {
+		return c.callTool(ctx, c.session, name, args)
+	}
+
 	session, err := c.connect(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer session.Close()
 
+	return c.callTool(ctx, session, name, args)
+}
+
+// WithSession runs multiple tool calls through one initialized MCP session.
+func (c *Client) WithSession(fn func(*Client) error) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	session, err := c.connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+
+	shared := *c
+	shared.session = session
+	return fn(&shared)
+}
+
+func (c *Client) callTool(ctx context.Context, session *sdkmcp.ClientSession, name string, args map[string]any) (*ToolResult, error) {
 	if args == nil {
 		args = map[string]any{}
 	}
@@ -110,65 +134,6 @@ func convertResult(r *sdkmcp.CallToolResult) *ToolResult {
 	}
 
 	return result
-}
-
-// ResolvePageID returns the explicit page ID or fetches the active page.
-func (c *Client) ResolvePageID(explicit *int) (int, error) {
-	if explicit != nil {
-		return *explicit, nil
-	}
-	result, err := c.CallTool("get_active_page", nil)
-	if err != nil {
-		return 0, fmt.Errorf("no active page: %w", err)
-	}
-
-	if pageID, ok := extractPageID(result.StructuredContent); ok {
-		return pageID, nil
-	}
-
-	return 0, fmt.Errorf("could not determine active page ID from response")
-}
-
-func extractPageID(sc map[string]any) (int, bool) {
-	if sc == nil {
-		return 0, false
-	}
-	if pageID, ok := intValue(sc["pageId"]); ok {
-		return pageID, true
-	}
-	page, ok := sc["page"].(map[string]any)
-	if !ok {
-		return 0, false
-	}
-	pageID, ok := intValue(page["pageId"])
-	if !ok {
-		return 0, false
-	}
-	return pageID, true
-}
-
-func intValue(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int32:
-		return int(n), true
-	case int64:
-		return int(n), true
-	case float64:
-		if math.Trunc(n) != n {
-			return 0, false
-		}
-		return int(n), true
-	case json.Number:
-		i, err := n.Int64()
-		if err != nil {
-			return 0, false
-		}
-		return int(i), true
-	default:
-		return 0, false
-	}
 }
 
 // Health checks the /health endpoint (REST, not MCP).

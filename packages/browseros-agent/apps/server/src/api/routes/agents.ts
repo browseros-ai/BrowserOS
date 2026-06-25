@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { Browser } from '@browseros/browser-core/browser'
 import { AGENT_HARNESS_LIMITS } from '@browseros/shared/constants/limits'
 import {
   type BrowserContext,
@@ -12,7 +13,6 @@ import {
 import { type Context, Hono } from 'hono'
 import { stream } from 'hono/streaming'
 import { formatUserMessage } from '../../agent/format-message'
-import type { Browser } from '../../browser/browser'
 import { createAcpUIMessageStreamResponse } from '../../lib/agents/acp/ui-message-stream'
 import {
   AGENT_ADAPTER_CATALOG,
