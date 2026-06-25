@@ -14,6 +14,7 @@ import { NewAgent } from '@/screens/new-agent/NewAgent'
 import { Onboarding } from '@/screens/onboarding/Onboarding'
 import { OnboardingV2 } from '@/screens/onboarding/OnboardingV2'
 import { Replay } from '@/screens/replay/Replay'
+import { TaskDetailPage } from '@/screens/task-detail/TaskDetailPage'
 
 /**
  * HashRouter wrapping a single layout route that mounts the sidebar
@@ -38,6 +39,7 @@ export function App() {
           <Route path="/" element={<Cockpit />} />
           <Route path="/mcp" element={<Mcp />} />
           <Route path="/audit" element={<Audit />} />
+          <Route path="/audit/:sessionId" element={<TaskDetailPage />} />
           {legacyUi && (
             <>
               <Route path="/agents" element={<Agents />} />
