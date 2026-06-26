@@ -25,6 +25,7 @@ import {
   type TabActivityRecord,
   tabActivityRegistry,
 } from '../../lib/tab-activity'
+import { screencastCache } from '../../services/screencast-cache'
 import { list as listAgents } from '../agents/service'
 import { resolveAgentDisplay } from './agent-display'
 
@@ -35,6 +36,12 @@ export interface EnrichedTabRecord extends TabActivityRecord {
   // falls back to its slug-hash palette. Wire is ready for the day
   // the profile schema gains a `color` field.
   color: string | null
+  /**
+   * Latest screencast frame from the background poller. `null` when
+   * the cache has no frame for the pageId (poller has not yet run,
+   * page is in failure backoff, or the tab is idle).
+   */
+  screencast: { jpegBase64: string; capturedAt: number } | null
 }
 
 export const tabsRoute = new Hono().get('/tabs/activity', async (c) => {
@@ -62,7 +69,11 @@ export const tabsRoute = new Hono().get('/tabs/activity', async (c) => {
       profilesById,
       identitiesByAgentId,
     })
-    return { ...tab, ...display }
+    const frame = screencastCache.get(tab.pageId)
+    const screencast = frame
+      ? { jpegBase64: frame.jpegBase64, capturedAt: frame.capturedAt }
+      : null
+    return { ...tab, ...display, screencast }
   })
   return c.json({ tabs: enriched })
 })

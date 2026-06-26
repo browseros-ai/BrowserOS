@@ -15,6 +15,7 @@ import { setBrowserSession } from '../../../src/lib/browser-session'
 import { tabActivityRegistry } from '../../../src/lib/tab-activity'
 import { create as createAgent } from '../../../src/routes/agents/service'
 import app, { type AppType } from '../../../src/server'
+import { screencastCache } from '../../../src/services/screencast-cache'
 import { withTempBrowserosDir } from '../../_helpers/temp-browseros-dir'
 
 function client() {
@@ -44,6 +45,7 @@ afterEach(() => {
   // stub resolves the same pageId.
   tabActivityRegistry.clear()
   setBrowserSession(null)
+  screencastCache.resetForTesting()
 })
 
 describe('/tabs/activity route', () => {
@@ -118,6 +120,52 @@ describe('/tabs/activity route', () => {
       expect(row.recentTools).toEqual([
         { name: 'navigate', at: row.lastToolAt },
       ])
+    })
+  })
+
+  test('emits screencast: null when the cache has no frame for the page', async () => {
+    await withTempBrowserosDir(async () => {
+      stubSession()
+      tabActivityRegistry.recordTool({
+        agentId: 'a',
+        slug: 'a',
+        pageId: 1,
+        targetId: 't1',
+        toolName: 'navigate',
+      })
+      const res = await client().tabs.activity.$get()
+      const body = (await res.json()) as {
+        tabs: Array<{ screencast: unknown }>
+      }
+      expect(body.tabs[0].screencast).toBeNull()
+    })
+  })
+
+  test('emits screencast frame when the cache has one for the page', async () => {
+    await withTempBrowserosDir(async () => {
+      stubSession()
+      tabActivityRegistry.recordTool({
+        agentId: 'a',
+        slug: 'a',
+        pageId: 1,
+        targetId: 't1',
+        toolName: 'navigate',
+      })
+      screencastCache.set(1, {
+        jpegBase64: 'ABCD',
+        capturedAt: 1_234_567_890,
+        byteLength: 3,
+      })
+      const res = await client().tabs.activity.$get()
+      const body = (await res.json()) as {
+        tabs: Array<{
+          screencast: { jpegBase64: string; capturedAt: number } | null
+        }>
+      }
+      expect(body.tabs[0].screencast).toEqual({
+        jpegBase64: 'ABCD',
+        capturedAt: 1_234_567_890,
+      })
     })
   })
 
