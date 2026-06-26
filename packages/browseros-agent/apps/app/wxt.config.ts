@@ -1,15 +1,14 @@
 import { sentryVitePlugin } from '@sentry/vite-plugin'
 import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'wxt'
+import { parseBrowserOSApiUrl } from './lib/browseros-api-url'
 import { LEGACY_AGENT_EXTENSION_ID } from './lib/constants/legacyAgentExtensionId'
 import { PRODUCT_WEB_HOST } from './lib/constants/productWebHost'
 
 // biome-ignore lint/style/noProcessEnv: build config file needs env access
 const env = process.env
 
-const apiUrl = new URL(
-  env.VITE_PUBLIC_BROWSEROS_API?.trim() || 'https://api.browseros.com',
-)
+const apiUrl = new URL(parseBrowserOSApiUrl(env.VITE_PUBLIC_BROWSEROS_API))
 const apiPattern = apiUrl.port
   ? `${apiUrl.hostname}:${apiUrl.port}`
   : apiUrl.hostname
