@@ -12,9 +12,9 @@ import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { cn } from '@/lib/utils'
 import {
-  HARNESSES,
   type Harness,
   type NewAgentValues,
+  SELECTABLE_HARNESSES,
 } from './new-agent.schemas'
 
 export function HarnessSection() {
@@ -60,7 +60,7 @@ export function HarnessSection() {
                 onValueChange={(value) => field.onChange(value as Harness)}
                 className="grid grid-cols-2 gap-2 md:grid-cols-3"
               >
-                {HARNESSES.map((name) => {
+                {SELECTABLE_HARNESSES.map((name) => {
                   const selected = field.value === name
                   return (
                     <label

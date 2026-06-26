@@ -6,6 +6,14 @@ import { z } from 'zod'
  * BrowserOS-internal harnesses that no-op the install. Keep this
  * list in sync with the backend's harnessEnum at
  * `apps/claw-server/src/routes/agents/schemas.ts`.
+ *
+ * NOTE: `HARNESSES` is the full Harness type-domain — it covers any
+ * harness value we may have stored historically. The wizard picker
+ * iterates `SELECTABLE_HARNESSES` (below) instead, which subtracts
+ * `RETIRED_HARNESSES` to drop options BrowserOS no longer offers for
+ * new creates. Existing profiles whose harness lives in
+ * `RETIRED_HARNESSES` still parse, render with the right icon, and
+ * can be uninstalled — they just can't be re-picked.
  */
 export const HARNESSES = [
   'Claude Code',
@@ -20,6 +28,24 @@ export const HARNESSES = [
 ] as const
 
 export type Harness = (typeof HARNESSES)[number]
+
+/**
+ * Harnesses removed from the new-agent picker. Claude Desktop is
+ * hidden because its config parser only validates stdio entries and
+ * the recommended `npx mcp-remote` bridge requires Node on the
+ * user's machine, which BrowserOS cannot guarantee. Mirrors the
+ * apps/server `HIDDEN_AGENTS` rationale.
+ */
+export const RETIRED_HARNESSES = [
+  'Claude Desktop',
+] as const satisfies readonly Harness[]
+
+export const SELECTABLE_HARNESSES = HARNESSES.filter(
+  (h): h is Exclude<Harness, (typeof RETIRED_HARNESSES)[number]> =>
+    !(RETIRED_HARNESSES as readonly Harness[]).includes(h),
+)
+
+export type SelectableHarness = (typeof SELECTABLE_HARNESSES)[number]
 
 export const LOGIN_MODES = ['profile', 'all', 'selective'] as const
 export type LoginMode = (typeof LOGIN_MODES)[number]
@@ -78,7 +104,9 @@ export type CustomAclRule = z.infer<typeof customAclRuleSchema>
 
 export const newAgentSchema = z.object({
   name: z.string().trim().min(1, 'Give the connector a name'),
-  harness: z.enum(HARNESSES),
+  // Form validation rejects retired harnesses so a hand-crafted
+  // submission can't slip Claude Desktop back into the create path.
+  harness: z.enum(SELECTABLE_HARNESSES),
   loginMode: z.enum(LOGIN_MODES),
   selectedSites: z.array(z.string()),
   approvals: z.record(z.string(), z.enum(APPROVAL_VERDICTS)),
