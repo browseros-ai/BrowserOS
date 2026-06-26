@@ -130,9 +130,11 @@ describe('listAgents', () => {
   })
 
   it('hides agents BrowserOS does not surface in the panel', async () => {
-    // Today only Gemini CLI is hidden: its HTTP MCP support is not
-    // stable enough for a one-click install. The agent stays
-    // available via the manual setup snippet.
+    // Hidden: Gemini CLI (HTTP MCP support not stable enough for a
+    // one-click install) and Claude Desktop (only stdio config is
+    // valid and the recommended `npx mcp-remote` bridge needs Node
+    // on the user's machine). Both stay available via the manual
+    // setup snippet.
     stubAgents = [
       {
         id: 'claude-code',
@@ -145,6 +147,12 @@ describe('listAgents', () => {
         displayName: 'Gemini CLI',
         installed: true,
         configPath: '/tmp/fake/gemini.json',
+      },
+      {
+        id: 'claude-desktop',
+        displayName: 'Claude Desktop',
+        installed: true,
+        configPath: '/tmp/fake/claude-desktop.json',
       },
     ]
     const { manager: hiddenManager } = makeManagerStub()
@@ -220,25 +228,25 @@ describe('installInto', () => {
     expect(calls.link[0].serverName).toBe('browseros')
   })
 
-  it('uses a stdio mcp-remote spec under a separate server name for codex', async () => {
-    // Codex rejects HTTP MCP specs; the manager surfaces this as an
-    // InvalidServerSpecError. Wrapping the HTTP url in `npx mcp-remote`
-    // lets a stdio-only client still reach the local HTTP endpoint.
+  it('uses an http spec under the http server name for codex', async () => {
+    // Codex gained streamable-HTTP MCP support in agent-mcp-manager
+    // 0.0.3 (its surface flipped to ['stdio', 'http']). planFor now
+    // hits the http branch, mirroring claude-code, so no stdio bridge
+    // is needed and the integration works without npx on the host.
     const { manager, calls } = makeManagerStub()
     setMcpManagerForTesting(manager)
 
     const result = await installInto('codex', 'http://127.0.0.1:9100/mcp')
     expect(result.success).toBe(true)
     expect(calls.add).toHaveLength(1)
-    expect(calls.add[0].name).toBe('browseros-stdio')
+    expect(calls.add[0].name).toBe('browseros')
     expect(calls.add[0].spec).toEqual({
-      transport: 'stdio',
-      command: 'npx',
-      args: ['mcp-remote', 'http://127.0.0.1:9100/mcp'],
+      transport: 'http',
+      url: 'http://127.0.0.1:9100/mcp',
     })
     expect(calls.link).toHaveLength(1)
     expect(calls.link[0].agent).toBe('codex')
-    expect(calls.link[0].serverName).toBe('browseros-stdio')
+    expect(calls.link[0].serverName).toBe('browseros')
   })
 
   it('uses a stdio mcp-remote spec under the stdio server name for claude-desktop', async () => {

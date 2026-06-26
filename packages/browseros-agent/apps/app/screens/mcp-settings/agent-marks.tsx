@@ -12,7 +12,6 @@
 
 import type { FC, SVGProps } from 'react'
 import { AnthropicBlack } from '@/components/ui/svgs/anthropicBlack'
-import { ClaudeAiIcon } from '@/components/ui/svgs/claudeAiIcon'
 import { CodexLight } from '@/components/ui/svgs/codexLight'
 import { CursorLight } from '@/components/ui/svgs/cursorLight'
 import { Vscode } from '@/components/ui/svgs/vscode'
@@ -22,10 +21,6 @@ export type AgentMarkProps = SVGProps<SVGSVGElement>
 
 export const ClaudeMark: FC<AgentMarkProps> = (props) => (
   <AnthropicBlack aria-hidden {...props} />
-)
-
-export const ClaudeDesktopMark: FC<AgentMarkProps> = (props) => (
-  <ClaudeAiIcon aria-hidden {...props} />
 )
 
 export const CursorMark: FC<AgentMarkProps> = (props) => (

@@ -1,6 +1,5 @@
 import type { FC, SVGProps } from 'react'
 import {
-  ClaudeDesktopMark,
   ClaudeMark,
   CodexMark,
   CursorMark,
@@ -29,11 +28,6 @@ const AGENT_PRESENTATION: Record<string, AgentPresentation> = {
     label: 'Claude Code',
     installUrl: 'https://claude.ai/code',
     mark: ClaudeMark,
-  },
-  'claude-desktop': {
-    label: 'Claude Desktop',
-    installUrl: 'https://claude.ai/download',
-    mark: ClaudeDesktopMark,
   },
   cursor: {
     label: 'Cursor',

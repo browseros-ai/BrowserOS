@@ -61,33 +61,6 @@ const clients: ClientConfig[] = [
     action: 'Run in your terminal:',
     getSnippet: (url) => `codex mcp add browseros ${url}`,
   },
-  {
-    id: 'claude-desktop',
-    name: 'Claude Desktop',
-    kind: 'config',
-    action: (
-      <>
-        Add to{' '}
-        <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
-          ~/Library/Application Support/Claude/claude_desktop_config.json
-        </code>{' '}
-        and restart Claude Desktop:
-      </>
-    ),
-    getSnippet: (url) =>
-      JSON.stringify(
-        {
-          mcpServers: {
-            browserOS: {
-              command: 'npx',
-              args: ['mcp-remote', url],
-            },
-          },
-        },
-        null,
-        2,
-      ),
-  },
 ]
 
 const CopyButton: FC<{ text: string; label?: string }> = ({ text, label }) => {

@@ -36,12 +36,20 @@ export type DetectInstalledAgentsFn = () => Promise<AgentInfo[]>
 
 /**
  * Agents the upstream library supports but BrowserOS deliberately
- * does not surface in the Integrations panel. Today: Gemini CLI's
- * MCP HTTP support is not stable enough to one-click-install
- * against. Users who actually want it can still copy-paste the
- * manual setup snippet from the disclosure on the same page.
+ * does not surface in the Integrations panel.
+ *
+ * - `gemini`: HTTP MCP support is not stable enough to one-click
+ *   install against.
+ * - `claude-desktop`: Anthropic's `claude_desktop_config.json` parser
+ *   only validates stdio entries, and the stdio bridge they recommend
+ *   (`npx mcp-remote`) requires Node on the user's machine. Without a
+ *   bundled-runtime path we cannot make this reliable, so we hide it
+ *   rather than ship a broken-by-default flow.
+ *
+ * Users who actually want either can still copy-paste the manual
+ * setup snippet from the disclosure on the same page.
  */
-const HIDDEN_AGENTS: ReadonlySet<string> = new Set(['gemini'])
+const HIDDEN_AGENTS: ReadonlySet<string> = new Set(['gemini', 'claude-desktop'])
 
 /**
  * The two server-names BrowserOS manages in the manifest. Iterating
@@ -63,9 +71,10 @@ interface AgentServerPlan {
  * Transport routing is sourced from the library's catalog via
  * `resolveAgentSurface` so we stay in lock-step with whatever
  * upstream agent-mcp-manager classifies as http-capable. Agents
- * that only accept stdio (claude-desktop, codex, …) get wrapped
- * via `npx mcp-remote <url>` so a stdio client still ends up
- * talking to the local HTTP MCP endpoint.
+ * that only accept stdio (e.g. claude-desktop) get wrapped via
+ * `npx mcp-remote <url>` so a stdio client still ends up talking
+ * to the local HTTP MCP endpoint. Codex moved to native HTTP in
+ * agent-mcp-manager 0.0.3, so it lands on the http branch.
  */
 function planFor(agentId: AgentId, currentUrl: string): AgentServerPlan {
   const surface = resolveAgentSurface(agentId, 'system')

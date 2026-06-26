@@ -15,18 +15,20 @@ import { getBrowserosDir } from '../browseros-dir'
 
 /**
  * Server-name BrowserOS registers itself under for agents that speak
- * MCP over HTTP natively (Claude Code, Claude Desktop, Cursor, VS Code,
- * Zed). The stdio-only agents get a separate entry — see
+ * MCP over HTTP natively (Claude Code, Cursor, VS Code, Codex, Zed).
+ * Stdio-only agents — when supported — get a separate entry under
  * `BROWSEROS_MCP_STDIO_SERVER_NAME` below.
  */
 export const BROWSEROS_MCP_SERVER_NAME = 'browseros'
 
 /**
- * Server-name BrowserOS registers itself under for stdio-only agents
- * (today: Codex). The spec wraps `npx mcp-remote <url>` so a stdio
- * client can speak to the BrowserOS HTTP MCP endpoint. Kept as a
- * separate manifest entry from the HTTP one so each carries its own
- * spec and can be reconciled independently.
+ * Server-name BrowserOS registers itself under for stdio-only agents.
+ * The spec wraps `npx mcp-remote <url>` so a stdio client can speak
+ * to the BrowserOS HTTP MCP endpoint. Kept as a separate manifest
+ * entry from the HTTP one so each carries its own spec and can be
+ * reconciled independently. No surfaced agent currently uses this
+ * branch — Claude Desktop is hidden from the Integrations panel
+ * because its stdio bridge requires Node on the user's machine.
  */
 export const BROWSEROS_MCP_STDIO_SERVER_NAME = 'browseros-stdio'
 

@@ -212,7 +212,7 @@
         "@browseros/shared": "workspace:*",
         "@hono/zod-validator": "^0.8.0",
         "@modelcontextprotocol/sdk": "^1.27.1",
-        "agent-mcp-manager": "^0.0.1",
+        "agent-mcp-manager": "^0.0.3",
         "commander": "^14.0.3",
         "drizzle-orm": "^0.45.2",
         "hono": "^4.12.3",
@@ -273,7 +273,7 @@
         "acp-probe": "^0.0.2",
         "acpx": "^0.10.0",
         "acpx-ai-provider": "^0.0.6",
-        "agent-mcp-manager": "^0.0.2",
+        "agent-mcp-manager": "^0.0.3",
         "ai": "^6.0.208",
         "commander": "^14.0.3",
         "core-js": "3.45.1",
@@ -1716,7 +1716,7 @@
 
     "agent-base": ["agent-base@6.0.2", "", { "dependencies": { "debug": "4" } }, "sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ=="],
 
-    "agent-mcp-manager": ["agent-mcp-manager@0.0.1", "", { "dependencies": { "@iarna/toml": "^2.2.5", "jsonc-parser": "^3.3.1" } }, "sha512-lU6gc4/2+/5wXNl38DWEJuDKO5vkBid6KAWpxkbEGS1F1T1yXurbBPxEsaUohcByqj/Xt3rGHCjSbjKCRASMXw=="],
+    "agent-mcp-manager": ["agent-mcp-manager@0.0.3", "", { "dependencies": { "@iarna/toml": "^2.2.5", "jsonc-parser": "^3.3.1" } }, "sha512-DBbMi56b9hMfaSNCdorX38M1euE1tgrW2gvhkCeGSnNqXsTAYrbCdRZ1aNqNDHn6Ej5/t8Hzswc7fYhEm671wg=="],
 
     "ahooks": ["ahooks@3.9.7", "", { "dependencies": { "@babel/runtime": "^7.21.0", "@types/js-cookie": "^3.0.6", "dayjs": "^1.9.1", "intersection-observer": "^0.12.0", "js-cookie": "^3.0.5", "lodash": "^4.17.21", "react-fast-compare": "^3.2.2", "resize-observer-polyfill": "^1.5.1", "screenfull": "^5.0.0", "tslib": "^2.4.1" }, "peerDependencies": { "react": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0", "react-dom": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0" } }, "sha512-S0lvzhbdlhK36RFBkGv+RbOM/dbbweym+BIHM/bwwuWVSVN5TuVErHPMWo4w0t1NDYg5KPp2iEf7Y7E5LASYiw=="],
 
@@ -3813,8 +3813,6 @@
     "@browseros/server/@hono/zod-validator": ["@hono/zod-validator@0.4.3", "", { "peerDependencies": { "hono": ">=3.9.0", "zod": "^3.19.1" } }, "sha512-xIgMYXDyJ4Hj6ekm9T9Y27s080Nl9NXHcJkOvkXPhubOLj8hZkOL8pDnnXfvCf5xEE8Q4oMFenQUZZREUY2gqQ=="],
 
     "@browseros/server/@types/bun": ["@types/bun@1.3.5", "", { "dependencies": { "bun-types": "1.3.5" } }, "sha512-RnygCqNrd3srIPEWBd5LFeUYG7plCoH2Yw9WaZGyNmdTEei+gWaHqydbaIRkIkcbXwhBT94q78QljxN0Sk838w=="],
-
-    "@browseros/server/agent-mcp-manager": ["agent-mcp-manager@0.0.2", "", { "dependencies": { "@iarna/toml": "^2.2.5", "jsonc-parser": "^3.3.1" } }, "sha512-1wyJqzeLKSRSpD5URfGI/H9WjwBcDwxyU/ltYNedIgnb6QV12DYd6jy6WigqLlevs0rTkBYhKs3kkHmyes2Dvw=="],
 
     "@browseros/server/zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
 

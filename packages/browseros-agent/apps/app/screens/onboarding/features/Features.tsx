@@ -66,7 +66,7 @@ const features: Feature[] = [
     highlights: [
       'One-line setup — run `claude mcp add` with your server URL to connect',
       '31 browser tools — tabs, clicks, typing, screenshots, bookmarks, history',
-      'Works everywhere — Claude Code, Gemini CLI, Codex, Claude Desktop',
+      'Works everywhere — Claude Code, Gemini CLI, Codex, Cursor, Zed',
       'Authenticated access — extract data from logged-in pages like LinkedIn',
     ],
     videoDuration: '1:40',
