@@ -42,9 +42,14 @@ import {
 import { extractPageId, tabActivityRegistry } from '../lib/tab-activity'
 import type { StoredAgentProfile } from '../routes/agents/schemas'
 import { recordToolDispatch } from '../services/audit-log'
+import {
+  CANCELLATION_REASON,
+  dispatchCancellation,
+} from '../services/dispatch-cancellation'
 import { check } from '../services/permissions'
 import { persistScreenshot } from '../services/screenshots'
 import { ensureAgentTabGroup } from '../services/tab-group-ops'
+import { cancellationErrorResult } from './cancellation-result'
 import { asRegister, type ToolResult } from './register-fn'
 
 /**
@@ -267,6 +272,27 @@ export function registerBrowserTools(
 }
 
 /**
+ * Combine zero or more AbortSignals into one. Returns:
+ *  - `undefined` when no inputs are supplied (no abort wiring)
+ *  - the single input when only one is supplied (avoids the
+ *    AbortSignal.any wrapper overhead in the common case)
+ *  - an AbortSignal.any of all defined inputs otherwise
+ *
+ * AbortSignal.any is supported in Node 20.3+ and Bun runtimes the
+ * cockpit targets. Each input is dropped if it is undefined so
+ * callers can pass `[extra?.signal, userCancel.signal]` without
+ * filtering first.
+ */
+function composeAbortSignals(
+  signals: ReadonlyArray<AbortSignal | undefined>,
+): AbortSignal | undefined {
+  const defined = signals.filter((s): s is AbortSignal => s !== undefined)
+  if (defined.length === 0) return undefined
+  if (defined.length === 1) return defined[0]
+  return AbortSignal.any(defined)
+}
+
+/**
  * v2 dispatch record helper. The single MCP endpoint does not know
  * which `StoredAgentProfile` produced the call, so the registry write
  * sources its identity from the per-session `ClientIdentity` instead.
@@ -364,11 +390,81 @@ export function registerBrowserToolsForSingleServer(
         }
 
         const dispatchStart = Date.now()
-        const result = await executeTool(tool, rawArgs, {
-          session,
-          signal: extra?.signal,
-        })
+
+        // Operator-cancel hook. Compose the transport's existing
+        // signal (client-driven notifications/cancelled) with our
+        // own so EITHER side firing aborts executeTool cleanly. The
+        // controller is registered before the call and unregistered
+        // in the finally block so a successful or errored dispatch
+        // never leaves a stale entry behind.
+        const userCancel = new AbortController()
+        const sessionId = extra?.sessionId ?? ''
+        if (sessionId) dispatchCancellation.register(sessionId, userCancel)
+        const composedSignal = composeAbortSignals([
+          extra?.signal,
+          userCancel.signal,
+        ])
+
+        let result: Awaited<ReturnType<typeof executeTool>>
+        try {
+          result = await executeTool(tool, rawArgs, {
+            session,
+            signal: composedSignal,
+          })
+        } catch (err) {
+          if (userCancel.signal.aborted) {
+            result = cancellationErrorResult(CANCELLATION_REASON)
+          } else {
+            throw err
+          }
+        } finally {
+          if (sessionId) dispatchCancellation.unregister(sessionId, userCancel)
+        }
+        // Some tools translate an abort into a structured isError
+        // result rather than throwing; cover that too so the operator
+        // attribution is honest in the audit log.
+        if (userCancel.signal.aborted) {
+          result = cancellationErrorResult(CANCELLATION_REASON)
+        }
         const durationMs = Date.now() - dispatchStart
+
+        // Record cancelled dispatches in the audit log so the task
+        // timeline shows the operator's intervention. The existing
+        // success branch below is left untouched; cancellations are
+        // tracked here with a small adapter that walks the same
+        // recordToolDispatch path with isError: true.
+        if (userCancel.signal.aborted) {
+          const identity = resolveIdentity(extra?.sessionId)
+          if (identity) {
+            const { agentId, slug } = agentIdentityFromClient(identity)
+            const agentLabel =
+              identity.clientTitle && identity.clientTitle.length > 0
+                ? identity.clientTitle
+                : identity.clientName.length > 0
+                  ? identity.clientName
+                  : slug
+            const pageId = extractPageId(tool.name, rawArgs)
+            const live = pageId !== null ? session.pages.getInfo(pageId) : null
+            recordToolDispatch({
+              agentId,
+              slug,
+              agentLabel,
+              sessionId: extra?.sessionId ?? '',
+              toolName: tool.name,
+              pageId,
+              targetId: live?.targetId ?? null,
+              url: live?.url ?? null,
+              title: live?.title ?? null,
+              rawArgs,
+              durationMs,
+              result: {
+                isError: true,
+                structuredContent: result.structuredContent,
+                content: result.content,
+              },
+            })
+          }
+        }
 
         if (!result.isError) {
           const identity = resolveIdentity(extra?.sessionId)

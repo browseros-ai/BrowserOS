@@ -18,6 +18,7 @@ import { cors } from 'hono/cors'
 import { HttpError } from './lib/errors'
 import { logger } from './lib/logger'
 import { agentsRoute } from './routes/agents'
+import { agentsControlRoute } from './routes/agents-control'
 import { auditRoute } from './routes/audit'
 import { auditScreenshotsRoute } from './routes/audit/screenshots'
 import { auditTasksRoute } from './routes/audit/tasks'
@@ -85,6 +86,7 @@ const routes = app
   .route('/', mcpRoute)
   .route('/', tabsRoute)
   .route('/', tabsFocusRoute)
+  .route('/', agentsControlRoute)
   .route('/', connectionsRoute)
   .route('/', auditRoute)
   .route('/', auditTasksRoute)
