@@ -47,7 +47,16 @@ interface FailureState {
 export interface ScreencastCache {
   get(pageId: number): ScreencastFrame | null
   set(pageId: number, frame: ScreencastFrame): void
+  /** Drop both the cached frame and the failure state for a pageId. */
   delete(pageId: number): void
+  /**
+   * Drop the cached frame but keep the failure state. Used by the
+   * poller when entering backoff: the prior JPEG would be stale
+   * (the agent has navigated away under us) so we hide it, but the
+   * failure counter must persist so isInBackoff() keeps returning
+   * true until the agent does something new.
+   */
+  clearFrame(pageId: number): void
   markFailure(pageId: number): boolean
   clearFailure(pageId: number): void
   isInBackoff(pageId: number, sinceMs: number): boolean
@@ -83,6 +92,9 @@ export function createScreencastCache(
     delete(pageId) {
       frames.delete(pageId)
       failures.delete(pageId)
+    },
+    clearFrame(pageId) {
+      frames.delete(pageId)
     },
     markFailure(pageId) {
       const prev = failures.get(pageId)

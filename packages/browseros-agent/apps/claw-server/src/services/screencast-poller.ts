@@ -167,12 +167,24 @@ async function snapOne(
       },
     )
     if (result.isError) {
-      screencastCache.markFailure(pageId)
+      // Drop the cached frame once we cross the backoff threshold.
+      // Holding on to the previous JPEG after the agent has navigated
+      // away (e.g. into a cross-origin iframe that the screenshot tool
+      // cannot capture) means /tabs/activity returns the OLD page's
+      // image with the NEW page's URL + title until backoff lifts.
+      // One transient failure still keeps the frame (cheap recovery
+      // for one-off CDP hiccups); sustained failures drop it so the
+      // UI falls back to the placeholder honestly.
+      if (screencastCache.markFailure(pageId)) {
+        screencastCache.clearFrame(pageId)
+      }
       return
     }
     const image = extractImage(result.structuredContent)
     if (!image) {
-      screencastCache.markFailure(pageId)
+      if (screencastCache.markFailure(pageId)) {
+        screencastCache.clearFrame(pageId)
+      }
       return
     }
     screencastCache.set(pageId, {
@@ -186,7 +198,9 @@ async function snapOne(
       pageId,
       error: err instanceof Error ? err.message : String(err),
     })
-    screencastCache.markFailure(pageId)
+    if (screencastCache.markFailure(pageId)) {
+      screencastCache.delete(pageId)
+    }
   }
 }
 

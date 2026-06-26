@@ -84,6 +84,14 @@ export function MiniScreencast({
           src={displayedSrc}
           alt={`Live view of ${site}`}
           className="h-full w-full object-cover"
+          // Catches corruption that slipped past the off-screen
+          // pre-decode (most relevant on initial mount, where
+          // displayedSrc is seeded directly from incomingSrc
+          // without going through the Image() decode gate).
+          // Falling back to null here re-renders into the globe
+          // placeholder so the operator never sees a browser
+          // broken-image icon.
+          onError={() => setDisplayedSrc(null)}
         />
       ) : (
         <div className="flex flex-col items-center gap-1.5 text-ink-3">

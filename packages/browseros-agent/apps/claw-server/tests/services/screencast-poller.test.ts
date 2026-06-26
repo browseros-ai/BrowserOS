@@ -234,4 +234,30 @@ describe('screencast poller', () => {
     expect(screencastCache.get(21)).toBeNull()
     expect(screencastCache.get(22)?.jpegBase64).toBe('OK22')
   })
+
+  it('keeps the prior frame on a single transient failure', async () => {
+    setSnapshot([rec(31, 'active', 1_000)])
+    queueFor(31, ok('GOOD'), badResult())
+
+    await runOneTick() // populates cache with GOOD
+    expect(screencastCache.get(31)?.jpegBase64).toBe('GOOD')
+
+    await runOneTick() // one failure; not yet in backoff
+    expect(screencastCache.get(31)?.jpegBase64).toBe('GOOD')
+  })
+
+  it('drops the stale frame once the page enters backoff', async () => {
+    setSnapshot([rec(32, 'active', 1_000)])
+    queueFor(32, ok('OLD'), badResult(), badResult(), badResult())
+
+    await runOneTick() // OLD frame in cache
+    expect(screencastCache.get(32)?.jpegBase64).toBe('OLD')
+
+    await runOneTick() // failure 1: keep frame
+    expect(screencastCache.get(32)?.jpegBase64).toBe('OLD')
+    await runOneTick() // failure 2: keep frame
+    expect(screencastCache.get(32)?.jpegBase64).toBe('OLD')
+    await runOneTick() // failure 3: enter backoff -> drop the stale frame
+    expect(screencastCache.get(32)).toBeNull()
+  })
 })
