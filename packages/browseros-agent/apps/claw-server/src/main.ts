@@ -27,6 +27,7 @@ import { logger } from './lib/logger'
 import { migrateMcpUrls } from './lib/migrate-mcp-urls'
 import { setLocalServerUrl } from './local-server-url'
 import server from './server'
+import { startScreencastPoller } from './services/screencast-poller'
 
 async function start(): Promise<void> {
   const config = loadClawConfig()
@@ -61,6 +62,10 @@ async function start(): Promise<void> {
     logger.info('cockpit attached to browseros browser', {
       cdpPort: env.cdpPort,
     })
+    // Drive the Running-now homepage screencast against the live
+    // session. Cleanly stopped on SIGINT/SIGTERM below; the handle is
+    // a no-op interval (unref'd) so it never blocks shutdown.
+    const screencast = startScreencastPoller({ session: bootstrap.session })
     // `exiting` guards against double-cleanup when a supervisor sends
     // SIGINT and SIGTERM back-to-back. `process.once` removes each
     // handler independently, so without the flag a SIGTERM that
@@ -74,6 +79,7 @@ async function start(): Promise<void> {
     const cleanup = (): void => {
       if (exiting) return
       exiting = true
+      screencast.stop()
       setTimeout(() => process.exit(1), 5_000).unref()
       bootstrap.disconnect().finally(() => process.exit(0))
     }

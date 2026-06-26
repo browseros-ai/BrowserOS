@@ -32,7 +32,10 @@ import {
   type ToolDefinition,
 } from '@browseros/browser-mcp/tools/framework'
 import { logger } from '../lib/logger'
-import { tabActivityRegistry } from '../lib/tab-activity'
+import {
+  tabActivityRegistry as defaultRegistry,
+  type TabActivityRegistry,
+} from '../lib/tab-activity'
 import { screencastCache } from './screencast-cache'
 
 export const DEFAULT_POLL_INTERVAL_MS = 1500
@@ -47,12 +50,20 @@ export interface ScreencastPollerHandle {
 export interface StartScreencastPollerOpts {
   session: BrowserSession
   intervalMs?: number
+  /**
+   * Injectable registry for tests. Production uses the module-level
+   * singleton. Bun's `mock.module` has run-level scope and leaks
+   * across files in the same `bun test` run, so an explicit
+   * dependency seam is cleaner than mocking the registry import.
+   */
+  registry?: TabActivityRegistry
 }
 
 export function startScreencastPoller(
   opts: StartScreencastPollerOpts,
 ): ScreencastPollerHandle {
   const intervalMs = opts.intervalMs ?? DEFAULT_POLL_INTERVAL_MS
+  const registry = opts.registry ?? defaultRegistry
   const screenshotTool = BROWSER_TOOLS.find((t) => t.name === 'screenshot')
   if (!screenshotTool) {
     // The browser-mcp catalogue not exposing a screenshot tool would
@@ -70,7 +81,7 @@ export function startScreencastPoller(
     if (running) return
     running = true
     try {
-      await runTick(opts.session, screenshotTool)
+      await runTick(opts.session, screenshotTool, registry)
     } catch (err) {
       logger.warn('screencast: tick failed', {
         error: err instanceof Error ? err.message : String(err),
@@ -103,8 +114,9 @@ export function startScreencastPoller(
 async function runTick(
   session: BrowserSession,
   screenshotTool: ToolDefinition,
+  registry: TabActivityRegistry,
 ): Promise<void> {
-  const tabs = tabActivityRegistry.snapshot()
+  const tabs = registry.snapshot()
   const livePageIds = new Set<number>()
 
   // 1. Build the work list: active tabs not in failure backoff.

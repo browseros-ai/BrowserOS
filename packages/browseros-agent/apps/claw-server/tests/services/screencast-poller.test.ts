@@ -69,15 +69,19 @@ mock.module('@browseros/browser-mcp/tools/framework', () => ({
   },
 }))
 
-mock.module('../../src/lib/tab-activity', () => ({
-  tabActivityRegistry: {
-    snapshot: () => snapshotRecords,
-  },
-}))
-
 const { startScreencastPoller } = await import(
   '../../src/services/screencast-poller'
 )
+
+// Tests inject this stub registry via opts.registry so we never
+// have to mock the tab-activity module (mock.module leaks across
+// files in the same bun-test run).
+const stubRegistry = {
+  snapshot: () => snapshotRecords,
+  recordTool: () => undefined,
+  size: () => snapshotRecords.length,
+  clear: () => undefined,
+}
 
 function rec(
   pageId: number,
@@ -108,6 +112,7 @@ async function runOneTick(): Promise<void> {
   const handle = startScreencastPoller({
     session: fakeSession,
     intervalMs: 60_000,
+    registry: stubRegistry,
   })
   // Yield to the event loop so the immediate `void tick()` resolves.
   await new Promise((r) => setTimeout(r, 0))
