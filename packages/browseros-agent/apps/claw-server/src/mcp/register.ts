@@ -47,6 +47,7 @@ import {
   dispatchCancellation,
 } from '../services/dispatch-cancellation'
 import { check } from '../services/permissions'
+import { ensureReplayRecorder } from '../services/replay-injection'
 import { persistScreenshot } from '../services/screenshots'
 import { ensureAgentTabGroup } from '../services/tab-group-ops'
 import { cancellationErrorResult } from './cancellation-result'
@@ -534,6 +535,16 @@ export function registerBrowserToolsForSingleServer(
                     pageId,
                     session,
                     signal: extra?.signal,
+                  })
+                  // Inject the rrweb recorder into this page so the
+                  // audit replay surface can rebuild the session
+                  // visually. Fire-and-forget; failures log at warn
+                  // and never block the agent's response.
+                  void ensureReplayRecorder({
+                    sessionId: extra?.sessionId ?? '',
+                    slug,
+                    pageId,
+                    session,
                   })
                 }
               }
