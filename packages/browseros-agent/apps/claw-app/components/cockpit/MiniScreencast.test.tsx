@@ -23,7 +23,6 @@ describe('MiniScreencast', () => {
       />,
     )
     expect(html).toContain('data:image/jpeg;base64,AAAA')
-    expect(html).toContain('decoding="async"')
     expect(html).toContain('Live view of example.com')
   })
 

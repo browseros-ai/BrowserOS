@@ -1,4 +1,5 @@
 import { Globe } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import type { ScreencastFrame } from '@/modules/api/tabs.hooks'
 
@@ -21,6 +22,15 @@ interface MiniScreencastProps {
  * back to a tinted block with the site host and a small globe when
  * the cache is cold or the page is in failure backoff.
  *
+ * Flicker-free frame swap: every time `screencast.capturedAt` ticks
+ * we kick off an off-screen `new Image()` to pre-decode the next
+ * frame, and only swap the visible `<img src>` once the decode has
+ * completed. Without this the browser unloads the old pixels the
+ * moment the src attribute changes, briefly exposing the container
+ * backdrop between paints; the operator sees that as a flicker
+ * every 1.5s. The pre-decode trades one extra render per frame for
+ * a perfectly stable visible image.
+ *
  * The `live` flag adds a pulsing dot top-right matching the design's
  * running indicator. The dot gets a translucent ring so it reads
  * against busy thumbnails.
@@ -30,20 +40,50 @@ export function MiniScreencast({
   live,
   screencast,
 }: MiniScreencastProps) {
-  const hasFrame =
-    screencast !== null &&
-    screencast !== undefined &&
-    screencast.jpegBase64.length > 0
+  const incomingSrc =
+    screencast && screencast.jpegBase64.length > 0
+      ? `data:image/jpeg;base64,${screencast.jpegBase64}`
+      : null
+
+  // `displayedSrc` is the src actually painted in the DOM. It only
+  // moves forward once the new bytes have decoded successfully.
+  const [displayedSrc, setDisplayedSrc] = useState<string | null>(incomingSrc)
+
+  useEffect(() => {
+    if (incomingSrc === null) {
+      setDisplayedSrc(null)
+      return
+    }
+    if (incomingSrc === displayedSrc) return
+    // Pre-decode in an off-screen Image. The browser caches the
+    // decoded pixels keyed by the data URL, so when we then set
+    // them on the visible <img> the swap is instant (no blank gap).
+    let cancelled = false
+    const img = new Image()
+    img.onload = () => {
+      if (!cancelled) setDisplayedSrc(incomingSrc)
+    }
+    img.onerror = () => {
+      // Decode failed (truncated bytes, unexpected encoding). Skip
+      // this frame; the next poll will retry with fresh bytes.
+    }
+    img.src = incomingSrc
+    return () => {
+      cancelled = true
+    }
+  }, [incomingSrc, displayedSrc])
+
+  const showImage = displayedSrc !== null
+
   return (
     <div className="relative flex h-[132px] items-center justify-center overflow-hidden bg-bg-sunken">
-      {hasFrame ? (
+      {showImage ? (
+        // biome-ignore lint/performance/noImgElement: data URL only;
+        // there is no remote URL for next/image to optimise.
         <img
-          src={`data:image/jpeg;base64,${screencast.jpegBase64}`}
+          src={displayedSrc}
           alt={`Live view of ${site}`}
           className="h-full w-full object-cover"
-          // Decode off the main thread so a slow decode does not
-          // stall the homepage's 1.5s poll cycle.
-          decoding="async"
         />
       ) : (
         <div className="flex flex-col items-center gap-1.5 text-ink-3">
