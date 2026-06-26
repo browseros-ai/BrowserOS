@@ -50,8 +50,11 @@ export type DetectInstalledAgentsFn = () => Promise<AgentInfo[]>
  * active BrowserOS link to a hidden agent (e.g. from before we hid
  * it), the row stays visible so they can still hit Disconnect to
  * clean it up. Once the link is removed the next refresh hides it.
- * Anyone who wants to re-install one of these can still copy-paste
- * the manual setup snippet from the disclosure on the same page.
+ * Gemini users can still re-install via the manual setup snippet on
+ * the same page (the generic HTTP block fits). There is no manual
+ * fallback for Claude Desktop today because its config parser
+ * rejects HTTP-shaped entries; restoring that path needs a bundled
+ * stdio bridge.
  */
 const HIDDEN_AGENTS: ReadonlySet<string> = new Set(['gemini', 'claude-desktop'])
 

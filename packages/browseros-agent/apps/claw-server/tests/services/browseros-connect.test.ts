@@ -42,19 +42,17 @@ describe('connectBrowserosToHarness', () => {
     expect((link?.payload as { agent: string }).agent).toBe('claude-code')
   })
 
-  it('wraps Codex in npx mcp-remote', async () => {
+  it('writes a direct HTTP spec for Codex (http-capable since agent-mcp-manager 0.0.3)', async () => {
     const stub = createStubMcpManager()
     setMcpManagerForTesting(stub)
     await connectBrowserosToHarness('Codex')
     const add = stub.calls.find((c) => c.method === 'add')
     const payload = add?.payload as {
-      spec: { transport: string; command?: string; args?: string[] }
+      spec: { transport: string; url?: string }
     }
-    expect(payload.spec.transport).toBe('stdio')
-    expect(payload.spec.command).toBe('npx')
-    expect(payload.spec.args?.[0]).toBe('mcp-remote')
-    expect(payload.spec.args?.[1]).toContain('/mcp')
-    expect(payload.spec.args?.[1]).not.toContain('/cockpit')
+    expect(payload.spec.transport).toBe('http')
+    expect(payload.spec.url).toContain('/mcp')
+    expect(payload.spec.url).not.toContain('/cockpit')
   })
 
   it('short-circuits as a no-op for BrowserOS-internal harnesses (Hermes, OpenClaw)', async () => {

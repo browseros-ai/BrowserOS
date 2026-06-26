@@ -36,7 +36,11 @@ function makeInput(overrides: Partial<NewAgentValues> = {}): NewAgentValues {
 }
 
 describe('harness install service', () => {
-  test('installForAgent on Claude Desktop links the slug under claude-desktop', async () => {
+  test('installForAgent on Claude Desktop wraps the slug in npx mcp-remote (stdio-only parser)', async () => {
+    // Claude Desktop's `claude_desktop_config.json` parser validates
+    // stdio-shaped entries only, so the install path must write the
+    // `npx mcp-remote <url>` shape. specFor sources this from the
+    // agent-mcp-manager catalog via resolveAgentSurface.
     await withTempBrowserosDir(async () => {
       const stub = createStubMcpManager()
       setMcpManagerForTesting(stub)
@@ -45,7 +49,11 @@ describe('harness install service', () => {
       const linkCall = stub.calls.find((c) => c.method === 'link')
       expect(addCall?.payload).toMatchObject({
         name: created.slug,
-        spec: { transport: 'http', url: created.mcpUrl },
+        spec: {
+          transport: 'stdio',
+          command: 'npx',
+          args: ['mcp-remote', created.mcpUrl],
+        },
       })
       expect(linkCall?.payload).toMatchObject({
         serverName: created.slug,
@@ -56,7 +64,7 @@ describe('harness install service', () => {
     })
   })
 
-  test('installForAgent on Codex uses stdio + mcp-remote', async () => {
+  test('installForAgent on Codex writes a direct HTTP spec (http-capable since agent-mcp-manager 0.0.3)', async () => {
     await withTempBrowserosDir(async () => {
       const stub = createStubMcpManager()
       setMcpManagerForTesting(stub)
@@ -69,9 +77,8 @@ describe('harness install service', () => {
       expect(addCall?.payload).toMatchObject({
         name: 'cdx-test',
         spec: {
-          transport: 'stdio',
-          command: 'npx',
-          args: ['mcp-remote', 'http://127.0.0.1:9200/mcp/cdx-test'],
+          transport: 'http',
+          url: 'http://127.0.0.1:9200/mcp/cdx-test',
         },
       })
       const linkCall = stub.calls.find((c) => c.method === 'link')

@@ -16,7 +16,8 @@
  * profile's slug, with a slug-shaped URL. v2 has no per-agent
  * profile, so this layer writes one entry keyed by the constant
  * `BROWSEROS_MCP_SERVER_NAME` ("browseros") with the slugless URL.
- * Both layers share `specFor` for the Codex stdio wrapping.
+ * Both layers share `specFor` for transport selection (HTTP vs the
+ * stdio `npx mcp-remote` fallback for stdio-only agents).
  */
 
 import type { AgentId } from 'agent-mcp-manager'
