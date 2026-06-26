@@ -41,7 +41,11 @@ export function AgentRunningCard({
       className="group flex cursor-pointer flex-col overflow-hidden border-border-2 border-l-4 p-0 transition hover:border-border-strong hover:shadow-card"
       style={{ borderLeftColor: agent.color }}
     >
-      <MiniScreencast site={siteOf(focus.url)} live={active} />
+      <MiniScreencast
+        site={siteOf(focus.url)}
+        live={active}
+        screencast={focus.screencast}
+      />
       <div className="flex flex-1 flex-col gap-2 p-3.5">
         <div className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate font-bold text-[13.5px]">

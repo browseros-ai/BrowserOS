@@ -34,6 +34,7 @@ function tab(over: Partial<TabActivityRecord> = {}): TabActivityRecord {
     agentLabel: 'claude-code',
     harness: null,
     color: null,
+    screencast: null,
     ...over,
   }
 }

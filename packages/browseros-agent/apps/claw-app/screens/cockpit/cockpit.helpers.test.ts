@@ -28,6 +28,7 @@ function record(over: Partial<TabActivityRecord> = {}): TabActivityRecord {
     agentLabel: 'Finance Ops',
     harness: 'Claude Code',
     color: null,
+    screencast: null,
     ...over,
   }
 }

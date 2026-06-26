@@ -26,6 +26,13 @@ export interface ToolEvent {
   at: number
 }
 
+export interface ScreencastFrame {
+  /** Raw base64; the UI wraps this with `data:image/jpeg;base64,`. */
+  jpegBase64: string
+  /** Unix ms when the poller captured the frame. */
+  capturedAt: number
+}
+
 export interface TabActivityRecord {
   targetId: string
   pageId: number
@@ -42,6 +49,12 @@ export interface TabActivityRecord {
   agentLabel: string
   harness: string | null
   color: string | null
+  /**
+   * Latest screencast frame from the background poller. null when the
+   * cache has no frame for the pageId (poller cold, page in failure
+   * backoff, or the tab is idle).
+   */
+  screencast: ScreencastFrame | null
 }
 
 interface TabsActivityResponse {
