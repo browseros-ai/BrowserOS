@@ -109,11 +109,16 @@ describe('migrateMcpUrls', () => {
       expect(methods).toContain('add')
       expect(methods).toContain('link')
       const addCall = stub.calls.find((c) => c.method === 'add')
+      // `makeInput` defaults to the Claude Desktop harness, whose
+      // config parser only validates stdio entries; specFor sources
+      // that from the agent-mcp-manager catalog and wraps the URL in
+      // `npx mcp-remote`.
       expect(addCall?.payload).toMatchObject({
         name: created.slug,
         spec: {
-          transport: 'http',
-          url: `http://127.0.0.1:9100/mcp/${created.slug}`,
+          transport: 'stdio',
+          command: 'npx',
+          args: ['mcp-remote', `http://127.0.0.1:9100/mcp/${created.slug}`],
         },
       })
     })
