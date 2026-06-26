@@ -196,7 +196,18 @@ export function tabsToAgentActivity(
       tabs: sorted,
     })
   }
-  return out.sort((a, b) => b.lastToolAt - a.lastToolAt)
+  // Sort by arrival order (when each agent first appeared on the
+  // homepage), NOT by recency. Sorting by `lastToolAt` desc would
+  // swap card positions every poll whenever one agent fires a tool
+  // call and the other is briefly idle, which reads as "the cards
+  // keep re-arranging" and breaks the operator's mental model of
+  // "the agent I started first stays at the top". Tie-break on
+  // agentId so the order is deterministic when two agents share a
+  // same-ms firstToolAt (rare but possible during parallel boots).
+  return out.sort(
+    (a, b) =>
+      a.firstToolAt - b.firstToolAt || a.agentId.localeCompare(b.agentId),
+  )
 }
 
 /**

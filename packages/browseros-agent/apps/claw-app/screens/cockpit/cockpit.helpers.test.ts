@@ -297,24 +297,28 @@ describe('tabsToAgentActivity', () => {
     expect(agents[0].recentTools[7].name).toBe('tool-14')
   })
 
-  it('groups two distinct agent ids into two records sorted by lastToolAt desc', () => {
+  it('groups two distinct agent ids into two records sorted by firstToolAt asc (arrival order)', () => {
+    // a1 appeared first (firstToolAt 1_000_000) so it stays on top
+    // regardless of which agent is more recently active.
     const agents = tabsToAgentActivity([
       record({
         targetId: 't1',
         agentId: 'a1',
         slug: 'older',
+        firstToolAt: 1_000_000,
         lastToolAt: 1_000_000,
       }),
       record({
         targetId: 't2',
         agentId: 'a2',
         slug: 'newer',
-        lastToolAt: 2_000_000,
+        firstToolAt: 2_000_000,
+        lastToolAt: 5_000_000,
       }),
     ])
     expect(agents).toHaveLength(2)
-    expect(agents[0].agentId).toBe('a2')
-    expect(agents[1].agentId).toBe('a1')
+    expect(agents[0].agentId).toBe('a1')
+    expect(agents[1].agentId).toBe('a2')
   })
 
   it('marks the agent active when at least one of its tabs is active', () => {
@@ -481,5 +485,62 @@ describe('tabsToAgentActivity sticky focus', () => {
     )
     expect(byAgent.a1).toBe('t1-anchor')
     expect(byAgent.a2).toBe('t2-anchor')
+  })
+
+  it('orders cards by firstToolAt asc (stable arrival order), not by lastToolAt', () => {
+    // a1 appeared first (firstToolAt: 1000) but is currently idler.
+    // a2 appeared later (firstToolAt: 2000) and is currently the
+    // freshest. The card order MUST follow arrival, not recency,
+    // so a1 stays on top.
+    const agents = tabsToAgentActivity([
+      record({
+        agentId: 'a1',
+        targetId: 't1',
+        firstToolAt: 1_000,
+        lastToolAt: 1_500,
+      }),
+      record({
+        agentId: 'a2',
+        targetId: 't2',
+        firstToolAt: 2_000,
+        lastToolAt: 9_000,
+      }),
+    ])
+    expect(agents.map((a) => a.agentId)).toEqual(['a1', 'a2'])
+  })
+
+  it('keeps card order stable across polls even when lastToolAt swaps', () => {
+    const before = tabsToAgentActivity([
+      record({
+        agentId: 'a1',
+        targetId: 't1',
+        firstToolAt: 1_000,
+        lastToolAt: 5_000,
+      }),
+      record({
+        agentId: 'a2',
+        targetId: 't2',
+        firstToolAt: 2_000,
+        lastToolAt: 4_000,
+      }),
+    ])
+    // Next poll: a2 just fired a tool call so its lastToolAt
+    // overtakes a1. firstToolAt does not change.
+    const after = tabsToAgentActivity([
+      record({
+        agentId: 'a1',
+        targetId: 't1',
+        firstToolAt: 1_000,
+        lastToolAt: 5_000,
+      }),
+      record({
+        agentId: 'a2',
+        targetId: 't2',
+        firstToolAt: 2_000,
+        lastToolAt: 6_000,
+      }),
+    ])
+    expect(before.map((a) => a.agentId)).toEqual(['a1', 'a2'])
+    expect(after.map((a) => a.agentId)).toEqual(['a1', 'a2'])
   })
 })
