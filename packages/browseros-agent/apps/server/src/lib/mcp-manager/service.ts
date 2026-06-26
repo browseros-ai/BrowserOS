@@ -36,7 +36,7 @@ export type DetectInstalledAgentsFn = () => Promise<AgentInfo[]>
 
 /**
  * Agents the upstream library supports but BrowserOS deliberately
- * does not surface in the Integrations panel.
+ * does not surface in the Integrations panel for fresh users.
  *
  * - `gemini`: HTTP MCP support is not stable enough to one-click
  *   install against.
@@ -46,8 +46,12 @@ export type DetectInstalledAgentsFn = () => Promise<AgentInfo[]>
  *   bundled-runtime path we cannot make this reliable, so we hide it
  *   rather than ship a broken-by-default flow.
  *
- * Users who actually want either can still copy-paste the manual
- * setup snippet from the disclosure on the same page.
+ * Hiding is conditional in `listAgents`: if the user already has an
+ * active BrowserOS link to a hidden agent (e.g. from before we hid
+ * it), the row stays visible so they can still hit Disconnect to
+ * clean it up. Once the link is removed the next refresh hides it.
+ * Anyone who wants to re-install one of these can still copy-paste
+ * the manual setup snippet from the disclosure on the same page.
  */
 const HIDDEN_AGENTS: ReadonlySet<string> = new Set(['gemini', 'claude-desktop'])
 
@@ -102,11 +106,16 @@ export async function listAgents(
   const mgr = getMcpManager()
   const detect = options.detect ?? detectInstalledAgents
   const [detectedRaw, links] = await Promise.all([detect(), mgr.listLinks()])
-  const detected = detectedRaw.filter((a) => !HIDDEN_AGENTS.has(a.id))
   const linkedSet = new Set(
     links
       .filter((l) => BROWSEROS_SERVER_NAMES.includes(l.serverName))
       .map((l) => l.agent),
+  )
+  // Hidden agents stay visible IF the user already has an active
+  // BrowserOS link; that link still needs a Disconnect tile so they
+  // can remove it. Once unlinked the next refresh filters them out.
+  const detected = detectedRaw.filter(
+    (a) => !HIDDEN_AGENTS.has(a.id) || linkedSet.has(a.id),
   )
   return detected.map((a) => ({
     id: a.id,

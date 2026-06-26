@@ -1,5 +1,6 @@
 import type { FC, SVGProps } from 'react'
 import {
+  ClaudeDesktopMark,
   ClaudeMark,
   CodexMark,
   CursorMark,
@@ -28,6 +29,16 @@ const AGENT_PRESENTATION: Record<string, AgentPresentation> = {
     label: 'Claude Code',
     installUrl: 'https://claude.ai/code',
     mark: ClaudeMark,
+  },
+  // Hidden from fresh users in `listAgents` because the integration
+  // needs Node on the user's machine. Preserved here so legacy
+  // installs that still have a BrowserOS link to Claude Desktop
+  // render with the right label and brand mark while the user
+  // disconnects.
+  'claude-desktop': {
+    label: 'Claude Desktop',
+    installUrl: 'https://claude.ai/download',
+    mark: ClaudeDesktopMark,
   },
   cursor: {
     label: 'Cursor',

@@ -129,7 +129,7 @@ describe('listAgents', () => {
     })
   })
 
-  it('hides agents BrowserOS does not surface in the panel', async () => {
+  it('hides agents BrowserOS does not surface when they have no active link', async () => {
     // Hidden: Gemini CLI (HTTP MCP support not stable enough for a
     // one-click install) and Claude Desktop (only stdio config is
     // valid and the recommended `npx mcp-remote` bridge needs Node
@@ -160,6 +160,44 @@ describe('listAgents', () => {
 
     const hiddenRows = await listAgents({ detect: stubDetect })
     expect(hiddenRows.map((r) => r.id)).toEqual(['claude-code'])
+  })
+
+  it('keeps a hidden agent visible while it still has a BrowserOS link so the user can Disconnect it', async () => {
+    // Regression: when we hid Claude Desktop, users who had already
+    // linked it via a prior BrowserOS release lost the Disconnect
+    // tile and were stuck with an orphan entry in their config.
+    // The hidden-agents filter must respect existing links.
+    stubAgents = [
+      {
+        id: 'claude-code',
+        displayName: 'Claude Code',
+        installed: true,
+        configPath: '/tmp/fake/claude-code.json',
+      },
+      {
+        id: 'claude-desktop',
+        displayName: 'Claude Desktop',
+        installed: true,
+        configPath: '/tmp/fake/claude-desktop.json',
+      },
+    ]
+    const { manager } = makeManagerStub({
+      links: [
+        {
+          serverName: 'browseros-stdio',
+          agent: 'claude-desktop',
+          configPath: '/tmp/fake/claude-desktop.json',
+        },
+      ],
+    })
+    setMcpManagerForTesting(manager)
+
+    const rows = await listAgents({ detect: stubDetect })
+    expect(rows.map((r) => r.id).sort()).toEqual([
+      'claude-code',
+      'claude-desktop',
+    ])
+    expect(rows.find((r) => r.id === 'claude-desktop')?.linked).toBe(true)
   })
 
   it('counts codex as linked when wired up under the stdio server name', async () => {
