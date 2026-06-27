@@ -113,13 +113,17 @@ Wondering how BrowserOS MCP compares to Chrome DevTools MCP or other browser aut
     ```json
     {
       "mcpServers": {
-        "browserOS": {
+        "browseros": {
           "command": "npx",
           "args": ["mcp-remote", "http://127.0.0.1:9239/mcp"]
         }
       }
     }
     ```
+
+    <Warning>
+    Do not add BrowserOS to `claude_desktop_config.json` as a raw `{ "url": "..." }` entry. Claude Desktop local config expects a command wrapper here, so use `npx mcp-remote <mcp_url>`.
+    </Warning>
 
     Restart Claude Desktop to connect.
   </Tab>

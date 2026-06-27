@@ -35,7 +35,7 @@ describe('connectBrowserosToHarness', () => {
     }
     expect(addPayload.name).toBe('browseros')
     expect(addPayload.spec.transport).toBe('http')
-    expect(addPayload.spec.url).toContain('/mcp')
+    expect(addPayload.spec.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
     expect(addPayload.spec.url).not.toContain('/cockpit')
     const link = stub.calls.find((c) => c.method === 'link')
     expect(link).toBeDefined()
@@ -51,7 +51,7 @@ describe('connectBrowserosToHarness', () => {
       spec: { transport: string; url?: string }
     }
     expect(payload.spec.transport).toBe('http')
-    expect(payload.spec.url).toContain('/mcp')
+    expect(payload.spec.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
     expect(payload.spec.url).not.toContain('/cockpit')
   })
 

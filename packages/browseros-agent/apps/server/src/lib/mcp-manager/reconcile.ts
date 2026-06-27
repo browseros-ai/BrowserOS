@@ -35,7 +35,7 @@ import {
 import type { McpAgentId, ReconcileResult } from './types'
 
 export interface ReconcileUrlInput {
-  /** The MCP URL the running server bound to, e.g. http://127.0.0.1:9100/mcp */
+  /** The client-facing MCP URL, e.g. http://127.0.0.1:9100/mcp */
   currentUrl: string
 }
 

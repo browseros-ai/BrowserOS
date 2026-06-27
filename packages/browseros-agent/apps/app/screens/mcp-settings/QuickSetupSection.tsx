@@ -55,6 +55,33 @@ const clients: ClientConfig[] = [
       `claude mcp add --transport http browseros ${url} --scope user`,
   },
   {
+    id: 'claude-desktop',
+    name: 'Claude Desktop',
+    kind: 'config',
+    action: (
+      <>
+        Add this block to{' '}
+        <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+          claude_desktop_config.json
+        </code>
+        .
+      </>
+    ),
+    getSnippet: (url) =>
+      JSON.stringify(
+        {
+          mcpServers: {
+            browseros: {
+              command: 'npx',
+              args: ['mcp-remote', url],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+  },
+  {
     id: 'codex',
     name: 'Codex',
     kind: 'command',
@@ -103,8 +130,8 @@ export const QuickSetupSection: FC<QuickSetupSectionProps> = ({
       <div>
         <h3 className="font-semibold text-sm">Manual setup</h3>
         <p className="text-muted-foreground text-xs">
-          Use the snippet for your agent, or paste the URL into any MCP-capable
-          client.
+          Use the snippet for your agent, or use the Server URL with clients
+          that support URL-based MCP config.
         </p>
       </div>
 

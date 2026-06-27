@@ -51,10 +51,10 @@ export type DetectInstalledAgentsFn = () => Promise<AgentInfo[]>
  * it), the row stays visible so they can still hit Disconnect to
  * clean it up. Once the link is removed the next refresh hides it.
  * Gemini users can still re-install via the manual setup snippet on
- * the same page (the generic HTTP block fits). There is no manual
- * fallback for Claude Desktop today because its config parser
- * rejects HTTP-shaped entries; restoring that path needs a bundled
- * stdio bridge.
+ * the same page (the generic HTTP block fits). Claude Desktop users
+ * can also copy the manual `mcp-remote` wrapper, but it remains
+ * hidden from one-click install until BrowserOS can provide a
+ * bundled-runtime path instead of assuming `npx` is available.
  */
 const HIDDEN_AGENTS: ReadonlySet<string> = new Set(['gemini', 'claude-desktop'])
 
