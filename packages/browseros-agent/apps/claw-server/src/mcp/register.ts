@@ -47,7 +47,6 @@ import {
   dispatchCancellation,
 } from '../services/dispatch-cancellation'
 import { check } from '../services/permissions'
-import { ensureReplayRecorder } from '../services/replay-injection'
 import { persistScreenshot } from '../services/screenshots'
 import { ensureAgentTabGroup } from '../services/tab-group-ops'
 import { cancellationErrorResult } from './cancellation-result'
@@ -536,16 +535,13 @@ export function registerBrowserToolsForSingleServer(
                     session,
                     signal: extra?.signal,
                   })
-                  // Inject the rrweb recorder into this page so the
-                  // audit replay surface can rebuild the session
-                  // visually. Fire-and-forget; failures log at warn
-                  // and never block the agent's response.
-                  void ensureReplayRecorder({
-                    sessionId: extra?.sessionId ?? '',
-                    slug,
-                    pageId,
-                    session,
-                  })
+                  // The rrweb session replay recorder is no longer
+                  // injected from here. F8 moved recording to a
+                  // content script driven by the claw-app extension's
+                  // background worker, which polls /replay/tabs and
+                  // injects via chrome.scripting.executeScript only
+                  // into tabs the cockpit reports as agent-driven.
+                  // See plan: 2026-06-29-1450-...content-script.md
                 }
               }
             }

@@ -44,9 +44,6 @@ export const env = {
   cdpPort: CLAW_CDP_PORT_DEFAULT,
   browserosDirOverride: readBrowserosDirOverride(),
   isDevelopment: readIsDevelopment(),
-  // Recorder kill switch. Default off until we throttle the emit
-  // path; CLAW_REPLAY_ENABLED=1 opts in for dogfood.
-  replayEnabled: readBoolFlag('CLAW_REPLAY_ENABLED'),
 }
 
 /** Applies validated startup config to the shared runtime snapshot. */
