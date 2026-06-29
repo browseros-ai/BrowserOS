@@ -105,14 +105,24 @@ export default defineBackground(() => {
     tabs: ReplayTab[],
   ): Promise<Array<{ chromeTabId: number; record: ChromeTabRecord }>> {
     const groupColors = await readGroupColors()
+    // Query all chrome tabs once. chrome.tabs.query({url}) expects a
+    // match pattern, not a raw URL; the cockpit's URLs include query
+    // strings that contain `?`, `&`, `=` which are not valid pattern
+    // syntax, so passing them directly returned zero matches in
+    // dogfood. Query-all + post-filter by exact-after-normalize URL
+    // is the reliable shape.
+    let allTabs: chrome.tabs.Tab[] = []
+    try {
+      allTabs = await chrome.tabs.query({})
+    } catch {
+      return []
+    }
     const out: Array<{ chromeTabId: number; record: ChromeTabRecord }> = []
     for (const tab of tabs) {
-      let candidates: chrome.tabs.Tab[] = []
-      try {
-        candidates = await chrome.tabs.query({ url: normalizeUrl(tab.url) })
-      } catch {
-        continue
-      }
+      const targetUrl = normalizeUrl(tab.url)
+      const candidates = allTabs.filter(
+        (t) => typeof t.url === 'string' && normalizeUrl(t.url) === targetUrl,
+      )
       const chromeTabId = pickChromeTab({
         candidates: candidates.map((c) => ({
           id: c.id,
