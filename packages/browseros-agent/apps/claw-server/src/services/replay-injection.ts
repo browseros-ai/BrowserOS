@@ -94,13 +94,23 @@ export async function ensureReplayRecorder(
     const { session: cdp } = await input.session.pages.getSession(input.pageId)
     await cdp.Page.addScriptToEvaluateOnNewDocument({
       source,
-      // Run the script on the current document too if it has already
-      // loaded by the time we attach. Without this the agent's first
-      // `tabs new` could miss the initial DOM snapshot when the
-      // about:blank navigation completes before injection.
-      runImmediately: true,
+      // Intentionally NOT `runImmediately: true`. Forcing the ~260KB
+      // rrweb UMD bundle to parse + execute synchronously on an
+      // already-loaded page stalls the renderer enough to drop the
+      // CDP connection (observed in manual dogfood). The script
+      // still attaches on the NEXT navigation of this target, which
+      // covers every URL after the agent's first `tabs new`. Missing
+      // the very-first-page initial DOM is a deliberate trade-off
+      // for v1 stability; a future commit can re-introduce
+      // immediate eval via a much smaller bootstrap stub that fetches
+      // rrweb async.
     })
     injected.add(input.pageId)
+    logger.info('replay recorder injected', {
+      sessionId: input.sessionId,
+      pageId: input.pageId,
+      bytes: source.length,
+    })
   } catch (err) {
     logger.warn('replay injection failed', {
       sessionId: input.sessionId,

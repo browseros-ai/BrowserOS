@@ -104,7 +104,7 @@ describe('ensureReplayRecorder', () => {
     expect(calls).toHaveLength(2)
   })
 
-  it('passes runImmediately so SPA flows after attach get the snapshot', async () => {
+  it('does NOT use runImmediately (renderer stress / CDP drop mitigation)', async () => {
     const calls: RecordedCall[] = []
     const session = fakeBrowserSession({ recordCalls: calls })
 
@@ -115,7 +115,7 @@ describe('ensureReplayRecorder', () => {
       session,
     })
 
-    expect(calls[0].runImmediately).toBe(true)
+    expect(calls[0].runImmediately).toBeUndefined()
   })
 
   it('bakes sessionId + pageId + cockpit URL into the injected script', async () => {
