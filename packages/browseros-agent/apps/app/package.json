@@ -50,7 +50,7 @@
     "@tanstack/react-query-persist-client": "^5.101.0",
     "@webext-core/messaging": "^2.3.0",
     "@wxt-dev/storage": "^1.2.8",
-    "@xstate/store": "^3.10.0",
+    "@xstate/store": "^4.2.0",
     "@xyflow/react": "^12.11.0",
     "ai": "^6.0.208",
     "better-auth": "^1.6.19",

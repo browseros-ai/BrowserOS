@@ -56,7 +56,7 @@
         "@tanstack/react-query-persist-client": "^5.101.0",
         "@webext-core/messaging": "^2.3.0",
         "@wxt-dev/storage": "^1.2.8",
-        "@xstate/store": "^3.10.0",
+        "@xstate/store": "^4.2.0",
         "@xyflow/react": "^12.11.0",
         "ai": "^6.0.208",
         "better-auth": "^1.6.19",
@@ -1711,7 +1711,7 @@
 
     "@xstate/fsm": ["@xstate/fsm@1.6.5", "", {}, "sha512-b5o1I6aLNeYlU/3CPlj/Z91ybk1gUsKT+5NAJI+2W4UjvS5KLG28K9v5UvNoFVjHV8PajVZ00RH3vnjyQO7ZAw=="],
 
-    "@xstate/store": ["@xstate/store@3.17.5", "", { "peerDependencies": { "react": "^18.2.0 || ^19.0.0", "solid-js": "^1.7.6" }, "optionalPeers": ["react", "solid-js"] }, "sha512-ITajQVRAMa1pgmgM0OdRFYQ6OQ8GK4ynh391p13GKtZnELXn9Hgs9pr4mqO1Z95HH9INcmczmWi5xk3O18GBWg=="],
+    "@xstate/store": ["@xstate/store@4.2.0", "", {}, "sha512-ZJYkKKkwRIQP6r5w0Uj1y8QlYqowUez/OUCLGc3opXYZP/bOvm+rrGq1i7T81jqN9EqYntqrr/bM0+uoGIiDSQ=="],
 
     "@xyflow/react": ["@xyflow/react@12.11.0", "", { "dependencies": { "@xyflow/system": "0.0.77", "classcat": "^5.0.3", "zustand": "^4.4.0" }, "peerDependencies": { "@types/react": ">=17", "@types/react-dom": ">=17", "react": ">=17", "react-dom": ">=17" }, "optionalPeers": ["@types/react", "@types/react-dom"] }, "sha512-na4IO33FSs2OS72hASgZDmTYwFAkef7Z74uBUVrong3ARmQQHfnRUVaCFn1kTt5LbS6pK03TbYjCPGLjLFfziA=="],
 
