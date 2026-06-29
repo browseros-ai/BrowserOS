@@ -67,6 +67,15 @@ export function buildInitScript(input: BuildInitScriptInput): string {
   return `(function(){
 if (window.__browserosClawReplayInstalled) return;
 window.__browserosClawReplayInstalled = true;
+// Defer the ~260KB rrweb UMD parse + execute into a follow-up
+// task. addScriptToEvaluateOnNewDocument runs the script BEFORE
+// any page script on every new document, with the navigation
+// blocked on it. Parsing 260KB synchronously stalls the renderer
+// long enough that CDP times out the navigate call (observed in
+// manual dogfood; CDP socket dropped on every nav). setTimeout(0)
+// pushes the work to a follow-up macrotask, so the document load
+// continues unblocked and the recorder boots a few ms later.
+setTimeout(function(){
 ${RRWEB_UMD_SOURCE}
 ;(function(){
   var sessionId = ${JSON.stringify(sessionId)};
@@ -177,6 +186,7 @@ ${RRWEB_UMD_SOURCE}
     if (document.visibilityState === 'hidden') flushNow();
   });
 })();
+}, 0);
 })();`
 }
 
