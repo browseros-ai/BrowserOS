@@ -56,7 +56,7 @@ jobs:
         run: bun scripts/build/cli/npm-access.ts --package browseros-cli
         working-directory: packages/browseros-agent
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: packages/browseros-agent/apps/cli/go.mod
 
