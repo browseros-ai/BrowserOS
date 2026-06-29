@@ -42,7 +42,11 @@ import {
 
 const COCKPIT_ORIGIN = 'http://127.0.0.1:9200'
 const POLL_INTERVAL_MS = 2_000
-const CONTENT_SCRIPT_PATH = 'recorder.content.js'
+// WXT outputs `entrypoints/recorder.content.ts` to this path inside
+// the built extension. The leading slash is required by
+// chrome.scripting; without it the API treats the value as a
+// relative path against an undefined base.
+const CONTENT_SCRIPT_PATH = 'content-scripts/recorder.js'
 
 export default defineBackground(() => {
   const map = new Map<number, ChromeTabRecord>()
