@@ -138,14 +138,14 @@ jobs:
 
       - name: Upload trend report as artifact
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: eval-report-${{ github.run_id }}
           path: /tmp/eval-report.html
 
       - name: Upload server stderr logs (for post-mortem on startup failures)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browseros-server-logs-${{ github.run_id }}
           path: /tmp/browseros-server-logs/

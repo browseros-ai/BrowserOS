@@ -288,7 +288,7 @@ jobs:
         run: df -h || true
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browseros-nightly-${{ matrix.platform }}-${{ matrix.arch }}
           if-no-files-found: error

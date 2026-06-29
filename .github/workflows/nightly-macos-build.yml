@@ -362,7 +362,7 @@ jobs:
 
       - name: Upload DMG artifact
         if: ${{ always() && steps.bump.outputs.version != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: BrowserOS_v${{ steps.bump.outputs.version }}_arm64
           path: ${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.bump.outputs.version }}/*.dmg
