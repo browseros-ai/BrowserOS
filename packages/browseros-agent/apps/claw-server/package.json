@@ -36,7 +36,7 @@
     "@hono/zod-validator": "^0.8.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "agent-mcp-manager": "^0.0.3",
-    "commander": "^14.0.3",
+    "commander": "^15.0.0",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.3",
     "nanoid": "^5.1.11",
