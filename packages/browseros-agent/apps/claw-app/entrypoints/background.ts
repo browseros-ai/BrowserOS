@@ -1,0 +1,200 @@
+/**
+ * @license
+ * Copyright 2025 BrowserOS
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Background service worker for the BrowserClaw extension.
+ *
+ * Owns the cockpit -> chrome tab-id bridge for the rrweb session
+ * replay recorder. The worker:
+ *
+ *   1. Polls `http://127.0.0.1:9200/replay/tabs` every 2 seconds
+ *      for the cockpit's list of currently-agent-driven CDP tabs.
+ *   2. For each row, resolves the corresponding `chrome.tabs.id`
+ *      via `chrome.tabs.query({url})` narrowed by
+ *      `chrome.tabGroups.query({})` colour matching.
+ *   3. Injects `recorder.content.js` into newly-discovered tabs
+ *      via `chrome.scripting.executeScript`. Operator-owned tabs
+ *      that are not in the cockpit's list are never touched.
+ *   4. Re-injects on every `chrome.webNavigation.onCommitted` for
+ *      tabs in the map (each new document needs its own script
+ *      context).
+ *   5. Responds to the content script's `recorder-hello` message
+ *      with the matching `{sessionId, tabPageId}`.
+ *   6. Sends `recorder-stop` to content scripts when the cockpit
+ *      removes their tab from the live list.
+ *
+ * The worker is MV3-recyclable; Chrome may recycle the service
+ * worker at any time. State is rebuilt from scratch on next poll;
+ * no persistence needed.
+ */
+
+import { defineBackground } from 'wxt/utils/define-background'
+import {
+  type ChromeTabRecord,
+  diffReplayMap,
+  normalizeUrl,
+  pickChromeTab,
+  type RecorderMessage,
+  type ReplayTab,
+  type ReplayTabsResponse,
+} from '@/modules/replay-background'
+
+const COCKPIT_ORIGIN = 'http://127.0.0.1:9200'
+const POLL_INTERVAL_MS = 2_000
+const CONTENT_SCRIPT_PATH = 'recorder.content.js'
+
+export default defineBackground(() => {
+  const map = new Map<number, ChromeTabRecord>()
+
+  async function poll(): Promise<void> {
+    let resp: Response
+    try {
+      resp = await fetch(`${COCKPIT_ORIGIN}/replay/tabs`)
+    } catch {
+      return
+    }
+    if (!resp.ok) return
+    let body: ReplayTabsResponse
+    try {
+      body = (await resp.json()) as ReplayTabsResponse
+    } catch {
+      return
+    }
+    const resolved = await resolveChromeTabIds(body.tabs)
+    const diff = diffReplayMap(map, resolved)
+    for (const tabId of diff.removed) {
+      const prev = map.get(tabId)
+      map.delete(tabId)
+      try {
+        await chrome.tabs.sendMessage(tabId, {
+          type: 'recorder-stop',
+        } satisfies RecorderMessage)
+      } catch {
+        // Tab may have closed; ignore.
+      }
+      if (prev) {
+        // eslint-disable-next-line no-console
+        console.info('[browseros-claw replay] stopped tab', { tabId, prev })
+      }
+    }
+    for (const entry of diff.added) {
+      map.set(entry.chromeTabId, entry.record)
+      // eslint-disable-next-line no-console
+      console.info('[browseros-claw replay] injecting tab', entry)
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: entry.chromeTabId, allFrames: false },
+          files: [CONTENT_SCRIPT_PATH],
+        })
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[browseros-claw replay] inject failed', {
+          tabId: entry.chromeTabId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+  }
+
+  async function resolveChromeTabIds(
+    tabs: ReplayTab[],
+  ): Promise<Array<{ chromeTabId: number; record: ChromeTabRecord }>> {
+    const groupColors = await readGroupColors()
+    const out: Array<{ chromeTabId: number; record: ChromeTabRecord }> = []
+    for (const tab of tabs) {
+      let candidates: chrome.tabs.Tab[] = []
+      try {
+        candidates = await chrome.tabs.query({ url: normalizeUrl(tab.url) })
+      } catch {
+        continue
+      }
+      const chromeTabId = pickChromeTab({
+        candidates: candidates.map((c) => ({
+          id: c.id,
+          groupId: c.groupId,
+          url: c.url,
+          title: c.title,
+        })),
+        groupColors,
+        replayTab: tab,
+      })
+      if (chromeTabId === null) continue
+      out.push({
+        chromeTabId,
+        record: { sessionId: tab.sessionId, tabPageId: tab.tabPageId },
+      })
+    }
+    return out
+  }
+
+  async function readGroupColors(): Promise<Map<number, string>> {
+    const out = new Map<number, string>()
+    try {
+      const groups = await chrome.tabGroups.query({})
+      for (const g of groups) {
+        if (typeof g.id === 'number' && typeof g.color === 'string') {
+          out.set(g.id, g.color)
+        }
+      }
+    } catch {
+      // ignore; the picker degrades to first-match.
+    }
+    return out
+  }
+
+  // Re-inject on every navigation for agent-driven tabs. Each new
+  // document gets a fresh script context; the prior content script
+  // is destroyed when its document goes away.
+  chrome.webNavigation.onCommitted.addListener(async (details) => {
+    if (details.frameId !== 0) return // main frame only
+    if (!map.has(details.tabId)) return
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: details.tabId, allFrames: false },
+        files: [CONTENT_SCRIPT_PATH],
+      })
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[browseros-claw replay] reinject failed', {
+        tabId: details.tabId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  })
+
+  // Content scripts ask "what is my config" right after injection.
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    const msg = message as RecorderMessage
+    if (msg.type !== 'recorder-hello') return false
+    const tabId = sender.tab?.id
+    if (typeof tabId !== 'number') {
+      sendResponse({ type: 'recorder-not-yet' } satisfies RecorderMessage)
+      return true
+    }
+    const record = map.get(tabId)
+    if (!record) {
+      sendResponse({ type: 'recorder-not-yet' } satisfies RecorderMessage)
+      return true
+    }
+    sendResponse({
+      type: 'recorder-config',
+      sessionId: record.sessionId,
+      tabPageId: record.tabPageId,
+    } satisfies RecorderMessage)
+    return true
+  })
+
+  // Best-effort cleanup when the operator closes a recorded tab.
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    map.delete(tabId)
+  })
+
+  // Kick off the polling loop. setInterval is OK in MV3 service
+  // workers; if Chrome recycles the worker, the next /replay/tabs
+  // poll on restart rebuilds the map from scratch.
+  setInterval(() => {
+    void poll()
+  }, POLL_INTERVAL_MS)
+  void poll()
+})
