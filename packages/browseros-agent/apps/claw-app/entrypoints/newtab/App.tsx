@@ -49,10 +49,6 @@ export function App() {
         {legacyUi && (
           <>
             <Route path="/run/:runId" element={<LiveRun />} />
-            <Route
-              path="/governance/audit/:runId/replay"
-              element={<Replay />}
-            />
             <Route path="/onboarding" element={<Onboarding />} />
           </>
         )}
