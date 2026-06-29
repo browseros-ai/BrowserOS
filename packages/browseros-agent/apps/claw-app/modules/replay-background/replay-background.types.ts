@@ -63,6 +63,15 @@ export interface ChromeTabRecord {
 export interface ReplayMapDiff {
   /** New `(chromeTabId -> record)` entries to inject + remember. */
   added: Array<{ chromeTabId: number; record: ChromeTabRecord }>
+  /** Existing entries whose sessionId / tabPageId changed for the
+   *  same chrome tab id (a tab that survived a session swap, or the
+   *  cockpit reassigned it). Background should send
+   *  `recorder-restart` so the live content script tears down the
+   *  old rrweb recorder and re-initialises with the new config. We
+   *  do NOT re-inject via `chrome.scripting` here because the
+   *  content script's `__browserosClawReplayInstalled` guard
+   *  short-circuits subsequent injects within the same document. */
+  changed: Array<{ chromeTabId: number; record: ChromeTabRecord }>
   /** Existing entries that disappeared (session ended / tab closed
    *  from the cockpit's view). Background should send `recorder-stop`
    *  to the content script and drop the entry locally. */
@@ -75,6 +84,19 @@ export type RecorderMessage =
   | { type: 'recorder-config'; sessionId: string; tabPageId: number }
   | { type: 'recorder-not-yet' }
   | { type: 'recorder-stop' }
+  | {
+      /**
+       * Cockpit reassigned this chrome tab id to a different session
+       * (or different tabPageId). Content script tears down its
+       * current rrweb recorder and re-initialises with this new
+       * config without going through another `recorder-hello`
+       * round-trip. The install guard stays set; only the recorder
+       * state inside the script is swapped.
+       */
+      type: 'recorder-restart'
+      sessionId: string
+      tabPageId: number
+    }
   | {
       /**
        * Content script forwards an NDJSON batch of rrweb events to

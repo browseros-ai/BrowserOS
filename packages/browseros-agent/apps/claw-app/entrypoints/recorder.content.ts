@@ -40,9 +40,31 @@ import * as rrweb from 'rrweb'
 import { defineContentScript } from 'wxt/utils/define-content-script'
 import type { RecorderMessage } from '@/modules/replay-background'
 
+interface RecorderConfig {
+  sessionId: string
+  tabPageId: number
+}
+
+interface ActiveRecorder {
+  config: RecorderConfig
+  /** Drain rrweb's pending queue + flush the NDJSON buffer to the
+   *  background. Idempotent. Used by pagehide / visibilitychange so
+   *  we do not stop the recorder, just push pending events. */
+  flushNow: () => void
+  /** Permanently tear down rrweb + the flush timer. */
+  stop: () => void
+}
+
 const BUFFER_CAP = 500
 const FLUSH_INTERVAL_MS = 2_500
 const FLUSH_AT_SIZE = 50
+
+// Per-document state. Survives recorder-stop / recorder-restart
+// message cycles. The install guard at module scope prevents the
+// background's repeated chrome.scripting.executeScript calls from
+// double-installing handlers in the same document; recorder
+// teardown / re-start happens via the message handlers below.
+let active: ActiveRecorder | null = null
 
 export default defineContentScript({
   matches: [],
@@ -51,14 +73,44 @@ export default defineContentScript({
     type Marked = typeof window & { __browserosClawReplayInstalled?: boolean }
     if ((window as Marked).__browserosClawReplayInstalled) return
     ;(window as Marked).__browserosClawReplayInstalled = true
-    void run()
+
+    // Install message handlers and lifecycle listeners ONCE per
+    // document. recorder-restart swaps the recorder state below
+    // without re-installing handlers (which would otherwise stack).
+    window.addEventListener('pagehide', () => active?.flushNow())
+    window.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') active?.flushNow()
+    })
+    chrome.runtime.onMessage.addListener((message) => {
+      const msg = message as RecorderMessage
+      if (msg.type === 'recorder-stop') {
+        active?.stop()
+        active = null
+      } else if (msg.type === 'recorder-restart') {
+        active?.stop()
+        active = startRecorder({
+          sessionId: msg.sessionId,
+          tabPageId: msg.tabPageId,
+        })
+      }
+      return false
+    })
+
+    void bootstrap()
   },
 })
 
-async function run(): Promise<void> {
+async function bootstrap(): Promise<void> {
   const config = await fetchConfig()
   if (!config) return
+  // A `recorder-restart` may have already raced in while we awaited
+  // the hello round-trip; if active is already populated by that
+  // path, defer to it.
+  if (active) return
+  active = startRecorder(config)
+}
 
+function startRecorder(config: RecorderConfig): ActiveRecorder {
   const sessionId = config.sessionId
   const tabPageId = config.tabPageId
 
@@ -68,6 +120,7 @@ async function run(): Promise<void> {
   const rawQueue: unknown[] = []
   let pendingSerialise: 1 | null = null
   let stopper: (() => void) | undefined
+  let stopped = false
 
   function send(body: string): void {
     // Forward NDJSON to the background. The background does the real
@@ -113,6 +166,7 @@ async function run(): Promise<void> {
 
   function armFlushTimer(): void {
     if (timer !== null) return
+    if (stopped) return
     timer = setTimeout(() => {
       timer = null
       flush()
@@ -158,6 +212,7 @@ async function run(): Promise<void> {
       },
       recordCanvas: false,
       emit(event) {
+        if (stopped) return
         rawQueue.push(event)
         if (pendingSerialise === null) {
           pendingSerialise = 1
@@ -171,13 +226,17 @@ async function run(): Promise<void> {
     })
     // eslint-disable-next-line no-console
     console.info('[browseros-claw replay] recorder online', {
-      sessionId: config.sessionId,
+      sessionId,
       tabPageId,
     })
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn('[browseros-claw replay] rrweb.record threw', err)
-    return
+    return {
+      config,
+      flushNow: () => {},
+      stop: () => {},
+    }
   }
 
   function flushNow(): void {
@@ -185,25 +244,24 @@ async function run(): Promise<void> {
     flush()
   }
 
-  function stop(): void {
-    flushNow()
-    try {
-      stopper?.()
-    } catch {
-      // ignore; rrweb may already be torn down
-    }
+  return {
+    config,
+    flushNow,
+    stop(): void {
+      if (stopped) return
+      stopped = true
+      flushNow()
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+      try {
+        stopper?.()
+      } catch {
+        // ignore; rrweb may already be torn down
+      }
+    },
   }
-
-  window.addEventListener('pagehide', flushNow)
-  window.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') flushNow()
-  })
-
-  chrome.runtime.onMessage.addListener((message) => {
-    const msg = message as RecorderMessage
-    if (msg.type === 'recorder-stop') stop()
-    return false
-  })
 }
 
 /**

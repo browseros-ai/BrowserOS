@@ -39,6 +39,7 @@ describe('diffReplayMap', () => {
       { chromeTabId: 2, record: rec({ sessionId: 'sid-2', tabPageId: 2 }) },
     ])
     expect(diff.added.map((a) => a.chromeTabId).sort()).toEqual([1, 2])
+    expect(diff.changed).toEqual([])
     expect(diff.removed).toEqual([])
   })
 
@@ -46,6 +47,7 @@ describe('diffReplayMap', () => {
     const current = new Map<number, ChromeTabRecord>([[1, rec()]])
     const diff = diffReplayMap(current, [{ chromeTabId: 1, record: rec() }])
     expect(diff.added).toEqual([])
+    expect(diff.changed).toEqual([])
     expect(diff.removed).toEqual([])
   })
 
@@ -56,21 +58,33 @@ describe('diffReplayMap', () => {
     ])
     const diff = diffReplayMap(current, [{ chromeTabId: 1, record: rec() }])
     expect(diff.added).toEqual([])
+    expect(diff.changed).toEqual([])
     expect(diff.removed).toEqual([2])
   })
 
-  it('flags an entry as added when its sessionId changes (tab repurposed)', () => {
+  it('flags as CHANGED (not added) when sessionId differs for an existing tab', () => {
     const current = new Map<number, ChromeTabRecord>([[1, rec()]])
     const diff = diffReplayMap(current, [
       { chromeTabId: 1, record: rec({ sessionId: 'sid-2' }) },
     ])
-    expect(diff.added).toEqual([
+    expect(diff.added).toEqual([])
+    expect(diff.changed).toEqual([
       { chromeTabId: 1, record: rec({ sessionId: 'sid-2' }) },
     ])
     expect(diff.removed).toEqual([])
   })
 
-  it('handles overlap: some same, some added, some removed', () => {
+  it('flags as CHANGED when tabPageId differs for an existing tab', () => {
+    const current = new Map<number, ChromeTabRecord>([[1, rec()]])
+    const diff = diffReplayMap(current, [
+      { chromeTabId: 1, record: rec({ tabPageId: 99 }) },
+    ])
+    expect(diff.added).toEqual([])
+    expect(diff.changed.map((c) => c.chromeTabId)).toEqual([1])
+    expect(diff.removed).toEqual([])
+  })
+
+  it('handles overlap: some same, some added, some changed, some removed', () => {
     const current = new Map<number, ChromeTabRecord>([
       [1, rec()],
       [2, rec({ sessionId: 'sid-2' })],
@@ -78,10 +92,12 @@ describe('diffReplayMap', () => {
     ])
     const diff = diffReplayMap(current, [
       { chromeTabId: 1, record: rec() }, // same
+      { chromeTabId: 2, record: rec({ sessionId: 'sid-2-new' }) }, // changed
       { chromeTabId: 4, record: rec({ sessionId: 'sid-4' }) }, // added
     ])
     expect(diff.added.map((a) => a.chromeTabId)).toEqual([4])
-    expect(diff.removed.sort()).toEqual([2, 3])
+    expect(diff.changed.map((c) => c.chromeTabId)).toEqual([2])
+    expect(diff.removed).toEqual([3])
   })
 })
 
@@ -122,8 +138,10 @@ describe('pickChromeTab', () => {
     ).toBe(2)
   })
 
-  it('falls back to first match when groupColor narrow fails', () => {
-    // Two tabs in two groups, neither matches our colour.
+  it('returns null when groupColor narrow finds no matching colour', () => {
+    // Two tabs in two groups, neither matches our colour. We refuse
+    // to guess; better to defer to the next poll than risk
+    // mis-attributing the operator's tab events to the agent's session.
     expect(
       pickChromeTab({
         candidates: [
@@ -136,10 +154,14 @@ describe('pickChromeTab', () => {
         ]),
         replayTab: row({ groupColor: 'orange' }),
       }),
-    ).toBe(1)
+    ).toBeNull()
   })
 
-  it('falls back to first match when groupColor is null on the row', () => {
+  it('returns null when groupColor is null AND multiple candidates exist', () => {
+    // Tab-group creation race: the cockpit knows the agent owns SOME
+    // tab on this URL but has not yet registered the tab group. We
+    // refuse to guess; the next poll will retry once groupColor is
+    // populated.
     expect(
       pickChromeTab({
         candidates: [
@@ -149,12 +171,13 @@ describe('pickChromeTab', () => {
         groupColors: new Map([[100, 'blue']]),
         replayTab: row({ groupColor: null }),
       }),
-    ).toBe(1)
+    ).toBeNull()
   })
 
   it('picks first when two candidates share the matching colour (defence in depth)', () => {
     // Should not happen by design (one colour per agent) but the
-    // picker still returns SOMETHING rather than null.
+    // picker still returns SOMETHING rather than null when colour
+    // matches.
     expect(
       pickChromeTab({
         candidates: [

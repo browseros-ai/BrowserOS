@@ -33,21 +33,25 @@ export function diffReplayMap(
 ): ReplayMapDiff {
   const nextIds = new Set<number>(resolved.map((r) => r.chromeTabId))
   const added: ReplayMapDiff['added'] = []
+  const changed: ReplayMapDiff['changed'] = []
   for (const r of resolved) {
     const existing = currentMap.get(r.chromeTabId)
+    if (!existing) {
+      added.push(r)
+      continue
+    }
     if (
-      !existing ||
       existing.sessionId !== r.record.sessionId ||
       existing.tabPageId !== r.record.tabPageId
     ) {
-      added.push(r)
+      changed.push(r)
     }
   }
   const removed: number[] = []
   for (const tabId of currentMap.keys()) {
     if (!nextIds.has(tabId)) removed.push(tabId)
   }
-  return { added, removed }
+  return { added, changed, removed }
 }
 
 /**
@@ -63,15 +67,19 @@ export function diffReplayMap(
  * Match strategy:
  *
  *   1. If only one candidate, return it. Most common.
- *   2. If multiple, narrow by `groupColor` matching the cockpit's
- *      row. The cockpit assigns each agent a distinct tab-group
- *      colour so concurrent agents on the same URL pick different
- *      groups.
- *   3. If still multiple (two agents truly sharing a tab group,
- *      which never happens by design but we defend against it),
- *      return the first. Wrong attribution is preferable to no
- *      recording.
- *   4. Returns null when no candidate matches.
+ *   2. If multiple AND `groupColor` is null (the cockpit's tab
+ *      group has not been registered yet), return null. We would
+ *      rather defer to the next poll than guess wrong. Wrong picks
+ *      attribute the operator's tab events to the agent's replay,
+ *      and the chrome.tabs.query result order is implementation
+ *      defined.
+ *   3. If multiple AND `groupColor` is set, narrow by colour. The
+ *      cockpit assigns each agent a distinct tab-group colour so
+ *      concurrent agents on the same URL pick different groups.
+ *   4. If colour narrowing finds none (no matching colour), return
+ *      null too: no candidate matches our agent. We do not fall
+ *      back to first-match because that risks mis-attribution.
+ *   5. Returns null when no candidate has a usable id.
  */
 export function pickChromeTab(args: {
   candidates: Array<{
@@ -90,15 +98,16 @@ export function pickChromeTab(args: {
   if (usable.length === 0) return null
   if (usable.length === 1) return usable[0].id
 
-  if (args.replayTab.groupColor !== null) {
-    const byColor = usable.filter((c) => {
-      if (typeof c.groupId !== 'number') return false
-      return args.groupColors.get(c.groupId) === args.replayTab.groupColor
-    })
-    if (byColor.length === 1) return byColor[0].id
-    if (byColor.length > 1) return byColor[0].id
-  }
-  return usable[0].id
+  // Multiple URL matches and we have no colour to disambiguate; defer.
+  if (args.replayTab.groupColor === null) return null
+
+  const byColor = usable.filter((c) => {
+    if (typeof c.groupId !== 'number') return false
+    return args.groupColors.get(c.groupId) === args.replayTab.groupColor
+  })
+  if (byColor.length >= 1) return byColor[0].id
+  // No colour match either. Defer rather than risk mis-attribution.
+  return null
 }
 
 /**

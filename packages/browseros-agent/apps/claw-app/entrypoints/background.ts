@@ -77,6 +77,27 @@ export default defineBackground(() => {
         // Tab may have closed; ignore.
       }
     }
+    // Same chrome tab id, new sessionId/tabPageId. The content
+    // script is still installed (the install guard would block a
+    // re-inject), so we cannot use chrome.scripting.executeScript
+    // here. The script's onMessage handler swaps recorder state
+    // in place.
+    for (const entry of diff.changed) {
+      map.set(entry.chromeTabId, entry.record)
+      try {
+        await chrome.tabs.sendMessage(entry.chromeTabId, {
+          type: 'recorder-restart',
+          sessionId: entry.record.sessionId,
+          tabPageId: entry.record.tabPageId,
+        } satisfies RecorderMessage)
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[browseros-claw replay] restart message failed', {
+          tabId: entry.chromeTabId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
     for (const entry of diff.added) {
       map.set(entry.chromeTabId, entry.record)
       try {
