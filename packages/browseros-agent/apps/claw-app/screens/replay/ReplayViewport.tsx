@@ -1,49 +1,187 @@
-import { Globe, Lock } from 'lucide-react'
+/**
+ * @license
+ * Copyright 2025 BrowserOS
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Replay viewport for the audit page. The original scaffold drew a
+ * fake browser chrome with a tinted page region and a caption pill.
+ * This version mounts rrweb-player inside that chrome so the actual
+ * recorded DOM mutations play back. A tab selector above the chrome
+ * lets the operator switch between tabs the agent drove in the same
+ * session.
+ *
+ * The player's built-in controller is hidden via `showController:
+ * false`; PlaybackTransport (see use-playback wiring) is the single
+ * source of UI truth. Time sync between this player and the
+ * scaffold's `usePlayback` clock is set up imperatively via the
+ * `onPlayerReady` callback so the page-level component can drive
+ * the player from the same scrub events the timeline already
+ * dispatches.
+ */
+
+import { Lock } from 'lucide-react'
+import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
-import type { ReplayFrame } from '@/modules/api/replay.hooks'
+import type { ReplayEvent, ReplayFrame } from '@/modules/api/replay.hooks'
 import { KIND_STYLE, VERB_META } from './replay.helpers'
+
+import 'rrweb-player/dist/style.css'
+// biome-ignore lint/style/useImportType: rrweb-player default export
+// is a class constructor invoked at runtime.
+import rrwebPlayer from 'rrweb-player'
+
+export interface ReplayPlayerHandle {
+  goto(ms: number): void
+  play(): void
+  pause(): void
+}
 
 interface ReplayViewportProps {
   site: string
-  /** The frame whose caption is currently displayed. */
+  /** The frame whose caption is currently displayed in the overlay. */
   frame: ReplayFrame | undefined
+  /** rrweb events for the currently-selected tabPageId. */
+  events: ReplayEvent[]
+  /** Distinct tabPageIds the operator can pick from. */
+  tabPageIds: number[]
+  selectedTabPageId: number | null
+  onTabPageIdChange: (id: number) => void
+  /** Called once the rrweb-player has mounted with usable controls. */
+  onPlayerReady: (handle: ReplayPlayerHandle) => void
 }
 
-/**
- * Reconstructed browser viewport for the replay player. Fake site
- * chrome at the top, tinted page region in the middle, and a caption
- * overlay pill near the bottom that mirrors the prototype's
- * RR-Web-style "what is happening right now" hint.
- */
-export function ReplayViewport({ site, frame }: ReplayViewportProps) {
+export function ReplayViewport({
+  site,
+  frame,
+  events,
+  tabPageIds,
+  selectedTabPageId,
+  onTabPageIdChange,
+  onPlayerReady,
+}: ReplayViewportProps) {
   return (
     <div className="relative flex flex-1 flex-col overflow-hidden rounded-2xl border border-border-2 bg-card shadow-sm">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-border border-b bg-bg-sunken px-3">
-        <span className="flex gap-1.5">
-          <span className="size-2.5 rounded-full bg-[#FF5F57]" />
-          <span className="size-2.5 rounded-full bg-[#FEBC2E]" />
-          <span className="size-2.5 rounded-full bg-[#28C840]" />
-        </span>
-        <div className="ml-3 flex h-6 flex-1 items-center gap-2 rounded-md border border-border-2 bg-card px-3 font-mono text-ink-2 text-xs">
-          <Lock className="size-3 text-ink-3" />
-          <span className="truncate">{site}</span>
-        </div>
-        <span className="rounded-full bg-bg-sunken px-2 py-0.5 font-bold text-[10px] text-ink-3 uppercase tracking-wide">
-          recorded
-        </span>
-      </div>
-      <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_top,#fff,var(--color-bg-sunken))]">
-        <div className="flex flex-col items-center gap-3 text-ink-3">
-          <Globe className="size-12" />
-          <code className="font-mono text-sm">{site}</code>
-          <p className="max-w-xs text-center text-ink-4 text-xs">
-            Site reconstruction lands once the RR-Web recording pipeline is
-            wired.
-          </p>
-        </div>
+      <Chrome
+        site={site}
+        tabPageIds={tabPageIds}
+        selectedTabPageId={selectedTabPageId}
+        onTabPageIdChange={onTabPageIdChange}
+      />
+      <div className="relative flex flex-1 items-stretch justify-center overflow-hidden bg-bg-sunken">
+        <PlayerCanvas events={events} onReady={onPlayerReady} />
         {frame && <Caption frame={frame} />}
       </div>
     </div>
+  )
+}
+
+interface ChromeProps {
+  site: string
+  tabPageIds: number[]
+  selectedTabPageId: number | null
+  onTabPageIdChange: (id: number) => void
+}
+
+function Chrome({
+  site,
+  tabPageIds,
+  selectedTabPageId,
+  onTabPageIdChange,
+}: ChromeProps) {
+  return (
+    <div className="flex h-9 shrink-0 items-center gap-2 border-border border-b bg-bg-sunken px-3">
+      <span className="flex gap-1.5">
+        <span className="size-2.5 rounded-full bg-[#FF5F57]" />
+        <span className="size-2.5 rounded-full bg-[#FEBC2E]" />
+        <span className="size-2.5 rounded-full bg-[#28C840]" />
+      </span>
+      <div className="ml-3 flex h-6 flex-1 items-center gap-2 rounded-md border border-border-2 bg-card px-3 font-mono text-ink-2 text-xs">
+        <Lock className="size-3 text-ink-3" />
+        <span className="truncate">{site}</span>
+      </div>
+      {tabPageIds.length > 1 && (
+        <select
+          aria-label="Tab to replay"
+          value={selectedTabPageId ?? ''}
+          onChange={(e) => onTabPageIdChange(Number(e.target.value))}
+          className="h-6 rounded-md border border-border-2 bg-card px-2 font-mono text-[11px] text-ink-2"
+        >
+          {tabPageIds.map((id) => (
+            <option key={id} value={id}>
+              Tab {id}
+            </option>
+          ))}
+        </select>
+      )}
+      <span className="rounded-full bg-bg-sunken px-2 py-0.5 font-bold text-[10px] text-ink-3 uppercase tracking-wide">
+        rrweb
+      </span>
+    </div>
+  )
+}
+
+interface PlayerCanvasProps {
+  events: ReplayEvent[]
+  onReady: (handle: ReplayPlayerHandle) => void
+}
+
+function PlayerCanvas({ events, onReady }: PlayerCanvasProps) {
+  const mountRef = useRef<HTMLDivElement>(null)
+  // We deliberately use useEffect rather than deriving during render
+  // because rrweb-player mounts into the DOM imperatively and its
+  // cleanup needs to happen on unmount + on events-array swap (tab
+  // change). Re-renders without a swap should NOT re-mount; the
+  // ref-comparison guard below handles that.
+  const lastEventsRef = useRef<ReplayEvent[] | null>(null)
+  useEffect(() => {
+    const mount = mountRef.current
+    if (!mount) return
+    if (events.length === 0) return
+    if (lastEventsRef.current === events) return
+    lastEventsRef.current = events
+
+    // Strip the cockpit annotations so rrweb sees its canonical
+    // {type, data, timestamp} shape.
+    const rrwebEvents = events.map((e) => ({
+      type: e.type,
+      data: e.data,
+      timestamp: e.ts,
+      // biome-ignore lint/suspicious/noExplicitAny: rrweb's event
+      // union is wide; we trust the recorder's output shape.
+    })) as any[]
+
+    mount.replaceChildren()
+    const player = new rrwebPlayer({
+      target: mount,
+      props: {
+        events: rrwebEvents,
+        autoPlay: false,
+        showController: false,
+        width: mount.clientWidth || 1024,
+        height: mount.clientHeight || 600,
+        skipInactive: false,
+      },
+    })
+    onReady({
+      goto: (ms) => player.goto(ms),
+      play: () => player.play(),
+      pause: () => player.pause(),
+    })
+    return () => {
+      // rrweb-player exposes $destroy on the underlying Svelte
+      // instance via 2.x; older builds expose it on the class.
+      const destroy = (player as unknown as { $destroy?: () => void }).$destroy
+      if (typeof destroy === 'function') destroy.call(player)
+      mount.replaceChildren()
+    }
+  }, [events, onReady])
+
+  return (
+    <div
+      ref={mountRef}
+      className="flex flex-1 items-center justify-center"
+      data-replay-canvas
+    />
   )
 }
 
