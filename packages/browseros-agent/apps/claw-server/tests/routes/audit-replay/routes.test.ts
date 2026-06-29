@@ -157,43 +157,6 @@ describe('audit-replay routes', () => {
     })
   })
 
-  test('GET /audit/replay/static/rrweb.umd.min.js serves the vendored UMD', async () => {
-    await withTempBrowserosDir(async () => {
-      const res = await app.fetch(
-        new Request('http://localhost/audit/replay/static/rrweb.umd.min.js'),
-      )
-      expect(res.status).toBe(200)
-      expect(res.headers.get('content-type')).toContain(
-        'application/javascript',
-      )
-      expect(res.headers.get('cache-control')).toContain('immutable')
-      expect(res.headers.get('etag')).toMatch(/^"rrweb-/)
-      const body = await res.arrayBuffer()
-      // 260KB-ish; the safety window matches the recorder-source
-      // vendor-size test bounds.
-      expect(body.byteLength).toBeGreaterThan(100_000)
-      expect(body.byteLength).toBeLessThan(1_000_000)
-    })
-  })
-
-  test('GET static UMD returns 304 when ETag matches', async () => {
-    await withTempBrowserosDir(async () => {
-      const head = await app.fetch(
-        new Request('http://localhost/audit/replay/static/rrweb.umd.min.js'),
-      )
-      const etag = head.headers.get('etag')
-      expect(etag).not.toBeNull()
-      const res = await app.fetch(
-        new Request('http://localhost/audit/replay/static/rrweb.umd.min.js', {
-          headers: { 'if-none-match': etag ?? '' },
-        }),
-      )
-      expect(res.status).toBe(304)
-      const body = await res.text()
-      expect(body).toBe('')
-    })
-  })
-
   test('POST with empty body returns 200 accepted:0', async () => {
     await withTempBrowserosDir(async () => {
       registerLiveSession('s3')

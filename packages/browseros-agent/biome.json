@@ -7,12 +7,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": [
-      "**",
-      "!**/apps/eval/src/dashboard/index.html",
-      "!**/*.svg",
-      "!apps/claw-server/src/vendor"
-    ]
+    "includes": ["**", "!**/apps/eval/src/dashboard/index.html", "!**/*.svg"]
   },
   "formatter": {
     "enabled": true,
@@ -55,12 +50,6 @@
     }
   },
   "overrides": [
-    {
-      "includes": ["**/vendor/**"],
-      "linter": { "enabled": false },
-      "formatter": { "enabled": false },
-      "assist": { "enabled": false }
-    },
     {
       "includes": ["**/apps/eval/src/dashboard/viewer.html"],
       "linter": {
