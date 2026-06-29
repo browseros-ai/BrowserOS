@@ -12,16 +12,35 @@
  *      to fetch a remote script (no CSP friction).
  *   2. Bakes in this session's `sessionId`, the page's `tabPageId`,
  *      and the cockpit's loopback origin.
- *   3. Calls `rrweb.record` with sensible defaults (password fields
- *      masked) and buffers events.
+ *   3. Calls `rrweb.record` with throttled sampling so heavy SPA
+ *      pages do not back up the main thread.
  *   4. POSTs each batch to the cockpit's audit-replay events route
- *      via `fetch({keepalive: true})`, and flushes via
- *      `navigator.sendBeacon` on `pagehide` so unload events are
- *      not dropped.
+ *      via a plain `fetch`, with `navigator.sendBeacon` as the
+ *      `pagehide` flush so unload events are not dropped.
+ *
+ * Throttling decisions (manual dogfood found the v1 emit handler
+ * locked heavy SPA pages; this version drops the noisy event
+ * categories at source via rrweb's built-in sampling):
+ *
+ *   - `sampling.mousemove: false` drops MouseMove entirely.
+ *   - `sampling.scroll: 250` rate-limits scroll to one event per
+ *     250ms.
+ *   - `sampling.media: 500` rate-limits media + canvas updates.
+ *   - `sampling.input: 'last'` only records the final value of
+ *     each input field rather than every keystroke. The audit
+ *     replay does not need keystroke timing; it needs final values
+ *     for context.
+ *   - `recordCanvas: false` skips canvas capture entirely (huge
+ *     event payloads and rarely useful for agent replay).
+ *   - The emit handler defers JSON.stringify into a microtask so
+ *     the rrweb hot path returns to the page as fast as possible.
+ *   - A 500-event in-memory cap drops the oldest events with a
+ *     console warn if the page produces faster than we can flush;
+ *     prevents a stuck flush from blowing up memory.
  *
  * `window.__browserosClawReplayInstalled` guards against double-
  * install when `addScriptToEvaluateOnNewDocument` fires twice for
- * the same document (it always does at least once per nav).
+ * the same document.
  */
 
 import { readFileSync } from 'node:fs'
@@ -31,10 +50,6 @@ import { join } from 'node:path'
  * Read the vendored UMD bundle at module load time. We use
  * `readFileSync` once on cold start; the contents are cached for the
  * process lifetime so per-tab injection is just a string interpolation.
- *
- * The path is resolved relative to this source file rather than
- * relative to the process cwd so the script is found regardless of
- * which directory the server is launched from.
  */
 const RRWEB_UMD_SOURCE = readFileSync(
   join(import.meta.dir, '..', 'vendor', 'rrweb.umd.min.js'),
@@ -49,9 +64,6 @@ export interface BuildInitScriptInput {
 
 export function buildInitScript(input: BuildInitScriptInput): string {
   const { sessionId, tabPageId, cockpitOrigin } = input
-  // JSON.stringify handles quote escaping and unicode safely for the
-  // user-controllable inputs (sessionId in particular; the rest are
-  // server-controlled but defence in depth costs nothing).
   return `(function(){
 if (window.__browserosClawReplayInstalled) return;
 window.__browserosClawReplayInstalled = true;
@@ -61,8 +73,17 @@ ${RRWEB_UMD_SOURCE}
   var tabPageId = ${JSON.stringify(tabPageId)};
   var url = ${JSON.stringify(cockpitOrigin)} + '/audit/replay/' + sessionId + '/events';
   if (!window.rrweb || typeof window.rrweb.record !== 'function') return;
+
+  // Buffer of pre-serialised NDJSON lines so the flush hot path is
+  // just a join + fetch; serialisation happens off-emit via a
+  // microtask scheduled below.
   var buf = [];
+  var BUFFER_CAP = 500;
+  var FLUSH_INTERVAL_MS = 2500;
   var timer = null;
+  var dropped = 0;
+  var pendingSerialise = null;
+
   function send(body){
     try {
       if (typeof navigator.sendBeacon === 'function' && document.visibilityState === 'hidden') {
@@ -73,37 +94,87 @@ ${RRWEB_UMD_SOURCE}
         method: 'POST',
         headers: { 'content-type': 'application/x-ndjson' },
         body: body,
-        keepalive: true,
         credentials: 'omit'
-      }).catch(function(){});
-    } catch (e) { /* swallow; recorder must never throw into page */ }
+      }).catch(function(){ /* recorder must never throw into page */ });
+    } catch (e) { /* swallow */ }
   }
+
   function flush(){
     if (buf.length === 0) return;
-    var body = buf.map(function(e){
-      return JSON.stringify({ tabPageId: tabPageId, ts: e.ts, type: e.type, data: e.data });
-    }).join('\\n');
+    var body = buf.join('\\n');
     buf = [];
+    if (dropped > 0) {
+      try { console.warn('[browseros-claw replay] dropped', dropped, 'events under buffer pressure'); } catch (e) {}
+      dropped = 0;
+    }
     send(body);
   }
+
+  function armFlushTimer(){
+    if (timer !== null) return;
+    timer = setTimeout(function(){ timer = null; flush(); }, FLUSH_INTERVAL_MS);
+  }
+
+  // Off-hot-path serialisation. The rrweb emit fires synchronously
+  // inline with DOM mutations; if we JSON.stringify there, the main
+  // thread backs up on busy pages. Push the raw event into a queue,
+  // schedule a microtask once per batch to drain into the NDJSON buf.
+  var rawQueue = [];
+  function drainRawQueue(){
+    pendingSerialise = null;
+    for (var i = 0; i < rawQueue.length; i++) {
+      var event = rawQueue[i];
+      var line;
+      try {
+        line = JSON.stringify({
+          tabPageId: tabPageId,
+          ts: (event && typeof event.timestamp === 'number') ? event.timestamp : Date.now(),
+          type: event && event.type,
+          data: event && event.data
+        });
+      } catch (err) { continue; }
+      if (buf.length >= BUFFER_CAP) {
+        // Drop oldest to make room. Holding all events in memory
+        // forever on a runaway page would OOM the tab; lossy
+        // replay is better than a crashed page.
+        buf.shift();
+        dropped++;
+      }
+      buf.push(line);
+    }
+    rawQueue = [];
+    armFlushTimer();
+  }
+
   window.rrweb.record({
     maskInputOptions: { password: true },
+    // Aggressive sampling so heavy SPA pages do not generate the
+    // ~1k events/sec that locked the browser in early dogfood.
+    sampling: {
+      mousemove: false,
+      scroll: 250,
+      media: 500,
+      input: 'last'
+    },
+    recordCanvas: false,
     emit: function(event){
-      buf.push({
-        ts: (event && typeof event.timestamp === 'number') ? event.timestamp : Date.now(),
-        type: event && event.type,
-        data: event && event.data
-      });
-      if (buf.length >= 50) {
-        flush();
-      } else if (timer === null) {
-        timer = setTimeout(function(){ timer = null; flush(); }, 2000);
+      rawQueue.push(event);
+      if (pendingSerialise === null) {
+        pendingSerialise = (typeof queueMicrotask === 'function')
+          ? (queueMicrotask(drainRawQueue), 1)
+          : setTimeout(drainRawQueue, 0);
       }
     }
   });
-  window.addEventListener('pagehide', flush);
+
+  function flushNow(){
+    // Drain any pending serialisation, then send synchronously.
+    if (rawQueue.length > 0) drainRawQueue();
+    flush();
+  }
+  window.addEventListener('pagehide', flushNow);
   window.addEventListener('visibilitychange', function(){
-    if (document.visibilityState === 'hidden') flush();
+    if (document.visibilityState === 'hidden') flushNow();
   });
 })();
 })();`
