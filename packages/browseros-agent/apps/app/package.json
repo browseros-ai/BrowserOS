@@ -19,7 +19,7 @@
     "codegen:watch": "graphql-codegen --config codegen.ts --watch"
   },
   "dependencies": {
-    "@ai-sdk/react": "^3.0.210",
+    "@ai-sdk/react": "^4.0.2",
     "@browseros/server": "workspace:*",
     "@hookform/resolvers": "^5.4.0",
     "@lobehub/icons": "^2.48.0",
