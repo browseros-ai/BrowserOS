@@ -19,16 +19,15 @@ describe('recorder-source', () => {
     expect(_rrwebVendorSizeForTesting()).toBeLessThan(1_000_000)
   })
 
-  it('output contains the inlined rrweb UMD source', () => {
+  it('output is a small bootstrap stub, NOT the full rrweb UMD', () => {
     const script = buildInitScript({
       sessionId: 'session-abc',
       tabPageId: 42,
       cockpitOrigin: 'http://127.0.0.1:9200',
     })
-    // The rrweb UMD bundle starts with the universal-module-definition
-    // factory; the safest signature to grep for is the literal name.
-    expect(script).toContain('rrweb')
+    // The stub references rrweb but does NOT inline the 260KB UMD.
     expect(script).toContain('window.rrweb.record')
+    expect(script.length).toBeLessThan(8_000)
   })
 
   it('bakes sessionId + tabPageId + cockpitOrigin into the output', () => {
@@ -38,12 +37,23 @@ describe('recorder-source', () => {
       cockpitOrigin: 'http://127.0.0.1:9200',
     })
     expect(script).toContain('"sess-1234"')
-    // The URL is built at runtime via string concatenation, so the
-    // literals appear separately in the output.
     expect(script).toContain('"http://127.0.0.1:9200"')
-    expect(script).toContain("'/audit/replay/'")
-    // Per-session variable assignments include the tab id verbatim.
     expect(script).toContain('var tabPageId = 99')
+  })
+
+  it('injects the static UMD URL via an async script tag', () => {
+    const script = buildInitScript({
+      sessionId: 's',
+      tabPageId: 1,
+      cockpitOrigin: 'http://127.0.0.1:9200',
+    })
+    // The stub builds `cockpitOrigin + '/audit/replay/static/rrweb.umd.min.js'`
+    // and creates a script tag with that src.
+    expect(script).toContain('/audit/replay/static/rrweb.umd.min.js')
+    expect(script).toContain('createElement')
+    expect(script).toContain('s.async = true')
+    expect(script).toContain('s.onload')
+    expect(script).toContain('s.onerror')
   })
 
   it('escapes a sessionId that contains quotes', () => {

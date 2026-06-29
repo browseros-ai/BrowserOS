@@ -5,38 +5,44 @@
  *
  * Builds the per-session JavaScript blob the cockpit injects into
  * every agent-driven BrowserOS page via CDP
- * `Page.addScriptToEvaluateOnNewDocument`. The blob is one
- * self-contained IIFE that:
+ * `Page.addScriptToEvaluateOnNewDocument`.
  *
- *   1. Inlines the vendored rrweb UMD bundle so the page never has
- *      to fetch a remote script (no CSP friction).
- *   2. Bakes in this session's `sessionId`, the page's `tabPageId`,
- *      and the cockpit's loopback origin.
- *   3. Calls `rrweb.record` with throttled sampling so heavy SPA
- *      pages do not back up the main thread.
- *   4. POSTs each batch to the cockpit's audit-replay events route
- *      via a plain `fetch`, with `navigator.sendBeacon` as the
- *      `pagehide` flush so unload events are not dropped.
+ * F5 design (bootstrap stub + async UMD fetch):
  *
- * Throttling decisions (manual dogfood found the v1 emit handler
- * locked heavy SPA pages; this version drops the noisy event
- * categories at source via rrweb's built-in sampling):
+ * The injected script is a small (~2KB) stub. It does NOT contain
+ * the rrweb UMD source. Instead, it appends a `<script async src>`
+ * tag pointing at the cockpit's static UMD route. The browser
+ * downloads and parses rrweb off the document-load critical path;
+ * once the script loads, the stub's `onload` handler starts the
+ * recorder with the throttled config.
+ *
+ * Earlier attempts inlined the 260KB UMD into the injected payload.
+ * `addScriptToEvaluateOnNewDocument` runs that script BEFORE any
+ * page script on every new document, and the synchronous parse of
+ * 260KB stalled the renderer enough to drop the CDP connection
+ * (S2 in the recorder-stability plan). The bootstrap stub avoids
+ * the stall because the script body adds the async tag and returns
+ * immediately.
+ *
+ * Trade-off accepted: pages with a strict `script-src` CSP that
+ * does not whitelist the cockpit's loopback origin will refuse the
+ * async script load. The stub's `onerror` logs to the page console
+ * so the operator can diagnose. For sites where this matters we
+ * can revisit a Worker- or sandboxed-frame-based variant.
+ *
+ * Throttling decisions (used when the recorder boots):
  *
  *   - `sampling.mousemove: false` drops MouseMove entirely.
  *   - `sampling.scroll: 250` rate-limits scroll to one event per
  *     250ms.
  *   - `sampling.media: 500` rate-limits media + canvas updates.
  *   - `sampling.input: 'last'` only records the final value of
- *     each input field rather than every keystroke. The audit
- *     replay does not need keystroke timing; it needs final values
- *     for context.
- *   - `recordCanvas: false` skips canvas capture entirely (huge
- *     event payloads and rarely useful for agent replay).
+ *     each input field rather than every keystroke.
+ *   - `recordCanvas: false` skips canvas capture entirely.
  *   - The emit handler defers JSON.stringify into a microtask so
  *     the rrweb hot path returns to the page as fast as possible.
  *   - A 500-event in-memory cap drops the oldest events with a
- *     console warn if the page produces faster than we can flush;
- *     prevents a stuck flush from blowing up memory.
+ *     console warn if the page produces faster than we can flush.
  *
  * `window.__browserosClawReplayInstalled` guards against double-
  * install when `addScriptToEvaluateOnNewDocument` fires twice for
@@ -47,9 +53,10 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /**
- * Read the vendored UMD bundle at module load time. We use
- * `readFileSync` once on cold start; the contents are cached for the
- * process lifetime so per-tab injection is just a string interpolation.
+ * The vendored UMD bytes are read here only so the size accessor
+ * stays accurate for tests; the buildInitScript output no longer
+ * inlines the bytes. The audit-replay route is the one that
+ * actually serves the file to the recorder stub.
  */
 const RRWEB_UMD_SOURCE = readFileSync(
   join(import.meta.dir, '..', 'vendor', 'rrweb.umd.min.js'),
@@ -67,45 +74,43 @@ export function buildInitScript(input: BuildInitScriptInput): string {
   return `(function(){
 if (window.__browserosClawReplayInstalled) return;
 window.__browserosClawReplayInstalled = true;
-// Defer the ~260KB rrweb UMD parse + execute into a follow-up
-// task. addScriptToEvaluateOnNewDocument runs the script BEFORE
-// any page script on every new document, with the navigation
-// blocked on it. Parsing 260KB synchronously stalls the renderer
-// long enough that CDP times out the navigate call (observed in
-// manual dogfood; CDP socket dropped on every nav). setTimeout(0)
-// pushes the work to a follow-up macrotask, so the document load
-// continues unblocked and the recorder boots a few ms later.
-setTimeout(function(){
-${RRWEB_UMD_SOURCE}
-;(function(){
-  var sessionId = ${JSON.stringify(sessionId)};
-  var tabPageId = ${JSON.stringify(tabPageId)};
-  var url = ${JSON.stringify(cockpitOrigin)} + '/audit/replay/' + sessionId + '/events';
-  if (!window.rrweb || typeof window.rrweb.record !== 'function') return;
+var sessionId = ${JSON.stringify(sessionId)};
+var tabPageId = ${JSON.stringify(tabPageId)};
+var cockpitOrigin = ${JSON.stringify(cockpitOrigin)};
+var eventsUrl = cockpitOrigin + '/audit/replay/' + sessionId + '/events';
+var rrwebUrl = cockpitOrigin + '/audit/replay/static/rrweb.umd.min.js';
 
-  // Buffer of pre-serialised NDJSON lines so the flush hot path is
-  // just a join + fetch; serialisation happens off-emit via a
-  // microtask scheduled below.
+function bootRecorder(){
+  if (!window.rrweb || typeof window.rrweb.record !== 'function') {
+    try { console.warn('[browseros-claw replay] rrweb unavailable after load'); } catch(e){}
+    return;
+  }
+
   var buf = [];
   var BUFFER_CAP = 500;
   var FLUSH_INTERVAL_MS = 2500;
   var timer = null;
   var dropped = 0;
   var pendingSerialise = null;
+  var rawQueue = [];
 
   function send(body){
     try {
       if (typeof navigator.sendBeacon === 'function' && document.visibilityState === 'hidden') {
-        navigator.sendBeacon(url, new Blob([body], { type: 'application/x-ndjson' }));
+        navigator.sendBeacon(eventsUrl, new Blob([body], { type: 'application/x-ndjson' }));
         return;
       }
-      fetch(url, {
+      fetch(eventsUrl, {
         method: 'POST',
         headers: { 'content-type': 'application/x-ndjson' },
         body: body,
         credentials: 'omit'
-      }).catch(function(){ /* recorder must never throw into page */ });
-    } catch (e) { /* swallow */ }
+      }).catch(function(err){
+        try { console.warn('[browseros-claw replay] events fetch failed', err && err.message); } catch(e){}
+      });
+    } catch (e) {
+      try { console.warn('[browseros-claw replay] send threw', e && e.message); } catch(e2){}
+    }
   }
 
   function flush(){
@@ -113,7 +118,7 @@ ${RRWEB_UMD_SOURCE}
     var body = buf.join('\\n');
     buf = [];
     if (dropped > 0) {
-      try { console.warn('[browseros-claw replay] dropped', dropped, 'events under buffer pressure'); } catch (e) {}
+      try { console.warn('[browseros-claw replay] dropped', dropped, 'events under buffer pressure'); } catch(e){}
       dropped = 0;
     }
     send(body);
@@ -124,11 +129,6 @@ ${RRWEB_UMD_SOURCE}
     timer = setTimeout(function(){ timer = null; flush(); }, FLUSH_INTERVAL_MS);
   }
 
-  // Off-hot-path serialisation. The rrweb emit fires synchronously
-  // inline with DOM mutations; if we JSON.stringify there, the main
-  // thread backs up on busy pages. Push the raw event into a queue,
-  // schedule a microtask once per batch to drain into the NDJSON buf.
-  var rawQueue = [];
   function drainRawQueue(){
     pendingSerialise = null;
     for (var i = 0; i < rawQueue.length; i++) {
@@ -142,42 +142,39 @@ ${RRWEB_UMD_SOURCE}
           data: event && event.data
         });
       } catch (err) { continue; }
-      if (buf.length >= BUFFER_CAP) {
-        // Drop oldest to make room. Holding all events in memory
-        // forever on a runaway page would OOM the tab; lossy
-        // replay is better than a crashed page.
-        buf.shift();
-        dropped++;
-      }
+      if (buf.length >= BUFFER_CAP) { buf.shift(); dropped++; }
       buf.push(line);
     }
     rawQueue = [];
     armFlushTimer();
   }
 
-  window.rrweb.record({
-    maskInputOptions: { password: true },
-    // Aggressive sampling so heavy SPA pages do not generate the
-    // ~1k events/sec that locked the browser in early dogfood.
-    sampling: {
-      mousemove: false,
-      scroll: 250,
-      media: 500,
-      input: 'last'
-    },
-    recordCanvas: false,
-    emit: function(event){
-      rawQueue.push(event);
-      if (pendingSerialise === null) {
-        pendingSerialise = (typeof queueMicrotask === 'function')
-          ? (queueMicrotask(drainRawQueue), 1)
-          : setTimeout(drainRawQueue, 0);
+  try {
+    window.rrweb.record({
+      maskInputOptions: { password: true },
+      sampling: {
+        mousemove: false,
+        scroll: 250,
+        media: 500,
+        input: 'last'
+      },
+      recordCanvas: false,
+      emit: function(event){
+        rawQueue.push(event);
+        if (pendingSerialise === null) {
+          pendingSerialise = (typeof queueMicrotask === 'function')
+            ? (queueMicrotask(drainRawQueue), 1)
+            : setTimeout(drainRawQueue, 0);
+        }
       }
-    }
-  });
+    });
+    try { console.info('[browseros-claw replay] recorder online', { sessionId: sessionId, tabPageId: tabPageId }); } catch(e){}
+  } catch (err) {
+    try { console.warn('[browseros-claw replay] rrweb.record threw', err && err.message); } catch(e){}
+    return;
+  }
 
   function flushNow(){
-    // Drain any pending serialisation, then send synchronously.
     if (rawQueue.length > 0) drainRawQueue();
     flush();
   }
@@ -185,8 +182,37 @@ ${RRWEB_UMD_SOURCE}
   window.addEventListener('visibilitychange', function(){
     if (document.visibilityState === 'hidden') flushNow();
   });
-})();
-}, 0);
+}
+
+// Append the rrweb UMD as an async script. document.documentElement
+// is reliably available even at this very early script-slot point
+// (the documentElement exists before head/body when running in the
+// addScriptToEvaluateOnNewDocument slot); falling back to body /
+// documentElement covers the case where the slot runs even earlier.
+function injectScriptTag(){
+  var s = document.createElement('script');
+  s.async = true;
+  s.src = rrwebUrl;
+  s.crossOrigin = 'anonymous';
+  s.onload = bootRecorder;
+  s.onerror = function(){
+    try { console.warn('[browseros-claw replay] umd load failed', rrwebUrl); } catch(e){}
+  };
+  var root = document.documentElement || document.head || document.body;
+  if (root) {
+    root.appendChild(s);
+  } else {
+    // Extremely early; wait for the document tree to materialise.
+    document.addEventListener('readystatechange', function once(){
+      if (document.documentElement) {
+        document.removeEventListener('readystatechange', once);
+        (document.documentElement || document.head || document.body).appendChild(s);
+      }
+    });
+  }
+}
+
+injectScriptTag();
 })();`
 }
 
