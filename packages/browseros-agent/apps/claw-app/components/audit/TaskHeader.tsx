@@ -1,8 +1,15 @@
-import { ChevronLeft, Copy, ExternalLink, Settings2 } from 'lucide-react'
+import {
+  ChevronLeft,
+  Copy,
+  ExternalLink,
+  PlayCircle,
+  Settings2,
+} from 'lucide-react'
 import { useState } from 'react'
-import { NavLink } from 'react-router'
+import { NavLink, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
 import type { TaskDetail } from '@/modules/api/audit.hooks'
+import { useReplayMetadata } from '@/modules/api/replay.hooks'
 import { formatDuration } from '@/screens/audit/audit.helpers'
 import { AgentDot } from './AgentDot'
 import { StatusBadge } from './StatusBadge'
@@ -14,6 +21,14 @@ interface TaskHeaderProps {
 export function TaskHeader({ task }: TaskHeaderProps) {
   const [copied, setCopied] = useState(false)
   const finalUrl = lastUrl(task) ?? task.dispatches[0]?.url ?? null
+  const navigate = useNavigate()
+  // Poll the metadata endpoint so the View Replay button unlocks
+  // within seconds once the first rrweb batch lands. The
+  // useReplayMetadata hook handles its own staleTime + interval.
+  const replayMeta = useReplayMetadata({
+    variables: { sessionId: task.sessionId },
+  })
+  const replayReady = replayMeta.data?.hasData === true
 
   return (
     <section className="space-y-4">
@@ -104,6 +119,20 @@ export function TaskHeader({ task }: TaskHeaderProps) {
         </dl>
 
         <div className="mt-5 flex flex-wrap gap-2">
+          <Button
+            variant="default"
+            size="sm"
+            disabled={!replayReady}
+            onClick={() => navigate(`/audit/${task.sessionId}/replay`)}
+            title={
+              replayReady
+                ? 'Watch the rrweb session replay'
+                : 'No replay recorded for this session yet'
+            }
+          >
+            <PlayCircle className="mr-1.5 size-3.5" />
+            View Session Replay
+          </Button>
           {finalUrl && (
             <Button
               variant="secondary"
