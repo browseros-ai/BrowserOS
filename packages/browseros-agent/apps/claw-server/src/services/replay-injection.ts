@@ -28,6 +28,7 @@
  */
 
 import type { BrowserSession } from '@browseros/browser-core/core/session'
+import { env } from '../env'
 import { logger } from '../lib/logger'
 import { getLocalServerUrl } from '../local-server-url'
 import { buildInitScript } from '../replay/recorder-source'
@@ -39,6 +40,22 @@ import { buildInitScript } from '../replay/recorder-source'
  */
 const injected = new Set<number>()
 
+/**
+ * Kill switch for the recorder. The current rrweb config emits
+ * synchronously on every DOM mutation, which on heavy SPA pages
+ * (HN /show, GitHub trending) backs up the main thread and locks
+ * the page. While we throttle the emit handler (move serialisation
+ * off the main thread, debounce flushes, drop low-information event
+ * types), the default ships OFF. Set CLAW_REPLAY_ENABLED=1 to opt
+ * in for dogfood.
+ *
+ * Read from the shared `env` snapshot at call time so tests can
+ * flip `env.replayEnabled` without remounting the module.
+ */
+function isReplayEnabled(): boolean {
+  return env.replayEnabled === true
+}
+
 export interface EnsureReplayRecorderInput {
   sessionId: string
   slug: string
@@ -49,6 +66,7 @@ export interface EnsureReplayRecorderInput {
 export async function ensureReplayRecorder(
   input: EnsureReplayRecorderInput,
 ): Promise<void> {
+  if (!isReplayEnabled()) return
   if (injected.has(input.pageId)) return
   if (input.sessionId.length === 0) {
     // The dispatch path may invoke us with an empty sessionId when

@@ -5,6 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { env } from '../../src/env'
 import { setLocalServerUrl } from '../../src/local-server-url'
 import {
   _resetReplayInjectionForTesting,
@@ -52,10 +53,14 @@ function fakeBrowserSession(opts: FakeBrowserSessionOpts) {
 beforeEach(() => {
   _resetReplayInjectionForTesting()
   setLocalServerUrl('http://127.0.0.1:9200')
+  // Recorder is off by default; the tests exercise the
+  // happy-path injection so flip it on per case.
+  env.replayEnabled = true
 })
 
 afterEach(() => {
   setLocalServerUrl(null)
+  env.replayEnabled = false
 })
 
 describe('ensureReplayRecorder', () => {
@@ -171,6 +176,21 @@ describe('ensureReplayRecorder', () => {
       sessionId: 'sess-1',
       slug: 'a',
       pageId: 12,
+      session,
+    })
+
+    expect(calls).toHaveLength(0)
+  })
+
+  it('skips injection when CLAW_REPLAY_ENABLED is not set', async () => {
+    env.replayEnabled = false
+    const calls: RecordedCall[] = []
+    const session = fakeBrowserSession({ recordCalls: calls })
+
+    await ensureReplayRecorder({
+      sessionId: 'sess-1',
+      slug: 'a',
+      pageId: 13,
       session,
     })
 
