@@ -22,8 +22,16 @@ export default defineConfig({
       'sidePanel',
       'notifications',
       'webNavigation',
+      'scripting',
     ],
-    host_permissions: ['http://127.0.0.1/*'],
+    // <all_urls> is a SCOPE grant. The extension is allowed to
+    // inject content scripts anywhere via chrome.scripting, BUT
+    // the manifest deliberately declares no `content_scripts` block,
+    // so Chrome never auto-injects. Operator-owned tabs only see
+    // the recorder when the background worker explicitly targets
+    // them via chrome.scripting.executeScript (which only happens
+    // for tabs the cockpit reports as agent-driven).
+    host_permissions: ['http://127.0.0.1/*', '<all_urls>'],
     action: {
       default_title: 'BrowserOS Agents',
     },
