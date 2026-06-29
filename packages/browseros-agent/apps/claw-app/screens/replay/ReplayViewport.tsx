@@ -26,9 +26,16 @@ import type { ReplayEvent, ReplayFrame } from '@/modules/api/replay.hooks'
 import { KIND_STYLE, VERB_META } from './replay.helpers'
 
 import 'rrweb-player/dist/style.css'
-// biome-ignore lint/style/useImportType: rrweb-player default export
-// is a class constructor invoked at runtime.
-import rrwebPlayer from 'rrweb-player'
+// We use rrweb's Replayer directly. The rrweb-player wrapper at v2.x
+// publishes a broken bundle: its built JS has no `new Replayer(...)`
+// call AND no import statement for @rrweb/replay, so the wrapper's
+// Player.svelte never instantiates a Replayer (the `replayer` Svelte
+// state stays undefined, the Controller `{#if replayer}` block never
+// renders, the player-frame div stays empty). The rrweb package
+// itself bundles Replayer cleanly; we mount it ourselves and skip
+// the wrapper. rrweb-player's CSS is still imported for the
+// `.replayer-wrapper` styling.
+import { Replayer } from 'rrweb'
 
 export interface ReplayPlayerHandle {
   goto(ms: number): void
@@ -128,7 +135,7 @@ interface PlayerCanvasProps {
 function PlayerCanvas({ events, onReady }: PlayerCanvasProps) {
   const mountRef = useRef<HTMLDivElement>(null)
   // We deliberately use useEffect rather than deriving during render
-  // because rrweb-player mounts into the DOM imperatively and its
+  // because Replayer mounts into the DOM imperatively and its
   // cleanup needs to happen on unmount + on events-array swap (tab
   // change). Re-renders without a swap should NOT re-mount; the
   // ref-comparison guard below handles that.
@@ -136,7 +143,7 @@ function PlayerCanvas({ events, onReady }: PlayerCanvasProps) {
   useEffect(() => {
     const mount = mountRef.current
     if (!mount) return
-    if (events.length === 0) return
+    if (events.length < 2) return
     if (lastEventsRef.current === events) return
     lastEventsRef.current = events
 
@@ -151,27 +158,33 @@ function PlayerCanvas({ events, onReady }: PlayerCanvasProps) {
     })) as any[]
 
     mount.replaceChildren()
-    const player = new rrwebPlayer({
-      target: mount,
-      props: {
-        events: rrwebEvents,
-        autoPlay: false,
-        showController: false,
-        width: mount.clientWidth || 1024,
-        height: mount.clientHeight || 600,
+    let replayer: Replayer
+    try {
+      replayer = new Replayer(rrwebEvents, {
+        root: mount,
+        speed: 1,
         skipInactive: false,
-      },
-    })
+        showWarning: false,
+      })
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[browseros-claw replay] Replayer ctor threw', err)
+      return
+    }
     onReady({
-      goto: (ms) => player.goto(ms),
-      play: () => player.play(),
-      pause: () => player.pause(),
+      // `pause(timeOffset)` jumps to that time and pauses. We pause
+      // rather than play so our scaffold's playback clock stays the
+      // source of truth.
+      goto: (ms) => replayer.pause(ms),
+      play: () => replayer.play(replayer.getCurrentTime()),
+      pause: () => replayer.pause(replayer.getCurrentTime()),
     })
     return () => {
-      // rrweb-player exposes $destroy on the underlying Svelte
-      // instance via 2.x; older builds expose it on the class.
-      const destroy = (player as unknown as { $destroy?: () => void }).$destroy
-      if (typeof destroy === 'function') destroy.call(player)
+      try {
+        replayer.destroy()
+      } catch {
+        // ignore; we're tearing down anyway
+      }
       mount.replaceChildren()
     }
   }, [events, onReady])

@@ -40,7 +40,6 @@ import * as rrweb from 'rrweb'
 import { defineContentScript } from 'wxt/utils/define-content-script'
 import type { RecorderMessage } from '@/modules/replay-background'
 
-const COCKPIT_ORIGIN = 'http://127.0.0.1:9200'
 const BUFFER_CAP = 500
 const FLUSH_INTERVAL_MS = 2_500
 const FLUSH_AT_SIZE = 50
@@ -49,15 +48,9 @@ export default defineContentScript({
   matches: [],
   registration: 'runtime', // declares the script can be injected via chrome.scripting
   main() {
-    // Guard against double-install when the background's
-    // chrome.scripting.executeScript runs against a tab whose
-    // prior content script context has not yet been torn down by
-    // a navigation. The flag is per-document; navigation creates
-    // a new context where this flag is unset.
     type Marked = typeof window & { __browserosClawReplayInstalled?: boolean }
     if ((window as Marked).__browserosClawReplayInstalled) return
     ;(window as Marked).__browserosClawReplayInstalled = true
-
     void run()
   },
 })
@@ -66,8 +59,7 @@ async function run(): Promise<void> {
   const config = await fetchConfig()
   if (!config) return
 
-  const eventsUrl =
-    `${COCKPIT_ORIGIN}/audit/replay/${config.sessionId}/events` as const
+  const sessionId = config.sessionId
   const tabPageId = config.tabPageId
 
   const buf: string[] = []
@@ -78,26 +70,25 @@ async function run(): Promise<void> {
   let stopper: (() => void) | undefined
 
   function send(body: string): void {
+    // Forward NDJSON to the background. The background does the real
+    // POST to the cockpit's loopback. Chrome's Private Network Access
+    // policy blocks public-origin (HTTPS) -> 127.0.0.1 fetches; the
+    // background runs in the extension's chrome-extension:// origin
+    // and is exempt.
     try {
-      if (
-        typeof navigator.sendBeacon === 'function' &&
-        document.visibilityState === 'hidden'
-      ) {
-        navigator.sendBeacon(
-          eventsUrl,
-          new Blob([body], { type: 'application/x-ndjson' }),
-        )
-        return
-      }
-      void fetch(eventsUrl, {
-        method: 'POST',
-        headers: { 'content-type': 'application/x-ndjson' },
-        body,
-        credentials: 'omit',
-      }).catch((err) => {
-        // eslint-disable-next-line no-console
-        console.warn('[browseros-claw replay] events fetch failed', err)
-      })
+      void chrome.runtime
+        .sendMessage({
+          type: 'recorder-events',
+          sessionId,
+          ndjson: body,
+        } satisfies RecorderMessage)
+        .catch((err) => {
+          // eslint-disable-next-line no-console
+          console.warn(
+            '[browseros-claw replay] sendMessage to background failed',
+            err,
+          )
+        })
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn('[browseros-claw replay] send threw', err)

@@ -75,3 +75,17 @@ export type RecorderMessage =
   | { type: 'recorder-config'; sessionId: string; tabPageId: number }
   | { type: 'recorder-not-yet' }
   | { type: 'recorder-stop' }
+  | {
+      /**
+       * Content script forwards an NDJSON batch of rrweb events to
+       * the background, which POSTs them to the cockpit. Direct
+       * page-side fetch to http://127.0.0.1:9200 is blocked by
+       * Chrome's Private Network Access policy when the document
+       * origin is public (HTTPS); the background's fetch runs in
+       * the extension's chrome-extension:// origin and is not
+       * subject to PNA.
+       */
+      type: 'recorder-events'
+      sessionId: string
+      ndjson: string
+    }

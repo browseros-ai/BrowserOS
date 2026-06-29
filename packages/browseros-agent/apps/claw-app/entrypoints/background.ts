@@ -68,7 +68,6 @@ export default defineBackground(() => {
     const resolved = await resolveChromeTabIds(body.tabs)
     const diff = diffReplayMap(map, resolved)
     for (const tabId of diff.removed) {
-      const prev = map.get(tabId)
       map.delete(tabId)
       try {
         await chrome.tabs.sendMessage(tabId, {
@@ -77,15 +76,9 @@ export default defineBackground(() => {
       } catch {
         // Tab may have closed; ignore.
       }
-      if (prev) {
-        // eslint-disable-next-line no-console
-        console.info('[browseros-claw replay] stopped tab', { tabId, prev })
-      }
     }
     for (const entry of diff.added) {
       map.set(entry.chromeTabId, entry.record)
-      // eslint-disable-next-line no-console
-      console.info('[browseros-claw replay] injecting tab', entry)
       try {
         await chrome.scripting.executeScript({
           target: { tabId: entry.chromeTabId, allFrames: false },
@@ -177,26 +170,49 @@ export default defineBackground(() => {
     }
   })
 
-  // Content scripts ask "what is my config" right after injection.
+  // Content scripts ask "what is my config" right after injection,
+  // and forward NDJSON event batches via 'recorder-events'.
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const msg = message as RecorderMessage
-    if (msg.type !== 'recorder-hello') return false
-    const tabId = sender.tab?.id
-    if (typeof tabId !== 'number') {
-      sendResponse({ type: 'recorder-not-yet' } satisfies RecorderMessage)
+    if (msg.type === 'recorder-hello') {
+      const tabId = sender.tab?.id
+      if (typeof tabId !== 'number') {
+        sendResponse({ type: 'recorder-not-yet' } satisfies RecorderMessage)
+        return true
+      }
+      const record = map.get(tabId)
+      if (!record) {
+        sendResponse({ type: 'recorder-not-yet' } satisfies RecorderMessage)
+        return true
+      }
+      sendResponse({
+        type: 'recorder-config',
+        sessionId: record.sessionId,
+        tabPageId: record.tabPageId,
+      } satisfies RecorderMessage)
       return true
     }
-    const record = map.get(tabId)
-    if (!record) {
-      sendResponse({ type: 'recorder-not-yet' } satisfies RecorderMessage)
-      return true
+    if (msg.type === 'recorder-events') {
+      // The cockpit serves HTTP loopback. Content scripts run in
+      // the page's origin context; an HTTPS page POSTing to
+      // 127.0.0.1 is blocked by Chrome's Private Network Access
+      // policy. The background's fetch runs in the extension's
+      // chrome-extension:// origin and is exempt.
+      void fetch(`${COCKPIT_ORIGIN}/audit/replay/${msg.sessionId}/events`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-ndjson' },
+        body: msg.ndjson,
+        credentials: 'omit',
+      }).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn('[browseros-claw replay] events POST failed', {
+          sessionId: msg.sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
+      return false
     }
-    sendResponse({
-      type: 'recorder-config',
-      sessionId: record.sessionId,
-      tabPageId: record.tabPageId,
-    } satisfies RecorderMessage)
-    return true
+    return false
   })
 
   // Best-effort cleanup when the operator closes a recorded tab.
