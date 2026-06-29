@@ -1,6 +1,35 @@
+/**
+ * @license
+ * Copyright 2025 BrowserOS
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Session-replay API surface for the claw-app cockpit.
+ *
+ * Two consumers, two hooks:
+ *
+ *   - `useReplayMetadata({ sessionId })` polls
+ *     `GET /audit/replay/:sessionId/exists` (cheap) so the audit
+ *     task page can flip its "View Session Replay" CTA between
+ *     enabled and "no replay yet". Refetches while the page is
+ *     open so a live session unlocks the CTA without a hard
+ *     refresh.
+ *
+ *   - `useReplayEvents({ sessionId })` fetches the full NDJSON
+ *     stream from `GET /audit/replay/:sessionId` and parses each
+ *     line into an rrweb event. Mounted only by the replay page;
+ *     the cache is keyed on sessionId so swapping between two
+ *     audit sessions does not re-fetch when both are still in
+ *     view.
+ *
+ * Type definitions for the visual frame timeline that the existing
+ * `screens/replay/` scaffold consumes live here too. Frames are
+ * derived in `screens/replay/replay.data.ts` from real
+ * tool_dispatches, not from this file.
+ */
+
 import { createQuery } from 'react-query-kit'
-import type { RunStatus } from '@/lib/status'
-import type { RunHarness } from '@/modules/api/runs.hooks'
+import { api } from './client'
+import { parseResponse } from './parseResponse'
 
 export type ReplayVerb =
   | 'navigate'
@@ -18,188 +47,117 @@ export interface ReplayFrame {
   t: number
   kind: ReplayKind
   verb: ReplayVerb
-  /** Short node label, e.g. "Create New Report". */
+  /** Short node label, e.g. the page title or a focused element. */
   node: string
-  /** Caption sentence rendered both in the viewport overlay and the timeline row. */
+  /** Caption sentence rendered in the viewport overlay + timeline row. */
   caption: string
-  /** Optional badge shown on the timeline row ("Allowed once", "Blocked"). */
+  /** Optional badge shown on the timeline row ("Blocked", "Cancelled"). */
   note?: string
-}
-
-export interface ReplayDetail {
-  id: string
-  agentLabel: string
-  /** One-line task description shown in the top bar. */
-  taskTitle: string
-  harness: RunHarness
-  /** Final run status, used to colour the header pill. */
-  status: RunStatus
-  /** Originating site host for the browser-chrome stub. */
-  site: string
-  /** When the run happened, e.g. "Jun 1, 2026". */
-  startedAt: string
-  /** Wall-clock duration as displayed in the stat strip. */
-  duration: string
-  tokens: string
-  steps: string
-  approvals: string
-  /** Total seconds the session covers. */
-  totalSeconds: number
-  frames: ReplayFrame[]
-}
-
-const CONCUR_REPLAY: ReplayDetail = {
-  id: 'run-concur-may',
-  agentLabel: 'Cowork . File expenses',
-  taskTitle: 'See my May invoices and file expenses on SAP Concur',
-  harness: 'Claude Code',
-  status: 'done',
-  site: 'app.concur.com',
-  startedAt: 'Jun 1, 2026',
-  duration: '0:57',
-  tokens: '4.3k',
-  steps: '9',
-  approvals: '1',
-  totalSeconds: 60,
-  frames: [
-    {
-      t: 0,
-      kind: 'action',
-      verb: 'navigate',
-      node: 'concur.com',
-      caption: 'Requesting permission to open concur.com',
-    },
-    {
-      t: 2,
-      kind: 'approval',
-      verb: 'navigate',
-      node: 'concur.com',
-      caption: 'You allowed the agent to open concur.com',
-      note: 'Allowed once',
-    },
-    {
-      t: 4,
-      kind: 'action',
-      verb: 'navigate',
-      node: 'concur.com',
-      caption: 'Navigating to concur.com',
-    },
-    {
-      t: 8,
-      kind: 'action',
-      verb: 'read',
-      node: 'Concur home',
-      caption: 'Session restored from vault, signed in as nikhil@example.com',
-    },
-    {
-      t: 13,
-      kind: 'action',
-      verb: 'click',
-      node: '"Create New Report"',
-      caption: 'Opened the new-report form',
-    },
-    {
-      t: 19,
-      kind: 'action',
-      verb: 'read',
-      node: 'May invoices',
-      caption: 'Matched 4 receipts from your invoices folder',
-    },
-    {
-      t: 25,
-      kind: 'action',
-      verb: 'type',
-      node: 'Report name',
-      caption: 'Typed "May 2026 . Engineering"',
-    },
-    {
-      t: 34,
-      kind: 'action',
-      verb: 'type',
-      node: '4 expense lines',
-      caption: 'Filled vendor, date, category and amount for 4 lines',
-    },
-    {
-      t: 42,
-      kind: 'action',
-      verb: 'attach',
-      node: '4 receipts',
-      caption: 'Attached PDF receipts, total $1,284.50',
-    },
-    {
-      t: 48,
-      kind: 'approval',
-      verb: 'submit',
-      node: '"Submit Report"',
-      caption: 'Approval requested: submit the report',
-      note: 'Needs OK',
-    },
-    {
-      t: 51,
-      kind: 'approval',
-      verb: 'submit',
-      node: '"Submit Report"',
-      caption: 'You allowed the submit once',
-      note: 'Allowed once',
-    },
-    {
-      t: 53,
-      kind: 'action',
-      verb: 'read',
-      node: 'Confirmation',
-      caption: 'Report submitted, #EXP-49217, routed to Dana R.',
-    },
-    {
-      t: 56,
-      kind: 'block',
-      verb: 'click',
-      node: '"Pay card balance"',
-      caption: 'Blocked: payments are non-interactive for agents',
-      note: 'Blocked',
-    },
-    {
-      t: 58,
-      kind: 'done',
-      verb: 'done',
-      node: '',
-      caption: 'Run complete, expense report filed',
-    },
-  ],
+  /** Source dispatch id so the replay surface can deep-link. */
+  dispatchId?: number
 }
 
 /**
- * Per-run replay fixtures. Keys match the run ids surfaced from
- * `useRuns` so an Audit row click into `/governance/audit/:id/replay`
- * lands on real data for at least one run.
+ * One rrweb event as parsed from the NDJSON stream. The on-disk line
+ * carries `sessionId` (server-trusted) + `tabPageId` (recorder-supplied)
+ * + the standard rrweb `{type, data, ts}`. The replay UI filters by
+ * `tabPageId` to drive a single rrweb-player instance at a time.
  */
-const FIXTURES: Record<string, ReplayDetail> = {
-  'run-concur-may': CONCUR_REPLAY,
+export interface ReplayEvent {
+  sessionId: string
+  tabPageId: number
+  /** rrweb event type 0-5. */
+  type: number
+  data: unknown
+  /** Capture timestamp, ms since epoch. */
+  ts: number
 }
 
-const FALLBACK: ReplayDetail = {
-  id: 'unknown',
-  agentLabel: 'Unknown run',
-  taskTitle: 'No replay was recorded for this run.',
-  harness: 'Codex',
-  status: 'stopped',
-  site: 'about:blank',
-  startedAt: '',
-  duration: '0:00',
-  tokens: '0',
-  steps: '0',
-  approvals: '0',
-  totalSeconds: 0,
-  frames: [],
+export interface ReplayMetadata {
+  ok: boolean
+  hasData: boolean
+  sizeBytes: number
+  firstEventAt?: number
+  lastEventAt?: number
+  /** Distinct page ids that contributed events to this session. */
+  tabPageIds: number[]
 }
 
-interface UseReplayVariables {
-  runId: string
+interface UseReplayMetadataVariables {
+  sessionId: string
 }
 
-export const useReplay = createQuery<ReplayDetail, UseReplayVariables>({
-  queryKey: ['replay'],
-  fetcher: ({ runId }) =>
-    new Promise((resolve) =>
-      setTimeout(() => resolve(FIXTURES[runId] ?? FALLBACK), 60),
-    ),
+export const useReplayMetadata = createQuery<
+  ReplayMetadata,
+  UseReplayMetadataVariables
+>({
+  queryKey: ['replay', 'metadata'],
+  fetcher: async ({ sessionId }) => {
+    const res = await api.audit.replay[':sessionId'].exists.$get({
+      param: { sessionId },
+    })
+    return parseResponse<ReplayMetadata>(res)
+  },
+  // While a live session is still streaming events the metadata
+  // (sizeBytes, lastEventAt, tabPageIds) keeps changing. 10s is a
+  // cheap poll over loopback and is what flips the CTA from
+  // disabled to enabled the first time data arrives.
+  refetchInterval: 10_000,
+})
+
+interface UseReplayEventsVariables {
+  sessionId: string
+}
+
+export interface ReplayEventsBundle {
+  events: ReplayEvent[]
+  /** All distinct tabPageIds in the stream, sorted ascending. */
+  tabPageIds: number[]
+}
+
+export const useReplayEvents = createQuery<
+  ReplayEventsBundle,
+  UseReplayEventsVariables
+>({
+  queryKey: ['replay', 'events'],
+  fetcher: async ({ sessionId }) => {
+    const res = await api.audit.replay[':sessionId'].$get({
+      param: { sessionId },
+    })
+    if (!res.ok) {
+      // 404 means no replay data; surface a clean empty bundle so
+      // the UI can render its no-data state without an error boundary
+      // catching the parseResponse throw.
+      if (res.status === 404) return { events: [], tabPageIds: [] }
+      return parseResponse<ReplayEventsBundle>(res)
+    }
+    const text = await res.text()
+    const events: ReplayEvent[] = []
+    const tabs = new Set<number>()
+    for (const line of text.split('\n')) {
+      if (line.length === 0) continue
+      try {
+        const ev = JSON.parse(line) as ReplayEvent
+        if (
+          typeof ev.ts === 'number' &&
+          typeof ev.type === 'number' &&
+          typeof ev.tabPageId === 'number'
+        ) {
+          events.push(ev)
+          tabs.add(ev.tabPageId)
+        }
+      } catch {
+        // Malformed line; the recorder shouldn't emit these, but if
+        // a partial line ever sneaks in we skip it rather than abort
+        // the whole stream.
+      }
+    }
+    return {
+      events,
+      tabPageIds: [...tabs].sort((a, b) => a - b),
+    }
+  },
+  // Replay events are immutable once a session ends; for live
+  // sessions a manual refresh button is enough. No refetch interval.
+  staleTime: Number.POSITIVE_INFINITY,
 })
