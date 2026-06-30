@@ -11,6 +11,12 @@ import time
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+
+from .products import (
+    ProductDescriptor,
+    default_product_descriptor,
+    get_product_descriptor,
+)
 from .utils import (
     get_platform,
     get_platform_arch,
@@ -134,16 +140,11 @@ class PathConfig:
 
 
 class BuildConfig:
-    """
-    Build-specific configuration
-
-    Contains all build-related settings like architecture, build type, versions, etc.
-    """
-
     def __init__(
         self,
         architecture: Optional[str] = None,
         build_type: str = "debug",
+        app_base_name: str = "BrowserOS",
     ):
         self.architecture = architecture or get_platform_arch()
         self.build_type = build_type
@@ -154,7 +155,7 @@ class BuildConfig:
         # App names - will be set based on platform
         self.CHROMIUM_APP_NAME = ""
         self.BROWSEROS_APP_NAME = ""
-        self.BROWSEROS_APP_BASE_NAME = "BrowserOS"
+        self.BROWSEROS_APP_BASE_NAME = app_base_name
 
         # Third party versions
         self.SPARKLE_VERSION = "2.7.0"
@@ -180,9 +181,7 @@ class BuildConfig:
 
 @dataclass
 class Context:
-    """
-    Context Object pattern - ONE place for all build state
-    """
+    """Resolved build state shared across build modules."""
 
     root_dir: Path = field(default_factory=get_package_root)
     chromium_src: Path = Path()
@@ -198,6 +197,7 @@ class Context:
     )
     github_repo: str = ""  # GitHub repo for release operations (owner/repo)
     start_time: float = 0.0
+    product: ProductDescriptor = field(default_factory=default_product_descriptor)
 
     # App names - will be set based on platform
     CHROMIUM_APP_NAME: str = ""
@@ -216,18 +216,22 @@ class Context:
     # pins per-arch and universal app paths through it.
     _fixed_app_path: Optional[Path] = None
 
-    # New sub-components (initialized in __post_init__)
     paths: PathConfig = field(init=False)
     build: BuildConfig = field(init=False)
-    artifact_registry: ArtifactRegistry = field(init=False)  # New artifact system
+    artifact_registry: ArtifactRegistry = field(init=False)
     env: EnvConfig = field(init=False)
 
     def __post_init__(self):
         """Load version files and set platform/architecture-specific configurations"""
-        # Initialize new sub-components
+        if not isinstance(self.product, ProductDescriptor):
+            self.product = get_product_descriptor(self.product)
+
         self.paths = PathConfig(self.root_dir, self.chromium_src)
-        self.build = BuildConfig(self.architecture, self.build_type)
-        self.artifact_registry = ArtifactRegistry()  # New artifact system
+        self.BROWSEROS_APP_BASE_NAME = self.product.app_base_name
+        self.build = BuildConfig(
+            self.architecture, self.build_type, self.BROWSEROS_APP_BASE_NAME
+        )
+        self.artifact_registry = ArtifactRegistry()
         self.env = EnvConfig()
 
         # Set default gn_flags_file if not provided
@@ -258,9 +262,9 @@ class Context:
 
         # Set architecture-specific output directory with platform separator
         if IS_WINDOWS():
-            self.out_dir = f"out\\Default_{self.architecture}"
+            self.out_dir = f"out\\Default_{self.product.id}_{self.architecture}"
         else:
-            self.out_dir = f"out/Default_{self.architecture}"
+            self.out_dir = f"out/Default_{self.product.id}_{self.architecture}"
 
         # Sync with PathConfig
         self.paths.out_dir = self.out_dir
@@ -299,30 +303,26 @@ class Context:
 
         self.start_time = time.time()
 
-    # === Initialization ===
-
     @classmethod
     def init_context(cls, config: Dict) -> "Context":
-        """
-        Initialize context from config
-        Replaces __post_init__ logic for better testability
-
-        Note: root_dir is always computed from package location, never from config.
-        """
+        """Initialize a context from config values."""
         chromium_src = (
             Path(config.get("chromium_src", ""))
             if config.get("chromium_src")
             else Path()
         )
 
-        # Get architecture or use platform default
         arch = config.get("architecture") or get_platform_arch()
 
-        # Create instance - root_dir uses default_factory (get_package_root)
         ctx = cls(
             chromium_src=chromium_src,
             architecture=arch,
-            build_type=config.get("build_type", "debug"),
+            build_type=config.get("build_type") or config.get("type", "debug"),
+            product=(
+                config["product"]
+                if isinstance(config.get("product"), ProductDescriptor)
+                else get_product_descriptor(config.get("product"))
+            ),
         )
 
         return ctx
@@ -450,9 +450,9 @@ class Context:
 
         Resolves strictly from this context's own out_dir (or _fixed_app_path
         when set, as UniversalBuildModule does). Never probes other out dirs:
-        a stale out/Default_universal app must not hijack arch-specific
+        a stale product universal app must not hijack arch-specific
         builds' sign/package stages. Universal flows resolve here too, since
-        architecture="universal" already derives out_dir=out/Default_universal.
+        architecture="universal" derives the product-specific universal out_dir.
         """
         # If fixed path is set (for arch-specific operations), use it directly
         if self._fixed_app_path:
@@ -551,7 +551,10 @@ class Context:
 
         Returns: e.g., "releases/0.31.0/macos/"
         """
-        return f"releases/{self.semantic_version}/{platform}/"
+        return (
+            f"releases/{self.product.release_prefix}/"
+            f"{self.semantic_version}/{platform}/"
+        )
 
     def get_app_base_name(self) -> str:
         """Get app base name without extension"""
@@ -569,6 +572,20 @@ class Context:
     def get_chromium_replace_files_dir(self) -> Path:
         """Get chromium files replacement directory"""
         return join_paths(self.root_dir, "chromium_files")
+
+    def get_chromium_replace_roots(self) -> list[Path]:
+        """Return ordered Chromium overlay roots for the active product."""
+        base = self.get_chromium_replace_files_dir()
+        return [base / "common", base / "products" / self.product.id]
+
+    def get_product_gn_args(self) -> list[str]:
+        """Return BrowserOS product GN args for configure."""
+        runtime_override = "true" if self.build_type == "debug" else "false"
+        return [
+            f'browseros_product = "{self.product.gn_product}"',
+            f"browseros_allow_runtime_product_override = {runtime_override}",
+            "browseros_package_all_server_resources = false",
+        ]
 
     def get_features_yaml_path(self) -> Path:
         """Get features.yaml file path"""

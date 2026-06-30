@@ -24,7 +24,8 @@ from typing import Optional, List, Dict, Any, Tuple
 
 from .context import Context
 from .env import EnvConfig
-from .utils import get_platform_arch, log_info
+from .products import get_product_descriptor
+from .utils import get_platform_arch, log_info, log_warning
 
 VALID_ARCHITECTURES = {"x64", "arm64", "universal"}
 
@@ -77,6 +78,7 @@ def _resolve_config_mode(
         ValueError: If required fields missing from both YAML and CLI
     """
     build_section = yaml_config.get("build", {})
+    product = get_product_descriptor(build_section.get("product"))
 
     # chromium_src: CLI override > YAML > error
     chromium_src_str = cli_args.get("chromium_src") or build_section.get("chromium_src")
@@ -138,12 +140,14 @@ def _resolve_config_mode(
             f"✓ CONFIG MODE: architecture={architectures[0]} ({arch_source})"
         )
     log_info(f"✓ CONFIG MODE: build_type={build_type} ({build_type_source})")
+    log_info(f"✓ CONFIG MODE: product={product.id} (yaml/default)")
 
     return [
         Context(
             chromium_src=chromium_src,
             architecture=arch,
             build_type=build_type,
+            product=product,
         )
         for arch in architectures
     ]
@@ -207,6 +211,7 @@ def _resolve_direct_mode(cli_args: Dict[str, Any]) -> List[Context]:
             chromium_src=chromium_src,
             architecture=architecture,
             build_type=build_type,
+            product=get_product_descriptor(None),
         )
     ]
 
@@ -259,8 +264,32 @@ def _resolve_pipeline_config_mode(yaml_config: Dict[str, Any]) -> List[str]:
             "  modules: [clean, configure, compile, sign_macos]"
         )
 
+    _warn_if_product_sensitive_partial_pipeline(modules)
     log_info(f"✓ CONFIG MODE: pipeline={modules} (yaml)")
     return modules
+
+
+def _warn_if_product_sensitive_partial_pipeline(modules: List[str]) -> None:
+    """Warn when a partial build can reuse stale product overlays."""
+    product_sensitive = {
+        "configure",
+        "compile",
+        "sign_macos",
+        "package_macos",
+        "mini_installer",
+        "sign_windows",
+        "package_windows",
+        "package_linux",
+        "universal_build",
+    }
+    if not product_sensitive.intersection(modules):
+        return
+    if "clean" in modules and "chromium_replace" in modules:
+        return
+    log_warning(
+        "⚠️  Product-sensitive partial pipeline without both clean and "
+        "chromium_replace; ensure Chromium source overlays match build.product."
+    )
 
 
 def _resolve_pipeline_direct_mode(

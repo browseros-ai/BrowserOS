@@ -82,7 +82,10 @@ class ConfigureExecuteTest(unittest.TestCase):
         self.assertTrue(args_gn.exists())
         self.assertEqual(
             args_gn.read_text(),
-            'is_official_build = true\n\ntarget_cpu = "arm64"\n',
+            'is_official_build = true\n\ntarget_cpu = "arm64"\n'
+            'browseros_product = "browseros"\n'
+            "browseros_allow_runtime_product_override = false\n"
+            "browseros_package_all_server_resources = false\n",
         )
 
     def test_release_build_fails_on_unused_args(self):

@@ -48,11 +48,16 @@ class ConfigureModule(CommandModule):
         out_path = join_paths(ctx.chromium_src, ctx.out_dir)
         out_path.mkdir(parents=True, exist_ok=True)
 
-        flags_file = join_paths(ctx.root_dir, ctx.paths.gn_flags_file)
+        gn_flags_file = ctx.paths.gn_flags_file
+        if gn_flags_file is None:
+            raise RuntimeError("GN flags file not set")
+
+        flags_file = join_paths(ctx.root_dir, gn_flags_file)
         args_file = ctx.get_gn_args_file()
 
         args_content = flags_file.read_text()
         args_content += f'\ntarget_cpu = "{ctx.architecture}"\n'
+        args_content += "\n".join(ctx.get_product_gn_args()) + "\n"
 
         args_file.write_text(args_content)
 

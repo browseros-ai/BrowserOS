@@ -16,6 +16,7 @@ from typing import Dict, Optional
 import yaml
 
 from .context import Context
+from .products import get_product_descriptor
 
 DEFAULT_CHROMIUM_VERSION = "137.0.7151.69"
 DEFAULT_BUILD_OFFSET = "80"
@@ -81,9 +82,11 @@ class MockChromium:
         path.write_text(content)
         return path
 
-    def with_out_dir(self, arch: str, args_gn: Optional[str] = None) -> Path:
+    def with_out_dir(
+        self, arch: str, args_gn: Optional[str] = None, product: str = "browseros"
+    ) -> Path:
         """Create out/Default_{arch}/, optionally with an args.gn file."""
-        out_dir = self.src / "out" / f"Default_{arch}"
+        out_dir = self.src / "out" / f"Default_{product}_{arch}"
         out_dir.mkdir(parents=True, exist_ok=True)
         if args_gn is not None:
             (out_dir / "args.gn").write_text(args_gn)
@@ -179,9 +182,16 @@ class MockBrowserOSRoot:
         path.write_text(content)
         return path
 
-    def add_replacement_file(self, relative_path: str, content: str) -> Path:
+    def add_replacement_file(
+        self, relative_path: str, content: str, product: str = "browseros"
+    ) -> Path:
         """Create a replacement file under chromium_files/ and return its path."""
-        path = self.root / "chromium_files" / relative_path
+        root = (
+            self.root / "chromium_files" / "common"
+            if product == "common"
+            else self.root / "chromium_files" / "products" / product
+        )
+        path = root / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
         return path
@@ -220,6 +230,7 @@ def make_context(
     root: MockBrowserOSRoot,
     architecture: str = "x64",
     build_type: str = "release",
+    product: str = "browseros",
 ) -> Context:
     """Build a real Context wired to the mock trees.
 
@@ -231,4 +242,5 @@ def make_context(
         chromium_src=chromium.src,
         architecture=architecture,
         build_type=build_type,
+        product=get_product_descriptor(product),
     )

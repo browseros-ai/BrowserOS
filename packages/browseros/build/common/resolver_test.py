@@ -82,6 +82,42 @@ class ResolveConfigConfigModeTest(unittest.TestCase):
             contexts = resolve_config(cli_args={}, yaml_config=yaml_config)
             self.assertEqual(contexts[0].build_type, "debug")
 
+    def test_product_defaults_to_browseros(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            m = MockChromium(Path(tmp))
+            yaml_config = {
+                "build": {"chromium_src": str(m.src), "architecture": "x64"}
+            }
+            contexts = resolve_config(cli_args={}, yaml_config=yaml_config)
+            self.assertEqual(contexts[0].product.id, "browseros")
+
+    def test_browserclaw_product_resolves_descriptor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            m = MockChromium(Path(tmp))
+            yaml_config = {
+                "build": {
+                    "chromium_src": str(m.src),
+                    "architecture": "arm64",
+                    "product": "browserclaw",
+                }
+            }
+            contexts = resolve_config(cli_args={}, yaml_config=yaml_config)
+            self.assertEqual(contexts[0].product.id, "browserclaw")
+            self.assertEqual(contexts[0].BROWSEROS_APP_BASE_NAME, "BrowserClaw")
+
+    def test_unknown_product_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            m = MockChromium(Path(tmp))
+            yaml_config = {
+                "build": {
+                    "chromium_src": str(m.src),
+                    "architecture": "x64",
+                    "product": "netscape",
+                }
+            }
+            with self.assertRaisesRegex(ValueError, "Unknown build.product"):
+                resolve_config(cli_args={}, yaml_config=yaml_config)
+
 
 class ResolveConfigDirectModeTest(unittest.TestCase):
     def test_missing_chromium_src_everywhere_raises(self):
@@ -104,6 +140,7 @@ class ResolveConfigDirectModeTest(unittest.TestCase):
             self.assertEqual(contexts[0].chromium_src, m.src)
             self.assertEqual(contexts[0].architecture, "arm64")
             self.assertEqual(contexts[0].build_type, "release")
+            self.assertEqual(contexts[0].product.id, "browseros")
 
     def test_env_chromium_src_used_when_no_cli(self):
         with tempfile.TemporaryDirectory() as tmp:
