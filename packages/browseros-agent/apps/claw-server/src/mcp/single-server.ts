@@ -17,6 +17,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
+import { env } from '../env'
 import { tabGroupTracker } from '../lib/agent-tab-groups'
 import { getBrowserSession } from '../lib/browser-session'
 import { logger } from '../lib/logger'
@@ -39,9 +40,17 @@ const SERVER_VERSION = '0.0.1'
 interface Session {
   server: McpServer
   transport: WebStandardStreamableHTTPServerTransport
+  /**
+   * Wall-clock of the last inbound request that landed on this
+   * session. Bumped by `handleSingleMcpRequest`. The idle sweeper
+   * tears down sessions whose `lastActivityAt` is older than
+   * `env.sessionIdleMs`.
+   */
+  lastActivityAt: number
 }
 
 const sessions = new Map<string, Session>()
+let sweeperHandle: ReturnType<typeof setInterval> | null = null
 
 function resolveIdentity(sessionId: string | undefined): ClientIdentity | null {
   if (!sessionId) return null
@@ -61,23 +70,7 @@ function buildSession(): Session {
     sessionIdGenerator: () => crypto.randomUUID(),
     enableJsonResponse: true,
     onsessionclosed(sessionId) {
-      // Read identity BEFORE dropping it so the cleanup hook can
-      // resolve the agentId.
-      const identity = identityService.getIdentity(sessionId)
-      if (identity) {
-        const { agentId } = agentIdentityFromClient(identity)
-        const browserSession = getBrowserSession()
-        if (browserSession) {
-          void closeAgentTabGroupForAgent({
-            agentId,
-            session: browserSession,
-          })
-        }
-      }
-      sessions.delete(sessionId)
-      identityService.dropSession(sessionId)
-      recordSessionEnd({ sessionId, kind: 'closed' })
-      logger.info('cockpit v2 mcp session closed', { sessionId })
+      cleanupSessionState(sessionId)
     },
   })
 
@@ -133,7 +126,78 @@ function buildSession(): Session {
     })
   }
 
-  return { server, transport }
+  return { server, transport, lastActivityAt: Date.now() }
+}
+
+/**
+ * Shared end-of-session cleanup. The explicit DELETE path (transport
+ * `onsessionclosed` callback) and the idle sweeper both call this.
+ * Idempotent: if the session is already gone from the map, return
+ * without firing side effects so repeated sweeps are safe.
+ */
+function cleanupSessionState(sessionId: string): void {
+  if (!sessions.has(sessionId)) return
+  // Read identity BEFORE dropping it so the cleanup hook can resolve
+  // the agentId for the tab-group close.
+  const identity = identityService.getIdentity(sessionId)
+  if (identity) {
+    const { agentId } = agentIdentityFromClient(identity)
+    const browserSession = getBrowserSession()
+    if (browserSession) {
+      // Decrements the tracker AND fires the CDP close on the
+      // BrowserOS side. Returns immediately if refCount > 0.
+      void closeAgentTabGroupForAgent({
+        agentId,
+        session: browserSession,
+      })
+    } else {
+      // No live browser session. Still decrement so the ref count
+      // stays accurate; the CDP close is moot because there is no
+      // browser to dispatch to.
+      tabGroupTracker.decrementSession(agentId)
+    }
+  }
+  sessions.delete(sessionId)
+  identityService.dropSession(sessionId)
+  recordSessionEnd({ sessionId, kind: 'closed' })
+  logger.info('cockpit v2 mcp session closed', { sessionId })
+}
+
+/**
+ * Walks the sessions map and tears down entries older than the
+ * configured idle window. Exported for unit testing; production
+ * callers drive it via the `setInterval` started in
+ * `ensureSweeperStarted`. Returns the ids that were swept so tests
+ * can assert directly without timer manipulation.
+ */
+export function sweepIdleSessions(now: number): string[] {
+  const idle: string[] = []
+  for (const [sessionId, session] of sessions.entries()) {
+    if (now - session.lastActivityAt > env.sessionIdleMs) {
+      idle.push(sessionId)
+    }
+  }
+  for (const sessionId of idle) cleanupSessionState(sessionId)
+  return idle
+}
+
+function ensureSweeperStarted(): void {
+  if (sweeperHandle !== null) return
+  sweeperHandle = setInterval(() => {
+    sweepIdleSessions(Date.now())
+  }, env.sessionSweepIntervalMs)
+  // The cockpit's HTTP server is the lifecycle anchor; the sweep
+  // timer must not pin the bun process on its own. `unref` is
+  // present on Node-style Timeout values but not part of the
+  // Web-standard typing, so we feature-detect rather than assert.
+  const handle = sweeperHandle as { unref?: () => void }
+  handle.unref?.()
+}
+
+function stopSweeper(): void {
+  if (sweeperHandle === null) return
+  clearInterval(sweeperHandle)
+  sweeperHandle = null
 }
 
 /**
@@ -150,6 +214,7 @@ export async function handleSingleMcpRequest(
   if (headerSessionId) {
     const existing = sessions.get(headerSessionId)
     if (existing) {
+      existing.lastActivityAt = Date.now()
       return existing.transport.handleRequest(request)
     }
     // Unknown session id. Reject upfront with a structured 404 so
@@ -173,14 +238,32 @@ export async function handleSingleMcpRequest(
   const assignedId = session.transport.sessionId
   if (assignedId) {
     sessions.set(assignedId, session)
+    ensureSweeperStarted()
   }
   return response
 }
 
 /**
- * Test-only escape hatch. Drops every cached session so a subsequent
- * request rebuilds from scratch.
+ * Test-only escape hatch. Drops every cached session AND stops the
+ * idle sweeper interval so subsequent tests rebuild from scratch
+ * without leaking timers across cases.
  */
 export function resetSingleMcpInstanceForTesting(): void {
+  stopSweeper()
   sessions.clear()
+}
+
+/**
+ * Test-only escape hatch. Backdates a session's lastActivityAt so
+ * the sweeper sees it as idle without the test having to sleep.
+ * Returns true if the session existed.
+ */
+export function setLastActivityForTesting(
+  sessionId: string,
+  ms: number,
+): boolean {
+  const session = sessions.get(sessionId)
+  if (!session) return false
+  session.lastActivityAt = ms
+  return true
 }

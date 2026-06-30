@@ -35,6 +35,21 @@ function readBoolFlag(name: string): boolean {
 }
 
 /**
+ * Parse a positive integer ms override, falling back to the
+ * provided default on any non-positive / non-finite input. Used
+ * for runtime tunables (sweep interval, idle timeout) the operator
+ * may want to shorten in dev or lengthen in staging.
+ */
+function readPositiveIntFlag(name: string, fallback: number): number {
+  // biome-ignore lint/style/noProcessEnv: env.ts is the sanctioned env-reader for the package
+  const raw = process.env[name]
+  if (raw === undefined) return fallback
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return parsed
+}
+
+/**
  * Runtime snapshot shared across services. main.ts applies validated
  * startup config before serving; tests may mutate fields for isolation.
  */
@@ -44,6 +59,16 @@ export const env = {
   resourcesDir: resolveDefaultResourcesDir(),
   browserosDirOverride: readBrowserosDirOverride(),
   isDevelopment: readIsDevelopment(),
+  // MCP session idle reaper. Sessions older than `sessionIdleMs`
+  // with no inbound requests are torn down by the sweeper running
+  // every `sessionSweepIntervalMs`. The 5-minute default matches
+  // services/tasks.ts:IDLE_TIMEOUT_MS so the UI's status read and
+  // the actual session-end row land at the same boundary.
+  sessionIdleMs: readPositiveIntFlag('CLAW_SESSION_IDLE_MS', 5 * 60 * 1000),
+  sessionSweepIntervalMs: readPositiveIntFlag(
+    'CLAW_SESSION_SWEEP_INTERVAL_MS',
+    60 * 1000,
+  ),
 }
 
 /** Applies validated startup config to the shared runtime snapshot. */
