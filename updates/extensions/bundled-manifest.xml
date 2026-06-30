@@ -6,4 +6,7 @@
   <app appid="bflpfmnmnokmjhmgnolecpppdbdophmk">
     <updatecheck codebase="https://cdn.browseros.com/extensions/agent-0.0.115.0.crx" version="0.0.115.0"/>
   </app>
+  <app appid="pjimfkbpehlcllblajnpfamdfjhhlgkc">
+    <updatecheck codebase="https://cdn.browseros.com/extensions/browserclaw-0.0.1.crx" version="0.0.1"/>
+  </app>
 </gupdate>

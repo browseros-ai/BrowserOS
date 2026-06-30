@@ -22,24 +22,6 @@ class StringReplacesModule(CommandModule):
             raise RuntimeError("Failed to apply string replacements")
 
 
-# Strings we want to replace but that we also replace automatically
-# for XTB files
-branding_replacements = [
-    (
-        r"The Chromium Authors. All rights reserved.",
-        r"The BrowserOS Authors. All rights reserved.",
-    ),
-    (
-        r"Google LLC. All rights reserved.",
-        r"The BrowserOS Authors. All rights reserved.",
-    ),
-    (r"The Chromium Authors", r"BrowserOS Software Inc"),
-    (r"Google Chrome", r"BrowserOS"),
-    (r"(Google)(?! Play)", r"BrowserOS"),
-    (r"Chromium", r"BrowserOS"),
-    (r"Chrome", r"BrowserOS"),
-]
-
 # List of files to apply replacements to
 target_files = [
     "chrome/app/chromium_strings.grd",
@@ -70,7 +52,7 @@ def apply_string_replacements_impl(ctx: Context) -> bool:
             replacement_count = 0
 
             # Apply each replacement
-            for pattern, replacement in branding_replacements:
+            for pattern, replacement in ctx.product.string_replacements:
                 matches = len(re.findall(pattern, content))
                 if matches > 0:
                     content = re.sub(pattern, replacement, content)

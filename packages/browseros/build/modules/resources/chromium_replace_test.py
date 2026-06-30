@@ -84,6 +84,21 @@ class ReplaceChromiumFilesTest(unittest.TestCase):
             "// release\n",
         )
 
+    def test_common_overlay_applies_before_product_overlay(self):
+        chromium, root, ctx = self._make("release")
+        chromium.add_file("chrome/common/branding.h", "// original\n")
+        root.add_replacement_file(
+            "chrome/common/branding.h", "// common\n", product="common"
+        )
+        root.add_replacement_file("chrome/common/branding.h", "// product\n")
+
+        self.assertTrue(replace_chromium_files_impl(ctx))
+
+        self.assertEqual(
+            (chromium.src / "chrome" / "common" / "branding.h").read_text(),
+            "// product\n",
+        )
+
 
 class ChromiumReplaceModuleValidateTest(unittest.TestCase):
     def test_missing_chromium_src_raises_validation_error(self):

@@ -60,6 +60,13 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
         build_type_condition = operation.get("build_type")
         os_condition = operation.get("os")
         arch_condition = operation.get("arch")
+        product_condition = operation.get("product")
+
+        if not product_matches(product_condition, ctx.product.id):
+            log_info(
+                f"  ⏭️  Skipping {name} (product: {product_condition}, current: {ctx.product.id})"
+            )
+            continue
 
         # Skip operation if build_type condition doesn't match
         if build_type_condition and build_type_condition != ctx.build_type:
@@ -143,6 +150,18 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
 
     log_success("Resources copied")
     return True
+
+
+def product_matches(product_condition, product_id: str) -> bool:
+    """Return whether a config operation applies to the active product."""
+    if product_condition is None:
+        return True
+    if product_condition == "all":
+        raise ValueError("Use a missing product field for all products, not product: all")
+    products = (
+        [product_condition] if isinstance(product_condition, str) else product_condition
+    )
+    return product_id in products
 
 
 def commit_resource_copy(

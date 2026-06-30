@@ -5,9 +5,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
+from build.common.context import Context
+from build.common.products import get_product_descriptor
 from build.modules.extensions.bundled_extensions import (
-    REQUIRED_BUNDLED_EXTENSION_IDS,
     BundledExtensionsModule,
     ExtensionInfo,
 )
@@ -47,12 +50,15 @@ class BundledExtensionsManifestTest(unittest.TestCase):
 
     def test_required_ids_cover_agent_bug_reporter_and_claw(self) -> None:
         self.assertEqual(
-            REQUIRED_BUNDLED_EXTENSION_IDS,
+            dict(get_product_descriptor("browseros").required_extension_ids),
             {
                 "adlpneommgkgeanpaekgoaolcpncohkf": "BrowserOS bug reporter",
                 "bflpfmnmnokmjhmgnolecpppdbdophmk": "BrowserOS agent",
-                CLAW_EXTENSION_ID: "BrowserOS Claw app",
             },
+        )
+        self.assertEqual(
+            dict(get_product_descriptor("browserclaw").required_extension_ids),
+            {CLAW_EXTENSION_ID: "BrowserClaw app"},
         )
 
     def test_generated_json_maps_claw_id_to_crx(self) -> None:
@@ -98,9 +104,41 @@ class BundledExtensionsManifestTest(unittest.TestCase):
 
         with self.assertRaisesRegex(
             RuntimeError,
-            f"BrowserOS Claw app \\({CLAW_EXTENSION_ID}\\)",
+            f"BrowserClaw app \\({CLAW_EXTENSION_ID}\\)",
         ):
-            BundledExtensionsModule()._validate_required_extensions(extensions)
+            BundledExtensionsModule()._validate_required_extensions(
+                extensions, self._ctx("browserclaw")
+            )
+
+    def test_browserclaw_selects_only_claw_extension(self) -> None:
+        extensions = [
+            ExtensionInfo(
+                id="adlpneommgkgeanpaekgoaolcpncohkf",
+                version="52.0.0.0",
+                codebase="https://cdn.browseros.com/extensions/bugreporter.crx",
+            ),
+            ExtensionInfo(
+                id="bflpfmnmnokmjhmgnolecpppdbdophmk",
+                version="0.0.115.0",
+                codebase="https://cdn.browseros.com/extensions/agent.crx",
+            ),
+            ExtensionInfo(
+                id=CLAW_EXTENSION_ID,
+                version="0.0.1",
+                codebase="https://cdn.browseros.com/extensions/browserclaw.crx",
+            ),
+        ]
+
+        selected = BundledExtensionsModule()._select_product_extensions(
+            extensions, self._ctx("browserclaw")
+        )
+
+        self.assertEqual([ext.id for ext in selected], [CLAW_EXTENSION_ID])
+
+    def _ctx(self, product: str):
+        return cast(
+            Context, SimpleNamespace(product=get_product_descriptor(product))
+        )
 
 
 if __name__ == "__main__":

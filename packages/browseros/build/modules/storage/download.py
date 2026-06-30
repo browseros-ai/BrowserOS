@@ -329,6 +329,22 @@ class DownloadResourcesModule(CommandModule):
             if build_type_condition and build_type_condition != current_build_type:
                 continue
 
+            product_condition = op.get("product")
+            if not _product_matches(product_condition, context.product.id):
+                continue
+
             filtered.append(op)
 
         return filtered
+
+
+def _product_matches(product_condition: Any, product_id: str) -> bool:
+    """Return whether a download operation applies to the active product."""
+    if product_condition is None:
+        return True
+    if product_condition == "all":
+        raise ValueError("Use a missing product field for all products, not product: all")
+    products = (
+        [product_condition] if isinstance(product_condition, str) else product_condition
+    )
+    return product_id in products

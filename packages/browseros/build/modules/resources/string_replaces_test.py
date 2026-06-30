@@ -84,6 +84,18 @@ class ApplyStringReplacementsTest(unittest.TestCase):
 
         self.assertEqual(other.read_text(), "<grit>Chromium</grit>\n")
 
+    def test_browserclaw_context_rebrands_to_browserclaw(self):
+        self.chromium.with_branding_files()
+        ctx = make_context(self.chromium, self.root, product="browserclaw")
+
+        self.assertTrue(apply_string_replacements_impl(ctx))
+
+        content = (
+            self.chromium.src / "chrome" / "app" / "chromium_strings.grd"
+        ).read_text()
+        self.assertIn("BrowserClaw", content)
+        self.assertNotIn("BrowserOS", content)
+
 
 class StringReplacesModuleValidateTest(unittest.TestCase):
     def test_missing_chromium_src_raises_validation_error(self):

@@ -187,7 +187,7 @@ class CopyResourcesTest(unittest.TestCase):
 
         self.assertFalse((self.chromium.src / "chrome" / "ghost").exists())
 
-    def test_real_config_copies_browseros_and_claw_server_roots_apart(self):
+    def test_real_config_copies_browseros_server_for_browseros_product(self):
         self.root.write_copy_config(self._real_copy_config())
         browseros_source = (
             self.root.root
@@ -240,6 +240,62 @@ class CopyResourcesTest(unittest.TestCase):
             / "browseros-claw-server"
         )
         self.assertEqual(browseros_dest.read_text(), "browseros")
+        self.assertFalse(claw_dest.exists())
+
+    def test_real_config_copies_claw_server_for_browserclaw_product(self):
+        self.root.write_copy_config(self._real_copy_config())
+        browseros_source = (
+            self.root.root
+            / "resources"
+            / "binaries"
+            / "browseros_server"
+            / "darwin-arm64"
+            / "resources"
+        )
+        claw_source = (
+            self.root.root
+            / "resources"
+            / "binaries"
+            / "browseros_claw_server"
+            / "darwin-arm64"
+            / "resources"
+        )
+        (browseros_source / "bin").mkdir(parents=True)
+        (browseros_source / "bin" / "browseros_server").write_text("browseros")
+        (claw_source / "bin").mkdir(parents=True)
+        (claw_source / "bin" / "browseros-claw-server").write_text("claw")
+
+        with patch("build.modules.resources.resources.get_platform", return_value="macos"):
+            ctx = make_context(
+                self.chromium,
+                self.root,
+                architecture="arm64",
+                build_type="release",
+                product="browserclaw",
+            )
+            self.assertTrue(copy_resources_impl(ctx))
+
+        browseros_dest = (
+            self.chromium.src
+            / "chrome"
+            / "browser"
+            / "browseros"
+            / "server"
+            / "resources"
+            / "bin"
+            / "browseros_server"
+        )
+        claw_dest = (
+            self.chromium.src
+            / "chrome"
+            / "browser"
+            / "browseros"
+            / "claw_server"
+            / "resources"
+            / "bin"
+            / "browseros-claw-server"
+        )
+        self.assertFalse(browseros_dest.exists())
         self.assertEqual(claw_dest.read_text(), "claw")
 
     def _real_copy_config(self) -> dict:

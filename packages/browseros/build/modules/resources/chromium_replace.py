@@ -27,44 +27,56 @@ def replace_chromium_files_impl(ctx: Context, replacements=None) -> bool:
     """Replace files in chromium source with custom files from chromium_files directory"""
     log_info("\n🔄 Replacing chromium files...")
     log_info(f"  Build type: {ctx.build_type}")
-
-    # Source directory containing replacement files
-    replacement_dir = ctx.get_chromium_replace_files_dir()
-
-    if not replacement_dir.exists():
-        log_info(f"⚠️  No chromium_files directory found at: {replacement_dir}")
-        return True
+    log_info(f"  Product: {ctx.product.id}")
 
     replaced_count = 0
     skipped_count = 0
+    found_overlay = False
 
-    # Find all files recursively in the replacement directory
-    for src_file in replacement_dir.rglob("*"):
+    for replacement_dir in ctx.get_chromium_replace_roots():
+        if not replacement_dir.exists():
+            continue
+        found_overlay = True
+        log_info(f"  Overlay: {replacement_dir.relative_to(ctx.root_dir)}")
+        replaced, skipped = _replace_from_root(ctx, replacement_dir)
+        replaced_count += replaced
+        skipped_count += skipped
+
+    if not found_overlay:
+        log_info(
+            f"⚠️  No chromium_files overlays found under: {ctx.get_chromium_replace_files_dir()}"
+        )
+        return True
+
+    log_success(
+        f"Replaced {replaced_count} files (skipped {skipped_count} non-matching files)"
+    )
+    return True
+
+
+def _replace_from_root(ctx: Context, replacement_dir: Path) -> tuple[int, int]:
+    """Apply one Chromium overlay root to the source tree."""
+    replaced_count = 0
+    skipped_count = 0
+
+    for src_file in sorted(replacement_dir.rglob("*")):
         if src_file.is_file():
-            # Skip build-type specific files that don't match current build type
             if src_file.suffix in [".debug", ".release"]:
-                # Check if this file matches the current build type
                 if (ctx.build_type == "debug" and src_file.suffix != ".debug") or (
                     ctx.build_type == "release" and src_file.suffix != ".release"
                 ):
                     skipped_count += 1
                     continue
 
-                # For matching build type files, determine the actual destination
-                # Remove the .debug/.release suffix for the destination path
                 relative_path = src_file.relative_to(replacement_dir)
-                # Convert path to string, remove suffix, then back to Path
                 dest_relative = Path(str(relative_path).rsplit(".", 1)[0])
             else:
-                # Regular file without build type suffix
                 relative_path = src_file.relative_to(replacement_dir)
                 dest_relative = relative_path
 
-                # Check if build-type specific version exists
                 debug_variant = src_file.with_suffix(src_file.suffix + ".debug")
                 release_variant = src_file.with_suffix(src_file.suffix + ".release")
 
-                # If a build-type specific variant exists for current build type, skip the generic file
                 if (ctx.build_type == "debug" and debug_variant.exists()) or (
                     ctx.build_type == "release" and release_variant.exists()
                 ):
@@ -74,10 +86,8 @@ def replace_chromium_files_impl(ctx: Context, replacements=None) -> bool:
                     skipped_count += 1
                     continue
 
-            # Destination path in actual chromium source
             dst_file = ctx.chromium_src / dest_relative
 
-            # Check if destination exists
             if not dst_file.exists():
                 log_error(
                     f"    Destination file not found in chromium_src: {dest_relative}"
@@ -87,7 +97,6 @@ def replace_chromium_files_impl(ctx: Context, replacements=None) -> bool:
                 )
 
             try:
-                # Replace the file
                 shutil.copy2(src_file, dst_file)
                 log_info(f"    ✓ Replaced: {relative_path} → {dest_relative}")
                 replaced_count += 1
@@ -96,10 +105,7 @@ def replace_chromium_files_impl(ctx: Context, replacements=None) -> bool:
                 log_error(f"    Error replacing file {relative_path}: {e}")
                 raise
 
-    log_success(
-        f"Replaced {replaced_count} files (skipped {skipped_count} non-matching files)"
-    )
-    return True
+    return replaced_count, skipped_count
 
 
 def add_file_to_replacements(
@@ -115,11 +121,8 @@ def add_file_to_replacements(
         )
         return False
 
-    # Create destination path
-    from context import BuildContext
-
-    ctx = BuildContext(root_dir=root_dir)
-    replacement_dir = ctx.get_chromium_replace_files_dir()
+    ctx = Context(root_dir=root_dir, chromium_src=chromium_src)
+    replacement_dir = ctx.get_chromium_replace_roots()[1]
     dest_file = replacement_dir / relative_path
 
     log_info("📂 Adding file to replacements:")

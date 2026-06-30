@@ -22,13 +22,6 @@ class ExtensionInfo(NamedTuple):
     codebase: str
 
 
-REQUIRED_BUNDLED_EXTENSION_IDS: Dict[str, str] = {
-    "adlpneommgkgeanpaekgoaolcpncohkf": "BrowserOS bug reporter",
-    "bflpfmnmnokmjhmgnolecpppdbdophmk": "BrowserOS agent",
-    # "pjimfkbpehlcllblajnpfamdfjhhlgkc": "BrowserOS Claw app",
-}
-
-
 class BundledExtensionsModule(CommandModule):
     """Download extensions from CDN manifest and create bundled_extensions.json"""
 
@@ -54,9 +47,9 @@ class BundledExtensionsModule(CommandModule):
         extensions = self._fetch_and_parse_manifest(manifest_url)
         if not extensions:
             raise RuntimeError("No extensions found in manifest")
-        self._validate_required_extensions(extensions)
+        extensions = self._select_product_extensions(extensions, ctx)
 
-        log_info(f"  Found {len(extensions)} extensions in manifest")
+        log_info(f"  Selected {len(extensions)} extension(s) for {ctx.product.display_name}")
 
         for ext in extensions:
             self._download_extension(ext, output_dir)
@@ -124,12 +117,22 @@ class BundledExtensionsModule(CommandModule):
 
         return extensions
 
-    def _validate_required_extensions(self, extensions: List[ExtensionInfo]) -> None:
+    def _select_product_extensions(
+        self, extensions: List[ExtensionInfo], ctx: Context
+    ) -> List[ExtensionInfo]:
+        """Return manifest entries required by the active product."""
+        self._validate_required_extensions(extensions, ctx)
+        required_ids = {extension_id for extension_id, _ in ctx.product.required_extension_ids}
+        return [ext for ext in extensions if ext.id in required_ids]
+
+    def _validate_required_extensions(
+        self, extensions: List[ExtensionInfo], ctx: Context
+    ) -> None:
         """Fail if the release manifest omits a required bundled extension."""
         extension_ids = {ext.id for ext in extensions}
         missing = [
             f"{name} ({extension_id})"
-            for extension_id, name in REQUIRED_BUNDLED_EXTENSION_IDS.items()
+            for extension_id, name in ctx.product.required_extension_ids
             if extension_id not in extension_ids
         ]
         if missing:
