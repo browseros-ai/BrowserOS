@@ -528,6 +528,25 @@ export function registerBrowserToolsForSingleServer(
                 )?.page
                 if (typeof pageId === 'number') {
                   const { agentId, slug } = agentIdentityFromClient(identity)
+                  // tabs new carries no `page` field in its input
+                  // args; the page id is born in the dispatch result.
+                  // recordSuccessfulDispatchV2 above therefore
+                  // skipped the registry write (extractPageId
+                  // returned null). Record here using the result-
+                  // derived pageId so /tabs/activity reflects the
+                  // new tab the moment it opens, not when a later
+                  // page-targeted dispatch (snapshot / navigate)
+                  // happens to land on it.
+                  const live = session.pages.getInfo(pageId)
+                  if (live) {
+                    tabActivityRegistry.recordTool({
+                      agentId,
+                      slug,
+                      pageId,
+                      targetId: live.targetId,
+                      toolName: 'tabs',
+                    })
+                  }
                   void ensureAgentTabGroup({
                     agentId,
                     slug,
@@ -535,13 +554,6 @@ export function registerBrowserToolsForSingleServer(
                     session,
                     signal: extra?.signal,
                   })
-                  // The rrweb session replay recorder is no longer
-                  // injected from here. F8 moved recording to a
-                  // content script driven by the claw-app extension's
-                  // background worker, which polls /replay/tabs and
-                  // injects via chrome.scripting.executeScript only
-                  // into tabs the cockpit reports as agent-driven.
-                  // See plan: 2026-06-29-1450-...content-script.md
                 }
               }
             }
