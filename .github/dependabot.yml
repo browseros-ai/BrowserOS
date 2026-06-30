@@ -11,6 +11,15 @@ updates:
     open-pull-requests-limit: 10
     cooldown:
       default-days: 3
+    # Major bumps are opt-in only via security advisories. Routine
+    # version PRs are limited to minor + patch so the queue stays
+    # actionable. A security update that requires a major bump still
+    # gets opened by Dependabot — `ignore` rules do not apply to
+    # security updates.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     groups:
       minor-and-patch:
         update-types:
@@ -32,6 +41,10 @@ updates:
     open-pull-requests-limit: 5
     cooldown:
       default-days: 3
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     groups:
       minor-and-patch:
         update-types:
