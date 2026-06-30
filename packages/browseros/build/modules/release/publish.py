@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Publish module - Copy versioned artifacts to download/ paths for fresh installs"""
 
-from typing import Dict, List, Tuple
+from typing import List, Optional, Tuple
 
 from ...common.context import Context
 from ...common.module import CommandModule, ValidationError
@@ -10,8 +10,8 @@ from ..storage import BOTO3_AVAILABLE, get_r2_client
 from .common import (
     PLATFORMS,
     PLATFORM_DISPLAY_NAMES,
-    DOWNLOAD_PATH_MAPPING,
     fetch_all_release_metadata,
+    get_download_path_mapping,
 )
 
 
@@ -41,7 +41,7 @@ class PublishModule(CommandModule):
     requires = []
     description = "Publish versioned artifacts to latest download URLs"
 
-    def __init__(self, platforms: List[str] = None):
+    def __init__(self, platforms: Optional[List[str]] = None):
         self.platforms = platforms or PLATFORMS
 
     def validate(self, ctx: Context) -> None:
@@ -60,7 +60,7 @@ class PublishModule(CommandModule):
         version = ctx.release_version
         env = ctx.env
 
-        metadata = fetch_all_release_metadata(version, env)
+        metadata = fetch_all_release_metadata(version, env, ctx.product.id)
         if not metadata:
             log_error(f"No release metadata found for version {version}")
             return
@@ -83,7 +83,7 @@ class PublishModule(CommandModule):
 
             release = metadata[platform]
             artifacts = release.get("artifacts", {})
-            platform_mapping = DOWNLOAD_PATH_MAPPING.get(platform, {})
+            platform_mapping = get_download_path_mapping(ctx.product).get(platform, {})
 
             log_info(f"\n{PLATFORM_DISPLAY_NAMES[platform]}:")
 
@@ -93,9 +93,7 @@ class PublishModule(CommandModule):
                     continue
 
                 dest_path = platform_mapping[artifact_key]
-                # Extract source key from URL (after CDN base)
-                url = artifact["url"]
-                source_key = f"releases/{version}/{platform}/{artifact['filename']}"
+                source_key = _release_source_key(ctx, platform, version, artifact)
 
                 log_info(f"  Copying {artifact['filename']} → {dest_path}")
                 success = copy_to_download_path(client, env.r2_bucket, source_key, dest_path)
@@ -104,7 +102,6 @@ class PublishModule(CommandModule):
                 if success:
                     log_success(f"    ✓ Published to {env.r2_cdn_base_url}/{dest_path}")
 
-        # Summary
         log_info(f"\n{'='*60}")
         succeeded = sum(1 for _, _, ok in results if ok)
         failed = sum(1 for _, _, ok in results if not ok)
@@ -116,3 +113,20 @@ class PublishModule(CommandModule):
             for filename, dest, ok in results:
                 if not ok:
                     log_error(f"  Failed: {filename} → {dest}")
+
+
+def _release_source_key(
+    ctx: Context,
+    platform: str,
+    version: str,
+    artifact: dict,
+) -> str:
+    """Resolve the R2 key for an artifact in release metadata."""
+    cdn_prefix = f"{ctx.env.r2_cdn_base_url.rstrip('/')}/"
+    url = artifact.get("url", "")
+    if url.startswith(cdn_prefix):
+        return url.removeprefix(cdn_prefix)
+    return (
+        f"releases/{ctx.product.release_prefix}/{version}/"
+        f"{platform}/{artifact['filename']}"
+    )

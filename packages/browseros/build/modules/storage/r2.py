@@ -149,6 +149,7 @@ def get_release_json(
     version: str,
     platform: str,
     env: Optional[EnvConfig] = None,
+    product_id: str = "browseros",
 ) -> Optional[Dict]:
     """Fetch release.json for a specific version and platform from R2
 
@@ -175,15 +176,20 @@ def get_release_json(
     if not client:
         return None
 
-    r2_key = f"releases/{version}/{platform}/release.json"
+    keys = [f"releases/{product_id}/{version}/{platform}/release.json"]
+    if product_id == "browseros":
+        keys.append(f"releases/{version}/{platform}/release.json")
 
-    try:
-        response = client.get_object(Bucket=env.r2_bucket, Key=r2_key)
-        content = response["Body"].read().decode("utf-8")
-        return json.loads(content)
-    except client.exceptions.NoSuchKey:
-        log_warning(f"release.json not found: {r2_key}")
-        return None
-    except Exception as e:
-        log_error(f"Failed to fetch release.json: {e}")
-        return None
+    for r2_key in keys:
+        try:
+            response = client.get_object(Bucket=env.r2_bucket, Key=r2_key)
+            content = response["Body"].read().decode("utf-8")
+            return json.loads(content)
+        except client.exceptions.NoSuchKey:
+            continue
+        except Exception as e:
+            log_error(f"Failed to fetch release.json: {e}")
+            return None
+
+    log_warning(f"release.json not found: {keys[0]}")
+    return None

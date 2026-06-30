@@ -8,6 +8,7 @@ import sys
 import shutil
 from pathlib import Path
 from ...common.context import Context
+from ...common.products import ProductDescriptor
 from ...common.utils import run_command, log_info, log_error, log_success
 
 
@@ -15,7 +16,7 @@ def merge_architectures(
     arch1_path: Path,
     arch2_path: Path,
     output_path: Path,
-    universalizer_script: Path = None,
+    universalizer_script: Path | None = None,
 ) -> bool:
     """
     Merge two architecture builds into a universal binary
@@ -89,23 +90,36 @@ def merge_architectures(
 
 
 def create_minimal_context(
-    app_path: Path, chromium_src: Path, root_dir: Path, architecture: str = "universal"
+    app_path: Path,
+    chromium_src: Path,
+    root_dir: Path,
+    architecture: str = "universal",
+    product: ProductDescriptor | None = None,
 ) -> Context:
     """Create a minimal BuildContext for signing/packaging operations"""
 
-    out_dir_path = app_path.parent  # out/Default_universal
+    out_dir_path = app_path.parent
 
     log_info(f"Creating context from app path: {app_path}")
     log_info(f"  Out dir: {out_dir_path}")
     log_info(f"  Chromium src: {chromium_src}")
     log_info(f"  Root dir: {root_dir}")
 
-    ctx = Context(
-        root_dir=root_dir,
-        chromium_src=chromium_src,
-        architecture=architecture,
-        build_type="release",  # Assume release for universal builds
-    )
+    if product is None:
+        ctx = Context(
+            root_dir=root_dir,
+            chromium_src=chromium_src,
+            architecture=architecture,
+            build_type="release",
+        )
+    else:
+        ctx = Context(
+            root_dir=root_dir,
+            chromium_src=chromium_src,
+            architecture=architecture,
+            build_type="release",
+            product=product,
+        )
 
     # Override out_dir to match the actual location
     ctx.out_dir = out_dir_path.name
@@ -131,7 +145,7 @@ def merge_sign_package(
     root_dir: Path,
     sign: bool = True,
     package: bool = True,
-    universalizer_script: Path = None,
+    universalizer_script: Path | None = None,
 ) -> bool:
     """
     Complete workflow: merge, sign, and package universal binary
@@ -166,7 +180,7 @@ def merge_sign_package(
         log_info("=" * 70)
 
         try:
-            from ..sign import sign_app
+            from ..sign.macos import sign_app
 
             ctx = create_minimal_context(output_path, chromium_src, root_dir)
             if not sign_app(ctx, create_dmg=False):
@@ -189,7 +203,7 @@ def merge_sign_package(
         log_info("=" * 70)
 
         try:
-            from . import create_dmg
+            from .macos import create_dmg
 
             ctx = create_minimal_context(output_path, chromium_src, root_dir)
 
@@ -208,7 +222,9 @@ def merge_sign_package(
                 log_error("Make sure you provided the correct --chromium-src path")
                 return False
 
-            if create_dmg(output_path, dmg_path, "BrowserOS", pkg_dmg_path):
+            if create_dmg(
+                output_path, dmg_path, ctx.product.mac.dmg_volume_name, pkg_dmg_path
+            ):
                 log_success(f"DMG created: {dmg_name}")
             else:
                 log_error("Failed to create DMG")
@@ -277,9 +293,7 @@ def handle_merge_command(
         architecture="universal",
         build_type="release",
     )
-    output_path = (
-        chromium_src / "out" / "Default_universal" / temp_ctx.BROWSEROS_APP_NAME
-    )
+    output_path = chromium_src / temp_ctx.out_dir / temp_ctx.BROWSEROS_APP_NAME
     log_info(f"  Output: {output_path} (auto-generated)")
 
     try:

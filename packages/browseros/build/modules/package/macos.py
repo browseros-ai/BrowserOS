@@ -32,21 +32,18 @@ class MacOSPackageModule(CommandModule):
         dmg_path = dmg_dir / dmg_name
         pkg_dmg_path = ctx.get_pkg_dmg_path()
 
-        # Determine if we should create signed DMG based on whether app was signed
-        # If signed_app artifact exists, the MacOSSignModule ran and we should sign the DMG
         if ctx.artifact_registry.has("signed_app"):
             self._create_signed_notarized_dmg(app_path, dmg_path, pkg_dmg_path, ctx)
         else:
-            self._create_dmg(app_path, dmg_path, pkg_dmg_path)
+            self._create_dmg(app_path, dmg_path, pkg_dmg_path, ctx)
 
         ctx.artifact_registry.add("dmg", dmg_path)
         log_success(f"DMG created: {dmg_name}")
 
-        # Send Slack notification
         notifier = get_notifier()
         notifier.notify(
             "📀 Package Created",
-            f"DMG package created successfully",
+            "DMG package created successfully",
             {
                 "Artifact": dmg_name,
                 "Version": ctx.semantic_version,
@@ -55,8 +52,12 @@ class MacOSPackageModule(CommandModule):
             color=COLOR_GREEN,
         )
 
-    def _create_dmg(self, app_path: Path, dmg_path: Path, pkg_dmg_path: Path) -> None:
-        if not create_dmg(app_path, dmg_path, "BrowserOS", pkg_dmg_path):
+    def _create_dmg(
+        self, app_path: Path, dmg_path: Path, pkg_dmg_path: Path, ctx: Context
+    ) -> None:
+        if not create_dmg(
+            app_path, dmg_path, ctx.product.mac.dmg_volume_name, pkg_dmg_path
+        ):
             raise RuntimeError("Failed to create DMG")
 
     def _create_signed_notarized_dmg(
@@ -72,7 +73,12 @@ class MacOSPackageModule(CommandModule):
         keychain_profile = env_vars.get("keychain_profile", "notarytool-profile")
 
         if not create_signed_notarized_dmg(
-            app_path, dmg_path, certificate_name, "BrowserOS", pkg_dmg_path, keychain_profile
+            app_path,
+            dmg_path,
+            certificate_name,
+            ctx.product.mac.dmg_volume_name,
+            pkg_dmg_path,
+            keychain_profile,
         ):
             raise RuntimeError("Failed to create signed and notarized DMG")
 def create_dmg(
@@ -311,20 +317,20 @@ def package_universal(contexts: List[Context]) -> bool:
         return False
 
     # Use the universal app path
-    universal_dir = contexts[0].chromium_src / "out/Default_universal"
-    universal_app_path = universal_dir / contexts[0].BROWSEROS_APP_NAME
-
-    if not universal_app_path.exists():
-        log_error(f"Universal app not found: {universal_app_path}")
-        return False
-
-    # Create a temporary universal context for DMG naming
+    product = contexts[0].product
     universal_ctx = Context(
         root_dir=contexts[0].root_dir,
         chromium_src=contexts[0].chromium_src,
         architecture="universal",
         build_type=contexts[0].build_type,
+        product=product,
     )
+    universal_dir = contexts[0].chromium_src / universal_ctx.out_dir
+    universal_app_path = universal_dir / universal_ctx.BROWSEROS_APP_NAME
+
+    if not universal_app_path.exists():
+        log_error(f"Universal app not found: {universal_app_path}")
+        return False
 
     # Create DMG in dist/<version> directory
     dmg_dir = universal_ctx.get_dist_dir()
@@ -338,7 +344,9 @@ def package_universal(contexts: List[Context]) -> bool:
     pkg_dmg_path = contexts[0].get_pkg_dmg_path()
 
     # Create the universal DMG
-    if create_dmg(universal_app_path, dmg_path, "BrowserOS", pkg_dmg_path):
+    if create_dmg(
+        universal_app_path, dmg_path, product.mac.dmg_volume_name, pkg_dmg_path
+    ):
         log_success(f"Universal DMG created: {dmg_name}")
         return True
     else:

@@ -93,6 +93,8 @@ def generate_release_json(
     env = ctx.env
 
     release_data = {
+        "product": ctx.product.id,
+        "product_name": ctx.product.display_name,
         "platform": platform,
         "version": ctx.get_semantic_version(),
         "chromium_version": ctx.chromium_version,
@@ -281,7 +283,7 @@ def upload_release_artifacts(
         # sequenced. A parallel fetch-merge-upload flow can still race and
         # drop one architecture.
         existing_release_data = get_release_json(
-            ctx.get_semantic_version(), platform, env
+            ctx.get_semantic_version(), platform, env, ctx.product.id
         )
         release_data = merge_release_metadata(existing_release_data, release_data)
     release_json_path = ctx.get_dist_dir() / "release.json"

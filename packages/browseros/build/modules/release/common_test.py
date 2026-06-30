@@ -3,7 +3,8 @@
 
 import unittest
 
-from .common import generate_appcast_item
+from ...common.products import get_product_descriptor
+from .common import generate_appcast_item, get_download_path_mapping
 
 ARTIFACT = {
     "url": "https://cdn.browseros.com/releases/0.31.0/win/BrowserOS_v0.31.0_x64_installer.exe",
@@ -35,6 +36,20 @@ class GenerateAppcastItemTest(unittest.TestCase):
             item,
         )
         self.assertNotIn("sparkle:os=", item)
+
+
+class DownloadPathMappingTest(unittest.TestCase):
+    def test_browserclaw_mapping_uses_product_artifact_prefix(self):
+        mapping = get_download_path_mapping(get_product_descriptor("browserclaw"))
+
+        self.assertEqual(
+            mapping["macos"]["universal"],
+            "download/BrowserClaw.dmg",
+        )
+        self.assertEqual(
+            mapping["win"]["x64_installer"],
+            "download/BrowserClaw_installer.exe",
+        )
 
 
 if __name__ == "__main__":

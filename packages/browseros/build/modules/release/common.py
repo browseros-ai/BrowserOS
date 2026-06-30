@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from ...common.env import EnvConfig
+from ...common.products import ProductDescriptor, default_product_descriptor
 from ..storage import get_release_json, get_r2_client, BOTO3_AVAILABLE
 
 PLATFORMS = ["macos", "win", "linux"]
@@ -29,8 +30,24 @@ DOWNLOAD_PATH_MAPPING = {
 }
 
 
+def get_download_path_mapping(
+    product: ProductDescriptor | None = None,
+) -> Dict[str, Dict[str, str]]:
+    """Return product-specific latest-download aliases."""
+    product = product or default_product_descriptor()
+    if product.id == "browseros":
+        return DOWNLOAD_PATH_MAPPING
+    return {
+        platform: {
+            key: value.replace("BrowserOS", product.artifact_prefix)
+            for key, value in mapping.items()
+        }
+        for platform, mapping in DOWNLOAD_PATH_MAPPING.items()
+    }
+
+
 def fetch_all_release_metadata(
-    version: str, env: Optional[EnvConfig] = None
+    version: str, env: Optional[EnvConfig] = None, product_id: str = "browseros"
 ) -> Dict[str, Dict]:
     """Fetch release.json from all platforms for a version"""
     if env is None:
@@ -38,7 +55,7 @@ def fetch_all_release_metadata(
 
     metadata = {}
     for platform in PLATFORMS:
-        release_data = get_release_json(version, platform, env)
+        release_data = get_release_json(version, platform, env, product_id)
         if release_data:
             metadata[platform] = release_data
 

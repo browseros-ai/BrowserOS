@@ -4,8 +4,12 @@
 import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 from unittest import mock
 
+from build.common.context import Context
+from build.common.products import get_product_descriptor
 from .windows import (
     WindowsSignModule,
     get_browseros_server_binary_paths,
@@ -101,11 +105,29 @@ class WindowsSignPathsTest(unittest.TestCase):
             self._write_binary(build_output_dir / "chrome.exe")
 
             with self.assertRaisesRegex(RuntimeError, "browseros_server.exe"):
-                WindowsSignModule()._sign_executables(build_output_dir, mock.Mock())
+                WindowsSignModule()._sign_executables(
+                    build_output_dir, self._ctx("browseros")
+                )
+
+    def test_browserclaw_requires_claw_binary(self):
+        with TemporaryDirectory() as tmp:
+            build_output_dir = Path(tmp)
+            self._write_binary(build_output_dir / "chrome.exe")
+
+            with self.assertRaisesRegex(RuntimeError, "browseros-claw-server.exe"):
+                WindowsSignModule()._sign_executables(
+                    build_output_dir, self._ctx("browserclaw")
+                )
 
     def _write_binary(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"binary")
+
+    def _ctx(self, product: str):
+        return cast(
+            Context,
+            SimpleNamespace(product=get_product_descriptor(product), env=mock.Mock()),
+        )
 
 
 if __name__ == "__main__":

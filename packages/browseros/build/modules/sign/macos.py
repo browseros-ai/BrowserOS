@@ -15,6 +15,7 @@ from ...common.server_binaries import (
     SERVER_BUNDLES,
     ServerBundle,
     macos_sign_spec_for,
+    server_bundles_for_product,
 )
 from ...common.utils import (
     run_command as utils_run_command,
@@ -47,10 +48,13 @@ SERVER_RESOURCES_BUNDLE_REL = SERVER_BUNDLES[0].macos_bundle_resources_root
 SERVER_RESOURCES_JUNK_FILES = {".DS_Store"}
 
 
-def verify_server_resources_bundle(app_path: Path, chromium_src: Path) -> List[str]:
+def verify_server_resources_bundle(
+    app_path: Path, chromium_src: Path, product_id: Optional[str] = None
+) -> List[str]:
     """Check bundled server resources match what the build staged."""
     problems: List[str] = []
-    for bundle in SERVER_BUNDLES:
+    bundles = server_bundles_for_product(product_id) if product_id else SERVER_BUNDLES
+    for bundle in bundles:
         problems.extend(_verify_server_resource_bundle(bundle, app_path, chromium_src))
     return problems
 
@@ -167,7 +171,7 @@ class MacOSSignModule(CommandModule):
 
     def execute(self, ctx: Context) -> None:
         log_info("=" * 70)
-        log_info("🚀 Starting signing process for BrowserOS...")
+        log_info(f"🚀 Starting signing process for {ctx.product.display_name}...")
         log_info("=" * 70)
 
         unlock_keychain(ctx.env)
@@ -185,7 +189,9 @@ class MacOSSignModule(CommandModule):
         log_success("Application signed and notarized successfully")
 
     def _verify_server_resources(self, app_path: Path, ctx: Context) -> None:
-        problems = verify_server_resources_bundle(app_path, ctx.chromium_src)
+        problems = verify_server_resources_bundle(
+            app_path, ctx.chromium_src, ctx.product.id
+        )
         if problems:
             raise RuntimeError(
                 "App bundle does not match staged server resources "
@@ -291,10 +297,15 @@ def find_components_to_sign(
 
     # Check both versioned and non-versioned paths for BrowserOS Framework
     # Handle both release and debug framework names
-    framework_names = [
-        "BrowserOS Framework.framework",
-        "BrowserOS Dev Framework.framework",
-    ]
+    if ctx:
+        framework_names = [ctx.product.mac_framework_name(ctx.build_type)]
+    else:
+        framework_names = [
+            "BrowserOS Framework.framework",
+            "BrowserOS Dev Framework.framework",
+            "BrowserClaw Framework.framework",
+            "BrowserClaw Dev Framework.framework",
+        ]
     nxtscape_framework_paths = []
 
     for fw_name in framework_names:
@@ -358,7 +369,8 @@ def find_components_to_sign(
         if nested_app not in components["helpers"]:
             components["apps"].append(nested_app)
 
-    for bundle in SERVER_BUNDLES:
+    bundles = server_bundles_for_product(ctx.product.id) if ctx else SERVER_BUNDLES
+    for bundle in bundles:
         bundle_root = app_path / bundle.macos_bundle_resources_root
         if not bundle_root.exists():
             continue
@@ -414,7 +426,7 @@ def get_identifier_for_component(
 
     # For frameworks
     if component_path.suffix == ".framework":
-        if name == "BrowserOS Framework" or name == "BrowserOS Dev Framework":
+        if name.endswith(" Framework") or name.endswith(" Dev Framework"):
             return f"{base_identifier}.framework"
         else:
             return f"{base_identifier}.{name.replace(' ', '_').lower()}"
@@ -603,6 +615,14 @@ def sign_all_components(
     """Sign all components in the correct order (bottom-up)"""
     log_info("🔍 Discovering components to sign...")
     components = find_components_to_sign(app_path, ctx)
+    base_identifier = (
+        ctx.product.mac_signing_identifier(ctx.build_type) if ctx else "com.browseros"
+    )
+    main_identifier = (
+        ctx.product.mac_signing_identifier(ctx.build_type)
+        if ctx
+        else "com.browseros.BrowserOS"
+    )
 
     # Print summary
     total_components = sum(len(items) for items in components.values())
@@ -615,7 +635,7 @@ def sign_all_components(
     # 1. Sign XPC Services first
     log_info("\n🔏 Signing XPC Services...")
     for xpc in components["xpc_services"]:
-        identifier = get_identifier_for_component(xpc)
+        identifier = get_identifier_for_component(xpc, base_identifier)
         options = get_signing_options(xpc)
         if not sign_component(xpc, certificate_name, identifier, options):
             return False
@@ -624,7 +644,7 @@ def sign_all_components(
     if components["apps"]:
         log_info("\n🔏 Signing nested applications...")
         for nested_app in components["apps"]:
-            identifier = get_identifier_for_component(nested_app)
+            identifier = get_identifier_for_component(nested_app, base_identifier)
             options = get_signing_options(nested_app)
             if not sign_component(nested_app, certificate_name, identifier, options):
                 return False
@@ -638,7 +658,7 @@ def sign_all_components(
             entitlements_dirs.append(ctx.get_entitlements_dir())
 
         for exe in components["executables"]:
-            identifier = get_identifier_for_component(exe)
+            identifier = get_identifier_for_component(exe, base_identifier)
             options = get_signing_options(exe)
 
             # Check for specific entitlements
@@ -660,7 +680,7 @@ def sign_all_components(
     if components["dylibs"]:
         log_info("\n🔏 Signing dynamic libraries...")
         for dylib in components["dylibs"]:
-            identifier = get_identifier_for_component(dylib)
+            identifier = get_identifier_for_component(dylib, base_identifier)
             if not sign_component(dylib, certificate_name, identifier):
                 return False
 
@@ -673,7 +693,7 @@ def sign_all_components(
             entitlements_dirs.append(ctx.get_entitlements_dir())
 
         for helper in components["helpers"]:
-            identifier = get_identifier_for_component(helper)
+            identifier = get_identifier_for_component(helper, base_identifier)
             options = get_signing_options(helper)
 
             # Check for specific entitlements
@@ -707,14 +727,18 @@ def sign_all_components(
             components["frameworks"], key=lambda x: 0 if "Sparkle" in x.name else 1
         )
         for framework in frameworks_sorted:
-            identifier = get_identifier_for_component(framework)
+            identifier = get_identifier_for_component(framework, base_identifier)
             if not sign_component(framework, certificate_name, identifier):
                 return False
 
     # 7. Sign main executable
     log_info("\n🔏 Signing main executable...")
     # Handle both release and debug executable names
-    main_exe_names = ["BrowserOS", "BrowserOS Dev"]
+    main_exe_names = (
+        [ctx.product.display_name, ctx.product.dev_display_name]
+        if ctx
+        else ["BrowserOS", "BrowserOS Dev"]
+    )
     main_exe = None
     for exe_name in main_exe_names:
         exe_path = join_paths(app_path, "Contents", "MacOS", exe_name)
@@ -728,13 +752,13 @@ def sign_all_components(
         )
         return False
 
-    if not sign_component(main_exe, certificate_name, "com.browseros.BrowserOS"):
+    if not sign_component(main_exe, certificate_name, main_identifier):
         return False
 
     # 8. Finally sign the app bundle
     log_info("\n🔏 Signing application bundle...")
     requirements = (
-        '=designated => identifier "com.browseros.BrowserOS" and '
+        f'=designated => identifier "{main_identifier}" and '
         "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and "
         "certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */"
     )
@@ -775,7 +799,7 @@ def sign_all_components(
         "--force",
         "--timestamp",
         "--identifier",
-        "com.browseros.BrowserOS",
+        main_identifier,
         "--options",
         "restrict,library,runtime,kill",
         "--requirements",
@@ -958,7 +982,7 @@ def notarize_app(
 def sign_app(ctx: Context, create_dmg: bool = True) -> bool:
     """Main signing function that uses BuildContext from build.py"""
     log_info("=" * 70)
-    log_info("🚀 Starting signing process for BrowserOS...")
+    log_info(f"🚀 Starting signing process for {ctx.product.display_name}...")
     log_info("=" * 70)
 
     unlock_keychain(ctx.env if ctx else None)
@@ -993,7 +1017,7 @@ def sign_app(ctx: Context, create_dmg: bool = True) -> bool:
         log_error(f"App not found at: {app_path}")
         return False
 
-    problems = verify_server_resources_bundle(app_path, ctx.chromium_src)
+    problems = verify_server_resources_bundle(app_path, ctx.chromium_src, ctx.product.id)
     if problems:
         log_error(
             "App bundle does not match staged server resources "
@@ -1038,7 +1062,7 @@ def sign_app(ctx: Context, create_dmg: bool = True) -> bool:
                 app_path=app_path,
                 dmg_path=dmg_path,
                 certificate_name=env_vars["certificate_name"],
-                volume_name="BrowserOS",
+                volume_name=ctx.product.mac.dmg_volume_name,
                 pkg_dmg_path=pkg_dmg_path,
                 keychain_profile="notarytool-profile",
             ):
@@ -1091,9 +1115,15 @@ def sign_universal(contexts: List[Context]) -> bool:
         app_paths.append(app_path)
         log_info(f"✓ Found {ctx.architecture} build: {app_path}")
 
-    # Create universal output directory
-    universal_dir = join_paths(contexts[0].chromium_src, "out", "Default_universal")
-    universal_app_path = join_paths(universal_dir, contexts[0].BROWSEROS_APP_NAME)
+    universal_ctx = Context(
+        root_dir=contexts[0].root_dir,
+        chromium_src=contexts[0].chromium_src,
+        architecture="universal",
+        build_type=contexts[0].build_type,
+        product=contexts[0].product,
+    )
+    universal_dir = contexts[0].chromium_src / universal_ctx.out_dir
+    universal_app_path = universal_ctx.get_app_path()
 
     if universal_dir.exists():
         log_info("Removing existing universal directory...")
@@ -1123,16 +1153,6 @@ def sign_universal(contexts: List[Context]) -> bool:
         run_command(cmd)
 
         log_success(f"Universal binary created: {universal_app_path}")
-
-        # Create a temporary context for universal signing
-        universal_ctx = Context(
-            root_dir=contexts[0].root_dir,
-            chromium_src=contexts[0].chromium_src,
-            architecture="universal",
-            build_type=contexts[0].build_type,
-        )
-        # Override out_dir for universal
-        universal_ctx.out_dir = "out/Default_universal"
 
         # Sign the universal binary
         if not sign_app(universal_ctx, create_dmg=False):

@@ -7,7 +7,11 @@ from typing import List, Optional
 from ...common.module import CommandModule, ValidationError
 from ...common.context import Context
 from ...common.env import EnvConfig
-from ...common.server_binaries import SERVER_BUNDLES, expected_windows_bundle_binary_paths
+from ...common.server_binaries import (
+    SERVER_BUNDLES,
+    expected_windows_bundle_binary_paths,
+    server_bundles_for_product,
+)
 from ...common.utils import (
     log_info,
     log_error,
@@ -51,20 +55,25 @@ class WindowsSignModule(CommandModule):
 
         build_output_dir = join_paths(ctx.chromium_src, ctx.out_dir)
 
-        self._sign_executables(build_output_dir, ctx.env)
+        self._sign_executables(build_output_dir, ctx)
         self._build_mini_installer(ctx)
         mini_installer_path = self._sign_installer(build_output_dir, ctx.env)
 
         ctx.artifact_registry.add("signed_installer", mini_installer_path)
         log_success("✅ All binaries signed successfully!")
 
-    def _sign_executables(self, build_output_dir: Path, env: EnvConfig) -> None:
+    def _sign_executables(self, build_output_dir: Path, ctx: Context) -> None:
         log_info("\nStep 1/3: Signing executables before packaging...")
+        env = ctx.env
         binaries_to_sign_first = [build_output_dir / "chrome.exe"]
         binaries_to_sign_first.extend(
-            get_existing_browseros_server_binary_paths(build_output_dir)
+            get_existing_browseros_server_binary_paths(
+                build_output_dir, ctx.product.id
+            )
         )
-        missing = get_missing_required_browseros_server_binary_paths(build_output_dir)
+        missing = get_missing_required_browseros_server_binary_paths(
+            build_output_dir, ctx.product.id
+        )
         if missing:
             raise RuntimeError(
                 "Missing bundled server binaries: "
@@ -102,25 +111,37 @@ class WindowsSignModule(CommandModule):
         return mini_installer_path
 
 
-def get_browseros_server_binary_paths(build_output_dir: Path) -> List[Path]:
+def get_browseros_server_binary_paths(
+    build_output_dir: Path, product_id: str | None = None
+) -> List[Path]:
     """Return absolute paths to bundled server binaries for signing."""
-    return expected_windows_bundle_binary_paths(build_output_dir)
+    return expected_windows_bundle_binary_paths(build_output_dir, product_id)
 
 
-def get_existing_browseros_server_binary_paths(build_output_dir: Path) -> List[Path]:
+def get_existing_browseros_server_binary_paths(
+    build_output_dir: Path, product_id: str | None = None
+) -> List[Path]:
     """Return bundled server binary paths that exist in a build output dir."""
     return [
-        path for path in expected_windows_bundle_binary_paths(build_output_dir)
+        path
+        for path in expected_windows_bundle_binary_paths(build_output_dir, product_id)
         if path.exists()
     ]
 
 
-def get_missing_required_browseros_server_binary_paths(build_output_dir: Path) -> List[Path]:
+def get_missing_required_browseros_server_binary_paths(
+    build_output_dir: Path, product_id: str | None = None
+) -> List[Path]:
     """Return missing bundled server binaries that should already be packaged."""
     missing: List[Path] = []
-    for bundle in SERVER_BUNDLES:
+    bundles = server_bundles_for_product(product_id) if product_id else SERVER_BUNDLES
+    for bundle in bundles:
         bundle_root = build_output_dir / bundle.windows_bundle_resources_root
-        should_exist = bundle.required_in_chromium_output or bundle_root.exists()
+        should_exist = (
+            product_id is not None
+            or bundle.required_in_chromium_output
+            or bundle_root.exists()
+        )
         if not should_exist:
             continue
         for rel in bundle.windows_binaries:

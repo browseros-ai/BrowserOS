@@ -5,11 +5,18 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import patch
 
+from build.common.context import Context
+from build.common.products import get_product_descriptor
 from build.modules.package.linux import (
     LINUX_HOST_APPIMAGETOOL,
     copy_browser_files,
+    create_apparmor_profile,
+    create_desktop_file,
+    create_launcher_script,
+    create_metainfo_file,
     get_host_appimagetool,
     get_linux_architecture_config,
 )
@@ -77,10 +84,13 @@ class CopyBrowserFilesTest(unittest.TestCase):
                 resources.mkdir(parents=True)
                 (resources / "marker.txt").write_text(bundle_name)
 
-            ctx = SimpleNamespace(
-                chromium_src=root,
-                out_dir=Path("out") / "Release",
-                BROWSEROS_APP_NAME="browseros",
+            ctx = cast(
+                Context,
+                SimpleNamespace(
+                    chromium_src=root,
+                    out_dir=Path("out") / "Release",
+                    BROWSEROS_APP_NAME="browseros",
+                ),
             )
 
             with patch("build.modules.package.linux.log_warning"):
@@ -95,6 +105,34 @@ class CopyBrowserFilesTest(unittest.TestCase):
                     / "marker.txt"
                 ).exists()
             )
+
+    def test_product_context_copies_only_owned_server_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out_dir = root / "out" / "Release"
+            target_dir = root / "package"
+            out_dir.mkdir(parents=True)
+            (out_dir / "browserclaw").write_text("browser")
+
+            for bundle_name in ("BrowserOSServer", "BrowserClawServer"):
+                resources = out_dir / bundle_name / "default" / "resources"
+                resources.mkdir(parents=True)
+                (resources / "marker.txt").write_text(bundle_name)
+
+            ctx = cast(
+                Context,
+                SimpleNamespace(
+                    chromium_src=root,
+                    out_dir=Path("out") / "Release",
+                    BROWSEROS_APP_NAME="browserclaw",
+                    product=get_product_descriptor("browserclaw"),
+                ),
+            )
+
+            with patch("build.modules.package.linux.log_warning"):
+                self.assertTrue(copy_browser_files(ctx, target_dir))
+
+            self.assertFalse((target_dir / "BrowserOSServer").exists())
             self.assertTrue(
                 (
                     target_dir
@@ -104,6 +142,33 @@ class CopyBrowserFilesTest(unittest.TestCase):
                     / "marker.txt"
                 ).exists()
             )
+
+
+class LinuxProductMetadataTest(unittest.TestCase):
+    def test_browserclaw_helpers_use_product_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ctx = cast(
+                Context,
+                SimpleNamespace(
+                    product=get_product_descriptor("browserclaw"),
+                    BROWSEROS_APP_NAME="browserclaw",
+                    get_browseros_chromium_version=lambda: "137.0.7231.69",
+                ),
+            )
+
+            desktop = create_desktop_file(
+                ctx, root / "applications", "/usr/bin/browserclaw"
+            )
+            create_launcher_script(ctx, root / "bin")
+            create_apparmor_profile(ctx, root / "apparmor")
+            create_metainfo_file(ctx, root / "metainfo")
+
+            self.assertEqual(desktop.name, "browserclaw.desktop")
+            self.assertIn("Name=BrowserClaw", desktop.read_text())
+            self.assertTrue((root / "bin" / "browserclaw").exists())
+            self.assertTrue((root / "apparmor" / "browserclaw").exists())
+            self.assertTrue((root / "metainfo" / "browserclaw.metainfo.xml").exists())
 
 
 if __name__ == "__main__":

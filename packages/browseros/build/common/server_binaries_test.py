@@ -13,6 +13,7 @@ from .server_binaries import (
     expected_windows_bundle_binary_paths,
     expected_windows_binary_paths,
     macos_sign_spec_for,
+    server_bundles_for_product,
 )
 
 ENTITLEMENTS_DIR = Path(__file__).resolve().parents[2] / "resources" / "entitlements"
@@ -48,6 +49,15 @@ class MacosServerBinariesTest(unittest.TestCase):
         )
         self.assertTrue(BROWSEROS_SERVER_BUNDLE.required_in_chromium_output)
         self.assertFalse(BROWSEROS_CLAW_SERVER_BUNDLE.required_in_chromium_output)
+
+    def test_server_bundles_filter_by_product(self):
+        self.assertEqual(
+            server_bundles_for_product("browseros"), (BROWSEROS_SERVER_BUNDLE,)
+        )
+        self.assertEqual(
+            server_bundles_for_product("browserclaw"),
+            (BROWSEROS_CLAW_SERVER_BUNDLE,),
+        )
 
     def test_every_entry_has_identifier_and_options(self):
         for stem, spec in MACOS_SERVER_BINARIES.items():
@@ -133,6 +143,21 @@ class WindowsServerBinariesTest(unittest.TestCase):
                 / "resources"
                 / "bin"
                 / "browseros_server.exe",
+                build_output_dir
+                / "BrowserClawServer"
+                / "default"
+                / "resources"
+                / "bin"
+                / "browseros-claw-server.exe",
+            ],
+        )
+
+    def test_expected_windows_bundle_binary_paths_can_filter_by_product(self):
+        build_output_dir = Path("/tmp/out/Default")
+
+        self.assertEqual(
+            expected_windows_bundle_binary_paths(build_output_dir, "browserclaw"),
+            [
                 build_output_dir
                 / "BrowserClawServer"
                 / "default"

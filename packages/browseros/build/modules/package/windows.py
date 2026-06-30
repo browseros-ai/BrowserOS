@@ -73,7 +73,6 @@ class WindowsPackageModule(CommandModule):
 
         log_success("Windows packages created successfully")
 
-        # Send Slack notification
         notifier = get_notifier()
         notifier.notify(
             "📦 Package Created",
@@ -128,7 +127,6 @@ def build_mini_installer(ctx: Context) -> bool:
     """Build the mini_installer target if it doesn't exist"""
     log_info("\n🔨 Checking mini_installer build...")
 
-    # Get paths
     build_output_dir = join_paths(ctx.chromium_src, ctx.out_dir)
     mini_installer_path = build_output_dir / "mini_installer.exe"
     setup_exe_path = build_output_dir / "setup.exe"
@@ -144,11 +142,9 @@ def build_mini_installer(ctx: Context) -> bool:
 
     log_info("Building setup and mini_installer targets...")
 
-    # Build mini_installer using autoninja
     try:
         cmd = autoninja_command(ctx.out_dir, ["setup", "mini_installer"])
 
-        # Change to chromium_src directory before running (like compile.py does)
         import os
 
         old_cwd = os.getcwd()
@@ -159,7 +155,6 @@ def build_mini_installer(ctx: Context) -> bool:
         finally:
             os.chdir(old_cwd)
 
-        # Verify the file was created
         missing_artifacts = []
         if not setup_exe_path.exists():
             missing_artifacts.append("setup.exe")
@@ -185,26 +180,20 @@ def create_installer(ctx: Context) -> bool:
     """Create Windows installer (mini_installer.exe)"""
     log_info("\n🔧 Creating Windows installer...")
 
-    # Get paths
     build_output_dir = join_paths(ctx.chromium_src, ctx.out_dir)
     mini_installer_path = build_output_dir / "mini_installer.exe"
 
     if not mini_installer_path.exists():
         log_warning(f"mini_installer.exe not found at: {mini_installer_path}")
-        log_info(
-            "To build the installer, run: autoninja -C out\\Default_x64 mini_installer"
-        )
+        log_info(f"To build the installer, run: autoninja -C {ctx.out_dir} mini_installer")
         return False
 
-    # Create output directory
     output_dir = ctx.get_dist_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate installer filename with version and architecture
     installer_name = ctx.get_artifact_name("installer")
     installer_path = output_dir / installer_name
 
-    # Copy mini_installer to final location
     try:
         shutil.copy2(mini_installer_path, installer_path)
         log_success(f"Installer created: {installer_name}")
@@ -218,33 +207,25 @@ def create_portable_zip(ctx: Context) -> bool:
     """Create ZIP of just the installer for easier distribution"""
     log_info("\n📦 Creating installer ZIP package...")
 
-    # Get paths
     build_output_dir = join_paths(ctx.chromium_src, ctx.out_dir)
     mini_installer_path = build_output_dir / "mini_installer.exe"
 
     if not mini_installer_path.exists():
         log_warning(f"mini_installer.exe not found at: {mini_installer_path}")
-        log_info(
-            "To build the installer, run: autoninja -C out\\Default_x64 mini_installer"
-        )
+        log_info(f"To build the installer, run: autoninja -C {ctx.out_dir} mini_installer")
         return False
 
-    # Create output directory
     output_dir = ctx.get_dist_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate ZIP filename with version and architecture
     zip_name = ctx.get_artifact_name("installer_zip")
     zip_path = output_dir / zip_name
 
-    # Create ZIP file containing just the installer
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            # Add mini_installer.exe to the zip
             installer_name = ctx.get_artifact_name("installer")
             zipf.write(mini_installer_path, installer_name)
 
-            # Get file size for logging
             file_size = mini_installer_path.stat().st_size
             log_info(f"Added installer to ZIP ({file_size // (1024*1024)} MB)")
 
@@ -253,13 +234,6 @@ def create_portable_zip(ctx: Context) -> bool:
     except Exception as e:
         log_error(f"Failed to create installer ZIP: {e}")
         return False
-
-
-# Sign functions moved to sign/windows.py
-# - sign_binaries()
-# - sign_with_codesigntool()
-# - get_browseros_server_binary_paths()
-# These are now in modules/sign/windows.py
 
 
 def get_target_cpu(build_output_dir: Path) -> str:

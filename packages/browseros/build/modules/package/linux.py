@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional
 
+from ...common.server_binaries import SERVER_BUNDLES, server_bundles_for_product
 from ...common.module import CommandModule, ValidationError
 from ...common.context import Context
 from ...common.utils import (
@@ -198,8 +199,7 @@ def copy_browser_files(
     dirs_to_copy = [
         "locales",
         "MEIPreload",
-        "BrowserOSServer",
-        "BrowserClawServer",
+        *_server_output_roots(ctx),
     ]
     for dir_name in dirs_to_copy:
         src = join_paths(out_dir, dir_name)
@@ -225,21 +225,20 @@ def copy_browser_files(
     return True
 
 
-def create_desktop_file(apps_dir: Path, exec_path: str) -> Path:
-    """Create .desktop file with specified Exec path.
+def _server_output_roots(ctx: Context) -> list[str]:
+    """Return final server bundle roots for the active product."""
+    product = getattr(ctx, "product", None)
+    bundles = server_bundles_for_product(product.id) if product else SERVER_BUNDLES
+    return [bundle.chromium_output_root for bundle in bundles]
 
-    Args:
-        apps_dir: Directory where .desktop file should be created
-        exec_path: Full path for Exec= line in desktop file
 
-    Returns:
-        Path to created .desktop file
-    """
+def create_desktop_file(ctx: Context, apps_dir: Path, exec_path: str) -> Path:
+    """Create the product desktop entry."""
     apps_dir.mkdir(parents=True, exist_ok=True)
 
     desktop_content = f"""[Desktop Entry]
 Version=1.0
-Name=BrowserOS
+Name={ctx.product.display_name}
 GenericName=Web Browser
 Comment=Browse the World Wide Web
 Exec={exec_path} %U
@@ -247,11 +246,11 @@ Terminal=false
 Type=Application
 Categories=Network;WebBrowser;
 MimeType=text/html;text/xml;application/xhtml+xml;application/xml;application/vnd.mozilla.xul+xml;application/rss+xml;application/rdf+xml;image/gif;image/jpeg;image/png;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/ftp;x-scheme-handler/chrome;video/webm;application/x-xpinstall;
-Icon=browseros
+Icon={ctx.product.linux.icon_name}
 StartupWMClass=chromium-browser
 """
 
-    desktop_file = Path(join_paths(apps_dir, "browseros.desktop"))
+    desktop_file = Path(join_paths(apps_dir, ctx.product.linux.desktop_id))
     desktop_file.write_text(desktop_content)
     log_info("  ✓ Created desktop file")
     return desktop_file
@@ -273,7 +272,14 @@ def copy_icon(ctx: Context, icons_dir: Path) -> bool:
     for size in [16, 22, 24, 32, 48, 64, 128, 256]:
         icon_src = Path(join_paths(icons_base, f"product_logo_{size}.png"))
         if icon_src.exists():
-            icon_dest = Path(join_paths(icons_dir, f"{size}x{size}", "apps", "browseros.png"))
+            icon_dest = Path(
+                join_paths(
+                    icons_dir,
+                    f"{size}x{size}",
+                    "apps",
+                    f"{ctx.product.linux.icon_name}.png",
+                )
+            )
             icon_dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(icon_src, icon_dest)
             copied = True
@@ -295,7 +301,8 @@ def prepare_appdir(ctx: Context, appdir: Path) -> bool:
     """Prepare the AppDir structure for AppImage"""
     log_info("📁 Preparing AppDir structure...")
 
-    app_root = join_paths(appdir, "opt", "browseros")
+    appimage_dir = ctx.product.linux.appimage_dir
+    app_root = join_paths(appdir, *Path(appimage_dir.lstrip("/")).parts)
     usr_share = join_paths(appdir, "usr", "share")
     icons_dir = join_paths(usr_share, "icons", "hicolor")
     apps_dir = join_paths(usr_share, "applications")
@@ -306,18 +313,18 @@ def prepare_appdir(ctx: Context, appdir: Path) -> bool:
 
     # Create desktop file
     desktop_file = create_desktop_file(
-        apps_dir, f"/opt/browseros/{ctx.BROWSEROS_APP_NAME}"
+        ctx, apps_dir, f"{appimage_dir}/{ctx.BROWSEROS_APP_NAME}"
     )
 
     # Copy icons (multiple sizes)
     copy_icon(ctx, icons_dir)
 
     # AppImage-specific: Copy desktop file to root and update Exec line
-    appdir_desktop = Path(join_paths(appdir, "browseros.desktop"))
+    appdir_desktop = Path(join_paths(appdir, ctx.product.linux.desktop_id))
     shutil.copy2(desktop_file, appdir_desktop)
     desktop_content = appdir_desktop.read_text()
     desktop_content = desktop_content.replace(
-        f"Exec=/opt/browseros/{ctx.BROWSEROS_APP_NAME} %U", "Exec=AppRun %U"
+        f"Exec={appimage_dir}/{ctx.BROWSEROS_APP_NAME} %U", "Exec=AppRun %U"
     )
     appdir_desktop.write_text(desktop_content)
 
@@ -326,16 +333,16 @@ def prepare_appdir(ctx: Context, appdir: Path) -> bool:
     if not icon_src.exists():
         icon_src = Path(join_paths(ctx.root_dir, "resources", "icons", "product_logo.png"))
     if icon_src.exists():
-        appdir_icon = Path(join_paths(appdir, "browseros.png"))
+        appdir_icon = Path(join_paths(appdir, f"{ctx.product.linux.icon_name}.png"))
         shutil.copy2(icon_src, appdir_icon)
 
     # AppImage-specific: Create AppRun script
     apprun_content = f"""#!/bin/sh
 THIS="$(readlink -f "${{0}}")"
 HERE="$(dirname "${{THIS}}")"
-export LD_LIBRARY_PATH="${{HERE}}"/opt/browseros:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH="${{HERE}}"{appimage_dir}:$LD_LIBRARY_PATH
 export CHROME_WRAPPER="${{THIS}}"
-"${{HERE}}"/opt/browseros/{ctx.BROWSEROS_APP_NAME} "$@"
+"${{HERE}}"{appimage_dir}/{ctx.BROWSEROS_APP_NAME} "$@"
 """
 
     apprun_file = Path(join_paths(appdir, "AppRun"))
@@ -429,16 +436,15 @@ def create_appimage(ctx: Context, appdir: Path, output_path: Path) -> bool:
 
 
 def create_launcher_script(ctx: Context, bin_dir: Path) -> None:
-    """Create launcher script in /usr/bin/browseros."""
+    """Create the product launcher script in /usr/bin."""
     bin_dir.mkdir(parents=True, exist_ok=True)
 
     launcher_content = f"""#!/bin/sh
-# BrowserOS launcher script
-export LD_LIBRARY_PATH=/usr/lib/browseros:$LD_LIBRARY_PATH
-exec /usr/lib/browseros/{ctx.BROWSEROS_APP_NAME} "$@"
+export LD_LIBRARY_PATH={ctx.product.linux.lib_dir}:$LD_LIBRARY_PATH
+exec {ctx.product.linux.lib_dir}/{ctx.BROWSEROS_APP_NAME} "$@"
 """
 
-    launcher_path = Path(join_paths(bin_dir, "browseros"))
+    launcher_path = Path(join_paths(bin_dir, ctx.product.linux.launcher_name))
     launcher_path.write_text(launcher_content)
     launcher_path.chmod(0o755)
     log_info("  ✓ Created launcher script")
@@ -455,7 +461,7 @@ def create_control_file(ctx: Context, debian_dir: Path) -> None:
     # Architecture mapping
     deb_arch = get_linux_architecture_config(ctx.architecture)["deb_arch"]
 
-    control_content = f"""Package: browseros
+    control_content = f"""Package: {ctx.product.linux.package_name}
 Version: {version}
 Section: web
 Priority: optional
@@ -464,10 +470,9 @@ Depends: libc6 (>= 2.31), libglib2.0-0, libnss3, libnspr4, libx11-6, libatk1.0-0
 Provides: www-browser, gnome-www-browser
 Recommends: apparmor
 Maintainer: BrowserOS Team <support@browseros.com>
-Homepage: https://www.browseros.com/
-Description: BrowserOS - The open source agentic browser
- BrowserOS is a privacy-focused web browser built on Chromium,
- designed for modern web browsing with AI capabilities.
+Homepage: {ctx.product.homepage_url}
+Description: {ctx.product.display_name} - {ctx.product.summary}
+ {ctx.product.description}
 """
 
     control_path = Path(join_paths(debian_dir, "control"))
@@ -475,26 +480,22 @@ Description: BrowserOS - The open source agentic browser
     log_info("  ✓ Created DEBIAN/control")
 
 
-def create_postinst_script(debian_dir: Path) -> None:
+def create_postinst_script(ctx: Context, debian_dir: Path) -> None:
     """Create DEBIAN/postinst script for sandbox, AppArmor, and alternatives."""
-    postinst_content = """#!/bin/sh
-# Post-installation script for BrowserOS
+    postinst_content = f"""#!/bin/sh
 set -e
 
-# Set SUID bit on chrome_sandbox for sandboxing support
-if [ -f /usr/lib/browseros/chrome_sandbox ]; then
-    chmod 4755 /usr/lib/browseros/chrome_sandbox
+if [ -f {ctx.product.linux.lib_dir}/chrome_sandbox ]; then
+    chmod 4755 {ctx.product.linux.lib_dir}/chrome_sandbox
 fi
 
-# Load AppArmor profile (required for Ubuntu 23.10+ user namespace restrictions)
 if [ -d /etc/apparmor.d ] && command -v apparmor_parser >/dev/null 2>&1; then
-    apparmor_parser -r -T -W /etc/apparmor.d/browseros 2>/dev/null || true
+    apparmor_parser -r -T -W /etc/apparmor.d/{ctx.product.linux.apparmor_profile_name} 2>/dev/null || true
 fi
 
-# Register as a selectable default browser
 if [ "$1" = "configure" ]; then
-    update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/browseros 40
-    update-alternatives --install /usr/bin/gnome-www-browser gnome-www-browser /usr/bin/browseros 40
+    update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/{ctx.product.linux.launcher_name} 40
+    update-alternatives --install /usr/bin/gnome-www-browser gnome-www-browser /usr/bin/{ctx.product.linux.launcher_name} 40
 fi
 
 exit 0
@@ -506,21 +507,18 @@ exit 0
     log_info("  ✓ Created DEBIAN/postinst")
 
 
-def create_prerm_script(debian_dir: Path) -> None:
+def create_prerm_script(ctx: Context, debian_dir: Path) -> None:
     """Create DEBIAN/prerm script to clean up on removal."""
-    prerm_content = """#!/bin/sh
-# Pre-removal script for BrowserOS
+    prerm_content = f"""#!/bin/sh
 set -e
 
-# Unregister as default browser
 if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
-    update-alternatives --remove x-www-browser /usr/bin/browseros 2>/dev/null || true
-    update-alternatives --remove gnome-www-browser /usr/bin/browseros 2>/dev/null || true
+    update-alternatives --remove x-www-browser /usr/bin/{ctx.product.linux.launcher_name} 2>/dev/null || true
+    update-alternatives --remove gnome-www-browser /usr/bin/{ctx.product.linux.launcher_name} 2>/dev/null || true
 fi
 
-# Unload AppArmor profile before files are removed
-if command -v apparmor_parser >/dev/null 2>&1 && [ -f /etc/apparmor.d/browseros ]; then
-    apparmor_parser -R /etc/apparmor.d/browseros 2>/dev/null || true
+if command -v apparmor_parser >/dev/null 2>&1 && [ -f /etc/apparmor.d/{ctx.product.linux.apparmor_profile_name} ]; then
+    apparmor_parser -R /etc/apparmor.d/{ctx.product.linux.apparmor_profile_name} 2>/dev/null || true
 fi
 
 exit 0
@@ -533,31 +531,23 @@ exit 0
 
 
 def create_apparmor_profile(ctx: Context, apparmor_dir: Path) -> None:
-    """Create AppArmor profile that permits unprivileged user namespaces.
-
-    Ubuntu 23.10+ restricts unprivileged user namespaces via AppArmor.
-    Without this profile, the Chromium sandbox cannot create namespaces
-    and the browser fatally crashes on launch (see GitHub issue #165).
-    """
+    """Create the product AppArmor profile for Chromium sandbox support."""
     apparmor_dir.mkdir(parents=True, exist_ok=True)
 
-    profile_content = f"""# AppArmor profile for BrowserOS
-# This profile allows everything and only exists to give the application
-# a name instead of having the label "unconfined", and to grant permission
-# to create unprivileged user namespaces (required for Chromium sandbox on
-# Ubuntu 23.10+ and other distros that restrict userns via AppArmor).
-
+    profile_name = ctx.product.linux.apparmor_profile_name
+    profile_content = f"""# AppArmor profile for {ctx.product.display_name}
+# Ubuntu 23.10+ requires a named profile with userns for Chromium sandboxing.
 abi <abi/4.0>,
 include <tunables/global>
 
-profile browseros /usr/lib/browseros/{ctx.BROWSEROS_APP_NAME} flags=(unconfined) {{
+profile {profile_name} {ctx.product.linux.lib_dir}/{ctx.BROWSEROS_APP_NAME} flags=(unconfined) {{
   userns,
 
-  include if exists <local/browseros>
+  include if exists <local/{profile_name}>
 }}
 """
 
-    profile_path = Path(join_paths(apparmor_dir, "browseros"))
+    profile_path = Path(join_paths(apparmor_dir, profile_name))
     profile_path.write_text(profile_content)
     log_info("  ✓ Created AppArmor profile")
 
@@ -575,27 +565,20 @@ def create_metainfo_file(ctx: Context, metainfo_dir: Path) -> None:
 
     metainfo_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>browseros.desktop</id>
-  <launchable type="desktop-id">browseros.desktop</launchable>
-  <name>BrowserOS</name>
+  <id>{ctx.product.linux.metainfo_id}</id>
+  <launchable type="desktop-id">{ctx.product.linux.desktop_id}</launchable>
+  <name>{ctx.product.display_name}</name>
   <developer id="com.browseros">
     <name>BrowserOS Team</name>
   </developer>
-  <summary>The open source agentic browser</summary>
+  <summary>{ctx.product.summary}</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>BSD-3-Clause and LGPL-2.1+ and Apache-2.0 and IJG and MIT and GPL-2.0+ and ISC and OpenSSL and (MPL-1.1 or GPL-2.0 or LGPL-2.0)</project_license>
-  <url type="homepage">https://www.browseros.com/</url>
-  <url type="bugtracker">https://github.com/browseros-ai/BrowserOS/issues</url>
-  <url type="help">https://docs.browseros.com/</url>
+  <url type="homepage">{ctx.product.homepage_url}</url>
+  <url type="bugtracker">{ctx.product.bugtracker_url}</url>
+  <url type="help">{ctx.product.support_url}</url>
   <description>
-    <p>
-      BrowserOS is a privacy-focused web browser built on Chromium,
-      designed for modern web browsing with AI capabilities.
-    </p>
-    <p>
-      Browse the web with built-in agentic AI features that help you
-      automate tasks and interact with web pages intelligently.
-    </p>
+    <p>{ctx.product.description}</p>
   </description>
   <categories>
     <category>Network</category>
@@ -615,36 +598,18 @@ def create_metainfo_file(ctx: Context, metainfo_dir: Path) -> None:
 </component>
 """
 
-    metainfo_path = Path(join_paths(metainfo_dir, "browseros.metainfo.xml"))
+    metainfo_path = Path(
+        join_paths(metainfo_dir, f"{ctx.product.linux.package_name}.metainfo.xml")
+    )
     metainfo_path.write_text(metainfo_content)
     log_info("  ✓ Created AppStream metainfo")
 
 
 def prepare_debdir(ctx: Context, debdir: Path) -> bool:
-    """Prepare directory structure for .deb package.
-
-    Structure:
-    debdir/
-    ├── DEBIAN/
-    │   ├── control
-    │   ├── postinst
-    │   └── prerm
-    ├── etc/
-    │   └── apparmor.d/
-    │       └── browseros
-    ├── usr/
-    │   ├── bin/
-    │   │   └── browseros (launcher script)
-    │   ├── lib/browseros/
-    │   │   └── [all browser files]
-    │   └── share/
-    │       ├── applications/browseros.desktop
-    │       ├── icons/hicolor/{16..256}x{16..256}/apps/browseros.png
-    │       └── metainfo/browseros.metainfo.xml
-    """
+    """Prepare the product-specific .deb directory tree."""
     log_info("📁 Preparing .deb directory structure...")
 
-    lib_dir = join_paths(debdir, "usr", "lib", "browseros")
+    lib_dir = join_paths(debdir, *Path(ctx.product.linux.lib_dir.lstrip("/")).parts)
     bin_dir = join_paths(debdir, "usr", "bin")
     share_dir = join_paths(debdir, "usr", "share")
     apps_dir = join_paths(share_dir, "applications")
@@ -661,7 +626,7 @@ def prepare_debdir(ctx: Context, debdir: Path) -> bool:
     create_launcher_script(ctx, bin_dir)
 
     # Create desktop file
-    create_desktop_file(apps_dir, "/usr/bin/browseros")
+    create_desktop_file(ctx, apps_dir, f"/usr/bin/{ctx.product.linux.launcher_name}")
 
     # Copy icons (multiple sizes for hicolor theme)
     copy_icon(ctx, icons_dir)
@@ -674,8 +639,8 @@ def prepare_debdir(ctx: Context, debdir: Path) -> bool:
 
     # Create DEBIAN metadata files
     create_control_file(ctx, debian_dir)
-    create_postinst_script(debian_dir)
-    create_prerm_script(debian_dir)
+    create_postinst_script(ctx, debian_dir)
+    create_prerm_script(ctx, debian_dir)
 
     log_success("✓ .deb directory prepared")
     return True

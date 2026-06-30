@@ -175,8 +175,8 @@ class UniversalBuildModule(CommandModule):
 
         self._merge_universal(ctx, built_apps[0], built_apps[1])
 
-        # Verify universal binary was created
-        universal_app = ctx.chromium_src / "out/Default_universal/BrowserOS.app"
+        universal_ctx = self._create_universal_context(ctx)
+        universal_app = universal_ctx.get_app_path()
         if not universal_app.exists():
             raise RuntimeError(f"Universal binary not found: {universal_app}")
 
@@ -186,8 +186,6 @@ class UniversalBuildModule(CommandModule):
         log_info("\n" + "=" * 70)
         log_info("🔏 Processing universal binary...")
         log_info("=" * 70)
-
-        universal_ctx = self._create_universal_context(ctx)
 
         # Sign universal
         log_info("\n🔏 Signing universal build...")
@@ -233,13 +231,15 @@ class UniversalBuildModule(CommandModule):
 
         # Clean architecture-specific directories
         for arch in UNIVERSAL_ARCHITECTURES:
-            arch_dir = ctx.chromium_src / f"out/Default_{arch}"
+            arch_ctx = self._create_arch_context(ctx, arch)
+            arch_dir = ctx.chromium_src / arch_ctx.out_dir
             if arch_dir.exists():
                 log_info(f"  Removing {arch_dir}")
                 safe_rmtree(arch_dir)
 
         # Clean universal directory
-        universal_dir = ctx.chromium_src / "out/Default_universal"
+        universal_ctx = self._create_universal_context(ctx)
+        universal_dir = ctx.chromium_src / universal_ctx.out_dir
         if universal_dir.exists():
             log_info(f"  Removing {universal_dir}")
             safe_rmtree(universal_dir)
@@ -262,11 +262,10 @@ class UniversalBuildModule(CommandModule):
             chromium_src=base_ctx.chromium_src,
             architecture=arch,
             build_type=base_ctx.build_type,
+            product=base_ctx.product,
         )
         # Pin the app path for this arch's context
-        ctx._fixed_app_path = (
-            ctx.chromium_src / f"out/Default_{arch}" / ctx.BROWSEROS_APP_NAME
-        )
+        ctx._fixed_app_path = ctx.chromium_src / ctx.out_dir / ctx.BROWSEROS_APP_NAME
         return ctx
 
     def _create_universal_context(self, base_ctx: Context) -> Context:
@@ -283,13 +282,10 @@ class UniversalBuildModule(CommandModule):
             chromium_src=base_ctx.chromium_src,
             architecture="universal",
             build_type=base_ctx.build_type,
+            product=base_ctx.product,
         )
         # Set fixed app path to the universal binary
-        ctx._fixed_app_path = (
-            ctx.chromium_src / "out/Default_universal" / ctx.BROWSEROS_APP_NAME
-        )
-        # Override out_dir for universal
-        ctx.out_dir = "out/Default_universal"
+        ctx._fixed_app_path = ctx.chromium_src / ctx.out_dir / ctx.BROWSEROS_APP_NAME
         return ctx
 
     def _merge_universal(
@@ -312,11 +308,12 @@ class UniversalBuildModule(CommandModule):
         from ..package.merge import merge_architectures
 
         # Prepare output path
-        universal_dir = ctx.chromium_src / "out/Default_universal"
+        universal_ctx = self._create_universal_context(ctx)
+        universal_dir = ctx.chromium_src / universal_ctx.out_dir
 
         # Create universal directory (already cleaned in _clean_build_directories)
         universal_dir.mkdir(parents=True, exist_ok=True)
-        universal_app = universal_dir / "BrowserOS.app"
+        universal_app = universal_dir / universal_ctx.BROWSEROS_APP_NAME
 
         # Find universalizer script
         universalizer_script = (

@@ -1,0 +1,35 @@
+build:
+  product: browseros
+  type: release
+  architecture: x64
+
+gn_flags:
+  file: build/config/gn/flags.windows.release.gn
+
+modules:
+  - clean
+  - git_setup
+  - winsparkle_setup
+  - download_resources
+  - resources
+  - bundled_extensions
+  - chromium_replace
+  - string_replaces
+  - series_patches
+  - patches
+  - configure
+  - compile
+  - sign_windows
+  - package_windows
+  - sparkle_sign
+  - upload
+
+required_envs:
+  - CODE_SIGN_TOOL_PATH
+  - ESIGNER_USERNAME
+  - ESIGNER_PASSWORD
+  - ESIGNER_TOTP_SECRET
+  - SPARKLE_PRIVATE_KEY
+
+notifications:
+  slack: true

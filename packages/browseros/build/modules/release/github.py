@@ -176,7 +176,7 @@ class GithubModule(CommandModule):
         tag_version = normalize_version(version)
         repo = ctx.github_repo
 
-        metadata = fetch_all_release_metadata(version, ctx.env)
+        metadata = fetch_all_release_metadata(version, ctx.env, ctx.product.id)
         if not metadata:
             log_error(f"No release metadata found for version {version}")
             return

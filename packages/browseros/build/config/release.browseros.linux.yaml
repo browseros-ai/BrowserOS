@@ -1,0 +1,25 @@
+build:
+  product: browseros
+  type: release
+  architecture: x64
+
+gn_flags:
+  file: build/config/gn/flags.linux.release.gn
+
+modules:
+  - clean
+  - git_setup
+  - download_resources
+  - resources
+  - bundled_extensions
+  - chromium_replace
+  - string_replaces
+  - series_patches
+  - patches
+  - configure
+  - compile
+  - package_linux
+  - upload
+
+notifications:
+  slack: true

@@ -39,8 +39,39 @@ class ReleaseResourceConfigTest(unittest.TestCase):
         self.assertLess(modules.index("download_resources"), modules.index("bundled_extensions"))
         self.assertLess(modules.index("bundled_extensions"), modules.index("universal_build"))
 
+    def test_product_release_configs_declare_product_and_resource_phases(self):
+        configs = {
+            "release.browseros.macos.arm64.yaml": "browseros",
+            "release.browseros.macos.x64.yaml": "browseros",
+            "release.browseros.macos.universal.yaml": "browseros",
+            "release.browseros.linux.yaml": "browseros",
+            "release.browseros.windows.yaml": "browseros",
+            "release.browserclaw.macos.arm64.yaml": "browserclaw",
+            "release.browserclaw.macos.x64.yaml": "browserclaw",
+            "release.browserclaw.macos.universal.yaml": "browserclaw",
+            "release.browserclaw.linux.yaml": "browserclaw",
+            "release.browserclaw.windows.yaml": "browserclaw",
+        }
+
+        for config_name, product in configs.items():
+            with self.subTest(config=config_name):
+                config = self._config(config_name)
+                self.assertEqual(config["build"]["product"], product)
+                modules = config["modules"]
+                self.assertLess(
+                    modules.index("download_resources"),
+                    modules.index("bundled_extensions"),
+                )
+                self.assertLess(
+                    modules.index("chromium_replace"),
+                    modules.index("string_replaces"),
+                )
+
     def _modules(self, config_name: str) -> list[str]:
-        return yaml.safe_load((CONFIG_DIR / config_name).read_text())["modules"]
+        return self._config(config_name)["modules"]
+
+    def _config(self, config_name: str) -> dict:
+        return yaml.safe_load((CONFIG_DIR / config_name).read_text())
 
 
 if __name__ == "__main__":

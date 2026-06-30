@@ -1,0 +1,28 @@
+build:
+  product: browseros
+  type: release
+  architecture: universal
+
+gn_flags:
+  file: build/config/gn/flags.macos.release.gn
+
+modules:
+  - clean
+  - git_setup
+  - sparkle_setup
+  - download_resources
+  - bundled_extensions
+  - chromium_replace
+  - string_replaces
+  - series_patches
+  - patches
+  - universal_build
+
+required_envs:
+  - MACOS_CERTIFICATE_NAME
+  - PROD_MACOS_NOTARIZATION_APPLE_ID
+  - PROD_MACOS_NOTARIZATION_TEAM_ID
+  - PROD_MACOS_NOTARIZATION_PWD
+
+notifications:
+  slack: true
