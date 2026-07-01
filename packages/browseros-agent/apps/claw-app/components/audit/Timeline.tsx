@@ -35,6 +35,13 @@ interface TimelineProps {
     kind: 'closed' | 'errored'
     reason: string | null
   } | null
+  /**
+   * Whether to render the session-end row below the dispatch list.
+   * Default true keeps existing consumers unchanged. Per-tab views
+   * (see `TabView.tsx`) pass false because the session end is not
+   * scoped to any one tab; it lives on the Session tab only.
+   */
+  showSessionEnd?: boolean
   onScreenshotClick: (dispatchId: number) => void
 }
 
@@ -53,6 +60,7 @@ export function Timeline({
   screenshotDispatchIds,
   startedAt,
   endEvent,
+  showSessionEnd = true,
   onScreenshotClick,
 }: TimelineProps) {
   const screenshotIdSet = new Set(screenshotDispatchIds)
@@ -123,7 +131,9 @@ export function Timeline({
             onScreenshotClick={onScreenshotClick}
           />
         ))}
-        <SessionEndRow startedAt={startedAt} endEvent={endEvent} />
+        {showSessionEnd && (
+          <SessionEndRow startedAt={startedAt} endEvent={endEvent} />
+        )}
       </ol>
     </section>
   )

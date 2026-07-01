@@ -33,16 +33,30 @@ const startedAt = 1_000_000
 function render(
   dispatches: ToolDispatchRow[],
   screenshotDispatchIds: readonly number[] = [],
+  extra: { showSessionEnd?: boolean; endEvent?: TimelineEndEvent } = {},
 ): string {
   return renderToStaticMarkup(
     <Timeline
       dispatches={dispatches}
       screenshotDispatchIds={screenshotDispatchIds}
       startedAt={startedAt}
-      endEvent={null}
+      endEvent={extra.endEvent ?? null}
+      showSessionEnd={extra.showSessionEnd}
       onScreenshotClick={() => undefined}
     />,
   )
+}
+
+type TimelineEndEvent = {
+  createdAt: number
+  kind: 'closed' | 'errored'
+  reason: string | null
+} | null
+
+const CLOSED_END: TimelineEndEvent = {
+  createdAt: startedAt + 60_000,
+  kind: 'closed',
+  reason: null,
 }
 
 describe('Timeline', () => {
@@ -119,5 +133,25 @@ describe('Timeline', () => {
       }),
     ])
     expect(html).not.toContain('data-testid="timeline-block-copy-screenshot"')
+  })
+
+  it('renders the SessionEndRow by default (backward compat)', () => {
+    const html = render([dispatch({ id: 1 })], [], { endEvent: CLOSED_END })
+    // SessionEndRow markup includes the literal "session closed" (or
+    // "session errored") tail; either is enough to pin the presence
+    // of the row.
+    expect(html).toContain('session closed')
+  })
+
+  it('hides the SessionEndRow when showSessionEnd is false (per-tab view)', () => {
+    const html = render([dispatch({ id: 1 })], [], {
+      endEvent: CLOSED_END,
+      showSessionEnd: false,
+    })
+    expect(html).not.toContain('session closed')
+    expect(html).not.toContain('session errored')
+    expect(html).not.toContain('Still running')
+    // The dispatch row itself is still there.
+    expect(html).toContain('snapshot')
   })
 })
