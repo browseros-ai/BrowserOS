@@ -29,10 +29,10 @@ export const HOST_ACP_ADAPTER_CONFIG = {
   codex: {
     displayName: 'Codex',
     nativeBinary: 'codex',
-    acpCommand: 'npx -y @zed-industries/codex-acp@^0.12.0',
-    acpPackageSpec: '@zed-industries/codex-acp@^0.12.0',
-    acpPackageName: '@zed-industries/codex-acp',
-    acpPackageVersionRange: '^0.12.0',
+    acpCommand: 'npx -y @agentclientprotocol/codex-acp@^1.0.2',
+    acpPackageSpec: '@agentclientprotocol/codex-acp@^1.0.2',
+    acpPackageName: '@agentclientprotocol/codex-acp',
+    acpPackageVersionRange: '^1.0.2',
     acpBin: 'codex-acp',
   },
 } as const satisfies Record<HostAcpAdapter, HostAcpAdapterConfig>
@@ -44,9 +44,9 @@ export const HOST_ACP_ADAPTER_CONFIG = {
  * adapter inherits the user's own CLI defaults (e.g. Claude settings
  * `permissions.defaultMode: "dontAsk"`, which auto-denies the BrowserOS
  * MCP tools). Candidates are tried in order; codex lists two ids because
- * @agentclientprotocol/codex-acp advertises `agent-full-access` while
- * @zed-industries/codex-acp (bundled-bun / npx fallback) uses
- * `full-access` for the same approval=never + danger-full-access preset.
+ * @agentclientprotocol/codex-acp advertises `agent-full-access`; older
+ * Zed-packaged Codex ACP builds used `full-access` for the same
+ * approval=never + danger-full-access preset, so keep it as a fallback.
  */
 export const DANGEROUS_ALLOW_MODE_CANDIDATES: Readonly<
   Partial<Record<HostAcpAdapter, readonly string[]>>

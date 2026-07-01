@@ -219,7 +219,7 @@ describe('createLanguageModel — ACP providers', () => {
     expect(overrides?.claude).toContain(bunPath)
     expect(overrides?.claude).toContain('@agentclientprotocol/claude-agent-acp')
     expect(overrides?.codex).toContain(bunPath)
-    expect(overrides?.codex).toContain('@zed-industries/codex-acp')
+    expect(overrides?.codex).toContain('@agentclientprotocol/codex-acp')
 
     fs.rmSync(tmpRoot, { recursive: true, force: true })
   })
@@ -247,7 +247,7 @@ describe('createLanguageModel — ACP providers', () => {
       | undefined
     expect(overrides?.['my-agent']).toBe('my-bin acp')
     expect(overrides?.claude).toContain('@agentclientprotocol/claude-agent-acp')
-    expect(overrides?.codex).toContain('@zed-industries/codex-acp')
+    expect(overrides?.codex).toContain('@agentclientprotocol/codex-acp')
 
     fs.rmSync(tmpRoot, { recursive: true, force: true })
   })
@@ -381,7 +381,7 @@ describe('createLanguageModel — ACP dangerously-allow mode', () => {
     expect(setModeCalls).toEqual(['agent-full-access'])
   })
 
-  it('falls back to the zed codex mode id when the first candidate is rejected', async () => {
+  it('falls back to the legacy codex mode id when the first candidate is rejected', async () => {
     rejectModes = ['agent-full-access']
     const { model } = await createLanguageModel({
       ...baseConfig(),
