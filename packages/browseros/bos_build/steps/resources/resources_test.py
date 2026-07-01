@@ -187,7 +187,7 @@ class CopyResourcesTest(unittest.TestCase):
 
         self.assertFalse((self.chromium.src / "chrome" / "ghost").exists())
 
-    def test_real_config_copies_browseros_server_for_browseros_product(self):
+    def test_real_config_copies_server_resources_for_browseros_product(self):
         self.root.write_copy_config(self._real_copy_config())
         browseros_source = (
             self.root.root
@@ -240,9 +240,9 @@ class CopyResourcesTest(unittest.TestCase):
             / "browseros-claw-server"
         )
         self.assertEqual(browseros_dest.read_text(), "browseros")
-        self.assertFalse(claw_dest.exists())
+        self.assertEqual(claw_dest.read_text(), "claw")
 
-    def test_real_config_copies_claw_server_for_browserclaw_product(self):
+    def test_real_config_copies_server_resources_for_browserclaw_product(self):
         self.root.write_copy_config(self._real_copy_config())
         browseros_source = (
             self.root.root
@@ -295,7 +295,7 @@ class CopyResourcesTest(unittest.TestCase):
             / "bin"
             / "browseros-claw-server"
         )
-        self.assertFalse(browseros_dest.exists())
+        self.assertEqual(browseros_dest.read_text(), "browseros")
         self.assertEqual(claw_dest.read_text(), "claw")
 
     def _real_copy_config(self) -> dict:

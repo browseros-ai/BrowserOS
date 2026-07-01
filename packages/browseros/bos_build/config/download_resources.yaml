@@ -39,7 +39,6 @@ download_operations:
     r2_key: "artifacts/server/latest/browseros-server-resources-darwin-arm64.zip"
     destination: "resources/binaries/browseros_server/darwin-arm64"
     download_type: "artifact_zip"
-    product: ["browseros"]
     os: ["macos"]
     arch: ["arm64"]
 
@@ -47,7 +46,6 @@ download_operations:
     r2_key: "artifacts/server/latest/browseros-server-resources-darwin-x64.zip"
     destination: "resources/binaries/browseros_server/darwin-x64"
     download_type: "artifact_zip"
-    product: ["browseros"]
     os: ["macos"]
     arch: ["x64"]
 
@@ -55,7 +53,6 @@ download_operations:
     r2_key: "artifacts/server/latest/browseros-server-resources-linux-arm64.zip"
     destination: "resources/binaries/browseros_server/linux-arm64"
     download_type: "artifact_zip"
-    product: ["browseros"]
     os: ["linux"]
     arch: ["arm64"]
 
@@ -63,7 +60,6 @@ download_operations:
     r2_key: "artifacts/server/latest/browseros-server-resources-linux-x64.zip"
     destination: "resources/binaries/browseros_server/linux-x64"
     download_type: "artifact_zip"
-    product: ["browseros"]
     os: ["linux"]
     arch: ["x64"]
 
@@ -71,7 +67,6 @@ download_operations:
     r2_key: "artifacts/server/latest/browseros-server-resources-windows-x64.zip"
     destination: "resources/binaries/browseros_server/windows-x64"
     download_type: "artifact_zip"
-    product: ["browseros"]
     os: ["windows"]
     arch: ["x64"]
 
@@ -80,7 +75,6 @@ download_operations:
     r2_key: "claw-server/prod-resources/latest/browseros-claw-server-resources-darwin-arm64.zip"
     destination: "resources/binaries/browseros_claw_server/darwin-arm64"
     download_type: "artifact_zip"
-    product: ["browserclaw"]
     os: ["macos"]
     arch: ["arm64"]
 
@@ -88,7 +82,6 @@ download_operations:
     r2_key: "claw-server/prod-resources/latest/browseros-claw-server-resources-darwin-x64.zip"
     destination: "resources/binaries/browseros_claw_server/darwin-x64"
     download_type: "artifact_zip"
-    product: ["browserclaw"]
     os: ["macos"]
     arch: ["x64"]
 
@@ -96,7 +89,6 @@ download_operations:
     r2_key: "claw-server/prod-resources/latest/browseros-claw-server-resources-linux-arm64.zip"
     destination: "resources/binaries/browseros_claw_server/linux-arm64"
     download_type: "artifact_zip"
-    product: ["browserclaw"]
     os: ["linux"]
     arch: ["arm64"]
 
@@ -104,7 +96,6 @@ download_operations:
     r2_key: "claw-server/prod-resources/latest/browseros-claw-server-resources-linux-x64.zip"
     destination: "resources/binaries/browseros_claw_server/linux-x64"
     download_type: "artifact_zip"
-    product: ["browserclaw"]
     os: ["linux"]
     arch: ["x64"]
 
@@ -112,6 +103,5 @@ download_operations:
     r2_key: "claw-server/prod-resources/latest/browseros-claw-server-resources-windows-x64.zip"
     destination: "resources/binaries/browseros_claw_server/windows-x64"
     download_type: "artifact_zip"
-    product: ["browserclaw"]
     os: ["windows"]
     arch: ["x64"]

@@ -93,7 +93,6 @@ copy_operations:
     source: "resources/binaries/browseros_server/darwin-arm64/resources"
     destination: "chrome/browser/browseros/server/resources"
     type: "directory"
-    product: ["browseros"]
     os: ["macos"]
     arch: ["arm64"]
 
@@ -101,7 +100,6 @@ copy_operations:
     source: "resources/binaries/browseros_server/darwin-x64/resources"
     destination: "chrome/browser/browseros/server/resources"
     type: "directory"
-    product: ["browseros"]
     os: ["macos"]
     arch: ["x64"]
 
@@ -109,7 +107,6 @@ copy_operations:
     source: "resources/binaries/browseros_server/linux-arm64/resources"
     destination: "chrome/browser/browseros/server/resources"
     type: "directory"
-    product: ["browseros"]
     os: ["linux"]
     arch: ["arm64"]
 
@@ -117,7 +114,6 @@ copy_operations:
     source: "resources/binaries/browseros_server/linux-x64/resources"
     destination: "chrome/browser/browseros/server/resources"
     type: "directory"
-    product: ["browseros"]
     os: ["linux"]
     arch: ["x64"]
 
@@ -125,7 +121,6 @@ copy_operations:
     source: "resources/binaries/browseros_server/windows-x64/resources"
     destination: "chrome/browser/browseros/server/resources"
     type: "directory"
-    product: ["browseros"]
     os: ["windows"]
     arch: ["x64"]
 
@@ -134,7 +129,6 @@ copy_operations:
     source: "resources/binaries/browseros_claw_server/darwin-arm64/resources"
     destination: "chrome/browser/browseros/claw_server/resources"
     type: "directory"
-    product: ["browserclaw"]
     os: ["macos"]
     arch: ["arm64"]
 
@@ -142,7 +136,6 @@ copy_operations:
     source: "resources/binaries/browseros_claw_server/darwin-x64/resources"
     destination: "chrome/browser/browseros/claw_server/resources"
     type: "directory"
-    product: ["browserclaw"]
     os: ["macos"]
     arch: ["x64"]
 
@@ -150,7 +143,6 @@ copy_operations:
     source: "resources/binaries/browseros_claw_server/linux-arm64/resources"
     destination: "chrome/browser/browseros/claw_server/resources"
     type: "directory"
-    product: ["browserclaw"]
     os: ["linux"]
     arch: ["arm64"]
 
@@ -158,7 +150,6 @@ copy_operations:
     source: "resources/binaries/browseros_claw_server/linux-x64/resources"
     destination: "chrome/browser/browseros/claw_server/resources"
     type: "directory"
-    product: ["browserclaw"]
     os: ["linux"]
     arch: ["x64"]
 
@@ -166,6 +157,5 @@ copy_operations:
     source: "resources/binaries/browseros_claw_server/windows-x64/resources"
     destination: "chrome/browser/browseros/claw_server/resources"
     type: "directory"
-    product: ["browserclaw"]
     os: ["windows"]
     arch: ["x64"]
