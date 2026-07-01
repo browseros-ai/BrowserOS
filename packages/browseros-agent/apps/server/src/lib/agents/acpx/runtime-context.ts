@@ -5,18 +5,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { constants, type Stats } from 'node:fs'
-import {
-  access,
-  mkdir,
-  readFile,
-  rename,
-  rm,
-  stat,
-  symlink,
-  writeFile,
-} from 'node:fs/promises'
-import { homedir } from 'node:os'
+import type { Stats } from 'node:fs'
+import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import {
   type AgentDefinition,
@@ -28,6 +18,8 @@ import {
   RUNTIME_SKILLS,
   SOUL_TEMPLATE,
 } from './runtime-templates'
+
+export { materializeCodexHome } from './codex-home'
 
 export const BROWSEROS_ACPX_OPERATING_PROMPT_VERSION = '2026-05-02.v1'
 
@@ -96,36 +88,6 @@ export async function ensureRuntimeSkills(
     await writeFileAtomic(skillPath, RUNTIME_SKILLS[name])
   }
   return names
-}
-
-/** Prepares the Codex home that the ACP adapter will see through CODEX_HOME. */
-export async function materializeCodexHome(input: {
-  paths: AgentRuntimePaths
-  skillNames: string[]
-  sourceCodexHome?: string
-}): Promise<void> {
-  await mkdir(input.paths.codexHome, { recursive: true })
-  const source =
-    input.sourceCodexHome ??
-    process.env.CODEX_HOME?.trim() ??
-    join(homedir(), '.codex')
-  await symlinkIfPresent(
-    join(source, 'auth.json'),
-    join(input.paths.codexHome, 'auth.json'),
-  )
-  for (const file of ['config.json', 'config.toml', 'instructions.md']) {
-    await copyIfPresent(join(source, file), join(input.paths.codexHome, file))
-  }
-  for (const name of input.skillNames) {
-    const target = join(input.paths.codexHome, 'skills', name, 'SKILL.md')
-    await writeFileAtomic(
-      target,
-      await readFile(
-        join(input.paths.runtimeSkillsDir, name, 'SKILL.md'),
-        'utf8',
-      ),
-    )
-  }
 }
 
 /** Builds stable BrowserOS-managed instructions for Claude/Codex ACP turns. */
@@ -218,27 +180,6 @@ async function writeFileIfMissing(
   }
 }
 
-async function symlinkIfPresent(source: string, target: string): Promise<void> {
-  if (!(await sourceFileExists(source))) return
-  await mkdir(dirname(target), { recursive: true })
-  try {
-    await symlink(source, target)
-  } catch (err) {
-    if (!isAlreadyExistsError(err)) throw err
-  }
-}
-
-async function copyIfPresent(source: string, target: string): Promise<void> {
-  if (!(await sourceFileExists(source))) return
-  const content = await readFile(source, 'utf8')
-  await mkdir(dirname(target), { recursive: true })
-  try {
-    await writeFile(target, content, { encoding: 'utf8', flag: 'wx' })
-  } catch (err) {
-    if (!isAlreadyExistsError(err)) throw err
-  }
-}
-
 /** Writes generated content via atomic replace so readers never see partial files. */
 async function writeFileAtomic(path: string, content: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
@@ -253,21 +194,6 @@ async function writeFileAtomic(path: string, content: string): Promise<void> {
     await rm(temporaryPath, { force: true }).catch(() => undefined)
     throw err
   }
-}
-
-async function sourceFileExists(path: string): Promise<boolean> {
-  let info: Stats
-  try {
-    info = await stat(path)
-    await access(path, constants.R_OK)
-  } catch (err) {
-    if (isNotFoundError(err)) return false
-    throw err
-  }
-  if (!info.isFile()) {
-    throw new Error(`Expected source file to be a file: ${path}`)
-  }
-  return true
 }
 
 export function shellQuote(value: string): string {

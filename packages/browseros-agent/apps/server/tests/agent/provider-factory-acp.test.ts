@@ -4,6 +4,19 @@
  */
 
 import { afterAll, beforeEach, describe, expect, it, mock } from 'bun:test'
+import {
+  accessSync,
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -38,11 +51,48 @@ const fakeProvider = {
 const mkdirCalls: Array<{ path: string; opts: { recursive?: boolean } }> = []
 let lastInstructionArgs: Record<string, unknown> | null = null
 
-mock.module('node:fs/promises', () => ({
-  mkdir: async (path: string, opts: { recursive?: boolean }) => {
-    mkdirCalls.push({ path, opts })
-  },
-}))
+function mockFsPromises(
+  mkdirImpl: (path: string, opts: { recursive?: boolean }) => Promise<void>,
+): void {
+  mock.module('node:fs/promises', () => ({
+    access: async (path: string, mode?: number) => {
+      accessSync(path, mode)
+    },
+    chmod: async (path: string, mode: number) => {
+      chmodSync(path, mode)
+    },
+    lstat: async (path: string) => lstatSync(path),
+    mkdir: mkdirImpl,
+    mkdtemp: async (prefix: string) => mkdtempSync(prefix),
+    readFile: async (path: string, encoding?: BufferEncoding) =>
+      readFileSync(path, encoding),
+    rename: async (oldPath: string, newPath: string) => {
+      renameSync(oldPath, newPath)
+    },
+    rm: async (
+      path: string,
+      opts?: { recursive?: boolean; force?: boolean },
+    ) => {
+      rmSync(path, opts)
+    },
+    stat: async (path: string) => statSync(path),
+    symlink: async (target: string, path: string) => {
+      symlinkSync(target, path)
+    },
+    writeFile: async (
+      path: string,
+      data: string | NodeJS.TypedArray | DataView,
+      options?: Parameters<typeof writeFileSync>[2],
+    ) => {
+      writeFileSync(path, data, options)
+    },
+  }))
+}
+
+mockFsPromises(async (path: string, opts: { recursive?: boolean }) => {
+  mkdirCalls.push({ path, opts })
+  mkdirSync(path, opts)
+})
 
 mock.module('../../src/lib/browseros-dir', () => ({
   getBrowserosDir: () => join(homedir(), '.browseros-test'),
@@ -279,15 +329,17 @@ describe('createLanguageModel — ACP providers', () => {
   })
 
   it('survives mkdir failures with a warn log and still spawns', async () => {
-    mock.module('node:fs/promises', () => ({
-      mkdir: async () => {
-        throw new Error('permission denied')
-      },
-    }))
+    mockFsPromises(async () => {
+      throw new Error('permission denied')
+    })
     // Re-import the factory so the mkdir mock is picked up.
     delete require.cache[require.resolve('../../src/agent/provider-factory')]
     const reloaded = await import('../../src/agent/provider-factory')
     await reloaded.createLanguageModel(baseConfig() as never)
+    mockFsPromises(async (path: string, opts: { recursive?: boolean }) => {
+      mkdirCalls.push({ path, opts })
+      mkdirSync(path, opts)
+    })
     // buildAcpxProvider still called even though mkdir threw.
     expect(lastBuildArgs?.workspacePath).toBe(
       join(homedir(), '.browseros-test', 'workspaces', 'claude-code'),

@@ -5,6 +5,11 @@
  */
 
 import { type AgentProbeResult, probeAgent as runProbe } from 'acp-probe'
+import {
+  ensureRuntimeSkills,
+  materializeCodexHome,
+  resolveAgentRuntimePaths,
+} from '../../../lib/agents/acpx/runtime-context'
 import { resolveAcpSpawnCommand } from '../../../lib/agents/host-acp/launcher'
 import { getBrowserosDir } from '../../../lib/browseros-dir'
 import { logger } from '../../../lib/logger'
@@ -89,14 +94,22 @@ export async function probeAcpAgent(
   let agentId = input.agentId
   let command = input.command
   if (!command && agentId) {
+    const browserosDir = input.browserosDir ?? getBrowserosDir()
     const launcher = resolveAcpSpawnCommand({
       agentType: agentId,
-      browserosDir: input.browserosDir ?? getBrowserosDir(),
+      browserosDir,
       resourcesDir: input.resourcesDir,
       platform: input.platform,
     })
     if (launcher?.source === 'bundled-bun') {
-      command = launcher.command
+      command =
+        agentId === 'codex'
+          ? await resolveCodexBundledProbeCommand({
+              browserosDir,
+              resourcesDir: input.resourcesDir,
+              platform: input.platform,
+            })
+          : launcher.command
       agentId = undefined
       logger.debug('ACP probe using bundled-bun launcher', {
         originalAgentId: input.agentId,
@@ -112,6 +125,30 @@ export async function probeAcpAgent(
     timeoutMs,
   })
   return normalizeProbeResult(result)
+}
+
+async function resolveCodexBundledProbeCommand(input: {
+  browserosDir: string
+  resourcesDir?: string | null
+  platform?: NodeJS.Platform
+}): Promise<string> {
+  const paths = resolveAgentRuntimePaths({
+    browserosDir: input.browserosDir,
+    agentId: 'codex-probe',
+  })
+  const skillNames = await ensureRuntimeSkills(paths.runtimeSkillsDir)
+  await materializeCodexHome({ paths, skillNames })
+  const launcher = resolveAcpSpawnCommand({
+    agentType: 'codex',
+    browserosDir: input.browserosDir,
+    resourcesDir: input.resourcesDir,
+    platform: input.platform,
+    env: { ...process.env, CODEX_HOME: paths.codexHome },
+  })
+  if (launcher?.source !== 'bundled-bun') {
+    throw new Error('Bundled Codex probe launcher disappeared')
+  }
+  return launcher.command
 }
 
 // codex-acp encodes effort into the advertised model id when it does not

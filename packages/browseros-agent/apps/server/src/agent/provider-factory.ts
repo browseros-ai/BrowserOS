@@ -17,7 +17,6 @@ import {
   DANGEROUS_ALLOW_MODE_CANDIDATES,
   isHostAcpAdapter,
 } from '../lib/agents/host-acp/config'
-import { resolveAcpSpawnCommand } from '../lib/agents/host-acp/launcher'
 import { getBrowserosDir } from '../lib/browseros-dir'
 import { createBrowserOSFetch } from '../lib/browseros-fetch'
 import {
@@ -29,6 +28,7 @@ import { createCopilotFetch } from '../lib/clients/oauth/copilot-fetch'
 import { logger } from '../lib/logger'
 import { createOpenRouterCompatibleFetch } from '../lib/openrouter-fetch'
 import { ensureWorkspaceInstructionFile } from './acp-instructions/ensureInstructionFile'
+import { resolveBuiltInAcpAgentRegistryOverrides } from './acp-launchers'
 import { ACP_PROVIDER_TYPES, isAcpProvider } from './acp-providers'
 import type { BuildSystemPromptOptions } from './prompt'
 import type { ResolvedAgentConfig } from './types'
@@ -147,22 +147,10 @@ async function createAcpLanguageModel(
       : {}),
   })
 
-  const agentRegistryOverrides: Record<string, string> = {}
-  // Pre-seed the built-in adapters with the bundled-Bun launcher so the
-  // spawned child does not depend on `npx` being on the user's PATH.
-  // We only override when the launcher resolved the bundled binary;
-  // host-npx-fallback would only restate acpx's own registry command,
-  // so we let acpx resolve it directly in that case.
-  for (const builtIn of ['claude', 'codex'] as const) {
-    const launcher = resolveAcpSpawnCommand({
-      agentType: builtIn,
-      browserosDir: getBrowserosDir(),
-      resourcesDir: config.resourcesDir,
-    })
-    if (launcher?.source === 'bundled-bun') {
-      agentRegistryOverrides[builtIn] = launcher.command
-    }
-  }
+  const agentRegistryOverrides = await resolveBuiltInAcpAgentRegistryOverrides({
+    browserosDir: getBrowserosDir(),
+    resourcesDir: config.resourcesDir,
+  })
   if (config.provider === LLM_PROVIDERS.ACP_CUSTOM && config.acpCommand) {
     agentRegistryOverrides[agentId] = config.acpCommand
   }
