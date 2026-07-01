@@ -37,7 +37,7 @@ describe('groupDispatchesByTab', () => {
     expect(groupDispatchesByTab([], [])).toEqual([])
   })
 
-  it('groups all null-pageId dispatches into a single Session bucket', () => {
+  it('all null-pageId dispatches yields a Session bucket only (no page tabs)', () => {
     const rows = [dispatch(1, null), dispatch(2, null), dispatch(3, null)]
     const groups = groupDispatchesByTab(rows, [])
     expect(groups).toHaveLength(1)
@@ -48,43 +48,63 @@ describe('groupDispatchesByTab', () => {
     expect(groups[0]!.dispatches.map((d) => d.id)).toEqual([1, 2, 3])
   })
 
-  it('single pageId with no null dispatches yields exactly one page bucket', () => {
+  it('single pageId + zero null dispatches yields Session + one page tab', () => {
     const rows = [
       dispatch(1, 7, { url: 'https://a.example/', title: 'A' }),
       dispatch(2, 7, { url: 'https://a.example/next', title: 'A2' }),
     ]
     const groups = groupDispatchesByTab(rows, [])
-    expect(groups).toHaveLength(1)
-    expect(groups[0]!.id).toBe('page-7')
-    expect(groups[0]!.label).toBe('Page 7')
+    expect(groups).toHaveLength(2)
+    expect(groups[0]!.id).toBe('session')
     expect(groups[0]!.dispatchCount).toBe(2)
+    expect(groups[1]!.id).toBe('page-7')
+    expect(groups[1]!.label).toBe('Tab 1')
   })
 
-  it('mixed session + pages produces Session first, then ascending pageIds', () => {
+  it('page tabs are labelled sequentially by first-appearance order (Tab 1, Tab 2, ...) not by raw pageId', () => {
+    // codex may open pageIds 43, 21, 55 in that chronological order.
+    // We want Tab 1 -> 43, Tab 2 -> 21, Tab 3 -> 55.
+    const rows = [
+      dispatch(1, 43),
+      dispatch(2, 21),
+      dispatch(3, 43),
+      dispatch(4, 55),
+      dispatch(5, 21),
+    ]
+    const groups = groupDispatchesByTab(rows, [])
+    const pageGroups = groups.filter((g) => g.id !== 'session')
+    expect(pageGroups.map((g) => g.label)).toEqual(['Tab 1', 'Tab 2', 'Tab 3'])
+    expect(pageGroups.map((g) => g.pageId)).toEqual([43, 21, 55])
+  })
+
+  it('Session bucket contains EVERY dispatch (overview semantics)', () => {
     const rows = [
       dispatch(1, null),
       dispatch(2, 7),
       dispatch(3, 1),
       dispatch(4, null),
       dispatch(5, 3),
-      dispatch(6, 7),
-      dispatch(7, 3),
-      dispatch(8, 1),
     ]
     const groups = groupDispatchesByTab(rows, [])
-    expect(groups.map((g) => g.id)).toEqual([
-      'session',
-      'page-1',
-      'page-3',
-      'page-7',
-    ])
-    expect(groups[0]!.dispatchCount).toBe(2)
-    expect(groups[1]!.dispatchCount).toBe(2)
-    expect(groups[2]!.dispatchCount).toBe(2)
-    expect(groups[3]!.dispatchCount).toBe(2)
+    const session = groups.find((g) => g.id === 'session')!
+    expect(session.dispatchCount).toBe(5)
+    expect(session.dispatches.map((d) => d.id)).toEqual([1, 2, 3, 4, 5])
   })
 
-  it('preserves chronological order inside each group', () => {
+  it('Session bucket contains EVERY screenshot (overview semantics)', () => {
+    const rows = [
+      dispatch(1, null),
+      dispatch(2, 3),
+      dispatch(3, 3),
+      dispatch(4, 7),
+      dispatch(5, 7),
+    ]
+    const groups = groupDispatchesByTab(rows, [1, 3, 5])
+    const session = groups.find((g) => g.id === 'session')!
+    expect(session.screenshotDispatchIds).toEqual([1, 3, 5])
+  })
+
+  it('preserves chronological order inside per-page groups', () => {
     const rows = [
       dispatch(1, 5),
       dispatch(2, null),
@@ -94,33 +114,30 @@ describe('groupDispatchesByTab', () => {
     ]
     const groups = groupDispatchesByTab(rows, [])
     expect(
-      groups.find((g) => g.id === 'session')!.dispatches.map((d) => d.id),
-    ).toEqual([2, 5])
-    expect(
       groups.find((g) => g.id === 'page-5')!.dispatches.map((d) => d.id),
     ).toEqual([1, 3, 4])
   })
 
-  it('displayUrl uses the LAST non-null url observed in the group', () => {
+  it('per-page displayUrl uses the LAST non-null url observed in that group', () => {
     const rows = [
       dispatch(1, 7, { url: 'https://first.example/', title: 'First' }),
       dispatch(2, 7, { url: null, title: null }),
       dispatch(3, 7, { url: 'https://latest.example/', title: 'Latest' }),
       dispatch(4, 7, { url: null, title: null }),
     ]
-    const g = groupDispatchesByTab(rows, [])[0]!
+    const g = groupDispatchesByTab(rows, []).find((x) => x.id === 'page-7')!
     expect(g.displayUrl).toBe('https://latest.example/')
     expect(g.displayTitle).toBe('Latest')
   })
 
-  it('displayUrl is null when every url in the group is null', () => {
+  it('per-page displayUrl is null when every url in the group is null', () => {
     const rows = [dispatch(1, 9), dispatch(2, 9)]
-    const g = groupDispatchesByTab(rows, [])[0]!
+    const g = groupDispatchesByTab(rows, []).find((x) => x.id === 'page-9')!
     expect(g.displayUrl).toBeNull()
     expect(g.displayTitle).toBeNull()
   })
 
-  it('screenshotDispatchIds filters allScreenshotIds to this group only', () => {
+  it('per-page screenshotDispatchIds filters to that page only', () => {
     const rows = [
       dispatch(1, null),
       dispatch(2, 3),
@@ -131,9 +148,6 @@ describe('groupDispatchesByTab', () => {
     // Assume screenshots exist for ids 1, 3, 5 (mixed groups).
     const groups = groupDispatchesByTab(rows, [1, 3, 5])
     expect(
-      groups.find((g) => g.id === 'session')!.screenshotDispatchIds,
-    ).toEqual([1])
-    expect(
       groups.find((g) => g.id === 'page-3')!.screenshotDispatchIds,
     ).toEqual([3])
     expect(
@@ -143,13 +157,18 @@ describe('groupDispatchesByTab', () => {
 })
 
 describe('pickDefaultTabId', () => {
-  it('returns the first non-session page tab when one exists', () => {
+  it('always returns Session when it exists (overview-first)', () => {
     const rows = [dispatch(1, null), dispatch(2, 3), dispatch(3, 7)]
-    expect(pickDefaultTabId(groupDispatchesByTab(rows, []))).toBe('page-3')
+    expect(pickDefaultTabId(groupDispatchesByTab(rows, []))).toBe('session')
   })
 
-  it('falls back to session when no page tabs exist', () => {
+  it('returns Session even for a session-only task', () => {
     const rows = [dispatch(1, null), dispatch(2, null)]
+    expect(pickDefaultTabId(groupDispatchesByTab(rows, []))).toBe('session')
+  })
+
+  it('returns Session even for a page-only task', () => {
+    const rows = [dispatch(1, 5), dispatch(2, 5)]
     expect(pickDefaultTabId(groupDispatchesByTab(rows, []))).toBe('session')
   })
 

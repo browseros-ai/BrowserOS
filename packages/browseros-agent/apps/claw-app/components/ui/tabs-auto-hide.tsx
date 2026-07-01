@@ -29,6 +29,8 @@ export interface AutoHideTabsProps {
   items: AutoHideTabsItem[]
   /** Which tab id is selected on mount. Falls back to the first item. */
   defaultId?: string
+  /** Passes through to shadcn TabsList's variant (`default` | `line`). */
+  listVariant?: 'default' | 'line'
   className?: string
   listClassName?: string
 }
@@ -36,6 +38,7 @@ export interface AutoHideTabsProps {
 export function AutoHideTabs({
   items,
   defaultId,
+  listVariant,
   className,
   listClassName,
 }: AutoHideTabsProps) {
@@ -44,7 +47,7 @@ export function AutoHideTabs({
   const initial = defaultId ?? items[0]!.id
   return (
     <Tabs defaultValue={initial} className={className}>
-      <TabsList className={listClassName}>
+      <TabsList variant={listVariant} className={listClassName}>
         {items.map((it) => (
           <TabsTrigger key={it.id} value={it.id}>
             {it.label}

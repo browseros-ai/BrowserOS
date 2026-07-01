@@ -84,7 +84,11 @@ export function TaskDetailPage() {
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6 px-8 pt-10 pb-20">
       <TaskHeader task={task} />
-      <AutoHideTabs items={items} defaultId={pickDefaultTabId(groups)} />
+      <AutoHideTabs
+        items={items}
+        defaultId={pickDefaultTabId(groups)}
+        listVariant="line"
+      />
       <ScreenshotLightbox
         dispatchId={lightboxId}
         onClose={() => setLightboxId(null)}

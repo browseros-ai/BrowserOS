@@ -34,11 +34,20 @@ export interface TabGroup {
 }
 
 /**
- * Groups a task's dispatch stream into one bucket per distinct
- * `pageId`, plus a leftmost "Session" bucket for dispatches with
- * `pageId === null`. Ordering: Session first (if present), then
- * ascending numeric pageId. Chronological order is preserved
- * inside each group.
+ * Groups a task's dispatch stream into a leftmost "Session"
+ * overview bucket plus one bucket per distinct `pageId`.
+ *
+ * The Session bucket is the task-level overview: it contains
+ * EVERY dispatch and EVERY screenshot, so the operator can see
+ * the whole task at a glance without picking a specific tab.
+ * Each per-page bucket contains only the dispatches + screenshots
+ * scoped to that tab.
+ *
+ * Page tabs are labelled sequentially (`Tab 1`, `Tab 2`, ...) in
+ * chronological order of first appearance. The underlying BrowserOS
+ * pageId is intentionally not surfaced in the label: it is stable
+ * across the extension's lifetime and can range into the hundreds,
+ * which reads as noise.
  *
  * Complexity: O(N) over dispatches, one pass. Callers should
  * memoise per task-detail response.
@@ -48,46 +57,52 @@ export function groupDispatchesByTab(
   allScreenshotIds: readonly number[],
 ): TabGroup[] {
   const screenshotSet = new Set(allScreenshotIds)
-  const buckets = new Map<number | 'session', ToolDispatchRow[]>()
+  const buckets = new Map<number, ToolDispatchRow[]>()
+  // Preserve first-seen order for the sequential Tab numbering
+  // (agents typically open tabs in chronological order, so this
+  // matches the operator's mental narrative better than sorting
+  // by raw pageId).
+  const pageOrder: number[] = []
   for (const d of dispatches) {
-    const key: number | 'session' = d.pageId ?? 'session'
-    const arr = buckets.get(key)
-    if (arr) arr.push(d)
-    else buckets.set(key, [d])
+    if (d.pageId === null) continue
+    const arr = buckets.get(d.pageId)
+    if (arr) {
+      arr.push(d)
+    } else {
+      buckets.set(d.pageId, [d])
+      pageOrder.push(d.pageId)
+    }
   }
 
   const groups: TabGroup[] = []
 
-  const sessionRows = buckets.get('session')
-  if (sessionRows && sessionRows.length > 0) {
+  // Session overview: EVERY dispatch and EVERY screenshot. This is
+  // the default view when the operator opens the task and does not
+  // yet know which tab they want to drill into.
+  if (dispatches.length > 0) {
     groups.push({
       id: 'session',
       pageId: null,
       label: 'Session',
       displayUrl: null,
       displayTitle: null,
-      dispatches: sessionRows,
-      dispatchCount: sessionRows.length,
-      screenshotDispatchIds: sessionRows
+      dispatches,
+      dispatchCount: dispatches.length,
+      screenshotDispatchIds: dispatches
         .map((d) => d.id)
         .filter((id) => screenshotSet.has(id)),
     })
   }
 
-  const pageKeys: number[] = []
-  for (const key of buckets.keys()) {
-    if (typeof key === 'number') pageKeys.push(key)
-  }
-  pageKeys.sort((a, b) => a - b)
-
-  for (const pageId of pageKeys) {
+  // Per-page buckets, numbered by first-appearance order.
+  pageOrder.forEach((pageId, idx) => {
     const rows = buckets.get(pageId)!
     const lastWithUrl = [...rows].reverse().find((d) => d.url !== null)
     const lastWithTitle = [...rows].reverse().find((d) => d.title !== null)
     groups.push({
       id: `page-${pageId}`,
       pageId,
-      label: `Page ${pageId}`,
+      label: `Tab ${idx + 1}`,
       displayUrl: lastWithUrl?.url ?? null,
       displayTitle: lastWithTitle?.title ?? null,
       dispatches: rows,
@@ -96,18 +111,19 @@ export function groupDispatchesByTab(
         .map((d) => d.id)
         .filter((id) => screenshotSet.has(id)),
     })
-  }
+  })
 
   return groups
 }
 
 /**
- * Picks which tab should be selected first. Prefers the first
- * real page tab (the operator usually wants to see actual page
- * activity first); falls back to Session when the task is
- * pageId-less all the way through.
+ * Picks which tab should be selected first. Prefers the Session
+ * overview so the operator sees the task-wide screenshot strip
+ * and timeline on entry; page tabs are drill-downs. Falls back to
+ * the first available id when Session is absent (e.g. an empty
+ * task).
  */
 export function pickDefaultTabId(groups: TabGroup[]): string | undefined {
-  const firstPage = groups.find((g) => g.id !== 'session')
-  return firstPage?.id ?? groups[0]?.id
+  const session = groups.find((g) => g.id === 'session')
+  return session?.id ?? groups[0]?.id
 }
