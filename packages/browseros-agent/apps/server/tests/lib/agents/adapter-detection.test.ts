@@ -354,7 +354,7 @@ describe('probeNpxPackageCache', () => {
         '_npx',
         'hit',
         'node_modules',
-        '@zed-industries',
+        '@agentclientprotocol',
         'codex-acp',
       ),
       { recursive: true },
@@ -365,10 +365,10 @@ describe('probeNpxPackageCache', () => {
         '_npx',
         'miss',
         'node_modules',
-        '@zed-industries',
+        '@agentclientprotocol',
         'nested',
         'node_modules',
-        '@zed-industries',
+        '@agentclientprotocol',
         'codex-acp',
       ),
       { recursive: true },
@@ -379,11 +379,11 @@ describe('probeNpxPackageCache', () => {
         '_npx',
         'hit',
         'node_modules',
-        '@zed-industries',
+        '@agentclientprotocol',
         'codex-acp',
         'package.json',
       ),
-      '{"version":"0.12.1"}',
+      '{"version":"1.0.2"}',
     )
     await writeFile(
       join(
@@ -391,20 +391,20 @@ describe('probeNpxPackageCache', () => {
         '_npx',
         'miss',
         'node_modules',
-        '@zed-industries',
+        '@agentclientprotocol',
         'nested',
         'node_modules',
-        '@zed-industries',
+        '@agentclientprotocol',
         'codex-acp',
         'package.json',
       ),
-      '{"version":"0.12.1"}',
+      '{"version":"1.0.2"}',
     )
 
     await expect(
-      probeNpxPackageCache('@zed-industries/codex-acp', {
+      probeNpxPackageCache('@agentclientprotocol/codex-acp', {
         npxCacheDir: join(npmCacheDir, '_npx'),
-        versionRange: '^0.12.0',
+        versionRange: '^1.0.2',
       }),
     ).resolves.toBe(true)
   })
@@ -418,7 +418,7 @@ describe('probeNpxPackageCache', () => {
         '_npx',
         'stale',
         'node_modules',
-        '@zed-industries',
+        '@agentclientprotocol',
         'codex-acp',
       ),
       { recursive: true },
@@ -429,17 +429,17 @@ describe('probeNpxPackageCache', () => {
         '_npx',
         'stale',
         'node_modules',
-        '@zed-industries',
+        '@agentclientprotocol',
         'codex-acp',
         'package.json',
       ),
-      '{"version":"0.11.9"}',
+      '{"version":"1.0.1"}',
     )
 
     await expect(
-      probeNpxPackageCache('@zed-industries/codex-acp', {
+      probeNpxPackageCache('@agentclientprotocol/codex-acp', {
         npxCacheDir: join(npmCacheDir, '_npx'),
-        versionRange: '^0.12.0',
+        versionRange: '^1.0.2',
       }),
     ).resolves.toBe(false)
   })

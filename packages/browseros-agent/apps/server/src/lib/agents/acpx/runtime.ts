@@ -927,9 +927,9 @@ async function applyPermissionBypass(
       return []
     } catch (err) {
       lastError = err
-      // debug, not warn: the harness always spawns @zed-industries/codex-acp
-      // (mode id `full-access`), so codex's first candidate is expected to
-      // be rejected on the happy path. Only the all-rejected case below warns.
+      // debug, not warn: Codex ACP builds have used both `agent-full-access`
+      // and `full-access` for the same bypass mode. Only the all-rejected
+      // case below warns.
       logger.debug('Agent harness acpx mode candidate rejected', {
         agentId: input.agent.id,
         adapter: input.agent.adapter,
