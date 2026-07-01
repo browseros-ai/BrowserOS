@@ -317,6 +317,21 @@ func startClawWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []
 		Cmd:     []string{"bun", "--env-file=.env.development", "wxt"},
 	}))
 
+	// Plain-URL preview of the newtab UI. Static-serves the same
+	// `dist/chrome-mv3-dev` directory that `wxt` writes to, so
+	// agent-browser (or any regular browser) can drive the audit
+	// pages via http://127.0.0.1:5174/newtab without needing the
+	// extension installed. The served HTML references wxt's Vite
+	// dev server for its module + HMR client URLs, so live-reload
+	// still works on this URL.
+	procs = append(procs, proc.StartManaged(ctx, wg, proc.ProcConfig{
+		Tag:     proc.TagWeb,
+		Dir:     filepath.Join(root, "apps/claw-app"),
+		Env:     env,
+		Restart: true,
+		Cmd:     []string{"bun", "run", "dev:web"},
+	}))
+
 	waitForCDP(ctx, p.CDP)
 
 	sidecarPath := watchSidecarConfigPath(userDataDir, "claw-server")

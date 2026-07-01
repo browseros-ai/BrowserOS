@@ -18,6 +18,7 @@ var (
 	TagAgent   = Tag{"agent", color.New(color.FgMagenta)}
 	TagServer  = Tag{"server", color.New(color.FgCyan)}
 	TagBrowser = Tag{"browser", color.New(color.FgBlue)}
+	TagWeb     = Tag{"web", color.New(color.FgHiMagenta)}
 	TagInfo    = Tag{"info", color.New(color.FgGreen)}
 	TagTest    = Tag{"test", color.New(color.FgWhite)}
 
