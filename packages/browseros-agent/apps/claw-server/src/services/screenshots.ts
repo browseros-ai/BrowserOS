@@ -124,13 +124,13 @@ export function persistScreenshot(input: PersistScreenshotInput): void {
   }
 
   const frame = screencastCache.get(input.pageId)
-  if (!frame) return
-  let cacheBytes: Buffer
-  try {
-    cacheBytes = Buffer.from(frame.jpegBase64, 'base64')
-  } catch {
-    return
-  }
+  if (!frame || !frame.jpegBase64) return
+  // Buffer.from(str, 'base64') never throws in Node/Bun; invalid
+  // chars are silently skipped. Guard against a zero-length result
+  // explicitly so we never write a 0-byte JPEG that renders as a
+  // broken icon in the audit UI.
+  const cacheBytes = Buffer.from(frame.jpegBase64, 'base64')
+  if (cacheBytes.length === 0) return
   writeBytesToDisk(input.dispatchId, cacheBytes)
   if (input.agentId !== null) {
     agentTabs.markFirstCaptureDone(input.agentId, input.pageId)
@@ -161,9 +161,10 @@ function extractImageBytes(
 ): Buffer | null {
   const image = extractToolResultImageData(result)
   if (!image) return null
-  try {
-    return Buffer.from(image, 'base64')
-  } catch {
-    return null
-  }
+  // Buffer.from(str, 'base64') never throws; a zero-length result
+  // means the tool sent garbage or empty base64. Treat as absent so
+  // the fallback branch can decide whether to write the cache frame
+  // instead of writing a 0-byte file here.
+  const bytes = Buffer.from(image, 'base64')
+  return bytes.length > 0 ? bytes : null
 }
