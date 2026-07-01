@@ -51,6 +51,22 @@ export interface ReplayFrame {
   node: string
   /** Caption sentence rendered in the viewport overlay + timeline row. */
   caption: string
+  /**
+   * Full URL captured on this dispatch's audit row, when the tool
+   * targeted a page. Populates the replay viewport's browser-chrome
+   * address bar so the operator can see the exact URL the agent
+   * was on at this instant. Null for tools that do not target a
+   * page (`run`, `windows`, `tab_groups`, `tabs new` before the
+   * result comes back).
+   */
+  url?: string | null
+  /**
+   * BrowserOS pageId this frame belongs to, or null when the tool
+   * did not target a page. Enables per-tab filtering on the replay
+   * screen so the address bar + caption reflect the selected tab
+   * as the operator switches between them.
+   */
+  pageId?: number | null
   /** Optional badge shown on the timeline row ("Blocked", "Cancelled"). */
   note?: string
   /** Source dispatch id so the replay surface can deep-link. */

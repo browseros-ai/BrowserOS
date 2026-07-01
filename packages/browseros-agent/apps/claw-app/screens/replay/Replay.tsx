@@ -52,6 +52,17 @@ export function Replay() {
     return replay.eventsForTab(selectedTabPageId)
   }, [replay, selectedTabPageId])
 
+  // Frames restricted to the selected tab. Must be declared
+  // BEFORE the isLoading early-return below so rules-of-hooks
+  // stays honest (hook count invariant across renders).
+  const framesForSelectedTab = useMemo(
+    () =>
+      !replay || selectedTabPageId === null
+        ? []
+        : replay.frames.filter((f) => f.pageId === selectedTabPageId),
+    [replay, selectedTabPageId],
+  )
+
   // When playback's time changes (driven by the scaffold's
   // setInterval clock), forward to the rrweb-player. Without this
   // the player would sit idle while the scrubber + timeline
@@ -84,6 +95,17 @@ export function Replay() {
   const back = () => navigate(`/audit/${replay.sessionId}`)
   const currentFrameIndex = frameIndexAt(replay.frames, playback.time)
   const currentFrame = replay.frames[currentFrameIndex]
+
+  // Per-tab current frame. Drives the viewport's address bar and
+  // caption so that switching tabs immediately reflects that
+  // tab's most recent dispatch at the current playback time.
+  // Falls back to the session-global currentFrame when the
+  // selected tab has no frames at or before `playback.time`
+  // (e.g. the operator scrubbed to an instant before that tab
+  // was ever active).
+  const currentTabFrameIndex = frameIndexAt(framesForSelectedTab, playback.time)
+  const currentTabFrame =
+    framesForSelectedTab[currentTabFrameIndex] ?? currentFrame
 
   const stats: { label: string; value: string }[] = [
     { label: 'Duration', value: replay.duration },
@@ -149,7 +171,7 @@ export function Replay() {
           )}
           <ReplayViewport
             site={replay.site}
-            frame={currentFrame}
+            frame={currentTabFrame}
             events={eventsForSelectedTab}
             onPlayerReady={onPlayerReady}
           />

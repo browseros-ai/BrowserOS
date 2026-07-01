@@ -59,9 +59,14 @@ export function ReplayViewport({
   events,
   onPlayerReady,
 }: ReplayViewportProps) {
+  // Prefer the current frame's full URL so the address bar shows
+  // exactly where the agent was at this instant. Falls back to the
+  // task-level site (a hostname) when the frame carries no url
+  // (e.g. `run`, `windows`, `tab_groups` dispatches).
+  const addressBar = frame?.url ?? site
   return (
     <div className="relative flex flex-1 flex-col overflow-hidden rounded-2xl border border-border-2 bg-card shadow-sm">
-      <Chrome site={site} />
+      <Chrome url={addressBar} />
       <div className="relative flex flex-1 items-stretch justify-center overflow-hidden bg-bg-sunken">
         <PlayerCanvas events={events} onReady={onPlayerReady} />
         {frame && <Caption frame={frame} />}
@@ -70,7 +75,7 @@ export function ReplayViewport({
   )
 }
 
-function Chrome({ site }: { site: string }) {
+function Chrome({ url }: { url: string }) {
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-border border-b bg-bg-sunken px-3">
       <span className="flex gap-1.5">
@@ -80,11 +85,8 @@ function Chrome({ site }: { site: string }) {
       </span>
       <div className="ml-3 flex h-6 flex-1 items-center gap-2 rounded-md border border-border-2 bg-card px-3 font-mono text-ink-2 text-xs">
         <Lock className="size-3 text-ink-3" />
-        <span className="truncate">{site}</span>
+        <span className="truncate">{url}</span>
       </div>
-      <span className="rounded-full bg-bg-sunken px-2 py-0.5 font-bold text-[10px] text-ink-3 uppercase tracking-wide">
-        rrweb
-      </span>
     </div>
   )
 }
@@ -111,12 +113,12 @@ function PlayerCanvas({ events, onReady }: PlayerCanvasProps) {
 
     // Strip the cockpit annotations so rrweb sees its canonical
     // {type, data, timestamp} shape.
+    // biome-ignore lint/suspicious/noExplicitAny: rrweb's event
+    // union is wide; we trust the recorder's output shape.
     const rrwebEvents = events.map((e) => ({
       type: e.type,
       data: e.data,
       timestamp: e.ts,
-      // biome-ignore lint/suspicious/noExplicitAny: rrweb's event
-      // union is wide; we trust the recorder's output shape.
     })) as any[]
 
     mount.replaceChildren()
