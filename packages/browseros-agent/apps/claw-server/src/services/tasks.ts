@@ -23,6 +23,7 @@
  * same millisecond.
  */
 
+import { existsSync } from 'node:fs'
 import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm'
 import { getAuditDb } from '../modules/db/db'
 import {
@@ -31,6 +32,24 @@ import {
   type ToolDispatchRow,
   toolDispatches,
 } from '../modules/db/schema/schema'
+import { screenshotPath } from './screenshots'
+
+/**
+ * Returns true if this dispatch actually has a screenshot file on
+ * disk. Replaces the older `toolName === 'screenshot'` heuristic
+ * which predated the screencast fallback + first-capture policy in
+ * `persistScreenshot`: many non-screenshot-tool dispatches (navigate,
+ * act, tabs new, first read on a page, ...) now produce files too.
+ * A tiny `existsSync` per dispatch is cheap for the audit endpoints
+ * and correct across every write path.
+ */
+function dispatchHasScreenshotFile(d: {
+  id: number
+  resultMeta: string | null
+}): boolean {
+  if (resultIsError(d.resultMeta)) return false
+  return existsSync(screenshotPath(d.id))
+}
 
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000
 
@@ -243,12 +262,12 @@ export function getTask(sessionId: string): TaskDetail | null {
     ...summary,
     dispatches,
     screenshotDispatchIds: dispatches
-      // Skip dispatches whose result was an error: persistScreenshot
-      // never wrote a file for them, so referencing those ids in the
-      // strip would render broken thumbnails.
-      .filter(
-        (d) => d.toolName === 'screenshot' && !resultIsError(d.resultMeta),
-      )
+      // Only include dispatches whose screenshot file actually
+      // exists on disk. Covers the explicit `screenshot` tool, the
+      // screencast fallback path (navigate / act / tabs new / ...),
+      // and the first-capture override for read-only tools. Skipping
+      // missing files avoids broken thumbnails in the UI strip.
+      .filter(dispatchHasScreenshotFile)
       .map((d) => d.id),
     startEvent: starts[0]
       ? {
@@ -288,10 +307,10 @@ function buildSummary(input: BuildSummaryInput): TaskSummary {
   const first = ds[0]
   const lastScreenshot = [...ds]
     .reverse()
-    // Same reason as getTask's screenshotDispatchIds filter:
-    // error-result screenshot dispatches have no file on disk, so
-    // using their id as the hero would 404 on every TaskCard.
-    .find((d) => d.toolName === 'screenshot' && !resultIsError(d.resultMeta))
+    // Same disk-existence check as getTask's screenshotDispatchIds
+    // filter; picks the most recent dispatch whose JPEG is present
+    // as the hero thumbnail on the TaskCard.
+    .find(dispatchHasScreenshotFile)
   const site = firstSiteOf(ds)
   const title = site
     ? `Browsed ${site}`

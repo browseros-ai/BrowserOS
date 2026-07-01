@@ -19,6 +19,16 @@ import { parseResultMeta } from '@/screens/audit/audit.helpers'
 
 interface TimelineProps {
   dispatches: ToolDispatchRow[]
+  /**
+   * Dispatch ids whose screenshot file is confirmed to exist on
+   * disk (from `TaskDetail.screenshotDispatchIds`). Used to decide
+   * which rows show the screenshot preview block. Predates PR #1488:
+   * previously the row derived this from `toolName === 'screenshot'`
+   * but the screencast fallback and first-capture policy now write
+   * screenshots for many non-screenshot-tool dispatches, so the
+   * server-side disk-existence list is authoritative.
+   */
+  screenshotDispatchIds: readonly number[]
   startedAt: number
   endEvent: {
     createdAt: number
@@ -40,10 +50,12 @@ function defaultExpandedSet(dispatches: ToolDispatchRow[]): Set<number> {
 
 export function Timeline({
   dispatches,
+  screenshotDispatchIds,
   startedAt,
   endEvent,
   onScreenshotClick,
 }: TimelineProps) {
+  const screenshotIdSet = new Set(screenshotDispatchIds)
   // Initial state: HIGH RISK rows pre-expanded. Lazy init so the
   // dispatch list is only walked once per mount; future polling
   // updates do not reset the user's manual toggles.
@@ -106,6 +118,7 @@ export function Timeline({
             dispatch={d}
             offsetMs={Math.max(0, d.createdAt - startedAt)}
             expanded={expanded.has(d.id)}
+            hasScreenshot={screenshotIdSet.has(d.id)}
             onToggle={() => toggle(d.id)}
             onScreenshotClick={onScreenshotClick}
           />
@@ -120,6 +133,14 @@ interface TimelineRowProps {
   dispatch: ToolDispatchRow
   offsetMs: number
   expanded: boolean
+  /**
+   * Whether this dispatch has a screenshot file on disk (per the
+   * server's authoritative `screenshotDispatchIds` list). True for
+   * both explicit-screenshot-tool calls AND the many non-screenshot
+   * dispatches (navigate / act / tabs new / first read / ...) that
+   * the screencast fallback + first-capture policy now capture.
+   */
+  hasScreenshot: boolean
   onToggle: () => void
   onScreenshotClick: (dispatchId: number) => void
 }
@@ -128,13 +149,14 @@ function TimelineRow({
   dispatch,
   offsetMs,
   expanded,
+  hasScreenshot,
   onToggle,
   onScreenshotClick,
 }: TimelineRowProps) {
   const highRisk = HIGH_RISK_TOOLS.has(dispatch.toolName)
   const meta = parseResultMeta(dispatch.resultMeta)
   const isError = meta?.isError ?? false
-  const isScreenshot = dispatch.toolName === 'screenshot' && !isError
+  const isScreenshot = hasScreenshot && !isError
   return (
     <li
       className={cn(

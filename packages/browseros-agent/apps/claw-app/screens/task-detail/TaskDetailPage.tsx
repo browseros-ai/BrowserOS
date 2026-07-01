@@ -60,6 +60,7 @@ export function TaskDetailPage() {
       />
       <Timeline
         dispatches={task.dispatches}
+        screenshotDispatchIds={task.screenshotDispatchIds}
         startedAt={task.startedAt}
         endEvent={task.endEvent}
         onScreenshotClick={setLightboxId}

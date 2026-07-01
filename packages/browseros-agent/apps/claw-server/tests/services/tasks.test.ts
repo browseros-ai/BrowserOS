@@ -5,16 +5,33 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import {
   resetAuditDbForTesting,
   setAuditDbForTesting,
 } from '../../src/modules/db/db'
 import { recordToolDispatch } from '../../src/services/audit-log'
+import { screenshotPath } from '../../src/services/screenshots'
 import {
   recordSessionEnd,
   recordSessionStart,
 } from '../../src/services/session-events'
 import { getTask, listTasks } from '../../src/services/tasks'
+import { withTempBrowserosDir } from '../_helpers/temp-browseros-dir'
+
+/**
+ * Simulates persistScreenshot having written a JPEG for this dispatch
+ * id. Needed because the tasks deriver checks disk existence (real
+ * writes are fire-and-forget from the MCP handler; the read-time
+ * deriver just answers "does the file exist right now?").
+ */
+function seedScreenshotFile(dispatchId: number | null | undefined): void {
+  if (typeof dispatchId !== 'number') return
+  const path = screenshotPath(dispatchId)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
+}
 
 function dispatch(
   sessionId: string,
@@ -144,28 +161,57 @@ describe('getTask', () => {
     expect(getTask('nope')).toBeNull()
   })
 
-  it('returns dispatches + screenshot ids in chronological order', () => {
-    startSession('cc-screens')
-    dispatch('cc-screens', 'tabs', { url: 'https://e.com' })
-    const id1 = dispatch('cc-screens', 'screenshot')
-    dispatch('cc-screens', 'read')
-    const id2 = dispatch('cc-screens', 'screenshot')
-    recordSessionEnd({ sessionId: 'cc-screens', kind: 'closed' })
+  it('returns dispatches + screenshot ids in chronological order', async () => {
+    await withTempBrowserosDir(async () => {
+      startSession('cc-screens')
+      dispatch('cc-screens', 'tabs', { url: 'https://e.com' })
+      const id1 = dispatch('cc-screens', 'screenshot')
+      dispatch('cc-screens', 'read')
+      const id2 = dispatch('cc-screens', 'screenshot')
+      recordSessionEnd({ sessionId: 'cc-screens', kind: 'closed' })
+      // Simulate that persistScreenshot wrote a file for both.
+      seedScreenshotFile(id1)
+      seedScreenshotFile(id2)
 
-    const detail = getTask('cc-screens')!
-    expect(detail.dispatches).toHaveLength(4)
-    expect(detail.screenshotDispatchIds).toEqual([id1!, id2!])
-    expect(detail.startEvent?.clientName).toBe('claude-code')
-    expect(detail.endEvent?.kind).toBe('closed')
-    expect(detail.status).toBe('done')
+      const detail = getTask('cc-screens')!
+      expect(detail.dispatches).toHaveLength(4)
+      expect(detail.screenshotDispatchIds).toEqual([id1!, id2!])
+      expect(detail.startEvent?.clientName).toBe('claude-code')
+      expect(detail.endEvent?.kind).toBe('closed')
+      expect(detail.status).toBe('done')
+    })
   })
 
-  it('excludes error-result screenshot dispatches from the strip', () => {
-    dispatch('cc-err', 'tabs', { url: 'https://e.com' })
-    const ok = dispatch('cc-err', 'screenshot')
-    dispatch('cc-err', 'screenshot', { isError: true })
-    const detail = getTask('cc-err')!
-    expect(detail.screenshotDispatchIds).toEqual([ok!])
+  it('excludes error-result screenshot dispatches from the strip', async () => {
+    await withTempBrowserosDir(async () => {
+      dispatch('cc-err', 'tabs', { url: 'https://e.com' })
+      const ok = dispatch('cc-err', 'screenshot')
+      dispatch('cc-err', 'screenshot', { isError: true })
+      // Only the non-error dispatch has a file (persistScreenshot
+      // skips isError). The error dispatch may or may not have one,
+      // but is filtered by resultIsError() before the disk check.
+      seedScreenshotFile(ok)
+      const detail = getTask('cc-err')!
+      expect(detail.screenshotDispatchIds).toEqual([ok!])
+    })
+  })
+
+  it('includes non-`screenshot`-tool dispatches whose JPEG is on disk (screencast fallback + first-capture paths)', async () => {
+    // This is the point of the PR #1488 follow-up: the tasks deriver
+    // must not gate on toolName. `navigate`, `act`, `tabs`, and
+    // first-read overrides all persist files today; the audit UI's
+    // strip and per-row previews should surface them.
+    await withTempBrowserosDir(async () => {
+      const nav = dispatch('cc-fb', 'navigate', { url: 'https://e.com' })
+      const first_read = dispatch('cc-fb', 'read')
+      const second_read = dispatch('cc-fb', 'read') // no file (deny-list)
+      // Simulate what the new persistScreenshot writes today:
+      seedScreenshotFile(nav)
+      seedScreenshotFile(first_read)
+      const detail = getTask('cc-fb')!
+      expect(detail.screenshotDispatchIds).toEqual([nav!, first_read!])
+      expect(detail.screenshotDispatchIds).not.toContain(second_read)
+    })
   })
 })
 
@@ -192,11 +238,15 @@ describe('listTasks / getTask consistency on double end rows', () => {
     expect(list.endedAt).toBe(detail.endedAt)
   })
 
-  it('lastScreenshotDispatchId skips error screenshots in listTasks', () => {
-    dispatch('cc-last', 'tabs', { url: 'https://e.com' })
-    const ok = dispatch('cc-last', 'screenshot')
-    dispatch('cc-last', 'screenshot', { isError: true })
-    const list = listTasks({}).tasks[0]!
-    expect(list.lastScreenshotDispatchId).toBe(ok)
+  it('lastScreenshotDispatchId skips error screenshots in listTasks', async () => {
+    await withTempBrowserosDir(async () => {
+      dispatch('cc-last', 'tabs', { url: 'https://e.com' })
+      const ok = dispatch('cc-last', 'screenshot')
+      dispatch('cc-last', 'screenshot', { isError: true })
+      // Only the non-error dispatch has a file on disk.
+      seedScreenshotFile(ok)
+      const list = listTasks({}).tasks[0]!
+      expect(list.lastScreenshotDispatchId).toBe(ok)
+    })
   })
 })

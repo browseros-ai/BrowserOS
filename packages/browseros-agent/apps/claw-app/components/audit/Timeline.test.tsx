@@ -30,10 +30,14 @@ function dispatch(overrides: Partial<ToolDispatchRow> = {}): ToolDispatchRow {
 
 const startedAt = 1_000_000
 
-function render(dispatches: ToolDispatchRow[]): string {
+function render(
+  dispatches: ToolDispatchRow[],
+  screenshotDispatchIds: readonly number[] = [],
+): string {
   return renderToStaticMarkup(
     <Timeline
       dispatches={dispatches}
+      screenshotDispatchIds={screenshotDispatchIds}
       startedAt={startedAt}
       endEvent={null}
       onScreenshotClick={() => undefined}

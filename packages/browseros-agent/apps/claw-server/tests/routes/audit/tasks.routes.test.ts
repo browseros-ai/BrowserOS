@@ -5,13 +5,24 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import {
   resetAuditDbForTesting,
   setAuditDbForTesting,
 } from '../../../src/modules/db/db'
 import app from '../../../src/server'
 import { recordToolDispatch } from '../../../src/services/audit-log'
+import { screenshotPath } from '../../../src/services/screenshots'
 import { recordSessionEnd } from '../../../src/services/session-events'
+import { withTempBrowserosDir } from '../../_helpers/temp-browseros-dir'
+
+function seedScreenshotFile(dispatchId: number | null | undefined): void {
+  if (typeof dispatchId !== 'number') return
+  const path = screenshotPath(dispatchId)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
+}
 
 function seed(sessionId: string, toolName: string, url: string | null = null) {
   return recordToolDispatch({
@@ -79,20 +90,25 @@ describe('GET /audit/tasks/:sessionId', () => {
   })
 
   it('returns the full task detail', async () => {
-    seed('detail-1', 'tabs', 'https://e.com')
-    seed('detail-1', 'screenshot')
+    await withTempBrowserosDir(async () => {
+      seed('detail-1', 'tabs', 'https://e.com')
+      const screenshotId = seed('detail-1', 'screenshot')
+      // Simulate persistScreenshot's fire-and-forget disk write; the
+      // deriver checks existence at read time.
+      seedScreenshotFile(screenshotId)
 
-    const res = await app.fetch(
-      new Request('http://localhost/audit/tasks/detail-1'),
-    )
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as {
-      sessionId: string
-      dispatches: unknown[]
-      screenshotDispatchIds: number[]
-    }
-    expect(body.sessionId).toBe('detail-1')
-    expect(body.dispatches).toHaveLength(2)
-    expect(body.screenshotDispatchIds).toHaveLength(1)
+      const res = await app.fetch(
+        new Request('http://localhost/audit/tasks/detail-1'),
+      )
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        sessionId: string
+        dispatches: unknown[]
+        screenshotDispatchIds: number[]
+      }
+      expect(body.sessionId).toBe('detail-1')
+      expect(body.dispatches).toHaveLength(2)
+      expect(body.screenshotDispatchIds).toHaveLength(1)
+    })
   })
 })
