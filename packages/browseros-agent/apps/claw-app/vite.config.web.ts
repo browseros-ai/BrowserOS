@@ -22,7 +22,33 @@
 import path from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
+
+/**
+ * Tailwind v4 auto-detects content sources relative to Vite's `root`.
+ * Standalone `root` here is `entrypoints/newtab/`, so without this
+ * plugin Tailwind would only scan those four files and ship a
+ * stylesheet with theme + base but no utility classes. Prepending an
+ * `@source "../../";` directive at transform time (in-memory only)
+ * points Tailwind at the whole `apps/claw-app/` tree without editing
+ * the on-disk `styles.css` that WXT also consumes.
+ *
+ * `enforce: 'pre'` runs this ahead of `@tailwindcss/vite` so the
+ * injected directive is present when Tailwind parses the CSS.
+ */
+function injectTailwindSource(): Plugin {
+  const STYLES_TAIL = '/entrypoints/newtab/styles.css'
+  const IMPORT_LINE = '@import "tailwindcss";'
+  return {
+    name: 'browseros-claw-app:inject-tailwind-source',
+    enforce: 'pre',
+    transform(code, id) {
+      if (!id.replace(/\\/g, '/').endsWith(STYLES_TAIL)) return null
+      if (!code.includes(IMPORT_LINE)) return null
+      return code.replace(IMPORT_LINE, `${IMPORT_LINE}\n@source "../../";`)
+    },
+  }
+}
 
 export default defineConfig({
   root: path.resolve(__dirname, 'entrypoints/newtab'),
@@ -31,7 +57,7 @@ export default defineConfig({
       '@': path.resolve(__dirname),
     },
   },
-  plugins: [react(), tailwindcss()],
+  plugins: [injectTailwindSource(), react(), tailwindcss()],
   server: {
     host: '127.0.0.1',
     port: 5173,

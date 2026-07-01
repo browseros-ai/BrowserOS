@@ -1,16 +1,5 @@
 @import "tailwindcss";
 /*
- * Explicitly scan the whole claw-app tree for Tailwind utility
- * classes. Under WXT this is redundant (WXT sets Vite root to the
- * app dir so auto-detection already covers everything), but under
- * the standalone dev:web server (vite.config.web.ts) the Vite root
- * is `entrypoints/newtab/`, and without this hint Tailwind would
- * only scan those four files and ship a stylesheet with theme +
- * base but no utility classes. Additive: Tailwind's built-in
- * ignore list still excludes node_modules / .git / dist / etc.
- */
-@source "../../";
-/*
  ---break---
  */
 @custom-variant dark (&:is(.dark *));
