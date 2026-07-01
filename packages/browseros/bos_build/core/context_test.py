@@ -5,7 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import cast
+from unittest import mock
 
+from . import context as context_mod
 from .context import Context
 from .products import ProductDescriptor, get_product_descriptor
 
@@ -72,35 +74,43 @@ class GetAppPathTest(unittest.TestCase):
         self.assertEqual(ctx.get_app_path(), pinned)
 
     def test_browserclaw_context_derives_names_and_paths(self):
-        ctx = Context(
-            chromium_src=Path("/nonexistent-src"),
-            architecture="arm64",
-            build_type="release",
-            product=get_product_descriptor("browserclaw"),
-        )
+        with (
+            mock.patch.object(context_mod, "IS_MACOS", return_value=True),
+            mock.patch.object(context_mod, "IS_WINDOWS", return_value=False),
+        ):
+            ctx = Context(
+                chromium_src=Path("/nonexistent-src"),
+                architecture="arm64",
+                build_type="release",
+                product=get_product_descriptor("browserclaw"),
+            )
 
-        self.assertEqual(ctx.BROWSEROS_APP_BASE_NAME, "BrowserClaw")
-        self.assertEqual(ctx.BROWSEROS_APP_NAME, "BrowserClaw.app")
-        self.assertEqual(ctx.out_dir, "out/Default_browserclaw_arm64")
-        self.assertEqual(
-            ctx.get_artifact_name("dmg"),
-            f"BrowserClaw_v{ctx.semantic_version}_arm64.dmg",
-        )
-        self.assertEqual(
-            ctx.get_release_path("macos"),
-            f"releases/browserclaw/{ctx.semantic_version}/macos/",
-        )
+            self.assertEqual(ctx.BROWSEROS_APP_BASE_NAME, "BrowserClaw")
+            self.assertEqual(ctx.BROWSEROS_APP_NAME, "BrowserClaw.app")
+            self.assertEqual(ctx.out_dir, "out/Default_browserclaw_arm64")
+            self.assertEqual(
+                ctx.get_artifact_name("dmg"),
+                f"BrowserClaw_v{ctx.semantic_version}_arm64.dmg",
+            )
+            self.assertEqual(
+                ctx.get_release_path("macos"),
+                f"releases/browserclaw/{ctx.semantic_version}/macos/",
+            )
 
     def test_context_accepts_product_id(self):
-        ctx = Context(
-            chromium_src=Path("/nonexistent-src"),
-            architecture="arm64",
-            build_type="release",
-            product=cast(ProductDescriptor, "browserclaw"),
-        )
+        with (
+            mock.patch.object(context_mod, "IS_MACOS", return_value=True),
+            mock.patch.object(context_mod, "IS_WINDOWS", return_value=False),
+        ):
+            ctx = Context(
+                chromium_src=Path("/nonexistent-src"),
+                architecture="arm64",
+                build_type="release",
+                product=cast(ProductDescriptor, "browserclaw"),
+            )
 
-        self.assertEqual(ctx.product.id, "browserclaw")
-        self.assertEqual(ctx.BROWSEROS_APP_NAME, "BrowserClaw.app")
+            self.assertEqual(ctx.product.id, "browserclaw")
+            self.assertEqual(ctx.BROWSEROS_APP_NAME, "BrowserClaw.app")
 
     def test_context_accepts_product_id_string(self):
         ctx = Context(
