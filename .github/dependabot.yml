@@ -20,6 +20,12 @@ updates:
       - dependency-name: "*"
         update-types:
           - "version-update:semver-major"
+      # @ricky0123/vad-web is pre-1.0 and treats every patch as a
+      # breaking API change (0.0.17 → 0.0.30 rewrote MicVAD.new's
+      # stream option into a getStream/pauseStream/resumeStream
+      # callback trio). Pin it here so it's opt-in only; a real
+      # upgrade needs a hand migration of `modules/voice/vad.silero.ts`.
+      - dependency-name: "@ricky0123/vad-web"
     groups:
       minor-and-patch:
         update-types:
