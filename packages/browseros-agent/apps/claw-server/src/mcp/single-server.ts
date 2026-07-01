@@ -136,7 +136,13 @@ function buildSession(): Session {
  * without firing side effects so repeated sweeps are safe.
  */
 function cleanupSessionState(sessionId: string): void {
-  if (!sessions.has(sessionId)) return
+  // Grab the ref BEFORE the map delete so we can close the transport
+  // + server AFTER the map is empty. Idempotent guard: if the
+  // session is already gone, return without firing side effects
+  // (protects against the sweeper racing with the explicit DELETE
+  // path and against the reentrant callback below).
+  const session = sessions.get(sessionId)
+  if (!session) return
   // Read identity BEFORE dropping it so the cleanup hook can resolve
   // the agentId for the tab-group close.
   const identity = identityService.getIdentity(sessionId)
@@ -160,6 +166,27 @@ function cleanupSessionState(sessionId: string): void {
   sessions.delete(sessionId)
   identityService.dropSession(sessionId)
   recordSessionEnd({ sessionId, kind: 'closed' })
+  // Close the transport + server AFTER the map delete so any
+  // reentrant onsessionclosed callback that the transport fires
+  // from inside its own close() sees the now-empty map and no-ops
+  // via the guard at the top of this function. Without these
+  // calls, long-lived SSE GET streams held by clients like
+  // codex-mcp-client stay open server-side until the client's
+  // TCP connection eventually drops, leaking a file descriptor
+  // and per-session memory for the interval between reap and
+  // organic disconnect.
+  void session.transport.close().catch((err) => {
+    logger.warn('session transport close threw', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  })
+  void session.server.close().catch((err) => {
+    logger.warn('session server close threw', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  })
   logger.info('cockpit v2 mcp session closed', { sessionId })
 }
 
@@ -266,4 +293,18 @@ export function setLastActivityForTesting(
   if (!session) return false
   session.lastActivityAt = ms
   return true
+}
+
+/**
+ * Test-only escape hatch. Returns the transport + server refs for a
+ * cached session so a test can install a spy on `.close()` before
+ * driving the sweeper. Returns null when the session id is unknown.
+ */
+export function getSessionRefsForTesting(sessionId: string): {
+  transport: WebStandardStreamableHTTPServerTransport
+  server: McpServer
+} | null {
+  const session = sessions.get(sessionId)
+  if (!session) return null
+  return { transport: session.transport, server: session.server }
 }

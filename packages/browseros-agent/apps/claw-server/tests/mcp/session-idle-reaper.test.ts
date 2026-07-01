@@ -24,6 +24,7 @@ import { env } from '../../src/env'
 import { tabGroupTracker } from '../../src/lib/agent-tab-groups'
 import { identityService } from '../../src/lib/mcp-session'
 import {
+  getSessionRefsForTesting,
   resetSingleMcpInstanceForTesting,
   setLastActivityForTesting,
   sweepIdleSessions,
@@ -152,6 +153,39 @@ describe('sweepIdleSessions', () => {
       expect(identityService.getIdentity(b.sessionId)).not.toBeNull()
       await a.client.close()
       await b.client.close()
+    }
+  })
+
+  test('reap calls transport.close() so long-lived SSE streams do not leak', async () => {
+    // Without transport.close(), SSE GET streams held by clients
+    // like codex-mcp-client / claude-code stay open server-side
+    // until the client's TCP connection eventually drops. Assert
+    // close() actually fires on reap by installing spies on the
+    // transport and server before we backdate + sweep.
+    {
+      const { client, sessionId } = await connect('codex-mcp-client')
+      const refs = getSessionRefsForTesting(sessionId)
+      expect(refs).not.toBeNull()
+      if (!refs) throw new Error('refs must exist')
+      let transportClosed = 0
+      let serverClosed = 0
+      const origTransportClose = refs.transport.close.bind(refs.transport)
+      const origServerClose = refs.server.close.bind(refs.server)
+      refs.transport.close = async () => {
+        transportClosed++
+        return origTransportClose()
+      }
+      refs.server.close = async () => {
+        serverClosed++
+        return origServerClose()
+      }
+
+      setLastActivityForTesting(sessionId, Date.now() - 10_000)
+      const swept = sweepIdleSessions(Date.now())
+      expect(swept).toEqual([sessionId])
+      expect(transportClosed).toBe(1)
+      expect(serverClosed).toBe(1)
+      await client.close()
     }
   })
 })
