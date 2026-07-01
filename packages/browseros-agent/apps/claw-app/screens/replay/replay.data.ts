@@ -110,13 +110,21 @@ function buildReplayData(task: TaskDetail, events: ReplayEvent[]): ReplayData {
     mapDispatchToFrame(row, sessionStartMs),
   )
 
-  const tabsForEvents = new Set<number>()
+  // Preserve first-appearance order for the tab list so per-tab
+  // labels (Tab 1, Tab 2, ...) match the operator's mental
+  // narrative and align with the audit view's sequential
+  // numbering. The raw BrowserOS pageId is non-contiguous and not
+  // useful to surface as a label.
+  const tabsInOrder: number[] = []
   const eventsByTab = new Map<number, ReplayEvent[]>()
   for (const ev of events) {
-    tabsForEvents.add(ev.tabPageId)
     const list = eventsByTab.get(ev.tabPageId)
-    if (list) list.push(ev)
-    else eventsByTab.set(ev.tabPageId, [ev])
+    if (list) {
+      list.push(ev)
+    } else {
+      eventsByTab.set(ev.tabPageId, [ev])
+      tabsInOrder.push(ev.tabPageId)
+    }
   }
 
   return {
@@ -133,7 +141,7 @@ function buildReplayData(task: TaskDetail, events: ReplayEvent[]): ReplayData {
     approvals: String(countApprovals(task.dispatches)),
     totalSeconds: totalMs / 1000,
     frames,
-    tabPageIds: [...tabsForEvents].sort((a, b) => a - b),
+    tabPageIds: tabsInOrder,
     eventsForTab: (id) => eventsByTab.get(id) ?? [],
   }
 }

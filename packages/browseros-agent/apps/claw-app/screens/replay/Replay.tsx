@@ -24,6 +24,7 @@ import { ArrowLeft, History } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { StatusBadge } from '@/components/cockpit/StatusBadge'
 import { Spinner } from '@/components/ui/spinner'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { EventTimeline } from './EventTimeline'
 import { PlaybackTransport } from './PlaybackTransport'
 import { type ReplayPlayerHandle, ReplayViewport } from './ReplayViewport'
@@ -132,13 +133,24 @@ export function Replay() {
 
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col gap-3 p-4">
+          {replay.tabPageIds.length > 1 && selectedTabPageId !== null && (
+            <Tabs
+              value={String(selectedTabPageId)}
+              onValueChange={(v) => setSelectedTabPageId(Number(v))}
+            >
+              <TabsList variant="line">
+                {replay.tabPageIds.map((id, idx) => (
+                  <TabsTrigger key={id} value={String(id)}>
+                    Tab {idx + 1}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+          )}
           <ReplayViewport
             site={replay.site}
             frame={currentFrame}
             events={eventsForSelectedTab}
-            tabPageIds={replay.tabPageIds}
-            selectedTabPageId={selectedTabPageId}
-            onTabPageIdChange={setSelectedTabPageId}
             onPlayerReady={onPlayerReady}
           />
           <PlaybackTransport

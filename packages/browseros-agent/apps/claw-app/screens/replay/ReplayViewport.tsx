@@ -6,9 +6,9 @@
  * Replay viewport for the audit page. The original scaffold drew a
  * fake browser chrome with a tinted page region and a caption pill.
  * This version mounts rrweb-player inside that chrome so the actual
- * recorded DOM mutations play back. A tab selector above the chrome
- * lets the operator switch between tabs the agent drove in the same
- * session.
+ * recorded DOM mutations play back. Tab selection lives at the
+ * page level (see `Replay.tsx`) as a prominent shadcn Tabs bar; the
+ * viewport itself just renders the currently-selected tab's events.
  *
  * The player's built-in controller is hidden via `showController:
  * false`; PlaybackTransport (see use-playback wiring) is the single
@@ -49,10 +49,6 @@ interface ReplayViewportProps {
   frame: ReplayFrame | undefined
   /** rrweb events for the currently-selected tabPageId. */
   events: ReplayEvent[]
-  /** Distinct tabPageIds the operator can pick from. */
-  tabPageIds: number[]
-  selectedTabPageId: number | null
-  onTabPageIdChange: (id: number) => void
   /** Called once the rrweb-player has mounted with usable controls. */
   onPlayerReady: (handle: ReplayPlayerHandle) => void
 }
@@ -61,19 +57,11 @@ export function ReplayViewport({
   site,
   frame,
   events,
-  tabPageIds,
-  selectedTabPageId,
-  onTabPageIdChange,
   onPlayerReady,
 }: ReplayViewportProps) {
   return (
     <div className="relative flex flex-1 flex-col overflow-hidden rounded-2xl border border-border-2 bg-card shadow-sm">
-      <Chrome
-        site={site}
-        tabPageIds={tabPageIds}
-        selectedTabPageId={selectedTabPageId}
-        onTabPageIdChange={onTabPageIdChange}
-      />
+      <Chrome site={site} />
       <div className="relative flex flex-1 items-stretch justify-center overflow-hidden bg-bg-sunken">
         <PlayerCanvas events={events} onReady={onPlayerReady} />
         {frame && <Caption frame={frame} />}
@@ -82,19 +70,7 @@ export function ReplayViewport({
   )
 }
 
-interface ChromeProps {
-  site: string
-  tabPageIds: number[]
-  selectedTabPageId: number | null
-  onTabPageIdChange: (id: number) => void
-}
-
-function Chrome({
-  site,
-  tabPageIds,
-  selectedTabPageId,
-  onTabPageIdChange,
-}: ChromeProps) {
+function Chrome({ site }: { site: string }) {
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-border border-b bg-bg-sunken px-3">
       <span className="flex gap-1.5">
@@ -106,20 +82,6 @@ function Chrome({
         <Lock className="size-3 text-ink-3" />
         <span className="truncate">{site}</span>
       </div>
-      {tabPageIds.length > 1 && (
-        <select
-          aria-label="Tab to replay"
-          value={selectedTabPageId ?? ''}
-          onChange={(e) => onTabPageIdChange(Number(e.target.value))}
-          className="h-6 rounded-md border border-border-2 bg-card px-2 font-mono text-[11px] text-ink-2"
-        >
-          {tabPageIds.map((id) => (
-            <option key={id} value={id}>
-              Tab {id}
-            </option>
-          ))}
-        </select>
-      )}
       <span className="rounded-full bg-bg-sunken px-2 py-0.5 font-bold text-[10px] text-ink-3 uppercase tracking-wide">
         rrweb
       </span>
