@@ -97,8 +97,18 @@ export function groupDispatchesByTab(
   // Per-page buckets, numbered by first-appearance order.
   pageOrder.forEach((pageId, idx) => {
     const rows = buckets.get(pageId)!
-    const lastWithUrl = [...rows].reverse().find((d) => d.url !== null)
-    const lastWithTitle = [...rows].reverse().find((d) => d.title !== null)
+    // Prefer a dispatch that carries url + title TOGETHER so the
+    // tab header shows a consistent (url, title) pair from a
+    // single moment in time. If no such paired dispatch exists in
+    // this tab, fall back to the last individual non-null values
+    // independently. The edge case: mid-navigation dispatches may
+    // have a url but null title (or vice versa); without this
+    // guard the header could show a stale title alongside a fresh
+    // url.
+    const reversed = [...rows].reverse()
+    const lastPaired = reversed.find((d) => d.url !== null && d.title !== null)
+    const lastWithUrl = lastPaired ?? reversed.find((d) => d.url !== null)
+    const lastWithTitle = lastPaired ?? reversed.find((d) => d.title !== null)
     groups.push({
       id: `page-${pageId}`,
       pageId,

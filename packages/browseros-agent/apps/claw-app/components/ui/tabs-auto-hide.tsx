@@ -43,7 +43,12 @@ export function AutoHideTabs({
   listClassName,
 }: AutoHideTabsProps) {
   if (items.length === 0) return null
-  if (items.length === 1) return <>{items[0]!.content}</>
+  // Wrap the single-item content in a div so `className` still
+  // applies (Fragments silently drop it). Keeps behaviour
+  // consistent whether the tab bar is hidden or shown.
+  if (items.length === 1) {
+    return <div className={className}>{items[0]!.content}</div>
+  }
   const initial = defaultId ?? items[0]!.id
   return (
     <Tabs defaultValue={initial} className={className}>

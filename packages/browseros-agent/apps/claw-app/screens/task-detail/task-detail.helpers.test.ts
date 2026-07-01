@@ -137,6 +137,35 @@ describe('groupDispatchesByTab', () => {
     expect(g.displayTitle).toBeNull()
   })
 
+  it('per-page displayUrl + displayTitle come from the SAME paired dispatch when one exists', () => {
+    // Simulates a mid-navigation dispatch (has url but null title)
+    // FOLLOWED by a load-complete dispatch (has both url + title).
+    // Without the paired-preference guard, `lastWithTitle` might
+    // reach further back and return a stale title next to the
+    // freshest url. With the guard, both come from the last
+    // dispatch that carried them together.
+    const rows = [
+      dispatch(1, 7, { url: 'https://old.example/', title: 'Old title' }),
+      dispatch(2, 7, { url: 'https://new.example/', title: null }),
+      dispatch(3, 7, { url: 'https://new.example/', title: 'New title' }),
+    ]
+    const g = groupDispatchesByTab(rows, []).find((x) => x.id === 'page-7')!
+    expect(g.displayUrl).toBe('https://new.example/')
+    expect(g.displayTitle).toBe('New title')
+  })
+
+  it('per-page displayUrl/displayTitle fall back independently when no paired dispatch exists', () => {
+    // No single dispatch carries both fields; each field falls
+    // back to its own most-recent non-null value.
+    const rows = [
+      dispatch(1, 3, { url: null, title: 'Only title' }),
+      dispatch(2, 3, { url: 'https://only-url.example/', title: null }),
+    ]
+    const g = groupDispatchesByTab(rows, []).find((x) => x.id === 'page-3')!
+    expect(g.displayUrl).toBe('https://only-url.example/')
+    expect(g.displayTitle).toBe('Only title')
+  })
+
   it('per-page screenshotDispatchIds filters to that page only', () => {
     const rows = [
       dispatch(1, null),
