@@ -50,6 +50,19 @@ function readPositiveIntFlag(name: string, fallback: number): number {
 }
 
 /**
+ * Opt-out gate for features that should be ON by default. Only `0`
+ * and `false` (case-insensitive) disable; everything else including
+ * an unset env keeps the feature on.
+ */
+function readBoolFlagDefaultTrue(name: string): boolean {
+  // biome-ignore lint/style/noProcessEnv: env.ts is the sanctioned env-reader for the package
+  const raw = process.env[name]
+  if (raw === undefined) return true
+  const normalised = raw.trim().toLowerCase()
+  return normalised !== '0' && normalised !== 'false'
+}
+
+/**
  * Runtime snapshot shared across services. main.ts applies validated
  * startup config before serving; tests may mutate fields for isolation.
  */
@@ -68,6 +81,15 @@ export const env = {
   sessionSweepIntervalMs: readPositiveIntFlag(
     'CLAW_SESSION_SWEEP_INTERVAL_MS',
     60 * 1000,
+  ),
+  // Audit screenshot fallback. When on (default), a successful
+  // state-mutating page-targeted dispatch that did not carry image
+  // bytes in its result grabs the current screencast cache frame for
+  // the tab and persists it as the dispatch's screenshot. Set to
+  // `0`/`false` to revert to the strict behaviour where only the
+  // explicit `screenshot` tool populates the audit's image column.
+  screencastScreenshotFallback: readBoolFlagDefaultTrue(
+    'CLAW_SCREENCAST_SCREENSHOT_FALLBACK',
   ),
 }
 

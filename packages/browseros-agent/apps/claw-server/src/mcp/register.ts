@@ -597,6 +597,10 @@ export function registerBrowserToolsForSingleServer(
               persistScreenshot({
                 dispatchId,
                 toolName: tool.name,
+                // Passed through so the screencast fallback branch
+                // can look up the current cache frame for this tab
+                // when the tool result carried no image bytes.
+                pageId,
                 result: {
                   isError: result.isError ?? false,
                   content: result.content,

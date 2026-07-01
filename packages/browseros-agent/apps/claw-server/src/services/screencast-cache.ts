@@ -15,12 +15,17 @@
  * `lastFailureAt` (the agent did something new since we last failed),
  * or when a successful capture writes a frame and clears the counter.
  *
- * Poller frames stay ephemeral by design: they are never persisted
- * to the audit log nor to disk. The audit-log narrative reflects what
- * the agent chose to capture, not what the cockpit polled in the
- * background. The same precedent `tab-group-ops.ts` set for
- * cockpit-driven `executeTool` calls bypassing the audit hook applies
- * here.
+ * The cache itself stays ephemeral: entries live in memory, evict
+ * on LRU, and are never mirrored to disk. `services/screenshots.ts`
+ * DOES take a single snapshot from the cache at dispatch complete
+ * time for state-mutating page-targeted dispatches (fills in the
+ * audit's screenshot column when the tool result did not carry
+ * image bytes), gated by `env.screencastScreenshotFallback`. That
+ * snapshot is per-dispatch and one-shot; the cache is not otherwise
+ * observed by the audit layer, and the "cockpit-driven executeTool
+ * bypasses the audit hook" precedent (see `tab-group-ops.ts`) is
+ * preserved: the narrative is still agent-driven, the image is
+ * decoration attached to that narrative.
  */
 
 import { logger } from '../lib/logger'
