@@ -12,7 +12,14 @@
  * registry from holding garbage keys.
  */
 
-const TOOLS_WITH_PAGE: ReadonlySet<string> = new Set([
+/**
+ * Tools that accept a `page` argument (either required or optional).
+ * Reused by `register.ts`'s cross-agent page guard so both the
+ * tab-activity registry attribution AND the isolation guard agree
+ * on which tools can be page-targeted. Adding a new tool that
+ * takes a page id belongs here.
+ */
+export const TOOLS_WITH_PAGE: ReadonlySet<string> = new Set([
   'act',
   'diff',
   'download',

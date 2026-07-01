@@ -15,7 +15,7 @@ import { createTabActivityRegistry, type TabActivityRegistry } from './registry'
 export const tabActivityRegistry: TabActivityRegistry =
   createTabActivityRegistry({ getSession: getBrowserSession })
 
-export { extractPageId } from './extract-page-id'
+export { extractPageId, TOOLS_WITH_PAGE } from './extract-page-id'
 export type {
   TabActivityRecord,
   TabActivityRegistry,

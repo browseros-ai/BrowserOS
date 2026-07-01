@@ -19,6 +19,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { env } from '../env'
 import { tabGroupTracker } from '../lib/agent-tab-groups'
+import { agentTabs } from '../lib/agent-tabs'
 import { getBrowserSession } from '../lib/browser-session'
 import { logger } from '../lib/logger'
 import {
@@ -162,6 +163,9 @@ function cleanupSessionState(sessionId: string): void {
       // browser to dispatch to.
       tabGroupTracker.decrementSession(agentId)
     }
+    // Drop the per-agent tabs ledger so the next session for this
+    // agentId starts empty. Symmetric with the tab-group tracker.
+    agentTabs.forgetAgent(agentId)
   }
   sessions.delete(sessionId)
   identityService.dropSession(sessionId)

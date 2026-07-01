@@ -33,13 +33,18 @@ import { BROWSER_TOOLS } from '@browseros/browser-mcp/registry'
 import { executeTool } from '@browseros/browser-mcp/tools/framework'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { ZodRawShape } from 'zod'
+import { agentTabs } from '../lib/agent-tabs'
 import { getBrowserSession } from '../lib/browser-session'
 import { logger } from '../lib/logger'
 import {
   agentIdentityFromClient,
   type ClientIdentity,
 } from '../lib/mcp-session'
-import { extractPageId, tabActivityRegistry } from '../lib/tab-activity'
+import {
+  extractPageId,
+  TOOLS_WITH_PAGE,
+  tabActivityRegistry,
+} from '../lib/tab-activity'
 import type { StoredAgentProfile } from '../routes/agents/schemas'
 import { recordToolDispatch } from '../services/audit-log'
 import {
@@ -293,6 +298,44 @@ function composeAbortSignals(
 }
 
 /**
+ * Rewrite a successful `tabs list` result to only include pages the
+ * calling agent owns. Both channels are rebuilt from the surviving
+ * subset:
+ *   - `structuredContent.pages` is filtered.
+ *   - `content[0].text` is rebuilt via the tool's `formatPageLine`
+ *     shape (`[N] URL (title)` or `[N] URL` when no title). Empty
+ *     survivors yield `(no open pages)` which matches the underlying
+ *     tool's empty output so codex's LLM interprets it as "no tabs,
+ *     open one" and dispatches `tabs new` instead of hijacking.
+ *
+ * Exported for unit tests; production callers reach it via the
+ * dispatch handler.
+ */
+export function filterTabsListToAgent<
+  R extends {
+    content: unknown
+    isError?: boolean
+    structuredContent?: unknown
+  },
+>(result: R, owned: ReadonlySet<number>): R {
+  const sc = result.structuredContent as
+    | { pages?: Array<{ page: number; url?: string; title?: string }> }
+    | undefined
+  const allPages = sc?.pages ?? []
+  const surviving = allPages.filter((p) => owned.has(p.page))
+  const lines = surviving.map(
+    (p) => `[${p.page}] ${p.url ?? ''}${p.title ? ` (${p.title})` : ''}`,
+  )
+  const text = lines.length > 0 ? lines.join('\n') : '(no open pages)'
+  return {
+    ...result,
+    isError: false,
+    content: [{ type: 'text', text }],
+    structuredContent: { pages: surviving },
+  } as R
+}
+
+/**
  * v2 dispatch record helper. The single MCP endpoint does not know
  * which `StoredAgentProfile` produced the call, so the registry write
  * sources its identity from the per-session `ClientIdentity` instead.
@@ -387,6 +430,50 @@ export function registerBrowserToolsForSingleServer(
             tool: tool.name,
             sessionId: extra?.sessionId,
           })
+        }
+
+        // Cross-agent page guard. Reject dispatches whose `page` arg
+        // points at a tab this agent does not own so an agent can
+        // only touch tabs it opened via `tabs new`. Prevents the
+        // "codex takes over the operator's active tab" failure
+        // mode: without this guard, an agent that sees a page id
+        // from anywhere (its LLM cache, `tabs active`, a prior
+        // session) could dispatch snapshot / navigate / etc. on the
+        // operator's tab. Fires BEFORE executeTool so the underlying
+        // tool never sees the bad page id. Fail-open when identity
+        // is unknown (unusual; matches the rest of the dispatch
+        // path's identity-optional behaviour).
+        if (TOOLS_WITH_PAGE.has(tool.name)) {
+          const pageArg = (rawArgs as { page?: unknown } | null | undefined)
+            ?.page
+          if (
+            typeof pageArg === 'number' &&
+            Number.isInteger(pageArg) &&
+            pageArg >= 1
+          ) {
+            const guardIdentity = resolveIdentity(extra?.sessionId)
+            if (guardIdentity) {
+              const { agentId: guardAgentId } =
+                agentIdentityFromClient(guardIdentity)
+              if (!agentTabs.ownedBy(guardAgentId).has(pageArg)) {
+                logger.warn('cockpit v2 rejected foreign-page dispatch', {
+                  tool: tool.name,
+                  sessionId: extra?.sessionId,
+                  agentId: guardAgentId,
+                  page: pageArg,
+                })
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `page ${pageArg} is not owned by this agent; call \`tabs new\` to open a fresh page and use the returned page id.`,
+                    },
+                  ],
+                  isError: true,
+                } satisfies ToolResult
+              }
+            }
+          }
         }
 
         const dispatchStart = Date.now()
@@ -547,6 +634,11 @@ export function registerBrowserToolsForSingleServer(
                       toolName: 'tabs',
                     })
                   }
+                  // Isolation ledger: this page now belongs to this
+                  // agent. Subsequent page-targeted dispatches will
+                  // pass the cross-agent page guard for this id and
+                  // fail it for any other agent's session.
+                  agentTabs.markOpened(agentId, pageId)
                   void ensureAgentTabGroup({
                     agentId,
                     slug,
@@ -555,6 +647,30 @@ export function registerBrowserToolsForSingleServer(
                     signal: extra?.signal,
                   })
                 }
+              } else if (args?.action === 'close') {
+                // Drop the closed page from the isolation ledger so
+                // the agent cannot re-reference it and so `tabs list`
+                // stops surfacing it.
+                const closedPage = (rawArgs as { page?: unknown } | null)?.page
+                if (
+                  typeof closedPage === 'number' &&
+                  Number.isInteger(closedPage) &&
+                  closedPage >= 1
+                ) {
+                  const { agentId } = agentIdentityFromClient(identity)
+                  agentTabs.markClosed(agentId, closedPage)
+                }
+              } else if ((args?.action ?? 'list') === 'list') {
+                // Filter the list to only pages this agent owns.
+                // With no owned pages, the surviving text is
+                // `(no open pages)` which mirrors the tool's own
+                // empty output; the LLM interprets it as "I have no
+                // tabs, I need to open one" and calls `tabs new`.
+                const { agentId } = agentIdentityFromClient(identity)
+                result = filterTabsListToAgent(
+                  result,
+                  agentTabs.ownedBy(agentId),
+                )
               }
             }
           } else {
