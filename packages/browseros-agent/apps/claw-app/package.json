@@ -6,7 +6,7 @@
   "description": "WXT extension surface for BrowserClaw. React + shadcn (base-vega). Talks to @browseros/claw-server over hono-rpc.",
   "scripts": {
     "dev": "bun --env-file=.env.development wxt",
-    "dev:web": "bun run build:dev && serve dist/chrome-mv3-dev -p 5174 --no-clipboard",
+    "dev:web": "serve dist/chrome-mv3-dev -p 5174 --no-clipboard",
     "build": "wxt build",
     "build:dev": "bun --env-file=.env.development wxt build --mode development",
     "test": "bun test",
