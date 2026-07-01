@@ -113,12 +113,11 @@ function PlayerCanvas({ events, onReady }: PlayerCanvasProps) {
 
     // Strip the cockpit annotations so rrweb sees its canonical
     // {type, data, timestamp} shape.
-    // biome-ignore lint/suspicious/noExplicitAny: rrweb's event
-    // union is wide; we trust the recorder's output shape.
     const rrwebEvents = events.map((e) => ({
       type: e.type,
       data: e.data,
       timestamp: e.ts,
+      // biome-ignore lint/suspicious/noExplicitAny: rrweb's event union is wide; we trust the recorder's output shape.
     })) as any[]
 
     mount.replaceChildren()

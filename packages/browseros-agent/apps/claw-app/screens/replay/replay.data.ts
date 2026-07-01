@@ -50,6 +50,13 @@ export interface ReplayData {
   status: RunStatus
   site: string
   startedAt: string
+  /**
+   * Raw session start in ms since epoch. Used by `buildTabView` to
+   * translate a frame's session-relative `t` into tab-relative time.
+   * `startedAt` above is the formatted date string; this is the
+   * machine-readable original.
+   */
+  startedAtMs: number
   duration: string
   /** Stat strip displayed in the header. Strings are presentation. */
   tokens: string
@@ -63,6 +70,16 @@ export interface ReplayData {
   /** Filter helper: events scoped to one tabPageId. */
   eventsForTab: (tabPageId: number) => ReplayEvent[]
 }
+
+// `buildTabView` and the `TabView` shape live in `./tab-view.ts` so
+// tests can import them without dragging the react-query-kit hook
+// graph. Re-exported here for backward-compat with existing
+// callers that reach it through this module.
+export {
+  buildTabView,
+  EMPTY_TAB_VIEW,
+  type TabView,
+} from './tab-view'
 
 export interface UseReplayDataResult {
   replay: ReplayData | null
@@ -135,6 +152,7 @@ function buildReplayData(task: TaskDetail, events: ReplayEvent[]): ReplayData {
     status: mapTaskStatus(task.status),
     site: task.site ?? 'about:blank',
     startedAt: formatStartedAt(task.startedAt),
+    startedAtMs: sessionStartMs,
     duration: formatDuration(totalMs),
     tokens: '-',
     steps: String(task.dispatchCount),
