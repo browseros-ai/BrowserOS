@@ -86,4 +86,50 @@ describe('agentTabs registry', () => {
     expect(r.size()).toBe(0)
     expect(r.ownedBy('a').size).toBe(0)
   })
+
+  it('hasFirstCapture returns false on an unrecorded (agent, page) pair', () => {
+    const r = createAgentTabsRegistry()
+    expect(r.hasFirstCapture('claude-code', 1)).toBe(false)
+    r.markOpened('claude-code', 1)
+    // Owning the page does not imply it has been captured yet.
+    expect(r.hasFirstCapture('claude-code', 1)).toBe(false)
+  })
+
+  it('markFirstCaptureDone flips hasFirstCapture to true', () => {
+    const r = createAgentTabsRegistry()
+    r.markFirstCaptureDone('claude-code', 1)
+    expect(r.hasFirstCapture('claude-code', 1)).toBe(true)
+    expect(r.hasFirstCapture('claude-code', 2)).toBe(false)
+  })
+
+  it('forgetAgent drops the first-capture set too', () => {
+    const r = createAgentTabsRegistry()
+    r.markFirstCaptureDone('claude-code', 1)
+    r.markFirstCaptureDone('claude-code', 2)
+    r.markFirstCaptureDone('cursor', 5)
+    r.forgetAgent('claude-code')
+    expect(r.hasFirstCapture('claude-code', 1)).toBe(false)
+    expect(r.hasFirstCapture('claude-code', 2)).toBe(false)
+    expect(r.hasFirstCapture('cursor', 5)).toBe(true)
+  })
+
+  it('two agents first-capture sets are isolated', () => {
+    const r = createAgentTabsRegistry()
+    r.markFirstCaptureDone('agent-a', 30)
+    // agent-b on the SAME pageId should still be able to record its
+    // own first capture; the two tracks are independent.
+    expect(r.hasFirstCapture('agent-a', 30)).toBe(true)
+    expect(r.hasFirstCapture('agent-b', 30)).toBe(false)
+    r.markFirstCaptureDone('agent-b', 30)
+    expect(r.hasFirstCapture('agent-b', 30)).toBe(true)
+  })
+
+  it('clear resets the first-capture set too', () => {
+    const r = createAgentTabsRegistry()
+    r.markFirstCaptureDone('a', 1)
+    r.markFirstCaptureDone('b', 2)
+    r.clear()
+    expect(r.hasFirstCapture('a', 1)).toBe(false)
+    expect(r.hasFirstCapture('b', 2)).toBe(false)
+  })
 })

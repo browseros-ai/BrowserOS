@@ -32,6 +32,23 @@ export interface AgentTabsRegistry {
    * starts empty.
    */
   forgetAgent(agentId: string): void
+  /**
+   * First-capture policy for the audit screenshot fallback. Returns
+   * true iff this agent has already had a screenshot written for
+   * this pageId within the current session. `services/screenshots.ts`
+   * uses this to give every tab exactly one visual anchor even when
+   * every dispatch is a read-only tool: the first successful
+   * dispatch on a tab writes; subsequent read-only dispatches on
+   * the same tab skip. Different agents on the same pageId are
+   * tracked independently; each gets its own first-capture write.
+   */
+  hasFirstCapture(agentId: string, pageId: number): boolean
+  /**
+   * Records that a screenshot was written for this (agent, page)
+   * pair. Called from `persistScreenshot` after a successful write
+   * (both tool-result and cache-fallback branches).
+   */
+  markFirstCaptureDone(agentId: string, pageId: number): void
   // Test-only escape hatches.
   size(): number
   clear(): void
@@ -41,6 +58,7 @@ const EMPTY: ReadonlySet<number> = new Set<number>()
 
 export function createAgentTabsRegistry(): AgentTabsRegistry {
   const records = new Map<string, Set<number>>()
+  const firstCaptures = new Map<string, Set<number>>()
   return {
     markOpened(agentId, pageId) {
       let set = records.get(agentId)
@@ -61,12 +79,25 @@ export function createAgentTabsRegistry(): AgentTabsRegistry {
     },
     forgetAgent(agentId) {
       records.delete(agentId)
+      firstCaptures.delete(agentId)
+    },
+    hasFirstCapture(agentId, pageId) {
+      return firstCaptures.get(agentId)?.has(pageId) ?? false
+    },
+    markFirstCaptureDone(agentId, pageId) {
+      let set = firstCaptures.get(agentId)
+      if (!set) {
+        set = new Set()
+        firstCaptures.set(agentId, set)
+      }
+      set.add(pageId)
     },
     size() {
       return records.size
     },
     clear() {
       records.clear()
+      firstCaptures.clear()
     },
   }
 }

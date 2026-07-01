@@ -594,13 +594,27 @@ export function registerBrowserToolsForSingleServer(
               },
             })
             if (dispatchId !== null) {
+              // `tabs new` is the one page-targeted tool whose page
+              // id is only born in the RESULT (not in args). Prefer
+              // the result-derived value so the screencast fallback
+              // + first-capture policy see the right pageId.
+              let screenshotPageId: number | null = pageId
+              if (tool.name === 'tabs') {
+                const args = rawArgs as { action?: string } | null | undefined
+                if (args?.action === 'new') {
+                  const resultPageId = (
+                    result.structuredContent as { page?: number } | undefined
+                  )?.page
+                  if (typeof resultPageId === 'number') {
+                    screenshotPageId = resultPageId
+                  }
+                }
+              }
               persistScreenshot({
                 dispatchId,
                 toolName: tool.name,
-                // Passed through so the screencast fallback branch
-                // can look up the current cache frame for this tab
-                // when the tool result carried no image bytes.
-                pageId,
+                pageId: screenshotPageId,
+                agentId,
                 result: {
                   isError: result.isError ?? false,
                   content: result.content,
