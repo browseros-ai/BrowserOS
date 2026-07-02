@@ -136,7 +136,11 @@ export function TaskHeader({ task }: TaskHeaderProps) {
             variant="default"
             size="sm"
             disabled={!replayReady}
-            onClick={() => navigate(`/audit/${task.sessionId}/replay`)}
+            onClick={() =>
+              navigate(`/audit/${task.sessionId}/replay`, {
+                state: { from: location.pathname },
+              })
+            }
             title={
               replayReady
                 ? 'Watch the rrweb session replay'

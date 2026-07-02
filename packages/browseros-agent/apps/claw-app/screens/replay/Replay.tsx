@@ -22,6 +22,7 @@
 
 import { ArrowLeft, History } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router'
 import { StatusBadge } from '@/components/cockpit/StatusBadge'
 import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -34,6 +35,7 @@ import { usePlayback } from './use-playback'
 
 export function Replay() {
   const { replay, isLoading, navigate } = useReplayData()
+  const location = useLocation()
   const [selectedTabPageId, setSelectedTabPageId] = useState<number | null>(
     null,
   )
@@ -114,10 +116,20 @@ export function Replay() {
   // task detail's Back button keeps its cockpit / audit-list target.
   // Doing navigate(`/audit/${sessionId}`) instead would push a new
   // history entry and lose that state.
+  //
+  // Signal for "reached replay via the in-app flow": task detail's
+  // View Replay button seeds location.state.from with the referring
+  // pathname. Absence of that flag means direct URL / refresh, so we
+  // fall back to the semantic parent. window.history.length is not
+  // used because it counts the whole tab's browser history, not just
+  // SPA-internal navigations, and can misfire on any prior entry.
+  const cameFromInAppFlow =
+    typeof location.state === 'object' &&
+    location.state !== null &&
+    'from' in location.state &&
+    typeof (location.state as { from: unknown }).from === 'string'
   const back = () =>
-    window.history.length > 1
-      ? navigate(-1)
-      : navigate(`/audit/${replay.sessionId}`)
+    cameFromInAppFlow ? navigate(-1) : navigate(`/audit/${replay.sessionId}`)
   // Everything below is tab-scoped: frame index, current frame,
   // scrubber ticks, timeline actions. Playback.time is already in
   // tab-relative seconds thanks to the per-tab usePlayback wiring.
