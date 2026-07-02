@@ -6,7 +6,7 @@ import {
   Settings2,
 } from 'lucide-react'
 import { useState } from 'react'
-import { NavLink, useNavigate } from 'react-router'
+import { useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
 import type { TaskDetail } from '@/modules/api/audit.hooks'
 import { useReplayMetadata } from '@/modules/api/replay.hooks'
@@ -32,13 +32,14 @@ export function TaskHeader({ task }: TaskHeaderProps) {
 
   return (
     <section className="space-y-4">
-      <NavLink
-        to="/audit"
+      <button
+        type="button"
+        onClick={() => navigate(-1)}
         className="inline-flex items-center gap-1 text-[12.5px] text-ink-3 hover:text-ink-1"
       >
         <ChevronLeft className="size-3.5" />
-        Back to Audit
-      </NavLink>
+        Back
+      </button>
 
       <header className="rounded-2xl border border-border-2 bg-card p-5">
         <div className="flex items-start justify-between gap-4">
