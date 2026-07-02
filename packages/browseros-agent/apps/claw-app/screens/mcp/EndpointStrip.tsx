@@ -7,7 +7,7 @@ interface EndpointStripProps {
 
 /**
  * Editorial endpoint strip. Mono uppercase label on top with an
- * inline `copy →` link, dark-ink `bg-ink` strip below carrying the
+ * inline `copy →` link, dark `bg-ink-deep` strip below carrying the
  * value in mono white. Copies to clipboard and flips the link to
  * `copied ✓` for 1.5 s. Long values `truncate`; the native `title`
  * attribute reveals the full string on hover.
@@ -46,7 +46,7 @@ export function EndpointStrip({ label, value }: EndpointStripProps) {
           )}
         </button>
       </div>
-      <div className="overflow-hidden rounded-xl bg-ink px-4 py-3">
+      <div className="overflow-hidden rounded-xl bg-ink-deep px-4 py-3">
         <code
           className="block truncate font-mono text-[12.5px] text-white/95"
           title={value}

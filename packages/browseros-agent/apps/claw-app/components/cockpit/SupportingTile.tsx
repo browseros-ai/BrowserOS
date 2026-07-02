@@ -65,7 +65,7 @@ function Caption({
   isLive: boolean
 }) {
   return (
-    <div className="flex flex-col gap-0.5 bg-ink px-3.5 py-2 text-white">
+    <div className="flex flex-col gap-0.5 bg-ink-deep px-3.5 py-2 text-white">
       <div className="flex items-center gap-2 font-mono text-[9.5px] text-white/75 uppercase tracking-[0.08em]">
         <AgentDot slug={task.slug} />
         <span className="truncate text-white/95">{task.agentLabel}</span>

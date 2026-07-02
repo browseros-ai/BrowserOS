@@ -126,7 +126,7 @@ function CopyableCli({ command }: { command: string }) {
     }
   }
   return (
-    <div className="flex items-center gap-2.5 rounded-xl bg-[#0a1810] px-3 py-3">
+    <div className="flex items-center gap-2.5 rounded-xl bg-ink-deep px-3 py-3">
       <span className="font-mono text-[#6FCF8E] text-xs">$</span>
       <code className="min-w-0 flex-1 truncate font-mono text-[#e9f2ea] text-xs">
         {command}

@@ -220,7 +220,7 @@ function Caption({ frame }: { frame: ReplayFrame }) {
   const verb = VERB_META[frame.verb]
   const kind = KIND_STYLE[frame.kind]
   return (
-    <div className="absolute bottom-5 left-1/2 z-10 flex max-w-[82%] -translate-x-1/2 items-center gap-2.5 rounded-full bg-[#0a1810]/90 px-4 py-2 shadow-xl backdrop-blur">
+    <div className="absolute bottom-5 left-1/2 z-10 flex max-w-[82%] -translate-x-1/2 items-center gap-2.5 rounded-full bg-ink-deep/90 px-4 py-2 shadow-xl backdrop-blur">
       <span
         className={cn(
           'flex size-5 items-center justify-center rounded-md text-white',

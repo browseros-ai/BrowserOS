@@ -46,10 +46,13 @@
   --color-sidebar-accent-foreground: #0f3e17;
   --color-sidebar-border: #e5e7eb;
 
-  /* BrowserOS bespoke surfaces */
+  /* BrowserOS bespoke surfaces. ink-deep is the shared dark-chrome
+     surface (terminal blocks, caption strips, viewport pills) so all
+     dark strips read as one ease-health green-black, not mixed blacks. */
   --color-bg-canvas: #fbfdf8;
   --color-bg-sunken: #ebf3ea;
   --color-card-tint: #fcfefb;
+  --color-ink-deep: #0a1810;
   --color-border-2: #dbe3dc;
   --color-border-strong: #c6d1c8;
 

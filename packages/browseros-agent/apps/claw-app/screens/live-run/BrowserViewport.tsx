@@ -76,7 +76,7 @@ function AgentBadge({ harness, paused }: { harness: string; paused: boolean }) {
     <div
       className={cn(
         'absolute top-3 right-4 z-30 flex items-center gap-2 rounded-full px-3 py-1.5 font-semibold text-white text-xs shadow-lg backdrop-blur',
-        paused ? 'bg-[#B47814]/95' : 'bg-[#0a1810]/90',
+        paused ? 'bg-[#B47814]/95' : 'bg-ink-deep/90',
       )}
     >
       <span

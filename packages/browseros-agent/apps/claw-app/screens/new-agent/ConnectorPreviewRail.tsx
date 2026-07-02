@@ -117,7 +117,7 @@ export function ConnectorPreviewRail({
       <span className="font-bold text-[11px] text-ink-4 uppercase tracking-wider">
         MCP endpoint
       </span>
-      <div className="flex items-center gap-2 rounded-lg bg-[#0a1810] px-3 py-2">
+      <div className="flex items-center gap-2 rounded-lg bg-ink-deep px-3 py-2">
         <code className="min-w-0 flex-1 truncate font-mono text-[#e9f2ea] text-[11px]">
           {mcpUrl}
         </code>

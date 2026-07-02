@@ -39,7 +39,7 @@ export function AuditHoverPreview({ task }: AuditHoverPreviewProps) {
         ) : null}
       </div>
       {task && (
-        <div className="flex flex-col gap-0.5 bg-ink px-4 py-3 text-white">
+        <div className="flex flex-col gap-0.5 bg-ink-deep px-4 py-3 text-white">
           <div className="flex items-center gap-2 font-mono text-[10px] text-white/75 uppercase tracking-[0.08em]">
             <AgentDot slug={task.slug} />
             <span className="truncate text-white/95">{task.agentLabel}</span>

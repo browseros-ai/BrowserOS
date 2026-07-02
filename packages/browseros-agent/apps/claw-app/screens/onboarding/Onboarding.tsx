@@ -74,7 +74,7 @@ const VALUE_PROPS: readonly ValueProp[] = [
 
 function BrandColumn() {
   return (
-    <aside className="relative flex w-[360px] shrink-0 flex-col justify-between overflow-hidden border-border border-r bg-gradient-to-br from-[#cfe7d3] via-[#e9f5e6] to-[#fbfdf8] p-9">
+    <aside className="relative flex w-[360px] shrink-0 flex-col justify-between overflow-hidden border-border border-r bg-gradient-to-br from-accent-tint-2 via-[#e9f5e6] to-bg-canvas p-9">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(420px_300px_at_30%_12%,rgba(45,122,58,0.16),transparent_70%)]"

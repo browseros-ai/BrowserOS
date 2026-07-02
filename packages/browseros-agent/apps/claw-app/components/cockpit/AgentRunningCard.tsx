@@ -50,7 +50,7 @@ export function AgentRunningCard({
           <TabCountChip tabs={agent.tabs} focusTargetId={focus.targetId} />
         </div>
       </div>
-      <div className="flex flex-col gap-1.5 bg-ink px-4 py-3 text-white">
+      <div className="flex flex-col gap-1.5 bg-ink-deep px-4 py-3 text-white">
         <div className="flex items-center gap-3 font-mono text-[10.5px] text-white/80 uppercase tracking-[0.08em]">
           <span className="inline-flex items-center gap-1.5">
             <AgentDot slug={agent.slug} />
@@ -60,7 +60,7 @@ export function AgentRunningCard({
             <span className="inline-flex items-center gap-1.5 text-[#b1dbb8]">
               <span
                 aria-hidden
-                className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-[#b1dbb8] shadow-[0_0_8px_hsl(130_46%_33%/0.7)]"
+                className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-[#b1dbb8] shadow-[0_0_8px_hsl(130_37%_78%/0.7)]"
               />
               LIVE
             </span>
