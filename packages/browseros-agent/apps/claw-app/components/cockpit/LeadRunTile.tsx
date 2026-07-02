@@ -1,5 +1,5 @@
 import { ArrowUpRight } from 'lucide-react'
-import { NavLink } from 'react-router'
+import { NavLink, useLocation } from 'react-router'
 import { AgentDot } from '@/components/audit/AgentDot'
 import { cn } from '@/lib/utils'
 import { type TaskSummary, taskScreenshotUrl } from '@/modules/api/audit.hooks'
@@ -31,9 +31,11 @@ export function LeadRunTile({ task, now, className }: LeadRunTileProps) {
   const isLive = task.status === 'live'
   const isFailed = task.status === 'failed'
   const screenshotId = task.lastScreenshotDispatchId
+  const location = useLocation()
   return (
     <NavLink
       to={`/audit/${encodeURIComponent(task.sessionId)}`}
+      state={{ from: location.pathname }}
       data-testid={`lead-tile-${task.sessionId}`}
       className={cn(
         'group relative flex flex-col overflow-hidden rounded-[18px] border border-border-2 bg-bg-sunken transition-[border-color] duration-150 hover:border-accent/40',

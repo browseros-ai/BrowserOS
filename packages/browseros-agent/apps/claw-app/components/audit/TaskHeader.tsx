@@ -6,7 +6,7 @@ import {
   Settings2,
 } from 'lucide-react'
 import { useState } from 'react'
-import { useNavigate } from 'react-router'
+import { useLocation, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
 import type { TaskDetail } from '@/modules/api/audit.hooks'
 import { useReplayMetadata } from '@/modules/api/replay.hooks'
@@ -22,6 +22,18 @@ export function TaskHeader({ task }: TaskHeaderProps) {
   const [copied, setCopied] = useState(false)
   const finalUrl = lastUrl(task) ?? task.dispatches[0]?.url ?? null
   const navigate = useNavigate()
+  const location = useLocation()
+  // Semantic back: prefer the referring path passed via router state
+  // (see cockpit tiles + audit list). Falls back to /audit for direct
+  // URL loads. Never uses navigate(-1) because history-based back is
+  // unreliable once the user has forward/back navigation in history.
+  const backTo =
+    typeof location.state === 'object' &&
+    location.state !== null &&
+    'from' in location.state &&
+    typeof location.state.from === 'string'
+      ? location.state.from
+      : '/audit'
   // Poll the metadata endpoint so the View Replay button unlocks
   // within seconds once the first rrweb batch lands. The
   // useReplayMetadata hook handles its own staleTime + interval.
@@ -34,7 +46,7 @@ export function TaskHeader({ task }: TaskHeaderProps) {
     <section className="space-y-4">
       <button
         type="button"
-        onClick={() => navigate(-1)}
+        onClick={() => navigate(backTo)}
         className="inline-flex items-center gap-1 text-[12.5px] text-ink-3 hover:text-ink-1"
       >
         <ChevronLeft className="size-3.5" />

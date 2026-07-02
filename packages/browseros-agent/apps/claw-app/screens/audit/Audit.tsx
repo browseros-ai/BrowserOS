@@ -7,7 +7,7 @@ import {
 } from '@tanstack/react-table'
 import { ScrollText } from 'lucide-react'
 import { useMemo } from 'react'
-import { useNavigate } from 'react-router'
+import { useLocation, useNavigate } from 'react-router'
 import { FilterBar } from '@/components/audit/FilterBar'
 import { EmptyState } from '@/components/cockpit/EmptyState'
 import { Button } from '@/components/ui/button'
@@ -56,6 +56,7 @@ export function Audit() {
     setSort,
   } = useAuditScreenData()
   const navigate = useNavigate()
+  const location = useLocation()
 
   // Mirror the URL-derived sort tuple into a memoised SortingState
   // array. Use the primitive id / desc as deps so the array reference
@@ -199,6 +200,7 @@ export function Audit() {
                   onClick={() =>
                     navigate(
                       `/audit/${encodeURIComponent(row.original.sessionId)}`,
+                      { state: { from: location.pathname } },
                     )
                   }
                   className="cursor-pointer"

@@ -109,7 +109,15 @@ export function Replay() {
     )
   }
 
-  const back = () => navigate(`/audit/${replay.sessionId}`)
+  // navigate(-1) preserves task detail's original location.state.from
+  // (the entry we're moving back to is re-focused, not re-created), so
+  // task detail's Back button keeps its cockpit / audit-list target.
+  // Doing navigate(`/audit/${sessionId}`) instead would push a new
+  // history entry and lose that state.
+  const back = () =>
+    window.history.length > 1
+      ? navigate(-1)
+      : navigate(`/audit/${replay.sessionId}`)
   // Everything below is tab-scoped: frame index, current frame,
   // scrubber ticks, timeline actions. Playback.time is already in
   // tab-relative seconds thanks to the per-tab usePlayback wiring.

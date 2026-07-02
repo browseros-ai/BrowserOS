@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router'
+import { NavLink, useLocation } from 'react-router'
 import { AgentDot } from '@/components/audit/AgentDot'
 import type { TaskSummary } from '@/modules/api/audit.hooks'
 import {
@@ -20,9 +20,11 @@ interface RunRowProps {
  */
 export function RunRow({ task, now }: RunRowProps) {
   const isLive = task.status === 'live'
+  const location = useLocation()
   return (
     <NavLink
       to={`/audit/${encodeURIComponent(task.sessionId)}`}
+      state={{ from: location.pathname }}
       data-testid={`run-row-${task.sessionId}`}
       className="group grid grid-cols-[max-content_1fr_max-content_max-content_max-content] items-center gap-4 border-border-2 border-t px-2 py-3 transition-colors duration-150 hover:bg-card-tint"
     >
