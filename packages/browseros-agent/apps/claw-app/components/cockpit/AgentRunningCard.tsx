@@ -46,7 +46,6 @@ export function AgentRunningCard({
           live={active}
           screencast={focus.screencast}
         />
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink via-ink/60 to-transparent" />
         <div className="absolute top-3 right-3">
           <TabCountChip tabs={agent.tabs} focusTargetId={focus.targetId} />
         </div>

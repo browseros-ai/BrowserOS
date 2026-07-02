@@ -44,7 +44,6 @@ export function SupportingTile({ task, now, className }: SupportingTileProps) {
         ) : (
           <NoShotComposition task={task} />
         )}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-ink via-ink/60 to-transparent" />
         <span className="pointer-events-none absolute top-2.5 right-2.5 flex size-6 items-center justify-center rounded-full bg-white/85 text-ink opacity-0 shadow-sm backdrop-blur-md transition-[opacity,transform] duration-200 group-hover:-translate-y-0.5 group-hover:opacity-100">
           <ArrowUpRight className="size-3.5" />
         </span>

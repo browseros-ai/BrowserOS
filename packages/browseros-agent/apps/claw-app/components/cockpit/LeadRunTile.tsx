@@ -52,10 +52,6 @@ export function LeadRunTile({ task, now, className }: LeadRunTileProps) {
         ) : (
           <LeadNoShotComposition task={task} />
         )}
-        {/* Short fade at the bottom of the image so the seam
-            between screenshot and caption block reads as intentional
-            rather than as a hard cut. */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-ink via-ink/60 to-transparent" />
         <span className="pointer-events-none absolute top-3 right-3 flex size-8 items-center justify-center rounded-full bg-white/85 text-ink opacity-0 shadow-sm backdrop-blur-md transition-[opacity,transform] duration-200 group-hover:-translate-y-0.5 group-hover:opacity-100">
           <ArrowUpRight className="size-4" />
         </span>
