@@ -62,7 +62,7 @@ describe('RecentActivity', () => {
     expect(html).toContain('No recent activity')
   })
 
-  it('renders one TaskCard per task', () => {
+  it('renders the freshest task as the lead tile with title, agent, and meta', () => {
     queryOverride = {
       isPending: false,
       data: { pages: [{ tasks: [sampleTask] }] },
@@ -70,7 +70,9 @@ describe('RecentActivity', () => {
     const html = render()
     expect(html).toContain('Browsed example.com')
     expect(html).toContain('Claude Code')
-    expect(html).toContain('Done')
+    // DONE is the silent default in the editorial cockpit; the tile
+    // instead carries a mono meta line with the dispatch count.
+    expect(html).toContain('4 tools')
   })
 
   it('renders the section header + view-all CTA in the empty state', () => {
