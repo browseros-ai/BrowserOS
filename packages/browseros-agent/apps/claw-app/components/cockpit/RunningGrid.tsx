@@ -45,7 +45,7 @@ export function RunningGrid({ agents }: RunningGridProps) {
   return (
     <section className="space-y-4">
       <header className="flex items-baseline gap-3">
-        <h2 className="font-semibold text-ink-1 text-lg">Running now</h2>
+        <h2 className="font-semibold text-ink text-lg">Running now</h2>
         <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-accent uppercase tracking-[0.08em]">
           <span
             aria-hidden

@@ -46,12 +46,12 @@ export function AgentRunningCard({
           live={active}
           screencast={focus.screencast}
         />
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-1 via-ink-1/60 to-transparent" />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink via-ink/60 to-transparent" />
         <div className="absolute top-3 right-3">
           <TabCountChip tabs={agent.tabs} focusTargetId={focus.targetId} />
         </div>
       </div>
-      <div className="flex flex-col gap-1.5 bg-ink-1 px-4 py-3 text-white">
+      <div className="flex flex-col gap-1.5 bg-ink px-4 py-3 text-white">
         <div className="flex items-center gap-3 font-mono text-[10.5px] text-white/80 uppercase tracking-[0.08em]">
           <span className="inline-flex items-center gap-1.5">
             <AgentDot slug={agent.slug} />

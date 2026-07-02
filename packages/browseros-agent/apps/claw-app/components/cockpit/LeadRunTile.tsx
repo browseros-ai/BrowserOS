@@ -55,8 +55,8 @@ export function LeadRunTile({ task, now, className }: LeadRunTileProps) {
         {/* Short fade at the bottom of the image so the seam
             between screenshot and caption block reads as intentional
             rather than as a hard cut. */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-ink-1 via-ink-1/60 to-transparent" />
-        <span className="pointer-events-none absolute top-3 right-3 flex size-8 items-center justify-center rounded-full bg-white/85 text-ink-1 opacity-0 shadow-sm backdrop-blur-md transition-[opacity,transform] duration-200 group-hover:-translate-y-0.5 group-hover:opacity-100">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-ink via-ink/60 to-transparent" />
+        <span className="pointer-events-none absolute top-3 right-3 flex size-8 items-center justify-center rounded-full bg-white/85 text-ink opacity-0 shadow-sm backdrop-blur-md transition-[opacity,transform] duration-200 group-hover:-translate-y-0.5 group-hover:opacity-100">
           <ArrowUpRight className="size-4" />
         </span>
       </div>
@@ -77,7 +77,7 @@ function Caption({
   isFailed: boolean
 }) {
   return (
-    <div className="flex flex-col gap-1 bg-ink-1 px-5 py-3 text-white">
+    <div className="flex flex-col gap-1 bg-ink px-5 py-3 text-white">
       <div className="flex items-center gap-3 font-mono text-[10.5px] text-white/80 uppercase tracking-[0.08em]">
         <span className="inline-flex items-center gap-1.5">
           <AgentDot slug={task.slug} />
@@ -129,7 +129,7 @@ function Caption({
 function LeadNoShotComposition({ task }: { task: TaskSummary }) {
   const verbs = task.toolSequence.slice(0, 5)
   return (
-    <div className="absolute inset-0 bg-gradient-to-br from-ink-1 via-ink-2 to-ink-1">
+    <div className="absolute inset-0 bg-gradient-to-br from-ink via-ink-2 to-ink">
       <div className="pointer-events-none absolute inset-0 flex flex-col justify-center gap-1 p-8 font-mono text-[30px] text-white/12 leading-[1.05] tracking-tight md:text-[38px]">
         {verbs.map((verb, idx) => (
           <span

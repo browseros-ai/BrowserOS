@@ -58,7 +58,7 @@ export function RecentActivity() {
       <div className="pt-1">
         <NavLink
           to="/audit"
-          className="group inline-flex items-center gap-1.5 font-mono text-[12px] text-ink-3 uppercase tracking-[0.08em] transition-colors hover:text-ink-1"
+          className="group inline-flex items-center gap-1.5 font-mono text-[12px] text-ink-3 uppercase tracking-[0.08em] transition-colors hover:text-ink"
         >
           View all activity
           <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
@@ -71,7 +71,7 @@ export function RecentActivity() {
 function SectionHeader() {
   return (
     <header className="flex items-baseline gap-3">
-      <h2 className="font-semibold text-ink-1 text-lg">Recent activity</h2>
+      <h2 className="font-semibold text-ink text-lg">Recent activity</h2>
     </header>
   )
 }
@@ -84,7 +84,7 @@ interface BentoGridProps {
 
 function BentoGrid({ lead, supporting, now }: BentoGridProps) {
   return (
-    <div className="grid grid-cols-1 gap-3 md:auto-rows-[150px] md:grid-cols-12 md:grid-rows-2">
+    <div className="grid grid-cols-1 gap-3 md:auto-rows-[200px] md:grid-cols-12 md:grid-rows-2">
       <LeadRunTile
         task={lead}
         now={now}
@@ -132,7 +132,7 @@ function Tail({ tail, now }: { tail: TaskSummary[]; now: number }) {
 
 function BentoSkeleton() {
   return (
-    <div className="grid grid-cols-1 gap-3 md:auto-rows-[150px] md:grid-cols-12 md:grid-rows-2">
+    <div className="grid grid-cols-1 gap-3 md:auto-rows-[200px] md:grid-cols-12 md:grid-rows-2">
       <Skeleton className="rounded-[18px] md:col-span-6 md:row-span-2" />
       <Skeleton className="rounded-2xl md:col-span-3 md:col-start-7 md:row-start-1" />
       <Skeleton className="rounded-2xl md:col-span-3 md:col-start-10 md:row-start-1" />
