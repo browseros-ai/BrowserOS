@@ -18,7 +18,7 @@ interface ConnectionRowProps {
  * anywhere on the row fires the currently visible action.
  *
  *   Not connected   click row -> connect. Row shows `connect →` as
- *                    the visual label (mono uppercase accent orange).
+ *                    the visual label (mono uppercase accent green).
  *   Connected       click row -> disconnect. Row shows
  *                    `● connected · disconnect →` as the label.
  *

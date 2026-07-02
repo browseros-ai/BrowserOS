@@ -22,8 +22,8 @@ interface AgentRunningCardProps {
  * a dark caption block at the bottom carries the agent identity,
  * the current tool, and Watch / Stop actions as inline chips.
  *
- * LIVE indicator uses the app's accent orange with a pulsing dot,
- * not a green pill; the whole app has one accent color.
+ * LIVE indicator uses the light palette green (#b1dbb8), not the
+ * brand accent: #0f3e17 is near-invisible on the dark caption block.
  */
 export function AgentRunningCard({
   agent,
@@ -57,10 +57,10 @@ export function AgentRunningCard({
             <span className="text-white">{agent.agentLabel}</span>
           </span>
           {active && (
-            <span className="inline-flex items-center gap-1.5 text-accent">
+            <span className="inline-flex items-center gap-1.5 text-[#b1dbb8]">
               <span
                 aria-hidden
-                className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent shadow-[0_0_8px_hsl(129_46%_33%/0.7)]"
+                className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-[#b1dbb8] shadow-[0_0_8px_hsl(130_46%_33%/0.7)]"
               />
               LIVE
             </span>

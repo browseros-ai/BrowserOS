@@ -15,8 +15,9 @@
  * colors, etc.) live alongside as additional utility classes.
  *
  * `accent` deliberately equals `primary`: the app uses accent as the vivid
- * brand color (pulse dots, emphasis text, gradients), not as shadcn's
- * pale hover tint — ease-health's #b6ced5 accent lives on only as chart-3.
+ * brand color (pulse dots, emphasis text, gradients), not as shadcn's pale
+ * hover tint — ease-health's #b6ced5 accent only lingers in the inert
+ * shadcn variable blocks at the end of this file (no utility reads them).
  */
 @theme inline {
   /* shadcn primitives: re-pointed to ease-health surfaces */

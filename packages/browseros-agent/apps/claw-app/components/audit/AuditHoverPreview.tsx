@@ -82,10 +82,10 @@ function NoShotComposition({ task }: { task: TaskSummary }) {
 
 function LiveDot() {
   return (
-    <span className="inline-flex items-center gap-1 text-accent">
+    <span className="inline-flex items-center gap-1 text-[#b1dbb8]">
       <span
         aria-hidden
-        className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent"
+        className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-[#b1dbb8]"
       />
       LIVE
     </span>
