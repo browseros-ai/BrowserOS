@@ -132,12 +132,7 @@ export function Audit() {
       {isError ? (
         <AuditEmpty variant="error" />
       ) : isLoading ? (
-        <TableShell
-          table={table}
-          skeleton
-          onRowHover={setHoveredTask}
-          onRowClick={undefined}
-        />
+        <TableShell table={table} />
       ) : rows.length === 0 ? (
         <AuditEmpty variant={hasActiveFilters ? 'search-miss' : 'zero-tasks'} />
       ) : (
@@ -272,9 +267,6 @@ export function Audit() {
 
 interface TableShellProps {
   table: ReturnType<typeof useReactTable<TaskSummary>>
-  skeleton: true
-  onRowHover: (task: TaskSummary | null) => void
-  onRowClick: undefined
 }
 
 /**
