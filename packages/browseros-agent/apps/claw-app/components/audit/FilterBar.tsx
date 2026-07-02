@@ -63,10 +63,16 @@ export function FilterBar({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border-2 bg-card px-3 py-2.5">
+    <div className="flex flex-wrap items-center gap-1 border-border-2 border-y py-2.5">
       <DropdownMenu>
         <DropdownMenuTrigger
-          render={<Button variant="ghost" size="sm" className="gap-1.5" />}
+          render={
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-1.5 font-mono text-[11px] text-ink-2 uppercase tracking-[0.08em] hover:bg-card-tint"
+            />
+          }
         >
           {selectedAgent ? (
             <>
@@ -76,7 +82,7 @@ export function FilterBar({
           ) : (
             'Agent'
           )}
-          <ChevronDown className="size-3.5 text-ink-3" />
+          <ChevronDown className="size-3 text-ink-3" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-52">
           <DropdownMenuItem onClick={() => onAgentChange(null)}>
@@ -101,10 +107,16 @@ export function FilterBar({
 
       <DropdownMenu>
         <DropdownMenuTrigger
-          render={<Button variant="ghost" size="sm" className="gap-1.5" />}
+          render={
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-1.5 font-mono text-[11px] text-ink-2 uppercase tracking-[0.08em] hover:bg-card-tint"
+            />
+          }
         >
-          {selectedStatus ? <StatusBadge status={selectedStatus} /> : 'Status'}
-          <ChevronDown className="size-3.5 text-ink-3" />
+          {selectedStatus ? <StatusPill status={selectedStatus} /> : 'Status'}
+          <ChevronDown className="size-3 text-ink-3" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-44">
           <DropdownMenuItem onClick={() => onStatusChange(null)}>
@@ -129,10 +141,16 @@ export function FilterBar({
       {siteOptions.length > 0 && (
         <DropdownMenu>
           <DropdownMenuTrigger
-            render={<Button variant="ghost" size="sm" className="gap-1.5" />}
+            render={
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5 font-mono text-[11px] text-ink-2 uppercase tracking-[0.08em] hover:bg-card-tint"
+              />
+            }
           >
             {selectedSite ?? 'Site'}
-            <ChevronDown className="size-3.5 text-ink-3" />
+            <ChevronDown className="size-3 text-ink-3" />
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="start"
@@ -165,10 +183,10 @@ export function FilterBar({
         <Input
           value={localSearch}
           onChange={(e) => setLocalSearch(e.target.value)}
-          placeholder="Search title or agent"
+          placeholder="search sessions..."
           // pr-7 reserves space for the inline clear button so the
           // text never sits under the icon.
-          className="h-8 w-56 pr-7 pl-8 text-[12.5px]"
+          className="h-8 w-64 border-none bg-transparent pr-7 pl-8 font-mono text-[11.5px] text-ink-1 placeholder:text-ink-3 focus-visible:bg-card-tint focus-visible:ring-0"
         />
         {localSearch.length > 0 && (
           <button
@@ -184,4 +202,30 @@ export function FilterBar({
       </div>
     </div>
   )
+}
+
+function StatusPill({ status }: { status: TaskStatus }) {
+  if (status === 'live') {
+    return (
+      <span className="inline-flex items-center gap-1 text-accent">
+        <span
+          aria-hidden
+          className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent"
+        />
+        Live
+      </span>
+    )
+  }
+  if (status === 'failed') {
+    return (
+      <span className="inline-flex items-center gap-1 text-red-500">
+        <span
+          aria-hidden
+          className="inline-block size-1.5 rounded-full bg-red-500"
+        />
+        Failed
+      </span>
+    )
+  }
+  return <span>Done</span>
 }

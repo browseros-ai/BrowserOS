@@ -1,5 +1,42 @@
 import type { TaskStatus, TaskSummary } from '@/modules/api/audit.hooks'
 
+/**
+ * LIVE runs always float to the top of the list regardless of
+ * `startedAt`; within each status group we sort newest-first. This
+ * is the input sort applied BEFORE tanstack-table's own sorting
+ * state so operator-triggered column sorts still work naturally
+ * (an operator sort override replaces this pre-sort at render).
+ */
+export function orderByLiveThenRecency(tasks: TaskSummary[]): TaskSummary[] {
+  return [...tasks].sort((a, b) => {
+    if (a.status === 'live' && b.status !== 'live') return -1
+    if (b.status === 'live' && a.status !== 'live') return 1
+    return b.startedAt - a.startedAt
+  })
+}
+
+const DAY_HEADING_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  weekday: 'long',
+  day: 'numeric',
+  month: 'long',
+})
+
+/** `WEDNESDAY, 2 JULY` style label used as an audit-list day divider. */
+export function formatDayHeading(ts: number): string {
+  return DAY_HEADING_FORMATTER.format(new Date(ts)).toUpperCase()
+}
+
+/** Local calendar-day equality (year + month + date), timezone-aware. */
+export function isSameLocalDay(a: number, b: number): boolean {
+  const da = new Date(a)
+  const db = new Date(b)
+  return (
+    da.getFullYear() === db.getFullYear() &&
+    da.getMonth() === db.getMonth() &&
+    da.getDate() === db.getDate()
+  )
+}
+
 const NINE_SECONDS = 9_000
 const ONE_MINUTE = 60_000
 const ONE_HOUR = 3_600_000

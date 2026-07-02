@@ -74,17 +74,17 @@ const sampleTask: TaskSummary = {
 }
 
 describe('Audit screen', () => {
-  it('renders the header + hint', () => {
+  it('renders the header', () => {
     dataOverride = { ...baseData }
     const html = renderApp()
     expect(html).toContain('Audit')
-    expect(html).toContain('Tasks across every BrowserClaw session')
   })
 
-  it('shows the empty state when there are no tasks', () => {
+  it('shows the editorial empty state when there are no tasks', () => {
     dataOverride = { ...baseData }
     const html = renderApp()
-    expect(html).toContain('No tasks in this view')
+    // Editorial voice: `the audit is *quiet* so far`
+    expect(html).toContain('quiet')
   })
 
   it('shows skeleton loading rows while the first page is pending', () => {
@@ -97,7 +97,8 @@ describe('Audit screen', () => {
   it('shows the error empty state when the query fails', () => {
     dataOverride = { ...baseData, isError: true }
     const html = renderApp()
-    expect(html).toContain('Could not load audit log')
+    // Editorial voice: `could not *load* the audit.`
+    expect(html).toContain('could not')
   })
 
   it('renders one row per task with title + agent + site', () => {
@@ -118,7 +119,9 @@ describe('Audit screen', () => {
     const html = renderApp()
     expect(html).toContain('Claude Code')
     expect(html).toContain('Browsed example.com')
-    expect(html).toContain('Done')
+    // DONE is the silent default in the editorial cockpit; the row's
+    // identity carries state (LIVE / FAILED render inline dots), so
+    // no visible 'Done' text renders here anymore.
   })
 
   it('renders the Load older tasks button when hasNextPage is true', () => {
@@ -146,16 +149,17 @@ describe('Audit screen', () => {
     const html = renderApp()
     // FilterBar's search input still on screen so the user can clear /
     // edit their query without a soft-lock.
-    expect(html).toMatch(/placeholder="Search title or agent"/)
-    expect(html).toContain('No tasks match these filters')
-    expect(html).toContain('Adjust the search or filter dropdowns')
+    expect(html).toMatch(/placeholder="search sessions/)
+    // Editorial voice: `nothing *matches* these filters.`
+    expect(html).toContain('matches')
   })
 
   it('hides the FilterBar when there are no tasks AND no active filters', () => {
     dataOverride = { ...baseData, tasks: [] }
     const html = renderApp()
-    expect(html).not.toMatch(/placeholder="Search title or agent"/)
-    expect(html).toContain('No tasks in this view')
+    expect(html).not.toMatch(/placeholder="search sessions/)
+    // Editorial voice: `the audit is *quiet* so far`
+    expect(html).toContain('quiet')
   })
 
   it('shows skeleton (not empty state) when auto-paginating a filtered query', () => {
@@ -176,7 +180,8 @@ describe('Audit screen', () => {
     }
     const html = renderApp()
     expect(html).toMatch(/animate-pulse/)
-    expect(html).not.toContain('No tasks match these filters')
-    expect(html).not.toContain('No tasks in this view')
+    // Editorial empty states must not appear while data is loading.
+    expect(html).not.toContain('quiet so far')
+    expect(html).not.toContain('nothing')
   })
 })
