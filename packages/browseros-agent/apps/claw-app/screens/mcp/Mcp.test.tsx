@@ -1,8 +1,8 @@
 /**
- * Pins the v2 MCP page shape: hero card with one URL + CLI snippet,
- * "Connected agents" board with one row per harness, "N of M
- * connected" install badge, no McpRow / RegenerateUrlDialog /
- * "Add agent" CTA.
+ * Pins the editorial MCP page shape: compressed hero + single
+ * endpoint URL strip (CLI snippet removed), inline Connected-agents
+ * header with an `N of M connected` mono chip, hairline row list
+ * filtered to exclude Hermes / OpenClaw / Gemini CLI.
  */
 
 import { describe, expect, it, mock } from 'bun:test'
@@ -34,11 +34,20 @@ mock.module('@/modules/api/connections.hooks', () => ({
             agentId: 'codex',
             message: '',
           },
+          // Hermes is BrowserOS-internal and gets filtered out at the
+          // render layer; the row list should not include it.
           {
             harness: 'Hermes',
             installed: true,
             agentId: null,
             message: 'Runs inside BrowserOS.',
+          },
+          // Gemini CLI is also filtered out at the render layer.
+          {
+            harness: 'Gemini CLI',
+            installed: false,
+            agentId: 'gemini-cli',
+            message: '',
           },
         ],
       },
@@ -74,39 +83,66 @@ function renderApp(): string {
   )
 }
 
-describe('Mcp (v2)', () => {
-  it('renders the hero card with the slugless URL and the canonical CLI snippet', () => {
+describe('Mcp (editorial)', () => {
+  it('renders the editorial hero: H1 + italic accent line + single slugless endpoint URL', () => {
     const html = renderApp()
     expect(html).toContain('MCP')
-    expect(html).toContain('1 endpoint')
+    // Italic accent line signature (matches cockpit's `working on`).
+    expect(html).toContain('every')
+    expect(html).toContain('harness.')
+    // Endpoint URL renders and is not slugged.
     expect(html).toContain('/mcp')
     expect(html).not.toContain('/mcp/claude-code')
     expect(html).not.toContain('/cockpit')
-    expect(html).toContain('claude mcp add browseros')
-    expect(html).toContain('--transport http')
+    // Copy affordance renders.
+    expect(html).toContain('copy')
   })
 
-  it('renders the Connected agents header with the right install badge', () => {
+  it('does NOT render the removed CLI snippet block', () => {
+    const html = renderApp()
+    expect(html).not.toContain('CLI SNIPPET')
+    expect(html).not.toContain('claude mcp add browseros')
+    expect(html).not.toContain('--transport http')
+  })
+
+  it('renders the Connected-agents header with the filtered-count chip', () => {
     const html = renderApp()
     expect(html).toContain('Connected agents')
-    // External connected = 1 (Cursor), external total = 3 (Claude Code,
-    // Cursor, Codex). Hermes (internal) is excluded from the badge.
+    // Visible list = Claude Code, Cursor, Codex (Hermes + Gemini CLI
+    // filtered). Connected among visible = 1 (Cursor).
     expect(html).toContain('1 of 3 connected')
   })
 
-  it('renders one row per harness from the fixture and surfaces install state', () => {
+  it('renders one row per visible harness and hides the filtered ones', () => {
     const html = renderApp()
     expect(html).toContain('Claude Code')
     expect(html).toContain('Cursor')
     expect(html).toContain('Codex')
-    expect(html).toContain('Hermes')
-    expect(html).toContain('Connected')
-    expect(html).toContain('Connect')
+    // Filtered out at the render layer.
+    expect(html).not.toContain('Hermes')
+    expect(html).not.toContain('Gemini CLI')
+    expect(html).not.toContain('OpenClaw')
   })
 
-  it('renders the internal-harness note at the bottom', () => {
+  it('renders editorial state voices (silent success, mono uppercase action text)', () => {
     const html = renderApp()
-    expect(html).toContain('Hermes and OpenClaw run inside BrowserOS')
+    // Connect action link renders in mono uppercase (single word).
+    expect(html).toMatch(/>\s*connect\s*/)
+    // Connected state renders inline `connected` label + disconnect
+    // link.
+    expect(html).toMatch(/>\s*connected\s*/)
+    expect(html).toMatch(/>\s*disconnect\s*/)
+  })
+
+  it('does NOT render the removed floating footer paragraph', () => {
+    const html = renderApp()
+    expect(html).not.toContain('Hermes and OpenClaw run inside BrowserOS')
+  })
+
+  it('does NOT render the removed Built-in variant', () => {
+    const html = renderApp()
+    expect(html).not.toContain('Built-in')
+    expect(html).not.toContain('built-in')
   })
 
   it('does NOT render the legacy McpRow / RegenerateUrlDialog / "Add agent" CTA', () => {
@@ -116,9 +152,11 @@ describe('Mcp (v2)', () => {
     expect(html).not.toContain('No endpoints yet')
   })
 
-  it('renders Hermes as a "Built-in" pill, not a Connect button', () => {
+  it('does NOT render the removed marketing subtitle from the old HeroCard', () => {
     const html = renderApp()
-    // The Hermes row carries the Built-in pill literal copy.
-    expect(html).toContain('Built-in')
+    expect(html).not.toContain(
+      'Add BrowserOS as an MCP server in your AI agent',
+    )
+    expect(html).not.toContain('One endpoint, every harness. Use the buttons')
   })
 })
