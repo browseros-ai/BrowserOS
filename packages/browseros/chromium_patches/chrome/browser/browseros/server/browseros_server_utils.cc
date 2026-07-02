@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000000000..dbd7e166bb02c
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_utils.cc
-@@ -0,0 +1,518 @@
+@@ -0,0 +1,513 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -151,19 +151,14 @@ index 0000000000000..dbd7e166bb02c
 +    return false;
 +  }
 +
-+  // Try binding to IPv6 localhost
-+  auto socket6 = net::TCPSocket::Create(nullptr, nullptr, net::NetLogSource());
-+  result = socket6->Open(net::ADDRESS_FAMILY_IPV6);
-+  if (result != net::OK) {
-+    return false;
-+  }
-+  result =
-+      socket6->Bind(net::IPEndPoint(net::IPAddress::IPv6Localhost(), port));
-+  socket6->Close();
-+  if (result != net::OK) {
-+    return false;
-+  }
-+
++  // Deliberately not checking IPv6 localhost here: the actual consumers
++  // (CDPServerSocketFactory, the Bun HTTP server) only require IPv4
++  // 127.0.0.1 to succeed and treat IPv6 as an optional fallback, not a
++  // requirement. On hosts with IPv6 disabled (e.g.
++  // net.ipv6.conf.lo.disable_ipv6=1), binding ::1 always fails with
++  // EADDRNOTAVAIL, which previously made every candidate port look
++  // unavailable and forced FindAvailablePort to burn through all
++  // kMaxPortAttempts on every startup.
 +  return true;
 +}
 +
