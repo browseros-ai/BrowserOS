@@ -8,11 +8,11 @@ import { HARNESSES, type Harness } from '@/screens/new-agent/new-agent.schemas'
 // always emits null). Hashing the slug keeps the colour stable per
 // agent so cards do not flicker between polls.
 const PALETTE = [
-  '#F26B2A',
+  '#2d7a3a',
   '#2F6FE0',
   '#7A5AF8',
   '#10A37F',
-  '#E0561C',
+  '#0f3e17',
   '#0EA5E9',
   '#F59E0B',
   '#DB2777',

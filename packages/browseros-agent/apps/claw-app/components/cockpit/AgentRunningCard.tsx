@@ -60,7 +60,7 @@ export function AgentRunningCard({
             <span className="inline-flex items-center gap-1.5 text-accent">
               <span
                 aria-hidden
-                className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent shadow-[0_0_8px_hsl(19_89%_56%/0.7)]"
+                className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent shadow-[0_0_8px_hsl(129_46%_33%/0.7)]"
               />
               LIVE
             </span>

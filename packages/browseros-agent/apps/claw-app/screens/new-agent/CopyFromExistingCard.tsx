@@ -16,7 +16,7 @@ export function CopyFromExistingCard({
 }: CopyFromExistingCardProps) {
   if (profiles.length === 0) return null
   return (
-    <div className="rounded-2xl border border-accent-tint-2 bg-gradient-to-br from-accent-tint to-[hsl(35_90%_96%)] p-4">
+    <div className="rounded-2xl border border-accent-tint-2 bg-gradient-to-br from-accent-tint to-[hsl(140_40%_96%)] p-4">
       <div className="mb-1 flex items-center gap-2">
         <Copy className="size-4 text-accent" />
         <span className="font-semibold text-ink text-sm">

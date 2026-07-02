@@ -123,7 +123,7 @@ function LiveInlineChip() {
     <span className="inline-flex items-center gap-1 font-mono text-[10px] text-accent uppercase tracking-[0.08em]">
       <span
         aria-hidden
-        className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent shadow-[0_0_6px_hsl(19_89%_56%/0.6)]"
+        className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent shadow-[0_0_6px_hsl(129_46%_33%/0.6)]"
       />
       LIVE
     </span>

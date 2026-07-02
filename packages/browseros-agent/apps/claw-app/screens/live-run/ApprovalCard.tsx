@@ -45,7 +45,7 @@ export function ApprovalCard({
   const KindIcon = KIND_ICON[approval.kind] ?? Send
   return (
     <div className="overflow-hidden rounded-2xl border border-accent-tint-2 bg-card shadow-md">
-      <div className="h-[3px] bg-gradient-to-r from-accent to-[#F6A05A]" />
+      <div className="h-[3px] bg-gradient-to-r from-accent to-[#2d7a3a]" />
       <div className="p-4">
         <div className="mb-2.5 flex items-center gap-2">
           <span className="flex size-6 items-center justify-center rounded-md bg-accent-tint text-accent">
