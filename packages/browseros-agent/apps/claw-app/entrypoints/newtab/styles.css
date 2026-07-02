@@ -5,73 +5,73 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * BrowserOS Agents cockpit palette.
+ * BrowserOS Agents cockpit palette — ease-health.
  *
  * The shadcn base-vega primitives we installed all read --color-background,
  * --color-foreground, --color-primary etc. We re-point those at the
- * design's warm-cream + orange palette so shadcn Cards, Badges and Buttons
- * sit cleanly inside the cockpit. The bespoke BrowserOS tokens (bg-canvas,
- * accent-ink, status colors, etc.) live alongside as additional utility
- * classes.
+ * ease-health palette (cream #fffefc surfaces, deep-green #0f3e17 primary,
+ * sage/mint tints) so shadcn Cards, Badges and Buttons sit cleanly inside
+ * the cockpit. The bespoke BrowserOS tokens (bg-canvas, accent-ink, status
+ * colors, etc.) live alongside as additional utility classes.
  *
- * The palette is the design prototype's tokens translated from raw hex to
- * HSL (which tailwind 4 + shadcn expect) so it composes with the rest of
- * the utility set.
+ * `accent` deliberately equals `primary`: the app uses accent as the vivid
+ * brand color (pulse dots, emphasis text, gradients), not as shadcn's
+ * pale hover tint — ease-health's #b6ced5 accent lives on only as chart-3.
  */
 @theme inline {
-  /* shadcn primitives: re-pointed to BrowserOS surfaces */
-  --color-background: hsl(40 25% 97%);
-  --color-foreground: hsl(40 8% 10%);
-  --color-card: hsl(0 0% 100%);
-  --color-card-foreground: hsl(40 8% 10%);
-  --color-popover: hsl(0 0% 100%);
-  --color-popover-foreground: hsl(40 8% 10%);
-  --color-primary: hsl(19 89% 56%);
-  --color-primary-foreground: hsl(0 0% 100%);
-  --color-secondary: hsl(40 22% 95%);
-  --color-secondary-foreground: hsl(40 8% 10%);
-  --color-muted: hsl(40 18% 94%);
-  --color-muted-foreground: hsl(35 5% 51%);
-  --color-accent: hsl(19 89% 56%);
-  --color-accent-foreground: hsl(0 0% 100%);
-  --color-destructive: hsl(4 56% 50%);
-  --color-destructive-foreground: hsl(0 0% 100%);
-  --color-border: hsl(40 22% 91%);
-  --color-input: hsl(40 22% 91%);
-  --color-ring: hsl(19 89% 56%);
-  --color-sidebar: hsl(40 22% 95%);
-  --color-sidebar-foreground: hsl(40 8% 10%);
-  --color-sidebar-accent: hsl(25 88% 94%);
-  --color-sidebar-accent-foreground: hsl(22 86% 38%);
-  --color-sidebar-border: hsl(40 22% 91%);
+  /* shadcn primitives: re-pointed to ease-health surfaces */
+  --color-background: #fffefc;
+  --color-foreground: #000000;
+  --color-card: #fffefc;
+  --color-card-foreground: #000000;
+  --color-popover: #fffefc;
+  --color-popover-foreground: #000000;
+  --color-primary: #0f3e17;
+  --color-primary-foreground: #fffefc;
+  --color-secondary: #cfe7d3;
+  --color-secondary-foreground: #0f3e17;
+  --color-muted: #e1f4df;
+  --color-muted-foreground: #333333;
+  --color-accent: #0f3e17;
+  --color-accent-foreground: #fffefc;
+  --color-destructive: #b7301b;
+  --color-destructive-foreground: #fffefc;
+  --color-border: #e5e7eb;
+  --color-input: #e5e7eb;
+  --color-ring: #0f3e17;
+  --color-sidebar: #f2f8f0;
+  --color-sidebar-foreground: #000000;
+  --color-sidebar-accent: #cfe7d3;
+  --color-sidebar-accent-foreground: #0f3e17;
+  --color-sidebar-border: #e5e7eb;
 
   /* BrowserOS bespoke surfaces */
-  --color-bg-canvas: hsl(40 30% 98%);
-  --color-bg-sunken: hsl(40 18% 94%);
-  --color-card-tint: hsl(40 35% 98.5%);
-  --color-border-2: hsl(40 18% 88%);
-  --color-border-strong: hsl(40 14% 83%);
+  --color-bg-canvas: #fbfdf8;
+  --color-bg-sunken: #ebf3ea;
+  --color-card-tint: #fcfefb;
+  --color-border-2: #dbe3dc;
+  --color-border-strong: #c6d1c8;
 
   /* Ink scale (typography hierarchy) */
-  --color-ink: hsl(40 8% 10%);
-  --color-ink-2: hsl(35 6% 32%);
-  --color-ink-3: hsl(35 5% 51%);
-  --color-ink-4: hsl(35 5% 66%);
+  --color-ink: #000000;
+  --color-ink-2: #333333;
+  --color-ink-3: #68706a;
+  --color-ink-4: #99a29b;
 
-  /* Accent ink (high-contrast orange text on tinted backgrounds) */
-  --color-accent-2: hsl(20 79% 49%);
-  --color-accent-ink: hsl(22 86% 38%);
-  --color-accent-tint: hsl(25 88% 94%);
-  --color-accent-tint-2: hsl(25 87% 90%);
+  /* Accent ink (high-contrast green text on tinted backgrounds) */
+  --color-accent-2: #2d7a3a;
+  --color-accent-ink: #0f3e17;
+  --color-accent-tint: #e1f4df;
+  --color-accent-tint-2: #cfe7d3;
 
   /* Status palette */
-  --color-green: hsl(140 65% 33%);
-  --color-green-tint: hsl(140 35% 92%);
+  --color-green: #2d7a3a;
+  --color-green-tint: #d9edda;
   --color-amber: hsl(35 80% 40%);
   --color-amber-tint: hsl(40 75% 92%);
-  --color-red: hsl(4 56% 50%);
+  --color-red: #b7301b;
   --color-red-tint: hsl(4 65% 95%);
-  --color-blue: hsl(217 75% 53%);
+  --color-blue: #3e7285;
 
   /* Type families. Variable fonts get the "Variable" suffix; Newsreader is
      not currently variable so it ships as a plain family. */
@@ -81,9 +81,9 @@
 
   /* Shadows from the design's --shadow-* tokens */
   --shadow-card:
-    0 1px 2px hsl(35 35% 12% / 0.04), 0 1px 3px hsl(35 35% 12% / 0.03);
+    0 1px 2px hsl(150 25% 10% / 0.04), 0 1px 3px hsl(150 25% 10% / 0.03);
   --shadow-pop:
-    0 8px 30px hsl(35 35% 12% / 0.14), 0 2px 8px hsl(35 35% 12% / 0.08);
+    0 8px 30px hsl(150 25% 10% / 0.14), 0 2px 8px hsl(150 25% 10% / 0.08);
 
   /* Animations referenced by JSX utilities (animate-pulse-dot, etc.) */
   --animate-pulse-dot: pulse-dot 1.4s ease-in-out infinite;
@@ -150,9 +150,9 @@ body,
 body {
   color: var(--color-foreground);
   font-family: var(--font-sans);
-  /* The design's body has a layered gradient on warm cream. We replicate
-     the same three layers so the cockpit chrome reads as the design,
-     not a flat white page.
+  /* The design's body has a layered gradient on cream. We replicate
+     the same three layers (sage, blue-gray mist, sage-to-moss wash) so
+     the cockpit chrome reads as the design, not a flat white page.
 
      background-attachment: fixed anchors the gradient to the viewport
      instead of the body box. Without it, the gradient is sized to body
@@ -163,15 +163,15 @@ body {
   background:
     radial-gradient(
       1200px 700px at 18% -8%,
-      hsl(160 12% 91%) 0%,
-      hsl(160 12% 91% / 0) 60%
+      hsl(140 30% 91%) 0%,
+      hsl(140 30% 91% / 0) 60%
     ),
     radial-gradient(
       1000px 800px at 100% 110%,
-      hsl(35 25% 90%) 0%,
-      hsl(35 25% 90% / 0) 55%
+      hsl(196 30% 92%) 0%,
+      hsl(196 30% 92% / 0) 55%
     ),
-    linear-gradient(155deg, hsl(170 10% 88%) 0%, hsl(35 18% 89%) 100%);
+    linear-gradient(155deg, hsl(150 20% 88%) 0%, hsl(90 20% 91%) 100%);
   background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -207,72 +207,72 @@ body {
  ---break---
  */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.141 0.005 285.823);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.141 0.005 285.823);
-  --primary: oklch(0.553 0.195 38.402);
-  --primary-foreground: oklch(0.98 0.016 73.684);
-  --secondary: oklch(0.967 0.001 286.375);
-  --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.21 0.006 285.885);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.705 0.015 286.067);
-  --chart-1: oklch(0.837 0.128 66.29);
-  --chart-2: oklch(0.705 0.213 47.604);
-  --chart-3: oklch(0.646 0.222 41.116);
-  --chart-4: oklch(0.553 0.195 38.402);
-  --chart-5: oklch(0.47 0.157 37.304);
+  --background: #fffefc;
+  --foreground: #000000;
+  --card: #fffefc;
+  --card-foreground: #000000;
+  --popover: #fffefc;
+  --popover-foreground: #000000;
+  --primary: #0f3e17;
+  --primary-foreground: #fffefc;
+  --secondary: #cfe7d3;
+  --secondary-foreground: #0f3e17;
+  --muted: #e1f4df;
+  --muted-foreground: #333333;
+  --accent: #b6ced5;
+  --accent-foreground: #0f3e17;
+  --destructive: #b7301b;
+  --border: #e5e7eb;
+  --input: #e5e7eb;
+  --ring: #0f3e17;
+  --chart-1: #0f3e17;
+  --chart-2: #2d7a3a;
+  --chart-3: #6ea8b8;
+  --chart-4: #b1dbb8;
+  --chart-5: #333333;
   --radius: 0.45rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.141 0.005 285.823);
-  --sidebar-primary: oklch(0.646 0.222 41.116);
-  --sidebar-primary-foreground: oklch(0.98 0.016 73.684);
-  --sidebar-accent: oklch(0.967 0.001 286.375);
-  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
-  --sidebar-border: oklch(0.92 0.004 286.32);
-  --sidebar-ring: oklch(0.705 0.015 286.067);
+  --sidebar: #fffefc;
+  --sidebar-foreground: #000000;
+  --sidebar-primary: #0f3e17;
+  --sidebar-primary-foreground: #fffefc;
+  --sidebar-accent: #e1f4df;
+  --sidebar-accent-foreground: #0f3e17;
+  --sidebar-border: #e5e7eb;
+  --sidebar-ring: #0f3e17;
 }
 /*
  ---break---
  */
 .dark {
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.006 285.885);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.006 285.885);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.47 0.157 37.304);
-  --primary-foreground: oklch(0.98 0.016 73.684);
-  --secondary: oklch(0.274 0.006 286.033);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.552 0.016 285.938);
-  --chart-1: oklch(0.837 0.128 66.29);
-  --chart-2: oklch(0.705 0.213 47.604);
-  --chart-3: oklch(0.646 0.222 41.116);
-  --chart-4: oklch(0.553 0.195 38.402);
-  --chart-5: oklch(0.47 0.157 37.304);
-  --sidebar: oklch(0.21 0.006 285.885);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.705 0.213 47.604);
-  --sidebar-primary-foreground: oklch(0.98 0.016 73.684);
-  --sidebar-accent: oklch(0.274 0.006 286.033);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.552 0.016 285.938);
+  --background: #0a1810;
+  --foreground: #fffefc;
+  --card: #142919;
+  --card-foreground: #fffefc;
+  --popover: #142919;
+  --popover-foreground: #fffefc;
+  --primary: #2d7a3a;
+  --primary-foreground: #fffefc;
+  --secondary: #1f3a26;
+  --secondary-foreground: #fffefc;
+  --muted: #1f3a26;
+  --muted-foreground: #a8c4ab;
+  --accent: #1f3a26;
+  --accent-foreground: #fffefc;
+  --destructive: #e34432;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.12);
+  --ring: #2d7a3a;
+  --chart-1: #4a9c56;
+  --chart-2: #b1dbb8;
+  --chart-3: #b6ced5;
+  --chart-4: #cfe7d3;
+  --chart-5: #d4d4d4;
+  --sidebar: #142919;
+  --sidebar-foreground: #fffefc;
+  --sidebar-primary: #2d7a3a;
+  --sidebar-primary-foreground: #fffefc;
+  --sidebar-accent: rgba(255, 255, 255, 0.06);
+  --sidebar-accent-foreground: #fffefc;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-ring: #2d7a3a;
 }
