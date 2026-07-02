@@ -133,17 +133,27 @@ describe('createLanguageModel — ACP providers', () => {
       acpCommand: 'my-bin acp',
     } as never)
     expect(lastBuildArgs?.agentId).toBe('my-agent')
+    // Built-in tier-2 overrides (BrowserOS-pinned npx commands) are
+    // still populated for claude + codex alongside the user's custom
+    // acp-agent override — nothing about acp-custom suppresses them.
     expect(lastBuildArgs?.agentRegistryOverrides).toEqual({
+      claude: 'npx -y @agentclientprotocol/claude-agent-acp@^0.31.0',
+      codex: 'npx -y @agentclientprotocol/codex-acp@^1.0.2',
       'my-agent': 'my-bin acp',
     })
   })
 
-  it('leaves agentRegistryOverrides empty for built-in agents without a bundled bun', async () => {
+  it('falls back to BrowserOS-pinned npx commands for built-in agents when no bundled bun is available', async () => {
     // baseConfig() has no resourcesDir so the launcher cannot resolve
-    // the bundled Bun and falls back to acpx's own npx command, which
-    // means we deliberately do NOT pre-seed the registry override.
+    // the bundled Bun and returns the tier-2 host-npx-fallback shape.
+    // We DO pre-seed the registry override with that pinned command so
+    // BrowserOS controls the version range instead of deferring to
+    // whatever acpx has hardcoded.
     await createLanguageModel(baseConfig() as never)
-    expect(lastBuildArgs?.agentRegistryOverrides).toEqual({})
+    expect(lastBuildArgs?.agentRegistryOverrides).toEqual({
+      claude: 'npx -y @agentclientprotocol/claude-agent-acp@^0.31.0',
+      codex: 'npx -y @agentclientprotocol/codex-acp@^1.0.2',
+    })
   })
 
   it('pre-seeds the bundled-Bun launcher for claude and codex when resourcesDir points at a real bundled bun', async () => {

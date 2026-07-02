@@ -74,10 +74,14 @@ describe('probeAcpAgent — input shape', () => {
     )
   })
 
-  it('forwards agentId to the underlying probe', async () => {
+  it('rewrites a built-in agentId to the tier-2 npx command when no resourcesDir is supplied', async () => {
     nextResult = baseProbeResult()
     await probeAcpAgent({ agentId: 'claude' })
-    expect(lastCall?.agent).toBe('claude')
+    // With no resourcesDir the launcher returns the host-npx-fallback
+    // shape; probeAcpAgent now honours that and forwards the pinned
+    // command rather than deferring to acpx's own registry.
+    expect(lastCall?.agent).toBeUndefined()
+    expect(lastCall?.command).toContain('@agentclientprotocol/claude-agent-acp')
     expect(lastCall?.authPolicy).toBe('skip')
   })
 
@@ -152,21 +156,23 @@ describe('probeAcpAgent — bundled-Bun launcher swap', () => {
     fs.rmSync(tmpRoot, { recursive: true, force: true })
   })
 
-  it('leaves agentId in place when no resourcesDir is supplied so acpx resolves the npx command', async () => {
+  it('produces the tier-2 pinned npx command when no resourcesDir is supplied', async () => {
     nextResult = baseProbeResult()
     await probeAcpAgent({ agentId: 'claude' })
-    expect(lastCall?.agent).toBe('claude')
-    expect(lastCall?.command).toBeUndefined()
+    // Launcher returns host-npx-fallback; probeAcpAgent forwards its
+    // command instead of leaving agentId in place for acpx to resolve.
+    expect(lastCall?.agent).toBeUndefined()
+    expect(lastCall?.command).toContain('@agentclientprotocol/claude-agent-acp')
   })
 
-  it('leaves agentId in place when the bundled bun binary is missing under resourcesDir', async () => {
+  it('produces the tier-2 pinned npx command when the bundled bun binary is missing under resourcesDir', async () => {
     nextResult = baseProbeResult()
     await probeAcpAgent({
       agentId: 'codex',
       resourcesDir: '/nonexistent/path/that/has/no/bundled/bun',
     })
-    expect(lastCall?.agent).toBe('codex')
-    expect(lastCall?.command).toBeUndefined()
+    expect(lastCall?.agent).toBeUndefined()
+    expect(lastCall?.command).toContain('@agentclientprotocol/codex-acp')
   })
 
   it('passes through an explicit command unchanged regardless of resourcesDir', async () => {

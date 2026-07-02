@@ -81,11 +81,11 @@ export async function probeAcpAgent(
   const timeoutMs = resolveTimeout(input.timeoutMs)
 
   // Built-in agent ids (claude, codex) get rewritten to an explicit
-  // command when the bundled-Bun launcher resolves. When the launcher
-  // would fall back to `npx -y …` we deliberately leave the agentId
-  // alone so acpx's built-in registry produces the same command via
-  // its own code path; this keeps callers that have not threaded
-  // resourcesDir yet on the exact pre-existing behaviour.
+  // command via the two-tier launcher chain: bundled-Bun preferred,
+  // host-npx-fallback second. Only `launcher === null` (agent id not
+  // in HOST_ACP_ADAPTER_CONFIG) leaves the agentId alone and lets
+  // acp-probe / acpx resolve it via their own registry. `launcherSource`
+  // in the log line distinguishes tier 1 vs tier 2 for runtime traces.
   let agentId = input.agentId
   let command = input.command
   if (!command && agentId) {
@@ -95,11 +95,12 @@ export async function probeAcpAgent(
       resourcesDir: input.resourcesDir,
       platform: input.platform,
     })
-    if (launcher?.source === 'bundled-bun') {
+    if (launcher) {
       command = launcher.command
       agentId = undefined
-      logger.debug('ACP probe using bundled-bun launcher', {
+      logger.debug('ACP probe using launcher-resolved command', {
         originalAgentId: input.agentId,
+        launcherSource: launcher.source,
       })
     }
   }
