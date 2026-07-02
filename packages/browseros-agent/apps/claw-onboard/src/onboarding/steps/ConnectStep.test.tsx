@@ -21,7 +21,7 @@ describe('ConnectStep', () => {
     const html = render('idle')
     expect(html).toContain('Add to Claude')
     expect(html).toContain('or use the CLI')
-    expect(html).toContain('claude mcp add browseros')
+    expect(html).toContain('claude mcp add BrowserClaw')
     expect(html).toContain('--transport http')
   })
 

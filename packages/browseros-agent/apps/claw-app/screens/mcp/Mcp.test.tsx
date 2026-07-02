@@ -111,7 +111,10 @@ describe('Mcp (editorial)', () => {
   it('does NOT render the removed CLI snippet block', () => {
     const html = renderApp()
     expect(html).not.toContain('CLI SNIPPET')
-    expect(html).not.toContain('claude mcp add browseros')
+    // Guard against any CLI snippet resurfacing regardless of the
+    // registered server name (`browseros` legacy or `BrowserClaw`
+    // post-rename).
+    expect(html).not.toContain('claude mcp add')
     expect(html).not.toContain('--transport http')
   })
 
