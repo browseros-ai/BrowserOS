@@ -84,7 +84,7 @@ interface BentoGridProps {
 
 function BentoGrid({ lead, supporting, now }: BentoGridProps) {
   return (
-    <div className="grid grid-cols-1 gap-3 md:auto-rows-[200px] md:grid-cols-12 md:grid-rows-2">
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-12 md:grid-rows-[200px_200px]">
       <LeadRunTile
         task={lead}
         now={now}
@@ -132,7 +132,7 @@ function Tail({ tail, now }: { tail: TaskSummary[]; now: number }) {
 
 function BentoSkeleton() {
   return (
-    <div className="grid grid-cols-1 gap-3 md:auto-rows-[200px] md:grid-cols-12 md:grid-rows-2">
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-12 md:grid-rows-[200px_200px]">
       <Skeleton className="rounded-[18px] md:col-span-6 md:row-span-2" />
       <Skeleton className="rounded-2xl md:col-span-3 md:col-start-7 md:row-start-1" />
       <Skeleton className="rounded-2xl md:col-span-3 md:col-start-10 md:row-start-1" />
