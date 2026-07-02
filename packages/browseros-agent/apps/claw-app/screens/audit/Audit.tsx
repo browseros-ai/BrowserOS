@@ -192,12 +192,16 @@ export function Audit() {
               <TableBody>
                 {rows.map((row, idx) => {
                   const prev = idx > 0 ? rows[idx - 1] : null
+                  // Null-check narrows prev so we do not need the
+                  // non-null assertion inside isSameLocalDay's number
+                  // parameters. Biome's noNonNullAssertion rule bans
+                  // the `!` form; this preserves the type discipline.
                   const dayChanged =
                     showDayHeadings &&
-                    (idx === 0 ||
+                    (prev === null ||
                       !isSameLocalDay(
                         row.original.startedAt,
-                        prev?.original.startedAt,
+                        prev.original.startedAt,
                       ))
                   return (
                     <Fragment key={row.id}>
