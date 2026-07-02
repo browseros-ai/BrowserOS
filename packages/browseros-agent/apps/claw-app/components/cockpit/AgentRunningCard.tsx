@@ -1,9 +1,8 @@
-import { Check, ExternalLink, RefreshCw, Square } from 'lucide-react'
-import { Card } from '@/components/ui/card'
+import { ExternalLink, RefreshCw, Square } from 'lucide-react'
+import { AgentDot } from '@/components/audit/AgentDot'
 import type { AgentActivityRecord } from '@/screens/cockpit/cockpit.helpers'
 import { formatToolTrail, siteOf } from '@/screens/cockpit/cockpit.helpers'
 import { MiniScreencast } from './MiniScreencast'
-import { StatusBadge } from './StatusBadge'
 import { TabCountChip } from './TabCountChip'
 
 interface AgentRunningCardProps {
@@ -17,14 +16,14 @@ interface AgentRunningCardProps {
 }
 
 /**
- * One card per agent on the homepage running grid. The focus tab is
- * the agent's freshest `lastToolAt` and supplies the visible
- * surface: site host, task title, mini-screencast. The "N tabs" chip
- * in the header opens a popover with the full tab list when the
- * agent is driving more than one tab. Trail and action count are
- * merged across all of this agent's tabs so the card tells the
- * complete story of what the agent has been doing, not just the
- * current focus.
+ * One card per LIVE agent in the "Running now" strip. Uses the
+ * same split-zone language as the editorial lead-story tile in
+ * Recent activity: the current focus screencast dominates the top,
+ * a dark caption block at the bottom carries the agent identity,
+ * the current tool, and Watch / Stop actions as inline chips.
+ *
+ * LIVE indicator uses the app's accent orange with a pulsing dot,
+ * not a green pill; the whole app has one accent color.
  */
 export function AgentRunningCard({
   agent,
@@ -36,68 +35,56 @@ export function AgentRunningCard({
   const focus = agent.currentFocus
   const active = agent.status === 'active'
   const trail = formatToolTrail(agent.recentTools)
-  const liveLine = `${agent.lastToolName} - ${focus.title || siteOf(focus.url)}`
-
   return (
-    <Card
+    <div
       data-agent-card
-      className="group flex cursor-pointer flex-col overflow-hidden border-border-2 border-l-4 p-0 transition hover:border-border-strong hover:shadow-card"
-      style={{ borderLeftColor: agent.color }}
+      className="group relative flex h-[300px] flex-col overflow-hidden rounded-2xl border border-border-2 bg-bg-sunken transition-[border-color] duration-150 hover:border-accent/40"
     >
-      <MiniScreencast
-        site={siteOf(focus.url)}
-        live={active}
-        screencast={focus.screencast}
-      />
-      <div className="flex flex-1 flex-col gap-2 p-3.5">
-        <div className="flex items-center gap-2">
-          <span className="min-w-0 flex-1 truncate font-bold text-[13.5px]">
-            {agent.agentLabel}
-          </span>
+      <div className="relative flex-1 overflow-hidden">
+        <MiniScreencast
+          site={siteOf(focus.url)}
+          live={active}
+          screencast={focus.screencast}
+        />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-1 via-ink-1/60 to-transparent" />
+        <div className="absolute top-3 right-3">
           <TabCountChip tabs={agent.tabs} focusTargetId={focus.targetId} />
-          <StatusBadge status={active ? 'running' : 'done'} />
         </div>
-        <code className="truncate font-mono text-[11px] text-ink-3">
-          {siteOf(focus.url)}
-        </code>
-        <p className="line-clamp-2 min-h-9 text-[12.5px] text-ink-2 leading-snug">
-          {focus.title || siteOf(focus.url)}
-        </p>
-        <div className="mt-auto flex items-center gap-1.5 text-[11.5px] text-ink-2">
-          {active ? (
-            <RefreshCw className="size-3 shrink-0 animate-spin text-accent" />
-          ) : (
-            <Check className="size-3 shrink-0 text-green" />
-          )}
-          <span className="min-w-0 flex-1 truncate font-mono">
-            {active ? liveLine : 'Completed'}
+      </div>
+      <div className="flex flex-col gap-1.5 bg-ink-1 px-4 py-3 text-white">
+        <div className="flex items-center gap-3 font-mono text-[10.5px] text-white/80 uppercase tracking-[0.08em]">
+          <span className="inline-flex items-center gap-1.5">
+            <AgentDot slug={agent.slug} />
+            <span className="text-white">{agent.agentLabel}</span>
           </span>
-          {agent.toolCount > 0 && (
-            <span className="shrink-0 rounded-full bg-bg-sunken px-1.5 py-0.5 font-mono text-[10.5px] text-ink-2">
-              {agent.toolCount} {agent.toolCount === 1 ? 'action' : 'actions'}
+          {active && (
+            <span className="inline-flex items-center gap-1.5 text-accent">
+              <span
+                aria-hidden
+                className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent shadow-[0_0_8px_hsl(19_89%_56%/0.7)]"
+              />
+              LIVE
             </span>
           )}
         </div>
-        {trail && (
-          <code
-            className="truncate font-mono text-[10.5px] text-ink-3"
-            title={trail}
-          >
-            {trail}
-          </code>
-        )}
-        <div className="flex gap-2 border-border border-t pt-2.5">
+        <h3 className="truncate font-semibold text-[14px] text-white leading-tight">
+          {focus.title || siteOf(focus.url)}
+        </h3>
+        <p className="truncate font-mono text-[11px] text-white/60">
+          {trail || siteOf(focus.url)}
+        </p>
+        <div className="mt-1 flex items-center gap-2 border-white/10 border-t pt-2">
           <button
             type="button"
             onClick={onWatch}
             disabled={isFocusPending}
-            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 font-semibold text-[12.5px] text-ink-2 transition hover:bg-bg-sunken hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md bg-white/10 px-2 py-1.5 font-mono text-[10.5px] text-white/90 uppercase tracking-[0.08em] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isFocusPending ? (
-              <RefreshCw className="size-3.5 animate-spin" />
+              <RefreshCw className="size-3 animate-spin" />
             ) : (
-              <ExternalLink className="size-3.5" />
-            )}{' '}
+              <ExternalLink className="size-3" />
+            )}
             Watch
           </button>
           {active && onStop && (
@@ -106,12 +93,10 @@ export function AgentRunningCard({
               onClick={onStop}
               disabled={isCancelPending}
               aria-label={isCancelPending ? 'Cancelling agent' : 'Stop agent'}
-              // min-w-[7rem] reserves enough width for the longer
+              // min-w reserves enough width for the longer
               // 'Cancelling' label so swapping in the pending state
-              // does not push the adjacent Watch button (which is
-              // flex-1) around. Centre-aligned content + fixed width
-              // means the icon position stays put across states too.
-              className="inline-flex min-w-[7rem] items-center justify-center gap-1.5 rounded-md bg-bg-sunken px-2.5 py-1.5 font-semibold text-[12.5px] text-ink-2 transition hover:bg-card-tint hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+              // does not push the Watch button around.
+              className="inline-flex min-w-[92px] items-center justify-center gap-1.5 rounded-md bg-white/10 px-2 py-1.5 font-mono text-[10.5px] text-white/90 uppercase tracking-[0.08em] transition hover:bg-red-500/30 hover:text-red-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isCancelPending ? (
                 <>
@@ -126,6 +111,6 @@ export function AgentRunningCard({
           )}
         </div>
       </div>
-    </Card>
+    </div>
   )
 }
