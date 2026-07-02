@@ -14,7 +14,7 @@ export function Cockpit() {
   const { agents } = useCockpitData()
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-8 px-8 pt-10 pb-20">
+    <div className="mx-auto flex max-w-7xl flex-col gap-8 px-8 pt-8 pb-16">
       <CockpitHero />
       <RunningGrid agents={agents} />
       <RecentActivity />
