@@ -123,14 +123,23 @@ export async function disconnectBrowserosFromHarness(
       serverName: BROWSEROS_MCP_SERVER_NAME,
       agent: agentId,
     })
-    // Best-effort: drop the manifest entry so a subsequent list does
-    // not show a phantom entry with zero links. Failure here does not
-    // change the install state from the user's point of view.
+    // Only drop the shared manifest entry when NO other agents are
+    // still linked to it. The BrowserClaw server is a single manifest
+    // record that agent-mcp-manager fans out across every agent's
+    // config file; unconditionally calling remove() here would wipe
+    // the shared entry and orphan every other agent's on-disk link.
+    // listLinks after unlink is safe: the library queues writes, so
+    // this read sees the post-unlink state.
     try {
-      await mgr.remove({
-        serverName: BROWSEROS_MCP_SERVER_NAME,
-        unlinkFirst: false,
+      const remainingLinks = await mgr.listLinks({
+        serverNames: [BROWSEROS_MCP_SERVER_NAME],
       })
+      if (remainingLinks.length === 0) {
+        await mgr.remove({
+          serverName: BROWSEROS_MCP_SERVER_NAME,
+          unlinkFirst: false,
+        })
+      }
     } catch {
       // ServerNotFoundError, etc. Safe to ignore: the link is gone,
       // which is the user-visible state we care about.
