@@ -21,6 +21,16 @@ mock.module('@/modules/api/connections.hooks', () => ({
             agentId: 'claude-code',
             message: '',
           },
+          // Claude Desktop is a retired harness (stdio-only host
+          // config, `npx mcp-remote` bridge requires Node) and gets
+          // filtered out at the render layer; the row list should
+          // not include it.
+          {
+            harness: 'Claude Desktop',
+            installed: false,
+            agentId: 'claude-desktop',
+            message: '',
+          },
           {
             harness: 'Cursor',
             installed: true,
@@ -119,6 +129,7 @@ describe('Mcp (editorial)', () => {
     expect(html).toContain('Cursor')
     expect(html).toContain('Codex')
     // Filtered out at the render layer.
+    expect(html).not.toContain('Claude Desktop')
     expect(html).not.toContain('Hermes')
     expect(html).not.toContain('Gemini CLI')
     expect(html).not.toContain('OpenClaw')

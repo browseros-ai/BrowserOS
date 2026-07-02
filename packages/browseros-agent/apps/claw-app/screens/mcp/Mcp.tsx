@@ -7,23 +7,33 @@ import {
   useDisconnectBrowseros,
 } from '@/modules/api/connections.hooks'
 import { buildCanonicalMcpEndpointUrl } from '@/modules/api/mcp-endpoint'
-import type { Harness } from '@/screens/new-agent/new-agent.schemas'
+import {
+  type Harness,
+  RETIRED_HARNESSES,
+} from '@/screens/new-agent/new-agent.schemas'
 import { ConnectionRow } from './ConnectionRow'
 import { HeroCard } from './HeroCard'
 
 /**
  * Editorial MCP install board. Compressed hero with a single dark-
  * ink endpoint strip; hairline-separated Connected-agents list below.
- * BrowserOS-internal harnesses (Hermes / OpenClaw) and the retired
- * Gemini CLI harness are filtered out of the render list at this
- * screen; the underlying `useBrowserosConnections` data source is
- * untouched.
+ * Three groups of harnesses are hidden at the render layer; the
+ * underlying `useBrowserosConnections` data source is untouched:
+ *
+ *   - `RETIRED_HARNESSES` (currently Claude Desktop): stdio-only host
+ *     configs whose recommended `npx mcp-remote` bridge requires
+ *     Node on the user's machine, which BrowserOS cannot guarantee.
+ *     Mirrors the new-agent picker's `SELECTABLE_HARNESSES` filter.
+ *   - Hermes / OpenClaw: BrowserOS-internal harnesses that read as
+ *     Built-in and do not need a user-facing Connect flow.
+ *   - Gemini CLI: dropped per operator direction.
  *
  * Live MCP-session state (who is connected right now) is surfaced on
  * the cockpit's running grid, not here; this page is the install
  * board.
  */
 const HIDDEN_HARNESSES: readonly Harness[] = [
+  ...RETIRED_HARNESSES,
   'Hermes',
   'OpenClaw',
   'Gemini CLI',
