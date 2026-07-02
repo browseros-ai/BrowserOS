@@ -40,6 +40,15 @@ describe('connectBrowserosToHarness', () => {
     const link = stub.calls.find((c) => c.method === 'link')
     expect(link).toBeDefined()
     expect((link?.payload as { agent: string }).agent).toBe('claude-code')
+    // The link call passes allowOverwrite: true so agent-mcp-manager
+    // takes ownership of any prior on-disk BrowserClaw entry instead
+    // of throwing ForeignEntryError. This is deliberate: BrowserClaw
+    // is the app's own name and any prior entry under it belongs to
+    // us in practice (relocated workspace, dev rebuild, prior manifest
+    // version).
+    expect((link?.payload as { allowOverwrite?: boolean }).allowOverwrite).toBe(
+      true,
+    )
   })
 
   it('writes a direct HTTP spec for Codex (http-capable since agent-mcp-manager 0.0.3)', async () => {

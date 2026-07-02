@@ -78,6 +78,15 @@ export async function connectBrowserosToHarness(
     const link = await mgr.link({
       serverName: BROWSEROS_MCP_SERVER_NAME,
       agent: agentId,
+      // Take ownership of any prior on-disk BrowserClaw entry that
+      // the manifest does not know about. Without this, agent-mcp-
+      // manager throws ForeignEntryError to protect the user from
+      // clobbering a foreign entry; that safety net is unnecessary
+      // for our case because BrowserClaw is the app's own name and
+      // any prior entry under it was almost certainly written by
+      // an earlier BrowserClaw install (relocated workspace, dev
+      // rebuild, or a prior version of the manifest).
+      allowOverwrite: true,
     })
     logger.info('connected browseros to harness', {
       harness,
