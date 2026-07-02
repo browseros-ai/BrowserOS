@@ -15,7 +15,7 @@
  * That path writes one entry per cockpit agent profile, keyed by the
  * profile's slug, with a slug-shaped URL. v2 has no per-agent
  * profile, so this layer writes one entry keyed by the constant
- * `BROWSEROS_MCP_SERVER_NAME` ("browseros") with the slugless URL.
+ * `BROWSEROS_MCP_SERVER_NAME` ("BrowserClaw") with the slugless URL.
  * Both layers share `specFor` for transport selection (HTTP vs the
  * stdio `npx mcp-remote` fallback for stdio-only agents).
  */

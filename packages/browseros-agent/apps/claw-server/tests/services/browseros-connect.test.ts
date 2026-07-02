@@ -33,7 +33,7 @@ describe('connectBrowserosToHarness', () => {
       name: string
       spec: { transport: string; url?: string }
     }
-    expect(addPayload.name).toBe('browseros')
+    expect(addPayload.name).toBe('BrowserClaw')
     expect(addPayload.spec.transport).toBe('http')
     expect(addPayload.spec.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
     expect(addPayload.spec.url).not.toContain('/cockpit')
@@ -85,7 +85,7 @@ describe('disconnectBrowserosFromHarness', () => {
       serverName: string
       agent: string
     }
-    expect(unlinkPayload.serverName).toBe('browseros')
+    expect(unlinkPayload.serverName).toBe('BrowserClaw')
     expect(unlinkPayload.agent).toBe('cursor')
     expect(stub.calls.find((c) => c.method === 'remove')).toBeDefined()
   })
@@ -125,7 +125,7 @@ describe('listBrowserosConnections', () => {
     setMcpManagerForTesting(
       stubWithLinks([
         {
-          serverName: 'browseros',
+          serverName: 'BrowserClaw',
           agent: 'claude-code',
           configPath: '/tmp/stub-claude-code.json',
         },
@@ -143,7 +143,7 @@ describe('listBrowserosConnections', () => {
     setMcpManagerForTesting(
       stubWithLinks([
         {
-          serverName: 'browseros',
+          serverName: 'BrowserClaw',
           agent: 'claude-code',
           configPath: '/tmp/stub-claude-code.json',
           broken: true,

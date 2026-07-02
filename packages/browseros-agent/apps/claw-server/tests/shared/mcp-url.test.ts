@@ -20,7 +20,11 @@ describe('canonicalMcpUrlForPort', () => {
 })
 
 describe('BROWSEROS_MCP_SERVER_NAME', () => {
-  it('is the canonical "browseros" key written into harness configs', () => {
-    expect(BROWSEROS_MCP_SERVER_NAME).toBe('browseros')
+  it('is the canonical "BrowserClaw" key written into harness configs', () => {
+    // Symbol name keeps its BROWSEROS_ prefix to avoid a
+    // cross-package rename; the value carries the current product
+    // brand ("BrowserClaw") so the entry the user sees in
+    // `claude mcp list` / Cursor settings matches the app name.
+    expect(BROWSEROS_MCP_SERVER_NAME).toBe('BrowserClaw')
   })
 })

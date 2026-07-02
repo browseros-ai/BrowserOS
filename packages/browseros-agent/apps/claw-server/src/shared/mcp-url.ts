@@ -18,10 +18,18 @@ export const MCP_PATH = '/mcp'
 
 /**
  * Server name written into harness configs. One canonical name across
- * every harness so the user sees "browseros" in every `claude mcp list`
- * / Cursor settings page. Same name reused by the canonical CLI snippet.
+ * every harness so the user sees "BrowserClaw" in every
+ * `claude mcp list` / Cursor settings page. Same name reused by the
+ * canonical CLI snippet.
+ *
+ * The symbol name keeps its `BROWSEROS_` prefix to avoid a
+ * cross-package rename; the value carries the product's current
+ * brand ("BrowserClaw"). Scoped to the claw-server flow only; the
+ * apps/server mcp-manager constant is untouched. Existing entries in
+ * user host configs that still hold the old `browseros` name are
+ * not reconciled automatically and need manual removal.
  */
-export const BROWSEROS_MCP_SERVER_NAME = 'browseros'
+export const BROWSEROS_MCP_SERVER_NAME = 'BrowserClaw'
 
 /**
  * Builds the slugless canonical URL the v2 cockpit advertises. The
