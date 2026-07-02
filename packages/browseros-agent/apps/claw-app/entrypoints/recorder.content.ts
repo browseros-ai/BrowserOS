@@ -19,8 +19,8 @@
  *      tabPageId }` (or `recorder-not-yet` if the map is briefly
  *      out of sync; retry after 1s).
  *   4. Script calls rrweb.record with the throttled config.
- *   5. Events buffer; flush every 2.5s OR every 50 events:
- *      POST to http://127.0.0.1:9200/audit/replay/<sid>/events.
+ *   5. Events buffer; flush every 2.5s OR every 50 events to the
+ *      background worker, which POSTs to the resolved local cockpit.
  *   6. On `pagehide`, navigator.sendBeacon flush so unload events
  *      are not dropped.
  *   7. On `recorder-stop` message: final flush, rrweb.stop(),
@@ -178,9 +178,11 @@ function startRecorder(config: RecorderConfig): ActiveRecorder {
     for (const event of rawQueue) {
       let line: string
       try {
-        // biome-ignore lint/suspicious/noExplicitAny: rrweb's event
-        // union is wide; we trust the recorder's output shape.
-        const ev = event as { timestamp?: number; type?: number; data?: any }
+        const ev = event as {
+          timestamp?: number
+          type?: number
+          data?: unknown
+        }
         line = JSON.stringify({
           tabPageId,
           ts: typeof ev.timestamp === 'number' ? ev.timestamp : Date.now(),

@@ -32,11 +32,11 @@ import {
   recordSessionStart,
 } from '../services/session-events'
 import { closeAgentTabGroupForAgent } from '../services/tab-group-ops'
+import { VERSION } from '../version'
 import { registerBrowserToolsForSingleServer } from './register'
 
 const SERVER_NAME = 'browseros-claw-server'
 const SERVER_TITLE = 'BrowserOS'
-const SERVER_VERSION = '0.0.1'
 
 interface Session {
   server: McpServer
@@ -62,7 +62,7 @@ function buildSession(): Session {
   const server = new McpServer({
     name: SERVER_NAME,
     title: SERVER_TITLE,
-    version: SERVER_VERSION,
+    version: VERSION,
   })
 
   registerBrowserToolsForSingleServer(server, resolveIdentity)

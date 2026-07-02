@@ -12,24 +12,24 @@
  * HTTP loopback to whichever port the claw server bound to.
  *
  * Resolution order for the base URL:
- *   1. ?apiUrl=… on window.location (dev launcher publishes this)
- *   2. sessionStorage cache of (1)
- *   3. VITE_BROWSEROS_CLAW_API_URL from the dev watcher
- *   4. standalone BrowserClaw port on 127.0.0.1
+ *   1. BrowserOS `browseros.server.server_port` pref
+ *   2. ?apiUrl=… on window.location (dev launcher publishes this)
+ *   3. sessionStorage cache of (2)
+ *   4. VITE_BROWSEROS_CLAW_API_URL from the dev watcher
+ *   5. standalone BrowserClaw port on 127.0.0.1
  *
- * The lazy Proxy is what lets us re-resolve the base URL after the
- * dev launcher hot-swaps it without breaking hc's path chaining
- * (hc returns its own Proxy; ours just forwards each property read).
+ * The lazy Proxy awaits the base URL at the terminal `$get`/`$post`
+ * call so BrowserOS's callback-based pref API can feed Hono without
+ * changing call sites.
  */
 
 import type { AppType } from '@browseros/claw-server/server'
-import { CLAW_API_PORT_DEFAULT } from '@browseros/claw-server/shared/port'
 import { hc } from 'hono/client'
 import {
-  API_URL_STORAGE_KEY,
-  normalizeLoopbackApiRootUrl,
-  resolveApiBaseUrlFromSources,
-} from './client.helpers'
+  apiBaseUrlSourcesFromWindow,
+  resolveBrowserOSServerBaseUrl,
+} from './browseros-ports'
+import { resolveApiBaseUrlFromSources } from './client.helpers'
 
 /**
  * Public helper for surfaces that need to embed the resolved base
@@ -38,41 +38,11 @@ import {
  * same resolution chain as the rpc client.
  */
 export function apiBaseUrl(): string {
-  return resolveApiBaseUrl()
+  return resolveApiBaseUrlFromSources(apiBaseUrlSourcesFromWindow())
 }
 
-function resolveApiBaseUrl(): string {
-  const fallback = `http://127.0.0.1:${CLAW_API_PORT_DEFAULT}`
-  if (typeof window === 'undefined') return fallback
-
-  const fromQuery = new URLSearchParams(window.location.search).get('apiUrl')
-  const queryBaseUrl = normalizeLoopbackApiRootUrl(fromQuery)
-  if (queryBaseUrl) {
-    try {
-      window.sessionStorage.setItem(API_URL_STORAGE_KEY, queryBaseUrl)
-    } catch {
-      // sessionStorage can refuse writes in sandboxed contexts; the
-      // resolved URL still serves this session.
-    }
-    return queryBaseUrl
-  }
-
-  try {
-    const stored = window.sessionStorage.getItem(API_URL_STORAGE_KEY)
-    return resolveApiBaseUrlFromSources({
-      query: null,
-      stored,
-      launcher: import.meta.env.VITE_BROWSEROS_CLAW_API_URL,
-      fallback,
-    })
-  } catch {
-    return resolveApiBaseUrlFromSources({
-      query: null,
-      stored: null,
-      launcher: import.meta.env.VITE_BROWSEROS_CLAW_API_URL,
-      fallback,
-    })
-  }
+export async function resolveApiBaseUrl(): Promise<string> {
+  return resolveBrowserOSServerBaseUrl(apiBaseUrlSourcesFromWindow())
 }
 
 type ApiClient = ReturnType<typeof hc<AppType>>
@@ -80,8 +50,8 @@ type ApiClient = ReturnType<typeof hc<AppType>>
 let cachedBase: string | null = null
 let cachedClient: ApiClient | null = null
 
-function getApiClient(): ApiClient {
-  const base = resolveApiBaseUrl()
+async function getApiClient(): Promise<ApiClient> {
+  const base = await resolveApiBaseUrl()
   if (base !== cachedBase || !cachedClient) {
     cachedBase = base
     cachedClient = hc<AppType>(base)
@@ -89,14 +59,31 @@ function getApiClient(): ApiClient {
   return cachedClient
 }
 
-// Lazy Proxy: every property access (`api.system.health.$get`) goes
-// through the freshly resolved baseUrl rather than a snapshot
-// captured at module load. hc itself returns a Proxy, so we forward
-// to it without a receiver override (passing an empty target would
-// break hc's path chaining).
-export const api = new Proxy({} as ApiClient, {
-  get(_target, prop) {
-    const client = getApiClient() as unknown as Record<PropertyKey, unknown>
-    return client[prop]
-  },
-})
+/** Creates a Hono-compatible proxy that awaits BrowserOS port resolution at request time. */
+function apiProxyFor(path: PropertyKey[]): unknown {
+  return new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        if (prop === 'then') return undefined
+        if (typeof prop === 'string' && prop.startsWith('$')) {
+          return async (...args: unknown[]) => {
+            const client = await getApiClient()
+            let node: unknown = client
+            for (const key of path) {
+              node = (node as Record<PropertyKey, unknown>)[key]
+            }
+            const method = (node as Record<PropertyKey, unknown>)[prop]
+            if (typeof method !== 'function') {
+              throw new Error(`Unknown API method: ${String(prop)}`)
+            }
+            return method(...args)
+          }
+        }
+        return apiProxyFor([...path, prop])
+      },
+    },
+  )
+}
+
+export const api = apiProxyFor([]) as ApiClient

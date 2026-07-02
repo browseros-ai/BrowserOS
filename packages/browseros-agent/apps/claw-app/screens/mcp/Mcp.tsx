@@ -1,12 +1,12 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { EditorialEmpty } from '@/components/ui/EditorialEmpty'
 import {
   useBrowserosConnections,
   useConnectBrowseros,
   useDisconnectBrowseros,
 } from '@/modules/api/connections.hooks'
-import { buildCanonicalMcpEndpointUrl } from '@/modules/api/mcp-endpoint'
+import { resolveCanonicalMcpEndpointUrl } from '@/modules/api/mcp-endpoint'
 import {
   type Harness,
   RETIRED_HARNESSES,
@@ -40,12 +40,22 @@ const HIDDEN_HARNESSES: readonly Harness[] = [
 ]
 
 export function Mcp() {
-  const url = buildCanonicalMcpEndpointUrl()
+  const [url, setUrl] = useState<string | null>(null)
   const connections = useBrowserosConnections()
   const connect = useConnectBrowseros()
   const disconnect = useDisconnectBrowseros()
   const queryClient = useQueryClient()
   const [errors, setErrors] = useState<Partial<Record<Harness, string>>>({})
+
+  useEffect(() => {
+    let active = true
+    resolveCanonicalMcpEndpointUrl().then((resolved) => {
+      if (active) setUrl(resolved)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
 
   const isLoading = connections.isPending && !connections.data
 

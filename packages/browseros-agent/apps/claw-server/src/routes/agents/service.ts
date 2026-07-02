@@ -75,12 +75,16 @@ function nowIso(): string {
   return new Date().toISOString()
 }
 
-function baseUrl(): string {
+function backendBaseUrl(): string {
   return getLocalServerUrl() ?? `http://127.0.0.1:${env.port}`
 }
 
+function mcpBaseUrl(): string {
+  return env.proxyPort ? `http://127.0.0.1:${env.proxyPort}` : backendBaseUrl()
+}
+
 function buildMcpUrl(slug: string): string {
-  return `${baseUrl()}/mcp/${slug}`
+  return `${mcpBaseUrl()}/mcp/${slug}`
 }
 
 function buildCliCommand(slug: string): string {
@@ -278,7 +282,11 @@ export async function update(
     // Failures are logged inside the helpers and do NOT roll back the
     // profile rewrite.
     await reconcileHarnessLink({
-      before: { slug: existing.slug, harness: existing.harness },
+      before: {
+        slug: existing.slug,
+        mcpUrl: existing.mcpUrl,
+        harness: existing.harness,
+      },
       after: { slug: next.slug, mcpUrl: next.mcpUrl, harness: next.harness },
     })
     return next
@@ -337,7 +345,11 @@ export async function regenerateMcpUrl(
     // automatically. Harness is unchanged so only the slug pair
     // differs.
     await reconcileHarnessLink({
-      before: { slug: existing.slug, harness: existing.harness },
+      before: {
+        slug: existing.slug,
+        mcpUrl: existing.mcpUrl,
+        harness: existing.harness,
+      },
       after: { slug: next.slug, mcpUrl: next.mcpUrl, harness: next.harness },
     })
     return { id, mcpUrl: next.mcpUrl }

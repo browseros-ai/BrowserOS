@@ -36,7 +36,7 @@ const UNNEEDED_SERVER_AND_R2_ENV_KEYS = [
 
 describe('claw server build', () => {
   const rootDir = resolve(import.meta.dir, '../../..')
-  const versionPkgPath = resolve(rootDir, 'apps/server/package.json')
+  const versionPkgPath = resolve(rootDir, 'apps/claw-server/package.json')
   const buildScript = resolve(rootDir, 'scripts/build/claw-server.ts')
   const target = getNativeTarget()
   const binaryPath = resolve(
@@ -71,6 +71,14 @@ describe('claw server build', () => {
       recursive: true,
       force: true,
     })
+  })
+
+  it('resolves the build version from the claw package', async () => {
+    const pkg = await Bun.file(versionPkgPath).json()
+    const config = loadBuildConfig(rootDir, clawServerBuildProduct, {
+      ci: true,
+    })
+    assert.strictEqual(config.version, pkg.version)
   })
 
   it('uploads artifacts by default while preserving local-only modes', () => {

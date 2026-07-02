@@ -4,6 +4,7 @@ import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
 import {
   type ToolDispatchRow,
   taskScreenshotUrl,
+  useTaskScreenshotBaseUrl,
 } from '@/modules/api/audit.hooks'
 
 interface ScreenshotStripProps {
@@ -25,6 +26,7 @@ export function ScreenshotStrip({
   startedAt,
   onSelect,
 }: ScreenshotStripProps) {
+  const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   const meta = useMemo(() => {
     const byId = new Map(dispatches.map((d) => [d.id, d]))
     return screenshotDispatchIds.map((id) => {
@@ -57,6 +59,7 @@ export function ScreenshotStrip({
               key={s.id}
               type="button"
               onClick={() => onSelect(s.id)}
+              disabled={screenshotBaseUrl === null}
               className="group w-48 shrink-0 text-left"
               data-testid={`screenshot-thumb-${s.id}`}
             >
@@ -64,12 +67,16 @@ export function ScreenshotStrip({
                 ratio={16 / 10}
                 className="overflow-hidden rounded-lg border border-border-2 bg-bg-sunken transition group-hover:border-accent"
               >
-                <img
-                  src={taskScreenshotUrl(s.id)}
-                  alt={`Screenshot ${idx + 1}`}
-                  className="h-full w-full object-cover"
-                  loading="lazy"
-                />
+                {screenshotBaseUrl !== null ? (
+                  <img
+                    src={taskScreenshotUrl(s.id, screenshotBaseUrl)}
+                    alt={`Screenshot ${idx + 1}`}
+                    className="h-full w-full object-cover"
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className="h-full w-full animate-pulse bg-card-tint" />
+                )}
               </AspectRatio>
               <div className="mt-1.5 flex items-center justify-between gap-2 text-[11.5px]">
                 <span className="font-mono text-ink-3">

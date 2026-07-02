@@ -10,56 +10,27 @@
  * the wizard / directory pages render flows through these helpers,
  * so the future cutover is confined to this file.
  *
- * Defaults to the standalone BrowserClaw API and honors dev-launcher
- * overrides when `dev:claw:watch:new` selects a random port.
+ * BrowserOS-managed builds read the MCP proxy pref; dev and
+ * standalone builds keep the existing launcher/fallback resolution.
  */
 
 import {
   BROWSEROS_MCP_SERVER_NAME,
   MCP_PATH,
 } from '@browseros/claw-server/shared/mcp-url'
-import { CLAW_API_PORT_DEFAULT } from '@browseros/claw-server/shared/port'
 import {
-  API_URL_STORAGE_KEY,
-  normalizeLoopbackApiRootUrl,
-  resolveApiBaseUrlFromSources,
-} from './client.helpers'
+  apiBaseUrlSourcesFromWindow,
+  resolveBrowserOSMcpBaseUrl,
+} from './browseros-ports'
+import { resolveApiBaseUrlFromSources } from './client.helpers'
 
-function fallbackBaseUrl(): string {
-  return `http://127.0.0.1:${CLAW_API_PORT_DEFAULT}`
+/** Resolves the MCP proxy base URL from BrowserOS prefs or trusted fallbacks. */
+export async function resolveMcpBaseUrl(): Promise<string> {
+  return resolveBrowserOSMcpBaseUrl(apiBaseUrlSourcesFromWindow())
 }
 
-/** Resolves the same API base URL as the client for pre-create previews. */
-function resolveMcpBaseUrl(): string {
-  const fallback = fallbackBaseUrl()
-  if (typeof window === 'undefined') return fallback
-
-  const query = new URLSearchParams(window.location.search).get('apiUrl')
-  const queryBaseUrl = normalizeLoopbackApiRootUrl(query)
-  if (queryBaseUrl) {
-    try {
-      window.sessionStorage.setItem(API_URL_STORAGE_KEY, queryBaseUrl)
-    } catch {
-      // sessionStorage may reject writes in sandboxed contexts; this call can still use the query URL.
-    }
-    return queryBaseUrl
-  }
-
-  try {
-    return resolveApiBaseUrlFromSources({
-      query: null,
-      stored: window.sessionStorage.getItem(API_URL_STORAGE_KEY),
-      launcher: import.meta.env.VITE_BROWSEROS_CLAW_API_URL,
-      fallback,
-    })
-  } catch {
-    return resolveApiBaseUrlFromSources({
-      query: null,
-      stored: null,
-      launcher: import.meta.env.VITE_BROWSEROS_CLAW_API_URL,
-      fallback,
-    })
-  }
+function mcpBaseUrlFallback(): string {
+  return resolveApiBaseUrlFromSources(apiBaseUrlSourcesFromWindow())
 }
 
 /**
@@ -69,7 +40,12 @@ function resolveMcpBaseUrl(): string {
  * produce identical strings.
  */
 export function buildMcpEndpointUrl(slug: string): string {
-  return `${resolveMcpBaseUrl()}/mcp/${slug}`
+  return `${mcpBaseUrlFallback()}/mcp/${slug}`
+}
+
+/** Builds a per-agent MCP endpoint after BrowserOS proxy-port resolution. */
+export async function resolveMcpEndpointUrl(slug: string): Promise<string> {
+  return `${await resolveMcpBaseUrl()}/mcp/${slug}`
 }
 
 /**
@@ -99,7 +75,12 @@ export function buildMcpCliCommand(slug: string): string {
  * apiUrl forwarding stay consistent across both shapes.
  */
 export function buildCanonicalMcpEndpointUrl(): string {
-  return `${resolveMcpBaseUrl()}${MCP_PATH}`
+  return `${mcpBaseUrlFallback()}${MCP_PATH}`
+}
+
+/** Builds the canonical MCP endpoint after BrowserOS proxy-port resolution. */
+export async function resolveCanonicalMcpEndpointUrl(): Promise<string> {
+  return `${await resolveMcpBaseUrl()}${MCP_PATH}`
 }
 
 /**

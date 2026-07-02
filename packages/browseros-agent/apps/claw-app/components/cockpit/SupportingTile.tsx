@@ -2,7 +2,11 @@ import { ArrowUpRight } from 'lucide-react'
 import { NavLink, useLocation } from 'react-router'
 import { AgentDot } from '@/components/audit/AgentDot'
 import { cn } from '@/lib/utils'
-import { type TaskSummary, taskScreenshotUrl } from '@/modules/api/audit.hooks'
+import {
+  type TaskSummary,
+  taskScreenshotUrl,
+  useTaskScreenshotBaseUrl,
+} from '@/modules/api/audit.hooks'
 import { formatDuration, formatRelative } from '@/screens/audit/audit.helpers'
 
 interface SupportingTileProps {
@@ -23,6 +27,7 @@ interface SupportingTileProps {
 export function SupportingTile({ task, now, className }: SupportingTileProps) {
   const isLive = task.status === 'live'
   const screenshotId = task.lastScreenshotDispatchId
+  const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   const location = useLocation()
   return (
     <NavLink
@@ -35,14 +40,16 @@ export function SupportingTile({ task, now, className }: SupportingTileProps) {
       )}
     >
       <div className="relative flex-1 overflow-hidden">
-        {screenshotId !== null ? (
+        {screenshotId !== null && screenshotBaseUrl !== null ? (
           <img
-            src={taskScreenshotUrl(screenshotId)}
+            src={taskScreenshotUrl(screenshotId, screenshotBaseUrl)}
             alt={`Session preview from ${task.agentLabel}`}
             loading="lazy"
             decoding="async"
             className="absolute inset-0 h-full w-full object-cover object-top"
           />
+        ) : screenshotId !== null ? (
+          <div className="absolute inset-0 animate-pulse bg-card-tint" />
         ) : (
           <NoShotComposition task={task} />
         )}

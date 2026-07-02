@@ -113,17 +113,40 @@ class GetAppPathTest(unittest.TestCase):
         self.assertEqual(ctx.product.id, "browserclaw")
         self.assertEqual(ctx.BROWSEROS_APP_BASE_NAME, "BrowserClaw")
 
-    def test_debug_gn_args_allow_runtime_override(self):
+    def test_debug_gn_args_allow_override_and_package_all(self):
         ctx = Context(
             chromium_src=Path("/nonexistent-src"),
             architecture="x64",
             build_type="debug",
         )
 
-        self.assertIn(
-            "browseros_allow_runtime_product_override = true",
+        self.assertEqual(
             ctx.get_product_gn_args(),
+            [
+                'browseros_product = "browseros"',
+                "browseros_allow_runtime_product_override = true",
+                "browseros_package_all_server_resources = true",
+            ],
         )
+
+    def test_release_gn_args_bake_product_identity(self):
+        for product in ("browseros", "browserclaw"):
+            with self.subTest(product=product):
+                ctx = Context(
+                    chromium_src=Path("/nonexistent-src"),
+                    architecture="arm64",
+                    build_type="release",
+                    product=get_product_descriptor(product),
+                )
+
+                self.assertEqual(
+                    ctx.get_product_gn_args(),
+                    [
+                        f'browseros_product = "{product}"',
+                        "browseros_allow_runtime_product_override = false",
+                        "browseros_package_all_server_resources = false",
+                    ],
+                )
 
 
 if __name__ == "__main__":

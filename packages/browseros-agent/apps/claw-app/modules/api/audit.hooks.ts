@@ -15,8 +15,9 @@
  * through the rpc client (which is JSON-only).
  */
 
+import { useEffect, useState } from 'react'
 import { createInfiniteQuery, createQuery } from 'react-query-kit'
-import { api, apiBaseUrl } from './client'
+import { api, apiBaseUrl, resolveApiBaseUrl } from './client'
 import { parseResponse } from './parseResponse'
 
 export interface ToolDispatchRow {
@@ -162,6 +163,26 @@ export const useTaskDetail = createQuery<
 })
 
 /** Absolute URL for the persisted screenshot of one dispatch. */
-export function taskScreenshotUrl(dispatchId: number): string {
-  return `${apiBaseUrl()}/audit/screenshot/${dispatchId}`
+export function taskScreenshotUrl(
+  dispatchId: number,
+  baseUrl = apiBaseUrl(),
+): string {
+  return `${baseUrl}/audit/screenshot/${dispatchId}`
+}
+
+/** Provides a screenshot URL base that follows BrowserOS server-port prefs. */
+export function useTaskScreenshotBaseUrl(): string | null {
+  const [baseUrl, setBaseUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    resolveApiBaseUrl().then((resolved) => {
+      if (active) setBaseUrl(resolved)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  return baseUrl
 }

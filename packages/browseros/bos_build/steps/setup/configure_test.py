@@ -95,6 +95,19 @@ class ConfigureExecuteTest(unittest.TestCase):
             "browseros_package_all_server_resources = false\n",
         )
 
+    def test_debug_args_append_product_args_verbatim(self):
+        ctx, chromium, _ = self._execute(
+            "debug", architecture="arm64", flags="is_debug = true\n"
+        )
+
+        args_gn = (chromium.src / ctx.out_dir / "args.gn").read_text()
+        self.assertEqual(
+            args_gn,
+            'is_debug = true\n\ntarget_cpu = "arm64"\n'
+            + "\n".join(ctx.get_product_gn_args())
+            + "\n",
+        )
+
     def test_release_build_fails_on_unused_args(self):
         ctx, _, run_cmd = self._execute("release")
 
@@ -140,6 +153,19 @@ class ConfigureExecuteTest(unittest.TestCase):
         self.assertLess(
             args_gn.index("symbol_level = 1"), args_gn.index("symbol_level=2")
         )
+
+    def test_debug_warns_when_server_resources_not_staged(self):
+        with mock.patch.object(configure, "log_warning") as log_warning:
+            self._execute("debug")
+
+        messages = [call.args[0] for call in log_warning.call_args_list]
+        self.assertTrue(any("server resources" in m for m in messages), messages)
+
+    def test_release_does_not_warn_about_server_resources(self):
+        with mock.patch.object(configure, "log_warning") as log_warning:
+            self._execute("release")
+
+        log_warning.assert_not_called()
 
     def test_extra_gn_args_logged(self):
         with mock.patch.object(configure, "log_info") as log_info:

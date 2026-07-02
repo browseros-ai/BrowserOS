@@ -4,7 +4,11 @@ import { AgentDot } from '@/components/audit/AgentDot'
 import { StatusBadge } from '@/components/audit/StatusBadge'
 import { AspectRatio } from '@/components/ui/aspect-ratio'
 import { cn } from '@/lib/utils'
-import { type TaskSummary, taskScreenshotUrl } from '@/modules/api/audit.hooks'
+import {
+  type TaskSummary,
+  taskScreenshotUrl,
+  useTaskScreenshotBaseUrl,
+} from '@/modules/api/audit.hooks'
 import {
   abbreviateSequence,
   formatDuration,
@@ -17,6 +21,7 @@ interface TaskCardProps {
 }
 
 export function TaskCard({ task, now }: TaskCardProps) {
+  const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   return (
     <NavLink
       to={`/audit/${encodeURIComponent(task.sessionId)}`}
@@ -49,13 +54,20 @@ export function TaskCard({ task, now }: TaskCardProps) {
         {task.lastScreenshotDispatchId !== null ? (
           <div className="w-32 shrink-0 transform-gpu overflow-hidden rounded-md border border-border-2 bg-bg-sunken">
             <AspectRatio ratio={16 / 10}>
-              <img
-                src={taskScreenshotUrl(task.lastScreenshotDispatchId)}
-                alt={`Hero from ${task.agentLabel}`}
-                className="h-full w-full object-cover"
-                loading="lazy"
-                decoding="async"
-              />
+              {screenshotBaseUrl !== null ? (
+                <img
+                  src={taskScreenshotUrl(
+                    task.lastScreenshotDispatchId,
+                    screenshotBaseUrl,
+                  )}
+                  alt={`Hero from ${task.agentLabel}`}
+                  className="h-full w-full object-cover"
+                  loading="lazy"
+                  decoding="async"
+                />
+              ) : (
+                <div className="h-full w-full animate-pulse bg-card-tint" />
+              )}
             </AspectRatio>
           </div>
         ) : (

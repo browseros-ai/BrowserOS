@@ -5,7 +5,6 @@ export const CLAW_SERVER_BUNDLE_ENTRYPOINT = 'apps/claw-server/src/main.ts'
 export const clawServerBuildProduct: BuildProductDescriptor = {
   label: 'BrowserOS Claw server',
   packageDir: 'apps/claw-server',
-  versionPackageDir: 'apps/server',
   entrypoint: CLAW_SERVER_BUNDLE_ENTRYPOINT,
   distRoot: 'dist/prod/claw-server',
   rawBinaryBaseName: 'browseros-claw-server',

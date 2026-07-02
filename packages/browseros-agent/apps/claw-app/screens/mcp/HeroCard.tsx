@@ -1,14 +1,10 @@
 import { EndpointStrip } from './EndpointStrip'
 
 interface HeroCardProps {
-  url: string
+  url: string | null
 }
 
-/**
- * Editorial MCP hero. Compressed `MCP` H1 + Newsreader italic
- * accent line matching the cockpit's signature voice. Single dark-
- * ink endpoint strip below. No card frame, no icon square, no pill.
- */
+/** Renders the MCP hero around the resolved endpoint strip. */
 export function HeroCard({ url }: HeroCardProps) {
   return (
     <header className="space-y-6">

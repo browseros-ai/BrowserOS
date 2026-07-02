@@ -11,7 +11,6 @@ import { SiteRulesTab } from '@/screens/governance/SiteRulesTab'
 import { LiveRun } from '@/screens/live-run/LiveRun'
 import { Mcp } from '@/screens/mcp/Mcp'
 import { NewAgent } from '@/screens/new-agent/NewAgent'
-import { Onboarding } from '@/screens/onboarding/Onboarding'
 import { Replay } from '@/screens/replay/Replay'
 import { TaskDetailPage } from '@/screens/task-detail/TaskDetailPage'
 
@@ -46,12 +45,7 @@ export function App() {
             </>
           )}
         </Route>
-        {legacyUi && (
-          <>
-            <Route path="/run/:runId" element={<LiveRun />} />
-            <Route path="/onboarding" element={<Onboarding />} />
-          </>
-        )}
+        {legacyUi && <Route path="/run/:runId" element={<LiveRun />} />}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </HashRouter>

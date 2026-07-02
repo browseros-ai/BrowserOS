@@ -296,12 +296,13 @@ class Context:
         return [base / "common", base / "products" / self.product.id]
 
     def get_product_gn_args(self) -> list[str]:
-        """Return BrowserOS product GN args for configure."""
-        runtime_override = "true" if self.build_type == "debug" else "false"
+        """Product GN args: release bakes identity; debug keeps the runtime
+        product switch working (it needs both server resource sets)."""
+        dev_build = "true" if self.build_type == "debug" else "false"
         return [
             f'browseros_product = "{self.product.gn_product}"',
-            f"browseros_allow_runtime_product_override = {runtime_override}",
-            "browseros_package_all_server_resources = false",
+            f"browseros_allow_runtime_product_override = {dev_build}",
+            f"browseros_package_all_server_resources = {dev_build}",
         ]
 
     def get_features_yaml_path(self) -> Path:

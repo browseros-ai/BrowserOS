@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { env } from '../../../src/env'
 import {
   resetMcpManagerForTesting,
   setMcpManagerForTesting,
@@ -8,10 +9,14 @@ import { createStubMcpManager } from '../../_helpers/stub-mcp-manager'
 
 describe('/connections route chain', () => {
   beforeEach(() => {
+    env.proxyPort = null
     resetMcpManagerForTesting()
     setMcpManagerForTesting(createStubMcpManager())
   })
-  afterEach(() => resetMcpManagerForTesting())
+  afterEach(() => {
+    env.proxyPort = null
+    resetMcpManagerForTesting()
+  })
 
   it('GET /connections lists one row per harness', async () => {
     const res = await app.fetch(
@@ -28,6 +33,9 @@ describe('/connections route chain', () => {
   })
 
   it('POST /connections/:harness/connect connects a single harness', async () => {
+    env.proxyPort = 9512
+    const stub = createStubMcpManager()
+    setMcpManagerForTesting(stub)
     const res = await app.fetch(
       new Request(
         `http://localhost/connections/${encodeURIComponent('Claude Code')}/connect`,
@@ -41,6 +49,31 @@ describe('/connections route chain', () => {
     }
     expect(body.installed).toBe(true)
     expect(body.agentId).toBe('claude-code')
+    const add = stub.calls.find((c) => c.method === 'add')
+    expect((add?.payload as { spec: { url?: string } }).spec.url).toBe(
+      'http://127.0.0.1:9512/mcp',
+    )
+  })
+
+  it('ignores a caller-supplied MCP URL body', async () => {
+    env.proxyPort = 9512
+    const stub = createStubMcpManager()
+    setMcpManagerForTesting(stub)
+    const res = await app.fetch(
+      new Request(
+        `http://localhost/connections/${encodeURIComponent('Claude Code')}/connect`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:7777/mcp' }),
+        },
+      ),
+    )
+    expect(res.status).toBe(200)
+    const add = stub.calls.find((c) => c.method === 'add')
+    expect((add?.payload as { spec: { url?: string } }).spec.url).toBe(
+      'http://127.0.0.1:9512/mcp',
+    )
   })
 
   it('POST /connections/:harness/disconnect disconnects a single harness', async () => {

@@ -8,16 +8,16 @@ import {
   Lock,
   Shield,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useFormContext } from 'react-hook-form'
 import { HarnessIcon } from '@/components/harness/HarnessIcon'
 import { Button } from '@/components/ui/button'
 import type { CreatedAgent } from '@/modules/api/agents.hooks'
 import {
   buildCliCommand,
-  buildMcpUrl,
   countApprovalVerdicts,
   describeLogins,
+  resolveMcpUrl,
   toSlug,
 } from './new-agent.helpers'
 import type { NewAgentValues } from './new-agent.schemas'
@@ -41,9 +41,10 @@ export function ConnectorPreviewRail({
   const form = useFormContext<NewAgentValues>()
   const values = form.watch()
   const [copied, setCopied] = useState(false)
+  const [resolvedMcpUrl, setResolvedMcpUrl] = useState<string | null>(null)
 
-  const slug = toSlug(values.name || values.harness)
-  const mcpUrl = createdAgent?.mcpUrl ?? buildMcpUrl(slug)
+  const slug = createdAgent?.slug ?? toSlug(values.name || values.harness)
+  const mcpUrl = createdAgent?.mcpUrl ?? resolvedMcpUrl
   const cliCommand = createdAgent?.cliCommand ?? buildCliCommand(slug)
   const logins = describeLogins(values.loginMode, values.selectedSites.length)
   const verdicts = countApprovalVerdicts(values.approvals)
@@ -69,7 +70,24 @@ export function ConnectorPreviewRail({
     ? 'Connector settings synced'
     : (installOutcome?.message ?? 'Endpoint registered.')
 
+  useEffect(() => {
+    setCopied(false)
+    if (createdAgent) {
+      setResolvedMcpUrl(null)
+      return
+    }
+    let active = true
+    setResolvedMcpUrl(null)
+    resolveMcpUrl(slug).then((url) => {
+      if (active) setResolvedMcpUrl(url)
+    })
+    return () => {
+      active = false
+    }
+  }, [createdAgent, slug])
+
   const copyMcpUrl = async () => {
+    if (mcpUrl === null) return
     try {
       await navigator.clipboard.writeText(mcpUrl)
       setCopied(true)
@@ -119,16 +137,24 @@ export function ConnectorPreviewRail({
       </span>
       <div className="flex items-center gap-2 rounded-lg bg-ink-deep px-3 py-2">
         <code className="min-w-0 flex-1 truncate font-mono text-[#e9f2ea] text-[11px]">
-          {mcpUrl}
+          {mcpUrl ?? (
+            <span className="block h-[14px] w-full max-w-[220px] animate-pulse rounded bg-white/15" />
+          )}
         </code>
-        <button
-          type="button"
-          onClick={copyMcpUrl}
-          className="flex size-6 items-center justify-center rounded-md bg-white/10 text-white hover:bg-white/20"
-          aria-label="Copy MCP URL"
-        >
-          {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-        </button>
+        {mcpUrl !== null && (
+          <button
+            type="button"
+            onClick={copyMcpUrl}
+            className="flex size-6 items-center justify-center rounded-md bg-white/10 text-white hover:bg-white/20"
+            aria-label="Copy MCP URL"
+          >
+            {copied ? (
+              <Check className="size-3" />
+            ) : (
+              <Copy className="size-3" />
+            )}
+          </button>
+        )}
       </div>
 
       <div className="flex-1" />

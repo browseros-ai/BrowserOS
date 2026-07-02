@@ -79,6 +79,7 @@ mock.module('@/modules/api/connections.hooks', () => ({
 }))
 
 const { Mcp } = await import('./Mcp')
+const { HeroCard } = await import('./HeroCard')
 
 function renderApp(): string {
   const client = new QueryClient({
@@ -94,17 +95,23 @@ function renderApp(): string {
 }
 
 describe('Mcp (editorial)', () => {
-  it('renders the editorial hero: H1 + italic accent line + single slugless endpoint URL', () => {
+  it('renders the editorial hero without exposing the fallback endpoint before pref resolution', () => {
     const html = renderApp()
     expect(html).toContain('MCP')
-    // Italic accent line signature (matches cockpit's `working on`).
     expect(html).toContain('every')
     expect(html).toContain('harness.')
-    // Endpoint URL renders and is not slugged.
-    expect(html).toContain('/mcp')
+    expect(html).not.toContain('http://127.0.0.1:9200/mcp')
+    expect(html).not.toContain('copy')
+  })
+
+  it('renders the endpoint copy strip once the resolved URL is available', () => {
+    const html = renderToStaticMarkup(
+      <HeroCard url="http://127.0.0.1:9512/mcp" />,
+    )
+
+    expect(html).toContain('http://127.0.0.1:9512/mcp')
     expect(html).not.toContain('/mcp/claude-code')
     expect(html).not.toContain('/cockpit')
-    // Copy affordance renders.
     expect(html).toContain('copy')
   })
 

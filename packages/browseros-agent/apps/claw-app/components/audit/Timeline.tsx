@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils'
 import {
   type ToolDispatchRow,
   taskScreenshotUrl,
+  useTaskScreenshotBaseUrl,
 } from '@/modules/api/audit.hooks'
 import { parseResultMeta } from '@/screens/audit/audit.helpers'
 
@@ -64,6 +65,7 @@ export function Timeline({
   onScreenshotClick,
 }: TimelineProps) {
   const screenshotIdSet = new Set(screenshotDispatchIds)
+  const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   // Initial state: HIGH RISK rows pre-expanded. Lazy init so the
   // dispatch list is only walked once per mount; future polling
   // updates do not reset the user's manual toggles.
@@ -127,6 +129,7 @@ export function Timeline({
             offsetMs={Math.max(0, d.createdAt - startedAt)}
             expanded={expanded.has(d.id)}
             hasScreenshot={screenshotIdSet.has(d.id)}
+            screenshotBaseUrl={screenshotBaseUrl}
             onToggle={() => toggle(d.id)}
             onScreenshotClick={onScreenshotClick}
           />
@@ -151,6 +154,7 @@ interface TimelineRowProps {
    * the screencast fallback + first-capture policy now capture.
    */
   hasScreenshot: boolean
+  screenshotBaseUrl: string | null
   onToggle: () => void
   onScreenshotClick: (dispatchId: number) => void
 }
@@ -160,6 +164,7 @@ function TimelineRow({
   offsetMs,
   expanded,
   hasScreenshot,
+  screenshotBaseUrl,
   onToggle,
   onScreenshotClick,
 }: TimelineRowProps) {
@@ -227,7 +232,7 @@ function TimelineRow({
               </pre>
             </Block>
           )}
-          {isScreenshot && (
+          {isScreenshot && screenshotBaseUrl !== null && (
             <Block label="screenshot">
               <button
                 type="button"
@@ -236,13 +241,22 @@ function TimelineRow({
               >
                 <AspectRatio ratio={16 / 10}>
                   <img
-                    src={taskScreenshotUrl(dispatch.id)}
+                    src={taskScreenshotUrl(dispatch.id, screenshotBaseUrl)}
                     alt={`Screenshot at T+${formatOffset(offsetMs)}`}
                     className="h-full w-full object-cover"
                     loading="lazy"
                   />
                 </AspectRatio>
               </button>
+            </Block>
+          )}
+          {isScreenshot && screenshotBaseUrl === null && (
+            <Block label="screenshot">
+              <div className="w-64 overflow-hidden rounded-md border border-border-2">
+                <AspectRatio ratio={16 / 10}>
+                  <div className="h-full w-full animate-pulse bg-card-tint" />
+                </AspectRatio>
+              </div>
             </Block>
           )}
           {dispatch.url && (

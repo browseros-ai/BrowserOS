@@ -7,6 +7,7 @@
 import { describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { env } from '../../../src/env'
 import { readJson } from '../../../src/lib/storage'
 import type { NewAgentValues } from '../../../src/routes/agents/schemas'
 import { storedAgentProfileSchema } from '../../../src/routes/agents/schemas'
@@ -30,6 +31,19 @@ function makeInput(overrides: Partial<NewAgentValues> = {}): NewAgentValues {
     aclRuleIds: ['wire-transfers', 'payment-methods'],
     customAclRules: [],
     ...overrides,
+  }
+}
+
+async function withProxyPort<T>(
+  port: number,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const previous = env.proxyPort
+  env.proxyPort = port
+  try {
+    return await fn()
+  } finally {
+    env.proxyPort = previous
   }
 }
 
@@ -60,6 +74,20 @@ describe('agents service', () => {
     })
   })
 
+  test('create stores and installs the trusted proxy MCP base URL', async () => {
+    await withProxyPort(9512, async () => {
+      await withTempBrowserosDir(async () => {
+        const created = await agents.create(makeInput({ name: 'Proxy Split' }))
+        expect(created.mcpUrl).toBe('http://127.0.0.1:9512/mcp/proxy-split')
+        const stored = await readJson(
+          `agents/${created.id}.json`,
+          storedAgentProfileSchema,
+        )
+        expect(stored.mcpUrl).toBe(created.mcpUrl)
+      })
+    })
+  })
+
   test('list returns the directory projection with derived fields', async () => {
     await withTempBrowserosDir(async () => {
       await agents.create(
@@ -82,6 +110,16 @@ describe('agents service', () => {
       expect(row.lastRunAt).toBe('Never run')
       expect(row.status).toBe('configured')
       expect(row.mcpUrl).toMatch(/\/mcp\/selective-agent$/)
+    })
+  })
+
+  test('list derives visible MCP URLs from the trusted proxy MCP base URL', async () => {
+    await withProxyPort(9512, async () => {
+      await withTempBrowserosDir(async () => {
+        await agents.create(makeInput({ name: 'Listed Proxy' }))
+        const rows = await agents.list()
+        expect(rows[0]?.mcpUrl).toBe('http://127.0.0.1:9512/mcp/listed-proxy')
+      })
     })
   })
 
@@ -197,6 +235,21 @@ describe('agents service', () => {
       expect(result.mcpUrl).toMatch(/\/mcp\/rotate-[a-z0-9-]+$/)
       const detail = await agents.getDetail(created.id)
       expect(detail).not.toBeNull()
+    })
+  })
+
+  test('regenerateMcpUrl uses the trusted proxy MCP base URL', async () => {
+    await withProxyPort(9512, async () => {
+      await withTempBrowserosDir(async () => {
+        const created = await agents.create(
+          makeInput({ name: 'Rotate Public' }),
+        )
+        const result = await agents.regenerateMcpUrl(created.id)
+        expect(result).not.toBeNull()
+        expect(result?.mcpUrl).toMatch(
+          /^http:\/\/127\.0\.0\.1:9512\/mcp\/rotate-public-[a-z0-9-]+$/,
+        )
+      })
     })
   })
 

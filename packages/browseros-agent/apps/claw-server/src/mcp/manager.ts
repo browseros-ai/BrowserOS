@@ -22,10 +22,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { logger } from '../lib/logger'
 import { findBySlug } from '../routes/agents/service'
+import { VERSION } from '../version'
 import { registerBrowserTools } from './register'
 
 const SERVER_NAME = 'browseros-claw-server'
-const SERVER_VERSION = '0.0.1'
 
 /**
  * Handles a single `/mcp/:slug` request end-to-end. Returns either:
@@ -47,7 +47,7 @@ export async function handleMcpRequest(
   const server = new McpServer({
     name: SERVER_NAME,
     title: `BrowserOS / ${agent.name}`,
-    version: SERVER_VERSION,
+    version: VERSION,
   })
 
   registerBrowserTools(server, agent)

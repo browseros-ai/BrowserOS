@@ -31,6 +31,7 @@ import {
   canonicalMcpUrlForPort,
 } from '../shared/mcp-url'
 import { HARNESS_TO_AGENT_ID } from './harness-install'
+import { relinkManagedServer } from './mcp-relink'
 import { specFor } from './spec-for'
 
 export interface ConnectionState {
@@ -53,7 +54,7 @@ export interface ConnectionState {
 const ALL_HARNESSES: readonly Harness[] = harnessEnum.options
 
 function canonicalMcpUrl(): string {
-  return canonicalMcpUrlForPort(env.port)
+  return canonicalMcpUrlForPort(env.proxyPort ?? env.port)
 }
 
 export async function connectBrowserosToHarness(
@@ -71,13 +72,11 @@ export async function connectBrowserosToHarness(
   const mgr = getMcpManager()
   const url = canonicalMcpUrl()
   try {
-    await mgr.add({
-      name: BROWSEROS_MCP_SERVER_NAME,
-      spec: specFor(agentId, url),
-    })
-    const link = await mgr.link({
+    const link = await relinkManagedServer({
+      mgr,
       serverName: BROWSEROS_MCP_SERVER_NAME,
       agent: agentId,
+      spec: specFor(agentId, url),
       // Take ownership of any prior on-disk BrowserClaw entry that
       // the manifest does not know about. Without this, agent-mcp-
       // manager throws ForeignEntryError to protect the user from

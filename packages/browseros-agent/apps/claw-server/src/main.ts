@@ -23,6 +23,7 @@ import { loadClawConfig } from './config'
 import { applyClawConfig, env } from './env'
 import { bootstrapBrowserosBrowser } from './lib/browser-bootstrap'
 import { setBrowserSession } from './lib/browser-session'
+import { getClawServerDir } from './lib/browseros-dir'
 import { logger } from './lib/logger'
 import { migrateMcpUrls } from './lib/migrate-mcp-urls'
 import { setLocalServerUrl } from './local-server-url'
@@ -43,6 +44,10 @@ async function start(): Promise<void> {
     port: env.port,
     fetch: server.fetch,
   })
+  // File sink attaches only after the port bind succeeds: the bind is
+  // the de-facto singleton lock, so a second accidental launch dies on
+  // EADDRINUSE before it can rotate the live instance's log file.
+  logger.setLogFile(getClawServerDir())
   const url = `http://${httpServer.hostname}:${httpServer.port}`
   setLocalServerUrl(url)
   logger.info('claw-server listening', { url })
@@ -88,8 +93,13 @@ async function start(): Promise<void> {
   }
 
   // Sweep stored profiles so their harness install and mcpUrl match
-  // the standalone server's current loopback URL.
-  const buildMcpUrlForMigration = (slug: string): string => `${url}/mcp/${slug}`
+  // the public MCP URL. In BrowserOS-managed launches this is the
+  // proxy port, not the backend server bind URL.
+  const publicMcpBaseUrl = env.proxyPort
+    ? `http://127.0.0.1:${env.proxyPort}`
+    : url
+  const buildMcpUrlForMigration = (slug: string): string =>
+    `${publicMcpBaseUrl}/mcp/${slug}`
   void migrateMcpUrls(buildMcpUrlForMigration)
     .then((result) =>
       logger.info('mcpUrl migration finished', {
@@ -105,4 +115,10 @@ async function start(): Promise<void> {
     )
 }
 
-void start()
+start().catch((error: unknown) => {
+  logger.error('claw-server startup failed', {
+    error: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  })
+  process.exit(1)
+})

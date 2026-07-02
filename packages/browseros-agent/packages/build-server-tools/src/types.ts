@@ -52,7 +52,6 @@ export interface BundleOptions {
 export interface BuildProductDescriptor {
   label: string
   packageDir: string
-  versionPackageDir?: string
   entrypoint: string
   distRoot: string
   rawBinaryBaseName: string

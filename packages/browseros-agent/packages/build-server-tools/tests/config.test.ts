@@ -98,24 +98,6 @@ describe('build config', () => {
     expect(config.r2).toBeUndefined()
   })
 
-  it('can read the build version from a separate package', async () => {
-    const rootDir = await writeProdRoot({}, { envFile: false })
-    const versionPackageDir = join(rootDir, 'apps/version-source')
-    await mkdir(versionPackageDir, { recursive: true })
-    await writeFile(
-      join(versionPackageDir, 'package.json'),
-      '{"version":"1.2.3"}',
-    )
-
-    const config = loadBuildConfig(
-      rootDir,
-      testProduct({ versionPackageDir: 'apps/version-source' }),
-      { ci: true },
-    )
-
-    expect(config.version).toBe('1.2.3')
-  })
-
   it('allows optional-env products to build local artifacts without R2', async () => {
     const rootDir = await writeProdRoot({}, { envFile: false })
     const product = testProduct({

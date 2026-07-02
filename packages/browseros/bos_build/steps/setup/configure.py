@@ -5,6 +5,7 @@ import sys
 
 from ...core.step import Step, ValidationError, step
 from ...core.context import Context
+from ...products.server_binaries import all_server_bundles
 from ...lib.utils import (
     run_command,
     log_info,
@@ -72,6 +73,9 @@ class ConfigureModule(Step):
 
         args_file.write_text(args_content)
 
+        if ctx.build_type == "debug":
+            self._warn_missing_server_resources(ctx)
+
         gn_cmd = "gn.bat" if IS_WINDOWS() else "gn"
         gn_args = [gn_cmd, "gen", ctx.out_dir]
         if ctx.build_type != "debug":
@@ -79,6 +83,19 @@ class ConfigureModule(Step):
         run_command(gn_args, cwd=ctx.chromium_src)
 
         log_success("Build configured")
+
+    def _warn_missing_server_resources(self, ctx: Context) -> None:
+        # Debug sets browseros_package_all_server_resources, so ninja needs
+        # every product's server resources staged; a missing set otherwise
+        # surfaces much later as a cryptic missing-input error.
+        for bundle in all_server_bundles():
+            resources_dir = ctx.chromium_src / bundle.chromium_resources_root
+            if not resources_dir.exists():
+                log_warning(
+                    f"⚠️  {bundle.id}: {resources_dir} not staged — debug "
+                    "builds package all server resources; run the resources "
+                    "step first or ninja will fail on missing inputs"
+                )
 
     def _ensure_linux_sysroot(self, ctx: Context) -> None:
         install_script = (

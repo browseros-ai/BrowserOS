@@ -116,6 +116,7 @@ describe('TaskDetailPage', () => {
     expect(html).toContain('Timeline')
     expect(html).toContain('Screenshots')
     expect(html).toContain('Open final URL')
+    expect(html).not.toContain('/audit/screenshot/2')
   })
 
   it('renders no-screenshots placeholder when there are none', () => {

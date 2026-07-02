@@ -8,7 +8,7 @@
  * Owns the cockpit -> chrome tab-id bridge for the rrweb session
  * replay recorder. The worker:
  *
- *   1. Polls `http://127.0.0.1:9200/replay/tabs` every 2 seconds
+ *   1. Polls the resolved local cockpit `/replay/tabs` every 2 seconds
  *      for the cockpit's list of currently-agent-driven CDP tabs.
  *   2. For each row, resolves the corresponding `chrome.tabs.id`
  *      via `chrome.tabs.query({url})` narrowed by
@@ -30,6 +30,7 @@
  */
 
 import { defineBackground } from 'wxt/utils/define-background'
+import { resolveBrowserOSServerBaseUrl } from '@/modules/api/browseros-ports'
 import {
   type ChromeTabRecord,
   diffReplayMap,
@@ -40,7 +41,6 @@ import {
   type ReplayTabsResponse,
 } from '@/modules/replay-background'
 
-const COCKPIT_ORIGIN = 'http://127.0.0.1:9200'
 const POLL_INTERVAL_MS = 2_000
 // WXT outputs `entrypoints/recorder.content.ts` to this path inside
 // the built extension. The leading slash is required by
@@ -54,7 +54,8 @@ export default defineBackground(() => {
   async function poll(): Promise<void> {
     let resp: Response
     try {
-      resp = await fetch(`${COCKPIT_ORIGIN}/replay/tabs`)
+      const cockpitOrigin = await resolveBrowserOSServerBaseUrl()
+      resp = await fetch(`${cockpitOrigin}/replay/tabs`)
     } catch {
       return
     }
@@ -219,22 +220,30 @@ export default defineBackground(() => {
       // 127.0.0.1 is blocked by Chrome's Private Network Access
       // policy. The background's fetch runs in the extension's
       // chrome-extension:// origin and is exempt.
-      void fetch(`${COCKPIT_ORIGIN}/audit/replay/${msg.sessionId}/events`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/x-ndjson' },
-        body: msg.ndjson,
-        credentials: 'omit',
-      }).catch((err) => {
-        // eslint-disable-next-line no-console
-        console.warn('[browseros-claw replay] events POST failed', {
-          sessionId: msg.sessionId,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      })
+      void postRecorderEvents(msg)
       return false
     }
     return false
   })
+
+  async function postRecorderEvents(msg: RecorderMessage): Promise<void> {
+    if (msg.type !== 'recorder-events') return
+    try {
+      const cockpitOrigin = await resolveBrowserOSServerBaseUrl()
+      await fetch(`${cockpitOrigin}/audit/replay/${msg.sessionId}/events`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-ndjson' },
+        body: msg.ndjson,
+        credentials: 'omit',
+      })
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[browseros-claw replay] events POST failed', {
+        sessionId: msg.sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
 
   // Best-effort cleanup when the operator closes a recorded tab.
   chrome.tabs.onRemoved.addListener((tabId) => {

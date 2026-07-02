@@ -27,6 +27,7 @@ import { AgentNotSupportedError, ForeignEntryError } from 'agent-mcp-manager'
 import { logger } from '../lib/logger'
 import { getMcpManager } from '../lib/mcp-manager'
 import type { Harness, StoredAgentProfile } from '../routes/agents/schemas'
+import { relinkManagedServer } from './mcp-relink'
 import { specFor } from './spec-for'
 
 export interface InstallOutcome {
@@ -75,10 +76,12 @@ export async function installForAgent(
   const mgr = getMcpManager()
   const spec = specFor(agentId, profile.mcpUrl)
   try {
-    // `add` overwrites any existing entry with the same name so URL
-    // drift (port change between boots) gets caught on every install.
-    await mgr.add({ name: profile.slug, spec })
-    const link = await mgr.link({ serverName: profile.slug, agent: agentId })
+    const link = await relinkManagedServer({
+      mgr,
+      serverName: profile.slug,
+      agent: agentId,
+      spec,
+    })
     logger.info('installed cockpit agent into harness', {
       slug: profile.slug,
       agent: agentId,
@@ -127,17 +130,16 @@ export async function uninstallForAgent(
 
 /**
  * Re-sync the harness MCP config after a profile mutation that
- * either rotated the slug or swapped the harness (or both). Always
- * installs the new (harness, slug) FIRST so the harness has a
- * working entry continuously; the stale entry under the old
- * (harness, slug) is unlinked afterwards.
+ * rotated the slug, swapped the harness, or changed the URL. Slug
+ * and harness changes install the new entry before removing the old
+ * one; URL-only changes rewrite the same entry with rollback.
  *
- * No-op when both the harness and slug stayed the same. Returns the
+ * No-op when harness, slug, and URL all stayed the same. Returns the
  * install + uninstall outcomes so callers can log them (today) or
  * surface them in the response (later).
  */
 export async function reconcileHarnessLink(input: {
-  before: Pick<StoredAgentProfile, 'slug' | 'harness'>
+  before: Pick<StoredAgentProfile, 'slug' | 'mcpUrl' | 'harness'>
   after: Pick<StoredAgentProfile, 'slug' | 'mcpUrl' | 'harness'>
 }): Promise<{
   install: InstallOutcome | null
@@ -146,11 +148,13 @@ export async function reconcileHarnessLink(input: {
   const { before, after } = input
   const harnessChanged = before.harness !== after.harness
   const slugChanged = before.slug !== after.slug
-  if (!harnessChanged && !slugChanged) {
+  const urlChanged = before.mcpUrl !== after.mcpUrl
+  if (!harnessChanged && !slugChanged && !urlChanged) {
     return { install: null, uninstall: null }
   }
   const install = await installForAgent(after)
-  const uninstall = await uninstallForAgent(before)
+  const uninstall =
+    harnessChanged || slugChanged ? await uninstallForAgent(before) : null
   return { install, uninstall }
 }
 

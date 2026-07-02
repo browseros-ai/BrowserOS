@@ -68,6 +68,7 @@ function readBoolFlagDefaultTrue(name: string): boolean {
  */
 export const env = {
   port: CLAW_API_PORT_DEFAULT,
+  proxyPort: null as number | null,
   cdpPort: CLAW_CDP_PORT_DEFAULT,
   resourcesDir: resolveDefaultResourcesDir(),
   browserosDirOverride: readBrowserosDirOverride(),
@@ -96,6 +97,7 @@ export const env = {
 /** Applies validated startup config to the shared runtime snapshot. */
 export function applyClawConfig(config: ClawConfig): void {
   env.port = config.port
+  env.proxyPort = config.proxyPort ?? null
   env.cdpPort = config.cdpPort
   env.resourcesDir = config.resourcesDir
 }
