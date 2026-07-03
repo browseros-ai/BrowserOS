@@ -11,6 +11,7 @@ export type ProviderType =
   | 'bedrock'
   | 'browseros'
   | 'moonshot'
+  | 'minimax'
   | 'chatgpt-pro'
   | 'github-copilot'
   | 'qwen-code'

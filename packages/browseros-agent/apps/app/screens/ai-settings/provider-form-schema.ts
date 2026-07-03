@@ -3,6 +3,7 @@ import { isLocalRuntimeProviderType } from '../../lib/llm-providers/provider-run
 
 const providerTypeEnum = z.enum([
   'moonshot',
+  'minimax',
   'anthropic',
   'openai',
   'openai-compatible',

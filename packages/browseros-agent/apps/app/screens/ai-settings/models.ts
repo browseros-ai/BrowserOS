@@ -36,6 +36,15 @@ const CUSTOM_PROVIDER_MODELS: Partial<Record<ProviderType, ModelInfo[]>> = {
     { modelId: 'qwen3-coder-flash', contextLength: 1000000 },
     { modelId: 'qwen3.5-plus', contextLength: 1000000 },
   ],
+  minimax: [
+    {
+      modelId: 'MiniMax-M3',
+      contextLength: 1000000,
+      supportsImages: true,
+      supportsReasoning: true,
+      supportsToolCall: true,
+    },
+  ],
 }
 
 function fromModelsDevModel(m: ModelsDevModel): ModelInfo {

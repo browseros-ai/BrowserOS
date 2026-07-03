@@ -413,6 +413,18 @@ function createMoonshotFactory(
   })
 }
 
+function createMinimaxFactory(
+  config: ResolvedAgentConfig,
+): (modelId: string) => unknown {
+  if (!config.baseUrl) throw new Error('MiniMax provider requires baseUrl')
+  if (!config.apiKey) throw new Error('MiniMax provider requires apiKey')
+  return createOpenAICompatible({
+    name: 'minimax',
+    baseURL: config.baseUrl,
+    apiKey: config.apiKey,
+  })
+}
+
 function createQwenCodeFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
@@ -459,6 +471,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.BROWSEROS]: createBrowserOSFactory,
   [LLM_PROVIDERS.OPENAI_COMPATIBLE]: createOpenAICompatibleFactory,
   [LLM_PROVIDERS.MOONSHOT]: createMoonshotFactory,
+  [LLM_PROVIDERS.MINIMAX]: createMinimaxFactory,
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProFactory,
   [LLM_PROVIDERS.GITHUB_COPILOT]: createGitHubCopilotFactory,
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeFactory,

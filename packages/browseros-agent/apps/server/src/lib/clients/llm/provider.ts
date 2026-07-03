@@ -152,6 +152,16 @@ function createMoonshotModel(config: ResolvedLLMConfig): LanguageModel {
   })(config.model)
 }
 
+function createMinimaxModel(config: ResolvedLLMConfig): LanguageModel {
+  if (!config.baseUrl) throw new Error('MiniMax provider requires baseUrl')
+  if (!config.apiKey) throw new Error('MiniMax provider requires apiKey')
+  return createOpenAICompatible({
+    name: 'minimax',
+    baseURL: config.baseUrl,
+    apiKey: config.apiKey,
+  })(config.model)
+}
+
 function createQwenCodeModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('Qwen Code requires OAuth authentication')
   return createOpenAICompatible({
@@ -192,6 +202,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.BROWSEROS]: createBrowserOSModel,
   [LLM_PROVIDERS.OPENAI_COMPATIBLE]: createOpenAICompatibleModel,
   [LLM_PROVIDERS.MOONSHOT]: createMoonshotModel,
+  [LLM_PROVIDERS.MINIMAX]: createMinimaxModel,
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProModel,
   [LLM_PROVIDERS.GITHUB_COPILOT]: createGitHubCopilotModel,
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeModel,

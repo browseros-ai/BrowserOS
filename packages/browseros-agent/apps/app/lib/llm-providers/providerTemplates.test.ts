@@ -13,4 +13,17 @@ describe('providerTemplates', () => {
       contextWindow: 1050000,
     })
   })
+
+  it('defaults MiniMax to M3 on the international endpoint with a 1M context', () => {
+    const template = providerTemplates.find(
+      (provider) => provider.id === 'minimax',
+    )
+
+    expect(template).toMatchObject({
+      name: 'MiniMax',
+      defaultBaseUrl: 'https://api.minimax.io/v1',
+      defaultModelId: 'MiniMax-M3',
+      contextWindow: 1000000,
+    })
+  })
 })
