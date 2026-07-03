@@ -99,8 +99,8 @@ const TOOL_TO_VERB: Record<string, string> = {
   wait: 'input',
   pdf: 'input',
   download: 'input',
-  run: 'input',
-  evaluate: 'input',
+  run: 'script',
+  evaluate: 'script',
 }
 
 const ARBITRARY_SCRIPT_TOOLS = new Set(['run', 'evaluate'])

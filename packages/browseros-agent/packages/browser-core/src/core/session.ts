@@ -13,6 +13,38 @@ import { WindowManager } from './windows'
 
 export interface BrowserSessionHooks extends PageManagerHooks {}
 
+/**
+ * CDP methods the agent must not call via the raw escape hatch.
+ * Blocks credential/history exfiltration even if the LLM is prompt-injected.
+ * Prefix matches: "Storage." blocks all Storage.* commands, etc.
+ */
+const CDP_BLOCKED_PREFIXES = [
+  'Storage.',
+  'DOMStorage.',
+  'IndexedDB.',
+  'History.',
+  'Bookmarks.',
+  'Network.getCookies',
+  'Network.getAllCookies',
+  'Network.clearBrowserCookies',
+  'Network.clearBrowserCache',
+  'Network.getResponseBody',
+  'Network.takeResponseBodyAsStream',
+  'Audits.',
+  'WebAuthn.',
+  'Cast.',
+]
+
+function assertCdpMethodAllowed(method: string): void {
+  for (const prefix of CDP_BLOCKED_PREFIXES) {
+    if (method === prefix || method.startsWith(prefix)) {
+      throw new Error(
+        `CDP method "${method}" is blocked by the BrowserOS security policy`,
+      )
+    }
+  }
+}
+
 /** Coordinates page registry, observation, input, navigation, and raw CDP access. */
 export class BrowserSession {
   readonly pages: PageManager
@@ -77,6 +109,7 @@ export class BrowserSession {
     params?: Record<string, unknown>,
     sessionId?: string,
   ): Promise<unknown> {
+    assertCdpMethodAllowed(method)
     return this.connection.rawSend(method, params ?? {}, sessionId)
   }
 
@@ -86,6 +119,7 @@ export class BrowserSession {
     paramsJson: string,
     sessionId?: string,
   ): Promise<unknown> {
+    assertCdpMethodAllowed(method)
     return this.connection.rawSendJson(method, paramsJson, sessionId)
   }
 

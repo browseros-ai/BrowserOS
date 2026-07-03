@@ -20,9 +20,7 @@ function getExtensionPage(): string {
 if (env.VITE_PUBLIC_SENTRY_DSN) {
   Sentry.init({
     dsn: env.VITE_PUBLIC_SENTRY_DSN,
-    // Setting this option to true will send default PII data to Sentry.
-    // For example, automatic IP address collection on events
-    sendDefaultPii: true,
+    sendDefaultPii: false,
     environment: env.PROD ? 'production' : 'development',
     release: chrome.runtime.getManifest().version,
 

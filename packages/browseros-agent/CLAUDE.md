@@ -1,5 +1,22 @@
 # BrowserOS Agent contributor ground rules
 
+## Condividere file compilati via HTTP
+
+Per esporre un `.deb` o altro artefatto sulla rete (es. dopo una build locale):
+
+```bash
+cd /home/ubuntu/temp-projects/BrowserOS   # directory con il file da servire
+nohup python3 -m http.server 55667 > /tmp/http-serve.log 2>&1 &
+echo "PID: $!"
+curl -s https://api.ipify.org             # stampa l'IP pubblico
+# scaricabile su http://<IP>:55667/<nome-file>
+```
+
+Per fermarlo: `pkill -f "http.server 55667"` oppure `kill <PID>`.
+Dettagli completi in `../../SERVE_FILES.md` (root del progetto).
+
+
+
 A Bun-workspaces monorepo for the BrowserOS MCP server, agent extension UI, CLI, eval harness, and shared packages.
 
 ## Before you push

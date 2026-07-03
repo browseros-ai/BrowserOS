@@ -205,7 +205,7 @@ function startRecorder(config: RecorderConfig): ActiveRecorder {
 
   try {
     stopper = rrweb.record({
-      maskInputOptions: { password: true },
+      maskAllInputs: true,
       sampling: {
         mousemove: false,
         scroll: 250,

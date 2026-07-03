@@ -17,20 +17,14 @@ export default defineConfig({
     // permissions later re-prompts/disables existing installs on update),
     // followed by claw-specific extras.
     permissions: [
-      'topSites',
       'storage',
       'unlimitedStorage',
       'scripting',
       'tabs',
       'tabGroups',
       'sidePanel',
-      'bookmarks',
-      'history',
       'browserOS',
-      'alarms',
       'webNavigation',
-      'downloads',
-      'notifications',
     ],
     // <all_urls> is a SCOPE grant. The extension is allowed to
     // inject content scripts anywhere via chrome.scripting, BUT

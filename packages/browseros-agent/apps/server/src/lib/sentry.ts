@@ -16,7 +16,7 @@ Sentry.init({
   dsn: INLINED_ENV.SENTRY_DSN,
   // Adds request headers and IP for users, for more info visit:
   // https://docs.sentry.io/platforms/javascript/guides/bun/configuration/options/#sendDefaultPii
-  sendDefaultPii: true,
+  sendDefaultPii: false,
   environment: SENTRY_ENVIRONMENT,
   release: VERSION,
 

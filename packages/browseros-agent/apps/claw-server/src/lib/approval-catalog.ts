@@ -59,4 +59,10 @@ export const APPROVAL_CATEGORIES: readonly ApprovalCategory[] = [
     defaultVerdict: 'Auto',
     allowAuto: true,
   },
+  {
+    id: 'script',
+    name: 'Execute script / raw CDP',
+    defaultVerdict: 'Ask',
+    allowAuto: false,
+  },
 ]
