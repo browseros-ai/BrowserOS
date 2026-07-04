@@ -4,7 +4,6 @@ on:
   pull_request:
     branches:
       - main
-      - dev
     paths:
       - "packages/browseros/bos_build/**"
       - "packages/browseros/tools/vendor_uploads/**"

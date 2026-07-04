@@ -4,7 +4,6 @@ on:
   pull_request:
     branches:
       - main
-      - dev
       - feat/claw-server-bootstrap
     paths:
       - "packages/browseros-agent/**"
