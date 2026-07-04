@@ -163,6 +163,24 @@ describe('TurnRegistry', () => {
     expect(registry.getActiveFor('agent-1')).toBeUndefined()
   })
 
+  it('reports whether any turn is running', () => {
+    const registry = makeRegistry()
+    expect(registry.hasRunning()).toBe(false)
+
+    const cancelledTurn = registry.register('agent-1')
+    expect(registry.hasRunning()).toBe(true)
+    registry.cancel(cancelledTurn.turnId, 'user stopped')
+    expect(registry.hasRunning()).toBe(false)
+
+    const doneTurn = registry.register('agent-1')
+    expect(registry.hasRunning()).toBe(true)
+    registry.pushEvent(doneTurn.turnId, {
+      type: 'done',
+      stopReason: 'end_turn',
+    })
+    expect(registry.hasRunning()).toBe(false)
+  })
+
   it('tracks separate active turns for the same agent in different sessions', () => {
     const registry = makeRegistry()
     const sidepanelSession = '00000000-0000-4000-8000-000000000001'

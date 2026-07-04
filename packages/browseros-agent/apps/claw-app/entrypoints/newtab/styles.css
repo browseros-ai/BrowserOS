@@ -51,14 +51,13 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
 
-  /* BrowserOS bespoke surfaces. ink-deep and its ink-deep-2 gradient
-     partner stay dark chips in both themes, elevated in dark so they read
-     as raised, not lost against the page. They carry hardcoded white text. */
+  /* BrowserOS bespoke surfaces. ink-deep stays a dark chip in both themes,
+     elevated in dark so it reads as raised, not lost against the page. It
+     carries hardcoded white text. */
   --color-bg-canvas: var(--bg-canvas);
   --color-bg-sunken: var(--bg-sunken);
   --color-card-tint: var(--card-tint);
   --color-ink-deep: var(--ink-deep);
-  --color-ink-deep-2: var(--ink-deep-2);
   --color-border-2: var(--border-2);
   --color-border-strong: var(--border-strong);
 
@@ -294,7 +293,6 @@ body {
   --bg-sunken: #dae5ff;
   --card-tint: #f5f8ff;
   --ink-deep: #01123f;
-  --ink-deep-2: #0a2158;
   --border-2: #dae5ff;
   /* --border-strong is a real step deeper than --border so it has
      visual weight when used on elevated panels, focused inputs, or
@@ -397,7 +395,6 @@ body {
      read as pressed into the page, matching the light-mode metaphor
      where they sit as Navy Deep chips on Sky Tint. */
   --ink-deep: #050912;
-  --ink-deep-2: #0d1424;
   --border-2: #212c40;
   --border-strong: #334159;
 

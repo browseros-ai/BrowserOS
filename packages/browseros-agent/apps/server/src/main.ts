@@ -82,6 +82,7 @@ export class Application {
         executionDir: this.config.executionDir,
         resourcesDir: this.config.resourcesDir,
         aiSdkDevtoolsEnabled: this.config.aiSdkDevtoolsEnabled,
+        onShutdown: () => this.stop('shutdown-endpoint'),
       })
     } catch (error) {
       this.handleStartupError('HTTP server', this.config.serverPort, error)

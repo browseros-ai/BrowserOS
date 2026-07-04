@@ -12,6 +12,7 @@ import {
 } from '@browseros/shared/schemas/browser-context'
 import { LLMConfigSchema } from '@browseros/shared/schemas/llm'
 import { z } from 'zod'
+import type { ServerActivity } from './services/server-activity'
 
 // Re-export browser context types for consumers
 export type { BrowserContext }
@@ -85,4 +86,6 @@ export interface HttpServerConfig {
   executionDir: string
   resourcesDir: string
   aiSdkDevtoolsEnabled?: boolean
+  activity?: ServerActivity
+  onShutdown?: () => void
 }

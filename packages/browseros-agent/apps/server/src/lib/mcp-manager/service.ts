@@ -26,6 +26,7 @@ import {
   BROWSEROS_MCP_STDIO_SERVER_NAME,
   getMcpManager,
 } from './manager'
+import { ensureClaudeCodeHttpTransportTag } from './transport-tag'
 import type {
   InstallAgentResult,
   McpAgentRow,
@@ -159,7 +160,13 @@ export async function installInto(
   // unconditionally on every install click so a URL drift gets
   // caught even outside the boot-time reconciler.
   await mgr.add({ name: serverName, spec })
-  await mgr.link({ serverName, agent: agentId })
+  const link = await mgr.link({ serverName, agent: agentId })
+  if (agentId === 'claude-code' && spec.transport === 'http') {
+    await ensureClaudeCodeHttpTransportTag({
+      configPath: link.configPath,
+      serverName,
+    })
+  }
   logger.info('Installed BrowserOS MCP into agent', {
     agent: agentId,
     serverName,

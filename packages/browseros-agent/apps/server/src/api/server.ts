@@ -18,6 +18,7 @@ import { createApiRoutes } from './routes'
 import { REMOTE_AGENT_HARNESS_MCP_SOURCE } from './routes/mcp'
 import { KlavisService } from './services/klavis'
 import { RemoteHermesService } from './services/remote-hermes/remote-hermes-service'
+import { ServerActivity } from './services/server-activity'
 import type { HttpServerConfig } from './types'
 
 /** Checks the loopback bind before Bun.serve so startup errors stay explicit. */
@@ -47,6 +48,7 @@ async function assertPortAvailable(port: number): Promise<void> {
 /** Creates the Hono app and Bun server after wiring process-level dependencies. */
 export async function createHttpServer(config: HttpServerConfig) {
   const { port, host = '0.0.0.0', browserosId } = config
+  const { onShutdown } = config
 
   const tokenManager = browserosId
     ? initializeOAuth(getDb(), browserosId)
@@ -61,6 +63,7 @@ export async function createHttpServer(config: HttpServerConfig) {
   // events into the same active turns). Hoisting here means both
   // mounts hold the same instance.
   const turnRegistry = new TurnRegistry()
+  const activity = new ServerActivity(turnRegistry)
 
   // Remote Hermes provider. Opt-in via AGENT_RUNNER_JWT_SECRET in env;
   // when absent we still wire the routes but they return a soft
@@ -83,7 +86,7 @@ export async function createHttpServer(config: HttpServerConfig) {
   }
 
   const app = createApiRoutes({
-    config,
+    config: { ...config, activity },
     gatewayBaseUrl: INLINED_ENV.BROWSEROS_CONFIG_URL
       ? new URL(INLINED_ENV.BROWSEROS_CONFIG_URL).origin
       : undefined,
@@ -91,6 +94,12 @@ export async function createHttpServer(config: HttpServerConfig) {
     remoteHermes,
     tokenManager,
     turnRegistry,
+    onShutdown: () => {
+      shutdownOAuth()
+      void klavis.stop()
+      remoteHermes?.close()
+      onShutdown?.()
+    },
   })
 
   app.onError((err, c) => {

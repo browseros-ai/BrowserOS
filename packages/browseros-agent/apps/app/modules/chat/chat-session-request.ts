@@ -22,6 +22,25 @@ export interface BuildSidepanelPreparedSendMessagesRequestInput
   message?: string
 }
 
+export interface PrepareSidepanelSendMessagesRequestInput
+  extends Omit<
+    BuildSidepanelPreparedSendMessagesRequestInput,
+    'agentServerUrl'
+  > {
+  resolveAgentServerUrl: () => Promise<string>
+}
+
+export async function prepareSidepanelSendMessagesRequest({
+  resolveAgentServerUrl,
+  ...input
+}: PrepareSidepanelSendMessagesRequestInput) {
+  const agentServerUrl = await resolveAgentServerUrl()
+  return buildSidepanelPreparedSendMessagesRequest({
+    agentServerUrl,
+    ...input,
+  })
+}
+
 export function buildSidepanelPreparedSendMessagesRequest({
   agentServerUrl,
   target,

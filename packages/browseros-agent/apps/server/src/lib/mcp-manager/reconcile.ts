@@ -32,6 +32,7 @@ import {
   BROWSEROS_MCP_STDIO_SERVER_NAME,
   getMcpManager,
 } from './manager'
+import { ensureClaudeCodeHttpTransportTag } from './transport-tag'
 import type { McpAgentId, ReconcileResult } from './types'
 
 export interface ReconcileUrlInput {
@@ -133,7 +134,13 @@ async function relinkAgents(
   const relinked: McpAgentId[] = []
   for (const agent of agents) {
     try {
-      await mgr.link({ serverName, agent })
+      const link = await mgr.link({ serverName, agent })
+      if (agent === 'claude-code') {
+        await ensureClaudeCodeHttpTransportTagForLink(
+          serverName,
+          link.configPath,
+        )
+      }
       relinked.push(agent)
     } catch (err) {
       logger.warn('MCP manager failed to relink agent after URL drift', {
@@ -144,6 +151,14 @@ async function relinkAgents(
     }
   }
   return relinked
+}
+
+async function ensureClaudeCodeHttpTransportTagForLink(
+  serverName: string,
+  configPath: string | undefined,
+): Promise<void> {
+  if (serverName !== BROWSEROS_MCP_SERVER_NAME || !configPath) return
+  await ensureClaudeCodeHttpTransportTag({ configPath, serverName })
 }
 
 export async function reconcileUrl(

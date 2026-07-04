@@ -5,10 +5,16 @@
  */
 
 import type { FieldErrors, Resolver, ResolverResult } from 'react-hook-form'
-import { DEFAULT_BROWSEROS_IMPORT_SOURCE_ID } from './onboarding-v2.helpers'
+import type { BrowserOSImportItem } from './browseros-onboarding-api'
+import {
+  DEFAULT_BROWSEROS_IMPORT_SOURCE_ID,
+  MOCK_BROWSEROS_IMPORT_SOURCES,
+  selectableItemsForSource,
+} from './onboarding-v2.helpers'
 
 export interface OnboardingFormValues {
   selectedSourceId: string
+  selectedItems: BrowserOSImportItem[]
 }
 
 interface OnboardingFormIssue {
@@ -22,6 +28,18 @@ interface OnboardingFormError {
 
 export const onboardingFormDefaults: OnboardingFormValues = {
   selectedSourceId: DEFAULT_BROWSEROS_IMPORT_SOURCE_ID,
+  selectedItems: selectableItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[0]),
+}
+
+function sanitizeSelectedItems(value: unknown): BrowserOSImportItem[] {
+  const selectedItems =
+    typeof value === 'object' && value !== null && 'selectedItems' in value
+      ? (value as { selectedItems?: unknown }).selectedItems
+      : undefined
+  if (!Array.isArray(selectedItems)) return []
+  return selectedItems.filter(
+    (item): item is BrowserOSImportItem => typeof item === 'string',
+  )
 }
 
 function validateFormValues(
@@ -34,7 +52,10 @@ function validateFormValues(
       ? (value as { selectedSourceId?: unknown }).selectedSourceId
       : undefined
   if (typeof selectedSourceId === 'string' && selectedSourceId.length > 0) {
-    return { success: true, data: { selectedSourceId } }
+    return {
+      success: true,
+      data: { selectedSourceId, selectedItems: sanitizeSelectedItems(value) },
+    }
   }
   return {
     success: false,

@@ -68,6 +68,13 @@ interface CloseInput {
   session: BrowserSession
 }
 
+interface ApplyTitleInput {
+  agentId: string
+  title: string
+  session: BrowserSession | null
+  signal?: AbortSignal
+}
+
 /** In-flight create promises keyed by agentId. See file comment. */
 const inflight = new Map<string, Promise<void>>()
 
@@ -200,6 +207,44 @@ export async function ensureAgentTabGroup(input: EnsureInput): Promise<void> {
     await dispatchAddToGroup(input, refreshed.groupId)
   } catch (err) {
     logger.warn('agent tab group add unexpected error', {
+      agentId: input.agentId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
+/** Stores and, when possible, applies a display title to an agent tab group. */
+export async function applyAgentTabGroupTitle(
+  input: ApplyTitleInput,
+): Promise<void> {
+  tabGroupTracker.setTitle(input.agentId, input.title)
+  try {
+    await inflight.get(input.agentId)
+  } catch (err) {
+    logger.warn('agent tab group create finished before title apply', {
+      agentId: input.agentId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
+  const record = tabGroupTracker.getByAgentId(input.agentId)
+  if (!record?.groupId || !input.session) return
+
+  try {
+    const result = await executeTool(
+      TAB_GROUPS_TOOL,
+      { action: 'update', groupId: record.groupId, title: input.title },
+      { session: input.session, signal: input.signal },
+    )
+    if (result.isError) {
+      logger.warn('agent tab group title update failed', {
+        agentId: input.agentId,
+        groupId: record.groupId,
+        error: extractFirstText(result),
+      })
+    }
+  } catch (err) {
+    logger.warn('agent tab group title update threw', {
       agentId: input.agentId,
       error: err instanceof Error ? err.message : String(err),
     })

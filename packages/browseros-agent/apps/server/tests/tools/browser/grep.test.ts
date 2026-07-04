@@ -27,11 +27,10 @@ describe('grep tool', () => {
       page: 4,
       over: 'ax',
       count: 2,
-      matches: ['button "Save" [ref=e1]', 'button "Save draft" [ref=e2]'],
     })
   })
 
-  it('reports zero matches with an empty matches array', async () => {
+  it('reports zero matches without a matches array', async () => {
     const session = sessionWithSnapshot('link "Home"\nlink "About"')
 
     const result = await executeTool(
@@ -45,7 +44,6 @@ describe('grep tool', () => {
       page: 4,
       over: 'ax',
       count: 0,
-      matches: [],
     })
   })
 })

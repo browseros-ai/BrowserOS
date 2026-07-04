@@ -4,6 +4,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type {
   AddServerOptions,
   InstalledServer,
@@ -11,6 +14,7 @@ import type {
   McpManager,
   RemoveServerOptions,
 } from 'agent-mcp-manager'
+import { createMcpManager } from 'agent-mcp-manager'
 import {
   reconcileUrl,
   resetMcpManagerForTesting,
@@ -21,6 +25,51 @@ interface ManagerCalls {
   add: AddServerOptions[]
   link: LinkServerOptions[]
   remove: RemoveServerOptions[]
+}
+
+async function withTempMcpEnv<T>(
+  run: (paths: {
+    browserosDir: string
+    claudeConfigPath: string
+  }) => Promise<T>,
+): Promise<T> {
+  const root = await mkdtemp(join(tmpdir(), 'mcp-manager-reconcile-'))
+  const previous = {
+    BROWSEROS_DIR: process.env.BROWSEROS_DIR,
+    CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+    HOME: process.env.HOME,
+  }
+  const browserosDir = join(root, 'browseros')
+  const claudeConfigDir = join(root, 'claude-config')
+  const homeDir = join(root, 'home')
+  const claudeConfigPath = join(claudeConfigDir, '.claude.json')
+  try {
+    await mkdir(claudeConfigDir, { recursive: true })
+    await mkdir(homeDir, { recursive: true })
+    process.env.BROWSEROS_DIR = browserosDir
+    process.env.CLAUDE_CONFIG_DIR = claudeConfigDir
+    process.env.HOME = homeDir
+    resetMcpManagerForTesting()
+    return await run({ browserosDir, claudeConfigPath })
+  } finally {
+    resetMcpManagerForTesting()
+    restoreEnv(previous)
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
+function restoreEnv(previous: {
+  BROWSEROS_DIR?: string
+  CLAUDE_CONFIG_DIR?: string
+  HOME?: string
+}): void {
+  for (const [key, value] of Object.entries(previous)) {
+    if (value === undefined) {
+      delete process.env[key]
+    } else {
+      process.env[key] = value
+    }
+  }
 }
 
 function makeManagerStub(initialServers: InstalledServer[]): {
@@ -181,6 +230,51 @@ describe('reconcileUrl', () => {
       'claude-code',
       'cursor',
     ])
+  })
+
+  it('reapplies the claude-code http transport tag after URL drift', async () => {
+    await withTempMcpEnv(async ({ browserosDir, claudeConfigPath }) => {
+      await writeFile(claudeConfigPath, '{"mcpServers":{}}\n', 'utf8')
+      const upstreamMgr = createMcpManager({
+        workspaceDir: join(browserosDir, 'mcp-manager'),
+        scope: 'system',
+      })
+      await upstreamMgr.add({
+        name: 'browseros',
+        spec: {
+          transport: 'http',
+          url: 'http://127.0.0.1:9100/mcp',
+        },
+      })
+      await upstreamMgr.link({
+        serverName: 'browseros',
+        agent: 'claude-code',
+      })
+
+      expect(
+        JSON.parse(await readFile(claudeConfigPath, 'utf8')).mcpServers
+          .browseros,
+      ).toEqual({
+        url: 'http://127.0.0.1:9100/mcp',
+      })
+
+      resetMcpManagerForTesting()
+      const result = await reconcileUrl({
+        currentUrl: 'http://127.0.0.1:9105/mcp',
+      })
+
+      expect(result).toEqual({
+        action: 'updated',
+        affectedAgents: ['claude-code'],
+      })
+      expect(
+        JSON.parse(await readFile(claudeConfigPath, 'utf8')).mcpServers
+          .browseros,
+      ).toEqual({
+        url: 'http://127.0.0.1:9105/mcp',
+        type: 'http',
+      })
+    })
   })
 
   it('best-effort restores the previous spec when add() throws after remove()', async () => {

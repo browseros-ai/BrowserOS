@@ -26,6 +26,7 @@ describe('IdentityService', () => {
       clientName: 'Claude Code',
       clientVersion: '1.4.2',
       clientTitle: 'Claude Code',
+      sessionLabel: null,
       firstSeenAt: 1_000_000,
     })
     expect(svc.getIdentity('s1')).toEqual(record)
@@ -55,6 +56,19 @@ describe('IdentityService', () => {
     svc.registerInitialize({ sessionId: 's1', clientInfo: { name: 'a' } })
     svc.dropSession('s1')
     expect(svc.getIdentity('s1')).toBeNull()
+    expect(svc.size()).toBe(0)
+  })
+
+  it('stores an accepted session label when the session is live', () => {
+    const svc = setup()
+    svc.registerInitialize({ sessionId: 's1', clientInfo: { name: 'a' } })
+    svc.setSessionLabel('s1', 'invoice-processing')
+    expect(svc.getIdentity('s1')?.sessionLabel).toBe('invoice-processing')
+  })
+
+  it('setSessionLabel is a no-op for an unknown session', () => {
+    const svc = setup()
+    svc.setSessionLabel('missing', 'invoice-processing')
     expect(svc.size()).toBe(0)
   })
 
@@ -116,18 +130,42 @@ describe('fallbackSlugForSession', () => {
 })
 
 describe('agentIdentityFromClient', () => {
-  it('uses the cleaned client name when one is present', () => {
+  it('scopes same-name clients by session id while keeping the plain slug', () => {
+    const a = agentIdentityFromClient({
+      sessionId: 's1',
+      clientName: 'Claude Code',
+      clientVersion: '1.0.0',
+      clientTitle: null,
+      sessionLabel: null,
+      firstSeenAt: 0,
+    })
+    const b = agentIdentityFromClient({
+      sessionId: 's2',
+      clientName: 'Claude Code',
+      clientVersion: '1.0.0',
+      clientTitle: null,
+      sessionLabel: null,
+      firstSeenAt: 0,
+    })
+    expect(a.agentId).toMatch(/^claude-code-[0-9a-f]{6}$/)
+    expect(b.agentId).toMatch(/^claude-code-[0-9a-f]{6}$/)
+    expect(a.agentId).not.toBe(b.agentId)
+    expect(a.slug).toBe('claude-code')
+    expect(b.slug).toBe('claude-code')
+  })
+
+  it('returns the same agentId for the same identity', () => {
     const identity = {
       sessionId: 's1',
       clientName: 'Claude Code',
       clientVersion: '1.0.0',
       clientTitle: null,
+      sessionLabel: null,
       firstSeenAt: 0,
     }
-    expect(agentIdentityFromClient(identity)).toEqual({
-      agentId: 'claude-code',
-      slug: 'claude-code',
-    })
+    expect(agentIdentityFromClient(identity)).toEqual(
+      agentIdentityFromClient(identity),
+    )
   })
 
   it('falls back to the synthetic handle when clientName is empty', () => {
@@ -136,10 +174,11 @@ describe('agentIdentityFromClient', () => {
       clientName: '',
       clientVersion: '',
       clientTitle: null,
+      sessionLabel: null,
       firstSeenAt: 0,
     }
     const result = agentIdentityFromClient(identity)
-    expect(result.agentId).toMatch(/^unknown-[0-9a-f]{6}$/)
+    expect(result.agentId).toBe(fallbackSlugForSession('session-xyz'))
     expect(result.agentId).toBe(result.slug)
   })
 
@@ -149,10 +188,11 @@ describe('agentIdentityFromClient', () => {
       clientName: '日本語',
       clientVersion: '',
       clientTitle: null,
+      sessionLabel: null,
       firstSeenAt: 0,
     }
-    expect(agentIdentityFromClient(identity).agentId).toMatch(
-      /^unknown-[0-9a-f]{6}$/,
-    )
+    const result = agentIdentityFromClient(identity)
+    expect(result.agentId).toBe(fallbackSlugForSession('s1'))
+    expect(result.agentId).toBe(result.slug)
   })
 })

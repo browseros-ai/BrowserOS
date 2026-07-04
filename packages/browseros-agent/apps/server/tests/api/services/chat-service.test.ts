@@ -22,6 +22,7 @@ interface StoredSession {
 
 interface StreamResponseOptions {
   uiMessages?: MockMessage[]
+  abortSignal?: AbortSignal
   onFinish(args: { messages: MockMessage[] }): Promise<void>
 }
 
@@ -75,6 +76,12 @@ mock.module('../../../src/lib/logger', () => ({
 }))
 
 const { ChatService } = await import('../../../src/api/services/chat-service')
+const { ServerActivity } = await import(
+  '../../../src/api/services/server-activity'
+)
+const { TurnRegistry } = await import(
+  '../../../src/lib/agents/turns/active-turn-registry'
+)
 
 function createKlavisStub(
   getStatus: () => KlavisProxyStatus = () => ({
@@ -132,6 +139,80 @@ function createFakeAgent() {
     dispose: mock(async () => {}),
   }
 }
+
+describe('ChatService activity tracking', () => {
+  it('returns to idle when a chat stream is aborted mid-response', async () => {
+    resolveLLMConfigSpy.mockImplementation(async () => ({
+      provider: 'openai',
+      model: 'gpt-5',
+      apiKey: 'test-key',
+    }))
+    const fakeAgent = createFakeAgent()
+    agentToReturn = fakeAgent
+    const abortController = new AbortController()
+    streamResponseHandler = async () => {
+      const encoder = new TextEncoder()
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: partial\n\n'))
+            abortController.signal.addEventListener(
+              'abort',
+              () => controller.close(),
+              { once: true },
+            )
+          },
+        }),
+      )
+    }
+
+    const registry = new TurnRegistry({
+      retainAfterDoneMs: 1000,
+      sweepIntervalMs: 60_000,
+    })
+    const activity = new ServerActivity(registry)
+    const browser = {
+      resolveTabIds: mock(async () => new Map<number, number>()),
+      closePage: mock(async () => {}),
+    }
+    const service = new ChatService({
+      sessionStore: createSessionStore() as never,
+      klavis: createKlavisStub() as never,
+      browser: browser as never,
+      browserSession: { pages: {} } as never,
+      serverPort: 32123,
+      activity,
+    })
+
+    const response = await service.processMessage(
+      {
+        conversationId: crypto.randomUUID(),
+        message: 'stop after the first chunk',
+        isScheduledTask: false,
+        mode: 'agent',
+        origin: 'sidepanel',
+        browserContext: {
+          activeTab: {
+            id: 3,
+            url: 'https://example.com',
+            title: 'Example',
+          },
+        },
+      } as never,
+      abortController.signal,
+    )
+
+    expect(activity.isBusy()).toBe(true)
+    const reader = response.body?.getReader()
+    await reader?.read()
+
+    abortController.abort()
+
+    expect(activity.isBusy()).toBe(false)
+    await reader?.cancel()
+    registry.stopSweeper()
+  })
+})
 
 describe('ChatService scheduled task hidden page lifecycle', () => {
   it('creates and cleans up a hidden page without creating a hidden window', async () => {

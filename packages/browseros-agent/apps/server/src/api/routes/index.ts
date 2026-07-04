@@ -28,6 +28,7 @@ import { createProviderRoutes } from './provider'
 import { createRefinePromptRoutes } from './refine-prompt'
 import { createRemoteHermesRoutes } from './remote-hermes'
 import { createScreencastRoute } from './screencast'
+import { createShutdownRoute } from './shutdown'
 import { createStatusRoute } from './status'
 
 interface CreateApiRoutesDeps {
@@ -35,6 +36,7 @@ interface CreateApiRoutesDeps {
   config: HttpServerConfig
   gatewayBaseUrl?: string
   klavis: KlavisService
+  onShutdown: () => void
   remoteHermes: RemoteHermesService | null
   tokenManager: OAuthTokenManager | null
   turnRegistry: TurnRegistry
@@ -47,6 +49,7 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
     config,
     gatewayBaseUrl,
     klavis,
+    onShutdown,
     remoteHermes,
     tokenManager,
     turnRegistry,
@@ -60,13 +63,15 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
     resourcesDir,
     version,
   } = config
+  const { activity } = config
 
   return (
     new Hono<Env>()
       .use('/*', cors(defaultCorsConfig))
       .use('/*', requireTrustedOrigin())
       .route('/health', createHealthRoute({ browser }))
-      .route('/status', createStatusRoute({ browser }))
+      .route('/shutdown', createShutdownRoute({ onShutdown }))
+      .route('/status', createStatusRoute({ browser, activity }))
       .route(
         '/test-provider',
         createProviderRoutes({ browserosId, resourcesDir }),
@@ -89,6 +94,7 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
           browserSession,
           klavis,
           executionDir,
+          activity,
         }),
       )
       // Dedicated in-process MCP server for the suggest_app_connection
@@ -113,6 +119,7 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
           serverPort: port,
           resourcesDir,
           remoteHermes,
+          activity,
         }),
       )
       .route('/screencast', createScreencastRoute({ browser }))

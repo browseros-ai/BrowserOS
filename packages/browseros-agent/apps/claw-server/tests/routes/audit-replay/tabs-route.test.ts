@@ -11,7 +11,10 @@
 
 import { afterEach, describe, expect, test } from 'bun:test'
 import { hc } from 'hono/client'
-import { identityService } from '../../../src/lib/mcp-session'
+import {
+  agentIdentityFromClient,
+  identityService,
+} from '../../../src/lib/mcp-session'
 import { tabActivityRegistry } from '../../../src/lib/tab-activity'
 import app, { type AppType } from '../../../src/server'
 
@@ -35,10 +38,11 @@ describe('GET /replay/tabs', () => {
   })
 
   test('returns the agent tab row when a session + dispatch are live', async () => {
-    identityService.registerInitialize({
+    const identity = identityService.registerInitialize({
       sessionId: 'sid-abc',
       clientInfo: { name: 'claude-code', version: '0.1.0' },
     })
+    const { agentId, slug } = agentIdentityFromClient(identity)
     // Drive a tool dispatch to populate the registry. The registry
     // needs a session attached to evaluate `status`, so this test
     // mounts a stub session via setBrowserSession.
@@ -59,8 +63,8 @@ describe('GET /replay/tabs', () => {
       // biome-ignore lint/suspicious/noExplicitAny: test stub
     } as any)
     tabActivityRegistry.recordTool({
-      agentId: 'claude-code',
-      slug: 'claude-code',
+      agentId,
+      slug,
       pageId: 5,
       targetId: 'cdp-target-5',
       toolName: 'tabs',

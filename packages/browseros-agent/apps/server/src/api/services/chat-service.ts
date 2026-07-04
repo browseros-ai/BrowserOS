@@ -21,6 +21,7 @@ import { buildAcpMcpServers } from '../../lib/agents/acpx-provider/buildAcpMcpSe
 import { resolveLLMConfig } from '../../lib/clients/llm/config'
 import { logger } from '../../lib/logger'
 import type { KlavisService } from '../services/klavis'
+import type { ServerActivity } from '../services/server-activity'
 import type { BrowserContext, ChatRequest } from '../types'
 import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'
 
@@ -38,6 +39,7 @@ export interface ChatServiceDeps {
    *  resolutions so the bundled-Bun launcher under
    *  <resourcesDir>/bin/third_party/bun can be located. */
   resourcesDir?: string | null
+  activity?: ServerActivity
 }
 
 export class ChatService {
@@ -371,7 +373,7 @@ export class ChatService {
             : msg,
         )
 
-    return createAgentUIStreamResponse({
+    const response = await createAgentUIStreamResponse({
       agent: session.agent.toolLoopAgent,
       uiMessages: promptUiMessages,
       abortSignal,
@@ -435,6 +437,10 @@ export class ChatService {
         }
       },
     })
+
+    return (
+      this.deps.activity?.trackChatResponse(response, abortSignal) ?? response
+    )
   }
 
   async deleteSession(

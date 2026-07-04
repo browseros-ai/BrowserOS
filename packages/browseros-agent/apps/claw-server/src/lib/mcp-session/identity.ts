@@ -18,10 +18,10 @@
  *
  * `agentIdentityFromClient` is the bridge between the identity map
  * and the existing `tabActivityRegistry`, which keys on
- * `{ agentId, slug }`. The cleaner produces a stable handle from
- * `clientInfo.name` when the client identifies itself politely, or
- * falls back to a session-derived `unknown-<hash>` so the registry
- * key is always non-empty.
+ * `{ agentId, slug }`. The slug is the cleaned `clientInfo.name`
+ * handle, while the agentId is session-scoped so parallel sessions
+ * from the same client do not share ownership ledgers. Unusable
+ * names fall back to the session-derived `unknown-<hash>` handle.
  */
 
 export interface ClientIdentity {
@@ -29,6 +29,7 @@ export interface ClientIdentity {
   clientName: string
   clientVersion: string
   clientTitle: string | null
+  sessionLabel: string | null
   firstSeenAt: number
 }
 
@@ -42,6 +43,7 @@ export interface IdentityService {
     }
   }): ClientIdentity
   getIdentity(sessionId: string): ClientIdentity | null
+  setSessionLabel(sessionId: string, label: string): void
   dropSession(sessionId: string): void
   /** Snapshot of every live identity. Used by the tabs route to enrich registry records by agentId. */
   list(): ClientIdentity[]
@@ -70,6 +72,7 @@ export function createIdentityService(
         clientName: input.clientInfo.name?.trim() ?? '',
         clientVersion: input.clientInfo.version?.trim() ?? '',
         clientTitle: input.clientInfo.title?.trim() || null,
+        sessionLabel: null,
         firstSeenAt: now(),
       }
       records.set(input.sessionId, record)
@@ -77,6 +80,10 @@ export function createIdentityService(
     },
     getIdentity(sessionId) {
       return records.get(sessionId) ?? null
+    },
+    setSessionLabel(sessionId, label) {
+      const record = records.get(sessionId)
+      if (record) record.sessionLabel = label
     },
     dropSession(sessionId) {
       records.delete(sessionId)
@@ -107,16 +114,11 @@ export function slugifyClientName(raw: string): string {
   return cleaned.slice(0, SLUG_MAX_LEN)
 }
 
-/**
- * Stable, obviously-synthetic fallback handle derived from the
- * session id. Same session always produces the same hash so the
- * registry sees one "agent" even if `clientInfo.name` is missing.
- */
-export function fallbackSlugForSession(sessionId: string): string {
-  // FNV-1a 32-bit; deterministic and dependency-free.
+/** Returns the stable six-hex FNV-1a suffix used by synthetic ids. */
+function hashTailFor(input: string): string {
   let hash = 0x811c9dc5
-  for (let i = 0; i < sessionId.length; i++) {
-    hash ^= sessionId.charCodeAt(i)
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i)
     hash =
       (hash +
         ((hash << 1) +
@@ -126,15 +128,23 @@ export function fallbackSlugForSession(sessionId: string): string {
           (hash << 24))) >>>
       0
   }
-  const tail = hash.toString(16).padStart(8, '0').slice(0, HASH_TAIL_LEN)
-  return `unknown-${tail}`
+  return hash.toString(16).padStart(8, '0').slice(0, HASH_TAIL_LEN)
+}
+
+/**
+ * Stable, obviously-synthetic fallback handle derived from the
+ * session id. Same session always produces the same hash so the
+ * registry sees one "agent" even if `clientInfo.name` is missing.
+ */
+export function fallbackSlugForSession(sessionId: string): string {
+  return `unknown-${hashTailFor(sessionId)}`
 }
 
 /**
  * Bridge from `ClientIdentity` to the `{ agentId, slug }` pair the
- * `tabActivityRegistry` expects. agentId and slug both equal the
- * cleaner output when `clientInfo.name` is usable, otherwise both
- * equal the session-derived fallback.
+ * `tabActivityRegistry` expects. Usable client names keep a stable
+ * slug and get a session-scoped agentId; unusable names use the
+ * session-derived fallback for both.
  */
 export function agentIdentityFromClient(identity: ClientIdentity): {
   agentId: string
@@ -142,7 +152,10 @@ export function agentIdentityFromClient(identity: ClientIdentity): {
 } {
   const cleaned = slugifyClientName(identity.clientName)
   if (cleaned.length > 0) {
-    return { agentId: cleaned, slug: cleaned }
+    return {
+      agentId: `${cleaned}-${hashTailFor(identity.sessionId)}`,
+      slug: cleaned,
+    }
   }
   const fallback = fallbackSlugForSession(identity.sessionId)
   return { agentId: fallback, slug: fallback }

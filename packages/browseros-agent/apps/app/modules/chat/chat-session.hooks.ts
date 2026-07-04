@@ -32,13 +32,18 @@ import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { sentry } from '@/lib/sentry/sentry'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
+import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useInvalidateCredits } from '@/modules/credits/credits.hooks'
 import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
 import { useChatRefs } from './chat-refs.hooks'
 import { GetConversationWithMessagesDocument } from './chat-session-document'
 import {
-  buildSidepanelPreparedSendMessagesRequest,
+  didStreamingTurnFinish,
+  getPersistableMessages,
+} from './chat-session-persistence'
+import {
+  prepareSidepanelSendMessagesRequest,
   toProviderOption,
 } from './chat-session-request'
 import type { ChatMode } from './chat-types'
@@ -191,15 +196,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const conversationIdParam = searchParams.get('conversationId')
 
   const agentUrlRef = useRef(agentServerUrl)
-  const agentUrlErrorRef = useRef(agentUrlError)
 
   useEffect(() => {
     agentUrlRef.current = agentServerUrl
   }, [agentServerUrl])
-
-  useEffect(() => {
-    agentUrlErrorRef.current = agentUrlError
-  }, [agentUrlError])
 
   const canSend = !isLoadingAgentUrl && !agentUrlError && !!agentServerUrl
 
@@ -213,8 +213,13 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const [disliked, setDisliked] = useState<Record<string, boolean>>({})
   const [conversationId, setConversationId] = useState(crypto.randomUUID())
   const conversationIdRef = useRef(conversationId)
+  const optionsRef = useRef(options)
   // The window this panel belongs to, resolved on mount in per-window scope.
   const windowIdRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    optionsRef.current = options
+  }, [options])
 
   useEffect(() => {
     conversationIdRef.current = conversationId
@@ -310,15 +315,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     ? toProviderOption(selectedChatTarget)
     : providers[0]
 
-  const {
-    messages,
-    sendMessage: baseSendMessage,
-    setMessages,
-    status,
-    stop,
-    error: chatError,
-  } = useChat({
-    transport: new DefaultChatTransport({
+  const transportRef = useRef<DefaultChatTransport<UIMessage> | null>(null)
+  if (!transportRef.current) {
+    transportRef.current = new DefaultChatTransport<UIMessage>({
       prepareSendMessagesRequest: async ({ messages }) => {
         const target = selectedChatTargetRef.current
         const fallbackProvider =
@@ -356,11 +355,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         const previousConversation = history?.length ? history : undefined
 
         const userSystemPrompt = getUserSystemPrompt(
-          options?.origin,
+          optionsRef.current?.origin,
           personalizationRef.current,
         )
         const agentSessionStrategy =
-          options?.agentSessionStrategy ?? 'conversation'
+          optionsRef.current?.agentSessionStrategy ?? 'conversation'
         const agentSessionId =
           agentSessionStrategy === 'main' ? 'main' : conversationIdRef.current
 
@@ -377,16 +376,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
         const message = getLastMessageText(messages)
 
-        const currentAgentServerUrl = agentUrlRef.current
-        if (!currentAgentServerUrl) {
-          throw (
-            agentUrlErrorRef.current ??
-            new Error('Agent server URL not configured.')
-          )
-        }
-
-        const result = buildSidepanelPreparedSendMessagesRequest({
-          agentServerUrl: currentAgentServerUrl,
+        const result = await prepareSidepanelSendMessagesRequest({
+          resolveAgentServerUrl: resolveAgentServerUrlWithRetry,
           target,
           fallbackProvider,
           message,
@@ -406,7 +397,21 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
         return result
       },
-    }),
+    })
+  }
+
+  const chatTransport = transportRef.current
+
+  const {
+    messages,
+    sendMessage: baseSendMessage,
+    setMessages,
+    status,
+    stop,
+    error: chatError,
+    regenerate,
+  } = useChat({
+    transport: chatTransport,
     onData: (part) => {
       if (part.type !== 'data-vm-status') return
       const data = part.data as
@@ -559,21 +564,21 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     syncExecutionHistory(messages, status)
   }, [messages, status, syncExecutionHistory])
 
-  // Save conversation only after streaming completes — not on every token
+  // Save conversation only after a turn terminates — not on every token
   const previousStatusRef = useRef(status)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: only save when streaming finishes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only save when a turn terminates
   useEffect(() => {
-    const wasStreaming =
-      previousStatusRef.current === 'streaming' ||
-      previousStatusRef.current === 'submitted'
-    const justFinished = wasStreaming && status === 'ready'
+    const justFinished = didStreamingTurnFinish(
+      previousStatusRef.current,
+      status,
+    )
     previousStatusRef.current = status
 
     if (!justFinished) return
 
     // Clear the selected text that was sent with this request
     const tabKey = pendingSelectionTabKeyRef.current
-    if (tabKey) {
+    if (status === 'ready' && tabKey) {
       pendingSelectionTabKeyRef.current = null
       delete selectionMapRef.current[tabKey]
       selectedTextStorage.getValue().then((map) => {
@@ -584,7 +589,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       })
     }
 
-    const messagesToSave = messages.filter((m) => m.parts?.length > 0)
+    const messagesToSave = getPersistableMessages(messages)
     if (messagesToSave.length === 0) return
 
     if (isLoggedIn) {
@@ -781,6 +786,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isRestoringConversation,
     agentUrlError,
     chatError,
+    retryLastTurn: regenerate,
     handleSelectProvider,
     getActionForMessage,
     resetConversation,

@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000000000..6c9a7e03ebc0d
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.h
-@@ -0,0 +1,153 @@
+@@ -0,0 +1,167 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -16,6 +16,7 @@ index 0000000000000..6c9a7e03ebc0d
 +
 +#include "base/files/file.h"
 +#include "base/files/file_path.h"
++#include "base/functional/callback.h"
 +#include "base/memory/raw_ptr.h"
 +#include "base/memory/weak_ptr.h"
 +#include "base/no_destructor.h"
@@ -78,6 +79,13 @@ index 0000000000000..6c9a7e03ebc0d
 +  void OnHealthCheckComplete(bool success);
 +
 +  void SetRunningForTesting(bool running) { is_running_ = running; }
++  void SetPortsForTesting(const ServerPorts& ports) { ports_ = ports; }
++  using PortFinderForTesting =
++      base::RepeatingCallback<int(int, const std::set<int>&, bool)>;
++  void SetPortFinderForTesting(PortFinderForTesting port_finder) {
++    port_finder_for_testing_ = port_finder;
++  }
++  void OnProcessExitedForTesting(int exit_code) { OnProcessExited(exit_code); }
 +
 +  base::FilePath GetBrowserOSServerExecutablePath() const;
 +  base::FilePath GetBrowserOSServerResourcesPath() const;
@@ -99,6 +107,9 @@ index 0000000000000..6c9a7e03ebc0d
 +  void ResolvePortsForStartup();
 +  void ApplyCommandLineOverrides();
 +  void SavePortsToPrefs();
++  int FindAvailableServerPort(int starting_port,
++                              const std::set<int>& excluded,
++                              bool allow_reuse);
 +  void StartCDPServer();
 +  void StopCDPServer();
 +  void StartProxy();
@@ -143,6 +154,8 @@ index 0000000000000..6c9a7e03ebc0d
 +  UpdateCompleteCallback update_complete_callback_;
 +
 +  int consecutive_startup_failures_ = 0;
++  int consecutive_health_failures_ = 0;
++  bool advance_port_on_restart_ = false;
 +  base::TimeTicks last_launch_time_;
 +
 +  base::RepeatingTimer health_check_timer_;
@@ -150,6 +163,7 @@ index 0000000000000..6c9a7e03ebc0d
 +
 +  std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
 +  std::unique_ptr<ServerUpdater> updater_;
++  PortFinderForTesting port_finder_for_testing_;
 +
 +  base::WeakPtrFactory<BrowserOSServerManager> weak_factory_{this};
 +};

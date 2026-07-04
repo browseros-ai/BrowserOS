@@ -4,6 +4,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   type AddServerOptions,
   type AgentInfo,
@@ -22,6 +25,48 @@ import {
 
 let stubAgents: AgentInfo[] = []
 const stubDetect = async (): Promise<AgentInfo[]> => stubAgents
+
+async function withTempMcpEnv<T>(
+  run: (paths: { claudeConfigPath: string }) => Promise<T>,
+): Promise<T> {
+  const root = await mkdtemp(join(tmpdir(), 'mcp-manager-service-'))
+  const previous = {
+    BROWSEROS_DIR: process.env.BROWSEROS_DIR,
+    CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+    HOME: process.env.HOME,
+  }
+  const browserosDir = join(root, 'browseros')
+  const claudeConfigDir = join(root, 'claude-config')
+  const homeDir = join(root, 'home')
+  const claudeConfigPath = join(claudeConfigDir, '.claude.json')
+  try {
+    await mkdir(claudeConfigDir, { recursive: true })
+    await mkdir(homeDir, { recursive: true })
+    process.env.BROWSEROS_DIR = browserosDir
+    process.env.CLAUDE_CONFIG_DIR = claudeConfigDir
+    process.env.HOME = homeDir
+    resetMcpManagerForTesting()
+    return await run({ claudeConfigPath })
+  } finally {
+    resetMcpManagerForTesting()
+    restoreEnv(previous)
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
+function restoreEnv(previous: {
+  BROWSEROS_DIR?: string
+  CLAUDE_CONFIG_DIR?: string
+  HOME?: string
+}): void {
+  for (const [key, value] of Object.entries(previous)) {
+    if (value === undefined) {
+      delete process.env[key]
+    } else {
+      process.env[key] = value
+    }
+  }
+}
 
 function makeManagerStub(
   opts: {
@@ -264,6 +309,24 @@ describe('installInto', () => {
     expect(calls.link).toHaveLength(1)
     expect(calls.link[0].agent).toBe('claude-code')
     expect(calls.link[0].serverName).toBe('browseros')
+  })
+
+  it('writes the claude-code system-scope http transport tag', async () => {
+    await withTempMcpEnv(async ({ claudeConfigPath }) => {
+      await writeFile(claudeConfigPath, '{"mcpServers":{}}\n', 'utf8')
+
+      const result = await installInto(
+        'claude-code',
+        'http://127.0.0.1:9100/mcp',
+      )
+
+      expect(result.success).toBe(true)
+      const config = JSON.parse(await readFile(claudeConfigPath, 'utf8'))
+      expect(config.mcpServers.browseros).toEqual({
+        url: 'http://127.0.0.1:9100/mcp',
+        type: 'http',
+      })
+    })
   })
 
   it('uses an http spec under the http server name for codex', async () => {

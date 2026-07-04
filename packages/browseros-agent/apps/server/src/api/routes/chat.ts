@@ -10,6 +10,7 @@ import { Sentry } from '../../lib/sentry'
 import { ChatService } from '../services/chat-service'
 import type { KlavisService } from '../services/klavis'
 import type { RemoteHermesService } from '../services/remote-hermes/remote-hermes-service'
+import type { ServerActivity } from '../services/server-activity'
 import { ChatRequestSchema } from '../types'
 import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'
 import { ConversationIdParamSchema } from '../utils/validation'
@@ -30,6 +31,7 @@ interface ChatRouteDeps {
   /** Configured at server startup when AGENT_RUNNER_JWT_SECRET is set.
    *  Null otherwise; `remote-hermes` chat requests get a soft 500. */
   remoteHermes?: RemoteHermesService | null
+  activity?: ServerActivity
 }
 
 export function createChatRoutes(deps: ChatRouteDeps) {
@@ -45,6 +47,7 @@ export function createChatRoutes(deps: ChatRouteDeps) {
     aiSdkDevtoolsEnabled: deps.aiSdkDevtoolsEnabled,
     serverPort: deps.serverPort,
     resourcesDir: deps.resourcesDir,
+    activity: deps.activity,
   })
 
   return new Hono()
@@ -103,7 +106,7 @@ export function createChatRoutes(deps: ChatRouteDeps) {
           deps.browser,
           request.browserContext,
         )
-        return deps.remoteHermes.streamTurn(
+        const response = await deps.remoteHermes.streamTurn(
           {
             conversationId: request.conversationId,
             message: request.message,
@@ -113,6 +116,10 @@ export function createChatRoutes(deps: ChatRouteDeps) {
             selectedTextSource: request.selectedTextSource,
           },
           c.req.raw.signal,
+        )
+        return (
+          deps.activity?.trackChatResponse(response, c.req.raw.signal) ??
+          response
         )
       }
 

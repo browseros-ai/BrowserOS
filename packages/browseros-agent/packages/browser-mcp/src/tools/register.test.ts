@@ -158,4 +158,44 @@ describe('registerBrowserTools', () => {
     ])
     expect(events[0]?.duration_ms).toEqual(expect.any(Number))
   })
+
+  it('fires lifecycle callbacks around browser tool execution', async () => {
+    const fake = createFakeServer()
+    let resolveNewPage: ((value: number) => void) | undefined
+    const starts: Array<Record<string, unknown>> = []
+    const ends: Array<Record<string, unknown>> = []
+    const session = {
+      pages: {
+        newPage: () =>
+          new Promise<number>((resolve) => {
+            resolveNewPage = resolve
+          }),
+      },
+    } as unknown as BrowserSession
+
+    registerBrowserTools(
+      fake.server as never,
+      session,
+      {},
+      {
+        onToolExecutionStart: (event) => starts.push(event),
+        onToolExecutionEnd: (event) => ends.push(event),
+        source: 'unit-test',
+      },
+    )
+
+    const run = fake.handlers.get('tabs')?.({
+      action: 'new',
+      url: 'https://example.com',
+    })
+    await Promise.resolve()
+
+    expect(starts).toEqual([{ tool_name: 'tabs', source: 'unit-test' }])
+    expect(ends).toEqual([])
+
+    resolveNewPage?.(42)
+    await run
+
+    expect(ends).toEqual([{ tool_name: 'tabs', source: 'unit-test' }])
+  })
 })

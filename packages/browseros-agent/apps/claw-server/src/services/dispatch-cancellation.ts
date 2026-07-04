@@ -38,8 +38,8 @@ export interface DispatchCancellationService {
   /** Called from a try/finally in register.ts when the dispatch resolves. */
   unregister(sessionId: string, controller: AbortController): void
   /**
-   * Aborts every active dispatch for this agent across all of its
-   * live sessions. Returns the count so the route can report
+   * Aborts every active dispatch for this agent record. Returns the
+   * count so the route can report
    * whether anything was actually cancelled.
    */
   cancelByAgent(agentId: string, reason: string): number

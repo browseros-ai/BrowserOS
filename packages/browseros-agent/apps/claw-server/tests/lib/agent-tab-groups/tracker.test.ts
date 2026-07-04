@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+import { colorForSlug } from '../../../src/lib/agent-tab-groups/group-color'
 import { createTabGroupTracker } from '../../../src/lib/agent-tab-groups/tracker'
 
 function setup(nowMs = 1_000_000) {
@@ -78,6 +79,41 @@ describe('createTabGroupTracker', () => {
     expect(r?.refCount).toBe(1)
     expect(r?.pageIds.size).toBe(0)
     expect(r?.groupId).toBeNull()
+  })
+
+  it('recordOpen hydrates a pre-seeded record with client slug metadata', () => {
+    const t = setup()
+    t.incrementSession('claude-code-abc123')
+    const r = t.recordOpen({
+      agentId: 'claude-code-abc123',
+      slug: 'claude-code',
+      pageId: 1,
+    })
+    expect(r.slug).toBe('claude-code')
+    expect(r.title).toBe('claude-code')
+    expect(r.color).toBe(colorForSlug('claude-code'))
+    expect(r.color).not.toBe(colorForSlug('claude-code-abc123'))
+  })
+
+  it('recordOpen preserves an explicit title on a pre-seeded record', () => {
+    const t = setup()
+    t.incrementSession('claude-code-abc123')
+    t.setTitle('claude-code-abc123', 'claude/invoice-processing')
+    const r = t.recordOpen({
+      agentId: 'claude-code-abc123',
+      slug: 'claude-code',
+      pageId: 1,
+    })
+    expect(r.title).toBe('claude/invoice-processing')
+    expect(r.slug).toBe('claude-code')
+    expect(r.color).toBe(colorForSlug('claude-code'))
+  })
+
+  it('setTitle on an unknown agentId does not materialize a record', () => {
+    const t = setup()
+    t.setTitle('missing', 'claude/invoice-processing')
+    expect(t.getByAgentId('missing')).toBeNull()
+    expect(t.size()).toBe(0)
   })
 
   it('decrementSession on unknown agentId returns null cleanly', () => {

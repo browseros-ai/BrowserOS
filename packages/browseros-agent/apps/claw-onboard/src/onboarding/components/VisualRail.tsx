@@ -7,7 +7,7 @@ export function VisualRail() {
       className="relative flex w-[360px] shrink-0 flex-col justify-between overflow-hidden border-border border-r p-9"
       style={{
         background:
-          'linear-gradient(165deg, #F8DCC2 0%, #FBF0E4 55%, #FAF8F5 100%)',
+          'linear-gradient(165deg, var(--color-secondary) 0%, var(--color-bg-sunken) 55%, var(--color-bg-canvas) 100%)',
       }}
     >
       <div
@@ -15,7 +15,7 @@ export function VisualRail() {
         className="pointer-events-none absolute inset-0"
         style={{
           background:
-            'radial-gradient(420px 300px at 30% 12%, rgba(242,107,42,.16), transparent 70%)',
+            'radial-gradient(420px 300px at 30% 12%, var(--color-accent-tint-2), transparent 70%)',
         }}
       />
       <div className="relative flex items-center gap-2.5">
@@ -36,7 +36,7 @@ export function VisualRail() {
             const Icon = f.icon
             return (
               <div key={f.title} className="flex items-start gap-[11px]">
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-white/70 text-accent-ink">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-card/70 text-accent-ink">
                   <Icon className="size-[15px]" />
                 </span>
                 <div>

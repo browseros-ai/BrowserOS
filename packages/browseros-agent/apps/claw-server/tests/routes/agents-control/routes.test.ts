@@ -13,7 +13,10 @@
 
 import { afterEach, describe, expect, test } from 'bun:test'
 import { hc } from 'hono/client'
-import { identityService } from '../../../src/lib/mcp-session'
+import {
+  agentIdentityFromClient,
+  identityService,
+} from '../../../src/lib/mcp-session'
 import app, { type AppType } from '../../../src/server'
 import { dispatchCancellation } from '../../../src/services/dispatch-cancellation'
 
@@ -50,7 +53,7 @@ describe('POST /agents/:agentId/cancel', () => {
     dispatchCancellation.register(identity.sessionId, c2)
 
     const res = await client().agents[':agentId'].cancel.$post({
-      param: { agentId: 'claude-code' },
+      param: { agentId: agentIdentityFromClient(identity).agentId },
     })
 
     expect(res.status).toBe(200)
@@ -77,7 +80,7 @@ describe('POST /agents/:agentId/cancel', () => {
     dispatchCancellation.register(b.sessionId, cB)
 
     const res = await client().agents[':agentId'].cancel.$post({
-      param: { agentId: 'claude-code' },
+      param: { agentId: agentIdentityFromClient(a).agentId },
     })
 
     expect(res.status).toBe(200)

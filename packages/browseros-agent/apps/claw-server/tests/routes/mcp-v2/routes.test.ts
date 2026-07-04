@@ -76,9 +76,30 @@ describe('POST /mcp (single endpoint)', () => {
     expect(identity?.clientName).toBe('claude-code')
     expect(identity?.clientVersion).toBe('1.4.2')
     const bridge = identity ? agentIdentityFromClient(identity) : null
-    expect(bridge?.agentId).toBe('claude-code')
+    expect(bridge?.agentId).toMatch(/^claude-code-[0-9a-f]{6}$/)
     expect(bridge?.slug).toBe('claude-code')
     await client.close()
+  })
+
+  test('same-name clients get distinct bridged agentIds', async () => {
+    const a = await connect('claude-code')
+    const b = await connect('claude-code')
+    const aIdentity = identityService.getIdentity(
+      a.transport.sessionId as string,
+    )
+    const bIdentity = identityService.getIdentity(
+      b.transport.sessionId as string,
+    )
+    if (!aIdentity || !bIdentity) throw new Error('missing identity')
+    const aBridge = agentIdentityFromClient(aIdentity)
+    const bBridge = agentIdentityFromClient(bIdentity)
+    expect(aBridge.agentId).toMatch(/^claude-code-[0-9a-f]{6}$/)
+    expect(bBridge.agentId).toMatch(/^claude-code-[0-9a-f]{6}$/)
+    expect(aBridge.agentId).not.toBe(bBridge.agentId)
+    expect(aBridge.slug).toBe('claude-code')
+    expect(bBridge.slug).toBe('claude-code')
+    await a.client.close()
+    await b.client.close()
   })
 
   test('tools/list returns the browser tool catalogue', async () => {

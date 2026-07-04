@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000000000..aee8a1fadceaf
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager_unittest.cc
-@@ -0,0 +1,431 @@
+@@ -0,0 +1,543 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -11,8 +11,10 @@ index 0000000000000..aee8a1fadceaf
 +#include "chrome/browser/browseros/server/browseros_server_manager.h"
 +
 +#include <memory>
++#include <set>
 +
 +#include "base/command_line.h"
++#include "base/functional/bind.h"
 +#include "base/memory/raw_ptr.h"
 +#include "base/test/scoped_command_line.h"
 +#include "base/test/task_environment.h"
@@ -89,6 +91,32 @@ index 0000000000000..aee8a1fadceaf
 +        });
 +  }
 +
++  ServerPorts MakePorts(int server_port) {
++    ServerPorts ports;
++    ports.cdp = browseros_server::kDefaultCDPPort;
++    ports.proxy = browseros_server::kDefaultProxyPort;
++    ports.server = server_port;
++    return ports;
++  }
++
++  void UseFakePortFinder(int return_port = 0) {
++    fake_port_finder_return_port_ = return_port;
++    manager_->SetPortFinderForTesting(base::BindRepeating(
++        &BrowserOSServerManagerTest::FindPortForTesting,
++        base::Unretained(this)));
++  }
++
++  int FindPortForTesting(int starting_port,
++                         const std::set<int>& excluded,
++                         bool allow_reuse) {
++    port_finder_call_count_++;
++    port_finder_starting_port_ = starting_port;
++    port_finder_excluded_ = excluded;
++    port_finder_allow_reuse_ = allow_reuse;
++    return fake_port_finder_return_port_ == 0 ? starting_port
++                                              : fake_port_finder_return_port_;
++  }
++
 +  base::test::TaskEnvironment task_environment_{
 +      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 +  TestingPrefServiceSimple prefs_;
@@ -99,6 +127,12 @@ index 0000000000000..aee8a1fadceaf
 +  raw_ptr<MockServerUpdater> updater_ = nullptr;
 +
 +  raw_ptr<BrowserOSServerManager> manager_ = nullptr;
++
++  int port_finder_call_count_ = 0;
++  int port_finder_starting_port_ = 0;
++  std::set<int> port_finder_excluded_;
++  bool port_finder_allow_reuse_ = false;
++  int fake_port_finder_return_port_ = 0;
 +};
 +
 +// =============================================================================
@@ -106,23 +140,48 @@ index 0000000000000..aee8a1fadceaf
 +// =============================================================================
 +
 +TEST_F(BrowserOSServerManagerTest, HealthCheckPass_NoRestart) {
-+  EXPECT_CALL(*process_controller_, Terminate(_, _)).Times(0);
-+}
-+
-+TEST_F(BrowserOSServerManagerTest, HealthCheckFail_TriggersRestart) {
 +  manager_->SetRunningForTesting(true);
++  manager_->SetPortsForTesting(MakePorts(browseros_server::kDefaultServerPort));
++  UseFakePortFinder();
 +
-+  // Single health check failure should trigger restart
-+  manager_->OnHealthCheckComplete(false);
-+  // is_restarting_ is now true (verified indirectly: second call is ignored)
-+  manager_->OnHealthCheckComplete(false);
-+}
-+
-+TEST_F(BrowserOSServerManagerTest, HealthCheckPass_DoesNotRestart) {
-+  manager_->SetRunningForTesting(true);
-+
-+  // Successful health check should not trigger restart
 +  manager_->OnHealthCheckComplete(true);
++  task_environment_.RunUntilIdle();
++
++  EXPECT_EQ(0, port_finder_call_count_);
++}
++
++TEST_F(BrowserOSServerManagerTest, HealthCheckFail_RestartsAfterTwoStrikes) {
++  SetupSuccessfulLaunch();
++  manager_->SetRunningForTesting(true);
++  manager_->SetPortsForTesting(MakePorts(browseros_server::kDefaultServerPort));
++  UseFakePortFinder();
++
++  // First failure is only a warning strike.
++  manager_->OnHealthCheckComplete(false);
++  task_environment_.RunUntilIdle();
++  EXPECT_EQ(0, port_finder_call_count_);
++
++  // Second consecutive failure triggers the managed restart.
++  manager_->OnHealthCheckComplete(false);
++  task_environment_.RunUntilIdle();
++  EXPECT_EQ(1, port_finder_call_count_);
++}
++
++TEST_F(BrowserOSServerManagerTest, HealthCheckPass_ResetsFailureStrikes) {
++  SetupSuccessfulLaunch();
++  manager_->SetRunningForTesting(true);
++  manager_->SetPortsForTesting(MakePorts(browseros_server::kDefaultServerPort));
++  UseFakePortFinder();
++
++  manager_->OnHealthCheckComplete(false);
++  manager_->OnHealthCheckComplete(true);
++  manager_->OnHealthCheckComplete(false);
++  task_environment_.RunUntilIdle();
++  EXPECT_EQ(0, port_finder_call_count_);
++
++  manager_->OnHealthCheckComplete(false);
++  task_environment_.RunUntilIdle();
++  EXPECT_EQ(1, port_finder_call_count_);
 +}
 +
 +// =============================================================================
@@ -333,6 +392,9 @@ index 0000000000000..aee8a1fadceaf
 +
 +TEST_F(BrowserOSServerManagerTest,
 +       RestartForUpdate_FailsWhenAlreadyRestarting) {
++  manager_->SetPortsForTesting(MakePorts(browseros_server::kDefaultServerPort));
++  UseFakePortFinder();
++
 +  bool first_callback_called = false;
 +  bool second_callback_called = false;
 +  bool first_result = true;
@@ -383,39 +445,85 @@ index 0000000000000..aee8a1fadceaf
 +// Restart Saves Ports to Prefs Tests
 +// =============================================================================
 +
-+TEST_F(BrowserOSServerManagerTest, RestartSavesEphemeralPortsToPrefs) {
++TEST_F(BrowserOSServerManagerTest, ManagedRestartKeepsServerPortWithReuse) {
 +  SetupSuccessfulLaunch();
 +  manager_->SetRunningForTesting(true);
++  manager_->SetPortsForTesting(MakePorts(browseros_server::kDefaultServerPort));
++  UseFakePortFinder(browseros_server::kDefaultServerPort);
 +
-+  // Set initial known ports in prefs
-+  prefs_.SetInteger(browseros_server::kServerPort, 9200);
-+
-+  // Mock WaitForExitWithTimeout (called on thread pool during restart)
-+  ON_CALL(*process_controller_, WaitForExitWithTimeout(_, _, _))
-+      .WillByDefault(Return(true));
-+
-+  // Trigger restart via health check failure
++  // Trigger restart via two consecutive health check failures.
++  manager_->OnHealthCheckComplete(false);
 +  manager_->OnHealthCheckComplete(false);
 +
 +  // Run all pending tasks (thread pool + reply)
 +  task_environment_.RunUntilIdle();
 +
-+  // After restart, prefs must reflect the manager's current in-memory ports.
-+  // This is the invariant: prefs and in-memory state stay in sync.
++  EXPECT_EQ(1, port_finder_call_count_);
++  EXPECT_EQ(browseros_server::kDefaultServerPort, port_finder_starting_port_);
++  EXPECT_EQ(1u, port_finder_excluded_.count(browseros_server::kDefaultCDPPort));
++  EXPECT_EQ(1u,
++            port_finder_excluded_.count(browseros_server::kDefaultProxyPort));
++  EXPECT_TRUE(port_finder_allow_reuse_);
 +  EXPECT_EQ(manager_->GetServerPort(),
 +            prefs_.GetInteger(browseros_server::kServerPort));
-+  // Server port should be non-zero (resolved by FindAvailablePort)
-+  EXPECT_NE(0, prefs_.GetInteger(browseros_server::kServerPort));
++  EXPECT_EQ(browseros_server::kDefaultServerPort,
++            prefs_.GetInteger(browseros_server::kServerPort));
 +}
 +
-+TEST_F(BrowserOSServerManagerTest, UpdateRestartSavesEphemeralPortsToPrefs) {
++TEST_F(BrowserOSServerManagerTest,
++       PortConflictExitAdvancesServerPortWithoutReuse) {
 +  SetupSuccessfulLaunch();
 +  manager_->SetRunningForTesting(true);
++  manager_->SetPortsForTesting(MakePorts(browseros_server::kDefaultServerPort));
++  UseFakePortFinder(browseros_server::kDefaultServerPort + 1);
 +
-+  prefs_.SetInteger(browseros_server::kServerPort, 9200);
++  manager_->OnProcessExitedForTesting(2);
++  task_environment_.RunUntilIdle();
 +
-+  ON_CALL(*process_controller_, WaitForExitWithTimeout(_, _, _))
-+      .WillByDefault(Return(true));
++  EXPECT_EQ(1, port_finder_call_count_);
++  EXPECT_EQ(browseros_server::kDefaultServerPort + 1,
++            port_finder_starting_port_);
++  EXPECT_FALSE(port_finder_allow_reuse_);
++  EXPECT_EQ(browseros_server::kDefaultServerPort + 1,
++            manager_->GetServerPort());
++  EXPECT_EQ(browseros_server::kDefaultServerPort + 1,
++            prefs_.GetInteger(browseros_server::kServerPort));
++}
++
++TEST_F(BrowserOSServerManagerTest,
++       PortConflictAdvanceConsumedThenManagedRestartKeepsPort) {
++  SetupSuccessfulLaunch();
++  manager_->SetRunningForTesting(true);
++  manager_->SetPortsForTesting(MakePorts(browseros_server::kDefaultServerPort));
++  UseFakePortFinder(browseros_server::kDefaultServerPort + 1);
++
++  manager_->OnProcessExitedForTesting(2);
++  task_environment_.RunUntilIdle();
++
++  EXPECT_EQ(1, port_finder_call_count_);
++  EXPECT_EQ(browseros_server::kDefaultServerPort + 1,
++            port_finder_starting_port_);
++  EXPECT_FALSE(port_finder_allow_reuse_);
++  EXPECT_EQ(browseros_server::kDefaultServerPort + 1,
++            manager_->GetServerPort());
++
++  manager_->OnHealthCheckComplete(false);
++  manager_->OnHealthCheckComplete(false);
++  task_environment_.RunUntilIdle();
++
++  EXPECT_EQ(2, port_finder_call_count_);
++  EXPECT_EQ(browseros_server::kDefaultServerPort + 1,
++            port_finder_starting_port_);
++  EXPECT_TRUE(port_finder_allow_reuse_);
++  EXPECT_EQ(browseros_server::kDefaultServerPort + 1,
++            manager_->GetServerPort());
++}
++
++TEST_F(BrowserOSServerManagerTest, UpdateRestartKeepsServerPortWithReuse) {
++  SetupSuccessfulLaunch();
++  manager_->SetRunningForTesting(true);
++  manager_->SetPortsForTesting(MakePorts(browseros_server::kDefaultServerPort));
++  UseFakePortFinder(browseros_server::kDefaultServerPort);
 +
 +  bool callback_called = false;
 +  bool callback_result = false;
@@ -428,9 +536,13 @@ index 0000000000000..aee8a1fadceaf
 +
 +  task_environment_.RunUntilIdle();
 +
++  EXPECT_EQ(1, port_finder_call_count_);
++  EXPECT_EQ(browseros_server::kDefaultServerPort, port_finder_starting_port_);
++  EXPECT_TRUE(port_finder_allow_reuse_);
 +  EXPECT_EQ(manager_->GetServerPort(),
 +            prefs_.GetInteger(browseros_server::kServerPort));
-+  EXPECT_NE(0, prefs_.GetInteger(browseros_server::kServerPort));
++  EXPECT_EQ(browseros_server::kDefaultServerPort,
++            prefs_.GetInteger(browseros_server::kServerPort));
 +}
 +
 +}  // namespace

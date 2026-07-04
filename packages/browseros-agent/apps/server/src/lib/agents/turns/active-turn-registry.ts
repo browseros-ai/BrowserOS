@@ -186,6 +186,13 @@ export class TurnRegistry {
     return undefined
   }
 
+  hasRunning(): boolean {
+    for (const turn of this.turns.values()) {
+      if (turn.status === 'running') return true
+    }
+    return false
+  }
+
   describe(turnId: string): ActiveTurnInfo | null {
     const turn = this.turns.get(turnId)
     if (!turn) return null

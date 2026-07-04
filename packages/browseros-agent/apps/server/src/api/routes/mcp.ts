@@ -13,6 +13,7 @@ import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
 import type { KlavisService } from '../services/klavis'
 import { createMcpServer } from '../services/mcp/mcp-server'
+import type { ServerActivity } from '../services/server-activity'
 import type { Env } from '../types'
 
 export const MANAGED_MCP_SERVERS_HEADER = 'X-BrowserOS-Managed-Mcp-Servers'
@@ -30,6 +31,7 @@ interface McpRouteDeps {
   executionDir: string
   createMcpServer?: CreateMcpServerFn
   createMcpTransport?: CreateMcpTransportFn
+  activity?: ServerActivity
 }
 
 interface McpRequestLogContext extends Record<string, unknown> {
@@ -132,6 +134,7 @@ export function createMcpRoutes(deps: McpRouteDeps) {
       defaultTabGroupId,
       executionDir: deps.executionDir,
       remoteAgentHarness: harness,
+      activity: deps.activity,
     })
     const transport = makeMcpTransport({
       sessionIdGenerator: undefined,

@@ -2,54 +2,77 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * BrowserClaw onboarding palette — Wiz blue/white/navy.
+ *
+ * The shadcn primitives read --color-background, --color-foreground,
+ * --color-primary, etc. We re-point those at plain app-palette variables so
+ * the `.dark` block can flip the whole system by re-declaring the plain
+ * variables; the concrete light values live in :root and the dark values in
+ * .dark.
+ *
+ * `accent` deliberately equals `primary`: the app uses accent as the vivid
+ * brand blue (logo mark, emphasis text, gradients), not shadcn's pale hover
+ * tint.
+ */
 @theme inline {
-  --color-background: hsl(40 25% 97%);
-  --color-foreground: hsl(40 8% 10%);
-  --color-card: hsl(0 0% 100%);
-  --color-card-foreground: hsl(40 8% 10%);
-  --color-popover: hsl(0 0% 100%);
-  --color-popover-foreground: hsl(40 8% 10%);
-  --color-primary: hsl(19 89% 56%);
-  --color-primary-foreground: hsl(0 0% 100%);
-  --color-secondary: hsl(40 22% 95%);
-  --color-secondary-foreground: hsl(40 8% 10%);
-  --color-muted: hsl(40 18% 94%);
-  --color-muted-foreground: hsl(35 5% 51%);
-  --color-accent: hsl(19 89% 56%);
-  --color-accent-foreground: hsl(0 0% 100%);
-  --color-destructive: hsl(4 56% 50%);
-  --color-destructive-foreground: hsl(0 0% 100%);
-  --color-border: hsl(40 22% 91%);
-  --color-input: hsl(40 22% 91%);
-  --color-ring: hsl(19 89% 56%);
-  --color-bg-canvas: hsl(40 30% 98%);
-  --color-bg-sunken: hsl(40 18% 94%);
-  --color-card-tint: hsl(40 35% 98.5%);
-  --color-border-2: hsl(40 18% 88%);
-  --color-border-strong: hsl(40 14% 83%);
-  --color-ink: hsl(40 8% 10%);
-  --color-ink-2: hsl(35 6% 32%);
-  --color-ink-3: hsl(35 5% 51%);
-  --color-ink-4: hsl(35 5% 66%);
-  --color-accent-2: hsl(20 79% 49%);
-  --color-accent-ink: hsl(22 86% 38%);
-  --color-accent-tint: hsl(25 88% 94%);
-  --color-accent-tint-2: hsl(25 87% 90%);
-  --color-green: hsl(140 65% 33%);
-  --color-green-tint: hsl(140 35% 92%);
-  --color-amber: hsl(35 80% 40%);
-  --color-amber-tint: hsl(40 75% 92%);
-  --color-red: hsl(4 56% 50%);
-  --color-red-tint: hsl(4 65% 95%);
-  --color-blue: hsl(217 75% 53%);
+  /* shadcn primitives: re-pointed through app palette variables */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* BrowserOS bespoke surfaces (canvas/sunken washes, tinted cards, borders). */
+  --color-bg-canvas: var(--bg-canvas);
+  --color-bg-sunken: var(--bg-sunken);
+  --color-card-tint: var(--card-tint);
+  --color-border-2: var(--border-2);
+  --color-border-strong: var(--border-strong);
+
+  /* Ink scale (typography hierarchy) */
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+
+  /* Accent ink (high-contrast text on tinted backgrounds) */
+  --color-accent-2: var(--accent-2);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-tint: var(--accent-tint);
+  --color-accent-tint-2: var(--accent-tint-2);
+
+  /* Status palette */
+  --color-green: var(--green);
+  --color-green-tint: var(--green-tint);
+  --color-amber: var(--amber);
+  --color-amber-tint: var(--amber-tint);
+  --color-red: var(--red);
+  --color-red-tint: var(--red-tint);
+  --color-blue: var(--blue);
+
   --font-sans:
     system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-serif: Georgia, "Times New Roman", serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --shadow-card:
-    0 1px 2px hsl(35 35% 12% / 0.04), 0 1px 3px hsl(35 35% 12% / 0.03);
+    0 1px 2px hsl(221 60% 20% / 0.05), 0 1px 3px hsl(221 60% 20% / 0.04);
   --shadow-pop:
-    0 8px 30px hsl(35 35% 12% / 0.14), 0 2px 8px hsl(35 35% 12% / 0.08);
+    0 8px 30px hsl(221 60% 20% / 0.14), 0 2px 8px hsl(221 60% 20% / 0.08);
   --animate-pulse-dot: pulse-dot 1.4s ease-in-out infinite;
   --animate-fade-up: fade-up 0.4s cubic-bezier(0.2, 0.7, 0.3, 1) both;
   --animate-fade-in: fade-in 0.35s ease both;
@@ -103,9 +126,39 @@ body,
 body {
   color: var(--color-foreground);
   font-family: var(--font-sans);
-  background: var(--color-bg-canvas);
+  /* background-attachment: fixed anchors the gradient to the viewport so it
+     stays put behind scrolled content instead of revealing bare canvas. */
+  background:
+    radial-gradient(
+      1200px 700px at 18% -8%,
+      hsl(221 100% 96%) 0%,
+      hsl(221 100% 96% / 0) 60%
+    ),
+    radial-gradient(
+      1000px 800px at 100% 110%,
+      hsl(210 100% 97%) 0%,
+      hsl(210 100% 97% / 0) 55%
+    ),
+    linear-gradient(155deg, hsl(220 60% 97%) 0%, hsl(210 50% 98%) 100%);
+  background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+.dark body {
+  background:
+    radial-gradient(
+      1200px 700px at 18% -8%,
+      hsl(222 45% 12%) 0%,
+      hsl(222 45% 12% / 0) 60%
+    ),
+    radial-gradient(
+      1000px 800px at 100% 110%,
+      hsl(215 40% 12%) 0%,
+      hsl(215 40% 12% / 0) 55%
+    ),
+    linear-gradient(155deg, hsl(222 40% 7%) 0%, hsl(220 35% 9%) 100%);
+  background-attachment: fixed;
 }
 
 ::selection {
@@ -122,4 +175,93 @@ body {
     transition-duration: 0.01ms;
     scroll-behavior: auto;
   }
+}
+
+:root {
+  color-scheme: light;
+  --background: #ffffff;
+  --foreground: #25242f;
+  --card: #ffffff;
+  --card-foreground: #25242f;
+  --popover: #ffffff;
+  --popover-foreground: #25242f;
+  --primary: #0254ec;
+  --primary-foreground: #ffffff;
+  --secondary: #eaf1ff;
+  --secondary-foreground: #01123f;
+  --muted: #f1f5fb;
+  --muted-foreground: #717783;
+  --accent: #0254ec;
+  --accent-foreground: #ffffff;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #dde5f0;
+  --input: #dde5f0;
+  --ring: #0254ec;
+
+  --bg-canvas: #f9fbff;
+  --bg-sunken: #eef3fb;
+  --card-tint: #fbfcff;
+  --border-2: #e3e9f4;
+  --border-strong: #c7d3e8;
+  --ink: #25242f;
+  --ink-2: #4a4f5c;
+  --ink-3: #717783;
+  --ink-4: #9aa1ae;
+  --accent-2: #2f6fed;
+  --accent-ink: #0143c4;
+  --accent-tint: #e4edff;
+  --accent-tint-2: #d3e2ff;
+  --green: #16a34a;
+  --green-tint: #e6f6ec;
+  --amber: hsl(35 85% 42%);
+  --amber-tint: hsl(42 90% 94%);
+  --red: #dc2626;
+  --red-tint: hsl(0 75% 96%);
+  --blue: #0e7490;
+}
+
+/* Dark theme values; the ink scale inverts, tints go from pale washes to deep washes. */
+.dark {
+  color-scheme: dark;
+  --background: #0b0f17;
+  --foreground: #e8ecf4;
+  --card: #131926;
+  --card-foreground: #e8ecf4;
+  --popover: #131926;
+  --popover-foreground: #e8ecf4;
+  --primary: #2f6fed;
+  --primary-foreground: #ffffff;
+  --secondary: #212a3d;
+  --secondary-foreground: #d5dded;
+  --muted: #171e2b;
+  --muted-foreground: #98a3b6;
+  --accent: #4d8bff;
+  --accent-foreground: #0b0f17;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #2a3446;
+  --input: #313c52;
+  --ring: #4d8bff;
+
+  --bg-canvas: #090d14;
+  --bg-sunken: #070b11;
+  --card-tint: #151d2e;
+  --border-2: #253046;
+  --border-strong: #34405c;
+  --ink: #eef2f9;
+  --ink-2: #c4cddf;
+  --ink-3: #94a0b5;
+  --ink-4: #67748c;
+  --accent-2: #6195ff;
+  --accent-ink: #8fb4ff;
+  --accent-tint: #1a2540;
+  --accent-tint-2: #223055;
+  --green: #34c26b;
+  --green-tint: #10281a;
+  --amber: hsl(38 85% 58%);
+  --amber-tint: hsl(38 45% 15%);
+  --red: #f36a5f;
+  --red-tint: #2b1414;
+  --blue: #56b8d8;
 }

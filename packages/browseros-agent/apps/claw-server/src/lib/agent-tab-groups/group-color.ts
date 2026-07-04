@@ -5,8 +5,8 @@
  *
  * Deterministic agent slug to colour mapping for the v2 tab-group
  * system. The browser's `tab_groups` tool accepts one of nine named
- * colours; we hash the slug into one slot so two parallel sessions
- * under the same `clientInfo.name` always pick the same colour.
+ * colours; we hash the client slug into one slot so same-client
+ * sessions share a colour without sharing a group.
  *
  * The matching hex palette is exposed alongside so the cockpit
  * homepage card can show a left border in the same colour the

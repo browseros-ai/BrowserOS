@@ -9,9 +9,9 @@
  * decrements the ref count and reads back the record so it knows
  * which group to close in BrowserOS.
  *
- * Ref-counted by MCP session: two parallel sessions whose clients
- * identify with the same name share one group; the group only
- * closes when the last session for that agentId ends.
+ * Ref-counted by MCP session. agentId is session-scoped, so each
+ * live session owns its own record; the count remains a defensive
+ * guard around duplicate open/close notifications.
  */
 
 import { colorForSlug, type TabGroupColor } from './group-color'
@@ -27,6 +27,7 @@ export interface TabGroupRecord {
   pageIds: Set<number>
   color: TabGroupColor
   title: string
+  titleExplicit: boolean
   firstOpenedAt: number
   /** Live MCP sessions whose identity resolves to this agentId. */
   refCount: number
@@ -53,6 +54,7 @@ export interface TabGroupTracker {
   recordOpen(input: RecordOpenInput): TabGroupRecord
   /** Called after `tab_groups create` returns so the cockpit can reuse the groupId for subsequent pages. */
   rememberGroup(input: RememberGroupInput): void
+  setTitle(agentId: string, title: string): void
   /** Called once per MCP session-init keyed by agentId. */
   incrementSession(agentId: string): void
   /**
@@ -83,6 +85,12 @@ export function createTabGroupTracker(
     recordOpen({ agentId, slug, pageId }) {
       const existing = records.get(agentId)
       if (existing) {
+        // Session init pre-seeds refCount-only records before tabs new supplies the client slug.
+        if (existing.pageIds.size === 0 && existing.groupId === null) {
+          existing.slug = slug
+          existing.color = colorForSlug(slug)
+          if (!existing.titleExplicit) existing.title = slug
+        }
         existing.pageIds.add(pageId)
         return existing
       }
@@ -94,6 +102,7 @@ export function createTabGroupTracker(
         pageIds: new Set([pageId]),
         color: colorForSlug(slug),
         title: slug,
+        titleExplicit: false,
         firstOpenedAt: now(),
         refCount: 0,
       }
@@ -105,6 +114,12 @@ export function createTabGroupTracker(
       if (!record) return
       record.groupId = groupId
       if (typeof windowId === 'number') record.windowId = windowId
+    },
+    setTitle(agentId, title) {
+      const record = records.get(agentId)
+      if (!record) return
+      record.title = title
+      record.titleExplicit = true
     },
     incrementSession(agentId) {
       const record = records.get(agentId)
@@ -122,6 +137,7 @@ export function createTabGroupTracker(
         pageIds: new Set(),
         color: colorForSlug(agentId),
         title: agentId,
+        titleExplicit: false,
         firstOpenedAt: now(),
         refCount: 1,
       })

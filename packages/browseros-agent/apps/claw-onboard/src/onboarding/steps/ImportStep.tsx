@@ -2,10 +2,14 @@ import { AlertTriangle, ArrowRight, Download, RefreshCw } from 'lucide-react'
 import type { UseFormReturn } from 'react-hook-form'
 import { Button } from '@/components/ui/button'
 import { FormField, FormItem, FormMessage } from '@/components/ui/form'
-import type { BrowserOSOnboardingState } from '../browseros-onboarding-api'
+import type {
+  BrowserOSImportItem,
+  BrowserOSOnboardingState,
+} from '../browseros-onboarding-api'
 import { ChromeQuitNotice } from '../components/ChromeQuitNotice'
 import { DisplayHeading, Em, StepCopy } from '../components/DisplayHeading'
 import { ImportedSummaryCard } from '../components/ImportedSummaryCard'
+import { ImportItemChecklist } from '../components/ImportItemChecklist'
 import { ImportingProgressCard } from '../components/ImportingProgressCard'
 import { ImportSourceTile } from '../components/ImportSourceTile'
 import { MacKeychainNotice } from '../components/MacKeychainNotice'
@@ -15,6 +19,7 @@ import {
   importItemLabel,
   importItemListLabel,
   importProgressTotal,
+  sanitizeImportSelection,
   selectableItemsForSource,
   selectedSourceById,
 } from '../onboarding-v2.helpers'
@@ -31,6 +36,20 @@ interface ImportStepProps {
   onContinue: () => void
 }
 
+function importButtonLabelFor(
+  hasSource: boolean,
+  hasSupportedItems: boolean,
+  checkedItemCount: number,
+  sourceName: string,
+): string {
+  if (!hasSource) return 'Pick an import source'
+  if (!hasSupportedItems) return 'No supported import items'
+  if (checkedItemCount === 0) return 'Select items to import'
+  return `Import ${checkedItemCount} ${
+    checkedItemCount === 1 ? 'item' : 'items'
+  } from ${sourceName}`
+}
+
 /** Renders the browser import step across quit, picker, progress, and success states. */
 export function ImportStep({
   phase,
@@ -43,18 +62,21 @@ export function ImportStep({
 }: ImportStepProps) {
   const selectedSourceId = form.watch('selectedSourceId')
   const selectedSource = selectedSourceById(state.sources, selectedSourceId)
-  const selectedItems = selectedSource
-    ? selectableItemsForSource(selectedSource)
+  const checkedItems = selectedSource
+    ? sanitizeImportSelection(selectedSource, form.watch('selectedItems'))
     : []
   const sourceName =
     selectedSource?.profileName || selectedSource?.browserName || 'source'
   const isDetecting = state.status === 'detecting'
-  const hasSelectableItems = selectedItems.length > 0
+  const hasSupportedItems = (selectedSource?.supportedItems.length ?? 0) > 0
   const isPickerValid =
-    Boolean(selectedSource) && hasSelectableItems && !isDetecting
+    Boolean(selectedSource) &&
+    hasSupportedItems &&
+    checkedItems.length > 0 &&
+    !isDetecting
   const completedItems = completedImportItemCount(state.progress)
   const totalItems = selectedSource
-    ? importProgressTotal(selectedSource, state.progress)
+    ? importProgressTotal(checkedItems.length, state.progress)
     : (state.progress?.totalItems ?? 0)
   const currentItemLabel = state.progress?.currentItem
     ? importItemLabel(state.progress.currentItem)
@@ -65,6 +87,27 @@ export function ImportStep({
       ? importItemListLabel(importedItems)
       : 'No completed items reported'
     : 'No item details reported'
+  const importButtonLabel = importButtonLabelFor(
+    Boolean(selectedSource),
+    hasSupportedItems,
+    checkedItems.length,
+    sourceName,
+  )
+
+  function toggleImportItem(item: BrowserOSImportItem) {
+    if (!selectedSource) return
+    const currentItems = sanitizeImportSelection(
+      selectedSource,
+      form.getValues('selectedItems'),
+    )
+    const nextItems = currentItems.includes(item)
+      ? currentItems.filter((currentItem) => currentItem !== item)
+      : sanitizeImportSelection(selectedSource, [...currentItems, item])
+    form.setValue('selectedItems', nextItems, {
+      shouldDirty: true,
+      shouldValidate: true,
+    })
+  }
 
   return (
     <StepWrap>
@@ -112,7 +155,18 @@ export function ImportStep({
                     key={source.id}
                     source={source}
                     selected={field.value === source.id}
-                    onSelect={() => field.onChange(source.id)}
+                    onSelect={() => {
+                      if (field.value === source.id) return
+                      field.onChange(source.id)
+                      form.setValue(
+                        'selectedItems',
+                        selectableItemsForSource(source),
+                        {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        },
+                      )
+                    }}
                   />
                 ))}
                 {!isDetecting && state.sources.length === 0 && (
@@ -124,6 +178,13 @@ export function ImportStep({
               </FormItem>
             )}
           />
+          {selectedSource && hasSupportedItems && (
+            <ImportItemChecklist
+              items={selectedSource.supportedItems}
+              checkedItems={checkedItems}
+              onToggle={toggleImportItem}
+            />
+          )}
           {state.error && (
             <div className="mb-4 rounded-xl border border-amber/30 bg-amber-tint p-4 text-[12.5px] text-ink-2">
               {state.error.message}
@@ -137,11 +198,7 @@ export function ImportStep({
             disabled={!isPickerValid}
           >
             <Download className="size-4" />
-            {selectedSource && hasSelectableItems
-              ? `Import ${selectedItems.length} items from ${sourceName}`
-              : selectedSource
-                ? 'No supported import items'
-                : 'Pick an import source'}
+            {importButtonLabel}
           </Button>
         </>
       )}
@@ -157,7 +214,7 @@ export function ImportStep({
       {phase === 'failed' && (
         <>
           <div className="mb-4 rounded-xl border border-amber/30 bg-amber-tint p-4">
-            <div className="mb-2 flex items-center gap-2 font-bold text-[13px] text-ink-1">
+            <div className="mb-2 flex items-center gap-2 font-bold text-[13px] text-ink">
               <AlertTriangle className="size-4 text-amber" />
               Import failed
             </div>

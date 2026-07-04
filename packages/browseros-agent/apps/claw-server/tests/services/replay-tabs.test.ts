@@ -6,12 +6,16 @@
  * Unit tests for the replay-tabs deriver. Stubs the three deps
  * (registry, identity service, tab group tracker) so we can drive
  * the matrix of "agent has live session vs not", "tab group known
- * vs not", "multi-session-same-agentId" without touching the
- * singleton state.
+ * vs not", and same-name sessions without touching the singleton
+ * state.
  */
 
 import { describe, expect, it } from 'bun:test'
 import { TAB_GROUP_COLORS } from '../../src/lib/agent-tab-groups/group-color'
+import {
+  agentIdentityFromClient,
+  type ClientIdentity,
+} from '../../src/lib/mcp-session'
 import { createReplayTabsService } from '../../src/services/replay-tabs'
 
 function registryStub(records: Array<Record<string, unknown>>) {
@@ -39,6 +43,7 @@ function identityStub(
         clientName: i.clientName,
         clientVersion: i.clientVersion ?? '0.0.1',
         clientTitle: i.clientTitle ?? null,
+        sessionLabel: null,
         firstSeenAt: i.firstSeenAt ?? 1_000_000,
       })),
   }
@@ -58,12 +63,28 @@ function tabGroupStub(groups: Record<string, { color: string }>) {
   }
 }
 
+function identityFor(sessionId: string, clientName: string): ClientIdentity {
+  return {
+    sessionId,
+    clientName,
+    clientVersion: '0.0.1',
+    clientTitle: null,
+    sessionLabel: null,
+    firstSeenAt: 1_000_000,
+  }
+}
+
+function agentIdFor(sessionId: string, clientName: string): string {
+  return agentIdentityFromClient(identityFor(sessionId, clientName)).agentId
+}
+
 describe('replay-tabs service', () => {
   it('emits one row per active tab, joined with sessionId + groupColor', () => {
+    const agentId = agentIdFor('sid-abc', 'claude-code')
     const svc = createReplayTabsService({
       registry: registryStub([
         {
-          agentId: 'claude-code',
+          agentId,
           pageId: 7,
           url: 'https://news.google.com/',
           title: 'Top stories',
@@ -73,7 +94,7 @@ describe('replay-tabs service', () => {
         { sessionId: 'sid-abc', clientName: 'claude-code' },
       ]),
       tabGroupTracker: tabGroupStub({
-        'claude-code': { color: 'orange' },
+        [agentId]: { color: 'orange' },
       }),
     })
 
@@ -100,10 +121,11 @@ describe('replay-tabs service', () => {
   })
 
   it('emits groupColor:null when no tab group is registered yet', () => {
+    const agentId = agentIdFor('sid-1', 'claude-code')
     const svc = createReplayTabsService({
       registry: registryStub([
         {
-          agentId: 'claude-code',
+          agentId,
           pageId: 7,
           url: 'https://news.google.com/',
           title: 'Top stories',
@@ -118,14 +140,15 @@ describe('replay-tabs service', () => {
   })
 
   it('handles multiple tabs for the same agent', () => {
+    const agentId = agentIdFor('sid-1', 'a1')
     const svc = createReplayTabsService({
       registry: registryStub([
-        { agentId: 'a1', pageId: 1, url: 'https://a.com/', title: 'A' },
-        { agentId: 'a1', pageId: 2, url: 'https://b.com/', title: 'B' },
-        { agentId: 'a1', pageId: 3, url: 'https://c.com/', title: 'C' },
+        { agentId, pageId: 1, url: 'https://a.com/', title: 'A' },
+        { agentId, pageId: 2, url: 'https://b.com/', title: 'B' },
+        { agentId, pageId: 3, url: 'https://c.com/', title: 'C' },
       ]),
       identityService: identityStub([{ sessionId: 'sid-1', clientName: 'a1' }]),
-      tabGroupTracker: tabGroupStub({ a1: { color: 'blue' } }),
+      tabGroupTracker: tabGroupStub({ [agentId]: { color: 'blue' } }),
     })
     const rows = svc.list()
     expect(rows).toHaveLength(3)
@@ -136,10 +159,13 @@ describe('replay-tabs service', () => {
     expect(rows.map((r) => r.tabPageId).sort()).toEqual([1, 2, 3])
   })
 
-  it('multi-session-same-agentId: picks one session per agent, documented limitation', () => {
+  it('keeps same-name sessions distinct by session-scoped agentId', () => {
+    const aAgentId = agentIdFor('sid-1', 'claude-code')
+    const bAgentId = agentIdFor('sid-2', 'claude-code')
     const svc = createReplayTabsService({
       registry: registryStub([
-        { agentId: 'claude-code', pageId: 7, url: 'x', title: '' },
+        { agentId: aAgentId, pageId: 7, url: 'x', title: '' },
+        { agentId: bAgentId, pageId: 8, url: 'y', title: '' },
       ]),
       identityService: identityStub([
         { sessionId: 'sid-1', clientName: 'claude-code' },
@@ -148,24 +174,27 @@ describe('replay-tabs service', () => {
       tabGroupTracker: tabGroupStub({}),
     })
     const rows = svc.list()
-    expect(rows).toHaveLength(1)
-    // We do not promise which session wins; only that exactly one does.
-    expect(['sid-1', 'sid-2']).toContain(rows[0].sessionId)
+    expect(rows).toHaveLength(2)
+    const bySid = Object.fromEntries(rows.map((r) => [r.sessionId, r]))
+    expect(bySid['sid-1'].tabPageId).toBe(7)
+    expect(bySid['sid-2'].tabPageId).toBe(8)
   })
 
   it('distinct agents emit distinct sessions even when both are live', () => {
+    const aAgentId = agentIdFor('sid-1', 'a1')
+    const bAgentId = agentIdFor('sid-2', 'a2')
     const svc = createReplayTabsService({
       registry: registryStub([
-        { agentId: 'a1', pageId: 1, url: 'https://x.com/', title: 'x' },
-        { agentId: 'a2', pageId: 2, url: 'https://y.com/', title: 'y' },
+        { agentId: aAgentId, pageId: 1, url: 'https://x.com/', title: 'x' },
+        { agentId: bAgentId, pageId: 2, url: 'https://y.com/', title: 'y' },
       ]),
       identityService: identityStub([
         { sessionId: 'sid-1', clientName: 'a1' },
         { sessionId: 'sid-2', clientName: 'a2' },
       ]),
       tabGroupTracker: tabGroupStub({
-        a1: { color: 'orange' },
-        a2: { color: 'cyan' },
+        [aAgentId]: { color: 'orange' },
+        [bAgentId]: { color: 'cyan' },
       }),
     })
     const rows = svc.list()
@@ -179,12 +208,13 @@ describe('replay-tabs service', () => {
     // Defensive: the wire shape must only contain values from the
     // canonical TAB_GROUP_COLORS list so the extension's
     // chrome.tabGroups disambiguator stays valid.
+    const agentId = agentIdFor('sid-1', 'a1')
     const svc = createReplayTabsService({
       registry: registryStub([
-        { agentId: 'a1', pageId: 1, url: 'https://x.com/', title: 'x' },
+        { agentId, pageId: 1, url: 'https://x.com/', title: 'x' },
       ]),
       identityService: identityStub([{ sessionId: 'sid-1', clientName: 'a1' }]),
-      tabGroupTracker: tabGroupStub({ a1: { color: 'orange' } }),
+      tabGroupTracker: tabGroupStub({ [agentId]: { color: 'orange' } }),
     })
     const rows = svc.list()
     expect(TAB_GROUP_COLORS).toContain(rows[0].groupColor as string)

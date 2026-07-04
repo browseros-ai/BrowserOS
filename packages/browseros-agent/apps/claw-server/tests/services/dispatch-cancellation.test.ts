@@ -9,7 +9,11 @@
  */
 
 import { describe, expect, it } from 'bun:test'
-import type { ClientIdentity, IdentityService } from '../../src/lib/mcp-session'
+import {
+  agentIdentityFromClient,
+  type ClientIdentity,
+  type IdentityService,
+} from '../../src/lib/mcp-session'
 import { createDispatchCancellation } from '../../src/services/dispatch-cancellation'
 
 function makeIdentity(over: Partial<ClientIdentity>): ClientIdentity {
@@ -18,6 +22,7 @@ function makeIdentity(over: Partial<ClientIdentity>): ClientIdentity {
     clientName: 'claude-code',
     clientVersion: '0.1.0',
     clientTitle: null,
+    sessionLabel: null,
     firstSeenAt: 1_000_000,
     ...over,
   }
@@ -27,6 +32,10 @@ function stubIdentityService(
   identities: ClientIdentity[],
 ): Pick<IdentityService, 'list'> {
   return { list: () => identities }
+}
+
+function agentIdFor(identity: ClientIdentity): string {
+  return agentIdentityFromClient(identity).agentId
 }
 
 describe('dispatch-cancellation', () => {
@@ -53,28 +62,37 @@ describe('dispatch-cancellation', () => {
   })
 
   it('cancelByAgent aborts every controller for matching sessions', () => {
+    const matching = makeIdentity({
+      sessionId: 's1',
+      clientName: 'claude-code',
+    })
+    const sameNameOtherSession = makeIdentity({
+      sessionId: 's2',
+      clientName: 'claude-code',
+    })
     const svc = createDispatchCancellation({
       identityService: stubIdentityService([
-        makeIdentity({ sessionId: 's1', clientName: 'claude-code' }),
-        makeIdentity({ sessionId: 's2', clientName: 'claude-code' }),
+        matching,
+        sameNameOtherSession,
         makeIdentity({ sessionId: 's3', clientName: 'cursor' }),
       ]),
     })
     const c1 = new AbortController()
     const c2 = new AbortController()
-    const c3 = new AbortController()
+    const cSameName = new AbortController()
+    const cOther = new AbortController()
     svc.register('s1', c1)
-    svc.register('s2', c2)
-    svc.register('s3', c3)
+    svc.register('s1', c2)
+    svc.register('s2', cSameName)
+    svc.register('s3', cOther)
 
-    // agentIdentityFromClient slugifies clientName, so 'claude-code'
-    // becomes agentId 'claude-code'.
-    const cancelled = svc.cancelByAgent('claude-code', 'stop now')
+    const cancelled = svc.cancelByAgent(agentIdFor(matching), 'stop now')
 
     expect(cancelled).toBe(2)
     expect(c1.signal.aborted).toBe(true)
     expect(c2.signal.aborted).toBe(true)
-    expect(c3.signal.aborted).toBe(false)
+    expect(cSameName.signal.aborted).toBe(false)
+    expect(cOther.signal.aborted).toBe(false)
     expect(c1.signal.reason).toBe('stop now')
   })
 
@@ -91,12 +109,14 @@ describe('dispatch-cancellation', () => {
   })
 
   it('cancelByAgent returns 0 when the matching session has no controllers', () => {
-    const svc = createDispatchCancellation({
-      identityService: stubIdentityService([
-        makeIdentity({ sessionId: 's1', clientName: 'claude-code' }),
-      ]),
+    const identity = makeIdentity({
+      sessionId: 's1',
+      clientName: 'claude-code',
     })
-    expect(svc.cancelByAgent('claude-code', 'no')).toBe(0)
+    const svc = createDispatchCancellation({
+      identityService: stubIdentityService([identity]),
+    })
+    expect(svc.cancelByAgent(agentIdFor(identity), 'no')).toBe(0)
   })
 
   it('clear empties the registry', () => {

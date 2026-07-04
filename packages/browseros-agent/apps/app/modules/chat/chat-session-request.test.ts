@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'bun:test'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
-import { buildSidepanelPreparedSendMessagesRequest } from './chat-session-request'
+import {
+  buildSidepanelPreparedSendMessagesRequest,
+  prepareSidepanelSendMessagesRequest,
+} from './chat-session-request'
 import type { ChatMode } from './chat-types'
 import type { SidepanelChatTarget } from './sidepanel-chat-targets'
 
@@ -101,6 +104,29 @@ describe('buildSidepanelPreparedSendMessagesRequest', () => {
       provider: 'browseros',
       model: 'gpt-5',
     })
+  })
+
+  it('resolves the server URL every time a request is prepared', async () => {
+    let port = 9200
+    const resolveAgentServerUrl = async () => `http://127.0.0.1:${port++}`
+
+    const first = await prepareSidepanelSendMessagesRequest({
+      resolveAgentServerUrl,
+      target: llmTarget,
+      fallbackProvider,
+      message: 'First request',
+      ...commonRequestInput(),
+    })
+    const second = await prepareSidepanelSendMessagesRequest({
+      resolveAgentServerUrl,
+      target: llmTarget,
+      fallbackProvider,
+      message: 'Second request',
+      ...commonRequestInput(),
+    })
+
+    expect(first.api).toBe('http://127.0.0.1:9200/chat')
+    expect(second.api).toBe('http://127.0.0.1:9201/chat')
   })
 })
 

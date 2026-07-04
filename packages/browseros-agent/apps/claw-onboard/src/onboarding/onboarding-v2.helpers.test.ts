@@ -5,8 +5,10 @@ import {
   importItemLabel,
   importItemListLabel,
   importProgressTotal,
+  importSourceSelectionChangeFor,
   MOCK_BROWSEROS_IMPORT_SOURCES,
   STARTER_PROMPTS,
+  sanitizeImportSelection,
   selectableItemsForSource,
   selectedSourceById,
   startImportRequestFor,
@@ -39,6 +41,34 @@ describe('source selection helpers', () => {
     ).toBe('Google Chrome - Personal')
   })
 
+  it('clears the selected source and items when sources empty', () => {
+    expect(importSourceSelectionChangeFor([], 'chrome-work')).toEqual({
+      selectedSourceId: '',
+      selectedItems: [],
+    })
+  })
+
+  it('selects the first source with default items when the current source vanished', () => {
+    expect(
+      importSourceSelectionChangeFor(
+        MOCK_BROWSEROS_IMPORT_SOURCES,
+        'missing-source',
+      ),
+    ).toEqual({
+      selectedSourceId: MOCK_BROWSEROS_IMPORT_SOURCES[0].id,
+      selectedItems: selectableItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[0]),
+    })
+  })
+
+  it('does not change selection when the current source still exists', () => {
+    expect(
+      importSourceSelectionChangeFor(
+        MOCK_BROWSEROS_IMPORT_SOURCES,
+        'chrome-personal',
+      ),
+    ).toBeNull()
+  })
+
   it('falls back to supported items when recommended items are empty', () => {
     expect(
       selectableItemsForSource({
@@ -48,11 +78,60 @@ describe('source selection helpers', () => {
     ).toEqual(MOCK_BROWSEROS_IMPORT_SOURCES[0].supportedItems)
   })
 
+  it('sanitizes explicit item selections against supported items in source order', () => {
+    expect(
+      sanitizeImportSelection(MOCK_BROWSEROS_IMPORT_SOURCES[0], [
+        'extensions',
+        'history',
+        'bookmarks',
+        'history',
+        'autofill',
+      ]),
+    ).toEqual(['history', 'bookmarks', 'autofill', 'extensions'])
+  })
+
+  it('filters unsupported selected items and returns empty for no matches', () => {
+    expect(
+      sanitizeImportSelection(MOCK_BROWSEROS_IMPORT_SOURCES[2], [
+        'extensions',
+        'autofill',
+        'history',
+      ]),
+    ).toEqual(['history'])
+    expect(
+      sanitizeImportSelection(MOCK_BROWSEROS_IMPORT_SOURCES[2], [
+        'extensions',
+        'autofill',
+      ]),
+    ).toEqual([])
+  })
+
   it('builds the Chromium start-import request for one source', () => {
     expect(startImportRequestFor(MOCK_BROWSEROS_IMPORT_SOURCES[0])).toEqual({
       sourceId: 'chrome-work',
       items: MOCK_BROWSEROS_IMPORT_SOURCES[0].recommendedItems,
     })
+  })
+
+  it('builds the Chromium start-import request for a sanitized subset', () => {
+    expect(
+      startImportRequestFor(MOCK_BROWSEROS_IMPORT_SOURCES[0], [
+        'extensions',
+        'history',
+      ]),
+    ).toEqual({
+      sourceId: 'chrome-work',
+      items: ['history', 'extensions'],
+    })
+  })
+
+  it('does not build a start-import request for empty explicit selections', () => {
+    expect(
+      startImportRequestFor(MOCK_BROWSEROS_IMPORT_SOURCES[0], []),
+    ).toBeNull()
+    expect(
+      startImportRequestFor(MOCK_BROWSEROS_IMPORT_SOURCES[2], ['extensions']),
+    ).toBeNull()
   })
 
   it('does not build a start-import request for empty item sources', () => {
@@ -82,7 +161,7 @@ describe('import item display helpers', () => {
 
   it('uses Chromium progress totals when present', () => {
     expect(
-      importProgressTotal(MOCK_BROWSEROS_IMPORT_SOURCES[0], {
+      importProgressTotal(2, {
         currentItem: 'cookies',
         completedItems: ['history', 'bookmarks'],
         totalItems: 7,
@@ -95,6 +174,10 @@ describe('import item display helpers', () => {
         totalItems: 7,
       }),
     ).toBe(2)
+  })
+
+  it('falls back to selected item count when Chromium omits progress totals', () => {
+    expect(importProgressTotal(2, undefined)).toBe(2)
   })
 })
 

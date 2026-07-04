@@ -1,10 +1,7 @@
 import { CheckCircle2, Circle, User } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { BrowserOSImportSource } from '../browseros-onboarding-api'
-import {
-  importItemListLabel,
-  selectableItemsForSource,
-} from '../onboarding-v2.helpers'
+import { importItemListLabel } from '../onboarding-v2.helpers'
 
 interface ImportSourceTileProps {
   source: BrowserOSImportSource
@@ -18,7 +15,7 @@ export function ImportSourceTile({
   selected,
   onSelect,
 }: ImportSourceTileProps) {
-  const itemCount = selectableItemsForSource(source).length
+  const itemCount = source.supportedItems.length
   return (
     <label
       className={cn(
@@ -48,11 +45,11 @@ export function ImportSourceTile({
           {source.displayName}
         </div>
         <div className="truncate text-[11.5px] text-ink-3">
-          {importItemListLabel(selectableItemsForSource(source))}
+          {importItemListLabel(source.supportedItems)}
         </div>
       </div>
       <div className="shrink-0 text-right font-mono text-[11.5px] text-ink-2">
-        {itemCount} items
+        {itemCount} {itemCount === 1 ? 'item' : 'items'}
       </div>
     </label>
   )

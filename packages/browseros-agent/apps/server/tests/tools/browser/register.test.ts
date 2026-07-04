@@ -787,7 +787,6 @@ return 'late'
           urlChanged: boolean
           beforeUrl: string
           afterUrl: string
-          snapshot: string
         }
       | undefined
     expect(data).toMatchObject({
@@ -797,8 +796,8 @@ return 'late'
       beforeUrl: 'https://example.com/old',
       afterUrl: 'https://example.com/new',
     })
-    expect(data?.snapshot).toContain('[UNTRUSTED_PAGE_CONTENT')
-    expect(data?.snapshot).toContain('- heading "New page"')
+    expect(data).not.toHaveProperty('snapshot')
+    expect(data).not.toHaveProperty('diff')
     expect(result?.content).toEqual([
       expect.objectContaining({
         type: 'text',
@@ -850,12 +849,11 @@ return 'late'
 
     expect(result?.isError).toBeFalsy()
     const data = result?.structuredContent as
-      | { added: number; removed: number; diff: string }
+      | { added: number; removed: number }
       | undefined
     expect(data).toMatchObject({ added: 1, removed: 0 })
-    expect(data?.diff).toContain('origin=https://example.com/current')
-    expect(data?.diff).toContain('+   button "Saved" [ref=e1]')
-    expect(data?.diff).not.toContain('origin=https://example.com/stale')
+    expect(data).not.toHaveProperty('diff')
+    expect(data).not.toHaveProperty('snapshot')
     expect(result?.content).toEqual([
       expect.objectContaining({
         type: 'text',
@@ -926,15 +924,14 @@ return 'late'
         | {
             added: number
             removed: number
-            diff: string
           }
         | undefined
       expect(data).toMatchObject({
         added: 2001,
         removed: 0,
       })
-      expect(data?.diff).toContain('word-2000')
-      expect(data?.diff).toContain('[UNTRUSTED_PAGE_CONTENT')
+      expect(data).not.toHaveProperty('diff')
+      expect(data).not.toHaveProperty('snapshot')
       expect(JSON.stringify(result?.structuredContent)).not.toContain('path')
       expect(JSON.stringify(result?.structuredContent)).not.toContain(
         'writtenToFile',
@@ -990,7 +987,6 @@ return 'late'
             path: string
             contentLength: number
             writtenToFile: boolean
-            diff: string
           }
         | undefined
       expect(data).toMatchObject({
@@ -1027,7 +1023,8 @@ return 'late'
       const savedContent = readFileSync(savedPath ?? '', 'utf8')
       expect(savedContent).toContain('[UNTRUSTED_PAGE_CONTENT')
       expect(savedContent).toContain(lastMarker)
-      expect(data?.diff).toBe(savedContent)
+      expect(data).not.toHaveProperty('diff')
+      expect(data).not.toHaveProperty('snapshot')
       expect(data?.contentLength).toBe(savedContent.length)
     })
   })
@@ -1492,11 +1489,18 @@ return 'late'
 
     expect(result?.isError).toBeFalsy()
     const data = result?.structuredContent as
-      | { page: number; snapshot: string }
+      | {
+          page: number
+          contentLength: number
+          tokenEstimate: number
+          writtenToFile: boolean
+        }
       | undefined
     expect(data).toMatchObject({ page: 2 })
-    expect(data?.snapshot).toContain('[UNTRUSTED_PAGE_CONTENT')
-    expect(data?.snapshot).toContain('- button "Save" [ref=e1]')
+    expect(data?.contentLength).toEqual(expect.any(Number))
+    expect(data?.tokenEstimate).toEqual(expect.any(Number))
+    expect(data?.writtenToFile).toBe(false)
+    expect(data).not.toHaveProperty('snapshot')
     expect(result?.content).toEqual([
       expect.objectContaining({
         type: 'text',
@@ -1532,14 +1536,18 @@ return 'late'
       const data = result?.structuredContent as
         | {
             page: number
-            snapshot: string
+            contentLength: number
+            tokenEstimate: number
+            writtenToFile: boolean
           }
         | undefined
       expect(data).toMatchObject({
         page: 4,
+        writtenToFile: false,
       })
-      expect(data?.snapshot).toContain('last-node')
-      expect(data?.snapshot).toContain('[UNTRUSTED_PAGE_CONTENT')
+      expect(data?.contentLength).toEqual(expect.any(Number))
+      expect(data?.tokenEstimate).toEqual(expect.any(Number))
+      expect(data).not.toHaveProperty('snapshot')
       expect(JSON.stringify(result?.structuredContent)).not.toContain('path')
       expect(result?.content).toEqual([
         expect.objectContaining({
@@ -1584,7 +1592,6 @@ return 'late'
             contentLength: number
             tokenEstimate: number
             writtenToFile: boolean
-            snapshot: string
           }
         | undefined
       expect(data).toMatchObject({
@@ -1617,7 +1624,7 @@ return 'late'
       expect(savedContent).toContain('[UNTRUSTED_PAGE_CONTENT')
       expect(savedContent).toContain('[END_UNTRUSTED_PAGE_CONTENT')
       expect(savedContent).toContain(lastMarker)
-      expect(data?.snapshot).toBe(savedContent)
+      expect(data).not.toHaveProperty('snapshot')
       expect(data?.contentLength).toBe(savedContent.length)
     })
   })

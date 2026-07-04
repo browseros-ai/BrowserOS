@@ -100,11 +100,11 @@ function Caption({
 }
 
 function NoShotComposition({ task }: { task: TaskSummary }) {
-  // Uses the fixed ink-deep surface pair so the top zone stays dark in both themes.
+  // The wash follows the theme: pale in light mode, deep in dark mode.
   const verbs = task.toolSequence.slice(0, 4)
   return (
-    <div className="absolute inset-0 bg-gradient-to-br from-ink-deep via-ink-deep-2 to-ink-deep">
-      <div className="pointer-events-none absolute inset-0 flex flex-col justify-center gap-0.5 pl-4 font-mono text-[14px] text-white/18 leading-tight tracking-tight">
+    <div className="absolute inset-0 bg-gradient-to-br from-accent-tint via-secondary to-muted">
+      <div className="pointer-events-none absolute inset-0 flex flex-col justify-center gap-0.5 pl-4 font-mono text-[14px] text-ink/18 leading-tight tracking-tight">
         {verbs.map((verb, idx) => (
           <span
             // biome-ignore lint/suspicious/noArrayIndexKey: tool sequence is stable-ordered per session, not a reorderable list

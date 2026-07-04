@@ -22,7 +22,10 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { eq } from 'drizzle-orm'
 import { env } from '../../src/env'
 import { tabGroupTracker } from '../../src/lib/agent-tab-groups'
-import { identityService } from '../../src/lib/mcp-session'
+import {
+  agentIdentityFromClient,
+  identityService,
+} from '../../src/lib/mcp-session'
 import {
   getSessionRefsForTesting,
   resetSingleMcpInstanceForTesting,
@@ -52,7 +55,10 @@ async function connect(clientName: string) {
   await client.connect(transport)
   const sessionId = transport.sessionId
   if (!sessionId) throw new Error('no session id assigned')
-  return { client, sessionId }
+  const identity = identityService.getIdentity(sessionId)
+  if (!identity) throw new Error('no identity registered')
+  const { agentId } = agentIdentityFromClient(identity)
+  return { client, sessionId, agentId }
 }
 
 function endRowsFor(sessionId: string): Array<{ kind: string }> {
@@ -127,16 +133,11 @@ describe('sweepIdleSessions', () => {
 
   test('reaping decrements the tab-group tracker so the agent group can be closed', async () => {
     {
-      const { client, sessionId } = await connect('codex-mcp-client')
-      // The initialized notification called tabGroupTracker
-      // .incrementSession('codex-mcp-client'). After reap, the
-      // ref count goes back to 0 and getByAgentId returns null
-      // (closeAgentTabGroupForAgent calls decrementSession which
-      // removes the record when refCount hits 0).
-      expect(tabGroupTracker.getByAgentId('codex-mcp-client')).not.toBeNull()
+      const { agentId, client, sessionId } = await connect('codex-mcp-client')
+      expect(tabGroupTracker.getByAgentId(agentId)).not.toBeNull()
       setLastActivityForTesting(sessionId, Date.now() - 10_000)
       sweepIdleSessions(Date.now())
-      expect(tabGroupTracker.getByAgentId('codex-mcp-client')).toBeNull()
+      expect(tabGroupTracker.getByAgentId(agentId)).toBeNull()
       await client.close()
     }
   })

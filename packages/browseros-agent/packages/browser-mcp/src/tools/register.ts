@@ -38,10 +38,17 @@ interface BrowserToolLogger {
 
 export interface BrowserToolRegistrationOptions {
   outputFileAccess?: BrowserOutputFileAccess
+  onToolExecutionStart?: (event: BrowserToolLifecycleEvent) => void
+  onToolExecutionEnd?: (event: BrowserToolLifecycleEvent) => void
   onToolExecuted?: (event: BrowserToolExecutionEvent) => void
   shouldLogToolRegistration?: () => boolean
   logger?: BrowserToolLogger
   source?: string
+}
+
+export interface BrowserToolLifecycleEvent extends Record<string, unknown> {
+  tool_name: string
+  source: string
 }
 
 export interface BrowserToolExecutionEvent extends Record<string, unknown> {
@@ -139,12 +146,17 @@ export function registerBrowserTools(
           toolName: tool.name,
           source,
         }
+        const lifecycleEvent = {
+          tool_name: tool.name,
+          source,
+        }
         options.logger?.debug?.('MCP browser tool started', {
           ...logBase,
           args: summarizeBrowserToolArgs(args),
           defaultWindowId: defaults.defaultWindowId,
           defaultTabGroupId: defaults.defaultTabGroupId,
         })
+        options.onToolExecutionStart?.(lifecycleEvent)
         try {
           const result = await withBrowserOutputFileAccess(
             options.outputFileAccess,
@@ -202,6 +214,8 @@ export function registerBrowserTools(
             content: [{ type: 'text' as const, text: errorText }],
             isError: true,
           }
+        } finally {
+          options.onToolExecutionEnd?.(lifecycleEvent)
         }
       },
     )

@@ -18,6 +18,7 @@ function identity(
     clientName: '',
     clientVersion: '',
     clientTitle: null,
+    sessionLabel: null,
     firstSeenAt: 0,
     ...p,
   }

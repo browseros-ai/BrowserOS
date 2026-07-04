@@ -70,8 +70,8 @@ export function AuditHoverPreview({ task }: AuditHoverPreviewProps) {
 function NoShotComposition({ task }: { task: TaskSummary }) {
   const verbs = task.toolSequence.slice(0, 5)
   return (
-    <div className="absolute inset-0 bg-gradient-to-br from-ink-deep via-ink-deep-2 to-ink-deep">
-      <div className="pointer-events-none absolute inset-0 flex flex-col justify-center gap-1 pl-6 font-mono text-[22px] text-white/15 leading-tight tracking-tight">
+    <div className="absolute inset-0 bg-gradient-to-br from-accent-tint via-secondary to-muted">
+      <div className="pointer-events-none absolute inset-0 flex flex-col justify-center gap-1 pl-6 font-mono text-[22px] text-ink/15 leading-tight tracking-tight">
         {verbs.map((verb, idx) => (
           <span
             // biome-ignore lint/suspicious/noArrayIndexKey: tool sequence is stable-ordered per session, not a reorderable list

@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000000000..c39cdbe4f8f1c
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1048 @@
+@@ -0,0 +1,1105 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -71,8 +71,10 @@ index 0000000000000..c39cdbe4f8f1c
 +
 +constexpr base::TimeDelta kStartupGracePeriod = base::Seconds(30);
 +constexpr int kMaxStartupFailures = 3;
++constexpr int kMaxConsecutiveHealthCheckFailures = 2;
 +
 +constexpr int kExitCodeSuccess = 0;
++constexpr int kExitCodePortConflict = 2;
 +
 +int GetPortOverrideFromCommandLine(base::CommandLine* command_line,
 +                                   const char* switch_name,
@@ -396,6 +398,17 @@ index 0000000000000..c39cdbe4f8f1c
 +  LOG(INFO) << "browseros: Saving to prefs - " << ports_.DebugString();
 +}
 +
++int BrowserOSServerManager::FindAvailableServerPort(
++    int starting_port,
++    const std::set<int>& excluded,
++    bool allow_reuse) {
++  if (port_finder_for_testing_) {
++    return port_finder_for_testing_.Run(starting_port, excluded, allow_reuse);
++  }
++
++  return server_utils::FindAvailablePort(starting_port, excluded, allow_reuse);
++}
++
 +void BrowserOSServerManager::Start() {
 +  if (is_running_) {
 +    LOG(INFO) << "browseros: " << GetManagedServerDescriptor().log_name
@@ -635,6 +648,7 @@ index 0000000000000..c39cdbe4f8f1c
 +
 +  process_ = std::move(result.process);
 +  is_running_ = true;
++  consecutive_health_failures_ = 0;
 +  last_launch_time_ = base::TimeTicks::Now();
 +
 +  LOG(INFO) << "browseros: " << GetManagedServerDescriptor().log_name
@@ -750,6 +764,13 @@ index 0000000000000..c39cdbe4f8f1c
 +    return;
 +  }
 +
++  if (exit_code == kExitCodePortConflict) {
++    advance_port_on_restart_ = true;
++    LOG(WARNING) << "browseros: Server reported port conflict (code "
++                 << kExitCodePortConflict
++                 << "), next restart will advance server port";
++  }
++
 +  base::TimeDelta uptime = base::TimeTicks::Now() - last_launch_time_;
 +  if (uptime < kStartupGracePeriod) {
 +    consecutive_startup_failures_++;
@@ -777,7 +798,7 @@ index 0000000000000..c39cdbe4f8f1c
 +  }
 +
 +  LOG(WARNING) << "browseros: Server exited (code " << exit_code
-+               << "), restarting with new ephemeral ports";
++               << "), restarting managed server";
 +  RestartBrowserOSProcess();
 +}
 +
@@ -814,11 +835,21 @@ index 0000000000000..c39cdbe4f8f1c
 +  }
 +
 +  if (success) {
++    consecutive_health_failures_ = 0;
 +    LOG(INFO) << "browseros: Health check passed";
 +    return;
 +  }
 +
-+  LOG(WARNING) << "browseros: Health check failed, restarting";
++  consecutive_health_failures_++;
++  LOG(WARNING) << "browseros: Health check failed (strike "
++               << consecutive_health_failures_ << "/"
++               << kMaxConsecutiveHealthCheckFailures << ")";
++  if (consecutive_health_failures_ < kMaxConsecutiveHealthCheckFailures) {
++    return;
++  }
++
++  LOG(WARNING) << "browseros: Health check failed twice, restarting";
++  consecutive_health_failures_ = 0;
 +  RestartBrowserOSProcess();
 +}
 +
@@ -846,13 +877,25 @@ index 0000000000000..c39cdbe4f8f1c
 +  assigned.insert(ports_.cdp);
 +  assigned.insert(ports_.proxy);
 +
++  const int previous_server_port = ports_.server;
 +  if (!cl->HasSwitch(browseros::kServerPort)) {
-+    ports_.server = server_utils::FindAvailablePort(
-+        browseros_server::kDefaultServerPort, assigned);
++    const bool advance_port = advance_port_on_restart_;
++    const int starting_port =
++        advance_port ? previous_server_port + 1 : previous_server_port;
++    ports_.server = FindAvailableServerPort(starting_port, assigned,
++                                            /*allow_reuse=*/!advance_port);
 +  }
++  advance_port_on_restart_ = false;
 +  assigned.insert(ports_.server);
 +
-+  LOG(INFO) << "browseros: New ephemeral ports - " << ports_.DebugString();
++  if (ports_.server == previous_server_port) {
++    LOG(INFO) << "browseros: Restart keeping server port - "
++              << ports_.DebugString();
++  } else {
++    LOG(INFO) << "browseros: Restart moved server port from "
++              << previous_server_port << " to " << ports_.server << " - "
++              << ports_.DebugString();
++  }
 +
 +  SavePortsToPrefs();
 +  LaunchBrowserOSProcess();
@@ -886,11 +929,25 @@ index 0000000000000..c39cdbe4f8f1c
 +  assigned.insert(ports_.cdp);
 +  assigned.insert(ports_.proxy);
 +
++  const int previous_server_port = ports_.server;
 +  if (!cl->HasSwitch(browseros::kServerPort)) {
-+    ports_.server = server_utils::FindAvailablePort(
-+        browseros_server::kDefaultServerPort, assigned);
++    const bool advance_port = advance_port_on_restart_;
++    const int starting_port =
++        advance_port ? previous_server_port + 1 : previous_server_port;
++    ports_.server = FindAvailableServerPort(starting_port, assigned,
++                                            /*allow_reuse=*/!advance_port);
 +  }
++  advance_port_on_restart_ = false;
 +  assigned.insert(ports_.server);
++
++  if (ports_.server == previous_server_port) {
++    LOG(INFO) << "browseros: Update restart keeping server port - "
++              << ports_.DebugString();
++  } else {
++    LOG(INFO) << "browseros: Update restart moved server port from "
++              << previous_server_port << " to " << ports_.server << " - "
++              << ports_.DebugString();
++  }
 +
 +  SavePortsToPrefs();
 +  LaunchBrowserOSProcess();

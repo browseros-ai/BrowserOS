@@ -1,8 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getAgentServerUrl } from '../../lib/browseros/helpers'
-
-const MAX_AGENT_SERVER_URL_ATTEMPTS = 3
-const AGENT_SERVER_URL_RETRY_DELAY_MS = 500
+import { resolveAgentServerUrlWithRetry } from './agent-server-url.helpers'
 
 export type UseAgentServerUrlResult =
   | { baseUrl: string; isLoading: false; error: null }
@@ -18,22 +15,15 @@ export function useAgentServerUrl(): UseAgentServerUrlResult {
 
   useEffect(() => {
     let cancelled = false
-    let retryTimer: ReturnType<typeof setTimeout> | undefined
 
-    async function loadUrl(attempt: number) {
+    async function loadUrl() {
       try {
-        const url = await getAgentServerUrl()
+        const url = await resolveAgentServerUrlWithRetry()
         if (!cancelled) {
           setState({ baseUrl: url, isLoading: false, error: null })
         }
       } catch (e) {
         if (!cancelled) {
-          if (attempt < MAX_AGENT_SERVER_URL_ATTEMPTS) {
-            retryTimer = setTimeout(() => {
-              void loadUrl(attempt + 1)
-            }, AGENT_SERVER_URL_RETRY_DELAY_MS)
-            return
-          }
           setState({
             isLoading: false,
             error: e instanceof Error ? e : new Error(String(e)),
@@ -42,13 +32,10 @@ export function useAgentServerUrl(): UseAgentServerUrlResult {
       }
     }
 
-    void loadUrl(1)
+    void loadUrl()
 
     return () => {
       cancelled = true
-      if (retryTimer) {
-        clearTimeout(retryTimer)
-      }
     }
   }, [])
 

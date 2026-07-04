@@ -14,8 +14,8 @@
  *   - tabActivityRegistry.snapshot() for the live (CDP-side) tabs
  *     each agent is driving. Each record carries `agentId`,
  *     `pageId`, `targetId`, `url`, `title`.
- *   - identityService.list() to map agentId back to the most
- *     recent live MCP `sessionId` (the replay file name).
+ *   - identityService.list() to map agentId back to the live MCP
+ *     `sessionId` (the replay file name).
  *   - tabGroupTracker.list() to map agentId back to the agent's
  *     tab-group colour, used by the extension to disambiguate
  *     when two agents happen to open the same URL.
@@ -29,13 +29,8 @@
  * has nothing to record. The next /replay/tabs poll picks the
  * tab up again as soon as a session reattaches.
  *
- * Multi-session edge case: if two MCP sessions share a clientName
- * (and therefore an agentId), the lookup returns one of them
- * arbitrarily. Each agent has its own tab group so the tab in
- * question belongs to ONE of the sessions in practice; v1 accepts
- * the rare misattribution. A future iteration could plumb the
- * dispatching sessionId through to tabActivityRegistry.recordTool
- * so the registry tracks it directly.
+ * agentId is session-scoped, so same-client sessions join back to
+ * their own replay file instead of sharing one live identity entry.
  */
 
 import {

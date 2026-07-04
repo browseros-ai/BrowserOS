@@ -10,14 +10,15 @@
  *   - `tabs new` populates the ledger; the follow-up `tabs list`
  *     returns only the newly-opened page (in both text and
  *     structured channels).
- *   - Two connected sessions with different agentIds are isolated:
- *     one agent's list does NOT include the other's pages.
+ *   - Two connected sessions are isolated: one agent's list does
+ *     NOT include the other's pages, even when both clients use the
+ *     same name.
  *   - `tabs close` drops the page from the ledger.
  *   - A page-targeted dispatch with a foreign `page` id is rejected
  *     with the clean error BEFORE `executeTool` fires.
  *   - After the session is reaped (cleanupSessionState via the idle
- *     sweeper), the agent's ledger is empty; a new session for the
- *     same agentId sees `(no open pages)`.
+ *     sweeper), the session-scoped ledger is empty; a new session
+ *     with the same client name sees `(no open pages)`.
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
@@ -71,7 +72,9 @@ const { setBrowserSession } = await import('../../src/lib/browser-session')
 const { agentTabs } = await import('../../src/lib/agent-tabs')
 const { tabActivityRegistry } = await import('../../src/lib/tab-activity')
 const { tabGroupTracker } = await import('../../src/lib/agent-tab-groups')
-const { identityService } = await import('../../src/lib/mcp-session')
+const { agentIdentityFromClient, identityService } = await import(
+  '../../src/lib/mcp-session'
+)
 const {
   resetSingleMcpInstanceForTesting,
   setLastActivityForTesting,
@@ -113,7 +116,10 @@ async function connect(clientName: string) {
   await client.connect(transport)
   const sessionId = transport.sessionId
   if (!sessionId) throw new Error('no session id assigned')
-  return { client, sessionId }
+  const identity = identityService.getIdentity(sessionId)
+  if (!identity) throw new Error('no identity registered')
+  const { agentId, slug } = agentIdentityFromClient(identity)
+  return { client, sessionId, agentId, slug }
 }
 
 interface TabsListResult {
@@ -166,12 +172,12 @@ describe('per-agent tabs isolation', () => {
         ],
       }),
     )
-    const { client } = await connect('claude-code')
+    const { agentId, client } = await connect('claude-code')
     await client.callTool({
       name: 'tabs',
       arguments: { action: 'new', url: 'https://news.google.com/' },
     })
-    expect([...agentTabs.ownedBy('claude-code')]).toEqual([7])
+    expect([...agentTabs.ownedBy(agentId)]).toEqual([7])
     const listResult = (await client.callTool({
       name: 'tabs',
       arguments: { action: 'list' },
@@ -256,6 +262,49 @@ describe('per-agent tabs isolation', () => {
     await b.client.close()
   })
 
+  it('same-name sessions are isolated by session-scoped agentId', async () => {
+    stubSessionForPage(1, 't1', 'https://a.example/', 'A')
+    queue(ok({ page: 1 }), ok({ group: { groupId: 'GA', windowId: 1 } }), ok())
+    const a = await connect('claude-code')
+    await a.client.callTool({
+      name: 'tabs',
+      arguments: { action: 'new', url: 'https://a.example/' },
+    })
+
+    const b = await connect('claude-code')
+    expect(a.agentId).not.toBe(b.agentId)
+    expect(a.slug).toBe('claude-code')
+    expect(b.slug).toBe('claude-code')
+
+    calls.length = 0
+    const snapshot = (await b.client.callTool({
+      name: 'snapshot',
+      arguments: { page: 1 },
+    })) as TabsListResult
+    expect(snapshot.isError).toBeTruthy()
+    expect(
+      (snapshot.content as Array<{ type: string; text?: string }>)?.[0]?.text,
+    ).toContain('page 1 is not owned')
+    expect(calls.length).toBe(0)
+
+    queue(
+      ok({
+        pages: [{ page: 1, url: 'https://a.example/', title: 'A' }],
+      }),
+    )
+    const listB = (await b.client.callTool({
+      name: 'tabs',
+      arguments: { action: 'list' },
+    })) as TabsListResult
+    expect(listB.structuredContent?.pages).toEqual([])
+    expect(
+      (listB.content as Array<{ type: string; text?: string }>)?.[0]?.text,
+    ).toBe('(no open pages)')
+
+    await a.client.close()
+    await b.client.close()
+  })
+
   it('tabs list on an empty ledger returns "(no open pages)"', async () => {
     setBrowserSession({
       pages: {
@@ -291,12 +340,12 @@ describe('per-agent tabs isolation', () => {
       ok(),
       ok(), // tabs close
     )
-    const { client } = await connect('claude-code')
+    const { agentId, client } = await connect('claude-code')
     await client.callTool({
       name: 'tabs',
       arguments: { action: 'new', url: 'https://x.com/' },
     })
-    expect([...agentTabs.ownedBy('claude-code')]).toEqual([5])
+    expect([...agentTabs.ownedBy(agentId)]).toEqual([5])
     // Now the operator (or the agent) closes page 5. The agentTabs
     // ledger drops it. NB: tabs close takes `page` as input so the
     // cross-agent guard sees the ownership check pass for our own
@@ -305,7 +354,7 @@ describe('per-agent tabs isolation', () => {
       name: 'tabs',
       arguments: { action: 'close', page: 5 },
     })
-    expect([...agentTabs.ownedBy('claude-code')]).toEqual([])
+    expect([...agentTabs.ownedBy(agentId)]).toEqual([])
     await client.close()
   })
 
@@ -363,16 +412,16 @@ describe('per-agent tabs isolation', () => {
       name: 'tabs',
       arguments: { action: 'new', url: 'https://x.com/' },
     })
-    expect([...agentTabs.ownedBy('claude-code')]).toEqual([7])
+    expect([...agentTabs.ownedBy(first.agentId)]).toEqual([7])
 
     // Reap the session.
     setLastActivityForTesting(first.sessionId, Date.now() - 10_000)
     sweepIdleSessions(Date.now())
-    expect(agentTabs.ownedBy('claude-code').size).toBe(0)
+    expect(agentTabs.ownedBy(first.agentId).size).toBe(0)
 
-    // A fresh session for the same agentId (same clientName) starts
-    // empty and its tabs list should reflect that even though the
-    // underlying tool returns operator-owned pages.
+    // A fresh session for the same clientName starts empty and its
+    // tabs list should reflect that even though the underlying tool
+    // returns operator-owned pages.
     queue(
       ok({
         pages: [

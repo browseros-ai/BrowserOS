@@ -38,7 +38,6 @@ export async function formatDiffResult(
       beforeUrl: diff.beforeUrl,
       afterUrl: diff.afterUrl,
     }),
-    ...(diff.urlChanged ? { snapshot: wrappedDiff } : { diff: wrappedDiff }),
   }
 
   if (tokenEstimate > MAX_INLINE_DIFF_TOKENS) {

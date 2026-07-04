@@ -75,7 +75,9 @@ function ok(structured?: unknown): FakeResult {
 // the stubbed executeTool.
 const { setBrowserSession } = await import('../../src/lib/browser-session')
 const { tabActivityRegistry } = await import('../../src/lib/tab-activity')
-const { identityService } = await import('../../src/lib/mcp-session')
+const { agentIdentityFromClient, identityService } = await import(
+  '../../src/lib/mcp-session'
+)
 const { resetSingleMcpInstanceForTesting } = await import(
   '../../src/mcp/single-server'
 )
@@ -131,20 +133,24 @@ describe('mcp/register.ts: tabs new registry write', () => {
     // also fires for action:'new' (one create + one update for colour)
     // so we queue those too.
     queue(ok({ page: 7 }), ok({ group: { groupId: 'G1', windowId: 42 } }), ok())
-    const { client } = await connect('codex-mcp-client')
+    const { client, transport } = await connect('codex-mcp-client')
     const result = await client.callTool({
       name: 'tabs',
       arguments: { action: 'new', url: 'https://example.com/' },
     })
     expect(result.isError).toBeFalsy()
+    const identity = identityService.getIdentity(transport.sessionId as string)
+    if (!identity) throw new Error('missing identity')
+    const { agentId, slug } = agentIdentityFromClient(identity)
+    expect(agentId).toMatch(/^codex-mcp-client-[0-9a-f]{6}$/)
 
     const snapshot = tabActivityRegistry.snapshot()
     expect(snapshot).toHaveLength(1)
     expect(snapshot[0]).toMatchObject({
       pageId: 7,
       targetId: 'target-7',
-      agentId: 'codex-mcp-client',
-      slug: 'codex-mcp-client',
+      agentId,
+      slug,
       lastToolName: 'tabs',
     })
 

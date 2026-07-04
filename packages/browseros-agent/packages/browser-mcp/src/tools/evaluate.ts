@@ -1,5 +1,7 @@
+import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
 import { z } from 'zod'
 import { clampTimeout, defineTool, errorResult, textResult } from './framework'
+import { writeTempToolOutputFile } from './output-file'
 import { wrapUntrusted } from './trust-boundary'
 
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -50,6 +52,46 @@ export const evaluate = defineTool({
     const value = result.result?.value ?? result.result?.description
     const text = value === undefined ? 'undefined' : safeStringify(value)
     const origin = ctx.session.pages.getInfo(args.page)?.url ?? 'unknown'
+    if (text.length > TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS) {
+      const excerpt = text.slice(0, TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS)
+      const wrappedText = wrapUntrusted(text, origin)
+      const contentLength = wrappedText.length
+      try {
+        const path = await writeTempToolOutputFile({
+          toolName: 'evaluate',
+          extension: 'txt',
+          content: wrappedText,
+        })
+        return textResult(
+          [
+            wrapUntrusted(excerpt, origin),
+            `Evaluate result truncated at ${TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS} chars. Full result (${text.length} chars) saved to: ${path}`,
+          ].join('\n\n'),
+          {
+            page: args.page,
+            contentLength,
+            writtenToFile: true,
+            path,
+          },
+        )
+      } catch (error) {
+        const saveError = error instanceof Error ? error.message : String(error)
+        return textResult(
+          [
+            wrapUntrusted(excerpt, origin),
+            `Evaluate result truncated at ${TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS} chars. Full result (${text.length} chars) could not be saved to a BrowserOS output file: ${saveError}`,
+          ].join('\n\n'),
+          {
+            page: args.page,
+            contentLength,
+            writtenToFile: false,
+            outputWriteFailed: true,
+            error: saveError,
+          },
+        )
+      }
+    }
+
     return textResult(wrapUntrusted(text, origin), {
       page: args.page,
       value,
