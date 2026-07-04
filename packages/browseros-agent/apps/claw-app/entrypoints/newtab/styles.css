@@ -10,9 +10,17 @@
  * palette via variables so `.dark` can flip the whole system by re-declaring
  * plain variables.
  *
- * `accent` deliberately equals `primary`: the app uses accent as the vivid
- * brand color (pulse dots, emphasis text, gradients), not as shadcn's pale
- * hover tint.
+ * Palette: Wiz (stylecn/wiz PR #16). Signal Blue #0254ec is the sole
+ * saturated color, applied to primary CTAs, links, focus rings, and
+ * accent-card borders on Sky Tint #eaf1ff surfaces; Wiz Steel #393f49
+ * is the editorial charcoal-navy for headings and body ink; Slate
+ * Border #cbd5e1 is the hairline divider.
+ *
+ * `accent` is a pale hover-tint (Sky Tint), NOT the vivid brand color.
+ * The vivid color lives on --primary. Any component that wants "brand
+ * blue text" should use `text-primary`, not `text-accent-foreground`
+ * unless the background is already a Sky Tint band. Same for dots,
+ * emphasis, and gradients.
  */
 @theme inline {
   /* shadcn primitives: re-pointed through app palette variables */
@@ -97,13 +105,15 @@
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  /* Explicit radius ramp from stylecn/wiz (PR #16). --radius-4xl is a
+     full pill so primary CTAs render as the Wiz signature pill button. */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-3xl: 20px;
+  --radius-4xl: 9999px;
 }
 
 /* Keyframes lifted from the design prototype's \3c style> block */
@@ -220,123 +230,142 @@ body {
  */
 :root {
   color-scheme: light;
+
+  /* Shadcn tokens from stylecn/wiz (PR #16). One electric Signal Blue
+     CTA on warm white, Wiz Steel foreground, Sky Tint secondary/muted/
+     accent surface, Slate Border hairlines. */
   --background: #ffffff;
-  --foreground: #25242f;
+  --foreground: #393f49;
   --card: #ffffff;
-  --card-foreground: #25242f;
+  --card-foreground: #393f49;
   --popover: #ffffff;
-  --popover-foreground: #25242f;
+  --popover-foreground: #393f49;
   --primary: #0254ec;
   --primary-foreground: #ffffff;
   --secondary: #eaf1ff;
-  --secondary-foreground: #01123f;
-  --muted: #f1f5fb;
+  --secondary-foreground: #0254ec;
+  --muted: #eaf1ff;
   --muted-foreground: #717783;
-  --accent: #0254ec;
-  --accent-foreground: #ffffff;
-  --destructive: #ef4444;
+  --accent: #eaf1ff;
+  --accent-foreground: #0254ec;
+  --destructive: #e11d48;
   --destructive-foreground: #ffffff;
-  --border: #dde5f0;
-  --input: #dde5f0;
+  --border: #cbd5e1;
+  --input: #cbd5e1;
   --ring: #0254ec;
   --chart-1: #0254ec;
-  --chart-2: #6195ff;
-  --chart-3: #fc80ff;
-  --chart-4: #b8d3ff;
-  --chart-5: #01123f;
-  --radius: 0.75rem;
-  --sidebar: #f7f9fe;
-  --sidebar-foreground: #25242f;
+  --chart-2: #0042ca;
+  --chart-3: #f5b957;
+  --chart-4: #f7cad5;
+  --chart-5: #717783;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #393f49;
   --sidebar-primary: #0254ec;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #e4edff;
-  --sidebar-accent-foreground: #01123f;
-  --sidebar-border: #dde5f0;
+  --sidebar-accent: #eaf1ff;
+  --sidebar-accent-foreground: #0254ec;
+  --sidebar-border: #cbd5e1;
   --sidebar-ring: #0254ec;
 
+  /* Radius ramp explicit values from PR #16. --radius-4xl is a full pill
+     for buttons, which is the Wiz signature CTA shape. */
+  --radius: 0.75rem;
+
+  /* BrowserOS bespoke tokens re-derived against the Wiz palette. Wiz
+     Steel (#393f49) becomes the ink scale anchor; Signal Blue and
+     Sapphire Deep drive the accent ink; Sky Tint is the accent tint;
+     Slate Border stays the divider. ink-deep keeps the deep navy so
+     dark-strip surfaces (terminal blocks, viewport pills) still read
+     as one unified elevated chip in both themes. */
   --bg-canvas: #f9fbff;
-  --bg-sunken: #eef3fb;
+  --bg-sunken: #eaf1ff;
   --card-tint: #fbfcff;
   --ink-deep: #01123f;
   --ink-deep-2: #0a2158;
-  --border-2: #e3e9f4;
-  --border-strong: #c7d3e8;
-  --ink: #25242f;
-  --ink-2: #4a4f5c;
+  --border-2: #dfe7f3;
+  --border-strong: #cbd5e1;
+  --ink: #393f49;
+  --ink-2: #575d69;
   --ink-3: #717783;
   --ink-4: #9aa1ae;
-  --accent-2: #2f6fed;
+  --accent-2: #0042ca;
   --accent-ink: #0143c4;
-  --accent-tint: #e4edff;
+  --accent-tint: #eaf1ff;
   --accent-tint-2: #d3e2ff;
   --green: #16a34a;
   --green-tint: #e6f6ec;
   --amber: hsl(35 85% 42%);
   --amber-tint: hsl(42 90% 94%);
-  --red: #dc2626;
-  --red-tint: hsl(0 75% 96%);
+  --red: #e11d48;
+  --red-tint: hsl(4 65% 95%);
   --blue: #0e7490;
 }
 /*
  ---break---
  */
 
-/* Dark theme values; the ink scale inverts, tints go from pale washes to deep washes. */
+/* Dark theme values; the ink scale inverts, tints go from pale washes
+   to deep washes. Shadcn tokens from stylecn/wiz (PR #16). */
 .dark {
   color-scheme: dark;
-  --background: #0b0f17;
-  --foreground: #e8ecf4;
-  --card: #131926;
-  --card-foreground: #e8ecf4;
-  --popover: #131926;
-  --popover-foreground: #e8ecf4;
-  --primary: #2f6fed;
-  --primary-foreground: #ffffff;
-  --secondary: #212a3d;
-  --secondary-foreground: #d5dded;
-  --muted: #171e2b;
-  --muted-foreground: #98a3b6;
-  --accent: #4d8bff;
-  --accent-foreground: #0b0f17;
-  --destructive: #ef4444;
+  --background: #0a0f1e;
+  --foreground: #f8f8fa;
+  --card: #151c30;
+  --card-foreground: #f8f8fa;
+  --popover: #151c30;
+  --popover-foreground: #f8f8fa;
+  --primary: #2f7cff;
+  --primary-foreground: #0a0f1e;
+  --secondary: #1e2842;
+  --secondary-foreground: #f8f8fa;
+  --muted: #1e2842;
+  --muted-foreground: #a4acbd;
+  --accent: #1e2842;
+  --accent-foreground: #f8f8fa;
+  --destructive: #ff5a75;
   --destructive-foreground: #ffffff;
-  --border: #2a3446;
-  --input: #313c52;
-  --ring: #4d8bff;
-  --chart-1: #4d8bff;
-  --chart-2: #6195ff;
-  --chart-3: #fc80ff;
-  --chart-4: #8fb4ff;
-  --chart-5: #b8d3ff;
-  --sidebar: #0d1320;
-  --sidebar-foreground: #e8ecf4;
-  --sidebar-primary: #2f6fed;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #232c40;
-  --sidebar-accent-foreground: #e8ecf4;
-  --sidebar-border: #2a3446;
-  --sidebar-ring: #4d8bff;
+  --border: rgba(255, 255, 255, 0.10);
+  --input: rgba(255, 255, 255, 0.15);
+  --ring: #2f7cff;
+  --chart-1: #2f7cff;
+  --chart-2: #7ea6ff;
+  --chart-3: #f5b957;
+  --chart-4: #f7cad5;
+  --chart-5: #a4acbd;
+  --sidebar: #151c30;
+  --sidebar-foreground: #f8f8fa;
+  --sidebar-primary: #2f7cff;
+  --sidebar-primary-foreground: #0a0f1e;
+  --sidebar-accent: rgba(255, 255, 255, 0.06);
+  --sidebar-accent-foreground: #f8f8fa;
+  --sidebar-border: rgba(255, 255, 255, 0.10);
+  --sidebar-ring: #2f7cff;
 
-  --bg-canvas: #090d14;
-  --bg-sunken: #070b11;
-  --card-tint: #151d2e;
-  --ink-deep: #172138;
-  --ink-deep-2: #1f2c4a;
-  --border-2: #253046;
-  --border-strong: #34405c;
-  --ink: #eef2f9;
-  --ink-2: #c4cddf;
-  --ink-3: #94a0b5;
-  --ink-4: #67748c;
-  --accent-2: #6195ff;
+  /* BrowserOS bespoke tokens re-derived against the Wiz dark palette.
+     Card + muted + accent share the same lifted #1e2842 tint so the
+     tint chain reads as one warm-navy block; ink-deep stays a deeper
+     elevated chip below the card lift. Ink scale anchored on the new
+     #f8f8fa foreground. */
+  --bg-canvas: #080d1a;
+  --bg-sunken: #050912;
+  --card-tint: #171f33;
+  --ink-deep: #1e2842;
+  --ink-deep-2: #263353;
+  --border-2: #212c40;
+  --border-strong: #334159;
+  --ink: #f8f8fa;
+  --ink-2: #d5dded;
+  --ink-3: #a4acbd;
+  --ink-4: #767e91;
+  --accent-2: #7ea6ff;
   --accent-ink: #8fb4ff;
-  --accent-tint: #1a2540;
-  --accent-tint-2: #223055;
+  --accent-tint: #1e2842;
+  --accent-tint-2: #253355;
   --green: #34c26b;
   --green-tint: #10281a;
   --amber: hsl(38 85% 58%);
   --amber-tint: hsl(38 45% 15%);
-  --red: #f36a5f;
+  --red: #ff5a75;
   --red-tint: #2b1414;
   --blue: #56b8d8;
 }
