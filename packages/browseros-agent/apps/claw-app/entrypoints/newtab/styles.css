@@ -293,7 +293,11 @@ body {
   --ink-deep: #01123f;
   --ink-deep-2: #0a2158;
   --border-2: #dae5ff;
-  --border-strong: #cbd5e1;
+  /* --border-strong is a real step deeper than --border so it has
+     visual weight when used on elevated panels, focused inputs, or
+     section separators. Was #cbd5e1 (identical to --border) after
+     the wiz palette adoption; restored the two-step border chain. */
+  --border-strong: #94a3b8;
 
   /* Elevated Sky Tint step so alternate rows, section rails, hover
      states, and bg-sunken can differentiate from the base --muted
@@ -371,7 +375,7 @@ body {
   --sidebar-primary-foreground: #0a0f1e;
   /* Active tab / sidebar-accent lifted from 0.06 -> 0.10 so the
      highlight registers. */
-  --sidebar-accent: rgba(255, 255, 255, 0.10);
+  --sidebar-accent: rgba(255, 255, 255, 0.1);
   --sidebar-accent-foreground: #f8f8fa;
   --sidebar-border: rgba(255, 255, 255, 0.14);
   --sidebar-ring: #2f7cff;
