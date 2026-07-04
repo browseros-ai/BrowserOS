@@ -38,11 +38,13 @@
     "@browseros/browser-mcp": "workspace:*",
     "@browseros/shared": "workspace:*",
     "@hono/zod-validator": "^0.8.0",
+    "@iarna/toml": "^2.2.5",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "agent-mcp-manager": "^0.0.3",
     "commander": "^14.0.3",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.3",
+    "jsonc-parser": "^3.3.1",
     "nanoid": "^5.1.11",
     "zod": "^4.4.3"
   },

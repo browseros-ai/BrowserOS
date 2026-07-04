@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -19,6 +19,10 @@ import type {
   RemoveServerOptions,
   UnlinkServerOptions,
 } from 'agent-mcp-manager'
+import {
+  resetMcpManagerForTesting,
+  setMcpManagerForTesting,
+} from '../../src/lib/mcp-manager'
 import { relinkManagedServer } from '../../src/services/mcp-relink'
 
 interface LinkWritingManager extends McpManager {
@@ -134,9 +138,23 @@ async function writeBareConfig(
     spec?.transport === 'http'
       ? { url: spec.url }
       : { command: 'node', args: ['server.js'] }
+  let existing: Record<string, unknown> = {}
+  try {
+    existing = JSON.parse(await readFile(configPath, 'utf8'))
+  } catch {
+    existing = {}
+  }
+  const existingServers =
+    typeof existing.mcpServers === 'object' && existing.mcpServers !== null
+      ? existing.mcpServers
+      : {}
   await writeFile(
     configPath,
-    JSON.stringify({ mcpServers: { [serverName]: entry } }, null, 2),
+    JSON.stringify(
+      { ...existing, mcpServers: { ...existingServers, [serverName]: entry } },
+      null,
+      2,
+    ),
     'utf8',
   )
 }
@@ -155,6 +173,14 @@ async function relinkWith(
 }
 
 describe('relinkManagedServer', () => {
+  beforeEach(() => {
+    resetMcpManagerForTesting()
+  })
+
+  afterEach(() => {
+    resetMcpManagerForTesting()
+  })
+
   it('tags claude-code http links and converges on repeated relinks', async () => {
     await withTempConfig(async (configPath) => {
       const manager = makeManager({ configPath })
@@ -172,6 +198,49 @@ describe('relinkManagedServer', () => {
 
       await relinkWith(manager, 'claude-code', spec)
       await expect(readFile(configPath, 'utf8')).resolves.toBe(first)
+    })
+  })
+
+  it('sweeps safe legacy BrowserOS aliases after writing the canonical Claude Code entry', async () => {
+    await withTempConfig(async (configPath) => {
+      await writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            mcpServers: {
+              browseros: {
+                url: 'http://127.0.0.1:9200/mcp',
+              },
+              'browseros-stdio': {
+                command: 'npx',
+                args: ['mcp-remote', 'http://127.0.0.1:9200/mcp'],
+              },
+              BrowserClaw: {
+                url: 'http://127.0.0.1:9200/mcp',
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      )
+      const manager = makeManager({ configPath })
+      setMcpManagerForTesting(manager)
+
+      await relinkWith(manager, 'claude-code', {
+        transport: 'http',
+        url: 'http://127.0.0.1:9200/mcp',
+      })
+
+      expect(JSON.parse(await readFile(configPath, 'utf8')).mcpServers).toEqual(
+        {
+          BrowserClaw: {
+            url: 'http://127.0.0.1:9200/mcp',
+            type: 'http',
+          },
+        },
+      )
     })
   })
 

@@ -55,7 +55,7 @@ afterEach(() => {
 })
 
 describe('healClaudeCodeTransportTags', () => {
-  it('repairs BrowserClaw, legacy browseros, and profile claude-code http entries', async () => {
+  it('repairs BrowserClaw and profile claude-code http entries without tagging legacy aliases', async () => {
     await withTempConfig(async (configPath) => {
       await writeFile(
         configPath,
@@ -127,7 +127,7 @@ describe('healClaudeCodeTransportTags', () => {
         ],
       )
 
-      await expect(healClaudeCodeTransportTags()).resolves.toBe(3)
+      await expect(healClaudeCodeTransportTags()).resolves.toBe(2)
 
       expect(JSON.parse(await readFile(configPath, 'utf8')).mcpServers).toEqual(
         {
@@ -137,7 +137,6 @@ describe('healClaudeCodeTransportTags', () => {
           },
           browseros: {
             url: 'http://127.0.0.1:9200/mcp',
-            type: 'http',
           },
           'profile-one': {
             url: 'http://127.0.0.1:9200/profile-one/mcp',
