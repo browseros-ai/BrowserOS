@@ -288,12 +288,24 @@ body {
      dark-strip surfaces (terminal blocks, viewport pills) still read
      as one unified elevated chip in both themes. */
   --bg-canvas: #f9fbff;
-  --bg-sunken: #eaf1ff;
-  --card-tint: #fbfcff;
+  --bg-sunken: #dae5ff;
+  --card-tint: #f5f8ff;
   --ink-deep: #01123f;
   --ink-deep-2: #0a2158;
-  --border-2: #dfe7f3;
+  --border-2: #dae5ff;
   --border-strong: #cbd5e1;
+
+  /* Elevated Sky Tint step so alternate rows, section rails, hover
+     states, and bg-sunken can differentiate from the base --muted
+     value. Without this, five semantic layers collapse into one
+     Sky Tint plateau. */
+  --sky-tint-2: #dae5ff;
+
+  /* Consistent surround for embedded media (thumbnails of real
+     websites, replay viewport). Transparent in light so nothing
+     changes; dark mode paints a scrim behind media so bright
+     embedded content does not dominate. */
+  --media-scrim: transparent;
   --ink: #393f49;
   --ink-2: #575d69;
   --ink-3: #717783;
@@ -320,35 +332,48 @@ body {
   color-scheme: dark;
   --background: #0a0f1e;
   --foreground: #f8f8fa;
-  --card: #151c30;
+  /* Card lifted from #151c30 -> #1a2337 so card boundaries are
+     perceptible against --background #0a0f1e. Was too flat before. */
+  --card: #1a2337;
   --card-foreground: #f8f8fa;
-  --popover: #151c30;
+  --popover: #1a2337;
   --popover-foreground: #f8f8fa;
   --primary: #2f7cff;
   --primary-foreground: #0a0f1e;
   --secondary: #1e2842;
   --secondary-foreground: #f8f8fa;
   --muted: #1e2842;
-  --muted-foreground: #a4acbd;
+  /* Muted-foreground warmed and brightened from #a4acbd -> #c1c8d8
+     so section headers ('TUESDAY 07 JULY' etc.) anchor visually
+     against the cool #0a0f1e body. Same WCAG tier, stronger
+     perceptual signal. */
+  --muted-foreground: #c1c8d8;
   --accent: #2f7cff;
   --accent-foreground: #0a0f1e;
   --destructive: #ff5a75;
   --destructive-foreground: #ffffff;
-  --border: rgba(255, 255, 255, 0.10);
-  --input: rgba(255, 255, 255, 0.15);
+  /* Border and input lifted from 0.10 / 0.15 -> 0.14 / 0.18 so
+     hairlines are actually visible on dark surfaces. */
+  --border: rgba(255, 255, 255, 0.14);
+  --input: rgba(255, 255, 255, 0.18);
   --ring: #2f7cff;
   --chart-1: #2f7cff;
   --chart-2: #7ea6ff;
   --chart-3: #f5b957;
   --chart-4: #f7cad5;
   --chart-5: #a4acbd;
-  --sidebar: #151c30;
+  /* Sidebar dropped below --card so the rail reads as a step down
+     from the body, mirroring the light mode 'no tint on rail'
+     pattern. Was identical to --card at #151c30, indistinguishable. */
+  --sidebar: #101728;
   --sidebar-foreground: #f8f8fa;
   --sidebar-primary: #2f7cff;
   --sidebar-primary-foreground: #0a0f1e;
-  --sidebar-accent: rgba(255, 255, 255, 0.06);
+  /* Active tab / sidebar-accent lifted from 0.06 -> 0.10 so the
+     highlight registers. */
+  --sidebar-accent: rgba(255, 255, 255, 0.10);
   --sidebar-accent-foreground: #f8f8fa;
-  --sidebar-border: rgba(255, 255, 255, 0.10);
+  --sidebar-border: rgba(255, 255, 255, 0.14);
   --sidebar-ring: #2f7cff;
 
   /* BrowserOS bespoke tokens re-derived against the Wiz dark palette.
@@ -358,11 +383,26 @@ body {
      #f8f8fa foreground. */
   --bg-canvas: #080d1a;
   --bg-sunken: #050912;
-  --card-tint: #171f33;
-  --ink-deep: #1e2842;
-  --ink-deep-2: #263353;
+  --card-tint: #1e2842;
+  /* --ink-deep recovers its 'recessed dark chrome' semantic in dark
+     mode. Was #1e2842 identical to --muted / --secondary / --accent-
+     tint; now dropped to #050912 (deeper than --background #0a0f1e)
+     so terminal blocks, viewport pills, and dark chrome surfaces
+     read as pressed into the page, matching the light-mode metaphor
+     where they sit as Navy Deep chips on Sky Tint. */
+  --ink-deep: #050912;
+  --ink-deep-2: #0d1424;
   --border-2: #212c40;
   --border-strong: #334159;
+
+  /* Elevated Sky Tint step parallel to light --sky-tint-2. Sits
+     between --card and --muted so semantic layers can differentiate. */
+  --sky-tint-2: #1a2337;
+
+  /* Semi-transparent scrim for embedded media (thumbnails of real
+     websites, replay viewport) so bright light-mode content does
+     not dominate the dark UI. */
+  --media-scrim: rgba(0, 0, 0, 0.5);
   --ink: #f8f8fa;
   --ink-2: #d5dded;
   --ink-3: #a4acbd;
