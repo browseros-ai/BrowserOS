@@ -192,7 +192,10 @@ body {
 
 /* Dark wash: two navy radials on the deep Wiz --background #0a0f1e,
    with a linear that runs from bg to slightly lifted card so the
-   viewport reads as a single continuous navy surface. */
+   viewport reads as a single continuous navy surface. The claw-app
+   is locked to light mode today (the theme toggle was removed) but
+   the .dark block below is kept so any downstream tool or embedding
+   scope that opts in via .dark still gets a coherent palette. */
 .dark body {
   background:
     radial-gradient(
@@ -326,12 +329,11 @@ body {
   --red-tint: hsl(4 65% 95%);
   --blue: #0e7490;
 }
-/*
- ---break---
- */
-
-/* Dark theme values; the ink scale inverts, tints go from pale washes
-   to deep washes. Shadcn tokens from stylecn/wiz (PR #16). */
+/* Dark theme values. The app is locked to light mode today (the theme
+   toggle was removed) but the shadcn token surface expects a coherent
+   .dark {} to exist so any downstream tool, storybook, or embedding
+   scope that opts in via `.dark` still renders correctly. Not currently
+   applied at runtime; kept as canonical palette reference. */
 .dark {
   color-scheme: dark;
   --background: #0a0f1e;

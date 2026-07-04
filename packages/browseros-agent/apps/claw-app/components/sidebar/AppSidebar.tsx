@@ -1,16 +1,14 @@
 import { cn } from '@/lib/utils'
 import { SidebarBranding } from './SidebarBranding'
 import { SidebarNavigation } from './SidebarNavigation'
-import { SidebarThemeToggle } from './SidebarThemeToggle'
 
 export interface AppSidebarProps {
   expanded?: boolean
 }
 
 /**
- * Wraps the branding + navigation, with the theme toggle as the footer.
- * The rest of the design's settings/identity surface lands in a
- * follow-up once there's a real setting to surface.
+ * Wraps the branding + navigation. Room for a footer strip lands in a
+ * follow-up when there is a real setting to surface.
  */
 export function AppSidebar({ expanded = false }: AppSidebarProps) {
   return (
@@ -22,9 +20,6 @@ export function AppSidebar({ expanded = false }: AppSidebarProps) {
     >
       <SidebarBranding expanded={expanded} />
       <SidebarNavigation expanded={expanded} />
-      <div className="shrink-0 p-2">
-        <SidebarThemeToggle expanded={expanded} />
-      </div>
     </div>
   )
 }
