@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   sync:
-    name: Bump internal-docs submodule pointer on dev
+    name: Bump internal-docs submodule pointer on main
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -26,7 +26,7 @@ jobs:
         with:
           token: ${{ secrets.INTERNAL_DOCS_SYNC_TOKEN }}
           submodules: true
-          ref: dev
+          ref: main
           fetch-depth: 50
 
       - name: Open auto-merge PR if internal-docs has new commits
@@ -42,7 +42,7 @@ jobs:
           fi
 
           EXISTING_PR_URL=$(gh pr list \
-            --base dev \
+            --base main \
             --state open \
             --json headRefName,url \
             --jq '[.[] | select(.headRefName | startswith("bot/sync-internal-docs-")) | .url][0] // ""')
@@ -78,7 +78,7 @@ jobs:
           CLEANUP_BRANCH=1
 
           PR_URL=$(gh pr create \
-            --base dev \
+            --base main \
             --head "$BRANCH" \
             --title "chore: sync internal-docs submodule" \
             --body "Automated bump of the \`.internal-docs\` submodule pointer. Auto-merging.")
