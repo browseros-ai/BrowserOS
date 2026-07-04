@@ -16,11 +16,13 @@
  * is the editorial charcoal-navy for headings and body ink; Slate
  * Border #cbd5e1 is the hairline divider.
  *
- * `accent` is a pale hover-tint (Sky Tint), NOT the vivid brand color.
- * The vivid color lives on --primary. Any component that wants "brand
- * blue text" should use `text-primary`, not `text-accent-foreground`
- * unless the background is already a Sky Tint band. Same for dots,
- * emphasis, and gradients.
+ * `accent` deliberately equals `primary` in this app: the codebase
+ * uses accent as the vivid brand color (pulse dots, emphasis text,
+ * gradients), not as shadcn's pale hover tint. Where a pale
+ * hover-tint surface is needed, the code uses --secondary or the
+ * bespoke --accent-tint / --accent-tint-2. Keeping accent equal to
+ * primary preserves every existing text-accent / bg-accent site
+ * without touching component code.
  */
 @theme inline {
   /* shadcn primitives: re-pointed through app palette variables */
@@ -87,11 +89,13 @@
   --font-serif: "Newsreader", Georgia, serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
 
-  /* Shadows from the design's --shadow-* tokens */
+  /* Shadows tinted with Wiz --ink-deep #01123f (hsl 224 97% 13%). Deep
+     navy at low opacity so cards and popovers sit against the Sky Tint
+     wash with a subtle navy lift, not a neutral gray drop-shadow. */
   --shadow-card:
-    0 1px 2px hsl(221 60% 20% / 0.05), 0 1px 3px hsl(221 60% 20% / 0.04);
+    0 1px 2px hsl(224 97% 13% / 0.05), 0 1px 3px hsl(224 97% 13% / 0.04);
   --shadow-pop:
-    0 8px 30px hsl(221 60% 20% / 0.14), 0 2px 8px hsl(221 60% 20% / 0.08);
+    0 8px 30px hsl(224 97% 13% / 0.14), 0 2px 8px hsl(224 97% 13% / 0.08);
 
   /* Animations referenced by JSX utilities (animate-pulse-dot, etc.) */
   --animate-pulse-dot: pulse-dot 1.4s ease-in-out infinite;
@@ -166,36 +170,42 @@ body {
      away when content overflows; the user sees the gradient stop mid
      scroll and bare white below. With fixed, the gradient stays anchored
      to the viewport regardless of how tall the scrolled content is. */
+  /* Wash: two Sky Tint radials (matched to --muted #eaf1ff) with a
+     warm-to-cool linear beneath. Anchors the cockpit chrome as the
+     Wiz palette, not a bare white page. */
   background:
     radial-gradient(
       1200px 700px at 18% -8%,
-      hsl(221 100% 96%) 0%,
-      hsl(221 100% 96% / 0) 60%
+      hsl(220 100% 96%) 0%,
+      hsl(220 100% 96% / 0) 60%
     ),
     radial-gradient(
       1000px 800px at 100% 110%,
-      hsl(210 100% 97%) 0%,
-      hsl(210 100% 97% / 0) 55%
+      hsl(215 100% 97%) 0%,
+      hsl(215 100% 97% / 0) 55%
     ),
-    linear-gradient(155deg, hsl(220 60% 97%) 0%, hsl(210 50% 98%) 100%);
+    linear-gradient(155deg, hsl(220 60% 98%) 0%, hsl(210 50% 98%) 100%);
   background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
+/* Dark wash: two navy radials on the deep Wiz --background #0a0f1e,
+   with a linear that runs from bg to slightly lifted card so the
+   viewport reads as a single continuous navy surface. */
 .dark body {
   background:
     radial-gradient(
       1200px 700px at 18% -8%,
-      hsl(222 45% 12%) 0%,
-      hsl(222 45% 12% / 0) 60%
+      hsl(224 45% 14%) 0%,
+      hsl(224 45% 14% / 0) 60%
     ),
     radial-gradient(
       1000px 800px at 100% 110%,
-      hsl(215 40% 12%) 0%,
-      hsl(215 40% 12% / 0) 55%
+      hsl(220 40% 14%) 0%,
+      hsl(220 40% 14% / 0) 55%
     ),
-    linear-gradient(155deg, hsl(222 40% 7%) 0%, hsl(220 35% 9%) 100%);
+    linear-gradient(155deg, hsl(224 51% 8%) 0%, hsl(222 42% 11%) 100%);
   background-attachment: fixed;
 }
 
@@ -246,8 +256,8 @@ body {
   --secondary-foreground: #0254ec;
   --muted: #eaf1ff;
   --muted-foreground: #717783;
-  --accent: #eaf1ff;
-  --accent-foreground: #0254ec;
+  --accent: #0254ec;
+  --accent-foreground: #ffffff;
   --destructive: #e11d48;
   --destructive-foreground: #ffffff;
   --border: #cbd5e1;
@@ -320,8 +330,8 @@ body {
   --secondary-foreground: #f8f8fa;
   --muted: #1e2842;
   --muted-foreground: #a4acbd;
-  --accent: #1e2842;
-  --accent-foreground: #f8f8fa;
+  --accent: #2f7cff;
+  --accent-foreground: #0a0f1e;
   --destructive: #ff5a75;
   --destructive-foreground: #ffffff;
   --border: rgba(255, 255, 255, 0.10);
