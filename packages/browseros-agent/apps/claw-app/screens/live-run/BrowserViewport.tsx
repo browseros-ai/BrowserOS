@@ -53,7 +53,7 @@ export function BrowserViewport({
           <Globe className="size-12" />
           <code className="font-mono text-sm">{site}</code>
           <p className="max-w-xs text-center text-ink-4 text-xs">
-            Live tab view lands once the BrowserOS Chromium recording pipeline
+            Live tab view lands once the BrowserClaw Chromium recording pipeline
             is wired.
           </p>
         </div>

@@ -106,7 +106,7 @@ export function NewAgent({ mode = 'create' }: NewAgentProps) {
   const headerTitle = isEdit ? 'Edit agent' : 'Add an agent'
   const headerSub = isEdit
     ? 'tune the harness connector for this agent'
-    : 'connect a harness to BrowserOS'
+    : 'connect a harness to BrowserClaw'
   const isMutating = isEdit ? updateAgent.isPending : createAgent.isPending
   const submitted = isEdit
     ? updateAgent.isSuccess

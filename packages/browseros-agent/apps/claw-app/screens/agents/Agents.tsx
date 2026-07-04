@@ -47,7 +47,7 @@ export function Agents() {
             )}
           </div>
           <p className="mt-0.5 text-ink-2 text-sm">
-            Every connector you've registered with BrowserOS, with its login
+            Every connector you've registered with BrowserClaw, with its login
             scope, guardrails, and MCP endpoint.
           </p>
         </div>
@@ -100,8 +100,8 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
         No agents yet
       </h2>
       <p className="max-w-md text-ink-3 text-sm leading-snug">
-        Connect a harness like Claude Code, Codex, or Hermes to BrowserOS. Each
-        agent gets its own login scope, approval rules, and MCP endpoint.
+        Connect a harness like Claude Code, Codex, or Hermes to BrowserClaw.
+        Each agent gets its own login scope, approval rules, and MCP endpoint.
       </p>
       <Button type="button" onClick={onAdd}>
         <Plus className="size-4" />
