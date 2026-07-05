@@ -45,6 +45,7 @@ export function AgentRunningCard({
           site={siteOf(focus.url)}
           live={active}
           screencast={focus.screencast}
+          className="h-full w-full"
         />
         <div className="absolute top-3 right-3">
           <TabCountChip tabs={agent.tabs} focusTargetId={focus.targetId} />

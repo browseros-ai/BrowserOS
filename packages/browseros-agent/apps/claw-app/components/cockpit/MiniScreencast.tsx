@@ -14,6 +14,14 @@ interface MiniScreencastProps {
    * appear or disappear.
    */
   screencast?: ScreencastFrame | null
+  /**
+   * Overrides the container sizing. Defaults to `h-[132px] w-full`
+   * (the RunningCard grid tile shape). AgentRunningCard passes
+   * `h-full w-full` so the frame fills its `flex-1` zone instead of
+   * clamping at 132px, which used to leave a Sky Tint strip below
+   * the image inside the 300px running-now tile.
+   */
+  className?: string
 }
 
 /**
@@ -39,6 +47,7 @@ export function MiniScreencast({
   site,
   live,
   screencast,
+  className,
 }: MiniScreencastProps) {
   const incomingSrc =
     screencast && screencast.jpegBase64.length > 0
@@ -76,7 +85,12 @@ export function MiniScreencast({
   const showImage = displayedSrc !== null
 
   return (
-    <div className="relative flex h-[132px] items-center justify-center overflow-hidden bg-bg-sunken">
+    <div
+      className={cn(
+        'relative flex items-center justify-center overflow-hidden bg-bg-sunken',
+        className ?? 'h-[132px] w-full',
+      )}
+    >
       {showImage ? (
         // biome-ignore lint/performance/noImgElement: data URL only;
         // there is no remote URL for next/image to optimise.
