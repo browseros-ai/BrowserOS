@@ -5,29 +5,23 @@
  *
  * Tests for the screencast poller's tick logic. We deliberately do
  * not start the setInterval here; instead we exercise the tick path
- * by mocking executeTool + the tab-activity registry and calling the
- * poller with a 1-shot interval that we immediately stop.
- *
- * mock.module persists across files in the same `bun test` run, so we
- * scope the mocks to known concerns (executeTool, tab-activity) and
- * let the real screencast-cache singleton drive the assertions.
+ * by stubbing session.screenshot + injecting a stub tab-activity
+ * registry, and calling the poller with a long interval that we
+ * immediately stop so only the eager first tick fires.
  */
 
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
-import * as frameworkReal from '@browseros/browser-mcp/tools/framework'
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
 import type { TabActivityRecord } from '../../src/lib/tab-activity'
 import { screencastCache } from '../../src/services/screencast-cache'
+import { startScreencastPoller } from '../../src/services/screencast-poller'
 
 interface FakeResult {
-  isError: boolean
-  content: (
-    | { type: 'text'; text: string }
-    | { type: 'image'; data: string; mimeType: string }
-  )[]
-  structuredContent?: unknown
+  ok: boolean
+  image?: string
 }
 
-const calls: { toolName: string; args: Record<string, unknown> }[] = []
+const calls: { page: number }[] = []
 const queued: Map<number, FakeResult[]> = new Map()
 let snapshotRecords: TabActivityRecord[] = []
 
@@ -42,39 +36,35 @@ function queueFor(pageId: number, ...rs: FakeResult[]): void {
 }
 
 function ok(image: string): FakeResult {
-  return {
-    isError: false,
-    content: [{ type: 'image', data: image, mimeType: 'image/jpeg' }],
-    structuredContent: { page: 1, format: 'jpeg' },
-  }
+  return { ok: true, image }
 }
 
 function badResult(): FakeResult {
-  return {
-    isError: true,
-    content: [{ type: 'text', text: 'fail' }],
-  }
+  return { ok: false }
 }
 
-mock.module('@browseros/browser-mcp/tools/framework', () => ({
-  // Spread the real module so any sibling exports (e.g. textResult)
-  // that other transitively-loaded modules import still resolve.
-  ...frameworkReal,
-  executeTool: async (def: { name: string }, args: Record<string, unknown>) => {
-    calls.push({ toolName: def.name, args })
-    const pageId = args.page as number
+// Stub session that pulls the next queued FakeResult per page.
+// ScreenshotCaptureResult shape is { data, mimeType, annotations }.
+// A queued `badResult()` throws so the poller's catch block fires,
+// matching the pre-refactor semantics where isError: true from
+// executeTool led to markFailure via the isError branch.
+const fakeSession = {
+  screenshot: async (
+    pageId: number,
+    _options: unknown,
+  ): Promise<{ data: string; mimeType: string; annotations: [] }> => {
+    calls.push({ page: pageId })
     const arr = queued.get(pageId)
     const result = arr?.shift()
-    if (!result) {
-      throw new Error(`no queued result for page=${pageId}`)
+    if (!result) throw new Error(`no queued result for page=${pageId}`)
+    if (!result.ok) throw new Error('cdp fail')
+    return {
+      data: result.image ?? '',
+      mimeType: 'image/jpeg',
+      annotations: [],
     }
-    return result
   },
-}))
-
-const { startScreencastPoller } = await import(
-  '../../src/services/screencast-poller'
-)
+} as unknown as BrowserSession
 
 // Tests inject this stub registry via opts.registry so we never
 // have to mock the tab-activity module (mock.module leaks across
@@ -106,8 +96,6 @@ function rec(
     status,
   }
 }
-
-const fakeSession = {} as never
 
 // Helper: start the poller, wait for the immediate first tick to
 // complete (Promise microtask flush + small await), stop, and return.
@@ -142,7 +130,7 @@ describe('screencast poller', () => {
 
     await runOneTick()
 
-    expect(calls.map((c) => c.args.page).sort()).toEqual([1, 3])
+    expect(calls.map((c) => c.page).sort()).toEqual([1, 3])
     expect(screencastCache.get(1)?.jpegBase64).toBe('IMG1')
     expect(screencastCache.get(3)?.jpegBase64).toBe('IMG3')
     expect(screencastCache.get(2)).toBeNull()
@@ -194,7 +182,7 @@ describe('screencast poller', () => {
     await runOneTick()
     await runOneTick()
     await runOneTick()
-    expect(calls.map((c) => c.args.page)).toEqual([4, 4, 4])
+    expect(calls.map((c) => c.page)).toEqual([4, 4, 4])
 
     // Next tick with same lastToolAt: still in backoff; expected
     // no new calls. We queue nothing because no call should fire.
