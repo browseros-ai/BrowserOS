@@ -60,12 +60,25 @@ export function startScreencastPoller(
   const intervalMs = opts.intervalMs ?? DEFAULT_POLL_INTERVAL_MS
   const registry = opts.registry ?? defaultRegistry
 
+  // Tracks CDP screenshot calls still resolving on Chromium's side.
+  // The `running` flag below stops a tick from overlapping with
+  // itself, but it does NOT stop individual snapOne calls from
+  // stacking: session.screenshot() has no AbortSignal support, so
+  // when a snapOne times out its outer Promise.race settles but the
+  // underlying capture keeps running. Under sustained sluggishness
+  // each 1.5s tick would fire a fresh CDP call for the same page on
+  // top of the last one. inFlight is a per-page guard; snapOne
+  // early-returns when the page id is already present, and the
+  // guard entry is cleared by the outstanding capture promise's
+  // .finally() when the CDP call actually resolves or rejects.
+  const inFlight = new Set<number>()
+
   let running = false
   const tick = async (): Promise<void> => {
     if (running) return
     running = true
     try {
-      await runTick(opts.session, registry)
+      await runTick(opts.session, registry, inFlight)
     } catch (err) {
       logger.warn('screencast: tick failed', {
         error: err instanceof Error ? err.message : String(err),
@@ -98,6 +111,7 @@ export function startScreencastPoller(
 async function runTick(
   session: BrowserSession,
   registry: TabActivityRegistry,
+  inFlight: Set<number>,
 ): Promise<void> {
   const tabs = registry.snapshot()
   const livePageIds = new Set<number>()
@@ -124,11 +138,38 @@ async function runTick(
   //    snapshots in flight at any time.
   for (let i = 0; i < work.length; i += MAX_PARALLEL_SHOTS) {
     const batch = work.slice(i, i + MAX_PARALLEL_SHOTS)
-    await Promise.allSettled(batch.map((pageId) => snapOne(pageId, session)))
+    await Promise.allSettled(
+      batch.map((pageId) => snapOne(pageId, session, inFlight)),
+    )
   }
 }
 
-async function snapOne(pageId: number, session: BrowserSession): Promise<void> {
+async function snapOne(
+  pageId: number,
+  session: BrowserSession,
+  inFlight: Set<number>,
+): Promise<void> {
+  // Per-page in-flight guard: see the docstring on `inFlight` at
+  // startScreencastPoller for why this is not covered by the
+  // tick-level `running` flag.
+  if (inFlight.has(pageId)) return
+  inFlight.add(pageId)
+
+  // Attach the .finally() BEFORE Promise.race so the guard entry is
+  // released when the CDP call actually resolves, not when the race
+  // timeout wins. If session.screenshot() rejects, .finally() still
+  // fires and Promise.race sees the rejection through this chained
+  // promise, so no unhandled rejection is orphaned.
+  const capturePromise = session
+    .screenshot(pageId, {
+      format: 'jpeg',
+      quality: JPEG_QUALITY,
+      annotate: false,
+    })
+    .finally(() => {
+      inFlight.delete(pageId)
+    })
+
   try {
     // Call session.screenshot() directly, WITHOUT a clip. The MCP
     // screenshot tool's default path (via executeTool) computes
@@ -147,11 +188,7 @@ async function snapOne(pageId: number, session: BrowserSession): Promise<void> {
     // (scale = 1, no clip) keeps the JPEG cost roughly the same
     // after downscaling and avoids the reflow.
     const result = await Promise.race([
-      session.screenshot(pageId, {
-        format: 'jpeg',
-        quality: JPEG_QUALITY,
-        annotate: false,
-      }),
+      capturePromise,
       new Promise<never>((_, reject) => {
         AbortSignal.timeout(SCREENSHOT_TIMEOUT_MS).addEventListener(
           'abort',
