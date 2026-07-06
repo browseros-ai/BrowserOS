@@ -47,7 +47,6 @@ const {
   applyAgentTabGroupTitle,
   ensureAgentTabGroup,
   closeAgentTabGroupForAgent,
-  focusAgentTabGroup,
 } = await import('../../src/services/tab-group-ops')
 
 const fakeSession = {} as never
@@ -324,51 +323,5 @@ describe('applyAgentTabGroupTitle', () => {
       groupId: 'G1',
       title: 'claude/invoice-processing',
     })
-  })
-})
-
-describe('focusAgentTabGroup', () => {
-  beforeEach(() => {
-    calls.length = 0
-    queued.length = 0
-    tabGroupTracker.reset()
-  })
-
-  it('returns ok=false when the tracker has no group for the agent', async () => {
-    const r = await focusAgentTabGroup({
-      agentId: 'unknown',
-      session: fakeSession,
-    })
-    expect(r.ok).toBe(false)
-  })
-
-  it('expands the group and activates the window for a tracked agent', async () => {
-    queue(ok({ group: { groupId: 'G1', windowId: 42 } }), ok(), ok(), ok())
-    await ensureAgentTabGroup({
-      agentId: 'a',
-      slug: 'a',
-      pageId: 1,
-      session: fakeSession,
-    })
-    const r = await focusAgentTabGroup({
-      agentId: 'a',
-      session: fakeSession,
-    })
-    expect(r.ok).toBe(true)
-    expect(r.groupId).toBe('G1')
-    expect(r.windowId).toBe(42)
-    const expand = calls.find(
-      (c) =>
-        (c.args as { action?: string }).action === 'update' &&
-        (c.args as { collapsed?: boolean }).collapsed === false,
-    )
-    expect(expand).toBeDefined()
-    const activate = calls.find(
-      (c) =>
-        c.toolName === 'windows' &&
-        (c.args as { action?: string }).action === 'activate',
-    )
-    expect(activate).toBeDefined()
-    expect((activate?.args as { windowId?: number }).windowId).toBe(42)
   })
 })

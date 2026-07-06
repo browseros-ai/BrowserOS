@@ -4,14 +4,13 @@ pub mod surfaces;
 
 use crate::{
     error::{AppError, AppResult},
-    services::agents::{Harness, HarnessInstallOutcome, StoredAgentProfile},
+    services::agents::Harness,
 };
 use manifest::{HarnessLink, HarnessManifest};
 use plan::{PlanAction, PlanOutcome};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use surfaces::{McpServerSpec, SurfacePaths, config_path_for};
 use tokio::sync::Mutex;
-use tracing::warn;
 
 pub const BROWSEROS_MCP_SERVER_NAME: &str = "BrowserClaw";
 
@@ -52,94 +51,6 @@ impl HarnessService {
             home_dir,
             paths,
             mutex: Arc::new(Mutex::new(())),
-        }
-    }
-
-    pub async fn install_for_agent(&self, profile: &StoredAgentProfile) -> HarnessInstallOutcome {
-        match self
-            .connect(
-                profile.harness,
-                profile.slug.as_str(),
-                profile.mcp_url.as_str(),
-                false,
-            )
-            .await
-        {
-            Ok(state) => HarnessInstallOutcome {
-                installed: state.installed,
-                message: if state.installed {
-                    format!("Endpoint registered with {}.", profile.harness)
-                } else {
-                    state.message
-                },
-                agent: state.agent_id,
-                config_path: state.config_path,
-            },
-            Err(err) => HarnessInstallOutcome {
-                installed: false,
-                message: format!(
-                    "Could not register endpoint with {}: {err}",
-                    profile.harness
-                ),
-                agent: profile.harness.agent_id().map(str::to_string),
-                config_path: None,
-            },
-        }
-    }
-
-    pub async fn uninstall_for_agent(&self, profile: &StoredAgentProfile) -> HarnessInstallOutcome {
-        match self
-            .disconnect(profile.harness, profile.slug.as_str())
-            .await
-        {
-            Ok(state) => HarnessInstallOutcome {
-                installed: state.installed,
-                message: if state.installed {
-                    state.message
-                } else {
-                    format!("Endpoint unregistered from {}.", profile.harness)
-                },
-                agent: state.agent_id,
-                config_path: state.config_path,
-            },
-            Err(err) => HarnessInstallOutcome {
-                installed: false,
-                message: format!(
-                    "Could not unregister endpoint from {}: {err}",
-                    profile.harness
-                ),
-                agent: profile.harness.agent_id().map(str::to_string),
-                config_path: None,
-            },
-        }
-    }
-
-    pub async fn reconcile_agent_link(
-        &self,
-        before: &StoredAgentProfile,
-        after: &StoredAgentProfile,
-    ) {
-        if before.harness == after.harness
-            && before.slug == after.slug
-            && before.mcp_url == after.mcp_url
-        {
-            return;
-        }
-        if let Err(err) = self
-            .connect(
-                after.harness,
-                after.slug.as_str(),
-                after.mcp_url.as_str(),
-                false,
-            )
-            .await
-        {
-            warn!(error = %err, "agent harness relink install failed");
-        }
-        if (before.harness != after.harness || before.slug != after.slug)
-            && let Err(err) = self.disconnect(before.harness, before.slug.as_str()).await
-        {
-            warn!(error = %err, "agent harness relink uninstall failed");
         }
     }
 

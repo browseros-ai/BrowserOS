@@ -18,7 +18,6 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { HttpError } from './lib/errors'
 import { logger } from './lib/logger'
-import { agentsRoute } from './routes/agents'
 import { agentsControlRoute } from './routes/agents-control'
 import { auditRoute } from './routes/audit'
 import { auditScreenshotsRoute } from './routes/audit/screenshots'
@@ -27,11 +26,8 @@ import { auditReplayRoute } from './routes/audit-replay'
 import { replayTabsRoute } from './routes/audit-replay/tabs'
 import { connectionsRoute } from './routes/connections'
 import { mcpV2Route } from './routes/mcp-v2'
-import { permissionsRoute } from './routes/permissions'
-import { siteRulesRoute } from './routes/site-rules'
 import { createSystemRoute } from './routes/system'
 import { tabsRoute } from './routes/tabs'
-import { tabsFocusRoute } from './routes/tabs-focus'
 
 // Telemetry capture is injectable so the server module stays usable
 // from the bun-test runner without pulling Sentry into the import
@@ -109,12 +105,8 @@ export function createServer(options: CreateServerOptions = {}) {
   // The single MCP endpoint mounts at `/mcp`.
   return app
     .route('/', createSystemRoute({ onShutdown: options.onShutdown }))
-    .route('/', agentsRoute)
-    .route('/', siteRulesRoute)
-    .route('/', permissionsRoute)
     .route('/', mcpV2Route)
     .route('/', tabsRoute)
-    .route('/', tabsFocusRoute)
     .route('/', agentsControlRoute)
     .route('/', connectionsRoute)
     .route('/', auditRoute)

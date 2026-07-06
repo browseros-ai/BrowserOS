@@ -4,21 +4,20 @@ use crate::{
     error::{AppError, AppResult},
     mcp::endpoint::mcp_endpoint,
     services::{
-        agents::{Harness, NewAgentValues},
+        agents::Harness,
         audit::{ListDispatchesQuery, ListTasksQuery, TaskStatus},
         replay::ReplayService,
-        site_rules::AddSiteRule,
         tab_activity::EnrichedTabRecord,
     },
 };
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, Query, Request, State, rejection::JsonRejection},
+    extract::{Path, Query, Request, State},
     http::{HeaderValue, Method, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
-    routing::{any, delete, get, options, post},
+    routing::{any, get, options, post},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -32,20 +31,8 @@ pub fn router() -> Router<AppState> {
         .route("/system/shutdown", post(system_shutdown))
         .route("/system/version", get(system_version))
         .route("/system/url", get(system_url))
-        .route("/agents", post(agents_create).get(agents_list))
-        .route(
-            "/agents/{id}",
-            get(agents_detail)
-                .patch(agents_update)
-                .delete(agents_delete),
-        )
-        .route("/agents/{id}/mcp-url:regenerate", post(agents_regenerate))
         .route("/agents/{agent_id}/cancel", post(agents_cancel))
-        .route("/site-rules", get(site_rules_list).post(site_rules_create))
-        .route("/site-rules/{id}", delete(site_rules_delete))
-        .route("/permissions/catalog", get(permissions_catalog))
         .route("/tabs/activity", get(tabs_activity))
-        .route("/tabs/focus/{agent_id}", post(tabs_focus))
         .route("/connections", get(connections_list))
         .route("/connections/{harness}/connect", post(connections_connect))
         .route(
@@ -132,69 +119,6 @@ async fn system_url(State(state): State<AppState>) -> Json<Value> {
     Json(json!({ "url": state.config.local_server_url() }))
 }
 
-async fn agents_create(
-    State(state): State<AppState>,
-    payload: Result<Json<NewAgentValues>, JsonRejection>,
-) -> AppResult<impl IntoResponse> {
-    let Json(body) = json_body(payload)?;
-    let created = state.agents.create(body).await?;
-    Ok((StatusCode::CREATED, Json(created)))
-}
-
-async fn agents_list(State(state): State<AppState>) -> AppResult<Json<Value>> {
-    Ok(Json(serde_json::to_value(state.agents.list().await?)?))
-}
-
-async fn agents_detail(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
-    let detail = state
-        .agents
-        .get_detail(&id)
-        .await?
-        .ok_or_else(|| AppError::not_found("agent not found"))?;
-    Ok(Json(serde_json::to_value(detail)?))
-}
-
-async fn agents_update(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    payload: Result<Json<NewAgentValues>, JsonRejection>,
-) -> AppResult<Json<Value>> {
-    let Json(body) = json_body(payload)?;
-    let updated = state
-        .agents
-        .update(&id, body)
-        .await?
-        .ok_or_else(|| AppError::not_found("agent not found"))?;
-    Ok(Json(serde_json::to_value(updated)?))
-}
-
-async fn agents_delete(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
-    let deleted = state
-        .agents
-        .remove(&id)
-        .await?
-        .ok_or_else(|| AppError::not_found("agent not found"))?;
-    Ok(Json(serde_json::to_value(deleted)?))
-}
-
-async fn agents_regenerate(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
-    let rotated = state
-        .agents
-        .regenerate_mcp_url(&id)
-        .await?
-        .ok_or_else(|| AppError::not_found("agent not found"))?;
-    Ok(Json(serde_json::to_value(rotated)?))
-}
-
 async fn agents_cancel(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -204,42 +128,6 @@ async fn agents_cancel(
         return Err(AppError::not_found("no active dispatches for this agent"));
     }
     Ok(Json(json!({ "ok": true, "cancelled": cancelled })))
-}
-
-async fn site_rules_list(State(state): State<AppState>) -> AppResult<Json<Value>> {
-    Ok(Json(serde_json::to_value(state.site_rules.list().await?)?))
-}
-
-async fn site_rules_create(
-    State(state): State<AppState>,
-    payload: Result<Json<AddSiteRule>, JsonRejection>,
-) -> AppResult<impl IntoResponse> {
-    let Json(body) = json_body(payload)?;
-    let created = state.site_rules.add(body).await?;
-    Ok((StatusCode::CREATED, Json(created)))
-}
-
-async fn site_rules_delete(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
-    let deleted = state
-        .site_rules
-        .remove(&id)
-        .await?
-        .ok_or_else(|| AppError::not_found("site rule not found"))?;
-    Ok(Json(deleted))
-}
-
-async fn permissions_catalog() -> Json<Value> {
-    Json(json!([
-        { "id": "submit", "name": "Submit / send / post", "defaultVerdict": "Ask", "allowAuto": true },
-        { "id": "payment", "name": "Payments & checkout", "defaultVerdict": "Block", "allowAuto": false },
-        { "id": "delete", "name": "Delete / destructive", "defaultVerdict": "Ask", "allowAuto": true },
-        { "id": "upload", "name": "File upload", "defaultVerdict": "Ask", "allowAuto": true },
-        { "id": "navigate", "name": "Navigate to a new site", "defaultVerdict": "Ask", "allowAuto": true },
-        { "id": "input", "name": "Click & type", "defaultVerdict": "Auto", "allowAuto": true }
-    ]))
 }
 
 async fn tabs_activity(State(state): State<AppState>) -> AppResult<Json<Value>> {
@@ -261,27 +149,6 @@ async fn tabs_activity(State(state): State<AppState>) -> AppResult<Json<Value>> 
         });
     }
     Ok(Json(json!({ "tabs": enriched })))
-}
-
-async fn tabs_focus(
-    State(state): State<AppState>,
-    Path(agent_id): Path<String>,
-) -> AppResult<Response> {
-    if state.browser.session().await.is_none() {
-        return Ok((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "ok": false, "reason": "browser session not connected" })),
-        )
-            .into_response());
-    }
-    Ok((
-        StatusCode::NOT_FOUND,
-        Json(json!({
-            "ok": false,
-            "reason": format!("no tab group registered for {agent_id}")
-        })),
-    )
-        .into_response())
 }
 
 async fn connections_list(State(state): State<AppState>) -> AppResult<Json<Value>> {
@@ -459,10 +326,6 @@ async fn replay_exists(
 
 async fn replay_tabs() -> Json<Value> {
     Json(json!({ "tabs": [] }))
-}
-
-fn json_body<T>(payload: Result<Json<T>, JsonRejection>) -> AppResult<Json<T>> {
-    payload.map_err(|err| AppError::bad_request(err.body_text()))
 }
 
 fn validate_limit(limit: Option<i64>, cap: i64) -> AppResult<()> {

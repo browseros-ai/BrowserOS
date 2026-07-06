@@ -3,15 +3,8 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * System-wide default approval catalog. This is the source for
- * `GET /permissions/catalog` and the fallback `permissions.check()`
- * uses when neither a site rule nor an agent verdict applies.
- *
- * Keep in sync with the UI's local catalog at
- * apps/claw-app/screens/new-agent/new-agent.schemas.ts
- * (`APPROVAL_CATEGORIES`). The UI keeps its own copy as the
- * fetch-failure fallback path for the Permissions tab; this server
- * copy is the source of truth at the wire boundary.
+ * System-wide default approval catalog used by `permissions.check()`
+ * when neither a site rule nor an agent verdict applies.
  */
 
 import { z } from 'zod'

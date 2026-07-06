@@ -5,7 +5,6 @@ pub mod harness;
 pub mod replay;
 pub mod screencast;
 pub mod screenshots;
-pub mod site_rules;
 pub mod tab_activity;
 
 pub(crate) fn now_epoch_ms() -> i64 {
@@ -20,27 +19,5 @@ pub(crate) fn now_iso() -> String {
     match now.format(&time::format_description::well_known::Rfc3339) {
         Ok(value) => value,
         Err(_) => now.unix_timestamp().to_string(),
-    }
-}
-
-pub(crate) fn slugify(input: &str) -> String {
-    let mut out = String::new();
-    let mut pending_dash = false;
-    for ch in input.chars().flat_map(char::to_lowercase) {
-        if ch.is_ascii_alphanumeric() {
-            if pending_dash && !out.is_empty() {
-                out.push('-');
-            }
-            pending_dash = false;
-            out.push(ch);
-        } else {
-            pending_dash = true;
-        }
-    }
-    let trimmed = out.trim_matches('-').to_string();
-    if trimmed.is_empty() {
-        "agent".to_string()
-    } else {
-        trimmed
     }
 }
