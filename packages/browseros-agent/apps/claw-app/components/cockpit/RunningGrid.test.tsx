@@ -75,7 +75,7 @@ describe('RunningGrid', () => {
     expect(html).not.toContain('0 live')
   })
 
-  it('does not render the legacy AddAgentTile when agents are present', () => {
+  it('does not render an add-profile tile when agents are present', () => {
     const html = renderWithRouter(<RunningGrid agents={[agent()]} />)
     expect(html).not.toContain('New profile')
     expect(html).not.toContain('harness . logins . guardrails')

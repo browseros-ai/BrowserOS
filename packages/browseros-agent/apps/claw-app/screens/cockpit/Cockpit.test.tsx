@@ -1,8 +1,7 @@
 /**
  * Pins the v2 homepage's section set: hero, running grid, recent
- * activity. The waiting strip and the new-profile tile must NOT
- * render in the default v2 build (their files stay on disk with TODO
- * headers, but the rendered tree does not reach them).
+ * activity. Legacy waiting and new-profile surfaces must not render
+ * in the default v2 build.
  */
 
 import { describe, expect, it, mock } from 'bun:test'
@@ -60,7 +59,7 @@ describe('Cockpit (v2)', () => {
     expect(html).not.toContain('Waiting on you')
   })
 
-  it('does NOT render the AddAgentTile in the default v2 build', () => {
+  it('does NOT render an add-profile tile in the default v2 build', () => {
     const html = renderApp()
     expect(html).not.toContain('New profile')
     expect(html).not.toContain('harness . logins . guardrails')

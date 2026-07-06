@@ -12,7 +12,7 @@
  */
 
 import { createMutation, createQuery } from 'react-query-kit'
-import type { Harness } from '@/screens/new-agent/new-agent.schemas'
+import type { Harness } from '@/components/harness/harness.types'
 import { api } from './client'
 import { parseResponse } from './parseResponse'
 

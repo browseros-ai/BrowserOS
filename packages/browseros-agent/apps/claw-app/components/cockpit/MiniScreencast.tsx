@@ -16,7 +16,7 @@ interface MiniScreencastProps {
   screencast?: ScreencastFrame | null
   /**
    * Overrides the container sizing. Defaults to `h-[132px] w-full`
-   * (the RunningCard grid tile shape). AgentRunningCard passes
+   * for compact cards. AgentRunningCard passes
    * `h-full w-full` so the frame fills its `flex-1` zone instead of
    * clamping at 132px, which used to leave a Sky Tint strip below
    * the image inside the 300px running-now tile.
@@ -92,8 +92,6 @@ export function MiniScreencast({
       )}
     >
       {showImage ? (
-        // biome-ignore lint/performance/noImgElement: data URL only;
-        // there is no remote URL for next/image to optimise.
         <img
           src={displayedSrc}
           alt={`Live view of ${site}`}

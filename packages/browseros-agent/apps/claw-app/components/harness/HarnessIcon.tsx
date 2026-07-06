@@ -1,6 +1,6 @@
 import { Bot, PawPrint, Wand2 } from 'lucide-react'
 import type { FC } from 'react'
-import type { Harness } from '@/screens/new-agent/new-agent.schemas'
+import type { Harness } from './harness.types'
 import {
   ClaudeCodeMark,
   ClaudeDesktopMark,
@@ -12,11 +12,10 @@ import {
 } from './harness-marks'
 
 /**
- * Single icon component for any harness the wizard can target. The
- * 7 external harnesses render brand SVG marks installed via the
- * `@svgl` shadcn registry; the 2 BrowserOS-internal harnesses
- * (Hermes, OpenClaw) fall through to lucide picks because they have
- * no third-party brand identity.
+ * Single icon component for any supported harness. External
+ * harnesses render brand SVG marks; BrowserOS-internal harnesses
+ * fall through to lucide picks because they have no third-party
+ * brand identity.
  *
  * Brand marks paint themselves in their native colours, so
  * `className` is only used for sizing. Lucide picks accept the
@@ -55,13 +54,4 @@ export const HarnessIcon: FC<HarnessIconProps> = ({ harness, className }) => {
       return <Bot className={className} aria-label="Harness" />
     }
   }
-}
-
-/**
- * True when the harness corresponds to a third-party CLI/IDE we will
- * write a real MCP config entry for. False for BrowserOS-internal
- * harnesses (Hermes, OpenClaw).
- */
-export function isExternalHarness(harness: Harness): boolean {
-  return harness !== 'Hermes' && harness !== 'OpenClaw'
 }

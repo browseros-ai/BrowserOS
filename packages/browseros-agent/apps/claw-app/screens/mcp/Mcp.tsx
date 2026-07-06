@@ -1,5 +1,9 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
+import {
+  type Harness,
+  RETIRED_HARNESSES,
+} from '@/components/harness/harness.types'
 import { EditorialEmpty } from '@/components/ui/EditorialEmpty'
 import {
   useBrowserosConnections,
@@ -7,10 +11,6 @@ import {
   useDisconnectBrowseros,
 } from '@/modules/api/connections.hooks'
 import { resolveCanonicalMcpEndpointUrl } from '@/modules/api/mcp-endpoint'
-import {
-  type Harness,
-  RETIRED_HARNESSES,
-} from '@/screens/new-agent/new-agent.schemas'
 import { ConnectionRow } from './ConnectionRow'
 import { HeroCard } from './HeroCard'
 
@@ -23,7 +23,6 @@ import { HeroCard } from './HeroCard'
  *   - `RETIRED_HARNESSES` (currently Claude Desktop): stdio-only host
  *     configs whose recommended `npx mcp-remote` bridge requires
  *     Node on the user's machine, which BrowserOS cannot guarantee.
- *     Mirrors the new-agent picker's `SELECTABLE_HARNESSES` filter.
  *   - Hermes / OpenClaw: BrowserOS-internal harnesses that read as
  *     Built-in and do not need a user-facing Connect flow.
  *   - Gemini CLI: dropped per operator direction.

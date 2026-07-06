@@ -8,7 +8,6 @@ import {
   siteOf,
   tabsToActivityRows,
   tabsToAgentActivity,
-  tabsToAgentRows,
 } from './cockpit.helpers'
 
 function record(over: Partial<TabActivityRecord> = {}): TabActivityRecord {
@@ -99,71 +98,6 @@ describe('harnessForRow', () => {
   })
   it('falls back to Claude Code for unknown values', () => {
     expect(harnessForRow('Atlas-9000')).toBe('Claude Code')
-  })
-})
-
-describe('tabsToAgentRows', () => {
-  it('filters out idle records and maps to AgentRow shape', () => {
-    const rows = tabsToAgentRows([
-      record({ targetId: 't1', status: 'active', slug: 'finance' }),
-      record({ targetId: 't2', status: 'idle', slug: 'travel' }),
-    ])
-    expect(rows.map((r) => r.id)).toEqual(['t1'])
-    expect(rows[0]).toMatchObject({
-      label: 'Finance Ops',
-      harness: 'Claude Code',
-      site: 'example.com',
-      task: 'Ex',
-      status: 'running',
-    })
-  })
-
-  it('uses the server-supplied agent label and harness', () => {
-    const rows = tabsToAgentRows([
-      record({
-        targetId: 't1',
-        status: 'active',
-        agentLabel: 'Cowork . File expenses',
-        harness: 'Cursor',
-      }),
-    ])
-    expect(rows[0].label).toBe('Cowork . File expenses')
-    expect(rows[0].harness).toBe('Cursor')
-  })
-
-  it('falls back to slug + Claude Code + hashed colour when the server returned null', () => {
-    const rows = tabsToAgentRows([
-      record({
-        targetId: 't1',
-        status: 'active',
-        slug: 'orphan',
-        agentLabel: '',
-        harness: null,
-        color: null,
-      }),
-    ])
-    expect(rows[0].label).toBe('orphan')
-    expect(rows[0].harness).toBe('Claude Code')
-    expect(rows[0].color).toBe(colorForSlug('orphan'))
-  })
-
-  it('surfaces the trail, action count, and startedAt on the row', () => {
-    const rows = tabsToAgentRows([
-      record({
-        targetId: 't1',
-        status: 'active',
-        recentTools: [
-          { name: 'navigate', at: 1_000_000 },
-          { name: 'snapshot', at: 1_000_100 },
-          { name: 'read', at: 1_000_200 },
-        ],
-        toolCount: 3,
-        firstToolAt: 1_000_000,
-      }),
-    ])
-    expect(rows[0].toolCount).toBe(3)
-    expect(rows[0].startedAt).toBe(1_000_000)
-    expect(rows[0].trail).toBe('navigate -> snapshot -> read')
   })
 })
 

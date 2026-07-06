@@ -1,7 +1,6 @@
+import { HARNESSES, type Harness } from '@/components/harness/harness.types'
 import type { ActivityRow } from '@/modules/api/activity.hooks'
-import type { AgentRow } from '@/modules/api/agents.hooks'
 import type { TabActivityRecord, ToolEvent } from '@/modules/api/tabs.hooks'
-import { HARNESSES, type Harness } from '@/screens/new-agent/new-agent.schemas'
 
 // Fallback palette used when the server-side join did not return a
 // colour for the agent (today no profile field exists; the server
@@ -50,9 +49,8 @@ export function formatRelative(ms: number, now: number): string {
 }
 
 /**
- * Returns the most recent N tool names joined with `->` for the
- * RunningCard's trail row. Capped to keep the card visually tight;
- * the full ring buffer is still in the data for any other consumer.
+ * Returns the most recent N tool names joined with `->` for compact
+ * card trail rows.
  */
 export function formatToolTrail(
   recentTools: ToolEvent[],
@@ -74,31 +72,6 @@ export function harnessForRow(value: string | null): Harness {
   return (HARNESSES as readonly string[]).includes(value)
     ? (value as Harness)
     : 'Claude Code'
-}
-
-/**
- * Tabs whose `status === 'active'` become live agent cards. The
- * label, harness, and colour all come from the route's profile join
- * when available, falling back to slug-derived defaults so a record
- * whose profile was deleted between dispatch and render still shows
- * something useful.
- */
-export function tabsToAgentRows(records: TabActivityRecord[]): AgentRow[] {
-  return records
-    .filter((r) => r.status === 'active')
-    .map((r) => ({
-      id: r.targetId,
-      label: r.agentLabel || r.slug,
-      harness: harnessForRow(r.harness),
-      site: siteOf(r.url),
-      task: r.title || siteOf(r.url),
-      status: 'running' as const,
-      liveLine: `${r.lastToolName} - ${r.title || siteOf(r.url)}`,
-      color: r.color ?? colorForSlug(r.slug),
-      toolCount: r.toolCount,
-      startedAt: r.firstToolAt,
-      trail: formatToolTrail(r.recentTools),
-    }))
 }
 
 /**
