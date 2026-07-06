@@ -1,12 +1,4 @@
-/**
- * Central RunStatus union + display metadata.
- *
- * The cockpit, governance audit, and recent-activity rows all map the
- * same underlying status to consistent label + color + pulse-dot
- * behaviour. Splitting that map out here keeps the StatusBadge a thin
- * wrapper and prevents the colors drifting between the dashboard and
- * the audit trail.
- */
+/** Shared status labels and colors for cockpit and audit surfaces. */
 
 export type RunStatus =
   | 'running'
@@ -22,11 +14,8 @@ export type RunStatus =
 
 export interface StatusMeta {
   label: string
-  /** Tailwind utility for the text color (token-keyed) */
   textClass: string
-  /** Tailwind utility for the background tint */
   bgClass: string
-  /** Whether the badge animates with a pulse-dot leading the label */
   pulse: boolean
 }
 
@@ -93,7 +82,6 @@ export const STATUS_META: Record<RunStatus, StatusMeta> = {
   },
 }
 
-/** Convenience: status that represents an in-flight run. */
 export function isActiveStatus(status: RunStatus): boolean {
   return (
     status === 'running' ||
@@ -103,7 +91,6 @@ export function isActiveStatus(status: RunStatus): boolean {
   )
 }
 
-/** Convenience: terminal statuses where the run no longer changes. */
 export function isEndedStatus(status: RunStatus): boolean {
   return status === 'done' || status === 'stopped'
 }

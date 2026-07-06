@@ -4,11 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * react-query-kit factories for the v2 MCP page's per-harness
- * Connect / Disconnect buttons. Backed by the
- * `GET /connections` and `POST /connections/:harness/{connect,disconnect}`
- * routes shipped in this PR. Mutation success invalidates the list
- * query by its `getKey()` so the row's "Connected" badge flips
- * within one render.
+ * Connect / Disconnect buttons.
  */
 
 import { createMutation, createQuery } from 'react-query-kit'

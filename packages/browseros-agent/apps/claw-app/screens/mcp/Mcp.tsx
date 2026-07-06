@@ -14,23 +14,7 @@ import { resolveCanonicalMcpEndpointUrl } from '@/modules/api/mcp-endpoint'
 import { ConnectionRow } from './ConnectionRow'
 import { HeroCard } from './HeroCard'
 
-/**
- * Editorial MCP install board. Compressed hero with a single dark-
- * ink endpoint strip; hairline-separated Connected-agents list below.
- * Three groups of harnesses are hidden at the render layer; the
- * underlying `useBrowserosConnections` data source is untouched:
- *
- *   - `RETIRED_HARNESSES` (currently Claude Desktop): stdio-only host
- *     configs whose recommended `npx mcp-remote` bridge requires
- *     Node on the user's machine, which BrowserOS cannot guarantee.
- *   - Hermes / OpenClaw: BrowserOS-internal harnesses that read as
- *     Built-in and do not need a user-facing Connect flow.
- *   - Gemini CLI: dropped per operator direction.
- *
- * Live MCP-session state (who is connected right now) is surfaced on
- * the cockpit's running grid, not here; this page is the install
- * board.
- */
+/** Harnesses that should not show a user-facing Connect flow. */
 const HIDDEN_HARNESSES: readonly Harness[] = [
   ...RETIRED_HARNESSES,
   'Hermes',

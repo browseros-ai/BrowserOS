@@ -3,23 +3,10 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Wires a cockpit agent profile into the user's chosen harness's MCP
- * config file via `agent-mcp-manager`. Each cockpit profile becomes
- * one entry in the harness's config, keyed by the profile's slug,
- * pointing at the canonical `http://127.0.0.1:9200/mcp` endpoint.
- *
- * `installForAgent` runs on POST /agents (right after the profile
- * file is written). `uninstallForAgent` runs on DELETE /agents/:id
- * (right before the profile file is removed). Both are best-effort
- * from the caller's point of view: an install failure does not
- * prevent the profile from being created, and an uninstall failure
- * does not prevent the profile from being deleted. The HTTP response
- * carries the outcome so the UI can surface it.
- *
- * Harness mapping is documented in HARNESS_TO_AGENT_ID below; two
- * harnesses (Hermes, OpenClaw) are BrowserOS-internal and do not
- * have a third-party config to write, so they short-circuit as a
- * no-op success.
+ * Wires a stored cockpit agent profile into the user's chosen harness
+ * MCP config via `agent-mcp-manager`. Install and uninstall are
+ * best-effort from profile persistence: failed harness writes return
+ * an outcome instead of rolling back the profile mutation.
  */
 
 import type { AgentId } from 'agent-mcp-manager'
@@ -31,25 +18,15 @@ import { relinkManagedServer } from './mcp-relink'
 import { specFor } from './spec-for'
 
 export interface InstallOutcome {
-  /** True iff the harness config was written successfully (or no-op for internal harnesses). */
   installed: boolean
-  /**
-   * Single-line human-readable message. Always present so the UI can
-   * surface the same string for success and failure.
-   */
   message: string
-  /** Filled when `installed` is true and the library wrote to a real file. */
   agent?: AgentId
   configPath?: string
 }
 
 /**
- * Map the wizard's harness label to the upstream library's agent id.
- * `null` means "no third-party config to write" (BrowserOS-internal
- * harness); the install short-circuits as a successful no-op.
- *
- * If a mapping is wrong, change it here and every install/uninstall
- * path picks up the new target.
+ * Maps stored harness labels to upstream agent ids; null means the
+ * harness is BrowserOS-internal and has no third-party config file.
  */
 export const HARNESS_TO_AGENT_ID: Record<Harness, AgentId | null> = {
   'Claude Code': 'claude-code',
@@ -129,14 +106,8 @@ export async function uninstallForAgent(
 }
 
 /**
- * Re-sync the harness MCP config after a profile mutation that
- * rotated the slug, swapped the harness, or changed the URL. Slug
- * and harness changes install the new entry before removing the old
- * one; URL-only changes rewrite the same entry with rollback.
- *
- * No-op when harness, slug, and URL all stayed the same. Returns the
- * install + uninstall outcomes so callers can log them (today) or
- * surface them in the response (later).
+ * Keeps the harness MCP entry aligned after profile slug, harness, or
+ * URL changes.
  */
 export async function reconcileHarnessLink(input: {
   before: Pick<StoredAgentProfile, 'slug' | 'mcpUrl' | 'harness'>
