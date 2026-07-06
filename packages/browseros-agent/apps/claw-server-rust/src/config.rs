@@ -12,6 +12,8 @@ const DEFAULT_SERVER_PORT: u16 = 9200;
 const DEFAULT_CDP_PORT: u16 = 49337;
 const DEFAULT_SESSION_IDLE_MS: u64 = 5 * 60 * 1000;
 const DEFAULT_SESSION_SWEEP_INTERVAL_MS: u64 = 60 * 1000;
+const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
+const DEV_BROWSERCLAW_DIR_NAME: &str = ".browserclaw-dev";
 
 #[derive(Debug, Parser)]
 #[command(name = "browseros-claw-server-rs")]
@@ -26,7 +28,7 @@ pub struct Config {
     pub cdp_port: u16,
     pub proxy_port: Option<u16>,
     pub resources_dir: PathBuf,
-    pub browseros_dir: PathBuf,
+    pub browserclaw_dir: PathBuf,
     pub claw_dir: PathBuf,
     pub session_idle: Duration,
     pub session_sweep_interval: Duration,
@@ -132,8 +134,8 @@ impl Config {
                 .map(|value| value == "development")
                 .unwrap_or(false)
         });
-        let browseros_dir = resolve_browseros_dir(env, dev_mode, &cwd);
-        let claw_dir = browseros_dir.join("claw-server");
+        let browserclaw_dir = resolve_browserclaw_dir(env, dev_mode, &cwd);
+        let claw_dir = browserclaw_dir.clone();
         let auth_token = sidecar
             .auth
             .token
@@ -144,7 +146,7 @@ impl Config {
             cdp_port,
             proxy_port,
             resources_dir,
-            browseros_dir,
+            browserclaw_dir,
             claw_dir,
             session_idle: Duration::from_millis(read_positive_ms(
                 env,
@@ -187,15 +189,15 @@ fn resolve_path(cwd: &Path, path: PathBuf) -> PathBuf {
     }
 }
 
-fn resolve_browseros_dir(env: &ConfigEnv, dev_mode: bool, cwd: &Path) -> PathBuf {
-    if let Some(raw) = env.get("BROWSEROS_DIR").and_then(clean_string) {
+fn resolve_browserclaw_dir(env: &ConfigEnv, dev_mode: bool, cwd: &Path) -> PathBuf {
+    if let Some(raw) = env.get("BROWSERCLAW_DIR").and_then(clean_string) {
         return PathBuf::from(raw);
     }
     let home = env.home_dir.clone().unwrap_or_else(|| cwd.to_path_buf());
     home.join(if dev_mode {
-        ".browseros-dev"
+        DEV_BROWSERCLAW_DIR_NAME
     } else {
-        ".browseros"
+        BROWSERCLAW_DIR_NAME
     })
 }
 
@@ -233,14 +235,14 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn parses_sidecar_defaults_and_browseros_dir_override() -> anyhow::Result<()> {
+    fn parses_sidecar_defaults_and_browserclaw_dir_override() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let config_path = dir.path().join("sidecar.json");
         fs::write(&config_path, r#"{"ports":{},"directories":{}}"#)?;
         let mut vars = BTreeMap::new();
         vars.insert(
-            "BROWSEROS_DIR".to_string(),
-            dir.path().join("browseros").to_string_lossy().to_string(),
+            "BROWSERCLAW_DIR".to_string(),
+            dir.path().join("browserclaw").to_string_lossy().to_string(),
         );
         vars.insert("CLAW_SESSION_IDLE_MS".to_string(), "1000".to_string());
         let cfg = Config::load_with_env(
@@ -251,7 +253,8 @@ mod tests {
         assert_eq!(cfg.cdp_port, 49337);
         assert_eq!(cfg.proxy_port, None);
         assert_eq!(cfg.session_idle, Duration::from_millis(1000));
-        assert!(cfg.browseros_dir.ends_with("browseros"));
+        assert!(cfg.browserclaw_dir.ends_with("browserclaw"));
+        assert_eq!(cfg.claw_dir, cfg.browserclaw_dir);
         assert_eq!(cfg.public_mcp_url(), "http://127.0.0.1:9200/mcp");
         Ok(())
     }
@@ -271,7 +274,8 @@ mod tests {
         assert_eq!(cfg.server_port, 9300);
         assert_eq!(cfg.cdp_port, 49338);
         assert_eq!(cfg.proxy_port, Some(9444));
-        assert!(cfg.browseros_dir.ends_with(".browseros-dev"));
+        assert!(cfg.browserclaw_dir.ends_with(".browserclaw-dev"));
+        assert_eq!(cfg.claw_dir, cfg.browserclaw_dir);
         assert_eq!(cfg.public_mcp_url(), "http://127.0.0.1:9444/mcp");
         Ok(())
     }

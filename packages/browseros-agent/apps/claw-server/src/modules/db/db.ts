@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * SQLite audit DB. One process-wide singleton, lazily constructed on
- * first use. File lives at `<browserosDir>/mcp-interface/audit.sqlite`
- * so multiple BrowserOS installs (per-user) stay isolated.
+ * first use. File lives at `<browserclawDir>/audit.sqlite` so BrowserClaw
+ * state stays isolated from BrowserOS server state.
  *
  * WAL + NORMAL synchronous is the recommended bun:sqlite profile for
  * write-heavy workloads: writers serialise through one connection,
@@ -16,7 +16,7 @@ import { Database } from 'bun:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite'
-import { resolveClawServerPath } from '../../lib/browseros-dir'
+import { resolveClawServerPath } from '../../lib/browserclaw-dir'
 import { logger } from '../../lib/logger'
 import { runMigrations } from './migrator'
 import * as schema from './schema/schema'

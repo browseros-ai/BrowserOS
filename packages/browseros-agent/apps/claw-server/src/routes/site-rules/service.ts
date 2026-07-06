@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * File-backed site-rules service. All rules live in a single array
- * file at <browserosDir>/claw-server/site-rules.json (typical user
+ * file at <browserclawDir>/site-rules.json (typical user
  * count is under 20, full-array scans on every read are fine and the
  * single-file shape lets the UI's list view round-trip in one I/O
  * call).

@@ -17,7 +17,7 @@
  * which is when the file matters most.
  *
  * Known limitation: rotation assumes one claw-server per
- * <browserosDir>. Two instances on different ports sharing a dir can
+ * <browserclawDir>. Two instances on different ports sharing a dir can
  * rotate each other's live log; guarding that needs a real file lock,
  * which this basic logger doesn't attempt.
  */

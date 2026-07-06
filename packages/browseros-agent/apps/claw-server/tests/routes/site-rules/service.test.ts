@@ -10,18 +10,18 @@ import { join } from 'node:path'
 import { readJson } from '../../../src/lib/storage'
 import { siteRulesFileSchema } from '../../../src/routes/site-rules/schemas'
 import * as siteRules from '../../../src/routes/site-rules/service'
-import { withTempBrowserosDir } from '../../_helpers/temp-browseros-dir'
+import { withTempBrowserClawDir } from '../../_helpers/temp-browserclaw-dir'
 
 describe('site-rules service', () => {
   test('list returns [] before any rule is added (file does not exist)', async () => {
-    await withTempBrowserosDir(async (dir) => {
+    await withTempBrowserClawDir(async (dir) => {
       expect(await siteRules.list()).toEqual([])
-      expect(existsSync(join(dir, 'claw-server/site-rules.json'))).toBe(false)
+      expect(existsSync(join(dir, 'site-rules.json'))).toBe(false)
     })
   })
 
   test('add creates the file and round-trips through the schema', async () => {
-    await withTempBrowserosDir(async (dir) => {
+    await withTempBrowserClawDir(async (dir) => {
       const created = await siteRules.add({
         label: 'Wire transfers',
         domain: 'mercury.com',
@@ -29,7 +29,7 @@ describe('site-rules service', () => {
       })
       expect(created.id).toMatch(/^[A-Za-z0-9_-]+$/)
       expect(created.label).toBe('Wire transfers')
-      const file = join(dir, 'claw-server/site-rules.json')
+      const file = join(dir, 'site-rules.json')
       expect(existsSync(file)).toBe(true)
       const stored = await readJson('site-rules.json', siteRulesFileSchema)
       expect(stored).toHaveLength(1)
@@ -38,7 +38,7 @@ describe('site-rules service', () => {
   })
 
   test('list returns rules in insertion order', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const a = await siteRules.add({
         label: 'A',
         domain: 'a.com',
@@ -60,7 +60,7 @@ describe('site-rules service', () => {
   })
 
   test('duplicate (domain, action, label) tuples are allowed (user-managed)', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const first = await siteRules.add({
         label: 'Wire transfers',
         domain: 'mercury.com',
@@ -77,7 +77,7 @@ describe('site-rules service', () => {
   })
 
   test('remove deletes the rule, returns the id, and shortens the list', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const created = await siteRules.add({
         label: 'X',
         domain: 'x.com',
@@ -90,7 +90,7 @@ describe('site-rules service', () => {
   })
 
   test('remove returns null when the id is unknown', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       await siteRules.add({ label: 'X', domain: 'x.com', action: 'submit' })
       expect(await siteRules.remove('ghost')).toBeNull()
       expect(await siteRules.list()).toHaveLength(1)
@@ -98,13 +98,13 @@ describe('site-rules service', () => {
   })
 
   test('remove returns null when no rules file exists yet', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       expect(await siteRules.remove('anything')).toBeNull()
     })
   })
 
   test('traversal-shaped ids resolve to null without touching disk', async () => {
-    await withTempBrowserosDir(async (dir) => {
+    await withTempBrowserClawDir(async (dir) => {
       await siteRules.add({ label: 'X', domain: 'x.com', action: 'submit' })
       const evilIds = [
         '../config',
@@ -117,12 +117,12 @@ describe('site-rules service', () => {
       }
       // The real rule is untouched.
       expect(await siteRules.list()).toHaveLength(1)
-      expect(existsSync(join(dir, 'claw-server/site-rules.json'))).toBe(true)
+      expect(existsSync(join(dir, 'site-rules.json'))).toBe(true)
     })
   })
 
   test('ten parallel adds all persist (no read-then-rewrite race)', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const count = 10
       await Promise.all(
         Array.from({ length: count }, (_, i) =>
@@ -140,7 +140,7 @@ describe('site-rules service', () => {
   })
 
   test('findMatching honours glob patterns end-to-end', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       await siteRules.add({
         label: 'Wire',
         domain: 'mercury.com',

@@ -3,7 +3,7 @@
   "type": "module",
   "private": true,
   "version": "0.0.5",
-  "description": "Hono backend for BrowserClaw: typed JSON API plus MCP route mux. File-based config under <browserosDir>/claw-server/.",
+  "description": "Hono backend for BrowserClaw: typed JSON API plus MCP route mux. File-based config under <browserclawDir>/.",
   "exports": {
     "./server": {
       "types": "./src/server.ts",

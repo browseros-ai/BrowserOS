@@ -12,7 +12,7 @@ import { readJson } from '../../../src/lib/storage'
 import type { NewAgentValues } from '../../../src/routes/agents/schemas'
 import { storedAgentProfileSchema } from '../../../src/routes/agents/schemas'
 import * as agents from '../../../src/routes/agents/service'
-import { withTempBrowserosDir } from '../../_helpers/temp-browseros-dir'
+import { withTempBrowserClawDir } from '../../_helpers/temp-browserclaw-dir'
 
 function makeInput(overrides: Partial<NewAgentValues> = {}): NewAgentValues {
   return {
@@ -62,9 +62,9 @@ async function withServerPort<T>(
 
 describe('agents service', () => {
   test('create persists a stored profile that round-trips through the schema', async () => {
-    await withTempBrowserosDir(async (dir) => {
+    await withTempBrowserClawDir(async (dir) => {
       const created = await agents.create(makeInput())
-      const file = join(dir, 'claw-server/agents', `${created.id}.json`)
+      const file = join(dir, 'agents', `${created.id}.json`)
       expect(existsSync(file)).toBe(true)
       const stored = await readJson(
         `agents/${created.id}.json`,
@@ -79,7 +79,7 @@ describe('agents service', () => {
   })
 
   test('create derives slug from the name; second create with same name appends -2', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const first = await agents.create(makeInput({ name: 'Foo' }))
       const second = await agents.create(makeInput({ name: 'Foo' }))
       expect(first.slug).toBe('foo')
@@ -89,7 +89,7 @@ describe('agents service', () => {
 
   test('create stores and installs the trusted proxy MCP URL', async () => {
     await withProxyPort(9512, async () => {
-      await withTempBrowserosDir(async () => {
+      await withTempBrowserClawDir(async () => {
         const created = await agents.create(makeInput({ name: 'Proxy Split' }))
         expect(created.mcpUrl).toBe('http://127.0.0.1:9512/mcp')
         const stored = await readJson(
@@ -103,7 +103,7 @@ describe('agents service', () => {
 
   test('create falls back to the server bind port when no proxy is configured', async () => {
     await withServerPort(9321, async () => {
-      await withTempBrowserosDir(async () => {
+      await withTempBrowserClawDir(async () => {
         const created = await agents.create(makeInput({ name: 'Bind Port' }))
         expect(created.mcpUrl).toBe('http://127.0.0.1:9321/mcp')
       })
@@ -111,7 +111,7 @@ describe('agents service', () => {
   })
 
   test('list returns the directory projection with derived fields', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       await agents.create(
         makeInput({
           name: 'Selective Agent',
@@ -137,7 +137,7 @@ describe('agents service', () => {
 
   test('list derives visible MCP URLs from the trusted proxy MCP base URL', async () => {
     await withProxyPort(9512, async () => {
-      await withTempBrowserosDir(async () => {
+      await withTempBrowserClawDir(async () => {
         await agents.create(makeInput({ name: 'Listed Proxy' }))
         const rows = await agents.list()
         expect(rows[0]?.mcpUrl).toBe('http://127.0.0.1:9512/mcp')
@@ -146,7 +146,7 @@ describe('agents service', () => {
   })
 
   test('list sorts by updatedAt descending', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const a = await agents.create(makeInput({ name: 'Alpha' }))
       // Force a small delay so the second create has a strictly later
       // updatedAt; ISO strings sort lexicographically the same way.
@@ -158,7 +158,7 @@ describe('agents service', () => {
   })
 
   test('getDetail returns the wizard-shape values', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const created = await agents.create(
         makeInput({
           name: 'Detail Test',
@@ -179,13 +179,13 @@ describe('agents service', () => {
   })
 
   test('getDetail returns null for unknown ids', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       expect(await agents.getDetail('ghost')).toBeNull()
     })
   })
 
   test('update rewrites the file; updatedAt advances, createdAt is preserved', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const created = await agents.create(makeInput())
       await new Promise((resolve) => setTimeout(resolve, 10))
       const updated = await agents.update(
@@ -202,7 +202,7 @@ describe('agents service', () => {
   })
 
   test('update recomputes slug when the name changes', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const created = await agents.create(makeInput({ name: 'Cowork Finance' }))
       expect(created.slug).toBe('cowork-finance')
       const updated = await agents.update(
@@ -214,7 +214,7 @@ describe('agents service', () => {
   })
 
   test('update keeps slug stable when the name does not change', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const created = await agents.create(makeInput({ name: 'Stable' }))
       const updated = await agents.update(
         created.id,
@@ -225,13 +225,13 @@ describe('agents service', () => {
   })
 
   test('update returns null for unknown ids', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       expect(await agents.update('ghost', makeInput())).toBeNull()
     })
   })
 
   test('remove deletes the file and subsequent getDetail is null', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const created = await agents.create(makeInput())
       const removed = await agents.remove(created.id)
       expect(removed?.id).toBe(created.id)
@@ -241,13 +241,13 @@ describe('agents service', () => {
   })
 
   test('remove returns null when the file does not exist', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       expect(await agents.remove('ghost')).toBeNull()
     })
   })
 
   test('regenerateMcpUrl rotates the slug and keeps the canonical URL', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const created = await agents.create(makeInput({ name: 'Rotate' }))
       const result = await agents.regenerateMcpUrl(created.id)
       expect(result).not.toBeNull()
@@ -267,7 +267,7 @@ describe('agents service', () => {
 
   test('regenerateMcpUrl uses the trusted proxy MCP base URL', async () => {
     await withProxyPort(9512, async () => {
-      await withTempBrowserosDir(async () => {
+      await withTempBrowserClawDir(async () => {
         const created = await agents.create(
           makeInput({ name: 'Rotate Public' }),
         )
@@ -279,20 +279,20 @@ describe('agents service', () => {
   })
 
   test('regenerateMcpUrl returns null for unknown ids', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       expect(await agents.regenerateMcpUrl('ghost')).toBeNull()
     })
   })
 
   test('list skips a corrupt agent file instead of rejecting the whole call', async () => {
-    await withTempBrowserosDir(async (dir) => {
+    await withTempBrowserClawDir(async (dir) => {
       const ok = await agents.create(makeInput({ name: 'Healthy' }))
       // Hand-write a garbage file under agents/. listFiles picks it
       // up; the per-file readJson rejects; loadAll logs + skips it.
       const { writeFile } = await import('node:fs/promises')
       const { join } = await import('node:path')
       await writeFile(
-        join(dir, 'claw-server/agents', 'broken.json'),
+        join(dir, 'agents', 'broken.json'),
         '{ this is not valid json',
         'utf8',
       )
@@ -308,7 +308,7 @@ describe('agents service', () => {
   })
 
   test('traversal-shaped ids resolve as not-found across every read/write path', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       await agents.create(makeInput({ name: 'Real' }))
       // Build a path that LOOKS like a profile id but contains
       // characters the service must reject before the storage layer
@@ -329,7 +329,7 @@ describe('agents service', () => {
   })
 
   test('ten parallel creates with the same name produce distinct slugs (no TOCTOU race)', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const count = 10
       const created = await Promise.all(
         Array.from({ length: count }, () =>
@@ -348,7 +348,7 @@ describe('agents service', () => {
   })
 
   test('two parallel updates of different profiles do not corrupt each other', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const a = await agents.create(makeInput({ name: 'Parallel A' }))
       const b = await agents.create(makeInput({ name: 'Parallel B' }))
       await Promise.all([

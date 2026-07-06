@@ -432,11 +432,12 @@ func serverRuntimeEnv(base []string, cfg config.Config) []string {
 	)
 }
 
-// clawRuntimeEnv wires the WXT app and standalone Claw server to the same BrowserOS session.
+// clawRuntimeEnv wires the WXT app and standalone Claw server to the same BrowserClaw state.
 func clawRuntimeEnv(base []string, cfg config.Config) []string {
 	env := make([]string, 0, len(base)+7)
 	for _, entry := range base {
 		if strings.HasPrefix(entry, "BROWSEROS_DIR=") ||
+			strings.HasPrefix(entry, "BROWSERCLAW_DIR=") ||
 			strings.HasPrefix(entry, "BROWSEROS_BINARY=") ||
 			strings.HasPrefix(entry, "BROWSEROS_USER_DATA_DIR=") ||
 			strings.HasPrefix(entry, "BROWSEROS_CLAW_CDP_PORT=") ||
@@ -449,7 +450,7 @@ func clawRuntimeEnv(base []string, cfg config.Config) []string {
 	apiURL := fmt.Sprintf("http://127.0.0.1:%d", cfg.Ports.Server)
 	return append(env,
 		"NODE_ENV=development",
-		fmt.Sprintf("BROWSEROS_DIR=%s", cfg.BrowserOSDir),
+		fmt.Sprintf("BROWSERCLAW_DIR=%s", cfg.BrowserOSDir),
 		fmt.Sprintf("BROWSEROS_BINARY=%s", cfg.BrowserOSAppPath),
 		fmt.Sprintf("BROWSEROS_USER_DATA_DIR=%s", cfg.DevUserDataDir),
 		fmt.Sprintf("BROWSEROS_CLAW_CDP_PORT=%d", cfg.Ports.CDP),

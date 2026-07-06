@@ -11,9 +11,9 @@ import type { ClawConfig } from './config'
 import { resolveDefaultResourcesDir } from './config'
 import { CLAW_API_PORT_DEFAULT, CLAW_CDP_PORT_DEFAULT } from './shared/port'
 
-function readBrowserosDirOverride(): string | undefined {
+function readBrowserClawDirOverride(): string | undefined {
   // biome-ignore lint/style/noProcessEnv: env.ts is the sanctioned env-reader for the package
-  const raw = process.env.BROWSEROS_DIR?.trim()
+  const raw = process.env.BROWSERCLAW_DIR?.trim()
   return raw && raw.length > 0 ? raw : undefined
 }
 
@@ -59,7 +59,7 @@ export const env = {
   proxyPort: null as number | null,
   cdpPort: CLAW_CDP_PORT_DEFAULT,
   resourcesDir: resolveDefaultResourcesDir(),
-  browserosDirOverride: readBrowserosDirOverride(),
+  browserClawDirOverride: readBrowserClawDirOverride(),
   isDevelopment: readIsDevelopment(),
   // MCP session idle reaper. Sessions older than `sessionIdleMs`
   // with no inbound requests are torn down by the sweeper running

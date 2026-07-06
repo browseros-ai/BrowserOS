@@ -11,7 +11,7 @@ use thiserror::Error;
 pub enum AppError {
     #[error("{message}")]
     Http { status: StatusCode, message: String },
-    #[error("storage path escapes claw-server root: {0}")]
+    #[error("storage path escapes BrowserClaw state root: {0}")]
     InvalidStoragePath(String),
     #[error("storage file not found: {0}")]
     StorageNotFound(String),

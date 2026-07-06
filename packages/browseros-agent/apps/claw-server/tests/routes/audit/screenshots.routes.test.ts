@@ -13,7 +13,7 @@ import {
 } from '../../../src/modules/db/db'
 import app from '../../../src/server'
 import { screenshotPath } from '../../../src/services/screenshots'
-import { withTempBrowserosDir } from '../../_helpers/temp-browseros-dir'
+import { withTempBrowserClawDir } from '../../_helpers/temp-browserclaw-dir'
 
 describe('GET /audit/screenshot/:dispatchId', () => {
   beforeEach(() => setAuditDbForTesting())
@@ -27,7 +27,7 @@ describe('GET /audit/screenshot/:dispatchId', () => {
   })
 
   it('404 when the file is not on disk', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const res = await app.fetch(
         new Request('http://localhost/audit/screenshot/9999'),
       )
@@ -36,7 +36,7 @@ describe('GET /audit/screenshot/:dispatchId', () => {
   })
 
   it('streams the file with image/jpeg content-type', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const path = screenshotPath(7)
       mkdirSync(dirname(path), { recursive: true })
       writeFileSync(path, Buffer.from([0xff, 0xd8, 0xff, 0xe0]))

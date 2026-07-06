@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Integration tests for /audit/replay/:sessionId/{events, exists, ""}.
- * Each test runs inside withTempBrowserosDir so the replay-storage
+ * Each test runs inside withTempBrowserClawDir so the replay-storage
  * singleton lays its files down under an isolated tmp directory.
  */
 
@@ -13,7 +13,7 @@ import { hc } from 'hono/client'
 import { identityService } from '../../../src/lib/mcp-session'
 import app, { type AppType } from '../../../src/server'
 import { replayStorage } from '../../../src/services/replay-storage'
-import { withTempBrowserosDir } from '../../_helpers/temp-browseros-dir'
+import { withTempBrowserClawDir } from '../../_helpers/temp-browserclaw-dir'
 
 function client() {
   return hc<AppType>('http://localhost', {
@@ -49,7 +49,7 @@ afterEach(async () => {
 
 describe('audit-replay routes', () => {
   test('POST events from a live session writes lines, GET reads them back', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       registerLiveSession('s1')
       const body = [
         ndjsonLine({ tabPageId: 1, ts: 100, type: 2 }),
@@ -85,7 +85,7 @@ describe('audit-replay routes', () => {
   })
 
   test('POST returns 410 for a session whose identity is not live', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const post = await client().audit.replay[':sessionId'].events.$post(
         { param: { sessionId: 'ghost' } },
         { init: { method: 'POST', body: ndjsonLine({}) } },
@@ -98,7 +98,7 @@ describe('audit-replay routes', () => {
   })
 
   test('GET returns 404 for an unknown sessionId', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const res = await client().audit.replay[':sessionId'].$get({
         param: { sessionId: 'no-such-session' },
       })
@@ -107,7 +107,7 @@ describe('audit-replay routes', () => {
   })
 
   test('GET /exists returns hasData:false for unknown session', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const res = await client().audit.replay[':sessionId'].exists.$get({
         param: { sessionId: 'no-such-session' },
       })
@@ -126,7 +126,7 @@ describe('audit-replay routes', () => {
   })
 
   test('GET /exists returns tabPageIds + first/last timestamps once populated', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       registerLiveSession('s2')
       await client().audit.replay[':sessionId'].events.$post(
         { param: { sessionId: 's2' } },
@@ -158,7 +158,7 @@ describe('audit-replay routes', () => {
   })
 
   test('POST with empty body returns 200 accepted:0', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       registerLiveSession('s3')
       const res = await client().audit.replay[':sessionId'].events.$post(
         { param: { sessionId: 's3' } },

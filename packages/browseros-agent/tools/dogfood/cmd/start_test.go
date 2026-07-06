@@ -47,7 +47,8 @@ func TestReportProgressInvokesConfiguredProgress(t *testing.T) {
 func TestClawRuntimeEnvWiresBrowserAndAPISettings(t *testing.T) {
 	got := clawRuntimeEnv([]string{
 		"PATH=/bin",
-		"BROWSEROS_DIR=/wrong",
+		"BROWSEROS_DIR=/wrong-browseros",
+		"BROWSERCLAW_DIR=/wrong",
 		"BROWSEROS_CLAW_CDP_PORT=1",
 		"VITE_BROWSEROS_CLAW_API_URL=http://wrong",
 	}, config.Config{
@@ -59,7 +60,8 @@ func TestClawRuntimeEnvWiresBrowserAndAPISettings(t *testing.T) {
 
 	assertEnvContains(t, got, "PATH=/bin")
 	assertEnvContains(t, got, "NODE_ENV=development")
-	assertEnvContains(t, got, "BROWSEROS_DIR=/tmp/claw-state")
+	assertEnvContains(t, got, "BROWSERCLAW_DIR=/tmp/claw-state")
+	assertEnvMissingPrefix(t, got, "BROWSEROS_DIR=")
 	assertEnvContains(t, got, "BROWSEROS_BINARY=/Applications/BrowserOS.app/Contents/MacOS/BrowserOS")
 	assertEnvContains(t, got, "BROWSEROS_USER_DATA_DIR=/tmp/claw-profile")
 	assertEnvContains(t, got, "BROWSEROS_CLAW_CDP_PORT=49337")

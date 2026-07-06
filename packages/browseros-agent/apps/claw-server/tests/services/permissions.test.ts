@@ -13,7 +13,7 @@ import type { NewAgentValues } from '../../src/routes/agents/schemas'
 import * as agentsService from '../../src/routes/agents/service'
 import * as siteRulesService from '../../src/routes/site-rules/service'
 import * as permissions from '../../src/services/permissions'
-import { withTempBrowserosDir } from '../_helpers/temp-browseros-dir'
+import { withTempBrowserClawDir } from '../_helpers/temp-browserclaw-dir'
 
 function makeProfile(overrides: Partial<NewAgentValues> = {}): NewAgentValues {
   return {
@@ -37,7 +37,7 @@ function makeProfile(overrides: Partial<NewAgentValues> = {}): NewAgentValues {
 
 describe('permissions.check', () => {
   test('site rule clamps an agent that wanted Auto', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const agent = await agentsService.create(makeProfile())
       await siteRulesService.add({
         label: 'Wire',
@@ -57,7 +57,7 @@ describe('permissions.check', () => {
   })
 
   test('site rule overrides an agent Auto verdict for submit', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const agent = await agentsService.create(
         makeProfile({
           approvals: {
@@ -93,7 +93,7 @@ describe('permissions.check', () => {
   })
 
   test('site rule with wildcard matches subdomains', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const agent = await agentsService.create(makeProfile())
       await siteRulesService.add({
         label: 'Stripe',
@@ -118,7 +118,7 @@ describe('permissions.check', () => {
   })
 
   test('agent verdict wins when no site rule matches', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const agent = await agentsService.create(makeProfile())
       const result = await permissions.check({
         agentId: agent.id,
@@ -130,7 +130,7 @@ describe('permissions.check', () => {
   })
 
   test('catalog default applies when the agent is missing', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const result = await permissions.check({
         agentId: 'ghost',
         verb: 'payment',
@@ -144,7 +144,7 @@ describe('permissions.check', () => {
   })
 
   test('catalog default applies when the agent profile omits the verb', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const agent = await agentsService.create(
         makeProfile({
           approvals: {
@@ -170,7 +170,7 @@ describe('permissions.check', () => {
   })
 
   test('unknown verb returns block from the permission-default source', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const agent = await agentsService.create(makeProfile())
       const result = await permissions.check({
         agentId: agent.id,
@@ -185,7 +185,7 @@ describe('permissions.check', () => {
   })
 
   test('traversal-shaped agentId resolves to catalog default (defence in depth)', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const result = await permissions.check({
         agentId: '../config',
         verb: 'submit',
@@ -197,7 +197,7 @@ describe('permissions.check', () => {
   })
 
   test('admin verb is enforced by matching site rules', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const agent = await agentsService.create(makeProfile())
       await siteRulesService.add({
         label: 'Org billing',
@@ -231,7 +231,7 @@ describe('permissions.check', () => {
   })
 
   test('input verb is not domain-scoped: site rules do not clamp it', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const agent = await agentsService.create(makeProfile())
       // A submit rule on the same domain must NOT carry over to the
       // input verb space; input falls through to the agent verdict.

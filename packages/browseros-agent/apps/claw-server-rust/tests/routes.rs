@@ -29,14 +29,14 @@ async fn test_app() -> anyhow::Result<TestApp> {
 
 async fn test_app_with_cdp_port(cdp_port: u16, start_browser: bool) -> anyhow::Result<TestApp> {
     let dir = tempfile::tempdir()?;
-    let root = dir.path().join("browseros");
+    let root = dir.path().join("browserclaw");
     let config = Arc::new(Config {
         server_port: 9200,
         cdp_port,
         proxy_port: None,
         resources_dir: dir.path().join("resources"),
-        browseros_dir: root.clone(),
-        claw_dir: root.join("claw-server"),
+        browserclaw_dir: root.clone(),
+        claw_dir: root,
         session_idle: Duration::from_secs(300),
         session_sweep_interval: Duration::from_secs(60),
         screencast_screenshot_fallback: true,

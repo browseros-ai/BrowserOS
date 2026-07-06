@@ -16,7 +16,7 @@ import { tabActivityRegistry } from '../../../src/lib/tab-activity'
 import { create as createAgent } from '../../../src/routes/agents/service'
 import app, { type AppType } from '../../../src/server'
 import { screencastCache } from '../../../src/services/screencast-cache'
-import { withTempBrowserosDir } from '../../_helpers/temp-browseros-dir'
+import { withTempBrowserClawDir } from '../../_helpers/temp-browserclaw-dir'
 
 function client() {
   return hc<AppType>('http://localhost', {
@@ -58,7 +58,7 @@ describe('/tabs/activity route', () => {
   })
 
   test('returns the enriched record once a tool has been recorded', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       // Seed a real agent profile on disk so the route's join finds
       // a label + harness instead of falling back.
       const agent = await createAgent({
@@ -124,7 +124,7 @@ describe('/tabs/activity route', () => {
   })
 
   test('emits screencast: null when the cache has no frame for the page', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       stubSession()
       tabActivityRegistry.recordTool({
         agentId: 'a',
@@ -142,7 +142,7 @@ describe('/tabs/activity route', () => {
   })
 
   test('emits screencast frame when the cache has one for the page', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       stubSession()
       tabActivityRegistry.recordTool({
         agentId: 'a',
@@ -170,7 +170,7 @@ describe('/tabs/activity route', () => {
   })
 
   test('falls back to slug when the agent profile is missing', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       // No profile on disk: the route should not throw, and should
       // surface the slug as a fallback label with null harness/color.
       stubSession()

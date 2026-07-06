@@ -28,7 +28,7 @@ import {
   persistScreenshot,
   screenshotPath,
 } from '../../src/services/screenshots'
-import { withTempBrowserosDir } from '../_helpers/temp-browseros-dir'
+import { withTempBrowserClawDir } from '../_helpers/temp-browserclaw-dir'
 
 const ONE_PX_JPEG_B64 =
   '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAr/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKpAA//Z'
@@ -59,7 +59,7 @@ describe('persistScreenshot', () => {
   })
 
   it('writes <dispatchId>.jpg from tool-result image content (explicit screenshot tool)', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       persistScreenshot({
         dispatchId: 42,
         toolName: 'screenshot',
@@ -81,7 +81,7 @@ describe('persistScreenshot', () => {
   })
 
   it('legacy structured.image field still routes through the tool-result branch', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       persistScreenshot({
         dispatchId: 4,
         toolName: 'screenshot',
@@ -99,7 +99,7 @@ describe('persistScreenshot', () => {
   })
 
   it('no-op when isError=true even if tool-result carries image bytes AND cache has a frame', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       primeCache(1)
       persistScreenshot({
         dispatchId: 2,
@@ -120,7 +120,7 @@ describe('persistScreenshot', () => {
   })
 
   it('screencast fallback: state-mutating dispatch with no image bytes + cache frame writes cache bytes', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       primeCache(7)
       persistScreenshot({
         dispatchId: 100,
@@ -141,7 +141,7 @@ describe('persistScreenshot', () => {
   })
 
   it('screencast fallback: `act`, `tabs`, `evaluate` (state-mutating) also get cache bytes', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       primeCache(3)
       for (const [dispatchId, toolName] of [
         [201, 'act'],
@@ -171,7 +171,7 @@ describe('persistScreenshot', () => {
     // Simulates the "already got a visual anchor for this tab" case:
     // pre-mark first-capture-done, then verify snapshot / read / grep
     // / diff / wait do NOT write.
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       primeCache(9)
       agentTabs.markFirstCaptureDone(AGENT, 9)
       for (const [dispatchId, toolName] of [
@@ -201,7 +201,7 @@ describe('persistScreenshot', () => {
   })
 
   it('screencast fallback SKIPS when pageId is null', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       persistScreenshot({
         dispatchId: 400,
         toolName: 'navigate',
@@ -219,7 +219,7 @@ describe('persistScreenshot', () => {
   })
 
   it('screencast fallback SKIPS when the cache has no frame for the pageId', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       // Cache primed for a DIFFERENT pageId only.
       primeCache(50)
       persistScreenshot({
@@ -239,7 +239,7 @@ describe('persistScreenshot', () => {
   })
 
   it('screencast fallback SKIPS when env.screencastScreenshotFallback is off (tool-result branch still fires)', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       env.screencastScreenshotFallback = false
       primeCache(11)
       persistScreenshot({
@@ -275,7 +275,7 @@ describe('persistScreenshot', () => {
   })
 
   it('tool-result branch wins over cache when both are available', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const CACHE_B64 = ONE_PX_JPEG_B64
       const TOOL_B64 =
         '/9j/4AAQSkZJRgABAAEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACv/EABQBAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8Aqp//2Q=='
@@ -299,7 +299,7 @@ describe('persistScreenshot', () => {
   })
 
   it('FIRST-CAPTURE: first read on a page writes even though `read` is in the deny-list', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       primeCache(20)
       persistScreenshot({
         dispatchId: 800,
@@ -319,7 +319,7 @@ describe('persistScreenshot', () => {
   })
 
   it('FIRST-CAPTURE: second read on the SAME page does NOT write', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       primeCache(21)
       // First read fires the override + marks first-capture-done.
       persistScreenshot({
@@ -352,7 +352,7 @@ describe('persistScreenshot', () => {
   })
 
   it('FIRST-CAPTURE: state-mutating write also marks; subsequent read on same page skips', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       primeCache(22)
       persistScreenshot({
         dispatchId: 1000,
@@ -385,7 +385,7 @@ describe('persistScreenshot', () => {
   })
 
   it('FIRST-CAPTURE: two agents on the same pageId EACH get their own first-capture write', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       primeCache(30)
       persistScreenshot({
         dispatchId: 1100,
@@ -418,7 +418,7 @@ describe('persistScreenshot', () => {
   })
 
   it('FIRST-CAPTURE: cannot override when agentId is null (falls back to strict deny-list)', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       primeCache(40)
       persistScreenshot({
         dispatchId: 1200,

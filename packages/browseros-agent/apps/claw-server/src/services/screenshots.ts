@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * On-disk store for per-dispatch screenshot bytes. Files live at
- * `<browserosDir>/claw-server/screenshots/<dispatchId>.jpg` and are
+ * `<browserclawDir>/screenshots/<dispatchId>.jpg` and are
  * served by the audit screenshot route via Bun.file(). Writes are
  * fire-and-forget; a hiccup logs at warn and never blocks the agent.
  *
@@ -43,7 +43,7 @@ import { writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { env } from '../env'
 import { agentTabs } from '../lib/agent-tabs'
-import { resolveClawServerPath } from '../lib/browseros-dir'
+import { resolveClawServerPath } from '../lib/browserclaw-dir'
 import { logger } from '../lib/logger'
 import { screencastCache } from './screencast-cache'
 import { extractToolResultImageData } from './tool-result-image'

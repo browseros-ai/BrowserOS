@@ -20,7 +20,7 @@ import {
   StorageNotFoundError,
   writeJson,
 } from '../../src/lib/storage'
-import { withTempBrowserosDir } from '../_helpers/temp-browseros-dir'
+import { withTempBrowserClawDir } from '../_helpers/temp-browserclaw-dir'
 
 const sampleSchema = z.object({
   name: z.string(),
@@ -29,7 +29,7 @@ const sampleSchema = z.object({
 
 describe('storage', () => {
   test('writeJson then readJson round-trips through the schema', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       await writeJson('sample.json', { name: 'one', ok: true }, sampleSchema)
       const read = await readJson('sample.json', sampleSchema)
       expect(read).toEqual({ name: 'one', ok: true })
@@ -37,29 +37,27 @@ describe('storage', () => {
   })
 
   test('writeJson creates parent directories', async () => {
-    await withTempBrowserosDir(async (dir) => {
+    await withTempBrowserClawDir(async (dir) => {
       await writeJson(
         'nested/dir/sample.json',
         { name: 'nested', ok: true },
         sampleSchema,
       )
-      expect(existsSync(join(dir, 'claw-server/nested/dir/sample.json'))).toBe(
-        true,
-      )
+      expect(existsSync(join(dir, 'nested/dir/sample.json'))).toBe(true)
     })
   })
 
   test('writeJson is atomic: the .tmp file is renamed, not left behind', async () => {
-    await withTempBrowserosDir(async (dir) => {
+    await withTempBrowserClawDir(async (dir) => {
       await writeJson('atomic.json', { name: 'a', ok: true }, sampleSchema)
-      const entries = await readdir(join(dir, 'claw-server'))
+      const entries = await readdir(dir)
       expect(entries).toContain('atomic.json')
       expect(entries.some((entry) => entry.endsWith('.tmp'))).toBe(false)
     })
   })
 
   test('readJson throws StorageNotFoundError on missing file', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       expect(readJson('ghost.json', sampleSchema)).rejects.toBeInstanceOf(
         StorageNotFoundError,
       )
@@ -67,8 +65,8 @@ describe('storage', () => {
   })
 
   test('readJson throws StorageCorruptError when JSON is invalid', async () => {
-    await withTempBrowserosDir(async (dir) => {
-      const root = join(dir, 'claw-server')
+    await withTempBrowserClawDir(async (dir) => {
+      const root = dir
       await ensureDir('.')
       await writeFile(join(root, 'broken.json'), '{not-json', 'utf8')
       expect(readJson('broken.json', sampleSchema)).rejects.toBeInstanceOf(
@@ -78,8 +76,8 @@ describe('storage', () => {
   })
 
   test('readJson throws StorageCorruptError when schema rejects the value', async () => {
-    await withTempBrowserosDir(async (dir) => {
-      const root = join(dir, 'claw-server')
+    await withTempBrowserClawDir(async (dir) => {
+      const root = dir
       await ensureDir('.')
       await writeFile(
         join(root, 'wrong-shape.json'),
@@ -93,7 +91,7 @@ describe('storage', () => {
   })
 
   test('writeJson refuses values that do not satisfy the schema', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       // biome-ignore lint/suspicious/noExplicitAny: deliberate invalid input for the test
       const bad = { name: 5, ok: 'not a bool' } as any
       expect(
@@ -103,7 +101,7 @@ describe('storage', () => {
   })
 
   test('removeFile deletes an existing file and returns true', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       await writeJson('to-delete.json', { name: 'd', ok: true }, sampleSchema)
       expect(await removeFile('to-delete.json')).toBe(true)
       expect(await fileExists('to-delete.json')).toBe(false)
@@ -111,14 +109,14 @@ describe('storage', () => {
   })
 
   test('removeFile returns false when the file does not exist', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       expect(await removeFile('never-existed.json')).toBe(false)
     })
   })
 
   test('listFiles defaults to .json and filters non-matching entries', async () => {
-    await withTempBrowserosDir(async (dir) => {
-      const root = join(dir, 'claw-server', 'list-test')
+    await withTempBrowserClawDir(async (dir) => {
+      const root = join(dir, 'list-test')
       await ensureDir('list-test')
       await writeFile(join(root, 'a.json'), '{"name":"a","ok":true}', 'utf8')
       await writeFile(join(root, 'b.json'), '{"name":"b","ok":true}', 'utf8')
@@ -129,13 +127,13 @@ describe('storage', () => {
   })
 
   test('listFiles returns [] when the directory does not exist', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       expect(await listFiles('missing-dir')).toEqual([])
     })
   })
 
-  test('relative paths cannot escape the claw-server root', async () => {
-    await withTempBrowserosDir(async () => {
+  test('relative paths cannot escape the BrowserClaw state root', async () => {
+    await withTempBrowserClawDir(async () => {
       expect(() =>
         writeJson('../escape.json', { name: 'e', ok: true }, sampleSchema),
       ).toThrow(StorageInvalidPathError)
@@ -146,18 +144,17 @@ describe('storage', () => {
   })
 
   test('absolute paths are rejected', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       expect(() => readJson('/etc/passwd', sampleSchema)).toThrow(
         StorageInvalidPathError,
       )
     })
   })
 
-  test('lateral traversal that stays inside the claw-server root is still rejected', async () => {
-    await withTempBrowserosDir(async () => {
-      // `agents/../config.json` normalises to `config.json` which sits
-      // INSIDE the claw-server root but escapes the intended subdirectory.
-      // The guard must catch the raw `..` before normalize collapses it.
+  test('lateral traversal that stays inside the BrowserClaw state root is still rejected', async () => {
+    await withTempBrowserClawDir(async () => {
+      // `agents/../config.json` normalises to `config.json`, so the guard
+      // must catch the raw `..` before normalize collapses it.
       expect(() => readJson('agents/../config.json', sampleSchema)).toThrow(
         StorageInvalidPathError,
       )

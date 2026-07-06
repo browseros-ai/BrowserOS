@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Per-session NDJSON store for rrweb replay events. Files live at
- * `<browserosDir>/claw-server/replays/<sessionId>.ndjson`. Each line
+ * `<browserclawDir>/replays/<sessionId>.ndjson`. Each line
  * is one event annotated by the recorder with `tabPageId` and `ts`;
  * the server prepends its own trusted `sessionId` before writing so
  * the on-disk shape is self-contained.
@@ -23,7 +23,7 @@
 
 import { type FileHandle, mkdir, open, stat, unlink } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { resolveClawServerPath } from '../lib/browseros-dir'
+import { resolveClawServerPath } from '../lib/browserclaw-dir'
 import { logger } from '../lib/logger'
 
 export const REPLAY_DIR_NAME = 'replays'
@@ -48,7 +48,7 @@ export interface ReplayStorage {
 }
 
 export interface ReplayStorageOptions {
-  /** Root directory for replay NDJSON files; defaults to <browserosDir>/claw-server/replays */
+  /** Root directory for replay NDJSON files; defaults to <browserclawDir>/replays */
   rootDir?: string
   maxOpenHandles?: number
   idleHandleMs?: number

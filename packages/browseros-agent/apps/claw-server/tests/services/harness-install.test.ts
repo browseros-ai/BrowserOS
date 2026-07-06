@@ -14,7 +14,7 @@ import {
   uninstallForAgent,
 } from '../../src/services/harness-install'
 import { createStubMcpManager } from '../_helpers/stub-mcp-manager'
-import { withTempBrowserosDir } from '../_helpers/temp-browseros-dir'
+import { withTempBrowserClawDir } from '../_helpers/temp-browserclaw-dir'
 
 function makeInput(overrides: Partial<NewAgentValues> = {}): NewAgentValues {
   return {
@@ -42,7 +42,7 @@ describe('harness install service', () => {
     // stdio-shaped entries only, so the install path must write the
     // `npx mcp-remote <url>` shape. specFor sources this from the
     // agent-mcp-manager catalog via resolveAgentSurface.
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const stub = createStubMcpManager()
       setMcpManagerForTesting(stub)
       const created = await agents.create(makeInput())
@@ -66,7 +66,7 @@ describe('harness install service', () => {
   })
 
   test('installForAgent on Codex writes a direct HTTP spec (http-capable since agent-mcp-manager 0.0.3)', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const stub = createStubMcpManager()
       setMcpManagerForTesting(stub)
       const outcome = await installForAgent({
@@ -89,7 +89,7 @@ describe('harness install service', () => {
   })
 
   test('Hermes + OpenClaw short-circuit as a no-op success (no manager calls)', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const stub = createStubMcpManager()
       setMcpManagerForTesting(stub)
       for (const harness of ['Hermes', 'OpenClaw'] as const) {
@@ -106,7 +106,7 @@ describe('harness install service', () => {
   })
 
   test('uninstallForAgent unlinks and drops the manifest entry', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const stub = createStubMcpManager()
       setMcpManagerForTesting(stub)
       await uninstallForAgent({ slug: 'gone-slug', harness: 'Claude Desktop' })
@@ -117,7 +117,7 @@ describe('harness install service', () => {
   })
 
   test('install failure does not throw; outcome carries the message', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const stub = createStubMcpManager()
       // Inject a custom failing manager.
       stub.add = async () => {
@@ -136,7 +136,7 @@ describe('harness install service', () => {
   })
 
   test('update with a slug rotation re-links the new slug then unlinks the old one', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const stub = createStubMcpManager()
       setMcpManagerForTesting(stub)
       const created = await agents.create(makeInput({ name: 'Original Name' }))
@@ -169,7 +169,7 @@ describe('harness install service', () => {
   })
 
   test('update with a harness change writes the new harness and unlinks the old one', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const stub = createStubMcpManager()
       setMcpManagerForTesting(stub)
       const created = await agents.create(
@@ -188,7 +188,7 @@ describe('harness install service', () => {
   })
 
   test('update with no harness or slug change skips the reconcile entirely', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const stub = createStubMcpManager()
       setMcpManagerForTesting(stub)
       const created = await agents.create(makeInput({ name: 'Same' }))
@@ -211,7 +211,7 @@ describe('harness install service', () => {
   })
 
   test('update with only an MCP URL change re-links the existing slug', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const previousProxyPort = env.proxyPort
       const stub = createStubMcpManager()
       setMcpManagerForTesting(stub)
@@ -259,7 +259,7 @@ describe('harness install service', () => {
   })
 
   test('installForAgent restores the previous managed link when replacement link fails', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const stub = createStubMcpManager()
       const previousSpec = {
         transport: 'stdio' as const,
@@ -335,7 +335,7 @@ describe('harness install service', () => {
   })
 
   test('regenerateMcpUrl re-links the new slug and unlinks the old one', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const stub = createStubMcpManager()
       setMcpManagerForTesting(stub)
       const created = await agents.create(makeInput({ name: 'Rotate Me' }))

@@ -3,14 +3,14 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * File-backed JSON storage under the claw-server root. Every read and
+ * File-backed JSON storage under the BrowserClaw state root. Every read and
  * write goes through a zod schema so on-disk shapes can't drift
  * silently. Writes are atomic via a `<name>.tmp` -> rename swap so a
  * crash mid-write leaves either the prior contents or nothing at all,
  * never a half-written file.
  *
  * The relative path argument is always evaluated against
- * `getClawServerDir()`; callers cannot reach outside the claw-server
+ * `getClawServerDir()`; callers cannot reach outside the BrowserClaw state
  * root. Absolute paths or `..` segments throw `StorageInvalidPathError`
  * so a stray join doesn't accidentally escape.
  */
@@ -25,7 +25,7 @@ import {
 } from 'node:fs/promises'
 import { dirname, isAbsolute, normalize, sep } from 'node:path'
 import type { ZodType } from 'zod'
-import { resolveClawServerPath } from './browseros-dir'
+import { resolveClawServerPath } from './browserclaw-dir'
 
 export class StorageNotFoundError extends Error {
   readonly relPath: string
@@ -48,7 +48,9 @@ export class StorageCorruptError extends Error {
 export class StorageInvalidPathError extends Error {
   readonly relPath: string
   constructor(relPath: string) {
-    super(`storage: relative path escapes the claw-server root: ${relPath}`)
+    super(
+      `storage: relative path escapes the BrowserClaw state root: ${relPath}`,
+    )
     this.name = 'StorageInvalidPathError'
     this.relPath = relPath
   }

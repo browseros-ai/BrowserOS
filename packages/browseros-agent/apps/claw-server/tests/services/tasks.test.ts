@@ -18,7 +18,7 @@ import {
   recordSessionStart,
 } from '../../src/services/session-events'
 import { getTask, listTasks } from '../../src/services/tasks'
-import { withTempBrowserosDir } from '../_helpers/temp-browseros-dir'
+import { withTempBrowserClawDir } from '../_helpers/temp-browserclaw-dir'
 
 /**
  * Simulates persistScreenshot having written a JPEG for this dispatch
@@ -162,7 +162,7 @@ describe('getTask', () => {
   })
 
   it('returns dispatches + screenshot ids in chronological order', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       startSession('cc-screens')
       dispatch('cc-screens', 'tabs', { url: 'https://e.com' })
       const id1 = dispatch('cc-screens', 'screenshot')
@@ -183,7 +183,7 @@ describe('getTask', () => {
   })
 
   it('excludes error-result screenshot dispatches from the strip', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       dispatch('cc-err', 'tabs', { url: 'https://e.com' })
       const ok = dispatch('cc-err', 'screenshot')
       dispatch('cc-err', 'screenshot', { isError: true })
@@ -201,7 +201,7 @@ describe('getTask', () => {
     // must not gate on toolName. `navigate`, `act`, `tabs`, and
     // first-read overrides all persist files today; the audit UI's
     // strip and per-row previews should surface them.
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       const nav = dispatch('cc-fb', 'navigate', { url: 'https://e.com' })
       const first_read = dispatch('cc-fb', 'read')
       const second_read = dispatch('cc-fb', 'read') // no file (deny-list)
@@ -239,7 +239,7 @@ describe('listTasks / getTask consistency on double end rows', () => {
   })
 
   it('lastScreenshotDispatchId skips error screenshots in listTasks', async () => {
-    await withTempBrowserosDir(async () => {
+    await withTempBrowserClawDir(async () => {
       dispatch('cc-last', 'tabs', { url: 'https://e.com' })
       const ok = dispatch('cc-last', 'screenshot')
       dispatch('cc-last', 'screenshot', { isError: true })

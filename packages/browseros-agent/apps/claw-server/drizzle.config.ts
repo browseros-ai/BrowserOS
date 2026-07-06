@@ -10,9 +10,8 @@
  * `bunx drizzle-kit generate --name=<name>` for new migrations and
  * `drizzle-kit studio` for ad-hoc inspection.
  *
- * The `dbCredentials.url` here is a placeholder; the runtime resolves
- * the real path via `interfacePath('audit.sqlite')` so it always
- * tracks the operator's BROWSEROS_DIR override.
+ * The `dbCredentials.url` here is a placeholder; runtime resolves the
+ * real path through the BrowserClaw state root.
  */
 
 import { defineConfig } from 'drizzle-kit'

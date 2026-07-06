@@ -36,7 +36,7 @@ impl AppState {
     ) -> AppResult<Self> {
         let home = env::var_os("HOME")
             .map(PathBuf::from)
-            .unwrap_or_else(|| config.browseros_dir.clone());
+            .unwrap_or_else(|| config.browserclaw_dir.clone());
         Self::new_with_home(config, shutdown_tx, home).await
     }
 

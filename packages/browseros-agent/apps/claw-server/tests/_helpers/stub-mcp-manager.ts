@@ -6,7 +6,7 @@
  * In-memory no-op `McpManager` for tests. Real agent-mcp-manager
  * writes to per-user config files (`~/.claude.json`, `~/.cursor/
  * mcp.json`, ...); we never want tests to touch those, so every test
- * that runs through `withTempBrowserosDir` gets this stub installed
+ * that runs through `withTempBrowserClawDir` gets this stub installed
  * by default.
  *
  * Tests that need to assert on install behaviour can grab a fresh
