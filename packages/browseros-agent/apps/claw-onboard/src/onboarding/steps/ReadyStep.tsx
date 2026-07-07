@@ -4,32 +4,27 @@ import { DisplayHeading, Em, StepCopy } from '../components/DisplayHeading'
 import { StarterPromptTile } from '../components/StarterPromptTile'
 import { StepWrap } from '../components/StepWrap'
 import { STARTER_PROMPTS } from '../onboarding-v2.helpers'
-import type { ImportPhase } from '../onboarding-v2.types'
 
 interface ReadyStepProps {
-  phase: ImportPhase
   onDone: () => void
 }
 
-/** Renders the final MCP setup step and post-connection starter prompts. */
-export function ReadyStep({ phase, onDone }: ReadyStepProps) {
-  const didImportLogins = phase === 'imported'
-
+/**
+ * Final onboarding step. Confirms the import landed and points at
+ * the MCP page for harness link-up. Reached only after a successful
+ * import; the reconnect path from Welcome bypasses this step and
+ * completes onboarding directly.
+ */
+export function ReadyStep({ onDone }: ReadyStepProps) {
   return (
     <StepWrap>
-      {didImportLogins ? (
-        <DisplayHeading>
-          Logins <Em>imported.</Em>
-        </DisplayHeading>
-      ) : (
-        <DisplayHeading>
-          You&rsquo;re set. <Em>Reconnect.</Em>
-        </DisplayHeading>
-      )}
+      <DisplayHeading>
+        Logins <Em>imported.</Em>
+      </DisplayHeading>
       <StepCopy>
-        {didImportLogins
-          ? 'One step left. Open the MCP page in BrowserClaw and link your AI: Claude Code, Cursor, Codex, or any other. Your agent runs tasks in this browser. You watch, approve, and audit.'
-          : 'Open the MCP page in BrowserClaw and link your AI: Claude Code, Cursor, Codex, or any other. Your agent runs tasks in this browser. You watch, approve, and audit.'}
+        One step left. Open the MCP page in BrowserClaw and link your AI: Claude
+        Code, Cursor, Codex, or any other. Your agent runs tasks in this
+        browser. You watch, approve, and audit.
       </StepCopy>
       <div className="mb-2.5 font-bold text-[12.5px] text-ink-2">
         Once connected, try one of these.

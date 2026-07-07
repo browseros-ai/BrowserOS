@@ -129,7 +129,7 @@ export function OnboardingV2() {
     <Form {...form}>
       <OnboardingShell step={step} totalSteps={TOTAL_STEPS}>
         {step === 0 && (
-          <WelcomeStep onPrimary={() => setStep(1)} onSkip={() => setStep(2)} />
+          <WelcomeStep onPrimary={() => setStep(1)} onSkip={finishOnboarding} />
         )}
         {step === 1 && (
           <ImportStep
@@ -141,9 +141,7 @@ export function OnboardingV2() {
             onContinue={() => setStep(2)}
           />
         )}
-        {step === 2 && (
-          <ReadyStep phase={importPhase} onDone={finishOnboarding} />
-        )}
+        {step === 2 && <ReadyStep onDone={finishOnboarding} />}
       </OnboardingShell>
     </Form>
   )
