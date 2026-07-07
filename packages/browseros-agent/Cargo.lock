@@ -219,10 +219,13 @@ dependencies = [
 name = "browseros-mcp"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "axum",
  "base64",
  "browseros-cdp",
  "browseros-core",
  "futures-util",
+ "http",
  "rand 0.9.4",
  "regex",
  "rmcp",
@@ -233,6 +236,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+ "tower",
  "tracing",
  "uuid",
 ]

@@ -69,7 +69,10 @@ async fn request_json(
     uri: &str,
     body: Option<Value>,
 ) -> anyhow::Result<(StatusCode, Value)> {
-    let mut builder = Request::builder().method(method).uri(uri);
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::HOST, "localhost");
     let request_body = if let Some(body) = body {
         builder = builder.header(header::CONTENT_TYPE, "application/json");
         Body::from(body.to_string())
@@ -94,9 +97,19 @@ async fn request_json_with_headers(
     body: Option<Value>,
     headers: &[(&str, &str)],
 ) -> anyhow::Result<(StatusCode, HeaderMap, Value)> {
-    let mut builder = Request::builder().method(method).uri(uri);
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::HOST, "localhost");
+    let mut has_session_header = false;
     for (name, value) in headers {
+        if name.eq_ignore_ascii_case("mcp-session-id") {
+            has_session_header = true;
+        }
         builder = builder.header(*name, *value);
+    }
+    if has_session_header {
+        builder = builder.header("mcp-protocol-version", "2025-06-18");
     }
     let request_body = if let Some(body) = body {
         builder = builder
@@ -110,12 +123,35 @@ async fn request_json_with_headers(
     let status = response.status();
     let headers = response.headers().clone();
     let bytes = to_bytes(response.into_body(), usize::MAX).await?;
-    let value = if bytes.is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_slice(&bytes)?
-    };
+    let value = response_body_value(&headers, &bytes)?;
     Ok((status, headers, value))
+}
+
+fn response_body_value(headers: &HeaderMap, bytes: &[u8]) -> anyhow::Result<Value> {
+    if bytes.is_empty() {
+        return Ok(Value::Null);
+    }
+    let body = std::str::from_utf8(bytes)?;
+    if headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/event-stream"))
+    {
+        return sse_json(body);
+    }
+    serde_json::from_str(body).or_else(|_| Ok(Value::String(body.to_string())))
+}
+
+fn sse_json(body: &str) -> anyhow::Result<Value> {
+    for line in body.lines() {
+        if let Some(data) = line.strip_prefix("data:") {
+            let data = data.trim();
+            if !data.is_empty() {
+                return Ok(serde_json::from_str(data)?);
+            }
+        }
+    }
+    Err(anyhow::anyhow!("SSE response had no JSON data: {body:?}"))
 }
 
 #[tokio::test]
@@ -171,7 +207,7 @@ async fn replay_tabs_tracks_only_live_agent_sessions() -> anyhow::Result<()> {
         .await;
 
     let (status, body) = request_json(&app.router, "GET", "/replay/tabs", None).await?;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "initialize body: {body:?}");
     assert_eq!(body, json!({ "tabs": [] }));
 
     let session_id = SessionId::new("session-live");
@@ -258,14 +294,14 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
         "id": 1,
         "method": "initialize",
         "params": {
-            "protocolVersion": "2025-11-25",
+            "protocolVersion": "2025-06-18",
             "capabilities": {},
             "clientInfo": { "name": "Codex", "version": "1.0" }
         }
     });
     let (status, headers, body) =
         request_json_with_headers(&app.router, "POST", "/mcp", Some(initialize), &[]).await?;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "initialize body: {body:?}");
     assert_eq!(
         body["result"]["serverInfo"]["name"],
         "browseros-claw-server"
@@ -275,6 +311,7 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| anyhow::anyhow!("missing mcp-session-id"))?
         .to_string();
+    send_initialized(&app.router, &session_id).await?;
 
     let list = json!({
         "jsonrpc": "2.0",
@@ -352,7 +389,11 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
     )
     .await?;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(stale["error"], "unknown mcp-session-id");
+    assert!(
+        stale
+            .as_str()
+            .is_some_and(|body| body.contains("Session not found"))
+    );
     Ok(())
 }
 
@@ -362,7 +403,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
     let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
     app.state.browser.connect_once_for_testing().await?;
     wait_for_cdp_connected(&app.router).await?;
-    let session_id = initialize_mcp(&app.router).await?;
+    let session_id = initialize_mcp(&app).await?;
 
     let tabs_new = json!({
         "jsonrpc": "2.0",
@@ -382,7 +423,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["result"]["isError"], false);
+    assert_eq!(body["result"]["isError"], false, "tabs_new body: {body:?}");
     assert_eq!(body["result"]["structuredContent"]["page"], 1);
 
     let tabs_list = json!({
@@ -425,7 +466,7 @@ async fn cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result<()> {
     let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
     app.state.browser.connect_once_for_testing().await?;
     wait_for_cdp_connected(&app.router).await?;
-    let session_id = initialize_mcp(&app.router).await?;
+    let session_id = initialize_mcp(&app).await?;
     let session = app
         .state
         .sessions
@@ -589,25 +630,54 @@ fn test_session(session_id: SessionId, agent_id: &str, slug: &str) -> Arc<Sessio
     )
 }
 
-async fn initialize_mcp(router: &Router) -> anyhow::Result<String> {
+async fn initialize_mcp(app: &TestApp) -> anyhow::Result<String> {
     let initialize = json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "initialize",
         "params": {
-            "protocolVersion": "2025-11-25",
+            "protocolVersion": "2025-06-18",
             "capabilities": {},
             "clientInfo": { "name": "Codex", "version": "1.0" }
         }
     });
-    let (status, headers, _body) =
-        request_json_with_headers(router, "POST", "/mcp", Some(initialize), &[]).await?;
-    assert_eq!(status, StatusCode::OK);
-    headers
+    let (status, headers, body) =
+        request_json_with_headers(&app.router, "POST", "/mcp", Some(initialize), &[]).await?;
+    assert_eq!(status, StatusCode::OK, "initialize body: {body:?}");
+    let session_id = headers
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("missing mcp-session-id"))
+        .ok_or_else(|| anyhow::anyhow!("missing mcp-session-id"))?;
+    send_initialized(&app.router, &session_id).await?;
+    for _ in 0..50 {
+        if app
+            .state
+            .sessions
+            .contains(&SessionId::new(session_id.clone()))
+            .await
+        {
+            return Ok(session_id);
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    anyhow::bail!("initialized notification did not register session {session_id}");
+}
+
+async fn send_initialized(router: &Router, session_id: &str) -> anyhow::Result<()> {
+    let (status, _headers, _body) = request_json_with_headers(
+        router,
+        "POST",
+        "/mcp",
+        Some(json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        })),
+        &[("mcp-session-id", session_id)],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    Ok(())
 }
 
 async fn wait_for_cdp_connected(router: &Router) -> anyhow::Result<()> {

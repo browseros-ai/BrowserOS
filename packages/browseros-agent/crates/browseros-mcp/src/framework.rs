@@ -67,6 +67,7 @@ pub struct ToolDef {
     pub input_schema: Arc<JsonObject>,
     pub output_schema: Option<Arc<JsonObject>>,
     pub annotations: Option<ToolAnnotations>,
+    pub metadata: ToolMetadata,
     pub handler: ToolHandler,
 }
 
@@ -82,6 +83,31 @@ impl ToolDef {
         }
         tool
     }
+
+    #[must_use]
+    pub fn call_hooks(&self, raw_args: &Value) -> ToolCallHooks {
+        let (filter_tabs_list, capture_new_page, close_page) =
+            tabs_action_flags(self.name, raw_args);
+        ToolCallHooks {
+            accepts_page_arg: self.metadata.accepts_page_arg,
+            filter_tabs_list,
+            capture_new_page,
+            close_page,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolMetadata {
+    pub accepts_page_arg: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolCallHooks {
+    pub accepts_page_arg: bool,
+    pub filter_tabs_list: bool,
+    pub capture_new_page: bool,
+    pub close_page: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -434,6 +460,17 @@ pub fn merge_structured(target: &mut Option<Value>, value: Value) {
         }
         (_, value) => *target = Some(value),
     }
+}
+
+fn tabs_action_flags(name: &str, raw_args: &Value) -> (bool, bool, bool) {
+    if name != "tabs" {
+        return (false, false, false);
+    }
+    let action = raw_args
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("list");
+    (action == "list", action == "new", action == "close")
 }
 
 #[must_use]

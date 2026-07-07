@@ -20,6 +20,8 @@ const DEV_BROWSERCLAW_DIR_NAME: &str = ".browserclaw-dev";
 pub struct Cli {
     #[arg(long)]
     pub config: PathBuf,
+    #[arg(long)]
+    pub stdio: bool,
 }
 
 #[derive(Debug, Clone)]

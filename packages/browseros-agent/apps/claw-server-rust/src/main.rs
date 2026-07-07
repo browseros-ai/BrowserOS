@@ -1,7 +1,8 @@
 use anyhow::Context;
 use axum::Router;
 use clap::Parser;
-use claw_server_rust::{AppState, build_router, config::Cli};
+use claw_server_rust::{AppState, build_router, config::Cli, mcp::browser_mcp_service};
+use rmcp::{serve_server, transport::stdio};
 use std::{io, net::SocketAddr, sync::Arc};
 use tokio::{net::TcpListener, sync::oneshot};
 use tracing::{error, info};
@@ -21,6 +22,9 @@ async fn main() -> anyhow::Result<()> {
         .clone()
         .start(state.browser.clone(), state.tab_activity.clone());
     state.sessions.clone().spawn_idle_sweeper();
+    if cli.stdio {
+        return serve_stdio(state).await;
+    }
     spawn_signal_shutdown(state.clone());
     heal_boot_config(&state).await;
     serve(build_router(state), config, shutdown_rx).await
@@ -73,6 +77,17 @@ async fn serve(
         })
         .await
         .context("claw-server listener failed")
+}
+
+async fn serve_stdio(state: AppState) -> anyhow::Result<()> {
+    let running = serve_server(browser_mcp_service(state.clone()), stdio())
+        .await
+        .context("failed to start stdio MCP server")?;
+    running.waiting().await.context("stdio MCP server failed")?;
+    state.sessions.shutdown().await?;
+    state.screencast.stop();
+    state.browser.stop();
+    Ok(())
 }
 
 async fn heal_boot_config(state: &AppState) {

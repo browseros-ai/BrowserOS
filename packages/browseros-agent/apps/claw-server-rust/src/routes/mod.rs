@@ -2,7 +2,7 @@ use crate::{
     AppState,
     domain::SessionId,
     error::{AppError, AppResult},
-    mcp::endpoint::mcp_endpoint,
+    mcp::streamable_http_service,
     services::{
         agents::Harness,
         audit::{ListDispatchesQuery, ListTasksQuery, TaskStatus},
@@ -18,7 +18,7 @@ use axum::{
     http::{HeaderValue, Method, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
-    routing::{any, get, options, post},
+    routing::{get, options, post},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -26,7 +26,7 @@ use std::str::FromStr;
 use tracing::{Instrument, info_span};
 use ulid::Ulid;
 
-pub fn router() -> Router<AppState> {
+pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/system/health", get(system_health))
         .route("/system/shutdown", post(system_shutdown))
@@ -51,7 +51,7 @@ pub fn router() -> Router<AppState> {
         .route("/audit/replay/{session_id}", get(replay_get))
         .route("/audit/replay/{session_id}/exists", get(replay_exists))
         .route("/replay/tabs", get(replay_tabs))
-        .route("/mcp", any(mcp_endpoint))
+        .nest_service("/mcp", streamable_http_service(state))
         .route("/{*path}", options(preflight))
 }
 
@@ -73,7 +73,9 @@ pub async fn request_context(req: Request, next: Next) -> Response {
         );
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_HEADERS,
-            HeaderValue::from_static("content-type,authorization,mcp-session-id"),
+            HeaderValue::from_static(
+                "accept,content-type,authorization,mcp-session-id,mcp-protocol-version,last-event-id",
+            ),
         );
         if let Ok(value) = HeaderValue::from_str(&request_id) {
             headers.insert("x-request-id", value);

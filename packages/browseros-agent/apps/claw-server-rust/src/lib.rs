@@ -1,6 +1,5 @@
 pub mod app;
 pub mod config;
-pub mod dispatch;
 pub mod domain;
 pub mod error;
 pub mod mcp;

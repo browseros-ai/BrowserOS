@@ -21,6 +21,7 @@ serde_json = "1"
 rmcp = { version = "2.1", features = ["server", "transport-io", "transport-streamable-http-server"] }
 schemars = "1.0"
 axum = "0.8"
+http = "1"
 tower = { version = "0.5", features = ["util"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 thiserror = "2"

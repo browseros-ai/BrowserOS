@@ -1,4 +1,4 @@
-use crate::framework::{ToolDef, input_schema, output_schema};
+use crate::framework::{ToolDef, ToolMetadata, input_schema, output_schema};
 use rmcp::model::ToolAnnotations;
 
 pub mod act;
@@ -63,6 +63,7 @@ where
         input_schema: input_schema::<T>(),
         output_schema: None,
         annotations,
+        metadata: metadata_for_tool(name),
         handler,
     }
 }
@@ -83,7 +84,29 @@ where
         input_schema: input_schema::<T>(),
         output_schema: Some(output_schema::<O>()),
         annotations,
+        metadata: metadata_for_tool(name),
         handler,
+    }
+}
+
+fn metadata_for_tool(name: &str) -> ToolMetadata {
+    ToolMetadata {
+        accepts_page_arg: matches!(
+            name,
+            "tabs"
+                | "navigate"
+                | "snapshot"
+                | "diff"
+                | "act"
+                | "download"
+                | "upload"
+                | "read"
+                | "grep"
+                | "screenshot"
+                | "pdf"
+                | "wait"
+                | "evaluate"
+        ),
     }
 }
 

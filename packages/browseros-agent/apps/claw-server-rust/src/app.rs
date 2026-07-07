@@ -84,7 +84,7 @@ impl AppState {
 }
 
 pub fn build_router(state: AppState) -> Router {
-    routes::router()
+    routes::router(state.clone())
         .with_state(state)
         .layer(middleware::from_fn(routes::request_context))
 }
