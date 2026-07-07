@@ -75,7 +75,8 @@ describe('connectBrowserosToHarness', () => {
     setMcpManagerForTesting(stub)
     await connectBrowserosToHarness('Cursor')
     const link = stub.calls.find((c) => c.method === 'link')
-    const url = (link?.payload as { server: { spec: { url: string } } }).server
+    expect(link).toBeDefined()
+    const url = (link!.payload as { server: { spec: { url: string } } }).server
       .spec.url
     expect(url).toBe('http://127.0.0.1:9500/mcp')
   })
@@ -87,7 +88,8 @@ describe('connectBrowserosToHarness', () => {
     setMcpManagerForTesting(stub)
     await connectBrowserosToHarness('Cursor')
     const link = stub.calls.find((c) => c.method === 'link')
-    const url = (link?.payload as { server: { spec: { url: string } } }).server
+    expect(link).toBeDefined()
+    const url = (link!.payload as { server: { spec: { url: string } } }).server
       .spec.url
     expect(url).toBe('http://127.0.0.1:9300/mcp')
   })
@@ -102,7 +104,8 @@ describe('connectBrowserosToHarness', () => {
     env.proxyPort = 9250
     await connectBrowserosToHarness('Claude Code')
     const link = stub.calls.find((c) => c.method === 'link')
-    const url = (link?.payload as { server: { spec: { url: string } } }).server
+    expect(link).toBeDefined()
+    const url = (link!.payload as { server: { spec: { url: string } } }).server
       .spec.url
     expect(url).toBe('http://127.0.0.1:9250/mcp')
   })
