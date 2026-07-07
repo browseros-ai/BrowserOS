@@ -26,7 +26,7 @@ export function makeStoredAgentProfile(
   return {
     id,
     name: 'Finance Ops',
-    harness: 'Claude Desktop',
+    harness: 'Cursor',
     loginMode: 'profile',
     selectedSites: [],
     approvals: {

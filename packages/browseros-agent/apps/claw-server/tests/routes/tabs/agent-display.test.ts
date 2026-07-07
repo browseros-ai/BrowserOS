@@ -8,7 +8,7 @@ import {
 function profile(
   p: Partial<AgentProfileLike> & { id: string },
 ): AgentProfileLike {
-  return { name: 'Sample', harness: 'Claude Desktop', ...p }
+  return { name: 'Sample', harness: 'Cursor', ...p }
 }
 
 function identity(

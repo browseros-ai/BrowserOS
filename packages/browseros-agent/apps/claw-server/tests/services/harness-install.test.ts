@@ -4,191 +4,96 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { describe, expect, test } from 'bun:test'
-import { setMcpManagerForTesting } from '../../src/lib/mcp-manager'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import {
+  resetMcpManagerForTesting,
+  setMcpManagerForTesting,
+} from '../../src/lib/mcp-manager'
 import {
   installForAgent,
   uninstallForAgent,
 } from '../../src/services/harness-install'
 import { createStubMcpManager } from '../_helpers/stub-mcp-manager'
-import { withTempBrowserClawDir } from '../_helpers/temp-browserclaw-dir'
+
+const URL = 'http://127.0.0.1:9200/mcp'
 
 describe('harness install service', () => {
-  test('installForAgent on Claude Desktop wraps the URL in npx mcp-remote (stdio-only parser)', async () => {
-    // Claude Desktop's `claude_desktop_config.json` parser validates
-    // stdio-shaped entries only, so the install path must write the
-    // `npx mcp-remote <url>` shape. specFor sources this from the
-    // agent-mcp-manager catalog via resolveAgentSurface.
-    await withTempBrowserClawDir(async () => {
-      const stub = createStubMcpManager()
-      setMcpManagerForTesting(stub)
+  beforeEach(() => resetMcpManagerForTesting())
+  afterEach(() => resetMcpManagerForTesting())
+
+  test('installForAgent on Codex writes a direct http spec to the codex agent', async () => {
+    const stub = createStubMcpManager()
+    setMcpManagerForTesting(stub)
+    const outcome = await installForAgent({
+      slug: 'cdx-test',
+      mcpUrl: URL,
+      harness: 'Codex',
+    })
+    const linkCall = stub.calls.find((c) => c.method === 'link')
+    expect(linkCall?.payload).toMatchObject({
+      server: { name: 'cdx-test', spec: { transport: 'http', url: URL } },
+      agent: 'codex',
+    })
+    expect(outcome.installed).toBe(true)
+  })
+
+  test('installForAgent covers each of the 7 supported harnesses', async () => {
+    const stub = createStubMcpManager()
+    setMcpManagerForTesting(stub)
+    const harnesses = [
+      { harness: 'Claude Code', agent: 'claude-code' },
+      { harness: 'Codex', agent: 'codex' },
+      { harness: 'Cursor', agent: 'cursor' },
+      { harness: 'OpenCode', agent: 'opencode' },
+      { harness: 'Antigravity', agent: 'antigravity' },
+      { harness: 'VS Code', agent: 'vscode' },
+      { harness: 'Zed', agent: 'zed' },
+    ] as const
+    for (const { harness, agent } of harnesses) {
+      stub.reset()
       const outcome = await installForAgent({
-        slug: 'install-smoke',
-        mcpUrl: 'http://127.0.0.1:9200/mcp',
-        harness: 'Claude Desktop',
+        slug: `slug-${agent}`,
+        mcpUrl: URL,
+        harness,
       })
-      const addCall = stub.calls.find((c) => c.method === 'add')
       const linkCall = stub.calls.find((c) => c.method === 'link')
-      expect(addCall?.payload).toMatchObject({
-        name: 'install-smoke',
-        spec: {
-          transport: 'stdio',
-          command: 'npx',
-          args: ['mcp-remote', 'http://127.0.0.1:9200/mcp'],
-        },
-      })
       expect(linkCall?.payload).toMatchObject({
-        serverName: 'install-smoke',
-        agent: 'claude-desktop',
+        server: { name: `slug-${agent}` },
+        agent,
       })
       expect(outcome.installed).toBe(true)
-      expect(outcome.message).toContain('Claude Desktop')
-    })
+    }
   })
 
-  test('installForAgent on Codex writes a direct HTTP spec (http-capable since agent-mcp-manager 0.0.3)', async () => {
-    await withTempBrowserClawDir(async () => {
-      const stub = createStubMcpManager()
-      setMcpManagerForTesting(stub)
-      const outcome = await installForAgent({
-        slug: 'cdx-test',
-        mcpUrl: 'http://127.0.0.1:9200/mcp',
-        harness: 'Codex',
-      })
-      const addCall = stub.calls.find((c) => c.method === 'add')
-      expect(addCall?.payload).toMatchObject({
-        name: 'cdx-test',
-        spec: {
-          transport: 'http',
-          url: 'http://127.0.0.1:9200/mcp',
-        },
-      })
-      const linkCall = stub.calls.find((c) => c.method === 'link')
-      expect(linkCall?.payload).toMatchObject({ agent: 'codex' })
-      expect(outcome.installed).toBe(true)
+  test('installForAgent surfaces the failure message when relink throws', async () => {
+    const stub = createStubMcpManager()
+    stub.link = async () => {
+      throw new Error('nope')
+    }
+    setMcpManagerForTesting(stub)
+    const outcome = await installForAgent({
+      slug: 'boom',
+      mcpUrl: URL,
+      harness: 'Codex',
     })
+    expect(outcome.installed).toBe(false)
+    expect(outcome.message).toContain('Could not register endpoint')
+    expect(outcome.message).toContain('nope')
   })
 
-  test('Hermes + OpenClaw short-circuit as a no-op success (no manager calls)', async () => {
-    await withTempBrowserClawDir(async () => {
-      const stub = createStubMcpManager()
-      setMcpManagerForTesting(stub)
-      for (const harness of ['Hermes', 'OpenClaw'] as const) {
-        const outcome = await installForAgent({
-          slug: 'x',
-          mcpUrl: 'http://127.0.0.1:9200/mcp',
-          harness,
-        })
-        expect(outcome.installed).toBe(true)
-        expect(outcome.message.toLowerCase()).toContain('browseros')
-      }
-      expect(stub.calls).toEqual([])
+  test('uninstallForAgent uses the disconnect primitive with removeIfLast', async () => {
+    const stub = createStubMcpManager()
+    setMcpManagerForTesting(stub)
+    const outcome = await uninstallForAgent({
+      slug: 'unslug',
+      harness: 'Cursor',
     })
-  })
-
-  test('uninstallForAgent unlinks and drops the manifest entry', async () => {
-    await withTempBrowserClawDir(async () => {
-      const stub = createStubMcpManager()
-      setMcpManagerForTesting(stub)
-      await uninstallForAgent({ slug: 'gone-slug', harness: 'Claude Desktop' })
-      const methods = stub.calls.map((c) => c.method)
-      expect(methods).toContain('unlink')
-      expect(methods).toContain('remove')
+    const disc = stub.calls.find((c) => c.method === 'disconnect')
+    expect(disc?.payload).toMatchObject({
+      serverName: 'unslug',
+      agent: 'cursor',
+      removeIfLast: true,
     })
-  })
-
-  test('install failure does not throw; outcome carries the message', async () => {
-    await withTempBrowserClawDir(async () => {
-      const stub = createStubMcpManager()
-      // Inject a custom failing manager.
-      stub.add = async () => {
-        throw new Error('disk full')
-      }
-      setMcpManagerForTesting(stub)
-      const outcome = await installForAgent({
-        slug: 'broken',
-        mcpUrl: 'http://127.0.0.1:9200/mcp',
-        harness: 'Claude Desktop',
-      })
-      expect(outcome.installed).toBe(false)
-      expect(outcome.message).toContain('Claude Desktop')
-      expect(outcome.message).toContain('disk full')
-    })
-  })
-
-  test('installForAgent restores the previous managed link when replacement link fails', async () => {
-    await withTempBrowserClawDir(async () => {
-      const stub = createStubMcpManager()
-      const previousSpec = {
-        transport: 'stdio' as const,
-        command: 'npx',
-        args: ['mcp-remote', 'http://127.0.0.1:9200/mcp'],
-      }
-      stub.listLinks = async () => {
-        stub.calls.push({
-          method: 'listLinks',
-          payload: { serverNames: ['existing'] },
-        })
-        return [
-          {
-            serverName: 'existing',
-            agent: 'claude-desktop',
-            configPath: '/tmp/stub-claude-desktop.json',
-          },
-        ]
-      }
-      stub.listServers = async () => {
-        stub.calls.push({ method: 'listServers', payload: {} })
-        return [
-          {
-            name: 'existing',
-            spec: previousSpec,
-            addedAt: '2026-07-02T00:00:00.000Z',
-            links: {},
-          },
-        ]
-      }
-      let linkAttempts = 0
-      stub.link = async (opts) => {
-        stub.calls.push({ method: 'link', payload: opts })
-        linkAttempts++
-        if (linkAttempts === 1) throw new Error('write denied')
-        return {
-          serverName: opts.serverName,
-          agent: opts.agent,
-          configPath: opts.configPath ?? `/tmp/stub-${opts.agent}.json`,
-          created: true,
-        }
-      }
-      setMcpManagerForTesting(stub)
-
-      const outcome = await installForAgent({
-        slug: 'existing',
-        mcpUrl: 'http://127.0.0.1:9512/mcp',
-        harness: 'Claude Desktop',
-      })
-
-      expect(outcome.installed).toBe(false)
-      expect(outcome.message).toContain('write denied')
-      const addCalls = stub.calls.filter((c) => c.method === 'add')
-      expect(addCalls).toHaveLength(2)
-      expect(addCalls[0]?.payload).toMatchObject({
-        name: 'existing',
-        spec: {
-          args: ['mcp-remote', 'http://127.0.0.1:9512/mcp'],
-        },
-      })
-      expect(addCalls[1]?.payload).toMatchObject({
-        name: 'existing',
-        spec: previousSpec,
-      })
-      const linkCalls = stub.calls.filter((c) => c.method === 'link')
-      expect(linkCalls).toHaveLength(2)
-      expect(linkCalls[1]?.payload).toMatchObject({
-        serverName: 'existing',
-        agent: 'claude-desktop',
-        configPath: '/tmp/stub-claude-desktop.json',
-      })
-    })
+    expect(outcome.installed).toBe(false)
   })
 })

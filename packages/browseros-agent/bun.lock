@@ -58,6 +58,7 @@
         "@wxt-dev/storage": "^1.2.8",
         "@xstate/store": "^3.10.0",
         "@xyflow/react": "^12.11.0",
+        "agent-mcp-manager": "0.0.3",
         "ai": "^6.0.208",
         "better-auth": "^1.6.19",
         "canvas-confetti": "^1.9.4",
@@ -214,7 +215,7 @@
         "@browseros/shared": "workspace:*",
         "@hono/zod-validator": "^0.8.0",
         "@modelcontextprotocol/sdk": "^1.27.1",
-        "agent-mcp-manager": "^0.0.3",
+        "agent-mcp-manager": "0.0.4-rc.3",
         "commander": "^14.0.3",
         "drizzle-orm": "^0.45.2",
         "hono": "^4.12.3",
@@ -273,7 +274,7 @@
         "acp-probe": "^0.0.2",
         "acpx": "^0.10.0",
         "acpx-ai-provider": "^0.0.6",
-        "agent-mcp-manager": "^0.0.3",
+        "agent-mcp-manager": "0.0.3",
         "ai": "^6.0.208",
         "commander": "^14.0.3",
         "core-js": "3.45.1",
@@ -3886,6 +3887,8 @@
     "@browseros/claw-onboard/lucide-react": ["lucide-react@1.21.0", "", { "peerDependencies": { "react": "^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0" } }, "sha512-reEZMXq8Qdd5jg5XYkQ5TR1fB/GiQ7ih4vcrthYDtgjSDwh0i6/YLiGjsWsIwgN49gpAnd4J2elSNzncMEEUUQ=="],
 
     "@browseros/claw-onboard/react-hook-form": ["react-hook-form@7.78.0", "", { "peerDependencies": { "react": "^16.8.0 || ^17 || ^18 || ^19" } }, "sha512-EEZqc+N23moyzTlz61Pj+JvcXo76ICkpfOZo8JZw+sM4+wLQGh6nI2Ms+PdMOYNluFu0ghlM7B8mCzhRYtJCnA=="],
+
+    "@browseros/claw-server/agent-mcp-manager": ["agent-mcp-manager@0.0.4-rc.3", "", { "dependencies": { "@iarna/toml": "^2.2.5", "jsonc-parser": "^3.3.1", "yaml": "^2.9.0" } }, "sha512-aomyrG2cN5SGRlSZNGmKho0Z+4uPIdiq08iT7JagghUhSdYALvwEVRmbpvyXkbb15gQTMB+6LsjzV+NTZ6y7kw=="],
 
     "@browseros/eval/zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
 

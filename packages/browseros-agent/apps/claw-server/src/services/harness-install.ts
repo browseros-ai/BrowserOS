@@ -10,7 +10,11 @@
  */
 
 import type { AgentId } from 'agent-mcp-manager'
-import { AgentNotSupportedError, ForeignEntryError } from 'agent-mcp-manager'
+import {
+  AgentNotSupportedError,
+  ForeignEntryError,
+  resolveAgentMcpConfigPath,
+} from 'agent-mcp-manager'
 import { logger } from '../lib/logger'
 import { getMcpManager } from '../lib/mcp-manager'
 import type { Harness, StoredAgentProfile } from '../routes/agents/schemas'
@@ -24,51 +28,43 @@ export interface InstallOutcome {
   configPath?: string
 }
 
-/**
- * Maps stored harness labels to upstream agent ids; null means the
- * harness is BrowserOS-internal and has no third-party config file.
- */
-export const HARNESS_TO_AGENT_ID: Record<Harness, AgentId | null> = {
+/** Maps stored harness labels to the upstream agent-mcp-manager id. */
+export const HARNESS_TO_AGENT_ID: Record<Harness, AgentId> = {
   'Claude Code': 'claude-code',
-  'Claude Desktop': 'claude-desktop',
+  Codex: 'codex',
   Cursor: 'cursor',
+  OpenCode: 'opencode',
+  Antigravity: 'antigravity',
   'VS Code': 'vscode',
   Zed: 'zed',
-  Codex: 'codex',
-  'Gemini CLI': 'gemini',
-  Hermes: null,
-  OpenClaw: null,
 }
 
 export async function installForAgent(
   profile: Pick<StoredAgentProfile, 'slug' | 'mcpUrl' | 'harness'>,
 ): Promise<InstallOutcome> {
   const agentId = HARNESS_TO_AGENT_ID[profile.harness]
-  if (agentId === null) {
-    return {
-      installed: true,
-      message: `${profile.harness} runs inside BrowserOS; no harness config to write.`,
-    }
-  }
   const mgr = getMcpManager()
   const spec = specFor(agentId, profile.mcpUrl)
   try {
-    const link = await relinkManagedServer({
+    await relinkManagedServer({
       mgr,
       serverName: profile.slug,
       agent: agentId,
       spec,
     })
+    const configPath = await resolveAgentMcpConfigPath(agentId, 'system').catch(
+      () => undefined,
+    )
     logger.info('installed cockpit agent into harness', {
       slug: profile.slug,
       agent: agentId,
-      configPath: link.configPath,
+      configPath,
     })
     return {
       installed: true,
       message: `Endpoint registered with ${profile.harness}.`,
       agent: agentId,
-      configPath: link.configPath,
+      configPath,
     }
   } catch (err) {
     return failure(err, profile.harness)
@@ -79,18 +75,18 @@ export async function uninstallForAgent(
   profile: Pick<StoredAgentProfile, 'slug' | 'harness'>,
 ): Promise<InstallOutcome> {
   const agentId = HARNESS_TO_AGENT_ID[profile.harness]
-  if (agentId === null) {
-    return {
-      installed: false,
-      message: `${profile.harness} runs inside BrowserOS; nothing to uninstall.`,
-    }
-  }
   const mgr = getMcpManager()
   try {
-    await mgr.unlink({ serverName: profile.slug, agent: agentId })
-    // Also drop the manifest entry so a future agent reusing the
-    // slug isn't blocked by a lingering record.
-    await mgr.remove({ serverName: profile.slug, unlinkFirst: false })
+    // `disconnect` is the 0.0.4 primitive that unlinks the agent AND
+    // drops the manifest entry only when no other agents remain
+    // linked to it. Replaces the pre-0.0.4 three-step unlink + list
+    // + conditional remove dance, which had a race window where two
+    // concurrent uninstalls could orphan each other's link records.
+    await mgr.disconnect({
+      serverName: profile.slug,
+      agent: agentId,
+      removeIfLast: true,
+    })
     logger.info('uninstalled cockpit agent from harness', {
       slug: profile.slug,
       agent: agentId,

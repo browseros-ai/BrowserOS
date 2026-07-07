@@ -1,8 +1,8 @@
 /**
  * Pins the editorial MCP page shape: compressed hero + single
- * endpoint URL strip (CLI snippet removed), inline Connected-agents
- * header with an `N of M connected` mono chip, hairline row list
- * filtered to exclude Hermes / OpenClaw / Gemini CLI.
+ * endpoint URL strip, inline Connected-agents header with an
+ * `N of M connected` mono chip, hairline row list of the 7 supported
+ * harnesses.
  */
 
 import { describe, expect, it, mock } from 'bun:test'
@@ -21,16 +21,6 @@ mock.module('@/modules/api/connections.hooks', () => ({
             agentId: 'claude-code',
             message: '',
           },
-          // Claude Desktop is a retired harness (stdio-only host
-          // config, `npx mcp-remote` bridge requires Node) and gets
-          // filtered out at the render layer; the row list should
-          // not include it.
-          {
-            harness: 'Claude Desktop',
-            installed: false,
-            agentId: 'claude-desktop',
-            message: '',
-          },
           {
             harness: 'Cursor',
             installed: true,
@@ -44,19 +34,28 @@ mock.module('@/modules/api/connections.hooks', () => ({
             agentId: 'codex',
             message: '',
           },
-          // Hermes is BrowserOS-internal and gets filtered out at the
-          // render layer; the row list should not include it.
           {
-            harness: 'Hermes',
-            installed: true,
-            agentId: null,
-            message: 'Runs inside BrowserOS.',
-          },
-          // Gemini CLI is also filtered out at the render layer.
-          {
-            harness: 'Gemini CLI',
+            harness: 'OpenCode',
             installed: false,
-            agentId: 'gemini-cli',
+            agentId: 'opencode',
+            message: '',
+          },
+          {
+            harness: 'Antigravity',
+            installed: false,
+            agentId: 'antigravity',
+            message: '',
+          },
+          {
+            harness: 'VS Code',
+            installed: false,
+            agentId: 'vscode',
+            message: '',
+          },
+          {
+            harness: 'Zed',
+            installed: false,
+            agentId: 'zed',
             message: '',
           },
         ],
@@ -125,20 +124,23 @@ describe('Mcp (editorial)', () => {
     expect(html).not.toContain('--transport http')
   })
 
-  it('renders the Connected-agents header with the filtered-count chip', () => {
+  it('renders the Connected-agents header with the count chip', () => {
     const html = renderApp()
     expect(html).toContain('Connected agents')
-    // Visible list = Claude Code, Cursor, Codex (Hermes + Gemini CLI
-    // filtered). Connected among visible = 1 (Cursor).
-    expect(html).toContain('1 of 3 connected')
+    // 7 supported harnesses, 1 connected (Cursor).
+    expect(html).toContain('1 of 7 connected')
   })
 
-  it('renders one row per visible harness and hides the filtered ones', () => {
+  it('renders one row per supported harness', () => {
     const html = renderApp()
     expect(html).toContain('Claude Code')
     expect(html).toContain('Cursor')
     expect(html).toContain('Codex')
-    // Filtered out at the render layer.
+    expect(html).toContain('OpenCode')
+    expect(html).toContain('Antigravity')
+    expect(html).toContain('VS Code')
+    expect(html).toContain('Zed')
+    // Retired harnesses do not appear.
     expect(html).not.toContain('Claude Desktop')
     expect(html).not.toContain('Hermes')
     expect(html).not.toContain('Gemini CLI')

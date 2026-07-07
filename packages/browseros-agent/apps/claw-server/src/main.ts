@@ -28,7 +28,7 @@ import { logger } from './lib/logger'
 import { migrateMcpUrls } from './lib/migrate-mcp-urls'
 import { setLocalServerUrl } from './local-server-url'
 import { createServer } from './server'
-import { healClaudeCodeBrowserOsHttpTransportTags } from './services/claude-code-heal'
+import { runIntegrityScan } from './services/integrity-scan'
 import { startScreencastPoller } from './services/screencast-poller'
 import { publicMcpUrl } from './shared/mcp-url'
 
@@ -56,10 +56,16 @@ async function start(): Promise<void> {
   setLocalServerUrl(url)
   logger.info('claw-server listening', { url })
 
-  const healedClaudeCodeTags = await healClaudeCodeBrowserOsHttpTransportTags()
-  if (healedClaudeCodeTags > 0) {
-    logger.info('healed Claude Code BrowserOS MCP transport tags', {
-      healed: healedClaudeCodeTags,
+  // Self-heal loop 1: diff manifest vs. on-disk agent configs and
+  // relink any drifted / missing entries from the manifest-stored
+  // spec. Fires before the URL migration so relinks use the current
+  // spec URL; the migration then overwrites URLs that have moved.
+  try {
+    const scan = await runIntegrityScan()
+    logger.info('integrity scan finished', { ...scan })
+  } catch (err) {
+    logger.warn('integrity scan failed unexpectedly', {
+      error: err instanceof Error ? err.message : String(err),
     })
   }
 
@@ -104,23 +110,18 @@ async function start(): Promise<void> {
     process.once('SIGTERM', cleanup)
   }
 
-  // Sweep stored profiles so their harness install and mcpUrl match
-  // the public MCP URL. In BrowserOS-managed launches this is the
-  // proxy port, not the backend server bind URL.
-  const mcpUrlForMigration = publicMcpUrl()
-  void migrateMcpUrls(mcpUrlForMigration)
-    .then((result) =>
-      logger.info('mcpUrl migration finished', {
-        migrated: result.migrated,
-        skipped: result.skipped,
-        failed: result.failed,
-      }),
-    )
-    .catch((err: unknown) =>
-      logger.error('mcpUrl migration failed unexpectedly', {
-        error: err instanceof Error ? err.message : String(err),
-      }),
-    )
+  // Self-heal loop 2: rewrite every managed MCP spec whose URL no
+  // longer matches the current public URL (proxy or bind port bump
+  // between runs) and update stored profile JSON to match. Covers
+  // per-profile installs AND the shared BrowserClaw entry.
+  try {
+    const migration = await migrateMcpUrls(publicMcpUrl())
+    logger.info('mcpUrl migration finished', { ...migration })
+  } catch (err) {
+    logger.error('mcpUrl migration failed unexpectedly', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
 }
 
 start().catch((error: unknown) => {

@@ -3,30 +3,30 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Singleton accessor for `agent-mcp-manager`. Manifest lives at
- * `<browserclawDir>/mcp-manager` so the per-cockpit-
- * agent server entries stay isolated from the BrowserOS-wide entry
+ * Singleton accessor for the `agent-mcp-manager` bound API. Manifest
+ * lives at `<browserclawDir>/mcp-manager` so the per-cockpit-agent
+ * server entries stay isolated from the BrowserOS-wide entry
  * `apps/server` manages under `<browserosDir>/mcp-manager`.
  *
- * The library writes config to the user's per-harness MCP file
- * (e.g. Claude Desktop's `~/Library/Application Support/Claude/
- * claude_desktop_config.json`, Cursor's `~/.cursor/mcp.json`).
- * Scope is always 'system' here since cockpit agents are user-wide.
+ * Since 0.0.4 the library exposes a functional surface. `bind()`
+ * pre-fills the workspaceDir on every verb so call sites stay
+ * `mgr.link({...})`, `mgr.rescan()`, etc. Scope is always 'system'
+ * here since cockpit agents are user-wide; per-call `scope` overrides
+ * are still available via the input object.
  */
 
 import { join } from 'node:path'
-import { createMcpManager, type McpManager } from 'agent-mcp-manager'
+import { type BoundApi, bind } from 'agent-mcp-manager'
 import { getClawServerDir } from './browserclaw-dir'
 
-let cached: McpManager | null = null
+let cached: BoundApi | null = null
 
-export function getMcpManager(): McpManager {
-  if (!cached) {
-    cached = createMcpManager({
-      workspaceDir: join(getClawServerDir(), 'mcp-manager'),
-      scope: 'system',
-    })
-  }
+export function getMcpManagerWorkspaceDir(): string {
+  return join(getClawServerDir(), 'mcp-manager')
+}
+
+export function getMcpManager(): BoundApi {
+  if (!cached) cached = bind(getMcpManagerWorkspaceDir())
   return cached
 }
 
@@ -34,6 +34,6 @@ export function resetMcpManagerForTesting(): void {
   cached = null
 }
 
-export function setMcpManagerForTesting(stub: McpManager): void {
+export function setMcpManagerForTesting(stub: BoundApi): void {
   cached = stub
 }

@@ -26,7 +26,7 @@ describe('/connections route chain', () => {
     const body = (await res.json()) as {
       connections: Array<{ harness: string; installed: boolean }>
     }
-    expect(body.connections.length).toBeGreaterThanOrEqual(9)
+    expect(body.connections.length).toBe(7)
     expect(
       body.connections.find((c) => c.harness === 'Claude Code'),
     ).toBeDefined()
@@ -49,10 +49,10 @@ describe('/connections route chain', () => {
     }
     expect(body.installed).toBe(true)
     expect(body.agentId).toBe('claude-code')
-    const add = stub.calls.find((c) => c.method === 'add')
-    expect((add?.payload as { spec: { url?: string } }).spec.url).toBe(
-      'http://127.0.0.1:9512/mcp',
-    )
+    const add = stub.calls.find((c) => c.method === 'link')
+    expect(
+      (add?.payload as { server: { spec: { url?: string } } }).server.spec.url,
+    ).toBe('http://127.0.0.1:9512/mcp')
   })
 
   it('ignores a caller-supplied MCP URL body', async () => {
@@ -70,10 +70,10 @@ describe('/connections route chain', () => {
       ),
     )
     expect(res.status).toBe(200)
-    const add = stub.calls.find((c) => c.method === 'add')
-    expect((add?.payload as { spec: { url?: string } }).spec.url).toBe(
-      'http://127.0.0.1:9512/mcp',
-    )
+    const add = stub.calls.find((c) => c.method === 'link')
+    expect(
+      (add?.payload as { server: { spec: { url?: string } } }).server.spec.url,
+    ).toBe('http://127.0.0.1:9512/mcp')
   })
 
   it('POST /connections/:harness/disconnect disconnects a single harness', async () => {

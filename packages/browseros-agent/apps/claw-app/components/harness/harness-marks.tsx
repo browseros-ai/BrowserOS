@@ -11,12 +11,13 @@
 import type { FC, SVGProps } from 'react'
 import { AnthropicBlack } from '@/components/ui/svgs/anthropicBlack'
 import { AnthropicWhite } from '@/components/ui/svgs/anthropicWhite'
-import { ClaudeAiIcon } from '@/components/ui/svgs/claudeAiIcon'
+import { Antigravity } from '@/components/ui/svgs/antigravity'
 import { CodexDark } from '@/components/ui/svgs/codexDark'
 import { CodexLight } from '@/components/ui/svgs/codexLight'
 import { CursorDark } from '@/components/ui/svgs/cursorDark'
 import { CursorLight } from '@/components/ui/svgs/cursorLight'
-import { Gemini } from '@/components/ui/svgs/gemini'
+import { Opencode } from '@/components/ui/svgs/opencode'
+import { OpencodeDark } from '@/components/ui/svgs/opencodeDark'
 import { Vscode } from '@/components/ui/svgs/vscode'
 import { ZedLogo } from '@/components/ui/svgs/zedLogo'
 import { cn } from '@/lib/utils'
@@ -39,10 +40,6 @@ export const ClaudeCodeMark: FC<HarnessMarkProps> = ({
       {...props}
     />
   </>
-)
-
-export const ClaudeDesktopMark: FC<HarnessMarkProps> = (props) => (
-  <ClaudeAiIcon aria-hidden {...props} />
 )
 
 export const CursorMark: FC<HarnessMarkProps> = ({ className, ...props }) => (
@@ -83,6 +80,17 @@ export const ZedMark: FC<HarnessMarkProps> = (props) => (
   <ZedLogo aria-hidden {...props} />
 )
 
-export const GeminiMark: FC<HarnessMarkProps> = (props) => (
-  <Gemini aria-hidden {...props} />
+export const OpenCodeMark: FC<HarnessMarkProps> = ({ className, ...props }) => (
+  <>
+    <Opencode aria-hidden className={cn(className, 'dark:hidden')} {...props} />
+    <OpencodeDark
+      aria-hidden
+      className={cn(className, 'hidden dark:block')}
+      {...props}
+    />
+  </>
+)
+
+export const AntigravityMark: FC<HarnessMarkProps> = (props) => (
+  <Antigravity aria-hidden {...props} />
 )
