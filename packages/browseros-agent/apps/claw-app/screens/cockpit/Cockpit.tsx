@@ -3,6 +3,7 @@ import { CockpitHero } from '@/components/cockpit/CockpitHero'
 import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
 import { RecentActivity } from '@/components/cockpit/RecentActivity'
 import { RunningGrid } from '@/components/cockpit/RunningGrid'
+import { isUserFacingHarness } from '@/components/harness/harness.types'
 import { useTasks } from '@/modules/api/audit.hooks'
 import { useBrowserosConnections } from '@/modules/api/connections.hooks'
 import { useCockpitData } from './cockpit.data'
@@ -23,8 +24,14 @@ export function Cockpit() {
   const taskProbe = useTasks({
     variables: { limit: ONBOARDING_PROBE_LIMIT },
   })
+  // Only count harnesses that appear on the /mcp screen. Hidden ones
+  // (Hermes, OpenClaw, Gemini CLI, retired Claude Desktop) may be
+  // preinstalled but are never something the reader intentionally
+  // connected, so lighting up 'MCP installed' for them is misleading.
   const hasConnection =
-    connections.data?.connections.some((c) => c.installed) ?? false
+    connections.data?.connections.some(
+      (c) => c.installed && isUserFacingHarness(c.harness),
+    ) ?? false
   const hasActivity = (taskProbe.data?.pages ?? []).some(
     (p) => p.tasks.length > 0,
   )

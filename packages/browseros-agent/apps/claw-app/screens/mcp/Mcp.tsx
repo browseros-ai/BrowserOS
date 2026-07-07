@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import {
   type Harness,
-  RETIRED_HARNESSES,
+  isUserFacingHarness,
 } from '@/components/harness/harness.types'
 import { EditorialEmpty } from '@/components/ui/EditorialEmpty'
 import {
@@ -13,14 +13,6 @@ import {
 import { resolveCanonicalMcpEndpointUrl } from '@/modules/api/mcp-endpoint'
 import { ConnectionRow } from './ConnectionRow'
 import { HeroCard } from './HeroCard'
-
-/** Harnesses that should not show a user-facing Connect flow. */
-const HIDDEN_HARNESSES: readonly Harness[] = [
-  ...RETIRED_HARNESSES,
-  'Hermes',
-  'OpenClaw',
-  'Gemini CLI',
-]
 
 export function Mcp() {
   const [url, setUrl] = useState<string | null>(null)
@@ -44,7 +36,7 @@ export function Mcp() {
 
   const visibleRows = useMemo(() => {
     const list = connections.data?.connections ?? []
-    return list.filter((c) => !HIDDEN_HARNESSES.includes(c.harness))
+    return list.filter((c) => isUserFacingHarness(c.harness))
   }, [connections.data])
 
   const connectedCount = visibleRows.filter((c) => c.installed).length
