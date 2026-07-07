@@ -11,11 +11,6 @@
 # - Use 'arch' field to specify target architectures
 #   - Supported values: x64, arm64
 #   - Operations without arch run for all architectures
-# - Use 'claw_server_variant' on BrowserClaw claw-server resources to select
-#   between 'typescript' and 'rust' via build_flags.yaml. A selected operation
-#   can override destination with 'selected_destination' and rename copied files
-#   with 'selected_renames'. Use 'selected_clear_destination: true' when the
-#   selected copy is mutually exclusive with another variant at the same path.
 #
 # Example:
 #   - name: "macOS-only Binary"
@@ -188,117 +183,111 @@ copy_operations:
     os: ["windows"]
     arch: ["x64"]
 
-  # BrowserOS Claw Server resources - Platform & Architecture specific
-  - name: "BrowserOS Claw Server Resources - macOS ARM64"
-    source: "resources/binaries/browseros_claw_server/darwin-arm64/resources"
-    destination: "chrome/browser/browseros/claw_server/resources"
-    selected_clear_destination: true
-    type: "directory"
-    claw_server_variant: "typescript"
-    os: ["macos"]
-    arch: ["arm64"]
-
-  - name: "BrowserOS Claw Server Resources - macOS x64"
-    source: "resources/binaries/browseros_claw_server/darwin-x64/resources"
-    destination: "chrome/browser/browseros/claw_server/resources"
-    selected_clear_destination: true
-    type: "directory"
-    claw_server_variant: "typescript"
-    os: ["macos"]
-    arch: ["x64"]
-
-  - name: "BrowserOS Claw Server Resources - Linux ARM64"
-    source: "resources/binaries/browseros_claw_server/linux-arm64/resources"
-    destination: "chrome/browser/browseros/claw_server/resources"
-    selected_clear_destination: true
-    type: "directory"
-    claw_server_variant: "typescript"
-    os: ["linux"]
-    arch: ["arm64"]
-
-  - name: "BrowserOS Claw Server Resources - Linux x64"
-    source: "resources/binaries/browseros_claw_server/linux-x64/resources"
-    destination: "chrome/browser/browseros/claw_server/resources"
-    selected_clear_destination: true
-    type: "directory"
-    claw_server_variant: "typescript"
-    os: ["linux"]
-    arch: ["x64"]
-
-  - name: "BrowserOS Claw Server Resources - Windows x64"
-    source: "resources/binaries/browseros_claw_server/windows-x64/resources"
-    destination: "chrome/browser/browseros/claw_server/resources"
-    selected_clear_destination: true
-    type: "directory"
-    claw_server_variant: "typescript"
-    os: ["windows"]
-    arch: ["x64"]
-
-  # BrowserOS Claw Rust Server resources - Platform & Architecture specific
+  # BrowserOS Claw Server resources - switch variants by swapping which block is commented.
   - name: "BrowserOS Claw Rust Server Resources - macOS ARM64"
     source: "resources/binaries/browseros_claw_server_rust/darwin-arm64/resources"
-    destination: "chrome/browser/browseros/claw_server_rust/resources"
-    selected_destination: "chrome/browser/browseros/claw_server/resources"
-    selected_clear_destination: true
-    selected_renames:
+    destination: "chrome/browser/browseros/claw_server/resources"
+    clear_destination: true
+    renames:
       - from: "bin/browseros-claw-server-rs"
         to: "bin/browseros-claw-server"
     type: "directory"
-    claw_server_variant: "rust"
+    product: "browserclaw"
     os: ["macos"]
     arch: ["arm64"]
 
   - name: "BrowserOS Claw Rust Server Resources - macOS x64"
     source: "resources/binaries/browseros_claw_server_rust/darwin-x64/resources"
-    destination: "chrome/browser/browseros/claw_server_rust/resources"
-    selected_destination: "chrome/browser/browseros/claw_server/resources"
-    selected_clear_destination: true
-    selected_renames:
+    destination: "chrome/browser/browseros/claw_server/resources"
+    clear_destination: true
+    renames:
       - from: "bin/browseros-claw-server-rs"
         to: "bin/browseros-claw-server"
     type: "directory"
-    claw_server_variant: "rust"
+    product: "browserclaw"
     os: ["macos"]
     arch: ["x64"]
 
   - name: "BrowserOS Claw Rust Server Resources - Linux ARM64"
     source: "resources/binaries/browseros_claw_server_rust/linux-arm64/resources"
-    destination: "chrome/browser/browseros/claw_server_rust/resources"
-    selected_destination: "chrome/browser/browseros/claw_server/resources"
-    selected_clear_destination: true
-    selected_renames:
+    destination: "chrome/browser/browseros/claw_server/resources"
+    clear_destination: true
+    renames:
       - from: "bin/browseros-claw-server-rs"
         to: "bin/browseros-claw-server"
     type: "directory"
-    claw_server_variant: "rust"
+    product: "browserclaw"
     os: ["linux"]
     arch: ["arm64"]
 
   - name: "BrowserOS Claw Rust Server Resources - Linux x64"
     source: "resources/binaries/browseros_claw_server_rust/linux-x64/resources"
-    destination: "chrome/browser/browseros/claw_server_rust/resources"
-    selected_destination: "chrome/browser/browseros/claw_server/resources"
-    selected_clear_destination: true
-    selected_renames:
+    destination: "chrome/browser/browseros/claw_server/resources"
+    clear_destination: true
+    renames:
       - from: "bin/browseros-claw-server-rs"
         to: "bin/browseros-claw-server"
     type: "directory"
-    claw_server_variant: "rust"
+    product: "browserclaw"
     os: ["linux"]
     arch: ["x64"]
 
   - name: "BrowserOS Claw Rust Server Resources - Windows x64"
     source: "resources/binaries/browseros_claw_server_rust/windows-x64/resources"
-    destination: "chrome/browser/browseros/claw_server_rust/resources"
-    selected_destination: "chrome/browser/browseros/claw_server/resources"
-    selected_clear_destination: true
-    selected_renames:
+    destination: "chrome/browser/browseros/claw_server/resources"
+    clear_destination: true
+    renames:
       - from: "bin/browseros-claw-server-rs.exe"
         to: "bin/browseros-claw-server.exe"
     type: "directory"
-    claw_server_variant: "rust"
+    product: "browserclaw"
     os: ["windows"]
     arch: ["x64"]
+
+  # - name: "BrowserOS Claw Server Resources - macOS ARM64"
+  #   source: "resources/binaries/browseros_claw_server/darwin-arm64/resources"
+  #   destination: "chrome/browser/browseros/claw_server/resources"
+  #   clear_destination: true
+  #   type: "directory"
+  #   product: "browserclaw"
+  #   os: ["macos"]
+  #   arch: ["arm64"]
+  #
+  # - name: "BrowserOS Claw Server Resources - macOS x64"
+  #   source: "resources/binaries/browseros_claw_server/darwin-x64/resources"
+  #   destination: "chrome/browser/browseros/claw_server/resources"
+  #   clear_destination: true
+  #   type: "directory"
+  #   product: "browserclaw"
+  #   os: ["macos"]
+  #   arch: ["x64"]
+  #
+  # - name: "BrowserOS Claw Server Resources - Linux ARM64"
+  #   source: "resources/binaries/browseros_claw_server/linux-arm64/resources"
+  #   destination: "chrome/browser/browseros/claw_server/resources"
+  #   clear_destination: true
+  #   type: "directory"
+  #   product: "browserclaw"
+  #   os: ["linux"]
+  #   arch: ["arm64"]
+  #
+  # - name: "BrowserOS Claw Server Resources - Linux x64"
+  #   source: "resources/binaries/browseros_claw_server/linux-x64/resources"
+  #   destination: "chrome/browser/browseros/claw_server/resources"
+  #   clear_destination: true
+  #   type: "directory"
+  #   product: "browserclaw"
+  #   os: ["linux"]
+  #   arch: ["x64"]
+  #
+  # - name: "BrowserOS Claw Server Resources - Windows x64"
+  #   source: "resources/binaries/browseros_claw_server/windows-x64/resources"
+  #   destination: "chrome/browser/browseros/claw_server/resources"
+  #   clear_destination: true
+  #   type: "directory"
+  #   product: "browserclaw"
+  #   os: ["windows"]
+  #   arch: ["x64"]
 
   # BrowserOS Claw onboarding static resources - platform-independent dist
   # downloaded from R2, feeds the onboarding grit pak built for every product

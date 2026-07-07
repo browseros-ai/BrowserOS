@@ -8,7 +8,6 @@ import subprocess
 from pathlib import Path
 from ...core.step import Step, ValidationError, step
 from ...core.context import Context
-from ...lib.build_flags import build_flags_for_context
 from ...lib.utils import log_info, log_success, log_error, log_warning, get_platform
 
 
@@ -30,10 +29,9 @@ class ResourcesModule(Step):
 
 
 def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
-    """Copy AI extensions and icons based on YAML configuration"""
+    """Copy configured resources into the Chromium checkout."""
     log_info("\n📦 Copying resources...")
 
-    # Load copy configuration
     copy_config_path = ctx.get_copy_resources_config()
     if not copy_config_path.exists():
         log_error(f"Copy configuration file not found: {copy_config_path}")
@@ -55,7 +53,6 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
 
     all_ok = True
 
-    # Process each copy operation
     for operation in config["copy_operations"]:
         name = operation.get("name", "Unnamed operation")
         source = operation["source"]
@@ -65,7 +62,6 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
         os_condition = operation.get("os")
         arch_condition = operation.get("arch")
         product_condition = operation.get("product")
-        variant_condition = operation.get("claw_server_variant")
 
         if not product_matches(product_condition, ctx.product.id):
             log_info(
@@ -73,37 +69,15 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
             )
             continue
 
-        if not claw_server_variant_matches(variant_condition, ctx):
-            log_info(
-                "  ⏭️  Skipping "
-                f"{name} (claw_server_variant: {variant_condition}, "
-                f"selected: {_selected_claw_server_variant(ctx)})"
-            )
-            continue
+        clear_destination = operation.get("clear_destination", False)
+        renames = operation.get("renames")
 
-        selected_claw_variant = is_selected_claw_server_variant(
-            variant_condition, ctx
-        )
-        if selected_claw_variant and operation.get("selected_destination"):
-            destination = operation["selected_destination"]
-        clear_destination = (
-            selected_claw_variant
-            and operation.get("selected_clear_destination", False)
-        )
-        renames = (
-            operation.get("selected_renames")
-            if selected_claw_variant
-            else operation.get("renames")
-        )
-
-        # Skip operation if build_type condition doesn't match
         if build_type_condition and build_type_condition != ctx.build_type:
             log_info(
                 f"  ⏭️  Skipping {name} (build_type: {build_type_condition}, current: {ctx.build_type})"
             )
             continue
 
-        # Skip operation if os condition doesn't match
         if os_condition:
             current_os = get_platform()
             if current_os not in os_condition:
@@ -112,7 +86,6 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
                 )
                 continue
 
-        # Skip operation if arch condition doesn't match
         if arch_condition:
             if ctx.architecture not in arch_condition:
                 log_info(
@@ -120,7 +93,6 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
                 )
                 continue
 
-        # Resolve paths
         src_path = ctx.root_dir / source
         dst_base = ctx.chromium_src / destination
 
@@ -131,7 +103,6 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
             if clear_destination:
                 clear_path(dst_base)
             if op_type == "directory":
-                # Copy entire directory
                 if src_path.exists() and src_path.is_dir():
                     dst_path = dst_base
                     dst_path.mkdir(parents=True, exist_ok=True)
@@ -146,7 +117,6 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
                     log_warning(f"    Source directory not found: {source}")
 
             elif op_type == "files":
-                # Copy files matching pattern
                 files = glob.glob(str(ctx.root_dir / source))
                 if files:
                     dst_base.mkdir(parents=True, exist_ok=True)
@@ -166,7 +136,6 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
                     log_warning(f"    No files found matching: {source}")
 
             elif op_type == "file":
-                # Copy single file
                 if src_path.exists() and src_path.is_file():
                     dst_base.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(src_path, dst_base)
@@ -203,29 +172,6 @@ def product_matches(product_condition, product_id: str) -> bool:
     return product_id in products
 
 
-def claw_server_variant_matches(variant_condition, ctx: Context) -> bool:
-    """Return whether a BrowserClaw-only claw-server variant gate matches."""
-    if variant_condition is None:
-        return True
-    if ctx.product.id != "browserclaw":
-        return True
-    if variant_condition not in ("typescript", "rust"):
-        raise ValueError(
-            "claw_server_variant must be 'typescript' or 'rust', got "
-            f"{variant_condition!r}"
-        )
-    return variant_condition == _selected_claw_server_variant(ctx)
-
-
-def is_selected_claw_server_variant(variant_condition, ctx: Context) -> bool:
-    """Return true only for the selected BrowserClaw claw-server operation."""
-    return (
-        variant_condition is not None
-        and ctx.product.id == "browserclaw"
-        and variant_condition == _selected_claw_server_variant(ctx)
-    )
-
-
 def apply_renames(base: Path, renames) -> None:
     """Rename declared relative paths under an already-copied destination."""
     if not isinstance(renames, list):
@@ -257,14 +203,6 @@ def clear_path(path: Path) -> None:
         shutil.rmtree(path)
         return
     path.unlink()
-
-
-def _selected_claw_server_variant(ctx: Context) -> str:
-    return (
-        "rust"
-        if build_flags_for_context(ctx).use_claw_server_rust
-        else "typescript"
-    )
 
 
 def _safe_relative_path(raw_path, field: str) -> Path:

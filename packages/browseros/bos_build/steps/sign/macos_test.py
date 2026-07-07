@@ -230,7 +230,7 @@ class VerifyServerResourcesBundleTest(unittest.TestCase):
         claw_destinations = {
             op["destination"]
             for op in config["copy_operations"]
-            if op["name"].startswith("BrowserOS Claw Server Resources")
+            if op["name"].startswith("BrowserOS Claw Rust Server Resources")
         }
         self.assertEqual(
             claw_destinations,

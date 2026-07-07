@@ -120,21 +120,6 @@ class GetAppPathTest(unittest.TestCase):
         self.assertEqual(ctx.product.id, "browserclaw")
         self.assertEqual(ctx.BROWSEROS_APP_BASE_NAME, "BrowserClaw")
 
-    def test_context_loads_build_flags_from_root(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config = Path(tmp) / "bos_build" / "config" / "build_flags.yaml"
-            config.parent.mkdir(parents=True)
-            config.write_text("use_claw_server_rust: false\n")
-
-            ctx = Context(
-                root_dir=Path(tmp),
-                chromium_src=Path("/nonexistent-src"),
-                architecture="arm64",
-                build_type="release",
-            )
-
-        self.assertFalse(ctx.build_flags.use_claw_server_rust)
-
     def test_debug_gn_args_allow_override_and_package_all(self):
         ctx = Context(
             chromium_src=Path("/nonexistent-src"),

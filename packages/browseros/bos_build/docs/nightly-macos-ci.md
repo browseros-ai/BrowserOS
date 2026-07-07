@@ -54,11 +54,15 @@ packages/browseros/resources/binaries/browseros_claw_onboard
 ```
 
 BrowserClaw stages the shared BrowserOS server bundle, the product-independent
-onboarding bundle, and the selected Claw server variant. The selected variant
-comes from
-`packages/browseros/bos_build/config/build_flags.yaml`.
+onboarding bundle, and both Claw server variants. The workflow always builds the
+TypeScript/Bun bundle:
 
-When `use_claw_server_rust: true`, the workflow runs:
+```bash
+bun scripts/build/claw-server.ts --target=darwin-arm64 --ci
+```
+
+and extracts it into
+`resources/binaries/browseros_claw_server/darwin-arm64`. It also runs:
 
 ```bash
 packages/browseros-agent/scripts/build/claw-server-rust-local.sh \
@@ -77,15 +81,8 @@ packages/browseros/resources/binaries/browseros_claw_server_rust/darwin-arm64/
 
 The normal resources step then copies this root into Chromium and renames
 `browseros-claw-server-rs` to the runtime name `browseros-claw-server`.
-
-When `use_claw_server_rust: false`, BrowserClaw falls back to:
-
-```bash
-bun scripts/build/claw-server.ts --target=darwin-arm64 --ci
-```
-
-and extracts the TypeScript/Bun resource zip into
-`resources/binaries/browseros_claw_server/darwin-arm64`.
+Switching the embedded variant is a `copy_resources.yaml` comment swap; the
+Rust block is active by default.
 
 ## Bundled Extensions
 
@@ -111,10 +108,9 @@ uv run browseros build --preset release --product <product> --arch <arch> \
   --chromium-src "$CHROMIUM_SRC"
 ```
 
-For BrowserClaw, the downloaded Claw server bundle follows the same
-`use_claw_server_rust` flag: Rust resources come from
-`claw-server-rust/prod-resources/latest/`, and the TypeScript/Bun fallback comes
-from `claw-server/prod-resources/latest/`.
+For BrowserClaw, `download_resources` fetches both Claw server bundles. Rust
+resources come from `claw-server-rust/prod-resources/latest/`, and the
+TypeScript/Bun resources come from `claw-server/prod-resources/latest/`.
 
 Release runs default to rebuilding the current version files without bumping
 them:

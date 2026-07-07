@@ -12,7 +12,6 @@ from typing import Any, List
 
 from ...core.step import Step, ValidationError, step
 from ...core.context import Context
-from ...lib.build_flags import build_flags_for_context
 from ...lib.utils import (
     log_info,
     log_success,
@@ -335,10 +334,6 @@ class DownloadResourcesModule(Step):
             if not _product_matches(product_condition, context.product.id):
                 continue
 
-            variant_condition = op.get("claw_server_variant")
-            if not _claw_server_variant_matches(variant_condition, context):
-                continue
-
             filtered.append(op)
 
         return filtered
@@ -354,25 +349,3 @@ def _product_matches(product_condition: Any, product_id: str) -> bool:
         [product_condition] if isinstance(product_condition, str) else product_condition
     )
     return product_id in products
-
-
-def _claw_server_variant_matches(
-    variant_condition: Any, context: Context
-) -> bool:
-    """Return whether a BrowserClaw-only claw-server variant gate matches."""
-    if variant_condition is None:
-        return True
-    if context.product.id != "browserclaw":
-        return True
-    if variant_condition not in ("typescript", "rust"):
-        raise ValueError(
-            "claw_server_variant must be 'typescript' or 'rust', got "
-            f"{variant_condition!r}"
-        )
-
-    selected = (
-        "rust"
-        if build_flags_for_context(context).use_claw_server_rust
-        else "typescript"
-    )
-    return variant_condition == selected

@@ -1,5 +1,0 @@
-# Human-editable build switches.
-#
-# BrowserClaw only: true embeds the Rust claw-server artifact in browser
-# builds; false restores the TypeScript/Bun claw-server artifact.
-use_claw_server_rust: true

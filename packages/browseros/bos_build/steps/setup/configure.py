@@ -88,7 +88,7 @@ class ConfigureModule(Step):
         # Debug sets browseros_package_all_server_resources, so ninja needs
         # every product's server resources staged; a missing set otherwise
         # surfaces much later as a cryptic missing-input error.
-        for bundle in all_server_bundles(ctx.build_flags.use_claw_server_rust):
+        for bundle in all_server_bundles():
             resources_dir = ctx.chromium_src / bundle.chromium_resources_root
             if not resources_dir.exists():
                 log_warning(

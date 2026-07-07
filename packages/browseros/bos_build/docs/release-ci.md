@@ -107,19 +107,20 @@ The Rust Claw server lane publishes to a distinct CDN/R2 prefix:
 that workflow has populated the matching R2 objects; the bos_build download
 step fails the whole Chromium build when a configured key is missing.
 
-BrowserClaw browser builds select the embedded claw-server variant with
-`packages/browseros/bos_build/config/build_flags.yaml`:
-`use_claw_server_rust: true` embeds the Rust resources from
-`claw-server-rust/prod-resources/latest/`, and `false` rolls BrowserClaw browser
-builds back to the TypeScript/Bun resources from `claw-server/prod-resources/latest/`.
-The browser build downloads only the selected BrowserClaw variant. BrowserClaw
-server OTA feeds (`appcast-claw-server*.xml`) remain pinned to the TypeScript
-server bundle until a separate feed migration changes them.
+BrowserClaw browser builds download both claw-server variants:
+Rust from `claw-server-rust/prod-resources/latest/` and TypeScript/Bun from
+`claw-server/prod-resources/latest/`. The embedded variant is selected in
+`packages/browseros/bos_build/config/copy_resources.yaml` by swapping which
+BrowserClaw claw-server block is commented. The Rust block is active by default
+and renames `browseros-claw-server-rs` to the runtime name
+`browseros-claw-server`. BrowserClaw server OTA feeds
+(`appcast-claw-server*.xml`) remain pinned to the TypeScript server bundle
+until a separate feed migration changes them.
 
 `release-macos.yml` follows this release rule too: it does not build server
 resources from the checked-out `packages/browseros-agent` tree. Its browser
 build command leaves downloads enabled, so `download_resources` fetches the
-published BrowserOS server bundle, selected BrowserClaw server bundle, and
+published BrowserOS server bundle, both BrowserClaw server bundles, and the
 onboarding bundle from R2 using the runner-local `packages/browseros/.env` R2
 credentials.
 

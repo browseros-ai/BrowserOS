@@ -30,14 +30,10 @@ ENTITLEMENTS_DIR = Path(__file__).resolve().parents[2] / "resources" / "entitlem
 
 
 class MacosServerBinariesTest(unittest.TestCase):
-    def test_server_bundles_select_rust_by_default(self):
+    def test_server_bundles_use_rust_for_browser_builds(self):
         self.assertEqual(
-            all_server_bundles(use_claw_server_rust=True),
+            all_server_bundles(),
             (BROWSEROS_SERVER_BUNDLE, BROWSERCLAW_RUST_SERVER_BUNDLE),
-        )
-        self.assertEqual(
-            all_server_bundles(use_claw_server_rust=False),
-            (BROWSEROS_SERVER_BUNDLE, BROWSEROS_CLAW_SERVER_BUNDLE),
         )
 
     def test_server_bundles_have_separate_resource_roots(self):
@@ -95,20 +91,12 @@ class MacosServerBinariesTest(unittest.TestCase):
 
     def test_server_bundles_filter_by_product(self):
         self.assertEqual(
-            server_bundles_for_product("browseros", use_claw_server_rust=True),
+            server_bundles_for_product("browseros"),
             (BROWSEROS_SERVER_BUNDLE,),
         )
         self.assertEqual(
-            server_bundles_for_product("browseros", use_claw_server_rust=False),
-            (BROWSEROS_SERVER_BUNDLE,),
-        )
-        self.assertEqual(
-            server_bundles_for_product("browserclaw", use_claw_server_rust=True),
+            server_bundles_for_product("browserclaw"),
             (BROWSERCLAW_RUST_SERVER_BUNDLE,),
-        )
-        self.assertEqual(
-            server_bundles_for_product("browserclaw", use_claw_server_rust=False),
-            (BROWSEROS_CLAW_SERVER_BUNDLE,),
         )
 
     def test_server_ota_bundles_stay_pinned_to_typescript_claw(self):

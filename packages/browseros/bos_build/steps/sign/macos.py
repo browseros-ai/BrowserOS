@@ -51,14 +51,13 @@ def verify_server_resources_bundle(
     app_path: Path,
     chromium_src: Path,
     product_id: Optional[str] = None,
-    use_claw_server_rust: Optional[bool] = None,
 ) -> List[str]:
     """Check bundled server resources match what the build staged."""
     problems: List[str] = []
     bundles = (
-        server_bundles_for_product(product_id, use_claw_server_rust)
+        server_bundles_for_product(product_id)
         if product_id
-        else all_server_bundles(use_claw_server_rust)
+        else all_server_bundles()
     )
     for bundle in bundles:
         problems.extend(_verify_server_resource_bundle(bundle, app_path, chromium_src))
@@ -232,7 +231,6 @@ class MacOSSignModule(Step):
             app_path,
             ctx.chromium_src,
             ctx.product.id,
-            ctx.build_flags.use_claw_server_rust,
         )
         if problems:
             raise RuntimeError(
@@ -411,12 +409,10 @@ def find_components_to_sign(
         if nested_app not in components["helpers"]:
             components["apps"].append(nested_app)
 
-    flags = getattr(ctx, "build_flags", None) if ctx else None
-    use_rust = flags.use_claw_server_rust if flags is not None else None
     bundles = (
-        server_bundles_for_product(ctx.product.id, use_rust)
+        server_bundles_for_product(ctx.product.id)
         if ctx
-        else all_server_bundles(use_rust)
+        else all_server_bundles()
     )
     for bundle in bundles:
         bundle_root = app_path / bundle.macos_bundle_resources_root

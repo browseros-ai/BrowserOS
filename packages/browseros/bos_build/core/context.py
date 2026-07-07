@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from ..lib import versions as versions_mod
-from ..lib.build_flags import BuildFlags, load_build_flags
 from ..lib.env import EnvConfig
 from ..lib.paths import get_package_root
 from .products import (
@@ -92,7 +91,6 @@ class Context:
 
     artifact_registry: ArtifactRegistry = field(init=False)
     env: EnvConfig = field(init=False)
-    build_flags: BuildFlags = field(init=False)
 
     def __post_init__(self):
         if not isinstance(self.product, ProductDescriptor):
@@ -100,7 +98,6 @@ class Context:
 
         self.artifact_registry = ArtifactRegistry()
         self.env = EnvConfig()
-        self.build_flags = load_build_flags(self.root_dir)
 
         if not self.architecture:
             self.architecture = get_platform_arch()

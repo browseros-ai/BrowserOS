@@ -145,39 +145,15 @@ jobs:
           cd "$agent_root"
           bun ci
           bun scripts/build/server.ts --target=darwin-arm64 --ci
+          bun scripts/build/claw-server.ts --target=darwin-arm64 --ci
           bun scripts/build/claw-onboard.ts --ci
-
-          use_rust="$(
-            BROWSEROS_ROOT="$browseros_root" uv --quiet run --project "$browseros_root" python - <<'PY'
-          import yaml
-          import os
-          from pathlib import Path
-
-          config = yaml.safe_load(
-              (
-                  Path(os.environ["BROWSEROS_ROOT"])
-                  / "bos_build/config/build_flags.yaml"
-              ).read_text()
-          )
-          value = config.get("use_claw_server_rust")
-          if not isinstance(value, bool):
-              raise SystemExit("use_claw_server_rust must be a boolean")
-          print("true" if value else "false")
-          PY
-          )"
-
-          if [ "$use_rust" = "true" ]; then
-            "$agent_root/scripts/build/claw-server-rust-local.sh" \
-              --target darwin-arm64 \
-              --agent-root "$agent_root" \
-              --browseros-root "$browseros_root"
-          else
-            bun scripts/build/claw-server.ts --target=darwin-arm64 --ci
-          fi
+          "$agent_root/scripts/build/claw-server-rust-local.sh" \
+            --target darwin-arm64 \
+            --agent-root "$agent_root" \
+            --browseros-root "$browseros_root"
 
           cd "$browseros_root"
-          AGENT_ROOT="$agent_root" BROWSEROS_ROOT="$browseros_root" USE_RUST="$use_rust" uv run python - <<'PY'
-          import os
+          AGENT_ROOT="$agent_root" BROWSEROS_ROOT="$browseros_root" uv run python - <<'PY'
           import shutil
           from pathlib import Path
 
@@ -194,16 +170,13 @@ jobs:
                   agent_root / "dist/prod/claw-onboard/browseros-claw-onboard-resources.zip",
                   browseros_root / "resources/binaries/browseros_claw_onboard",
               ),
+              (
+                  agent_root
+                  / "dist/prod/claw-server/browseros-claw-server-resources-darwin-arm64.zip",
+                  browseros_root
+                  / "resources/binaries/browseros_claw_server/darwin-arm64",
+              ),
           ]
-          if os.environ["USE_RUST"] != "true":
-              artifacts.append(
-                  (
-                      agent_root
-                      / "dist/prod/claw-server/browseros-claw-server-resources-darwin-arm64.zip",
-                      browseros_root
-                      / "resources/binaries/browseros_claw_server/darwin-arm64",
-                  )
-              )
 
           for archive, destination in artifacts:
               if not archive.is_file():
