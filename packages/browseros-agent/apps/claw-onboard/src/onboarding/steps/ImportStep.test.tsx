@@ -91,7 +91,7 @@ describe('ImportStep', () => {
       )
     }
     expect(html).toContain('7 of 7 selected')
-    expect(html).toContain('macOS will ask')
+    expect(html).toContain('macOS will ask to read')
     expect(html).toContain('Import 7 items from Work')
     expect(html).not.toContain('Chrome is open')
     expect(html).not.toContain('Quit Chrome for me')
