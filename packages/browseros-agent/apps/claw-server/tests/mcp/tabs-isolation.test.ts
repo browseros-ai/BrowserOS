@@ -156,11 +156,12 @@ describe('per-agent tabs isolation', () => {
     resetAuditDbForTesting()
   })
 
-  it('tabs new populates the ledger; follow-up tabs list returns only that page', async () => {
+  it('tabs new populates the ledger; follow-up tabs list groups your tab and the user tab separately', async () => {
     stubSessionForPage(7, 'target-7', 'https://news.google.com/', 'News')
     // Queue: tabs new -> ensureAgentTabGroup fires create + update ->
     // then tabs list underlying result contains BOTH the agent's tab
-    // AND the operator's tab. The cockpit filter should reduce it.
+    // AND the operator's tab. The cockpit annotator keeps both and
+    // groups them into `Your tabs:` and `User's tabs:` sections.
     queue(
       ok({ page: 7 }), // tabs new
       ok({ group: { groupId: 'G1', windowId: 42 } }), // tab_groups create
@@ -184,23 +185,40 @@ describe('per-agent tabs isolation', () => {
     })) as TabsListResult
     expect(listResult.isError).toBeFalsy()
     expect(listResult.structuredContent?.pages).toEqual([
-      { page: 7, url: 'https://news.google.com/', title: 'News' },
+      {
+        page: 7,
+        url: 'https://news.google.com/',
+        title: 'News',
+        ownership: 'mine',
+        ownerAgentId: agentId,
+        ownerLabel: null,
+      },
+      {
+        page: 42,
+        url: 'https://operator.example/',
+        title: "Op's tab",
+        ownership: 'user',
+        ownerAgentId: null,
+        ownerLabel: null,
+      },
     ])
     const text = (
       listResult.content as Array<{ type: string; text?: string }>
     )?.[0]?.text
-    expect(text).toContain('[7] https://news.google.com/')
-    expect(text).not.toContain("Op's tab")
-    expect(text).not.toContain('operator.example')
+    expect(text).toContain('Your tabs:')
+    expect(text).toContain('[7] https://news.google.com/ (News)')
+    expect(text).toContain("User's tabs:")
+    expect(text).toContain("[42] https://operator.example/ (Op's tab)")
     await client.close()
   })
 
-  it('two agents are isolated: one agent list does not include the other agent pages', async () => {
-    // Two connected sessions.
-    // agent-a opens page 1, agent-b opens page 2.
-    // Both call tabs list and see only their own.
+  it('two agents see each other tabs as "other-agent" with the owner label', async () => {
+    // Two connected sessions. agent-a opens page 1, agent-b opens
+    // page 2. Both call tabs list. Each sees its OWN page under
+    // "Your tabs:", the peer's page under "Other agents' tabs:" with
+    // the peer's slug in ownerLabel, and the operator page under
+    // "User's tabs:".
     stubSessionForPage(1, 't1', 'https://a.example/', 'A')
-    // agent-a: tabs new (page 1) + tab_groups create + update
     queue(ok({ page: 1 }), ok({ group: { groupId: 'GA', windowId: 1 } }), ok())
     const a = await connect('claude-code')
     await a.client.callTool({
@@ -208,8 +226,6 @@ describe('per-agent tabs isolation', () => {
       arguments: { action: 'new', url: 'https://a.example/' },
     })
 
-    // Switch session stub to a page id both agents can see (agent-b
-    // opens page 2 while page 1 also exists). We stub pages 1 and 2.
     setBrowserSession({
       pages: {
         getInfo: (id: number) =>
@@ -229,7 +245,6 @@ describe('per-agent tabs isolation', () => {
       },
       // biome-ignore lint/suspicious/noExplicitAny: test stub
     } as any)
-    // agent-b: tabs new (page 2) + tab_groups create + update
     queue(ok({ page: 2 }), ok({ group: { groupId: 'GB', windowId: 1 } }), ok())
     const b = await connect('cursor')
     await b.client.callTool({
@@ -237,8 +252,6 @@ describe('per-agent tabs isolation', () => {
       arguments: { action: 'new', url: 'https://b.example/' },
     })
 
-    // Underlying tabs list returns BOTH pages plus operator tab 99.
-    // Filter must reduce per-agent.
     const opTabs = [
       { page: 1, url: 'https://a.example/', title: 'A' },
       { page: 2, url: 'https://b.example/', title: 'B' },
@@ -249,14 +262,48 @@ describe('per-agent tabs isolation', () => {
       name: 'tabs',
       arguments: { action: 'list' },
     })) as TabsListResult
-    expect(listA.structuredContent?.pages).toEqual([opTabs[0]])
+    expect(listA.structuredContent?.pages).toEqual([
+      {
+        ...opTabs[0],
+        ownership: 'mine',
+        ownerAgentId: a.agentId,
+        ownerLabel: null,
+      },
+      {
+        ...opTabs[1],
+        ownership: 'other-agent',
+        ownerAgentId: b.agentId,
+        ownerLabel: 'cursor',
+      },
+      { ...opTabs[2], ownership: 'user', ownerAgentId: null, ownerLabel: null },
+    ])
+    const textA = (listA.content as Array<{ type: string; text?: string }>)?.[0]
+      ?.text
+    expect(textA).toContain('Your tabs:')
+    expect(textA).toContain("Other agents' tabs:")
+    expect(textA).toContain(', owned by cursor')
+    expect(textA).toContain("User's tabs:")
 
     queue(ok({ pages: opTabs }))
     const listB = (await b.client.callTool({
       name: 'tabs',
       arguments: { action: 'list' },
     })) as TabsListResult
-    expect(listB.structuredContent?.pages).toEqual([opTabs[1]])
+    expect(listB.structuredContent?.pages).toEqual([
+      {
+        ...opTabs[0],
+        ownership: 'other-agent',
+        ownerAgentId: a.agentId,
+        ownerLabel: 'claude-code',
+      },
+      {
+        ...opTabs[1],
+        ownership: 'mine',
+        ownerAgentId: b.agentId,
+        ownerLabel: null,
+      },
+      { ...opTabs[2], ownership: 'user', ownerAgentId: null, ownerLabel: null },
+    ])
 
     await a.client.close()
     await b.client.close()
@@ -296,23 +343,36 @@ describe('per-agent tabs isolation', () => {
       name: 'tabs',
       arguments: { action: 'list' },
     })) as TabsListResult
-    expect(listB.structuredContent?.pages).toEqual([])
-    expect(
-      (listB.content as Array<{ type: string; text?: string }>)?.[0]?.text,
-    ).toBe('(no open pages)')
+    // Page 1 shows up as an other-agent tab (session A's ownership)
+    // even though the two sessions share the same client slug.
+    expect(listB.structuredContent?.pages).toEqual([
+      {
+        page: 1,
+        url: 'https://a.example/',
+        title: 'A',
+        ownership: 'other-agent',
+        ownerAgentId: a.agentId,
+        ownerLabel: 'claude-code',
+      },
+    ])
+    const textB = (listB.content as Array<{ type: string; text?: string }>)?.[0]
+      ?.text
+    expect(textB).toContain("Other agents' tabs:")
+    expect(textB).toContain(', owned by claude-code')
 
     await a.client.close()
     await b.client.close()
   })
 
-  it('tabs list on an empty ledger returns "(no open pages)"', async () => {
+  it('tabs list with no owned pages shows the operator tabs under "User\'s tabs:"', async () => {
     setBrowserSession({
       pages: {
         getInfo: (_id: number) => undefined,
       },
       // biome-ignore lint/suspicious/noExplicitAny: test stub
     } as any)
-    // Underlying tool returns some operator tabs; filter drops them.
+    // Underlying tool returns operator tabs; the annotator groups
+    // them under "User's tabs:" instead of hiding them.
     queue(
       ok({
         pages: [
@@ -320,6 +380,37 @@ describe('per-agent tabs isolation', () => {
         ],
       }),
     )
+    const { client } = await connect('claude-code')
+    const list = (await client.callTool({
+      name: 'tabs',
+      arguments: { action: 'list' },
+    })) as TabsListResult
+    expect(list.structuredContent?.pages).toEqual([
+      {
+        page: 100,
+        url: 'https://only-operator.example/',
+        title: 'Op',
+        ownership: 'user',
+        ownerAgentId: null,
+        ownerLabel: null,
+      },
+    ])
+    const text = (list.content as Array<{ type: string; text?: string }>)?.[0]
+      ?.text
+    expect(text).toContain("User's tabs:")
+    expect(text).toContain('[100] https://only-operator.example/ (Op)')
+    expect(text).not.toContain('Your tabs:')
+    await client.close()
+  })
+
+  it('tabs list with truly zero open pages still renders "(no open pages)"', async () => {
+    setBrowserSession({
+      pages: {
+        getInfo: (_id: number) => undefined,
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: test stub
+    } as any)
+    queue(ok({ pages: [] }))
     const { client } = await connect('claude-code')
     const list = (await client.callTool({
       name: 'tabs',
@@ -435,10 +526,32 @@ describe('per-agent tabs isolation', () => {
       name: 'tabs',
       arguments: { action: 'list' },
     })) as TabsListResult
-    expect(list.structuredContent?.pages).toEqual([])
-    expect(
-      (list.content as Array<{ type: string; text?: string }>)?.[0]?.text,
-    ).toBe('(no open pages)')
+    // After the reap, ownership of page 7 was dropped, so the new
+    // session sees both pages under "User's tabs:" rather than
+    // remembering the stale ownership.
+    expect(list.structuredContent?.pages).toEqual([
+      {
+        page: 7,
+        url: 'https://x.com/',
+        title: 'Stale',
+        ownership: 'user',
+        ownerAgentId: null,
+        ownerLabel: null,
+      },
+      {
+        page: 99,
+        url: 'https://operator.example/',
+        title: 'Op',
+        ownership: 'user',
+        ownerAgentId: null,
+        ownerLabel: null,
+      },
+    ])
+    const text = (list.content as Array<{ type: string; text?: string }>)?.[0]
+      ?.text
+    expect(text).toContain("User's tabs:")
+    expect(text).not.toContain('Your tabs:')
+    expect(text).not.toContain("Other agents' tabs:")
     await second.client.close()
   })
 })

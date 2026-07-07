@@ -25,6 +25,7 @@ import { logger } from '../lib/logger'
 import {
   agentIdentityFromClient,
   type ClientIdentity,
+  identityService,
 } from '../lib/mcp-session'
 import {
   extractPageId,
@@ -41,6 +42,10 @@ import { persistScreenshot } from '../services/screenshots'
 import { ensureAgentTabGroup } from '../services/tab-group-ops'
 import { cancellationErrorResult } from './cancellation-result'
 import { asRegister, type ToolResult } from './register-fn'
+import {
+  annotateTabsListWithOwnership,
+  buildOwnershipDeps,
+} from './tabs-ownership'
 
 /**
  * Schemes the cockpit refuses to forward to `navigate`, regardless of
@@ -199,44 +204,6 @@ function dispatchErrorText(content: unknown): string | null {
     }
   }
   return null
-}
-
-/**
- * Rewrite a successful `tabs list` result to only include pages the
- * calling agent owns. Both channels are rebuilt from the surviving
- * subset:
- *   - `structuredContent.pages` is filtered.
- *   - `content[0].text` is rebuilt via the tool's `formatPageLine`
- *     shape (`[N] URL (title)` or `[N] URL` when no title). Empty
- *     survivors yield `(no open pages)` which matches the underlying
- *     tool's empty output so codex's LLM interprets it as "no tabs,
- *     open one" and dispatches `tabs new` instead of hijacking.
- *
- * Exported for unit tests; production callers reach it via the
- * dispatch handler.
- */
-export function filterTabsListToAgent<
-  R extends {
-    content: unknown
-    isError?: boolean
-    structuredContent?: unknown
-  },
->(result: R, owned: ReadonlySet<number>): R {
-  const sc = result.structuredContent as
-    | { pages?: Array<{ page: number; url?: string; title?: string }> }
-    | undefined
-  const allPages = sc?.pages ?? []
-  const surviving = allPages.filter((p) => owned.has(p.page))
-  const lines = surviving.map(
-    (p) => `[${p.page}] ${p.url ?? ''}${p.title ? ` (${p.title})` : ''}`,
-  )
-  const text = lines.length > 0 ? lines.join('\n') : '(no open pages)'
-  return {
-    ...result,
-    isError: false,
-    content: [{ type: 'text', text }],
-    structuredContent: { pages: surviving },
-  } as R
 }
 
 /**
@@ -627,16 +594,19 @@ export function registerBrowserToolsForSingleServer(
                   agentTabs.markClosed(agentId, closedPage)
                 }
               } else if ((args?.action ?? 'list') === 'list') {
-                // Filter the list to only pages this agent owns.
-                // With no owned pages, the surviving text is
-                // `(no open pages)` which mirrors the tool's own
-                // empty output; the LLM interprets it as "I have no
-                // tabs, I need to open one" and calls `tabs new`.
-                const { agentId } = agentIdentityFromClient(identity)
-                result = filterTabsListToAgent(
-                  result,
-                  agentTabs.ownedBy(agentId),
+                // Annotate every open page with an ownership tag and
+                // group the text output into Your tabs / User's tabs
+                // / Other agents' tabs. Every page in the underlying
+                // result survives; the cross-agent page guard above
+                // still hard-rejects a page-targeted dispatch on a
+                // foreign page, so broader visibility does not open
+                // a broader action surface.
+                const deps = buildOwnershipDeps(
+                  identity,
+                  agentTabs,
+                  identityService,
                 )
+                result = annotateTabsListWithOwnership(result, deps)
               }
             }
           } else {

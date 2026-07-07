@@ -5,11 +5,18 @@
  *
  * Per-agent ownership ledger for browser pages. Populated by
  * successful `tabs new` dispatches and drained by `tabs close`.
- * The cockpit's `tabs list` handler filters its result to only
- * this agent's owned pages, and the page-targeted tools reject
- * dispatches whose `page` arg is not owned by the caller. Together
- * with `tabGroupTracker`, this guarantees an agent can only see /
- * touch tabs it opened; the operator's own tabs are invisible.
+ * Two indices stay coherent:
+ *   - `records: Map<agentId, Set<pageId>>` powers `ownedBy(agentId)`.
+ *   - `owners:  Map<pageId, agentId>`      powers `resolveOwner(pageId)`.
+ * `markOpened` writes both; `markClosed` and `forgetAgent` remove
+ * from both. The `owners.get(pageId) === agentId` guard on removal
+ * handles the (defensive) case of two agents claiming the same
+ * pageId: only the recorded owner clears its entry.
+ *
+ * The cockpit's `tabs list` handler uses `resolveOwner` to classify
+ * every open page as `mine` (owner === caller), `user` (no owner),
+ * or `other-agent` (owner !== caller). Page-targeted tools still
+ * gate on `ownedBy` in register.ts for cross-ownership rejection.
  *
  * Different lifecycle than `tabActivityRegistry`: that one is
  * targetId-keyed and prunes on a 30s window for the /tabs/activity
@@ -26,6 +33,13 @@ export interface AgentTabsRegistry {
    * `owned.has(page)` without null-checking.
    */
   ownedBy(agentId: string): ReadonlySet<number>
+  /**
+   * Returns the agentId currently listed as owner of `pageId`, or
+   * null when the page has no agent owner (operator-opened tab).
+   * O(1). Used by the `tabs list` handler to classify every page
+   * by ownership without walking every agent's ownedBy set.
+   */
+  resolveOwner(pageId: number): string | null
   /**
    * Drops all pages tracked for an agent. Called from
    * `cleanupSessionState` so the next session for the same agentId
@@ -58,6 +72,7 @@ const EMPTY: ReadonlySet<number> = new Set<number>()
 
 export function createAgentTabsRegistry(): AgentTabsRegistry {
   const records = new Map<string, Set<number>>()
+  const owners = new Map<number, string>()
   const firstCaptures = new Map<string, Set<number>>()
   return {
     markOpened(agentId, pageId) {
@@ -67,18 +82,29 @@ export function createAgentTabsRegistry(): AgentTabsRegistry {
         records.set(agentId, set)
       }
       set.add(pageId)
+      owners.set(pageId, agentId)
     },
     markClosed(agentId, pageId) {
       const set = records.get(agentId)
       if (!set) return
       set.delete(pageId)
+      if (owners.get(pageId) === agentId) owners.delete(pageId)
       if (set.size === 0) records.delete(agentId)
     },
     ownedBy(agentId) {
       return records.get(agentId) ?? EMPTY
     },
+    resolveOwner(pageId) {
+      return owners.get(pageId) ?? null
+    },
     forgetAgent(agentId) {
-      records.delete(agentId)
+      const set = records.get(agentId)
+      if (set) {
+        for (const pageId of set) {
+          if (owners.get(pageId) === agentId) owners.delete(pageId)
+        }
+        records.delete(agentId)
+      }
       firstCaptures.delete(agentId)
     },
     hasFirstCapture(agentId, pageId) {
@@ -97,6 +123,7 @@ export function createAgentTabsRegistry(): AgentTabsRegistry {
     },
     clear() {
       records.clear()
+      owners.clear()
       firstCaptures.clear()
     },
   }
