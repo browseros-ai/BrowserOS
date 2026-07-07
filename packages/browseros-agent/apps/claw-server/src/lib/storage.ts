@@ -106,6 +106,30 @@ export async function readJson<T>(
   return result.data
 }
 
+/**
+ * Schema-less read used by migrations that need to peek at fields
+ * before deciding whether the file is still valid under the current
+ * schema. Throws `StorageNotFoundError` for missing files and
+ * `StorageCorruptError` for JSON parse failures; schema-level
+ * mismatches are the caller's problem.
+ */
+export async function readJsonRaw(relPath: string): Promise<unknown> {
+  guardRelativePath(relPath)
+  const abs = resolveClawServerPath(relPath)
+  let raw: string
+  try {
+    raw = await readFile(abs, 'utf8')
+  } catch (err) {
+    if (isFsError(err, 'ENOENT')) throw new StorageNotFoundError(relPath)
+    throw err
+  }
+  try {
+    return JSON.parse(raw)
+  } catch (err) {
+    throw new StorageCorruptError(relPath, err)
+  }
+}
+
 export async function writeJson<T>(
   relPath: string,
   value: T,
