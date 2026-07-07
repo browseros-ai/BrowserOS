@@ -91,7 +91,14 @@ describe('ImportStep', () => {
       )
     }
     expect(html).toContain('7 of 7 selected')
-    expect(html).toContain('macOS will ask to read')
+    // JSX wraps "macOS will ask" in a semibold span, so the string
+    // "macOS will ask to read" is split by a </span> boundary in the
+    // rendered HTML. Assert on the positive plus a negative that
+    // explicitly rules out the old "macOS will ask permission"
+    // phrasing; together these pin the assertion to the new copy
+    // without fighting the JSX structure.
+    expect(html).toContain('macOS will ask')
+    expect(html).not.toContain('macOS will ask permission')
     expect(html).toContain('Import 7 items from Work')
     expect(html).not.toContain('Chrome is open')
     expect(html).not.toContain('Quit Chrome for me')
