@@ -194,12 +194,7 @@ function StepBadge({ number, kicker, status }: StepBadgeProps) {
       : status === 'done'
         ? 'text-green'
         : 'text-ink-3'
-  const numberTone =
-    status === 'active'
-      ? 'text-ink'
-      : status === 'done'
-        ? 'text-ink-3'
-        : 'text-ink-3'
+  const numberTone = status === 'active' ? 'text-ink' : 'text-ink-3'
   return (
     <div className="flex items-center justify-between">
       <span
