@@ -227,4 +227,49 @@ describe('listBrowserosConnections', () => {
     const codexRow = rows.find((r) => r.harness === 'Codex')
     expect(codexRow?.installed).toBe(false)
   })
+
+  it('hides a harness whose agent isInstalled probe returns false', async () => {
+    const stub = createStubMcpManager()
+    // Override the default (all-true) install probe: opencode + antigravity
+    // report false; everything else true.
+    stub.isInstalled = async (input) => {
+      const out: Partial<Record<string, boolean>> = {}
+      for (const agent of input.agents) {
+        out[agent] = agent !== 'opencode' && agent !== 'antigravity'
+      }
+      return out as never
+    }
+    setMcpManagerForTesting(stub)
+    const rows = await listBrowserosConnections()
+    expect(rows.map((r) => r.harness)).toEqual([
+      'Claude Code',
+      'Codex',
+      'Cursor',
+      'VS Code',
+      'Zed',
+    ])
+  })
+
+  it('keeps an already-linked harness visible even if isInstalled reports false', async () => {
+    const stub = createStubMcpManager()
+    await stub.link({
+      server: {
+        name: 'BrowserClaw',
+        spec: { transport: 'http', url: 'http://127.0.0.1:9200/mcp' },
+      },
+      agent: 'opencode',
+    })
+    // Even though the install probe says opencode is not installed,
+    // the linked record means we already have a working install for
+    // it. Keep the row so the user can disconnect.
+    stub.isInstalled = async (input) => {
+      const out: Partial<Record<string, boolean>> = {}
+      for (const agent of input.agents) out[agent] = agent !== 'opencode'
+      return out as never
+    }
+    setMcpManagerForTesting(stub)
+    const rows = await listBrowserosConnections()
+    const oc = rows.find((r) => r.harness === 'OpenCode')
+    expect(oc?.installed).toBe(true)
+  })
 })

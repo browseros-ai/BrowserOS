@@ -13,7 +13,11 @@
  */
 
 import type { AgentId } from 'agent-mcp-manager'
-import { ForeignEntryError, resolveAgentMcpConfigPath } from 'agent-mcp-manager'
+import {
+  AgentNotInstalledError,
+  ForeignEntryError,
+  resolveAgentMcpConfigPath,
+} from 'agent-mcp-manager'
 import { logger } from '../lib/logger'
 import { getMcpManager } from '../lib/mcp-manager'
 import { type Harness, harnessEnum } from '../routes/agents/schemas'
@@ -112,46 +116,81 @@ export async function disconnectBrowserosFromHarness(
 }
 
 /**
- * One row per supported harness. The library's `listLinks` is the
- * authoritative source: a harness is `installed` iff a link record
- * for `(serverName: "BrowserClaw", agent: <id>)` exists.
+ * One row per supported harness that is ACTUALLY installed on this
+ * machine. Filters out any harness the library reports as
+ * uninstalled via `isInstalled` (the same signal `link` gates on
+ * throwing `AgentNotInstalledError`), so the UI never offers a
+ * Connect button that would throw. Harnesses that already carry a
+ * BrowserClaw link record are kept regardless of the current
+ * `isInstalled` reading: if a link exists we already have a working
+ * install, and the file will be there on disk to prove it.
+ *
+ * `listLinks` remains the authoritative source for `installed=true`;
+ * a harness is `installed` iff a link record for
+ * `(serverName: "BrowserClaw", agent: <id>)` exists.
  */
 export async function listBrowserosConnections(): Promise<ConnectionState[]> {
   const mgr = getMcpManager()
+  const agentIds = ALL_HARNESSES.map((h) => HARNESS_TO_AGENT_ID[h])
+
   let links: Awaited<ReturnType<typeof mgr.listLinks>> = []
   try {
     links = await mgr.listLinks({
       serverNames: [BROWSEROS_MCP_SERVER_NAME],
     })
   } catch (err) {
-    logger.warn('listBrowserosConnections failed', {
+    logger.warn('listBrowserosConnections listLinks failed', {
       error: err instanceof Error ? err.message : String(err),
     })
-    // Fall through: every harness reports not-installed.
+    // Fall through: every harness reports not-installed. The
+    // installed-agents gate below still runs so the list survives
+    // a listLinks fault.
   }
+
+  let installedMap: Awaited<ReturnType<typeof mgr.isInstalled>> = {}
+  try {
+    installedMap = await mgr.isInstalled({ agents: agentIds })
+  } catch (err) {
+    logger.warn('listBrowserosConnections isInstalled failed', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+    // If the install probe throws, default every agent to installed
+    // so we do not silently hide the whole list on a transient
+    // filesystem hiccup.
+    for (const id of agentIds) installedMap[id] = true
+  }
+
   const byAgent = new Map<AgentId, (typeof links)[number]>()
   for (const link of links) {
     byAgent.set(link.agent, link)
   }
-  return ALL_HARNESSES.map((harness): ConnectionState => {
+
+  const rows: ConnectionState[] = []
+  for (const harness of ALL_HARNESSES) {
     const agentId = HARNESS_TO_AGENT_ID[harness]
     const link = byAgent.get(agentId)
+    const isInstalledOnDisk = installedMap[agentId] ?? false
+    // Already-linked wins: an existing link means we have a working
+    // install even if isInstalled dropped for a transient reason.
+    if (!link && !isInstalledOnDisk) continue
     if (link) {
-      return {
+      rows.push({
         harness,
         installed: true,
         agentId,
         configPath: link.configPath,
         message: `Configured in ${harness}.`,
-      }
+      })
+    } else {
+      rows.push({
+        harness,
+        installed: false,
+        agentId,
+        message: `${harness} is not configured.`,
+      })
     }
-    return {
-      harness,
-      installed: false,
-      agentId,
-      message: `${harness} is not configured.`,
-    }
-  })
+  }
+  return rows
 }
 
 function failure(
@@ -160,6 +199,20 @@ function failure(
   err: unknown,
   op: 'connect' | 'disconnect',
 ): ConnectionState {
+  if (err instanceof AgentNotInstalledError) {
+    logger.info('browseros connect target not installed', {
+      harness,
+      agent: err.agent,
+      configPath: err.configPath,
+      parentDir: err.parentDir,
+    })
+    return {
+      harness,
+      installed: false,
+      agentId,
+      message: `${harness} is not installed on this machine. Launch it once so the MCP config directory exists, then try again.`,
+    }
+  }
   if (err instanceof ForeignEntryError) {
     logger.warn('browseros harness entry exists but was not written by us', {
       harness,
