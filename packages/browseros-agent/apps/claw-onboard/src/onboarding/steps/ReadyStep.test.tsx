@@ -19,23 +19,23 @@ describe('ReadyStep', () => {
 
     expect(html).toContain('Logins')
     expect(html).toContain('imported')
-    expect(html).toContain('One step left: connect your agent.')
-    expect(html).toContain('Open MCP in BrowserClaw')
+    expect(html).toContain('One step left.')
+    expect(html).toContain('Open the MCP page in BrowserClaw')
     expect(html).toContain('Claude Code, Cursor, Codex')
-    expect(html).toContain('logged in as you')
+    expect(html).toContain('You watch, approve, and audit.')
   })
 
   it('keeps skipped onboarding copy truthful', () => {
     const html = render('picker')
 
-    expect(html).toContain('Almost')
-    expect(html).toContain('there')
-    expect(html).toContain('Connect your agent next.')
+    expect(html).toContain('You’re set.')
+    expect(html).toContain('Reconnect')
+    expect(html).toContain('Open the MCP page in BrowserClaw')
     expect(html).not.toContain('Logins')
   })
 
   it('renders the MCP setup CTA', () => {
-    expect(render()).toContain('Connect your agent')
+    expect(render()).toContain('Connect your AI')
   })
 
   it('frames starter prompts as post-connection examples', () => {

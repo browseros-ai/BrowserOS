@@ -83,16 +83,16 @@ describe('OnboardingV2 shell', () => {
     const html = renderApp()
     expect(html).toContain('The browser your agents')
     expect(html).toContain('drive')
-    expect(html).toContain('Set up')
+    expect(html).toContain('Start setup')
   })
 
   it('renders the visual rail with the v2 quote and three feature blocks', () => {
     const html = renderApp()
     expect(html).toContain('BrowserClaw')
-    expect(html).toContain('Let the agent you already run')
-    expect(html).toContain('Fast &amp; token-cheap')
-    expect(html).toContain('Logged in as you')
-    expect(html).toContain('Under your control')
+    expect(html).toContain('Let your AI')
+    expect(html).toContain('Signed in as you.')
+    expect(html).toContain('Watch every step.')
+    expect(html).toContain('Yours to keep.')
   })
 
   it('renders a full-page main landmark without the fake macOS window chrome', () => {

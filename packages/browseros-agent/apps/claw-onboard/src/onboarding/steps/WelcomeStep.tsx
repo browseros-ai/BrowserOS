@@ -13,19 +13,19 @@ export function WelcomeStep({ onPrimary, onSkip }: WelcomeStepProps) {
   return (
     <StepWrap>
       <DisplayHeading>
-        The browser your agents <Em>drive</Em>.
+        The browser your agents <Em>drive.</Em>
       </DisplayHeading>
       <StepCopy>
-        Logged in as you, fast, and under your control. Set-up takes about two
-        minutes. Import your logins and run your first task.
+        BrowserClaw is a browser your AI agents drive using the accounts
+        you&rsquo;re already signed into. Set-up takes about two minutes.
       </StepCopy>
       <div className="flex flex-wrap items-center gap-3">
         <Button type="button" size="lg" onClick={onPrimary}>
           <Zap className="size-4" />
-          Set up . about 2 min
+          Start setup
         </Button>
         <Button type="button" size="lg" variant="ghost" onClick={onSkip}>
-          I&rsquo;ve done this before . reconnect
+          I&rsquo;ve done this. Reconnect.
         </Button>
       </div>
     </StepWrap>

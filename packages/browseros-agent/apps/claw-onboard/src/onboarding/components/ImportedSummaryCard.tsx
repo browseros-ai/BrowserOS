@@ -19,7 +19,7 @@ export function ImportedSummaryCard({
           <Check className="size-4" />
         </span>
         <span className="font-bold text-[14px]">
-          Imported {importedItemCount} items from {sourceName}
+          Imported {importedItemCount} items from {sourceName}.
         </span>
       </div>
       <SummaryRow
@@ -28,11 +28,11 @@ export function ImportedSummaryCard({
       />
       <SummaryRow
         icon={<Lock className="size-3.5 text-ink-3" />}
-        text="Imported data stays local. Never shown to you or the agent."
+        text="Stays on this Mac. Never shown to you or the agent."
       />
       <SummaryRow
         icon={<CreditCard className="size-3.5 text-ink-3" />}
-        text="Payment cards skipped"
+        text="Payment cards were skipped."
       />
     </div>
   )

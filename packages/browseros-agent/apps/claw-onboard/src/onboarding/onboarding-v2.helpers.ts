@@ -170,6 +170,6 @@ export function importProgressTotal(
 }
 
 export const STARTER_PROMPTS: readonly string[] = [
-  'Find me a coffee shop within walking distance and save it to my Maps.',
-  'Apply for the SF visa for me, you have my passport scan in iCloud.',
+  'Book me the cheapest morning flight from SFO to NYC next Friday.',
+  'Open the pull requests assigned to me on GitHub and summarize each.',
 ]

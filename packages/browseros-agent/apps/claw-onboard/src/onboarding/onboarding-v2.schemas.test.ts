@@ -22,7 +22,7 @@ describe('onboardingFormSchema', () => {
     const result = onboardingFormSchema.safeParse({ selectedSourceId: '' })
     expect(result.success).toBe(false)
     if (!result.success) {
-      expect(result.error.issues[0]?.message).toBe('Pick an import source.')
+      expect(result.error.issues[0]?.message).toBe('Pick a profile.')
     }
   })
 

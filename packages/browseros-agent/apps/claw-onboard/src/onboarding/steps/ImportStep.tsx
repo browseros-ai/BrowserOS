@@ -40,9 +40,9 @@ function importButtonLabelFor(
   checkedItemCount: number,
   sourceName: string,
 ): string {
-  if (!hasSource) return 'Pick an import source'
-  if (!hasSupportedItems) return 'No supported import items'
-  if (checkedItemCount === 0) return 'Select items to import'
+  if (!hasSource) return 'Pick a profile'
+  if (!hasSupportedItems) return 'Nothing to import from this profile'
+  if (checkedItemCount === 0) return 'Select what to import'
   return `Import ${checkedItemCount} ${
     checkedItemCount === 1 ? 'item' : 'items'
   } from ${sourceName}`
@@ -112,8 +112,8 @@ export function ImportStep({
         Import your <Em>logins</Em>.
       </DisplayHeading>
       <StepCopy>
-        BrowserClaw copies your saved Chrome sessions so the agent never has to
-        log in again. Sessions stay in a local vault on this Mac.
+        Copy your saved sessions here so your agent never has to log in again.
+        Stays local, on this Mac.
       </StepCopy>
 
       {phase === 'picker' && (
@@ -121,8 +121,8 @@ export function ImportStep({
           <div className="mb-2.5 flex items-center justify-between gap-3">
             <div className="font-bold text-[12.5px] text-ink-2">
               {isDetecting
-                ? 'Detecting import sources'
-                : 'Choose a browser profile to import'}
+                ? 'Looking for profiles'
+                : 'Pick a profile to import'}
             </div>
             <Button
               type="button"
@@ -166,7 +166,7 @@ export function ImportStep({
                 ))}
                 {!isDetecting && state.sources.length === 0 && (
                   <div className="rounded-xl border border-border-2 bg-card p-4 text-[12.5px] text-ink-2">
-                    No import sources detected.
+                    No profiles found.
                   </div>
                 )}
                 <FormMessage />
@@ -211,11 +211,11 @@ export function ImportStep({
           <div className="mb-4 rounded-xl border border-amber/30 bg-amber-tint p-4">
             <div className="mb-2 flex items-center gap-2 font-bold text-[13px] text-ink">
               <AlertTriangle className="size-4 text-amber" />
-              Import failed
+              Something went wrong.
             </div>
             <div className="text-[12.5px] text-ink-2">
               {state.error?.message ??
-                'BrowserClaw could not finish importing this profile.'}
+                "BrowserClaw couldn't finish this import. Try again below, or refresh the profile list."}
             </div>
           </div>
           <div className="flex flex-wrap gap-2.5">
@@ -226,11 +226,11 @@ export function ImportStep({
               disabled={!isPickerValid}
             >
               <Download className="size-4" />
-              Try import again
+              Try again
             </Button>
             <Button type="button" size="lg" variant="ghost" onClick={onRefresh}>
               <RefreshCw className="size-4" />
-              Refresh sources
+              Refresh profiles
             </Button>
           </div>
         </>

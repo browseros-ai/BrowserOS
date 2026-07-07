@@ -19,17 +19,17 @@ export function ReadyStep({ phase, onDone }: ReadyStepProps) {
     <StepWrap>
       {didImportLogins ? (
         <DisplayHeading>
-          Logins <Em>imported</Em>.
+          Logins <Em>imported.</Em>
         </DisplayHeading>
       ) : (
         <DisplayHeading>
-          Almost <Em>there</Em>.
+          You&rsquo;re set. <Em>Reconnect.</Em>
         </DisplayHeading>
       )}
       <StepCopy>
         {didImportLogins
-          ? 'One step left: connect your agent. Open MCP in BrowserClaw and link Claude Code, Cursor, Codex, or another harness. Then your agent runs tasks here, logged in as you. You watch, approve, and audit.'
-          : 'Connect your agent next. Open MCP in BrowserClaw and link Claude Code, Cursor, Codex, or another harness. Then your agent runs tasks in this browser. You watch, approve, and audit.'}
+          ? 'One step left. Open the MCP page in BrowserClaw and link your AI: Claude Code, Cursor, Codex, or any other. Your agent runs tasks in this browser. You watch, approve, and audit.'
+          : 'Open the MCP page in BrowserClaw and link your AI: Claude Code, Cursor, Codex, or any other. Your agent runs tasks in this browser. You watch, approve, and audit.'}
       </StepCopy>
       <div className="mb-2.5 font-bold text-[12.5px] text-ink-2">
         Once connected, try one of these.
@@ -41,7 +41,7 @@ export function ReadyStep({ phase, onDone }: ReadyStepProps) {
       </div>
       <Button type="button" size="lg" onClick={onDone}>
         <PlugZap className="size-4" />
-        Connect your agent
+        Connect your AI
       </Button>
     </StepWrap>
   )

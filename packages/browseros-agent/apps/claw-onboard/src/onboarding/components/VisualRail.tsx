@@ -28,8 +28,8 @@ export function VisualRail() {
       </div>
       <div className="relative">
         <div className="mb-[18px] font-serif text-[23px] text-ink italic leading-snug">
-          &ldquo;Let the agent you already run drive the browser you&rsquo;re
-          already logged into.&rdquo;
+          &ldquo;Let your AI <span className="text-accent">actually</span> use
+          the web.&rdquo;
         </div>
         <div className="flex flex-col gap-3">
           {FEATURES.map((f) => {
@@ -49,7 +49,7 @@ export function VisualRail() {
         </div>
       </div>
       <div className="relative text-[11.5px] text-ink-3">
-        Mac . v1.0 . signed build
+        Signed build for Mac. v1.0.
       </div>
     </div>
   )
@@ -57,18 +57,18 @@ export function VisualRail() {
 
 const FEATURES = [
   {
-    icon: Zap,
-    title: 'Fast & token-cheap',
-    description: 'DOM-first, not a screenshot loop',
+    icon: Lock,
+    title: 'Signed in as you.',
+    description: 'Uses the sessions you already have.',
   },
   {
-    icon: Lock,
-    title: 'Logged in as you',
-    description: 'Imports your Chrome sessions',
+    icon: Zap,
+    title: 'Watch every step.',
+    description: 'See every agent in real time.',
   },
   {
     icon: ShieldCheck,
-    title: 'Under your control',
-    description: 'Scoped approvals, hard blocks',
+    title: 'Yours to keep.',
+    description: 'Everything runs on your machine.',
   },
 ] as const

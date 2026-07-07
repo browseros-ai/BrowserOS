@@ -60,9 +60,7 @@ function validateFormValues(
   return {
     success: false,
     error: {
-      issues: [
-        { message: 'Pick an import source.', path: ['selectedSourceId'] },
-      ],
+      issues: [{ message: 'Pick a profile.', path: ['selectedSourceId'] }],
     },
   }
 }

@@ -53,7 +53,7 @@ describe('WelcomeStep', () => {
     )
 
     expect(html).toContain('The browser your agents')
-    expect(html).toContain('Set up')
+    expect(html).toContain('Start setup')
   })
 
   it('wires the reconnect CTA to skip setup', () => {
@@ -65,7 +65,7 @@ describe('WelcomeStep', () => {
       },
     })
 
-    const reconnectButton = findClickableByText(tree, 'reconnect')
+    const reconnectButton = findClickableByText(tree, 'Reconnect.')
     expect(reconnectButton).not.toBeNull()
 
     reconnectButton?.props.onClick?.()
