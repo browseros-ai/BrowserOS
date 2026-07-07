@@ -20,6 +20,7 @@ import {
 } from 'agent-mcp-manager'
 import { logger } from '../lib/logger'
 import { getMcpManager } from '../lib/mcp-manager'
+import { tildifyHomePath } from '../lib/tildify'
 import { type Harness, harnessEnum } from '../routes/agents/schemas'
 import { BROWSEROS_MCP_SERVER_NAME, publicMcpUrl } from '../shared/mcp-url'
 import { HARNESS_TO_AGENT_ID } from './harness-install'
@@ -62,19 +63,20 @@ export async function connectBrowserosToHarness(
       // rebuild, or a prior version of the manifest).
       allowOverwrite: true,
     })
-    const configPath = await resolveAgentMcpConfigPath(agentId, 'system').catch(
-      () => undefined,
-    )
+    const rawConfigPath = await resolveAgentMcpConfigPath(
+      agentId,
+      'system',
+    ).catch(() => undefined)
     logger.info('connected browseros to harness', {
       harness,
       agent: agentId,
-      configPath,
+      configPath: rawConfigPath,
     })
     return {
       harness,
       installed: true,
       agentId,
-      configPath,
+      configPath: tildifyHomePath(rawConfigPath),
       message: `BrowserOS registered as an MCP server in ${harness}.`,
     }
   } catch (err) {
@@ -178,7 +180,7 @@ export async function listBrowserosConnections(): Promise<ConnectionState[]> {
         harness,
         installed: true,
         agentId,
-        configPath: link.configPath,
+        configPath: tildifyHomePath(link.configPath),
         message: `Configured in ${harness}.`,
       })
     } else {
@@ -224,7 +226,7 @@ function failure(
       harness,
       installed: false,
       agentId,
-      configPath: err.configPath,
+      configPath: tildifyHomePath(err.configPath),
       message: `${harness} already has an entry under "${err.serverName}" that we did not write. Remove it from the config and try again.`,
     }
   }

@@ -272,4 +272,24 @@ describe('listBrowserosConnections', () => {
     const oc = rows.find((r) => r.harness === 'OpenCode')
     expect(oc?.installed).toBe(true)
   })
+
+  it('collapses a home-relative configPath to ~ prefix in the row', async () => {
+    const stub = createStubMcpManager()
+    const HOME = (await import('node:os')).homedir()
+    // Seed a linked entry whose configPath lives under the user's
+    // home dir; the row should surface the tildified form so the
+    // cockpit never renders the operator's username.
+    await stub.link({
+      server: {
+        name: 'BrowserClaw',
+        spec: { transport: 'http', url: 'http://127.0.0.1:9200/mcp' },
+      },
+      agent: 'zed',
+      configPath: `${HOME}/.config/zed/settings.json`,
+    })
+    setMcpManagerForTesting(stub)
+    const rows = await listBrowserosConnections()
+    const zed = rows.find((r) => r.harness === 'Zed')
+    expect(zed?.configPath).toBe('~/.config/zed/settings.json')
+  })
 })
