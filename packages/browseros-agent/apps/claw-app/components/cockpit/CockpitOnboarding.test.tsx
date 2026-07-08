@@ -4,23 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { describe, expect, it, mock } from 'bun:test'
+import { describe, expect, it } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { CockpitOnboarding } from './CockpitOnboarding'
-
-// FirstRunVideo pulls the demo from a GitHub Release URL and would
-// try to hit the network during SSR. Stub it so the surrounding
-// markup can render, then assert the presence of the wrapper.
-mock.module('./FirstRunVideo', () => ({
-  FirstRunVideo: () => (
-    <div
-      data-testid="first-run-video-stub"
-      role="img"
-      aria-label="motion demo"
-    />
-  ),
-}))
 
 function render(state: 'first-run' | 'waiting'): string {
   return renderToStaticMarkup(
@@ -35,7 +22,7 @@ describe('CockpitOnboarding', () => {
     const html = render('first-run')
     expect(html).toContain('You watch. Your agent')
     expect(html).toContain('works.')
-    expect(html).toContain('first-run-video-stub')
+    expect(html).toContain('first-run-demo.mp4')
     expect(html).toContain('Set up MCP endpoint')
     expect(html).toContain('Paste this into Claude Code, Cursor, or Codex.')
     expect(html).toContain(
