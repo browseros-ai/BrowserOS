@@ -67,7 +67,6 @@ describe('cockpit onboarding copy', () => {
     expect(PRIMARY_ACTION_COPY.install.activeLabel).toBe('Set up MCP endpoint')
     expect(PRIMARY_ACTION_COPY.install.doneLabel).toBe('View MCP endpoint')
     expect(PRIMARY_ACTION_COPY.install.href).toBe('/mcp')
-    expect(PRIMARY_ACTION_COPY.copy.label).toBe('Copy starter prompt')
   })
 
   it('step titles are single short sentences ending in a period', () => {

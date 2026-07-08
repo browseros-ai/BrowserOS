@@ -6,9 +6,9 @@
  * First-run guidance rendered by the Cockpit screen when the reader
  * has no session activity yet. Anchors on a short Remotion motion
  * demo that establishes the mental model (this cockpit watches;
- * your agent acts), then names the two available actions (set up
- * MCP, copy the starter prompt), then a tight three-step reminder
- * strip, then the footer.
+ * your agent acts), then a single definitive CTA to set up the MCP
+ * endpoint, then the copyable starter prompt tile, then a tight
+ * three-step reminder strip, then a docs link.
  *
  * Two visual variants keyed off the `state` prop.
  *
@@ -23,7 +23,6 @@
  * refetches; the component is a stateless presenter.
  */
 
-import { RotateCcw } from 'lucide-react'
 import { useState } from 'react'
 import {
   FOOTER_COPY,
@@ -43,13 +42,9 @@ import { StarterPromptTile } from './StarterPromptTile'
 
 interface CockpitOnboardingProps {
   state: Exclude<OnboardingState, 'ready'>
-  onRefresh: () => void
 }
 
-export function CockpitOnboarding({
-  state,
-  onRefresh,
-}: CockpitOnboardingProps) {
+export function CockpitOnboarding({ state }: CockpitOnboardingProps) {
   const [promptCopied, setPromptCopied] = useState(false)
   const isWaiting = state === 'waiting'
   const showWaitingBanner = isWaiting || promptCopied
@@ -75,13 +70,6 @@ export function CockpitOnboarding({
             : PRIMARY_ACTION_COPY.install.activeLabel
         }
         installStatus={isWaiting ? 'done' : 'active'}
-        copyLabel={PRIMARY_ACTION_COPY.copy.label}
-        onCopyClick={() => {
-          void navigator.clipboard
-            .writeText(STARTER_PROMPT)
-            .then(flagCopied)
-            .catch(() => setPromptCopied(false))
-        }}
       />
       {showWaitingBanner && <FirstRunWaitingBanner message={waitingMessage} />}
       <div className="flex flex-col gap-2">
@@ -111,7 +99,7 @@ export function CockpitOnboarding({
           },
         ]}
       />
-      <OnboardingFooter onRefresh={onRefresh} />
+      <OnboardingFooter />
     </section>
   )
 }
@@ -133,25 +121,9 @@ function OnboardingHero() {
   )
 }
 
-interface OnboardingFooterProps {
-  onRefresh: () => void
-}
-
-function OnboardingFooter({ onRefresh }: OnboardingFooterProps) {
+function OnboardingFooter() {
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-1 text-[12.5px] text-ink-3">
-      <span>{FOOTER_COPY.refreshQuestion}</span>
-      <button
-        type="button"
-        onClick={onRefresh}
-        className="inline-flex items-center gap-1.5 rounded-md text-ink-2 underline decoration-border-2 underline-offset-2 transition hover:decoration-ink-2"
-      >
-        <RotateCcw className="size-3" />
-        {FOOTER_COPY.refresh}
-      </button>
-      <span aria-hidden className="text-border-2">
-        ·
-      </span>
+    <div className="pt-1 text-[12.5px] text-ink-3">
       <a
         href={FOOTER_COPY.docsHref}
         target="_blank"

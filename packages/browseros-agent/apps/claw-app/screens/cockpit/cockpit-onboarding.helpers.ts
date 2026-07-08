@@ -49,9 +49,6 @@ export const PRIMARY_ACTION_COPY = {
     doneLabel: 'View MCP endpoint',
     href: '/mcp',
   },
-  copy: {
-    label: 'Copy starter prompt',
-  },
 } as const
 
 export const WAITING_COPY = {
@@ -81,8 +78,6 @@ export const STEP_COPY = {
 } as const
 
 export const FOOTER_COPY = {
-  refreshQuestion: 'Already set up?',
-  refresh: 'Refresh the page.',
   docs: 'Read the docs',
   docsHref: 'https://docs.browseros.com/',
 } as const

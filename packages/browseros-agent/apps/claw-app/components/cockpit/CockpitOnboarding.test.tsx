@@ -9,9 +9,9 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { CockpitOnboarding } from './CockpitOnboarding'
 
-// The Remotion Player pulls in browser-only globals (Web Audio, etc.)
-// during SSR. Stub it so the surrounding markup can render, then
-// assert the presence of the wrapper container instead.
+// FirstRunVideo pulls the demo from a GitHub Release URL and would
+// try to hit the network during SSR. Stub it so the surrounding
+// markup can render, then assert the presence of the wrapper.
 mock.module('./FirstRunVideo', () => ({
   FirstRunVideo: () => (
     <div
@@ -25,19 +25,18 @@ mock.module('./FirstRunVideo', () => ({
 function render(state: 'first-run' | 'waiting'): string {
   return renderToStaticMarkup(
     <MemoryRouter>
-      <CockpitOnboarding state={state} onRefresh={() => undefined} />
+      <CockpitOnboarding state={state} />
     </MemoryRouter>,
   )
 }
 
 describe('CockpitOnboarding', () => {
-  it('first-run: hero, motion demo, active install CTA, prompt tile, and reminder strip render', () => {
+  it('first-run: hero, motion demo, single install CTA, prompt tile, and reminder strip render', () => {
     const html = render('first-run')
     expect(html).toContain('You watch. Your agent')
     expect(html).toContain('works.')
     expect(html).toContain('first-run-video-stub')
     expect(html).toContain('Set up MCP endpoint')
-    expect(html).toContain('Copy starter prompt')
     expect(html).toContain('Paste this into Claude Code, Cursor, or Codex.')
     expect(html).toContain(
       'Use BrowserClaw. Book me the cheapest morning flight',
@@ -45,6 +44,13 @@ describe('CockpitOnboarding', () => {
     expect(html).toContain('Install BrowserClaw as an MCP.')
     expect(html).toContain('Prompt your agent.')
     expect(html).toContain('Watch it here.')
+  })
+
+  it('first-run: renders only ONE primary CTA button in the action row', () => {
+    // The Copy starter prompt button was retired; the primary action
+    // row now holds just the MCP install navigation link.
+    const html = render('first-run')
+    expect(html).not.toContain('Copy starter prompt')
   })
 
   it('first-run: does NOT render the waiting banner before any signal', () => {
@@ -68,14 +74,14 @@ describe('CockpitOnboarding', () => {
     expect(html).toContain(
       'Use BrowserClaw. Book me the cheapest morning flight',
     )
-    expect(html).toContain('Copy starter prompt')
   })
 
-  it('renders the docs link and refresh affordance in both states', () => {
+  it('renders the docs link in both states with no refresh affordance', () => {
     for (const state of ['first-run', 'waiting'] as const) {
       const html = render(state)
       expect(html).toContain('https://docs.browseros.com/')
-      expect(html).toContain('Refresh the page.')
+      expect(html).not.toContain('Refresh the page.')
+      expect(html).not.toContain('Already set up?')
     }
   })
 })

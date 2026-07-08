@@ -1,4 +1,3 @@
-import { useQueryClient } from '@tanstack/react-query'
 import { CockpitHero } from '@/components/cockpit/CockpitHero'
 import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
 import { RecentActivity } from '@/components/cockpit/RecentActivity'
@@ -14,7 +13,6 @@ const ONBOARDING_PROBE_LIMIT = 1
 /** Renders the Claw cockpit homepage. */
 export function Cockpit() {
   const { agents } = useCockpitData()
-  const queryClient = useQueryClient()
 
   // Probe the two data sources the onboarding state hinges on. Both
   // queries live in react-query's cache under stable keys, so the
@@ -47,24 +45,26 @@ export function Cockpit() {
   // first paint for returning users whose tasks are still in-flight.
   const probesResolved =
     connections.data !== undefined && taskProbe.data !== undefined
-  const state = probesResolved
-    ? getOnboardingState({ hasConnection, hasActivity })
-    : 'ready'
+  // DO NOT COMMIT — local override so the first-run onboarding
+  // renders regardless of connection/activity state. Revert this
+  // block back to the probesResolved ternary before pushing.
+  // Append `#/onboarding=waiting` to the URL to preview the waiting
+  // variant instead; anything else lands on first-run.
+  void probesResolved
+  void getOnboardingState
+  void hasConnection
+  void hasActivity
+  const state = (
+    typeof window !== 'undefined' &&
+    window.location.hash.includes('onboarding=waiting')
+      ? 'waiting'
+      : 'first-run'
+  ) as 'first-run' | 'waiting' | 'ready'
 
   if (state !== 'ready') {
     return (
       <div className="mx-auto flex max-w-7xl flex-col px-8 pt-8 pb-16">
-        <CockpitOnboarding
-          state={state}
-          onRefresh={() => {
-            void queryClient.invalidateQueries({
-              queryKey: useBrowserosConnections.getKey(),
-            })
-            void queryClient.invalidateQueries({
-              queryKey: useTasks.getKey(),
-            })
-          }}
-        />
+        <CockpitOnboarding state={state} />
       </div>
     )
   }
