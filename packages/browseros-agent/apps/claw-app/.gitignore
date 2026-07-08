@@ -34,7 +34,3 @@ stats-*.json
 # GraphQL generated files
 generated/
 
-# Onboarding video assets — rendered from @browseros/onboarding-video, not source.
-# Run `bun run video:sync` after re-rendering to refresh these files locally.
-public/onboarding/first-run-demo.mp4
-public/onboarding/first-run-demo-poster.png
