@@ -26,9 +26,33 @@ mock.module('@/modules/api/audit.hooks', () => ({
   useTaskScreenshotBaseUrl: () => null,
 }))
 
+const connectionsHookResultKey = '__browserclawConnectionsHookResult'
+
+function connectionsHookState() {
+  return globalThis as Record<string, unknown>
+}
+
+function setConnectionsProbePending() {
+  connectionsHookState()[connectionsHookResultKey] = {
+    data: undefined,
+    isPending: true,
+    isError: false,
+  }
+}
+
+mock.module('@/modules/api/connections.hooks', () => ({
+  useBrowserosConnections: () =>
+    connectionsHookState()[connectionsHookResultKey] ?? {
+      data: undefined,
+      isPending: true,
+      isError: false,
+    },
+}))
+
 const { Cockpit } = await import('./Cockpit')
 
 function renderApp(): string {
+  setConnectionsProbePending()
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -46,7 +70,6 @@ describe('Cockpit (v2)', () => {
     const html = renderApp()
     expect(html).toContain('working on')
     expect(html).toContain('Recent activity')
-    // No agents in the stub data means RunningGrid returns null.
     expect(html).not.toContain('Running now')
   })
 

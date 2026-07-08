@@ -411,7 +411,7 @@ func isDevBrowserProcess(command string) bool {
 }
 
 func isBrowserProcessForUserDataDir(command string, userDataDirs []string, includeDevTempProfiles bool) bool {
-	if !strings.Contains(command, "BrowserOS.app/Contents/MacOS/BrowserOS") {
+	if !isBrowserAppCommand(command) {
 		return false
 	}
 	for _, dir := range userDataDirs {
@@ -425,6 +425,11 @@ func isBrowserProcessForUserDataDir(command string, userDataDirs []string, inclu
 	return includeDevTempProfiles &&
 		(strings.Contains(command, "browseros-dev-") ||
 			strings.Contains(command, "browseros-test-"))
+}
+
+func isBrowserAppCommand(command string) bool {
+	return strings.Contains(command, "BrowserOS.app/Contents/MacOS/BrowserOS") ||
+		strings.Contains(command, "BrowserClaw.app/Contents/MacOS/BrowserClaw")
 }
 
 func watchRunPaths(baseDir string, identity WatchRunIdentity) watchRunPathsResult {

@@ -11,7 +11,7 @@ func TestDefaults(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	cfg := Defaults(home)
 
-	if cfg.BrowserOSAppPath != "/Applications/BrowserOS.app/Contents/MacOS/BrowserOS" {
+	if cfg.BrowserOSAppPath != DefaultBrowserOSAppPath {
 		t.Fatalf("unexpected browser path: %s", cfg.BrowserOSAppPath)
 	}
 	if cfg.SourceUserDataDir != filepath.Join(home, "Library/Application Support/BrowserOS") {
@@ -82,7 +82,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 	cfg := Config{
 		RepoPath:          "/repo",
-		BrowserOSAppPath:  "/Applications/BrowserOS.app/Contents/MacOS/BrowserOS",
+		BrowserOSAppPath:  DefaultBrowserOSAppPath,
 		SourceUserDataDir: "/source",
 		SourceProfileDir:  "Profile 25",
 		DevUserDataDir:    "/dev",
@@ -212,6 +212,91 @@ func TestResolvePreservesSelectedTarget(t *testing.T) {
 	}
 	if cfg.DevUserDataDir != filepath.Join(home, ".config/browseros-dogfood/claw/profile") {
 		t.Fatalf("dev profile got %q", cfg.DevUserDataDir)
+	}
+}
+
+func TestResolveBrowserAppPath(t *testing.T) {
+	customPath := filepath.Join(t.TempDir(), "CustomBrowser")
+	tests := []struct {
+		name          string
+		target        Target
+		configured    string
+		existingPaths map[string]bool
+		want          BrowserAppResolution
+	}{
+		{
+			name:          "BrowserOS default uses BrowserOS even when BrowserClaw exists",
+			target:        TargetBrowserOS,
+			configured:    DefaultBrowserOSAppPath,
+			existingPaths: map[string]bool{DefaultBrowserClawAppPath: true},
+			want: BrowserAppResolution{
+				Path:          DefaultBrowserOSAppPath,
+				PreferredPath: DefaultBrowserOSAppPath,
+			},
+		},
+		{
+			name:          "Claw default uses BrowserClaw when installed",
+			target:        TargetClaw,
+			configured:    DefaultBrowserOSAppPath,
+			existingPaths: map[string]bool{DefaultBrowserClawAppPath: true},
+			want: BrowserAppResolution{
+				Path:          DefaultBrowserClawAppPath,
+				PreferredPath: DefaultBrowserClawAppPath,
+			},
+		},
+		{
+			name:   "Claw default falls back to BrowserOS when BrowserClaw is absent",
+			target: TargetClaw,
+			want: BrowserAppResolution{
+				Path:          DefaultBrowserOSAppPath,
+				PreferredPath: DefaultBrowserClawAppPath,
+				MissingPath:   DefaultBrowserClawAppPath,
+				Fallback:      true,
+			},
+		},
+		{
+			name:          "custom configured path wins when available",
+			target:        TargetClaw,
+			configured:    customPath,
+			existingPaths: map[string]bool{customPath: true, DefaultBrowserClawAppPath: true},
+			want: BrowserAppResolution{
+				Path:          customPath,
+				PreferredPath: customPath,
+			},
+		},
+		{
+			name:          "BrowserOS custom path remains strict",
+			target:        TargetBrowserOS,
+			configured:    customPath,
+			existingPaths: map[string]bool{DefaultBrowserOSAppPath: true},
+			want: BrowserAppResolution{
+				Path:          customPath,
+				PreferredPath: customPath,
+			},
+		},
+		{
+			name:          "missing custom path falls back to target default",
+			target:        TargetClaw,
+			configured:    customPath,
+			existingPaths: map[string]bool{DefaultBrowserClawAppPath: true},
+			want: BrowserAppResolution{
+				Path:          DefaultBrowserClawAppPath,
+				PreferredPath: customPath,
+				MissingPath:   customPath,
+				Fallback:      true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ResolveBrowserAppPath(tt.target, tt.configured, func(path string) bool {
+				return tt.existingPaths[path]
+			})
+			if got != tt.want {
+				t.Fatalf("ResolveBrowserAppPath got %#v want %#v", got, tt.want)
+			}
+		})
 	}
 }
 

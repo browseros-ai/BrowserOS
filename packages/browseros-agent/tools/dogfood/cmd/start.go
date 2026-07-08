@@ -186,6 +186,9 @@ func buildAndStartBrowserOSEnvironment(ctx context.Context, cfg config.Config, a
 	if err := prepareBrowserOSEnvironment(&cfg, agentRoot, opts); err != nil {
 		return nil, err
 	}
+	if err := resolveStartBrowserApp(&cfg); err != nil {
+		return nil, err
+	}
 	reportProgress(opts, "building agent")
 	if err := pipeline.Build(ctx, agentRoot, opts.Runner); err != nil {
 		return nil, err
@@ -196,6 +199,9 @@ func buildAndStartBrowserOSEnvironment(ctx context.Context, cfg config.Config, a
 func buildAndStartClawEnvironment(ctx context.Context, cfg config.Config, agentRoot string, opts environmentOptions) (*environment, error) {
 	reportProgress(opts, "preparing profile")
 	if err := prepareClawEnvironment(&cfg, opts); err != nil {
+		return nil, err
+	}
+	if err := resolveStartBrowserApp(&cfg); err != nil {
 		return nil, err
 	}
 	reportProgress(opts, "preparing Claw apps")
@@ -462,6 +468,39 @@ func clawRuntimeEnv(base []string, cfg config.Config) []string {
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func resolveStartBrowserApp(cfg *config.Config) error {
+	resolution := resolveConfiguredBrowserApp(cfg, browserAppExecutableExists)
+	if err := validateBrowserAppExecutable(resolution.Path); err != nil {
+		return err
+	}
+	if resolution.Fallback {
+		proc.LogMsg(proc.TagInfo, proc.WarnColor.Sprintf("Browser app unavailable at %s; using %s", resolution.MissingPath, resolution.Path))
+	}
+	return nil
+}
+
+func resolveConfiguredBrowserApp(cfg *config.Config, exists func(string) bool) config.BrowserAppResolution {
+	resolution := config.ResolveBrowserAppPath(cfg.Target, cfg.BrowserOSAppPath, exists)
+	cfg.BrowserOSAppPath = resolution.Path
+	return resolution
+}
+
+func browserAppExecutableExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Mode()&0111 != 0
+}
+
+func validateBrowserAppExecutable(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("browseros_app_path: %w", err)
+	}
+	if info.IsDir() || info.Mode()&0111 == 0 {
+		return fmt.Errorf("browseros_app_path is not an executable file: %s", path)
+	}
+	return nil
 }
 
 func printSummary(cfg config.Config, agentRoot string) {

@@ -158,7 +158,12 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	proc.LogMsg(proc.TagInfo, proc.DimColor.Sprint("Press Ctrl+C to stop, double Ctrl+C to force kill"))
 	fmt.Println()
 
-	env := buildWatchEnv(p, userDataDir, watchClaw)
+	clawBinary := browser.BinaryResolution{}
+	if watchClaw {
+		clawBinary = browser.ResolveInstalledBinary(browser.ProductBrowserClaw)
+		logClawBrowserBinary(clawBinary)
+	}
+	env := buildWatchEnvWithBinaryResolution(p, userDataDir, watchClaw, clawBinary)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -235,12 +240,20 @@ func resolveWatchDefaultPorts(root string, claw bool) (proc.Ports, error) {
 
 // buildWatchEnv forwards the selected product into WXT's Chromium launcher config.
 func buildWatchEnv(p proc.Ports, userDataDir string, claw bool) []string {
+	return buildWatchEnvWithBinaryResolution(p, userDataDir, claw, browser.BinaryResolution{})
+}
+
+func buildWatchEnvWithBinaryResolution(p proc.Ports, userDataDir string, claw bool, binaryResolution browser.BinaryResolution) []string {
 	env := proc.BuildEnv(p, "development")
 	env = append(env,
 		fmt.Sprintf("BROWSEROS_USER_DATA_DIR=%s", userDataDir),
 		fmt.Sprintf("BROWSEROS_PRODUCT=%s", watchProduct(claw)),
 	)
 	if claw {
+		if binaryResolution.Path == "" {
+			binaryResolution = browser.ResolveInstalledBinary(browser.ProductBrowserClaw)
+		}
+		env = append(env, fmt.Sprintf("BROWSEROS_BINARY=%s", binaryResolution.Path))
 		env = buildClawWatchEnv(env, p)
 	}
 	return env
@@ -260,6 +273,14 @@ func buildClawWatchEnv(env []string, p proc.Ports) []string {
 		fmt.Sprintf("BROWSEROS_CLAW_CDP_PORT=%d", p.CDP),
 		fmt.Sprintf("VITE_BROWSEROS_CLAW_API_URL=%s", apiURL),
 	)
+}
+
+func logClawBrowserBinary(resolution browser.BinaryResolution) {
+	if resolution.Fallback {
+		proc.LogMsgf(proc.TagInfo, "BrowserClaw app not found at %s; using %s", browser.BrowserClawBinaryPath, resolution.Path)
+		return
+	}
+	proc.LogMsgf(proc.TagInfo, "Browser app: %s", resolution.Path)
 }
 
 // startBrowserOSWatch supervises the BrowserOS agent extension plus server dev pair.

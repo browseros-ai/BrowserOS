@@ -5,66 +5,83 @@
  * harnesses.
  */
 
-import { describe, expect, it, mock } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 
-mock.module('@/modules/api/connections.hooks', () => ({
-  useBrowserosConnections: Object.assign(
-    () => ({
+const mcpBrowserosConnections = [
+  {
+    harness: 'Claude Code',
+    installed: false,
+    agentId: 'claude-code',
+    message: '',
+  },
+  {
+    harness: 'Cursor',
+    installed: true,
+    agentId: 'cursor',
+    configPath: '/tmp/cursor.json',
+    message: 'Configured in Cursor.',
+  },
+  {
+    harness: 'Codex',
+    installed: false,
+    agentId: 'codex',
+    message: '',
+  },
+  {
+    harness: 'OpenCode',
+    installed: false,
+    agentId: 'opencode',
+    message: '',
+  },
+  {
+    harness: 'Antigravity',
+    installed: false,
+    agentId: 'antigravity',
+    message: '',
+  },
+  {
+    harness: 'VS Code',
+    installed: false,
+    agentId: 'vscode',
+    message: '',
+  },
+  {
+    harness: 'Zed',
+    installed: false,
+    agentId: 'zed',
+    message: '',
+  },
+]
+
+const connectionsHookResultKey = '__browserclawConnectionsHookResult'
+
+function connectionsHookState() {
+  return globalThis as Record<string, unknown>
+}
+
+function setConnectionsHookResult(result: unknown) {
+  connectionsHookState()[connectionsHookResultKey] = result
+}
+
+function getConnectionsHookResult() {
+  return (
+    connectionsHookState()[connectionsHookResultKey] ?? {
       data: {
-        connections: [
-          {
-            harness: 'Claude Code',
-            installed: false,
-            agentId: 'claude-code',
-            message: '',
-          },
-          {
-            harness: 'Cursor',
-            installed: true,
-            agentId: 'cursor',
-            configPath: '/tmp/cursor.json',
-            message: 'Configured in Cursor.',
-          },
-          {
-            harness: 'Codex',
-            installed: false,
-            agentId: 'codex',
-            message: '',
-          },
-          {
-            harness: 'OpenCode',
-            installed: false,
-            agentId: 'opencode',
-            message: '',
-          },
-          {
-            harness: 'Antigravity',
-            installed: false,
-            agentId: 'antigravity',
-            message: '',
-          },
-          {
-            harness: 'VS Code',
-            installed: false,
-            agentId: 'vscode',
-            message: '',
-          },
-          {
-            harness: 'Zed',
-            installed: false,
-            agentId: 'zed',
-            message: '',
-          },
-        ],
+        connections: mcpBrowserosConnections,
       },
       isPending: false,
       isError: false,
-    }),
-    { getKey: () => ['cockpit', 'connections'] },
-  ),
+    }
+  )
+}
+
+mock.module('@/modules/api/connections.hooks', () => ({
+  useBrowserosConnections: Object.assign(() => getConnectionsHookResult(), {
+    getKey: () => ['cockpit', 'connections'],
+  }),
   useConnectBrowseros: () => ({
     isPending: false,
     variables: undefined,
@@ -76,6 +93,24 @@ mock.module('@/modules/api/connections.hooks', () => ({
     mutateAsync: async () => ({ installed: false }),
   }),
 }))
+
+beforeEach(() => {
+  setConnectionsHookResult({
+    data: {
+      connections: mcpBrowserosConnections,
+    },
+    isPending: false,
+    isError: false,
+  })
+})
+
+afterEach(() => {
+  setConnectionsHookResult({
+    data: undefined,
+    isPending: true,
+    isError: false,
+  })
+})
 
 const { Mcp } = await import('./Mcp')
 const { HeroCard } = await import('./HeroCard')
@@ -127,7 +162,6 @@ describe('Mcp (editorial)', () => {
   it('renders the Connected-agents header with the count chip', () => {
     const html = renderApp()
     expect(html).toContain('Connected agents')
-    // 7 supported harnesses, 1 connected (Cursor).
     expect(html).toContain('1 of 7 connected')
   })
 
@@ -140,7 +174,6 @@ describe('Mcp (editorial)', () => {
     expect(html).toContain('Antigravity')
     expect(html).toContain('VS Code')
     expect(html).toContain('Zed')
-    // Retired harnesses do not appear.
     expect(html).not.toContain('Claude Desktop')
     expect(html).not.toContain('Hermes')
     expect(html).not.toContain('Gemini CLI')
@@ -149,10 +182,7 @@ describe('Mcp (editorial)', () => {
 
   it('renders editorial state voices (silent success, mono uppercase action text)', () => {
     const html = renderApp()
-    // Connect action link renders in mono uppercase (single word).
     expect(html).toMatch(/>\s*connect\s*/)
-    // Connected state renders inline `connected` label + disconnect
-    // link.
     expect(html).toMatch(/>\s*connected\s*/)
     expect(html).toMatch(/>\s*disconnect\s*/)
   })

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"browseros-dev/browser"
 	"browseros-dev/proc"
 )
 
@@ -122,14 +123,19 @@ func TestBuildWatchEnvSelectsBrowserOSProduct(t *testing.T) {
 }
 
 func TestBuildWatchEnvSelectsBrowserClawProduct(t *testing.T) {
-	env := buildWatchEnv(proc.Ports{
+	env := buildWatchEnvWithBinaryResolution(proc.Ports{
 		CDP:       9012,
 		Server:    9123,
 		Extension: 9321,
-	}, "/tmp/browseros-dev", true)
+	}, "/tmp/browseros-dev", true, browser.BinaryResolution{
+		Product:       browser.ProductBrowserClaw,
+		Path:          browser.BrowserClawBinaryPath,
+		PreferredPath: browser.BrowserClawBinaryPath,
+	})
 
 	for _, want := range []string{
 		"BROWSEROS_PRODUCT=browserclaw",
+		"BROWSEROS_BINARY=/Applications/BrowserClaw.app/Contents/MacOS/BrowserClaw",
 		"BROWSEROS_CLAW_CDP_PORT=9012",
 		"VITE_BROWSEROS_CLAW_API_URL=http://127.0.0.1:9123",
 	} {
@@ -157,6 +163,22 @@ func TestBuildClawWatchEnvIncludesSelectedPorts(t *testing.T) {
 	}
 	if hasEnvEntry(env, "CLAW_SERVER_PORT=9123") {
 		t.Fatalf("claw server port should be passed through sidecar config, got %#v", env)
+	}
+}
+
+func TestBuildWatchEnvUsesFallbackBrowserBinaryForClaw(t *testing.T) {
+	env := buildWatchEnvWithBinaryResolution(proc.Ports{
+		CDP:    9012,
+		Server: 9123,
+	}, "/tmp/browseros-dev", true, browser.BinaryResolution{
+		Product:       browser.ProductBrowserClaw,
+		Path:          browser.BrowserOSBinaryPath,
+		PreferredPath: browser.BrowserClawBinaryPath,
+		Fallback:      true,
+	})
+
+	if !hasEnvEntry(env, "BROWSEROS_BINARY=/Applications/BrowserOS.app/Contents/MacOS/BrowserOS") {
+		t.Fatalf("expected fallback browser binary env, got %#v", env)
 	}
 }
 

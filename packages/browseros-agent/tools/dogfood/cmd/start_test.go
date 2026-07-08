@@ -52,7 +52,7 @@ func TestClawRuntimeEnvWiresBrowserAndAPISettings(t *testing.T) {
 		"BROWSEROS_CLAW_CDP_PORT=1",
 		"VITE_BROWSEROS_CLAW_API_URL=http://wrong",
 	}, config.Config{
-		BrowserOSAppPath: "/Applications/BrowserOS.app/Contents/MacOS/BrowserOS",
+		BrowserOSAppPath: config.DefaultBrowserClawAppPath,
 		DevUserDataDir:   "/tmp/claw-profile",
 		BrowserOSDir:     "/tmp/claw-state",
 		Ports:            config.Ports{CDP: 49337, Server: 9200},
@@ -62,7 +62,7 @@ func TestClawRuntimeEnvWiresBrowserAndAPISettings(t *testing.T) {
 	assertEnvContains(t, got, "NODE_ENV=development")
 	assertEnvContains(t, got, "BROWSERCLAW_DIR=/tmp/claw-state")
 	assertEnvMissingPrefix(t, got, "BROWSEROS_DIR=")
-	assertEnvContains(t, got, "BROWSEROS_BINARY=/Applications/BrowserOS.app/Contents/MacOS/BrowserOS")
+	assertEnvContains(t, got, "BROWSEROS_BINARY=/Applications/BrowserClaw.app/Contents/MacOS/BrowserClaw")
 	assertEnvContains(t, got, "BROWSEROS_USER_DATA_DIR=/tmp/claw-profile")
 	assertEnvContains(t, got, "BROWSEROS_CLAW_CDP_PORT=49337")
 	assertEnvContains(t, got, "BROWSEROS_SERVER_PORT=9200")
@@ -107,6 +107,42 @@ func TestServerRuntimeEnvOverridesInheritedBrowserOSDir(t *testing.T) {
 		t.Fatalf("inherited BrowserOS dir was not overridden: %#v", got)
 	}
 	assertEnvContains(t, got, "BROWSEROS_DIR=/tmp/browseros-dogfood")
+}
+
+func TestResolveConfiguredBrowserAppUsesClawDefaultAtStart(t *testing.T) {
+	cfg := config.Config{
+		Target:           config.TargetClaw,
+		BrowserOSAppPath: config.DefaultBrowserOSAppPath,
+	}
+
+	resolution := resolveConfiguredBrowserApp(&cfg, func(path string) bool {
+		return path == config.DefaultBrowserClawAppPath
+	})
+
+	if cfg.BrowserOSAppPath != config.DefaultBrowserClawAppPath {
+		t.Fatalf("resolved app path got %q", cfg.BrowserOSAppPath)
+	}
+	if resolution.Fallback {
+		t.Fatalf("did not expect fallback: %#v", resolution)
+	}
+}
+
+func TestResolveConfiguredBrowserAppFallsBackWhenCustomPathIsMissing(t *testing.T) {
+	cfg := config.Config{
+		Target:           config.TargetClaw,
+		BrowserOSAppPath: "/missing/custom-browser",
+	}
+
+	resolution := resolveConfiguredBrowserApp(&cfg, func(path string) bool {
+		return path == config.DefaultBrowserClawAppPath
+	})
+
+	if cfg.BrowserOSAppPath != config.DefaultBrowserClawAppPath {
+		t.Fatalf("resolved app path got %q", cfg.BrowserOSAppPath)
+	}
+	if !resolution.Fallback || resolution.MissingPath != "/missing/custom-browser" {
+		t.Fatalf("unexpected fallback resolution: %#v", resolution)
+	}
 }
 
 func assertEnvContains(t *testing.T, env []string, want string) {

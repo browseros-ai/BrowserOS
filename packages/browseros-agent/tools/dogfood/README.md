@@ -13,7 +13,7 @@ High level:
 - It imports your normal BrowserOS profile into a target-specific dogfood profile.
 - It keeps BrowserOS and BrowserClaw state separate from your normal app state and from each other.
 - For BrowserOS, it builds the local extension, starts the local server, and launches the installed BrowserOS app with the alpha Dock icon against them.
-- For BrowserClaw, it starts the BrowserClaw WXT app and standalone Claw server against the installed BrowserOS app.
+- For BrowserClaw, it starts the BrowserClaw WXT app and standalone Claw server against the installed BrowserClaw app, falling back to BrowserOS when BrowserClaw is not installed.
 - It does not auto-pull on `start`; you choose when to update the checkout.
 
 ## Requirements
@@ -21,7 +21,7 @@ High level:
 - macOS.
 - Go.
 - Bun.
-- BrowserOS installed at `/Applications/BrowserOS.app`.
+- BrowserOS installed at `/Applications/BrowserOS.app`; BrowserClaw optionally installed at `/Applications/BrowserClaw.app`.
 - A separate BrowserOS monorepo checkout for alpha dogfood.
 
 ## Install
@@ -54,7 +54,7 @@ browseros-dogfood --claw init
 
 - `Repo path`: the full path to the root BrowserOS git repo clone.
 - `Branch`: the branch dogfood should track. It defaults to the selected repo's current branch, or `main`.
-- `BrowserOS binary`: defaults to `/Applications/BrowserOS.app/Contents/MacOS/BrowserOS`.
+- `BrowserOS binary`: defaults to `/Applications/BrowserOS.app/Contents/MacOS/BrowserOS`; Claw start resolves to BrowserClaw at launch time when available.
 - `Source profile`: your main installed BrowserOS profile.
 
 Use a separate clone for the repo path. This clone is what `browseros-dogfood` uses to run alpha dogfood builds, so ideally it is not the same checkout you use for actual dev work. Give the full root repo path, for example `/Users/you/code/browseros-alpha`.
