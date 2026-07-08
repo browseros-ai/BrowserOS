@@ -42,7 +42,7 @@
     "agent-mcp-manager": "0.0.4-rc.3",
     "commander": "^14.0.3",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.12.3",
+    "hono": "^4.12.27",
     "zod": "^4.4.3"
   },
   "devDependencies": {
