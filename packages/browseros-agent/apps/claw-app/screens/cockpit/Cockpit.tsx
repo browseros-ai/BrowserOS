@@ -21,12 +21,18 @@ export function Cockpit() {
   const connections = useBrowserosConnections()
   const taskProbe = useTasks({
     variables: { limit: ONBOARDING_PROBE_LIMIT },
-    // Scoped to the cockpit probe: while the reader sits on the
-    // first-run / waiting shells the poll needs to feel live so the
-    // 'ready' handoff lands within a few seconds of their first
-    // agent write. React-query's default polling elsewhere in the
-    // app is unchanged.
-    refetchInterval: 4000,
+    // Scoped to the onboarding shells: poll every 4s while the
+    // reader has no activity yet so the 'ready' handoff lands
+    // within a few seconds of their first agent write. Once any
+    // task appears, the function returns `false` and react-query
+    // stops polling this key; the paginated `RecentActivity` query
+    // takes over. Elsewhere in the app react-query's default
+    // no-polling behaviour is unchanged.
+    refetchInterval: (query) => {
+      const pages = query.state.data?.pages ?? []
+      const hasAnyActivity = pages.some((p) => p.tasks.length > 0)
+      return hasAnyActivity ? false : 4000
+    },
   })
   // Only count harnesses that appear on the /mcp screen. Hidden ones
   // (Hermes, OpenClaw, Gemini CLI, retired Claude Desktop) may be

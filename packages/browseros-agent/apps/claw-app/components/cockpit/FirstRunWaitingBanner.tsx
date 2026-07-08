@@ -16,8 +16,14 @@ interface FirstRunWaitingBannerProps {
 }
 
 export function FirstRunWaitingBanner({ message }: FirstRunWaitingBannerProps) {
+  // role="status" gives this container an implicit `aria-live="polite"`,
+  // so assistive tech announces the message the moment the banner mounts
+  // (e.g. right after the operator copies the starter prompt).
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-border-2 bg-bg-sunken px-4 py-3 text-[13px] text-ink-2">
+    <div
+      role="status"
+      className="flex items-center gap-3 rounded-xl border border-border-2 bg-bg-sunken px-4 py-3 text-[13px] text-ink-2"
+    >
       <PulsingDot />
       <span>{message}</span>
     </div>
