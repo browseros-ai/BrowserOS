@@ -76,11 +76,15 @@ if (env.BROWSEROS_EXTENSION_PORT) {
   )
 }
 
+const browserBinary =
+  process.platform === 'win32'
+    ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+    : env.BROWSEROS_BINARY ||
+      '/Applications/BrowserOS.app/Contents/MacOS/BrowserOS'
+
 export default defineWebExtConfig({
   binaries: {
-    chrome:
-      env.BROWSEROS_BINARY ||
-      '/Applications/BrowserOS.app/Contents/MacOS/BrowserOS',
+    chrome: browserBinary,
   },
   chromiumArgs,
   chromiumProfile: chromiumProfile(),

@@ -104,5 +104,9 @@
     "shiki": "^3.23.0",
     "@vitejs/plugin-react": "^5.0.0",
     "vite": "^7.0.0"
+  },
+  "dependencies": {
+    "@emotion/use-insertion-effect-with-fallbacks": "1.2.0",
+    "@jimp/plugin-print": "^1.6.1"
   }
 }

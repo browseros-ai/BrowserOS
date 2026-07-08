@@ -31,6 +31,7 @@ import {
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
+import { setupMruStore } from './mruStore'
 import { scheduledJobRuns } from './scheduledJobRuns'
 
 const LEGACY_TOOL_APPROVAL_STORAGE_KEYS = [
@@ -55,6 +56,37 @@ export default defineBackground(() => {
   setupLlmProvidersBackupToBrowserOS()
   setupLlmProvidersSyncToBackend()
   setupScheduledJobsSyncToBackend()
+  setupMruStore()
+
+  chrome.commands.onCommand.addListener(async (command) => {
+    if (command === 'toggle-tab-switcher') {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      })
+      const tabId = tab?.id
+      if (!tabId) return
+
+      const sendToggle = () =>
+        chrome.tabs
+          .sendMessage(tabId, { type: 'tab-switcher:toggle' })
+          .catch(() => {})
+
+      try {
+        await chrome.tabs.sendMessage(tabId, { type: 'tab-switcher:toggle' })
+      } catch {
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ['content-scripts/tab-switcher.js'],
+          })
+        } catch {
+          return
+        }
+        sendToggle()
+      }
+    }
+  })
 
   scheduledJobRuns()
 

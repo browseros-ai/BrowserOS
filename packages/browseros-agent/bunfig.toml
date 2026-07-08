@@ -12,4 +12,6 @@ timeout = 30000
 # preload = []
 
 [install]
-linker = "isolated"
+# Use hoisted linker for Windows compatibility with Vite/Rollup
+# isolated causes symlink resolution issues with some transitive deps
+linker = "hoisted"
