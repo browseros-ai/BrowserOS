@@ -178,7 +178,9 @@ pub fn begin(
         phase: "merge",
         total: Some(store.patches().len()),
     });
-    let target_tree = git.build_tree_from_patches(&store.metadata().base_commit, &patches)?;
+    let target_tree = git
+        .build_tree_from_patches(&store.metadata().base_commit, &patches)
+        .context("building target tree from store patches for base-bump merge")?;
     let target_commit = commit_tree(
         git.process(),
         &target_tree,

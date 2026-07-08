@@ -552,6 +552,39 @@ fn config_discovery_runs_from_subdirectory_and_missing_store_is_actionable() -> 
     Ok(())
 }
 
+#[test]
+fn wrong_checkout_refuses_status_diff_apply_with_guidance() -> Result<()> {
+    let scenario = applied_rev1_scenario()?;
+    let wrong_checkout = scenario.store.path();
+    let verbs = ["status", "diff", "apply"];
+
+    for verb in verbs {
+        let out = run_bpatch(wrong_checkout, Some(&scenario.store_dir), strs(&[verb]))?;
+        assert_eq!(out.code, 3, "{verb} stderr:\n{}", out.stderr);
+        assert!(out.stdout.is_empty());
+        assert_wrong_checkout_reason(&out.stderr, wrong_checkout, &scenario.store_dir);
+        assert!(!out.stderr.contains("git apply --cached"));
+
+        let json_out = run_bpatch(
+            wrong_checkout,
+            Some(&scenario.store_dir),
+            strs(&[verb, "--json"]),
+        )?;
+        assert_eq!(json_out.code, 3, "{verb} json stdout:\n{}", json_out.stdout);
+        assert!(json_out.stderr.is_empty());
+        let json = parse_json(&json_out.stdout)?;
+        assert_eq!(json["result"], "error");
+        assert_eq!(json["exit"], 3);
+        assert_wrong_checkout_reason(
+            json["reason"].as_str().expect("reason string"),
+            wrong_checkout,
+            &scenario.store_dir,
+        );
+    }
+
+    Ok(())
+}
+
 fn run_bpatch(cwd: &Path, store: Option<&Path>, args: Vec<String>) -> Result<CmdOutput> {
     let home = tempfile::tempdir()?;
     run_bpatch_with_home(cwd, store, args, home.path())
@@ -583,6 +616,26 @@ fn strs(args: &[&str]) -> Vec<String> {
 
 fn parse_json(stdout: &str) -> Result<Value> {
     Ok(serde_json::from_str(stdout.trim())?)
+}
+
+fn assert_wrong_checkout_reason(reason: &str, checkout: &Path, store_dir: &Path) {
+    assert!(reason.contains(&checkout.display().to_string()), "{reason}");
+    assert!(
+        reason.contains(&store_dir.display().to_string()),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("does not look like a Chromium checkout"),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("chrome/browser/ui/llmchat/panel.cc not in index"),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("cd into your chromium checkout and re-run"),
+        "{reason}"
+    );
 }
 
 fn applied_rev1_scenario() -> Result<AppliedScenario> {

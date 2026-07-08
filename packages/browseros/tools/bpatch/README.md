@@ -61,8 +61,8 @@ Global flags:
 
 | Verb | Flags | Exit codes | Use |
 | --- | --- | --- | --- |
-| `bpatch status` | global flags | `0`, `1` | Show checkout base, store rev, applied trailers, and drift. |
-| `bpatch diff` | global flags | `0`, `1` | Show what `apply` would touch, grouped by feature, with rebuild-scope hint. |
+| `bpatch status` | global flags | `0`, `3`, `1` | Show checkout base, store rev, applied trailers, and drift. |
+| `bpatch diff` | global flags | `0`, `3`, `1` | Show what `apply` would touch, grouped by feature, with rebuild-scope hint. |
 | `bpatch apply` | `--pull`, global flags | `0`, `2`, `3`, `1` | Optionally fast-forward the store repo, then converge the checkout or report conflicts/drift. |
 | `bpatch extract [SPEC]` | `--feature <FEATURE>`, `--commit`, `--repin`, global flags | `0`, `3`, `1` | Extract `<rev>` or `<rev1>..<rev2>` into the store, or repin existing store patches to the checkout base. |
 | `bpatch feature list` | global flags | `0`, `1` | List features, owned patch counts, and last applied sequence numbers. |
@@ -82,6 +82,10 @@ Global flags:
 | `1` | CLI, git, lock, config, or unexpected error. |
 
 With `--json`, every command emits a single object carrying `result` and `exit`.
+
+## Troubleshooting
+
+If `status`, `diff`, or `apply` says the current path does not look like a Chromium checkout, you are probably running `bpatch` from the BrowserOS repo that contains `chromium_patches`, or from another git repo that is not the Chromium checkout. `cd` into the Chromium checkout that has the store base commit and re-run with the same `--store` path.
 
 ## Cron Recipe
 

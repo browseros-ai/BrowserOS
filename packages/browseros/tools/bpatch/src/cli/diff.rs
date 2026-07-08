@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::engine::state::{StateContext, resolve, unassigned_feature_name};
@@ -81,7 +81,8 @@ pub fn run(ctx: &StateContext) -> Result<DiffReport> {
         .map(|patch| ctx.store_dir.join(&patch.path))
         .collect::<Vec<_>>();
     let target_tree = crate::git::GitAdapter::new(&ctx.checkout)
-        .build_tree_from_patches(&state.base.sha, &patches)?;
+        .build_tree_from_patches(&state.base.sha, &patches)
+        .context("building target tree from store patches")?;
     let applied_tree = state
         .applied
         .as_ref()

@@ -206,7 +206,7 @@ pub fn run(
         Ok(ApplyOutcome::BaseMismatch(mismatch)) => base_mismatch_report(ctx, mismatch, progress),
         Ok(outcome) => report_from_outcome(outcome),
         Err(err) => ApplyReport::Error {
-            reason: err.to_string(),
+            reason: format!("{err:#}"),
             exit: 1,
         },
     }
@@ -379,7 +379,7 @@ fn base_mismatch_report(
         Ok(state) => state,
         Err(err) => {
             return ApplyReport::Error {
-                reason: err.to_string(),
+                reason: format!("{err:#}"),
                 exit: 1,
             };
         }
@@ -392,7 +392,7 @@ fn base_mismatch_report(
             Ok(store) => store,
             Err(err) => {
                 return ApplyReport::Error {
-                    reason: err.to_string(),
+                    reason: format!("{err:#}"),
                     exit: 1,
                 };
             }
@@ -427,7 +427,7 @@ fn base_mismatch_report(
             exit: 2,
         },
         Err(err) => ApplyReport::Error {
-            reason: err.to_string(),
+            reason: format!("{err:#}"),
             exit: 1,
         },
     }
