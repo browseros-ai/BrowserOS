@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from .batch_apply import MARKER_SUFFIXES
+from .batch_apply import MARKER_SUFFIXES, METADATA_ROOT_FILES
 from .validation import validate_description, validate_feature_name
 
 # Features whose description carries this prefix list files touched by
@@ -64,6 +64,8 @@ def patch_base_paths(patches_dir: Path) -> Set[str]:
         if not path.is_file() or path.name.startswith("."):
             continue
         rel = path.relative_to(patches_dir).as_posix()
+        if rel in METADATA_ROOT_FILES:
+            continue
         for suffix in MARKER_SUFFIXES:
             if rel.endswith(suffix):
                 rel = rel[: -len(suffix)]

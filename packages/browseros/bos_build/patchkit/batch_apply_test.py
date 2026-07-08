@@ -118,6 +118,21 @@ class BatchApplyTest(unittest.TestCase):
         names = [p.name for p in find_patch_files(self.patches_dir)]
         self.assertEqual(names, ["a.patch"])
 
+    def test_find_patch_files_skips_root_metadata_but_not_nested_yaml(self):
+        # bpatch-v2 metadata at the tree root is not a patch; a chromium
+        # yaml file patched deeper in the tree still is.
+        (self.patches_dir / "features.yaml").write_text("x")
+        (self.patches_dir / "store.yaml").write_text("x")
+        nested = self.patches_dir / "chrome" / "app"
+        nested.mkdir(parents=True)
+        (nested / "features.yaml").write_text("x")
+
+        names = [
+            str(p.relative_to(self.patches_dir))
+            for p in find_patch_files(self.patches_dir)
+        ]
+        self.assertEqual(names, ["chrome/app/features.yaml"])
+
     def test_dry_run_reports_without_modifying_tree(self):
         _make_patch(self.repo, self.patches_dir)
 

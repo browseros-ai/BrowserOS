@@ -28,6 +28,53 @@ struct AppliedScenario {
 }
 
 #[test]
+fn top_level_help_teaches_chromium_workflow() -> Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_bpatch"))
+        .arg("--help")
+        .output()
+        .context("running bpatch --help")?;
+    let stdout = String::from_utf8(output.stdout)?;
+    let stderr = String::from_utf8(output.stderr)?;
+
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.is_empty());
+    assert!(!stdout.contains('\u{1b}'));
+    assert!(stdout.contains("GETTING STARTED:"));
+    assert!(stdout.contains("bpatch init /abs/path/to/chromium_patches"));
+    assert!(stdout.contains("Or run bpatch init from inside chromium_patches."));
+    assert!(stdout.contains("Run bpatch from inside a Chromium checkout."));
+    assert!(stdout.contains("GLOBAL FLAGS:"));
+    assert!(
+        stdout.contains("--store <STORE>  Overrides the config file for store-reading commands.")
+    );
+    assert!(stdout.contains("--json           Emits a single JSON object"));
+    assert!(stdout.contains("EXAMPLES:"));
+    assert!(stdout.contains("bpatch status"));
+    assert!(stdout.contains("bpatch diff"));
+    assert!(stdout.contains("bpatch apply"));
+    assert!(stdout.contains("bpatch extract <rev1>..<rev2> --feature <name>"));
+    assert!(stdout.contains("bpatch apply -> bpatch continue --materialize"));
+    assert!(stdout.contains("EXIT CODES:"));
+    assert!(stdout.contains("0  Initialized, converged, applied"));
+    assert!(stdout.contains("2  Conflicts are pending"));
+    assert!(stdout.contains("3  Drift/refusal or extract needs a feature decision."));
+    assert!(stdout.contains("1  CLI, git, lock, config, or unexpected error."));
+
+    let short = Command::new(env!("CARGO_BIN_EXE_bpatch"))
+        .arg("-h")
+        .output()
+        .context("running bpatch -h")?;
+    let short_stdout = String::from_utf8(short.stdout)?;
+    let short_stderr = String::from_utf8(short.stderr)?;
+
+    assert!(short.status.success(), "{short_stderr}");
+    assert!(short_stderr.is_empty());
+    assert!(!short_stdout.contains("GETTING STARTED:"));
+    assert!(!short_stdout.contains("EXIT CODES:"));
+    Ok(())
+}
+
+#[test]
 fn sim1_extract_hack_commit_renders_routing_net_fold_and_next_step() -> Result<()> {
     let checkout = FixtureRepo::new()?;
     let base = write_extract_base(&checkout)?;
@@ -519,6 +566,12 @@ fn config_discovery_runs_from_subdirectory_and_missing_store_is_actionable() -> 
     let json = parse_json(&missing.stdout)?;
     assert_eq!(json["result"], "error");
     assert!(json["reason"].as_str().unwrap().contains("--store <dir>"));
+    assert!(
+        json["reason"]
+            .as_str()
+            .unwrap()
+            .contains("bpatch init <dir>")
+    );
     assert!(json["reason"].as_str().unwrap().contains("config.toml"));
     assert_eq!(json["exit"], 1);
 
@@ -582,6 +635,167 @@ fn wrong_checkout_refuses_status_diff_apply_with_guidance() -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+#[test]
+fn init_writes_fresh_config_and_status_uses_it() -> Result<()> {
+    let scenario = applied_rev1_scenario()?;
+    let home = tempfile::tempdir()?;
+    let outside_checkout = tempfile::tempdir()?;
+    let config = home.path().join(".config/bpatch/config.toml");
+    let store = scenario.store_dir.canonicalize()?;
+
+    let init = run_bpatch_with_home(
+        outside_checkout.path(),
+        None,
+        vec!["init".into(), scenario.store_dir.display().to_string()],
+        home.path(),
+    )?;
+    assert_eq!(init.code, 0, "{}", init.stderr);
+    assert!(init.stderr.is_empty());
+    assert!(init.stdout.contains("initialized store "));
+    assert!(init.stdout.contains(&store.display().to_string()));
+    assert!(init.stdout.contains(&config.display().to_string()));
+
+    let config_text = fs::read_to_string(&config)?;
+    assert_eq!(config_text, format!("store = \"{}\"\n", store.display()));
+
+    let status = run_bpatch_with_home(
+        scenario.checkout.path(),
+        None,
+        strs(&["status"]),
+        home.path(),
+    )?;
+    assert_eq!(status.code, 0, "{}", status.stderr);
+    assert!(status.stdout.contains("base     148.0.7204.1"));
+    Ok(())
+}
+
+#[test]
+fn init_preserves_existing_config_comments_and_keys() -> Result<()> {
+    let scenario = applied_rev1_scenario()?;
+    let home = tempfile::tempdir()?;
+    let config_dir = home.path().join(".config/bpatch");
+    let config = config_dir.join("config.toml");
+    fs::create_dir_all(&config_dir)?;
+    fs::write(
+        &config,
+        r#"# bpatch config
+store = "/tmp/old-store" # keep store note
+
+[checkouts]
+# keep alias note
+main = "/tmp/chromium"
+"#,
+    )?;
+
+    let init = run_bpatch_with_home(
+        scenario.checkout.path(),
+        None,
+        vec!["init".into(), scenario.store_dir.display().to_string()],
+        home.path(),
+    )?;
+    assert_eq!(init.code, 0, "{}", init.stderr);
+
+    let store = scenario.store_dir.canonicalize()?;
+    let config_text = fs::read_to_string(&config)?;
+    assert!(config_text.contains("# bpatch config"));
+    assert!(config_text.contains(&format!(
+        "store = \"{}\" # keep store note",
+        store.display()
+    )));
+    assert!(config_text.contains("[checkouts]"));
+    assert!(config_text.contains("# keep alias note"));
+    assert!(config_text.contains("main = \"/tmp/chromium\""));
+
+    let alias_only_home = tempfile::tempdir()?;
+    let alias_only_config_dir = alias_only_home.path().join(".config/bpatch");
+    let alias_only_config = alias_only_config_dir.join("config.toml");
+    fs::create_dir_all(&alias_only_config_dir)?;
+    fs::write(
+        &alias_only_config,
+        r#"[checkouts]
+# keep alias-only note
+main = "/tmp/chromium"
+"#,
+    )?;
+    let init = run_bpatch_with_home(
+        scenario.checkout.path(),
+        None,
+        vec!["init".into(), scenario.store_dir.display().to_string()],
+        alias_only_home.path(),
+    )?;
+    assert_eq!(init.code, 0, "{}", init.stderr);
+    let alias_only_text = fs::read_to_string(&alias_only_config)?;
+    assert!(alias_only_text.starts_with(&format!("store = \"{}\"\n", store.display())));
+    assert!(alias_only_text.contains("[checkouts]"));
+    assert!(alias_only_text.contains("# keep alias-only note"));
+    assert!(alias_only_text.contains("main = \"/tmp/chromium\""));
+    Ok(())
+}
+
+#[test]
+fn init_rejects_directory_without_store_yaml() -> Result<()> {
+    let home = tempfile::tempdir()?;
+    let not_store = tempfile::tempdir()?;
+
+    let init = run_bpatch_with_home(
+        not_store.path(),
+        None,
+        vec!["init".into(), not_store.path().display().to_string()],
+        home.path(),
+    )?;
+    assert_eq!(init.code, 1);
+    assert!(init.stdout.is_empty());
+    assert!(init.stderr.contains("missing store.yaml"));
+    assert!(!home.path().join(".config/bpatch/config.toml").exists());
+    Ok(())
+}
+
+#[test]
+fn init_defaults_to_cwd_only_when_cwd_is_store() -> Result<()> {
+    let checkout = FixtureRepo::new()?;
+    let base = write_extract_base(&checkout)?;
+    let store = FixtureRepo::new()?;
+    let store_dir = seed_extract_store(&store, &base)?;
+    let home = tempfile::tempdir()?;
+
+    let init = run_bpatch_with_home(&store_dir, None, strs(&["init"]), home.path())?;
+    assert_eq!(init.code, 0, "{}", init.stderr);
+    let config_text = fs::read_to_string(home.path().join(".config/bpatch/config.toml"))?;
+    assert!(config_text.contains(&store_dir.canonicalize()?.display().to_string()));
+
+    let missing_home = tempfile::tempdir()?;
+    let missing =
+        run_bpatch_with_home(checkout.path(), None, strs(&["init"]), missing_home.path())?;
+    assert_eq!(missing.code, 1);
+    assert!(missing.stderr.contains("init requires <STORE_DIR>"));
+    assert!(missing.stderr.contains("bpatch init <dir>"));
+    Ok(())
+}
+
+#[test]
+fn init_json_output_is_single_object() -> Result<()> {
+    let checkout = FixtureRepo::new()?;
+    let base = write_extract_base(&checkout)?;
+    let store = FixtureRepo::new()?;
+    let store_dir = seed_extract_store(&store, &base)?;
+    let home = tempfile::tempdir()?;
+    let config = home.path().join(".config/bpatch/config.toml");
+
+    let init = run_bpatch_with_home(&store_dir, None, strs(&["init", "--json"]), home.path())?;
+    assert_eq!(init.code, 0, "{}", init.stderr);
+    assert!(init.stderr.is_empty());
+    assert_eq!(init.stdout.lines().count(), 1);
+    let json = parse_json(&init.stdout)?;
+    assert_eq!(json["result"], "initialized");
+    assert_eq!(
+        json["store"],
+        store_dir.canonicalize()?.display().to_string()
+    );
+    assert_eq!(json["config"], config.display().to_string());
+    assert_eq!(json["exit"], 0);
     Ok(())
 }
 
