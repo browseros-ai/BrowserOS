@@ -41,12 +41,25 @@ function setConnectionsProbePending() {
 }
 
 mock.module('@/modules/api/connections.hooks', () => ({
-  useBrowserosConnections: () =>
-    connectionsHookState()[connectionsHookResultKey] ?? {
-      data: undefined,
-      isPending: true,
-      isError: false,
-    },
+  useBrowserosConnections: Object.assign(
+    () =>
+      connectionsHookState()[connectionsHookResultKey] ?? {
+        data: undefined,
+        isPending: true,
+        isError: false,
+      },
+    { getKey: () => ['cockpit', 'connections'] },
+  ),
+  useConnectBrowseros: () => ({
+    isPending: false,
+    variables: undefined,
+    mutateAsync: async () => ({ installed: true }),
+  }),
+  useDisconnectBrowseros: () => ({
+    isPending: false,
+    variables: undefined,
+    mutateAsync: async () => ({ installed: false }),
+  }),
 }))
 
 const { Cockpit } = await import('./Cockpit')
