@@ -16,7 +16,11 @@
     "scripts/dev/inspect-ui.ts",
     "scripts/patch-windows-exe.ts",
     "apps/eval/scripts/generate-report.ts",
-    "apps/eval/scripts/weekly-report.ts"
+    "apps/eval/scripts/weekly-report.ts",
+    "apps/claw-app/entrypoints/newtab/main.tsx",
+    "apps/claw-app/entrypoints/background.ts",
+    "apps/claw-app/entrypoints/recorder.content.ts",
+    "apps/claw-app/onboarding-video/src/index-render.ts"
   ],
   "ignoreDependencies": [
     "tailwind-scrollbar-hide",
@@ -26,7 +30,9 @@
     "dotenv",
     "picocolors",
     "@browseros/cdp-protocol",
-    "@graphql-typed-document-node/core"
+    "@graphql-typed-document-node/core",
+    "@remotion/bundler",
+    "@remotion/renderer"
   ],
   "ignoreUnresolvedImports": [
     "@/assets/**",
@@ -67,7 +73,35 @@
     "unlisted-dependencies": "warn",
     "circular-dependencies": "warn",
     "unused-class-members": "off",
-    "duplicate-exports": "off"
+    "duplicate-exports": "off",
+    "boundary-violation": "error"
+  },
+  "boundaries": {
+    "zones": [
+      {
+        "name": "claw-app-extension",
+        "patterns": [
+          "apps/claw-app/entrypoints/**",
+          "apps/claw-app/components/**",
+          "apps/claw-app/screens/**",
+          "apps/claw-app/modules/**"
+        ]
+      },
+      {
+        "name": "claw-app-video",
+        "patterns": ["apps/claw-app/onboarding-video/**"]
+      }
+    ],
+    "rules": [
+      {
+        "from": "claw-app-extension",
+        "allow": []
+      },
+      {
+        "from": "claw-app-video",
+        "allow": ["claw-app-extension"]
+      }
+    ]
   },
   "overrides": [
     {
