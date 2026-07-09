@@ -4,7 +4,7 @@ description: "One-click setup for the AI tools we support. A copyable endpoint U
 keywords: ["connect AI to BrowserClaw", "BrowserClaw MCP", "browser MCP server", "Streamable HTTP MCP"]
 ---
 
-BrowserClaw is one MCP server, at one URL, on your own machine. Any AI tool that supports MCP can use it. This page covers the two ways to connect: the one-click board for the tools we support today, and the copyable URL for everything else.
+BrowserClaw is one MCP server, at one URL, on your own machine. Any AI tool that supports MCP can use it. This page covers the one-click board for the tools we support today. For anything else, [set it up manually](/browserclaw/mcp/manual) with the endpoint URL below.
 
 ## The endpoint URL
 
@@ -40,70 +40,14 @@ Title: Add one-click support for <AI tool name>
 - Name and link to the AI tool
 - Which config file it uses for MCP servers (path + format)
 - A link to that AI tool's MCP setup docs
-- Whether you're already using BrowserClaw with it via the manual setup below
+- Whether you're already using BrowserClaw with it via the manual setup
 ```
 
-While you're waiting for one-click support, the manual URL setup below usually works.
+While you're waiting for one-click support, most AI tools work with the manual URL setup.
 
-## Manual URL setup
-
-Any AI tool that speaks MCP over HTTP can use BrowserClaw. The pattern is always the same: copy the endpoint URL, drop it into the tool's own MCP config, restart. The exact syntax varies by tool. Here are the ones we've documented so far.
-
-### Hermes Agent
-
-[Hermes Agent](https://hermes-agent.nousresearch.com) from Nous Research supports connecting to external HTTP MCP servers via its YAML config.
-
-Open `~/.hermes/config.yaml` and add a `mcp_servers` entry:
-
-```yaml
-mcp_servers:
-  browserclaw:
-    url: "http://127.0.0.1:9200/mcp"
-```
-
-Then reload Hermes:
-
-- Inside an existing `hermes chat` session, run `/reload-mcp`.
-- Or restart Hermes.
-
-Hermes also has a CLI command that adds a server interactively: `hermes mcp add browserclaw`. Either path works.
-
-### Vercel AI SDK
-
-The [Vercel AI SDK](https://ai-sdk.dev/) supports MCP tools via the `@ai-sdk/mcp` package. Point the client at BrowserClaw's endpoint URL, pull the tools, and pass them into `streamText` or `generateText`.
-
-```javascript
-import { createMCPClient } from '@ai-sdk/mcp';
-import { streamText } from 'ai';
-
-const mcpClient = await createMCPClient({
-  transport: {
-    type: 'http',
-    url: 'http://127.0.0.1:9200/mcp',
-  },
-});
-
-const tools = await mcpClient.tools();
-
-const result = await streamText({
-  model: 'xai/grok-4.5',
-  tools,
-  prompt: 'Open the running BrowserClaw tab and summarise what my agent just did.',
-  onEnd: async () => {
-    await mcpClient.close();
-  },
-});
-```
-
-The AI SDK docs recommend closing the client once you're done. In streaming code that means `mcpClient.close()` inside `onEnd`. In non-streaming code, use a `try` / `finally` block.
-
-### OpenClaw
-
-[OpenClaw](https://openclaw.ai) is an open-source personal AI assistant. As of today, we could not find published guidance for connecting an external MCP server to OpenClaw in the [OpenClaw docs](https://docs.openclaw.ai/). If you use OpenClaw, filing an issue asking for MCP client support is the fastest path. When they ship it, connecting BrowserClaw will be the same pattern as every other tool on this page.
-
-### Pi.dev
-
-[Pi.dev](https://pi.dev), a minimal agent harness for coding assistants, does not currently ship MCP support out of the box. Their project docs suggest building an extension that adds MCP support to Pi, at which point BrowserClaw's endpoint URL would drop into that extension.
+<Card title="Manual URL setup" icon="wrench" href="/browserclaw/mcp/manual">
+  Guided setup for Hermes Agent, Vercel AI SDK, OpenClaw, and Pi.dev.
+</Card>
 
 ## Where to next
 
