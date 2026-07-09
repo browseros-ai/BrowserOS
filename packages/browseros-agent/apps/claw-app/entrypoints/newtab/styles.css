@@ -13,7 +13,6 @@
 
 @import "./tokens.css";
 
-
 /* Base layout. #root fills the viewport so the sidebar's `inset-y-0`
    spans the whole page even when the cockpit body is shorter than the
    viewport. */
