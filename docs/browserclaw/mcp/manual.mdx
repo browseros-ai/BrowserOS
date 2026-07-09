@@ -93,10 +93,6 @@ Verify the connection with the built-in doctor:
 openclaw mcp doctor browserclaw --probe
 ```
 
-## Pi.dev
-
-[Pi.dev](https://pi.dev), a minimal agent harness for coding assistants, does not currently ship MCP support out of the box. Their project docs suggest building an extension that adds MCP support to Pi, at which point BrowserClaw's endpoint URL would drop into that extension.
-
 ## Any other MCP-compatible AI tool
 
 The pattern is the same: paste `http://127.0.0.1:9200/mcp` into the AI tool's own MCP server config, using whatever syntax that tool expects. BrowserClaw's endpoint uses **Streamable HTTP** transport (per the current MCP spec), so any client that supports Streamable HTTP works.
