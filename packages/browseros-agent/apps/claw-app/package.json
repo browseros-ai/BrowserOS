@@ -70,6 +70,7 @@
     "@remotion/bundler": "^4.0.400",
     "@remotion/cli": "^4.0.400",
     "@remotion/renderer": "^4.0.400",
+    "@remotion/tailwind-v4": "^4.0.400",
     "@tailwindcss/vite": "^4.1.17",
     "@types/chrome": "^0.1.28",
     "@types/react": "^19.1.12",

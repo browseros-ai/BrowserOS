@@ -1,0 +1,28 @@
+/*
+ * @license
+ * Copyright 2026 BrowserOS
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Composition-side global styles.
+ *
+ * Pulls in Tailwind v4 utilities plus the shipped extension's
+ * design-token layer (`@theme inline { ... }` block in
+ * `../../entrypoints/newtab/styles.css`), so any component reachable
+ * from `onboarding-video/src/*` renders with the same colours,
+ * fonts, radii, and shadows the reader sees in the actual product.
+ *
+ * The extension's styles.css already `@import "tailwindcss";` at the
+ * top, so we do not need to import Tailwind separately here.
+ */
+
+@import "../../entrypoints/newtab/styles.css";
+
+/*
+ * Tailwind v4 auto-scans the file that imports its layer, but the
+ * layer is re-exported here from `newtab/styles.css`. Point the
+ * scanner at every .tsx/.ts under this composition's source so
+ * class names like `bg-accent`, `text-ink`, etc. actually get
+ * compiled into the emitted stylesheet.
+ */
+@source ".";
+

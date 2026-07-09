@@ -14,6 +14,7 @@
  */
 
 import { Composition } from 'remotion'
+import './index.css'
 import { FirstRunDemo } from './FirstRunDemo'
 import { FPS, TOTAL_FRAMES } from './timing'
 
