@@ -15,7 +15,7 @@
  * top, so we do not need to import Tailwind separately here.
  */
 
-@import "../../entrypoints/newtab/styles.css";
+@import "../../entrypoints/newtab/tokens.css";
 
 /*
  * Tailwind v4 auto-scans the file that imports its layer, but the

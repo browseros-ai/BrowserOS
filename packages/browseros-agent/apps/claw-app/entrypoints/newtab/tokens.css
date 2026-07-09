@@ -1,0 +1,357 @@
+/**
+ * @license
+ * Copyright 2026 BrowserOS
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Design-token layer. Extracted from newtab/styles.css so the Remotion
+ * composition can consume ONLY the tokens (not the extension's global
+ * body / background / prefers-reduced-motion / ::selection rules).
+ *
+ * Contents:
+ *   1. Tailwind entry (@import "tailwindcss") and dark custom-variant.
+ *   2. @theme inline block: every design token the app uses
+ *      (colours, fonts, radii, shadows, animation names).
+ *   3. @keyframes: pulse-dot, fade-up, fade-in.
+ *   4. :root palette: light-mode CSS variable values.
+ *   5. .dark palette: dark-mode CSS variable values (kept for any
+ *      downstream tool that opts in via .dark; the app is locked to
+ *      light at runtime today).
+ *
+ * If a rule you need to reach from BOTH the extension and the
+ * composition is layout-affecting (body background, html height,
+ * selection, prefers-reduced-motion), leave it in styles.css.
+ */
+
+@import "tailwindcss";
+/*
+ ---break---
+ */
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * The shadcn base-vega primitives we installed all read --color-background,
+ * --color-foreground, --color-primary etc. We re-point those at the app
+ * palette via variables so `.dark` can flip the whole system by re-declaring
+ * plain variables.
+ *
+ * Palette: Wiz (stylecn/wiz PR #16). Signal Blue #0254ec is the sole
+ * saturated color, applied to primary CTAs, links, focus rings, and
+ * accent-card borders on Sky Tint #eaf1ff surfaces; Wiz Steel #393f49
+ * is the editorial charcoal-navy for headings and body ink; Slate
+ * Border #cbd5e1 is the hairline divider.
+ *
+ * `accent` deliberately equals `primary` in this app: the codebase
+ * uses accent as the vivid brand color (pulse dots, emphasis text,
+ * gradients), not as shadcn's pale hover tint. Where a pale
+ * hover-tint surface is needed, the code uses --secondary or the
+ * bespoke --accent-tint / --accent-tint-2. Keeping accent equal to
+ * primary preserves every existing text-accent / bg-accent site
+ * without touching component code.
+ */
+@theme inline {
+  /* shadcn primitives: re-pointed through app palette variables */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+
+  /* BrowserOS bespoke surfaces. ink-deep stays a dark chip in both themes,
+     elevated in dark so it reads as raised, not lost against the page. It
+     carries hardcoded white text. */
+  --color-bg-canvas: var(--bg-canvas);
+  --color-bg-sunken: var(--bg-sunken);
+  --color-card-tint: var(--card-tint);
+  --color-ink-deep: var(--ink-deep);
+  --color-border-2: var(--border-2);
+  --color-border-strong: var(--border-strong);
+
+  /* Ink scale (typography hierarchy) */
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+
+  /* Accent ink (high-contrast text on tinted backgrounds) */
+  --color-accent-2: var(--accent-2);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-tint: var(--accent-tint);
+  --color-accent-tint-2: var(--accent-tint-2);
+
+  /* Status palette */
+  --color-green: var(--green);
+  --color-green-tint: var(--green-tint);
+  --color-amber: var(--amber);
+  --color-amber-tint: var(--amber-tint);
+  --color-red: var(--red);
+  --color-red-tint: var(--red-tint);
+  --color-blue: var(--blue);
+
+  /* Type families. Variable fonts get the "Variable" suffix; Newsreader is
+     not currently variable so it ships as a plain family. */
+  --font-sans: "Schibsted Grotesk Variable", system-ui, sans-serif;
+  --font-serif: "Newsreader", Georgia, serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+
+  /* Shadows tinted with Wiz --ink-deep #01123f (hsl 224 97% 13%). Deep
+     navy at low opacity so cards and popovers sit against the Sky Tint
+     wash with a subtle navy lift, not a neutral gray drop-shadow. */
+  --shadow-card:
+    0 1px 2px hsl(224 97% 13% / 0.05), 0 1px 3px hsl(224 97% 13% / 0.04);
+  --shadow-pop:
+    0 8px 30px hsl(224 97% 13% / 0.14), 0 2px 8px hsl(224 97% 13% / 0.08);
+
+  /* Animations referenced by JSX utilities (animate-pulse-dot, etc.) */
+  --animate-pulse-dot: pulse-dot 1.4s ease-in-out infinite;
+  --animate-fade-up: fade-up 0.4s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  --animate-fade-in: fade-in 0.35s ease both;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  /* Explicit radius ramp from stylecn/wiz (PR #16). --radius-4xl is a
+     full pill so primary CTAs render as the Wiz signature pill button. */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-3xl: 20px;
+  --radius-4xl: 9999px;
+}
+
+/* Keyframes lifted from the design prototype's \3c style> block */
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/*
+ ---break---
+ */
+:root {
+  color-scheme: light;
+
+  /* Shadcn tokens from stylecn/wiz (PR #16). One electric Signal Blue
+     CTA on warm white, Wiz Steel foreground, Sky Tint secondary/muted/
+     accent surface, Slate Border hairlines. */
+  --background: #ffffff;
+  --foreground: #393f49;
+  --card: #ffffff;
+  --card-foreground: #393f49;
+  --popover: #ffffff;
+  --popover-foreground: #393f49;
+  --primary: #0254ec;
+  --primary-foreground: #ffffff;
+  --secondary: #eaf1ff;
+  --secondary-foreground: #0254ec;
+  --muted: #eaf1ff;
+  --muted-foreground: #717783;
+  --accent: #0254ec;
+  --accent-foreground: #ffffff;
+  --destructive: #e11d48;
+  --destructive-foreground: #ffffff;
+  --border: #cbd5e1;
+  --input: #cbd5e1;
+  --ring: #0254ec;
+  --chart-1: #0254ec;
+  --chart-2: #0042ca;
+  --chart-3: #f5b957;
+  --chart-4: #f7cad5;
+  --chart-5: #717783;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #393f49;
+  --sidebar-primary: #0254ec;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eaf1ff;
+  --sidebar-accent-foreground: #0254ec;
+  --sidebar-border: #cbd5e1;
+  --sidebar-ring: #0254ec;
+
+  /* Radius ramp explicit values from PR #16. --radius-4xl is a full pill
+     for buttons, which is the Wiz signature CTA shape. */
+  --radius: 0.75rem;
+
+  /* BrowserOS bespoke tokens re-derived against the Wiz palette. Wiz
+     Steel (#393f49) becomes the ink scale anchor; Signal Blue and
+     Sapphire Deep drive the accent ink; Sky Tint is the accent tint;
+     Slate Border stays the divider. ink-deep keeps the deep navy so
+     dark-strip surfaces (terminal blocks, viewport pills) still read
+     as one unified elevated chip in both themes. */
+  --bg-canvas: #f9fbff;
+  --bg-sunken: #dae5ff;
+  --card-tint: #f5f8ff;
+  --ink-deep: #01123f;
+  --border-2: #dae5ff;
+  /* --border-strong is a real step deeper than --border so it has
+     visual weight when used on elevated panels, focused inputs, or
+     section separators. Was #cbd5e1 (identical to --border) after
+     the wiz palette adoption; restored the two-step border chain. */
+  --border-strong: #94a3b8;
+
+  /* Elevated Sky Tint step so alternate rows, section rails, hover
+     states, and bg-sunken can differentiate from the base --muted
+     value. Without this, five semantic layers collapse into one
+     Sky Tint plateau. */
+  --sky-tint-2: #dae5ff;
+
+  /* Consistent surround for embedded media (thumbnails of real
+     websites, replay viewport). Transparent in light so nothing
+     changes; dark mode paints a scrim behind media so bright
+     embedded content does not dominate. */
+  --media-scrim: transparent;
+  --ink: #393f49;
+  --ink-2: #575d69;
+  --ink-3: #717783;
+  --ink-4: #9aa1ae;
+  --accent-2: #0042ca;
+  --accent-ink: #0143c4;
+  --accent-tint: #eaf1ff;
+  --accent-tint-2: #d3e2ff;
+  --green: #16a34a;
+  --green-tint: #e6f6ec;
+  --amber: hsl(35 85% 42%);
+  --amber-tint: hsl(42 90% 94%);
+  --red: #e11d48;
+  --red-tint: hsl(4 65% 95%);
+  --blue: #0e7490;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: #0a0f1e;
+  --foreground: #f8f8fa;
+  /* Card lifted from #151c30 -> #1a2337 so card boundaries are
+     perceptible against --background #0a0f1e. Was too flat before. */
+  --card: #1a2337;
+  --card-foreground: #f8f8fa;
+  --popover: #1a2337;
+  --popover-foreground: #f8f8fa;
+  --primary: #2f7cff;
+  --primary-foreground: #0a0f1e;
+  --secondary: #1e2842;
+  --secondary-foreground: #f8f8fa;
+  --muted: #1e2842;
+  /* Muted-foreground warmed and brightened from #a4acbd -> #c1c8d8
+     so section headers ('TUESDAY 07 JULY' etc.) anchor visually
+     against the cool #0a0f1e body. Same WCAG tier, stronger
+     perceptual signal. */
+  --muted-foreground: #c1c8d8;
+  --accent: #2f7cff;
+  --accent-foreground: #0a0f1e;
+  --destructive: #ff5a75;
+  --destructive-foreground: #ffffff;
+  /* Border and input lifted from 0.10 / 0.15 -> 0.14 / 0.18 so
+     hairlines are actually visible on dark surfaces. */
+  --border: rgba(255, 255, 255, 0.14);
+  --input: rgba(255, 255, 255, 0.18);
+  --ring: #2f7cff;
+  --chart-1: #2f7cff;
+  --chart-2: #7ea6ff;
+  --chart-3: #f5b957;
+  --chart-4: #f7cad5;
+  --chart-5: #a4acbd;
+  /* Sidebar dropped below --card so the rail reads as a step down
+     from the body, mirroring the light mode 'no tint on rail'
+     pattern. Was identical to --card at #151c30, indistinguishable. */
+  --sidebar: #101728;
+  --sidebar-foreground: #f8f8fa;
+  --sidebar-primary: #2f7cff;
+  --sidebar-primary-foreground: #0a0f1e;
+  /* Active tab / sidebar-accent lifted from 0.06 -> 0.10 so the
+     highlight registers. */
+  --sidebar-accent: rgba(255, 255, 255, 0.1);
+  --sidebar-accent-foreground: #f8f8fa;
+  --sidebar-border: rgba(255, 255, 255, 0.14);
+  --sidebar-ring: #2f7cff;
+
+  /* BrowserOS bespoke tokens re-derived against the Wiz dark palette.
+     Card + muted + accent share the same lifted #1e2842 tint so the
+     tint chain reads as one warm-navy block; ink-deep stays a deeper
+     elevated chip below the card lift. Ink scale anchored on the new
+     #f8f8fa foreground. */
+  --bg-canvas: #080d1a;
+  --bg-sunken: #050912;
+  --card-tint: #1e2842;
+  /* --ink-deep recovers its 'recessed dark chrome' semantic in dark
+     mode. Was #1e2842 identical to --muted / --secondary / --accent-
+     tint; now dropped to #050912 (deeper than --background #0a0f1e)
+     so terminal blocks, viewport pills, and dark chrome surfaces
+     read as pressed into the page, matching the light-mode metaphor
+     where they sit as Navy Deep chips on Sky Tint. */
+  --ink-deep: #050912;
+  --border-2: #212c40;
+  --border-strong: #334159;
+
+  /* Elevated Sky Tint step parallel to light --sky-tint-2. Sits
+     between --card and --muted so semantic layers can differentiate. */
+  --sky-tint-2: #1a2337;
+
+  /* Semi-transparent scrim for embedded media (thumbnails of real
+     websites, replay viewport) so bright light-mode content does
+     not dominate the dark UI. */
+  --media-scrim: rgba(0, 0, 0, 0.5);
+  --ink: #f8f8fa;
+  --ink-2: #d5dded;
+  --ink-3: #a4acbd;
+  --ink-4: #767e91;
+  --accent-2: #7ea6ff;
+  --accent-ink: #8fb4ff;
+  --accent-tint: #1e2842;
+  --accent-tint-2: #253355;
+  --green: #34c26b;
+  --green-tint: #10281a;
+  --amber: hsl(38 85% 58%);
+  --amber-tint: hsl(38 45% 15%);
+  --red: #ff5a75;
+  --red-tint: #2b1414;
+  --blue: #56b8d8;
+}
