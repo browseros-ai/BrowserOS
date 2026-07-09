@@ -1,6 +1,7 @@
 ---
 title: "BrowserClaw"
-description: "Your AI agent gets a browser. You watch, approve, and audit every step."
+description: "The browser your AI can actually use. It's your browser, your logins, your control."
+keywords: ["BrowserClaw", "browser for AI agents", "AI browser", "Claude Code browser", "MCP browser"]
 ---
 
 <video
@@ -10,51 +11,71 @@ description: "Your AI agent gets a browser. You watch, approve, and audit every 
   poster="https://github.com/browseros-ai/BrowserOS/releases/download/onboarding-video/v0.1.0/first-run-demo-poster.png"
 ></video>
 
-BrowserClaw is a free, open-source browser your AI agents drive using your logged-in accounts. Your AI opens its own tabs inside it, and you watch, approve, and audit every step from a dashboard on your new-tab page.
+BrowserClaw is a browser your AI can actually use. You install it and use it like any browser. Once you're signed in to the sites you use every day, your AI can use those same logins to get real work done. You watch every step on your new tab page, and replay anything it did like a video.
 
-## Three things it gives your agent
+## The problem
+
+Your AI is smart. But it can't press the buttons.
+
+Ask it to book a flight, download an invoice, or send a message from your inbox. It stops at the login screen. Today's tools open a blank browser where nothing is signed in, or a browser running on some remote cloud. Neither one can do your real work.
+
+## The idea
+
+BrowserClaw is a real browser you install and use. Because it's your browser, your logins are already there. Your email, your calendar, your bank, your work tools: all signed in.
+
+When your AI drives BrowserClaw, it can actually do things. Book a meeting on your calendar. Reply to an email from your inbox. Get the numbers from a Notion doc. File an expense. The 15-minute chores you keep meaning to get to just get done.
+
+## Three things you get
 
 <CardGroup cols={3}>
-  <Card title="A real browser" icon="globe">
-    Your agent gets Chromium with your logins already there. No headless scraping, no fake user agents, no captchas that stop it dead.
+  <Card title="Your logins" icon="key">
+    Your Gmail, your calendar, your bank, your work tools. Already signed in. Your AI uses the logins you already have.
   </Card>
-  <Card title="A recording of every step" icon="camera">
-    Every click, tab, and decision is captured. Scrub through the whole session frame by frame, or jump to the exact moment the agent chose wrong.
+  <Card title="A dashboard that watches" icon="binoculars">
+    A dashboard on your new tab shows every AI working right now. Which site it's on, what it's doing, how far along.
   </Card>
-  <Card title="A cockpit that watches" icon="binoculars">
-    A dashboard shows what your agent is doing right now and what it did before. No context-switching. No "did it finish?" pings.
+  <Card title="Replay every session" icon="rotate-ccw">
+    Every session becomes a video you can replay. If your AI got something wrong, hit rewind and see where. If it went right, you know the recipe.
   </Card>
 </CardGroup>
 
-## Who this is for
+## See it in action
 
-Developers running Claude Code, Cursor, Codex, VS Code, Zed, OpenCode, or Antigravity in agentic mode. You want the agent to act on the web (log in somewhere, extract data, book a thing, test a flow) without giving it your own tabs and cookies. You want to see what it did after the fact.
-
-## Quick start
+Three steps from asking your AI to replaying what it did.
 
 <Steps>
-  <Step title="Install BrowserClaw">
-    Download BrowserClaw for your operating system.
-
-    <Card title="Install guide" icon="download" href="/browserclaw/install">
-      macOS, Windows, and Linux downloads.
-    </Card>
+  <Step title="Connect BrowserClaw to your AI">
+    One click connects BrowserClaw to Claude Code, Cursor, Codex, and other AI tools. Nothing to set up.
   </Step>
-  <Step title="Connect your agent">
-    Open the MCP install board inside BrowserClaw and click Install on your harness's row. One click, no config file editing.
-
-    <Card title="Connect your MCP client" icon="plug" href="/browserclaw/mcp/index">
-      Claude Code, Cursor, Codex, VS Code, Zed, OpenCode, Antigravity.
-    </Card>
+  <Step title="Give it a real task">
+    In your AI chat, ask it to do something you actually need done. Something like: `Book me the cheapest morning flight from SFO to NYC next Friday.`
   </Step>
-  <Step title="Paste the starter prompt">
-    In your agent, paste `Use BrowserClaw. Book me the cheapest morning flight from SFO to NYC next Friday.` and press enter.
-
-    <Card title="More sample prompts" icon="sparkles" href="/browserclaw/sample-prompts">
-      A copyable library of prompts BrowserClaw handles well.
-    </Card>
+  <Step title="Watch it work, replay it later">
+    Open a new tab. Your AI's session shows up on your dashboard, live, with a preview of what it's doing. When it's done, you can replay the whole run like a video.
   </Step>
 </Steps>
+
+## Your stuff stays yours
+
+Everything that happens in BrowserClaw stays on your computer. Your sessions, your screenshots, your history: none of it goes anywhere. We don't have servers to store it, and no dashboard to peek at what you're doing.
+
+<Card title="Privacy and data" icon="lock" href="/browserclaw/privacy">
+  The full breakdown of what stays on your machine.
+</Card>
+
+## Get started
+
+<CardGroup cols={3}>
+  <Card title="Download BrowserClaw" icon="download" href="https://browseros.com/agents">
+    macOS, Windows, and Linux. Free and open source.
+  </Card>
+  <Card title="Connect your AI" icon="plug" href="/browserclaw/mcp/index">
+    One-click setup for Claude Code, Cursor, Codex, VS Code, Zed, and more.
+  </Card>
+  <Card title="Your first run" icon="play" href="/browserclaw/first-run">
+    A guided walkthrough from install to your first task.
+  </Card>
+</CardGroup>
 
 <Tip>
 Wondering how BrowserClaw fits alongside BrowserOS? See [BrowserClaw vs BrowserOS](/browserclaw/comparisons/browseros) for the one-glance breakdown.
