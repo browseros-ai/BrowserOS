@@ -20,6 +20,45 @@
         ]
       },
       {
+        "group": "BrowserClaw",
+        "pages": [
+          "browserclaw/index",
+          "browserclaw/how-it-works",
+          "browserclaw/install",
+          "browserclaw/first-run",
+          {
+            "group": "Connect your agent",
+            "pages": [
+              "browserclaw/mcp/index",
+              "browserclaw/mcp/claude-code",
+              "browserclaw/mcp/cursor",
+              "browserclaw/mcp/codex",
+              "browserclaw/mcp/vscode",
+              "browserclaw/mcp/zed",
+              "browserclaw/mcp/opencode",
+              "browserclaw/mcp/antigravity",
+              "browserclaw/mcp/manual"
+            ]
+          },
+          "browserclaw/sample-prompts",
+          "browserclaw/cockpit",
+          "browserclaw/tabs-and-isolation",
+          "browserclaw/agent-profiles",
+          "browserclaw/audit-and-replay",
+          "browserclaw/privacy",
+          "browserclaw/permissions-and-boundaries",
+          "browserclaw/troubleshooting",
+          {
+            "group": "Comparisons",
+            "pages": [
+              "browserclaw/comparisons/browseros",
+              "browserclaw/comparisons/chrome-devtools-mcp",
+              "browserclaw/comparisons/browser-use"
+            ]
+          }
+        ]
+      },
+      {
         "group": "Core Features",
         "pages": [
           "features/bring-your-own-llm",
@@ -64,7 +103,9 @@
     { "source": "/features/memory", "destination": "/" },
     { "source": "/features/llm-chat-hub", "destination": "/" },
     { "source": "/features/workflows", "destination": "/features/scheduled-tasks" },
-    { "source": "/features/qwen-code-oauth", "destination": "/features/bring-your-own-llm" }
+    { "source": "/features/qwen-code-oauth", "destination": "/features/bring-your-own-llm" },
+    { "source": "/browserclaw", "destination": "/browserclaw/" },
+    { "source": "/features/browserclaw", "destination": "/browserclaw/" }
   ],
   "logo": {
     "light": "/logo/logo44.png",

@@ -1,0 +1,67 @@
+---
+title: "BrowserClaw"
+description: "Your AI agent gets a browser. You watch, approve, and audit every step."
+---
+
+<video
+  controls
+  className="w-full aspect-video rounded-xl"
+  src="https://github.com/browseros-ai/BrowserOS/releases/download/onboarding-video/v0.1.0/first-run-demo.mp4"
+  poster="https://github.com/browseros-ai/BrowserOS/releases/download/onboarding-video/v0.1.0/first-run-demo-poster.png"
+></video>
+
+BrowserClaw is a free, open-source browser your AI agents drive using your logged-in accounts. Your AI opens its own tabs inside it, and you watch, approve, and audit every step from a dashboard on your new-tab page.
+
+## Three things it gives your agent
+
+<CardGroup cols={3}>
+  <Card title="A real browser" icon="globe">
+    Your agent gets Chromium with your logins already there. No headless scraping, no fake user agents, no captchas that stop it dead.
+  </Card>
+  <Card title="A recording of every step" icon="camera">
+    Every click, tab, and decision is captured. Scrub through the whole session frame by frame, or jump to the exact moment the agent chose wrong.
+  </Card>
+  <Card title="A cockpit that watches" icon="binoculars">
+    A dashboard shows what your agent is doing right now and what it did before. No context-switching. No "did it finish?" pings.
+  </Card>
+</CardGroup>
+
+## Who this is for
+
+Developers running Claude Code, Cursor, Codex, VS Code, Zed, OpenCode, or Antigravity in agentic mode. You want the agent to act on the web (log in somewhere, extract data, book a thing, test a flow) without giving it your own tabs and cookies. You want to see what it did after the fact.
+
+## What it is not
+
+- Not a chat app. The chat lives in your MCP client.
+- Not a scraper. It runs a real browser with your consent, not a scale scraper.
+- Not a bot farm. One BrowserClaw, one machine, your data.
+
+## Quick start
+
+<Steps>
+  <Step title="Install BrowserClaw">
+    Download it from [browseros.com](https://browseros.com). BrowserClaw ships as part of BrowserOS.
+
+    <Card title="Install guide" icon="download" href="/browserclaw/install">
+      macOS, Windows, and Linux download links plus verification.
+    </Card>
+  </Step>
+  <Step title="Connect your agent">
+    Open the MCP install board inside BrowserClaw and click Install on your harness's row. One click, no config file editing.
+
+    <Card title="Connect your MCP client" icon="plug" href="/browserclaw/mcp/index">
+      Claude Code, Cursor, Codex, VS Code, Zed, OpenCode, Antigravity.
+    </Card>
+  </Step>
+  <Step title="Paste the starter prompt">
+    In your agent, paste `Use BrowserClaw. Book me the cheapest morning flight from SFO to NYC next Friday.` and press enter.
+
+    <Card title="More sample prompts" icon="sparkles" href="/browserclaw/sample-prompts">
+      A copyable library of prompts BrowserClaw handles well.
+    </Card>
+  </Step>
+</Steps>
+
+<Tip>
+Wondering how BrowserClaw fits alongside BrowserOS? See [BrowserClaw vs BrowserOS](/browserclaw/comparisons/browseros) for the one-glance breakdown.
+</Tip>

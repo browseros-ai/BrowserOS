@@ -1,0 +1,66 @@
+---
+title: "How BrowserClaw works"
+description: "The mental model: your agent drives, BrowserClaw watches and records."
+---
+
+BrowserClaw is a two-actor system. Your AI is the actor. BrowserClaw is the stage.
+
+## The two-actor model
+
+<CardGroup cols={2}>
+  <Card title="Your agent" icon="robot">
+    Your MCP client (Claude Code, Cursor, Codex, and so on) decides what to do next. It picks the URLs, chooses which buttons to click, reads the results, and writes the next prompt to itself. BrowserClaw does not do any of the thinking.
+  </Card>
+  <Card title="BrowserClaw" icon="binoculars">
+    BrowserClaw exposes a browser as an MCP server. Your agent calls tools like `open`, `click`, `type`, `snapshot`. BrowserClaw runs them against a real Chromium session and streams back what happened.
+  </Card>
+</CardGroup>
+
+Your agent talks to BrowserClaw over a local MCP endpoint on `127.0.0.1`. Nothing crosses the network. Nothing leaves your machine.
+
+## Your tabs vs agent tabs
+
+BrowserClaw separates every browser tab into one of two buckets: yours or the agent's. The tab strip is visually different for each so you can never lose track.
+
+- The agent can only see and act on tabs in the **agent bucket**.
+- The agent cannot open, read, click, or type into a tab in your **personal bucket**.
+- You can hand a personal tab to the agent explicitly, and take one back the same way.
+
+See [Your tabs vs agent tabs](/browserclaw/tabs-and-isolation) for the full model.
+
+## What gets recorded
+
+Every step the agent takes lands in the audit log:
+
+- The URL at the start and end of the step
+- A screenshot of the page after the action
+- A DOM snapshot for replay
+- The tool the agent called plus its arguments
+- The agent's own reasoning at that step, if the harness exposes it
+
+You can scrub the whole session in [audit and replay](/browserclaw/audit-and-replay). Skip forward, jump back, land on the exact frame where a decision went wrong.
+
+## What does NOT get recorded
+
+- Any tab in your personal bucket. BrowserClaw does not know it exists.
+- Passwords typed by the agent are captured as `••••••`, never as plaintext.
+- Credit-card fields are redacted the same way.
+
+## Where the data lives
+
+Everything sits on your disk, under the BrowserOS user data directory. No cloud. No sync. No telemetry from BrowserClaw itself.
+
+Your MCP client (Claude Code, Cursor, and so on) still sends your prompt to its own vendor: that is between you and that vendor. BrowserClaw does not intermediate that leg.
+
+See [Privacy and data](/browserclaw/privacy) for the full breakdown.
+
+## Next
+
+<CardGroup cols={2}>
+  <Card title="Install BrowserClaw" icon="download" href="/browserclaw/install">
+    Get it running in under two minutes.
+  </Card>
+  <Card title="Your first run" icon="play" href="/browserclaw/first-run">
+    A walkthrough from install to a first activity row.
+  </Card>
+</CardGroup>
