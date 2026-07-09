@@ -30,13 +30,6 @@
             "group": "Connect your agent",
             "pages": [
               "browserclaw/mcp/index",
-              "browserclaw/mcp/claude-code",
-              "browserclaw/mcp/cursor",
-              "browserclaw/mcp/codex",
-              "browserclaw/mcp/vscode",
-              "browserclaw/mcp/zed",
-              "browserclaw/mcp/opencode",
-              "browserclaw/mcp/antigravity",
               "browserclaw/mcp/manual"
             ]
           },
