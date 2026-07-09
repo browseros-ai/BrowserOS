@@ -79,5 +79,8 @@ export const STEP_COPY = {
 
 export const FOOTER_COPY = {
   docs: 'Read the docs',
-  docsHref: 'https://docs.browseros.com/',
+  // Deep-link to the BrowserClaw section instead of the docs root
+  // so a first-run reader lands on install / first-run / MCP setup
+  // instead of BrowserOS's general index.
+  docsHref: 'https://docs.browseros.com/browserclaw/',
 } as const

@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'bun:test'
 import {
+  FOOTER_COPY,
   getOnboardingState,
   HERO_COPY,
   PRIMARY_ACTION_COPY,
@@ -67,6 +68,14 @@ describe('cockpit onboarding copy', () => {
     expect(PRIMARY_ACTION_COPY.install.activeLabel).toBe('Set up MCP endpoint')
     expect(PRIMARY_ACTION_COPY.install.doneLabel).toBe('View MCP endpoint')
     expect(PRIMARY_ACTION_COPY.install.href).toBe('/mcp')
+  })
+
+  it('docs footer link deep-links to the BrowserClaw section', () => {
+    // Should NOT bare-root; readers arriving from the cockpit expect
+    // BrowserClaw-specific docs (install / MCP / first-run), not the
+    // BrowserOS index. Guard against accidental drift.
+    expect(FOOTER_COPY.docsHref).toBe('https://docs.browseros.com/browserclaw/')
+    expect(FOOTER_COPY.docs).toBe('Read the docs')
   })
 
   it('step titles are single short sentences ending in a period', () => {
