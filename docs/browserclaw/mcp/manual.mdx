@@ -54,13 +54,13 @@ const result = await streamText({
   model: 'xai/grok-4.5',
   tools,
   prompt: 'Open the running BrowserClaw tab and summarise what my agent just did.',
-  onEnd: async () => {
+  onFinish: async () => {
     await mcpClient.close();
   },
 });
 ```
 
-The AI SDK docs recommend closing the client once you're done. In streaming code that means `mcpClient.close()` inside `onEnd`. In non-streaming code, use a `try` / `finally` block.
+The AI SDK docs recommend closing the client once you're done. In streaming code that means `mcpClient.close()` inside `onFinish`. In non-streaming code, use a `try` / `finally` block.
 
 ## OpenClaw
 
