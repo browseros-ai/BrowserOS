@@ -74,7 +74,7 @@ describe('cockpit onboarding copy', () => {
     // Should NOT bare-root; readers arriving from the cockpit expect
     // BrowserClaw-specific docs (install / MCP / first-run), not the
     // BrowserOS index. Guard against accidental drift.
-    expect(FOOTER_COPY.docsHref).toBe('https://docs.browseros.com/browserclaw/')
+    expect(FOOTER_COPY.docsHref).toBe('https://docs.browseros.com/browserclaw')
     expect(FOOTER_COPY.docs).toBe('Read the docs')
   })
 

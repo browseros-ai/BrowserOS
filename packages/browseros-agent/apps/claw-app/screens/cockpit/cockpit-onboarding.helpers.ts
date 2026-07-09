@@ -81,6 +81,8 @@ export const FOOTER_COPY = {
   docs: 'Read the docs',
   // Deep-link to the BrowserClaw section instead of the docs root
   // so a first-run reader lands on install / first-run / MCP setup
-  // instead of BrowserOS's general index.
-  docsHref: 'https://docs.browseros.com/browserclaw/',
+  // instead of BrowserOS's general index. Mintlify canonicalises
+  // the URL without a trailing slash, so we use the no-slash form
+  // to avoid triggering a redirect on every click.
+  docsHref: 'https://docs.browseros.com/browserclaw',
 } as const
