@@ -97,8 +97,7 @@
     { "source": "/features/llm-chat-hub", "destination": "/" },
     { "source": "/features/workflows", "destination": "/features/scheduled-tasks" },
     { "source": "/features/qwen-code-oauth", "destination": "/features/bring-your-own-llm" },
-    { "source": "/browserclaw", "destination": "/browserclaw/" },
-    { "source": "/features/browserclaw", "destination": "/browserclaw/" }
+    { "source": "/features/browserclaw", "destination": "/browserclaw" }
   ],
   "logo": {
     "light": "/logo/logo44.png",
