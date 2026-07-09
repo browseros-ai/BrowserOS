@@ -16,7 +16,7 @@ Now pick your AI tool below.
 
 ## Hermes Agent
 
-[Hermes Agent](https://hermes-agent.nousresearch.com) from Nous Research supports connecting to external HTTP MCP servers via its YAML config.
+[Hermes Agent](https://hermes-agent.nousresearch.com) from Nous Research supports connecting to external HTTP MCP servers via its YAML config. Full details in [Hermes' MCP docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp).
 
 Open `~/.hermes/config.yaml` and add a `mcp_servers` entry:
 
@@ -35,7 +35,7 @@ Hermes also has a CLI command that adds a server interactively: `hermes mcp add 
 
 ## Vercel AI SDK
 
-The [Vercel AI SDK](https://ai-sdk.dev/) supports MCP tools via the `@ai-sdk/mcp` package. Point the client at BrowserClaw's endpoint URL, pull the tools, and pass them into `streamText` or `generateText`.
+The [Vercel AI SDK](https://ai-sdk.dev/) supports MCP tools via the `@ai-sdk/mcp` package. Full details in [the AI SDK MCP docs](https://ai-sdk.dev/docs/ai-sdk-core/mcp-tools). Point the client at BrowserClaw's endpoint URL, pull the tools, and pass them into `streamText` or `generateText`.
 
 ```javascript
 import { createMCPClient } from '@ai-sdk/mcp';
