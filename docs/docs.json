@@ -25,7 +25,6 @@
           "browserclaw/index",
           "browserclaw/how-it-works",
           "browserclaw/install",
-          "browserclaw/first-run",
           {
             "group": "Connect your agent",
             "pages": [
@@ -97,7 +96,8 @@
     { "source": "/features/llm-chat-hub", "destination": "/" },
     { "source": "/features/workflows", "destination": "/features/scheduled-tasks" },
     { "source": "/features/qwen-code-oauth", "destination": "/features/bring-your-own-llm" },
-    { "source": "/features/browserclaw", "destination": "/browserclaw" }
+    { "source": "/features/browserclaw", "destination": "/browserclaw" },
+    { "source": "/browserclaw/first-run", "destination": "/browserclaw/how-it-works" }
   ],
   "logo": {
     "light": "/logo/logo44.png",
