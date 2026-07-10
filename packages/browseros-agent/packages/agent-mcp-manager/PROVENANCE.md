@@ -2,11 +2,11 @@
 
 Inlined snapshot of `agent-mcp-manager` from https://github.com/DaniAkash/agent-toolkit.
 
-- Upstream commit: `fedf865d597619571e79e29758df2c20bc4a2a03`
+- Upstream commit: `50ec1c8556015987c89f79d6855fec464b5aaea6`
 - Upstream branch: `feat/mcp-manager-v0.0.4-fp`
 - Upstream PR: https://github.com/DaniAkash/agent-toolkit/pull/64
-- Upstream version at snapshot: `0.0.4-rc.3`
-- Inlined on: 2026-07-10
+- Upstream version at snapshot: `0.0.4-rc.4`
+- Inlined on: 2026-07-10 (refresh from `fedf865d59...`)
 
 ## Why inlined
 

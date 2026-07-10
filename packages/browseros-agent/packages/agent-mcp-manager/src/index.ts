@@ -76,4 +76,4 @@ export type {
   ServerManifest,
 } from './types'
 
-export const VERSION = '0.0.4-rc.3'
+export const VERSION = '0.0.4-rc.4'

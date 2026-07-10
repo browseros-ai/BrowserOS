@@ -86,4 +86,14 @@ describe('populated catalog', () => {
     expect(cc.project?.stdio.tagKey).toBe('type')
     expect(cc.project?.stdio.tagValue).toBe('stdio')
   })
+
+  test('claude-code system HTTP shape writes type: "http" and type: "sse" per transport', () => {
+    // Regression: Claude Code emits a parse warning for HTTP entries
+    // that lack an explicit `type` field. Without this shape, the
+    // library wrote entries Claude Code silently rejected on launch.
+    const cc = CATALOG_BY_ID['claude-code']
+    expect(cc.http?.tagKey).toBe('type')
+    expect(cc.http?.tagValue).toBe('http')
+    expect(cc.http?.sseTagValue).toBe('sse')
+  })
 })

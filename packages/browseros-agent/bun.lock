@@ -300,7 +300,7 @@
     },
     "packages/agent-mcp-manager": {
       "name": "@browseros/agent-mcp-manager",
-      "version": "0.0.4-rc.3",
+      "version": "0.0.4-rc.4",
       "dependencies": {
         "@iarna/toml": "^2.2.5",
         "jsonc-parser": "^3.3.1",

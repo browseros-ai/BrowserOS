@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 
 import {
+  claudeCode,
   claudeDesktop,
   cline,
   codex,
+  cursor,
   goose,
   opencode,
   vscode,
@@ -175,5 +177,46 @@ describe('getEmitter: project-scope override', () => {
     const out = getEmitter(vscode, 'project').add('', 'gh', STDIO_SPEC)
     const parsed = JSON.parse(out)
     expect(parsed.servers.gh.type).toBe('stdio')
+  })
+})
+
+describe('getEmitter: per-transport tag values (Claude Code HTTP + SSE)', () => {
+  // Regression: Claude Code's ~/.claude.json parser rejects HTTP
+  // entries that lack an explicit `type` field. Before rc.4 we wrote
+  // no tag on system-scope HTTP entries and Claude Code silently
+  // skipped them at launch. See the sseTagValue field on HttpShape.
+
+  const SSE_SPEC: McpServerSpec = {
+    transport: 'sse',
+    url: 'https://example.com/sse',
+  }
+
+  test('claude-code system HTTP entry gets type: "http"', () => {
+    const out = getEmitter(claudeCode).add('', 'browserclaw', HTTP_SPEC)
+    const parsed = JSON.parse(out)
+    expect(parsed.mcpServers.browserclaw.type).toBe('http')
+    expect(parsed.mcpServers.browserclaw.url).toBe('https://example.com/mcp')
+  })
+
+  test('claude-code system SSE entry gets type: "sse"', () => {
+    const out = getEmitter(claudeCode).add('', 'events', SSE_SPEC)
+    const parsed = JSON.parse(out)
+    expect(parsed.mcpServers.events.type).toBe('sse')
+    expect(parsed.mcpServers.events.url).toBe('https://example.com/sse')
+  })
+
+  test('claude-code system stdio entry has no type tag (parser accepts it)', () => {
+    const out = getEmitter(claudeCode).add('', 'gh', STDIO_SPEC)
+    const parsed = JSON.parse(out)
+    expect(parsed.mcpServers.gh.type).toBeUndefined()
+    expect(parsed.mcpServers.gh.command).toBe('gh-mcp')
+  })
+
+  test('cursor HTTP (uses shared tagValue) still writes type: "http" for SSE too', () => {
+    // Regression guard: clients without sseTagValue keep the historical
+    // behavior of using the shared tagValue for both transports.
+    const out = getEmitter(cursor).add('', 'events', SSE_SPEC)
+    const parsed = JSON.parse(out)
+    expect(parsed.mcpServers.events.type).toBe('http')
   })
 })

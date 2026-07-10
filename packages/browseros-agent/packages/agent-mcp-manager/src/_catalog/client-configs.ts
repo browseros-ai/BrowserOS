@@ -75,7 +75,12 @@ export const claudeCode: ClientConfig = {
     project: ['stdio'],
   },
   stdio: { topLevelKey: 'mcpServers' },
-  http: { supportsOAuth: true },
+  http: {
+    tagKey: 'type',
+    tagValue: 'http',
+    sseTagValue: 'sse',
+    supportsOAuth: true,
+  },
   project: {
     stdio: { topLevelKey: 'mcpServers', tagKey: 'type', tagValue: 'stdio' },
   },
@@ -83,8 +88,8 @@ export const claudeCode: ClientConfig = {
     firstParty: 'https://docs.claude.com/en/docs/claude-code/mcp',
     smithery: SMITHERY_URL,
     notes:
-      'Project scope (.mcp.json) requires an explicit type: stdio tag; ~/.claude.json accepts entries without a tag. System scope writes stdio and http both without a type tag (Claude Code parses both), matching the shape v0.0.3 shipped.',
-    verified: VERIFIED,
+      'HTTP and SSE entries in ~/.claude.json require an explicit `type` field ("http", "sse", or "ws") or Claude Code emits a "url but no type" parse warning and skips the entry on launch. Stdio entries are accepted with or without a type tag. Project scope (.mcp.json) writes an explicit type: stdio tag per Claude Code project-scope docs.',
+    verified: '2026-07-10',
   },
 }
 

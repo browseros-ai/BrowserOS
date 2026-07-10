@@ -111,11 +111,16 @@ function buildHttpEntry(
   if (spec.headers && Object.keys(spec.headers).length > 0) {
     base[headerField] = spec.headers
   }
-  // HTTP tag value is either a fixed shape.tagValue (Cline, Kiro, etc.)
-  // or nothing (no tag written). We do NOT emit spec.transport as the
-  // tag value here: clients that accept both sse and http use the same
-  // static tag ('http') per Smithery + first-party docs research.
-  return finaliseEntry(base, shape.injects, shape.tagKey, shape.tagValue)
+  // Tag value resolution: `sseTagValue` overrides `tagValue` for sse
+  // entries when set. Used by clients like Claude Code that write
+  // `type: "http"` for http entries and `type: "sse"` for sse entries.
+  // Clients that use the same tag value regardless (Cursor, VS Code,
+  // Gemini, ...) keep `tagValue: 'http'` and omit `sseTagValue`.
+  const tagValue =
+    spec.transport === 'sse' && shape.sseTagValue !== undefined
+      ? shape.sseTagValue
+      : shape.tagValue
+  return finaliseEntry(base, shape.injects, shape.tagKey, tagValue)
 }
 
 function finaliseEntry(

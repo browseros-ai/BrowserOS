@@ -87,9 +87,17 @@ export interface HttpShape {
   /**
    * Value written under `tagKey` for http entries. Known values:
    * 'http', 'streamableHttp' (Cline), 'streamable-http' (Kiro),
-   * 'remote' (OpenCode).
+   * 'remote' (OpenCode). Applied to both `http` and `sse` transports
+   * unless `sseTagValue` is set.
    */
   tagValue?: string
+  /**
+   * Value written under `tagKey` for SSE entries specifically. Use when
+   * the client accepts both http and sse and distinguishes them by tag
+   * value: Claude Code writes `type: "http"` for http and `type: "sse"`
+   * for sse. When unset, SSE entries use `tagValue` (the shared value).
+   */
+  sseTagValue?: string
   /** Static fields merged into every http entry. */
   injects?: Record<string, unknown>
   /**
