@@ -12,12 +12,12 @@
  * polling interval.
  */
 
-import type { AgentId } from 'agent-mcp-manager'
+import type { AgentId } from '@browseros/agent-mcp-manager'
 import {
   AgentNotInstalledError,
   ForeignEntryError,
   resolveAgentMcpConfigPath,
-} from 'agent-mcp-manager'
+} from '@browseros/agent-mcp-manager'
 import { logger } from '../lib/logger'
 import { getMcpManager } from '../lib/mcp-manager'
 import { tildifyHomePath } from '../lib/tildify'

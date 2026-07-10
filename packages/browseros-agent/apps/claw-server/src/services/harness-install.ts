@@ -9,12 +9,12 @@
  * an outcome instead of rolling back the profile mutation.
  */
 
-import type { AgentId } from 'agent-mcp-manager'
+import type { AgentId } from '@browseros/agent-mcp-manager'
 import {
   AgentNotSupportedError,
   ForeignEntryError,
   resolveAgentMcpConfigPath,
-} from 'agent-mcp-manager'
+} from '@browseros/agent-mcp-manager'
 import { logger } from '../lib/logger'
 import { getMcpManager } from '../lib/mcp-manager'
 import type { Harness, StoredAgentProfile } from '../routes/agents/schemas'

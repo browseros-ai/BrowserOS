@@ -19,7 +19,7 @@ import {
   type AgentId,
   type McpServerSpec,
   resolveAgentSurface,
-} from 'agent-mcp-manager'
+} from '@browseros/agent-mcp-manager'
 
 export function specFor(agentId: AgentId, mcpUrl: string): McpServerSpec {
   const surface = resolveAgentSurface(agentId, 'system')

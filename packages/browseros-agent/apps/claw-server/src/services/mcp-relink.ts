@@ -19,7 +19,7 @@ import type {
   BoundApi,
   LinkPlanSummary,
   McpServerSpec,
-} from 'agent-mcp-manager'
+} from '@browseros/agent-mcp-manager'
 
 interface RelinkManagedServerOptions {
   mgr: BoundApi

@@ -29,7 +29,7 @@
  */
 
 import { rename } from 'node:fs/promises'
-import type { BoundApi, McpServerSpec } from 'agent-mcp-manager'
+import type { BoundApi, McpServerSpec } from '@browseros/agent-mcp-manager'
 import {
   type StoredAgentProfile,
   storedAgentProfileSchema,
