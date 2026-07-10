@@ -1,14 +1,51 @@
 ---
-title: "The cockpit"
-description: "Your dashboard for what your agents are doing right now and what they did before."
+title: "Your dashboard"
+description: "The new-tab dashboard that shows what your AI is doing now and what it did before."
+keywords: ["BrowserClaw dashboard", "AI agent activity", "watch AI agent live", "session history"]
 ---
 
-<Note>
-This page is landing in a follow-up release. Track the [BrowserClaw docs rollout](https://github.com/browseros-ai/BrowserOS/issues) for progress.
-</Note>
+Open a new tab in BrowserClaw and you land on your dashboard. It shows what your AI is working on right now and what it did before, so you always know what happened without pinging your AI to check.
 
-Coming soon.
+## What you see
 
-<Card title="Your tabs vs agent tabs" icon="arrow-right" href="/browserclaw/tabs-and-isolation">
-  Continue with what is shipped today.
-</Card>
+<Frame caption="The dashboard: live activity on top, recent sessions below.">
+  <img src="/images/browserclaw--dashboard-populated.png" alt="BrowserClaw new-tab dashboard with a large italic headline that reads 'What are your agents working on right now?' Below it, a Recent activity section shows a large lead tile with a screenshot of a browsed page and four supporting tiles next to it, plus a typographic list of older sessions." />
+</Frame>
+
+Two regions stack on the page:
+
+- **Running now** shows a live card for every AI that is actively working. It only appears when at least one AI is running.
+- **Recent activity** shows the sessions your AIs already finished, newest first. Click any of them to open the full story.
+
+## Running now
+
+Every live agent gets its own card at the top of the dashboard.
+
+Each card carries:
+
+- A live preview of the browser tab your AI is looking at right now, updating as it works.
+- A **LIVE** chip and a pulsing dot so you can tell at a glance which agents are actually doing something.
+- The site title, the AI's name, and a short trail of the last few actions it took (like `tabs → read → navigate`).
+- A tab-count chip in the corner so you know how many tabs this AI has open.
+- Two buttons at the bottom of the card:
+  - **Watch** switches your active tab to the one the AI is working in, so you can look over its shoulder.
+  - **Stop** ends the session. If your AI went off the rails, one click cancels the run.
+
+## Recent activity
+
+Once a session finishes, it moves down into Recent activity. The most recent (or any still-live) session takes the big lead tile on the left. Four supporting tiles show what's after that. Anything older stacks in a compact typographic list below.
+
+Each tile is clickable and takes you straight to the full session view, where you can read every action step by step or hit **View Session Replay** to watch the whole run like a video.
+
+The home page holds the twelve most recent sessions. To see everything, click **View all activity** at the bottom of the section and you'll land on the full audit list.
+
+## Where to next
+
+<CardGroup cols={2}>
+  <Card title="How BrowserClaw works" icon="play" href="/browserclaw/how-it-works">
+    A guided walkthrough from install to your first AI-driven session.
+  </Card>
+  <Card title="Your stuff stays yours" icon="lock" href="/browserclaw/privacy">
+    What BrowserClaw records, what it doesn't, and where everything lives.
+  </Card>
+</CardGroup>
