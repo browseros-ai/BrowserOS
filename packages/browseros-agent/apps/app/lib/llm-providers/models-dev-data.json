@@ -939,7 +939,7 @@
       {
         "id": "minimax/minimax-m3",
         "name": "MiniMax-M3",
-        "contextWindow": 1000000,
+        "contextWindow": 524288,
         "maxOutput": 512000,
         "supportsImages": true,
         "supportsReasoning": true,

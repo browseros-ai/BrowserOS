@@ -32,16 +32,25 @@ describe('ChatGPT models', () => {
 })
 
 describe('MiniMax models', () => {
-  it('offers MiniMax-M3 with a 1M context window', () => {
+  it('offers current models with their supported capabilities', () => {
     const models = getModelsForProvider('minimax')
 
-    expect(models[0]).toEqual({
-      modelId: 'MiniMax-M3',
-      contextLength: 1000000,
-      supportsImages: true,
-      supportsReasoning: true,
-      supportsToolCall: true,
-    })
+    expect(models).toEqual([
+      {
+        modelId: 'MiniMax-M3',
+        contextLength: 1000000,
+        supportsImages: true,
+        supportsReasoning: true,
+        supportsToolCall: true,
+      },
+      {
+        modelId: 'MiniMax-M2.7',
+        contextLength: 204800,
+        supportsReasoning: true,
+        supportsToolCall: true,
+      },
+    ])
     expect(getModelContextLength('minimax', 'MiniMax-M3')).toBe(1000000)
+    expect(getModelContextLength('minimax', 'MiniMax-M2.7')).toBe(204800)
   })
 })

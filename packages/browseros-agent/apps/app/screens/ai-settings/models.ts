@@ -44,6 +44,12 @@ const CUSTOM_PROVIDER_MODELS: Partial<Record<ProviderType, ModelInfo[]>> = {
       supportsReasoning: true,
       supportsToolCall: true,
     },
+    {
+      modelId: 'MiniMax-M2.7',
+      contextLength: 204800,
+      supportsReasoning: true,
+      supportsToolCall: true,
+    },
   ],
 }
 
