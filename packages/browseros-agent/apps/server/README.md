@@ -72,7 +72,7 @@ Tools organized by category:
 
 The agent loop uses the [Vercel AI SDK](https://sdk.vercel.ai) to orchestrate multi-step browser automation:
 
-- **Multi-provider support** — OpenAI, Anthropic, Google, Azure, Bedrock, OpenRouter, Ollama, LM Studio, and any OpenAI-compatible endpoint
+- **Multi-provider support** — OpenAI, Anthropic, Google, Azure, Bedrock, OpenRouter, Requesty, Ollama, LM Studio, and any OpenAI-compatible endpoint
 - **Session management** — conversations persist in a local SQLite database
 - **Context overflow handling** — automatic message compaction when context windows fill up
 - **MCP client** — connects to external MCP servers for additional tool access (40+ app integrations)

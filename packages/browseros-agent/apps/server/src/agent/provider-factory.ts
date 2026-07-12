@@ -28,6 +28,7 @@ import { createCodexFetch } from '../lib/clients/oauth/codex-fetch'
 import { createCopilotFetch } from '../lib/clients/oauth/copilot-fetch'
 import { logger } from '../lib/logger'
 import { createOpenRouterCompatibleFetch } from '../lib/openrouter-fetch'
+import { createRequestyCompatibleFetch } from '../lib/requesty-fetch'
 import { ensureWorkspaceInstructionFile } from './acp-instructions/ensureInstructionFile'
 import { ACP_PROVIDER_TYPES, isAcpProvider } from './acp-providers'
 import type { BuildSystemPromptOptions } from './prompt'
@@ -300,6 +301,22 @@ function createOpenRouterFactory(
   })
 }
 
+function createRequestyFactory(
+  config: ResolvedAgentConfig,
+): (modelId: string) => unknown {
+  if (!config.apiKey) throw new Error('Requesty provider requires apiKey')
+  return createOpenAICompatible({
+    name: 'requesty',
+    baseURL: EXTERNAL_URLS.REQUESTY_API,
+    apiKey: config.apiKey,
+    headers: {
+      'HTTP-Referer': 'https://browseros.com',
+      'X-Title': 'BrowserOS',
+    },
+    fetch: createRequestyCompatibleFetch(),
+  })
+}
+
 function createAzureFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
@@ -452,6 +469,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.OPENAI]: createOpenAIFactory,
   [LLM_PROVIDERS.GOOGLE]: createGoogleFactory,
   [LLM_PROVIDERS.OPENROUTER]: createOpenRouterFactory,
+  [LLM_PROVIDERS.REQUESTY]: createRequestyFactory,
   [LLM_PROVIDERS.AZURE]: createAzureFactory,
   [LLM_PROVIDERS.LMSTUDIO]: createLMStudioFactory,
   [LLM_PROVIDERS.OLLAMA]: createOllamaFactory,

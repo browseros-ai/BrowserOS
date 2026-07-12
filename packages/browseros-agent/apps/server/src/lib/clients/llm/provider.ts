@@ -19,6 +19,7 @@ import type { LanguageModel } from 'ai'
 import { createBrowserOSFetch } from '../../browseros-fetch'
 import { logger } from '../../logger'
 import { createOpenRouterCompatibleFetch } from '../../openrouter-fetch'
+import { createRequestyCompatibleFetch } from '../../requesty-fetch'
 import { createCodexFetch } from '../oauth/codex-fetch'
 import { createCopilotFetch } from '../oauth/copilot-fetch'
 import {
@@ -50,6 +51,20 @@ function createOpenRouterModel(config: ResolvedLLMConfig): LanguageModel {
     apiKey: config.apiKey,
     extraBody: { reasoning: {} },
     fetch: createOpenRouterCompatibleFetch(),
+  })(config.model)
+}
+
+function createRequestyModel(config: ResolvedLLMConfig): LanguageModel {
+  if (!config.apiKey) throw new Error('Requesty provider requires apiKey')
+  return createOpenAICompatible({
+    name: 'requesty',
+    baseURL: EXTERNAL_URLS.REQUESTY_API,
+    apiKey: config.apiKey,
+    headers: {
+      'HTTP-Referer': 'https://browseros.com',
+      'X-Title': 'BrowserOS',
+    },
+    fetch: createRequestyCompatibleFetch(),
   })(config.model)
 }
 
@@ -185,6 +200,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.OPENAI]: createOpenAIModel,
   [LLM_PROVIDERS.GOOGLE]: createGoogleModel,
   [LLM_PROVIDERS.OPENROUTER]: createOpenRouterModel,
+  [LLM_PROVIDERS.REQUESTY]: createRequestyModel,
   [LLM_PROVIDERS.AZURE]: createAzureModel,
   [LLM_PROVIDERS.OLLAMA]: createOllamaModel,
   [LLM_PROVIDERS.LMSTUDIO]: createLMStudioModel,

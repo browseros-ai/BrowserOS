@@ -188,6 +188,7 @@ Set eval environment variables in the monorepo root `.env.development` file.
 | Azure OpenAI | `azure` | Yes |
 | AWS Bedrock | `bedrock` | No |
 | OpenRouter | `openrouter` | No |
+| Requesty | `requesty` | No |
 | Fireworks, Together, etc. | `openai-compatible` | Yes |
 | Ollama | `ollama` | No |
 | Clado Action (executor only) | `clado-action` | Yes |

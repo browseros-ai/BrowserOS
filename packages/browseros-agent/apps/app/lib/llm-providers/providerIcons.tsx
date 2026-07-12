@@ -27,6 +27,7 @@ const providerIconMap: Record<ProviderType, IconComponent | null> = {
   'openai-compatible': OpenAI,
   google: Gemini,
   openrouter: OpenRouter,
+  requesty: null,
   azure: Azure,
   ollama: Ollama,
   lmstudio: LmStudio,
