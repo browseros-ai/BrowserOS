@@ -123,25 +123,25 @@ export function createMcpRoutes(deps: McpRouteDeps) {
 
     logger.debug('MCP request received', logContext)
 
-    // Per-request server + transport: no shared state, no race conditions,
-    // no ID collisions. Required by MCP SDK 1.26.0+ security fix (GHSA-345p-7cg4-v4c7).
-    const mcpServer = makeMcpServer({
-      version: deps.version,
-      browserSession: deps.browserSession,
-      klavis: deps.klavis,
-      connectorScope: { selectedServerNames },
-      defaultWindowId,
-      defaultTabGroupId,
-      executionDir: deps.executionDir,
-      remoteAgentHarness: harness,
-      activity: deps.activity,
-    })
-    const transport = makeMcpTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    })
-
     try {
+      // Per-request server + transport: no shared state, no race conditions,
+      // no ID collisions. Required by MCP SDK 1.26.0+ security fix (GHSA-345p-7cg4-v4c7).
+      const mcpServer = makeMcpServer({
+        version: deps.version,
+        browserSession: deps.browserSession,
+        klavis: deps.klavis,
+        connectorScope: { selectedServerNames },
+        defaultWindowId,
+        defaultTabGroupId,
+        executionDir: deps.executionDir,
+        remoteAgentHarness: harness,
+        activity: deps.activity,
+      })
+      const transport = makeMcpTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: true,
+      })
+
       await mcpServer.connect(transport)
       logger.debug('MCP request transport connected', logContext)
       const response = await transport.handleRequest(c)
@@ -156,15 +156,21 @@ export function createMcpRoutes(deps: McpRouteDeps) {
         scope.setTag('scopeId', scopeId)
         Sentry.captureException(error)
       })
+      const errorMessage =
+        error instanceof Error ? error.message : String(error)
       logger.error('Error handling MCP request', {
         ...logContext,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage,
       })
 
       return c.json(
         {
           jsonrpc: '2.0',
-          error: { code: -32603, message: 'Internal server error' },
+          error: {
+            code: -32603,
+            message: 'Internal server error',
+            data: errorMessage,
+          },
           id: null,
         },
         500,

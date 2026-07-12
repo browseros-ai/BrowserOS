@@ -91,6 +91,24 @@ async function postMcp(
   })
 }
 
+async function expectJsonRpcInternalError(
+  response: Response,
+  errorMessage: string,
+) {
+  expect(response.status).toBe(500)
+  const body = await response.json()
+  expect(body).toEqual({
+    jsonrpc: '2.0',
+    error: {
+      code: -32603,
+      message: 'Internal server error',
+      data: errorMessage,
+    },
+    id: null,
+  })
+  expect(body.error).not.toHaveProperty('name')
+}
+
 describe('parseManagedMcpServersHeader', () => {
   it('returns an empty scope for missing or empty headers', () => {
     expect(parseManagedMcpServersHeader(undefined)).toEqual([])
@@ -111,6 +129,18 @@ describe('parseManagedMcpServersHeader', () => {
 })
 
 describe('createMcpRoutes', () => {
+  it('returns the MCP server status for GET requests', async () => {
+    const app = createTestMcpRoutes()
+
+    const response = await app.request('/')
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      status: 'ok',
+      message: 'MCP server is running. Use POST to interact.',
+    })
+  })
+
   it('passes latest Klavis status and selected connector scope per request', async () => {
     let status: KlavisProxyStatus = { state: 'connecting' }
     const klavis = {
@@ -184,5 +214,59 @@ describe('createMcpRoutes', () => {
     expect(serverCreations[0].remoteAgentHarness).toBe(
       serverCreations[1].remoteAgentHarness,
     )
+  })
+
+  it('returns a JSON-RPC error when MCP server construction throws', async () => {
+    const app = createTestMcpRoutes({
+      createMcpServer: (() => {
+        throw new Error('tool registration failed')
+      }) as never,
+    })
+
+    const response = await postMcp(app)
+
+    await expectJsonRpcInternalError(response, 'tool registration failed')
+    expect(createMcpTransportSpy).not.toHaveBeenCalled()
+  })
+
+  it('returns a JSON-RPC error when MCP transport construction throws', async () => {
+    const app = createTestMcpRoutes({
+      createMcpTransport: (() => {
+        throw new Error('transport setup failed')
+      }) as never,
+    })
+
+    const response = await postMcp(app)
+
+    await expectJsonRpcInternalError(response, 'transport setup failed')
+  })
+
+  it('returns a JSON-RPC error when connecting the MCP server fails', async () => {
+    const app = createTestMcpRoutes({
+      createMcpServer: (() => ({
+        connect: async () => {
+          throw new Error('server connection failed')
+        },
+      })) as never,
+    })
+
+    const response = await postMcp(app)
+
+    await expectJsonRpcInternalError(response, 'server connection failed')
+  })
+
+  it('returns a JSON-RPC error when handling the MCP request fails', async () => {
+    const app = createTestMcpRoutes({
+      createMcpTransport: ((options: unknown) => ({
+        options,
+        handleRequest: async () => {
+          throw new Error('request handling failed')
+        },
+      })) as never,
+    })
+
+    const response = await postMcp(app)
+
+    await expectJsonRpcInternalError(response, 'request handling failed')
   })
 })
