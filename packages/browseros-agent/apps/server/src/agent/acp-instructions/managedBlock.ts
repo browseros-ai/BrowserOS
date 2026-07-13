@@ -3,7 +3,7 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Renders, parses, and splices the BrowserOS-managed block inside the
+ * Renders, parses, and splices the Request Browser-managed block inside the
  * ACP workspace instruction file (CLAUDE.md / AGENTS.md). Everything
  * outside the BEGIN/END markers is user-authored content and never
  * touched.
@@ -43,7 +43,7 @@ export function findManagedBlock(source: string): ManagedBlock | null {
 export function renderManagedBlock(prompt: string, hash: string): string {
   return [
     BEGIN,
-    '<!-- This block is managed by BrowserOS. Do not edit inside the markers. -->',
+    '<!-- This block is managed by Request Browser. Do not edit inside the markers. -->',
     `<!-- BROWSEROS:HASH=${hash} -->`,
     '',
     prompt,

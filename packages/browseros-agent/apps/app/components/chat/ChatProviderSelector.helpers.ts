@@ -1,4 +1,5 @@
 import type { Provider } from './chatComponentTypes'
+import { getProviderDisplayName } from '@/lib/llm-providers/provider-selection'
 
 export interface ProviderOptionGroup {
   key: 'llm' | 'acp'
@@ -34,7 +35,7 @@ export function getProviderSearchValue(
 ): string {
   return [
     provider.id,
-    provider.name,
+    getProviderDisplayName(provider),
     provider.type,
     groupLabel,
     provider.adapterName,

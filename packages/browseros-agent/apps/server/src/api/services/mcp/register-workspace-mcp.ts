@@ -90,7 +90,7 @@ function failure(error: unknown): ToolResult {
 async function requireSession(scope: WorkspaceMcpScope) {
   if (!scope.conversationId || scope.conversationId === 'ephemeral') {
     throw new Error(
-      'Workspace tools require an active BrowserOS research conversation.',
+      'Workspace tools require an active Request Browser research conversation.',
     )
   }
   const session = await scope.store.getResearchSessionByConversationId(
@@ -98,7 +98,7 @@ async function requireSession(scope: WorkspaceMcpScope) {
   )
   if (!session) {
     throw new Error(
-      'No research session is linked to this conversation. Start the task from BrowserOS first.',
+      'No research session is linked to this conversation. Start the task from Request Browser first.',
     )
   }
   if (['completed', 'failed', 'cancelled'].includes(session.status)) {
@@ -158,7 +158,7 @@ function decodeBase64(value: string): Uint8Array {
   return Uint8Array.from(Buffer.from(encoded, 'base64'))
 }
 
-/** Registers scoped workspace/research tools on the BrowserOS MCP server. */
+/** Registers scoped workspace/research tools on the Request Browser MCP server. */
 export function registerWorkspaceMcpTools(
   server: McpServer,
   scope: WorkspaceMcpScope,
@@ -169,7 +169,7 @@ export function registerWorkspaceMcpTools(
     'research_get_session',
     {
       description:
-        'Get the active BrowserOS research goal, plan, status, and recent activity. Call this before planning or saving results.',
+        'Get the active Request Browser research goal, plan, status, and recent activity. Call this before planning or saving results.',
       inputSchema: z.object({}),
     },
     async () => {

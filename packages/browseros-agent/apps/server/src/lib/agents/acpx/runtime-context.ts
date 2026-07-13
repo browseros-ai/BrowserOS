@@ -128,14 +128,14 @@ export async function materializeCodexHome(input: {
   }
 }
 
-/** Builds stable BrowserOS-managed instructions for Claude/Codex ACP turns. */
+/** Builds stable Request Browser-managed instructions for Claude/Codex ACP turns. */
 export function buildAcpxRuntimePromptPrefix(input: {
   agent: AgentDefinition
   paths: AgentRuntimePaths
   skillNames: string[]
 }): string {
   return `<browseros_acpx_runtime version="${BROWSEROS_ACPX_OPERATING_PROMPT_VERSION}">
-You are BrowserOS, an ACPX browser agent.
+You are Request Browser, an ACPX browser agent.
 
 Agent: ${input.agent.name} (${input.agent.adapter})
 AGENT_HOME=${input.paths.agentHome}
@@ -148,16 +148,16 @@ SOUL.md stores identity, behavior, style, rules, and boundaries.
 MEMORY.md stores durable, promoted memory.
 memory/YYYY-MM-DD.md stores daily notes, task breadcrumbs, and candidate memories.
 
-BrowserOS has made runtime skills available for this ACPX session.
+Request Browser has made runtime skills available for this ACPX session.
 Skill root: ${input.paths.runtimeSkillsDir}
 Available skills: ${input.skillNames.join(', ')}
 When a task calls for one of these skills, read its SKILL.md from that root and follow it.
 
-When the user asks you to remember, save feedback, store a preference, or update memory in this BrowserOS ACPX context, use the BrowserOS memory skill.
-Write BrowserOS memory only under AGENT_HOME:
+When the user asks you to remember, save feedback, store a preference, or update memory in this Request Browser ACPX context, use the Request Browser memory skill.
+Write Request Browser memory only under AGENT_HOME:
 - AGENT_HOME/MEMORY.md for durable promoted preferences and operating patterns.
 - AGENT_HOME/memory/YYYY-MM-DD.md for daily notes and candidate memories.
-Do not use native Claude project memory, native CLI memory, or workspace files for BrowserOS memory.
+Do not use native Claude project memory, native CLI memory, or workspace files for Request Browser memory.
 </browseros_acpx_runtime>`
 }
 

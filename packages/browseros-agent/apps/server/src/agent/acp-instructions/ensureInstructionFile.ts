@@ -3,7 +3,7 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Plants and refreshes the BrowserOS-managed instruction file inside
+ * Plants and refreshes the Request Browser-managed instruction file inside
  * an ACP agent's workspace. Called from `createAcpLanguageModel`
  * when a new conversation starts; subsequent turns short-circuit.
  */

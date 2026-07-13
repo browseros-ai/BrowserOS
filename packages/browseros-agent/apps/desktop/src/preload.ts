@@ -8,6 +8,7 @@ import type {
   AppSurface,
   BrowserProfileSummary,
   DesktopPreferences,
+  AssistantLayout,
   DesktopApi,
 } from './shared/desktop-api.js'
 
@@ -68,6 +69,9 @@ const api: DesktopApi = {
     },
     getActiveProfile: (): Promise<BrowserProfileSummary> => ipcRenderer.invoke('app:get-active-profile'),
     getPreferences: (): Promise<DesktopPreferences> => ipcRenderer.invoke('app:get-preferences'),
+    getAssistantLayout: (): Promise<AssistantLayout> => ipcRenderer.invoke('app:get-assistant-layout'),
+    setAssistantWidth: (width: number): Promise<{ width: number }> => ipcRenderer.invoke('app:set-assistant-width', width),
+    setAssistantMode: (mode: AssistantLayout['mode']): Promise<{ mode: AssistantLayout['mode'] }> => ipcRenderer.invoke('app:set-assistant-mode', mode),
     onProfile: (listener: (profile: BrowserProfileSummary) => void): (() => void) => {
       const handler = (_event: Electron.IpcRendererEvent, profile: BrowserProfileSummary) => listener(profile)
       ipcRenderer.on('app:profile', handler)
@@ -93,6 +97,11 @@ const api: DesktopApi = {
       const handler = (_event: Electron.IpcRendererEvent, preferences: DesktopPreferences) => listener(preferences)
       ipcRenderer.on('app:preferences', handler)
       return () => ipcRenderer.removeListener('app:preferences', handler)
+    },
+    onAssistantLayout: (listener: (layout: AssistantLayout) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, layout: AssistantLayout) => listener(layout)
+      ipcRenderer.on('app:assistant-layout', handler)
+      return () => ipcRenderer.removeListener('app:assistant-layout', handler)
     },
   },
 }

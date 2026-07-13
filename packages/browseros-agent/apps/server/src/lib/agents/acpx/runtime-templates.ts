@@ -6,7 +6,7 @@
 
 export const SOUL_TEMPLATE = `# SOUL.md - Who You Are
 
-You are a BrowserOS ACPX agent.
+You are a Request Browser ACPX agent.
 
 You are not a stateless chatbot. These files are how you keep continuity across sessions.
 
@@ -43,7 +43,7 @@ If you change this file, tell the user.
 
 export const MEMORY_TEMPLATE = `# MEMORY.md - What Persists
 
-Durable, promoted memory for this BrowserOS ACPX agent.
+Durable, promoted memory for this Request Browser ACPX agent.
 
 ## What Belongs
 
@@ -77,12 +77,12 @@ Use memory/YYYY-MM-DD.md for observations, task breadcrumbs, and candidate memor
 export const RUNTIME_SKILLS: Record<string, string> = {
   browseros: `---
 name: browseros
-description: Use BrowserOS MCP tools for browser automation.
+description: Use Request Browser MCP tools for browser automation. The legacy browseros namespace is internal.
 ---
 
-# BrowserOS MCP
+# Request Browser MCP
 
-Use BrowserOS MCP for browser work.
+Use Request Browser MCP for browser work.
 
 - Observe before acting: call snapshot/content tools before interacting.
 - Act with tool-provided element ids when available.
@@ -115,10 +115,10 @@ Do not store memory files in the project workspace.
 ## Write
 
 - When the user explicitly asks you to remember, save feedback, store a preference, or update memory, use this skill.
-- Write BrowserOS memory only under $AGENT_HOME.
+- Write Request Browser memory only under $AGENT_HOME.
 - Use $AGENT_HOME/MEMORY.md for durable promoted preferences and operating patterns.
 - Use $AGENT_HOME/memory/YYYY-MM-DD.md for daily notes and candidate memories.
-- Do not use native Claude project memory, native CLI memory, or workspace files for BrowserOS memory.
+- Do not use native Claude project memory, native CLI memory, or workspace files for Request Browser memory.
 - Put observations and task breadcrumbs in today's daily note first.
 - Promote only stable patterns into MEMORY.md.
 - Do not promote one-off facts, raw transcripts, temporary state, secrets, or credentials.
@@ -134,17 +134,17 @@ Do not store memory files in the project workspace.
 `,
   'app-connections': `---
 name: app-connections
-description: Use when a task needs a third-party SaaS app (Gmail, Google Calendar/Docs/Drive/Sheets, Slack, GitHub, Linear, Jira, Notion, Figma, Salesforce, HubSpot, Stripe, Discord, LinkedIn, Cal.com, Resend, Asana, ClickUp, Monday, Outlook Mail/Calendar, Microsoft Teams, Supabase, Vercel, Cloudflare, Dropbox, OneDrive, WordPress, YouTube, Box, Shopify, Zendesk, Intercom, Airtable, Confluence, PostHog, Mixpanel, WhatsApp, Brave Search, Mem0, Postman, Google Forms, GitLab) or when a tool call returns 401/Unauthorized or a response surfaces an authUrl / apiKeyUrl. Drives the connect, discover, execute flow over BrowserOS's MCP integration surface.
+description: Use when a task needs a third-party SaaS app (Gmail, Google Calendar/Docs/Drive/Sheets, Slack, GitHub, Linear, Jira, Notion, Figma, Salesforce, HubSpot, Stripe, Discord, LinkedIn, Cal.com, Resend, Asana, ClickUp, Monday, Outlook Mail/Calendar, Microsoft Teams, Supabase, Vercel, Cloudflare, Dropbox, OneDrive, WordPress, YouTube, Box, Shopify, Zendesk, Intercom, Airtable, Confluence, PostHog, Mixpanel, WhatsApp, Brave Search, Mem0, Postman, Google Forms, GitLab) or when a tool call returns 401/Unauthorized or a response surfaces an authUrl / apiKeyUrl. Drives the connect, discover, execute flow over Request Browser's MCP integration surface.
 ---
 
 # app-connections
 
-BrowserOS exposes third-party SaaS apps through two MCP namespaces:
+Request Browser exposes third-party SaaS apps through two MCP namespaces:
 
 - \`browseros/*\` for browser automation and Klavis Strata tools (discover, execute).
 - \`nudge/suggest_app_connection\` to render an interactive Connect card to the user. This is your only path to ask for authorization.
 
-Both namespaces are always on the wire whenever BrowserOS is running. Do not try to install anything.
+Both namespaces are always on the wire whenever Request Browser is running. Do not try to install anything.
 
 ## Decision
 
@@ -169,7 +169,7 @@ Any text or URL you add duplicates the card. The Connect card is the single sour
 
 ## appName casing
 
-Pass the exact display name from the BrowserOS catalog. Proper-case, spaces preserved. Wrong casing yields a 400.
+Pass the exact display name from the Request Browser catalog. Proper-case, spaces preserved. Wrong casing yields a 400.
 
 Right: \`Gmail\`, \`Google Calendar\`, \`Slack\`, \`GitHub\`, \`Cal.com\`, \`Microsoft Teams\`.
 Wrong: \`gmail\`, \`google-calendar\`, \`Gcalendar\`, \`Github\`, \`MS Teams\`.

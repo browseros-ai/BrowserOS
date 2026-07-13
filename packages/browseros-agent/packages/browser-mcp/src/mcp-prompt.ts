@@ -1,4 +1,4 @@
-export const BROWSER_MCP_INSTRUCTIONS = `BrowserOS browser automation.
+export const BROWSER_MCP_INSTRUCTIONS = `Request Browser browser automation.
 
 Observe -> Act -> Verify:
 - Start with tabs action="list" to find page ids when needed. The list is grouped by ownership (your tabs / user's tabs / other agents' tabs); you may only modify your own tabs.

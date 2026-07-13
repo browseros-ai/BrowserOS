@@ -167,7 +167,7 @@ export async function installInto(
       serverName,
     })
   }
-  logger.info('Installed BrowserOS MCP into agent', {
+  logger.info('Installed Request Browser MCP into agent', {
     agent: agentId,
     serverName,
   })
@@ -199,7 +199,7 @@ export async function uninstallFrom(
   for (const serverName of BROWSEROS_SERVER_NAMES) {
     try {
       await mgr.unlink({ serverName, agent: agentId })
-      logger.info('Uninstalled BrowserOS MCP from agent', {
+      logger.info('Uninstalled Request Browser MCP from agent', {
         agent: agentId,
         serverName,
       })
@@ -215,7 +215,7 @@ export async function uninstallFrom(
     return {
       success: false,
       message:
-        'Cannot remove a user-edited entry. Please remove BrowserOS from this agent manually and try again.',
+        'Cannot remove a user-edited entry. Please remove Request Browser from this agent manually and try again.',
     }
   }
   return { success: true }
@@ -254,13 +254,13 @@ export function humaniseInstallError(err: unknown): {
   if (err instanceof ForeignEntryError) {
     return {
       message:
-        "Cannot replace a user-edited entry. Please remove BrowserOS from this agent's config manually and try again.",
+        "Cannot replace a user-edited entry. Please remove Request Browser from this agent's config manually and try again.",
       status: 409,
     }
   }
   if (err instanceof UnsupportedTransportError) {
     return {
-      message: `This agent does not support BrowserOS's MCP transport. ${err.message}`,
+      message: `This agent does not support Request Browser's MCP transport. ${err.message}`,
       status: 400,
     }
   }

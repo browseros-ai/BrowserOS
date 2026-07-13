@@ -285,7 +285,7 @@ describe('acpx runtime context helpers', () => {
       skillNames: ['app-connections', 'browseros', 'memory', 'soul'],
     })
 
-    expect(prompt).toContain('You are BrowserOS')
+    expect(prompt).toContain('You are Request Browser')
     expect(prompt).toContain(
       'AGENT_HOME=/tmp/browseros/agents/harness/agent-1/home',
     )

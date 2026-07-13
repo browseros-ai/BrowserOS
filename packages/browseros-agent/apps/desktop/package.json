@@ -2,7 +2,7 @@
   "name": "@browseros/request-browser-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Request Browser desktop shell with BrowserOS agent features",
+  "description": "Request Browser desktop shell with native AI agent features",
   "type": "module",
   "main": "dist/main.js",
   "scripts": {

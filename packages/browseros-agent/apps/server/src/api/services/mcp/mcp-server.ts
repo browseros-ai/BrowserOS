@@ -32,7 +32,7 @@ export interface McpServiceDeps {
   workspaceConversationId?: string
 }
 
-/** Creates a per-request BrowserOS MCP server with tools for the requested surface. */
+/** Creates a per-request Request Browser MCP server with tools for the requested surface. */
 export function createMcpServer(deps: McpServiceDeps) {
   const selectedServerNames = deps.connectorScope?.selectedServerNames ?? []
   const instructions =
@@ -41,7 +41,7 @@ export function createMcpServer(deps: McpServiceDeps) {
     deps.workspaceConversationId !== 'ephemeral'
       ? `${MCP_INSTRUCTIONS}\n\n## Research Workspace\nCall research_get_session first. Use workspace_create_source for each page, workspace_create_record for verified structured results, and workspace_save_asset for evidence files or screenshots. Update plan steps and call research_update_status only after verifying coverage and source support. Do not store private chain-of-thought.`
       : MCP_INSTRUCTIONS
-  logger.debug('Creating BrowserOS MCP server', {
+  logger.debug('Creating Request Browser MCP server', {
     version: deps.version,
     remoteAgentHarness: Boolean(deps.remoteAgentHarness),
     selectedServerNames,
@@ -52,7 +52,7 @@ export function createMcpServer(deps: McpServiceDeps) {
 
   const server = createBrowserMcpServer({
     name: 'browseros_mcp',
-    title: 'BrowserOS MCP server',
+    title: 'Request Browser MCP server',
     version: deps.version,
     browserSession: deps.browserSession,
     defaultWindowId: deps.defaultWindowId,
@@ -86,7 +86,7 @@ export function createMcpServer(deps: McpServiceDeps) {
   }
 
   deps.klavis?.registerMcpTools(server, deps.connectorScope)
-  logger.debug('BrowserOS MCP server created', {
+  logger.debug('Request Browser MCP server created', {
     remoteAgentHarness: Boolean(deps.remoteAgentHarness),
     selectedServerNames,
     selectedServerCount: selectedServerNames.length,

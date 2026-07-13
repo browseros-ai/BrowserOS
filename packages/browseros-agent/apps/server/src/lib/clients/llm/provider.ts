@@ -96,7 +96,7 @@ function createBedrockModel(config: ResolvedLLMConfig): LanguageModel {
 }
 
 function createBrowserOSModel(config: ResolvedLLMConfig): LanguageModel {
-  if (!config.baseUrl) throw new Error('BrowserOS provider requires baseUrl')
+  if (!config.baseUrl) throw new Error('Request Browser provider requires baseUrl')
   const { baseUrl, apiKey, model, upstreamProvider, browserosId } = config
   const browserosFetch = browserosId
     ? createBrowserOSFetch(browserosId)
@@ -123,7 +123,7 @@ function createBrowserOSModel(config: ResolvedLLMConfig): LanguageModel {
       fetch: browserosFetch,
     })(model)
   }
-  logger.debug('Creating OpenAI-compatible provider for BrowserOS')
+  logger.debug('Creating OpenAI-compatible provider for Request Browser')
   return createOpenAICompatible({
     name: 'browseros',
     baseURL: baseUrl,

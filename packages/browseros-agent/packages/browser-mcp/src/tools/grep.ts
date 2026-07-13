@@ -92,7 +92,7 @@ export const grep = defineTool({
         return textResult(
           [
             wrapUntrusted(inlineText, origin),
-            `Grep output truncated for ${matches.length} match(es). Full matches (${fullMatchesText.length} chars) could not be saved to a BrowserOS output file: ${saveError}`,
+            `Grep output truncated for ${matches.length} match(es). Full matches (${fullMatchesText.length} chars) could not be saved to a Request Browser output file: ${saveError}`,
           ].join('\n\n'),
           {
             page: args.page,

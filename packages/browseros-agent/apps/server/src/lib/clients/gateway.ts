@@ -39,7 +39,7 @@ export async function fetchBrowserOSConfig(
   configUrl: string,
   browserosId?: string,
 ): Promise<BrowserOSConfig> {
-  logger.debug('Fetching BrowserOS config', { configUrl, browserosId })
+  logger.debug('Fetching Request Browser provider config', { configUrl, browserosId })
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -77,14 +77,14 @@ export async function fetchBrowserOSConfig(
     }
 
     const defaultProvider = config.providers.find((p) => p.name === 'default')
-    logger.info('✅ BrowserOS config fetched', {
+  logger.info('✅ Request Browser provider config fetched', {
       providerCount: config.providers.length,
       dailyRateLimit: defaultProvider?.dailyRateLimit,
     })
 
     return config
   } catch (error) {
-    logger.error('❌ Failed to fetch BrowserOS config', {
+  logger.error('❌ Failed to fetch Request Browser provider config', {
       configUrl,
       error: error instanceof Error ? error.message : String(error),
     })

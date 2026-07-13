@@ -10,6 +10,7 @@ import {
   Database,
   Download,
   Globe2,
+  Maximize2,
   PanelRight,
   LoaderCircle,
   LockKeyhole,
@@ -27,7 +28,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { AgentProgress, AppSurface, BrowserProfileSummary, BrowserState, BrowserTabState, DesktopPreferences } from '../shared/desktop-api'
+import type { AgentProgress, AppSurface, AssistantLayout, BrowserProfileSummary, BrowserState, BrowserTabState, DesktopPreferences } from '../shared/desktop-api'
 import './styles.css'
 
 type ChatMessage = {
@@ -41,6 +42,7 @@ const newConversationId = () => crypto.randomUUID()
 function Shell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [assistantOpen, setAssistantOpen] = useState(true)
+  const [assistantLayout, setAssistantLayout] = useState<AssistantLayout>({ width: 420, mode: 'docked' })
   const [activeView, setActiveView] = useState<'agent' | 'workspace'>('agent')
   const [surface, setSurface] = useState<AppSurface>('browser')
   const [address, setAddress] = useState('https://www.google.com')
@@ -94,6 +96,7 @@ function Shell() {
     const unsubscribeSurface = window.requestBrowser.app.onSurface(setSurface)
     const unsubscribeAssistant = window.requestBrowser.app.onAssistantVisible(setAssistantOpen)
     const unsubscribePreferences = window.requestBrowser.app.onPreferences(setPreferences)
+    const unsubscribeAssistantLayout = window.requestBrowser.app.onAssistantLayout(setAssistantLayout)
     const unsubscribeAgentProgress = window.requestBrowser.agent.onProgress(setAgentActivity)
     let cancelled = false
     const checkServer = () => {
@@ -112,8 +115,13 @@ function Shell() {
       unsubscribeSurface()
       unsubscribeAssistant()
       unsubscribePreferences()
+      unsubscribeAssistantLayout()
       unsubscribeAgentProgress()
     }
+  }, [])
+
+  useEffect(() => {
+    window.requestBrowser.app.getAssistantLayout().then(setAssistantLayout).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -132,7 +140,7 @@ function Shell() {
       const appSurface = surface !== 'browser'
       const top = appSurface ? 56 : 96
       const left = appSurface ? 0 : sidebarCollapsed ? 56 : 256
-      const right = assistantOpen ? 382 : 0
+      const right = assistantOpen && assistantLayout.mode === 'docked' ? assistantLayout.width : 0
       window.requestBrowser.browser.setBounds({
         x: left,
         y: top,
@@ -149,7 +157,7 @@ function Shell() {
       observer.disconnect()
       window.removeEventListener('resize', updateBounds)
     }
-  }, [assistantOpen, sidebarCollapsed, surface])
+  }, [assistantOpen, assistantLayout, sidebarCollapsed, surface])
 
   const navigate = async () => {
     if (!address.trim()) return
@@ -257,6 +265,7 @@ function Shell() {
               </button>
               <span>{surface === 'connect-apps' ? 'Connect Apps' : surface === 'scheduled' ? 'Scheduled Tasks' : surface[0].toUpperCase() + surface.slice(1)}</span>
               {preferences.showLlmChat && <button className={`icon-button ${assistantOpen ? 'selected' : ''}`} title="Toggle assistant" onClick={() => setAssistantOpen((value) => !value)}><PanelRight size={16} /></button>}
+              {preferences.showLlmChat && <button className={`icon-button ${assistantLayout.mode === 'floating' ? 'selected' : ''}`} title={assistantLayout.mode === 'floating' ? 'Dock AI panel' : 'Float AI panel'} onClick={() => { const mode = assistantLayout.mode === 'floating' ? 'docked' : 'floating'; setAssistantLayout((value) => ({ ...value, mode })); void window.requestBrowser.app.setAssistantMode(mode) }}><Maximize2 size={15} /></button>}
             </div>
           ) : <>
           <div className="tab-strip" aria-label="Browser tabs">
@@ -285,6 +294,7 @@ function Shell() {
                 <button className={`provider-chip ${preferences.showToolbarLabels ? '' : 'compact'}`} title="Choose AI provider" aria-label="Choose AI provider" onClick={() => { setActiveView('agent'); setAssistantOpen(true) }}><span className="provider-dot" />{preferences.showToolbarLabels && <><span>OpenCode</span><ChevronDown size={13} /></>}</button>
               )}
               {preferences.showLlmChat && <button className={`icon-button ${assistantOpen ? 'selected' : ''}`} title="Toggle assistant" onClick={() => setAssistantOpen((value) => !value)}><PanelRight size={16} /></button>}
+              {preferences.showLlmChat && <button className={`icon-button ${assistantLayout.mode === 'floating' ? 'selected' : ''}`} title={assistantLayout.mode === 'floating' ? 'Dock AI panel' : 'Float AI panel'} onClick={() => { const mode = assistantLayout.mode === 'floating' ? 'docked' : 'floating'; setAssistantLayout((value) => ({ ...value, mode })); void window.requestBrowser.app.setAssistantMode(mode) }}><Maximize2 size={15} /></button>}
               <button className="icon-button" title="More" onClick={() => void window.requestBrowser.app.showBrowserMenu()}><MoreHorizontal size={17} /></button>
             </div>
           </div>

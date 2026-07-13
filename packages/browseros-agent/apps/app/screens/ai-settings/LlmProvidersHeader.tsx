@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
+import { getProviderDisplayName } from '@/lib/llm-providers/provider-selection'
 import type { HarnessAgent } from '@/modules/agents/agent-harness-types'
 import type { SidepanelChatTargetSelection } from '@/modules/chat/sidepanel-chat-targets'
 import {
@@ -81,7 +82,7 @@ export const LlmProvidersHeader: FC<LlmProvidersHeaderProps> = ({
                         id: provider.id,
                       })}
                     >
-                      {provider.name}
+                      {getProviderDisplayName(provider)}
                     </SelectItem>
                   ))}
                 </SelectGroup>

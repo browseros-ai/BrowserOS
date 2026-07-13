@@ -1,4 +1,5 @@
 import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
+import { getProviderDisplayName } from '@/lib/llm-providers/provider-selection'
 import type {
   HarnessAdapterDescriptor,
   HarnessAgent,
@@ -220,7 +221,7 @@ function toLlmTarget(provider: LlmProviderConfig): SidepanelChatTarget {
   return {
     kind: 'llm',
     id: provider.id,
-    name: provider.name,
+    name: getProviderDisplayName(provider),
     type: provider.type,
     provider,
   }

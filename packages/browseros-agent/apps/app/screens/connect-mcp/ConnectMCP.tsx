@@ -50,7 +50,12 @@ export const ConnectMCP: FC = () => {
   const { trigger: submitApiKeyMutation, isMutating: isSubmittingApiKey } =
     useSubmitApiKey()
 
-  const { data: serversList } = useGetMCPServersList()
+  const {
+    data: serversList,
+    error: serversListError,
+    isLoading: isServersListLoading,
+    mutate: refreshServersList,
+  } = useGetMCPServersList()
 
   const {
     data: userMCPIntegrations,
@@ -93,23 +98,28 @@ export const ConnectMCP: FC = () => {
     name: string
     description: string
   }) => {
+    // Persist the selection immediately. The built-in catalog is local, while
+    // OAuth/API-key provisioning is a separate remote step. A cloud outage
+    // must not make the Add button appear to do nothing or lose the user's
+    // selected app.
+    const localId = Date.now().toString()
+    await addServer({
+      id: localId,
+      displayName: name,
+      type: 'managed',
+      managedServerName: name,
+      managedServerDescription: description,
+    })
     try {
       const response = await addManagedServerMutation({
         serverName: name,
       })
 
       if (!response.apiKeyUrl && !response.oauthUrl) {
-        failedToAddMcp(name, 'No auth URL returned')
+        toast.success(`${name} added to Request Browser`)
         return
       }
 
-      addServer({
-        id: Date.now().toString(),
-        displayName: name,
-        type: 'managed',
-        managedServerName: name,
-        managedServerDescription: description,
-      })
       track(MANAGED_MCP_ADDED_EVENT, { server_name: name })
 
       if (response.apiKeyUrl) {
@@ -119,7 +129,10 @@ export const ConnectMCP: FC = () => {
 
       window.open(response.oauthUrl, '_blank')?.focus()
     } catch (e) {
-      failedToAddMcp(name, e)
+      toast.warning(
+        `${name} was added locally, but account authentication is unavailable. Use Authenticate when the connection service is online.`,
+      )
+      sentry.captureException(e)
     }
   }
 
@@ -335,15 +348,27 @@ export const ConnectMCP: FC = () => {
       )}
 
       <AvailableManagedServers
-        availableServers={availableServers}
+        availableServers={availableServers ?? []}
         onAddServer={addManagedServer}
-        isLoading={false}
+        isLoading={isServersListLoading}
       />
+
+      {serversListError && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm">
+          <span className="text-muted-foreground">
+            Built-in app catalog is unavailable. Custom apps still work; retry to reconnect.
+          </span>
+          <Button variant="outline" size="sm" onClick={() => void refreshServersList()}>
+            Retry
+          </Button>
+        </div>
+      )}
 
       <AddManagedMCPDialog
         open={addingManagedMcp}
         onOpenChange={setAddingManagedMcp}
         serversList={availableServers}
+        isLoading={isServersListLoading}
         unauthenticatedServers={unauthenticatedServers}
         onAddServer={addManagedServer}
         onAuthenticate={openAuthUrlForMCP}

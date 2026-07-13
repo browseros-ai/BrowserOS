@@ -79,7 +79,7 @@ const inputSchema = {
     .string()
     .min(1)
     .describe(
-      'The display name of the toolkit to connect, e.g. "Linear", "Gmail", "Slack". Match the casing of the BrowserOS catalog (proper-case, space-separated).',
+      'The display name of the toolkit to connect, e.g. "Linear", "Gmail", "Slack". Match the casing of the Request Browser catalog (proper-case, space-separated).',
     ),
   reason: z
     .string()

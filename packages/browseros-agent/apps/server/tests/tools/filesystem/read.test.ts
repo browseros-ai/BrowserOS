@@ -192,7 +192,7 @@ describe('filesystem_read', () => {
 
     const result = await exec({ path: statePath })
     expect(result.isError).toBe(true)
-    expect(result.text).toContain('outside BrowserOS tool output')
+    expect(result.text).toContain('outside Request Browser tool output')
   })
 
   it('reads BrowserOS-generated output files without a workspace', async () => {
@@ -228,7 +228,7 @@ describe('filesystem_read', () => {
 
     expect(result.isError).toBe(true)
     expect(result.text).toContain('No workspace selected')
-    expect(result.text).toContain('BrowserOS-generated tool output')
+    expect(result.text).toContain('Request Browser-generated tool output')
   })
 
   it('rejects BrowserOS state paths outside generated outputs without a workspace', async () => {
@@ -240,7 +240,7 @@ describe('filesystem_read', () => {
     const result = await noWorkspaceExec({ path: statePath })
 
     expect(result.isError).toBe(true)
-    expect(result.text).toContain('outside BrowserOS tool output')
+    expect(result.text).toContain('outside Request Browser tool output')
   })
 
   it('preserves browser trust markers when reading saved page content without a workspace', async () => {

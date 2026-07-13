@@ -1,6 +1,7 @@
 import { KeyRound, Trash2 } from 'lucide-react'
 import type { FC } from 'react'
 import { Button } from '@/components/ui/button'
+import { getProviderDisplayName } from '@/lib/llm-providers/provider-selection'
 import { ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
 
@@ -35,7 +36,9 @@ export const IncompleteProviderCard: FC<IncompleteProviderCardProps> = ({
       </div>
       <div className="min-w-0 flex-1">
         <div className="mb-1 flex items-center gap-2">
-          <span className="font-semibold">{provider.name}</span>
+          <span className="font-semibold">
+            {getProviderDisplayName(provider)}
+          </span>
         </div>
         <p className="truncate text-muted-foreground text-sm">
           {provider.modelId}

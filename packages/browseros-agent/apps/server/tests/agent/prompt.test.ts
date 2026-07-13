@@ -217,7 +217,7 @@ describe('workspace gating (P11)', () => {
       })
       expect(prompt).toContain('### Browser Output Files')
       expect(prompt).toContain('filesystem_read')
-      expect(prompt).toContain('BrowserOS-generated output files')
+      expect(prompt).toContain('Request Browser-generated output files')
       expect(prompt).not.toContain('filesystem_write')
     })
 

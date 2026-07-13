@@ -34,7 +34,7 @@ interface ParsedCliArgs {
   configPath: string
 }
 
-/** Loads BrowserOS server config from the sidecar JSON file passed by Chromium. */
+/** Loads Request Browser server config from the sidecar JSON file passed by Electron. */
 export function loadServerConfig(
   argv: string[] = process.argv,
 ): ConfigResult<ServerConfig> {
@@ -58,8 +58,8 @@ function parseCliArgs(argv: string[]): ConfigResult<ParsedCliArgs> {
 
   try {
     program
-      .name('browseros-server')
-      .description('BrowserOS Unified Server - MCP + Agent')
+      .name('request-browser-server')
+      .description('Request Browser Unified Server - MCP + Agent')
       .version(VERSION)
       .option('--config <path>', 'Path to sidecar JSON configuration file')
       .configureOutput({ writeErr: () => {} })

@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/collapsible'
 import { Switch } from '@/components/ui/switch'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import { getProviderDisplayName } from '@/lib/llm-providers/provider-selection'
 import { providersStorage } from '@/lib/llm-providers/storage'
 import type { ProviderType } from '@/lib/llm-providers/types'
 import { useScheduledJobRuns } from '@/lib/schedules/scheduleStorage'
@@ -145,7 +146,7 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
                   ) : (
                     <ProviderIcon type={providerInfo.type} size={12} />
                   )}
-                  {providerInfo.name}
+                  {getProviderDisplayName(providerInfo)}
                 </span>
               </>
             )}

@@ -87,7 +87,11 @@ const primarySettingsSections: NavSection[] = [
 ]
 
 const helpItems: NavItem[] = [
-  { name: 'Docs', href: 'https://docs.browseros.com/', icon: BookOpen },
+  {
+    name: 'Docs',
+    href: 'https://github.com/kreates1994/BrowserOS#readme',
+    icon: BookOpen,
+  },
   { name: 'Features', to: '/onboarding/features', icon: Compass },
   { name: 'Revisit Onboarding', to: '/onboarding', icon: RotateCcw },
 ]

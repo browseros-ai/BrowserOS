@@ -14,6 +14,7 @@ import {
   TaskItem,
   TaskTrigger,
 } from '@/components/ai-elements/task'
+import { buildToolLabel } from '@/lib/tool-labels'
 import type {
   ToolInvocationInfo,
   ToolInvocationState,
@@ -62,7 +63,7 @@ export const ToolBatch: FC<ToolBatchProps> = ({
           <div key={tool.toolCallId}>
             <TaskItem className="flex items-center gap-2">
               <ToolStatusIcon state={tool.state} />
-              <span className="flex-1">{formatToolName(tool.toolName)}</span>
+              <span className="flex-1">{formatToolName(tool.toolName, tool.input)}</span>
             </TaskItem>
           </div>
         ))}
@@ -71,11 +72,9 @@ export const ToolBatch: FC<ToolBatchProps> = ({
   )
 }
 
-const formatToolName = (name: string) => {
-  return name
-    ?.replace(/_/g, ' ')
-    ?.replace(/([a-z])([A-Z])/g, '$1 $2')
-    ?.replace(/^./, (s) => s.toUpperCase())
+const formatToolName = (name: string, input: Record<string, unknown>) => {
+  const { label, subject } = buildToolLabel(name, input)
+  return subject ? `${label} ${subject}` : label
 }
 
 const isToolCompleted = (state: ToolInvocationState) =>

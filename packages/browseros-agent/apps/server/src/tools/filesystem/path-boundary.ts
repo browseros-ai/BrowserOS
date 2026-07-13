@@ -39,7 +39,7 @@ function assertRelativeWorkspaceInput(inputPath: string): void {
 
 function assertAbsoluteBrowserosOutputInput(inputPath: string): void {
   if (!isAbsoluteInput(inputPath)) {
-    throw new Error('Path must be an absolute BrowserOS tool output path.')
+    throw new Error('Path must be an absolute Request Browser tool output path.')
   }
 }
 
@@ -127,7 +127,7 @@ export async function resolveWorkspaceWritePath(
   return resolved
 }
 
-/** Resolves a BrowserOS-generated output file without exposing sibling app state. */
+/** Resolves a Request Browser-generated output file without exposing sibling app state. */
 export async function resolveBrowserToolOutputPath(
   inputPath: string,
 ): Promise<string> {
@@ -136,7 +136,7 @@ export async function resolveBrowserToolOutputPath(
   const candidate = resolve(inputPath)
   const canonical = await realpath(candidate)
   if (!isPathInside(outputRoot, canonical)) {
-    throw new Error('Path is outside BrowserOS tool output.')
+    throw new Error('Path is outside Request Browser tool output.')
   }
   return canonical
 }

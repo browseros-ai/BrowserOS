@@ -841,7 +841,7 @@ async function applyRuntimeControls(
   if (input.agent.modelId && input.agent.modelId !== 'default') {
     events.push({
       type: 'status',
-      text: 'Requested model is stored on the BrowserOS agent, but this acpx/runtime version does not expose public model control. Using adapter default.',
+      text: 'Requested model is stored on the Request Browser agent, but this acpx/runtime version does not expose public model control. Using adapter default.',
     })
   }
   if (!input.agent.reasoningEffort) return events

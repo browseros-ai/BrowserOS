@@ -38,7 +38,7 @@ function parseErrorMessage(
   if (message.includes('Failed to fetch') || message.includes('fetch failed')) {
     return {
       text: 'Unable to connect to Request Browser agent. Follow the instructions below.',
-      url: 'https://docs.browseros.com/troubleshooting/connection-issues',
+      url: 'https://github.com/kreates1994/BrowserOS#readme',
       isConnectionError: true,
     }
   }
@@ -65,7 +65,7 @@ function parseErrorMessage(
   ) {
     return {
       text: 'Add your own API key for unlimited usage.',
-      url: 'https://dub.sh/browseros-usage-limit',
+      url: 'https://github.com/kreates1994/BrowserOS#readme',
       isRateLimit: true,
     }
   }

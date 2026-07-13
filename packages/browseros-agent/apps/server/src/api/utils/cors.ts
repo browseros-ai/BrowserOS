@@ -13,6 +13,7 @@ const STATIC_ALLOWED_ORIGINS = new Set<string>([
   'chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk',
 ])
 const EXTENSION_PROTOCOLS = new Set(['chrome-extension:', 'moz-extension:'])
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
 
 let cachedAllowedOrigins: Set<string> | null = null
 
@@ -71,7 +72,21 @@ export function resetAllowedOriginsForTesting(): void {
 }
 
 export function isAllowedOrigin(origin: string): boolean {
-  return getAllowedOrigins().has(origin)
+  if (getAllowedOrigins().has(origin)) return true
+
+  // Electron serves the Request Browser UI from a fresh loopback port on
+  // every launch. Keep the normal allowlist strict everywhere else, while
+  // allowing only local HTTP origins in the Electron sidecar mode.
+  if (process.env.BROWSEROS_CDP_MODE !== 'electron') return false
+  try {
+    const url = new URL(origin)
+    return (
+      (url.protocol === 'http:' || url.protocol === 'https:') &&
+      LOOPBACK_HOSTS.has(url.hostname)
+    )
+  } catch {
+    return false
+  }
 }
 
 export const defaultCorsConfig: CorsOptions = {
@@ -79,7 +94,7 @@ export const defaultCorsConfig: CorsOptions = {
     if (origin && isAllowedOrigin(origin)) return origin
     return null
   },
-  allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization', 'Accept'],
   credentials: true,
 }

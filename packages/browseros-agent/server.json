@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
-  "name": "BrowserOS MCP Server",
-  "description": "Model Context Protocol server exposing Chromium browser automation capabilities through BrowserOS",
+  "name": "Request Browser MCP Server",
+  "description": "Model Context Protocol server exposing Chromium browser automation capabilities through Request Browser",
   "repository": {
-    "url": "https://github.com/browseros/browseros-server",
+    "url": "https://github.com/kreates1994/BrowserOS",
     "source": "github"
   },
   "version": "0.0.1",

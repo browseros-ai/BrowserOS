@@ -27,6 +27,7 @@ import { GetProfileIdByUserIdDocument } from '@/lib/conversations/graphql/upload
 import { getQueryKeyFromDocument } from '@/lib/graphql/getQueryKeyFromDocument'
 import { CHATGPT_PROVIDER_DISPLAY_NAME } from '@/lib/llm-providers/provider-display-names'
 import type { ProviderTemplate } from '@/lib/llm-providers/providerTemplates'
+import { getProviderDisplayName } from '@/lib/llm-providers/provider-selection'
 import { testProvider } from '@/lib/llm-providers/testProvider'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
@@ -461,7 +462,11 @@ export const BrowserOsAiPane: FC = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Provider</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete "{providerToDelete?.name}"? This
+              Are you sure you want to delete "
+              {providerToDelete
+                ? getProviderDisplayName(providerToDelete)
+                : ''}
+              "? This
               action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>

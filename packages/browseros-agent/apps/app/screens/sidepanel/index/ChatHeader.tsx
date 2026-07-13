@@ -8,6 +8,7 @@ import { ThemeToggle } from '@/components/elements/theme-toggle'
 import { Feature } from '@/lib/browseros/capabilities'
 import { productRepositoryUrl } from '@/lib/constants/productUrls'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import { getProviderDisplayName } from '@/lib/llm-providers/provider-selection'
 import type { ProviderType } from '@/lib/llm-providers/types'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { useCredits } from '@/modules/credits/credits.hooks'
@@ -53,9 +54,7 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
   const location = useLocation()
   const navigate = useNavigate()
   const isHistoryPage = location.pathname === '/history'
-  const providerLabel = selectedProvider.type.startsWith('opencode') || selectedProvider.name === 'OpenCode'
-    ? 'Request Browser'
-    : selectedProvider.name
+  const providerLabel = getProviderDisplayName(selectedProvider)
 
   const handleNewConversationFromHistory = () => {
     onNewConversation()
@@ -82,8 +81,8 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
           <button
             type="button"
             className="group relative inline-flex min-w-0 max-w-[min(15rem,55vw)] cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
-            title={`Change AI provider. Current provider: ${selectedProvider.name}`}
-            aria-label={`Change AI provider. Current provider: ${selectedProvider.name}`}
+            title={`Change AI provider. Current provider: ${providerLabel}`}
+            aria-label={`Change AI provider. Current provider: ${providerLabel}`}
           >
             {selectedProvider.kind === 'acp' ? (
               <Bot className="h-[18px] w-[18px]" />

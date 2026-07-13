@@ -15,6 +15,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import { getProviderDisplayName } from '@/lib/llm-providers/provider-selection'
 import type { ProviderType } from '@/lib/llm-providers/types'
 import { openDesktopSurface } from '@/lib/browseros/desktop-navigation'
 import { cn } from '@/lib/utils'
@@ -71,7 +72,7 @@ export const ChatProviderSelector: FC<
                       </span>
                       <span className="min-w-0 flex-1 text-left">
                         <span className="block truncate text-sm">
-                          {provider.name}
+                          {getProviderDisplayName(provider)}
                         </span>
                         {subtitle && (
                           <span className="block truncate text-muted-foreground text-xs">

@@ -31,6 +31,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { type StagedAttachment, stageAttachments } from '@/lib/attachments'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import { getProviderDisplayName } from '@/lib/llm-providers/provider-selection'
 import type { ProviderType } from '@/lib/llm-providers/types'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import { cn } from '@/lib/utils'
@@ -253,7 +254,7 @@ function CalmContextControls({
             >
               <TargetPillIcon provider={selectedProvider} />
               <span className="truncate font-medium font-mono text-[11.5px] tracking-[-0.01em]">
-                {selectedProvider.name}
+                {getProviderDisplayName(selectedProvider)}
               </span>
               <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
             </button>

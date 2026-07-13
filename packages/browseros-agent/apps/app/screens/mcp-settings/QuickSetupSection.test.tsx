@@ -48,7 +48,7 @@ describe('QuickSetupSection', () => {
     const html = render()
 
     expect(html).toContain(
-      'claude mcp add --transport http browseros http://127.0.0.1:9200/mcp --scope user',
+      'claude mcp add --transport http request-browser http://127.0.0.1:9200/mcp --scope user',
     )
   })
 

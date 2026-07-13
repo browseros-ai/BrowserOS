@@ -363,7 +363,7 @@ function createBedrockFactory(
 function createBrowserOSFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
-  if (!config.baseUrl) throw new Error('BrowserOS provider requires baseUrl')
+  if (!config.baseUrl) throw new Error('Request Browser provider requires baseUrl')
   const { baseUrl, apiKey, upstreamProvider, browserosId } = config
   const browserosFetch = browserosId
     ? createBrowserOSFetch(browserosId)
@@ -390,7 +390,7 @@ function createBrowserOSFactory(
       fetch: browserosFetch,
     })
   }
-  logger.debug('Creating OpenAI-compatible provider for BrowserOS')
+  logger.debug('Creating OpenAI-compatible provider for Request Browser')
   return createOpenAICompatible({
     name: 'browseros',
     baseURL: baseUrl,

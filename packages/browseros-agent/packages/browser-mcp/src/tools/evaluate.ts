@@ -79,7 +79,7 @@ export const evaluate = defineTool({
         return textResult(
           [
             wrapUntrusted(excerpt, origin),
-            `Evaluate result truncated at ${TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS} chars. Full result (${text.length} chars) could not be saved to a BrowserOS output file: ${saveError}`,
+            `Evaluate result truncated at ${TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS} chars. Full result (${text.length} chars) could not be saved to a Request Browser output file: ${saveError}`,
           ].join('\n\n'),
           {
             page: args.page,

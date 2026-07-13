@@ -11,7 +11,9 @@
 
 const VERB_OVERRIDES: Record<string, string> = {
   // Navigation
+  navigate: 'Navigated to',
   navigate_page: 'Navigated to',
+  browseros_navigate: 'Navigated to',
   new_page: 'Opened tab',
   new_hidden_page: 'Opened tab',
   show_page: 'Showed tab',
@@ -156,6 +158,13 @@ type SubjectExtractor = (input: Record<string, unknown>) => string | undefined
 
 const SUBJECT_EXTRACTORS: Record<string, SubjectExtractor> = {
   // URL-bearing tools
+  navigate: (i) => {
+    const action = asString(i.action)
+    if (action === 'back') return 'back'
+    if (action === 'forward') return 'forward'
+    if (action === 'reload') return 'reload'
+    return formatUrl(i.url)
+  },
   new_page: (i) => formatUrl(i.url),
   new_hidden_page: (i) => formatUrl(i.url),
   navigate_page: (i) => {
@@ -263,11 +272,27 @@ export interface ToolLabelResult {
 }
 
 /**
- * Strip MCP namespace prefixes (e.g. "browseros__", "mcp_") to find the
- * canonical tool name used in the override maps.
+ * Strip MCP namespace prefixes (including the normalized ACP form) to find
+ * the canonical tool name used in the override maps. The wire names remain
+ * unchanged; this is only a presentation concern for the activity trace.
  */
 function canonicalName(rawName: string): string {
-  return rawName.replace(/^browseros__/, '').replace(/^mcp_/, '')
+  let name = rawName.trim().toLowerCase()
+
+  // ACP providers may emit any of these equivalent forms:
+  // mcp.browseros.navigate, mcp__browseros__navigate,
+  // mcp_browseros_navigate, or browseros.navigate.
+  for (let pass = 0; pass < 3; pass += 1) {
+    const withoutMcp = name.replace(/^mcp(?:[._:]|__|_)/, '')
+    const withoutBrowserNamespace = withoutMcp.replace(
+      /^browseros(?:[._:]|__|_)/,
+      '',
+    )
+    if (withoutBrowserNamespace === name) break
+    name = withoutBrowserNamespace
+  }
+
+  return name
 }
 
 /**

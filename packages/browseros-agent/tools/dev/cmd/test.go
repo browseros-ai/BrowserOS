@@ -138,7 +138,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 	}
 	proc.LogMsg(proc.TagServer, "Server ready")
 
-	proc.LogMsg(proc.TagBrowser, "Starting BrowserOS...")
+	proc.LogMsg(proc.TagBrowser, "Starting Request Browser...")
 	procs = append(procs, proc.StartManaged(ctx, &wg, proc.ProcConfig{
 		Tag:     proc.TagBrowser,
 		Dir:     root,

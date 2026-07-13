@@ -21,7 +21,7 @@ export interface MCPServerHeaderProps {
   onServerRestart?: () => void
 }
 
-const DOCS_URL = 'https://docs.browseros.com/features/use-with-claude-code'
+const DOCS_URL = 'https://github.com/kreates1994/BrowserOS#readme'
 
 export const MCPServerHeader: FC<MCPServerHeaderProps> = ({
   serverUrl,

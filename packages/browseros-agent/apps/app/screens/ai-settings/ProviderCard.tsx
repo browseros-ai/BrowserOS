@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { canTestProvider } from '@/lib/llm-providers/provider-runtime'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import { getProviderDisplayName } from '@/lib/llm-providers/provider-selection'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { cn } from '@/lib/utils'
 
@@ -68,7 +69,7 @@ export const ProviderCard: FC<ProviderCardProps> = ({
       </div>
       <div className="min-w-0 flex-1">
         <div className="mb-1 flex items-center gap-2">
-          <span className="font-semibold">{provider.name}</span>
+          <span className="font-semibold">{getProviderDisplayName(provider)}</span>
           {isSelected && (
             <Badge
               variant="secondary"
@@ -83,7 +84,7 @@ export const ProviderCard: FC<ProviderCardProps> = ({
             <>
               Request Browser-hosted model with strict rate limits.{' '}
               <a
-                href="https://docs.browseros.com/features/bring-your-own-llm"
+                href="https://github.com/kreates1994/BrowserOS#readme"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="underline hover:text-foreground"

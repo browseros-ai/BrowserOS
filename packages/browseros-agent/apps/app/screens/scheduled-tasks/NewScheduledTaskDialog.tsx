@@ -42,6 +42,7 @@ import {
   resolveChatProvider,
 } from '@/lib/llm-providers/provider-runtime'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import { getProviderDisplayName } from '@/lib/llm-providers/provider-selection'
 import {
   defaultProviderIdStorage,
   providersStorage,
@@ -381,7 +382,7 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
                           />
                         )}
                       </span>
-                      {resolvedProvider.name}
+                      {getProviderDisplayName(resolvedProvider)}
                     </span>
                     <ChevronDown className="h-4 w-4 opacity-50" />
                   </Button>

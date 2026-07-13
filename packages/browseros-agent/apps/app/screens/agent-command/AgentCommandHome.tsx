@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router'
 import type { Provider } from '@/components/chat/chatComponentTypes'
 import { Feature } from '@/lib/browseros/capabilities'
 import { createBrowserOSAction } from '@/lib/chat-actions/types'
+import { getProviderDisplayName } from '@/lib/llm-providers/provider-selection'
 import { openSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanelWithSearch'
 import {
   useAgentAdapters,
@@ -161,7 +162,7 @@ export const AgentCommandHome: FC = () => {
               attachmentsEnabled={true}
               placeholder={
                 selectedProvider
-                  ? `Ask ${selectedProvider.name} to handle a task...`
+                  ? `Ask ${getProviderDisplayName(selectedProvider)} to handle a task...`
                   : 'Loading providers...'
               }
               onOpenVoiceMode={() => {

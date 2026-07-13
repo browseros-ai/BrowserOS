@@ -3,7 +3,7 @@
  * @license
  * Copyright 2025 BrowserOS
  *
- * BrowserOS Server - Entry Point
+ * Request Browser Server - Entry Point
  */
 
 if (typeof Bun === 'undefined') {

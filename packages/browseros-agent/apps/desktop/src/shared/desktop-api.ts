@@ -18,6 +18,10 @@ export type DesktopPreferences = {
   showLlmChat: boolean
   showToolbarLabels: boolean
 }
+export type AssistantLayout = {
+  width: number
+  mode: 'docked' | 'floating'
+}
 
 export type BrowserBounds = {
   x: number
@@ -75,10 +79,14 @@ export interface DesktopApi {
     onToggleSidebar(listener: () => void): () => void
     getActiveProfile(): Promise<BrowserProfileSummary>
     getPreferences(): Promise<DesktopPreferences>
+    getAssistantLayout(): Promise<AssistantLayout>
+    setAssistantWidth(width: number): Promise<{ width: number }>
+    setAssistantMode(mode: AssistantLayout['mode']): Promise<{ mode: AssistantLayout['mode'] }>
     onProfile(listener: (profile: BrowserProfileSummary) => void): () => void
     onSurface(listener: (surface: AppSurface) => void): () => void
     onAssistantVisible(listener: (visible: boolean) => void): () => void
     onLog(listener: (line: string) => void): () => void
     onPreferences(listener: (preferences: DesktopPreferences) => void): () => void
+    onAssistantLayout(listener: (layout: AssistantLayout) => void): () => void
   }
 }

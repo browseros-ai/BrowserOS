@@ -38,7 +38,7 @@ export const SidebarUserFooter: FC<SidebarUserFooterProps> = ({
 
   const aboutLink = (
     <a
-      href="https://docs.browseros.com/"
+      href="https://github.com/kreates1994/BrowserOS#readme"
       target="_blank"
       rel="noopener noreferrer"
       className="flex h-9 items-center gap-2 overflow-hidden whitespace-nowrap rounded-md px-3 font-medium text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"

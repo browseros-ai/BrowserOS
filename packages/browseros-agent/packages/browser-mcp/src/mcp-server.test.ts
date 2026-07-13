@@ -40,7 +40,7 @@ describe('createBrowserMcpServer', () => {
     const server = inspect(
       createBrowserMcpServer({
         name: 'browseros_mcp',
-        title: 'BrowserOS MCP server',
+        title: 'Request Browser MCP server',
         version: '1.2.3',
         browserSession: { pages: {} } as unknown as BrowserSession,
       }),
@@ -71,7 +71,7 @@ describe('createBrowserMcpServer', () => {
     const server = inspect(
       createBrowserMcpServer({
         name: 'browseros_mcp',
-        title: 'BrowserOS MCP server',
+        title: 'Request Browser MCP server',
         version: '1.2.3',
         browserSession: {
           pages: {
@@ -144,7 +144,7 @@ describe('createBrowserMcpServer', () => {
     const server = inspect(
       createBrowserMcpServer({
         name: 'browseros_mcp',
-        title: 'BrowserOS MCP server',
+        title: 'Request Browser MCP server',
         version: '1.2.3',
         browserSession: {
           pages: {
@@ -175,7 +175,7 @@ describe('createBrowserMcpServer', () => {
     const server = inspect(
       createBrowserMcpServer({
         name: 'browseros_mcp',
-        title: 'BrowserOS MCP server',
+        title: 'Request Browser MCP server',
         version: '1.2.3',
         browserSession: {
           pages: {

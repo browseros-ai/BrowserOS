@@ -113,11 +113,11 @@ async function resolveBrowserOSConfig(
   const configUrl = INLINED_ENV.BROWSEROS_CONFIG_URL
   if (!configUrl) {
     throw new Error(
-      'BROWSEROS_CONFIG_URL environment variable is required for BrowserOS provider',
+      'BROWSEROS_CONFIG_URL environment variable is required for Request Browser provider',
     )
   }
 
-  logger.debug('Resolving BROWSEROS config', { configUrl, browserosId })
+  logger.debug('Resolving Request Browser provider config', { configUrl, browserosId })
 
   const browserosConfig = await fetchBrowserOSConfig(configUrl, browserosId)
   const llmConfig = getLLMConfigFromProvider(browserosConfig, 'default')

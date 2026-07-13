@@ -5,7 +5,7 @@
  *
  * Persistent WebSocket bridge to the agent-control-worker, plus the
  * dispatch logic that routes worker-originated `rpc.request` frames to
- * the laptop's local BrowserOS MCP server.
+ * the laptop's local Request Browser MCP server.
  *
  * The class is shape-aware of three invariants:
  *  1. At most one OPEN socket per process. Concurrent `ensureOpen()`

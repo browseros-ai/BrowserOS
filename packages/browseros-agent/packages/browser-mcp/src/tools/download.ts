@@ -10,7 +10,7 @@ import { recordBrowserOutputFile } from './output-file'
 export const download = defineTool({
   name: 'download',
   description:
-    'Click an element (by ref from the last snapshot) to trigger a file download, and save it to a BrowserOS output file. Returns the saved path and filename.',
+    'Click an element (by ref from the last snapshot) to trigger a file download, and save it to a Request Browser output file. Returns the saved path and filename.',
   input: z.object({
     page: z.number().int().describe('Page id from `tabs`.'),
     ref: z

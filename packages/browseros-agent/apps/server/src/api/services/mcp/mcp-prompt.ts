@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-export const MCP_INSTRUCTIONS = `BrowserOS MCP Server — compact browser automation and 40+ external service integrations.
+export const MCP_INSTRUCTIONS = `Request Browser MCP Server — compact browser automation and 40+ external service integrations.
 
 ## Browser Automation
 

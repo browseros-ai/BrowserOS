@@ -1,4 +1,4 @@
-import { KeyRound, Plus, Search } from 'lucide-react'
+import { KeyRound, Loader2, Plus, Search } from 'lucide-react'
 import { type FC, useState } from 'react'
 import { McpServerIcon } from '@/components/mcp/McpServerIcon'
 import { Button } from '@/components/ui/button'
@@ -20,6 +20,7 @@ export interface AddManagedMCPDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   serversList?: { name: string; description: string }[]
+  isLoading?: boolean
   unauthenticatedServers: UnauthenticatedServer[]
   onAddServer: (args: { name: string; description: string }) => void
   onAuthenticate: (serverName: string) => void
@@ -29,6 +30,7 @@ export const AddManagedMCPDialog: FC<AddManagedMCPDialogProps> = ({
   open,
   onOpenChange,
   serversList,
+  isLoading = false,
   unauthenticatedServers,
   onAddServer,
   onAuthenticate,
@@ -148,9 +150,16 @@ export const AddManagedMCPDialog: FC<AddManagedMCPDialogProps> = ({
             </div>
           )}
 
-          {!hasResults && (
+          {isLoading && (
+            <div className="flex items-center justify-center gap-2 py-8 text-muted-foreground text-sm">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading available apps…
+            </div>
+          )}
+
+          {!isLoading && !hasResults && (
             <p className="py-6 text-center text-muted-foreground text-sm">
-              No apps found
+              No apps found. You can still add a custom app.
             </p>
           )}
         </div>

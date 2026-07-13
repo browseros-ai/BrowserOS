@@ -12,7 +12,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const DEFAULT_SERVER_PORT = 9105
 const CDP_PORT = 9225
 const DEFAULT_URL = 'https://www.google.com'
-const AGENT_PANEL_WIDTH = 392
+const DEFAULT_AGENT_PANEL_WIDTH = 420
+const MIN_AGENT_PANEL_WIDTH = 340
+const MAX_AGENT_PANEL_WIDTH = 600
+type AssistantMode = 'docked' | 'floating'
 
 let mainWindow: BrowserWindow | null = null
 type BrowserTab = {
@@ -64,6 +67,8 @@ let agentUiExtensionBaseUrl = ''
 let agentExtensionRoot = ''
 const profileExtensionLoads = new Map<string, Promise<void>>()
 let assistantVisible = true
+let assistantWidth = DEFAULT_AGENT_PANEL_WIDTH
+let assistantMode: AssistantMode = 'docked'
 let serverProcess: ChildProcessWithoutNullStreams | null = null
 let serverReady = false
 let serverPort = DEFAULT_SERVER_PORT
@@ -232,7 +237,7 @@ async function loadAgentExtension(): Promise<void> {
       emitLog('Request Browser manifest was not found; using the desktop fallback manifest.')
     }
 
-    // Keep the BrowserOS-generated declarative surface (options, action,
+    // Keep the legacy generated declarative surface (options, action,
     // side-panel, new-tab route, permissions and content scripts). The
     // original service worker is intentionally omitted: it assumes Chrome's
     // native BrowserOS APIs and would crash inside Electron before the
@@ -381,8 +386,22 @@ async function navigate(input: string): Promise<BrowserState> {
   const tab = browserTabs.get(activeTabId)
   if (!tab) return getBrowserState()
   const url = normalizeNavigationInput(input)
-  await tab.view.webContents.loadURL(url)
-  return getBrowserState()
+  // Do not make the omnibox wait for a full page-load promise. Modern sites
+  // intentionally keep requests open, while the visible document is already
+  // usable. Loading state and the final URL are broadcast by the WebContents
+  // navigation listeners below.
+  tab.state = {
+    ...tab.state,
+    url,
+    loading: true,
+  }
+  broadcastBrowserState()
+  void tab.view.webContents.loadURL(url).catch((error) => {
+    tab.state = { ...tab.state, loading: false }
+    broadcastBrowserState()
+    emitLog(`Navigation failed for tab ${tab.id} (${String(error)})`)
+  })
+  return { ...tab.state }
 }
 
 async function importBookmarksFromHtml(): Promise<void> {
@@ -641,6 +660,14 @@ async function loadDesktopState(): Promise<void> {
     browserPrefs.set('browseros.server.mcp_port', serverPort)
     browserPrefs.set('browseros.server.proxy_port', serverPort)
     assistantVisible = browserPrefs.get('browseros.side_panel.enabled') !== false && browserPrefs.get('browseros.show_llm_chat') !== false
+    const storedAssistantWidth = browserPrefs.get('request-browser.ai-panel.width')
+    if (typeof storedAssistantWidth === 'number') {
+      assistantWidth = Math.min(MAX_AGENT_PANEL_WIDTH, Math.max(MIN_AGENT_PANEL_WIDTH, storedAssistantWidth))
+    }
+    const storedAssistantMode = browserPrefs.get('request-browser.ai-panel.mode')
+    if (storedAssistantMode === 'docked' || storedAssistantMode === 'floating') {
+      assistantMode = storedAssistantMode
+    }
     bookmarks.splice(0, bookmarks.length, ...(state.bookmarks ?? []))
     historyEntries.splice(0, historyEntries.length, ...(state.history ?? []))
     downloadEntries.splice(0, downloadEntries.length, ...(state.downloads ?? []))
@@ -1168,14 +1195,17 @@ function setAssistantBounds(): void {
   if (!mainWindow || !agentView) return
   const [width, height] = mainWindow.getContentSize()
   const top = activeSurface === 'browser' ? 96 : 56
+  const panelWidth = Math.min(assistantWidth, width)
+  const isFloating = assistantMode === 'floating'
   agentView.setBounds({
-    x: assistantVisible ? Math.max(0, width - AGENT_PANEL_WIDTH) : width,
-    y: top,
-    width: assistantVisible ? Math.min(AGENT_PANEL_WIDTH, width) : 0,
-    height: Math.max(0, height - top),
+    x: assistantVisible ? Math.max(0, width - panelWidth - (isFloating ? 16 : 0)) : width,
+    y: assistantVisible && isFloating ? top + 12 : top,
+    width: assistantVisible ? panelWidth : 0,
+    height: assistantVisible ? Math.max(0, height - top - (isFloating ? 24 : 0)) : 0,
   })
   agentView.setVisible(assistantVisible)
   mainWindow.webContents.send('app:assistant-visible', assistantVisible)
+  mainWindow.webContents.send('app:assistant-layout', { width: assistantWidth, mode: assistantMode })
 }
 
 async function createAgentView(): Promise<void> {
@@ -1777,6 +1807,12 @@ function registerIpc(): void {
         assistantVisible = !assistantVisible
         setAssistantBounds()
       } },
+      { label: assistantMode === 'floating' ? 'Dock AI panel' : 'Float AI panel', click: () => {
+        assistantMode = assistantMode === 'floating' ? 'docked' : 'floating'
+        browserPrefs.set('request-browser.ai-panel.mode', assistantMode)
+        scheduleDesktopStateSave()
+        setAssistantBounds()
+      } },
       { label: 'Block common ads and trackers', type: 'checkbox', checked: browserPrefs.get('request-browser.ad-blocking.enabled') === true, click: (item) => {
         browserPrefs.set('request-browser.ad-blocking.enabled', item.checked)
         scheduleDesktopStateSave()
@@ -1817,6 +1853,23 @@ function registerIpc(): void {
   })
   ipcMain.handle('app:get-active-profile', () => browserProfiles.find((profile) => profile.id === activeProfileId) ?? browserProfiles[0])
   ipcMain.handle('app:get-preferences', () => getDesktopPreferences())
+  ipcMain.handle('app:get-assistant-layout', () => ({ width: assistantWidth, mode: assistantMode }))
+  ipcMain.handle('app:set-assistant-width', (_event, value: number) => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return { width: assistantWidth }
+    assistantWidth = Math.min(MAX_AGENT_PANEL_WIDTH, Math.max(MIN_AGENT_PANEL_WIDTH, Math.round(value)))
+    browserPrefs.set('request-browser.ai-panel.width', assistantWidth)
+    scheduleDesktopStateSave()
+    setAssistantBounds()
+    return { width: assistantWidth }
+  })
+  ipcMain.handle('app:set-assistant-mode', (_event, value: AssistantMode) => {
+    if (value !== 'docked' && value !== 'floating') return { mode: assistantMode }
+    assistantMode = value
+    browserPrefs.set('request-browser.ai-panel.mode', assistantMode)
+    scheduleDesktopStateSave()
+    setAssistantBounds()
+    return { mode: assistantMode }
+  })
   ipcMain.handle('agent:assistant-visible', (_event, visible: boolean) => {
     assistantVisible = Boolean(visible)
     setAssistantBounds()
@@ -1938,7 +1991,16 @@ function registerIpc(): void {
     const tab = browserTabs.get(tabId)
     if (!tab) throw new Error(`Tab ${tabId} not found`)
     if (updateProperties.active === true) activateBrowserTab(tabId)
-    if (typeof updateProperties.url === 'string') await tab.view.webContents.loadURL(normalizeNavigationInput(updateProperties.url))
+    if (typeof updateProperties.url === 'string') {
+      const url = normalizeNavigationInput(updateProperties.url)
+      tab.state = { ...tab.state, url, loading: true }
+      broadcastBrowserState()
+      void tab.view.webContents.loadURL(url).catch((error) => {
+        tab.state = { ...tab.state, loading: false }
+        broadcastBrowserState()
+        emitLog(`Tab ${tabId} navigation failed (${String(error)})`)
+      })
+    }
     if (typeof updateProperties.muted === 'boolean') tab.view.webContents.setAudioMuted(updateProperties.muted)
     return chromeTab(tab, [...browserTabs.keys()].indexOf(tabId))
   })

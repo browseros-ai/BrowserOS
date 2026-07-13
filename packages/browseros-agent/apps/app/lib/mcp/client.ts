@@ -185,7 +185,7 @@ function normalizeTools(result: ListToolsResult): {
 }
 
 /**
- * Fetches available tools from the BrowserOS MCP server without importing the
+ * Fetches available tools from the Request Browser MCP server without importing the
  * MCP SDK runtime, which can generate validators with `new Function` in tests
  * and browser extension contexts.
  * @public
