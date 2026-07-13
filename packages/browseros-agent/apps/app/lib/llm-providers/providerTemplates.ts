@@ -99,7 +99,7 @@ export const providerTemplates: ProviderTemplate[] = [
     supportsImages: true,
     contextWindow: 1000000,
     setupGuideUrl:
-      'https://platform.minimax.io/docs/api-reference/text-openai-api',
+      'https://platform.minimax.io/docs/api-reference/api-overview',
   },
   enrichTemplate('openai', {
     defaultModelId: 'gpt-5',

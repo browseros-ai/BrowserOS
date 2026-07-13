@@ -20,6 +20,7 @@ import {
 import { resolveAcpSpawnCommand } from '../lib/agents/host-acp/launcher'
 import { getBrowserosDir } from '../lib/browseros-dir'
 import { createBrowserOSFetch } from '../lib/browseros-fetch'
+import { createMinimaxProvider } from '../lib/clients/llm/minimax-provider'
 import {
   createMockBrowserOSLanguageModel,
   shouldUseMockBrowserOSLLM,
@@ -416,13 +417,7 @@ function createMoonshotFactory(
 function createMinimaxFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
-  if (!config.baseUrl) throw new Error('MiniMax provider requires baseUrl')
-  if (!config.apiKey) throw new Error('MiniMax provider requires apiKey')
-  return createOpenAICompatible({
-    name: 'minimax',
-    baseURL: config.baseUrl,
-    apiKey: config.apiKey,
-  })
+  return createMinimaxProvider(config)
 }
 
 function createQwenCodeFactory(

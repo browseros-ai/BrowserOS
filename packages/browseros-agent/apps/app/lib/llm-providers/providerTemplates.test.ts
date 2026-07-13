@@ -25,7 +25,7 @@ describe('providerTemplates', () => {
       defaultModelId: 'MiniMax-M3',
       contextWindow: 1000000,
       setupGuideUrl:
-        'https://platform.minimax.io/docs/api-reference/text-openai-api',
+        'https://platform.minimax.io/docs/api-reference/api-overview',
     })
   })
 })

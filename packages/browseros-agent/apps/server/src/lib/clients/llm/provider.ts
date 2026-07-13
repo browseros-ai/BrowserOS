@@ -21,6 +21,7 @@ import { logger } from '../../logger'
 import { createOpenRouterCompatibleFetch } from '../../openrouter-fetch'
 import { createCodexFetch } from '../oauth/codex-fetch'
 import { createCopilotFetch } from '../oauth/copilot-fetch'
+import { createMinimaxProvider } from './minimax-provider'
 import {
   createMockBrowserOSLanguageModel,
   shouldUseMockBrowserOSLLM,
@@ -153,13 +154,7 @@ function createMoonshotModel(config: ResolvedLLMConfig): LanguageModel {
 }
 
 function createMinimaxModel(config: ResolvedLLMConfig): LanguageModel {
-  if (!config.baseUrl) throw new Error('MiniMax provider requires baseUrl')
-  if (!config.apiKey) throw new Error('MiniMax provider requires apiKey')
-  return createOpenAICompatible({
-    name: 'minimax',
-    baseURL: config.baseUrl,
-    apiKey: config.apiKey,
-  })(config.model)
+  return createMinimaxProvider(config)(config.model)
 }
 
 function createQwenCodeModel(config: ResolvedLLMConfig): LanguageModel {
