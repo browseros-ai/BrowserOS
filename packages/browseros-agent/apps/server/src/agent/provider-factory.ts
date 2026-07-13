@@ -38,6 +38,9 @@ export { isAcpProvider }
 const BUILT_IN_ACP_AGENT_BY_PROVIDER: Record<string, string> = {
   [LLM_PROVIDERS.CLAUDE_CODE]: 'claude',
   [LLM_PROVIDERS.CODEX]: 'codex',
+  [LLM_PROVIDERS.OPENCODE]: 'opencode',
+  [LLM_PROVIDERS.OPENCODE_GO]: 'opencode',
+  [LLM_PROVIDERS.OPENCODE_ZEN]: 'opencode',
 }
 
 export type EnsureWorkspaceInstructionFile =
@@ -168,6 +171,13 @@ async function createAcpLanguageModel(
   }
   if (config.provider === LLM_PROVIDERS.ACP_CUSTOM && config.acpCommand) {
     agentRegistryOverrides[agentId] = config.acpCommand
+  }
+  if (
+    config.provider === LLM_PROVIDERS.OPENCODE ||
+    config.provider === LLM_PROVIDERS.OPENCODE_GO ||
+    config.provider === LLM_PROVIDERS.OPENCODE_ZEN
+  ) {
+    agentRegistryOverrides[agentId] = config.acpCommand ?? 'opencode acp'
   }
   const provider = await buildAcpxProvider({
     conversationId: config.conversationId,

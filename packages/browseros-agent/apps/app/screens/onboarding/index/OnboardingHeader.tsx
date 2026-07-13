@@ -16,10 +16,10 @@ export const OnboardingHeader: FC<OnboardingHeaderProps> = ({ isMounted }) => {
         <div className="flex items-center gap-3">
           {/* Floating animation to logo */}
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-orange">
-            <img src={ProductLogoSvg} alt="BrowserOS" className="h-6 w-6" />
+            <img src={ProductLogoSvg} alt="Request Browser" className="h-6 w-6" />
           </div>
           <span className="font-semibold text-accent-orange text-lg">
-            BrowserOS
+            Request Browser
           </span>
         </div>
         <nav className="hidden items-center gap-1 md:flex">

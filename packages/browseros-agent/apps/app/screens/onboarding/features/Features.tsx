@@ -39,10 +39,10 @@ const features: Feature[] = [
     Icon: Bot,
     tag: 'AI AGENT',
     title: 'Built-in AI Agent',
-    description:
-      'Describe any task and watch BrowserOS execute it—clicking, typing, and navigating for you.',
+      description:
+        'Describe any task and watch Request Browser execute it—clicking, typing, and navigating for you.',
     detailedDescription:
-      'The BrowserOS Agent turns your words into browser actions. Describe what you need in plain English—fill out this form, extract data from that page, navigate through these steps—and the agent handles the rest. It clicks buttons, types text, navigates between pages, and completes multi-step browser tasks automatically. Everything runs locally on your machine with your own API keys, so your data stays private.',
+        'The Request Browser Agent turns your words into browser actions. Describe what you need in plain English—fill out this form, extract data from that page, navigate through these steps—and the agent handles the rest. It clicks buttons, types text, navigates between pages, and completes multi-step browser tasks automatically. Everything runs locally on your machine with your own API keys, so your data stays private.',
     highlights: [
       'Multi-tab execution — run agents in multiple tabs simultaneously',
       'Smart navigation — automatically finds and interacts with page elements',
@@ -58,11 +58,11 @@ const features: Feature[] = [
     id: 'mcp-server',
     Icon: Plug,
     tag: 'MCP',
-    title: 'BrowserOS as MCP Server',
+      title: 'Request Browser as MCP Server',
     description:
       'Connect Claude Code, Gemini CLI, or any MCP client to control your browser with 31 tools.',
     detailedDescription:
-      'BrowserOS includes a built-in MCP server that lets AI coding agents control your browser. Claude Code can open tabs, click elements, fill forms, take screenshots, and read page content—all through natural language commands. Unlike Chrome DevTools MCP which requires debug profiles and separate servers, BrowserOS works out of the box. Just copy the URL from settings and connect.',
+        'Request Browser includes a built-in MCP server that lets AI coding agents control your browser. Claude Code can open tabs, click elements, fill forms, take screenshots, and read page content—all through natural language commands. Unlike Chrome DevTools MCP which requires debug profiles and separate servers, Request Browser works out of the box. Just copy the URL from settings and connect.',
     highlights: [
       'One-line setup — run `claude mcp add` with your server URL to connect',
       '31 browser tools — tabs, clicks, typing, screenshots, bookmarks, history',
@@ -117,7 +117,7 @@ const features: Feature[] = [
     description:
       'Claude Code tests your web app, reads console errors, and fixes your code in one loop.',
     detailedDescription:
-      'The killer workflow for frontend developers. Claude Code connects to BrowserOS, opens your localhost app, clicks through the UI, reads console errors and network failures, then goes back to your codebase to fix the bugs—all in one continuous loop. No more switching between terminal and browser. No more copy-pasting error messages. Just describe the issue and let the agent debug it end-to-end.',
+        'The killer workflow for frontend developers. Claude Code connects to Request Browser, opens your localhost app, clicks through the UI, reads console errors and network failures, then goes back to your codebase to fix the bugs—all in one continuous loop. No more switching between terminal and browser. No more copy-pasting error messages. Just describe the issue and let the agent debug it end-to-end.',
     highlights: [
       'Test & fix loop — Claude navigates your app, finds bugs, and patches them',
       'Console access — read browser console and network errors from your terminal',
@@ -174,7 +174,7 @@ export const FeaturesPage: FC = () => {
                 >
                   Why Switch to{' '}
                   <span className="text-[var(--accent-orange)]">
-                    BrowserOS?
+                    Request Browser?
                   </span>
                 </h1>
                 <p
@@ -186,7 +186,7 @@ export const FeaturesPage: FC = () => {
                       : 'translate-y-4 opacity-0',
                   )}
                 >
-                  Watch our launch video to understand the vision of BrowserOS
+                  Watch our launch video to understand the vision of Request Browser
                   and key features!
                 </p>
               </div>
@@ -194,7 +194,7 @@ export const FeaturesPage: FC = () => {
 
             {/* Centered Large Video */}
             <VideoFrame
-              title="browseros.com/demo"
+              title="Request Browser demo"
               className={cn(
                 'transition-all delay-500 duration-700',
                 mounted
@@ -205,7 +205,7 @@ export const FeaturesPage: FC = () => {
               <video
                 className="h-full w-full"
                 src={BROWSER_OS_INTRO_VIDEO_URL}
-                title="BrowserOS MCP Server Demonstration"
+                title="Request Browser MCP Server Demonstration"
                 autoPlay
                 muted
                 loop
@@ -275,7 +275,7 @@ export const FeaturesPage: FC = () => {
             <LinkIcon className="h-6 w-6 text-[var(--accent-orange)]" />
             <h2 className="font-bold text-3xl">
               Join our community and help us improve{' '}
-              <span className="text-[var(--accent-orange)]">BrowserOS!</span>
+                <span className="text-[var(--accent-orange)]">Request Browser!</span>
             </h2>
           </div>
 
@@ -380,7 +380,7 @@ export const FeaturesPage: FC = () => {
             size="lg"
             className="bg-[var(--accent-orange)] text-white shadow-[var(--accent-orange)]/25 shadow-lg hover:bg-[var(--accent-orange)]/90"
           >
-            Start Using BrowserOS
+            Start Using Request Browser
             <ArrowRight className="ml-2 h-4 w-4" />
           </Button>
         </div>

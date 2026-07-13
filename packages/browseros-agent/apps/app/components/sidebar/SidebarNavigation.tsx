@@ -1,4 +1,4 @@
-import { CalendarClock, Home, PlugZap, Settings } from 'lucide-react'
+import { Bookmark, CalendarClock, Clock3, Database, Download, Home, PlugZap, Settings } from 'lucide-react'
 import type { FC } from 'react'
 import { NavLink, useLocation } from 'react-router'
 import {
@@ -26,6 +26,10 @@ const primaryNavItems: NavItem[] = [
     to: '/connect-apps',
     icon: PlugZap,
   },
+  { name: 'Workspace', to: '/workspace', icon: Database },
+  { name: 'Bookmarks', to: '/library/bookmarks', icon: Bookmark },
+  { name: 'History', to: '/library/history', icon: Clock3 },
+  { name: 'Downloads', to: '/library/downloads', icon: Download },
   { name: 'Scheduled Tasks', to: '/scheduled', icon: CalendarClock },
   {
     name: 'Settings',

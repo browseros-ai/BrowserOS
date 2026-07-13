@@ -19,6 +19,7 @@ import { REMOTE_AGENT_HARNESS_MCP_SOURCE } from './routes/mcp'
 import { KlavisService } from './services/klavis'
 import { RemoteHermesService } from './services/remote-hermes/remote-hermes-service'
 import { ServerActivity } from './services/server-activity'
+import { WorkspaceStore } from '../lib/workspace/workspace-store'
 import type { HttpServerConfig } from './types'
 
 /** Checks the loopback bind before Bun.serve so startup errors stay explicit. */
@@ -64,6 +65,7 @@ export async function createHttpServer(config: HttpServerConfig) {
   // mounts hold the same instance.
   const turnRegistry = new TurnRegistry()
   const activity = new ServerActivity(turnRegistry)
+  const workspaceStore = new WorkspaceStore()
 
   // Remote Hermes provider. Opt-in via AGENT_RUNNER_JWT_SECRET in env;
   // when absent we still wire the routes but they return a soft
@@ -94,6 +96,7 @@ export async function createHttpServer(config: HttpServerConfig) {
     remoteHermes,
     tokenManager,
     turnRegistry,
+    workspaceStore,
     onShutdown: () => {
       shutdownOAuth()
       void klavis.stop()

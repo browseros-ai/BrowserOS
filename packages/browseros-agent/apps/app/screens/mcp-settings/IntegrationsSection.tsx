@@ -71,8 +71,8 @@ export const IntegrationsSection: FC<IntegrationsSectionProps> = ({
           <h2 className="font-semibold text-lg leading-tight">
             Connected agents
           </h2>
-          <p className="text-muted-foreground text-sm">
-            Add BrowserOS as an MCP server in your AI agents — no copy-paste
+            <p className="text-muted-foreground text-sm">
+              Add Request Browser as an MCP server in your AI agents — no copy-paste
             required.
           </p>
         </div>

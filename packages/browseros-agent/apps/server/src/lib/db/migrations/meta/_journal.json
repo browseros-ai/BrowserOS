@@ -29,6 +29,13 @@
       "when": 1781916712443,
       "tag": "0003_scrub_hermes_credentials",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1783754167829,
+      "tag": "0004_add-workspace",
+      "breakpoints": true
     }
   ]
 }

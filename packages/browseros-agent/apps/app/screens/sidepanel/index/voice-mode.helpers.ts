@@ -14,12 +14,12 @@ export function chipTextFor(
     case 'transcribing':
       return 'Transcribing'
     case 'responding':
-      return 'BrowserOS Agent is working'
+      return 'Request Browser Agent is working'
     case 'barge_in_pending':
       // Do not advertise that the agent has been interrupted. The
       // interruption is still tentative; the agent is still working
       // until the transcript is confirmed real.
-      return 'BrowserOS Agent is working'
+      return 'Request Browser Agent is working'
     case 'closed':
     case 'idle':
       return ''

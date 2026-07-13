@@ -15,6 +15,9 @@ export interface ModelInfo {
 const CUSTOM_PROVIDER_MODELS: Partial<Record<ProviderType, ModelInfo[]>> = {
   browseros: [{ modelId: 'browseros-auto', contextLength: 200000 }],
   'openai-compatible': [],
+  opencode: [],
+  'opencode-go': [],
+  'opencode-zen': [],
   ollama: [],
   'chatgpt-pro': [
     { modelId: 'gpt-5.5', contextLength: 1050000 },

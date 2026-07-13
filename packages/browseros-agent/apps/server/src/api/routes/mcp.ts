@@ -8,6 +8,7 @@ import type { BrowserSession } from '@browseros/browser-core/core/session'
 import { createBrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
 import { StreamableHTTPTransport } from '@hono/mcp'
 import { Hono } from 'hono'
+import type { WorkspaceStore } from '../../lib/workspace/workspace-store'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
@@ -32,6 +33,7 @@ interface McpRouteDeps {
   createMcpServer?: CreateMcpServerFn
   createMcpTransport?: CreateMcpTransportFn
   activity?: ServerActivity
+  workspaceStore?: WorkspaceStore
 }
 
 interface McpRequestLogContext extends Record<string, unknown> {
@@ -95,6 +97,7 @@ export function createMcpRoutes(deps: McpRouteDeps) {
 
   app.post('/', async (c) => {
     const scopeId = c.req.header('X-BrowserOS-Scope-Id') || 'ephemeral'
+    const agentId = c.req.header('X-BrowserOS-Agent-Id')
     metrics.log('mcp.request', { scopeId })
     const source = c.req.query('source') || undefined
 
@@ -135,6 +138,11 @@ export function createMcpRoutes(deps: McpRouteDeps) {
       executionDir: deps.executionDir,
       remoteAgentHarness: harness,
       activity: deps.activity,
+      workspaceStore: deps.workspaceStore,
+      // Only BrowserOS-spawned ACP agents receive workspace write tools.
+      // External MCP callers may use the same browser route but do not get
+      // access to the local research database by spoofing a scope id alone.
+      workspaceConversationId: agentId ? scopeId : undefined,
     })
     const transport = makeMcpTransport({
       sessionIdGenerator: undefined,

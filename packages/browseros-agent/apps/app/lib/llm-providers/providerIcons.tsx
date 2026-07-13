@@ -38,6 +38,9 @@ const providerIconMap: Record<ProviderType, IconComponent | null> = {
   'qwen-code': Qwen,
   codex: OpenAI,
   'claude-code': Anthropic,
+  opencode: null,
+  'opencode-go': null,
+  'opencode-zen': null,
   'acp-custom': null,
   'remote-hermes': Sparkles,
 }
@@ -57,6 +60,10 @@ export const ProviderIcon: FC<ProviderIconProps> = ({
   size = 20,
   className,
 }) => {
+  if (type === 'opencode' || type === 'opencode-go' || type === 'opencode-zen') {
+    return <RequestBrowserIcon size={size} className={className} />
+  }
+
   const IconComponent = providerIconMap[type]
 
   if (IconComponent) {
@@ -74,10 +81,22 @@ export const BrowserOSIcon: FC<{ size?: number; className?: string }> = ({
   size = 20,
   className,
 }) => {
+  return <RequestBrowserIcon size={size} className={className} />
+}
+
+/**
+ * Request Browser product icon used for the local assistant and OpenCode-backed
+ * provider. Keeping this as a shared component prevents the assistant header,
+ * provider picker, and settings surfaces from drifting into different brands.
+ */
+export const RequestBrowserIcon: FC<{ size?: number; className?: string }> = ({
+  size = 20,
+  className,
+}) => {
   return (
     <img
       src={ProductLogoSvg}
-      alt="BrowserOS"
+      alt="Request Browser"
       width={size}
       height={size}
       className={className}

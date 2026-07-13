@@ -26,6 +26,27 @@ type LoopbackDiscoveryHost = (typeof LOOPBACK_DISCOVERY_HOSTS)[number]
 export interface CdpBackendConfig {
   port: number
   exitOnReconnectFailure?: boolean
+  /** Use standard Electron Target.* CDP commands instead of BrowserOS's Browser.* domain. */
+  electronMode?: boolean
+}
+
+type ElectronTargetInfo = {
+  targetId: string
+  type: string
+  title: string
+  url: string
+  attached?: boolean
+}
+
+type ElectronTabInfo = ElectronTargetInfo & {
+  tabId: number
+  isActive: boolean
+  isLoading: boolean
+  loadProgress: number
+  isPinned: boolean
+  isHidden: boolean
+  windowId: number
+  index: number
 }
 
 // biome-ignore lint/correctness/noUnusedVariables: declaration merging adds ProtocolApi properties to the class
@@ -34,6 +55,7 @@ interface CdpBackend extends ProtocolApi {}
 class CdpBackend implements ICdpBackend {
   private port: number
   private exitOnReconnectFailure: boolean
+  private electronMode: boolean
   private ws: WebSocket | null = null
   private messageId = 0
   private pending = new Map<number, PendingRequest>()
@@ -50,10 +72,13 @@ class CdpBackend implements ICdpBackend {
   private sessionCache = new Map<string, ProtocolApi>()
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null
   private preferredDiscoveryHost: LoopbackDiscoveryHost | null = null
+  private electronNextTabId = 1
+  private electronTabIds = new Map<string, number>()
 
   constructor(config: CdpBackendConfig) {
     this.port = config.port
     this.exitOnReconnectFailure = config.exitOnReconnectFailure ?? true
+    this.electronMode = config.electronMode ?? false
 
     const rawSend: RawSend = (method, params) => this.rawSend(method, params)
     const rawOn: RawOn = (event, handler) => this.rawOn(event, handler)
@@ -400,6 +425,13 @@ class CdpBackend implements ICdpBackend {
     params?: Record<string, unknown>,
     sessionId?: string,
   ): Promise<unknown> {
+    if (this.electronMode && !sessionId && method.startsWith('Browser.')) {
+      const result = await this.handleElectronBrowserCommand(
+        method,
+        params ?? {},
+      )
+      if (result !== undefined) return result
+    }
     return this.sendRawMessage(method, params ?? {}, sessionId)
   }
 
@@ -453,6 +485,216 @@ class CdpBackend implements ICdpBackend {
         this.handleDeadConnection()
       }
     })
+  }
+
+  /**
+   * Electron does not expose BrowserOS's custom Browser.* CDP domain. Map the
+   * small tab/window surface browser-core needs onto standard Target.* calls.
+   * One Electron BrowserWindow is represented as window 1; additional native
+   * windows can be added later without changing the server contract.
+   */
+  private async handleElectronBrowserCommand(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    switch (method) {
+      case 'Browser.getTabs':
+        return { tabs: await this.listElectronTabs() }
+      case 'Browser.getActiveTab': {
+        const tabs = await this.listElectronTabs()
+        return { tab: tabs[0] }
+      }
+      case 'Browser.getTabInfo': {
+        const tab = await this.resolveElectronTab(params)
+        if (!tab) throw new Error('Electron tab not found')
+        return { tab }
+      }
+      case 'Browser.createTab': {
+        const result = (await this.sendRawMessage('Target.createTarget', {
+          url: typeof params.url === 'string' ? params.url : 'about:blank',
+        })) as { targetId: string }
+        const tabs = await this.listElectronTabs()
+        const tab = tabs.find((candidate) => candidate.targetId === result.targetId)
+        return { tab: tab ?? this.electronTabInfo(await this.getElectronTarget(result.targetId)) }
+      }
+      case 'Browser.closeTab': {
+        const tab = await this.resolveElectronTab(params)
+        if (tab) {
+          await this.sendRawMessage('Target.closeTarget', {
+            targetId: tab.targetId,
+          })
+          this.electronTabIds.delete(tab.targetId)
+        }
+        return {}
+      }
+      case 'Browser.activateTab':
+      case 'Browser.showTab': {
+        const tab = await this.resolveElectronTab(params)
+        if (!tab) throw new Error('Electron tab not found')
+        await this.sendRawMessage('Target.activateTarget', {
+          targetId: tab.targetId,
+        })
+        return { tab }
+      }
+      case 'Browser.getWindows':
+      case 'Browser.getActiveWindow': {
+        const tabs = await this.listElectronTabs()
+        const window = {
+          windowId: 1,
+          windowType: 'normal',
+          bounds: {},
+          isActive: true,
+          isVisible: true,
+          tabCount: tabs.length,
+          activeTabId: tabs[0]?.tabId,
+        }
+        return method === 'Browser.getWindows'
+          ? { windows: [window] }
+          : { window }
+      }
+      case 'Browser.createWindow': {
+        const result = (await this.sendRawMessage('Target.createTarget', {
+          url: typeof params.url === 'string' ? params.url : 'about:blank',
+        })) as { targetId: string }
+        await this.listElectronTabs()
+        return {
+          window: {
+            windowId: 1,
+            windowType: 'normal',
+            bounds: {},
+            isActive: true,
+            isVisible: true,
+            tabCount: 1,
+            activeTabId: this.electronTabIds.get(result.targetId),
+          },
+        }
+      }
+      case 'Browser.getTabForTarget': {
+        const targetId = typeof params.targetId === 'string' ? params.targetId : ''
+        const tab = await this.resolveElectronTab({ targetId })
+        if (!tab) throw new Error('Electron target not found')
+        return { tabId: tab.tabId, windowId: 1 }
+      }
+      case 'Browser.getTargetForTab': {
+        const tab = await this.resolveElectronTab(params)
+        if (!tab) throw new Error('Electron tab not found')
+        return { targetId: tab.targetId, windowId: 1 }
+      }
+      case 'Browser.getWindowForTarget': {
+        const tab = await this.resolveElectronTab(params)
+        if (!tab) throw new Error('Electron target not found')
+        return { windowId: 1, bounds: {} }
+      }
+      case 'Browser.getWindowBounds':
+        return { bounds: {} }
+      case 'Browser.setWindowVisibility':
+        return {
+          window: {
+            windowId: 1,
+            windowType: 'normal',
+            bounds: {},
+            isActive: true,
+            isVisible: Boolean(params.visible),
+            tabCount: (await this.listElectronTabs()).length,
+          },
+          replaced: false,
+          previousWindowId: 1,
+          newWindowId: 1,
+        }
+      case 'Browser.addTabsToGroup': {
+        const tabs = await this.listElectronTabs()
+        const tabIds = Array.isArray(params.tabIds)
+          ? new Set(params.tabIds.filter((value): value is number => typeof value === 'number'))
+          : new Set<number>()
+        return {
+          group: {
+            groupId: typeof params.groupId === 'string' ? params.groupId : 'electron',
+            windowId: 1,
+            title: '',
+            color: 'grey',
+            collapsed: false,
+            tabIds: tabs.filter((tab) => tabIds.has(tab.tabId)).map((tab) => tab.tabId),
+          },
+        }
+      }
+      case 'Browser.getTabGroups':
+        return { groups: [] }
+      case 'Browser.closeWindow':
+        for (const tab of await this.listElectronTabs()) {
+          await this.sendRawMessage('Target.closeTarget', { targetId: tab.targetId })
+        }
+        return {}
+      default:
+        return undefined
+    }
+  }
+
+  private async listElectronTargets(): Promise<ElectronTargetInfo[]> {
+    const result = (await this.sendRawMessage('Target.getTargets', {})) as {
+      targetInfos?: ElectronTargetInfo[]
+    }
+    return (result.targetInfos ?? []).filter(
+      (target) =>
+        target.type === 'page' &&
+        Boolean(target.url) &&
+        !target.url.startsWith('file://') &&
+        !target.url.startsWith('chrome-extension://'),
+    )
+  }
+
+  private async getElectronTarget(targetId: string): Promise<ElectronTargetInfo> {
+    const target = (await this.listElectronTargets()).find(
+      (candidate) => candidate.targetId === targetId,
+    )
+    if (!target) throw new Error(`Electron target not found: ${targetId}`)
+    return target
+  }
+
+  private async listElectronTabs(): Promise<ElectronTabInfo[]> {
+    const targets = await this.listElectronTargets()
+    const liveTargets = new Set(targets.map((target) => target.targetId))
+    for (const targetId of this.electronTabIds.keys()) {
+      if (!liveTargets.has(targetId)) this.electronTabIds.delete(targetId)
+    }
+
+    return targets.map((target, index) => {
+      const tabId = this.electronTabIds.get(target.targetId) ?? this.electronNextTabId++
+      this.electronTabIds.set(target.targetId, tabId)
+      return this.electronTabInfo(target, tabId, index === 0, index)
+    })
+  }
+
+  private electronTabInfo(
+    target: ElectronTargetInfo,
+    tabId = this.electronTabIds.get(target.targetId) ?? this.electronNextTabId++,
+    isActive = false,
+    index = 0,
+  ): ElectronTabInfo {
+    this.electronTabIds.set(target.targetId, tabId)
+    return {
+      ...target,
+      tabId,
+      isActive,
+      isLoading: false,
+      loadProgress: 1,
+      isPinned: false,
+      isHidden: false,
+      windowId: 1,
+      index,
+    }
+  }
+
+  private async resolveElectronTab(
+    params: Record<string, unknown>,
+  ): Promise<ElectronTabInfo | undefined> {
+    const tabs = await this.listElectronTabs()
+    if (typeof params.tabId === 'number') {
+      return tabs.find((tab) => tab.tabId === params.tabId)
+    }
+    if (typeof params.targetId === 'string') {
+      return tabs.find((tab) => tab.targetId === params.targetId)
+    }
+    return tabs[0]
   }
 
   private rawMessageJson(

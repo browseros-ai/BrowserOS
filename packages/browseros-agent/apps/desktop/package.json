@@ -1,0 +1,71 @@
+{
+  "name": "@browseros/request-browser-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Request Browser desktop shell with BrowserOS agent features",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build:renderer": "vite build",
+    "build:main": "tsc -p tsconfig.json",
+    "build": "bun run build:renderer && bun run build:main",
+    "build:server-binary": "bun scripts/build-server-binary.ts",
+    "dev": "bun run build && electron dist/main.js",
+    "package:win": "bun run build:server-binary && bun run build && electron-builder --win nsis",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "bunx @biomejs/biome check src"
+  },
+  "dependencies": {
+    "@browseros/shared": "workspace:*",
+    "lucide-react": "^0.562.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^40.0.0",
+    "electron-builder": "^26.3.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.5"
+  },
+  "trustedDependencies": [
+    "electron",
+    "electron-builder"
+  ],
+  "build": {
+    "appId": "com.requestbrowser.desktop",
+    "productName": "Request Browser",
+    "artifactName": "RequestBrowser-${version}-${arch}-Setup.${ext}",
+    "directories": {
+      "output": "dist/installers"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/installers/**/*",
+      "!dist/request-browser-server.exe"
+    ],
+    "extraResources": [
+      {
+        "from": "../app/dist/chrome-mv3",
+        "to": "browseros-ui"
+      },
+      {
+        "from": "dist/request-browser-server.exe",
+        "to": "request-browser-server.exe"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/request-browser.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

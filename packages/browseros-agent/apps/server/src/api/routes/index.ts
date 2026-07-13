@@ -8,6 +8,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import type { TurnRegistry } from '../../lib/agents/turns/active-turn-registry'
 import type { OAuthTokenManager } from '../../lib/clients/oauth/token-manager'
+import type { WorkspaceStore } from '../../lib/workspace/workspace-store'
 import { requireTrustedOrigin } from '../middleware/require-trusted-origin'
 import type { KlavisService } from '../services/klavis'
 import type { RemoteHermesService } from '../services/remote-hermes/remote-hermes-service'
@@ -30,6 +31,7 @@ import { createRemoteHermesRoutes } from './remote-hermes'
 import { createScreencastRoute } from './screencast'
 import { createShutdownRoute } from './shutdown'
 import { createStatusRoute } from './status'
+import { createWorkspaceRoutes } from './workspace'
 
 interface CreateApiRoutesDeps {
   agentRoutes?: Hono<Env>
@@ -40,6 +42,7 @@ interface CreateApiRoutesDeps {
   remoteHermes: RemoteHermesService | null
   tokenManager: OAuthTokenManager | null
   turnRegistry: TurnRegistry
+  workspaceStore?: WorkspaceStore
 }
 
 /** Composes the BrowserOS HTTP API from the existing route factories. */
@@ -53,6 +56,7 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
     remoteHermes,
     tokenManager,
     turnRegistry,
+    workspaceStore,
   } = deps
   const {
     browser,
@@ -65,7 +69,7 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
   } = config
   const { activity } = config
 
-  return (
+  const app = (
     new Hono<Env>()
       .use('/*', cors(defaultCorsConfig))
       .use('/*', requireTrustedOrigin())
@@ -99,6 +103,7 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
           klavis,
           executionDir,
           activity,
+          workspaceStore,
         }),
       )
       // Dedicated in-process MCP server for the suggest_app_connection
@@ -133,6 +138,12 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
         createRemoteHermesRoutes({ service: remoteHermes }),
       )
   )
+
+  if (workspaceStore) {
+    app.route('/workspace', createWorkspaceRoutes({ store: workspaceStore }))
+  }
+
+  return app
 }
 
 function protectedAgentRoutes(

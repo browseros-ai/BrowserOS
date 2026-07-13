@@ -16,6 +16,9 @@ export type ProviderType =
   | 'qwen-code'
   | 'codex'
   | 'claude-code'
+  | 'opencode'
+  | 'opencode-go'
+  | 'opencode-zen'
   | 'acp-custom'
   | 'remote-hermes'
 

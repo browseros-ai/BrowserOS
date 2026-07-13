@@ -38,6 +38,15 @@ export interface UseAcpProbeOptions {
 const BUILT_IN_AGENT_BY_TYPE: Partial<Record<ProviderType, string>> = {
   'claude-code': 'claude',
   codex: 'codex',
+  opencode: 'opencode',
+  'opencode-go': 'opencode',
+  'opencode-zen': 'opencode',
+}
+
+const DEFAULT_COMMAND_BY_TYPE: Partial<Record<ProviderType, string>> = {
+  opencode: 'opencode acp',
+  'opencode-go': 'opencode acp',
+  'opencode-zen': 'opencode acp',
 }
 
 // Probe results encode the agent's currently-installed CLI version, which
@@ -70,14 +79,20 @@ export function isAcpProbeEnabled(
 export function useAcpProbe(opts: UseAcpProbeOptions) {
   const { baseUrl: agentServerUrl } = useAgentServerUrl()
   const agentId = resolveAcpAgentId(opts)
-  const enabled = isAcpProbeEnabled(opts, agentServerUrl ?? undefined, agentId)
+  const command =
+    opts.command ?? DEFAULT_COMMAND_BY_TYPE[opts.providerType as ProviderType]
+  const enabled = isAcpProbeEnabled(
+    { ...opts, command },
+    agentServerUrl ?? undefined,
+    agentId,
+  )
 
   return useQuery<AcpProbeResult>({
     queryKey: [
       'acpx-probe',
       opts.providerType,
       agentId,
-      opts.command,
+      command,
       opts.cwd,
     ],
     enabled,
@@ -88,7 +103,7 @@ export function useAcpProbe(opts: UseAcpProbeOptions) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           agentId,
-          command: opts.command,
+          command,
           cwd: opts.cwd,
         }),
       })

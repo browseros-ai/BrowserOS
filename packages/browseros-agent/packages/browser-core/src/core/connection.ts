@@ -30,4 +30,5 @@ export const EXCLUDED_URL_PREFIXES: readonly string[] = [
   'chrome-untrusted://',
   'chrome-search://',
   'devtools://',
+  'file://',
 ]

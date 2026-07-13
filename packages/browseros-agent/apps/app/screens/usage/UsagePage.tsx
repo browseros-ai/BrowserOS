@@ -28,7 +28,7 @@ export const UsagePage: FC = () => {
           <div>
             <h2 className="font-semibold text-lg">Usage & Billing</h2>
             <p className="text-muted-foreground text-sm">
-              Monitor your BrowserOS AI credit usage
+              Monitor your Request Browser AI credit usage
             </p>
           </div>
         </div>
@@ -53,7 +53,7 @@ export const UsagePage: FC = () => {
         <div>
           <h2 className="font-semibold text-lg">Usage & Billing</h2>
           <p className="text-muted-foreground text-sm">
-            Monitor your BrowserOS AI credit usage
+            Monitor your Request Browser AI credit usage
           </p>
         </div>
       </div>

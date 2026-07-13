@@ -144,7 +144,7 @@ export const AgentCommandHome: FC = () => {
               next?
             </h1>
             <p className="mx-auto max-w-2xl text-muted-foreground text-sm leading-6 [text-wrap:pretty]">
-              Pick BrowserOS AI or any agent, then start a task — all without
+              Pick Request Browser AI or any agent, then start a task — all without
               leaving this tab.
             </p>
           </div>

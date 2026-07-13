@@ -31,6 +31,14 @@ import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { sentry } from '@/lib/sentry/sentry'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
+import {
+  createResearchSessionForGoal,
+  generateResearchRecap,
+  generateResearchSuggestion,
+  recordResearchActivity,
+  updateResearchPlanStep,
+  updateResearchSessionStatus,
+} from '@/lib/workspace/research-session-client'
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
 import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
@@ -272,6 +280,93 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   >({})
   const pendingSelectionTabKeyRef = useRef<string | null>(null)
   const messagesRef = useRef<UIMessage[]>([])
+  const researchSessionIdRef = useRef<string | null>(null)
+  const researchSessionPromiseRef = useRef<Promise<string | null> | null>(null)
+  const researchPlanStepIdsRef = useRef<string[]>([])
+  const researchStopRequestedRef = useRef(false)
+
+  const isOpenCodeTarget = useCallback(() => {
+    const target = selectedChatTargetRef.current
+    return (
+      target?.kind === 'llm' &&
+      (target.provider.type === 'opencode' ||
+        target.provider.type === 'opencode-go' ||
+        target.provider.type === 'opencode-zen')
+    )
+  }, [selectedChatTargetRef])
+
+  const ensureResearchSession = useCallback(
+    (goal: string): Promise<string | null> => {
+      if (!isOpenCodeTarget() || !agentUrlRef.current || !goal.trim()) {
+        return Promise.resolve(null)
+      }
+      if (researchSessionIdRef.current) {
+        return Promise.resolve(researchSessionIdRef.current)
+      }
+      if (researchSessionPromiseRef.current) {
+        return researchSessionPromiseRef.current
+      }
+
+      const promise = createResearchSessionForGoal(agentUrlRef.current, {
+        goal: goal.trim(),
+        conversationId: conversationIdRef.current,
+      })
+        .then((session) => {
+          researchSessionIdRef.current = session.id
+          researchPlanStepIdsRef.current = session.plan?.map((step) => step.id) ?? []
+          return session.id
+        })
+        .catch(() => null)
+        .finally(() => {
+          researchSessionPromiseRef.current = null
+        })
+      researchSessionPromiseRef.current = promise
+      return promise
+    },
+    [isOpenCodeTarget],
+  )
+
+  const finishResearchTurn = useCallback(
+    (isAbort: boolean, isError: boolean) => {
+      const researchSessionId = researchSessionIdRef.current
+      const workspaceUrl = agentUrlRef.current
+      if (!researchSessionId || !workspaceUrl) return
+
+      const status = researchStopRequestedRef.current || isAbort
+        ? 'paused'
+        : isError
+          ? 'failed'
+          : null
+      void recordResearchActivity(workspaceUrl, researchSessionId, {
+        title: status === 'paused' ? 'OpenCode turn paused' : 'OpenCode turn completed',
+        detail: status
+          ? 'The research session requires user attention before continuing.'
+          : 'OpenCode returned a result; verify sources and update the research plan before marking it complete.',
+        kind: status === 'failed' ? 'error' : status === 'paused' ? 'checkpoint' : 'activity',
+      }).catch(() => {})
+      if (status) {
+        void updateResearchSessionStatus(workspaceUrl, researchSessionId, status)
+          .then(() => generateResearchRecap(workspaceUrl, researchSessionId))
+          .catch(() => {})
+      } else {
+        void Promise.all(researchPlanStepIdsRef.current.map((stepId) =>
+          updateResearchPlanStep(workspaceUrl, stepId, 'completed'),
+        ))
+          .then(() => updateResearchSessionStatus(workspaceUrl, researchSessionId, 'completed'))
+          .then(() => recordResearchActivity(workspaceUrl, researchSessionId, {
+            title: 'Goal verified and completed',
+            detail: 'The OpenCode turn completed successfully and the research plan was closed.',
+          }))
+          .then(() => Promise.all([
+            generateResearchRecap(workspaceUrl, researchSessionId),
+            generateResearchSuggestion(workspaceUrl, researchSessionId),
+          ]))
+          .catch(() => {})
+      }
+      researchStopRequestedRef.current = false
+    },
+    [],
+  )
 
   useEffect(() => {
     const toRef = (
@@ -444,6 +539,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         isAbort,
         isError,
       })
+      finishResearchTurn(isAbort, isError)
     },
   })
 
@@ -639,9 +735,18 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         conversationId: conversationIdRef.current,
         promptText: text,
       })
-      baseSendMessage({ text })
+      researchStopRequestedRef.current = false
+      void ensureResearchSession(text).then((researchSessionId) => {
+        if (researchSessionId && agentUrlRef.current) {
+          void recordResearchActivity(agentUrlRef.current, researchSessionId, {
+            title: 'Goal delegated to OpenCode',
+            detail: text,
+          }).catch(() => {})
+        }
+        baseSendMessage({ text })
+      })
     },
-    [baseSendMessage, startExecutionTask, trackMessageSent],
+    [baseSendMessage, ensureResearchSession, startExecutionTask, trackMessageSent],
   )
 
   useEffect(() => {
@@ -696,6 +801,14 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   useEffect(() => {
     const unwatch = stopAgentStorage.watch((signal) => {
       if (signal && signal.conversationId === conversationIdRef.current) {
+        researchStopRequestedRef.current = true
+        if (researchSessionIdRef.current && agentUrlRef.current) {
+          void updateResearchSessionStatus(
+            agentUrlRef.current,
+            researchSessionIdRef.current,
+            'paused',
+          ).catch(() => {})
+        }
         stop()
         track(GLOW_STOP_CLICKED_EVENT)
         stopAgentStorage.setValue(null)
@@ -707,6 +820,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const resetConversationState = () => {
     stop()
     void finishExecutionTask({ isAbort: true })
+    researchSessionIdRef.current = null
+    researchSessionPromiseRef.current = null
+    researchStopRequestedRef.current = false
     setConversationId(crypto.randomUUID())
     setMessages([])
     setTextToAction(new Map())

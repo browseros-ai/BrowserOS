@@ -6,6 +6,7 @@ import {
   BREADCRUMB_SCHEDULE_DISMISSED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
+import { openDesktopRoute } from '@/lib/browseros/desktop-navigation'
 import type { NudgeData } from './getMessageSegments'
 
 export interface ScheduleSuggestionCardProps {
@@ -56,10 +57,7 @@ export const ScheduleSuggestionCard: FC<ScheduleSuggestionCardProps> = ({
       openDialog: 'true',
     })
 
-    const url = chrome.runtime.getURL(
-      `app.html#/scheduled?${params.toString()}`,
-    )
-    chrome.tabs.create({ url })
+    openDesktopRoute(`scheduled?${params.toString()}`)
   }
 
   return (

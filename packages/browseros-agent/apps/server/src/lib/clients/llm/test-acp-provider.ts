@@ -27,6 +27,9 @@ export interface TestAcpProviderInput {
 const BUILT_IN_AGENT_BY_PROVIDER: Record<string, string> = {
   [LLM_PROVIDERS.CLAUDE_CODE]: 'claude',
   [LLM_PROVIDERS.CODEX]: 'codex',
+  [LLM_PROVIDERS.OPENCODE]: 'opencode',
+  [LLM_PROVIDERS.OPENCODE_GO]: 'opencode',
+  [LLM_PROVIDERS.OPENCODE_ZEN]: 'opencode',
 }
 
 function resolveAgentId(input: TestAcpProviderInput): string | undefined {
@@ -80,7 +83,9 @@ export async function testAcpProvider(
   }
   const probeResult = await probe({
     agentId,
-    command: input.acpCommand,
+    command:
+      input.acpCommand ??
+      (agentId === 'opencode' ? 'opencode acp' : undefined),
     cwd: input.acpFixedWorkspacePath,
     resourcesDir: options.resourcesDir,
   })

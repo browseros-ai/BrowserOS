@@ -15,9 +15,10 @@ export const NewTabBranding: FC = () => {
           }}
           className="flex h-20 w-20 items-center justify-center rounded-xl bg-transparent"
         >
-          <img src={ProductLogoSvg} alt="BrowserOS" className="h-20 w-20" />
+          <img src={ProductLogoSvg} alt="Request Browser" className="h-20 w-20" />
         </motion.div>
       </div>
+      <div className="font-semibold text-2xl tracking-tight">Request Browser</div>
     </div>
   )
 }

@@ -29,6 +29,9 @@ export const LLM_PROVIDERS = {
   QWEN_CODE: 'qwen-code',
   CLAUDE_CODE: 'claude-code',
   CODEX: 'codex',
+  OPENCODE: 'opencode',
+  OPENCODE_GO: 'opencode-go',
+  OPENCODE_ZEN: 'opencode-zen',
   ACP_CUSTOM: 'acp-custom',
   REMOTE_HERMES: 'remote-hermes',
 } as const
@@ -52,9 +55,12 @@ export const LLMProviderSchema: z.ZodEnum<
     'chatgpt-pro',
     'github-copilot',
     'qwen-code',
-    'claude-code',
-    'codex',
-    'acp-custom',
+  'claude-code',
+  'codex',
+  'opencode',
+  'opencode-go',
+  'opencode-zen',
+  'acp-custom',
     'remote-hermes',
   ]
 > = z.enum([
@@ -74,6 +80,9 @@ export const LLMProviderSchema: z.ZodEnum<
   LLM_PROVIDERS.QWEN_CODE,
   LLM_PROVIDERS.CLAUDE_CODE,
   LLM_PROVIDERS.CODEX,
+  LLM_PROVIDERS.OPENCODE,
+  LLM_PROVIDERS.OPENCODE_GO,
+  LLM_PROVIDERS.OPENCODE_ZEN,
   LLM_PROVIDERS.ACP_CUSTOM,
   LLM_PROVIDERS.REMOTE_HERMES,
 ])

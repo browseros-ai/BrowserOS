@@ -60,7 +60,7 @@ export const StepTwo = ({ direction, onContinue }: StepTwoProps) => {
         <div className="w-full max-w-md space-y-6">
           <div className="space-y-2 text-center">
             <h2 className="font-bold text-3xl tracking-tight">
-              Sign in to BrowserOS
+                Sign in to Request Browser
             </h2>
             <p className="text-base text-muted-foreground">
               Sync your settings and unlock cloud features

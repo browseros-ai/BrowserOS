@@ -130,7 +130,7 @@ export function useUpdateHarnessAgent() {
       patch: { name?: string; pinned?: boolean }
     }) => {
       if (!baseUrl || urlLoading) {
-        throw new Error('BrowserOS agent server URL is not ready')
+        throw new Error('Request Browser agent server URL is not ready')
       }
       const data = await agentsFetch<{ agent: HarnessAgent }>(
         baseUrl,
@@ -178,7 +178,7 @@ export function useDeleteHarnessAgent() {
   return useMutation({
     mutationFn: async (agentId: string) => {
       if (!baseUrl || urlLoading) {
-        throw new Error('BrowserOS agent server URL is not ready')
+        throw new Error('Request Browser agent server URL is not ready')
       }
       return agentsFetch<{ success: boolean }>(
         baseUrl,

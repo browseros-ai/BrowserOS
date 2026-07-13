@@ -35,6 +35,28 @@ describe('providerFormSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('accepts a custom ACP provider for OpenCode without API credentials', () => {
+    const result = providerFormSchema.safeParse({
+      ...baseProviderValues,
+      type: 'acp-custom',
+      acpAgentId: 'opencode',
+      acpCommand: 'opencode acp',
+    })
+
+    expect(result.success).toBe(true)
+  })
+
+  it('accepts the first-class OpenCode provider without API credentials', () => {
+    const result = providerFormSchema.safeParse({
+      ...baseProviderValues,
+      type: 'opencode',
+      acpAgentId: 'opencode',
+      acpCommand: 'opencode acp',
+    })
+
+    expect(result.success).toBe(true)
+  })
+
   it('still requires a base URL for ordinary API-backed providers', () => {
     const result = providerFormSchema.safeParse({
       ...baseProviderValues,
@@ -87,6 +109,32 @@ describe('normalizeProviderFormValues', () => {
     expect(values.sessionToken).toBe('')
   })
 
+  it('clears stale endpoint and credential fields for custom ACP configs', () => {
+    const values = normalizeProviderFormValues({
+      ...staleCredentialValues,
+      type: 'acp-custom',
+      acpAgentId: 'opencode',
+      acpCommand: 'opencode acp',
+    })
+
+    expect(values.baseUrl).toBe('')
+    expect(values.apiKey).toBe('')
+    expect(values.acpAgentId).toBe('opencode')
+    expect(values.acpCommand).toBe('opencode acp')
+  })
+
+  it('preserves the optional OpenCode Go API key', () => {
+    const values = normalizeProviderFormValues({
+      ...staleCredentialValues,
+      type: 'opencode',
+      acpAgentId: 'opencode',
+      acpCommand: 'opencode acp',
+    })
+
+    expect(values.baseUrl).toBe('')
+    expect(values.apiKey).toBe('secret')
+  })
+
   it('leaves ordinary API-backed provider fields intact', () => {
     const values = normalizeProviderFormValues({
       ...staleCredentialValues,
@@ -108,7 +156,25 @@ describe('provider type options', () => {
       value: 'claude-code',
       label: 'Claude Code',
     })
+    expect(providerTypeOptions).toContainEqual({
+      value: 'acp-custom',
+      label: 'Custom ACP / OpenCode',
+    })
+    expect(providerTypeOptions).toContainEqual({
+      value: 'opencode',
+      label: 'OpenCode (Legacy ACP)',
+    })
+    expect(providerTypeOptions).toContainEqual({
+      value: 'opencode-go',
+      label: 'OpenCode Go',
+    })
+    expect(providerTypeOptions).toContainEqual({
+      value: 'opencode-zen',
+      label: 'OpenCode Zen (Free models)',
+    })
     expect(getDefaultBaseUrlForProviders('codex')).toBe('')
     expect(getDefaultBaseUrlForProviders('claude-code')).toBe('')
+    expect(getDefaultBaseUrlForProviders('opencode-go')).toBe('')
+    expect(getDefaultBaseUrlForProviders('opencode-zen')).toBe('')
   })
 })

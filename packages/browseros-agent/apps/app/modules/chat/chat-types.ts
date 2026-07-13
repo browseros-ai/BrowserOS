@@ -27,21 +27,21 @@ export const CHAT_SUGGESTIONS: Suggestion[] = [
 
 export const AGENT_SUGGESTIONS: Suggestion[] = [
   {
-    display: 'Read about our vision and upvote',
+    display: 'Summarize this page and save it',
     prompt:
-      'Go to https://dub.sh/browseros-launch in current tab. Find and click the upvote button',
+      'Summarize the current tab, preserve the source URL, and save the result to my Request Browser workspace',
     icon: '❤️',
   },
   {
-    display: 'Support BrowserOS on Github',
+    display: 'Extract visible data into a table',
     prompt:
-      'Go to http://git.new/browseros in current tab and star the repository',
+      'Extract the visible list or table from the current tab into a structured Request Browser workspace database, including source links',
     icon: '⭐',
   },
   {
-    display: 'Open amazon.com and order Sensodyne toothpaste',
+    display: 'Research prices on this page',
     prompt:
-      'Open amazon.com in current tab and add sensodyne toothpaste to cart',
+      'Find product or service prices on the current tab, flag missing or uncertain values, and prepare them for review before saving',
     icon: '🛒',
   },
 ]

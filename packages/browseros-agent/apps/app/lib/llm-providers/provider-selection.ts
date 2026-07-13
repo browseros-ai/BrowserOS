@@ -1,7 +1,7 @@
 import type { LlmProviderConfig } from './types'
 
 export const DEFAULT_PROVIDER_ID = 'browseros'
-export const DEFAULT_PROVIDER_NAME = 'BrowserOS'
+export const DEFAULT_PROVIDER_NAME = 'Request Browser'
 
 /** Resolves the persisted default id, repairing stale values to the first provider. */
 export function resolveDefaultProviderId(

@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/popover'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
+import { openDesktopSurface } from '@/lib/browseros/desktop-navigation'
 import { cn } from '@/lib/utils'
 import {
   getProviderSearchValue,
@@ -91,7 +92,7 @@ export const ChatProviderSelector: FC<
                 type="button"
                 className="flex w-full items-center gap-3 rounded-md p-2 text-muted-foreground text-sm transition-colors hover:bg-accent hover:text-foreground"
                 onClick={() => {
-                  window.open('/app.html#/settings/ai', '_blank')
+                  openDesktopSurface('settings')
                   setOpen(false)
                 }}
               >

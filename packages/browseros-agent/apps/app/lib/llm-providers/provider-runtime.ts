@@ -3,6 +3,10 @@ import type { LlmProviderConfig, ProviderType } from './types'
 const localRuntimeProviderTypes: ReadonlySet<ProviderType> = new Set([
   'codex',
   'claude-code',
+  'opencode',
+  'opencode-go',
+  'opencode-zen',
+  'acp-custom',
 ])
 
 /** Identifies provider configs backed by local CLIs instead of HTTP endpoints. */
@@ -12,7 +16,7 @@ export function isLocalRuntimeProviderType(type: ProviderType): boolean {
 
 /**
  * Identifies provider configs that can be sent to the generic chat routes.
- * ACP-backed types (claude-code, codex, acp-custom) are chat-capable: the
+ * ACP-backed types (claude-code, codex, opencode, acp-custom) are chat-capable: the
  * agent server resolves them to an ACP LanguageModelV2 inside streamText.
  */
 export function isChatProviderType(_type: ProviderType): boolean {
@@ -59,7 +63,7 @@ export function resolveChatProvider(
 /**
  * Scheduled tasks and refine-prompt requests go through the hosted
  * BrowserOS `/chat` endpoint and therefore cannot use local-runtime
- * providers (claude-code, codex, acp-custom) which only exist as a
+ * providers (claude-code, codex, opencode, acp-custom) which only exist as a
  * spawned CLI on the user's machine. These helpers explicitly skip
  * those types so the resolver falls back to a cloud-routable provider.
  */

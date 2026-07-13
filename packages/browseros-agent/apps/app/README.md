@@ -1,8 +1,8 @@
-# BrowserOS Agent Extension
+# Request Browser Extension
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](../../../../LICENSE)
 
-The built-in browser extension that powers BrowserOS's AI interface — new tab with unified search, side panel chat, onboarding, and settings. Built with [WXT](https://wxt.dev) and React.
+The browser extension that powers Request Browser's AI interface — new tab with unified search, side panel chat, onboarding, and settings. Built with [WXT](https://wxt.dev) and React.
 
 > For user-facing feature documentation, see [docs.browseros.com](https://docs.browseros.com).
 

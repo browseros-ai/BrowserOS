@@ -9,6 +9,8 @@ import { createBrowserMcpServer } from '@browseros/browser-mcp/mcp-server'
 import { logger } from '../../../lib/logger'
 import { metrics } from '../../../lib/metrics'
 import { registerFilesystemMcpTools } from '../../../tools/filesystem/register-mcp'
+import { registerWorkspaceMcpTools } from './register-workspace-mcp'
+import type { WorkspaceStore } from '../../../lib/workspace/workspace-store'
 import { shouldLogToolRegistration } from '../../../tools/registration-log-sampling'
 import type { ConnectorToolScope, KlavisService } from '../klavis'
 import type { ServerActivity } from '../server-activity'
@@ -25,11 +27,20 @@ export interface McpServiceDeps {
   executionDir: string
   remoteAgentHarness?: RemoteAgentHarnessTools
   activity?: ServerActivity
+  /** Workspace persistence scoped to the current MCP conversation. */
+  workspaceStore?: WorkspaceStore
+  workspaceConversationId?: string
 }
 
 /** Creates a per-request BrowserOS MCP server with tools for the requested surface. */
 export function createMcpServer(deps: McpServiceDeps) {
   const selectedServerNames = deps.connectorScope?.selectedServerNames ?? []
+  const instructions =
+    deps.workspaceStore &&
+    deps.workspaceConversationId &&
+    deps.workspaceConversationId !== 'ephemeral'
+      ? `${MCP_INSTRUCTIONS}\n\n## Research Workspace\nCall research_get_session first. Use workspace_create_source for each page, workspace_create_record for verified structured results, and workspace_save_asset for evidence files or screenshots. Update plan steps and call research_update_status only after verifying coverage and source support. Do not store private chain-of-thought.`
+      : MCP_INSTRUCTIONS
   logger.debug('Creating BrowserOS MCP server', {
     version: deps.version,
     remoteAgentHarness: Boolean(deps.remoteAgentHarness),
@@ -46,7 +57,7 @@ export function createMcpServer(deps: McpServiceDeps) {
     browserSession: deps.browserSession,
     defaultWindowId: deps.defaultWindowId,
     defaultTabGroupId: deps.defaultTabGroupId,
-    instructions: MCP_INSTRUCTIONS,
+    instructions,
     registration: {
       outputFileAccess: deps.remoteAgentHarness?.outputFileAccess,
       logger,
@@ -64,6 +75,13 @@ export function createMcpServer(deps: McpServiceDeps) {
     })
     registerFilesystemMcpTools(server, deps.executionDir, {
       outputFileAccess: deps.remoteAgentHarness.outputFileAccess,
+    })
+  }
+
+  if (deps.workspaceStore && deps.workspaceConversationId) {
+    registerWorkspaceMcpTools(server, {
+      store: deps.workspaceStore,
+      conversationId: deps.workspaceConversationId,
     })
   }
 

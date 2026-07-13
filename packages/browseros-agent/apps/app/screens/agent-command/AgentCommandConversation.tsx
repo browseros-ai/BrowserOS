@@ -1,8 +1,17 @@
 import { ArrowLeft, Plus } from 'lucide-react'
-import { type FC, useEffect, useMemo, useRef } from 'react'
+import { type FC, useCallback, useEffect, useMemo, useRef } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
 import type { AgentAdapterHealth } from '@/components/agents/agent-row/agent-row.types'
 import { Button } from '@/components/ui/button'
+import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
+import {
+  createResearchSessionForGoal,
+  generateResearchRecap,
+  generateResearchSuggestion,
+  recordResearchActivity,
+  updateResearchPlanStep,
+  updateResearchSessionStatus,
+} from '@/lib/workspace/research-session-client'
 import { cn } from '@/lib/utils'
 import type {
   AgentEntry,
@@ -46,9 +55,14 @@ function AgentConversationController({
   agents: AgentEntry[]
 }) {
   const initialMessageSentRef = useRef<string | null>(null)
+  const workspaceSessionIdRef = useRef<string | null>(null)
+  const workspaceSessionPromiseRef = useRef<Promise<string | null> | null>(null)
+  const workspacePlanStepIdsRef = useRef<string[]>([])
+  const workspaceStopRequestedRef = useRef(false)
   const onInitialMessageConsumedRef = useRef(onInitialMessageConsumed)
   const agent = agents.find((entry) => entry.agentId === agentId)
   const agentName = agent?.name || agentId || 'Agent'
+  const { baseUrl: agentServerUrl } = useAgentServerUrl()
   const harnessHistoryQuery = useHarnessChatHistory(
     agentId,
     sessionId,
@@ -77,6 +91,54 @@ function AgentConversationController({
   )
   const activeTurnId = harnessAgent?.activeTurnId ?? null
 
+  const ensureWorkspaceSession = useCallback(
+    (goal: string): Promise<string | null> => {
+      if (!agentServerUrl || !goal.trim()) return Promise.resolve(null)
+      if (workspaceSessionIdRef.current) {
+        return Promise.resolve(workspaceSessionIdRef.current)
+      }
+      if (workspaceSessionPromiseRef.current) {
+        return workspaceSessionPromiseRef.current
+      }
+
+      const promise = createResearchSessionForGoal(agentServerUrl, {
+        goal: goal.trim(),
+        conversationId: sessionId,
+      })
+        .then((session) => {
+          workspaceSessionIdRef.current = session.id
+          workspacePlanStepIdsRef.current = session.plan?.map((step) => step.id) ?? []
+          const [understandStep, browseStep] = workspacePlanStepIdsRef.current
+          if (understandStep) void updateResearchPlanStep(agentServerUrl, understandStep, 'completed').catch(() => {})
+          if (browseStep) void updateResearchPlanStep(agentServerUrl, browseStep, 'running').catch(() => {})
+          return session.id
+        })
+        .catch(() => null)
+        .finally(() => {
+          workspaceSessionPromiseRef.current = null
+        })
+      workspaceSessionPromiseRef.current = promise
+      return promise
+    },
+    [agentServerUrl, sessionId],
+  )
+
+  const recordWorkspaceActivity = useCallback(
+    (input: {
+      title: string
+      detail?: string
+      kind?: 'activity' | 'error' | 'checkpoint'
+    }) => {
+      if (!agentServerUrl || !workspaceSessionIdRef.current) return
+      void recordResearchActivity(
+        agentServerUrl,
+        workspaceSessionIdRef.current,
+        input,
+      ).catch(() => {})
+    },
+    [agentServerUrl],
+  )
+
   const { turns, streaming, send } = useAgentConversation(agentId, {
     runtime: 'agent-harness',
     sessionId,
@@ -85,6 +147,29 @@ function AgentConversationController({
     activeTurnId,
     onComplete: () => {
       void harnessHistoryQuery.refetch()
+      if (agentServerUrl && workspaceSessionIdRef.current) {
+        const status = workspaceStopRequestedRef.current
+          ? 'paused'
+          : 'completed'
+        void updateResearchSessionStatus(
+          agentServerUrl,
+          workspaceSessionIdRef.current,
+          status,
+        )
+          .then(async () => {
+            if (status === 'completed') {
+              await Promise.all(workspacePlanStepIdsRef.current.map((stepId) => updateResearchPlanStep(agentServerUrl, stepId, 'completed')))
+            }
+            await generateResearchRecap(agentServerUrl, workspaceSessionIdRef.current as string)
+            await generateResearchSuggestion(agentServerUrl, workspaceSessionIdRef.current as string)
+          })
+          .catch(() => {})
+        recordWorkspaceActivity({
+          title: status === 'paused' ? 'Agent turn paused' : 'Agent turn completed',
+          detail: 'The visible activity and reasoning trace remain available in this thread.',
+        })
+        workspaceStopRequestedRef.current = false
+      }
     },
     onSessionKeyChange: () => {},
   })
@@ -92,12 +177,45 @@ function AgentConversationController({
   const removeQueuedMessage = useRemoveHarnessQueuedMessage()
 
   const handleStop = () => {
+    workspaceStopRequestedRef.current = true
     void cancelHarnessTurn(agentId, {
       sessionId,
       turnId: activeTurnId ?? undefined,
       reason: 'user pressed stop',
     })
+    if (agentServerUrl && workspaceSessionIdRef.current) {
+      void updateResearchSessionStatus(
+        agentServerUrl,
+        workspaceSessionIdRef.current,
+        'paused',
+      ).catch(() => {})
+      recordWorkspaceActivity({ title: 'Agent turn paused', kind: 'checkpoint' })
+    }
   }
+
+  const sendWithWorkspace = useCallback(
+    async (input: Parameters<typeof send>[0]) => {
+      const normalizedInput =
+        typeof input === 'string' ? { text: input } : input
+      workspaceStopRequestedRef.current = false
+      const session = await ensureWorkspaceSession(normalizedInput.text)
+      if (session) {
+        recordWorkspaceActivity({
+          title: 'Goal delegated to the agent',
+          detail: normalizedInput.text,
+        })
+        if (agentServerUrl) {
+          void updateResearchSessionStatus(
+            agentServerUrl,
+            session,
+            'running',
+          ).catch(() => {})
+        }
+      }
+      await send(input)
+    },
+    [agentServerUrl, ensureWorkspaceSession, recordWorkspaceActivity, send],
+  )
   const visibleTurns = useMemo(
     () => filterTurnsPersistedInHistory(turns, historyMessages),
     [historyMessages, turns],
@@ -112,8 +230,8 @@ function AgentConversationController({
     : null
   const error = harnessHistoryQuery.error ?? null
 
-  const sendRef = useRef(send)
-  sendRef.current = send
+  const sendRef = useRef(sendWithWorkspace)
+  sendRef.current = sendWithWorkspace
 
   useEffect(() => {
     if (disabled || !historyReady) return
@@ -213,6 +331,13 @@ function AgentConversationController({
               // starting a parallel turn. Drains automatically as
               // soon as the active turn ends.
               if (streaming || activeTurnId) {
+                void ensureWorkspaceSession(input.text).then((workspaceSessionId) => {
+                  if (!workspaceSessionId) return
+                  recordWorkspaceActivity({
+                    title: 'Follow-up message queued',
+                    detail: input.text,
+                  })
+                })
                 enqueueMessage.mutate({
                   agentId,
                   sessionId,
@@ -221,7 +346,7 @@ function AgentConversationController({
                 })
                 return
               }
-              void send({ text: input.text, attachments, attachmentPreviews })
+                void sendWithWorkspace({ text: input.text, attachments, attachmentPreviews })
             }}
             onStop={handleStop}
             streaming={streaming}

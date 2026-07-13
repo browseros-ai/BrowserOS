@@ -2,6 +2,7 @@ import { AlertCircle, RefreshCw } from 'lucide-react'
 import type { FC } from 'react'
 import { useMemo } from 'react'
 import { Button } from '@/components/ui/button'
+import { openDesktopRoute } from '@/lib/browseros/desktop-navigation'
 
 const SURVEY_DIRECTIONS = [
   'competitor',
@@ -36,7 +37,7 @@ function parseErrorMessage(
   // fetch failure is always a local connection issue.
   if (message.includes('Failed to fetch') || message.includes('fetch failed')) {
     return {
-      text: 'Unable to connect to BrowserOS agent. Follow below instructions.',
+      text: 'Unable to connect to Request Browser agent. Follow the instructions below.',
       url: 'https://docs.browseros.com/troubleshooting/connection-issues',
       isConnectionError: true,
     }
@@ -124,14 +125,13 @@ export const ChatError: FC<ChatErrorProps> = ({
         </a>
       )}
       {isCreditsExhausted && url && (
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
+        <button
+          type="button"
+          onClick={() => openDesktopRoute('settings/usage')}
           className="text-muted-foreground text-xs underline hover:text-foreground"
         >
-          View Usage & Billing
-        </a>
+          Open AI settings
+        </button>
       )}
       {isRateLimit && !isCreditsExhausted && (
         <p className="text-muted-foreground text-xs">

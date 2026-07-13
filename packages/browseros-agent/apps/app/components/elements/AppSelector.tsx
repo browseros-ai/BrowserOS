@@ -18,6 +18,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { MANAGED_MCP_ADDED_EVENT } from '@/lib/constants/analyticsEvents'
+import { openDesktopSurface } from '@/lib/browseros/desktop-navigation'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import { track } from '@/lib/metrics/track'
 import { sentry } from '@/lib/sentry/sentry'
@@ -213,10 +214,7 @@ export const AppSelector: FC<AppSelectorProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        const appUrl = chrome.runtime.getURL(
-                          '/app.html#/connect-apps',
-                        )
-                        window.open(appUrl, '_blank')
+                        openDesktopSurface('connect-apps')
                         setOpen(false)
                       }}
                       title="Manage apps"

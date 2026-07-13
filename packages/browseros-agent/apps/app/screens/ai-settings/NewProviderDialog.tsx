@@ -90,11 +90,33 @@ import {
 const ACP_PROVIDER_TYPES = new Set<ProviderType>([
   'claude-code',
   'codex',
+  'opencode',
+  'opencode-go',
+  'opencode-zen',
   'acp-custom',
 ])
 
 function isAcpProviderType(type: ProviderType | undefined): boolean {
   return type !== undefined && ACP_PROVIDER_TYPES.has(type)
+}
+
+function isOpenCodeProviderType(type: ProviderType | undefined): boolean {
+  return type === 'opencode' || type === 'opencode-go' || type === 'opencode-zen'
+}
+
+function filterOpenCodeModels(
+  type: ProviderType | undefined,
+  models: Array<{ id: string; name?: string; description?: string }>,
+) {
+  if (type === 'opencode-go') {
+    return models.filter((model) => model.id.startsWith('opencode-go/'))
+  }
+  if (type === 'opencode-zen') {
+    return models
+      .filter((model) => model.id.startsWith('opencode/'))
+      .sort((a, b) => Number(b.id.endsWith('-free')) - Number(a.id.endsWith('-free')))
+  }
+  return models
 }
 
 function isRemoteHermesType(type: ProviderType | undefined): boolean {
@@ -161,7 +183,10 @@ function isProviderTestable(input: {
   if (!input.modelId) return false
 
   if (isAcpProviderType(input.type)) {
-    return input.type !== 'acp-custom' || Boolean(input.acpCommand)
+    return (
+      input.type !== 'acp-custom' ||
+      Boolean(input.acpCommand)
+    )
   }
 
   if (
@@ -229,6 +254,13 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         initialValues?.reasoningEffort ||
         defaultReasoningEffort(initialValues?.type),
       reasoningSummary: initialValues?.reasoningSummary || 'auto',
+      acpAgentId:
+        initialValues?.acpAgentId ||
+        (isOpenCodeProviderType(initialValues?.type) ? 'opencode' : ''),
+      acpCommand:
+        initialValues?.acpCommand ||
+        (isOpenCodeProviderType(initialValues?.type) ? 'opencode acp' : ''),
+      acpFixedWorkspacePath: initialValues?.acpFixedWorkspacePath || '',
     },
   })
 
@@ -242,6 +274,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   const watchedSecretAccessKey = form.watch('secretAccessKey')
   const watchedRegion = form.watch('region')
   const watchedSessionToken = form.watch('sessionToken')
+  const watchedAcpAgentId = form.watch('acpAgentId')
+  const watchedAcpCommand = form.watch('acpCommand')
+  const watchedAcpFixedWorkspacePath = form.watch('acpFixedWorkspacePath')
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional - clear result when any credential changes
   useEffect(() => {
@@ -256,10 +291,16 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     watchedSecretAccessKey,
     watchedRegion,
     watchedSessionToken,
+    watchedAcpAgentId,
+    watchedAcpCommand,
+    watchedAcpFixedWorkspacePath,
   ])
 
   const acpProbe = useAcpProbe({
     providerType: watchedType as ProviderType,
+    acpAgentId: watchedAcpAgentId,
+    command: watchedAcpCommand,
+    cwd: watchedAcpFixedWorkspacePath,
     enabled: isAcpProviderType(watchedType as ProviderType),
   })
 
@@ -271,7 +312,10 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   useEffect(() => {
     if (!isAcpProviderType(watchedType as ProviderType)) return
     if (!acpProbe.data) return
-    const firstModel = acpProbe.data.models[0]?.id
+    const firstModel = filterOpenCodeModels(
+      watchedType as ProviderType,
+      acpProbe.data.models,
+    )[0]?.id
     if (firstModel && !form.getValues('modelId')) {
       form.setValue('modelId', firstModel, { shouldDirty: false })
     }
@@ -321,8 +365,18 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       if (!form.getValues('name')) form.setValue('name', 'Remote Hermes')
       return
     }
+    if (newType === 'acp-custom' || isOpenCodeProviderType(newType)) {
+      const template = getProviderTemplate(newType)
+      if (!form.getValues('name')) form.setValue('name', template?.name ?? 'OpenCode')
+      if (!form.getValues('acpAgentId')) {
+        form.setValue('acpAgentId', 'opencode')
+      }
+      if (!form.getValues('acpCommand')) {
+        form.setValue('acpCommand', 'opencode acp')
+      }
+    }
     form.setValue('reasoningEffort', defaultReasoningEffort(newType))
-    form.setValue('modelId', '')
+    form.setValue('modelId', getProviderTemplate(newType)?.defaultModelId ?? '')
   }
 
   useEffect(() => {
@@ -361,6 +415,13 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
           initialValues.reasoningEffort ||
           defaultReasoningEffort(initialValues.type),
         reasoningSummary: initialValues.reasoningSummary || 'auto',
+        acpAgentId:
+          initialValues.acpAgentId ||
+          (isOpenCodeProviderType(initialValues.type) ? 'opencode' : ''),
+        acpCommand:
+          initialValues.acpCommand ||
+          (isOpenCodeProviderType(initialValues.type) ? 'opencode acp' : ''),
+        acpFixedWorkspacePath: initialValues.acpFixedWorkspacePath || '',
       })
     }
   }, [initialValues, form])
@@ -384,6 +445,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         sessionToken: '',
         reasoningEffort: defaultReasoningEffort(defaultType),
         reasoningSummary: 'auto',
+        acpAgentId: '',
+        acpCommand: '',
+        acpFixedWorkspacePath: '',
       })
     }
     setTestResult(null)
@@ -466,6 +530,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
           secretAccessKey: values.secretAccessKey,
           region: values.region,
           sessionToken: values.sessionToken,
+          acpAgentId: values.acpAgentId,
+          acpCommand: values.acpCommand,
+          acpFixedWorkspacePath: values.acpFixedWorkspacePath,
         },
         agentServerUrl,
       )
@@ -533,16 +600,122 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     }
 
     function renderAcpFields() {
-      const agentLabel = watchedType === 'codex' ? 'Codex' : 'Claude Code'
+      const isOpenCode = isOpenCodeProviderType(watchedType)
+      const isCustom = isOpenCode || watchedType === 'acp-custom'
+      const agentLabel = isOpenCode
+        ? 'OpenCode'
+        : isCustom
+          ? 'Custom ACP agent'
+        : watchedType === 'codex'
+          ? 'Codex'
+          : 'Claude Code'
+      const customFields = isCustom ? (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField
+              control={form.control}
+              name="acpAgentId"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>ACP Agent ID *</FormLabel>
+                  <FormControl>
+                    <Input placeholder="opencode" {...field} />
+                  </FormControl>
+                  <FormDescription>
+                    Use <code>opencode</code> for the OpenCode ACP agent.
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="acpCommand"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>ACP Command *</FormLabel>
+                  <FormControl>
+                    <Input placeholder="opencode acp" {...field} />
+                  </FormControl>
+                  <FormDescription>
+                    The local command Request Browser starts over JSON-RPC stdio.
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+          <FormField
+            control={form.control}
+            name="acpFixedWorkspacePath"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Workspace Path</FormLabel>
+                <FormControl>
+                  <Input
+                    placeholder="Optional local workspace directory"
+                    {...field}
+                  />
+                </FormControl>
+                <FormDescription>
+                  OpenCode uses this directory as its working context.
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          {isOpenCode ? (
+            <FormField
+              control={form.control}
+              name="apiKey"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    {watchedType === 'opencode-zen' ? 'OpenCode Zen API Key' : 'OpenCode Go API Key'}
+                  </FormLabel>
+                  <FormControl>
+                    <Input
+                      type="password"
+                      autoComplete="off"
+                      placeholder="Paste key from opencode.ai/auth"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    Optional if already connected with the OpenCode CLI. Request Browser stores its copy with operating-system encryption and syncs it to OpenCode&apos;s required local auth store.
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          ) : null}
+        </>
+      ) : null
       const banner = (
         <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 text-sm dark:border-green-800 dark:bg-green-950 dark:text-green-300">
-          Credentials are managed by the local {agentLabel} runtime. No API key
-          needed.
+          {isCustom
+            ? isOpenCode
+              ? watchedType === 'opencode-zen'
+                ? 'OpenCode Zen runs locally over ACP. Free model availability is limited and free providers may retain prompts, so avoid sensitive data.'
+                : 'OpenCode Go runs locally over ACP using your Go subscription and opencode-go models.'
+              : 'This ACP agent runs locally. Configure its provider credentials in the agent environment or configuration.'
+            : `Credentials are managed by the local ${agentLabel} runtime. No API key needed.`}
+          {isOpenCode && setupGuideUrl ? (
+            <a
+              href={setupGuideUrl}
+              onClick={handleSetupGuideClick}
+              className="ml-1 inline-flex cursor-pointer items-center gap-1 text-primary hover:underline"
+            >
+              <ExternalLink className="h-3 w-3" />
+              OpenCode setup
+            </a>
+          ) : null}
         </div>
       )
       if (acpProbe.isPending) {
         return (
           <>
+            {customFields}
             {banner}
             <div className="flex items-center gap-2 text-muted-foreground text-sm">
               <Loader2 className="size-4 animate-spin" />
@@ -555,6 +728,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       if (acpProbe.isError) {
         return (
           <>
+            {customFields}
             {banner}
             <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700 text-sm dark:border-red-800 dark:bg-red-950 dark:text-red-300">
               <div>
@@ -580,6 +754,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       if (probe?.error) {
         return (
           <>
+            {customFields}
             {banner}
             <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700 text-sm dark:border-red-800 dark:bg-red-950 dark:text-red-300">
               <div>
@@ -602,47 +777,54 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
           </>
         )
       }
-      const models = probe?.models ?? []
+      const models = filterOpenCodeModels(watchedType, probe?.models ?? [])
       const effortValues = probe?.reasoning?.values ?? []
       return (
         <>
+          {customFields}
           {banner}
           <FormField
             control={form.control}
             name="modelId"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Model *</FormLabel>
-                <Select
-                  onValueChange={field.onChange}
-                  value={field.value || ''}
-                  disabled={models.length === 0}
-                >
-                  <FormControl>
-                    <SelectTrigger className="w-full">
-                      <SelectValue
-                        placeholder={
-                          models.length === 0
-                            ? 'No settable models advertised'
-                            : 'Select a model...'
-                        }
-                      />
-                    </SelectTrigger>
-                  </FormControl>
-                  <SelectContent>
-                    {models.map((m) => (
-                      <SelectItem key={m.id} value={m.id}>
-                        <span className="font-medium">{m.name ?? m.id}</span>
-                        {m.description ? (
-                          <span className="ml-2 text-muted-foreground text-xs">
-                            {m.description}
-                          </span>
-                        ) : null}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <FormMessage />
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Model *</FormLabel>
+                  {isCustom && models.length === 0 ? (
+                    <FormControl>
+                      <Input placeholder="Model ID" {...field} />
+                    </FormControl>
+                  ) : (
+                    <Select
+                      onValueChange={field.onChange}
+                      value={field.value || ''}
+                      disabled={models.length === 0}
+                    >
+                      <FormControl>
+                        <SelectTrigger className="w-full">
+                          <SelectValue
+                            placeholder={
+                              models.length === 0
+                                ? 'No settable models advertised'
+                                : 'Select a model...'
+                            }
+                          />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {models.map((m) => (
+                          <SelectItem key={m.id} value={m.id}>
+                            <span className="font-medium">{m.name ?? m.id}</span>
+                            {m.description ? (
+                              <span className="ml-2 text-muted-foreground text-xs">
+                                {m.description}
+                              </span>
+                            ) : null}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  <FormMessage />
               </FormItem>
             )}
           />

@@ -8,6 +8,7 @@ import { AgentCommandHome } from '@/screens/agent-command/AgentCommandHome'
 import { AgentCommandLayout } from '@/screens/agent-command/AgentCommandLayout'
 import { AISettingsPage } from '@/screens/ai-settings/AISettingsPage'
 import { LoginPage } from '@/screens/auth/LoginPage'
+import { BrowserDataPage } from '@/screens/browser-data/BrowserDataPage'
 import { LogoutPage } from '@/screens/auth/LogoutPage'
 import { ConnectMCP } from '@/screens/connect-mcp/ConnectMCP'
 import { CustomizationPage } from '@/screens/customization/CustomizationPage'
@@ -24,6 +25,7 @@ import { StepsLayout } from '@/screens/onboarding/steps/StepsLayout'
 import { ProfilePage } from '@/screens/profile/ProfilePage'
 import { ScheduledTasksPage } from '@/screens/scheduled-tasks/ScheduledTasksPage'
 import { UsagePage } from '@/screens/usage/UsagePage'
+import { WorkspacePage } from '@/screens/workspace/WorkspacePage'
 
 function getSurveyParams(): { maxTurns?: number; experimentId?: string } {
   const params = new URLSearchParams(window.location.search)
@@ -89,7 +91,9 @@ export const App: FC = () => {
           </Route>
 
           <Route path="connect-apps" element={<ConnectMCP />} />
+          <Route path="workspace" element={<WorkspacePage />} />
           <Route path="scheduled" element={<ScheduledTasksPage />} />
+          <Route path="library/:kind" element={<BrowserDataPage />} />
         </Route>
 
         <Route element={<SettingsSidebarLayout />}>

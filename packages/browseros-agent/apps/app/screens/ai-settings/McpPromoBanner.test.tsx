@@ -43,7 +43,7 @@ describe('McpPromoBanner', () => {
   it('renders the MCP promo without a fixed tool count', () => {
     const html = renderBanner()
 
-    expect(html).toContain('Use BrowserOS with Claude Code')
+    expect(html).toContain('Use Request Browser with Claude Code')
     expect(html).toContain('Connect your favorite coding tools')
     expect(html).toContain('Set up')
     expect(html).not.toContain('66+ tools')

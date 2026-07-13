@@ -107,6 +107,18 @@ describe('createLanguageModel — ACP providers', () => {
     expect(lastBuildArgs?.agentId).toBe('codex')
   })
 
+  it('routes OpenCode to the ACP command with the expected defaults', async () => {
+    await createLanguageModel({
+      ...baseConfig(),
+      provider: 'opencode',
+    } as never)
+    expect(lastBuildArgs?.agentId).toBe('opencode')
+    expect(
+      (lastBuildArgs?.agentRegistryOverrides as Record<string, string>)
+        ?.opencode,
+    ).toBe('opencode acp')
+  })
+
   it('lets an explicit acpAgentId override the built-in default', async () => {
     await createLanguageModel({
       ...baseConfig(),
@@ -166,7 +178,7 @@ describe('createLanguageModel — ACP providers', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bos-pf-acp-'))
     const binDir = path.join(tmpRoot, 'bin', 'third_party')
     fs.mkdirSync(binDir, { recursive: true })
-    const bunPath = path.join(binDir, 'bun')
+    const bunPath = path.join(binDir, process.platform === 'win32' ? 'bun.exe' : 'bun')
     fs.writeFileSync(bunPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
 
     await createLanguageModel({
@@ -191,7 +203,7 @@ describe('createLanguageModel — ACP providers', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bos-pf-acp-'))
     const binDir = path.join(tmpRoot, 'bin', 'third_party')
     fs.mkdirSync(binDir, { recursive: true })
-    fs.writeFileSync(path.join(binDir, 'bun'), '#!/bin/sh\nexit 0\n', {
+    fs.writeFileSync(path.join(binDir, process.platform === 'win32' ? 'bun.exe' : 'bun'), '#!/bin/sh\nexit 0\n', {
       mode: 0o755,
     })
 
@@ -266,8 +278,10 @@ describe('createLanguageModel — ACP providers', () => {
       providerId: 'sonnet-medium',
     } as never)
     expect(opusPath).not.toBe(lastBuildArgs?.workspacePath)
-    expect(opusPath).toContain('claude-code/opus-high')
-    expect(lastBuildArgs?.workspacePath).toContain('claude-code/sonnet-medium')
+    expect(opusPath).toContain(join('claude-code', 'opus-high'))
+    expect(lastBuildArgs?.workspacePath).toContain(
+      join('claude-code', 'sonnet-medium'),
+    )
   })
 
   it('mkdir -ps the workspace before handing it to buildAcpxProvider', async () => {

@@ -133,7 +133,7 @@ export const ChatFooter: FC<ChatFooterProps> = ({
       )}
 
       <div className="p-3">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between gap-2">
           <ChatModeToggle mode={mode} onModeChange={onModeChange} />
 
           <div className="h-4 w-px bg-border/50" />
@@ -146,8 +146,9 @@ export const ChatFooter: FC<ChatFooterProps> = ({
               data-state={isTabMentionOpen ? 'open' : 'closed'}
               aria-expanded={isTabMentionOpen}
               aria-haspopup="dialog"
+              aria-label={attachedTabs.length ? `Attached tabs: ${attachedTabs.length}` : 'Attach browser tabs'}
               className="flex cursor-pointer items-center gap-1 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
-              title="Attach tabs (@)"
+              title="Attach browser tabs (@)"
             >
               <Layers className="h-4 w-4" />
               {attachedTabs.length > 0 && (
@@ -170,8 +171,9 @@ export const ChatFooter: FC<ChatFooterProps> = ({
                 title={
                   selectedFolder
                     ? selectedFolder.name
-                    : 'Select workspace folder'
+                    : 'Choose workspace folder'
                 }
+                aria-label={selectedFolder ? `Workspace folder: ${selectedFolder.name}` : 'Choose workspace folder'}
               >
                 <div className="relative">
                   <Folder className="h-4 w-4" />
@@ -188,6 +190,7 @@ export const ChatFooter: FC<ChatFooterProps> = ({
                 type="button"
                 className="flex cursor-pointer items-center gap-1 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
                 title="Connect apps"
+                aria-label="Connect apps"
               >
                 {connectedManagedServers.length > 0 ? (
                   <>

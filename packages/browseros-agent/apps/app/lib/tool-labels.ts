@@ -82,8 +82,8 @@ const VERB_OVERRIDES: Record<string, string> = {
   suggest_schedule: 'Suggested schedule',
   suggest_app_connection: 'Suggested app connect',
 
-  // BrowserOS info
-  browseros_info: 'Read BrowserOS info',
+  // Request Browser product information (legacy tool identifier retained).
+  browseros_info: 'Read Request Browser info',
 
   // Windows
   list_windows: 'Listed windows',

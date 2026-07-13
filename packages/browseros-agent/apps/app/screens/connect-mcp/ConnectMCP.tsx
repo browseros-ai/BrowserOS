@@ -221,7 +221,7 @@ export const ConnectMCP: FC = () => {
           <div className="flex-1">
             <h2 className="mb-1 font-semibold text-xl">Connected Apps</h2>
             <p className="mb-6 text-muted-foreground text-sm">
-              Connect BrowserOS assistant to apps to send email, schedule
+              Connect Request Browser assistant to apps to send email, schedule
               calendar events, write docs, and more
             </p>
 

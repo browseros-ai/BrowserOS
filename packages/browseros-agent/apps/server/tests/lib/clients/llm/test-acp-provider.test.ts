@@ -94,6 +94,31 @@ describe('testAcpProvider — happy path', () => {
     expect(lastProbeInput?.command).toBe('my-bin acp')
     expect(lastProbeInput?.cwd).toBe('/tmp/x')
   })
+
+  it('resolves and probes OpenCode through its ACP command', async () => {
+    nextProbeResult = probeOK({
+      agentInfo: { name: 'opencode', title: 'OpenCode' },
+    })
+    const result = await runTest({
+      provider: 'opencode',
+      model: 'sonnet',
+      acpCommand: 'opencode acp',
+    })
+    expect(result.success).toBe(true)
+    expect(lastProbeInput?.agentId).toBe('opencode')
+    expect(lastProbeInput?.command).toBe('opencode acp')
+  })
+
+  it.each(['opencode-go', 'opencode-zen'])(
+    'uses the built-in OpenCode ACP command for %s',
+    async (provider) => {
+      nextProbeResult = probeOK()
+      const result = await runTest({ provider, model: 'sonnet' })
+      expect(result.success).toBe(true)
+      expect(lastProbeInput?.agentId).toBe('opencode')
+      expect(lastProbeInput?.command).toBe('opencode acp')
+    },
+  )
 })
 
 describe('testAcpProvider — failure modes', () => {

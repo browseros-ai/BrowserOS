@@ -197,31 +197,44 @@ export default defineContentScript({
   matches: ['*://*/*'],
   runAt: 'document_start',
   main() {
+    const handleMessage = (message: GlowMessage): { success: true } | undefined => {
+      if (
+        typeof message !== 'object' ||
+        !('conversationId' in message) ||
+        !('isActive' in message)
+      ) {
+        return
+      }
+
+      if (message.isActive) {
+        activeConversationId = message.conversationId
+        startGlow()
+      } else if (message.conversationId === activeConversationId) {
+        activeConversationId = null
+        stopGlow()
+        if (message.showConfetti) {
+          fireConfetti()
+        }
+      }
+
+      return { success: true }
+    }
+
     browser.runtime.onMessage.addListener(
       (message: GlowMessage, _sender, sendResponse) => {
-        if (
-          typeof message !== 'object' ||
-          !('conversationId' in message) ||
-          !('isActive' in message)
-        ) {
-          return
-        }
-
-        if (message.isActive) {
-          activeConversationId = message.conversationId
-          startGlow()
-        } else if (message.conversationId === activeConversationId) {
-          activeConversationId = null
-          stopGlow()
-          if (message.showConfetti) {
-            fireConfetti()
-          }
-        }
-
-        sendResponse({ success: true })
-        return true
+        const response = handleMessage(message)
+        if (response) sendResponse(response)
+        return Boolean(response)
       },
     )
+
+    // Request Browser's Electron shell cannot use Chrome's tabs.sendMessage
+    // transport for WebContentsView tabs. The shell forwards the same
+    // payload through the page world as a scoped postMessage event.
+    window.addEventListener('message', (event) => {
+      if (event.source !== window || event.data?.source !== 'request-browser') return
+      handleMessage(event.data.message as GlowMessage)
+    })
 
     window.addEventListener('beforeunload', stopGlow)
 

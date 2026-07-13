@@ -1,4 +1,4 @@
-import { Bot, Github, History, Plus, SettingsIcon } from 'lucide-react'
+import { Bot, ExternalLink, Github, History, MoreHorizontal, Plus, SettingsIcon } from 'lucide-react'
 import type { FC } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
@@ -11,6 +11,15 @@ import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { useCredits } from '@/modules/credits/credits.hooks'
+import { openDesktopSurface } from '@/lib/browseros/desktop-navigation'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 
 const CreditsBadgeWrapper: FC = () => {
   const { supports } = useCapabilities()
@@ -19,7 +28,7 @@ const CreditsBadgeWrapper: FC = () => {
   return (
     <CreditBadge
       credits={data.credits}
-      onClick={() => window.open('/app.html#/settings/usage', '_blank')}
+      onClick={() => openDesktopSurface('settings')}
     />
   )
 }
@@ -44,10 +53,21 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
   const location = useLocation()
   const navigate = useNavigate()
   const isHistoryPage = location.pathname === '/history'
+  const providerLabel = selectedProvider.type.startsWith('opencode') || selectedProvider.name === 'OpenCode'
+    ? 'Request Browser'
+    : selectedProvider.name
 
   const handleNewConversationFromHistory = () => {
     onNewConversation()
     navigate('/')
+  }
+
+  const openRepository = () => {
+    void chrome.tabs.create({ url: productRepositoryUrl })
+  }
+
+  const openSettings = () => {
+    void chrome.runtime.openOptionsPage()
   }
 
   return (
@@ -61,8 +81,9 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
         >
           <button
             type="button"
-            className="group relative inline-flex cursor-pointer items-center gap-2 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
-            title="Change AI Provider"
+            className="group relative inline-flex min-w-0 max-w-[min(15rem,55vw)] cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
+            title={`Change AI provider. Current provider: ${selectedProvider.name}`}
+            aria-label={`Change AI provider. Current provider: ${selectedProvider.name}`}
           >
             {selectedProvider.kind === 'acp' ? (
               <Bot className="h-[18px] w-[18px]" />
@@ -74,8 +95,8 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
                 size={18}
               />
             )}
-            <span className="font-semibold text-base">
-              {selectedProvider.name}
+            <span className="truncate font-semibold text-base">
+              {providerLabel}
             </span>
           </button>
         </ChatProviderSelector>
@@ -114,25 +135,35 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
             </Link>
           ))}
 
-        <a
-          href={productRepositoryUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="cursor-pointer rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-          title="Star on Github"
-        >
-          <Github className="h-4 w-4" />
-        </a>
-
-        <a
-          href="/app.html#/settings"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="cursor-pointer rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-          title="Settings"
-        >
-          <SettingsIcon className="h-4 w-4" />
-        </a>
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="cursor-pointer rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
+              title="More sidebar actions"
+              aria-label="More sidebar actions"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" sideOffset={8} className="min-w-48">
+            <DropdownMenuLabel>Sidebar actions</DropdownMenuLabel>
+            <DropdownMenuItem onSelect={openSettings}>
+              <SettingsIcon className="h-4 w-4" />
+              <span>Open settings</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={openRepository}>
+              <Github className="h-4 w-4" />
+              <span>Project on GitHub</span>
+              <ExternalLink className="ml-auto h-3.5 w-3.5 text-muted-foreground" />
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={onNewConversation} disabled={!hasMessages}>
+              <Plus className="h-4 w-4" />
+              <span>New conversation</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         <ThemeToggle
           className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"

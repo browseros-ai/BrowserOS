@@ -59,7 +59,10 @@ export class Application {
       process.exit(EXIT_CODES.GENERAL_ERROR)
     }
 
-    const cdp = new CdpBackend({ port: this.config.cdpPort })
+    const cdp = new CdpBackend({
+      port: this.config.cdpPort,
+      electronMode: process.env.BROWSEROS_CDP_MODE === 'electron',
+    })
     try {
       logger.debug(`Connecting to CDP on port ${this.config.cdpPort}`)
       await cdp.connect()

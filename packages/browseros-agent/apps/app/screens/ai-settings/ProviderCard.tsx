@@ -81,7 +81,7 @@ export const ProviderCard: FC<ProviderCardProps> = ({
         <p className="truncate text-muted-foreground text-sm">
           {isBuiltIn ? (
             <>
-              BrowserOS-hosted model with strict rate limits.{' '}
+              Request Browser-hosted model with strict rate limits.{' '}
               <a
                 href="https://docs.browseros.com/features/bring-your-own-llm"
                 target="_blank"

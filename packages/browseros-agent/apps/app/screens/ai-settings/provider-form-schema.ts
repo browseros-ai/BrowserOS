@@ -18,6 +18,9 @@ const providerTypeEnum = z.enum([
   'qwen-code',
   'codex',
   'claude-code',
+  'opencode',
+  'opencode-go',
+  'opencode-zen',
   'acp-custom',
   'remote-hermes',
 ])
@@ -30,6 +33,9 @@ const credentiallessProviderTypes: ReadonlySet<
   'qwen-code',
   'codex',
   'claude-code',
+  'opencode',
+  'opencode-go',
+  'opencode-zen',
   'acp-custom',
   'remote-hermes',
 ])
@@ -130,7 +136,7 @@ export function normalizeProviderFormValues(
   return {
     ...values,
     baseUrl: '',
-    apiKey: '',
+    apiKey: values.type.startsWith('opencode') ? values.apiKey : '',
     resourceName: '',
     accessKeyId: '',
     secretAccessKey: '',

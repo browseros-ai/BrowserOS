@@ -1,7 +1,7 @@
 {
   "name": "browseros-monorepo",
   "version": "1.0.0",
-  "description": "BrowserOS monorepo - server, extension, and shared packages",
+  "description": "Request Browser monorepo - server, extension, and shared packages",
   "private": true,
   "type": "module",
   "workspaces": [
