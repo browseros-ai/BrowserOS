@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../../src/env'
@@ -76,36 +76,80 @@ describe('bucketClientName', () => {
   })
 })
 
-describe('telemetry state + disabled default', () => {
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+describe('telemetry state + gating', () => {
   let dir: string
-  let prior: string | undefined
+  let priorDir: string | undefined
+  let priorKey: string | undefined
+  let priorEnvEnabled: boolean
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'claw-analytics-'))
-    prior = env.browserClawDirOverride
+    priorDir = env.browserClawDirOverride
+    priorKey = env.posthogKey
+    priorEnvEnabled = env.analyticsEnabledByEnv
     env.browserClawDirOverride = dir
+    env.posthogKey = undefined
+    env.analyticsEnabledByEnv = true
     resetAnalyticsForTesting()
   })
 
   afterEach(() => {
-    env.browserClawDirOverride = prior
+    env.browserClawDirOverride = priorDir
+    env.posthogKey = priorKey
+    env.analyticsEnabledByEnv = priorEnvEnabled
     resetAnalyticsForTesting()
     rmSync(dir, { recursive: true, force: true })
   })
 
-  it('mints and persists an anonymous uuid, enabled by default', () => {
+  it('mints and persists an anonymous uuid with consent on by default', () => {
     const state = getTelemetryState()
-    expect(state.enabled).toBe(true)
-    expect(state.distinctId).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-    )
+    expect(state.distinctId).toMatch(UUID_RE)
     const onDisk = JSON.parse(readFileSync(join(dir, 'analytics.json'), 'utf8'))
     expect(onDisk.distinctId).toBe(state.distinctId)
+    expect(onDisk.enabled).toBe(true)
+  })
+
+  it('reports enabled=false without a key, even with consent on', () => {
+    // The reported flag is the EFFECTIVE state, so the UI never shows
+    // telemetry as on while every capture is a no-op.
+    expect(getTelemetryState().enabled).toBe(false)
+  })
+
+  it('reports enabled=true only when key + kill-switch + consent all pass', () => {
+    env.posthogKey = 'phc_test'
+    resetAnalyticsForTesting()
+    expect(getTelemetryState().enabled).toBe(true)
+    // Operator kill-switch overrides consent.
+    env.analyticsEnabledByEnv = false
+    resetAnalyticsForTesting()
+    expect(getTelemetryState().enabled).toBe(false)
+  })
+
+  it('fails closed on a corrupt state file and leaves it untouched', () => {
+    const path = join(dir, 'analytics.json')
+    writeFileSync(path, '{ not valid json', 'utf8')
+    env.posthogKey = 'phc_test'
+    resetAnalyticsForTesting()
+    // A prior opt-out might be hiding in the corrupt file, so we must
+    // not silently re-enable.
+    expect(getTelemetryState().enabled).toBe(false)
+    expect(readFileSync(path, 'utf8')).toBe('{ not valid json')
+  })
+
+  it('honours a persisted opt-out even with a key present', () => {
+    writeFileSync(
+      join(dir, 'analytics.json'),
+      JSON.stringify({ distinctId: 'abc', enabled: false }),
+      'utf8',
+    )
+    env.posthogKey = 'phc_test'
+    resetAnalyticsForTesting()
+    expect(getTelemetryState().enabled).toBe(false)
   })
 
   it('is a no-op (no throw) when no PostHog key is configured', () => {
-    // Default dev/test env has no CLAW_POSTHOG_KEY, so no client is
-    // constructed and capture must be a safe no-op.
     expect(() => captureEvent('server_started')).not.toThrow()
     expect(() =>
       captureEvent('harness_connected', { harness: 'Zed' }),

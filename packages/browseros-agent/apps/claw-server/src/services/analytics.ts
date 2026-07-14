@@ -80,7 +80,8 @@ export interface AnalyticsState {
 
 let state: AnalyticsState | null = null
 let client: PostHog | null = null
-let initialised = false
+let stateLoaded = false
+let clientInitialised = false
 
 function analyticsPath(): string {
   return join(getClawServerDir(), ANALYTICS_FILE)
@@ -102,13 +103,33 @@ function persistState(next: AnalyticsState): void {
 }
 
 /**
- * Reads the persisted anonymous id + opt-out flag, generating and
- * writing a fresh anonymous UUID on first run. A missing or corrupt
- * file regenerates rather than throwing.
+ * Reads the persisted anonymous id + opt-out flag. A genuinely MISSING
+ * file (first run) mints a fresh id with consent on (the opt-out
+ * default). A file that EXISTS but is unreadable or corrupt fails
+ * CLOSED (consent off) and is left untouched, so a prior opt-out can
+ * never be silently lost.
  */
 function loadOrCreateState(): AnalyticsState {
+  let raw: string
   try {
-    const parsed = JSON.parse(readFileSync(analyticsPath(), 'utf8')) as Partial<
+    raw = readFileSync(analyticsPath(), 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      // First run: no prior choice exists, so honour the opt-out
+      // default (telemetry on) and persist a fresh anonymous id.
+      const fresh: AnalyticsState = { distinctId: randomUUID(), enabled: true }
+      persistState(fresh)
+      return fresh
+    }
+    // The file exists but could not be read (permissions, IO). A prior
+    // opt-out may be hiding in it, so fail CLOSED and do not overwrite.
+    logger.warn('analytics state unreadable; disabling to preserve consent', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return { distinctId: randomUUID(), enabled: false }
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<
       Record<keyof AnalyticsState, unknown>
     >
     if (typeof parsed.distinctId === 'string' && parsed.distinctId.length > 0) {
@@ -118,30 +139,47 @@ function loadOrCreateState(): AnalyticsState {
       }
     }
   } catch {
-    // Missing or unreadable: fall through and mint a fresh id.
+    // Fall through to the fail-closed path below.
   }
-  const fresh: AnalyticsState = { distinctId: randomUUID(), enabled: true }
-  persistState(fresh)
-  return fresh
+  // The file exists but is corrupt or missing an id. We cannot tell
+  // whether the user had opted out, so fail CLOSED and leave the file
+  // untouched for recovery rather than silently re-enabling.
+  logger.warn('analytics state corrupt; disabling to preserve consent')
+  return { distinctId: randomUUID(), enabled: false }
 }
 
-function ensureInit(): void {
-  if (initialised) return
-  initialised = true
-  state = loadOrCreateState()
+/**
+ * Every gate that must pass before telemetry is actually active on
+ * this server: a configured write key, the operator kill-switch on,
+ * and the user's consent. This is the single source of truth reported
+ * to the UI and used to decide whether to construct the client, so the
+ * two can never disagree.
+ */
+function effectiveEnabled(s: AnalyticsState | null): boolean {
+  return Boolean(s?.enabled && env.analyticsEnabledByEnv && env.posthogKey)
+}
 
-  const disabledReason = !env.posthogKey
-    ? 'no-key'
-    : !env.analyticsEnabledByEnv
-      ? 'env-off'
-      : !state.enabled
-        ? 'user-opt-out'
-        : null
-  if (disabledReason) {
-    logger.info('analytics disabled', { reason: disabledReason })
+/** Loads the anonymous id + consent flag. Does NOT construct a client. */
+function ensureState(): void {
+  if (stateLoaded) return
+  stateLoaded = true
+  state = loadOrCreateState()
+}
+
+/** Constructs the PostHog client iff every gate in `effectiveEnabled` passes. */
+function ensureClient(): void {
+  ensureState()
+  if (clientInitialised) return
+  clientInitialised = true
+  if (!effectiveEnabled(state)) {
+    const reason = !env.posthogKey
+      ? 'no-key'
+      : !env.analyticsEnabledByEnv
+        ? 'env-off'
+        : 'user-opt-out'
+    logger.info('analytics disabled', { reason })
     return
   }
-
   client = new PostHog(env.posthogKey as string, {
     host: env.posthogHost,
     // Local, low-volume process: flush each event promptly so a
@@ -201,7 +239,7 @@ export function captureEvent(
   event: string,
   props: Record<string, unknown> = {},
 ): void {
-  ensureInit()
+  ensureClient()
   if (!client || !state) return
   try {
     client.capture({
@@ -222,12 +260,18 @@ export function captureEvent(
 }
 
 /**
- * The anonymous id + enabled flag surfaced to the cockpit UI so it
- * can share the same install identity and reflect the opt-out state.
+ * The anonymous id + EFFECTIVE enabled flag surfaced to the cockpit UI.
+ * `enabled` reflects whether telemetry is actually active (key present,
+ * kill-switch on, user not opted out), so the UI never shows telemetry
+ * as on while every capture is a no-op. Loads state but never
+ * constructs a network client.
  */
 export function getTelemetryState(): AnalyticsState {
-  ensureInit()
-  return state ?? { distinctId: '', enabled: false }
+  ensureState()
+  return {
+    distinctId: state?.distinctId ?? '',
+    enabled: effectiveEnabled(state),
+  }
 }
 
 /** Flush pending events. Called from the boot shutdown path. */
@@ -244,5 +288,6 @@ export async function shutdownAnalytics(): Promise<void> {
 export function resetAnalyticsForTesting(): void {
   state = null
   client = null
-  initialised = false
+  stateLoaded = false
+  clientInitialised = false
 }
