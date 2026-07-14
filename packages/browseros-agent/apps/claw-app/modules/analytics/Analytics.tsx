@@ -12,32 +12,38 @@
 import { useEffect, useRef } from 'react'
 import { useLocation } from 'react-router'
 import { AnalyticsEvent, screenEventForPath, track } from './events'
-import { applyTelemetry } from './posthog'
+import { applyTelemetry, isCapturing } from './posthog'
 import { useTelemetryState } from './telemetry.hooks'
 
 export function Analytics() {
   const { data } = useTelemetryState()
   const location = useLocation()
   const appOpened = useRef(false)
+  const lastViewedPath = useRef<string | null>(null)
 
-  // External-system integration: init/opt-in/opt-out posthog-js from the
-  // server-owned consent, then record the first open once analytics is
-  // live (capture no-ops until then, so ordering is safe).
+  // External-system integration. Reconcile posthog with the server's
+  // effective telemetry state, then emit events. The guards
+  // (`appOpened`, `lastViewedPath`) are only consumed once posthog is
+  // actually capturing, so:
+  //   - a cold open on a deep link fires its view event once telemetry
+  //     initialises rather than being dropped, and
+  //   - opting in later still sends `app_opened` (the guard was not
+  //     burned while capture was a no-op).
+  // Runs on telemetry state changes and on navigation.
   useEffect(() => {
     if (!data) return
-    applyTelemetry({ distinctId: data.distinctId, consent: data.consent })
+    applyTelemetry({ distinctId: data.distinctId, enabled: data.enabled })
+    if (!isCapturing()) return
     if (!appOpened.current) {
       appOpened.current = true
       track(AnalyticsEvent.AppOpened)
     }
-  }, [data])
-
-  // Route changes are the only source of screen-view events; there is no
-  // handler to lift this into, so it lives in an effect keyed on the path.
-  useEffect(() => {
-    const event = screenEventForPath(location.pathname)
-    if (event) track(event)
-  }, [location.pathname])
+    if (lastViewedPath.current !== location.pathname) {
+      lastViewedPath.current = location.pathname
+      const event = screenEventForPath(location.pathname)
+      if (event) track(event)
+    }
+  }, [data, location.pathname])
 
   return null
 }

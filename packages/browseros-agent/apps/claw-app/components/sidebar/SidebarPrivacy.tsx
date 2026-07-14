@@ -50,21 +50,23 @@ export function SidebarPrivacy({ expanded = false }: SidebarPrivacyProps) {
 
   const handleChange = (next: boolean) => {
     if (!distinctId) return
-    // Reconcile posthog and record the toggle in the right order so the
-    // opt-out event still sends (fired while consent is live) and the
-    // opt-in event sends after the client is initialised.
-    if (next) {
-      applyTelemetry({ distinctId, consent: true })
-      track(AnalyticsEvent.OptOutToggled, { enabled: true })
-    } else {
-      track(AnalyticsEvent.OptOutToggled, { enabled: false })
-      applyTelemetry({ distinctId, consent: false })
-    }
     setConsent.mutate(
       { consent: next },
       {
-        onSuccess: (state) =>
-          queryClient.setQueryData(TELEMETRY_QUERY_KEY, state),
+        onSuccess: (state) => {
+          queryClient.setQueryData(TELEMETRY_QUERY_KEY, state)
+          // Reconcile off the server's authoritative effective state
+          // (respects the kill-switch), ordering so the opt-out event
+          // still sends while capture is live and the opt-in event sends
+          // after init.
+          if (state.enabled) {
+            applyTelemetry({ distinctId: state.distinctId, enabled: true })
+            track(AnalyticsEvent.OptOutToggled, { enabled: true })
+          } else {
+            track(AnalyticsEvent.OptOutToggled, { enabled: false })
+            applyTelemetry({ distinctId: state.distinctId, enabled: false })
+          }
+        },
       },
     )
   }

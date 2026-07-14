@@ -70,16 +70,18 @@ function init(distinctId: string): void {
 }
 
 /**
- * Reconciles the posthog client with the current shared telemetry
- * state. Initialises on first consent, opts in/out on later changes,
- * and does nothing when no key is configured. Safe to call repeatedly.
+ * Reconciles the posthog client with the server's EFFECTIVE telemetry
+ * state. `enabled` already folds in the user's consent, the operator
+ * kill-switch, and the server key, so the cockpit respects all three by
+ * gating on it. Initialises on first enable, opts in/out on later
+ * changes, no-ops without a Vite key. Safe to call repeatedly.
  */
 export function applyTelemetry(input: {
   distinctId: string
-  consent: boolean
+  enabled: boolean
 }): void {
   if (!KEY || !input.distinctId) return
-  if (input.consent) {
+  if (input.enabled) {
     if (!initialised) init(input.distinctId)
     else posthog.opt_in_capturing()
   } else if (initialised) {
@@ -87,11 +89,16 @@ export function applyTelemetry(input: {
   }
 }
 
-/** Fire-and-forget event. No-ops until initialised + consented. */
+/** Whether posthog is initialised AND currently opted in to capturing. */
+export function isCapturing(): boolean {
+  return initialised && !posthog.has_opted_out_capturing()
+}
+
+/** Fire-and-forget event. No-ops until capturing. */
 export function capture(
   event: string,
   properties?: Record<string, unknown>,
 ): void {
-  if (!initialised) return
+  if (!isCapturing()) return
   posthog.capture(event, properties)
 }

@@ -87,7 +87,7 @@ function analyticsPath(): string {
   return join(getClawServerDir(), ANALYTICS_FILE)
 }
 
-function persistState(next: AnalyticsState): void {
+function persistState(next: AnalyticsState): boolean {
   const dir = getClawServerDir()
   const path = analyticsPath()
   const tmp = `${path}.tmp`
@@ -95,10 +95,12 @@ function persistState(next: AnalyticsState): void {
     mkdirSync(dir, { recursive: true })
     writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
     renameSync(tmp, path)
+    return true
   } catch (err) {
     logger.warn('analytics state write failed', {
       error: err instanceof Error ? err.message : String(err),
     })
+    return false
   }
 }
 
@@ -295,8 +297,18 @@ export function setTelemetryConsent(consent: boolean): TelemetryState {
     distinctId: state?.distinctId ?? randomUUID(),
     enabled: consent,
   }
+  // Write to disk BEFORE flipping in-memory state, and surface a failed
+  // write at error level: a swallowed failure could stop telemetry for
+  // this process yet silently revert to the old on-disk choice on the
+  // next restart. We still apply in-memory so the choice holds for this
+  // session, but the durability gap is no longer hidden.
+  if (!persistState(next)) {
+    logger.error(
+      'analytics consent write failed; choice may not survive a restart',
+      { consent },
+    )
+  }
   state = next
-  persistState(next)
   // Force re-evaluation on the next capture; drop any live client so a
   // withdrawn consent stops sending right away.
   clientInitialised = false
