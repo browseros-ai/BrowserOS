@@ -16,6 +16,10 @@ export const upload = defineTool({
       .optional()
       .describe('Local file paths to upload.'),
   }),
+  annotations: {
+    title: 'Upload file to page',
+    destructiveHint: true,
+  },
   handler: async (args, ctx) => {
     const files = args.files ?? (args.file === undefined ? [] : [args.file])
     if (files.length === 0) {

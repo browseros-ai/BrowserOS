@@ -61,6 +61,10 @@ export const act = defineTool({
     clickCount: z.number().int().optional(),
     clear: z.boolean().optional(),
   }),
+  annotations: {
+    title: 'Interact with page',
+    destructiveHint: true,
+  },
   handler: async (args, ctx, response) => {
     const input = ctx.session.input(args.page)
 

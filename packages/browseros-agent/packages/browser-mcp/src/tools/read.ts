@@ -38,7 +38,7 @@ export const read = defineTool({
       .optional()
       .describe('For markdown reads, include image references.'),
   }),
-  annotations: { readOnlyHint: true },
+  annotations: { title: 'Read page content', readOnlyHint: true },
   handler: async (args, ctx) => {
     const { session } = await ctx.session.pages.getSession(args.page)
     const code =

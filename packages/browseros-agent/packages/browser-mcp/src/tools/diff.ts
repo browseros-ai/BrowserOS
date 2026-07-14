@@ -7,7 +7,7 @@ export const diff = defineTool({
   description:
     "Show what changed on the page since the last snapshot/diff - a cheap way to see an action's effect without re-dumping the whole tree.",
   input: z.object({ page: z.number().int() }),
-  annotations: { readOnlyHint: true },
+  annotations: { title: 'Diff page state', readOnlyHint: true },
   handler: async (args, ctx) => {
     const d = await ctx.session.observe(args.page).diff()
     const origin =

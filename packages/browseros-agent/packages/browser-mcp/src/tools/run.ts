@@ -47,7 +47,11 @@ export const run = defineTool({
     logs: z.array(z.string()),
     error: z.string().optional(),
   }),
-  annotations: { openWorldHint: true },
+  annotations: {
+    title: 'Run browser SDK script',
+    destructiveHint: true,
+    openWorldHint: true,
+  },
   handler: async (args, ctx) => {
     let fn: (...injected: unknown[]) => Promise<unknown>
     try {

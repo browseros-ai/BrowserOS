@@ -75,6 +75,7 @@ describe('registerBrowserTools', () => {
     )
     expect(fake.configs.get('tabs')?.inputSchema).toBeDefined()
     expect(fake.configs.get('snapshot')?.annotations).toEqual({
+      title: 'Snapshot accessibility tree',
       readOnlyHint: true,
     })
     expect(fake.configs.get('tabs')?.outputSchema).toBeUndefined()

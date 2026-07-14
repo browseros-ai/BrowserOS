@@ -18,7 +18,7 @@ export const grep = defineTool({
     over: z.enum(['ax', 'content']).default('ax'),
     limit: z.number().optional().describe('Max matching lines (default 50).'),
   }),
-  annotations: { readOnlyHint: true },
+  annotations: { title: 'Search page', readOnlyHint: true },
   handler: async (args, ctx) => {
     let regex: RegExp
     try {

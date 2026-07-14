@@ -34,7 +34,11 @@ export const windows = defineTool({
       .optional()
       .describe('Focus the window after making it visible.'),
   }),
-  annotations: { openWorldHint: true },
+  annotations: {
+    title: 'Manage windows',
+    destructiveHint: true,
+    openWorldHint: true,
+  },
   handler: async (args, ctx) => {
     switch (args.action) {
       case 'list': {

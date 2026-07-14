@@ -7,7 +7,7 @@ import { wrapUntrusted } from './trust-boundary'
 const DEFAULT_TIMEOUT_MS = 30_000
 const MAX_TIMEOUT_MS = 30_000
 
-const DESCRIPTION = `Evaluate JavaScript in a page context through CDP Runtime.evaluate. Use this for page-state reads or small DOM scripts that are awkward with read/grep. Return a value to read it back.`
+const DESCRIPTION = `Evaluate JavaScript in a page context through CDP Runtime.evaluate. Returns the value returned by the script.`
 
 export const evaluate = defineTool({
   name: 'evaluate',
@@ -24,7 +24,11 @@ export const evaluate = defineTool({
       .optional()
       .describe('Max evaluation time in ms (default 30000).'),
   }),
-  annotations: { openWorldHint: true },
+  annotations: {
+    title: 'Run JavaScript in page',
+    readOnlyHint: true,
+    openWorldHint: true,
+  },
   handler: async (args, ctx) => {
     const { session } = await ctx.session.pages.getSession(args.page)
     const timeout = clampTimeout(

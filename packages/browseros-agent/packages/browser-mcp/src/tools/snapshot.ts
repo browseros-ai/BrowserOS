@@ -5,11 +5,11 @@ import { formatSnapshotResult } from './snapshot-format'
 export const snapshot = defineTool({
   name: 'snapshot',
   description:
-    'Capture the page as an indented accessibility tree. Each actionable element carries a stable [ref=eN] you pass to `act`. Iframe content is stitched in inline. Re-snapshot after navigation or large changes (refs are invalidated). This is the start of the loop: snapshot -> act -> (reads back a diff).',
+    'Capture the page as an indented accessibility tree. Each actionable element carries a stable [ref=eN] that can be passed to `act`. Iframe content is stitched inline. Refs are invalidated by navigation or large DOM changes.',
   input: z.object({
     page: z.number().int().describe('Page id from `tabs` or `navigate`.'),
   }),
-  annotations: { readOnlyHint: true },
+  annotations: { title: 'Snapshot accessibility tree', readOnlyHint: true },
   handler: async (args, ctx) => {
     const { text } = await ctx.session.observe(args.page).snapshot()
     const origin = ctx.session.pages.getInfo(args.page)?.url ?? 'unknown'

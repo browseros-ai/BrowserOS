@@ -10,6 +10,10 @@ export const navigate = defineTool({
     action: z.enum(['url', 'back', 'forward', 'reload']).default('url'),
     url: z.string().optional().describe('Required when action is "url".'),
   }),
+  annotations: {
+    title: 'Navigate page',
+    destructiveHint: true,
+  },
   handler: async (args, ctx, response) => {
     const nav = ctx.session.nav(args.page)
     switch (args.action) {

@@ -63,7 +63,7 @@ export const screenshot = defineTool({
       .optional()
       .describe('Overlay numbered refs from a fresh snapshot. Defaults false.'),
   }),
-  annotations: { readOnlyHint: true },
+  annotations: { title: 'Take screenshot', readOnlyHint: true },
   handler: async (args, ctx) => {
     const fullPage = args.fullPage ?? false
     const captureOptions: ScreenshotCaptureOptions = {
