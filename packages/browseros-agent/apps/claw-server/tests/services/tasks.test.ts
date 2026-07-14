@@ -151,6 +151,35 @@ describe('listTasks', () => {
     ])
     expect(all.size).toBe(6)
   })
+
+  it('does not duplicate or truncate sessions when dispatches interleave across the cursor', () => {
+    // Two busy sessions whose dispatch ids straddle the page cursor, mixed
+    // with short sessions. Ids are assigned in call order:
+    dispatch('cc-s1', 'a') // id 1
+    dispatch('cc-s2', 'a') // id 2
+    dispatch('cc-s3', 'a') // id 3
+    dispatch('cc-s4', 'a') // id 4
+    dispatch('cc-s1', 'b') // id 5  -> cc-s1 = {1, 5}
+    dispatch('cc-s2', 'b') // id 6  -> cc-s2 = {2, 6}
+
+    const seen = new Map<string, number>()
+    let cursor: number | undefined
+    for (let guard = 0; guard < 10; guard++) {
+      const page = listTasks({ limit: 2, cursor })
+      for (const t of page.tasks) {
+        // Each session must appear on exactly one page.
+        expect(seen.has(t.sessionId)).toBe(false)
+        seen.set(t.sessionId, t.dispatchCount)
+      }
+      if (page.nextCursor == null) break
+      cursor = page.nextCursor
+    }
+
+    expect(seen.size).toBe(4)
+    // Counts must reflect all rows, not just those below the cursor.
+    expect(seen.get('cc-s1')).toBe(2)
+    expect(seen.get('cc-s2')).toBe(2)
+  })
 })
 
 describe('getTask', () => {

@@ -114,9 +114,11 @@ export function listTasks(query: ListTasksQuery): ListTasksResult {
 
   const wheres = []
   if (query.agentId) wheres.push(eq(toolDispatches.agentId, query.agentId))
-  if (typeof query.cursor === 'number') {
-    wheres.push(lt(toolDispatches.id, query.cursor))
-  }
+  // Pagination is per-session, keyed on each session's max(id) (see orderBy /
+  // nextCursor below), so the cursor must filter grouped rows via HAVING, not
+  // individual rows via WHERE. Applying it as a row-level `id < cursor` before
+  // GROUP BY re-groups earlier sessions that still own rows below the cursor,
+  // returning them again on later pages with truncated aggregate counts.
 
   // 1. One row per sessionId, ordered by max dispatch id desc, paginated.
   const sessionsRaw = db
@@ -136,6 +138,11 @@ export function listTasks(query: ListTasksQuery): ListTasksResult {
     .from(toolDispatches)
     .where(wheres.length > 0 ? and(...wheres) : undefined)
     .groupBy(toolDispatches.sessionId)
+    .having(
+      typeof query.cursor === 'number'
+        ? lt(sql`max(${toolDispatches.id})`, query.cursor)
+        : undefined,
+    )
     .orderBy(desc(sql`max(${toolDispatches.id})`))
     .limit(limit + 1)
     .all()
