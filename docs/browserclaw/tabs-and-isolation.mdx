@@ -1,14 +1,50 @@
 ---
-title: "Your tabs vs agent tabs"
-description: "How BrowserClaw keeps your own browsing separate from what the agent is doing."
+title: "Your tabs and agent tabs"
+description: "How BrowserClaw keeps your own browsing separate from what your AI is doing."
+keywords: ["BrowserClaw tab isolation", "agent tabs", "personal tabs", "AI browser sandbox"]
 ---
 
-<Note>
-This page is landing in a follow-up release. Track the [BrowserClaw docs rollout](https://github.com/browseros-ai/BrowserOS/issues) for progress.
-</Note>
+You use your browser for your own work. Your bank, your inbox, your team's docs, your notes. When an AI drives BrowserClaw, it works in tabs of its own, right next to yours. Yours stay yours.
 
-Coming soon.
+## Three tab groups, one browser
 
-<Card title="Agent profiles" icon="arrow-right" href="/browserclaw/agent-profiles">
-  Continue with what is shipped today.
-</Card>
+BrowserClaw sorts every open page into one of three groups:
+
+- **Your tabs.** Pages you opened yourself. Personal browsing, work docs, whatever you were doing before your AI started.
+- **This AI's tabs.** Pages your AI opened while working on the task you gave it.
+- **Another AI's tabs.** If you're running more than one AI at once, each one has its own pages. This AI cannot touch another AI's tabs either.
+
+Each AI gets its own colored tab group at the top of your tab strip, titled with the AI's name. Your tabs stay outside any group. Two AIs running side by side means two colored groups sitting next to your own tabs. One glance tells you what belongs to whom.
+
+## What each AI can and cannot do
+
+An AI running in BrowserClaw can:
+
+- Open new tabs for its own work. They land in its own colored group automatically.
+- Read, click, type, and scroll on tabs it opened.
+- See a list of every open tab so it knows what else is going on. It sees the URL and title of your tabs, so if you have a Google Doc open it knows a Google Doc is there.
+
+An AI cannot:
+
+- Click, type, or scroll on your tabs. It sees they exist, but any action gets refused.
+- Close your tabs.
+- Touch another AI's tabs.
+
+The rule is: **the AI can look, but it can only act on the tabs it opened itself.**
+
+## When an AI's session ends
+
+Close an AI's session and its tab group closes with it. The tabs it opened go away in one step. Your tabs are never touched.
+
+If you close one of an AI's tabs while it's still running, the AI notices right away and stops trying to act on it. Nothing gets stuck.
+
+## Where to next
+
+<CardGroup cols={2}>
+  <Card title="Your stuff stays yours" icon="lock" href="/browserclaw/privacy">
+    What BrowserClaw records, what it doesn't, and where everything lives.
+  </Card>
+  <Card title="How BrowserClaw works" icon="play" href="/browserclaw/how-it-works">
+    A guided walkthrough from install to your first AI-driven session.
+  </Card>
+</CardGroup>

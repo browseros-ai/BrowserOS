@@ -34,7 +34,6 @@
           },
           "browserclaw/cockpit",
           "browserclaw/tabs-and-isolation",
-          "browserclaw/agent-profiles",
           "browserclaw/audit-and-replay",
           "browserclaw/privacy",
           "browserclaw/permissions-and-boundaries",
@@ -97,7 +96,8 @@
     { "source": "/features/qwen-code-oauth", "destination": "/features/bring-your-own-llm" },
     { "source": "/features/browserclaw", "destination": "/browserclaw" },
     { "source": "/browserclaw/first-run", "destination": "/browserclaw/how-it-works" },
-    { "source": "/browserclaw/sample-prompts", "destination": "/browserclaw/how-it-works" }
+    { "source": "/browserclaw/sample-prompts", "destination": "/browserclaw/how-it-works" },
+    { "source": "/browserclaw/agent-profiles", "destination": "/browserclaw/tabs-and-isolation" }
   ],
   "logo": {
     "light": "/logo/logo44.png",
