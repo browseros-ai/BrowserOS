@@ -1,0 +1,58 @@
+---
+title: "Claude Desktop and Cowork"
+description: "Give Claude Desktop, and Cowork inside it, a real browser via a one-file extension."
+keywords: ["Claude Desktop MCP", "Claude Cowork MCP", "BrowserClaw Claude Desktop extension"]
+---
+
+[Claude Desktop](https://claude.ai/download) and [Claude Cowork](https://claude.com/product/cowork) both run inside the same Claude app. A single BrowserClaw extension gives them both a real browser to work in.
+
+## Install
+
+<Steps>
+  <Step title="Install BrowserClaw">
+    Download BrowserClaw from [browseros.com/agents](https://browseros.com/agents) if you haven't already. Launch it at least once so the local server is running.
+  </Step>
+  <Step title="Download the BrowserClaw extension">
+    Head to the [releases page](https://github.com/browseros-ai/browserclaw-claude-desktop/releases) and grab the latest `browserclaw-<version>.mcpb` file. This is the Claude Desktop extension package.
+  </Step>
+  <Step title="Drag it onto Claude Desktop">
+    Open Claude Desktop's Settings window and drag the `.mcpb` file onto it. Claude Desktop registers the extension and starts using BrowserClaw's tools right away.
+  </Step>
+</Steps>
+
+## Verify
+
+Open BrowserClaw, then in Claude Desktop ask:
+
+```text
+Open browseros.com/agents in a new tab and tell me the page title.
+```
+
+Claude opens the page inside BrowserClaw and replies with the title.
+
+## Cowork gets it too
+
+Cowork runs inside Claude Desktop, so the same extension unlocks it there as well. Ask Cowork to do a task that involves the web, and it uses BrowserClaw the same way Claude Desktop does. No second install.
+
+## Where the extension came from
+
+The extension is a small forwarding wrapper: Claude Desktop talks to it locally, and it forwards every call to BrowserClaw's local endpoint. Nothing goes to a server we control. Source, install file, and privacy policy live in the [browserclaw-claude-desktop repo](https://github.com/browseros-ai/browserclaw-claude-desktop).
+
+## Troubleshooting
+
+**Claude says "BrowserClaw is not running".** Open BrowserClaw. The local server starts with the app.
+
+**The extension does not load.** Restart Claude Desktop. If it still fails, remove the extension from Settings and install the latest release again.
+
+**Claude is not using BrowserClaw when it should.** Say "Use BrowserClaw for this" the first time and Claude picks up the tools.
+
+## Where to next
+
+<CardGroup cols={2}>
+  <Card title="How BrowserClaw works" icon="play" href="/browserclaw/how-it-works">
+    A guided walkthrough from install to your first AI-driven session.
+  </Card>
+  <Card title="One-click setup" icon="plug" href="/browserclaw/mcp">
+    The AI tools we support with one click today.
+  </Card>
+</CardGroup>

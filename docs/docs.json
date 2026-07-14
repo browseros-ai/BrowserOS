@@ -29,6 +29,7 @@
             "group": "Connect your agent",
             "pages": [
               "browserclaw/mcp/index",
+              "browserclaw/mcp/claude-desktop",
               "browserclaw/mcp/manual"
             ]
           },
