@@ -7,7 +7,7 @@ import { wrapUntrusted } from './trust-boundary'
 const DEFAULT_TIMEOUT_MS = 30_000
 const MAX_TIMEOUT_MS = 30_000
 
-const DESCRIPTION = `Evaluate JavaScript in a page context through CDP Runtime.evaluate. Returns the value returned by the script.`
+const DESCRIPTION = `Evaluate JavaScript in a page context through CDP Runtime.evaluate. Use this for page-state reads or small DOM scripts that are awkward with read/grep. Return a value to read it back.`
 
 export const evaluate = defineTool({
   name: 'evaluate',

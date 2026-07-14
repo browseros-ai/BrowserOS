@@ -18,7 +18,7 @@ const MAX_WAIT_TIMEOUT_MS = 30_000
 export const wait = defineTool({
   name: 'wait',
   description:
-    'Pause before continuing. `for="time"` (default) pauses for `value` ms; `"text"` waits for a substring to appear in the DOM; `"selector"` waits for a CSS selector to match. `value` is optional; for `"time"` it defaults to 2000ms.',
+    'Pause before continuing. Prefer acting directly and reading the diff; use wait only when there is no reliable UI signal yet. for="time" (default) pauses for value ms; "text" waits for a substring to appear; "selector" waits for a CSS selector to match. value is optional — for "time" it defaults to 2000ms, so calling wait with just a page pauses ~2s.',
   input: z.object({
     page: z.number().int(),
     for: z
