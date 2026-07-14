@@ -29,6 +29,7 @@ import { migrateMcpUrls } from './lib/migrate-mcp-urls'
 import { writeRuntimeFile } from './lib/runtime-file'
 import { setLocalServerUrl } from './local-server-url'
 import { createServer } from './server'
+import { captureEvent, shutdownAnalytics } from './services/analytics'
 import { runIntegrityScan } from './services/integrity-scan'
 import { startScreencastPoller } from './services/screencast-poller'
 import { publicMcpUrl } from './shared/mcp-url'
@@ -56,6 +57,8 @@ async function start(): Promise<void> {
   const url = `http://${httpServer.hostname}:${httpServer.port}`
   setLocalServerUrl(url)
   logger.info('claw-server listening', { url })
+  // Anonymous active-install signal (one per boot). No url/port sent.
+  captureEvent('server_started')
   // Publish the running URL to <CONFIG_DIR>/runtime.json so external
   // discovery (the Claude Desktop extension) can read the port without
   // scanning, log-tailing, or waiting for a harness link to populate
@@ -116,7 +119,25 @@ async function start(): Promise<void> {
       exiting = true
       screencast.stop()
       setTimeout(() => process.exit(1), 5_000).unref()
-      bootstrap.disconnect().finally(() => process.exit(0))
+      // Drain queued analytics alongside the CDP disconnect so the
+      // last session event is not stranded; the 5s kill switch above
+      // bounds either hanging.
+      Promise.allSettled([bootstrap.disconnect(), shutdownAnalytics()]).finally(
+        () => process.exit(0),
+      )
+    }
+    shutdown = cleanup
+    process.once('SIGINT', cleanup)
+    process.once('SIGTERM', cleanup)
+  } else {
+    // No browser attached (BrowserOS not reachable): still flush
+    // analytics on exit so boot/connect events are not lost.
+    let exiting = false
+    const cleanup = (): void => {
+      if (exiting) return
+      exiting = true
+      setTimeout(() => process.exit(1), 5_000).unref()
+      shutdownAnalytics().finally(() => process.exit(0))
     }
     shutdown = cleanup
     process.once('SIGINT', cleanup)

@@ -50,6 +50,13 @@ function readBoolFlagDefaultTrue(name: string): boolean {
   return normalised !== '0' && normalised !== 'false'
 }
 
+/** Trimmed string env read, or undefined when unset/blank. */
+function readString(name: string): string | undefined {
+  // biome-ignore lint/style/noProcessEnv: env.ts is the sanctioned env-reader for the package
+  const raw = process.env[name]?.trim()
+  return raw && raw.length > 0 ? raw : undefined
+}
+
 /**
  * Runtime snapshot shared across services. main.ts applies validated
  * startup config before serving; tests may mutate fields for isolation.
@@ -80,6 +87,14 @@ export const env = {
   screencastScreenshotFallback: readBoolFlagDefaultTrue(
     'CLAW_SCREENCAST_SCREENSHOT_FALLBACK',
   ),
+  // Anonymous product analytics (PostHog). Disabled unless a project
+  // write key is provided (production builds inject it). `posthogHost`
+  // defaults to PostHog US Cloud. `analyticsEnabledByEnv` is an
+  // operator kill-switch (set CLAW_ANALYTICS_ENABLED=0 to force off);
+  // the per-install user opt-out lives in the analytics state file.
+  posthogKey: readString('CLAW_POSTHOG_KEY'),
+  posthogHost: readString('CLAW_POSTHOG_HOST') ?? 'https://us.i.posthog.com',
+  analyticsEnabledByEnv: readBoolFlagDefaultTrue('CLAW_ANALYTICS_ENABLED'),
 }
 
 /** Applies validated startup config to the shared runtime snapshot. */

@@ -22,6 +22,7 @@ import { logger } from '../lib/logger'
 import { getMcpManager } from '../lib/mcp-manager'
 import { tildifyHomePath } from '../lib/tildify'
 import { BROWSEROS_MCP_SERVER_NAME, publicMcpUrl } from '../shared/mcp-url'
+import { captureEvent } from './analytics'
 import { HARNESS_TO_AGENT_ID, type Harness, harnessEnum } from './harnesses'
 import { relinkManagedServer } from './mcp-relink'
 import { specFor } from './spec-for'
@@ -71,6 +72,9 @@ export async function connectBrowserosToHarness(
       agent: agentId,
       configPath: rawConfigPath,
     })
+    // Which agents users are wiring BrowserClaw into. `harness` is a
+    // fixed enum label, not user data.
+    captureEvent('harness_connected', { harness })
     return {
       harness,
       installed: true,
@@ -105,6 +109,7 @@ export async function disconnectBrowserosFromHarness(
       unlinked: summary.unlinked,
       removedManifest: summary.removedManifest,
     })
+    captureEvent('harness_disconnected', { harness })
     return {
       harness,
       installed: false,
