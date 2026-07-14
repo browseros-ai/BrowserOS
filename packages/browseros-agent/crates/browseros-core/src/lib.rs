@@ -8,6 +8,7 @@ pub mod navigation;
 pub mod observer;
 pub mod page_signals;
 pub mod pages;
+pub mod screencast;
 pub mod screenshot;
 pub mod settle;
 pub mod snapshot;

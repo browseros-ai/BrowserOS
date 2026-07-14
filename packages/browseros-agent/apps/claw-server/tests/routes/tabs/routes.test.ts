@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Integration test for the /tabs/activity route. Pins the response
- * shape, the empty-state behaviour, and the agent-profile join.
+ * shape, the empty-state behaviour, and the live-identity join.
  * The registry-population path is exercised by mcp/register tests;
  * this file only verifies the route surface.
  */
@@ -12,11 +12,13 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { hc } from 'hono/client'
 import { setBrowserSession } from '../../../src/lib/browser-session'
+import {
+  agentIdentityFromClient,
+  identityService,
+} from '../../../src/lib/mcp-session'
 import { tabActivityRegistry } from '../../../src/lib/tab-activity'
 import app, { type AppType } from '../../../src/server'
 import { screencastCache } from '../../../src/services/screencast-cache'
-import { writeAgentProfile } from '../../_helpers/agent-profile'
-import { withTempBrowserClawDir } from '../../_helpers/temp-browserclaw-dir'
 
 function client() {
   return hc<AppType>('http://localhost', {
@@ -44,6 +46,7 @@ afterEach(() => {
   // record visible to a later test that re-attaches a session whose
   // stub resolves the same pageId.
   tabActivityRegistry.clear()
+  identityService.clear()
   setBrowserSession(null)
   screencastCache.resetForTesting()
 })
@@ -58,144 +61,121 @@ describe('/tabs/activity route', () => {
   })
 
   test('returns the enriched record once a tool has been recorded', async () => {
-    await withTempBrowserClawDir(async () => {
-      // Seed a real agent profile on disk so the route's join finds
-      // a label + harness instead of falling back.
-      const agent = await writeAgentProfile({
-        name: 'Finance Ops',
-        harness: 'Claude Code',
-        loginMode: 'profile',
-        selectedSites: ['stripe.com'],
-        approvals: {
-          submit: 'Ask',
-          payment: 'Block',
-          delete: 'Ask',
-          upload: 'Ask',
-          navigate: 'Auto',
-          input: 'Auto',
-        },
-        aclRuleIds: [],
-        customAclRules: [],
-      })
-      stubSession()
-      tabActivityRegistry.recordTool({
-        agentId: agent.id,
-        slug: agent.slug,
-        pageId: 1,
-        targetId: 't1',
-        toolName: 'navigate',
-      })
-      const res = await client().tabs.activity.$get()
-      expect(res.status).toBe(200)
-      const body = (await res.json()) as {
-        tabs: Array<{
-          targetId: string
-          agentId: string
-          slug: string
-          firstToolAt: number
-          lastToolAt: number
-          lastToolName: string
-          toolCount: number
-          recentTools: Array<{ name: string; at: number }>
-          agentLabel: string
-          harness: string | null
-          color: string | null
-          status: 'active' | 'idle'
-        }>
-      }
-      expect(body.tabs).toHaveLength(1)
-      const row = body.tabs[0]
-      expect(row).toMatchObject({
-        targetId: 't1',
-        agentId: agent.id,
-        slug: agent.slug,
-        lastToolName: 'navigate',
-        toolCount: 1,
-        agentLabel: 'Finance Ops',
-        harness: 'Claude Code',
-        color: null,
-        status: 'active',
-      })
-      expect(row.firstToolAt).toBe(row.lastToolAt)
-      expect(row.recentTools).toEqual([
-        { name: 'navigate', at: row.lastToolAt },
-      ])
+    const identity = identityService.registerInitialize({
+      sessionId: 'finance-session',
+      clientInfo: {
+        name: 'claude-code',
+        version: '1.0.0',
+        title: 'Finance Ops',
+      },
     })
+    const agent = agentIdentityFromClient(identity)
+    stubSession()
+    tabActivityRegistry.recordTool({
+      agentId: agent.agentId,
+      slug: agent.slug,
+      pageId: 1,
+      targetId: 't1',
+      toolName: 'navigate',
+    })
+    const res = await client().tabs.activity.$get()
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      tabs: Array<{
+        targetId: string
+        agentId: string
+        slug: string
+        firstToolAt: number
+        lastToolAt: number
+        lastToolName: string
+        toolCount: number
+        recentTools: Array<{ name: string; at: number }>
+        agentLabel: string
+        harness: string | null
+        color: string | null
+        status: 'active' | 'idle'
+      }>
+    }
+    expect(body.tabs).toHaveLength(1)
+    const row = body.tabs[0]
+    expect(row).toMatchObject({
+      targetId: 't1',
+      agentId: agent.agentId,
+      slug: agent.slug,
+      lastToolName: 'navigate',
+      toolCount: 1,
+      agentLabel: 'Finance Ops',
+      harness: null,
+      status: 'active',
+    })
+    expect(row.color).toMatch(/^#[0-9A-F]{6}$/)
+    expect(row.firstToolAt).toBe(row.lastToolAt)
+    expect(row.recentTools).toEqual([{ name: 'navigate', at: row.lastToolAt }])
   })
 
   test('emits screencast: null when the cache has no frame for the page', async () => {
-    await withTempBrowserClawDir(async () => {
-      stubSession()
-      tabActivityRegistry.recordTool({
-        agentId: 'a',
-        slug: 'a',
-        pageId: 1,
-        targetId: 't1',
-        toolName: 'navigate',
-      })
-      const res = await client().tabs.activity.$get()
-      const body = (await res.json()) as {
-        tabs: Array<{ screencast: unknown }>
-      }
-      expect(body.tabs[0].screencast).toBeNull()
+    stubSession()
+    tabActivityRegistry.recordTool({
+      agentId: 'a',
+      slug: 'a',
+      pageId: 1,
+      targetId: 't1',
+      toolName: 'navigate',
     })
+    const res = await client().tabs.activity.$get()
+    const body = (await res.json()) as {
+      tabs: Array<{ screencast: unknown }>
+    }
+    expect(body.tabs[0].screencast).toBeNull()
   })
 
   test('emits screencast frame when the cache has one for the page', async () => {
-    await withTempBrowserClawDir(async () => {
-      stubSession()
-      tabActivityRegistry.recordTool({
-        agentId: 'a',
-        slug: 'a',
-        pageId: 1,
-        targetId: 't1',
-        toolName: 'navigate',
-      })
-      screencastCache.set(1, {
-        jpegBase64: 'ABCD',
-        capturedAt: 1_234_567_890,
-        byteLength: 3,
-      })
-      const res = await client().tabs.activity.$get()
-      const body = (await res.json()) as {
-        tabs: Array<{
-          screencast: { jpegBase64: string; capturedAt: number } | null
-        }>
-      }
-      expect(body.tabs[0].screencast).toEqual({
-        jpegBase64: 'ABCD',
-        capturedAt: 1_234_567_890,
-      })
+    stubSession()
+    tabActivityRegistry.recordTool({
+      agentId: 'a',
+      slug: 'a',
+      pageId: 1,
+      targetId: 't1',
+      toolName: 'navigate',
+    })
+    screencastCache.set(1, {
+      jpegBase64: 'ABCD',
+      capturedAt: 1_234_567_890,
+      byteLength: 3,
+    })
+    const res = await client().tabs.activity.$get()
+    const body = (await res.json()) as {
+      tabs: Array<{
+        screencast: { jpegBase64: string; capturedAt: number } | null
+      }>
+    }
+    expect(body.tabs[0].screencast).toEqual({
+      jpegBase64: 'ABCD',
+      capturedAt: 1_234_567_890,
     })
   })
 
-  test('falls back to slug when the agent profile is missing', async () => {
-    await withTempBrowserClawDir(async () => {
-      // No profile on disk: the route should not throw, and should
-      // surface the slug as a fallback label with null harness/color.
-      stubSession()
-      tabActivityRegistry.recordTool({
-        agentId: 'unknown',
-        slug: 'orphan-slug',
-        pageId: 1,
-        targetId: 't1',
-        toolName: 'navigate',
-      })
-      const res = await client().tabs.activity.$get()
-      expect(res.status).toBe(200)
-      const body = (await res.json()) as {
-        tabs: Array<{
-          agentLabel: string
-          harness: string | null
-          color: string | null
-        }>
-      }
-      expect(body.tabs).toHaveLength(1)
-      expect(body.tabs[0].agentLabel).toBe('orphan-slug')
-      expect(body.tabs[0].harness).toBeNull()
-      // Phase 4 fills colour from the deterministic agent-tab-groups
-      // hex even when no identity record is around.
-      expect(body.tabs[0].color).toMatch(/^#[0-9A-F]{6}$/)
+  test('falls back to slug when the session identity is gone', async () => {
+    stubSession()
+    tabActivityRegistry.recordTool({
+      agentId: 'unknown',
+      slug: 'orphan-slug',
+      pageId: 1,
+      targetId: 't1',
+      toolName: 'navigate',
     })
+    const res = await client().tabs.activity.$get()
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      tabs: Array<{
+        agentLabel: string
+        harness: string | null
+        color: string | null
+      }>
+    }
+    expect(body.tabs).toHaveLength(1)
+    expect(body.tabs[0].agentLabel).toBe('orphan-slug')
+    expect(body.tabs[0].harness).toBeNull()
+    expect(body.tabs[0].color).toMatch(/^#[0-9A-F]{6}$/)
   })
 })

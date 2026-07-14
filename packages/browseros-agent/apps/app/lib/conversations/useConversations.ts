@@ -2,21 +2,34 @@ import type { UIMessage } from 'ai'
 import { useEffect, useState } from 'react'
 import { useSessionInfo } from '../auth/sessionStorage'
 import { removeConversationExecutionHistory } from '../execution-history/storage'
+import { sentry } from '../sentry/sentry'
+import { planConversationSave } from './conversation-save'
+import { createConversationUploadScheduler } from './conversation-upload-scheduler'
 import { type Conversation, conversationStorage } from './conversationStorage'
 import { uploadConversationsToGraphql } from './uploadConversationsToGraphql'
 
-const MAX_CONVERSATIONS = 50
+const scheduleConversationUpload = createConversationUploadScheduler(
+  uploadConversationsToGraphql,
+  {
+    onError: (error) => {
+      sentry.captureException(error, {
+        extra: { message: 'Failed to upload local conversations' },
+      })
+    },
+  },
+)
 
 export function useConversations() {
-  const [conversations, setConversations] = useState<Conversation[]>([])
+  const [conversations, setConversations] = useState<Conversation[]>()
 
   const { sessionInfo } = useSessionInfo()
 
   useEffect(() => {
-    // user is logged in, could sync conversations from server here
-    if (sessionInfo.user?.id && conversations.length > 0) {
-      uploadConversationsToGraphql(conversations)
-    }
+    // An empty snapshot cancels work queued before logout or local deletion.
+    scheduleConversationUpload(
+      sessionInfo.user?.id ? conversations : [],
+      sessionInfo.user?.id ?? null,
+    )
   }, [sessionInfo.user?.id, conversations])
 
   useEffect(() => {
@@ -35,47 +48,21 @@ export function useConversations() {
 
   const saveConversation = async (id: string, messages: UIMessage[]) => {
     const current = (await conversationStorage.getValue()) ?? []
-    const existingIndex = current.findIndex((c) => c.id === id)
+    const plan = planConversationSave(current, id, messages)
+    if (!plan) return
 
-    if (existingIndex >= 0) {
-      const existing = current[existingIndex]
-      const hasContentChanged =
-        existing.messages.length !== messages.length ||
-        JSON.stringify(existing.messages) !== JSON.stringify(messages)
-
-      if (!hasContentChanged) return
-
-      current[existingIndex] = {
-        ...existing,
-        messages,
-        lastMessagedAt: Date.now(),
-      }
-      await conversationStorage.setValue(current)
-    } else {
-      const newConversation: Conversation = {
-        id,
-        messages,
-        lastMessagedAt: Date.now(),
-      }
-      const nextConversations = [newConversation, ...current]
-      const removedConversations = nextConversations.slice(MAX_CONVERSATIONS)
-      await conversationStorage.setValue(
-        nextConversations.slice(0, MAX_CONVERSATIONS),
-      )
-      await Promise.all(
-        removedConversations.map((conversation) =>
-          removeConversationExecutionHistory(conversation.id),
-        ),
-      )
-    }
+    await conversationStorage.setValue(plan.conversations)
+    await Promise.all(
+      plan.removedConversationIds.map(removeConversationExecutionHistory),
+    )
   }
 
   const getConversation = (id: string) => {
-    return conversations.find((c) => c.id === id)
+    return conversations?.find((c) => c.id === id)
   }
 
   return {
-    conversations,
+    conversations: conversations ?? [],
     removeConversation,
     saveConversation,
     getConversation,

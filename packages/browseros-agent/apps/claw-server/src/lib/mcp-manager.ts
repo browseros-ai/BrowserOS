@@ -16,7 +16,7 @@
  */
 
 import { join } from 'node:path'
-import { type BoundApi, bind } from 'agent-mcp-manager'
+import { type BoundApi, bind } from '@browseros/agent-mcp-manager'
 import { getClawServerDir } from './browserclaw-dir'
 
 let cached: BoundApi | null = null

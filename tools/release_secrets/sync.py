@@ -25,6 +25,7 @@ RELEASE_WORKFLOW_FILES = (
     Path(".github/workflows/release-browseros.yml"),
     Path(".github/workflows/release-browserclaw.yml"),
     Path(".github/workflows/release-windows.yml"),
+    Path(".github/workflows/release-extension-feeds.yml"),
     Path(".github/workflows/release-extensions.yml"),
     Path(".github/workflows/release-server.yml"),
     Path(".github/workflows/release-claw-server.yml"),
@@ -72,6 +73,7 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browserclaw.yml",
             "release-server.yml",
             "release-claw-server.yml",
+            "release-extension-feeds.yml",
             "release-extensions.yml",
         ),
     ),  # Release artifact downloads/uploads.
@@ -83,6 +85,7 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browserclaw.yml",
             "release-server.yml",
             "release-claw-server.yml",
+            "release-extension-feeds.yml",
             "release-extensions.yml",
         ),
     ),  # Release artifact downloads/uploads.
@@ -94,6 +97,7 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browserclaw.yml",
             "release-server.yml",
             "release-claw-server.yml",
+            "release-extension-feeds.yml",
             "release-extensions.yml",
         ),
     ),  # Release artifact downloads/uploads.
@@ -105,6 +109,7 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browserclaw.yml",
             "release-server.yml",
             "release-claw-server.yml",
+            "release-extension-feeds.yml",
             "release-extensions.yml",
         ),
     ),  # Release artifact downloads/uploads.

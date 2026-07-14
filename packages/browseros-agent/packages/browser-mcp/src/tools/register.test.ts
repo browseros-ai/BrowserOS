@@ -16,7 +16,12 @@ function createFakeServer() {
   const handlers = new Map<string, RegisteredHandler>()
   const configs = new Map<
     string,
-    { description: string; inputSchema?: unknown; annotations?: unknown }
+    {
+      description: string
+      inputSchema?: unknown
+      outputSchema?: unknown
+      annotations?: unknown
+    }
   >()
 
   return {
@@ -28,6 +33,7 @@ function createFakeServer() {
         config: {
           description: string
           inputSchema?: unknown
+          outputSchema?: unknown
           annotations?: unknown
         },
         handler: RegisteredHandler,
@@ -71,6 +77,73 @@ describe('registerBrowserTools', () => {
     expect(fake.configs.get('snapshot')?.annotations).toEqual({
       readOnlyHint: true,
     })
+    expect(fake.configs.get('tabs')?.outputSchema).toBeUndefined()
+    expect(fake.configs.get('run')?.outputSchema).toBeDefined()
+  })
+
+  it('preserves structured results when the option is omitted', async () => {
+    const fake = createFakeServer()
+    const session = {
+      pages: { newPage: async () => 42 },
+    } as unknown as BrowserSession
+
+    registerBrowserTools(fake.server as never, session)
+
+    const result = await fake.handlers.get('tabs')?.({ action: 'new' })
+
+    expect(result?.structuredContent).toEqual({ page: 42 })
+    expect(result).toHaveProperty('structuredContent')
+  })
+
+  it('omits ordinary structured results when explicitly disabled', async () => {
+    const fake = createFakeServer()
+    const debugLogs: Array<{
+      message: string
+      meta?: Record<string, unknown>
+    }> = []
+    const session = {
+      pages: { newPage: async () => 42 },
+    } as unknown as BrowserSession
+
+    registerBrowserTools(
+      fake.server as never,
+      session,
+      {},
+      {
+        includeStructuredContent: false,
+        logger: {
+          debug: (message, meta) => debugLogs.push({ message, meta }),
+        },
+      },
+    )
+
+    const result = await fake.handlers.get('tabs')?.({ action: 'new' })
+
+    expect(result).not.toHaveProperty('structuredContent')
+    expect(debugLogs.at(-1)).toEqual({
+      message: 'MCP browser tool completed',
+      meta: expect.objectContaining({ hasStructuredContent: false }),
+    })
+  })
+
+  it('keeps schema-declared run structured in both modes', async () => {
+    for (const includeStructuredContent of [undefined, false]) {
+      const fake = createFakeServer()
+      registerBrowserTools(
+        fake.server as never,
+        { pages: {} } as unknown as BrowserSession,
+        {},
+        { includeStructuredContent },
+      )
+
+      const result = await fake.handlers.get('run')?.({ code: 'return 42' })
+
+      expect(result?.structuredContent).toEqual({
+        ok: true,
+        value: 42,
+        logs: [],
+      })
+    }
   })
 
   it('logs sampled registration and records failed tool executions', async () => {

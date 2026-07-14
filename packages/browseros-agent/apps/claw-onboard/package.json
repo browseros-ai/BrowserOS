@@ -2,7 +2,7 @@
   "name": "@browseros/claw-onboard",
   "type": "module",
   "private": true,
-  "version": "0.0.6",
+  "version": "0.0.9",
   "description": "Standalone Vite app for the BrowserClaw onboarding flow.",
   "scripts": {
     "dev": "vite",

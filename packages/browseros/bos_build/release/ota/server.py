@@ -281,7 +281,7 @@ class ServerOTAModule(Step):
             )
 
         if os_type == "windows":
-            return sign_server_bundle_windows(staging_resources, ctx.env)
+            return sign_server_bundle_windows(staging_resources, ctx.env, self.bundle)
 
         log_info("No code signing for Linux binaries")
         return True

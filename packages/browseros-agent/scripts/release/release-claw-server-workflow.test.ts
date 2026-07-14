@@ -14,12 +14,29 @@ const shellVersionPlaceholder = '$' + '{VERSION}'
 const shellTargetPlaceholder = '$' + '{target}'
 const shellServerAssetsPlaceholder = '$' + '{server_assets[@]}'
 const publishOtaIf = '$' + '{{ inputs.publish_ota == true }}'
+const releaseTagOutput = '$' + '{{ steps.release.outputs.tag }}'
 const expectedBumpBranch = `chore-bump-claw-server-v${shellVersionPlaceholder}`
 
 function reflectVersionStep(): string {
   const start = workflow.indexOf('- name: Reflect version on main via PR')
   expect(start).toBeGreaterThanOrEqual(0)
   return workflow.slice(start)
+}
+
+function generateReleaseNotesStep(): string {
+  const start = workflow.indexOf('- name: Generate release notes')
+  const end = workflow.indexOf('- name: Create GitHub release')
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return workflow.slice(start, end)
+}
+
+function createGithubReleaseStep(): string {
+  const start = workflow.indexOf('- name: Create GitHub release')
+  const end = workflow.indexOf('  build-publish:')
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return workflow.slice(start, end)
 }
 
 describe('release-claw-server workflow', () => {
@@ -73,5 +90,23 @@ describe('release-claw-server workflow', () => {
     expect(step).not.toContain('continue-on-error: true')
     expect(step).toContain('GITHUB_STEP_SUMMARY')
     expect(step).toContain('::error::')
+  })
+
+  it('caps generated changelogs before create and edit consume release notes', () => {
+    const step = generateReleaseNotesStep()
+    const createStep = createGithubReleaseStep()
+
+    expect(step).toContain(`RELEASE_TAG: ${releaseTagOutput}`)
+    expect(step).toContain('CHANGELOG_FILE="/tmp/release-changelog.md"')
+    expect(step).toContain('NOTES_FILE="/tmp/release-notes.md"')
+    expect(step).toContain(
+      'node packages/browseros-agent/scripts/release/cap-release-changelog.mjs',
+    )
+    expect(step).toContain('--max-entries 15')
+    expect(step).toContain('--previous-tag "$PREVIOUS_TAG"')
+    expect(step).toContain('--release-tag "$RELEASE_TAG"')
+    expect(
+      createStep.match(/--notes-file \/tmp\/release-notes\.md/g),
+    ).toHaveLength(2)
   })
 })

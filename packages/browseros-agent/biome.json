@@ -7,12 +7,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": [
-      "**",
-      "!.scripts",
-      "!**/apps/eval/src/dashboard/index.html",
-      "!**/*.svg"
-    ]
+    "includes": ["**", "!.scripts", "!**/*.svg"]
   },
   "formatter": {
     "enabled": true,
@@ -55,20 +50,6 @@
     }
   },
   "overrides": [
-    {
-      "includes": ["**/apps/eval/src/dashboard/viewer.html"],
-      "linter": {
-        "rules": {
-          "a11y": {
-            "useValidAnchor": "off"
-          },
-          "complexity": {
-            "noExcessiveCognitiveComplexity": "off",
-            "useOptionalChain": "off"
-          }
-        }
-      }
-    },
     {
       "includes": ["**/scripts/dev/inspect-ui.ts"],
       "linter": {

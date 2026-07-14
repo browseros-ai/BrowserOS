@@ -29,13 +29,13 @@ pub struct StatusReport {
     pub applied_store_rev: Option<String>,
     /// Short applied store revision, when present.
     pub applied_store_short_rev: Option<String>,
-    /// Applied tree cache or recovered tree, when present.
+    /// Materialized checkout tree cache or recovered tree, when present.
     pub applied_tree: Option<String>,
     /// Number of apply-authored feature commits since base.
     pub feature_commits: usize,
     /// Subject of the newest apply-authored feature commit.
     pub last_feature_commit: Option<String>,
-    /// Drift entries relative to the applied tree.
+    /// Drift entries relative to the newest bpatch-authored commit tree.
     pub drift: Vec<StatusDriftFile>,
     /// Active conflict session, when one is in progress.
     pub conflict_session: Option<StatusConflictSession>,
@@ -47,7 +47,7 @@ pub struct StatusReport {
 pub enum StatusResult {
     /// Checkout has no drift.
     Clean,
-    /// Checkout differs from its applied tree.
+    /// Checkout differs from its bpatch-authored drift anchor.
     Drift,
 }
 
@@ -79,7 +79,7 @@ pub struct StatusConflictSession {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StatusDriftSource {
-    /// Drift is committed on top of the applied tree.
+    /// Drift is committed on top of the bpatch-authored drift anchor.
     Committed,
     /// Drift is in the index or worktree.
     Uncommitted,

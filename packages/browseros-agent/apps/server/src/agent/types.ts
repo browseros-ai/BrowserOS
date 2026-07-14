@@ -46,8 +46,6 @@ export interface ResolvedAgentConfig {
   workingDir?: string
   /** Whether the model supports image inputs (vision). Defaults to true. */
   supportsImages?: boolean
-  /** Eval mode - enables window management tools. Defaults to false. */
-  evalMode?: boolean
   /** Chat mode - restricts to read-only tools (no browser automation). Defaults to false. */
   chatMode?: boolean
   /** Scheduled task mode - disables tab grouping. Defaults to false. */

@@ -5,10 +5,9 @@
  */
 
 import { Hono } from 'hono'
-// Package version is read off the bundled package.json. resolveJsonModule
-// + bun's loader resolve this without a build step.
 import pkg from '../../package.json' with { type: 'json' }
 import { getLocalServerUrl } from '../local-server-url'
+import { VERSION } from '../version'
 
 interface SystemRouteConfig {
   onShutdown?: () => void
@@ -21,8 +20,6 @@ export function createSystemRoute(config: SystemRouteConfig = {}) {
       setImmediate(() => config.onShutdown?.())
       return c.json({ status: 'ok' as const })
     })
-    .get('/system/version', (c) =>
-      c.json({ name: pkg.name, version: pkg.version }),
-    )
+    .get('/system/version', (c) => c.json({ name: pkg.name, version: VERSION }))
     .get('/system/url', (c) => c.json({ url: getLocalServerUrl() }))
 }

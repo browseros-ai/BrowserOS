@@ -1,14 +1,111 @@
 ---
-title: "Manual URL install for any MCP client"
-description: "Connect BrowserClaw to any MCP-compatible client using the local server URL."
+title: "Manual URL setup"
+description: "Connect BrowserClaw to any MCP-compatible AI tool with the copyable endpoint URL."
+keywords: ["BrowserClaw manual MCP setup", "Hermes MCP", "Vercel AI SDK MCP", "OpenClaw MCP"]
 ---
 
-<Note>
-This page is landing in a follow-up release. Track the [BrowserClaw docs rollout](https://github.com/browseros-ai/BrowserOS/issues) for progress.
-</Note>
+Any AI tool that speaks MCP over HTTP can use BrowserClaw. The pattern is always the same: copy the endpoint URL, drop it into the tool's own MCP config, restart. The exact syntax varies by tool. Here are the ones we've documented so far.
 
-Coming soon.
+First, grab the endpoint URL from BrowserClaw. Open a new tab, click **MCP** in the sidebar, and click **Copy** at the top of the page. It looks like this:
 
-<Card title="Sample prompts" icon="arrow-right" href="/browserclaw/sample-prompts">
-  Continue with what is shipped today.
-</Card>
+```text
+http://127.0.0.1:9200/mcp
+```
+
+Now pick your AI tool below.
+
+## Hermes Agent
+
+[Hermes Agent](https://hermes-agent.nousresearch.com) from Nous Research supports connecting to external HTTP MCP servers via its YAML config. Full details in [Hermes' MCP docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp).
+
+Open `~/.hermes/config.yaml` and add a `mcp_servers` entry:
+
+```yaml
+mcp_servers:
+  browserclaw:
+    url: "http://127.0.0.1:9200/mcp"
+```
+
+Then reload Hermes:
+
+- Inside an existing `hermes chat` session, run `/reload-mcp`.
+- Or restart Hermes.
+
+Hermes also has a CLI command that adds a server interactively: `hermes mcp add browserclaw`. Either path works.
+
+## Vercel AI SDK
+
+The [Vercel AI SDK](https://ai-sdk.dev/) supports MCP tools via the `@ai-sdk/mcp` package. Full details in [the AI SDK MCP docs](https://ai-sdk.dev/docs/ai-sdk-core/mcp-tools). Point the client at BrowserClaw's endpoint URL, pull the tools, and pass them into `streamText` or `generateText`.
+
+```javascript
+import { createMCPClient } from '@ai-sdk/mcp';
+import { streamText } from 'ai';
+
+const mcpClient = await createMCPClient({
+  transport: {
+    type: 'http',
+    url: 'http://127.0.0.1:9200/mcp',
+  },
+});
+
+const tools = await mcpClient.tools();
+
+const result = await streamText({
+  model: 'xai/grok-4.5',
+  tools,
+  prompt: 'Open the running BrowserClaw tab and summarise what my agent just did.',
+  onFinish: async () => {
+    await mcpClient.close();
+  },
+});
+```
+
+The AI SDK docs recommend closing the client once you're done. In streaming code that means `mcpClient.close()` inside `onFinish`. In non-streaming code, use a `try` / `finally` block.
+
+## OpenClaw
+
+[OpenClaw](https://openclaw.ai) is an open-source personal AI assistant that can act as an MCP client. Full details in [OpenClaw's MCP docs](https://docs.openclaw.ai/cli/mcp).
+
+The fastest path is the CLI:
+
+```bash
+openclaw mcp add browserclaw --url http://127.0.0.1:9200/mcp --transport streamable-http
+```
+
+Or edit `~/.openclaw/openclaw.json` directly:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "browserclaw": {
+        "url": "http://127.0.0.1:9200/mcp",
+        "transport": "streamable-http"
+      }
+    }
+  }
+}
+```
+
+Verify the connection with the built-in doctor:
+
+```bash
+openclaw mcp doctor browserclaw --probe
+```
+
+## Any other MCP-compatible AI tool
+
+The pattern is the same: paste `http://127.0.0.1:9200/mcp` into the AI tool's own MCP server config, using whatever syntax that tool expects. BrowserClaw's endpoint uses **Streamable HTTP** transport (per the current MCP spec), so any client that supports Streamable HTTP works.
+
+If you get your AI tool talking to BrowserClaw and want to help others do the same, please [open a discussion](https://github.com/orgs/browseros-ai/discussions) with the setup steps.
+
+## Where to next
+
+<CardGroup cols={2}>
+  <Card title="How BrowserClaw works" icon="play" href="/browserclaw/how-it-works">
+    A guided walkthrough from install to your first AI-driven session.
+  </Card>
+  <Card title="One-click setup" icon="plug" href="/browserclaw/mcp">
+    The AI tools we support with one click today.
+  </Card>
+</CardGroup>

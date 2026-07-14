@@ -4,7 +4,7 @@ use futures_util::future::BoxFuture;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::{fmt, sync::Arc};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 pub const EXCLUDED_URL_PREFIXES: &[&str] = &[
     "chrome-extension://",
@@ -29,6 +29,15 @@ pub trait CdpConnection: Send + Sync {
     ) -> BoxFuture<'a, Result<String, CdpError>>;
 
     fn events(&self) -> broadcast::Receiver<CdpEvent>;
+
+    /// Dedicated single-method event channel that bypasses the broadcast
+    /// ring (see `CdpClient::events_targeted`). Default: a closed channel —
+    /// transports without targeted delivery yield no events here.
+    fn events_targeted(&self, _method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        let (_tx, rx) = mpsc::unbounded_channel();
+        rx
+    }
+
     fn is_connected(&self) -> bool;
     fn connection_epoch(&self) -> u64;
 }
@@ -54,6 +63,10 @@ impl CdpConnection for CdpClient {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         CdpClient::events(self)
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        CdpClient::events_targeted(self, method)
     }
 
     fn is_connected(&self) -> bool {

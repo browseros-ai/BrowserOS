@@ -23,7 +23,7 @@
  * image bytes), gated by `env.screencastScreenshotFallback`. That
  * snapshot is per-dispatch and one-shot; the cache is not otherwise
  * observed by the audit layer, and the "cockpit-driven executeTool
- * bypasses the audit hook" precedent (see `tab-group-ops.ts`) is
+ * bypasses the audit hook" precedent (see the tab-group effect) is
  * preserved: the narrative is still agent-driven, the image is
  * decoration attached to that narrative.
  */

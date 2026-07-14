@@ -5,7 +5,7 @@
  *
  * Unit tests for the `classify` + `annotateTabsListWithOwnership`
  * pair. Deps are injected as plain functions so the tests never
- * touch the process-wide agentTabs or identityService singletons.
+ * touch the process-wide ownership or identity singletons.
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -17,9 +17,9 @@ import {
 
 function makeDeps(overrides: Partial<OwnershipDeps> = {}): OwnershipDeps {
   return {
-    callerAgentId: 'me',
+    callerKey: 'me',
     resolveOwner: () => null,
-    labelForAgentId: () => null,
+    labelForKey: () => null,
     ...overrides,
   }
 }
@@ -43,7 +43,7 @@ describe('classify', () => {
   test('foreign owner returns the "other-agent" bucket with a label', () => {
     const deps = makeDeps({
       resolveOwner: () => 'other',
-      labelForAgentId: (id) => (id === 'other' ? 'cursor' : null),
+      labelForKey: (id) => (id === 'other' ? 'cursor' : null),
     })
     const result = classify({ page: 9 }, deps)
     expect(result.ownership).toBe('other-agent')
@@ -54,7 +54,7 @@ describe('classify', () => {
   test('foreign owner with no label (session already closed) leaves ownerLabel null', () => {
     const deps = makeDeps({
       resolveOwner: () => 'other',
-      labelForAgentId: () => null,
+      labelForKey: () => null,
     })
     const result = classify({ page: 9 }, deps)
     expect(result.ownership).toBe('other-agent')
@@ -78,7 +78,7 @@ describe('annotateTabsListWithOwnership', () => {
   test('groups one page per bucket with headers in the fixed order', () => {
     const deps = makeDeps({
       resolveOwner: (id) => (id === 3 ? 'me' : id === 7 ? 'other' : null),
-      labelForAgentId: (id) => (id === 'other' ? 'claude-code' : null),
+      labelForKey: (id) => (id === 'other' ? 'claude-code' : null),
     })
     const result = annotateTabsListWithOwnership(oneOfEach, deps)
     const text = (result.content as Array<{ text: string }>)[0].text
@@ -170,7 +170,7 @@ describe('annotateTabsListWithOwnership', () => {
       },
       makeDeps({
         resolveOwner: (id) => (id === 3 ? 'me' : id === 9 ? 'other' : null),
-        labelForAgentId: (id) => (id === 'other' ? 'cursor' : null),
+        labelForKey: (id) => (id === 'other' ? 'cursor' : null),
       }),
     )
     const sc = result.structuredContent as {
@@ -194,7 +194,7 @@ describe('annotateTabsListWithOwnership', () => {
       },
       makeDeps({
         resolveOwner: () => 'ghost',
-        labelForAgentId: () => null,
+        labelForKey: () => null,
       }),
     )
     const text = (result.content as Array<{ text: string }>)[0].text

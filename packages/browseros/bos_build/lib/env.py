@@ -14,6 +14,30 @@ from typing import Optional
 from dotenv import load_dotenv
 
 
+# Keep this registry beside EnvConfig's credential properties so logging code
+# has one package-wide source of truth for values that must never reach output.
+SENSITIVE_ENV_VARS: frozenset[str] = frozenset(
+    {
+        "BROWSERCLAW_KEY",
+        "BROWSEROS_AGENT_V2_KEY",
+        "BROWSEROS_CONTROLLER_KEY",
+        "BUGREPORTER_KEY",
+        "CLOUDFLARE_API_TOKEN",
+        "ESIGNER_PASSWORD",
+        "ESIGNER_TOTP_SECRET",
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "MACOS_KEYCHAIN_PASSWORD",
+        "POSTHOG_API_KEY",
+        "PROD_MACOS_NOTARIZATION_PWD",
+        "R2_SECRET_ACCESS_KEY",
+        "SENTRY_AUTH_TOKEN",
+        "SLACK_WEBHOOK_URL",
+        "SPARKLE_PRIVATE_KEY",
+    }
+)
+
+
 def _load_dotenv_file():
     """Load .env file from project root"""
     from .paths import get_package_root

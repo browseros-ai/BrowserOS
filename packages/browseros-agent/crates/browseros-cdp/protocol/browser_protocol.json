@@ -177,6 +177,19 @@
             { "name": "scale", "type": "number" },
             { "name": "zoom", "type": "number", "optional": true }
           ]
+        },
+        {
+          "id": "ScreencastFrameMetadata",
+          "type": "object",
+          "properties": [
+            { "name": "offsetTop", "type": "number" },
+            { "name": "pageScaleFactor", "type": "number" },
+            { "name": "deviceWidth", "type": "number" },
+            { "name": "deviceHeight", "type": "number" },
+            { "name": "scrollOffsetX", "type": "number" },
+            { "name": "scrollOffsetY", "type": "number" },
+            { "name": "timestamp", "type": "number", "optional": true }
+          ]
         }
       ],
       "commands": [
@@ -223,6 +236,31 @@
           "parameters": [
             { "name": "accept", "type": "boolean" },
             { "name": "promptText", "type": "string", "optional": true }
+          ]
+        },
+        {
+          "name": "startScreencast",
+          "parameters": [
+            { "name": "format", "type": "string", "optional": true },
+            { "name": "quality", "type": "integer", "optional": true },
+            { "name": "maxWidth", "type": "integer", "optional": true },
+            { "name": "maxHeight", "type": "integer", "optional": true },
+            { "name": "everyNthFrame", "type": "integer", "optional": true }
+          ]
+        },
+        { "name": "stopScreencast" },
+        {
+          "name": "screencastFrameAck",
+          "parameters": [{ "name": "sessionId", "type": "integer" }]
+        }
+      ],
+      "events": [
+        {
+          "name": "screencastFrame",
+          "parameters": [
+            { "name": "data", "type": "string" },
+            { "name": "metadata", "$ref": "ScreencastFrameMetadata" },
+            { "name": "sessionId", "type": "integer" }
           ]
         }
       ]

@@ -6,9 +6,9 @@
  * Tri-bucket ownership annotation for the `tabs list` MCP result.
  *
  * Every open page is classified as one of:
- *   - `mine`         owner === caller (this session)
+ *   - `mine`         owner key === caller key
  *   - `user`         no agent owner recorded (operator-opened tab)
- *   - `other-agent`  owner is a different session's agentId
+ *   - `other-agent`  owner is a different durable agent key
  *
  * The classifier keeps every page in the response (no filtering) and
  * decorates the text + structuredContent channels so the LLM can
@@ -16,12 +16,13 @@
  * the text output; a fully empty list still renders `(no open pages)`
  * for backwards compatibility with the pre-refactor empty-state cue.
  *
- * The cross-agent page guard in register.ts still hard-rejects a
+ * The cross-agent page guard in the dispatch pipeline still hard-rejects a
  * dispatch on a foreign page. This annotator only affects visibility.
  */
 
+import type { OwnershipStore } from '../domain/ownership'
 import {
-  agentIdentityFromClient,
+  agentKeyFromClient,
   type ClientIdentity,
   type IdentityService,
 } from '../lib/mcp-session'
@@ -41,9 +42,9 @@ export interface AnnotatedPage extends StructuredPage {
 }
 
 export interface OwnershipDeps {
-  callerAgentId: string
+  callerKey: string
   resolveOwner: (pageId: number) => string | null
-  labelForAgentId: (agentId: string) => string | null
+  labelForKey: (key: string) => string | null
 }
 
 export function classify(
@@ -59,7 +60,7 @@ export function classify(
       ownerLabel: null,
     }
   }
-  if (owner === deps.callerAgentId) {
+  if (owner === deps.callerKey) {
     return {
       ...page,
       ownership: 'mine',
@@ -71,7 +72,7 @@ export function classify(
     ...page,
     ownership: 'other-agent',
     ownerAgentId: owner,
-    ownerLabel: deps.labelForAgentId(owner),
+    ownerLabel: deps.labelForKey(owner),
   }
 }
 
@@ -126,24 +127,23 @@ function formatLine(p: AnnotatedPage): string {
 /**
  * Builds an OwnershipDeps for a given caller identity. The label
  * cache snapshots `identityService.list()` at call time; an agent
- * whose session already closed will have no entry and `labelForAgentId`
+ * whose session already closed will have no entry and `labelForKey`
  * returns null (the text render then omits the "owned by ..." suffix).
  */
 export function buildOwnershipDeps(
   callerIdentity: ClientIdentity,
-  agentTabs: { resolveOwner: (pageId: number) => string | null },
+  ownershipStore: Pick<OwnershipStore, 'ownerOf'>,
   identityService: IdentityService,
 ): OwnershipDeps {
-  const { agentId: callerAgentId } = agentIdentityFromClient(callerIdentity)
+  const callerKey = agentKeyFromClient(callerIdentity)
   const labelCache = new Map<string, string>()
   for (const id of identityService.list()) {
-    const { agentId, slug } = agentIdentityFromClient(id)
-    const label = slug || id.clientName || 'unknown'
-    labelCache.set(agentId, label)
+    const key = agentKeyFromClient(id)
+    labelCache.set(key, id.clientName || key)
   }
   return {
-    callerAgentId,
-    resolveOwner: (pageId) => agentTabs.resolveOwner(pageId),
-    labelForAgentId: (agentId) => labelCache.get(agentId) ?? null,
+    callerKey,
+    resolveOwner: (pageId) => ownershipStore.ownerOf(pageId),
+    labelForKey: (key) => labelCache.get(key) ?? null,
   }
 }

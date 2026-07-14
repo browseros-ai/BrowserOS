@@ -1,11 +1,14 @@
 const BULLET = /^(\s*)- /
+const MAX_LCS_CELLS = 4_000_000
 
 export interface SnapshotDiff {
-  /** Unified-style diff body followed by a summary line; empty when nothing changed. */
+  /** Line-level diff or bounded change summary; empty when nothing changed. */
   text: string
   added: number
   removed: number
   changed: boolean
+  /** Counts are changed-window sizes because the line-level comparison was skipped. */
+  lineDiffSkipped?: true
   urlChanged?: true
   beforeUrl?: string
   afterUrl?: string
@@ -25,11 +28,15 @@ interface TaggedLine {
   text: string
 }
 
+interface ChangedWindow {
+  start: number
+  beforeEnd: number
+  afterEnd: number
+}
+
 /**
- * Line-level diff between two rendered snapshots. Each snapshot line is a node's semantic
- * identity (role + name + state + ref), so a removed/added pair on the same ref reads as a
- * state change for free. Unchanged lines far from any change are elided to keep the diff small.
- * Identical input short-circuits — agents diff in a loop after every action.
+ * Computes a compact line diff between rendered snapshots, or a bounded summary when the changed
+ * window is too large for LCS. Distant unchanged context is elided from line-level results.
  */
 export function diffSnapshots(
   before: string,
@@ -40,11 +47,44 @@ export function diffSnapshots(
     return { text: '', added: 0, removed: 0, changed: false }
   }
 
+  const beforeLines = splitLines(before)
+  const afterLines = splitLines(after)
+  const { start, beforeEnd, afterEnd } = findChangedWindow(
+    beforeLines,
+    afterLines,
+  )
+  const removedWindowLines = beforeEnd - start
+  const addedWindowLines = afterEnd - start
+
+  if (exceedsLcsBudget(removedWindowLines, addedWindowLines)) {
+    return {
+      text: [
+        `Snapshot changed substantially: ${beforeLines.length} lines before, ${afterLines.length} lines after.`,
+        `Line-level diff skipped because the changed region exceeds the ${MAX_LCS_CELLS}-cell comparison limit.`,
+      ].join('\n'),
+      added: addedWindowLines,
+      removed: removedWindowLines,
+      changed: true,
+      lineDiffSkipped: true,
+    }
+  }
+
   const tagged: TaggedLine[] = []
+  for (let i = 0; i < start; i++) {
+    tagged.push({ gutter: ' ', text: beforeLines[i] })
+  }
+  appendDiffLines(
+    tagged,
+    beforeLines.slice(start, beforeEnd),
+    afterLines.slice(start, afterEnd),
+  )
+  for (let i = beforeEnd; i < beforeLines.length; i++) {
+    tagged.push({ gutter: ' ', text: beforeLines[i] })
+  }
+
   let added = 0
   let removed = 0
-  for (const line of diffLines(before, after)) {
-    tagged.push(line)
+  for (const line of tagged) {
     if (line.gutter === '+') added++
     else if (line.gutter === '-') removed++
   }
@@ -91,36 +131,76 @@ function splitLines(value: string): string[] {
   return value === '' ? [] : value.split('\n')
 }
 
-function diffLines(before: string, after: string): TaggedLine[] {
-  const beforeLines = splitLines(before)
-  const afterLines = splitLines(after)
-  const table = buildLcsTable(beforeLines, afterLines)
-  const tagged: TaggedLine[] = []
+function findChangedWindow(before: string[], after: string[]): ChangedWindow {
+  let start = 0
+  while (
+    start < before.length &&
+    start < after.length &&
+    before[start] === after[start]
+  ) {
+    start++
+  }
+
+  let beforeEnd = before.length
+  let afterEnd = after.length
+  while (
+    beforeEnd > start &&
+    afterEnd > start &&
+    before[beforeEnd - 1] === after[afterEnd - 1]
+  ) {
+    beforeEnd--
+    afterEnd--
+  }
+
+  return { start, beforeEnd, afterEnd }
+}
+
+function exceedsLcsBudget(beforeLength: number, afterLength: number): boolean {
+  return (
+    beforeLength > 0 &&
+    afterLength > 0 &&
+    beforeLength + 1 > MAX_LCS_CELLS / (afterLength + 1)
+  )
+}
+
+function appendDiffLines(
+  tagged: TaggedLine[],
+  before: string[],
+  after: string[],
+): void {
+  if (before.length === 0) {
+    for (const text of after) tagged.push({ gutter: '+', text })
+    return
+  }
+  if (after.length === 0) {
+    for (const text of before) tagged.push({ gutter: '-', text })
+    return
+  }
+
+  const table = buildLcsTable(before, after)
   let i = 0
   let j = 0
 
-  while (i < beforeLines.length && j < afterLines.length) {
-    if (beforeLines[i] === afterLines[j]) {
-      tagged.push({ gutter: ' ', text: beforeLines[i] })
+  while (i < before.length && j < after.length) {
+    if (before[i] === after[j]) {
+      tagged.push({ gutter: ' ', text: before[i] })
       i++
       j++
     } else if (table[i + 1][j] >= table[i][j + 1]) {
-      tagged.push({ gutter: '-', text: beforeLines[i] })
+      tagged.push({ gutter: '-', text: before[i] })
       i++
     } else {
-      tagged.push({ gutter: '+', text: afterLines[j] })
+      tagged.push({ gutter: '+', text: after[j] })
       j++
     }
   }
 
-  while (i < beforeLines.length) {
-    tagged.push({ gutter: '-', text: beforeLines[i++] })
+  while (i < before.length) {
+    tagged.push({ gutter: '-', text: before[i++] })
   }
-  while (j < afterLines.length) {
-    tagged.push({ gutter: '+', text: afterLines[j++] })
+  while (j < after.length) {
+    tagged.push({ gutter: '+', text: after[j++] })
   }
-
-  return tagged
 }
 
 function buildLcsTable(before: string[], after: string[]): number[][] {

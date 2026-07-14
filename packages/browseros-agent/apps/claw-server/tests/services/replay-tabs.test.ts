@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Unit tests for the replay-tabs deriver. Stubs the three deps
- * (registry, identity service, tab group tracker) so we can drive
+ * (registry, identity service, ownership store) so we can drive
  * the matrix of "agent has live session vs not", "tab group known
  * vs not", and same-name sessions without touching the singleton
  * state.
@@ -14,6 +14,7 @@ import { describe, expect, it } from 'bun:test'
 import { TAB_GROUP_COLORS } from '../../src/lib/agent-tab-groups/group-color'
 import {
   agentIdentityFromClient,
+  agentKeyFromClient,
   type ClientIdentity,
 } from '../../src/lib/mcp-session'
 import { createReplayTabsService } from '../../src/services/replay-tabs'
@@ -49,16 +50,12 @@ function identityStub(
   }
 }
 
-function tabGroupStub(groups: Record<string, { color: string }>) {
+function ownershipStub(groups: Record<string, { color: string }>) {
   return {
-    getByAgentId: (agentId: string) => {
-      const g = groups[agentId]
+    groupOf: (key: string) => {
+      const g = groups[key]
       if (!g) return null
-      // The real tracker returns the full record; we only need .color
-      // for this consumer.
-      return { color: g.color } as unknown as ReturnType<
-        typeof import('../../src/lib/agent-tab-groups').tabGroupTracker.getByAgentId
-      >
+      return { color: g.color } as never
     },
   }
 }
@@ -78,6 +75,10 @@ function agentIdFor(sessionId: string, clientName: string): string {
   return agentIdentityFromClient(identityFor(sessionId, clientName)).agentId
 }
 
+function keyFor(sessionId: string, clientName: string): string {
+  return agentKeyFromClient(identityFor(sessionId, clientName))
+}
+
 describe('replay-tabs service', () => {
   it('emits one row per active tab, joined with sessionId + groupColor', () => {
     const agentId = agentIdFor('sid-abc', 'claude-code')
@@ -93,8 +94,8 @@ describe('replay-tabs service', () => {
       identityService: identityStub([
         { sessionId: 'sid-abc', clientName: 'claude-code' },
       ]),
-      tabGroupTracker: tabGroupStub({
-        [agentId]: { color: 'orange' },
+      ownershipStore: ownershipStub({
+        [keyFor('sid-abc', 'claude-code')]: { color: 'orange' },
       }),
     })
 
@@ -115,7 +116,7 @@ describe('replay-tabs service', () => {
         { agentId: 'ghost-agent', pageId: 1, url: 'x', title: 'x' },
       ]),
       identityService: identityStub([]),
-      tabGroupTracker: tabGroupStub({}),
+      ownershipStore: ownershipStub({}),
     })
     expect(svc.list()).toEqual([])
   })
@@ -134,7 +135,7 @@ describe('replay-tabs service', () => {
       identityService: identityStub([
         { sessionId: 'sid-1', clientName: 'claude-code' },
       ]),
-      tabGroupTracker: tabGroupStub({}),
+      ownershipStore: ownershipStub({}),
     })
     expect(svc.list()[0].groupColor).toBeNull()
   })
@@ -148,7 +149,9 @@ describe('replay-tabs service', () => {
         { agentId, pageId: 3, url: 'https://c.com/', title: 'C' },
       ]),
       identityService: identityStub([{ sessionId: 'sid-1', clientName: 'a1' }]),
-      tabGroupTracker: tabGroupStub({ [agentId]: { color: 'blue' } }),
+      ownershipStore: ownershipStub({
+        [keyFor('sid-1', 'a1')]: { color: 'blue' },
+      }),
     })
     const rows = svc.list()
     expect(rows).toHaveLength(3)
@@ -171,7 +174,7 @@ describe('replay-tabs service', () => {
         { sessionId: 'sid-1', clientName: 'claude-code' },
         { sessionId: 'sid-2', clientName: 'claude-code' },
       ]),
-      tabGroupTracker: tabGroupStub({}),
+      ownershipStore: ownershipStub({}),
     })
     const rows = svc.list()
     expect(rows).toHaveLength(2)
@@ -192,9 +195,9 @@ describe('replay-tabs service', () => {
         { sessionId: 'sid-1', clientName: 'a1' },
         { sessionId: 'sid-2', clientName: 'a2' },
       ]),
-      tabGroupTracker: tabGroupStub({
-        [aAgentId]: { color: 'orange' },
-        [bAgentId]: { color: 'cyan' },
+      ownershipStore: ownershipStub({
+        [keyFor('sid-1', 'a1')]: { color: 'orange' },
+        [keyFor('sid-2', 'a2')]: { color: 'cyan' },
       }),
     })
     const rows = svc.list()
@@ -214,7 +217,9 @@ describe('replay-tabs service', () => {
         { agentId, pageId: 1, url: 'https://x.com/', title: 'x' },
       ]),
       identityService: identityStub([{ sessionId: 'sid-1', clientName: 'a1' }]),
-      tabGroupTracker: tabGroupStub({ [agentId]: { color: 'orange' } }),
+      ownershipStore: ownershipStub({
+        [keyFor('sid-1', 'a1')]: { color: 'orange' },
+      }),
     })
     const rows = svc.list()
     expect(TAB_GROUP_COLORS).toContain(rows[0].groupColor as string)

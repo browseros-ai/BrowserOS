@@ -29,9 +29,8 @@
  * successful dispatch on a given (agentId, pageId) pair within the
  * session writes even if the tool is read-only. This guarantees at
  * least one visual anchor per tab for audits that consist entirely
- * of reads (a common codex research pattern). Tracked by
- * `agentTabs.hasFirstCapture` / `markFirstCaptureDone`; the ledger
- * is dropped on session end via `cleanupSessionState`.
+ * of reads (a common codex research pattern). This module owns that
+ * session-scoped first-capture ledger independently of tab ownership.
  *
  * The screencast cache remains ephemeral. The persistence here is a
  * single snapshot AT dispatch complete time, not a continuous
@@ -42,7 +41,6 @@ import { mkdirSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { env } from '../env'
-import { agentTabs } from '../lib/agent-tabs'
 import { resolveClawServerPath } from '../lib/browserclaw-dir'
 import { logger } from '../lib/logger'
 import { screencastCache } from './screencast-cache'
@@ -94,6 +92,31 @@ const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'wait',
 ])
 
+const firstCaptures = new Map<string, Set<number>>()
+
+function hasFirstCapture(agentId: string, pageId: number): boolean {
+  return firstCaptures.get(agentId)?.has(pageId) ?? false
+}
+
+function markFirstCaptureDone(agentId: string, pageId: number): void {
+  let pages = firstCaptures.get(agentId)
+  if (!pages) {
+    pages = new Set()
+    firstCaptures.set(agentId, pages)
+  }
+  pages.add(pageId)
+}
+
+/** Drops first-capture state when a session-scoped audit identity ends. */
+export function dropFirstCaptures(agentId: string): void {
+  firstCaptures.delete(agentId)
+}
+
+/** Clears first-capture state between tests. */
+export function clearFirstCapturesForTesting(): void {
+  firstCaptures.clear()
+}
+
 /** Fire-and-forget. Never throws. */
 export function persistScreenshot(input: PersistScreenshotInput): void {
   if (input.result.isError) return
@@ -104,7 +127,7 @@ export function persistScreenshot(input: PersistScreenshotInput): void {
   if (toolBytes) {
     writeBytesToDisk(input.dispatchId, toolBytes)
     if (input.agentId !== null && input.pageId !== null) {
-      agentTabs.markFirstCaptureDone(input.agentId, input.pageId)
+      markFirstCaptureDone(input.agentId, input.pageId)
     }
     return
   }
@@ -120,11 +143,11 @@ export function persistScreenshot(input: PersistScreenshotInput): void {
     // we let the write through so the operator gets at least one
     // visual anchor per tab even in an all-read-only audit.
     if (input.agentId === null) return
-    if (agentTabs.hasFirstCapture(input.agentId, input.pageId)) return
+    if (hasFirstCapture(input.agentId, input.pageId)) return
   }
 
   const frame = screencastCache.get(input.pageId)
-  if (!frame || !frame.jpegBase64) return
+  if (!frame?.jpegBase64) return
   // Buffer.from(str, 'base64') never throws in Node/Bun; invalid
   // chars are silently skipped. Guard against a zero-length result
   // explicitly so we never write a 0-byte JPEG that renders as a
@@ -133,7 +156,7 @@ export function persistScreenshot(input: PersistScreenshotInput): void {
   if (cacheBytes.length === 0) return
   writeBytesToDisk(input.dispatchId, cacheBytes)
   if (input.agentId !== null) {
-    agentTabs.markFirstCaptureDone(input.agentId, input.pageId)
+    markFirstCaptureDone(input.agentId, input.pageId)
   }
 }
 

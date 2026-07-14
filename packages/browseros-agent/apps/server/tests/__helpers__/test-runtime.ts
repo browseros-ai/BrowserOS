@@ -144,10 +144,11 @@ export async function resolveRuntimePorts(): Promise<{
   }
 }
 
+/** Resolves test environment settings into an explicit browser launch plan. */
 export async function createTestRuntimePlan(): Promise<TestRuntimePlan> {
   const resolvedPorts = await resolveRuntimePorts()
   const userDataDir = mkdtempSync(join(tmpdir(), 'browseros-test-'))
-  const headless = process.env.BROWSEROS_TEST_HEADLESS === 'true'
+  const headless = process.env.BROWSEROS_TEST_HEADLESS !== 'false'
   const extraArgs = parseExtraArgs(process.env.BROWSEROS_TEST_EXTRA_ARGS)
 
   return {

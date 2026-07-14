@@ -1,6 +1,6 @@
 # BrowserOS Agent
 
-The agent platform powering [BrowserOS](https://github.com/browseros-ai/BrowserOS) — contains the MCP server, agent UI, CLI, and evaluation framework.
+The agent platform powering [BrowserOS](https://github.com/browseros-ai/BrowserOS) — contains the MCP server, agent UI, CLI, and shared packages.
 
 ## Monorepo Structure
 
@@ -9,8 +9,6 @@ apps/
   server/          # Bun server - MCP endpoints + agent loop
   app/             # BrowserOS app UI (Chrome extension)
   cli/             # Go CLI for controlling BrowserOS from the terminal
-  eval/            # Evaluation framework for benchmarking agents
-
 packages/
   cdp-protocol/    # Type-safe Chrome DevTools Protocol bindings
   shared/          # Shared constants (ports, timeouts, limits)
@@ -21,7 +19,6 @@ packages/
 | `apps/server` | Bun server exposing MCP tools and running the agent loop |
 | `apps/app` | BrowserOS app UI — Chrome extension for the chat interface |
 | `apps/cli` | Go CLI — control BrowserOS from the terminal or AI coding agents |
-| `apps/eval` | Benchmark framework — WebVoyager, Mind2Web evaluation |
 | `packages/cdp-protocol` | Auto-generated CDP type bindings used by the server |
 | `packages/shared` | Shared constants used across packages |
 
@@ -92,7 +89,7 @@ For release builds, copy `.env.production.example` to `.env.production` and fill
 
 The monorepo has two root env files:
 
-- `.env.development` - local development, tests, app/server/eval runs, and codegen inputs.
+- `.env.development` - local development, tests, app/server runs, and codegen inputs.
 - `.env.production` - release builds and upload scripts.
 
 Both are gitignored. Their tracked templates, `.env.development.example` and `.env.production.example`, are generated from `@browseros/shared/env/registry`; run `bun run env:examples` after changing the registry. CI drift-checks the generated examples.
@@ -101,7 +98,7 @@ Fresh clone setup is: copy `.env.development.example` to `.env.development`, fil
 
 **Server Sidecar Config** (`--config <path>`)
 
-The server and Claw server read startup ports, resource directories, execution directories, and instance metadata from a sidecar JSON file. `tools/dev`, dogfood, eval, and Chromium-managed sidecar launches generate this file and pass it with `--config`.
+The server and Claw server read startup ports, resource directories, execution directories, and instance metadata from a sidecar JSON file. `tools/dev`, dogfood, and Chromium-managed sidecar launches generate this file and pass it with `--config`.
 
 | Field | Description |
 |-------|-------------|
@@ -120,7 +117,6 @@ The server and Claw server read startup ports, resource directories, execution d
 | `app` | `.env.development` | Browser extension and local BrowserOS launch settings, including dev ports, public Vite values, source-map upload settings, and optional GraphQL schema path. |
 | `claw` | `.env.development` | Optional Claw app/server overrides such as Claw API URL, user-data dir, CDP port, and `BROWSERCLAW_DIR`. |
 | `server` | `.env.development`, `.env.production` | Server config URL, telemetry, Sentry, `NODE_ENV`, log level, and local server test settings. |
-| `eval` | `.env.development` | LLM provider keys, suite-mode model settings, BrowserOS server/binary paths, WebArena-Infinity paths, and eval report publishing settings. |
 | `build` | `.env.production` | Build-time production values such as `AGENT_RUNNER_JWT_SECRET`. |
 | `upload` | `.env.production` | Cloudflare R2 credentials and bucket for production artifact uploads. |
 

@@ -74,11 +74,30 @@ class WindowsPackageModule(Step):
 
         installer_path = self._create_installer(context)
         zip_path = self._create_portable_zip(context)
+        product_executable_path = self._copy_product_executable(context)
 
         context.artifact_registry.add("installer", installer_path)
         context.artifact_registry.add("installer_zip", zip_path)
+        context.artifact_registry.add("built_app", product_executable_path)
 
         log_success("Windows packages created successfully")
+
+    def _copy_product_executable(self, ctx: Context) -> Path:
+        """Create the product-named executable after installer packaging."""
+        chrome_path = ctx.get_chromium_app_path()
+        product_path = ctx.get_app_path()
+        if not chrome_path.exists():
+            raise RuntimeError(
+                f"Primary browser executable not found after packaging: {chrome_path}"
+            )
+
+        try:
+            shutil.copy2(chrome_path, product_path)
+        except Exception as e:
+            raise RuntimeError(f"Failed to create product executable: {e}") from e
+
+        log_success(f"Product executable created: {product_path.name}")
+        return product_path
 
     def _create_installer(self, ctx: Context) -> Path:
         build_output_dir = join_paths(ctx.chromium_src, ctx.out_dir)
@@ -119,6 +138,8 @@ class WindowsPackageModule(Step):
             return zip_path
         except Exception as e:
             raise RuntimeError(f"Failed to create installer ZIP: {e}")
+
+
 def build_mini_installer(ctx: Context) -> bool:
     """Build the mini_installer target if it doesn't exist"""
     log_info("\n🔨 Checking mini_installer build...")

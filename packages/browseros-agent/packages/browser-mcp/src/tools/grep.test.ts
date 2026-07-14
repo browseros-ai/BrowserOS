@@ -65,7 +65,7 @@ function restoreBrowserosDir(previous: string | undefined): void {
 }
 
 describe('grep tool', () => {
-  it('returns small matches with metadata-only structured output', async () => {
+  it('returns small matches in bounded structured output', async () => {
     const result = await executeTool(
       grep,
       { page: 4, pattern: 'save', over: 'ax' },
@@ -81,12 +81,12 @@ describe('grep tool', () => {
       page: 4,
       over: 'ax',
       count: 2,
+      matches: ['button "Save" [ref=e1]', 'button "Save draft" [ref=e2]'],
     })
-    expect(result.structuredContent).not.toHaveProperty('matches')
     expect(textOf(result)).toContain('button "Save" [ref=e1]')
   })
 
-  it('reports zero matches without a matches array', async () => {
+  it('reports zero matches with an empty matches array', async () => {
     const result = await executeTool(
       grep,
       { page: 4, pattern: 'checkout', over: 'ax' },
@@ -98,13 +98,14 @@ describe('grep tool', () => {
       page: 4,
       over: 'ax',
       count: 0,
+      matches: [],
     })
   })
 
-  it('clamps pathological single-line matches and spills the full line', async () => {
+  it('preserves refs while clamping matches and spills the full line', async () => {
     await withBrowserosDir(async () => {
-      const tail = 'tail-marker'
-      const line = `needle ${'x'.repeat(100_000)} ${tail}`
+      const ref = '[ref=e123]'
+      const line = `needle ${'x'.repeat(100_000)} ${ref}`
       const result = await executeTool(
         grep,
         { page: 4, pattern: 'needle', over: 'ax' },
@@ -115,7 +116,9 @@ describe('grep tool', () => {
             page: number
             over: string
             count: number
-            truncated: boolean
+            matches: string[]
+            contentLength: number
+            writtenToFile: boolean
             path: string
           }
         | undefined
@@ -127,19 +130,42 @@ describe('grep tool', () => {
         page: 4,
         over: 'ax',
         count: 1,
-        truncated: true,
+        matches: [expect.stringMatching(/\.\.\. \[truncated\] \[ref=e123\]$/)],
+        contentLength: line.length,
+        writtenToFile: true,
       })
       const path = data?.path
       expect(typeof path).toBe('string')
       if (typeof path !== 'string') throw new Error('expected output path')
-      expect(data).not.toHaveProperty('matches')
       expect(renderedLine.length).toBeLessThanOrEqual(
         TOOL_LIMITS.GREP_MATCH_LINE_MAX_CHARS,
       )
       expect(renderedLine).toContain('... [truncated]')
+      expect(renderedLine).toEndWith(ref)
+      expect(data?.matches).toEqual([renderedLine])
       expect(text).toContain(path)
-      expect(text).not.toContain(tail)
-      expect(readFileSync(path, 'utf8')).toContain(tail)
+      expect(readFileSync(path, 'utf8')).toContain(line)
+    })
+  })
+
+  it('does not preserve ref-like suffixes that exceed the line budget', async () => {
+    await withBrowserosDir(async () => {
+      const oversizedSuffix = ` [ref=e${'1'.repeat(1_000)}]`
+      const line = `needle ${'x'.repeat(6_000)}${oversizedSuffix}`
+      const result = await executeTool(
+        grep,
+        { page: 4, pattern: 'needle', over: 'ax' },
+        { session: sessionWithSnapshot(line) },
+      )
+      const data = result.structuredContent as { matches: string[] } | undefined
+      const renderedLine = data?.matches[0] ?? ''
+
+      expect(result.isError).toBeFalsy()
+      expect(renderedLine.length).toBeLessThanOrEqual(
+        TOOL_LIMITS.GREP_MATCH_LINE_MAX_CHARS,
+      )
+      expect(renderedLine).toEndWith('... [truncated]')
+      expect(renderedLine).not.toContain(oversizedSuffix)
     })
   })
 
@@ -157,7 +183,8 @@ describe('grep tool', () => {
             page: number
             over: string
             count: number
-            truncated: boolean
+            matches: string[]
+            contentLength: number
             writtenToFile: boolean
             outputWriteFailed: boolean
             error: string
@@ -171,17 +198,18 @@ describe('grep tool', () => {
         page: 4,
         over: 'ax',
         count: 1,
-        truncated: true,
+        matches: [expect.stringContaining('... [truncated]')],
+        contentLength: line.length,
         writtenToFile: false,
         outputWriteFailed: true,
         error: expect.any(String),
       })
       expect(data).not.toHaveProperty('path')
-      expect(data).not.toHaveProperty('matches')
       expect(renderedLine.length).toBeLessThanOrEqual(
         TOOL_LIMITS.GREP_MATCH_LINE_MAX_CHARS,
       )
       expect(renderedLine).toContain('... [truncated]')
+      expect(data?.matches).toEqual([renderedLine])
       expect(text).toContain('could not be saved')
       expect(text).not.toContain(tail)
     })
@@ -208,6 +236,10 @@ describe('grep tool', () => {
       page: 4,
       over: 'ax',
       count: TOOL_LIMITS.GREP_MAX_MATCHES,
+      matches: Array.from(
+        { length: TOOL_LIMITS.GREP_MAX_MATCHES },
+        (_, index) => `match ${index}`,
+      ),
     })
     expect(textOf(result)).toContain(
       `match ${TOOL_LIMITS.GREP_MAX_MATCHES - 1}`,

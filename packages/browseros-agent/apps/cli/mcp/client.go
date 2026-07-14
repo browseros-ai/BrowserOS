@@ -38,7 +38,7 @@ func (c *Client) connect(ctx context.Context) (*sdkmcp.ClientSession, error) {
 	}, nil)
 
 	transport := &sdkmcp.StreamableClientTransport{
-		Endpoint:             c.BaseURL + "/mcp",
+		Endpoint:             c.BaseURL + "/mcp?structured=1",
 		HTTPClient:           c.HTTPClient,
 		DisableStandaloneSSE: true,
 	}

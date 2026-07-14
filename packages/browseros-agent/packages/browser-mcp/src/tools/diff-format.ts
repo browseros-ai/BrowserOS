@@ -26,19 +26,28 @@ export async function formatDiffResult(
     }
   }
 
-  const diffText = diff.text || '(empty page)'
-  const wrappedDiff = wrapUntrusted(diffText, origin)
-  const tokenEstimate = estimateTextTokens(wrappedDiff)
   const structured = {
     changed: true,
     added: diff.added,
     removed: diff.removed,
+    ...(diff.lineDiffSkipped && { lineDiffSkipped: true }),
     ...(diff.urlChanged && {
       urlChanged: true,
       beforeUrl: diff.beforeUrl,
       afterUrl: diff.afterUrl,
     }),
   }
+  const diffText = diff.text || '(empty page)'
+
+  if (diff.lineDiffSkipped) {
+    return {
+      text: `${diffText}\nTake a fresh snapshot for the current state.`,
+      structured,
+    }
+  }
+
+  const wrappedDiff = wrapUntrusted(diffText, origin)
+  const tokenEstimate = estimateTextTokens(wrappedDiff)
 
   if (tokenEstimate > MAX_INLINE_DIFF_TOKENS) {
     const excerpt = sliceTextByEstimatedTokens(

@@ -2,7 +2,10 @@ import { describe, expect, it } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { SnapshotDiff } from '@browseros/browser-core/core/snapshot/diff'
+import {
+  diffSnapshots,
+  type SnapshotDiff,
+} from '@browseros/browser-core/core/snapshot/diff'
 import { formatDiffResult } from './diff-format'
 
 async function withBrowserosDir<T>(run: () => Promise<T>): Promise<T> {
@@ -77,6 +80,34 @@ describe('formatDiffResult', () => {
 
     expect(result.text).toBe('no change since last snapshot')
     expect(result.structured).toEqual({ changed: false })
+  })
+
+  it('renders over-budget diff guidance inline with bounded metadata', async () => {
+    const before = Array.from(
+      { length: 2_001 },
+      (_, i) => `- before node ${i}`,
+    ).join('\n')
+    const after = Array.from(
+      { length: 2_000 },
+      (_, i) => `- after node ${i}`,
+    ).join('\n')
+
+    const result = await formatDiffResult(
+      diffSnapshots(before, after),
+      'https://example.com/dynamic',
+    )
+
+    expect(result.text).toContain('Snapshot changed substantially')
+    expect(result.text).toContain('Take a fresh snapshot for the current state')
+    expect(result.text).not.toContain('UNTRUSTED_PAGE_CONTENT')
+    expect(result.structured).toEqual({
+      changed: true,
+      added: 2_000,
+      removed: 2_001,
+      lineDiffSkipped: true,
+    })
+    expect(result.structured).not.toHaveProperty('truncated')
+    expect(result.structured).not.toHaveProperty('path')
   })
 
   it('writes large diffs to a file with metadata-only structured content', async () => {

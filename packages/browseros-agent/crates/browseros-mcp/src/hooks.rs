@@ -18,6 +18,9 @@ pub struct McpClientInfo {
 pub struct McpSessionStarted {
     pub session_id: String,
     pub client_info: McpClientInfo,
+    /// Live handle to the session's client for server-initiated requests
+    /// (elicitation). None when the transport has no peer (tests, replay).
+    pub peer: Option<rmcp::service::Peer<rmcp::RoleServer>>,
 }
 
 #[derive(Debug, Clone)]

@@ -5,7 +5,7 @@
  *
  * In-memory registry of in-flight tool dispatch AbortControllers,
  * keyed by `sessionId`. The MCP dispatch path in
- * `apps/claw-server/src/mcp/register.ts` registers a controller at
+ * `apps/claw-server/src/mcp/dispatch.ts` registers a controller at
  * the start of every tool call and unregisters it in a finally
  * block when the call resolves. The cockpit's Stop button calls
  * `cancelByAgent(agentId)` which walks the identity service for
@@ -20,7 +20,7 @@
  * immediately.
  *
  * The abort signal here is one half of an `AbortSignal.any(...)`
- * composition in register.ts; the other half is the transport's
+ * composition in dispatch.ts; the other half is the transport's
  * own signal (from `extra?.signal`, used for client-initiated
  * `notifications/cancelled`). Either side firing aborts the
  * executeTool call cleanly without conflict.
@@ -33,10 +33,12 @@ import {
 } from '../lib/mcp-session'
 
 export interface DispatchCancellationService {
-  /** Called by register.ts at the start of every tool dispatch. */
+  /** Called by dispatch.ts at the start of every tool dispatch. */
   register(sessionId: string, controller: AbortController): void
-  /** Called from a try/finally in register.ts when the dispatch resolves. */
+  /** Called from a try/finally in dispatch.ts when the dispatch resolves. */
   unregister(sessionId: string, controller: AbortController): void
+  /** Aborts every active dispatch for one MCP session. */
+  cancelBySession(sessionId: string, reason: string): number
   /**
    * Aborts every active dispatch for this agent record. Returns the
    * count so the route can report
@@ -74,6 +76,16 @@ export function createDispatchCancellation(
       set.delete(controller)
       if (set.size === 0) controllers.delete(sessionId)
     },
+    cancelBySession(sessionId, reason) {
+      const set = controllers.get(sessionId)
+      if (!set) return 0
+      let cancelled = 0
+      for (const controller of [...set]) {
+        controller.abort(reason)
+        cancelled += 1
+      }
+      return cancelled
+    },
     cancelByAgent(agentId, reason) {
       let cancelled = 0
       for (const identity of opts.identityService.list()) {
@@ -99,7 +111,7 @@ export function createDispatchCancellation(
   }
 }
 
-/** Process-wide singleton consumed by register.ts + the cancel route. */
+/** Process-wide singleton consumed by dispatch.ts and session cleanup. */
 export const dispatchCancellation = createDispatchCancellation({
   identityService,
 })

@@ -16,9 +16,7 @@
  *     `pageId`, `targetId`, `url`, `title`.
  *   - identityService.list() to map agentId back to the live MCP
  *     `sessionId` (the replay file name).
- *   - tabGroupTracker.list() to map agentId back to the agent's
- *     tab-group colour, used by the extension to disambiguate
- *     when two agents happen to open the same URL.
+ *   - ownershipStore.groupOf() to resolve the durable agent group's colour.
  *
  * Output:
  *   - `[{ sessionId, tabPageId, url, title, groupColor }]`.
@@ -33,13 +31,12 @@
  * their own replay file instead of sharing one live identity entry.
  */
 
-import {
-  type TabGroupColor,
-  type TabGroupTracker,
-  tabGroupTracker,
-} from '../lib/agent-tab-groups'
+import type { OwnershipStore } from '../domain/ownership'
+import { ownershipStore } from '../domain/ownership'
+import type { TabGroupColor } from '../lib/agent-tab-groups'
 import {
   agentIdentityFromClient,
+  agentKeyFromClient,
   type ClientIdentity,
   type IdentityService,
   identityService,
@@ -67,7 +64,7 @@ interface ReplayTab {
 export interface ReplayTabsServiceDeps {
   registry: Pick<TabActivityRegistry, 'snapshot'>
   identityService: Pick<IdentityService, 'list'>
-  tabGroupTracker: Pick<TabGroupTracker, 'getByAgentId'>
+  ownershipStore: Pick<OwnershipStore, 'groupOf'>
 }
 
 export function createReplayTabsService(deps: ReplayTabsServiceDeps) {
@@ -79,7 +76,7 @@ export function createReplayTabsService(deps: ReplayTabsServiceDeps) {
       for (const tab of tabs) {
         const identity = liveByAgentId.get(tab.agentId)
         if (!identity) continue
-        const group = deps.tabGroupTracker.getByAgentId(tab.agentId)
+        const group = deps.ownershipStore.groupOf(agentKeyFromClient(identity))
         out.push({
           sessionId: identity.sessionId,
           tabPageId: tab.pageId,
@@ -110,5 +107,5 @@ function buildLiveAgentIdMap(
 export const replayTabsService = createReplayTabsService({
   registry: tabActivityRegistry,
   identityService,
-  tabGroupTracker,
+  ownershipStore,
 })

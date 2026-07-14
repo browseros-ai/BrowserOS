@@ -170,12 +170,19 @@ class WindowsServerBinariesTest(unittest.TestCase):
                 f"{rel} outside expected layout",
             )
 
-    def test_expected_windows_binary_paths_joins_root(self):
+    def test_expected_windows_binary_paths_resolves_browseros_descriptor(self):
         root = Path("/tmp/fake/resources/bin")
-        resolved = expected_windows_binary_paths(root)
-        self.assertEqual(len(resolved), len(WINDOWS_SERVER_BINARIES))
-        for rel, abs_path in zip(WINDOWS_SERVER_BINARIES, resolved):
-            self.assertEqual(abs_path, root / rel)
+        self.assertEqual(
+            expected_windows_binary_paths(root, BROWSEROS_SERVER_BUNDLE),
+            [root / "browseros_server.exe"],
+        )
+
+    def test_expected_windows_binary_paths_resolves_browserclaw_descriptor(self):
+        root = Path("/tmp/fake/resources/bin")
+        self.assertEqual(
+            expected_windows_binary_paths(root, BROWSEROS_CLAW_SERVER_BUNDLE),
+            [root / "browseros-claw-server.exe"],
+        )
 
     def test_expected_windows_bundle_binary_paths_includes_claw(self):
         build_output_dir = Path("/tmp/out/Default")

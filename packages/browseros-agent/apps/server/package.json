@@ -1,6 +1,6 @@
 {
   "name": "@browseros/server",
-  "version": "0.0.125",
+  "version": "0.0.127",
   "description": "BrowserOS server",
   "type": "module",
   "main": "./src/index.ts",
@@ -70,6 +70,7 @@
     "@ai-sdk/openai": "^3.0.73",
     "@ai-sdk/openai-compatible": "^2.0.51",
     "@ai-sdk/provider": "^3.0.10",
+    "@browseros/agent-mcp-manager": "workspace:*",
     "@browseros/browser-core": "workspace:*",
     "@browseros/browser-mcp": "workspace:*",
     "@browseros/cdp-protocol": "workspace:*",
@@ -82,7 +83,6 @@
     "acp-probe": "^0.0.2",
     "acpx": "^0.10.0",
     "acpx-ai-provider": "^0.0.6",
-    "agent-mcp-manager": "0.0.3",
     "ai": "^6.0.208",
     "commander": "^14.0.3",
     "core-js": "3.45.1",

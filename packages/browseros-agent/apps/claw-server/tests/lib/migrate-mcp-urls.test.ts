@@ -5,17 +5,59 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setMcpManagerForTesting } from '../../src/lib/mcp-manager'
 import { migrateMcpUrls } from '../../src/lib/migrate-mcp-urls'
-import { readJson, writeJson } from '../../src/lib/storage'
-import { storedAgentProfileSchema } from '../../src/routes/agents/schemas'
-import { writeAgentProfile } from '../_helpers/agent-profile'
 import { createStubMcpManager } from '../_helpers/stub-mcp-manager'
 import { withTempBrowserClawDir } from '../_helpers/temp-browserclaw-dir'
 
 describe('migrateMcpUrls', () => {
+  test('ignores manifest entries outside the shared BrowserClaw server', async () => {
+    await withTempBrowserClawDir(async () => {
+      const stub = createStubMcpManager()
+      const oldUrl = 'http://127.0.0.1:8080/mcp'
+      await stub.link({
+        server: {
+          name: 'legacy-profile-slug',
+          spec: { transport: 'http', url: oldUrl },
+        },
+        agent: 'claude-code',
+      })
+      setMcpManagerForTesting(stub)
+      stub.reset()
+
+      const result = await migrateMcpUrls('http://127.0.0.1:9200/mcp')
+
+      expect(result).toEqual({ migrated: 0, skipped: 0, failed: 0 })
+      expect(stub.calls.filter((c) => c.method === 'link')).toHaveLength(0)
+      const servers = await stub.list()
+      expect(servers[0]?.spec).toEqual({ transport: 'http', url: oldUrl })
+    })
+  })
+
+  test('does not inspect the legacy agents path', async () => {
+    await withTempBrowserClawDir(async (root) => {
+      const sentinel = join(root, 'agents')
+      await writeFile(sentinel, 'untouched', 'utf8')
+      const stub = createStubMcpManager()
+      await stub.link({
+        server: {
+          name: 'BrowserClaw',
+          spec: { transport: 'http', url: 'http://127.0.0.1:8080/mcp' },
+        },
+        agent: 'cursor',
+      })
+      setMcpManagerForTesting(stub)
+      stub.reset()
+
+      const result = await migrateMcpUrls('http://127.0.0.1:9200/mcp')
+
+      expect(result).toEqual({ migrated: 1, skipped: 0, failed: 0 })
+      expect(await readFile(sentinel, 'utf8')).toBe('untouched')
+    })
+  })
+
   test('relinks every manifest entry whose spec URL has moved', async () => {
     await withTempBrowserClawDir(async () => {
       const stub = createStubMcpManager()
@@ -43,6 +85,110 @@ describe('migrateMcpUrls', () => {
       const servers = await stub.list()
       const bc = servers.find((s) => s.name === 'BrowserClaw')
       expect(bc?.spec).toMatchObject({ transport: 'http', url: newUrl })
+    })
+  })
+
+  test('relinks the exact config path recorded in the manifest', async () => {
+    await withTempBrowserClawDir(async () => {
+      const stub = createStubMcpManager()
+      const configPath = '/tmp/custom-claude-mcp.json'
+      await stub.link({
+        server: {
+          name: 'BrowserClaw',
+          spec: { transport: 'http', url: 'http://127.0.0.1:8080/mcp' },
+        },
+        agent: 'claude-code',
+        configPath,
+      })
+      setMcpManagerForTesting(stub)
+      stub.reset()
+
+      const result = await migrateMcpUrls('http://127.0.0.1:9200/mcp')
+
+      expect(result).toEqual({ migrated: 1, skipped: 0, failed: 0 })
+      const relink = stub.calls.find((call) => call.method === 'link')
+      expect(relink?.payload).toMatchObject({
+        agent: 'claude-code',
+        configPath,
+      })
+      const [server] = await stub.list()
+      expect(server?.links['claude-code']?.configPath).toBe(configPath)
+    })
+  })
+
+  test('keeps a pending marker so the next boot retries every harness', async () => {
+    await withTempBrowserClawDir(async () => {
+      const stub = createStubMcpManager()
+      const oldUrl = 'http://127.0.0.1:8080/mcp'
+      const newUrl = 'http://127.0.0.1:9200/mcp'
+      await stub.link({
+        server: {
+          name: 'BrowserClaw',
+          spec: { transport: 'http', url: oldUrl },
+        },
+        agent: 'claude-code',
+      })
+      await stub.link({
+        server: {
+          name: 'BrowserClaw',
+          spec: { transport: 'http', url: oldUrl },
+        },
+        agent: 'cursor',
+      })
+      const originalLink = stub.link
+      let failClaude = true
+      stub.link = async (input) => {
+        if (failClaude && input.agent === 'claude-code') {
+          throw new Error('config locked')
+        }
+        return originalLink(input)
+      }
+      setMcpManagerForTesting(stub)
+      stub.reset()
+
+      const firstResult = await migrateMcpUrls(newUrl)
+
+      expect(firstResult).toEqual({ migrated: 1, skipped: 0, failed: 1 })
+      let servers = await stub.list()
+      let bc = servers.find((s) => s.name === 'BrowserClaw')
+      expect(bc?.spec).toMatchObject({ transport: 'http', url: newUrl })
+
+      failClaude = false
+      stub.reset()
+      const secondResult = await migrateMcpUrls(newUrl)
+
+      expect(secondResult).toEqual({ migrated: 2, skipped: 0, failed: 0 })
+      servers = await stub.list()
+      bc = servers.find((s) => s.name === 'BrowserClaw')
+      expect(bc?.spec).toMatchObject({ transport: 'http', url: newUrl })
+    })
+  })
+
+  test('replays every link when a prior run was interrupted', async () => {
+    await withTempBrowserClawDir(async (root) => {
+      const pendingFile = join(root, 'mcp-url-migration.pending')
+      await writeFile(pendingFile, 'interrupted', 'utf8')
+      const stub = createStubMcpManager()
+      const url = 'http://127.0.0.1:9200/mcp'
+      await stub.link({
+        server: { name: 'BrowserClaw', spec: { transport: 'http', url } },
+        agent: 'claude-code',
+      })
+      await stub.link({
+        server: { name: 'BrowserClaw', spec: { transport: 'http', url } },
+        agent: 'cursor',
+      })
+      setMcpManagerForTesting(stub)
+      stub.reset()
+
+      const result = await migrateMcpUrls(url)
+
+      expect(result).toEqual({ migrated: 2, skipped: 0, failed: 0 })
+      expect(stub.calls.filter((c) => c.method === 'link')).toHaveLength(2)
+      const pendingStillExists = await stat(pendingFile)
+        .then(() => true)
+        .catch(() => false)
+      expect(pendingStillExists).toBe(false)
     })
   })
 
@@ -123,133 +269,6 @@ describe('migrateMcpUrls', () => {
         command: 'npx',
         args: ['mcp-remote', newUrl, '--auth', 'http://auth.example/z'],
       })
-    })
-  })
-
-  test('rewrites the mcpUrl field on stored profile JSON files', async () => {
-    await withTempBrowserClawDir(async () => {
-      const stub = createStubMcpManager()
-      setMcpManagerForTesting(stub)
-      const created = await writeAgentProfile({ name: 'Cowork' })
-      const oldUrl = 'http://127.0.0.1:8080/mcp'
-      const storedBefore = await readJson(
-        `agents/${created.id}.json`,
-        storedAgentProfileSchema,
-      )
-      await writeJson(
-        `agents/${created.id}.json`,
-        { ...storedBefore, mcpUrl: oldUrl },
-        storedAgentProfileSchema,
-      )
-      await migrateMcpUrls('http://127.0.0.1:9200/mcp')
-      const stored = await readJson(
-        `agents/${created.id}.json`,
-        storedAgentProfileSchema,
-      )
-      expect(stored.mcpUrl).toBe('http://127.0.0.1:9200/mcp')
-    })
-  })
-
-  test('does NOT advance the stored mcpUrl when the manifest relink for that slug fails', async () => {
-    await withTempBrowserClawDir(async () => {
-      const stub = createStubMcpManager()
-      // Seed a profile whose slug lives in the manifest with the old URL.
-      const created = await writeAgentProfile({ name: 'Retry Install' })
-      const oldUrl = 'http://127.0.0.1:8080/mcp'
-      const storedBefore = await readJson(
-        `agents/${created.id}.json`,
-        storedAgentProfileSchema,
-      )
-      await writeJson(
-        `agents/${created.id}.json`,
-        { ...storedBefore, mcpUrl: oldUrl },
-        storedAgentProfileSchema,
-      )
-      await stub.link({
-        server: {
-          name: created.slug,
-          spec: { transport: 'http', url: oldUrl },
-        },
-        agent: 'claude-code',
-      })
-      // Every mgr.link fails. The invariant: profile JSON must stay
-      // on the OLD URL so the next boot retries against a consistent
-      // manifest / profile pair, not diverge into a three-way split.
-      stub.link = async () => {
-        throw new Error('link boom')
-      }
-      setMcpManagerForTesting(stub)
-      const result = await migrateMcpUrls('http://127.0.0.1:9200/mcp')
-      expect(result.failed).toBeGreaterThan(0)
-      const stored = await readJson(
-        `agents/${created.id}.json`,
-        storedAgentProfileSchema,
-      )
-      expect(stored.mcpUrl).toBe(oldUrl)
-    })
-  })
-
-  test('quarantines a profile whose harness value is no longer in the enum', async () => {
-    await withTempBrowserClawDir(async (root) => {
-      const stub = createStubMcpManager()
-      setMcpManagerForTesting(stub)
-      // Write a retired-harness profile directly (bypasses zod so we
-      // can plant a `harness: 'Claude Desktop'` value the current
-      // enum rejects).
-      const retiredProfile = {
-        id: 'oldie',
-        slug: 'oldie',
-        name: 'Old Profile',
-        harness: 'Claude Desktop',
-        loginMode: 'profile',
-        selectedSites: [],
-        approvals: {},
-        aclRuleIds: [],
-        customAclRules: [],
-        status: 'configured',
-        mcpUrl: 'http://127.0.0.1:9200/mcp',
-        createdAt: '2026-01-01T00:00:00Z',
-        updatedAt: '2026-01-01T00:00:00Z',
-      }
-      await mkdir(join(root, 'agents'), { recursive: true })
-      await writeFile(
-        join(root, 'agents', 'oldie.json'),
-        JSON.stringify(retiredProfile),
-        'utf8',
-      )
-      const result = await migrateMcpUrls('http://127.0.0.1:9100/mcp')
-      // Retired-harness quarantine does NOT count as `failed`; it is
-      // a clean routed outcome. Verify the file moved.
-      expect(result.failed).toBe(0)
-      const originalGone = await stat(join(root, 'agents', 'oldie.json')).catch(
-        () => null,
-      )
-      expect(originalGone).toBeNull()
-      const raw = await readFile(
-        join(root, 'agents', '.retired', 'oldie.json'),
-        'utf8',
-      )
-      expect(JSON.parse(raw).harness).toBe('Claude Desktop')
-    })
-  })
-
-  test('a corrupt profile file (unparseable JSON) is logged + skipped without aborting the sweep', async () => {
-    await withTempBrowserClawDir(async (root) => {
-      const stub = createStubMcpManager()
-      setMcpManagerForTesting(stub)
-      const ok = await writeAgentProfile({ name: 'Healthy' })
-      await writeFile(
-        join(root, 'agents', 'broken.json'),
-        '{ this is not valid json',
-        'utf8',
-      )
-      const result = await migrateMcpUrls('http://127.0.0.1:9100/mcp')
-      expect(result.failed).toBeGreaterThanOrEqual(1)
-      const stored = await readJson(
-        `agents/${ok.id}.json`,
-        storedAgentProfileSchema,
-      )
-      expect(stored.mcpUrl).toBe('http://127.0.0.1:9100/mcp')
     })
   })
 

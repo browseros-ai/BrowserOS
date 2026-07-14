@@ -10,6 +10,23 @@ const workflow = readFileSync(
 const shellChannelPlaceholder = '$' + '{channel}'
 const shellTargetPlaceholder = '$' + '{target}'
 const shellAssetsPlaceholder = '$' + '{assets[@]}'
+const releaseTagOutput = '$' + '{{ steps.release.outputs.tag }}'
+
+function generateReleaseNotesStep(): string {
+  const start = workflow.indexOf('- name: Generate release notes')
+  const end = workflow.indexOf('- name: Create GitHub release')
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return workflow.slice(start, end)
+}
+
+function createGithubReleaseStep(): string {
+  const start = workflow.indexOf('- name: Create GitHub release')
+  const end = workflow.indexOf('  cargo-test:')
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return workflow.slice(start, end)
+}
 
 describe('release-claw-server-rust workflow', () => {
   it('uses the Rust claw tag trigger and workflow_call contract', () => {
@@ -93,5 +110,23 @@ describe('release-claw-server-rust workflow', () => {
       `gh release upload "$RELEASE_TAG" "${shellAssetsPlaceholder}" --clobber`,
     )
     expect(workflow).toContain('Expected 5 Rust server resource zips')
+  })
+
+  it('caps generated changelogs before create and edit consume release notes', () => {
+    const step = generateReleaseNotesStep()
+    const createStep = createGithubReleaseStep()
+
+    expect(step).toContain(`RELEASE_TAG: ${releaseTagOutput}`)
+    expect(step).toContain('CHANGELOG_FILE="/tmp/release-changelog.md"')
+    expect(step).toContain('NOTES_FILE="/tmp/release-notes.md"')
+    expect(step).toContain(
+      'node packages/browseros-agent/scripts/release/cap-release-changelog.mjs',
+    )
+    expect(step).toContain('--max-entries 15')
+    expect(step).toContain('--previous-tag "$PREVIOUS_TAG"')
+    expect(step).toContain('--release-tag "$RELEASE_TAG"')
+    expect(
+      createStep.match(/--notes-file \/tmp\/release-notes\.md/g),
+    ).toHaveLength(2)
   })
 })

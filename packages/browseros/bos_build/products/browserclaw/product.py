@@ -3,7 +3,11 @@
 
 from pathlib import Path
 
-from ...core.products import ProductDescriptor
+from ...core.products import (
+    BROWSEROS_BUG_REPORTER_EXTENSION_ID,
+    BROWSERCLAW_EXTENSION_ID,
+    ProductDescriptor,
+)
 from ..server_binaries import ServerBundle, SignSpec
 
 BROWSERCLAW_PRODUCT = ProductDescriptor.define(
@@ -12,6 +16,10 @@ BROWSERCLAW_PRODUCT = ProductDescriptor.define(
     windows_installer_guid="{FA2AFFF8-647B-477C-A5D2-905BA8DB9B82}",
     summary="The open source browser for web agents",
     description="BrowserClaw is a Chromium-based browser for agent workflows.",
+    required_extensions=(
+        (BROWSERCLAW_EXTENSION_ID, "BrowserClaw app"),
+        (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
+    ),
 )
 
 BROWSERCLAW_SERVER_BUNDLE = ServerBundle(

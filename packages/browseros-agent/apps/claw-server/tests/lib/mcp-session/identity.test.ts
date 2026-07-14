@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
   agentIdentityFromClient,
+  agentKeyFromClient,
   createIdentityService,
   fallbackSlugForSession,
   slugifyClientName,
@@ -130,6 +131,19 @@ describe('fallbackSlugForSession', () => {
 })
 
 describe('agentIdentityFromClient', () => {
+  it('preserves the session-scoped audit identity', () => {
+    expect(
+      agentIdentityFromClient({
+        sessionId: 'session-a',
+        clientName: 'Claude Code',
+        clientVersion: '1.0.0',
+        clientTitle: null,
+        sessionLabel: null,
+        firstSeenAt: 0,
+      }),
+    ).toEqual({ agentId: 'claude-code-a36a9d', slug: 'claude-code' })
+  })
+
   it('scopes same-name clients by session id while keeping the plain slug', () => {
     const a = agentIdentityFromClient({
       sessionId: 's1',
@@ -194,5 +208,39 @@ describe('agentIdentityFromClient', () => {
     const result = agentIdentityFromClient(identity)
     expect(result.agentId).toBe(fallbackSlugForSession('s1'))
     expect(result.agentId).toBe(result.slug)
+  })
+})
+
+describe('agentKeyFromClient', () => {
+  function identity(sessionId: string, clientName: string) {
+    return {
+      sessionId,
+      clientName,
+      clientVersion: '1.0.0',
+      clientTitle: null,
+      sessionLabel: null,
+      firstSeenAt: 0,
+    }
+  }
+
+  it('survives reconnects from the same named client', () => {
+    expect(agentKeyFromClient(identity('session-1', 'Claude Code'))).toBe(
+      agentKeyFromClient(identity('session-2', 'Claude Code')),
+    )
+  })
+
+  it('normalizes case, spaces, and symbols with the existing slug rules', () => {
+    expect(agentKeyFromClient(identity('s1', '  CLAUDE +++ Code! '))).toBe(
+      'claude-code',
+    )
+  })
+
+  it('uses distinct session fallbacks for unusable names', () => {
+    const empty = agentKeyFromClient(identity('session-1', ''))
+    const symbols = agentKeyFromClient(identity('session-2', '!!!'))
+
+    expect(empty).toBe(fallbackSlugForSession('session-1'))
+    expect(symbols).toBe(fallbackSlugForSession('session-2'))
+    expect(empty).not.toBe(symbols)
   })
 })

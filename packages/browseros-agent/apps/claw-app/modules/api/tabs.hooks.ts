@@ -11,10 +11,9 @@
  * module for the record shape, the active-window threshold, and the
  * RECENT_TOOLS_CAP that bounds `recentTools`.
  *
- * The route enriches each record with the agent profile (label,
- * harness, color), falling back to slug / null when the profile has
- * been deleted between record and read. The hook surfaces those
- * enriched fields directly so the screen does not have to join again.
+ * The route enriches each record from the live MCP session identity,
+ * falling back to the recorded slug when that session has closed. The
+ * hook surfaces those fields directly so the screen does not join again.
  */
 
 import { createQuery } from 'react-query-kit'

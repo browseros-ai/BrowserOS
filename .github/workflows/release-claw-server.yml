@@ -96,18 +96,28 @@ jobs:
       - name: Generate release notes
         env:
           PREVIOUS_TAG: ${{ steps.release.outputs.previous_tag }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RELEASE_SHA: ${{ steps.release.outputs.release_sha }}
         run: |
           set -euo pipefail
+          CHANGELOG_FILE="/tmp/release-changelog.md"
+          NOTES_FILE="/tmp/release-notes.md"
 
           if [ -z "$PREVIOUS_TAG" ]; then
-            echo "Initial BrowserClaw Server release." > /tmp/release-notes.md
+            echo "Initial BrowserClaw Server release." > "$CHANGELOG_FILE"
           else
-            git log "$PREVIOUS_TAG..$RELEASE_SHA" --pretty=format:"- %s (%h)" > /tmp/release-notes.md
-            if [ ! -s /tmp/release-notes.md ]; then
-              echo "No commits since $PREVIOUS_TAG." > /tmp/release-notes.md
+            git log "$PREVIOUS_TAG..$RELEASE_SHA" --pretty=format:"- %s (%h)" > "$CHANGELOG_FILE"
+            if [ ! -s "$CHANGELOG_FILE" ]; then
+              echo "No commits since $PREVIOUS_TAG." > "$CHANGELOG_FILE"
             fi
           fi
+
+          node packages/browseros-agent/scripts/release/cap-release-changelog.mjs \
+            --input "$CHANGELOG_FILE" \
+            --output "$NOTES_FILE" \
+            --max-entries 15 \
+            --previous-tag "$PREVIOUS_TAG" \
+            --release-tag "$RELEASE_TAG"
 
       - name: Create GitHub release
         env:

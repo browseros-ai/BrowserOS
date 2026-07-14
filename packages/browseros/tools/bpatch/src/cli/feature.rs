@@ -324,7 +324,9 @@ fn last_sequences(ctx: &StateContext) -> Result<BTreeMap<String, usize>> {
     let mut sequences = BTreeMap::new();
     let range = format!("{}..HEAD", state.base.sha);
     for commit in git.first_parent_commits(Some(&range), None)? {
-        if parse_apply_trailers(&git.commit_trailers(&commit)?)?.is_none() {
+        if parse_apply_trailers(&git.commit_trailers(&commit)?)?
+            .is_none_or(|trailers| trailers.state_only)
+        {
             continue;
         }
         if let Some((feature, seq)) = subject_sequence(&git.commit_subject(&commit)?) {

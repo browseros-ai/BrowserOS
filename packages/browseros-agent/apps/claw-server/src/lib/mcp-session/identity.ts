@@ -24,6 +24,8 @@
  * names fall back to the session-derived `unknown-<hash>` handle.
  */
 
+import { type AgentKey, agentKeyFromSlug } from '../../domain/agent-key'
+
 export interface ClientIdentity {
   sessionId: string
   clientName: string
@@ -138,6 +140,14 @@ function hashTailFor(input: string): string {
  */
 export function fallbackSlugForSession(sessionId: string): string {
   return `unknown-${hashTailFor(sessionId)}`
+}
+
+/** Resolves the durable client key used for page and tab-group ownership. */
+export function agentKeyFromClient(identity: ClientIdentity): AgentKey {
+  const cleaned = slugifyClientName(identity.clientName)
+  return agentKeyFromSlug(
+    cleaned.length > 0 ? cleaned : fallbackSlugForSession(identity.sessionId),
+  )
 }
 
 /**

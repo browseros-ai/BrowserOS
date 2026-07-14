@@ -7,38 +7,61 @@
  * Pre-fix, sessions stayed in the in-memory map forever unless the
  * client sent an explicit `DELETE /mcp`; codex and most other
  * clients do not, so `agent_session_ends` never got a row and the
- * agent's tab group leaked. The sweeper here writes the same end
- * row and fires the same tab-group close that the explicit DELETE
- * path always did, on the same `IDLE_TIMEOUT_MS` boundary that
+ * session state leaked. The sweeper writes the same end
+ * row as the explicit DELETE path, on the same timeout boundary that
  * `services/tasks.ts:deriveStatus` already used at read time.
  *
  * `sweepIdleSessions(now)` is exported so tests can drive a
  * deterministic clock without manipulating timers.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { eq } from 'drizzle-orm'
-import { env } from '../../src/env'
-import { tabGroupTracker } from '../../src/lib/agent-tab-groups'
-import {
-  agentIdentityFromClient,
-  identityService,
-} from '../../src/lib/mcp-session'
-import {
+import { agentSessionEnds } from '../../src/modules/db/schema/schema'
+
+interface GroupCall {
+  toolName: string
+  args: Record<string, unknown>
+  signal?: AbortSignal
+}
+
+const groupCalls: GroupCall[] = []
+const realFramework = await import('@browseros/browser-mcp/tools/framework')
+mock.module('@browseros/browser-mcp/tools/framework', () => ({
+  ...realFramework,
+  executeTool: async (
+    tool: { name: string },
+    args: Record<string, unknown>,
+    context: { signal?: AbortSignal },
+  ) => {
+    groupCalls.push({ toolName: tool.name, args, signal: context.signal })
+    return { isError: false, content: [{ type: 'text', text: 'ok' }] }
+  },
+}))
+
+const { ownershipStore } = await import('../../src/domain/ownership')
+const { env } = await import('../../src/env')
+const { setBrowserSession } = await import('../../src/lib/browser-session')
+const { agentKeyFromClient, identityService } = await import(
+  '../../src/lib/mcp-session'
+)
+const { maybeRequestSessionNaming, resetSessionNamingForTests } = await import(
+  '../../src/mcp/session-naming'
+)
+const {
   getSessionRefsForTesting,
   resetSingleMcpInstanceForTesting,
   setLastActivityForTesting,
   sweepIdleSessions,
-} from '../../src/mcp/single-server'
-import {
-  getAuditDb,
-  resetAuditDbForTesting,
-  setAuditDbForTesting,
-} from '../../src/modules/db/db'
-import { agentSessionEnds } from '../../src/modules/db/schema/schema'
-import app from '../../src/server'
+} = await import('../../src/mcp/single-server')
+const { getAuditDb, resetAuditDbForTesting, setAuditDbForTesting } =
+  await import('../../src/modules/db/db')
+const { dispatchCancellation } = await import(
+  '../../src/services/dispatch-cancellation'
+)
+const app = (await import('../../src/server')).default
 
 async function connect(clientName: string) {
   const transport = new StreamableHTTPClientTransport(
@@ -57,8 +80,7 @@ async function connect(clientName: string) {
   if (!sessionId) throw new Error('no session id assigned')
   const identity = identityService.getIdentity(sessionId)
   if (!identity) throw new Error('no identity registered')
-  const { agentId } = agentIdentityFromClient(identity)
-  return { client, sessionId, agentId }
+  return { client, sessionId }
 }
 
 function endRowsFor(sessionId: string): Array<{ kind: string }> {
@@ -76,13 +98,21 @@ describe('sweepIdleSessions', () => {
     setAuditDbForTesting()
     resetSingleMcpInstanceForTesting()
     identityService.clear()
-    tabGroupTracker.reset()
+    ownershipStore.clear()
+    dispatchCancellation.clear()
+    resetSessionNamingForTests()
+    groupCalls.length = 0
+    setBrowserSession(null)
     env.sessionIdleMs = 50
   })
   afterEach(() => {
     resetSingleMcpInstanceForTesting()
     identityService.clear()
-    tabGroupTracker.reset()
+    ownershipStore.clear()
+    dispatchCancellation.clear()
+    resetSessionNamingForTests()
+    groupCalls.length = 0
+    setBrowserSession(null)
     env.sessionIdleMs = ORIGINAL_IDLE
     resetAuditDbForTesting()
   })
@@ -127,17 +157,6 @@ describe('sweepIdleSessions', () => {
       // gated on `sessions.has(sessionId)` so no double-write.
       expect(sweepIdleSessions(Date.now())).toEqual([])
       expect(endRowsFor(sessionId)).toHaveLength(1)
-      await client.close()
-    }
-  })
-
-  test('reaping decrements the tab-group tracker so the agent group can be closed', async () => {
-    {
-      const { agentId, client, sessionId } = await connect('codex-mcp-client')
-      expect(tabGroupTracker.getByAgentId(agentId)).not.toBeNull()
-      setLastActivityForTesting(sessionId, Date.now() - 10_000)
-      sweepIdleSessions(Date.now())
-      expect(tabGroupTracker.getByAgentId(agentId)).toBeNull()
       await client.close()
     }
   })
@@ -188,5 +207,144 @@ describe('sweepIdleSessions', () => {
       expect(serverClosed).toBe(1)
       await client.close()
     }
+  })
+
+  test('last session for a key collapses its group without closing it', async () => {
+    const { client, sessionId } = await connect('claude-code')
+    const identity = identityService.getIdentity(sessionId)
+    if (!identity) throw new Error('identity missing')
+    const key = agentKeyFromClient(identity)
+    ownershipStore.setGroup(key, {
+      id: 'G1',
+      windowId: 1,
+      color: 'red',
+      title: key,
+      titleExplicit: false,
+      collapsed: false,
+    })
+    setBrowserSession({} as never)
+
+    setLastActivityForTesting(sessionId, Date.now() - 10_000)
+    expect(sweepIdleSessions(Date.now())).toEqual([sessionId])
+    await Promise.resolve()
+
+    expect(groupCalls).toHaveLength(1)
+    expect(groupCalls[0]?.args).toEqual({
+      action: 'update',
+      groupId: 'G1',
+      collapsed: true,
+    })
+    expect(groupCalls[0]?.signal).toBeInstanceOf(AbortSignal)
+    expect(groupCalls.some((call) => call.args.action === 'close')).toBe(false)
+    expect(ownershipStore.groupOf(key)?.collapsed).toBe(true)
+    expect(ownershipStore.size()).toBe(1)
+    await client.close()
+  })
+
+  test('reap collapses then forgets fallback-keyed ownership', async () => {
+    const initialSize = ownershipStore.size()
+    const { client, sessionId } = await connect('!!!')
+    const identity = identityService.getIdentity(sessionId)
+    if (!identity) throw new Error('identity missing')
+    const key = agentKeyFromClient(identity)
+    ownershipStore.claimPage(key, 7)
+    ownershipStore.setGroup(key, {
+      id: 'G-fallback',
+      windowId: 1,
+      color: 'red',
+      title: key,
+      titleExplicit: false,
+      collapsed: false,
+    })
+    setBrowserSession({} as never)
+
+    setLastActivityForTesting(sessionId, Date.now() - 10_000)
+    expect(sweepIdleSessions(Date.now())).toEqual([sessionId])
+    await Promise.resolve()
+
+    expect(groupCalls).toHaveLength(1)
+    expect(groupCalls[0]?.args).toEqual({
+      action: 'update',
+      groupId: 'G-fallback',
+      collapsed: true,
+    })
+    expect(groupCalls.some((call) => call.args.action === 'close')).toBe(false)
+    expect(ownershipStore.size()).toBe(initialSize)
+    expect(ownershipStore.pagesOf(key)).toEqual(new Set())
+    expect(ownershipStore.ownerOf(7)).toBeNull()
+    expect(ownershipStore.groupOf(key)).toBeNull()
+    await client.close()
+  })
+
+  test('does not collapse while another same-key session is live', async () => {
+    const first = await connect('claude-code')
+    const second = await connect('claude-code')
+    const identity = identityService.getIdentity(first.sessionId)
+    if (!identity) throw new Error('identity missing')
+    const key = agentKeyFromClient(identity)
+    ownershipStore.setGroup(key, {
+      id: 'G1',
+      windowId: 1,
+      color: 'red',
+      title: key,
+      titleExplicit: false,
+      collapsed: false,
+    })
+    setBrowserSession({} as never)
+
+    setLastActivityForTesting(first.sessionId, Date.now() - 10_000)
+    expect(sweepIdleSessions(Date.now())).toEqual([first.sessionId])
+    await Promise.resolve()
+
+    expect(groupCalls).toEqual([])
+    expect(ownershipStore.groupOf(key)?.collapsed).toBe(false)
+    ownershipStore.clear()
+    await first.client.close()
+    await second.client.close()
+  })
+
+  test('teardown aborts every in-flight dispatch for the session', async () => {
+    const { client, sessionId } = await connect('claude-code')
+    const first = new AbortController()
+    const second = new AbortController()
+    dispatchCancellation.register(sessionId, first)
+    dispatchCancellation.register(sessionId, second)
+
+    setLastActivityForTesting(sessionId, Date.now() - 10_000)
+    expect(sweepIdleSessions(Date.now())).toEqual([sessionId])
+
+    expect(first.signal.aborted).toBe(true)
+    expect(second.signal.aborted).toBe(true)
+    expect(first.signal.reason).toBe('MCP session ended')
+    await client.close()
+  })
+
+  test('teardown cancels a hanging naming elicitation cleanly', async () => {
+    const { client, sessionId } = await connect('claude-code')
+    let elicitationAborted = false
+    const naming = maybeRequestSessionNaming({
+      sessionId,
+      requestId: 1,
+      server: {
+        getClientCapabilities: () => ({ elicitation: {} }),
+        elicitInput: (_params, options) =>
+          new Promise((_, reject) => {
+            options.signal?.addEventListener(
+              'abort',
+              () => {
+                elicitationAborted = true
+                reject(new DOMException('aborted', 'AbortError'))
+              },
+              { once: true },
+            )
+          }),
+      },
+    })
+
+    setLastActivityForTesting(sessionId, Date.now() - 10_000)
+    expect(sweepIdleSessions(Date.now())).toEqual([sessionId])
+    await expect(naming).resolves.toBeUndefined()
+    expect(elicitationAborted).toBe(true)
+    await client.close()
   })
 })

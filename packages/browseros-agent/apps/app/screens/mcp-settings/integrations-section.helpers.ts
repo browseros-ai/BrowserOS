@@ -1,10 +1,12 @@
 import type { FC, SVGProps } from 'react'
 import {
+  AntigravityMark,
   ClaudeDesktopMark,
   ClaudeMark,
   CodexMark,
   CursorMark,
   GenericAgentMark,
+  OpenCodeMark,
   VSCodeMark,
   ZedMark,
 } from './agent-marks'
@@ -54,6 +56,16 @@ const AGENT_PRESENTATION: Record<string, AgentPresentation> = {
     label: 'Codex',
     installUrl: 'https://github.com/openai/codex',
     mark: CodexMark,
+  },
+  opencode: {
+    label: 'OpenCode',
+    installUrl: 'https://opencode.ai',
+    mark: OpenCodeMark,
+  },
+  antigravity: {
+    label: 'Antigravity',
+    installUrl: 'https://antigravity.google',
+    mark: AntigravityMark,
   },
   zed: {
     label: 'Zed',

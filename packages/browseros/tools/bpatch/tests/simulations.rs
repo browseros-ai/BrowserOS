@@ -362,7 +362,7 @@ fn sim4_drift_refusal_prints_annotations_and_remedies() -> Result<()> {
     assert_eq!(out.code, 3);
     assert!(
         out.stdout
-            .contains("drift: working tree differs from applied state in 2 files:")
+            .contains("drift: working tree differs from its bpatch baseline in 2 files:")
     );
     assert!(out.stdout.contains("chrome/browser/ui/llmchat/panel.cc"));
     assert!(out.stdout.contains("(modified since feat: llmchat)"));
@@ -486,7 +486,12 @@ fn sim5_agent_base_bump_conflict_continue_repin_round_trips_store() -> Result<()
         Some(&scenario.store_dir),
         strs(&["apply", "--json"]),
     )?;
-    assert_eq!(parse_json(&converged.stdout)?["result"], "converged");
+    assert_eq!(
+        parse_json(&converged.stdout)?["result"],
+        "converged",
+        "{}",
+        converged.stdout
+    );
     Ok(())
 }
 

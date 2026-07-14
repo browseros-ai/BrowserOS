@@ -6,6 +6,7 @@ import { wrapUntrusted } from './trust-boundary'
 
 const DEFAULT_LIMIT = 50
 const LINE_TRUNCATION_MARKER = '... [truncated]'
+const REF_SUFFIX_PATTERN = / \[ref=e\d+\]$/
 
 export const grep = defineTool({
   name: 'grep',
@@ -50,6 +51,7 @@ export const grep = defineTool({
         page: args.page,
         over: args.over,
         count: 0,
+        matches: [],
       })
     }
 
@@ -83,7 +85,9 @@ export const grep = defineTool({
             page: args.page,
             over: args.over,
             count: matches.length,
-            truncated: true,
+            matches: renderedMatches,
+            contentLength: fullMatchesText.length,
+            writtenToFile: true,
             path,
           },
         )
@@ -98,7 +102,8 @@ export const grep = defineTool({
             page: args.page,
             over: args.over,
             count: matches.length,
-            truncated: true,
+            matches: renderedMatches,
+            contentLength: fullMatchesText.length,
             writtenToFile: false,
             outputWriteFailed: true,
             error: saveError,
@@ -111,6 +116,7 @@ export const grep = defineTool({
       page: args.page,
       over: args.over,
       count: matches.length,
+      matches: renderedMatches,
     })
   },
 })
@@ -122,7 +128,17 @@ function clampLimit(limit: number | undefined): number {
 }
 
 function clampRenderedLine(line: string): string {
-  return clampText(line, TOOL_LIMITS.GREP_MATCH_LINE_MAX_CHARS)
+  const maxChars = TOOL_LIMITS.GREP_MATCH_LINE_MAX_CHARS
+  const refSuffix = line.match(REF_SUFFIX_PATTERN)?.[0]
+  if (
+    refSuffix &&
+    line.length > maxChars &&
+    refSuffix.length + LINE_TRUNCATION_MARKER.length <= maxChars
+  ) {
+    const prefix = line.slice(0, -refSuffix.length)
+    return `${clampText(prefix, maxChars - refSuffix.length)}${refSuffix}`
+  }
+  return clampText(line, maxChars)
 }
 
 function clampText(text: string, maxChars: number): string {

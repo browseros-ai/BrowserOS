@@ -74,10 +74,6 @@ jobs:
             command: (cd apps/claw-server && bun run test)
             junit_path: test-results/claw-server.xml
             needs_browser: false
-          - suite: eval
-            command: (cd apps/eval && bun run test)
-            junit_path: test-results/eval.xml
-            needs_browser: false
           - suite: build
             command: bun run ./scripts/run-bun-test.ts ./scripts/build
             junit_path: test-results/build.xml

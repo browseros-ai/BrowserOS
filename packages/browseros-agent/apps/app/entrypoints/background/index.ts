@@ -4,6 +4,7 @@ import { Capabilities } from '@/lib/browseros/capabilities'
 import { getHealthCheckUrl, getMcpServerUrl } from '@/lib/browseros/helpers'
 import {
   ensureSidePanelRuntimeStateLoaded,
+  initializeSidePanelOptions,
   openSidePanel,
   registerSidePanelOpenStateListeners,
   setSidePanelPerWindowPreference,
@@ -89,6 +90,7 @@ export default defineBackground(() => {
 
   chrome.runtime.onInstalled.addListener((details) => {
     if (details.reason === chrome.runtime.OnInstalledReason.INSTALL) {
+      initializeSidePanelOptions().catch(() => null)
       chrome.tabs.create({
         url: chrome.runtime.getURL('app.html#/onboarding'),
       })

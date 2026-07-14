@@ -1,10 +1,13 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Serialize;
 
+use crate::engine::apply::build_apply_target_trees;
+use crate::engine::progress;
 use crate::engine::state::{StateContext, resolve, unassigned_feature_name};
+use crate::git::GitAdapter;
 use crate::store::{FeatureMatch, Store};
 
 /// Serializable diff report for the next apply.
@@ -75,22 +78,16 @@ pub struct RebuildScope {
 pub fn run(ctx: &StateContext) -> Result<DiffReport> {
     let state = resolve(ctx)?;
     let store = Store::load(&ctx.store_dir)?;
-    let patches = store
-        .patches()
-        .values()
-        .filter(|patch| store.stores_path(&patch.path))
-        .map(|patch| ctx.store_dir.join(&patch.path))
-        .collect::<Vec<_>>();
-    let target_tree = crate::git::GitAdapter::new(&ctx.checkout)
-        .build_tree_from_patches(&state.base.sha, &patches)
-        .context("building target tree from store patches")?;
-    let applied_tree = state
-        .applied
-        .as_ref()
-        .map(|applied| applied.tree.as_str())
-        .unwrap_or(&state.base.sha);
-    let entries = crate::git::GitAdapter::new(&ctx.checkout)
-        .diff_tree_name_status(applied_tree, &target_tree)?
+    let checkout = GitAdapter::new(&ctx.checkout);
+    let target = build_apply_target_trees(
+        &checkout,
+        &ctx.store_dir,
+        &store,
+        &state,
+        &mut progress::noop(),
+    )?;
+    let entries = checkout
+        .diff_tree_name_status(&state.head_tree, &target.checkout_tree)?
         .into_iter()
         .filter(|entry| {
             entry

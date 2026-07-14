@@ -26,7 +26,6 @@ from bos_build.steps.extensions.bundled_extensions import (
     ManifestBundle,
 )
 
-CLAW_EXTENSION_ID = "pjimfkbpehlcllblajnpfamdfjhhlgkc"
 MODULE = "bos_build.steps.extensions.bundled_extensions"
 
 
@@ -42,8 +41,14 @@ class BundledExtensionsManifestTest(unittest.TestCase):
         )
 
         by_id = {ext.id: ext for ext in extensions}
-        required = get_product_descriptor("browseros").required_extension_ids
-        for extension_id, name in required:
+        required = {
+            extension_id: name
+            for product in ("browseros", "browserclaw")
+            for extension_id, name in get_product_descriptor(
+                product
+            ).required_extension_ids
+        }
+        for extension_id, name in required.items():
             self.assertIn(extension_id, by_id, name)
 
         for ext in extensions:
@@ -54,21 +59,20 @@ class BundledExtensionsManifestTest(unittest.TestCase):
             self.assertTrue(ext.version)
             self.assertIn(f"-{ext.version}.crx", ext.codebase)
 
-    def test_required_ids_cover_agent_bug_reporter_and_claw(self) -> None:
-        # Both products bundle all three until the chromium-side fix lands
-        # (see the required_extension_ids TODO in common/products.py).
-        expected = {
-            "adlpneommgkgeanpaekgoaolcpncohkf": "BrowserOS bug reporter",
-            "bflpfmnmnokmjhmgnolecpppdbdophmk": "BrowserOS agent",
-            CLAW_EXTENSION_ID: "BrowserClaw app",
-        }
+    def test_release_product_required_ids_are_exact(self) -> None:
         self.assertEqual(
-            dict(get_product_descriptor("browseros").required_extension_ids),
-            expected,
+            get_product_descriptor("browseros").required_extension_ids,
+            (
+                (BROWSEROS_AGENT_EXTENSION_ID, "BrowserOS agent"),
+                (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
+            ),
         )
         self.assertEqual(
-            dict(get_product_descriptor("browserclaw").required_extension_ids),
-            expected,
+            get_product_descriptor("browserclaw").required_extension_ids,
+            (
+                (BROWSERCLAW_EXTENSION_ID, "BrowserClaw app"),
+                (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
+            ),
         )
 
     def test_generated_json_maps_claw_id_to_crx(self) -> None:
@@ -77,7 +81,7 @@ class BundledExtensionsManifestTest(unittest.TestCase):
             BundledExtensionsModule()._generate_json(
                 [
                     ExtensionInfo(
-                        id=CLAW_EXTENSION_ID,
+                        id=BROWSERCLAW_EXTENSION_ID,
                         version="0.0.1",
                         codebase=(
                             "https://cdn.browseros.com/extensions/browserclaw-0.0.1.crx"
@@ -90,118 +94,189 @@ class BundledExtensionsManifestTest(unittest.TestCase):
             data = json.loads((output_dir / "bundled_extensions.json").read_text())
 
         self.assertEqual(
-            data[CLAW_EXTENSION_ID],
+            data[BROWSERCLAW_EXTENSION_ID],
             {
-                "external_crx": f"{CLAW_EXTENSION_ID}.crx",
+                "external_crx": f"{BROWSERCLAW_EXTENSION_ID}.crx",
                 "external_version": "0.0.1",
             },
         )
 
-    def test_missing_claw_app_fails_validation(self) -> None:
-        extensions = [
-            ExtensionInfo(
-                id="adlpneommgkgeanpaekgoaolcpncohkf",
-                version="52.0.0.0",
-                codebase="https://cdn.browseros.com/extensions/bugreporter.crx",
-            ),
-            ExtensionInfo(
-                id="bflpfmnmnokmjhmgnolecpppdbdophmk",
-                version="0.0.115.0",
-                codebase="https://cdn.browseros.com/extensions/agent.crx",
-            ),
-        ]
-
-        with self.assertRaisesRegex(
-            RuntimeError,
-            f"BrowserClaw app \\({CLAW_EXTENSION_ID}\\)",
-        ):
-            BundledExtensionsModule()._validate_required_extensions(
-                extensions, self._ctx("browserclaw")
-            )
-
-    def test_browserclaw_selects_all_required_extensions(self) -> None:
-        extensions = [
-            ExtensionInfo(
-                id="adlpneommgkgeanpaekgoaolcpncohkf",
-                version="52.0.0.0",
-                codebase="https://cdn.browseros.com/extensions/bugreporter.crx",
-            ),
-            ExtensionInfo(
-                id="bflpfmnmnokmjhmgnolecpppdbdophmk",
-                version="0.0.115.0",
-                codebase="https://cdn.browseros.com/extensions/agent.crx",
-            ),
-            ExtensionInfo(
-                id=CLAW_EXTENSION_ID,
-                version="0.0.1",
-                codebase="https://cdn.browseros.com/extensions/browserclaw.crx",
-            ),
-        ]
-
-        selected = BundledExtensionsModule()._select_product_extensions(
-            extensions, self._ctx("browserclaw")
+    def test_missing_required_entry_names_product_and_extension(self) -> None:
+        cases = (
+            ("browseros", BROWSEROS_AGENT_EXTENSION_ID, "BrowserOS agent"),
+            ("browserclaw", BROWSERCLAW_EXTENSION_ID, "BrowserClaw app"),
         )
+        for product, missing_id, missing_name in cases:
+            with self.subTest(product=product):
+                extensions = [
+                    ext for ext in self._all_extensions() if ext.id != missing_id
+                ]
+                display_name = get_product_descriptor(product).display_name
 
-        # All three ship for browserclaw too while the packaging TODO stands.
-        self.assertEqual(
-            [ext.id for ext in selected],
-            [
-                "adlpneommgkgeanpaekgoaolcpncohkf",
-                "bflpfmnmnokmjhmgnolecpppdbdophmk",
-                CLAW_EXTENSION_ID,
-            ],
-        )
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    f"{display_name}.*{missing_name} \\({missing_id}\\)",
+                ):
+                    BundledExtensionsModule()._validate_required_extensions(
+                        extensions, self._ctx(product)
+                    )
+
+    def test_release_selection_is_product_exact(self) -> None:
+        expected = {
+            "browseros": {
+                BROWSEROS_AGENT_EXTENSION_ID,
+                BROWSEROS_BUG_REPORTER_EXTENSION_ID,
+            },
+            "browserclaw": {
+                BROWSERCLAW_EXTENSION_ID,
+                BROWSEROS_BUG_REPORTER_EXTENSION_ID,
+            },
+        }
+        for product, required_ids in expected.items():
+            with self.subTest(product=product):
+                selected = BundledExtensionsModule()._select_product_extensions(
+                    self._all_extensions(), self._ctx(product)
+                )
+
+                self.assertEqual({ext.id for ext in selected}, required_ids)
+
+    def test_debug_selection_is_registered_product_union(self) -> None:
+        expected = {
+            BROWSEROS_AGENT_EXTENSION_ID,
+            BROWSEROS_BUG_REPORTER_EXTENSION_ID,
+            BROWSERCLAW_EXTENSION_ID,
+        }
+        for product in ("browseros", "browserclaw"):
+            with self.subTest(product=product):
+                selected = BundledExtensionsModule()._select_product_extensions(
+                    self._all_extensions(), self._ctx(product, build_type="debug")
+                )
+
+                self.assertEqual({ext.id for ext in selected}, expected)
 
     def test_hybrid_mode_builds_in_repo_and_downloads_external_required(self) -> None:
         plan = BundledExtensionsModule()._plan_hybrid_bundles(
-            [
-                ExtensionInfo(
-                    id=BROWSEROS_BUG_REPORTER_EXTENSION_ID,
-                    version="52.0.0.0",
-                    codebase="https://cdn.browseros.com/extensions/bugreporter.crx",
-                ),
-                # Local-buildable IDs may still appear in the manifest; local wins.
-                ExtensionInfo(
-                    id=BROWSEROS_AGENT_EXTENSION_ID,
-                    version="0.0.115.0",
-                    codebase="https://cdn.browseros.com/extensions/agent.crx",
-                ),
-                ExtensionInfo(
-                    id=BROWSERCLAW_EXTENSION_ID,
-                    version="0.0.1",
-                    codebase="https://cdn.browseros.com/extensions/browserclaw.crx",
-                ),
-            ],
+            self._all_extensions(),
             self._ctx("browseros", bundle_local_extensions=True),
         )
 
-        self.assertIsInstance(plan[0], ManifestBundle)
-        self.assertIsInstance(plan[1], LocalBundle)
-        self.assertIsInstance(plan[2], LocalBundle)
+        self.assertIsInstance(plan[0], LocalBundle)
+        self.assertIsInstance(plan[1], ManifestBundle)
+        self.assertEqual(cast(LocalBundle, plan[0]).spec.name, "agent")
         self.assertEqual(
-            cast(ManifestBundle, plan[0]).extension.id,
+            cast(ManifestBundle, plan[1]).extension.id,
             BROWSEROS_BUG_REPORTER_EXTENSION_ID,
         )
-        self.assertEqual(cast(LocalBundle, plan[1]).spec.name, "agent")
-        self.assertEqual(cast(LocalBundle, plan[2]).spec.name, "browserclaw")
+
+    def test_browserclaw_hybrid_mode_builds_claw_not_agent(self) -> None:
+        plan = BundledExtensionsModule()._plan_hybrid_bundles(
+            self._all_extensions(),
+            self._ctx("browserclaw", bundle_local_extensions=True),
+        )
+
+        self.assertIsInstance(plan[0], LocalBundle)
+        self.assertIsInstance(plan[1], ManifestBundle)
+        self.assertEqual(cast(LocalBundle, plan[0]).spec.name, "browserclaw")
+        self.assertEqual(
+            cast(ManifestBundle, plan[1]).extension.id,
+            BROWSEROS_BUG_REPORTER_EXTENSION_ID,
+        )
 
     def test_hybrid_mode_fails_when_external_required_missing(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "BrowserOS bug reporter"):
             BundledExtensionsModule()._plan_hybrid_bundles(
                 [
-                    ExtensionInfo(
-                        id=BROWSEROS_AGENT_EXTENSION_ID,
-                        version="0.0.115.0",
-                        codebase="https://cdn.browseros.com/extensions/agent.crx",
-                    ),
-                    ExtensionInfo(
-                        id=BROWSERCLAW_EXTENSION_ID,
-                        version="0.0.1",
-                        codebase="https://cdn.browseros.com/extensions/browserclaw.crx",
-                    ),
+                    ext
+                    for ext in self._all_extensions()
+                    if ext.id != BROWSEROS_BUG_REPORTER_EXTENSION_ID
                 ],
                 self._ctx("browseros", bundle_local_extensions=True),
             )
+
+    def test_cleanup_removes_only_generated_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            chromium_src = Path(tmp)
+            ctx = self._ctx("browseros", chromium_src=chromium_src)
+            module = BundledExtensionsModule()
+            source_dir = module._get_output_dir(ctx)
+            source_dir.mkdir(parents=True)
+            preserved = ("BUILD.gn", ".gitignore", "README.md", "saved.crx.backup")
+            for name in preserved:
+                (source_dir / name).write_text(name)
+            for extension_id in (
+                BROWSEROS_AGENT_EXTENSION_ID,
+                BROWSERCLAW_EXTENSION_ID,
+            ):
+                (source_dir / f"{extension_id}.crx").write_text(extension_id)
+            (source_dir / "bundled_extensions.json").write_text("{}")
+
+            active_output = chromium_src / ctx.out_dir / "browseros_extensions"
+            active_output.mkdir(parents=True)
+            (active_output / "stale.crx").write_text("stale")
+            unrelated_output = (
+                chromium_src
+                / "out"
+                / "Default_browserclaw_arm64"
+                / "browseros_extensions"
+            )
+            unrelated_output.mkdir(parents=True)
+            (unrelated_output / "keep.crx").write_text("keep")
+
+            module._clear_generated_outputs(ctx, source_dir)
+
+            self.assertFalse((source_dir / "bundled_extensions.json").exists())
+            self.assertEqual(list(source_dir.glob("*.crx")), [])
+            for name in preserved:
+                self.assertTrue((source_dir / name).is_file(), name)
+            self.assertFalse(active_output.exists())
+            self.assertTrue((unrelated_output / "keep.crx").is_file())
+
+    def test_sequential_staging_leaves_only_latest_product_payload(self) -> None:
+        expected = {
+            "browseros": {
+                BROWSEROS_AGENT_EXTENSION_ID,
+                BROWSEROS_BUG_REPORTER_EXTENSION_ID,
+            },
+            "browserclaw": {
+                BROWSERCLAW_EXTENSION_ID,
+                BROWSEROS_BUG_REPORTER_EXTENSION_ID,
+            },
+        }
+
+        for first, second in (
+            ("browseros", "browserclaw"),
+            ("browserclaw", "browseros"),
+        ):
+            with (
+                self.subTest(first=first, second=second),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                chromium_src = Path(tmp)
+                module = BundledExtensionsModule()
+
+                def write_crx(ext: ExtensionInfo, output_dir: Path) -> None:
+                    (output_dir / f"{ext.id}.crx").write_text(ext.id)
+
+                with (
+                    patch.object(
+                        module,
+                        "_fetch_and_parse_manifest",
+                        return_value=self._all_extensions(),
+                    ),
+                    patch.object(module, "_download_extension", side_effect=write_crx),
+                ):
+                    module.execute(self._ctx(first, chromium_src=chromium_src))
+                    module.execute(self._ctx(second, chromium_src=chromium_src))
+
+                source_dir = module._get_output_dir(
+                    self._ctx(second, chromium_src=chromium_src)
+                )
+                staged_ids = {path.stem for path in source_dir.glob("*.crx")}
+                manifest_ids = set(
+                    json.loads((source_dir / "bundled_extensions.json").read_text())
+                )
+                self.assertEqual(staged_ids, expected[second])
+                self.assertEqual(manifest_ids, expected[second])
 
     def test_build_local_extension_uses_spec_recipe_without_version_stamp(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -258,14 +333,22 @@ class BundledExtensionsManifestTest(unittest.TestCase):
                 os.environ,
                 {
                     "BROWSEROS_AGENT_V2_KEY": "agent-pem",
-                    "BROWSERCLAW_KEY": "claw-pem",
                 },
-                clear=False,
+                clear=True,
             ),
             patch(f"{MODULE}.find_chrome_binary", return_value="chrome-bin"),
         ):
             BundledExtensionsModule().preflight(
                 self._ctx("browseros", bundle_local_extensions=True)
+            )
+
+    def test_browserclaw_local_preflight_requires_only_claw_key(self) -> None:
+        with (
+            patch.dict(os.environ, {"BROWSERCLAW_KEY": "claw-pem"}, clear=True),
+            patch(f"{MODULE}.find_chrome_binary", return_value="chrome-bin"),
+        ):
+            BundledExtensionsModule().preflight(
+                self._ctx("browserclaw", bundle_local_extensions=True)
             )
 
     def test_local_mode_preflight_names_missing_local_signing_key(self) -> None:
@@ -288,15 +371,41 @@ class BundledExtensionsManifestTest(unittest.TestCase):
         product: str,
         bundle_local_extensions: bool = False,
         root_dir: Path | None = None,
-    ):
-        return cast(
-            Context,
-            SimpleNamespace(
-                product=get_product_descriptor(product),
-                bundle_local_extensions=bundle_local_extensions,
-                root_dir=root_dir or Path("/repo/packages/browseros"),
-            ),
+        build_type: str = "release",
+        chromium_src: Path | None = None,
+    ) -> Context:
+        return Context(
+            root_dir=root_dir or Path("/repo/packages/browseros"),
+            chromium_src=chromium_src or Path("/chromium"),
+            architecture="arm64",
+            build_type=build_type,
+            chromium_version="1.0.0.0",
+            browseros_build_offset="1",
+            browseros_version_parts=(1, 0, 0, 0),
+            browseros_chromium_version="1.0.0.1",
+            semantic_version="0.0.1",
+            product=get_product_descriptor(product),
+            bundle_local_extensions=bundle_local_extensions,
         )
+
+    def _all_extensions(self) -> list[ExtensionInfo]:
+        return [
+            ExtensionInfo(
+                id=BROWSEROS_AGENT_EXTENSION_ID,
+                version="0.0.115.0",
+                codebase="https://cdn.browseros.com/extensions/agent.crx",
+            ),
+            ExtensionInfo(
+                id=BROWSEROS_BUG_REPORTER_EXTENSION_ID,
+                version="52.0.0.0",
+                codebase="https://cdn.browseros.com/extensions/bugreporter.crx",
+            ),
+            ExtensionInfo(
+                id=BROWSERCLAW_EXTENSION_ID,
+                version="0.0.1",
+                codebase="https://cdn.browseros.com/extensions/browserclaw.crx",
+            ),
+        ]
 
 
 if __name__ == "__main__":

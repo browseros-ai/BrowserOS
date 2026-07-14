@@ -298,6 +298,20 @@ class Context:
         base = self.get_chromium_replace_files_dir()
         return [base / "common", base / "products" / self.product.id]
 
+    @property
+    def required_extension_ids(self) -> tuple[tuple[str, str], ...]:
+        """Return bundled-extension requirements for the current build."""
+        if self.build_type != "debug":
+            return self.product.required_extension_ids
+
+        from ..products import PRODUCTS
+
+        required: Dict[str, str] = {}
+        for product in PRODUCTS.values():
+            for extension_id, name in product.required_extension_ids:
+                required.setdefault(extension_id, name)
+        return tuple(required.items())
+
     def get_product_gn_args(self) -> list[str]:
         """Product GN args: release bakes identity; debug keeps the runtime
         product switch working (it needs both server resource sets)."""

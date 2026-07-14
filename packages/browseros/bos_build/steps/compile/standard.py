@@ -130,12 +130,13 @@ class CompileModule(Step):
         )
 
         app_path = ctx.get_chromium_app_path()
-        new_path = ctx.get_app_path()
+        built_app_path = app_path
+        if not IS_WINDOWS():
+            built_app_path = ctx.get_app_path()
+            if app_path.exists() and not built_app_path.exists():
+                shutil.move(str(app_path), str(built_app_path))
 
-        if app_path.exists() and not new_path.exists():
-            shutil.move(str(app_path), str(new_path))
-
-        ctx.artifact_registry.add("built_app", new_path)
+        ctx.artifact_registry.add("built_app", built_app_path)
 
         log_success("Build complete!")
 

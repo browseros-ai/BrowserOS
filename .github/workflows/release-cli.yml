@@ -93,6 +93,7 @@ jobs:
           CLI_PATH="packages/browseros-agent/apps/cli"
           TAG="${{ steps.release.outputs.tag }}"
           CHANGELOG_FILE="/tmp/release-changelog.md"
+          NOTES_FILE="/tmp/release-notes.md"
           PREV_TAG="${{ steps.release.outputs.previous_tag }}"
 
           if [ -z "$PREV_TAG" ]; then
@@ -119,8 +120,14 @@ jobs:
             fi
           fi
 
-          cat "$CHANGELOG_FILE" > /tmp/release-notes.md
-          cat >> /tmp/release-notes.md <<'EOF'
+          node packages/browseros-agent/scripts/release/cap-release-changelog.mjs \
+            --input "$CHANGELOG_FILE" \
+            --output "$NOTES_FILE" \
+            --max-entries 15 \
+            --previous-tag "$PREV_TAG" \
+            --release-tag "$TAG"
+
+          cat >> "$NOTES_FILE" <<'EOF'
 
           ## Install `browseros-cli`
 

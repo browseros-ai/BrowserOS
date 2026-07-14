@@ -1,12 +1,14 @@
 diff --git a/chrome/browser/browseros/bundled_extensions/BUILD.gn b/chrome/browser/browseros/bundled_extensions/BUILD.gn
 new file mode 100644
-index 0000000000000..3793b4baa5efe
+index 0000000000000000000000000000000000000000..dcc0720c667865f28b40801cd250c5aadcfe60d1
 --- /dev/null
 +++ b/chrome/browser/browseros/bundled_extensions/BUILD.gn
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,42 @@
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
++
++import("//chrome/browser/browseros/buildflags.gni")
 +
 +# Bundled BrowserOS extensions for immediate installation on first run.
 +# These CRX files are installed locally before fetching remote updates.
@@ -19,10 +21,18 @@ index 0000000000000..3793b4baa5efe
 +
 +_bundled_extensions_sources = [
 +  "bundled_extensions.json",
-+  "bflpfmnmnokmjhmgnolecpppdbdophmk.crx",  # Agent
 +  "adlpneommgkgeanpaekgoaolcpncohkf.crx",  # Bug Reporter
-+  "pjimfkbpehlcllblajnpfamdfjhhlgkc.crx",  # BrowserClaw
 +]
++
++if (browseros_allow_runtime_product_override || browseros_product_browseros) {
++  _bundled_extensions_sources +=
++      [ "bflpfmnmnokmjhmgnolecpppdbdophmk.crx" ]  # Agent
++}
++
++if (browseros_allow_runtime_product_override || browseros_product_browserclaw) {
++  _bundled_extensions_sources +=
++      [ "pjimfkbpehlcllblajnpfamdfjhhlgkc.crx" ]  # BrowserClaw
++}
 +
 +if (!is_mac) {
 +  copy("bundled_extensions") {

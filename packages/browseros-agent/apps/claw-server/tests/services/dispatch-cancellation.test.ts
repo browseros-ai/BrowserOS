@@ -61,6 +61,24 @@ describe('dispatch-cancellation', () => {
     expect(() => svc.unregister('unknown', new AbortController())).not.toThrow()
   })
 
+  it('cancelBySession aborts every controller for only that session', () => {
+    const svc = createDispatchCancellation({
+      identityService: stubIdentityService([]),
+    })
+    const first = new AbortController()
+    const second = new AbortController()
+    const other = new AbortController()
+    svc.register('s1', first)
+    svc.register('s1', second)
+    svc.register('s2', other)
+
+    expect(svc.cancelBySession('s1', 'session ended')).toBe(2)
+    expect(first.signal.reason).toBe('session ended')
+    expect(second.signal.reason).toBe('session ended')
+    expect(other.signal.aborted).toBe(false)
+    expect(svc.cancelBySession('missing', 'session ended')).toBe(0)
+  })
+
   it('cancelByAgent aborts every controller for matching sessions', () => {
     const matching = makeIdentity({
       sessionId: 's1',

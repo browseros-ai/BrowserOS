@@ -14,9 +14,20 @@ import {
   type OnboardingFormValues,
   onboardingFormDefaults,
   onboardingFormResolver,
+  onboardingFormSchema,
 } from '../onboarding-v2.schemas'
 import type { ImportPhase } from '../onboarding-v2.types'
 import { ImportStep } from './ImportStep'
+
+// Take the message from the resolver rather than restating it, so these tests
+// track the production copy instead of a string they hardcoded themselves.
+const unpickedResult = onboardingFormSchema.safeParse({
+  selectedSourceId: '',
+  selectedItems: [],
+})
+const PICK_PROFILE_MESSAGE = unpickedResult.success
+  ? ''
+  : (unpickedResult.error.issues[0]?.message ?? '')
 
 function readyState(
   overrides: Partial<BrowserOSOnboardingState> = {},
@@ -33,15 +44,27 @@ function Harness({
   phase,
   state = readyState(),
   formValues = {},
+  unpicked = false,
 }: {
   phase: ImportPhase
   state?: BrowserOSOnboardingState
   formValues?: Partial<OnboardingFormValues>
+  unpicked?: boolean
 }) {
   const form = useForm<OnboardingFormValues>({
     resolver: onboardingFormResolver,
     defaultValues: { ...onboardingFormDefaults, ...formValues },
   })
+  // Reproduces the error OnboardingV2 sets on itself: its sources effect calls
+  // setValue('selectedSourceId', '', { shouldValidate: true }), and the resolver
+  // rejects the empty id. Seeding it here is the only way to get a form error
+  // into a server render — nothing else validates (no events, no effects).
+  if (unpicked) {
+    form.setError('selectedSourceId', {
+      type: 'required',
+      message: PICK_PROFILE_MESSAGE,
+    })
+  }
   return (
     <Form {...form}>
       <ImportStep
@@ -60,10 +83,16 @@ function render(
   phase: ImportPhase,
   state: BrowserOSOnboardingState = readyState(),
   formValues: Partial<OnboardingFormValues> = {},
+  unpicked = false,
 ): string {
   return renderToStaticMarkup(
     <MemoryRouter>
-      <Harness phase={phase} state={state} formValues={formValues} />
+      <Harness
+        phase={phase}
+        state={state}
+        formValues={formValues}
+        unpicked={unpicked}
+      />
     </MemoryRouter>,
   )
 }
@@ -75,6 +104,25 @@ function checklistRowFor(html: string, label: string): string {
   const rowStart = html.lastIndexOf('<label', labelIndex)
   const rowEnd = html.indexOf('</label>', labelIndex)
   return html.slice(rowStart, rowEnd + '</label>'.length)
+}
+
+// The empty picker renders a disabled import CTA next to an enabled skip, so
+// `disabled` assertions have to be scoped to one button's own markup. Labels can
+// also appear outside buttons ("Pick a profile" is a prefix of the "Pick a
+// profile to import" heading), so skip matches that aren't inside a button.
+function buttonMarkupFor(html: string, label: string): string {
+  for (
+    let labelIndex = html.indexOf(label);
+    labelIndex !== -1;
+    labelIndex = html.indexOf(label, labelIndex + 1)
+  ) {
+    const buttonStart = html.lastIndexOf('<button', labelIndex)
+    const buttonEnd = html.indexOf('</button>', labelIndex)
+    if (buttonStart === -1 || buttonEnd === -1) continue
+    if (html.indexOf('</button>', buttonStart) !== buttonEnd) continue
+    return html.slice(buttonStart, buttonEnd + '</button>'.length)
+  }
+  return ''
 }
 
 describe('ImportStep', () => {
@@ -277,5 +325,81 @@ describe('ImportStep', () => {
     expect(html).toContain('Imported 0 items from Work')
     expect(html).toContain('No completed items reported')
     expect(html).not.toContain('History, Bookmarks')
+  })
+
+  it('leaves an enabled way forward when no profiles are found', () => {
+    const html = render('picker', readyState({ sources: [] }))
+    const skip = buttonMarkupFor(html, 'Skip for now')
+
+    expect(html).toContain('No profiles found.')
+    expect(buttonMarkupFor(html, 'Pick a profile')).toContain('disabled=""')
+    expect(skip).toContain('Skip for now')
+    expect(skip).not.toContain('disabled=""')
+  })
+
+  it('keeps the skip available when profiles are present', () => {
+    const skip = buttonMarkupFor(render('picker'), 'Skip for now')
+
+    expect(skip).toContain('Skip for now')
+    expect(skip).not.toContain('disabled=""')
+  })
+
+  it('keeps the skip enabled while profiles are still being detected', () => {
+    const html = render('picker', readyState({ status: 'detecting' }))
+    const skip = buttonMarkupFor(html, 'Skip for now')
+
+    expect(html).toContain('Looking for profiles')
+    expect(skip).toContain('Skip for now')
+    expect(skip).not.toContain('disabled=""')
+  })
+
+  it('offers a skip out of a failed import', () => {
+    const html = render('failed', readyState({ status: 'failed', sources: [] }))
+    const skip = buttonMarkupFor(html, 'Skip for now')
+
+    expect(html).toContain('Try again')
+    expect(html).toContain('Refresh profiles')
+    expect(skip).toContain('Skip for now')
+    expect(skip).not.toContain('disabled=""')
+  })
+
+  it('does not offer a skip while an import is running', () => {
+    const html = render('importing', readyState({ status: 'importing' }))
+
+    expect(html).not.toContain('Skip for now')
+  })
+
+  it('does not offer a skip once the import has succeeded', () => {
+    const html = render('imported', readyState({ status: 'succeeded' }))
+
+    expect(html).toContain('Continue')
+    expect(html).not.toContain('Skip for now')
+  })
+
+  it('does not blame the user when there is no profile to pick', () => {
+    const html = render('picker', readyState({ sources: [] }), {}, true)
+
+    expect(html).toContain('No profiles found.')
+    expect(html).not.toContain('data-slot="form-message"')
+  })
+
+  it('does not blame the user while profiles are still being detected', () => {
+    const html = render(
+      'picker',
+      readyState({ status: 'detecting', sources: [] }),
+      {},
+      true,
+    )
+
+    expect(html).toContain('Looking for profiles')
+    expect(html).not.toContain('data-slot="form-message"')
+  })
+
+  it('still asks for a pick when profiles are there to pick from', () => {
+    const html = render('picker', readyState(), {}, true)
+
+    expect(PICK_PROFILE_MESSAGE).not.toBe('')
+    expect(html).toContain('data-slot="form-message"')
+    expect(html).toContain(PICK_PROFILE_MESSAGE)
   })
 })

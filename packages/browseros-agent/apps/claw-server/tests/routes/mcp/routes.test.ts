@@ -81,6 +81,34 @@ describe('POST /mcp (single endpoint)', () => {
     await client.close()
   })
 
+  test('raw JSON-RPC POST responses use an SSE stream', async () => {
+    const res = await app.fetch(
+      new Request('http://localhost/mcp', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2025-11-25',
+            capabilities: {},
+            clientInfo: { name: 'raw-client', version: '1.0.0' },
+          },
+        }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('text/event-stream')
+    const body = await res.text()
+    expect(body).toContain('event: message')
+    expect(body).toContain('"jsonrpc":"2.0"')
+  })
+
   test('same-name clients get distinct bridged agentIds', async () => {
     const a = await connect('claude-code')
     const b = await connect('claude-code')

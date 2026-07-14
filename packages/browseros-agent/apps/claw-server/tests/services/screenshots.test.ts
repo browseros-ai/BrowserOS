@@ -22,9 +22,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { env } from '../../src/env'
-import { agentTabs } from '../../src/lib/agent-tabs'
 import { screencastCache } from '../../src/services/screencast-cache'
 import {
+  clearFirstCapturesForTesting,
+  dropFirstCaptures,
   persistScreenshot,
   screenshotPath,
 } from '../../src/services/screenshots'
@@ -49,12 +50,12 @@ const ORIGINAL_FALLBACK = env.screencastScreenshotFallback
 describe('persistScreenshot', () => {
   beforeEach(() => {
     screencastCache.resetForTesting()
-    agentTabs.clear()
+    clearFirstCapturesForTesting()
     env.screencastScreenshotFallback = true
   })
   afterEach(() => {
     screencastCache.resetForTesting()
-    agentTabs.clear()
+    clearFirstCapturesForTesting()
     env.screencastScreenshotFallback = ORIGINAL_FALLBACK
   })
 
@@ -173,7 +174,18 @@ describe('persistScreenshot', () => {
     // / diff / wait do NOT write.
     await withTempBrowserClawDir(async () => {
       primeCache(9)
-      agentTabs.markFirstCaptureDone(AGENT, 9)
+      persistScreenshot({
+        dispatchId: 300,
+        toolName: 'screenshot',
+        pageId: 9,
+        agentId: AGENT,
+        result: {
+          isError: false,
+          content: [
+            { type: 'image', data: ONE_PX_JPEG_B64, mimeType: 'image/jpeg' },
+          ],
+        },
+      })
       for (const [dispatchId, toolName] of [
         [301, 'snapshot'],
         [302, 'read'],
@@ -314,7 +326,6 @@ describe('persistScreenshot', () => {
       })
       await new Promise((r) => setTimeout(r, 50))
       expect(existsSync(screenshotPath(800))).toBe(true)
-      expect(agentTabs.hasFirstCapture(AGENT, 20)).toBe(true)
     })
   })
 
@@ -348,6 +359,39 @@ describe('persistScreenshot', () => {
       await new Promise((r) => setTimeout(r, 50))
       expect(existsSync(screenshotPath(900))).toBe(true)
       expect(existsSync(screenshotPath(901))).toBe(false)
+    })
+  })
+
+  it('dropFirstCaptures lets a new session capture the page again', async () => {
+    await withTempBrowserClawDir(async () => {
+      primeCache(23)
+      for (const dispatchId of [950, 951]) {
+        persistScreenshot({
+          dispatchId,
+          toolName: 'read',
+          pageId: 23,
+          agentId: AGENT,
+          result: {
+            isError: false,
+            content: [{ type: 'text', text: 'read' }],
+          },
+        })
+      }
+      dropFirstCaptures(AGENT)
+      persistScreenshot({
+        dispatchId: 952,
+        toolName: 'read',
+        pageId: 23,
+        agentId: AGENT,
+        result: {
+          isError: false,
+          content: [{ type: 'text', text: 'read after reconnect' }],
+        },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(existsSync(screenshotPath(950))).toBe(true)
+      expect(existsSync(screenshotPath(951))).toBe(false)
+      expect(existsSync(screenshotPath(952))).toBe(true)
     })
   })
 
@@ -412,8 +456,6 @@ describe('persistScreenshot', () => {
       await new Promise((r) => setTimeout(r, 50))
       expect(existsSync(screenshotPath(1100))).toBe(true)
       expect(existsSync(screenshotPath(1101))).toBe(true)
-      expect(agentTabs.hasFirstCapture('agent-a', 30)).toBe(true)
-      expect(agentTabs.hasFirstCapture('agent-b', 30)).toBe(true)
     })
   })
 

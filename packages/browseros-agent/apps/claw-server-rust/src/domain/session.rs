@@ -97,6 +97,9 @@ pub struct Session {
     cancel: CancellationToken,
     replay_handle: Mutex<Option<String>>,
     last_activity: Mutex<Instant>,
+    /// User-facing session name gathered via MCP elicitation. In-memory only,
+    /// mirroring the TS identity map's sessionLabel (never persisted to audit).
+    session_label: RwLock<Option<String>>,
 }
 
 impl Session {
@@ -110,6 +113,7 @@ impl Session {
             cancel: CancellationToken::new(),
             replay_handle: Mutex::new(None),
             last_activity: Mutex::new(now),
+            session_label: RwLock::new(None),
         })
     }
 
@@ -145,6 +149,14 @@ impl Session {
 
     pub async fn set_replay_handle(&self, value: Option<String>) {
         *self.replay_handle.lock().await = value;
+    }
+
+    pub async fn session_label(&self) -> Option<String> {
+        self.session_label.read().await.clone()
+    }
+
+    pub async fn set_session_label(&self, label: String) {
+        *self.session_label.write().await = Some(label);
     }
 
     pub fn cancel(&self) {

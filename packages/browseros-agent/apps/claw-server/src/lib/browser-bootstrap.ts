@@ -20,8 +20,8 @@
  *
  * Soft fail at boot: if BrowserOS is not running on the configured
  * port at startup, return `null` and log a warning. The cockpit
- * keeps serving the UI, the profile CRUD, the harness installs, and
- * `tools/list`; only `tools/call` short-circuits with the existing
+ * keeps serving the UI, the connection routes, and `tools/list`;
+ * only `tools/call` short-circuits with the existing
  * "browser session not connected" wire shape. Restart the cockpit
  * after BrowserOS is up to reattach.
  */

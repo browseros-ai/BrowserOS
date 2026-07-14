@@ -9,7 +9,13 @@ from unittest import mock
 
 from . import context as context_mod
 from .context import Context
-from .products import ProductDescriptor, get_product_descriptor
+from .products import (
+    BROWSEROS_AGENT_EXTENSION_ID,
+    BROWSEROS_BUG_REPORTER_EXTENSION_ID,
+    BROWSERCLAW_EXTENSION_ID,
+    ProductDescriptor,
+    get_product_descriptor,
+)
 
 
 class GetAppPathTest(unittest.TestCase):
@@ -154,6 +160,47 @@ class GetAppPathTest(unittest.TestCase):
                         "browseros_package_all_server_resources = false",
                     ],
                 )
+
+    def test_release_required_extensions_follow_active_product(self):
+        expected = {
+            "browseros": (
+                (BROWSEROS_AGENT_EXTENSION_ID, "BrowserOS agent"),
+                (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
+            ),
+            "browserclaw": (
+                (BROWSERCLAW_EXTENSION_ID, "BrowserClaw app"),
+                (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
+            ),
+        }
+
+        for product, required in expected.items():
+            with self.subTest(product=product):
+                ctx = Context(
+                    chromium_src=Path("/nonexistent-src"),
+                    architecture="arm64",
+                    build_type="release",
+                    product=get_product_descriptor(product),
+                )
+
+                self.assertEqual(ctx.required_extension_ids, required)
+
+    def test_debug_required_extensions_are_registered_product_union(self):
+        expected = (
+            (BROWSEROS_AGENT_EXTENSION_ID, "BrowserOS agent"),
+            (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
+            (BROWSERCLAW_EXTENSION_ID, "BrowserClaw app"),
+        )
+
+        for product in ("browseros", "browserclaw"):
+            with self.subTest(product=product):
+                ctx = Context(
+                    chromium_src=Path("/nonexistent-src"),
+                    architecture="arm64",
+                    build_type="debug",
+                    product=get_product_descriptor(product),
+                )
+
+                self.assertEqual(ctx.required_extension_ids, expected)
 
 
 if __name__ == "__main__":

@@ -6,20 +6,29 @@ import { StepWrap } from '../components/StepWrap'
 import { STARTER_PROMPTS } from '../onboarding-v2.helpers'
 
 interface ReadyStepProps {
+  imported: boolean
   onDone: () => void
 }
 
 /**
- * Final onboarding step. Confirms the import landed and points at
- * the MCP page for harness link-up. Reached only after a successful
- * import; the reconnect path from Welcome bypasses this step and
- * completes onboarding directly.
+ * Final onboarding step. Points at the MCP page for harness link-up, and
+ * confirms the import only when one actually landed — users who skipped the
+ * import step reach this step too. The reconnect path from Welcome bypasses
+ * this step and completes onboarding directly.
  */
-export function ReadyStep({ onDone }: ReadyStepProps) {
+export function ReadyStep({ imported, onDone }: ReadyStepProps) {
   return (
     <StepWrap>
       <DisplayHeading>
-        Logins <Em>imported.</Em>
+        {imported ? (
+          <>
+            Logins <Em>imported.</Em>
+          </>
+        ) : (
+          <>
+            Connect your <Em>AI.</Em>
+          </>
+        )}
       </DisplayHeading>
       <StepCopy>
         One step left. Open the MCP page in BrowserClaw and link your AI: Claude

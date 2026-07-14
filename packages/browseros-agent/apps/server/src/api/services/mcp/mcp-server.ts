@@ -22,6 +22,7 @@ export interface McpServiceDeps {
   connectorScope?: ConnectorToolScope
   defaultWindowId?: number
   defaultTabGroupId?: string
+  includeStructuredContent?: boolean
   executionDir: string
   remoteAgentHarness?: RemoteAgentHarnessTools
   activity?: ServerActivity
@@ -48,6 +49,7 @@ export function createMcpServer(deps: McpServiceDeps) {
     defaultTabGroupId: deps.defaultTabGroupId,
     instructions: MCP_INSTRUCTIONS,
     registration: {
+      includeStructuredContent: deps.includeStructuredContent ?? false,
       outputFileAccess: deps.remoteAgentHarness?.outputFileAccess,
       logger,
       onToolExecutionStart: () => deps.activity?.beginMcpToolExecution(),

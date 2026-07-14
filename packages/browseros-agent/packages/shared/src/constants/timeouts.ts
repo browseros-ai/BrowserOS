@@ -14,6 +14,7 @@ export const TIMEOUTS = {
   // Agent/Tool execution
   TOOL_CALL: 120_000,
   TOOL_POST_ACTION: 2_000,
+  TAB_GROUP_OP: 10_000,
   TEST_PROVIDER: 15_000,
   REFINE_PROMPT: 30_000,
 

@@ -20,7 +20,7 @@ import {
   disconnectBrowserosFromHarness,
   listBrowserosConnections,
 } from '../../services/browseros-connect'
-import { harnessEnum } from '../agents/schemas'
+import { harnessEnum } from '../../services/harnesses'
 
 const harnessParamSchema = z.object({ harness: harnessEnum })
 

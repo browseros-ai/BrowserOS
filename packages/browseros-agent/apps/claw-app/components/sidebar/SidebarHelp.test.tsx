@@ -26,7 +26,7 @@ describe('SidebarHelp', () => {
 
   it('pins Docs and onboarding to their exact targets', () => {
     expect(helpItems.map((item) => [item.name, item.url])).toEqual([
-      ['Docs', 'https://docs.browseros.com/'],
+      ['Docs', 'https://docs.browseros.com/browserclaw'],
       ['Revisit Onboarding', 'chrome://browseros-onboarding'],
     ])
   })

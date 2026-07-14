@@ -18,7 +18,11 @@ interface HelpItem {
 }
 
 export const helpItems: HelpItem[] = [
-  { name: 'Docs', url: 'https://docs.browseros.com/', icon: BookOpen },
+  {
+    name: 'Docs',
+    url: 'https://docs.browseros.com/browserclaw',
+    icon: BookOpen,
+  },
   {
     name: 'Revisit Onboarding',
     url: 'chrome://browseros-onboarding',

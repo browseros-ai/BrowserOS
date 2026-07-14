@@ -10,10 +10,12 @@ use crate::store::Store;
 pub const TRAILER_STORE_REV: &str = "Bpatch-Store-Rev";
 /// Trailer key carrying the chromium base commit used for convergence.
 pub const TRAILER_BASE: &str = "Bpatch-Base";
-/// Trailer key carrying the cached applied tree.
+/// Trailer key carrying the cached materialized checkout tree.
 pub const TRAILER_TREE: &str = "Bpatch-Tree";
 /// Trailer key marking commits authored by `bpatch annotate`.
 pub const TRAILER_ANNOTATED: &str = "Bpatch-Annotated";
+/// Trailer key marking apply commits that only advance store bookkeeping.
+pub const TRAILER_STATE_ONLY: &str = "Bpatch-State-Only";
 
 const HISTORY_LIMIT: usize = 512;
 const UNASSIGNED_FEATURE: &str = "(unassigned)";
@@ -42,10 +44,12 @@ impl StateContext {
 pub struct ApplyTrailers {
     /// Store repository commit applied to the checkout.
     pub store_rev: String,
-    /// Chromium base commit used to compute the applied tree.
+    /// Chromium base commit used to compute the applied checkout tree.
     pub base: String,
-    /// Cached applied tree, when the commit still carries it.
+    /// Cached materialized checkout tree, when the commit still carries it.
     pub tree: Option<String>,
+    /// Whether the commit advances store state without changing managed files.
+    pub state_only: bool,
 }
 
 /// Parsed bpatch annotate trailers from a commit.
@@ -53,6 +57,15 @@ pub struct ApplyTrailers {
 pub struct AnnotateTrailers {
     /// Chromium base commit used while grouping dirty checkout changes.
     pub base: String,
+}
+
+/// Trailer kind of the commit used as the committed-drift anchor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BpatchCommitKind {
+    /// Commit authored by `bpatch apply`.
+    Apply,
+    /// Commit authored by `bpatch annotate`.
+    Annotate,
 }
 
 /// Resolved checkout state derived from history and the store repo.
@@ -72,7 +85,9 @@ pub struct ResolvedState {
     pub store: StoreRepoState,
     /// Last apply-authored state, if this checkout has one.
     pub applied: Option<AppliedState>,
-    /// Drift from the applied tree.
+    /// Kind of the newest bpatch-authored commit, when any.
+    pub drift_anchor_kind: Option<BpatchCommitKind>,
+    /// Drift from the newest bpatch-authored commit tree.
     pub drift: DriftState,
 }
 
@@ -103,7 +118,7 @@ pub struct StoreRepoState {
 /// Last apply-authored state discovered in checkout history.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppliedState {
-    /// Commit carrying the newest bpatch trailers.
+    /// Commit carrying the newest apply trailers.
     pub commit: String,
     /// Short form of the trailer commit.
     pub short_commit: String,
@@ -113,7 +128,7 @@ pub struct AppliedState {
     pub short_store_rev: String,
     /// Base revision recorded in the trailer commit.
     pub base: String,
-    /// Applied tree resolved from the trailer cache or recovery fallback.
+    /// Materialized checkout tree resolved from the trailer or recovery fallback.
     pub tree: String,
     /// Count of apply-authored feature commits since the base.
     pub feature_commit_count: usize,
@@ -121,12 +136,12 @@ pub struct AppliedState {
     pub last_subject: String,
 }
 
-/// Drift state relative to the applied tree.
+/// Drift state relative to the newest bpatch-authored commit tree.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DriftState {
     /// No committed or tracked uncommitted drift was found.
     Clean,
-    /// One or more files differ from the applied tree.
+    /// One or more files differ from the bpatch-authored drift anchor.
     Drifted {
         /// Drift entries grouped by source class.
         files: Vec<DriftFile>,
@@ -148,7 +163,7 @@ impl DriftState {
     }
 }
 
-/// One file that differs from the applied tree.
+/// One file that differs from the bpatch-authored drift anchor.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DriftFile {
     /// Repository-relative file path.
@@ -164,7 +179,7 @@ pub struct DriftFile {
 /// Source class for a drift entry.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DriftSource {
-    /// HEAD contains commits after the applied tree.
+    /// HEAD contains commits after the bpatch-authored drift anchor.
     Committed,
     /// The index or worktree differs from HEAD.
     Uncommitted,
@@ -214,8 +229,11 @@ struct TrailerCommit {
     subject: String,
 }
 
-struct BaseTrailerCommit {
+struct BpatchTrailerCommit {
+    commit: String,
     base: String,
+    subject: String,
+    kind: BpatchCommitKind,
 }
 
 /// Resolves trailer state, store freshness, base display, and checkout drift.
@@ -226,16 +244,16 @@ pub fn resolve(ctx: &StateContext) -> Result<ResolvedState> {
     let head_rev = checkout.head_rev()?;
     let head_tree = checkout.tree_id("HEAD")?;
     let store_head = store_repo.head_rev()?;
-    let latest = find_latest_apply_commit(&checkout)?;
-    let latest_base = if latest.is_some() {
-        None
-    } else {
-        find_latest_base_commit(&checkout)?
-    };
-    let base_sha = latest
+    let latest_apply = find_latest_apply_commit(&checkout)?;
+    let latest_feature_subject = find_latest_feature_subject(&checkout)?;
+    let latest_bpatch = find_latest_bpatch_commit(&checkout)?;
+    let latest_bpatch_tree = latest_bpatch
         .as_ref()
-        .map(|entry| entry.trailers.base.clone())
-        .or_else(|| latest_base.as_ref().map(|entry| entry.base.clone()))
+        .map(|entry| checkout.tree_id(&entry.commit))
+        .transpose()?;
+    let base_sha = latest_bpatch
+        .as_ref()
+        .map(|entry| entry.base.clone())
         .unwrap_or_else(|| head_rev.clone());
     let base = BaseState {
         short_sha: checkout.short_rev(&base_sha)?,
@@ -243,7 +261,7 @@ pub fn resolve(ctx: &StateContext) -> Result<ResolvedState> {
         sha: base_sha.clone(),
     };
 
-    let applied = latest
+    let applied = latest_apply
         .map(|entry| {
             let tree = applied_tree(&checkout, &ctx.store_dir, &store_head, &entry)?;
             Ok::<_, anyhow::Error>(AppliedState {
@@ -254,7 +272,7 @@ pub fn resolve(ctx: &StateContext) -> Result<ResolvedState> {
                 store_rev: entry.trailers.store_rev,
                 commit: entry.commit,
                 tree,
-                last_subject: entry.subject,
+                last_subject: latest_feature_subject.unwrap_or(entry.subject),
             })
         })
         .transpose()?;
@@ -268,14 +286,12 @@ pub fn resolve(ctx: &StateContext) -> Result<ResolvedState> {
             .transpose()?,
         head_rev: store_head,
     };
-    let applied_tree = applied
+    let (drift_tree, drift_subject) = latest_bpatch
         .as_ref()
-        .map(|applied| applied.tree.as_str())
-        .unwrap_or(&base.sha);
-    let last_subject = applied
-        .as_ref()
-        .map(|applied| applied.last_subject.as_str());
-    let drift = detect_drift(&checkout, &store_model, applied_tree, last_subject)?;
+        .zip(latest_bpatch_tree.as_deref())
+        .map(|(entry, tree)| (tree, entry.subject.as_str()))
+        .unwrap_or((base.sha.as_str(), "base state"));
+    let drift = detect_drift(&checkout, &store_model, drift_tree, drift_subject)?;
 
     Ok(ResolvedState {
         checkout: ctx.checkout.clone(),
@@ -285,6 +301,7 @@ pub fn resolve(ctx: &StateContext) -> Result<ResolvedState> {
         base,
         store,
         applied,
+        drift_anchor_kind: latest_bpatch.as_ref().map(|entry| entry.kind),
         drift,
     })
 }
@@ -294,11 +311,13 @@ pub fn parse_apply_trailers(trailers: &[Trailer]) -> Result<Option<ApplyTrailers
     let mut store_rev = None;
     let mut base = None;
     let mut tree = None;
+    let mut state_only = false;
     for trailer in trailers {
         match trailer.key.as_str() {
             TRAILER_STORE_REV => store_rev = Some(trailer.value.clone()),
             TRAILER_BASE => base = Some(trailer.value.clone()),
             TRAILER_TREE => tree = Some(trailer.value.clone()),
+            TRAILER_STATE_ONLY => state_only = trailer.value.eq_ignore_ascii_case("true"),
             _ => {}
         }
     }
@@ -312,6 +331,7 @@ pub fn parse_apply_trailers(trailers: &[Trailer]) -> Result<Option<ApplyTrailers
         store_rev,
         base,
         tree,
+        state_only,
     }))
 }
 
@@ -362,6 +382,14 @@ pub fn format_apply_trailers(store_rev: &str, base: &str, tree: Option<&str>) ->
     out
 }
 
+/// Formats apply trailers for a commit that only advances store bookkeeping.
+pub fn format_state_apply_trailers(store_rev: &str, base: &str, tree: &str) -> String {
+    let mut out = format_apply_trailers(store_rev, base, Some(tree));
+    out.push_str(TRAILER_STATE_ONLY);
+    out.push_str(": true\n");
+    out
+}
+
 /// Formats the trailer block for commits created by `bpatch annotate`.
 pub fn format_annotate_trailers(base: &str) -> String {
     let mut out = String::new();
@@ -393,10 +421,32 @@ fn find_latest_apply_commit(git: &GitAdapter) -> Result<Option<TrailerCommit>> {
     Ok(None)
 }
 
-fn find_latest_base_commit(git: &GitAdapter) -> Result<Option<BaseTrailerCommit>> {
+fn find_latest_bpatch_commit(git: &GitAdapter) -> Result<Option<BpatchTrailerCommit>> {
     for commit in git.first_parent_commits(None, Some(HISTORY_LIMIT))? {
-        if let Some(base) = parse_bpatch_authored_base(&git.commit_trailers(&commit)?)? {
-            return Ok(Some(BaseTrailerCommit { base }));
+        let trailers = git.commit_trailers(&commit)?;
+        let (base, kind) = if let Some(apply) = parse_apply_trailers(&trailers)? {
+            (apply.base, BpatchCommitKind::Apply)
+        } else if let Some(annotate) = parse_annotate_trailers(&trailers)? {
+            (annotate.base, BpatchCommitKind::Annotate)
+        } else {
+            continue;
+        };
+        return Ok(Some(BpatchTrailerCommit {
+            subject: git.commit_subject(&commit)?,
+            commit,
+            base,
+            kind,
+        }));
+    }
+    Ok(None)
+}
+
+fn find_latest_feature_subject(git: &GitAdapter) -> Result<Option<String>> {
+    for commit in git.first_parent_commits(None, Some(HISTORY_LIMIT))? {
+        if parse_apply_trailers(&git.commit_trailers(&commit)?)?
+            .is_some_and(|trailers| !trailers.state_only)
+        {
+            return Ok(Some(git.commit_subject(&commit)?));
         }
     }
     Ok(None)
@@ -406,7 +456,9 @@ fn feature_commit_count(git: &GitAdapter, base: &str) -> Result<usize> {
     let range = format!("{base}..HEAD");
     let mut count = 0;
     for commit in git.first_parent_commits(Some(&range), None)? {
-        if parse_apply_trailers(&git.commit_trailers(&commit)?)?.is_some() {
+        if parse_apply_trailers(&git.commit_trailers(&commit)?)?
+            .is_some_and(|trailers| !trailers.state_only)
+        {
             count += 1;
         }
     }
@@ -427,6 +479,7 @@ fn applied_tree(
         let patches = store
             .patches()
             .values()
+            .filter(|patch| store.stores_path(&patch.path))
             .map(|patch| store_dir.join(&patch.path))
             .collect::<Vec<_>>();
         return Ok(git.build_tree_from_patches(&entry.trailers.base, &patches)?);
@@ -440,14 +493,13 @@ fn applied_tree(
 fn detect_drift(
     git: &GitAdapter,
     store: &Store,
-    applied_tree: &str,
-    last_apply_subject: Option<&str>,
+    baseline_tree: &str,
+    baseline_subject: &str,
 ) -> Result<DriftState> {
     let mut files = Vec::new();
-    let subject = last_apply_subject.unwrap_or("applied state");
-    for entry in git.diff_tree_name_status(applied_tree, "HEAD^{tree}")? {
+    for entry in git.diff_tree_name_status(baseline_tree, "HEAD^{tree}")? {
         if stores_path(store, &entry.path) {
-            files.push(committed_drift(entry, subject));
+            files.push(committed_drift(entry, baseline_subject));
         }
     }
 

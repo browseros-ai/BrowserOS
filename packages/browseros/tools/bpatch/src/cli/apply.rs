@@ -147,7 +147,7 @@ pub struct ApplyConflictFile {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApplyDriftSource {
-    /// Drift is committed on top of the applied tree.
+    /// Drift is committed on top of the bpatch-authored drift anchor.
     Committed,
     /// Drift is in the index or worktree.
     Uncommitted,
@@ -307,7 +307,7 @@ pub fn render_human(report: &ApplyReport) -> String {
         ApplyReport::Drift { files, .. } => {
             let mut out = String::new();
             out.push_str(&format!(
-                "drift: working tree differs from applied state in {} {}:\n",
+                "drift: working tree differs from its bpatch baseline in {} {}:\n",
                 files.len(),
                 files_label(files.len())
             ));

@@ -1,14 +1,61 @@
 ---
-title: "Connect your MCP client"
-description: "One-click install into Claude Code, Cursor, Codex, VS Code, Zed, OpenCode, and Antigravity. Manual URL install for anything else."
+title: "Connect your AI"
+description: "One-click setup for the AI tools we support. A copyable endpoint URL for everything else."
+keywords: ["connect AI to BrowserClaw", "BrowserClaw MCP", "browser MCP server", "Streamable HTTP MCP"]
 ---
 
-<Note>
-This page is landing in a follow-up release. Track the [BrowserClaw docs rollout](https://github.com/browseros-ai/BrowserOS/issues) for progress.
-</Note>
+BrowserClaw is one MCP server, at one URL, on your own machine. Any AI tool that supports MCP can use it. This page covers the one-click board for the tools we support today. For anything else, [set it up manually](/browserclaw/mcp/manual) with the endpoint URL below.
 
-Coming soon.
+## The endpoint URL
 
-<Card title="Your first run" icon="arrow-right" href="/browserclaw/first-run">
-  Continue with what is shipped today.
+Open a new tab in BrowserClaw and click **MCP** in the sidebar. The top of the page shows the endpoint URL:
+
+```text
+http://127.0.0.1:9200/mcp
+```
+
+That address is local to your computer. Nothing crosses the network. Click **Copy** at the top of the page to grab it.
+
+## One-click setup
+
+Under the endpoint URL you'll see the list of AI tools we support out of the box. Find yours, click **Connect**, and restart the AI tool.
+
+<Frame caption="One endpoint, one click per supported AI tool.">
+  <img src="/images/browserclaw--mcp-install-board.png" alt="BrowserClaw connect page showing an endpoint URL at the top and the supported AI tools listed underneath, each with a Connect button on the right." />
+</Frame>
+
+Today the supported AI tools are **Claude Code**, **Codex**, **Cursor**, **OpenCode**, **Antigravity**, **VS Code**, and **Zed**. Behind the scenes, BrowserClaw writes a single entry named `BrowserClaw` into the AI tool's own MCP config file, pointing at the endpoint URL above. Nothing else changes.
+
+<Tip>
+The board updates as soon as your AI tool actually loads the config. If you don't see the row flip to **Connected**, restart the AI tool once and come back.
+</Tip>
+
+## Don't see your AI tool?
+
+If your AI tool supports MCP but isn't on the one-click board, we'd love to add it. Head to [BrowserOS Discussions](https://github.com/orgs/browseros-ai/discussions) and open a new discussion. A short template that helps us move fast:
+
+```text
+Title: Add one-click support for <AI tool name>
+
+- Name and link to the AI tool
+- Which config file it uses for MCP servers (path + format)
+- A link to that AI tool's MCP setup docs
+- Whether you're already using BrowserClaw with it via the manual setup
+```
+
+While you're waiting for one-click support, most AI tools work with the manual URL setup.
+
+<Card title="Manual URL setup" icon="wrench" href="/browserclaw/mcp/manual">
+  Guided setup for Hermes Agent, Vercel AI SDK, OpenClaw, and other MCP-compatible AI tools.
 </Card>
+
+## Where to next
+
+<CardGroup cols={2}>
+  <Card title="How BrowserClaw works" icon="play" href="/browserclaw/how-it-works">
+    A guided walkthrough from install to your first AI-driven session.
+  </Card>
+  <Card title="Your dashboard" icon="binoculars" href="/browserclaw/cockpit">
+    Every part of the new-tab dashboard and what it tells you.
+  </Card>
+</CardGroup>

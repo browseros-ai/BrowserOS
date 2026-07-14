@@ -9,7 +9,6 @@ from unittest.mock import MagicMock, patch
 
 from ...core.context import Context
 from ...core.step import ValidationError
-from .manifests import ExtensionsFeedModule
 from .release import ExtensionReleaseModule, build_pipeline
 
 MODULE = "bos_build.release.extensions.release"
@@ -37,80 +36,41 @@ class BuildPipelineTest(unittest.TestCase):
             build_pipeline(
                 version="1.0.0",
                 name="agent-v2",
-                channel="alpha",
-                publish_manifest=False,
                 branch=None,
                 chrome_binary=None,
             )
 
-    def test_feed_extension_gets_feeds_step_with_exact_pins(self):
+    def test_named_extension_gets_one_release_step(self):
         steps = build_pipeline(
             version="1.2.3",
             name="agent",
-            channel="prod",
-            publish_manifest=True,
-            branch=None,
-            chrome_binary=None,
-        )
-        self.assertEqual(len(steps), 2)
-        release, feeds = steps
-        self.assertIsInstance(release, ExtensionReleaseModule)
-        self.assertIsInstance(feeds, ExtensionsFeedModule)
-        self.assertEqual(release.names, ("agent",))
-        self.assertEqual(feeds.set_versions, {"agent": "1.2.3"})
-        self.assertEqual(feeds.channel, "prod")
-        self.assertTrue(feeds.publish)
-
-    def test_controller_only_skips_feeds_step(self):
-        steps = build_pipeline(
-            version="1.2.3",
-            name="controller",
-            channel="alpha",
-            publish_manifest=False,
             branch=None,
             chrome_binary=None,
         )
         self.assertEqual(len(steps), 1)
-        self.assertIsInstance(steps[0], ExtensionReleaseModule)
+        release = steps[0]
+        self.assertIsInstance(release, ExtensionReleaseModule)
+        self.assertEqual(release.names, ("agent",))
 
-    def test_all_extensions_pin_only_feed_members(self):
+    def test_all_extensions_get_one_release_step(self):
         steps = build_pipeline(
             version="2.0.0",
             name=None,
-            channel="alpha",
-            publish_manifest=False,
             branch=None,
             chrome_binary=None,
         )
-        release, feeds = steps
+        self.assertEqual(len(steps), 1)
+        release = steps[0]
+        self.assertIsInstance(release, ExtensionReleaseModule)
         self.assertEqual(
             release.names, ("agent", "controller", "bugreporter", "browserclaw")
         )
-        self.assertEqual(
-            feeds.set_versions,
-            {"agent": "2.0.0", "bugreporter": "2.0.0", "browserclaw": "2.0.0"},
-        )
-        self.assertFalse(feeds.publish)
-
-    def test_bad_channel_rejected_at_assembly_even_without_feeds_step(self):
-        for name in ("agent", "controller"):
-            with self.assertRaisesRegex(ValueError, "alpha/prod"):
-                build_pipeline(
-                    version="1.0.0",
-                    name=name,
-                    channel="pord",
-                    publish_manifest=False,
-                    branch=None,
-                    chrome_binary=None,
-                )
 
     def test_dash_prefixed_branch_rejected_at_assembly(self):
         with self.assertRaisesRegex(ValueError, "branch"):
             build_pipeline(
                 version="1.0.0",
                 name="controller",
-                channel="alpha",
-                publish_manifest=False,
                 branch="--upload-pack=/bin/sh",
                 chrome_binary=None,
             )
@@ -121,22 +81,9 @@ class BuildPipelineTest(unittest.TestCase):
                 build_pipeline(
                     version=version,
                     name="agent",
-                    channel="alpha",
-                    publish_manifest=False,
                     branch=None,
                     chrome_binary=None,
                 )
-
-    def test_dry_run_is_default_for_manifests(self):
-        _, feeds = build_pipeline(
-            version="1.0.0",
-            name="agent",
-            channel="alpha",
-            publish_manifest=False,
-            branch=None,
-            chrome_binary=None,
-        )
-        self.assertFalse(feeds.publish)
 
 
 class ValidateTest(unittest.TestCase):

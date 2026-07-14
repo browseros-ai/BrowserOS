@@ -79,12 +79,11 @@ def macos_sign_spec_for(binary_path: Path) -> Optional[SignSpec]:
     return None
 
 
-def expected_windows_binary_paths(server_bin_dir: Path) -> List[Path]:
-    """Resolve the browseros server's Windows binaries under resources/bin."""
-    bundles = server_bundles_for_product("browseros")
-    return [
-        server_bin_dir / rel for bundle in bundles for rel in bundle.windows_binaries
-    ]
+def expected_windows_binary_paths(
+    server_bin_dir: Path, bundle: ServerBundle
+) -> List[Path]:
+    """Resolve a server bundle's Windows binaries under resources/bin."""
+    return [server_bin_dir / rel for rel in bundle.windows_binaries]
 
 
 def expected_windows_bundle_binary_paths(

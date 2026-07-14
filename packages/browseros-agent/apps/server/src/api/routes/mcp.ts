@@ -97,6 +97,7 @@ export function createMcpRoutes(deps: McpRouteDeps) {
     const scopeId = c.req.header('X-BrowserOS-Scope-Id') || 'ephemeral'
     metrics.log('mcp.request', { scopeId })
     const source = c.req.query('source') || undefined
+    const includeStructuredContent = c.req.query('structured') === '1'
 
     const defaultWindowId = parseOptionalNumber(
       c.req.header('X-BrowserOS-Default-Window-Id'),
@@ -132,6 +133,7 @@ export function createMcpRoutes(deps: McpRouteDeps) {
       connectorScope: { selectedServerNames },
       defaultWindowId,
       defaultTabGroupId,
+      includeStructuredContent,
       executionDir: deps.executionDir,
       remoteAgentHarness: harness,
       activity: deps.activity,

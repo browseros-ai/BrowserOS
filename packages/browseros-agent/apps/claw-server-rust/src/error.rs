@@ -66,6 +66,22 @@ impl AppError {
     }
 
     #[must_use]
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self::Http {
+            status: StatusCode::FORBIDDEN,
+            message: message.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn unsupported_media_type(message: impl Into<String>) -> Self {
+        Self::Http {
+            status: StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            message: message.into(),
+        }
+    }
+
+    #[must_use]
     pub fn unavailable(message: impl Into<String>) -> Self {
         Self::Http {
             status: StatusCode::SERVICE_UNAVAILABLE,

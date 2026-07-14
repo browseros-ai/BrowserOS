@@ -26,6 +26,7 @@
     "declarationMap": true
   },
   "references": [
+    { "path": "./packages/agent-mcp-manager" },
     { "path": "./packages/browser-core" },
     { "path": "./packages/browser-mcp" },
     { "path": "./packages/build-server-tools" },

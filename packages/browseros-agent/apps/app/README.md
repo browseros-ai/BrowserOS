@@ -142,11 +142,10 @@ GRAPHQL_SCHEMA_PATH=/path/to/api-repo/.../schema.graphql
 
 ## Release Flow
 
-BrowserOS agent extension releases are built as signed CRX artifacts and staged
-with update-feed metadata through the reusable `Release: Extensions (CRX +
-feeds)` workflow. The normal BrowserOS product release path calls that workflow
-from `release-browseros.yml` when the `extensions` input is `alpha` or `prod`
-and `extensions_version` is set.
+BrowserOS agent extension releases are built as signed CRX artifacts through
+the reusable `Release: Extensions (CRX)` workflow. The normal BrowserOS product
+release path calls that workflow from `release-browseros.yml` when the
+`extensions` input is `alpha` or `prod` and `extensions_version` is set.
 
 For a standalone agent extension release, dispatch the reusable workflow with
 the target version and extension name:
@@ -154,15 +153,25 @@ the target version and extension name:
 ```bash
 gh workflow run release-extensions.yml \
   -f version=0.0.119 \
-  -f extension=agent \
-  -f channel=alpha \
-  -f publish_manifest=false
+  -f extension=agent
 ```
 
-Leave `publish_manifest=false` for staging; publish the feed only after the
-staged CRX and generated manifest have been inspected. The previous GitHub
-Release zip distribution and extension component-tag trigger are historical
-only.
+Feed generation is a separate, dry-run-by-default workflow. Publish only after
+inspecting the CRX and generated diff:
+
+```bash
+gh workflow run release-extension-feeds.yml \
+  -f channel=alpha \
+  -f pins=agent=0.0.119
+
+gh workflow run release-extension-feeds.yml \
+  -f channel=alpha \
+  -f pins=agent=0.0.119 \
+  -f publish=true
+```
+
+The previous GitHub Release zip distribution and extension component-tag
+trigger are historical only.
 
 ## Development Tooling
 

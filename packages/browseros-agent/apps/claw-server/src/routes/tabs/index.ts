@@ -9,11 +9,10 @@
  * browser tool dispatch succeeds; this route just publishes the
  * current snapshot.
  *
- * The snapshot is joined against the agents directory so the UI
- * receives `agentLabel` and `harness` directly instead of a slug it
- * has to format itself. Profile lookups fall back to the slug when a
- * record references an agent whose stored profile has been deleted;
- * the route never throws on a missing profile.
+ * The snapshot is joined against the live MCP identity registry so
+ * the UI receives the connecting client's label. Records outlive a
+ * closed MCP session until the activity TTL expires, so missing
+ * identities fall back to the stable recorded slug.
  *
  * Polling is the v1 transport (the UI hook polls every 1500 ms); SSE
  * on `?stream=1` is a future option if polling proves chatty.
@@ -26,15 +25,11 @@ import {
   tabActivityRegistry,
 } from '../../lib/tab-activity'
 import { screencastCache } from '../../services/screencast-cache'
-import { list as listAgents } from '../agents/service'
 import { resolveAgentDisplay } from './agent-display'
 
 interface EnrichedTabRecord extends TabActivityRecord {
   agentLabel: string
   harness: string | null
-  // No stored colour on the agent profile yet; emit null so the UI
-  // falls back to its slug-hash palette. Wire is ready for the day
-  // the profile schema gains a `color` field.
   color: string | null
   /**
    * Latest screencast frame from the background poller. `null` when
@@ -44,16 +39,13 @@ interface EnrichedTabRecord extends TabActivityRecord {
   screencast: { jpegBase64: string; capturedAt: number } | null
 }
 
-export const tabsRoute = new Hono().get('/tabs/activity', async (c) => {
+export const tabsRoute = new Hono().get('/tabs/activity', (c) => {
   const tabs = tabActivityRegistry.snapshot()
   if (tabs.length === 0) {
     return c.json({ tabs: [] as EnrichedTabRecord[] })
   }
-  // O(records + profiles + identities) join. The agents directory
-  // reads from disk on every call today; identity records live in
-  // memory. The resolver picks profile, then identity, then slug.
-  const profiles = await listAgents()
-  const profilesById = new Map(profiles.map((p) => [p.id, p]))
+  // O(records + identities) in-memory join. The resolver picks the
+  // live session identity when present, then the recorded slug.
   const identitiesByAgentId = new Map<
     string,
     ReturnType<typeof identityService.list>[number]
@@ -65,10 +57,11 @@ export const tabsRoute = new Hono().get('/tabs/activity', async (c) => {
     }
   }
   const enriched: EnrichedTabRecord[] = tabs.map((tab) => {
-    const display = resolveAgentDisplay(tab.agentId, tab.slug, {
-      profilesById,
+    const display = resolveAgentDisplay(
+      tab.agentId,
+      tab.slug,
       identitiesByAgentId,
-    })
+    )
     const frame = screencastCache.get(tab.pageId)
     const screencast = frame
       ? { jpegBase64: frame.jpegBase64, capturedAt: frame.capturedAt }

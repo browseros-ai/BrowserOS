@@ -63,11 +63,7 @@ const RETIRED_PREFIX_DEFAULTS: Record<string, readonly string[]> = {
   R2_DOWNLOAD_PREFIX: ['artifacts/vendor'],
 }
 const PRIMARY_OLD_FILES: Record<EnvMode, string[]> = {
-  development: [
-    'apps/server/.env.development',
-    'apps/app/.env.development',
-    'apps/eval/.env.development',
-  ],
+  development: ['apps/server/.env.development', 'apps/app/.env.development'],
   production: ['apps/server/.env.production', 'apps/cli/.env.production'],
 }
 

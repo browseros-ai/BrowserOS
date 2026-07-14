@@ -15,7 +15,7 @@ use crate::{
 use browseros_cdp::CdpEvent;
 use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, broadcast, mpsc};
 
 #[derive(Clone, Default)]
 pub struct BrowserSessionHooks {
@@ -166,6 +166,12 @@ impl BrowserSession {
     #[must_use]
     pub fn cdp_events(&self) -> broadcast::Receiver<CdpEvent> {
         self.connection.events()
+    }
+
+    /// See [`crate::connection::CdpConnection::events_targeted`].
+    #[must_use]
+    pub fn cdp_events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.connection.events_targeted(method)
     }
 
     #[must_use]

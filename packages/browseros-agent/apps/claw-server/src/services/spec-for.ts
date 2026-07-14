@@ -10,16 +10,15 @@
  * a parallel allow-list here. Stdio-only agents fall back to wrapping
  * the URL via `npx mcp-remote`, the same approach `apps/server` uses.
  *
- * Used by both profile installs (`harness-install.ts`) and the
- * single shared install (`browseros-connect.ts`) so the transport
- * rule lives in one place.
+ * Used by the shared install in `browseros-connect.ts` so the
+ * transport rule stays separate from connection orchestration.
  */
 
 import {
   type AgentId,
   type McpServerSpec,
   resolveAgentSurface,
-} from 'agent-mcp-manager'
+} from '@browseros/agent-mcp-manager'
 
 export function specFor(agentId: AgentId, mcpUrl: string): McpServerSpec {
   const surface = resolveAgentSurface(agentId, 'system')

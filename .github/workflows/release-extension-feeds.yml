@@ -1,0 +1,127 @@
+name: "Release: Extension update feeds"
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Update-feed channel"
+        required: true
+        type: choice
+        options:
+          - alpha
+          - prod
+        default: "alpha"
+      pins:
+        description: "Optional name=version pins, separated by commas or spaces"
+        required: false
+        type: string
+        default: ""
+      publish:
+        description: "Write feeds to R2 (unchecked = full dry-run files and diff)"
+        required: false
+        type: boolean
+        default: false
+      allow_downgrade:
+        description: "Allow version downgrades or removal of live entries"
+        required: false
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      channel:
+        description: "Update-feed channel: alpha or prod"
+        required: false
+        type: string
+        default: "alpha"
+      pins:
+        description: "Optional name=version pins, separated by commas or spaces"
+        required: false
+        type: string
+        default: ""
+      publish:
+        description: "Write feeds to R2"
+        required: false
+        type: boolean
+        default: false
+      allow_downgrade:
+        description: "Allow version downgrades or removal of live entries"
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      R2_ACCOUNT_ID:
+        required: true
+      R2_ACCESS_KEY_ID:
+        required: true
+      R2_SECRET_ACCESS_KEY:
+        required: true
+      R2_BUCKET:
+        required: true
+
+concurrency:
+  group: release-extension-feeds
+  cancel-in-progress: false
+
+jobs:
+  feeds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Generate extension update feeds
+        working-directory: packages/browseros
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          PINS: ${{ inputs.pins }}
+          PUBLISH: ${{ inputs.publish }}
+          ALLOW_DOWNGRADE: ${{ inputs.allow_downgrade }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        # Inputs are validated and appended to an args array, never a command string.
+        run: |
+          set -euo pipefail
+
+          case "$CHANNEL" in
+            alpha|prod) ;;
+            *)
+              echo "::error::Invalid channel '$CHANNEL'; expected alpha or prod" >&2
+              exit 1
+              ;;
+          esac
+
+          args=(--channel "$CHANNEL")
+          normalized=${PINS//,/ }
+          normalized=${normalized//$'\n'/ }
+          normalized=${normalized//$'\r'/ }
+          read -r -a pin_tokens <<< "$normalized"
+          for pin in "${pin_tokens[@]}"; do
+            if [[ ! "$pin" =~ ^[a-z][a-z0-9_-]*=[0-9]+([.][0-9]+){0,3}$ ]]; then
+              echo "::error::Invalid pin '$pin'; expected name=version (for example, agent=0.0.119)" >&2
+              exit 1
+            fi
+            args+=(--set "$pin")
+          done
+          if [ "$PUBLISH" = "true" ]; then
+            args+=(--publish)
+          fi
+          if [ "$ALLOW_DOWNGRADE" = "true" ]; then
+            args+=(--allow-downgrade)
+          fi
+
+          {
+            echo "### Extension feed command"
+            echo '```bash'
+            echo "browseros release extensions ${args[*]}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          uv run browseros release extensions "${args[@]}"

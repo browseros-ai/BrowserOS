@@ -1,4 +1,4 @@
-name: "Release: Extensions (CRX + feeds)"
+name: "Release: Extensions (CRX)"
 
 on:
   workflow_dispatch:
@@ -23,19 +23,6 @@ on:
         required: false
         type: string
         default: ""
-      channel:
-        description: "Update-feed channel to regenerate"
-        required: true
-        type: choice
-        options:
-          - alpha
-          - prod
-        default: "alpha"
-      publish_manifest:
-        description: "Write regenerated update manifests to R2 (unchecked = dry run)"
-        required: false
-        type: boolean
-        default: false
   workflow_call:
     inputs:
       version:
@@ -47,21 +34,11 @@ on:
         required: false
         type: string
         default: "all"
-      channel:
-        description: "Update-feed channel to regenerate: alpha or prod"
-        required: false
-        type: string
-        default: "alpha"
       branch:
         description: "Branch override (checkout ref for in-repo builds, clone branch for external repos)"
         required: false
         type: string
         default: ""
-      publish_manifest:
-        description: "Write regenerated update manifests to R2"
-        required: false
-        type: boolean
-        default: false
     secrets:
       GH_TOKEN:
         required: false
@@ -133,13 +110,11 @@ jobs:
           VERSION: ${{ inputs.version }}
           EXTENSION: ${{ inputs.extension }}
           BRANCH: ${{ inputs.branch }}
-          CHANNEL: ${{ inputs.channel }}
-          PUBLISH_MANIFEST: ${{ inputs.publish_manifest }}
 
           # Cloning private external extension repos
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
-          # Cloudflare R2 (crx upload + feed publisher)
+          # Cloudflare R2 (CRX upload)
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -165,15 +140,12 @@ jobs:
         # string) so a crafted dispatch input cannot break into this shell.
         run: |
           set -euo pipefail
-          args=(--version "$VERSION" --channel "$CHANNEL")
+          args=(--version "$VERSION")
           if [ "$EXTENSION" != "all" ]; then
             args+=(--name "$EXTENSION")
           fi
           if [ -n "$BRANCH" ]; then
             args+=(--branch "$BRANCH")
-          fi
-          if [ "$PUBLISH_MANIFEST" = "true" ]; then
-            args+=(--publish-manifest)
           fi
           {
             echo "### Release command"

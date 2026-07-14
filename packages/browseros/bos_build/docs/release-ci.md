@@ -22,7 +22,7 @@ release-browseros.yml
     - release-windows.yml -> build-browseros.yml with products=browseros
     - release-macos.yml with products=browseros
   extension CRX, when extensions is alpha or prod
-    - release-extensions.yml with extension=agent and publish_manifest=false
+    - release-extensions.yml with extension=agent
   stage_updates
     - render appcast and extension feed dry runs from R2 metadata
     - upload staged XML/JSON as staged-update-feeds-browseros-<version>
@@ -44,7 +44,7 @@ release-browserclaw.yml
     - release-windows.yml -> build-browseros.yml with products=browserclaw
     - release-macos.yml with products=browserclaw
   extension CRX, when extensions is alpha or prod
-    - release-extensions.yml with extension=browserclaw and publish_manifest=false
+    - release-extensions.yml with extension=browserclaw
   stage_updates
     - upload staged XML/JSON as staged-update-feeds-browserclaw-<version>
   finalize
@@ -61,7 +61,8 @@ the self-hosted macOS builder.
 | `.github/workflows/release-server.yml` | Builds BrowserOS server resource zips for every browser target, uploads versioned R2 resource keys, attaches server release assets, and reflects the server package version. | Manual and `agent-server/v*` tags | Yes, when `include_servers=true` and `products` includes `browseros` |
 | `.github/workflows/release-claw-server.yml` | Builds BrowserClaw server and onboard resource zips, uploads versioned R2 keys, attaches server release assets, and reflects Claw package versions. | Manual and `claw-server/v*` tags | Yes, when `include_servers=true` and `products` includes `browserclaw` |
 | `.github/workflows/release-claw-server-rust.yml` | Builds BrowserClaw Rust server resource zips for every browser target, uploads versioned R2 keys under `claw-server-rust/prod-resources`, and attaches Rust server release assets. | Manual, reusable, and `claw-server-rust/v*` tags | Called by `release-browserclaw.yml` when `include_servers=true` |
-| `.github/workflows/release-extensions.yml` | Builds, signs, uploads, and optionally republishes extension CRX manifests for `agent`, `controller`, `bugreporter`, and `browserclaw`. | Manual and reusable | Called by per-product orchestrators with `secrets: inherit` and `publish_manifest=false` |
+| `.github/workflows/release-extensions.yml` | Builds, signs, and uploads CRXs for `agent`, `controller`, `bugreporter`, and `browserclaw`; it never reads or writes update feeds. | Manual and reusable | Called by per-product orchestrators with `secrets: inherit` |
+| `.github/workflows/release-extension-feeds.yml` | Regenerates extension update feeds through the guarded feed publisher, as a dry run by default or an explicit R2 publish. | Manual and reusable | Independent operator action; no orchestrator dependency |
 | `.github/workflows/release-cli.yml` | Builds browseros-cli release binaries, uploads them to CDN, publishes npm package metadata, and creates the CLI GitHub release. | `cli/v*` tags | No orchestrator use |
 | `.github/workflows/release-linux.yml` | Builds Linux x64 browser artifacts on WarpBuild, one matrix entry per selected product. | Manual | Yes |
 | `.github/workflows/release-windows.yml` | Builds Windows x64 browser artifacts on WarpBuild, one matrix entry per selected product, with optional signing. | Manual | Yes |
@@ -126,7 +127,7 @@ gh workflow run release-browseros.yml \
   -f platforms=all \
   -f include_servers=true \
   -f sign_windows=true \
-  -f macos_arch=arm64 \
+  -f macos_arch=universal \
   -f upload_to_r2=true \
   -f extensions=alpha \
   -f extensions_version=<agent-extension-version> \
@@ -136,7 +137,7 @@ gh workflow run release-browserclaw.yml \
   -f platforms=all \
   -f include_servers=true \
   -f sign_windows=true \
-  -f macos_arch=arm64 \
+  -f macos_arch=universal \
   -f upload_to_r2=true \
   -f extensions=alpha \
   -f extensions_version=<browserclaw-extension-version> \
@@ -171,7 +172,7 @@ gh workflow run release-claw-server.yml -f version=0.0.3
 gh workflow run release-claw-server-rust.yml -f version=0.1.0
 gh workflow run release-linux.yml -f products=browseros -f upload_to_r2=true
 gh workflow run release-windows.yml -f products=browserclaw -f sign=false
-gh workflow run release-macos.yml -f products=all -f arch=arm64
+gh workflow run release-macos.yml -f products=all   # arch defaults to universal; pass -f arch=arm64 for a faster single-arch build
 ```
 
 ## Secrets And Variables
@@ -281,6 +282,21 @@ uv run browseros release appcast --version <version> --product browserclaw --pub
 # Publish extension update manifests only if the per-product run built a CRX.
 uv run browseros release extensions --channel alpha --set agent=<agent-extension-version> --publish
 uv run browseros release extensions --channel alpha --set browserclaw=<browserclaw-extension-version> --publish
+```
+
+The extension feed operation is also available as a lightweight workflow that
+does not rebuild CRXs. `pins` accepts comma- or space-separated `name=version`
+pairs; omit `publish` for the full dry run and diff:
+
+```bash
+gh workflow run release-extension-feeds.yml \
+  -f channel=alpha \
+  -f pins='agent=<agent-extension-version>,bugreporter=<bugreporter-version>'
+
+gh workflow run release-extension-feeds.yml \
+  -f channel=alpha \
+  -f pins=agent=<agent-extension-version> \
+  -f publish=true
 ```
 
 Server OTA promotion is also manual. The server release workflows can generate

@@ -6,7 +6,8 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::engine::progress::ProgressEvent;
 use crate::engine::state::{
-    DriftFile, DriftSource, StateContext, format_annotate_trailers, format_apply_trailers,
+    BpatchCommitKind, DriftFile, DriftSource, ResolvedState, StateContext,
+    format_annotate_trailers, format_apply_trailers, format_state_apply_trailers,
     parse_bpatch_authored_base, unassigned_feature_name,
 };
 use crate::git::{GitAdapter, TreeDiffEntry};
@@ -57,11 +58,11 @@ pub struct AppliedApply {
     pub base_display: String,
     /// Applied store revision before this run, when any.
     pub previous_store_short_rev: Option<String>,
-    /// Files changed between the applied tree and target tree.
+    /// Files changed between the current checkout and target tree.
     pub files_changed: usize,
     /// Store-managed file count loaded from the store.
     pub store_managed_files: usize,
-    /// Final target tree carried by the batch's last commit.
+    /// Final checkout tree materialized by this apply.
     pub target_tree: String,
     /// Feature commits authored by this run.
     pub commits: Vec<AuthoredCommit>,
@@ -108,7 +109,7 @@ pub struct AuthorCommitsInput<'a> {
 /// Trailer style for commit-tree authored bpatch commits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommitTrailerMode<'a> {
-    /// Apply commits record the store revision and final target tree.
+    /// Apply commits record the store revision and materialized checkout tree.
     Apply { store_rev: &'a str },
     /// Annotate commits record only the base plus an annotation marker.
     Annotate,
@@ -154,6 +155,19 @@ struct CommitGroup {
     files: Vec<TreeDiffEntry>,
 }
 
+pub(crate) struct ApplyTargetTrees {
+    pub checkout_tree: String,
+    pub store_delta: Vec<TreeDiffEntry>,
+}
+
+struct StoreRevisionSnapshot {
+    _temp: tempfile::TempDir,
+    dir: PathBuf,
+}
+
+const STATE_COMMIT_SUBJECT: &str = "chore: advance bpatch store state";
+const STATE_COMMIT_FEATURE: &str = "(state)";
+
 /// Runs same-base convergence against the current store.
 pub fn apply(
     ctx: &StateContext,
@@ -174,25 +188,7 @@ pub fn apply(
     }
 
     let checkout = GitAdapter::new(&ctx.checkout);
-    let store_target_tree =
-        build_target_tree(&checkout, &ctx.store_dir, &store, &state.base.sha, progress)
-            .context("building target tree from store patches")?;
-    let applied_tree = state
-        .applied
-        .as_ref()
-        .map(|applied| applied.tree.as_str())
-        .unwrap_or(&state.base.sha);
-    let store_delta = checkout
-        .diff_tree_name_status(applied_tree, &store_target_tree)?
-        .into_iter()
-        .filter(|entry| stores_entry(&store, entry))
-        .collect::<Vec<_>>();
-    let target_tree = build_tree_from_source_entries(
-        &checkout,
-        &state.head_tree,
-        &store_target_tree,
-        &store_delta,
-    )?;
+    let target = build_apply_target_trees(&checkout, &ctx.store_dir, &store, &state, progress)?;
 
     checkout.refresh_index()?;
     let has_uncommitted_drift = state
@@ -200,53 +196,88 @@ pub fn apply(
         .files()
         .iter()
         .any(|file| matches!(file.source, DriftSource::Uncommitted));
-    if state.head_tree == target_tree && !has_uncommitted_drift {
+    let checkout_matches_target = state.head_tree == target.checkout_tree;
+    let store_revision_changed = state
+        .applied
+        .as_ref()
+        .is_some_and(|applied| applied.store_rev != state.store.head_rev);
+    let applied_checkout_matches_head = state.applied.as_ref().is_some_and(|applied| {
+        applied.store_rev == state.store.head_rev && applied.tree == state.head_tree
+    });
+    let committed_drift_is_store_delta =
+        committed_drift_covered_by_store_delta(state.drift.files(), &target.store_delta);
+    let target_is_safe = state.drift.is_clean()
+        || (state.drift_anchor_kind == Some(BpatchCommitKind::Apply)
+            && checkout_matches_target
+            && !has_uncommitted_drift
+            && committed_drift_is_store_delta);
+    if checkout_matches_target
+        && !store_revision_changed
+        && (target.store_delta.is_empty() || applied_checkout_matches_head)
+        && target_is_safe
+    {
         return Ok(ApplyOutcome::Converged(ConvergedApply {
             store_rev: state.store.head_rev,
             store_short_rev: state.store.short_head_rev,
-            target_tree,
+            target_tree: target.checkout_tree,
         }));
     }
 
-    if !state.drift.is_clean() {
+    if !target_is_safe {
         return Ok(ApplyOutcome::Drift(DriftApply {
             files: state.drift.files().to_vec(),
         }));
     }
 
-    let delta = checkout.diff_tree_name_status(&state.head_tree, &target_tree)?;
+    let delta = checkout.diff_tree_name_status(&state.head_tree, &target.checkout_tree)?;
     let collisions = untracked_add_collisions(&checkout, &delta)?;
     if !collisions.is_empty() {
         return Ok(ApplyOutcome::Drift(DriftApply { files: collisions }));
     }
+    let commit_delta = if delta.is_empty() {
+        &target.store_delta
+    } else {
+        &delta
+    };
 
-    let chain = author_feature_commits(
-        AuthorCommitsInput {
-            checkout: &ctx.checkout,
-            store: &store,
-            base: &state.base.sha,
-            applied_tree: &state.head_tree,
-            target_tree: &target_tree,
-            trailers: CommitTrailerMode::Apply {
-                store_rev: &state.store.head_rev,
+    let chain = if target.store_delta.is_empty() && store_revision_changed {
+        author_state_commit(
+            &checkout,
+            &state.head_rev,
+            &state.head_tree,
+            &state.store.head_rev,
+            &state.base.sha,
+            progress,
+        )?
+    } else {
+        author_feature_commits(
+            AuthorCommitsInput {
+                checkout: &ctx.checkout,
+                store: &store,
+                base: &state.base.sha,
+                applied_tree: &state.head_tree,
+                target_tree: &target.checkout_tree,
+                trailers: CommitTrailerMode::Apply {
+                    store_rev: &state.store.head_rev,
+                },
+                subject_mode: SubjectMode::FeatureName,
+                parent_commit: &state.head_rev,
+                delta: commit_delta,
             },
-            subject_mode: SubjectMode::FeatureName,
-            parent_commit: &state.head_rev,
-            delta: &delta,
-        },
-        progress,
-    )?;
+            progress,
+        )?
+    };
 
     progress(ProgressEvent::Start {
         phase: "materialize",
         total: Some(delta.len()),
     });
     checkout
-        .materialize_tree_delta(&state.head_tree, &target_tree)
+        .materialize_tree_delta(&state.head_tree, &target.checkout_tree)
         .with_context(|| {
             format!(
-                "materializing target tree failed; recover with `git read-tree -m -u {} {target_tree}`",
-                state.head_tree
+                "materializing target tree failed; recover with `git read-tree -m -u {} {}`",
+                state.head_tree, target.checkout_tree
             )
         })?;
     progress(ProgressEvent::End {
@@ -256,7 +287,7 @@ pub fn apply(
         &ctx.checkout,
         &state.head_rev,
         &chain.final_sha,
-        &target_tree,
+        &target.checkout_tree,
     )?;
 
     Ok(ApplyOutcome::Applied(AppliedApply {
@@ -271,9 +302,70 @@ pub fn apply(
             .keys()
             .filter(|path| store.stores_path(path))
             .count(),
-        target_tree,
+        target_tree: target.checkout_tree,
         commits: chain.commits,
     }))
+}
+
+fn committed_drift_covered_by_store_delta(
+    drift: &[DriftFile],
+    store_delta: &[TreeDiffEntry],
+) -> bool {
+    let mut changed_paths = BTreeSet::new();
+    for entry in store_delta {
+        changed_paths.insert(entry.path.as_path());
+        if let Some(old_path) = entry.old_path.as_deref() {
+            changed_paths.insert(old_path);
+        }
+    }
+    drift
+        .iter()
+        .filter(|file| matches!(file.source, DriftSource::Committed))
+        .all(|file| changed_paths.contains(file.path.as_path()))
+}
+
+/// Authors an unchanged-tree commit when only the store revision advanced.
+fn author_state_commit(
+    git: &GitAdapter,
+    parent_commit: &str,
+    tree: &str,
+    store_rev: &str,
+    base: &str,
+    progress: &mut dyn FnMut(ProgressEvent<'_>),
+) -> Result<AuthoredCommitChain> {
+    progress(ProgressEvent::Start {
+        phase: "commit",
+        total: Some(1),
+    });
+    let mut message = String::from(STATE_COMMIT_SUBJECT);
+    message.push_str("\n\n");
+    message.push_str(&format_state_apply_trailers(store_rev, base, tree));
+    let sha = git.process().run_with_stdin(
+        &["commit-tree", tree, "-p", parent_commit],
+        message.as_bytes(),
+    )?;
+    let sha = String::from_utf8(sha)
+        .context("commit-tree output was not UTF-8")?
+        .trim()
+        .to_string();
+    let short_sha = git.short_rev(&sha)?;
+    progress(ProgressEvent::Tick {
+        phase: "commit",
+        done: 1,
+        total: Some(1),
+        item: Some(STATE_COMMIT_FEATURE),
+    });
+    progress(ProgressEvent::End { phase: "commit" });
+    Ok(AuthoredCommitChain {
+        commits: vec![AuthoredCommit {
+            feature: STATE_COMMIT_FEATURE.to_string(),
+            seq: 0,
+            sha: sha.clone(),
+            short_sha,
+            subject: STATE_COMMIT_SUBJECT.to_string(),
+        }],
+        final_sha: sha,
+    })
 }
 
 /// Authors grouped feature commits with commit-tree without moving refs.
@@ -448,7 +540,106 @@ fn pull_store(store_dir: &Path, progress: &mut dyn FnMut(ProgressEvent<'_>)) -> 
     Ok(())
 }
 
-fn build_target_tree(
+/// Builds the raw store tree and exact overlaid checkout tree for an apply plan.
+pub(crate) fn build_apply_target_trees(
+    git: &GitAdapter,
+    store_dir: &Path,
+    store: &Store,
+    state: &ResolvedState,
+    progress: &mut dyn FnMut(ProgressEvent<'_>),
+) -> Result<ApplyTargetTrees> {
+    let store_target_tree =
+        build_store_target_tree(git, store_dir, store, &state.base.sha, progress)
+            .context("building target tree from store patches")?;
+    let applied_matches_store_worktree = state
+        .applied
+        .as_ref()
+        .is_some_and(|applied| applied.store_rev == state.store.head_rev)
+        && Git::new(store_dir)
+            .run(&["status", "--porcelain", "-z", "--", "."])?
+            .is_empty();
+    let applied_store_tree = match &state.applied {
+        Some(_) if applied_matches_store_worktree => store_target_tree.clone(),
+        Some(applied) => {
+            let snapshot = materialize_store_revision(store_dir, &applied.store_rev)?;
+            let applied_store = Store::load(&snapshot.dir).with_context(|| {
+                format!(
+                    "loading store revision {} from {}",
+                    applied.store_rev,
+                    snapshot.dir.display()
+                )
+            })?;
+            if applied_store.metadata().base_commit != applied.base {
+                // Base-bump continue records the pre-repin store revision with its resolved new-base tree.
+                applied.tree.clone()
+            } else {
+                build_store_target_tree(git, &snapshot.dir, &applied_store, &applied.base, progress)
+                    .context("building previous target tree from applied store revision")?
+            }
+        }
+        None => state.base.sha.clone(),
+    };
+    let store_delta = git
+        .diff_tree_name_status(&applied_store_tree, &store_target_tree)?
+        .into_iter()
+        .filter(|entry| stores_entry(store, entry))
+        .collect::<Vec<_>>();
+    let checkout_tree =
+        build_tree_from_source_entries(git, &state.head_tree, &store_target_tree, &store_delta)?;
+    Ok(ApplyTargetTrees {
+        checkout_tree,
+        store_delta,
+    })
+}
+
+/// Materializes one historical store subtree without changing the store worktree.
+fn materialize_store_revision(store_dir: &Path, revision: &str) -> Result<StoreRevisionSnapshot> {
+    let store_dir = fs::canonicalize(store_dir)
+        .with_context(|| format!("resolving store path {}", store_dir.display()))?;
+    let store_git = Git::new(&store_dir);
+    let repo_root = fs::canonicalize(store_git.run_str(&["rev-parse", "--show-toplevel"])?)
+        .context("resolving store repository root")?;
+    let repo_git = Git::new(&repo_root);
+    let store_prefix = store_dir.strip_prefix(&repo_root).with_context(|| {
+        format!(
+            "store path {} is outside repository {}",
+            store_dir.display(),
+            repo_root.display()
+        )
+    })?;
+    let paths = if store_prefix.as_os_str().is_empty() {
+        repo_git.run(&["ls-tree", "-r", "-z", "--name-only", revision])?
+    } else {
+        repo_git.run(&[
+            "ls-tree",
+            "-r",
+            "-z",
+            "--name-only",
+            revision,
+            "--",
+            path_arg(store_prefix)?,
+        ])?
+    };
+    if paths.is_empty() {
+        bail!(
+            "store revision {revision} has no files under {}",
+            store_prefix.display()
+        );
+    }
+
+    let temp = tempfile::tempdir().context("creating historical store snapshot")?;
+    let indexed = repo_git.with_env("GIT_INDEX_FILE", temp.path().join("index").into_os_string());
+    indexed.run(&["read-tree", revision])?;
+    let prefix = format!("--prefix={}/", path_arg(temp.path())?.trim_end_matches('/'));
+    indexed.run_with_stdin(
+        &["checkout-index", "--force", "--stdin", "-z", &prefix],
+        &paths,
+    )?;
+    let dir = temp.path().join(store_prefix);
+    Ok(StoreRevisionSnapshot { _temp: temp, dir })
+}
+
+fn build_store_target_tree(
     git: &GitAdapter,
     store_dir: &Path,
     store: &Store,

@@ -17,7 +17,7 @@ use std::{
 };
 use tokio::{
     net::TcpStream,
-    sync::{Mutex, broadcast, oneshot},
+    sync::{Mutex, broadcast, mpsc, oneshot},
     task::JoinHandle,
     time::{sleep, timeout},
 };
@@ -97,6 +97,7 @@ struct Inner {
     pending: Mutex<HashMap<u64, PendingSender>>,
     sink: Mutex<Option<WsSink>>,
     events_tx: broadcast::Sender<CdpEvent>,
+    targeted: std::sync::Mutex<HashMap<String, mpsc::UnboundedSender<CdpEvent>>>,
     connected: AtomicBool,
     disconnecting: AtomicBool,
     reconnecting: AtomicBool,
@@ -115,6 +116,7 @@ impl CdpClient {
             pending: Mutex::new(HashMap::new()),
             sink: Mutex::new(None),
             events_tx,
+            targeted: std::sync::Mutex::new(HashMap::new()),
             connected: AtomicBool::new(false),
             disconnecting: AtomicBool::new(false),
             reconnecting: AtomicBool::new(false),
@@ -230,6 +232,22 @@ impl CdpClient {
 
     pub fn on_event(&self, method: &str) -> EventStream {
         EventStream::new(method, self.events())
+    }
+
+    /// Subscribe to one event method on a dedicated channel. Matching events
+    /// are delivered here INSTEAD of the shared broadcast ring and are freed
+    /// as soon as they are consumed — use for high-rate, large-payload events
+    /// (e.g. `Page.screencastFrame`) whose retention in the 4096-slot
+    /// broadcast ring would pin memory. One subscriber per method: a new
+    /// call replaces the previous one (whose channel closes); dropping the
+    /// receiver restores broadcast delivery for the method.
+    #[must_use]
+    pub fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        if let Ok(mut targeted) = self.inner.targeted.lock() {
+            targeted.insert(method.to_string(), tx);
+        }
+        rx
     }
 
     async fn send_frame(&self, id: u64, method: &str, message: Message) -> Result<Value, CdpError> {
@@ -396,11 +414,34 @@ async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
         .get("sessionId")
         .and_then(Value::as_str)
         .map(SessionId::from);
-    let _ = inner.events_tx.send(CdpEvent {
+    let event = CdpEvent {
         method: method.to_string(),
         params,
         session_id,
-    });
+    };
+    let Some(event) = send_targeted(inner, event) else {
+        return;
+    };
+    let _ = inner.events_tx.send(event);
+}
+
+/// Hands the event to the method's targeted subscriber if one is live;
+/// returns the event back when it should fall through to the broadcast ring.
+fn send_targeted(inner: &Inner, event: CdpEvent) -> Option<CdpEvent> {
+    let Ok(mut targeted) = inner.targeted.lock() else {
+        return Some(event);
+    };
+    let Some(sender) = targeted.get(&event.method) else {
+        return Some(event);
+    };
+    match sender.send(event) {
+        Ok(()) => None,
+        Err(rejected) => {
+            let event = rejected.0;
+            targeted.remove(&event.method);
+            Some(event)
+        }
+    }
 }
 
 async fn start_keepalive(inner: Arc<Inner>) {

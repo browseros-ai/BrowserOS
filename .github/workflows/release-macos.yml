@@ -14,7 +14,7 @@ on:
       arch:
         description: macOS architecture to build
         type: choice
-        default: arm64
+        default: universal
         options:
           - arm64
           - universal
@@ -46,9 +46,9 @@ on:
         type: string
         default: browseros
       arch:
-        description: macOS architecture to build (arm64, universal)
+        description: macOS architecture to build (universal, universal)
         type: string
-        default: arm64
+        default: universal
       bump:
         description: Version bump level (offset-only, offset+build, offset+patch, none)
         type: string
@@ -101,7 +101,7 @@ jobs:
           set -euo pipefail
 
           products="${INPUT_PRODUCTS:-browseros}"
-          arch="${INPUT_ARCH:-arm64}"
+          arch="${INPUT_ARCH:-universal}"
           bump_mode="${INPUT_BUMP:-none}"
           commit_version="${INPUT_COMMIT_VERSION:-false}"
           upload_to_r2="${INPUT_UPLOAD_TO_R2:-true}"

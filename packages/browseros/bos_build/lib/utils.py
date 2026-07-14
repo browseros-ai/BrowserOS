@@ -5,10 +5,15 @@ Shared utilities for the build system
 
 import os
 import sys
+import json
+import shlex
 import subprocess
 import shutil
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Optional, List, Dict, Union
+
+from .env import SENSITIVE_ENV_VARS
 
 # Import logging functions from logger module - re-exported for other modules
 from .logger import (  # noqa: F401
@@ -18,6 +23,160 @@ from .logger import (  # noqa: F401
     log_success,
     _log_to_file,
 )
+
+
+REDACTION_MARKER = "***"
+SENSITIVE_COMMAND_FLAGS: frozenset[str] = frozenset(
+    {
+        "-p",
+        "-credential_id",
+        "-password",
+        "--password",
+        "-passphrase",
+        "--passphrase",
+        "-totp_secret",
+        "--totp_secret",
+        "--totp-secret",
+        "-secret",
+        "--secret",
+        "-token",
+        "--token",
+        "--api-key",
+        "--api_key",
+        "--private-key",
+        "--private_key",
+    }
+)
+
+
+class _RedactedCalledProcessError(subprocess.CalledProcessError):
+    """Keep raw failure metadata while making implicit display safe."""
+
+    def __init__(
+        self,
+        returncode: int,
+        cmd: Sequence[str],
+        redacted_cmd: str,
+        output: Optional[str] = None,
+        stderr: Optional[str] = None,
+        redacted_output: Optional[str] = None,
+        redacted_stderr: Optional[str] = None,
+    ) -> None:
+        super().__init__(returncode, cmd, output, stderr)
+        self.redacted_cmd = redacted_cmd
+        self.redacted_output = redacted_output
+        self.redacted_stderr = redacted_stderr
+
+    def _display_exception(self) -> subprocess.CalledProcessError:
+        return subprocess.CalledProcessError(
+            self.returncode,
+            self.redacted_cmd,
+            self.redacted_output,
+            self.redacted_stderr,
+        )
+
+    def __str__(self) -> str:
+        return str(self._display_exception())
+
+    def __repr__(self) -> str:
+        return repr(self._display_exception())
+
+
+def _without_wrapping_quotes(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1]
+    return value
+
+
+def get_command_secret_values(cmd: Sequence[str]) -> tuple[str, ...]:
+    """Return values associated with known credential flags in ``cmd``."""
+    values: list[str] = []
+    redact_next = False
+
+    for part in cmd:
+        token = str(part)
+        if redact_next:
+            values.extend((token, _without_wrapping_quotes(token)))
+            redact_next = False
+            continue
+
+        flag, separator, value = token.partition("=")
+        if separator and flag.casefold() in SENSITIVE_COMMAND_FLAGS:
+            values.extend((value, _without_wrapping_quotes(value)))
+        elif token.casefold() in SENSITIVE_COMMAND_FLAGS:
+            redact_next = True
+
+    return tuple(value for value in values if value)
+
+
+def redact_sensitive_text(
+    text: str,
+    additional_secrets: Iterable[str] = (),
+    env: Optional[Mapping[str, str]] = None,
+) -> str:
+    """Mask exact credential values in text without changing its source data."""
+    environment = env if env is not None else os.environ
+    secret_values = list(additional_secrets)
+    secret_values.extend(
+        value
+        for name in SENSITIVE_ENV_VARS
+        if (value := environment.get(name))
+    )
+
+    normalized_values: set[str] = set()
+    for value in secret_values:
+        value = str(value)
+        if not value:
+            continue
+        for candidate in {value, _without_wrapping_quotes(value)}:
+            if not candidate:
+                continue
+            components = {candidate, *(line for line in candidate.splitlines() if line)}
+            for component in components:
+                normalized_values.update(
+                    {
+                        component,
+                        component.encode("unicode_escape").decode("ascii"),
+                        json.dumps(component)[1:-1],
+                        repr(component),
+                        shlex.quote(component),
+                        subprocess.list2cmdline([component]),
+                    }
+                )
+
+    redacted = str(text)
+    for value in sorted(normalized_values, key=len, reverse=True):
+        redacted = redacted.replace(value, REDACTION_MARKER)
+    return redacted
+
+
+def redact_command(
+    cmd: Sequence[str],
+    env: Optional[Mapping[str, str]] = None,
+) -> str:
+    """Build a command string for logs while leaving executable argv untouched."""
+    displayed: list[str] = []
+    redact_next = False
+
+    for part in cmd:
+        token = str(part)
+        if redact_next:
+            displayed.append(REDACTION_MARKER)
+            redact_next = False
+            continue
+
+        flag, separator, _ = token.partition("=")
+        if separator and flag.casefold() in SENSITIVE_COMMAND_FLAGS:
+            displayed.append(f"{flag}={REDACTION_MARKER}")
+        else:
+            displayed.append(token)
+            redact_next = token.casefold() in SENSITIVE_COMMAND_FLAGS
+
+    return redact_sensitive_text(
+        " ".join(displayed),
+        get_command_secret_values(cmd),
+        env,
+    )
 
 
 # Platform detection functions
@@ -43,7 +202,9 @@ def run_command(
     check: bool = True,
 ) -> subprocess.CompletedProcess:
     """Run a command with real-time streaming output and full capture"""
-    cmd_str = " ".join(cmd)
+    process_env = env or os.environ
+    secret_values = get_command_secret_values(cmd)
+    cmd_str = redact_command(cmd, process_env)
     _log_to_file(f"RUN_COMMAND: 🔧 Running: {cmd_str}")
     log_info(f"🔧 Running: {cmd_str}")
 
@@ -52,7 +213,7 @@ def run_command(
         process = subprocess.Popen(
             cmd,
             cwd=cwd,
-            env=env or os.environ,
+            env=process_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,  # Merge stderr into stdout
             text=True,
@@ -69,8 +230,9 @@ def run_command(
         for line in iter(process.stdout.readline, ""):
             line = line.rstrip()
             if line:
-                print(line)  # Print to console in real-time
-                _log_to_file(f"RUN_COMMAND: STDOUT: {line}")  # Log to file
+                safe_line = redact_sensitive_text(line, secret_values, process_env)
+                print(safe_line)  # Print to console in real-time
+                _log_to_file(f"RUN_COMMAND: STDOUT: {safe_line}")  # Log to file
                 stdout_lines.append(line)
 
         # Wait for process to complete
@@ -89,8 +251,20 @@ def run_command(
         )
 
         if check and process.returncode != 0:
-            raise subprocess.CalledProcessError(
-                process.returncode, cmd, result.stdout, result.stderr
+            safe_output = redact_sensitive_text(
+                result.stdout, secret_values, process_env
+            )
+            safe_stderr = redact_sensitive_text(
+                result.stderr, secret_values, process_env
+            )
+            raise _RedactedCalledProcessError(
+                process.returncode,
+                cmd,
+                cmd_str,
+                result.stdout,
+                result.stderr,
+                safe_output,
+                safe_stderr,
             )
 
         return result
@@ -102,24 +276,30 @@ def run_command(
         if e.stdout:
             for line in e.stdout.strip().split("\n"):
                 if line.strip():
-                    _log_to_file(f"RUN_COMMAND: STDOUT: {line}")
+                    safe_line = redact_sensitive_text(line, secret_values, process_env)
+                    _log_to_file(f"RUN_COMMAND: STDOUT: {safe_line}")
 
         if e.stderr:
             for line in e.stderr.strip().split("\n"):
                 if line.strip():
-                    _log_to_file(f"RUN_COMMAND: STDERR: {line}")
+                    safe_line = redact_sensitive_text(line, secret_values, process_env)
+                    _log_to_file(f"RUN_COMMAND: STDERR: {safe_line}")
 
         if check:
             log_error(f"Command failed: {cmd_str}")
             if e.stderr:
-                log_error(f"Error: {e.stderr}")
+                safe_error = redact_sensitive_text(
+                    e.stderr, secret_values, process_env
+                )
+                log_error(f"Error: {safe_error}")
             raise
         return e
     except Exception as e:
-        _log_to_file(f"RUN_COMMAND: ❌ Unexpected error: {str(e)}")
+        safe_error = redact_sensitive_text(str(e), secret_values, process_env)
+        _log_to_file(f"RUN_COMMAND: ❌ Unexpected error: {safe_error}")
         if check:
             log_error(f"Unexpected error running command: {cmd_str}")
-            log_error(f"Error: {str(e)}")
+            log_error(f"Error: {safe_error}")
         raise
 
 

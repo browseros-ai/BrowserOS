@@ -38,11 +38,6 @@ const testSuites = {
       argv: [bun, 'run', 'test'],
     },
     {
-      label: 'eval tests',
-      cwd: resolve(projectRoot, 'apps/eval'),
-      argv: [bun, 'run', 'test'],
-    },
-    {
       label: 'build script tests',
       argv: [bun, 'run', './scripts/run-bun-test.ts', './scripts/build'],
     },

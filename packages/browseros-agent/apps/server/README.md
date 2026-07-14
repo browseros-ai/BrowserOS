@@ -166,4 +166,4 @@ The workflow validates the tag against the hardcoded package path. A tag push fa
 
 ## Sidecar Config
 
-`--config <path>` is the only server startup config input. The JSON sidecar carries `ports.server`, `ports.cdp`, `ports.proxy`, `directories.resources`, `directories.execution`, and optional `instance.*` metadata. Dev, dogfood, eval, and Chromium-managed launches generate this file before starting the binary.
+`--config <path>` is the only server startup config input. The JSON sidecar carries `ports.server`, `ports.cdp`, `ports.proxy`, `directories.resources`, `directories.execution`, and optional `instance.*` metadata. Dev, dogfood, and Chromium-managed launches generate this file before starting the binary.

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>BrowserOS Claw Server (Alpha)</title>
+    <link>https://cdn.browseros.com/appcast-claw-server.alpha.xml</link>
+    <description>BrowserOS Claw Server (Alpha) binary updates</description>
+    <language>en</language>
+
+  </channel>
+</rss>

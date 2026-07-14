@@ -1,6 +1,8 @@
 import unittest
 
 from tools.release_secrets.sync import (
+    ALLOWLIST,
+    RELEASE_WORKFLOW_FILES,
     DotenvParseError,
     build_check_result,
     build_plan,
@@ -75,6 +77,21 @@ class WorkflowSecretScannerTest(unittest.TestCase):
         )
 
         self.assertEqual({"BAR_BAZ", "FOO", "QUX"}, refs)
+
+    def test_extension_feed_workflow_uses_only_r2_allowlisted_secrets(self):
+        workflow = "release-extension-feeds.yml"
+        self.assertIn(workflow, {path.name for path in RELEASE_WORKFLOW_FILES})
+
+        consumers = {spec.name for spec in ALLOWLIST if workflow in spec.consumers}
+        self.assertEqual(
+            {
+                "R2_ACCOUNT_ID",
+                "R2_ACCESS_KEY_ID",
+                "R2_SECRET_ACCESS_KEY",
+                "R2_BUCKET",
+            },
+            consumers,
+        )
 
 
 class SecretPlanTest(unittest.TestCase):

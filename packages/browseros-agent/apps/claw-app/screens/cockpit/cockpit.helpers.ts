@@ -63,9 +63,8 @@ export function formatToolTrail(
 
 /**
  * Coerces the server-supplied harness string back into the UI's
- * `Harness` union. Unknown values (older profiles, hand-edited
- * files, server-side enum drift) fall back to 'Claude Code' so the
- * harness icon still resolves to something concrete.
+ * `Harness` union. Missing or unknown values fall back to 'Claude Code'
+ * so the harness icon still resolves to something concrete.
  */
 export function harnessForRow(value: string | null): Harness {
   if (!value) return 'Claude Code'

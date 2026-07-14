@@ -3,12 +3,13 @@
 
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import cast
 from unittest import mock
 
 from . import standard
-from ...core.context import Context
+from ...core.context import ArtifactRegistry, Context
 
 
 class ComputeNinjaJobsTest(unittest.TestCase):
@@ -143,6 +144,68 @@ class CompileModuleExecuteTest(unittest.TestCase):
             ["autoninja", "-C", "out/Default_x64", "chrome", "chromedriver"],
         )
         self.assertEqual(run_cmd.call_args.kwargs["cwd"], ctx.chromium_src)
+
+    def test_windows_keeps_and_registers_chrome_exe(self):
+        with TemporaryDirectory() as tmp:
+            build_output_dir = Path(tmp) / "out" / "Default"
+            build_output_dir.mkdir(parents=True)
+            chrome_path = build_output_dir / "chrome.exe"
+            product_path = build_output_dir / "BrowserOS.exe"
+            chrome_path.write_bytes(b"chrome")
+            registry = ArtifactRegistry()
+            ctx = cast(
+                Context,
+                SimpleNamespace(
+                    out_dir="out/Default",
+                    chromium_src=Path(tmp),
+                    artifact_registry=registry,
+                    get_chromium_app_path=lambda: chrome_path,
+                    get_app_path=lambda: product_path,
+                ),
+            )
+
+            with (
+                mock.patch.object(standard, "IS_WINDOWS", return_value=True),
+                mock.patch.object(standard, "run_command"),
+                mock.patch.object(standard, "autoninja_command", return_value=[]),
+                mock.patch.object(standard.CompileModule, "_create_version_file"),
+            ):
+                standard.CompileModule().execute(ctx)
+
+            self.assertTrue(chrome_path.exists())
+            self.assertFalse(product_path.exists())
+            self.assertEqual(registry.get("built_app"), chrome_path)
+
+    def test_non_windows_keeps_product_rename(self):
+        with TemporaryDirectory() as tmp:
+            build_output_dir = Path(tmp) / "out" / "Default"
+            build_output_dir.mkdir(parents=True)
+            chrome_path = build_output_dir / "chrome"
+            product_path = build_output_dir / "browseros"
+            chrome_path.write_bytes(b"chrome")
+            registry = ArtifactRegistry()
+            ctx = cast(
+                Context,
+                SimpleNamespace(
+                    out_dir="out/Default",
+                    chromium_src=Path(tmp),
+                    artifact_registry=registry,
+                    get_chromium_app_path=lambda: chrome_path,
+                    get_app_path=lambda: product_path,
+                ),
+            )
+
+            with (
+                mock.patch.object(standard, "IS_WINDOWS", return_value=False),
+                mock.patch.object(standard, "run_command"),
+                mock.patch.object(standard, "autoninja_command", return_value=[]),
+                mock.patch.object(standard.CompileModule, "_create_version_file"),
+            ):
+                standard.CompileModule().execute(ctx)
+
+            self.assertFalse(chrome_path.exists())
+            self.assertEqual(product_path.read_bytes(), b"chrome")
+            self.assertEqual(registry.get("built_app"), product_path)
 
 
 class BuildTargetTest(unittest.TestCase):

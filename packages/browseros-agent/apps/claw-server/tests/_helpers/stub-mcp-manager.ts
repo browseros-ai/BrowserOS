@@ -18,7 +18,7 @@ import type {
   BoundApi,
   ManifestServerEntry,
   McpServer,
-} from 'agent-mcp-manager'
+} from '@browseros/agent-mcp-manager'
 
 export interface StubCall {
   method:

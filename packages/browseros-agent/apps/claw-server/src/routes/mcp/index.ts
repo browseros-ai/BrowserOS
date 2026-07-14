@@ -12,7 +12,10 @@
 
 import { Hono } from 'hono'
 import { handleSingleMcpRequest } from '../../mcp/single-server'
+import { setMcpRequestHygieneMiddleware } from './mcp-request-hygiene'
 
-export const mcpRoute = new Hono().all('/mcp', async (c) => {
-  return handleSingleMcpRequest(c.req.raw)
-})
+export const mcpRoute = new Hono()
+  .use('/mcp', setMcpRequestHygieneMiddleware)
+  .all('/mcp', async (c) => {
+    return handleSingleMcpRequest(c.req.raw)
+  })

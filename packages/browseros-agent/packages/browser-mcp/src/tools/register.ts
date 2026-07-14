@@ -37,6 +37,7 @@ interface BrowserToolLogger {
 }
 
 export interface BrowserToolRegistrationOptions {
+  includeStructuredContent?: boolean
   outputFileAccess?: BrowserOutputFileAccess
   onToolExecutionStart?: (event: BrowserToolLifecycleEvent) => void
   onToolExecutionEnd?: (event: BrowserToolLifecycleEvent) => void
@@ -177,11 +178,16 @@ export function registerBrowserTools(
           const errorSummary = result.isError
             ? resultTextSummary(result.content)
             : undefined
+          const structuredContent =
+            (options.includeStructuredContent ?? true) ||
+            tool.output !== undefined
+              ? result.structuredContent
+              : undefined
           options.logger?.debug?.('MCP browser tool completed', {
             ...logBase,
             durationMs,
             isError: Boolean(result.isError),
-            hasStructuredContent: result.structuredContent !== undefined,
+            hasStructuredContent: structuredContent !== undefined,
           })
           if (result.isError) {
             options.logger?.info?.('MCP browser tool returned error', {
@@ -193,7 +199,7 @@ export function registerBrowserTools(
           return {
             content: result.content,
             isError: result.isError,
-            structuredContent: result.structuredContent,
+            ...(structuredContent !== undefined && { structuredContent }),
           }
         } catch (error) {
           const errorText =

@@ -9,6 +9,7 @@ while required external extensions continue to download from the CDN manifest.
 
 import json
 import os
+import shutil
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -96,6 +97,7 @@ class BundledExtensionsModule(Step):
         output_dir = self._get_output_dir(ctx)
 
         output_dir.mkdir(parents=True, exist_ok=True)
+        self._clear_generated_outputs(ctx, output_dir)
         log_info(f"  Output: {output_dir}")
 
         extensions = self._fetch_and_parse_manifest(manifest_url)
@@ -126,6 +128,18 @@ class BundledExtensionsModule(Step):
         return (
             ctx.chromium_src / "chrome" / "browser" / "browseros" / "bundled_extensions"
         )
+
+    def _clear_generated_outputs(self, ctx: Context, output_dir: Path) -> None:
+        """Remove generated extension payloads without touching source files."""
+        for crx_path in output_dir.glob("*.crx"):
+            crx_path.unlink()
+        (output_dir / "bundled_extensions.json").unlink(missing_ok=True)
+
+        generated_output_dir = ctx.chromium_src / ctx.out_dir / "browseros_extensions"
+        if generated_output_dir.is_symlink() or generated_output_dir.is_file():
+            generated_output_dir.unlink()
+        elif generated_output_dir.exists():
+            shutil.rmtree(generated_output_dir)
 
     def _fetch_and_parse_manifest(self, url: str) -> List[ExtensionInfo]:
         """Fetch XML manifest and parse extension information"""
@@ -183,27 +197,25 @@ class BundledExtensionsModule(Step):
     def _select_product_extensions(
         self, extensions: List[ExtensionInfo], ctx: Context
     ) -> List[ExtensionInfo]:
-        """Return manifest entries required by the active product."""
+        """Return manifest entries required by the current build."""
         self._validate_required_extensions(extensions, ctx)
-        required_ids = {
-            extension_id for extension_id, _ in ctx.product.required_extension_ids
-        }
+        required_ids = {extension_id for extension_id, _ in ctx.required_extension_ids}
         return [ext for ext in extensions if ext.id in required_ids]
 
     def _validate_required_extensions(
         self, extensions: List[ExtensionInfo], ctx: Context
     ) -> None:
-        """Fail if the release manifest omits a required bundled extension."""
+        """Fail if the manifest omits a required bundled extension."""
         extension_ids = {ext.id for ext in extensions}
         missing = [
             f"{name} ({extension_id})"
-            for extension_id, name in ctx.product.required_extension_ids
+            for extension_id, name in ctx.required_extension_ids
             if extension_id not in extension_ids
         ]
         if missing:
             raise RuntimeError(
-                "Bundled extension manifest missing required entries: "
-                + ", ".join(missing)
+                f"Bundled extension manifest for {ctx.product.display_name} "
+                "missing required entries: " + ", ".join(missing)
             )
 
     def _use_local_bundles(self, ctx: Context) -> bool:
@@ -218,7 +230,7 @@ class BundledExtensionsModule(Step):
         planned: List[BundlePlan] = []
         missing: List[str] = []
 
-        for extension_id, name in ctx.product.required_extension_ids:
+        for extension_id, name in ctx.required_extension_ids:
             spec = local_specs_by_id.get(extension_id)
             if spec is not None:
                 planned.append(LocalBundle(name=name, spec=spec))
@@ -233,8 +245,8 @@ class BundledExtensionsModule(Step):
 
         if missing:
             raise RuntimeError(
-                "Bundled extensions missing required local or manifest entries: "
-                + ", ".join(missing)
+                f"Bundled extensions for {ctx.product.display_name} missing required "
+                "local or manifest entries: " + ", ".join(missing)
             )
         return planned
 
@@ -326,7 +338,7 @@ class BundledExtensionsModule(Step):
         missing = []
         local_specs_by_id = self._local_specs_by_id()
         has_local_required = False
-        for extension_id, name in ctx.product.required_extension_ids:
+        for extension_id, name in ctx.required_extension_ids:
             spec = local_specs_by_id.get(extension_id)
             if spec is None:
                 continue

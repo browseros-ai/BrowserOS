@@ -1,66 +1,97 @@
 ---
 title: "How BrowserClaw works"
-description: "The mental model: your agent drives, BrowserClaw watches and records."
+description: "A step-by-step walkthrough from download to your first AI-driven browsing session."
+keywords: ["BrowserClaw setup", "connect AI to browser", "how BrowserClaw works", "AI browser walkthrough"]
 ---
 
-BrowserClaw is a two-actor system. Your AI is the actor. BrowserClaw is the stage.
+This page walks you from a fresh download to your first AI-driven session. Six steps. About five minutes.
 
-## The two-actor model
+<Steps>
+  <Step title="Install BrowserClaw">
+    Head over to [browseros.com/agents](https://browseros.com/agents) and download BrowserClaw for your operating system. Install it the way you'd install any other browser.
 
-<CardGroup cols={2}>
-  <Card title="Your agent" icon="robot">
-    Your MCP client (Claude Code, Cursor, Codex, and so on) decides what to do next. It picks the URLs, chooses which buttons to click, reads the results, and writes the next prompt to itself. BrowserClaw does not do any of the thinking.
+    Once it's open, it works like Chrome or any other browser you've used. Bookmarks, extensions, keyboard shortcuts, all in the same places.
+  </Step>
+  <Step title="Sign in like you normally would">
+    Use BrowserClaw as your browser for a bit. Sign in to Gmail. Sign in to your calendar. Sign in to Notion, Linear, your CRM, your accounting tool, whatever you use for actual work.
+
+    There is nothing special about this step. You are just using a browser. But it matters, because every account you sign in to here becomes something your AI can use later.
+
+    <Note>
+    Your AI cannot see your personal tabs unless you ask it to. It works in its own tabs, side by side with yours. Signing in to Gmail here means your AI can use Gmail when you ask it to. It does not mean your AI is reading your inbox while you're not looking.
+    </Note>
+  </Step>
+  <Step title="Connect BrowserClaw to your AI">
+    Open a new tab in BrowserClaw and click **MCP** in the sidebar. You'll see a list of AI tools you can connect with one click.
+
+    <Frame caption="The connect page: one endpoint, one click per AI tool.">
+      <img src="/images/browserclaw--mcp-install-board.png" alt="BrowserClaw connect page showing an endpoint URL at the top and six AI tools listed underneath: Claude Code, Codex, Cursor, Antigravity, VS Code, and Zed. Each has a Connect button on the right." />
+    </Frame>
+
+    Find the AI tool you use: Claude Code, Cursor, Codex, Antigravity, VS Code, Zed, or another. Click **Connect** on its row. BrowserClaw sets everything up for you.
+
+    Restart your AI tool once, and it now has a browser.
+
+    <Tip>
+    Using an AI tool that isn't listed? Copy the endpoint URL at the top of the page and paste it into your AI's own settings. See the [Connect page](/browserclaw/mcp/index) for the manual setup.
+    </Tip>
+  </Step>
+  <Step title="Give your AI a task">
+    Open your AI tool and give it a real task. Something you'd actually want done. To start, try this:
+
+    ```text
+    Find a good time next week for a 30-minute team meeting and send the invite.
+    ```
+
+    Or something closer to your own work:
+
+    ```text
+    Summarize my important unread emails from the last two days.
+    ```
+
+    ```text
+    Pull the numbers from the Q3 dashboard in Notion and put them in a summary at the top.
+    ```
+
+    Whichever you pick, hit send.
+  </Step>
+  <Step title="Watch it work">
+    Open a new tab in BrowserClaw. Your AI's session shows up on the dashboard.
+
+    <Frame caption="Every running AI and every finished session, at a glance.">
+      <img src="/images/browserclaw--dashboard-populated.png" alt="BrowserClaw new-tab dashboard with a large italic headline reading 'What are your agents working on right now?' A row of Running now cards shows a live agent session with a live browser preview. Below it, a grid of Recent activity tiles shows five completed sessions with the sites they visited." />
+    </Frame>
+
+    Two things to look at:
+
+    - **Running now**: the AI working on your task right now. You'll see the site it's on, how long it's been at it, and a live preview of what it's looking at.
+    - **Recent activity**: sessions that already finished. Click any tile to open the full story of what happened.
+
+    You don't have to sit and stare. Come back whenever you want; the dashboard shows you what's been going on.
+  </Step>
+  <Step title="Replay what your AI did">
+    When a session finishes, click its tile. Then click **View Session Replay**.
+
+    <Frame caption="Replay any session like a video. Scrub through, see exactly what your AI saw at every moment.">
+      <img src="/images/browserclaw--replay-scrubber.png" alt="BrowserClaw replay screen showing a full-fidelity playback of a page the AI browsed. A play/pause scrubber sits at the bottom. On the right, an action timeline lists every step the AI took, synced to the current moment in the video." />
+    </Frame>
+
+    The replay plays back like a video. Hit rewind to see the exact moment things went off, or the exact moment something went well. On the right, every step your AI took is listed in order, and you can click any one to jump the replay to that moment.
+
+    Now you know what worked. Tell your AI, and it'll do the next task better.
+  </Step>
+</Steps>
+
+## Where to next
+
+<CardGroup cols={3}>
+  <Card title="Your dashboard" icon="binoculars" href="/browserclaw/cockpit">
+    Every part of the new-tab dashboard and what it tells you.
   </Card>
-  <Card title="BrowserClaw" icon="binoculars">
-    BrowserClaw exposes a browser as an MCP server. Your agent calls tools like `open`, `click`, `type`, `snapshot`. BrowserClaw runs them against a real Chromium session and streams back what happened.
+  <Card title="Your stuff stays yours" icon="lock" href="/browserclaw/privacy">
+    What BrowserClaw records, what it doesn't, and where everything lives.
   </Card>
-</CardGroup>
-
-Your agent talks to BrowserClaw over a local MCP endpoint on `127.0.0.1`. Nothing crosses the network. Nothing leaves your machine.
-
-## Your tabs vs agent tabs
-
-BrowserClaw separates every browser tab into one of two buckets: yours or the agent's. The tab strip is visually different for each so you can never lose track.
-
-- The agent can only see and act on tabs in the **agent bucket**.
-- The agent cannot open, read, click, or type into a tab in your **personal bucket**.
-- You can hand a personal tab to the agent explicitly, and take one back the same way.
-
-See [Your tabs vs agent tabs](/browserclaw/tabs-and-isolation) for the full model.
-
-## What gets recorded
-
-Every step the agent takes lands in the audit log:
-
-- The URL at the start and end of the step
-- A screenshot of the page after the action
-- A DOM snapshot for replay
-- The tool the agent called plus its arguments
-- The agent's own reasoning at that step, if the harness exposes it
-
-You can scrub the whole session in [audit and replay](/browserclaw/audit-and-replay). Skip forward, jump back, land on the exact frame where a decision went wrong.
-
-## What does NOT get recorded
-
-- Any tab in your personal bucket. BrowserClaw does not know it exists.
-- Passwords typed by the agent are captured as `••••••`, never as plaintext.
-- Credit-card fields are redacted the same way.
-
-## Where the data lives
-
-Everything sits on your disk, inside BrowserClaw's own local data directory. No cloud. No sync. No telemetry from BrowserClaw itself.
-
-Your MCP client (Claude Code, Cursor, and so on) still sends your prompt to its own vendor: that is between you and that vendor. BrowserClaw does not intermediate that leg.
-
-See [Privacy and data](/browserclaw/privacy) for the full breakdown.
-
-## Next
-
-<CardGroup cols={2}>
-  <Card title="Install BrowserClaw" icon="download" href="/browserclaw/install">
-    Download links and setup steps.
-  </Card>
-  <Card title="Your first run" icon="play" href="/browserclaw/first-run">
-    A walkthrough from install to a first activity row.
+  <Card title="How BrowserClaw compares" icon="scale-balanced" href="/browserclaw/comparisons/browseros">
+    BrowserClaw next to BrowserOS and other AI browsing tools.
   </Card>
 </CardGroup>

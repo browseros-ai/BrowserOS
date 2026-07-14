@@ -1,4 +1,5 @@
 pub mod hooks;
+pub mod naming;
 
 use crate::{AppState, mcp::hooks::ClawMcpHooks};
 use browseros_mcp::{BrowserMcpService, BrowserMcpServiceOptions, BrowserSessionProvider};

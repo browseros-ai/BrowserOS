@@ -12,18 +12,17 @@
  * polling interval.
  */
 
-import type { AgentId } from 'agent-mcp-manager'
+import type { AgentId } from '@browseros/agent-mcp-manager'
 import {
   AgentNotInstalledError,
   ForeignEntryError,
   resolveAgentMcpConfigPath,
-} from 'agent-mcp-manager'
+} from '@browseros/agent-mcp-manager'
 import { logger } from '../lib/logger'
 import { getMcpManager } from '../lib/mcp-manager'
 import { tildifyHomePath } from '../lib/tildify'
-import { type Harness, harnessEnum } from '../routes/agents/schemas'
 import { BROWSEROS_MCP_SERVER_NAME, publicMcpUrl } from '../shared/mcp-url'
-import { HARNESS_TO_AGENT_ID } from './harness-install'
+import { HARNESS_TO_AGENT_ID, type Harness, harnessEnum } from './harnesses'
 import { relinkManagedServer } from './mcp-relink'
 import { specFor } from './spec-for'
 

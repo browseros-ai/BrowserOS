@@ -228,11 +228,14 @@ def _plan_release(switches: Switches, platform: str) -> List[str]:
 def _plan_debug(switches: Switches, platform: str) -> List[str]:
     steps: List[str] = []
     steps.extend(_provision_steps(switches))
+    if platform == "windows":
+        steps.append("winsparkle_setup")
     if switches.download:
         steps.append("download_resources")
     steps.extend(
         [
             "resources",
+            "bundled_extensions",
             "chromium_replace",
             "string_replaces",
             "patches",
@@ -242,6 +245,8 @@ def _plan_debug(switches: Switches, platform: str) -> List[str]:
     )
     if platform == "macos" and switches.sign:
         steps.append("sign_macos")
+    if platform == "windows":
+        steps.append("mini_installer")
     steps.append(f"package_{platform}")
     if switches.upload:
         steps.append("upload")

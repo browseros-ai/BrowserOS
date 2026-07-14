@@ -163,8 +163,16 @@ def copy_browser_files(
     Returns:
         True if successful, False otherwise
     """
-    target_dir.mkdir(parents=True, exist_ok=True)
     out_dir = join_paths(ctx.chromium_src, ctx.out_dir)
+    extensions_dir_name = "browseros_extensions"
+    extensions_src = join_paths(out_dir, extensions_dir_name)
+    if not extensions_src.is_dir():
+        raise FileNotFoundError(
+            f"Required bundled extensions directory not found at {extensions_src}; "
+            f"expected {extensions_dir_name} in Chromium output directory {out_dir}"
+        )
+
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     files_to_copy = [
         ctx.BROWSEROS_APP_NAME,
@@ -193,6 +201,13 @@ def copy_browser_files(
             log_info(f"  ✓ Copied {file}")
         else:
             log_warning(f"  ⚠ File not found: {file}")
+
+    shutil.copytree(
+        extensions_src,
+        join_paths(target_dir, extensions_dir_name),
+        dirs_exist_ok=True,
+    )
+    log_info(f"  ✓ Copied {extensions_dir_name}/")
 
     dirs_to_copy = [
         "locales",

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,22 @@ import (
 	"testing"
 	"time"
 )
+
+func TestConnectOptsIntoStructuredContent(t *testing.T) {
+	var requestURI string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestURI = r.URL.RequestURI()
+		http.Error(w, "stop after capturing endpoint", http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient(server.URL, "test", time.Second)
+	_, _ = client.connect(context.Background())
+
+	if requestURI != "/mcp?structured=1" {
+		t.Fatalf("MCP request URI = %q, want /mcp?structured=1", requestURI)
+	}
+}
 
 func TestHealthUsesCanonicalSystemHealthEndpoint(t *testing.T) {
 	var paths []string

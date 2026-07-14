@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Pins the registry-write side effect of the `tabs new` dispatch
- * branch in mcp/register.ts. Pre-fix, the registry only learned
+ * branch in the MCP dispatch pipeline. Pre-fix, the registry only learned
  * about a tab from a subsequent page-targeted dispatch (snapshot,
  * navigate, etc) because `extractPageId` reads `page` from input
  * args, and `tabs new` carries no `page` in its input (the page id
@@ -12,7 +12,7 @@
  * also written to the registry so `/tabs/activity` reflects the
  * tab the moment it opens.
  *
- * Pattern mirrors tab-group-ops.test.ts: mock `executeTool` at the
+ * Mock `executeTool` at the
  * module boundary so the orchestrator drives synthetic results,
  * stub the browser session so `pages.getInfo(pageId)` returns a
  * known targetId, and assert against the singleton registry.
@@ -45,7 +45,7 @@ function nextResult(toolName: string): FakeResult {
 }
 
 // Preserve the framework's other exports (defineTool, textResult,
-// errorResult, etc.) since `server.ts` -> `register.ts` ->
+// errorResult, etc.) since `server.ts` -> the dispatch pipeline ->
 // `BROWSER_TOOLS` transitively imports every tool's source, and
 // each tool imports helpers from this same module. Without the
 // spread, those imports throw 'Export named "textResult" not found'
@@ -74,12 +74,16 @@ function ok(structured?: unknown): FakeResult {
 // Imports must come AFTER mock.module so the orchestrator picks up
 // the stubbed executeTool.
 const { setBrowserSession } = await import('../../src/lib/browser-session')
+const { ownershipStore } = await import('../../src/domain/ownership')
 const { tabActivityRegistry } = await import('../../src/lib/tab-activity')
 const { agentIdentityFromClient, identityService } = await import(
   '../../src/lib/mcp-session'
 )
 const { resetSingleMcpInstanceForTesting } = await import(
   '../../src/mcp/single-server'
+)
+const { resetTabGroupEffectsForTesting } = await import(
+  '../../src/mcp/effects/tab-groups'
 )
 const app = (await import('../../src/server')).default
 
@@ -111,18 +115,22 @@ async function connect(clientName: string) {
   return { client, transport }
 }
 
-describe('mcp/register.ts: tabs new registry write', () => {
+describe('MCP dispatch: tabs new registry write', () => {
   beforeEach(() => {
     calls.length = 0
     queued.length = 0
     resetSingleMcpInstanceForTesting()
     identityService.clear()
+    ownershipStore.clear()
+    resetTabGroupEffectsForTesting()
     tabActivityRegistry.clear()
   })
   afterEach(() => {
     queued.length = 0
     resetSingleMcpInstanceForTesting()
     identityService.clear()
+    ownershipStore.clear()
+    resetTabGroupEffectsForTesting()
     tabActivityRegistry.clear()
     setBrowserSession(null)
   })
@@ -139,6 +147,7 @@ describe('mcp/register.ts: tabs new registry write', () => {
       arguments: { action: 'new', url: 'https://example.com/' },
     })
     expect(result.isError).toBeFalsy()
+    expect(result.structuredContent).toBeUndefined()
     const identity = identityService.getIdentity(transport.sessionId as string)
     if (!identity) throw new Error('missing identity')
     const { agentId, slug } = agentIdentityFromClient(identity)

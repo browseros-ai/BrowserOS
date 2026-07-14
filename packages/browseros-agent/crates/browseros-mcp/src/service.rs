@@ -169,7 +169,11 @@ impl BrowserMcpService {
         self.lifecycle.lock().await.client_info = Some(client_info);
     }
 
-    async fn ensure_session_started(&self, session_id: String) -> Result<String, McpError> {
+    async fn ensure_session_started(
+        &self,
+        session_id: String,
+        peer: Option<rmcp::service::Peer<RoleServer>>,
+    ) -> Result<String, McpError> {
         let event = {
             let mut lifecycle = self.lifecycle.lock().await;
             if lifecycle.session_id.is_none() {
@@ -194,6 +198,7 @@ impl BrowserMcpService {
             McpSessionStarted {
                 session_id,
                 client_info,
+                peer,
             }
         };
         let started_session_id = event.session_id.clone();
@@ -209,13 +214,17 @@ impl BrowserMcpService {
     ) -> Result<String, McpError> {
         let session_id = session_id_from_extensions(&context.extensions)
             .unwrap_or_else(|| self.fallback_session_id.clone());
-        self.ensure_session_started(session_id).await
+        self.ensure_session_started(session_id, Some(context.peer.clone()))
+            .await
     }
 
     async fn learn_session_from_notification(&self, context: &NotificationContext<RoleServer>) {
         let session_id = session_id_from_extensions(&context.extensions)
             .unwrap_or_else(|| self.fallback_session_id.clone());
-        if let Err(err) = self.ensure_session_started(session_id).await {
+        if let Err(err) = self
+            .ensure_session_started(session_id, Some(context.peer.clone()))
+            .await
+        {
             warn!(error = %err, "mcp session start hook failed");
         }
     }

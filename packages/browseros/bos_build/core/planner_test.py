@@ -221,14 +221,15 @@ class CiGoldenTest(unittest.TestCase):
 
 class DebugGoldenTest(unittest.TestCase):
     def test_debug_macos(self):
-        # config/debug.yaml — no clean, no bundled_extensions, no
-        # series_patches, no sparkle_setup, no sign, no upload
+        # config/debug.yaml — no clean, no series_patches, no sparkle_setup,
+        # no sign, no upload
         self.assertEqual(
             plan(Switches(preset="debug"), "arm64", "macos"),
             [
                 "git_setup",
                 "download_resources",
                 "resources",
+                "bundled_extensions",
                 "chromium_replace",
                 "string_replaces",
                 "patches",
@@ -241,6 +242,42 @@ class DebugGoldenTest(unittest.TestCase):
     def test_debug_rejects_universal(self):
         with self.assertRaisesRegex(ValueError, "not supported for debug"):
             plan_runs(Switches(preset="debug", architectures=("universal",)), "macos")
+
+    def test_debug_windows_builds_installer_before_packaging(self):
+        self.assertEqual(
+            plan(Switches(preset="debug"), "x64", "windows"),
+            [
+                "git_setup",
+                "winsparkle_setup",
+                "download_resources",
+                "resources",
+                "bundled_extensions",
+                "chromium_replace",
+                "string_replaces",
+                "patches",
+                "configure",
+                "compile",
+                "mini_installer",
+                "package_windows",
+            ],
+        )
+
+    def test_debug_linux(self):
+        self.assertEqual(
+            plan(Switches(preset="debug"), "x64", "linux"),
+            [
+                "git_setup",
+                "download_resources",
+                "resources",
+                "bundled_extensions",
+                "chromium_replace",
+                "string_replaces",
+                "patches",
+                "configure",
+                "compile",
+                "package_linux",
+            ],
+        )
 
     def test_debug_rejection_wins_over_platform(self):
         with self.assertRaisesRegex(ValueError, "not supported for debug"):

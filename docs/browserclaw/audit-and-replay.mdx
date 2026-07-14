@@ -1,14 +1,72 @@
 ---
 title: "Audit and replay"
-description: "Every agent step is recorded. Scrub through any session frame by frame."
+description: "Every agent step is on your disk. Search, click through, and replay any session like a video. Nothing leaves your machine."
+keywords: ["BrowserClaw audit", "AI agent replay", "browser session recording", "local audit trail"]
 ---
 
-<Note>
-This page is landing in a follow-up release. Track the [BrowserClaw docs rollout](https://github.com/browseros-ai/BrowserOS/issues) for progress.
-</Note>
+BrowserClaw records everything your AI does in the browser so you can go back and see exactly what happened. All of it lives on your computer. Nothing goes to any server we control.
 
-Coming soon.
+## The audit trail
 
-<Card title="Privacy and data" icon="arrow-right" href="/browserclaw/privacy">
-  Continue with what is shipped today.
-</Card>
+Every session your AI runs shows up on the audit page. Search across all of them, filter by agent, status, or site, and click any row to open its full story.
+
+<Frame caption="Every agent session, searchable and filterable.">
+  <img src="/images/browserclaw--audit-list.png" alt="BrowserClaw audit page showing a searchable list of agent sessions grouped by day. Columns visible: agent, title, tools used, action count, duration, and when it happened. Filter dropdowns at the top: Agent, Status, Site." />
+</Frame>
+
+Sessions land in one of three states:
+
+- **Live**: the AI is still working.
+- **Done**: it finished cleanly.
+- **Failed**: something errored during the run.
+
+## What each session shows you
+
+Click any session and you get its full story: agent, timestamps, and every step the AI took, in order.
+
+<Frame caption="A single session, with every action laid out.">
+  <img src="/images/browserclaw--task-detail.png" alt="BrowserClaw task detail page showing a header with the agent name, status, and started time, followed by a tab strip listing every page the agent used. Below, a timeline of tool calls with arguments, results, and screenshots for each step." />
+</Frame>
+
+If the session used more than one tab, a tab strip lets you jump between them. Each tab has its own timeline of actions. Most steps include a screenshot of what the AI was looking at when it ran. Click one to open it full-size.
+
+Sessions also carry a **View Session Replay** button that unlocks as soon as replay data lands.
+
+## Replay like a video
+
+Click **View Session Replay** to watch the whole session play back. The replay is the actual page the AI saw, not just a screenshot: DOM changes, scrolls, clicks, everything as it happened.
+
+<Frame caption="Scrub through the recording. Jump to any moment.">
+  <img src="/images/browserclaw--replay-scrubber.png" alt="BrowserClaw replay screen showing a full-fidelity playback of a page the AI browsed. A play, pause, and seek scrubber sits at the bottom. On the right, an action timeline lists every step the AI took, synced to the current moment in the video." />
+</Frame>
+
+Use the scrubber to jump to any moment. Click any step on the right timeline to skip the replay straight to that action. If the session touched multiple tabs, switch between them at the top; each tab is its own recording with its own time origin.
+
+## Where all of this lives
+
+Everything you see on these pages sits in one folder on your computer: **`~/.browserclaw/`** in your home directory.
+
+- `~/.browserclaw/audit.sqlite` is the database of tool calls, session starts, and session ends.
+- `~/.browserclaw/screenshots/` is a JPEG per screenshotted step.
+- `~/.browserclaw/replays/` is the recording data per session.
+
+The BrowserClaw server that reads and writes these files only accepts requests from your own machine. It binds `127.0.0.1`, the local loopback, so nothing on your network can reach it. No account. No telemetry. No cloud sync.
+
+If you want to delete a session or wipe everything, delete the files. That's it.
+
+## What isn't recorded
+
+- **Your personal tabs.** The recorder is only loaded into tabs your AI opened. Tabs you opened for your own work never get it. This isn't a policy on top of a general recorder; the recorder script is never even loaded there.
+- **Passwords.** Any input marked as a password field is masked before it hits the recording.
+- **Canvas and mouse jitter.** Canvas contents are not recorded. Cursor movements are not recorded either.
+
+If you want the full picture, keep reading:
+
+<CardGroup cols={2}>
+  <Card title="Your stuff stays yours" icon="lock" href="/browserclaw/privacy">
+    The full breakdown of what stays on your machine.
+  </Card>
+  <Card title="How BrowserClaw works" icon="play" href="/browserclaw/how-it-works">
+    A guided walkthrough from install to your first AI-driven session.
+  </Card>
+</CardGroup>

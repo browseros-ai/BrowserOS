@@ -38,6 +38,7 @@ mock.module('./sidePanelOpenStateStorage', () => ({
 
 let openSidePanel: typeof import('./toggleSidePanel').openSidePanel
 let toggleSidePanel: typeof import('./toggleSidePanel').toggleSidePanel
+let initializeSidePanelOptions: typeof import('./toggleSidePanel').initializeSidePanelOptions
 let registerSidePanelOpenStateListeners: typeof import('./toggleSidePanel').registerSidePanelOpenStateListeners
 let refreshSidePanelRuntimeState: typeof import('./toggleSidePanel').refreshSidePanelRuntimeState
 let setSidePanelPerWindowPreference: typeof import('./toggleSidePanel').setSidePanelPerWindowPreference
@@ -46,6 +47,7 @@ beforeAll(async () => {
   const module = await import('./toggleSidePanel')
   openSidePanel = module.openSidePanel
   toggleSidePanel = module.toggleSidePanel
+  initializeSidePanelOptions = module.initializeSidePanelOptions
   registerSidePanelOpenStateListeners =
     module.registerSidePanelOpenStateListeners
   refreshSidePanelRuntimeState = module.refreshSidePanelRuntimeState
@@ -124,6 +126,7 @@ describe('side panel scope routing', () => {
     const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
 
     expect(result).toEqual({ opened: false })
+    expect(setOptionsCalls).toEqual([])
     expect(closeCalls).toEqual([{ windowId: 3 }])
     expect(openCalls).toEqual([])
   })
@@ -198,11 +201,72 @@ describe('side panel scope routing', () => {
     storedSidePanelPerWindow = true
 
     await refreshSidePanelRuntimeState()
+    expect(setOptionsCalls).toEqual([])
+
     const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
 
     expect(result).toEqual({ opened: true })
     expect(openCalls).toEqual([{ windowId: 3 }])
     expect(browserosToggleCalls).toEqual([])
+  })
+
+  it('falls back to tab scope without changing Chrome options when storage fails', async () => {
+    getSidePanelPerWindowOverride = async () => {
+      throw new Error('storage unavailable')
+    }
+
+    await refreshSidePanelRuntimeState()
+    expect(setOptionsCalls).toEqual([])
+
+    const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
+
+    expect(result).toEqual({ opened: true })
+    expect(browserosToggleCalls).toEqual([{ tabId: 7 }])
+    expect(openCalls).toEqual([])
+  })
+
+  it('applies Chrome options for explicit scope changes', async () => {
+    await setSidePanelPerWindowPreference(true)
+    await setSidePanelPerWindowPreference(false)
+
+    expect(setOptionsCalls).toEqual([
+      { enabled: true, path: 'sidepanel.html' },
+      { enabled: false },
+    ])
+  })
+
+  it('initializes Chrome options from the stored scope during installation', async () => {
+    storedSidePanelPerWindow = true
+
+    await initializeSidePanelOptions()
+
+    expect(setOptionsCalls).toEqual([{ enabled: true, path: 'sidepanel.html' }])
+  })
+
+  it('initializes Chrome options with tab scope when storage fails', async () => {
+    getSidePanelPerWindowOverride = async () => {
+      throw new Error('storage unavailable')
+    }
+
+    await initializeSidePanelOptions()
+
+    expect(setOptionsCalls).toEqual([{ enabled: false }])
+  })
+
+  it('keeps a newer explicit setting over stale installation state', async () => {
+    let resolveStoredValue: (perWindow: boolean) => void = () => {}
+    getSidePanelPerWindowOverride = async () =>
+      new Promise<boolean>((resolve) => {
+        resolveStoredValue = resolve
+      })
+
+    const initializePromise = initializeSidePanelOptions()
+    await Promise.resolve()
+    await setSidePanelPerWindowPreference(true)
+    resolveStoredValue(false)
+    await initializePromise
+
+    expect(setOptionsCalls).toEqual([{ enabled: true, path: 'sidepanel.html' }])
   })
 
   it('keeps a newer explicit setting change over a stale refresh result', async () => {
@@ -218,6 +282,7 @@ describe('side panel scope routing', () => {
     resolveStoredValue(false)
     await refreshPromise
 
+    expect(setOptionsCalls).toEqual([{ enabled: true, path: 'sidepanel.html' }])
     const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
 
     expect(result).toEqual({ opened: true })

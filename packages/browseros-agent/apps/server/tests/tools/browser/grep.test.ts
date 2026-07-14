@@ -11,7 +11,7 @@ function sessionWithSnapshot(text: string): BrowserSession {
 }
 
 describe('grep tool', () => {
-  it('returns matched lines with page, over, and count in structured output', async () => {
+  it('returns matched lines in structured output', async () => {
     const session = sessionWithSnapshot(
       'button "Save" [ref=e1]\nlink "Home"\nbutton "Save draft" [ref=e2]',
     )
@@ -27,10 +27,11 @@ describe('grep tool', () => {
       page: 4,
       over: 'ax',
       count: 2,
+      matches: ['button "Save" [ref=e1]', 'button "Save draft" [ref=e2]'],
     })
   })
 
-  it('reports zero matches without a matches array', async () => {
+  it('reports zero matches with an empty matches array', async () => {
     const session = sessionWithSnapshot('link "Home"\nlink "About"')
 
     const result = await executeTool(
@@ -44,6 +45,7 @@ describe('grep tool', () => {
       page: 4,
       over: 'ax',
       count: 0,
+      matches: [],
     })
   })
 })

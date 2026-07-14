@@ -68,40 +68,27 @@ def release(
         help="Branch override for external-repo extensions "
         "(in-repo extensions build the current working tree)",
     ),
-    channel: str = typer.Option(
-        "alpha", "--channel", "-c", help="Feed channel to regenerate: alpha or prod"
-    ),
-    publish_manifest: bool = typer.Option(
-        False,
-        "--publish-manifest",
-        help="Write regenerated update manifests to R2 "
-        "(default is a dry run: full files + diff vs live)",
-    ),
     chrome_binary: Optional[str] = typer.Option(
         None, "--chrome-binary", help="Chrome binary for --pack-extension"
     ),
 ):
-    """Build, pack, upload extension CRXs, then regenerate the update feeds.
+    """Build, pack, and upload extension CRXs.
 
     In-repo extensions (agent, browserclaw) build from this working tree and
-    stamp --version into their package.json. The CRX uploads immediately;
-    the manifest trio goes through the feeds publisher rails and is only
-    written with --publish-manifest.
+    stamp --version into their package.json.
 
     \b
-    Release the agent to alpha (manifest dry-run):
+    Release the agent CRX:
       browseros ext release --version 0.0.118 --name agent
 
     \b
-    Release + publish the alpha manifests:
-      browseros ext release --version 0.0.118 --name agent --publish-manifest
+    Update feeds separately (dry run unless --publish is passed):
+      browseros release extensions --channel alpha --set agent=0.0.118
     """
     try:
         steps = build_pipeline(
             version=version,
             name=name,
-            channel=channel,
-            publish_manifest=publish_manifest,
             branch=branch,
             chrome_binary=chrome_binary,
         )

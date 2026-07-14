@@ -1,14 +1,37 @@
 ---
-title: "Your tabs vs agent tabs"
-description: "How BrowserClaw keeps your own browsing separate from what the agent is doing."
+title: "Your tabs and agent tabs"
+description: "How BrowserClaw groups your tabs and your AI's tabs so you always know what's what."
+keywords: ["BrowserClaw tabs", "agent tabs", "personal tabs", "AI browser"]
 ---
 
-<Note>
-This page is landing in a follow-up release. Track the [BrowserClaw docs rollout](https://github.com/browseros-ai/BrowserOS/issues) for progress.
-</Note>
+You use your browser for your own work. When an AI drives BrowserClaw, it works in tabs of its own, right next to yours.
 
-Coming soon.
+## Two kinds of tabs, one browser
 
-<Card title="Agent profiles" icon="arrow-right" href="/browserclaw/agent-profiles">
-  Continue with what is shipped today.
-</Card>
+- **Your tabs.** Pages you opened yourself.
+- **The AI's tabs.** Pages your AI opened for the task you gave it.
+
+Each AI's tabs land in their own colored tab group at the top of your tab strip, titled with the AI's name. Your tabs stay outside any group. One glance tells you what belongs to whom.
+
+## Your AI knows the difference
+
+BrowserClaw tells your AI which tabs belong to you and which it opened itself. Your AI uses that to stay out of your workflow by default. It knows your tabs are there and can read their titles and URLs, so it has context, but it doesn't jump in.
+
+If you want your AI to help with something you have open, reply to the email you're reading, extract the numbers from the doc on your screen, just ask. Your AI can work on the tab. That's your call.
+
+## When an AI's session ends
+
+Close an AI's session and its tab group closes with it. The tabs it opened go away in one step. Your tabs are never touched.
+
+If you close one of an AI's tabs while it's still running, the AI notices right away. Nothing gets stuck.
+
+## Where to next
+
+<CardGroup cols={2}>
+  <Card title="Your stuff stays yours" icon="lock" href="/browserclaw/privacy">
+    What BrowserClaw records, what it doesn't, and where everything lives.
+  </Card>
+  <Card title="How BrowserClaw works" icon="play" href="/browserclaw/how-it-works">
+    A guided walkthrough from install to your first AI-driven session.
+  </Card>
+</CardGroup>

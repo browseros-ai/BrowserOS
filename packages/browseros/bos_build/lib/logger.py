@@ -24,6 +24,13 @@ for _stream in (sys.stdout, sys.stderr):
 _log_file = None
 
 
+def _redact(message: str) -> str:
+    # Import lazily because utils re-exports these logger functions.
+    from .utils import redact_sensitive_text
+
+    return redact_sensitive_text(str(message))
+
+
 def _ensure_log_file():
     """Ensure log file is created with timestamp"""
     global _log_file
@@ -48,6 +55,7 @@ def _ensure_log_file():
 
 def _log_to_file(message: str):
     """Write message to log file with timestamp"""
+    message = _redact(message)
     log_file = _ensure_log_file()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_file.write(f"[{timestamp}] {message}\n")
@@ -56,24 +64,28 @@ def _log_to_file(message: str):
 
 def log_info(message: str):
     """Print info message using Typer"""
+    message = _redact(message)
     typer.echo(message)
     _log_to_file(f"INFO: {message}")
 
 
 def log_warning(message: str):
     """Print warning message with color"""
+    message = _redact(message)
     typer.secho(f"⚠️  {message}", fg=typer.colors.YELLOW)
     _log_to_file(f"WARNING: {message}")
 
 
 def log_error(message: str):
     """Print error message to stderr with color"""
+    message = _redact(message)
     typer.secho(f"❌ {message}", fg=typer.colors.RED, err=True)
     _log_to_file(f"ERROR: {message}")
 
 
 def log_success(message: str):
     """Print success message with color"""
+    message = _redact(message)
     typer.secho(f"✅ {message}", fg=typer.colors.GREEN)
     _log_to_file(f"SUCCESS: {message}")
 
@@ -81,6 +93,7 @@ def log_success(message: str):
 def log_debug(message: str, enabled: bool = False):
     """Print debug message if enabled"""
     if enabled:
+        message = _redact(message)
         typer.secho(f"🔍 {message}", fg=typer.colors.BLUE, dim=True)
         _log_to_file(f"DEBUG: {message}")
 

@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Ext release orchestration: build → stamp → pack → upload per spec, then
-regenerate the update manifests through the Part B feeds publisher.
-
-This is the consolidation the old actions repo could not do — it generated
-update-manifest.xml locally and told the operator to upload it by hand. Here
-the manifests flow through FeedPublisher's rails (dry-run by default,
---publish-manifest to write), so a released crx and its feed entry can no
-longer drift apart.
-"""
+"""Build, stamp, pack, and upload extension CRXs."""
 
 import os
 import re
@@ -18,9 +10,8 @@ from ...core.step import Step, ValidationError
 from ...lib.paths import get_package_root
 from ...lib.r2 import BOTO3_AVAILABLE, get_r2_client, upload_file_to_r2
 from ...lib.utils import log_info, log_success, log_warning
-from ..feeds.spec import CDN_BASE_URL, EXTENSIONS as FEED_EXTENSIONS
+from ..feeds.spec import CDN_BASE_URL
 from .crx import find_chrome_binary, pack_crx
-from .manifests import CHANNELS, ExtensionsFeedModule
 from .specs import (
     ExtensionSpec,
     ExternalRepoSource,
@@ -166,25 +157,10 @@ class ExtensionReleaseModule(Step):
 def build_pipeline(
     version: str,
     name: Optional[str],
-    channel: str,
-    publish_manifest: bool,
     branch: Optional[str],
     chrome_binary: Optional[str],
 ) -> List[Step]:
-    """Assemble the release pipeline for one --name (or every spec).
-
-    Extensions the feeds table knows get their new version pinned into an
-    ExtensionsFeedModule step; a selection with no feed members (controller)
-    releases the crx only — there is nothing to regenerate.
-
-    Channel and version are rejected here, at assembly time — the runner
-    validates steps just-in-time, so leaving this to the feeds step would
-    burn a full build + crx upload before a typo surfaces.
-    """
-    if channel not in CHANNELS:
-        raise ValueError(
-            f"channel must be one of {'/'.join(CHANNELS)}, got '{channel}'"
-        )
+    """Assemble the CRX release pipeline for one --name (or every spec)."""
     if not _VERSION_RE.fullmatch(version):
         raise ValueError(
             f"Invalid version '{version}' — Chrome extension versions are "
@@ -194,7 +170,7 @@ def build_pipeline(
     if branch and branch.startswith("-"):
         raise ValueError(f"Invalid branch name '{branch}'")
     specs = select_specs(name)
-    steps: List[Step] = [
+    return [
         ExtensionReleaseModule(
             version=version,
             names=tuple(spec.name for spec in specs),
@@ -202,15 +178,3 @@ def build_pipeline(
             chrome_binary=chrome_binary,
         )
     ]
-
-    feed_names = {ext.name for ext in FEED_EXTENSIONS}
-    pins = {spec.name: version for spec in specs if spec.name in feed_names}
-    if pins:
-        steps.append(
-            ExtensionsFeedModule(
-                channel=channel,
-                set_versions=pins,
-                publish=publish_manifest,
-            )
-        )
-    return steps

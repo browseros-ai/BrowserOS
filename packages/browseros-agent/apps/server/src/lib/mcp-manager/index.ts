@@ -8,8 +8,9 @@ export {
   resetMcpManagerForTesting,
   setMcpManagerForTesting,
 } from './manager'
-export { reconcileUrl } from './reconcile'
+export { reconcileUrl, selfHealMcpLinks } from './reconcile'
 export {
+  cleanupNonCuratedLinks,
   humaniseInstallError,
   installInto,
   listAgents,

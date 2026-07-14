@@ -25,7 +25,6 @@
           "browserclaw/index",
           "browserclaw/how-it-works",
           "browserclaw/install",
-          "browserclaw/first-run",
           {
             "group": "Connect your agent",
             "pages": [
@@ -33,10 +32,8 @@
               "browserclaw/mcp/manual"
             ]
           },
-          "browserclaw/sample-prompts",
           "browserclaw/cockpit",
           "browserclaw/tabs-and-isolation",
-          "browserclaw/agent-profiles",
           "browserclaw/audit-and-replay",
           "browserclaw/privacy",
           "browserclaw/permissions-and-boundaries",
@@ -97,7 +94,10 @@
     { "source": "/features/llm-chat-hub", "destination": "/" },
     { "source": "/features/workflows", "destination": "/features/scheduled-tasks" },
     { "source": "/features/qwen-code-oauth", "destination": "/features/bring-your-own-llm" },
-    { "source": "/features/browserclaw", "destination": "/browserclaw" }
+    { "source": "/features/browserclaw", "destination": "/browserclaw" },
+    { "source": "/browserclaw/first-run", "destination": "/browserclaw/how-it-works" },
+    { "source": "/browserclaw/sample-prompts", "destination": "/browserclaw/how-it-works" },
+    { "source": "/browserclaw/agent-profiles", "destination": "/browserclaw/tabs-and-isolation" }
   ],
   "logo": {
     "light": "/logo/logo44.png",
