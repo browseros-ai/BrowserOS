@@ -4,11 +4,15 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
+import { z } from 'zod'
 import pkg from '../../package.json' with { type: 'json' }
 import { getLocalServerUrl } from '../local-server-url'
-import { getTelemetryState } from '../services/analytics'
+import { getTelemetryState, setTelemetryConsent } from '../services/analytics'
 import { VERSION } from '../version'
+
+const telemetryConsentSchema = z.object({ consent: z.boolean() })
 
 interface SystemRouteConfig {
   onShutdown?: () => void
@@ -30,5 +34,12 @@ export function createSystemRoute(config: SystemRouteConfig = {}) {
       // share one anonymous identity with the server and reflect the
       // current telemetry setting. No PII: distinctId is a random UUID.
       .get('/system/telemetry', (c) => c.json(getTelemetryState()))
+      // The cockpit opt-out toggle. Persists the user's consent choice
+      // server-side so it governs both server and extension telemetry.
+      .post(
+        '/system/telemetry',
+        zValidator('json', telemetryConsentSchema),
+        (c) => c.json(setTelemetryConsent(c.req.valid('json').consent)),
+      )
   )
 }

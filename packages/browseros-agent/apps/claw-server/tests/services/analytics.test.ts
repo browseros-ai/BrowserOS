@@ -19,6 +19,7 @@ import {
   getTelemetryState,
   resetAnalyticsForTesting,
   sanitize,
+  setTelemetryConsent,
 } from '../../src/services/analytics'
 
 describe('sanitize (allow-list + value guard)', () => {
@@ -154,5 +155,29 @@ describe('telemetry state + gating', () => {
     expect(() =>
       captureEvent('harness_connected', { harness: 'Zed' }),
     ).not.toThrow()
+  })
+
+  it('exposes the raw consent flag alongside the effective enabled flag', () => {
+    // no key → effective off, but consent (user choice) is on by default
+    const state = getTelemetryState()
+    expect(state.enabled).toBe(false)
+    expect(state.consent).toBe(true)
+  })
+
+  it('setTelemetryConsent persists the choice and keeps the same id', () => {
+    const before = getTelemetryState()
+    const off = setTelemetryConsent(false)
+    expect(off.consent).toBe(false)
+    expect(off.enabled).toBe(false)
+    expect(off.distinctId).toBe(before.distinctId)
+    // persisted to disk
+    const onDisk = JSON.parse(readFileSync(join(dir, 'analytics.json'), 'utf8'))
+    expect(onDisk.enabled).toBe(false)
+    expect(onDisk.distinctId).toBe(before.distinctId)
+    // re-reading reflects the opt-out
+    resetAnalyticsForTesting()
+    expect(getTelemetryState().consent).toBe(false)
+    // turning back on
+    expect(setTelemetryConsent(true).consent).toBe(true)
   })
 })

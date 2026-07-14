@@ -46,6 +46,7 @@
     "media-chrome": "^4.19.1",
     "motion": "^12.40.0",
     "nanoid": "^5.1.11",
+    "posthog-js": "^1.160.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-hook-form": "~7.78.0",

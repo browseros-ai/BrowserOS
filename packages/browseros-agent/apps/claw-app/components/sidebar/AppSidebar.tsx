@@ -2,6 +2,7 @@ import { cn } from '@/lib/utils'
 import { SidebarBranding } from './SidebarBranding'
 import { SidebarHelp } from './SidebarHelp'
 import { SidebarNavigation } from './SidebarNavigation'
+import { SidebarPrivacy } from './SidebarPrivacy'
 
 export interface AppSidebarProps {
   expanded?: boolean
@@ -18,6 +19,9 @@ export function AppSidebar({ expanded = false }: AppSidebarProps) {
     >
       <SidebarBranding expanded={expanded} />
       <SidebarNavigation expanded={expanded} />
+      <div className="px-2 pb-1">
+        <SidebarPrivacy expanded={expanded} />
+      </div>
       <SidebarHelp expanded={expanded} />
     </div>
   )

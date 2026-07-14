@@ -1,5 +1,6 @@
 import { HashRouter, Navigate, Route, Routes } from 'react-router'
 import { CockpitShell } from '@/components/layout/CockpitShell'
+import { Analytics } from '@/modules/analytics/Analytics'
 import { Audit } from '@/screens/audit/Audit'
 import { Cockpit } from '@/screens/cockpit/Cockpit'
 import { Mcp } from '@/screens/mcp/Mcp'
@@ -10,6 +11,7 @@ import { TaskDetailPage } from '@/screens/task-detail/TaskDetailPage'
 export function App() {
   return (
     <HashRouter>
+      <Analytics />
       <Routes>
         <Route element={<CockpitShell />}>
           <Route path="/" element={<Cockpit />} />
