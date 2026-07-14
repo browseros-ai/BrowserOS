@@ -36,17 +36,7 @@
           "browserclaw/cockpit",
           "browserclaw/tabs-and-isolation",
           "browserclaw/audit-and-replay",
-          "browserclaw/privacy",
-          "browserclaw/permissions-and-boundaries",
-          "browserclaw/troubleshooting",
-          {
-            "group": "Comparisons",
-            "pages": [
-              "browserclaw/comparisons/browseros",
-              "browserclaw/comparisons/chrome-devtools-mcp",
-              "browserclaw/comparisons/browser-use"
-            ]
-          }
+          "browserclaw/privacy"
         ]
       },
       {
@@ -98,7 +88,12 @@
     { "source": "/features/browserclaw", "destination": "/browserclaw" },
     { "source": "/browserclaw/first-run", "destination": "/browserclaw/how-it-works" },
     { "source": "/browserclaw/sample-prompts", "destination": "/browserclaw/how-it-works" },
-    { "source": "/browserclaw/agent-profiles", "destination": "/browserclaw/tabs-and-isolation" }
+    { "source": "/browserclaw/agent-profiles", "destination": "/browserclaw/tabs-and-isolation" },
+    { "source": "/browserclaw/permissions-and-boundaries", "destination": "/browserclaw/tabs-and-isolation" },
+    { "source": "/browserclaw/troubleshooting", "destination": "/browserclaw" },
+    { "source": "/browserclaw/comparisons/browseros", "destination": "/browserclaw" },
+    { "source": "/browserclaw/comparisons/chrome-devtools-mcp", "destination": "/comparisons/chrome-devtools-mcp" },
+    { "source": "/browserclaw/comparisons/browser-use", "destination": "/browserclaw" }
   ],
   "logo": {
     "light": "/logo/logo44.png",
