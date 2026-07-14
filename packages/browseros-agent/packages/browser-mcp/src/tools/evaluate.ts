@@ -26,7 +26,7 @@ export const evaluate = defineTool({
   }),
   annotations: {
     title: 'Run JavaScript in page',
-    readOnlyHint: true,
+    destructiveHint: true,
     openWorldHint: true,
   },
   handler: async (args, ctx) => {
