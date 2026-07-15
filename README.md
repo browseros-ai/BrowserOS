@@ -124,33 +124,44 @@ Every AI browser today asks you to sign into their cloud and hand over your data
 <table>
 <tr>
 <td width="40%" valign="middle">
-<h4>Built-in AI agent</h4>
+<h4>BrowserOS agent in action</h4>
 Ask it in plain English. 53+ browser tools plus 40+ app integrations (Gmail, Slack, GitHub, Linear, Notion, and more). <a href="https://docs.browseros.com/getting-started">Docs</a>
 </td>
 <td width="60%">
-<img src="docs/videos/browserOS-agent-in-action.gif" alt="BrowserOS agent completing a browser task with natural language" width="100%" />
+<a href="https://www.youtube.com/watch?v=SoSFev5R5dI"><img src="docs/videos/browserOS-agent-in-action.gif" alt="BrowserOS agent completing a browser task with natural language" width="100%" /></a>
 </td>
 </tr>
 <tr>
 <td width="40%" valign="middle">
-<h4>Cowork with files</h4>
-Combine browser automation with local file operations in one session. Research the web, save reports to your folder, read and edit files, run shell commands. <a href="https://docs.browseros.com/features/cowork">Docs</a>
+<h4>Install as MCP and control from claude-code</h4>
+Turn BrowserOS into an MCP server and drive it from Claude Code, Cursor, or any MCP client. <a href="https://docs.browseros.com/features/use-with-claude-code">Docs</a>
 </td>
 <td width="60%">
-<a href="https://docs.browseros.com/features/cowork"><img src="https://img.shields.io/badge/Watch-Cowork%20demo-4c71f2?style=for-the-badge" alt="Watch Cowork demo" /></a>
+<video src="https://github.com/user-attachments/assets/c725d6df-1a0d-40eb-a125-ea009bf664dc" controls width="100%"></video>
 </td>
 </tr>
 <tr>
 <td width="40%" valign="middle">
-<h4>Scheduled tasks</h4>
-Run agents on autopilot: daily, hourly, or every few minutes. Wake up to a fresh report or a queue processed overnight. <a href="https://docs.browseros.com/features/scheduled-tasks">Docs</a>
+<h4>Use BrowserOS to chat</h4>
+Chat about the current page from the side panel. Summarise, ask questions, transform what you're reading. <a href="https://docs.browseros.com/getting-started">Docs</a>
 </td>
 <td width="60%">
-<a href="https://www.youtube.com/watch?v=SoSFev5R5dI"><img src="https://img.shields.io/badge/Watch-Scheduled%20tasks-4c71f2?style=for-the-badge" alt="Watch scheduled tasks demo" /></a>
+<video src="https://github.com/user-attachments/assets/726803c5-8e36-420e-8694-c63a2607beca" controls width="100%"></video>
+</td>
+</tr>
+<tr>
+<td width="40%" valign="middle">
+<h4>Use BrowserOS to scrape data</h4>
+Point the agent at a page, tell it what to pull, and get structured data back. <a href="https://docs.browseros.com/getting-started">Docs</a>
+</td>
+<td width="60%">
+<video src="https://github.com/user-attachments/assets/9f038216-bc24-4555-abf1-af2adcb7ebc0" controls width="100%"></video>
 </td>
 </tr>
 </table>
 
+- **Cowork with files.** Combine browser automation with local file operations in one session. [Docs](https://docs.browseros.com/features/cowork)
+- **Scheduled tasks.** Run agents on autopilot: daily, hourly, or every few minutes. [Docs](https://docs.browseros.com/features/scheduled-tasks)
 - **Bring your own AI.** 11+ providers, or fully local with Ollama and LM Studio. [Provider list](https://docs.browseros.com/features/bring-your-own-llm)
 - **Real ad blocking.** uBlock Origin with full Manifest V2 support. [Docs](https://docs.browseros.com/features/ad-blocking)
 
