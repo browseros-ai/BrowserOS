@@ -14,6 +14,8 @@
 <tr>
 <td width="50%" align="center" valign="top">
 
+<img src="packages/browseros/resources/browserclaw/icons/product_logo_192.png" alt="BrowserClaw logo" width="96" height="96" />
+
 ### BrowserClaw
 
 **The browser for AI agents**
@@ -27,6 +29,8 @@ Claude Code, Codex, Cursor, or any MCP client drives it using the accounts you'r
 
 </td>
 <td width="50%" align="center" valign="top">
+
+<img src="packages/browseros/resources/browseros/icons/product_logo_192.png" alt="BrowserOS logo" width="96" height="96" />
 
 ### BrowserOS
 
