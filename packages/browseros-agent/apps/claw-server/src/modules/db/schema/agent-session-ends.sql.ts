@@ -11,16 +11,19 @@
  * ends row is Live until it goes idle past the deriver's threshold.
  */
 
-import { sql } from 'drizzle-orm'
 import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 
 export const agentSessionEnds = sqliteTable(
   'agent_session_ends',
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
+    // Epoch millis, defaulted in JS: see tool-dispatches.sql.ts. A SQL
+    // `unixepoch('subsec')` default needs SQLite >= 3.42, which the
+    // macOS system SQLite behind bun:sqlite may predate, yielding NULL
+    // and a NOT NULL failure on every insert. `Date.now()` is portable.
     createdAt: integer('created_at')
       .notNull()
-      .default(sql`(unixepoch('subsec') * 1000)`),
+      .$defaultFn(() => Date.now()),
     sessionId: text('session_id').notNull(),
     kind: text('kind', { enum: ['closed', 'errored'] }).notNull(),
     reason: text('reason'),

@@ -15,6 +15,13 @@
       "when": 1782387594647,
       "tag": "0001_add_agent_session_events",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1784154055975,
+      "tag": "0002_default_created_at_in_js",
+      "breakpoints": true
     }
   ]
 }

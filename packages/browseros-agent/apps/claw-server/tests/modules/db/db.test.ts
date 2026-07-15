@@ -3,12 +3,15 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { sql } from 'drizzle-orm'
+import { getTableConfig } from 'drizzle-orm/sqlite-core'
 import {
   getAuditDb,
   resetAuditDbForTesting,
   setAuditDbForTesting,
 } from '../../../src/modules/db/db'
 import { resolveMigrationsFolder } from '../../../src/modules/db/migrator'
+import { agentSessionEnds } from '../../../src/modules/db/schema/agent-session-ends.sql'
+import { agentSessionStarts } from '../../../src/modules/db/schema/agent-session-starts.sql'
 import { toolDispatches } from '../../../src/modules/db/schema/tool-dispatches.sql'
 
 describe('audit DB (in-memory test seam)', () => {
@@ -28,7 +31,7 @@ describe('audit DB (in-memory test seam)', () => {
     expect(rows).toEqual([])
   })
 
-  it('records the unixepoch-derived createdAt default within a few seconds of now', () => {
+  it('populates createdAt with an epoch-ms default within a few seconds of now', () => {
     const db = getAuditDb()
     db.insert(toolDispatches)
       .values({
@@ -42,6 +45,27 @@ describe('audit DB (in-memory test seam)', () => {
     const row = db.select().from(toolDispatches).get()
     expect(row?.createdAt).toBeGreaterThan(Date.now() - 5_000)
     expect(row?.createdAt).toBeLessThanOrEqual(Date.now() + 1_000)
+  })
+
+  // Regression guard for the audit log staying empty on SQLite < 3.42:
+  // `unixepoch('subsec')` yields NULL there, so a SQL-only default made
+  // every NOT NULL insert fail. createdAt must be defaulted in JS
+  // ($defaultFn) so it never depends on the runtime SQLite version. This
+  // assertion is version-independent: it fails even on a newer SQLite
+  // (e.g. CI) if the SQL-only default is ever reintroduced.
+  it('defaults createdAt in JS ($defaultFn), not via a SQLite expression', () => {
+    for (const table of [
+      toolDispatches,
+      agentSessionStarts,
+      agentSessionEnds,
+    ]) {
+      const createdAt = getTableConfig(table).columns.find(
+        (column) => column.name === 'created_at',
+      )
+      expect(createdAt).toBeDefined()
+      expect(createdAt?.hasDefault).toBe(true)
+      expect(typeof createdAt?.defaultFn).toBe('function')
+    }
   })
 
   it('honours the three indexes defined in the schema', () => {
