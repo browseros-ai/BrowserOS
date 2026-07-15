@@ -161,7 +161,7 @@ Bring your own keys, use OAuth for your existing subscriptions, or run models lo
 
 | Provider | Type | Auth |
 |---|---|---|
-| Kimi K2.5 (default) | Cloud | Built-in |
+| Kimi (default) | Cloud | Built-in |
 | Claude (Anthropic) | Cloud | API key |
 | GPT-4o / o3 (OpenAI) | Cloud | API key |
 | ChatGPT Pro/Plus | Cloud | OAuth |
