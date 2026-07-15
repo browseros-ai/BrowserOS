@@ -174,21 +174,26 @@ Bring your own keys, use OAuth for your existing subscriptions, or run models lo
 
 Full list of 11+ providers (Gemini, GitHub Copilot, Azure, Bedrock, OpenRouter, and more) is in the [bring-your-own-LLM docs](https://docs.browseros.com/features/bring-your-own-llm).
 
-## How they compare
+## How BrowserOS compares
 
-Both products next to what people usually ask about:
+| | BrowserOS | Chrome | Brave | Dia | Comet | Atlas |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| Open Source | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| AI Agent | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ |
+| MCP Server | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Cowork (files + browser) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Scheduled Tasks | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Bring Your Own Keys | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Local Models (Ollama) | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Local-first Privacy | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Ad Blocking (MV2) | ✅ | ❌ | ✅ | ❌ | ✅ | ❌ |
 
-| | BrowserClaw | BrowserOS | Chrome | Playwright / browser-use | Comet / Atlas / Dia |
-|---|:---:|:---:|:---:|:---:|:---:|
-| Open source | ✅ | ✅ | ❌ | ✅ | ❌ |
-| Real browser with your logins | ✅ | ✅ | ✅ | ❌ | Cloud VM |
-| Built-in AI agent | Via MCP | ✅ | ❌ | ❌ | ✅ |
-| Bring your own AI keys | ✅ | ✅ | ❌ | ✅ | ❌ |
-| Local models (Ollama, LM Studio) | Via MCP | ✅ | ❌ | ✅ | ❌ |
-| Everything stays on your machine | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Session replay (video-style) | ✅ | ❌ | ❌ | Traces | ❌ |
-| Scheduled agent tasks | ❌ | ✅ | ❌ | ❌ | ❌ |
-| Ad blocking with Manifest V2 | ✅ | ✅ | ❌ | N/A | Partial |
+**Detailed comparisons:**
+- [BrowserOS vs Chrome DevTools MCP](https://docs.browseros.com/comparisons/chrome-devtools-mcp): developer-focused comparison for browser automation
+- [BrowserOS vs Claude Cowork](https://docs.browseros.com/comparisons/claude-cowork): getting real work done with AI
+- [BrowserOS vs OpenClaw](https://docs.browseros.com/comparisons/openclaw): everyday AI assistance
+
+A dedicated BrowserClaw comparison table is coming; for now, see the [why BrowserClaw](#browserclaw) callouts above.
 
 ## FAQ
 
