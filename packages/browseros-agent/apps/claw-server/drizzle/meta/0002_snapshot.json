@@ -46,16 +46,12 @@
       "indexes": {
         "agent_session_ends_session_idx": {
           "name": "agent_session_ends_session_idx",
-          "columns": [
-            "session_id"
-          ],
+          "columns": ["session_id"],
           "isUnique": false
         },
         "agent_session_ends_created_at_idx": {
           "name": "agent_session_ends_created_at_idx",
-          "columns": [
-            "created_at"
-          ],
+          "columns": ["created_at"],
           "isUnique": false
         }
       },
@@ -127,16 +123,12 @@
       "indexes": {
         "agent_session_starts_session_idx": {
           "name": "agent_session_starts_session_idx",
-          "columns": [
-            "session_id"
-          ],
+          "columns": ["session_id"],
           "isUnique": false
         },
         "agent_session_starts_created_at_idx": {
           "name": "agent_session_starts_created_at_idx",
-          "columns": [
-            "created_at"
-          ],
+          "columns": ["created_at"],
           "isUnique": false
         }
       },
@@ -250,24 +242,17 @@
       "indexes": {
         "tool_dispatches_created_at_idx": {
           "name": "tool_dispatches_created_at_idx",
-          "columns": [
-            "created_at"
-          ],
+          "columns": ["created_at"],
           "isUnique": false
         },
         "tool_dispatches_agent_created_idx": {
           "name": "tool_dispatches_agent_created_idx",
-          "columns": [
-            "agent_id",
-            "created_at"
-          ],
+          "columns": ["agent_id", "created_at"],
           "isUnique": false
         },
         "tool_dispatches_session_idx": {
           "name": "tool_dispatches_session_idx",
-          "columns": [
-            "session_id"
-          ],
+          "columns": ["session_id"],
           "isUnique": false
         }
       },
