@@ -38,7 +38,7 @@ export interface AuditScreenData {
   isFetchingNextPage: boolean
   fetchNextPage: () => void
   filters: AuditFilters
-  setAgentFilter: (agentId: string | null) => void
+  setAgentFilter: (slug: string | null) => void
   setStatusFilter: (status: TaskStatus | null) => void
   setSiteFilter: (site: string | null) => void
   setSearch: (q: string) => void
@@ -72,7 +72,7 @@ export function useAuditScreenData(): AuditScreenData {
 
   const query = useTasks({
     variables: {
-      agentId: filters.agentId ?? undefined,
+      slug: filters.agentSlug ?? undefined,
       status: filters.status ?? undefined,
       site: filters.site ?? undefined,
       search: filters.search || undefined,
@@ -99,8 +99,8 @@ export function useAuditScreenData(): AuditScreenData {
   const autoFetchCount = useRef(0)
   const filterKey = useMemo(
     () =>
-      `${filters.agentId ?? ''}|${filters.status ?? ''}|${filters.site ?? ''}|${filters.search}`,
-    [filters.agentId, filters.status, filters.site, filters.search],
+      `${filters.agentSlug ?? ''}|${filters.status ?? ''}|${filters.site ?? ''}|${filters.search}`,
+    [filters.agentSlug, filters.status, filters.site, filters.search],
   )
   const prevFilterKey = useRef(filterKey)
   if (prevFilterKey.current !== filterKey) {
@@ -145,7 +145,7 @@ export function useAuditScreenData(): AuditScreenData {
       void query.fetchNextPage()
     },
     filters,
-    setAgentFilter: (agentId) => update({ agentId }),
+    setAgentFilter: (agentSlug) => update({ agentSlug }),
     setStatusFilter: (status) => update({ status }),
     setSiteFilter: (site) => update({ site }),
     setSearch: (search) => update({ search }),
