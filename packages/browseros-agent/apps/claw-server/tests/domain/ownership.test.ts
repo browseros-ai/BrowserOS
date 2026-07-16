@@ -17,7 +17,6 @@ function group(overrides: Partial<GroupRef> = {}): GroupRef {
     windowId: 10,
     color: 'purple',
     title: 'Codex',
-    titleExplicit: false,
     collapsed: false,
     ...overrides,
   }
@@ -105,11 +104,10 @@ describe('OwnershipStore', () => {
 
     store.updateGroup(codex, {
       title: 'Research',
-      titleExplicit: true,
       collapsed: true,
     })
     expect(store.groupOf(codex)).toEqual(
-      group({ title: 'Research', titleExplicit: true, collapsed: true }),
+      group({ title: 'Research', collapsed: true }),
     )
 
     store.clearGroup(codex)

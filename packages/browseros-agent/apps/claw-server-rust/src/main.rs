@@ -3,7 +3,7 @@ use axum::Router;
 use clap::Parser;
 use claw_server_rust::{AppState, build_router, config::Cli, mcp::browser_mcp_service};
 use rmcp::{serve_server, transport::stdio};
-use std::{io, net::SocketAddr, sync::Arc};
+use std::{future::Future, io, net::SocketAddr, sync::Arc};
 use tokio::{net::TcpListener, sync::oneshot};
 use tracing::{error, info};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -26,8 +26,7 @@ async fn main() -> anyhow::Result<()> {
         return serve_stdio(state).await;
     }
     spawn_signal_shutdown(state.clone());
-    heal_boot_config(&state).await;
-    serve(build_router(state), config, shutdown_rx).await
+    serve(state, config, shutdown_rx).await
 }
 
 fn init_tracing(config: Arc<claw_server_rust::config::Config>) -> anyhow::Result<WorkerGuard> {
@@ -55,9 +54,23 @@ fn init_tracing(config: Arc<claw_server_rust::config::Config>) -> anyhow::Result
 }
 
 async fn serve(
+    state: AppState,
+    config: Arc<claw_server_rust::config::Config>,
+    shutdown_rx: oneshot::Receiver<()>,
+) -> anyhow::Result<()> {
+    let heal_state = state.clone();
+    serve_with_boot_task(build_router(state), config, shutdown_rx, async move {
+        heal_boot_config(&heal_state).await
+    })
+    .await
+}
+
+/// Binds the HTTP listener before starting non-critical boot work in the background.
+async fn serve_with_boot_task(
     app: Router,
     config: Arc<claw_server_rust::config::Config>,
     shutdown_rx: oneshot::Receiver<()>,
+    boot_task: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], config.server_port));
     let listener = match TcpListener::bind(addr).await {
@@ -71,6 +84,7 @@ async fn serve(
         Err(err) => return Err(err).context("failed to bind claw-server listener"),
     };
     info!(%addr, "claw-server-rust listening");
+    tokio::spawn(boot_task);
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(async move {
             let _ = shutdown_rx.await;
@@ -91,10 +105,16 @@ async fn serve_stdio(state: AppState) -> anyhow::Result<()> {
 }
 
 async fn heal_boot_config(state: &AppState) {
-    match state.harness.heal_claude_code_http_tags().await {
-        Ok(changed) if changed > 0 => info!(changed, "healed Claude Code MCP transport tags"),
-        Ok(_) => {}
-        Err(err) => error!(error = %err, "Claude Code MCP transport heal failed"),
+    match state.harness.run_integrity_scan().await {
+        Ok(outcome) => info!(
+            verified = outcome.verified,
+            drifted = outcome.drifted,
+            missing = outcome.missing,
+            healed = outcome.healed,
+            failed = outcome.failed,
+            "completed MCP config integrity scan"
+        ),
+        Err(err) => error!(error = %err, "MCP config integrity scan failed"),
     }
 }
 
@@ -134,4 +154,56 @@ async fn wait_for_shutdown_signal() {
 #[cfg(not(unix))]
 async fn wait_for_shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::serve_with_boot_task;
+    use axum::Router;
+    use claw_server_rust::config::Config;
+    use std::{sync::Arc, time::Duration};
+    use tempfile::tempdir;
+    use tokio::{net::TcpStream, sync::oneshot};
+
+    #[tokio::test]
+    async fn listener_binds_while_boot_task_is_still_running() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = probe.local_addr()?.port();
+        drop(probe);
+        let config = Arc::new(Config {
+            server_port: port,
+            cdp_port: 49337,
+            proxy_port: None,
+            resources_dir: root.path().join("resources"),
+            browserclaw_dir: root.path().to_path_buf(),
+            claw_dir: root.path().to_path_buf(),
+            session_idle: Duration::from_secs(300),
+            session_sweep_interval: Duration::from_secs(60),
+            screencast_screenshot_fallback: true,
+            dev_mode: false,
+            auth_token: None,
+        });
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (boot_started_tx, boot_started_rx) = oneshot::channel();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let boot_release = release.clone();
+        let server = tokio::spawn(serve_with_boot_task(
+            Router::new(),
+            config,
+            shutdown_rx,
+            async move {
+                let _ = boot_started_tx.send(());
+                boot_release.notified().await;
+            },
+        ));
+
+        tokio::time::timeout(Duration::from_secs(1), boot_started_rx).await??;
+        let stream = TcpStream::connect(("127.0.0.1", port)).await?;
+        drop(stream);
+        release.notify_one();
+        let _ = shutdown_tx.send(());
+        server.await??;
+        Ok(())
+    }
 }

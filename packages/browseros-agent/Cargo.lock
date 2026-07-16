@@ -3,6 +3,19 @@
 version = 4
 
 [[package]]
+name = "agent-mcp-manager"
+version = "0.1.0"
+dependencies = [
+ "jsonc-parser",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "time",
+ "toml_edit",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -360,6 +373,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 name = "claw-server-rust"
 version = "0.1.0"
 dependencies = [
+ "agent-mcp-manager",
  "anyhow",
  "axum",
  "base64",
@@ -386,6 +400,7 @@ dependencies = [
  "tracing-subscriber",
  "ulid",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -1048,6 +1063,12 @@ dependencies = [
  "futures-util",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "jsonc-parser"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "362fdb0bfedf94ebd31e4e82ff38ba705b6b82417b3b25f0c4bbb024dd11f552"
 
 [[package]]
 name = "lazy_static"

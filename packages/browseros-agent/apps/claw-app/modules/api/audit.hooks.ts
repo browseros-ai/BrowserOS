@@ -95,6 +95,7 @@ export interface ListTasksResponse {
 
 export interface UseTasksVars {
   agentId?: string
+  slug?: string
   status?: TaskStatus
   site?: string
   search?: string
@@ -112,6 +113,7 @@ export const useTasks = createInfiniteQuery<
   fetcher: async (vars, { pageParam }) => {
     const query: Record<string, string> = {}
     if (vars?.agentId) query.agentId = vars.agentId
+    if (vars?.slug) query.slug = vars.slug
     if (vars?.status) query.status = vars.status
     if (vars?.site) query.site = vars.site
     if (vars?.search) query.search = vars.search

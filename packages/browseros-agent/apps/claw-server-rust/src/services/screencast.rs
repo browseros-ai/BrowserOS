@@ -3,45 +3,35 @@ use crate::services::{
     now_epoch_ms,
     tab_activity::{ScreencastFrame, TabActivityRecord, TabActivityService},
 };
-use browseros_cdp::CdpEvent;
 use browseros_core::{
-    BrowserSession, CoreError, PageId, SessionId,
-    screencast::{self, SCREENCAST_FRAME_METHOD, ScreencastOptions},
-    screenshot::{ScreenshotCaptureOptions, ScreenshotFormat},
+    BrowserSession, PageId,
+    screenshot::{ScreenshotCaptureOptions, ScreenshotCaptureResult, ScreenshotFormat},
 };
-use serde_json::json;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::{
         Arc,
-        atomic::{AtomicI64, Ordering},
+        atomic::{AtomicBool, AtomicI64, Ordering},
     },
     time::Duration,
 };
 use tokio::{
-    sync::{Mutex, mpsc},
-    task::JoinHandle,
-    time::{MissedTickBehavior, interval},
+    task::{JoinHandle, JoinSet},
+    time::{MissedTickBehavior, interval, timeout},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::warn;
 
-const SUPERVISOR_INTERVAL: Duration = Duration::from_secs(1);
-const POLL_INTERVAL: Duration = Duration::from_millis(1500);
-const FAILURE_BACKOFF_MS: i64 = 5_000;
+const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(1500);
+const SCREENSHOT_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_PARALLEL_SHOTS: usize = 8;
 const FAILURE_BACKOFF_THRESHOLD: u8 = 3;
-/// No `/tabs/activity` reads for this long means nobody is watching the
-/// cockpit: stop screencasts and skip poll captures until the next read.
 const IDLE_AFTER_MS: i64 = 15_000;
-/// A screencast that stays frameless this long while its page is still the
-/// window's active agent page gets restarted — revives casts silently killed
-/// by a CDP reconnect and refreshes the keyframe on static pages.
-const FRAMELESS_RESTART_MS: i64 = 5_000;
 
 pub struct ScreencastService {
-    inner: Arc<Mutex<ScreencastInner>>,
-    casts: Arc<Mutex<HashMap<SessionId, Cast>>>,
+    inner: Arc<tokio::sync::Mutex<ScreencastInner>>,
     last_read_ms: AtomicI64,
+    tick_running: AtomicBool,
     cancel: CancellationToken,
     capacity: usize,
 }
@@ -50,84 +40,61 @@ pub struct ScreencastService {
 struct ScreencastInner {
     frames: HashMap<u32, ScreencastFrame>,
     order: VecDeque<u32>,
-    failures: HashMap<u32, u8>,
-    retry_after: HashMap<u32, i64>,
+    failures: HashMap<u32, FailureState>,
+    in_flight: HashSet<u32>,
 }
 
-/// A live `Page.startScreencast` on one target session. Keyed in the casts
-/// map by the envelope target session id (string), which routes incoming
-/// `Page.screencastFrame` events; the integer sessionId inside frame params
-/// is only the ack cookie.
-struct Cast {
-    page_id: u32,
-    window_id: i64,
-    target_id: String,
-    session: browseros_core::ProtocolSession,
-    last_frame_at: i64,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FailureState {
+    consecutive: u8,
+    last_failure_at: i64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-struct AgentPage {
-    page_id: u32,
-    target_id: String,
-    window_id: Option<i64>,
-    status_active: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct RunningCast {
-    key: SessionId,
-    page_id: u32,
-    target_id: String,
-    window_id: i64,
-    last_frame_at: i64,
-}
-
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct TickPlan {
-    stop: Vec<SessionId>,
-    start: Vec<(u32, i64)>,
-    poll: Vec<u32>,
+    capture: Vec<u32>,
+    gc: Vec<u32>,
+}
+
+struct TickGuard<'a>(&'a AtomicBool);
+
+impl Drop for TickGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl ScreencastService {
     #[must_use]
     pub fn new(capacity: usize) -> Arc<Self> {
         Arc::new(Self {
-            inner: Arc::new(Mutex::new(ScreencastInner::default())),
-            casts: Arc::new(Mutex::new(HashMap::new())),
+            inner: Arc::new(tokio::sync::Mutex::new(ScreencastInner::default())),
             last_read_ms: AtomicI64::new(0),
+            tick_running: AtomicBool::new(false),
             cancel: CancellationToken::new(),
             capacity,
         })
     }
 
+    /// Start polling active agent pages and caching their latest screenshots.
     pub fn start(
         self: Arc<Self>,
         browser: Arc<BrowserService>,
         tab_activity: Arc<TabActivityService>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
-            let mut supervisor = interval(SUPERVISOR_INTERVAL);
-            supervisor.set_missed_tick_behavior(MissedTickBehavior::Delay);
-            let mut poller = interval(POLL_INTERVAL);
-            poller.set_missed_tick_behavior(MissedTickBehavior::Delay);
-            let mut pump: Option<JoinHandle<()>> = None;
+            let mut poller = interval(DEFAULT_POLL_INTERVAL);
+            poller.set_missed_tick_behavior(MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
-                    () = self.cancel.cancelled() => {
-                        if let Some(pump) = pump.take() {
-                            pump.abort();
-                        }
-                        self.stop_all_casts().await;
-                        return;
-                    }
-                    _ = supervisor.tick() => {
-                        self.ensure_pump(&browser, &mut pump).await;
-                        self.supervise(&browser, &tab_activity).await;
-                    }
+                    () = self.cancel.cancelled() => return,
                     _ = poller.tick() => {
-                        self.poll_uncovered_pages(&browser, &tab_activity).await;
+                        let service = self.clone();
+                        let browser = browser.clone();
+                        let tab_activity = tab_activity.clone();
+                        tokio::spawn(async move {
+                            service.tick(&browser, &tab_activity).await;
+                        });
                     }
                 }
             }
@@ -151,516 +118,309 @@ impl ScreencastService {
         now.saturating_sub(self.last_read_ms.load(Ordering::Relaxed)) > IDLE_AFTER_MS
     }
 
-    async fn ensure_pump(
+    fn begin_tick(&self) -> Option<TickGuard<'_>> {
+        self.tick_running
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .ok()
+            .map(|_| TickGuard(&self.tick_running))
+    }
+
+    async fn tick(
         self: &Arc<Self>,
         browser: &Arc<BrowserService>,
-        pump: &mut Option<JoinHandle<()>>,
+        tab_activity: &Arc<TabActivityService>,
     ) {
-        if pump.as_ref().is_some_and(|handle| !handle.is_finished()) {
+        let Some(_tick_guard) = self.begin_tick() else {
+            return;
+        };
+        self.run_tick(browser, tab_activity).await;
+    }
+
+    async fn run_tick(
+        self: &Arc<Self>,
+        browser: &Arc<BrowserService>,
+        tab_activity: &Arc<TabActivityService>,
+    ) {
+        let idle = self.is_idle(now_epoch_ms());
+        let records = tab_activity.snapshot().await;
+        let (failures, in_flight, cached_page_ids) = {
+            let inner = self.inner.lock().await;
+            (
+                inner.failures.clone(),
+                inner.in_flight.clone(),
+                inner.order.iter().copied().collect::<Vec<_>>(),
+            )
+        };
+        let plan = plan_tick(idle, &records, &failures, &in_flight, &cached_page_ids);
+        self.gc_pages(&plan.gc).await;
+
+        if plan.capture.is_empty() {
             return;
         }
         let Some(session) = browser.session().await else {
             return;
         };
-        // Frames bypass the broadcast ring (they are large and high-rate;
-        // ring slots would retain them long after consumption) — the
-        // targeted channel frees each frame once handled, and CDP's ack
-        // backpressure caps in-flight frames at ~1 per cast.
-        let frames = session.cdp_events_targeted(SCREENCAST_FRAME_METHOD);
-        let service = self.clone();
-        *pump = Some(tokio::spawn(async move {
-            service.pump_frames(frames).await;
-        }));
-    }
-
-    async fn pump_frames(self: Arc<Self>, mut frames: mpsc::UnboundedReceiver<CdpEvent>) {
-        loop {
-            tokio::select! {
-                () = self.cancel.cancelled() => return,
-                received = frames.recv() => match received {
-                    Some(event) => self.handle_frame(event).await,
-                    // Channel replaced or client gone; the supervisor
-                    // respawns the pump on its next tick.
-                    None => return,
+        for batch in plan.capture.chunks(MAX_PARALLEL_SHOTS) {
+            let mut captures = JoinSet::new();
+            for page_id in batch.iter().copied() {
+                let service = self.clone();
+                let session = session.clone();
+                captures.spawn(async move {
+                    service.capture_one(session, page_id).await;
+                });
+            }
+            while let Some(result) = captures.join_next().await {
+                if let Err(err) = result {
+                    warn!(error = %err, "screencast capture task failed");
                 }
             }
         }
     }
 
-    async fn handle_frame(&self, event: CdpEvent) {
-        let CdpEvent {
-            params, session_id, ..
-        } = event;
-        let Some(session_id) = session_id else {
+    /// Capture one page while keeping timed-out CDP work guarded until it resolves.
+    async fn capture_one(self: Arc<Self>, session: Arc<BrowserSession>, page_id: u32) {
+        if !self.begin_capture(page_id).await {
             return;
+        }
+        let options = ScreenshotCaptureOptions {
+            format: Some(ScreenshotFormat::Jpeg),
+            quality: Some(50),
+            full_page: Some(false),
+            annotate: Some(false),
+            // BrowserOS visibly resizes watched tabs when captureScreenshot includes a clip.
+            clip: None,
         };
-        let Some(frame) = screencast::parse_frame_event(params) else {
-            debug!(%session_id, "ignoring unparseable screencast frame");
-            return;
-        };
-        let owner = {
-            let mut casts = self.casts.lock().await;
-            let Some(cast) = casts.get_mut(&session_id) else {
-                // Frame from a session we do not own — drop it.
-                return;
-            };
-            cast.last_frame_at = now_epoch_ms();
-            (cast.page_id, cast.session.clone())
-        };
-        let (page_id, session) = owner;
-        // Ack from a detached task: a wedged ack send must not stall frame
-        // routing for the other casts. Per-session ordering is safe — CDP
-        // sends the next frame only after this ack lands.
-        let ack_id = frame.session_id;
-        tokio::spawn(async move {
-            if let Err(err) = screencast::ack_frame(&session, ack_id).await {
-                debug!(page_id, error = %err, "screencastFrameAck failed");
+        let mut capture =
+            tokio::spawn(async move { session.screenshot(PageId(page_id), options).await });
+        let outcome = timeout(SCREENSHOT_TIMEOUT, &mut capture).await;
+        match outcome {
+            Ok(result) => {
+                self.clear_in_flight(page_id).await;
+                match result {
+                    Ok(Ok(capture)) if !capture.data.is_empty() => {
+                        self.store_capture(page_id, capture).await;
+                    }
+                    Ok(Ok(_)) => self.capture_failed(page_id, "empty screenshot").await,
+                    Ok(Err(err)) => self.capture_failed(page_id, &err.to_string()).await,
+                    Err(err) => self.capture_failed(page_id, &err.to_string()).await,
+                }
             }
-        });
+            Err(_) => {
+                let service = self.clone();
+                tokio::spawn(async move {
+                    let _ = capture.await;
+                    service.clear_in_flight(page_id).await;
+                });
+                self.capture_failed(page_id, "screenshot timeout").await;
+            }
+        }
+    }
+
+    async fn begin_capture(&self, page_id: u32) -> bool {
+        self.inner.lock().await.in_flight.insert(page_id)
+    }
+
+    async fn clear_in_flight(&self, page_id: u32) {
+        self.inner.lock().await.in_flight.remove(&page_id);
+    }
+
+    async fn store_capture(&self, page_id: u32, capture: ScreenshotCaptureResult) {
         self.store_frame(
             page_id,
             ScreencastFrame {
-                jpeg_base64: frame.data,
+                jpeg_base64: capture.data,
                 captured_at: now_epoch_ms(),
             },
         )
         .await;
     }
 
-    async fn supervise(&self, browser: &Arc<BrowserService>, tab_activity: &Arc<TabActivityService>) {
-        let Some(session) = browser.session().await else {
-            // No connection: target sessions are gone, drop the bookkeeping.
-            self.casts.lock().await.clear();
-            return;
-        };
-        let now = now_epoch_ms();
-        let idle = self.is_idle(now);
-        let topology = if idle {
-            Some((Vec::new(), HashMap::new()))
-        } else {
-            let records = tab_activity.snapshot().await;
-            self.resolve_topology(&session, records).await
-        };
-        let Some((agent_pages, active_target_by_window)) = topology else {
-            // Transient CDP failure while listing pages: keep the running
-            // casts and retry next tick instead of tearing them all down.
-            return;
-        };
-        let running: Vec<RunningCast> = self
-            .casts
-            .lock()
-            .await
-            .iter()
-            .map(|(key, cast)| RunningCast {
-                key: key.clone(),
-                page_id: cast.page_id,
-                target_id: cast.target_id.clone(),
-                window_id: cast.window_id,
-                last_frame_at: cast.last_frame_at,
-            })
-            .collect();
-        let plan = plan_tick(idle, now, &agent_pages, &active_target_by_window, &running);
-        self.apply_plan(&session, plan, now).await;
-    }
-
-    /// Map agent pages to windows and resolve each relevant window's active
-    /// tab via root `Browser.getActiveTab` — no attach, so the user's own
-    /// tabs are never touched.
-    async fn resolve_topology(
-        &self,
-        session: &Arc<BrowserSession>,
-        records: Vec<TabActivityRecord>,
-    ) -> Option<(Vec<AgentPage>, HashMap<i64, String>)> {
-        if records.is_empty() {
-            return Some((Vec::new(), HashMap::new()));
-        }
-        let infos = match session.pages.list().await {
-            Ok(infos) => infos,
-            Err(err) => {
-                debug!(error = %err, "screencast page listing failed");
-                return None;
-            }
-        };
-        let window_by_page: HashMap<u32, i64> = infos
-            .iter()
-            .filter_map(|info| {
-                info.window_id
-                    .as_ref()
-                    .map(|window| (info.page_id.0, window.0))
-            })
-            .collect();
-        let agent_pages: Vec<AgentPage> = records
-            .into_iter()
-            .map(|record| AgentPage {
-                window_id: window_by_page.get(&record.page_id).copied(),
-                page_id: record.page_id,
-                target_id: record.target_id,
-                status_active: record.status == "active",
-            })
-            .collect();
-        let windows: HashSet<i64> = agent_pages
-            .iter()
-            .filter_map(|page| page.window_id)
-            .collect();
-        let mut active_target_by_window = HashMap::new();
-        for window_id in windows {
-            match get_active_target(session, window_id).await {
-                Ok(Some(target_id)) => {
-                    active_target_by_window.insert(window_id, target_id);
-                }
-                Ok(None) => {}
-                Err(err) => debug!(window_id, error = %err, "getActiveTab failed"),
-            }
-        }
-        Some((agent_pages, active_target_by_window))
-    }
-
-    async fn apply_plan(&self, session: &Arc<BrowserSession>, plan: TickPlan, now: i64) {
-        for key in plan.stop {
-            let cast = self.casts.lock().await.remove(&key);
-            if let Some(cast) = cast
-                && let Err(err) = screencast::stop_screencast(&cast.session).await
-            {
-                debug!(page_id = cast.page_id, error = %err, "stopScreencast failed");
-            }
-        }
-        for (page_id, window_id) in plan.start {
-            if let Err(err) = self.start_cast(session, page_id, window_id, now).await {
-                debug!(page_id, error = %err, "startScreencast failed");
-            }
-        }
-    }
-
-    async fn start_cast(
-        &self,
-        session: &Arc<BrowserSession>,
-        page_id: u32,
-        window_id: i64,
-        now: i64,
-    ) -> Result<(), CoreError> {
-        let page = session.pages.get_session(PageId(page_id)).await?;
-        // Register before starting so the first frame is routable.
-        self.casts.lock().await.insert(
-            page.session_id.clone(),
-            Cast {
-                page_id,
-                window_id,
-                target_id: page.target_id.into_inner(),
-                session: page.session.clone(),
-                last_frame_at: now,
-            },
-        );
-        if let Err(err) =
-            screencast::start_screencast(&page.session, &ScreencastOptions::default()).await
-        {
-            self.casts.lock().await.remove(&page.session_id);
-            return Err(err);
-        }
-        Ok(())
-    }
-
-    async fn stop_all_casts(&self) {
-        let casts: Vec<Cast> = {
-            let mut guard = self.casts.lock().await;
-            guard.drain().map(|(_, cast)| cast).collect()
-        };
-        for cast in casts {
-            if let Err(err) = screencast::stop_screencast(&cast.session).await {
-                debug!(page_id = cast.page_id, error = %err, "stopScreencast on teardown failed");
-            }
-        }
-    }
-
-    /// Poll fallback for agent pages CDP will not composite (background
-    /// tabs): the pre-screencast captureScreenshot path, unchanged.
-    async fn poll_uncovered_pages(
-        &self,
-        browser: &Arc<BrowserService>,
-        tab_activity: &Arc<TabActivityService>,
-    ) {
-        if self.is_idle(now_epoch_ms()) {
-            return;
-        }
-        let Some(session) = browser.session().await else {
-            return;
-        };
-        let covered: HashSet<u32> = self
-            .casts
-            .lock()
-            .await
-            .values()
-            .map(|cast| cast.page_id)
-            .collect();
-        let pages = tab_activity.snapshot().await;
-        for record in pages
-            .into_iter()
-            .filter(|record| record.status == "active" && !covered.contains(&record.page_id))
-        {
-            if self.is_backing_off(record.page_id).await {
-                continue;
-            }
-            let options = ScreenshotCaptureOptions {
-                format: Some(ScreenshotFormat::Jpeg),
-                quality: Some(50),
-                full_page: Some(false),
-                annotate: Some(false),
-                // The BrowserOS fork visibly resizes tabs when clip is set.
-                clip: None,
-            };
-            match session.screenshot(PageId(record.page_id), options).await {
-                Ok(capture) => {
-                    self.store_frame(
-                        record.page_id,
-                        ScreencastFrame {
-                            jpeg_base64: capture.data,
-                            captured_at: now_epoch_ms(),
-                        },
-                    )
-                    .await;
-                }
-                Err(err) => {
-                    warn!(page_id = record.page_id, error = %err, "screencast capture failed");
-                    self.record_failure(record.page_id).await;
-                }
-            }
-        }
-    }
-
-    async fn is_backing_off(&self, page_id: u32) -> bool {
-        self.inner
-            .lock()
-            .await
-            .retry_after
-            .get(&page_id)
-            .copied()
-            .map(|retry_after| now_epoch_ms() < retry_after)
-            .unwrap_or(false)
-    }
-
     async fn store_frame(&self, page_id: u32, frame: ScreencastFrame) {
         let mut inner = self.inner.lock().await;
+        inner.frames.remove(&page_id);
+        inner.order.retain(|existing| *existing != page_id);
         inner.frames.insert(page_id, frame);
-        inner.failures.remove(&page_id);
-        inner.retry_after.remove(&page_id);
-        if let Some(pos) = inner.order.iter().position(|existing| *existing == page_id) {
-            inner.order.remove(pos);
-        }
         inner.order.push_back(page_id);
+        inner.failures.remove(&page_id);
         while inner.order.len() > self.capacity {
             if let Some(evicted) = inner.order.pop_front() {
                 inner.frames.remove(&evicted);
-                inner.failures.remove(&evicted);
-                inner.retry_after.remove(&evicted);
             }
         }
     }
 
-    async fn record_failure(&self, page_id: u32) {
-        let mut inner = self.inner.lock().await;
-        let failures = inner.failures.entry(page_id).or_insert(0);
-        *failures = failures.saturating_add(1);
-        if *failures >= FAILURE_BACKOFF_THRESHOLD {
-            inner
-                .retry_after
-                .insert(page_id, now_epoch_ms().saturating_add(FAILURE_BACKOFF_MS));
+    async fn capture_failed(&self, page_id: u32, error: &str) {
+        warn!(page_id, error, "screencast capture failed");
+        if self.record_failure(page_id, now_epoch_ms()).await {
+            warn!(page_id, "screencast page enters backoff");
         }
+    }
+
+    async fn record_failure(&self, page_id: u32, now: i64) -> bool {
+        let mut inner = self.inner.lock().await;
+        let state = inner.failures.entry(page_id).or_insert(FailureState {
+            consecutive: 0,
+            last_failure_at: now,
+        });
+        state.consecutive = state.consecutive.saturating_add(1);
+        state.last_failure_at = now;
+        let in_backoff = state.consecutive >= FAILURE_BACKOFF_THRESHOLD;
+        if in_backoff {
+            inner.frames.remove(&page_id);
+            inner.order.retain(|existing| *existing != page_id);
+        }
+        in_backoff
+    }
+
+    async fn gc_pages(&self, page_ids: &[u32]) {
+        if page_ids.is_empty() {
+            return;
+        }
+        let page_ids: HashSet<u32> = page_ids.iter().copied().collect();
+        let mut inner = self.inner.lock().await;
+        for page_id in &page_ids {
+            inner.frames.remove(page_id);
+            inner.failures.remove(page_id);
+        }
+        inner.order.retain(|page_id| !page_ids.contains(page_id));
     }
 }
 
-async fn get_active_target(
-    session: &Arc<BrowserSession>,
-    window_id: i64,
-) -> Result<Option<String>, CoreError> {
-    let value = session
-        .cdp("Browser.getActiveTab", json!({ "windowId": window_id }), None)
-        .await?;
-    let result: browseros_cdp::browser::GetActiveTabResult =
-        serde_json::from_value(value).map_err(|err| CoreError::Message(err.to_string()))?;
-    Ok(result.tab.map(|tab| tab.target_id))
-}
-
-/// Pure per-tick decision: which casts to stop, which pages to start
-/// screencasting (window's active agent page), and which pages the
-/// captureScreenshot fallback should poll.
+/// Plan active captures and stale-frame GC without mutating service state.
 fn plan_tick(
     idle: bool,
-    now: i64,
-    agent_pages: &[AgentPage],
-    active_target_by_window: &HashMap<i64, String>,
-    running: &[RunningCast],
+    records: &[TabActivityRecord],
+    failures: &HashMap<u32, FailureState>,
+    in_flight: &HashSet<u32>,
+    cached_page_ids: &[u32],
 ) -> TickPlan {
-    let mut plan = TickPlan::default();
     if idle {
-        plan.stop = running.iter().map(|cast| cast.key.clone()).collect();
-        return plan;
+        return TickPlan::default();
     }
-    let agent_by_target: HashMap<&str, &AgentPage> = agent_pages
+    let live_page_ids: HashSet<u32> = records.iter().map(|record| record.page_id).collect();
+    let capture = records
         .iter()
-        .map(|page| (page.target_id.as_str(), page))
+        .filter(|record| record.status == "active")
+        .filter(|record| !in_flight.contains(&record.page_id))
+        .filter(|record| {
+            !failures.get(&record.page_id).is_some_and(|failure| {
+                failure.consecutive >= FAILURE_BACKOFF_THRESHOLD
+                    && record.last_tool_at <= failure.last_failure_at
+            })
+        })
+        .map(|record| record.page_id)
         .collect();
-    let mut covered: HashSet<u32> = HashSet::new();
-    for cast in running {
-        let still_window_active = active_target_by_window
-            .get(&cast.window_id)
-            .is_some_and(|target| *target == cast.target_id);
-        let still_agent = agent_by_target.contains_key(cast.target_id.as_str());
-        if !still_window_active || !still_agent {
-            plan.stop.push(cast.key.clone());
-            continue;
-        }
-        if now.saturating_sub(cast.last_frame_at) > FRAMELESS_RESTART_MS {
-            plan.stop.push(cast.key.clone());
-            plan.start.push((cast.page_id, cast.window_id));
-        }
-        covered.insert(cast.page_id);
-    }
-    for (window_id, target_id) in active_target_by_window {
-        let Some(page) = agent_by_target.get(target_id.as_str()) else {
-            continue;
-        };
-        if covered.insert(page.page_id) {
-            plan.start.push((page.page_id, *window_id));
-        }
-    }
-    for page in agent_pages {
-        if page.status_active && !covered.contains(&page.page_id) {
-            plan.poll.push(page.page_id);
-        }
-    }
-    plan
+    let gc = cached_page_ids
+        .iter()
+        .copied()
+        .filter(|page_id| !live_page_ids.contains(page_id))
+        .collect();
+    TickPlan { capture, gc }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentPage, RunningCast, ScreencastService, plan_tick};
-    use crate::services::tab_activity::ScreencastFrame;
-    use browseros_core::SessionId;
-    use std::collections::HashMap;
+    use super::{FailureState, ScreencastService, TickPlan, plan_tick};
+    use crate::services::tab_activity::{ScreencastFrame, TabActivityRecord};
+    use std::collections::{HashMap, HashSet};
 
     const NOW: i64 = 1_000_000;
 
-    fn page(page_id: u32, target_id: &str, window_id: Option<i64>, status_active: bool) -> AgentPage {
-        AgentPage {
+    fn record(page_id: u32, status: &'static str, last_tool_at: i64) -> TabActivityRecord {
+        TabActivityRecord {
+            target_id: format!("target-{page_id}"),
             page_id,
-            target_id: target_id.to_string(),
-            window_id,
-            status_active,
+            url: format!("https://example.com/{page_id}"),
+            title: format!("Page {page_id}"),
+            agent_id: "agent".to_string(),
+            slug: "codex".to_string(),
+            first_tool_at: last_tool_at,
+            last_tool_at,
+            last_tool_name: "tabs".to_string(),
+            tool_count: 1,
+            recent_tools: Vec::new(),
+            status,
         }
     }
 
-    fn cast(key: &str, page_id: u32, target_id: &str, window_id: i64, last_frame_at: i64) -> RunningCast {
-        RunningCast {
-            key: SessionId::from(key),
-            page_id,
-            target_id: target_id.to_string(),
-            window_id,
-            last_frame_at,
+    fn failure(consecutive: u8, last_failure_at: i64) -> FailureState {
+        FailureState {
+            consecutive,
+            last_failure_at,
         }
     }
 
-    fn active(entries: &[(i64, &str)]) -> HashMap<i64, String> {
-        entries
-            .iter()
-            .map(|(window, target)| (*window, (*target).to_string()))
-            .collect()
+    fn frame(data: &str, captured_at: i64) -> ScreencastFrame {
+        ScreencastFrame {
+            jpeg_base64: data.to_string(),
+            captured_at,
+        }
     }
 
     #[test]
-    fn active_agent_page_starts_screencast_and_is_not_polled() {
-        let pages = [page(1, "t1", Some(1), true)];
-        let plan = plan_tick(false, NOW, &pages, &active(&[(1, "t1")]), &[]);
-        assert_eq!(plan.start, vec![(1, 1)]);
-        assert!(plan.stop.is_empty());
-        assert!(plan.poll.is_empty());
+    fn planner_captures_only_active_tabs() {
+        let records = [record(1, "active", NOW), record(2, "idle", NOW)];
+        let plan = plan_tick(false, &records, &HashMap::new(), &HashSet::new(), &[]);
+        assert_eq!(plan.capture, vec![1]);
+        assert!(plan.gc.is_empty());
     }
 
     #[test]
-    fn background_agent_page_polls_instead_of_screencasting() {
-        let pages = [page(1, "t1", Some(1), true), page(2, "t2", Some(1), true)];
-        let plan = plan_tick(false, NOW, &pages, &active(&[(1, "t1")]), &[]);
-        assert_eq!(plan.start, vec![(1, 1)]);
-        assert_eq!(plan.poll, vec![2]);
+    fn planner_retries_before_failure_threshold() {
+        let records = [record(1, "active", NOW)];
+        let failures = HashMap::from([(1, failure(2, NOW))]);
+        let plan = plan_tick(false, &records, &failures, &HashSet::new(), &[]);
+        assert_eq!(plan.capture, vec![1]);
     }
 
     #[test]
-    fn non_agent_active_tab_gets_no_screencast() {
-        let pages = [page(1, "t1", Some(1), true)];
-        let plan = plan_tick(false, NOW, &pages, &active(&[(1, "user-tab")]), &[]);
-        assert!(plan.start.is_empty());
-        assert_eq!(plan.poll, vec![1]);
+    fn planner_backs_off_after_three_failures() {
+        let records = [record(1, "active", NOW)];
+        let failures = HashMap::from([(1, failure(3, NOW))]);
+        let plan = plan_tick(false, &records, &failures, &HashSet::new(), &[]);
+        assert!(plan.capture.is_empty());
     }
 
     #[test]
-    fn unknown_window_agent_page_still_polls() {
-        let pages = [page(1, "t1", None, true)];
-        let plan = plan_tick(false, NOW, &pages, &HashMap::new(), &[]);
-        assert!(plan.start.is_empty());
-        assert_eq!(plan.poll, vec![1]);
+    fn planner_lifts_backoff_after_new_tool_activity() {
+        let records = [record(1, "active", NOW + 1)];
+        let failures = HashMap::from([(1, failure(3, NOW))]);
+        let plan = plan_tick(false, &records, &failures, &HashSet::new(), &[]);
+        assert_eq!(plan.capture, vec![1]);
     }
 
     #[test]
-    fn idle_agent_page_neither_screencasts_nor_polls_when_backgrounded() {
-        let pages = [page(2, "t2", Some(1), false)];
-        let plan = plan_tick(false, NOW, &pages, &active(&[(1, "user-tab")]), &[]);
-        assert!(plan.start.is_empty());
-        assert!(plan.poll.is_empty());
+    fn planner_skips_pages_with_capture_in_flight() {
+        let records = [record(1, "active", NOW), record(2, "active", NOW)];
+        let in_flight = HashSet::from([1]);
+        let plan = plan_tick(false, &records, &HashMap::new(), &in_flight, &[]);
+        assert_eq!(plan.capture, vec![2]);
     }
 
     #[test]
-    fn active_page_switch_stops_old_cast_and_starts_new() {
-        let pages = [page(1, "t1", Some(1), true), page(2, "t2", Some(1), true)];
-        let running = [cast("s1", 1, "t1", 1, NOW)];
-        let plan = plan_tick(false, NOW, &pages, &active(&[(1, "t2")]), &running);
-        assert_eq!(plan.stop, vec![SessionId::from("s1")]);
-        assert_eq!(plan.start, vec![(2, 1)]);
-        assert_eq!(plan.poll, vec![1]);
+    fn planner_garbage_collects_closed_page_frames() {
+        let records = [record(2, "idle", NOW), record(3, "active", NOW)];
+        let plan = plan_tick(false, &records, &HashMap::new(), &HashSet::new(), &[1, 2]);
+        assert_eq!(plan.capture, vec![3]);
+        assert_eq!(plan.gc, vec![1]);
     }
 
     #[test]
-    fn cast_whose_page_left_the_agent_set_stops() {
-        let running = [cast("s1", 1, "t1", 1, NOW)];
-        let plan = plan_tick(false, NOW, &[], &HashMap::new(), &running);
-        assert_eq!(plan.stop, vec![SessionId::from("s1")]);
-        assert!(plan.start.is_empty());
+    fn idle_planner_is_a_no_op() {
+        let records = [record(1, "active", NOW)];
+        let plan = plan_tick(true, &records, &HashMap::new(), &HashSet::new(), &[2]);
+        assert_eq!(plan, TickPlan::default());
     }
 
     #[test]
-    fn idle_governor_stops_all_casts_and_skips_polling() {
-        let pages = [page(1, "t1", Some(1), true)];
-        let running = [cast("s1", 1, "t1", 1, NOW), cast("s2", 2, "t2", 2, NOW)];
-        let plan = plan_tick(true, NOW, &pages, &active(&[(1, "t1")]), &running);
-        let mut stopped = plan.stop.clone();
-        stopped.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-        assert_eq!(stopped, vec![SessionId::from("s1"), SessionId::from("s2")]);
-        assert!(plan.start.is_empty());
-        assert!(plan.poll.is_empty());
-    }
-
-    #[test]
-    fn resume_after_read_restarts_within_one_tick() {
-        let pages = [page(1, "t1", Some(1), true)];
-        let plan = plan_tick(false, NOW, &pages, &active(&[(1, "t1")]), &[]);
-        assert_eq!(plan.start, vec![(1, 1)]);
-    }
-
-    #[test]
-    fn frameless_cast_on_active_agent_page_restarts() {
-        let pages = [page(1, "t1", Some(1), true)];
-        let running = [cast("s1", 1, "t1", 1, NOW - 6_000)];
-        let plan = plan_tick(false, NOW, &pages, &active(&[(1, "t1")]), &running);
-        assert_eq!(plan.stop, vec![SessionId::from("s1")]);
-        assert_eq!(plan.start, vec![(1, 1)]);
-        assert!(plan.poll.is_empty());
-    }
-
-    #[test]
-    fn cast_with_recent_frame_is_left_alone() {
-        let pages = [page(1, "t1", Some(1), true)];
-        let running = [cast("s1", 1, "t1", 1, NOW - 1_000)];
-        let plan = plan_tick(false, NOW, &pages, &active(&[(1, "t1")]), &running);
-        assert!(plan.stop.is_empty());
-        assert!(plan.start.is_empty());
-        assert!(plan.poll.is_empty());
+    fn tick_overlap_guard_resets_when_tick_finishes() {
+        let service = ScreencastService::new(2);
+        let Some(guard) = service.begin_tick() else {
+            panic!("first tick should start");
+        };
+        assert!(service.begin_tick().is_none());
+        drop(guard);
+        assert!(service.begin_tick().is_some());
     }
 
     #[test]
@@ -676,37 +436,69 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn frame_cache_is_lru_capped() {
+    async fn frame_cache_is_lru_capped_and_updates_recency() {
         let service = ScreencastService::new(2);
-        service
-            .store_frame(
-                1,
-                ScreencastFrame {
-                    jpeg_base64: "a".to_string(),
-                    captured_at: 1,
-                },
-            )
-            .await;
-        service
-            .store_frame(
-                2,
-                ScreencastFrame {
-                    jpeg_base64: "b".to_string(),
-                    captured_at: 2,
-                },
-            )
-            .await;
-        service
-            .store_frame(
-                3,
-                ScreencastFrame {
-                    jpeg_base64: "c".to_string(),
-                    captured_at: 3,
-                },
-            )
-            .await;
-        assert!(service.frame_for(1).await.is_none());
-        assert!(service.frame_for(2).await.is_some());
-        assert!(service.frame_for(3).await.is_some());
+        service.store_frame(1, frame("a", 1)).await;
+        service.store_frame(2, frame("b", 2)).await;
+        service.store_frame(1, frame("new-a", 3)).await;
+        service.store_frame(3, frame("c", 4)).await;
+
+        let Some(refreshed) = service.frame_for(1).await else {
+            panic!("missing page 1 frame");
+        };
+        assert_eq!(refreshed.jpeg_base64, "new-a");
+        assert_eq!(refreshed.captured_at, 3);
+        assert!(service.frame_for(2).await.is_none());
+        let Some(newest) = service.frame_for(3).await else {
+            panic!("missing page 3 frame");
+        };
+        assert_eq!(newest.jpeg_base64, "c");
+        assert_eq!(newest.captured_at, 4);
+    }
+
+    #[tokio::test]
+    async fn entering_backoff_drops_frame_but_keeps_failure_state() {
+        let service = ScreencastService::new(2);
+        service.store_frame(1, frame("stale", 1)).await;
+        assert!(!service.record_failure(1, NOW - 2).await);
+        assert!(!service.record_failure(1, NOW - 1).await);
+        assert!(service.record_failure(1, NOW).await);
+
+        let inner = service.inner.lock().await;
+        assert!(!inner.frames.contains_key(&1));
+        assert_eq!(inner.failures.get(&1), Some(&failure(3, NOW)));
+    }
+
+    #[tokio::test]
+    async fn successful_capture_clears_failure_state() {
+        let service = ScreencastService::new(2);
+        assert!(!service.record_failure(1, NOW - 2).await);
+        assert!(!service.record_failure(1, NOW - 1).await);
+        assert!(service.record_failure(1, NOW).await);
+        service.store_frame(1, frame("fresh", NOW + 1)).await;
+
+        assert!(!service.inner.lock().await.failures.contains_key(&1));
+    }
+
+    #[tokio::test]
+    async fn per_page_in_flight_guard_clears_only_on_completion() {
+        let service = ScreencastService::new(2);
+        assert!(service.begin_capture(1).await);
+        assert!(!service.begin_capture(1).await);
+        service.clear_in_flight(1).await;
+        assert!(service.begin_capture(1).await);
+    }
+
+    #[tokio::test]
+    async fn garbage_collection_drops_frame_and_failure_state() {
+        let service = ScreencastService::new(2);
+        service.store_frame(1, frame("stale", 1)).await;
+        service.record_failure(1, NOW).await;
+        service.gc_pages(&[1]).await;
+
+        let inner = service.inner.lock().await;
+        assert!(!inner.frames.contains_key(&1));
+        assert!(!inner.failures.contains_key(&1));
+        assert!(!inner.order.contains(&1));
     }
 }

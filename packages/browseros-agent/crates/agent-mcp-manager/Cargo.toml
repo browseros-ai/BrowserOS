@@ -1,0 +1,20 @@
+[package]
+name = "agent-mcp-manager"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Programmatic MCP server registration for AI coding agents"
+
+[dependencies]
+jsonc-parser.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+time.workspace = true
+toml_edit.workspace = true
+
+[lints]
+workspace = true

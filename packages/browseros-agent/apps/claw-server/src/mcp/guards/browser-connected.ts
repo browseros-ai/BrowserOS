@@ -11,7 +11,7 @@ import type { ToolGuard } from '../dispatch'
 export const guardBrowserConnected: ToolGuard = (call) => {
   if (call.session) return null
 
-  logger.warn('cockpit v2 tool dispatch rejected', {
+  logger.warn('cockpit tool dispatch rejected', {
     tool: call.tool.name,
     sessionId: call.sessionId || undefined,
     reason: 'browser session not connected',

@@ -310,6 +310,38 @@ class DownloadResourceConfigTest(unittest.TestCase):
             [op["name"] for op in filtered],
         )
 
+    def test_universal_plan_expands_arm64_prep_run_to_both_arches(self) -> None:
+        # A universal invocation expands into per-arch runs; the arm64 prep
+        # run executes with architecture="arm64" but carries
+        # plan_architectures=("universal",), so it must still download the
+        # x64 server bundles the merge folds in (release 29377078861).
+        operations = self._real_download_operations()
+
+        filtered = self._filter_operations(
+            operations, "macos", "arm64", plan_architectures=("universal",)
+        )
+        names = [op["name"] for op in filtered]
+
+        self.assertIn("BrowserOS Server Resources - macOS ARM64", names)
+        self.assertIn("BrowserOS Server Resources - macOS x64", names)
+        self.assertIn("BrowserOS Claw Server Resources - macOS ARM64", names)
+        self.assertIn("BrowserOS Claw Server Resources - macOS x64", names)
+
+    def test_flat_multi_arch_plan_stays_arch_scoped(self) -> None:
+        # Flat multi-arch (arm64, x64 without universal) plans a full
+        # per-arch run each with its own download step, so a single run must
+        # stay arch-scoped and NOT pull the sibling arch.
+        operations = self._real_download_operations()
+
+        filtered = self._filter_operations(
+            operations, "macos", "arm64", plan_architectures=("arm64", "x64")
+        )
+        names = [op["name"] for op in filtered]
+
+        self.assertIn("BrowserOS Server Resources - macOS ARM64", names)
+        self.assertNotIn("BrowserOS Server Resources - macOS x64", names)
+        self.assertNotIn("BrowserOS Claw Server Resources - macOS x64", names)
+
     def test_real_config_includes_claw_onboard_resources_everywhere(self) -> None:
         # The onboarding dist is platform-independent and its grit pak is
         # built for every product, so the operation must carry no gates.
@@ -426,11 +458,13 @@ class DownloadResourceConfigTest(unittest.TestCase):
         platform: str,
         architecture: str,
         product: str = "browseros",
+        plan_architectures: tuple = (),
     ) -> list[dict]:
         ctx = cast(
             Context,
             SimpleNamespace(
                 architecture=architecture,
+                plan_architectures=plan_architectures,
                 build_type="release",
                 product=get_product_descriptor(product),
             ),

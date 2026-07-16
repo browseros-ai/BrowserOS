@@ -43,6 +43,7 @@ struct AgentOwnershipState {
     pages: BTreeSet<PageId>,
     tab_group_ref: Option<String>,
     tab_group_color: Option<TabGroupColor>,
+    tab_group_collapsed: bool,
 }
 
 impl AgentPageOwnership {
@@ -122,7 +123,11 @@ impl AgentPageOwnership {
 
     pub async fn set_tab_group_ref(&self, agent_key: AgentKey, value: Option<String>) {
         let mut inner = self.inner.write().await;
-        inner.agents.entry(agent_key).or_default().tab_group_ref = value;
+        let agent = inner.agents.entry(agent_key).or_default();
+        agent.tab_group_ref = value;
+        if agent.tab_group_ref.is_none() {
+            agent.tab_group_collapsed = false;
+        }
         inner.remove_empty_agents();
     }
 
@@ -141,6 +146,22 @@ impl AgentPageOwnership {
         inner.remove_empty_agents();
     }
 
+    pub async fn tab_group_collapsed(&self, agent_key: &AgentKey) -> bool {
+        self.inner
+            .read()
+            .await
+            .agents
+            .get(agent_key)
+            .is_some_and(|agent| agent.tab_group_collapsed)
+    }
+
+    pub async fn set_tab_group_collapsed(&self, agent_key: AgentKey, collapsed: bool) {
+        let mut inner = self.inner.write().await;
+        let agent = inner.agents.entry(agent_key).or_default();
+        agent.tab_group_collapsed = collapsed && agent.tab_group_ref.is_some();
+        inner.remove_empty_agents();
+    }
+
     pub async fn set_tab_group(
         &self,
         agent_key: AgentKey,
@@ -151,7 +172,20 @@ impl AgentPageOwnership {
         let agent = inner.agents.entry(agent_key).or_default();
         agent.tab_group_ref = group_ref;
         agent.tab_group_color = color;
+        agent.tab_group_collapsed = false;
         inner.remove_empty_agents();
+    }
+
+    /// Removes all durable ownership and tab-group state for an agent key.
+    pub async fn forget(&self, agent_key: &AgentKey) {
+        let mut inner = self.inner.write().await;
+        if let Some(agent) = inner.agents.remove(agent_key) {
+            for page_id in agent.pages {
+                if inner.page_owners.get(&page_id) == Some(agent_key) {
+                    inner.page_owners.remove(&page_id);
+                }
+            }
+        }
     }
 }
 
@@ -226,5 +260,41 @@ mod tests {
             ownership.tab_group_color(&codex).await,
             Some(TabGroupColor::Purple)
         );
+        assert!(!ownership.tab_group_collapsed(&codex).await);
+    }
+
+    #[tokio::test]
+    async fn forget_drops_pages_and_group_state() {
+        let ownership = AgentPageOwnership::new();
+        let codex = AgentKey::new("codex");
+        ownership.claim_page(codex.clone(), PageId(1)).await;
+        ownership
+            .set_tab_group(
+                codex.clone(),
+                Some("group-1".to_string()),
+                Some(TabGroupColor::Purple),
+            )
+            .await;
+
+        ownership.forget(&codex).await;
+
+        assert_eq!(ownership.owner_of_page(&PageId(1)).await, None);
+        assert!(ownership.owned_pages(&codex).await.is_empty());
+        assert_eq!(ownership.tab_group_ref(&codex).await, None);
+    }
+
+    #[tokio::test]
+    async fn collapsed_state_requires_a_live_group_ref() {
+        let ownership = AgentPageOwnership::new();
+        let codex = AgentKey::new("codex");
+        ownership
+            .set_tab_group_ref(codex.clone(), Some("group-1".to_string()))
+            .await;
+        ownership.set_tab_group_collapsed(codex.clone(), true).await;
+        assert!(ownership.tab_group_collapsed(&codex).await);
+
+        ownership.set_tab_group_ref(codex.clone(), None).await;
+
+        assert!(!ownership.tab_group_collapsed(&codex).await);
     }
 }

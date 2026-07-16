@@ -9,6 +9,7 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/browseros-ai/BrowserOS"
 
 [workspace.dependencies]
+agent-mcp-manager = { path = "crates/agent-mcp-manager" }
 browseros-cdp = { path = "crates/browseros-cdp" }
 browseros-core = { path = "crates/browseros-core" }
 browseros-mcp = { path = "crates/browseros-mcp" }
@@ -18,6 +19,8 @@ tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+jsonc-parser = { version = "0.33", features = ["cst"] }
+toml_edit = "0.22"
 rmcp = { version = "2.1", features = ["server", "transport-io", "transport-streamable-http-server", "elicitation"] }
 schemars = "1.0"
 axum = "0.8"

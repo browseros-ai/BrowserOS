@@ -228,7 +228,10 @@ fn parse_positive_int_prefix(raw: &str) -> Option<u64> {
     let end = unsigned
         .find(|c: char| !c.is_ascii_digit())
         .unwrap_or(unsigned.len());
-    unsigned[..end].parse::<u64>().ok().filter(|value| *value > 0)
+    unsigned[..end]
+        .parse::<u64>()
+        .ok()
+        .filter(|value| *value > 0)
 }
 
 fn read_bool_default_true(env: &ConfigEnv, key: &str) -> bool {

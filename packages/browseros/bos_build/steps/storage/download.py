@@ -305,9 +305,14 @@ class DownloadResourcesModule(Step):
         current_arch = context.architecture
         current_build_type = context.build_type
 
-        # For universal builds, we need both arm64 and x64
+        # For universal builds we need every macOS arch. A universal
+        # invocation expands into per-arch runs (arm64 prep, then x64, then
+        # merge), so the prep run executes with architecture="arm64" while
+        # carrying plan_architectures=("universal",) — expand here too, or
+        # the x64 server bundle is never refreshed and the merge folds a
+        # stale sibling arch into the app (release 29377078861).
         target_archs = [current_arch]
-        if current_arch == "universal":
+        if current_arch == "universal" or "universal" in context.plan_architectures:
             target_archs = ["arm64", "x64", "universal"]
 
         filtered = []

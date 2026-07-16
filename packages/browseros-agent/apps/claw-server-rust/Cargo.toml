@@ -14,6 +14,7 @@ name = "browseros-claw-server-rs"
 path = "src/main.rs"
 
 [dependencies]
+agent-mcp-manager.workspace = true
 browseros-cdp.workspace = true
 browseros-core.workspace = true
 browseros-mcp.workspace = true
@@ -39,6 +40,7 @@ tracing-appender.workspace = true
 tracing-subscriber.workspace = true
 ulid.workspace = true
 url.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

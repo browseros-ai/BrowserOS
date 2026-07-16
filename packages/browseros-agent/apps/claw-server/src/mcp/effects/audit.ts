@@ -25,7 +25,7 @@ export const applyAudit: ToolEffect = ({
   }
   if (result.isError) return undefined
   if (!call.agent || !call.agentLabel) {
-    logger.warn('cockpit v2 dispatch missing identity', {
+    logger.warn('cockpit dispatch missing identity', {
       tool: call.tool.name,
       sessionId: call.sessionId || undefined,
     })

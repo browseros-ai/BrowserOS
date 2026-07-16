@@ -92,6 +92,7 @@ export interface TaskDetail extends TaskSummary {
 
 export interface ListTasksQuery {
   agentId?: string
+  slug?: string
   status?: TaskStatus
   site?: string
   search?: string
@@ -114,6 +115,7 @@ export function listTasks(query: ListTasksQuery): ListTasksResult {
 
   const wheres = []
   if (query.agentId) wheres.push(eq(toolDispatches.agentId, query.agentId))
+  if (query.slug) wheres.push(eq(toolDispatches.slug, query.slug))
   // Pagination is per-session, keyed on each session's max(id) (see orderBy /
   // nextCursor below), so the cursor must filter grouped rows via HAVING, not
   // individual rows via WHERE. Applying it as a row-level `id < cursor` before

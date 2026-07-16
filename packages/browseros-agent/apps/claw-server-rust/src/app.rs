@@ -7,6 +7,7 @@ use crate::{
         agents::AgentService, audit::AuditService, browser::BrowserService,
         harness::HarnessService, replay::ReplayService, screencast::ScreencastService,
         screenshots::ScreenshotService, tab_activity::TabActivityService,
+        telemetry::TelemetryService,
     },
     storage::JsonStore,
 };
@@ -22,6 +23,7 @@ pub struct AppState {
     pub screenshots: Arc<ScreenshotService>,
     pub tab_activity: Arc<TabActivityService>,
     pub harness: Arc<HarnessService>,
+    pub telemetry: Arc<TelemetryService>,
     pub agents: Arc<AgentService>,
     pub sessions: Arc<SessionRegistry>,
     pub browser: Arc<BrowserService>,
@@ -58,6 +60,7 @@ impl AppState {
             config.claw_dir.join("mcp-manager"),
             home_dir,
         ));
+        let telemetry = Arc::new(TelemetryService::new(&config.claw_dir));
         let agents = Arc::new(AgentService::new(store.clone()));
         let sessions = SessionRegistry::new(
             audit.clone(),
@@ -74,6 +77,7 @@ impl AppState {
             screenshots,
             tab_activity,
             harness,
+            telemetry,
             agents,
             sessions,
             browser,

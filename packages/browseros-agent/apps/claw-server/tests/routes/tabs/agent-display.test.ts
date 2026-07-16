@@ -1,15 +1,24 @@
 import { describe, expect, test } from 'bun:test'
-import type { ClientIdentity } from '../../../src/lib/mcp-session'
+import { agentKeyFromSlug } from '../../../src/domain/agent-key'
+import {
+  type ClientIdentity,
+  slugifyClientName,
+} from '../../../src/lib/mcp-session'
 import { resolveAgentDisplay } from '../../../src/routes/tabs/agent-display'
 
 function identity(
   p: Partial<ClientIdentity> & { sessionId: string },
 ): ClientIdentity {
+  const slug = p.slug ?? (slugifyClientName(p.clientName ?? '') || 'agent')
+  const generatedLabel = p.generatedLabel ?? 'swift-otter'
   return {
     clientName: '',
     clientVersion: '',
     clientTitle: null,
-    sessionLabel: null,
+    slug,
+    key: agentKeyFromSlug(`${slug}-${generatedLabel}`),
+    generatedLabel,
+    label: generatedLabel,
     firstSeenAt: 0,
     ...p,
   }

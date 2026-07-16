@@ -37,11 +37,10 @@ class ExtensionSpec:
         return f"{CDN_BASE_URL}/{self.crx_key(version)}"
 
 
-# browserclaw ships bundled-only until it joins the live update feeds.
 EXTENSIONS: Tuple[ExtensionSpec, ...] = (
     ExtensionSpec("agent", BROWSEROS_AGENT_EXTENSION_ID, True),
     ExtensionSpec("bugreporter", BROWSEROS_BUG_REPORTER_EXTENSION_ID, True),
-    ExtensionSpec("browserclaw", BROWSERCLAW_EXTENSION_ID, False),
+    ExtensionSpec("browserclaw", BROWSERCLAW_EXTENSION_ID, True),
 )
 
 

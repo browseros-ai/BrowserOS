@@ -11,11 +11,13 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import { agentKeyFromSlug } from '../../src/domain/agent-key'
 import { TAB_GROUP_COLORS } from '../../src/lib/agent-tab-groups/group-color'
 import {
   agentIdentityFromClient,
   agentKeyFromClient,
   type ClientIdentity,
+  slugifyClientName,
 } from '../../src/lib/mcp-session'
 import { createReplayTabsService } from '../../src/services/replay-tabs'
 
@@ -39,14 +41,13 @@ function identityStub(
 ) {
   return {
     list: () =>
-      identities.map((i) => ({
-        sessionId: i.sessionId,
-        clientName: i.clientName,
-        clientVersion: i.clientVersion ?? '0.0.1',
-        clientTitle: i.clientTitle ?? null,
-        sessionLabel: null,
-        firstSeenAt: i.firstSeenAt ?? 1_000_000,
-      })),
+      identities.map((i) =>
+        identityFor(i.sessionId, i.clientName, {
+          clientVersion: i.clientVersion ?? '0.0.1',
+          clientTitle: i.clientTitle ?? null,
+          firstSeenAt: i.firstSeenAt ?? 1_000_000,
+        }),
+      ),
   }
 }
 
@@ -60,14 +61,24 @@ function ownershipStub(groups: Record<string, { color: string }>) {
   }
 }
 
-function identityFor(sessionId: string, clientName: string): ClientIdentity {
+function identityFor(
+  sessionId: string,
+  clientName: string,
+  overrides: Partial<ClientIdentity> = {},
+): ClientIdentity {
+  const slug = slugifyClientName(clientName) || 'agent'
+  const generatedLabel = `swift-${slugifyClientName(sessionId) || 'session'}`
   return {
     sessionId,
     clientName,
     clientVersion: '0.0.1',
     clientTitle: null,
-    sessionLabel: null,
+    slug,
+    key: agentKeyFromSlug(`${slug}-${generatedLabel}`),
+    generatedLabel,
+    label: generatedLabel,
     firstSeenAt: 1_000_000,
+    ...overrides,
   }
 }
 

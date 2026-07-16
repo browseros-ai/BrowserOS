@@ -28,6 +28,7 @@ const REAL_CATALOGUE = [
   'download',
   'evaluate',
   'grep',
+  'name_session',
   'navigate',
   'pdf',
   'read',
@@ -76,7 +77,8 @@ describe('POST /mcp (single endpoint)', () => {
     expect(identity?.clientName).toBe('claude-code')
     expect(identity?.clientVersion).toBe('1.4.2')
     const bridge = identity ? agentIdentityFromClient(identity) : null
-    expect(bridge?.agentId).toMatch(/^claude-code-[0-9a-f]{6}$/)
+    expect(bridge?.agentId).toBe(identity?.key)
+    expect(bridge?.agentId).toMatch(/^claude-code-[a-z]+-[a-z]+(?:-\d+)?$/)
     expect(bridge?.slug).toBe('claude-code')
     await client.close()
   })
@@ -121,8 +123,8 @@ describe('POST /mcp (single endpoint)', () => {
     if (!aIdentity || !bIdentity) throw new Error('missing identity')
     const aBridge = agentIdentityFromClient(aIdentity)
     const bBridge = agentIdentityFromClient(bIdentity)
-    expect(aBridge.agentId).toMatch(/^claude-code-[0-9a-f]{6}$/)
-    expect(bBridge.agentId).toMatch(/^claude-code-[0-9a-f]{6}$/)
+    expect(aBridge.agentId).toBe(aIdentity.key)
+    expect(bBridge.agentId).toBe(bIdentity.key)
     expect(aBridge.agentId).not.toBe(bBridge.agentId)
     expect(aBridge.slug).toBe('claude-code')
     expect(bBridge.slug).toBe('claude-code')

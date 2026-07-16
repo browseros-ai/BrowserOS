@@ -107,9 +107,22 @@ function markFirstCaptureDone(agentId: string, pageId: number): void {
   pages.add(pageId)
 }
 
-/** Drops first-capture state when a session-scoped audit identity ends. */
+/** Drops first-capture state when a retained session is fully reaped. */
 export function dropFirstCaptures(agentId: string): void {
   firstCaptures.delete(agentId)
+}
+
+/** Test-only first-capture seed without filesystem work. */
+export function markFirstCaptureForTesting(
+  agentId: string,
+  pageId: number,
+): void {
+  markFirstCaptureDone(agentId, pageId)
+}
+
+/** Test-only retained-state probe. */
+export function hasFirstCapturesForTesting(agentId: string): boolean {
+  return firstCaptures.has(agentId)
 }
 
 /** Clears first-capture state between tests. */

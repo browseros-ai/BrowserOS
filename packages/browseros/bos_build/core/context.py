@@ -65,6 +65,11 @@ class Context:
     chromium_src: Path = Path()
     out_dir: str = "out/Default"
     architecture: str = ""  # Defaults to host arch in __post_init__
+    # Full architecture set of the overall build invocation. A universal
+    # invocation expands into per-arch run Contexts whose own `architecture`
+    # is "arm64"/"x64"; this preserves the invocation's intent so the prep
+    # run still fetches every arch's resources. Empty = single-arch/unknown.
+    plan_architectures: tuple = ()
     build_type: str = "debug"
     chromium_version: str = ""
     browseros_build_offset: str = ""

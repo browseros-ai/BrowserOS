@@ -47,11 +47,7 @@ export const TAB_GROUP_HEX: Record<TabGroupColor, string> = {
   orange: '#F26B2A',
 }
 
-/**
- * FNV-1a 32-bit hash. Same algorithm used by `fallbackSlugForSession`
- * in `mcp-session/identity.ts`, so colour selection has the same
- * distribution as the synthetic-slug fallback already does.
- */
+/** FNV-1a 32-bit hash used to distribute client slugs across colours. */
 function fnv1a(input: string): number {
   let hash = 0x811c9dc5
   for (let i = 0; i < input.length; i++) {

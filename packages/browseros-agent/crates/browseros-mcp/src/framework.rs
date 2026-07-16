@@ -83,31 +83,11 @@ impl ToolDef {
         }
         tool
     }
-
-    #[must_use]
-    pub fn call_hooks(&self, raw_args: &Value) -> ToolCallHooks {
-        let (filter_tabs_list, capture_new_page, close_page) =
-            tabs_action_flags(self.name, raw_args);
-        ToolCallHooks {
-            accepts_page_arg: self.metadata.accepts_page_arg,
-            filter_tabs_list,
-            capture_new_page,
-            close_page,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ToolMetadata {
     pub accepts_page_arg: bool,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ToolCallHooks {
-    pub accepts_page_arg: bool,
-    pub filter_tabs_list: bool,
-    pub capture_new_page: bool,
-    pub close_page: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -207,7 +187,7 @@ pub async fn execute_tool(
     ctx: &ToolCtx,
 ) -> ToolExecResult<ToolResult> {
     ctx.throw_if_cancelled()?;
-    let primary_page = raw_arg_page_id(def.metadata.accepts_page_arg, &raw_args).map(PageId);
+    let primary_page = extract_page_id(def.metadata.accepts_page_arg, &raw_args).map(PageId);
     let mut response = ToolResponse::new();
     match (def.handler)(raw_args, ctx, &mut response).await {
         Ok(Some(result)) => response.append_result(result),
@@ -224,7 +204,7 @@ pub async fn execute_tool(
     let mut result = response.build_for_session(ctx, primary_page).await?;
     ctx.throw_if_cancelled()?;
 
-    if let Some(page_id) = result_page_id(&result)
+    if let Some(page_id) = structured_page_id(result.structured_content.as_ref())
         && let Some(tab_id) = ctx.session.pages.get_tab_id(PageId(page_id)).await
     {
         result.metadata_tab_id = Some(tab_id.0);
@@ -241,7 +221,7 @@ pub fn pending_dialog_result(ctx: &ToolCtx, page: PageId) -> Option<ToolResult> 
 }
 
 #[must_use]
-pub fn raw_arg_page_id(accepts_page_arg: bool, raw_args: &Value) -> Option<u32> {
+pub fn extract_page_id(accepts_page_arg: bool, raw_args: &Value) -> Option<u32> {
     if !accepts_page_arg {
         return None;
     }
@@ -250,6 +230,11 @@ pub fn raw_arg_page_id(accepts_page_arg: bool, raw_args: &Value) -> Option<u32> 
         .and_then(Value::as_u64)
         .and_then(|value| u32::try_from(value).ok())
         .filter(|value| *value >= 1)
+}
+
+#[must_use]
+pub fn result_page_id(result: &ToolResult) -> Option<u32> {
+    structured_page_id(result.structured_content.as_ref())
 }
 
 #[must_use]
@@ -465,13 +450,12 @@ fn path_for_issue(path: &serde_path_to_error::Path) -> String {
     }
 }
 
-fn result_page_id(result: &crate::response::BuiltToolResponse) -> Option<u32> {
-    result
-        .structured_content
-        .as_ref()
+fn structured_page_id(structured_content: Option<&Value>) -> Option<u32> {
+    structured_content
         .and_then(|value| value.get("page"))
         .and_then(Value::as_u64)
         .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value >= 1)
 }
 
 pub fn merge_structured(target: &mut Option<Value>, value: Value) {
@@ -481,17 +465,6 @@ pub fn merge_structured(target: &mut Option<Value>, value: Value) {
         }
         (_, value) => *target = Some(value),
     }
-}
-
-fn tabs_action_flags(name: &str, raw_args: &Value) -> (bool, bool, bool) {
-    if name != "tabs" {
-        return (false, false, false);
-    }
-    let action = raw_args
-        .get("action")
-        .and_then(Value::as_str)
-        .unwrap_or("list");
-    (action == "list", action == "new", action == "close")
 }
 
 #[must_use]

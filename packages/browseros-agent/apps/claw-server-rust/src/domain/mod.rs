@@ -8,4 +8,4 @@ pub use agent_ref::{AgentRef, ClientInfo};
 pub use ids::{AgentId, DispatchId, ProfileId, SessionId};
 pub use ownership::{AgentKey, AgentPageOwnership};
 pub use registry::SessionRegistry;
-pub use session::{Session, TabGroupColor, color_for_slug};
+pub use session::{Session, TabGroupColor, color_for_slug, hex_for_slug};

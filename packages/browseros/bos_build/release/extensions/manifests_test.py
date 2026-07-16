@@ -97,10 +97,14 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
         )
         manifest, json_content, bundled = [c.content for c in self.publisher.calls]
 
-        # Channel manifest: --set wins, bugreporter carried from live manifest.
+        # Channel manifest: --set wins and other versions carry from live sources.
         self.assertEqual(
             extract_manifest_versions(manifest),
-            {AGENT_ID: "0.0.118.0", BUGREPORTER_ID: "54.0.0.0"},
+            {
+                AGENT_ID: "0.0.118.0",
+                BUGREPORTER_ID: "54.0.0.0",
+                BROWSERCLAW_ID: "0.0.0.2",
+            },
         )
         # JSON points every update-feed id at the channel manifest URL.
         self.assertIn(
@@ -109,8 +113,8 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
         )
         self.assertIn(AGENT_ID, json_content)
         self.assertIn(BUGREPORTER_ID, json_content)
-        self.assertNotIn(BROWSERCLAW_ID, json_content)
-        # Bundled carries the same channel versions plus bundled-only claw.
+        self.assertIn(BROWSERCLAW_ID, json_content)
+        # Bundled retains all resolved extension versions.
         self.assertEqual(
             extract_manifest_versions(bundled),
             {
@@ -126,7 +130,11 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
         manifest = self.publisher.calls[0].content
         self.assertEqual(
             extract_manifest_versions(manifest),
-            {AGENT_ID: "0.0.117.0", BUGREPORTER_ID: "54.0.0.0"},
+            {
+                AGENT_ID: "0.0.117.0",
+                BUGREPORTER_ID: "54.0.0.0",
+                BROWSERCLAW_ID: "0.0.0.2",
+            },
         )
 
     def test_bundled_never_regresses_below_live_on_channel_run(self):
@@ -153,6 +161,9 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
         bundled = publisher.calls[2].content
         self.assertEqual(
             extract_manifest_versions(manifest)[AGENT_ID], "0.0.118.0"
+        )
+        self.assertEqual(
+            extract_manifest_versions(manifest)[BROWSERCLAW_ID], "0.0.0.2"
         )
         self.assertEqual(extract_manifest_versions(bundled)[AGENT_ID], "0.0.119.0")
         # Both agent crx versions are referenced somewhere — both checked.

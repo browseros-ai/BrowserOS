@@ -46,6 +46,7 @@ interface ApplyAgentTabGroupTitleInput {
 }
 
 const inflightCreates = new Map<AgentKey, Promise<void>>()
+const inflightCollapses = new Map<AgentKey, Promise<boolean>>()
 
 /** Creates or joins the durable group for a newly opened page. */
 export async function ensureAgentTabGroup(
@@ -84,17 +85,14 @@ export async function ensureAgentTabGroup(
   await create
 }
 
-/** Stores a late title and applies it to a live durable group. */
+/** Stores a renamed title and applies it to a live group. */
 export async function applyAgentTabGroupTitle(
   input: ApplyAgentTabGroupTitleInput,
 ): Promise<void> {
   await inflightCreates.get(input.key)
   const group = ownershipStore.groupOf(input.key)
   if (!group) return
-  ownershipStore.updateGroup(input.key, {
-    title: input.title,
-    titleExplicit: true,
-  })
+  ownershipStore.updateGroup(input.key, { title: input.title })
   if (!input.session) return
 
   try {
@@ -125,9 +123,27 @@ export async function applyAgentTabGroupTitle(
 export async function collapseAgentTabGroup(input: {
   key: AgentKey
   session: BrowserSession
-}): Promise<void> {
+}): Promise<boolean> {
+  const existingCollapse = inflightCollapses.get(input.key)
+  if (existingCollapse) return existingCollapse
+
+  let collapse: Promise<boolean>
+  collapse = collapseGroup(input).finally(() => {
+    if (inflightCollapses.get(input.key) === collapse) {
+      inflightCollapses.delete(input.key)
+    }
+  })
+  inflightCollapses.set(input.key, collapse)
+  return collapse
+}
+
+async function collapseGroup(input: {
+  key: AgentKey
+  session: BrowserSession
+}): Promise<boolean> {
+  await inflightCreates.get(input.key)
   const group = ownershipStore.groupOf(input.key)
-  if (!group || group.collapsed) return
+  if (!group || group.collapsed) return true
 
   try {
     const result = await dispatchGroup(input.session, {
@@ -141,19 +157,74 @@ export async function collapseAgentTabGroup(input: {
         groupId: group.id,
         error: firstText(result),
       })
-      return
+      return false
     }
     // The ref may have been replaced while the update was in flight;
     // only stamp the state if it still describes the group we updated.
     if (ownershipStore.groupOf(input.key)?.id === group.id) {
       ownershipStore.updateGroup(input.key, { collapsed: true })
     }
+    return true
   } catch (error) {
     logger.warn('agent tab group collapse threw', {
       key: input.key,
       groupId: group.id,
       error: errorText(error),
     })
+    return false
+  }
+}
+
+/** Closes a retained group and every tab still inside it. */
+export async function closeAgentTabGroup(input: {
+  key: AgentKey
+  session: BrowserSession
+}): Promise<boolean> {
+  await inflightCreates.get(input.key)
+  await inflightCollapses.get(input.key)
+  const group = ownershipStore.groupOf(input.key)
+  if (!group) return true
+
+  try {
+    const result = await dispatchGroup(input.session, {
+      action: 'close',
+      groupId: group.id,
+    })
+    if (!result.isError) return true
+    if ((await groupExists(input.session, group.id)) === false) return true
+    logger.warn('agent tab group close failed', {
+      key: input.key,
+      groupId: group.id,
+      error: firstText(result),
+    })
+    return false
+  } catch (error) {
+    if ((await groupExists(input.session, group.id)) === false) return true
+    logger.warn('agent tab group close threw', {
+      key: input.key,
+      groupId: group.id,
+      error: errorText(error),
+    })
+    return false
+  }
+}
+
+async function groupExists(
+  session: BrowserSession,
+  groupId: string,
+): Promise<boolean | null> {
+  try {
+    const result = await dispatchGroup(session, { action: 'list' })
+    if (result.isError) return null
+    const groups = (
+      result.structuredContent as
+        | { groups?: Array<{ groupId?: unknown }> }
+        | undefined
+    )?.groups
+    if (!Array.isArray(groups)) return null
+    return groups.some((candidate) => candidate.groupId === groupId)
+  } catch {
+    return null
   }
 }
 
@@ -193,8 +264,8 @@ export const applyTabGroups: ToolEffect = ({ call, result }) => {
 }
 
 async function createGroup(input: EnsureAgentTabGroupInput): Promise<void> {
-  const creationTitle = desiredTitle(input.identity, input.key)
-  const color = colorForSlug(input.key)
+  const creationTitle = desiredTitle(input.identity)
+  const color = colorForSlug(input.identity.slug)
   const result = await dispatchGroup(input.session, {
     action: 'create',
     pages: [input.pageId],
@@ -209,20 +280,10 @@ async function createGroup(input: EnsureAgentTabGroupInput): Promise<void> {
     windowId: group.windowId,
     color,
     title: creationTitle,
-    titleExplicit: input.identity.sessionLabel !== null,
     collapsed: group.collapsed,
   })
 
   await lockGroupColor(input.key, group.id, color, input.session)
-  const latestTitle = desiredTitle(input.identity, input.key)
-  if (latestTitle !== creationTitle) {
-    await applyCreationLateTitle(
-      input.key,
-      group.id,
-      latestTitle,
-      input.session,
-    )
-  }
   logger.info('agent tab group created', {
     key: input.key,
     groupId: group.id,
@@ -319,36 +380,6 @@ async function lockGroupColor(
   }
 }
 
-async function applyCreationLateTitle(
-  key: AgentKey,
-  groupId: string,
-  title: string,
-  session: BrowserSession,
-): Promise<void> {
-  try {
-    const result = await dispatchGroup(session, {
-      action: 'update',
-      groupId,
-      title,
-    })
-    if (result.isError) {
-      logger.warn('agent tab group late title apply failed', {
-        key,
-        groupId,
-        error: firstText(result),
-      })
-      return
-    }
-    ownershipStore.updateGroup(key, { title, titleExplicit: true })
-  } catch (error) {
-    logger.warn('agent tab group late title apply threw', {
-      key,
-      groupId,
-      error: errorText(error),
-    })
-  }
-}
-
 function dispatchGroup(
   session: BrowserSession,
   args: Record<string, unknown>,
@@ -359,11 +390,10 @@ function dispatchGroup(
   })
 }
 
-function desiredTitle(identity: ClientIdentity, key: AgentKey): string {
-  if (!identity.sessionLabel) return key
+function desiredTitle(identity: ClientIdentity): string {
   return buildSessionGroupTitle(
-    clientPrefixFromSlug(key),
-    identity.sessionLabel,
+    clientPrefixFromSlug(identity.slug),
+    identity.label,
   )
 }
 
@@ -407,4 +437,5 @@ function errorText(error: unknown): string {
 /** Clears only in-flight orchestration state between tests. */
 export function resetTabGroupEffectsForTesting(): void {
   inflightCreates.clear()
+  inflightCollapses.clear()
 }

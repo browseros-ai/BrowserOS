@@ -67,12 +67,14 @@ export const env = {
   resourcesDir: resolveDefaultResourcesDir(),
   browserClawDirOverride: readBrowserClawDirOverride(),
   isDevelopment: readIsDevelopment(),
-  // MCP session idle reaper. Sessions older than `sessionIdleMs`
-  // with no inbound requests are torn down by the sweeper running
-  // every `sessionSweepIntervalMs`. The 5-minute default matches
-  // services/tasks.ts:IDLE_TIMEOUT_MS so the UI's status read and
-  // the actual session-end row land at the same boundary.
-  sessionIdleMs: readPositiveIntFlag('CLAW_SESSION_IDLE_MS', 5 * 60 * 1000),
+  // MCP session lifecycle. Idle sessions end after `sessionIdleMs`;
+  // their groups and attribution remain until `sessionRetentionMs`.
+  // The cockpit UI derives its done status independently.
+  sessionIdleMs: readPositiveIntFlag('CLAW_SESSION_IDLE_MS', 30 * 60 * 1000),
+  sessionRetentionMs: readPositiveIntFlag(
+    'CLAW_SESSION_RETENTION_MS',
+    2 * 60 * 60 * 1000,
+  ),
   sessionSweepIntervalMs: readPositiveIntFlag(
     'CLAW_SESSION_SWEEP_INTERVAL_MS',
     60 * 1000,

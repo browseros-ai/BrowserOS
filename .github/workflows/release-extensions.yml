@@ -23,6 +23,11 @@ on:
         required: false
         type: string
         default: ""
+      github_release:
+        description: "Create or update the GitHub release"
+        required: false
+        type: boolean
+        default: true
   workflow_call:
     inputs:
       version:
@@ -39,6 +44,11 @@ on:
         required: false
         type: string
         default: ""
+      github_release:
+        description: "Create or update the GitHub release"
+        required: false
+        type: boolean
+        default: false
     secrets:
       GH_TOKEN:
         required: false
@@ -86,12 +96,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
+          # Full history and tags: per-extension release notes diff against the
+          # previous ext-<name>/v* tag and need the whole commit range.
+          fetch-depth: 0
           ref: ${{ inputs.branch || github.ref }}
 
       - name: Setup uv
@@ -160,6 +173,105 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           uv run browseros ext release "${args[@]}"
+
+      - name: Create GitHub releases
+        if: ${{ inputs.github_release }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          EXTENSION: ${{ inputs.extension }}
+          BRANCH: ${{ inputs.branch }}
+        # One release per selected extension, each in its own ext-<name>/v* tag
+        # namespace (mirrors the agent-server/v* convention in release-server.yml).
+        # Inputs arrive via env and are only ever used quoted, so a crafted
+        # dispatch value cannot break out of this shell; the extension name is
+        # additionally validated against the known set before it feeds a tag.
+        run: |
+          set -euo pipefail
+
+          TARGET_SHA="$(git rev-parse HEAD)"
+
+          if [ "$EXTENSION" = "all" ]; then
+            names=(agent controller bugreporter browserclaw)
+          else
+            names=("$EXTENSION")
+          fi
+
+          for NAME in "${names[@]}"; do
+            case "$NAME" in
+              agent)
+                TITLE="BrowserOS Agent Extension - v$VERSION"
+                KIND="in-repo"
+                SCOPE_PATH="packages/browseros-agent/apps/app"
+                ;;
+              browserclaw)
+                TITLE="BrowserClaw Extension - v$VERSION"
+                KIND="in-repo"
+                SCOPE_PATH="packages/browseros-agent/apps/claw-app"
+                ;;
+              controller)
+                TITLE="BrowserOS Controller Extension - v$VERSION"
+                KIND="external"
+                REPO="browseros-ai/BrowserOS-agent"
+                EXT_BRANCH="${BRANCH:-main}"
+                ;;
+              bugreporter)
+                TITLE="BrowserOS Bug Reporter Extension - v$VERSION"
+                KIND="external"
+                REPO="browseros-ai/BrowserOS-feedback-extension"
+                EXT_BRANCH="${BRANCH:-main}"
+                ;;
+              *)
+                echo "::error::Unknown extension '$NAME'"
+                exit 1
+                ;;
+            esac
+
+            RELEASE_TAG="ext-${NAME}/v${VERSION}"
+            NOTES_FILE="/tmp/notes-${NAME}.md"
+
+            if [ "$KIND" = "in-repo" ]; then
+              # Newest existing ext-<name>/v* tag by version order, excluding the
+              # tag being released so idempotent re-runs still diff from the prior one.
+              PREVIOUS_TAG="$(git tag --list "ext-${NAME}/v*" | { grep -vFx "$RELEASE_TAG" || true; } | sort -V | tail -n1)"
+              CHANGELOG_FILE="/tmp/changelog-${NAME}.md"
+
+              if [ -z "$PREVIOUS_TAG" ]; then
+                echo "Initial ${TITLE} release." > "$CHANGELOG_FILE"
+              else
+                git log "${PREVIOUS_TAG}..${TARGET_SHA}" --pretty=format:"- %s (%h)" -- "$SCOPE_PATH" > "$CHANGELOG_FILE"
+                if [ ! -s "$CHANGELOG_FILE" ]; then
+                  echo "No changes in ${SCOPE_PATH} since ${PREVIOUS_TAG}." > "$CHANGELOG_FILE"
+                fi
+              fi
+
+              node packages/browseros-agent/scripts/release/cap-release-changelog.mjs \
+                --input "$CHANGELOG_FILE" \
+                --output "$NOTES_FILE" \
+                --max-entries 15 \
+                --previous-tag "$PREVIOUS_TAG" \
+                --release-tag "$RELEASE_TAG"
+            else
+              # Built from another repo, so this monorepo's git log says nothing
+              # about it — record the source instead of inventing a changelog.
+              echo "Built from ${REPO} @ ${EXT_BRANCH}." > "$NOTES_FILE"
+            fi
+
+            if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+              gh release edit "$RELEASE_TAG" \
+                --title "$TITLE" \
+                --notes-file "$NOTES_FILE"
+            else
+              gh release create "$RELEASE_TAG" \
+                --target "$TARGET_SHA" \
+                --title "$TITLE" \
+                --notes-file "$NOTES_FILE"
+            fi
+
+            if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
+              gh release edit "$RELEASE_TAG" --draft=false
+            fi
+          done
 
       - name: Upload CRX artifacts
         if: always()

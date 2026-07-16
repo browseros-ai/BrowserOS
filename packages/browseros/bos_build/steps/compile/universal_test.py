@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for the merge_universal step."""
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -104,6 +105,70 @@ class PreflightTest(MergeUniversalTestBase):
         ):
             with self.assertRaisesRegex(ValidationError, "not found"):
                 MergeUniversalModule().preflight(self.ctx)
+
+
+class ServerBundleSkewTest(unittest.TestCase):
+    """The merge-time guard against version-skewed per-arch server bundles."""
+
+    def _write_bundle(
+        self,
+        family_dir: Path,
+        arch_dir: str,
+        version: str,
+        generated_at: str = "2026-01-01T00:00:00.000Z",
+    ) -> None:
+        arch_path = family_dir / arch_dir
+        arch_path.mkdir(parents=True)
+        (arch_path / "artifact-metadata.json").write_text(
+            json.dumps(
+                {"version": version, "generatedAt": generated_at, "files": []}
+            )
+        )
+
+    def test_matching_versions_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binaries = Path(tmp)
+            family = binaries / "browseros_server"
+            self._write_bundle(family, "darwin-arm64", "0.0.10")
+            self._write_bundle(family, "darwin-x64", "0.0.10")
+
+            universal._assert_server_bundles_aligned(binaries)  # no raise
+
+    def test_mismatched_versions_raise_with_both_versions_and_timestamps(self):
+        # Mirrors the BrowserClaw 0.47.11 skew: fresh arm64 vs stale x64.
+        with tempfile.TemporaryDirectory() as tmp:
+            binaries = Path(tmp)
+            family = binaries / "browseros_claw_server"
+            self._write_bundle(
+                family, "darwin-arm64", "0.0.10", "2026-07-14T00:00:00.000Z"
+            )
+            self._write_bundle(
+                family, "darwin-x64", "0.0.3", "2026-06-30T00:00:00.000Z"
+            )
+
+            with self.assertRaises(ValidationError) as caught:
+                universal._assert_server_bundles_aligned(binaries)
+
+            message = str(caught.exception)
+            self.assertIn("browseros_claw_server", message)
+            self.assertIn("0.0.10", message)
+            self.assertIn("0.0.3", message)
+            self.assertIn("2026-07-14T00:00:00.000Z", message)
+            self.assertIn("2026-06-30T00:00:00.000Z", message)
+
+    def test_absent_x64_metadata_skips_family(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binaries = Path(tmp)
+            family = binaries / "browseros_server"
+            self._write_bundle(family, "darwin-arm64", "0.0.10")
+            # x64 dir exists but carries no metadata (partial/older layout).
+            (family / "darwin-x64").mkdir(parents=True)
+
+            universal._assert_server_bundles_aligned(binaries)  # no raise
+
+    def test_missing_binaries_dir_is_noop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            universal._assert_server_bundles_aligned(Path(tmp) / "absent")  # no raise
 
 
 class RegistrationTest(unittest.TestCase):

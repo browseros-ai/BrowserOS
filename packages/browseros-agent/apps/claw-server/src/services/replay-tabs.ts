@@ -16,7 +16,7 @@
  *     `pageId`, `targetId`, `url`, `title`.
  *   - identityService.list() to map agentId back to the live MCP
  *     `sessionId` (the replay file name).
- *   - ownershipStore.groupOf() to resolve the durable agent group's colour.
+ *   - ownershipStore.groupOf() to resolve the session group's colour.
  *
  * Output:
  *   - `[{ sessionId, tabPageId, url, title, groupColor }]`.
@@ -25,10 +25,10 @@
  * response: if no MCP session is currently registered for this
  * agentId, there is nothing to POST events to, so the extension
  * has nothing to record. The next /replay/tabs poll picks the
- * tab up again as soon as a session reattaches.
+ * tab up again only while its owning session is live.
  *
- * agentId is session-scoped, so same-client sessions join back to
- * their own replay file instead of sharing one live identity entry.
+ * Each session key is also its agentId, so same-client sessions join
+ * back to their own replay file instead of sharing one identity entry.
  */
 
 import type { OwnershipStore } from '../domain/ownership'

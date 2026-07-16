@@ -10,11 +10,13 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import { BROWSER_TOOLS } from '@browseros/browser-mcp/registry'
 import {
+  errorResult,
   executeTool,
   type ToolDefinition,
+  textResult,
 } from '@browseros/browser-mcp/tools/framework'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { ZodRawShape } from 'zod'
+import { type ZodRawShape, z } from 'zod'
 import type { AgentKey } from '../domain/agent-key'
 import { ownershipStore } from '../domain/ownership'
 import { getBrowserSession } from '../lib/browser-session'
@@ -22,7 +24,11 @@ import { logger } from '../lib/logger'
 import {
   agentIdentityFromClient,
   agentKeyFromClient,
+  buildSessionGroupTitle,
   type ClientIdentity,
+  clientPrefixFromSlug,
+  identityService,
+  normalizeSmallName,
 } from '../lib/mcp-session'
 import {
   CANCELLATION_REASON,
@@ -32,15 +38,14 @@ import { cancellationErrorResult } from './cancellation-result'
 import { composeAbortSignals, dispatchErrorText } from './dispatch-util'
 import { applyAudit } from './effects/audit'
 import { applyOwnershipClaims } from './effects/ownership-claims'
-import { createSessionNamingEffect } from './effects/session-naming'
+import { applySessionNaming } from './effects/session-naming'
 import { applyTabActivity } from './effects/tab-activity'
-import { applyTabGroups } from './effects/tab-groups'
+import { applyAgentTabGroupTitle, applyTabGroups } from './effects/tab-groups'
 import { applyTabsListView } from './effects/tabs-list-view'
 import { guardBrowserConnected } from './guards/browser-connected'
 import { guardNavigateScheme } from './guards/navigate-scheme'
 import { guardPageOwnership } from './guards/page-ownership'
 import { asRegister, type ToolResult } from './register-fn'
-import type { SessionNamingServer } from './session-naming'
 
 const ARBITRARY_SCRIPT_TOOLS = new Set(['run', 'evaluate'])
 
@@ -48,7 +53,6 @@ export interface ToolCall {
   tool: ToolDefinition
   args: unknown
   sessionId: string
-  requestId: unknown
   identity: ClientIdentity | null
   key: AgentKey | null
   agent: { agentId: string; slug: string } | null
@@ -87,6 +91,9 @@ const BASE_EFFECTS: readonly NamedToolEffect[] = [
   { name: 'audit', run: applyAudit },
   { name: 'tab-activity', run: applyTabActivity },
   { name: 'tab-groups', run: applyTabGroups },
+  // Must stay last: tabs-list-view rewrites result content wholesale, so a
+  // nudge appended before it would be clobbered.
+  { name: 'session-naming', run: applySessionNaming },
 ]
 
 /** Returns the first guard rejection in pipeline order. */
@@ -112,7 +119,7 @@ export function runEffects(
     try {
       result = effect.run({ ...context, result }) ?? result
     } catch (error) {
-      warn('cockpit v2 tool dispatch effect failed', {
+      warn('cockpit tool dispatch effect failed', {
         tool: context.call.tool.name,
         sessionId: context.call.sessionId || undefined,
         effect: effect.name,
@@ -127,16 +134,8 @@ export function runEffects(
 export function registerBrowserToolsForSingleServer(
   server: McpServer,
   resolveIdentity: (sessionId: string | undefined) => ClientIdentity | null,
-  options: { sessionNamingServer: SessionNamingServer },
 ): void {
   const register = asRegister(server)
-  const effects: readonly NamedToolEffect[] = [
-    ...BASE_EFFECTS,
-    {
-      name: 'session-naming',
-      run: createSessionNamingEffect(options.sessionNamingServer),
-    },
-  ]
   for (const tool of BROWSER_TOOLS) {
     register(
       tool.name,
@@ -149,18 +148,45 @@ export function registerBrowserToolsForSingleServer(
         }),
       },
       (args, extra) =>
-        dispatchToolCall(
-          buildToolCall(tool, args, extra, resolveIdentity),
-          effects,
-        ),
+        dispatchToolCall(buildToolCall(tool, args, extra, resolveIdentity)),
     )
   }
+  register(
+    'name_session',
+    {
+      description:
+        'Rename this browser session: a small lowercase 2-3 word label for what this session is doing, e.g. "invoice processing". Tabs are grouped as <client>/<name>. Call again to rename.',
+      inputSchema: { name: z.string().max(64) },
+      annotations: {
+        title: 'Name session',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args, extra) => {
+      const identity = resolveIdentity(extra?.sessionId)
+      if (!identity) return errorResult('unable to resolve this session')
+      const label = normalizeSmallName(args.name as string)
+      if (!label) return errorResult('name must contain a usable session name')
+
+      const prefix = clientPrefixFromSlug(identity.slug)
+      const oldTitle = buildSessionGroupTitle(prefix, identity.label)
+      const newTitle = buildSessionGroupTitle(prefix, label)
+      identityService.setLabel(identity.sessionId, label)
+      await applyAgentTabGroupTitle({
+        key: identity.key,
+        title: newTitle,
+        session: getBrowserSession(),
+      })
+      return textResult(`renamed to ${newTitle} (was ${oldTitle})`)
+    },
+  )
 }
 
 interface DispatchExtra {
   signal?: AbortSignal
   sessionId?: string
-  requestId?: string | number
 }
 
 interface ExecutionOutcome {
@@ -191,7 +217,6 @@ function buildToolCall(
     tool,
     args,
     sessionId: extra?.sessionId ?? '',
-    requestId: extra?.requestId,
     identity,
     key,
     agent,
@@ -213,16 +238,13 @@ function buildToolCall(
   }
 }
 
-async function dispatchToolCall(
-  call: ToolCall,
-  effects: readonly NamedToolEffect[],
-): Promise<ToolResult> {
+async function dispatchToolCall(call: ToolCall): Promise<ToolResult> {
   const rejection = runGuards(call)
   if (rejection) return wireResult(rejection)
   const connectedCall = call as ConnectedToolCall
 
   if (ARBITRARY_SCRIPT_TOOLS.has(call.tool.name)) {
-    logger.warn('cockpit v2 dispatched arbitrary-script tool', {
+    logger.warn('cockpit dispatched arbitrary-script tool', {
       tool: call.tool.name,
       sessionId: call.sessionId || undefined,
     })
@@ -230,14 +252,14 @@ async function dispatchToolCall(
 
   const outcome = await executeWithCancellation(connectedCall)
   if (outcome.result.isError && !outcome.cancelled) {
-    logger.warn('cockpit v2 tool dispatch failed', {
+    logger.warn('cockpit tool dispatch failed', {
       tool: call.tool.name,
       sessionId: call.sessionId || undefined,
       durationMs: outcome.durationMs,
       error: dispatchErrorText(outcome.result.content),
     })
   }
-  const result = runEffects({ call, ...outcome }, effects)
+  const result = runEffects({ call, ...outcome })
   return wireResult(result)
 }
 
@@ -298,10 +320,10 @@ function logThrownDispatch(
     durationMs: Date.now() - dispatchStart,
   }
   if (call.signal?.aborted) {
-    logger.info('cockpit v2 tool dispatch cancelled by client', fields)
+    logger.info('cockpit tool dispatch cancelled by client', fields)
     return
   }
-  logger.error('cockpit v2 tool dispatch threw', {
+  logger.error('cockpit tool dispatch threw', {
     ...fields,
     error: error instanceof Error ? error.message : String(error),
   })

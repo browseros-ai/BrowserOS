@@ -144,7 +144,7 @@ class ExtensionRegistryTest(unittest.TestCase):
         by_name = {ext.name: ext for ext in EXTENSIONS}
         self.assertTrue(by_name["agent"].in_update_feed)
         self.assertTrue(by_name["bugreporter"].in_update_feed)
-        self.assertFalse(by_name["browserclaw"].in_update_feed)
+        self.assertTrue(by_name["browserclaw"].in_update_feed)
 
     def test_crx_url_scheme(self):
         agent = extension_by_name("agent")

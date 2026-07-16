@@ -121,10 +121,7 @@ where
 }
 
 /// Sends one session-name elicitation over the live peer.
-pub async fn peer_elicit_session_name(
-    peer: &Peer<RoleServer>,
-    prefix: &str,
-) -> ElicitNameOutcome {
+pub async fn peer_elicit_session_name(peer: &Peer<RoleServer>, prefix: &str) -> ElicitNameOutcome {
     let params = ElicitRequestParams::FormElicitationParams {
         meta: None,
         message: build_session_name_prompt(prefix),
@@ -173,9 +170,15 @@ mod tests {
 
     #[test]
     fn normalize_small_name_matches_ts_vectors() {
-        assert_eq!(normalize_small_name("Invoice Processing!"), "invoice-processing");
+        assert_eq!(
+            normalize_small_name("Invoice Processing!"),
+            "invoice-processing"
+        );
         assert_eq!(normalize_small_name("  LinkedIn   Jobs "), "linkedin-jobs");
-        assert_eq!(normalize_small_name("one two three four five"), "one-two-three");
+        assert_eq!(
+            normalize_small_name("one two three four five"),
+            "one-two-three"
+        );
         assert_eq!(normalize_small_name("!!!"), "");
         assert_eq!(normalize_small_name(""), "");
         assert_eq!(normalize_small_name("日本語"), "");
@@ -228,7 +231,9 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn accepted_name_is_normalized() {
         let name = elicit_session_name(|| {
-            std::future::ready(ElicitNameOutcome::Accepted("Invoice Processing".to_string()))
+            std::future::ready(ElicitNameOutcome::Accepted(
+                "Invoice Processing".to_string(),
+            ))
         })
         .await;
         assert_eq!(name.as_deref(), Some("invoice-processing"));

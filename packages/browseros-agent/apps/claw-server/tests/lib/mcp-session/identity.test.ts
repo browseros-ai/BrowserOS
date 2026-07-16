@@ -3,16 +3,18 @@ import {
   agentIdentityFromClient,
   agentKeyFromClient,
   createIdentityService,
-  fallbackSlugForSession,
   slugifyClientName,
 } from '../../../src/lib/mcp-session/identity'
 
 describe('IdentityService', () => {
-  function setup(nowMs = 1_000_000) {
-    return createIdentityService({ now: () => nowMs })
+  function setup(options: { now?: () => number; random?: () => number } = {}) {
+    return createIdentityService({
+      now: options.now ?? (() => 1_000_000),
+      random: options.random ?? (() => 0),
+    })
   }
 
-  it('registers an initialize and returns the record', () => {
+  it('registers a born-named identity with one key and agent id', () => {
     const svc = setup()
     const record = svc.registerInitialize({
       sessionId: 's1',
@@ -22,63 +24,172 @@ describe('IdentityService', () => {
         title: 'Claude Code',
       },
     })
+
     expect(record).toMatchObject({
       sessionId: 's1',
       clientName: 'Claude Code',
       clientVersion: '1.4.2',
       clientTitle: 'Claude Code',
-      sessionLabel: null,
+      slug: 'claude-code',
+      label: 'agile-alpaca',
+      generatedLabel: 'agile-alpaca',
+      key: 'claude-code-agile-alpaca',
       firstSeenAt: 1_000_000,
+    })
+    expect(record.label).not.toBeNull()
+    expect(agentKeyFromClient(record)).toBe(record.key)
+    expect(agentIdentityFromClient(record)).toEqual({
+      agentId: record.key,
+      slug: 'claude-code',
     })
     expect(svc.getIdentity('s1')).toEqual(record)
   })
 
-  it('overwrites on a duplicate sessionId rather than appending', () => {
+  it('uses agent for an unusable client slug', () => {
     const svc = setup()
-    svc.registerInitialize({
+    const record = svc.registerInitialize({
       sessionId: 's1',
-      clientInfo: { name: 'Claude Code', version: '1.4.2' },
+      clientInfo: { name: '!!!' },
     })
-    svc.registerInitialize({
-      sessionId: 's1',
-      clientInfo: { name: 'Cursor', version: '0.99.0' },
+
+    expect(record.slug).toBe('agent')
+    expect(record.key).toBe('agent-agile-alpaca')
+    expect(agentIdentityFromClient(record)).toEqual({
+      agentId: 'agent-agile-alpaca',
+      slug: 'agent',
     })
-    expect(svc.size()).toBe(1)
-    expect(svc.getIdentity('s1')?.clientName).toBe('Cursor')
   })
 
-  it('returns null for an unknown session id', () => {
-    const svc = setup()
-    expect(svc.getIdentity('nope')).toBeNull()
+  it('mints distinct keys for concurrent sessions from one client', () => {
+    const draws = [0, 0, 0.03, 0.03]
+    const svc = setup({ random: () => draws.shift() ?? 0.03 })
+    const first = svc.registerInitialize({
+      sessionId: 's1',
+      clientInfo: { name: 'Claude Code' },
+    })
+    const second = svc.registerInitialize({
+      sessionId: 's2',
+      clientInfo: { name: 'Claude Code' },
+    })
+
+    expect(first.key).toBe('claude-code-agile-alpaca')
+    expect(second.key).not.toBe(first.key)
+    expect(second.slug).toBe(first.slug)
   })
 
-  it('drops a session and forgets the record', () => {
-    const svc = setup()
-    svc.registerInitialize({ sessionId: 's1', clientInfo: { name: 'a' } })
-    svc.dropSession('s1')
+  it('returns the original identity for duplicate initialization', () => {
+    const draws = [0, 0, 0.5, 0.5]
+    const svc = setup({ random: () => draws.shift() ?? 0.5 })
+    const first = svc.registerInitialize({
+      sessionId: 's1',
+      clientInfo: { name: 'Claude Code', version: '1.0.0' },
+    })
+    const duplicate = svc.registerInitialize({
+      sessionId: 's1',
+      clientInfo: { name: 'Different Client', version: '2.0.0' },
+    })
+
+    expect(duplicate).toBe(first)
+    expect(duplicate.key).toBe('claude-code-agile-alpaca')
+    expect(duplicate.clientVersion).toBe('1.0.0')
+    expect(svc.list()).toEqual([first])
+  })
+
+  it('keeps ended keys reserved until retention cleanup forgets them', () => {
+    let now = 1_000
+    const svc = setup({ now: () => now })
+    const first = svc.registerInitialize({
+      sessionId: 's1',
+      clientInfo: { name: 'Claude Code' },
+    })
+
+    now = 2_000
+    expect(svc.endSession('s1')).toEqual(first)
     expect(svc.getIdentity('s1')).toBeNull()
+    expect(svc.list()).toEqual([])
+    expect(svc.listRetained()).toEqual([{ key: first.key, endedAt: 2_000 }])
+
+    const second = svc.registerInitialize({
+      sessionId: 's2',
+      clientInfo: { name: 'Claude Code' },
+    })
+    expect(second.key).not.toBe(first.key)
+
+    svc.forgetRetained(first.key)
+    expect(svc.listRetained()).toEqual([])
+  })
+
+  it('renames only the mutable label', () => {
+    const svc = setup()
+    const record = svc.registerInitialize({
+      sessionId: 's1',
+      clientInfo: { name: 'Claude Code' },
+    })
+
+    svc.setLabel('s1', 'invoice-processing')
+    expect(svc.getIdentity('s1')).toMatchObject({
+      key: record.key,
+      generatedLabel: 'agile-alpaca',
+      label: 'invoice-processing',
+    })
+  })
+
+  it('returns null for unknown sessions and ignores unknown renames', () => {
+    const svc = setup()
+    expect(svc.getIdentity('missing')).toBeNull()
+    svc.setLabel('missing', 'invoice-processing')
     expect(svc.size()).toBe(0)
   })
 
-  it('stores an accepted session label when the session is live', () => {
+  it('starts fresh sessions with the full rename-nudge budget', () => {
     const svc = setup()
-    svc.registerInitialize({ sessionId: 's1', clientInfo: { name: 'a' } })
-    svc.setSessionLabel('s1', 'invoice-processing')
-    expect(svc.getIdentity('s1')?.sessionLabel).toBe('invoice-processing')
+    const record = svc.registerInitialize({
+      sessionId: 's1',
+      clientInfo: { name: 'Claude Code' },
+    })
+    expect(record.renameNudgesLeft).toBe(5)
   })
 
-  it('setSessionLabel is a no-op for an unknown session', () => {
+  it('grants five rename nudges then refuses', () => {
     const svc = setup()
-    svc.setSessionLabel('missing', 'invoice-processing')
-    expect(svc.size()).toBe(0)
+    svc.registerInitialize({
+      sessionId: 's1',
+      clientInfo: { name: 'Claude Code' },
+    })
+
+    for (let index = 0; index < 5; index += 1) {
+      expect(svc.takeRenameNudge('s1')).toBe(true)
+    }
+    expect(svc.takeRenameNudge('s1')).toBe(false)
+    expect(svc.getIdentity('s1')?.renameNudgesLeft).toBe(0)
   })
 
-  it('clear empties everything', () => {
+  it('refuses rename nudges once the label diverges from the generated one', () => {
+    const svc = setup()
+    svc.registerInitialize({
+      sessionId: 's1',
+      clientInfo: { name: 'Claude Code' },
+    })
+
+    svc.setLabel('s1', 'invoice-processing')
+    expect(svc.takeRenameNudge('s1')).toBe(false)
+  })
+
+  it('refuses rename nudges for unknown or unidentified sessions', () => {
+    const svc = setup()
+    expect(svc.takeRenameNudge('missing')).toBe(false)
+    expect(svc.takeRenameNudge('')).toBe(false)
+  })
+
+  it('clear removes live identities and retained reservations', () => {
     const svc = setup()
     svc.registerInitialize({ sessionId: 's1', clientInfo: { name: 'a' } })
+    svc.endSession('s1')
     svc.registerInitialize({ sessionId: 's2', clientInfo: { name: 'b' } })
+
     svc.clear()
     expect(svc.size()).toBe(0)
+    expect(svc.listRetained()).toEqual([])
   })
 
   it('trims and stores empty clientInfo fields cleanly', () => {
@@ -104,143 +215,12 @@ describe('slugifyClientName', () => {
   })
 
   it('caps the output at 64 characters', () => {
-    const raw = 'x'.repeat(120)
-    expect(slugifyClientName(raw)).toHaveLength(64)
+    expect(slugifyClientName('x'.repeat(120))).toHaveLength(64)
   })
 
   it('returns an empty string for pure-unicode or pure-symbol input', () => {
     expect(slugifyClientName('!!!')).toBe('')
     expect(slugifyClientName('日本語')).toBe('')
     expect(slugifyClientName('')).toBe('')
-  })
-})
-
-describe('fallbackSlugForSession', () => {
-  it('produces a stable handle for the same session', () => {
-    const a = fallbackSlugForSession('abc-def-123')
-    const b = fallbackSlugForSession('abc-def-123')
-    expect(a).toBe(b)
-    expect(a).toMatch(/^unknown-[0-9a-f]{6}$/)
-  })
-
-  it('produces a different handle for different sessions', () => {
-    expect(fallbackSlugForSession('session-1')).not.toBe(
-      fallbackSlugForSession('session-2'),
-    )
-  })
-})
-
-describe('agentIdentityFromClient', () => {
-  it('preserves the session-scoped audit identity', () => {
-    expect(
-      agentIdentityFromClient({
-        sessionId: 'session-a',
-        clientName: 'Claude Code',
-        clientVersion: '1.0.0',
-        clientTitle: null,
-        sessionLabel: null,
-        firstSeenAt: 0,
-      }),
-    ).toEqual({ agentId: 'claude-code-a36a9d', slug: 'claude-code' })
-  })
-
-  it('scopes same-name clients by session id while keeping the plain slug', () => {
-    const a = agentIdentityFromClient({
-      sessionId: 's1',
-      clientName: 'Claude Code',
-      clientVersion: '1.0.0',
-      clientTitle: null,
-      sessionLabel: null,
-      firstSeenAt: 0,
-    })
-    const b = agentIdentityFromClient({
-      sessionId: 's2',
-      clientName: 'Claude Code',
-      clientVersion: '1.0.0',
-      clientTitle: null,
-      sessionLabel: null,
-      firstSeenAt: 0,
-    })
-    expect(a.agentId).toMatch(/^claude-code-[0-9a-f]{6}$/)
-    expect(b.agentId).toMatch(/^claude-code-[0-9a-f]{6}$/)
-    expect(a.agentId).not.toBe(b.agentId)
-    expect(a.slug).toBe('claude-code')
-    expect(b.slug).toBe('claude-code')
-  })
-
-  it('returns the same agentId for the same identity', () => {
-    const identity = {
-      sessionId: 's1',
-      clientName: 'Claude Code',
-      clientVersion: '1.0.0',
-      clientTitle: null,
-      sessionLabel: null,
-      firstSeenAt: 0,
-    }
-    expect(agentIdentityFromClient(identity)).toEqual(
-      agentIdentityFromClient(identity),
-    )
-  })
-
-  it('falls back to the synthetic handle when clientName is empty', () => {
-    const identity = {
-      sessionId: 'session-xyz',
-      clientName: '',
-      clientVersion: '',
-      clientTitle: null,
-      sessionLabel: null,
-      firstSeenAt: 0,
-    }
-    const result = agentIdentityFromClient(identity)
-    expect(result.agentId).toBe(fallbackSlugForSession('session-xyz'))
-    expect(result.agentId).toBe(result.slug)
-  })
-
-  it('falls back to the synthetic handle when clientName is pure unicode', () => {
-    const identity = {
-      sessionId: 's1',
-      clientName: '日本語',
-      clientVersion: '',
-      clientTitle: null,
-      sessionLabel: null,
-      firstSeenAt: 0,
-    }
-    const result = agentIdentityFromClient(identity)
-    expect(result.agentId).toBe(fallbackSlugForSession('s1'))
-    expect(result.agentId).toBe(result.slug)
-  })
-})
-
-describe('agentKeyFromClient', () => {
-  function identity(sessionId: string, clientName: string) {
-    return {
-      sessionId,
-      clientName,
-      clientVersion: '1.0.0',
-      clientTitle: null,
-      sessionLabel: null,
-      firstSeenAt: 0,
-    }
-  }
-
-  it('survives reconnects from the same named client', () => {
-    expect(agentKeyFromClient(identity('session-1', 'Claude Code'))).toBe(
-      agentKeyFromClient(identity('session-2', 'Claude Code')),
-    )
-  })
-
-  it('normalizes case, spaces, and symbols with the existing slug rules', () => {
-    expect(agentKeyFromClient(identity('s1', '  CLAUDE +++ Code! '))).toBe(
-      'claude-code',
-    )
-  })
-
-  it('uses distinct session fallbacks for unusable names', () => {
-    const empty = agentKeyFromClient(identity('session-1', ''))
-    const symbols = agentKeyFromClient(identity('session-2', '!!!'))
-
-    expect(empty).toBe(fallbackSlugForSession('session-1'))
-    expect(symbols).toBe(fallbackSlugForSession('session-2'))
-    expect(empty).not.toBe(symbols)
   })
 })

@@ -9,8 +9,11 @@
  */
 
 import { describe, expect, test } from 'bun:test'
+import { createOwnershipStore } from '../../src/domain/ownership'
+import { createIdentityService } from '../../src/lib/mcp-session'
 import {
   annotateTabsListWithOwnership,
+  buildOwnershipDeps,
   classify,
   type OwnershipDeps,
 } from '../../src/mcp/tabs-ownership'
@@ -213,5 +216,39 @@ describe('annotateTabsListWithOwnership', () => {
       makeDeps(),
     )
     expect(result.isError).toBe(false)
+  })
+})
+
+describe('buildOwnershipDeps', () => {
+  test('falls back to a retained group title after the owner session ends', () => {
+    const draws = [0, 0, 0.03, 0.03]
+    const identities = createIdentityService({
+      now: () => 1,
+      random: () => draws.shift() ?? 0.03,
+    })
+    const caller = identities.registerInitialize({
+      sessionId: 'caller',
+      clientInfo: { name: 'codex' },
+    })
+    const owner = identities.registerInitialize({
+      sessionId: 'owner',
+      clientInfo: { name: 'claude-code' },
+    })
+    const store = createOwnershipStore()
+    store.claimPage(owner.key, 9)
+    store.setGroup(owner.key, {
+      id: 'G1',
+      windowId: 1,
+      color: 'red',
+      title: 'claude/invoice-processing',
+      collapsed: true,
+    })
+    identities.endSession('owner')
+
+    const deps = buildOwnershipDeps(caller, store, identities)
+    expect(classify({ page: 9 }, deps)).toMatchObject({
+      ownership: 'other-agent',
+      ownerLabel: 'claude/invoice-processing',
+    })
   })
 })

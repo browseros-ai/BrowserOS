@@ -311,7 +311,7 @@ jobs:
       }}
     uses: ./.github/workflows/release-extensions.yml
     permissions:
-      contents: read
+      contents: write
     with:
       version: ${{ needs.preflight.outputs.extensions_version }}
       extension: agent

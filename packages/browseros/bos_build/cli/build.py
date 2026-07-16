@@ -613,6 +613,7 @@ def _resolve_preset(
                         Context(
                             chromium_src=src,
                             architecture=run_arch,
+                            plan_architectures=tuple(switches.architectures),
                             build_type=switches.build_type,
                             product=switches.product,
                             extra_gn_args=extra_gn_args,

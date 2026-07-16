@@ -10,16 +10,20 @@
  * never block the agent.
  */
 
-import { sql } from 'drizzle-orm'
 import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 
 export const toolDispatches = sqliteTable(
   'tool_dispatches',
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
+    // Epoch millis, defaulted in JS rather than via a SQL
+    // `unixepoch('subsec')` expression: that modifier needs SQLite
+    // >= 3.42, and `bun:sqlite` links the system SQLite on macOS
+    // (often older), where it yields NULL and every insert fails the
+    // NOT NULL constraint. `Date.now()` is runtime-portable.
     createdAt: integer('created_at')
       .notNull()
-      .default(sql`(unixepoch('subsec') * 1000)`),
+      .$defaultFn(() => Date.now()),
     agentId: text('agent_id').notNull(),
     slug: text('slug').notNull(),
     agentLabel: text('agent_label').notNull(),

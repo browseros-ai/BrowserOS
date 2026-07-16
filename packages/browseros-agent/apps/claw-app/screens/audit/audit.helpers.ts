@@ -84,7 +84,6 @@ export function abbreviateSequence(seq: string[], cap = 5): string {
 }
 
 export interface AgentChip {
-  agentId: string
   slug: string
   agentLabel: string
   count: number
@@ -93,13 +92,12 @@ export interface AgentChip {
 export function agentChipsFor(tasks: TaskSummary[]): AgentChip[] {
   const map = new Map<string, AgentChip>()
   for (const t of tasks) {
-    const existing = map.get(t.agentId)
+    const existing = map.get(t.slug)
     if (existing) {
       existing.count += 1
       continue
     }
-    map.set(t.agentId, {
-      agentId: t.agentId,
+    map.set(t.slug, {
       slug: t.slug,
       agentLabel: t.agentLabel,
       count: 1,

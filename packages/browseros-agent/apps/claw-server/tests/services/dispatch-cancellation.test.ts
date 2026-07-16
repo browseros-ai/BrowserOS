@@ -9,20 +9,29 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import { agentKeyFromSlug } from '../../src/domain/agent-key'
 import {
   agentIdentityFromClient,
   type ClientIdentity,
   type IdentityService,
+  slugifyClientName,
 } from '../../src/lib/mcp-session'
 import { createDispatchCancellation } from '../../src/services/dispatch-cancellation'
 
 function makeIdentity(over: Partial<ClientIdentity>): ClientIdentity {
+  const sessionId = over.sessionId ?? 's1'
+  const clientName = over.clientName ?? 'claude-code'
+  const slug = over.slug ?? (slugifyClientName(clientName) || 'agent')
+  const generatedLabel = over.generatedLabel ?? `swift-${sessionId}`
   return {
-    sessionId: 's1',
-    clientName: 'claude-code',
+    sessionId,
+    clientName,
     clientVersion: '0.1.0',
     clientTitle: null,
-    sessionLabel: null,
+    slug,
+    key: agentKeyFromSlug(`${slug}-${generatedLabel}`),
+    generatedLabel,
+    label: generatedLabel,
     firstSeenAt: 1_000_000,
     ...over,
   }

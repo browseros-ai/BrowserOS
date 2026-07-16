@@ -151,7 +151,8 @@ describe('MCP dispatch: tabs new registry write', () => {
     const identity = identityService.getIdentity(transport.sessionId as string)
     if (!identity) throw new Error('missing identity')
     const { agentId, slug } = agentIdentityFromClient(identity)
-    expect(agentId).toMatch(/^codex-mcp-client-[0-9a-f]{6}$/)
+    expect(agentId).toBe(identity.key)
+    expect(agentId).toMatch(/^codex-mcp-client-[a-z]+-[a-z]+(?:-\d+)?$/)
 
     const snapshot = tabActivityRegistry.snapshot()
     expect(snapshot).toHaveLength(1)

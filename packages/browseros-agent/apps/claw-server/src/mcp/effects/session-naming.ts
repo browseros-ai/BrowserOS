@@ -4,44 +4,28 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { logger } from '../../lib/logger'
-import type { ToolEffect } from '../dispatch'
 import {
-  maybeRequestSessionNaming,
-  type SessionNamingServer,
-} from '../session-naming'
+  buildSessionGroupTitle,
+  clientPrefixFromSlug,
+  identityService,
+} from '../../lib/mcp-session'
+import type { ToolEffect } from '../dispatch'
 
-/** Starts naming while the first successful tabs-new response stream is open. */
-export function createSessionNamingEffect(
-  server: SessionNamingServer,
-): ToolEffect {
-  let warnedMissingRequestId = false
-
-  return ({ call, result }) => {
-    if (result.isError || !call.flags.newPage) return undefined
-    if (
-      typeof call.requestId !== 'string' &&
-      typeof call.requestId !== 'number'
-    ) {
-      if (!warnedMissingRequestId) {
-        warnedMissingRequestId = true
-        logger.warn('mcp session naming request id unavailable', {
-          sessionId: call.sessionId,
-        })
-      }
-      return undefined
-    }
-
-    void maybeRequestSessionNaming({
-      server,
-      sessionId: call.sessionId,
-      requestId: call.requestId,
-    }).catch((error) => {
-      logger.warn('mcp session naming failed unexpectedly', {
-        sessionId: call.sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      })
-    })
+/** Appends a bounded rename nudge while the session keeps its generated label. */
+export const applySessionNaming: ToolEffect = ({ call, result }) => {
+  const identity = call.identity
+  if (result.isError || call.tool.name === 'name_session' || !identity) {
     return undefined
+  }
+  if (!identityService.takeRenameNudge(call.sessionId)) return undefined
+
+  const title = buildSessionGroupTitle(
+    clientPrefixFromSlug(identity.slug),
+    identity.label,
+  )
+  const tip = `Tip: this session is "${title}" — rename it with name_session name="<2-3 word task label>"`
+  return {
+    ...result,
+    content: [...result.content, { type: 'text', text: tip }],
   }
 }

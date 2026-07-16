@@ -10,6 +10,7 @@ on:
         options:
           - alpha
           - prod
+          - both
         default: "alpha"
       pins:
         description: "Optional name=version pins, separated by commas or spaces"
@@ -29,7 +30,7 @@ on:
   workflow_call:
     inputs:
       channel:
-        description: "Update-feed channel: alpha or prod"
+        description: "Update-feed channel: alpha, prod, or both"
         required: false
         type: string
         default: "alpha"
@@ -92,9 +93,9 @@ jobs:
           set -euo pipefail
 
           case "$CHANNEL" in
-            alpha|prod) ;;
+            alpha|prod|both) ;;
             *)
-              echo "::error::Invalid channel '$CHANNEL'; expected alpha or prod" >&2
+              echo "::error::Invalid channel '$CHANNEL'; expected alpha, prod, or both" >&2
               exit 1
               ;;
           esac
@@ -118,10 +119,23 @@ jobs:
             args+=(--allow-downgrade)
           fi
 
-          {
-            echo "### Extension feed command"
-            echo '```bash'
-            echo "browseros release extensions ${args[*]}"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          uv run browseros release extensions "${args[@]}"
+          if [ "$CHANNEL" = "both" ]; then
+            for ch in alpha prod; do
+              args[1]="$ch"
+              {
+                echo "### Extension feed command ($ch)"
+                echo '```bash'
+                echo "browseros release extensions ${args[*]}"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              uv run browseros release extensions "${args[@]}"
+            done
+          else
+            {
+              echo "### Extension feed command"
+              echo '```bash'
+              echo "browseros release extensions ${args[*]}"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            uv run browseros release extensions "${args[@]}"
+          fi

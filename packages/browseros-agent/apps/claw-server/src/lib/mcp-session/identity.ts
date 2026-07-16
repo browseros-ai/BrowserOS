@@ -1,38 +1,28 @@
 /**
  * @license
- * Copyright 2025 BrowserOS
+ * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * Per-session identity map. In v2 the cockpit exposes one standard
- * MCP endpoint at `POST /mcp` and every agent connects to it
- * over a `StreamableHTTPTransport` session. The transport assigns an
- * `mcp-session-id` at handshake time; we use that id as the key into
- * this map so subsequent `tools/call` requests on the same session
- * can be attributed to the connecting client.
- *
- * Records live for the lifetime of the session. When the transport
- * reports `close` (clean disconnect) or `error` (abrupt), the route
- * layer is expected to call `dropSession(sessionId)`. Polled reads
- * tolerate a stale identity; the homepage degrades to "no label"
- * rather than crashing.
- *
- * `agentIdentityFromClient` is the bridge between the identity map
- * and the existing `tabActivityRegistry`, which keys on
- * `{ agentId, slug }`. The slug is the cleaned `clientInfo.name`
- * handle, while the agentId is session-scoped so parallel sessions
- * from the same client do not share ownership ledgers. Unusable
- * names fall back to the session-derived `unknown-<hash>` handle.
  */
 
 import { type AgentKey, agentKeyFromSlug } from '../../domain/agent-key'
+import { generateFunName } from './fun-names'
 
 export interface ClientIdentity {
   sessionId: string
   clientName: string
   clientVersion: string
   clientTitle: string | null
-  sessionLabel: string | null
+  slug: string
+  key: AgentKey
+  generatedLabel: string
+  label: string
+  renameNudgesLeft: number
   firstSeenAt: number
+}
+
+export interface RetainedIdentity {
+  key: AgentKey
+  endedAt: number
 }
 
 export interface IdentityService {
@@ -45,36 +35,60 @@ export interface IdentityService {
     }
   }): ClientIdentity
   getIdentity(sessionId: string): ClientIdentity | null
-  setSessionLabel(sessionId: string, label: string): void
-  dropSession(sessionId: string): void
-  /** Snapshot of every live identity. Used by the tabs route to enrich registry records by agentId. */
+  setLabel(sessionId: string, label: string): void
+  takeRenameNudge(sessionId: string): boolean
+  endSession(sessionId: string): ClientIdentity | null
   list(): ClientIdentity[]
-  // Test-only escape hatches mirroring the tab-activity registry.
+  listRetained(): RetainedIdentity[]
+  forgetRetained(key: AgentKey): void
   size(): number
   clear(): void
 }
 
 export interface IdentityServiceDeps {
   now?: () => number
+  random?: () => number
 }
 
 const SLUG_MAX_LEN = 64
-const HASH_TAIL_LEN = 6
+const SESSION_NAME_NUDGE_LIMIT = 5
 
 export function createIdentityService(
   deps: IdentityServiceDeps = {},
 ): IdentityService {
   const records = new Map<string, ClientIdentity>()
+  const retained = new Map<AgentKey, number>()
   const now = deps.now ?? (() => Date.now())
+  const random = deps.random ?? Math.random
+
+  function keyAvailable(key: AgentKey): boolean {
+    if (retained.has(key)) return false
+    return Array.from(records.values()).every((record) => record.key !== key)
+  }
 
   return {
     registerInitialize(input) {
+      const existing = records.get(input.sessionId)
+      if (existing) return existing
+
+      const clientName = input.clientInfo.name?.trim() ?? ''
+      const slug = slugifyClientName(clientName) || 'agent'
+      const generatedLabel = generateFunName({
+        random,
+        isAvailable(label) {
+          return keyAvailable(agentKeyFromSlug(`${slug}-${label}`))
+        },
+      })
       const record: ClientIdentity = {
         sessionId: input.sessionId,
-        clientName: input.clientInfo.name?.trim() ?? '',
+        clientName,
         clientVersion: input.clientInfo.version?.trim() ?? '',
         clientTitle: input.clientInfo.title?.trim() || null,
-        sessionLabel: null,
+        slug,
+        key: agentKeyFromSlug(`${slug}-${generatedLabel}`),
+        generatedLabel,
+        label: generatedLabel,
+        renameNudgesLeft: SESSION_NAME_NUDGE_LIMIT,
         firstSeenAt: now(),
       }
       records.set(input.sessionId, record)
@@ -83,30 +97,49 @@ export function createIdentityService(
     getIdentity(sessionId) {
       return records.get(sessionId) ?? null
     },
-    setSessionLabel(sessionId, label) {
+    setLabel(sessionId, label) {
       const record = records.get(sessionId)
-      if (record) record.sessionLabel = label
+      if (record) record.label = label
     },
-    dropSession(sessionId) {
+    takeRenameNudge(sessionId) {
+      const record = records.get(sessionId)
+      if (
+        !record ||
+        record.label !== record.generatedLabel ||
+        record.renameNudgesLeft === 0
+      ) {
+        return false
+      }
+      record.renameNudgesLeft -= 1
+      return true
+    },
+    endSession(sessionId) {
+      const record = records.get(sessionId)
+      if (!record) return null
       records.delete(sessionId)
+      retained.set(record.key, now())
+      return record
     },
     list() {
       return Array.from(records.values())
+    },
+    listRetained() {
+      return Array.from(retained, ([key, endedAt]) => ({ key, endedAt }))
+    },
+    forgetRetained(key) {
+      retained.delete(key)
     },
     size() {
       return records.size
     },
     clear() {
       records.clear()
+      retained.clear()
     },
   }
 }
 
-/**
- * Lowercase alphanumeric + hyphen, trimmed, capped. Returns the
- * cleaned handle, or an empty string when nothing usable remains
- * (caller falls back to the synthetic hash).
- */
+/** Lowercase alphanumeric + hyphen, trimmed and capped. */
 export function slugifyClientName(raw: string): string {
   const cleaned = raw
     .toLowerCase()
@@ -116,57 +149,15 @@ export function slugifyClientName(raw: string): string {
   return cleaned.slice(0, SLUG_MAX_LEN)
 }
 
-/** Returns the stable six-hex FNV-1a suffix used by synthetic ids. */
-function hashTailFor(input: string): string {
-  let hash = 0x811c9dc5
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i)
-    hash =
-      (hash +
-        ((hash << 1) +
-          (hash << 4) +
-          (hash << 7) +
-          (hash << 8) +
-          (hash << 24))) >>>
-      0
-  }
-  return hash.toString(16).padStart(8, '0').slice(0, HASH_TAIL_LEN)
-}
-
-/**
- * Stable, obviously-synthetic fallback handle derived from the
- * session id. Same session always produces the same hash so the
- * registry sees one "agent" even if `clientInfo.name` is missing.
- */
-export function fallbackSlugForSession(sessionId: string): string {
-  return `unknown-${hashTailFor(sessionId)}`
-}
-
-/** Resolves the durable client key used for page and tab-group ownership. */
+/** Resolves the per-conversation key used for all ownership. */
 export function agentKeyFromClient(identity: ClientIdentity): AgentKey {
-  const cleaned = slugifyClientName(identity.clientName)
-  return agentKeyFromSlug(
-    cleaned.length > 0 ? cleaned : fallbackSlugForSession(identity.sessionId),
-  )
+  return identity.key
 }
 
-/**
- * Bridge from `ClientIdentity` to the `{ agentId, slug }` pair the
- * `tabActivityRegistry` expects. Usable client names keep a stable
- * slug and get a session-scoped agentId; unusable names use the
- * session-derived fallback for both.
- */
+/** Bridges the born identity to registry and audit call sites. */
 export function agentIdentityFromClient(identity: ClientIdentity): {
   agentId: string
   slug: string
 } {
-  const cleaned = slugifyClientName(identity.clientName)
-  if (cleaned.length > 0) {
-    return {
-      agentId: `${cleaned}-${hashTailFor(identity.sessionId)}`,
-      slug: cleaned,
-    }
-  }
-  const fallback = fallbackSlugForSession(identity.sessionId)
-  return { agentId: fallback, slug: fallback }
+  return { agentId: identity.key, slug: identity.slug }
 }

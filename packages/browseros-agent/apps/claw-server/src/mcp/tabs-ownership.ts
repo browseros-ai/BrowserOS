@@ -20,6 +20,7 @@
  * dispatch on a foreign page. This annotator only affects visibility.
  */
 
+import type { AgentKey } from '../domain/agent-key'
 import type { OwnershipStore } from '../domain/ownership'
 import {
   agentKeyFromClient,
@@ -126,13 +127,12 @@ function formatLine(p: AnnotatedPage): string {
 
 /**
  * Builds an OwnershipDeps for a given caller identity. The label
- * cache snapshots `identityService.list()` at call time; an agent
- * whose session already closed will have no entry and `labelForKey`
- * returns null (the text render then omits the "owned by ..." suffix).
+ * cache snapshots `identityService.list()` at call time and falls back
+ * to the retained group title after a session ends.
  */
 export function buildOwnershipDeps(
   callerIdentity: ClientIdentity,
-  ownershipStore: Pick<OwnershipStore, 'ownerOf'>,
+  ownershipStore: Pick<OwnershipStore, 'ownerOf' | 'groupOf'>,
   identityService: IdentityService,
 ): OwnershipDeps {
   const callerKey = agentKeyFromClient(callerIdentity)
@@ -144,6 +144,9 @@ export function buildOwnershipDeps(
   return {
     callerKey,
     resolveOwner: (pageId) => ownershipStore.ownerOf(pageId),
-    labelForKey: (key) => labelCache.get(key) ?? null,
+    labelForKey: (key) =>
+      labelCache.get(key) ??
+      ownershipStore.groupOf(key as AgentKey)?.title ??
+      null,
   }
 }

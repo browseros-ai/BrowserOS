@@ -21,7 +21,7 @@ const baseData: AuditScreenData = {
   isFetchingNextPage: false,
   fetchNextPage: () => undefined,
   filters: {
-    agentId: null,
+    agentSlug: null,
     status: null,
     site: null,
     search: '',
@@ -107,7 +107,6 @@ describe('Audit screen', () => {
       tasks: [sampleTask],
       agentOptions: [
         {
-          agentId: 'claude-code',
           slug: 'claude-code',
           agentLabel: 'Claude Code',
           count: 1,
@@ -139,7 +138,7 @@ describe('Audit screen', () => {
       ...baseData,
       tasks: [],
       filters: {
-        agentId: null,
+        agentSlug: null,
         status: null,
         site: null,
         search: 'nothing-matches',
@@ -171,7 +170,7 @@ describe('Audit screen', () => {
       isLoading: true,
       tasks: [],
       filters: {
-        agentId: null,
+        agentSlug: null,
         status: 'live',
         site: null,
         search: '',

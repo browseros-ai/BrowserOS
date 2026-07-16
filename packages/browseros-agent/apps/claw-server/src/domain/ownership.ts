@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-/** Ownership uses a durable client key so reconnects retain their pages and group; prune only removes claims for pages no longer live in the browser. */
+/** Ownership uses a per-session key; prune only removes claims for pages no longer live in the browser. */
 
 import type { TabGroupColor } from '../lib/agent-tab-groups'
 import type { AgentKey } from './agent-key'
@@ -14,13 +14,10 @@ export interface GroupRef {
   windowId: number | null
   color: TabGroupColor
   title: string
-  titleExplicit: boolean
   collapsed: boolean
 }
 
-export type GroupPatch = Partial<
-  Pick<GroupRef, 'title' | 'titleExplicit' | 'collapsed'>
->
+export type GroupPatch = Partial<Pick<GroupRef, 'title' | 'collapsed'>>
 
 export interface OwnershipStore {
   claimPage(key: AgentKey, pageId: number): void

@@ -14,7 +14,12 @@ import { createIdentityService } from './identity'
 export const identityService = createIdentityService()
 
 export type { AgentKey } from '../../domain/agent-key'
-export type { ClientIdentity, IdentityService } from './identity'
+export { generateFunName } from './fun-names'
+export type {
+  ClientIdentity,
+  IdentityService,
+  RetainedIdentity,
+} from './identity'
 export {
   agentIdentityFromClient,
   agentKeyFromClient,
@@ -23,8 +28,6 @@ export {
 } from './identity'
 export {
   buildSessionGroupTitle,
-  buildSessionNamePrompt,
   clientPrefixFromSlug,
   normalizeSmallName,
-  sessionNameRequestedSchema,
 } from './naming'

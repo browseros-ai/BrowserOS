@@ -27,8 +27,10 @@ export const guardPageOwnership: ToolGuard = (call) => {
   // tab this agent does not own so an agent can only touch tabs it opened via
   // `tabs new`. This fires before executeTool; unknown identities fail open.
   if (ownershipStore.pagesOf(call.key).has(page)) return null
+  const owner = ownershipStore.ownerOf(page)
+  const ownerTitle = owner ? ownershipStore.groupOf(owner)?.title : null
 
-  logger.warn('cockpit v2 rejected foreign-page dispatch', {
+  logger.warn('cockpit rejected foreign-page dispatch', {
     tool: call.tool.name,
     sessionId: call.sessionId || undefined,
     key: call.key,
@@ -39,7 +41,9 @@ export const guardPageOwnership: ToolGuard = (call) => {
     content: [
       {
         type: 'text',
-        text: `page ${page} is not owned by this agent; call \`tabs new\` to open a fresh page and use the returned page id.`,
+        text: ownerTitle
+          ? `page ${page} is owned by ${ownerTitle}; call tabs new to open your own page`
+          : `page ${page} is not owned by this agent; call \`tabs new\` to open a fresh page and use the returned page id.`,
       },
     ],
     isError: true,

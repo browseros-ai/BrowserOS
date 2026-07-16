@@ -73,6 +73,18 @@ function ok(structured?: unknown): FakeResult {
   }
 }
 
+function expectNudgedText(
+  content: Array<{ type: string; text?: string }> | undefined,
+  expected: string,
+): void {
+  expect(content?.[0]?.text).toBe(expected)
+  const tip = content?.[content.length - 1]
+  expect(tip?.text).toStartWith('Tip: this session is "claude/')
+  expect(tip?.text).toEndWith(
+    ' — rename it with name_session name="<2-3 word task label>"',
+  )
+}
+
 async function waitFor(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (predicate()) return
@@ -232,7 +244,10 @@ describe('per-agent tabs isolation', () => {
     })
 
     expect(result.structuredContent).toBeUndefined()
-    expect(result.content).toEqual([{ type: 'text', text: 'ok\nreturn: 42' }])
+    expectNudgedText(
+      result.content as Array<{ type: string; text?: string }>,
+      'ok\nreturn: 42',
+    )
     await client.close()
   })
 
@@ -348,7 +363,7 @@ describe('per-agent tabs isolation', () => {
     await b.client.close()
   })
 
-  it('same-name sessions share ownership while different names remain isolated', async () => {
+  it('same-name sessions keep independent ownership and groups', async () => {
     stubSessionForPage(1, 't1', 'https://a.example/', 'A')
     queue(ok({ page: 1 }), ok({ group: { groupId: 'GA', windowId: 1 } }), ok())
     const a = await connect('claude-code')
@@ -359,16 +374,17 @@ describe('per-agent tabs isolation', () => {
 
     const b = await connect('claude-code')
     expect(a.agentId).not.toBe(b.agentId)
-    expect(a.key).toBe(b.key)
+    expect(a.key).not.toBe(b.key)
     expect(a.slug).toBe('claude-code')
     expect(b.slug).toBe('claude-code')
 
-    queue(ok({ snapshot: true }))
+    calls.length = 0
     const snapshot = (await b.client.callTool({
       name: 'snapshot',
       arguments: { page: 1 },
     })) as TabsListResult
-    expect(snapshot.isError).toBeFalsy()
+    expect(snapshot.isError).toBeTruthy()
+    expect(calls).toEqual([])
 
     queue(
       ok({
@@ -382,7 +398,8 @@ describe('per-agent tabs isolation', () => {
     expect(listB.structuredContent).toBeUndefined()
     const textB = (listB.content as Array<{ type: string; text?: string }>)?.[0]
       ?.text
-    expect(textB).toContain('Your tabs:')
+    expect(textB).toContain("Other agents' tabs:")
+    expect(textB).toContain('owned by claude-code')
 
     const different = await connect('cursor')
     calls.length = 0
@@ -442,9 +459,10 @@ describe('per-agent tabs isolation', () => {
       arguments: { action: 'list' },
     })) as TabsListResult
     expect(list.structuredContent).toBeUndefined()
-    expect(
-      (list.content as Array<{ type: string; text?: string }>)?.[0]?.text,
-    ).toBe('(no open pages)')
+    expectNudgedText(
+      list.content as Array<{ type: string; text?: string }>,
+      '(no open pages)',
+    )
     await client.close()
   })
 
@@ -591,7 +609,7 @@ describe('per-agent tabs isolation', () => {
     await client.close()
   })
 
-  it('idle reap preserves ownership and group across same-name reconnect', async () => {
+  it('idle end retains old ownership but a returning conversation starts fresh', async () => {
     stubSessionForPage(7, 't7')
     queue(ok({ page: 7 }), ok({ group: { groupId: 'G', windowId: 1 } }), ok())
     const first = await connect('claude-code')
@@ -606,15 +624,24 @@ describe('per-agent tabs isolation', () => {
     queue(ok())
     setLastActivityForTesting(first.sessionId, Date.now() - 10_000)
     sweepIdleSessions(Date.now())
-    await Promise.resolve()
+    await Bun.sleep(0)
     expect([...ownershipStore.pagesOf(first.key)]).toEqual([7])
     expect(ownershipStore.groupOf(first.key)?.id).toBe('G')
     expect(ownershipStore.groupOf(first.key)?.collapsed).toBe(true)
     expect(calls.some((call) => call.args.action === 'close')).toBe(false)
 
+    const second = await connect('claude-code')
+    expect(second.key).not.toBe(first.key)
+    calls.length = 0
+    const snapshot = await second.client.callTool({
+      name: 'snapshot',
+      arguments: { page: 7 },
+    })
+    expect(snapshot.isError).toBeTruthy()
+    expect(calls).toEqual([])
+    expect(ownershipStore.groupOf(first.key)?.collapsed).toBe(true)
+
     queue(
-      ok({ snapshot: true }),
-      ok(),
       ok({
         pages: [
           { page: 7, url: 'https://x.com/', title: 'Stale' },
@@ -622,23 +649,6 @@ describe('per-agent tabs isolation', () => {
         ],
       }),
     )
-    const second = await connect('claude-code')
-    expect(second.key).toBe(first.key)
-    const snapshot = await second.client.callTool({
-      name: 'snapshot',
-      arguments: { page: 7 },
-    })
-    expect(snapshot.isError).toBeFalsy()
-    await Promise.resolve()
-    expect(ownershipStore.groupOf(first.key)?.collapsed).toBe(false)
-    expect(
-      calls.some(
-        (call) =>
-          call.toolName === 'tab_groups' &&
-          call.args.action === 'update' &&
-          call.args.collapsed === false,
-      ),
-    ).toBe(true)
     const list = (await second.client.callTool({
       name: 'tabs',
       arguments: { action: 'list' },
@@ -647,8 +657,11 @@ describe('per-agent tabs isolation', () => {
     const text = (list.content as Array<{ type: string; text?: string }>)?.[0]
       ?.text
     expect(text).toContain("User's tabs:")
-    expect(text).toContain('Your tabs:')
-    expect(text).not.toContain("Other agents' tabs:")
+    expect(text).toContain("Other agents' tabs:")
+    expect(text).toContain(
+      `owned by ${ownershipStore.groupOf(first.key)?.title}`,
+    )
+    expect(text).not.toContain('Your tabs:')
     await second.client.close()
   })
 })
