@@ -20,6 +20,7 @@ import { getTask, listTasks } from '../../services/tasks'
 
 const listQuerySchema = z.object({
   agentId: z.string().optional(),
+  slug: z.string().optional(),
   status: z.enum(['live', 'done', 'failed']).optional(),
   site: z.string().optional(),
   search: z.string().optional(),

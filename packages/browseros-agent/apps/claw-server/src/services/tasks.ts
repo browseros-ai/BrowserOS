@@ -92,6 +92,7 @@ export interface TaskDetail extends TaskSummary {
 
 export interface ListTasksQuery {
   agentId?: string
+  slug?: string
   status?: TaskStatus
   site?: string
   search?: string
@@ -114,6 +115,7 @@ export function listTasks(query: ListTasksQuery): ListTasksResult {
 
   const wheres = []
   if (query.agentId) wheres.push(eq(toolDispatches.agentId, query.agentId))
+  if (query.slug) wheres.push(eq(toolDispatches.slug, query.slug))
   if (typeof query.cursor === 'number') {
     wheres.push(lt(toolDispatches.id, query.cursor))
   }

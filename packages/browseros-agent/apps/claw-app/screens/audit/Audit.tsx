@@ -62,7 +62,7 @@ export function Audit() {
   const location = useLocation()
 
   const hasActiveFilters =
-    filters.agentId !== null ||
+    filters.agentSlug !== null ||
     filters.status !== null ||
     filters.site !== null ||
     filters.search.length > 0
@@ -118,7 +118,7 @@ export function Audit() {
           agentOptions={agentOptions}
           statusOptions={statusOptions}
           siteOptions={siteOptions}
-          selectedAgentId={filters.agentId}
+          selectedAgentSlug={filters.agentSlug}
           selectedStatus={filters.status}
           selectedSite={filters.site}
           search={filters.search}
