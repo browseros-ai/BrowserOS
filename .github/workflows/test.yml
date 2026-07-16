@@ -145,8 +145,26 @@ jobs:
         run: |
           set +e
           mkdir -p test-results
-          ${{ matrix.command }}
-          exit_code=$?
+          # Bun's TS-file parser has occasional races on Linux when many test
+          # workers parse the same source concurrently, surfacing as
+          # `SyntaxError: Export named 'X' not found in module ...` on files
+          # whose source clearly exports X. It is not reproducible locally
+          # and clears on rerun. Retry once on failure so a single flake does
+          # not block PRs; a second consecutive failure still fails the job.
+          attempt=0
+          max_attempts=2
+          exit_code=1
+          while [ "$attempt" -lt "$max_attempts" ]; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -gt 1 ]; then
+              echo "::warning::${{ matrix.suite }} attempt $attempt (previous exit $exit_code)"
+              # Fresh junit slot per attempt so stale output does not mask the retry.
+              rm -f "${{ matrix.junit_path }}"
+            fi
+            ${{ matrix.command }}
+            exit_code=$?
+            if [ "$exit_code" = "0" ]; then break; fi
+          done
           if [ ! -f "${{ matrix.junit_path }}" ]; then
             if [ "$exit_code" = "0" ]; then
               cat > "${{ matrix.junit_path }}" <<EOF
