@@ -110,6 +110,21 @@ export class ChatService {
     // Build stable keys for change detection
     const mcpServerKey = this.buildMcpServerKey(request.browserContext)
 
+    // ACP is excluded: a rebuild cannot deliver a mode change to those agents,
+    // because their instructions live in the workspace instruction file and
+    // ensureWorkspaceInstructionFile() skips whenever isNewConversation is
+    // false - which it is on every rebuild. Rebuilding would leave a fresh
+    // in-band prompt contradicting the stale on-disk block.
+    const requestChatMode = agentConfig.chatMode ?? false
+    const modeChanged =
+      !isAcpProvider(llmConfig.provider) &&
+      !!session &&
+      session.chatMode !== requestChatMode
+    // Tracked, not inferred from session.chatMode having been stamped by an
+    // earlier branch: that inference is non-local and breaks silently if a
+    // rebuild path forgets to stamp it.
+    let rebuiltThisTurn = false
+
     // Detect MCP config change mid-conversation → rebuild session
     if (session && session.mcpServerKey !== mcpServerKey) {
       logger.info('MCP servers changed mid-conversation, rebuilding session', {
@@ -124,6 +139,7 @@ export class ChatService {
         agentConfig,
         mcpServerKey,
       )
+      rebuiltThisTurn = true
 
       const oldParts = (previousMcpKey ?? '').split(',').filter(Boolean)
       const newParts = mcpServerKey.split(',').filter(Boolean)
@@ -181,6 +197,7 @@ export class ChatService {
         agentConfig,
         mcpServerKey,
       )
+      rebuiltThisTurn = true
 
       if (!request.userWorkingDir) {
         contextChanges.push(
@@ -218,6 +235,45 @@ export class ChatService {
             `The user switched workspace during this conversation. Filesystem tools now use the new working directory: ${request.userWorkingDir}`,
           )
         }
+      }
+    }
+
+    // Detect mode change mid-conversation → rebuild session. The toolset and
+    // system prompt are fixed when the agent is built, so without this the
+    // session keeps the mode it started in whatever the toggle says. Switching
+    // to chat mode drops the agent's record of tool calls it already made
+    // (sanitizeMessagesForToolset removes parts the narrower toolset lacks) and
+    // switching back does not restore them; the MCP and workspace rebuilds
+    // above already behave this way.
+    if (modeChanged) {
+      if (session && !rebuiltThisTurn) {
+        logger.info('Chat mode changed mid-conversation, rebuilding session', {
+          conversationId: request.conversationId,
+          previous: session.chatMode,
+          current: requestChatMode,
+        })
+        session = await this.rebuildSession(
+          session,
+          request,
+          agentConfig,
+          mcpServerKey,
+        )
+        rebuiltThisTurn = true
+      }
+
+      const workspaceConnected = !!request.userWorkingDir
+      if (requestChatMode) {
+        contextChanges.push(
+          workspaceConnected
+            ? 'The user switched to read-only chat mode during this conversation. You can observe pages but can no longer interact with them, and workspace filesystem tools other than reading BrowserOS output files are no longer available.'
+            : 'The user switched to read-only chat mode during this conversation. You can observe pages but can no longer interact with them or modify files.',
+        )
+      } else {
+        contextChanges.push(
+          workspaceConnected
+            ? 'The user switched to agent mode during this conversation. You can interact with pages and perform browser actions again, and the workspace filesystem tools are available again. Any earlier statement that read-only chat mode blocked them no longer applies.'
+            : 'The user switched to agent mode during this conversation. You can interact with pages and perform browser actions again.',
+        )
       }
     }
 
@@ -290,6 +346,7 @@ export class ChatService {
         browserContext,
         mcpServerKey,
         workingDir: request.userWorkingDir,
+        chatMode: requestChatMode,
         outputFileAccess,
       }
       sessionStore.set(request.conversationId, session)
@@ -503,6 +560,7 @@ export class ChatService {
       browserContext,
       mcpServerKey,
       workingDir: request.userWorkingDir,
+      chatMode: agentConfig.chatMode ?? false,
       outputFileAccess,
     }
     newSession.agent.messages = sanitizeMessagesForToolset(

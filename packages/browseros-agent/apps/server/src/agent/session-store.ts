@@ -12,6 +12,16 @@ export interface AgentSession {
   mcpServerKey?: string
   /** Workspace directory when the session was created, for change detection. */
   workingDir?: string
+  /**
+   * Read-only chat mode when the session was created, for change detection.
+   *
+   * Required, unlike the other change-detection fields: it is never
+   * legitimately absent, and an unstamped session would compare
+   * `undefined !== false` and fake a mode change, rebuilding and announcing a
+   * switch that never happened. Keeping it required makes the compiler enforce
+   * the stamp at every construction site.
+   */
+  chatMode: boolean
   /** Browser-generated output paths returned during this conversation. */
   outputFileAccess?: BrowserOutputFileAccess
 }
