@@ -193,6 +193,8 @@ jobs:
           BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
           CHROMIUM_SRC: ${{ steps.build_inputs.outputs.chromium_src }}
           UPLOAD_TO_R2: ${{ steps.build_inputs.outputs.upload_to_r2 }}
+          VITE_CLAW_POSTHOG_KEY: ${{ secrets.VITE_CLAW_POSTHOG_KEY }}
+          VITE_CLAW_POSTHOG_HOST: ${{ secrets.VITE_CLAW_POSTHOG_HOST }}
         run: |
           set -euo pipefail
           cd "$BROWSEROS_REPO/packages/browseros"
