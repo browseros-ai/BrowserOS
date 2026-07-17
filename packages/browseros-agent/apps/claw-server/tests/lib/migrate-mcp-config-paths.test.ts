@@ -6,6 +6,7 @@
 
 import { afterEach, describe, expect, test } from 'bun:test'
 import { stat, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { setMcpManagerForTesting } from '../../src/lib/mcp-manager'
 import {
@@ -75,6 +76,37 @@ describe('migrateMcpConfigPaths', () => {
       setConfigPathResolverForTesting(async () => NEW_ANTI)
       stub.reset()
       const result = await migrateMcpConfigPaths()
+      expect(result).toEqual({ migrated: 0, skipped: 1, failed: 0 })
+      expect(stub.calls.some((c) => c.method === 'link')).toBe(false)
+      expect(stub.calls.some((c) => c.method === 'unlink')).toBe(false)
+    })
+  })
+
+  test('a tilde-prefixed manifest path is treated as equal to its expanded home form', async () => {
+    // Defensive against a direct API caller (or future manifest
+    // format change) that hands us `~/...`. The library today
+    // always emits `$HOME`-expanded absolute paths, so this branch
+    // is not reachable via the manager's own writes, but the
+    // migration is idempotent enough that a false-positive here
+    // would silently loop every boot.
+    await withTempBrowserClawDir(async () => {
+      const stub = createStubMcpManager()
+      const tildePath = '~/.gemini/config/mcp_config.json'
+      const expanded = join(homedir(), '.gemini/config/mcp_config.json')
+      await stub.link({
+        server: {
+          name: 'BrowserClaw',
+          spec: { transport: 'http', url: URL },
+        },
+        agent: 'antigravity',
+        configPath: tildePath,
+      })
+      setMcpManagerForTesting(stub)
+      setConfigPathResolverForTesting(async () => expanded)
+      stub.reset()
+
+      const result = await migrateMcpConfigPaths()
+
       expect(result).toEqual({ migrated: 0, skipped: 1, failed: 0 })
       expect(stub.calls.some((c) => c.method === 'link')).toBe(false)
       expect(stub.calls.some((c) => c.method === 'unlink')).toBe(false)

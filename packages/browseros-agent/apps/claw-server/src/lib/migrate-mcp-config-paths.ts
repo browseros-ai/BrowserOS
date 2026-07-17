@@ -20,7 +20,8 @@
  */
 
 import { access, unlink, writeFile } from 'node:fs/promises'
-import { resolve as resolvePath } from 'node:path'
+import { homedir } from 'node:os'
+import { join, resolve as resolvePath } from 'node:path'
 import type {
   AgentId,
   AgentScope,
@@ -214,7 +215,20 @@ async function tryRestore(
 }
 
 function samePath(a: string, b: string): boolean {
-  return resolvePath(a) === resolvePath(b)
+  return resolvePath(expandHome(a)) === resolvePath(expandHome(b))
+}
+
+// `path.resolve` does NOT expand `~`. The library's own resolver
+// always emits `$HOME`-expanded absolute paths into the manifest,
+// so this branch is defensive: it prevents a boot-time re-migration
+// loop if a direct API caller (or a future manifest-format change)
+// hands us a `~`-prefixed configPath.
+function expandHome(p: string): string {
+  if (p === '~') return homedir()
+  if (p.startsWith('~/') || p.startsWith('~\\')) {
+    return join(homedir(), p.slice(2))
+  }
+  return p
 }
 
 async function safeList(
