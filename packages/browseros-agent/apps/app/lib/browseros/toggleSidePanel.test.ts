@@ -16,6 +16,13 @@ const onClosedListeners: Array<
   (info: chrome.sidePanel.PanelClosedInfo) => void
 > = []
 
+// Total replacement is intentional here: sidePanelOpenStateStorage
+// pulls in wxt/storage which touches `browser.runtime` on load, and
+// no other test file imports it. Adding the `...realModule` spread
+// pattern (see the 2026-07-17 test reliability audit) would eagerly
+// load the environment-coupled module for no cross-file benefit.
+// Per-file worker isolation (Level 3 of that audit) covers the
+// pollution class regardless.
 mock.module('./sidePanelOpenStateStorage', () => ({
   sidePanelPerWindowStorage: {
     getValue: async () => {

@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import type { TaskSummary } from '@/modules/api/audit.hooks'
+import * as _auditHooks from '@/modules/api/audit.hooks'
 
 interface MockQueryShape {
   data?: { pages: { tasks: TaskSummary[] }[] }
@@ -11,7 +12,13 @@ interface MockQueryShape {
 
 let queryOverride: MockQueryShape = { isPending: true }
 
+// Spread the real audit-hooks module so unrelated tests that import
+// useTaskDetail / useDispatches / useAuditCleanupCandidates keep
+// working: Bun's mock.module registry is process-scoped and a
+// partial replacement drops the un-overridden exports (see the
+// 2026-07-17 test reliability audit).
 mock.module('@/modules/api/audit.hooks', () => ({
+  ..._auditHooks,
   useTasks: () => queryOverride,
   taskScreenshotUrl: (id: number) => `/audit/screenshot/${id}`,
   useTaskScreenshotBaseUrl: () => null,

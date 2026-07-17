@@ -26,7 +26,7 @@
     "start": "bun --watch src/main.ts --config config.sample.json",
     "start:ci": "bun src/main.ts --config config.sample.json",
     "build": "bun ../../scripts/build/claw-server.ts --target=all",
-    "test": "bun test",
+    "test": "bun run ../../scripts/run-bun-test.ts ./apps/claw-server",
     "typecheck": "tsc --noEmit",
     "lint": "bunx biome check",
     "lint:fix": "bunx biome check --write --unsafe",

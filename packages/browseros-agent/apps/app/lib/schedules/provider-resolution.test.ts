@@ -18,6 +18,12 @@ const createBrowserOSProvider = () => ({
   updatedAt: 0,
 })
 
+// Total replacements are intentional here: these storage/helper
+// modules pull in wxt/storage + generated graphql code that requires
+// build-time output not present in this test context. No other test
+// imports from these modules, so cross-file pollution isn't a risk.
+// Per-file worker isolation (Level 3 in the 2026-07-17 test
+// reliability audit) covers the general class regardless.
 mock.module('@/lib/llm-providers/storage', () => ({
   DEFAULT_PROVIDER_ID: 'browseros',
   createDefaultBrowserOSProvider: createBrowserOSProvider,

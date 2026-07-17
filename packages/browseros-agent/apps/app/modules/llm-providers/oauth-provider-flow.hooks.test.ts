@@ -1,7 +1,13 @@
 import { beforeAll, describe, expect, it, mock } from 'bun:test'
+import * as _clientOauth from '@/lib/llm-providers/client-oauth'
+import * as _providerDisplayNames from '@/lib/llm-providers/provider-display-names'
+import * as _providerTemplates from '@/lib/llm-providers/providerTemplates'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
+import * as _track from '@/lib/metrics/track'
+import * as _oauthStatusHooks from '@/modules/llm-providers/oauth-status.hooks'
 import type { OAuthProviderFlowConfig } from './oauth-provider-flow.hooks'
 
+// sonner is an npm package; total-replacement is intentional.
 mock.module('sonner', () => ({
   toast: {
     error: () => {},
@@ -10,11 +16,18 @@ mock.module('sonner', () => ({
   },
 }))
 
+// Internal-module mocks spread the real exports so any concurrent
+// test file that imports from the same module keeps working. Bun's
+// mock.module registry is process-scoped; without the spread a
+// dropped export blows up unrelated tests at load time with
+// `SyntaxError: Export named 'X' not found`.
 mock.module('@/lib/metrics/track', () => ({
+  ..._track,
   track: () => {},
 }))
 
 mock.module('@/lib/llm-providers/client-oauth', () => ({
+  ..._clientOauth,
   requestDeviceCode: async () => {
     throw new Error('not used')
   },
@@ -22,10 +35,12 @@ mock.module('@/lib/llm-providers/client-oauth', () => ({
 }))
 
 mock.module('@/lib/llm-providers/provider-display-names', () => ({
+  ..._providerDisplayNames,
   CHATGPT_PROVIDER_DISPLAY_NAME: 'ChatGPT',
 }))
 
 mock.module('@/lib/llm-providers/providerTemplates', () => ({
+  ..._providerTemplates,
   getProviderTemplate: (providerType: string) =>
     providerType === 'chatgpt-pro'
       ? {
@@ -37,6 +52,7 @@ mock.module('@/lib/llm-providers/providerTemplates', () => ({
 }))
 
 mock.module('@/modules/llm-providers/oauth-status.hooks', () => ({
+  ..._oauthStatusHooks,
   useOAuthStatus: () => ({
     status: null,
     startPolling: () => {},

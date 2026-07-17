@@ -2,8 +2,16 @@ import { describe, expect, it, mock } from 'bun:test'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
+import * as _auditHooks from '@/modules/api/audit.hooks'
+import * as _connectionsHooks from '@/modules/api/connections.hooks'
+import * as _cockpitData from './cockpit.data'
 
+// Spread the real module in every mock.module: Bun's registry is
+// process-scoped so a partial replacement drops the un-overridden
+// exports and breaks unrelated test files that import them (see the
+// 2026-07-17 test reliability audit).
 mock.module('./cockpit.data', () => ({
+  ..._cockpitData,
   useCockpitData: () => ({
     agents: [],
     activity: [],
@@ -12,6 +20,7 @@ mock.module('./cockpit.data', () => ({
 }))
 
 mock.module('@/modules/api/audit.hooks', () => ({
+  ..._auditHooks,
   useTasks: () => ({
     data: { pages: [{ tasks: [], nextCursor: null }] },
     isPending: false,
@@ -43,6 +52,7 @@ function setConnectionsProbeEmpty() {
 }
 
 mock.module('@/modules/api/connections.hooks', () => ({
+  ..._connectionsHooks,
   useBrowserosConnections: Object.assign(
     () =>
       connectionsHookState()[connectionsHookResultKey] ?? {

@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
+import * as _connectionsHooks from '@/modules/api/connections.hooks'
 
 const mcpBrowserosConnections = [
   {
@@ -78,7 +79,12 @@ function getConnectionsHookResult() {
   )
 }
 
+// Spread the real module so unrelated tests that import a different
+// hook from connections.hooks still work: partial mock.module()
+// replacements corrupt Bun's process-scoped module registry (see the
+// 2026-07-17 test reliability audit).
 mock.module('@/modules/api/connections.hooks', () => ({
+  ..._connectionsHooks,
   useBrowserosConnections: Object.assign(() => getConnectionsHookResult(), {
     getKey: () => ['cockpit', 'connections'],
   }),
