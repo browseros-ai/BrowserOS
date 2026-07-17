@@ -3,15 +3,16 @@
  * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Scene 06: the CTA + loop reset. First half holds the "set it up
- * below" caption + a downward chevron so the reader learns the
- * scroll affordance BEFORE the loop restarts; second half fades
- * back to the initial cockpit + landing-dot state so Scene 01 can
- * restart without a visible seam.
+ * Scene 06: the CTA + loop reset. Real `<CockpitOnboarding />`
+ * fades back in behind a "set it up below" pill + bouncing
+ * downward chevron so the reader learns the scroll affordance
+ * before the loop restarts. Second half fades the CTA out so
+ * scene 01 can restart without a visible seam.
  */
 
 import { AbsoluteFill, Easing, interpolate, useCurrentFrame } from 'remotion'
-import { CockpitFrame } from '../components/CockpitFrame'
+import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
+import { BrowserShell } from '../components/BrowserShell'
 import { SceneLabel } from '../components/SceneLabel'
 import { palette } from '../palette'
 
@@ -20,13 +21,10 @@ const EASE_STANDARD = Easing.bezier(0.4, 0, 0.6, 1)
 
 export function SceneLoop() {
   const frame = useCurrentFrame()
-  // Fade in the cockpit chrome so the loop returns to the poster.
   const cockpitOpacity = interpolate(frame, [0, 30], [0, 1], {
     extrapolateRight: 'clamp',
     easing: EASE_STANDARD,
   })
-  // CTA caption: appears for the first ~2s of the scene, then fades
-  // out over the last ~1s. Chevron bounces subtly for the whole time.
   const ctaIn = interpolate(frame, [0, 12], [0, 1], {
     extrapolateRight: 'clamp',
     easing: EASE_OUT,
@@ -37,7 +35,6 @@ export function SceneLoop() {
     easing: EASE_STANDARD,
   })
   const ctaOpacity = Math.min(ctaIn, ctaOut)
-  // Bounce the chevron up-and-down every second (~30 frames).
   const bounceProgress = (frame % 30) / 30
   const chevronY = interpolate(bounceProgress, [0, 0.5, 1], [0, 8, 0], {
     easing: EASE_STANDARD,
@@ -54,8 +51,18 @@ export function SceneLoop() {
         }}
       >
         <SceneLabel text="you are here" opacity={cockpitOpacity} />
-        <div style={{ flex: 1 }}>
-          <CockpitFrame showLandingDot />
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <BrowserShell>
+            <div
+              style={{
+                height: '100%',
+                overflow: 'hidden',
+                background: 'var(--color-bg-canvas)',
+              }}
+            >
+              <CockpitOnboarding state="first-run" />
+            </div>
+          </BrowserShell>
         </div>
       </div>
       <div

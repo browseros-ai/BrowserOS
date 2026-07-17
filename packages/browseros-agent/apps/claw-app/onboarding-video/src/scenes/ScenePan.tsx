@@ -3,41 +3,44 @@
  * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Scene 02: the pan. The cockpit slides to the left; an agent
- * terminal card slides in from the right. Both surfaces settle into
- * a side-by-side composition. Labels above each surface name their
- * role: "you watch here" over the cockpit, "your work happens here"
- * over the terminal.
+ * Scene 03: the pan. The real `<CockpitOnboarding />` slides to
+ * the left half; the agent terminal slides in from the right.
+ * Labels above each surface name their role: "you watch here"
+ * over the cockpit, "then: prompt your agent" over the terminal.
+ * `AgentTerminal` stays composition-local because the extension
+ * has no equivalent widget.
  */
 
 import { AbsoluteFill, Easing, interpolate, useCurrentFrame } from 'remotion'
+import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
 import { AgentTerminal } from '../components/AgentTerminal'
-import { CockpitFrame } from '../components/CockpitFrame'
+import { BrowserShell } from '../components/BrowserShell'
 import { SceneLabel } from '../components/SceneLabel'
 import { palette } from '../palette'
 
+const EASE_OUT = Easing.bezier(0.16, 1, 0.3, 1)
+
 export function ScenePan() {
   const frame = useCurrentFrame()
-  // Cockpit slides from centered to left half. Terminal slides in from off-canvas right.
   const cockpitX = interpolate(frame, [0, 50], [0, -400], {
     extrapolateRight: 'clamp',
-    easing: Easing.bezier(0.16, 1, 0.3, 1),
+    easing: EASE_OUT,
   })
   const terminalX = interpolate(frame, [0, 50], [1200, 0], {
     extrapolateRight: 'clamp',
-    easing: Easing.bezier(0.16, 1, 0.3, 1),
+    easing: EASE_OUT,
   })
   const cockpitScale = interpolate(frame, [0, 50], [1, 0.78], {
     extrapolateRight: 'clamp',
-    easing: Easing.bezier(0.16, 1, 0.3, 1),
+    easing: EASE_OUT,
   })
   const terminalOpacity = interpolate(frame, [10, 55], [0, 1], {
     extrapolateRight: 'clamp',
-    easing: Easing.bezier(0.16, 1, 0.3, 1),
+    easing: EASE_OUT,
   })
   const labelIn = interpolate(frame, [55, 80], [0, 1], {
     extrapolateRight: 'clamp',
-    easing: Easing.bezier(0.16, 1, 0.3, 1),
+    easing: EASE_OUT,
   })
   return (
     <AbsoluteFill style={{ background: palette.bgCanvas, padding: 24 }}>
@@ -59,7 +62,17 @@ export function ScenePan() {
           style={{ marginBottom: 14 }}
         />
         <div style={{ height: 'calc(100% - 34px)' }}>
-          <CockpitFrame showLandingDot />
+          <BrowserShell>
+            <div
+              style={{
+                height: '100%',
+                overflow: 'hidden',
+                background: 'var(--color-bg-canvas)',
+              }}
+            >
+              <CockpitOnboarding state="first-run" />
+            </div>
+          </BrowserShell>
         </div>
       </div>
       <div
