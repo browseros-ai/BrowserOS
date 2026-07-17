@@ -317,17 +317,28 @@ export const opencode: ClientConfig = {
   id: 'opencode',
   displayName: 'OpenCode',
   installCheckPaths: {
+    // `$HOME/.local/share/opencode` is OpenCode's OAuth token store
+    // (per its docs at https://opencode.ai/docs/mcp-servers/). It
+    // exists as soon as the user has authenticated any OAuth MCP
+    // server or run the OpenCode installer, even before they create
+    // their global `opencode.json`.
     darwin: [
       '$XDG_CONFIG_HOME/opencode',
       '$HOME/.config/opencode',
       '$HOME/.opencode',
+      '$HOME/.local/share/opencode',
     ],
     linux: [
       '$XDG_CONFIG_HOME/opencode',
       '$HOME/.config/opencode',
       '$HOME/.opencode',
+      '$HOME/.local/share/opencode',
     ],
-    win32: ['$USERPROFILE\\.config\\opencode', '$USERPROFILE\\.opencode'],
+    win32: [
+      '$USERPROFILE\\.config\\opencode',
+      '$USERPROFILE\\.opencode',
+      '$USERPROFILE\\.local\\share\\opencode',
+    ],
   },
   systemPaths: {
     darwin: [

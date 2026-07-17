@@ -36,6 +36,23 @@ export function getCatalogEntry(agent: AgentId): ClientConfig {
 }
 
 /**
+ * The catalog's install-detection paths for this agent on the
+ * current OS, expanded (env vars substituted, unresolvable entries
+ * dropped). These are the DIRECTORIES / FILES that indicate the
+ * agent is present on the machine, not the config file path we
+ * would write to (that is `resolveAgentMcpConfigPath`). Callers
+ * pass the result to `anyExists` to answer "is this agent
+ * installed?".
+ *
+ * Empty when the catalog has no `installCheckPaths` entry for the
+ * current platform.
+ */
+export function resolveInstallCheckPaths(agent: AgentId): string[] {
+  const entry = getCatalogEntry(agent)
+  return expandPaths(pickOsList(entry.installCheckPaths))
+}
+
+/**
  * Resolve the config file path agent-mcp-manager would write to for
  * this agent under the given scope. Throws when the path isn't
  * resolvable on this OS or when project scope is requested for an

@@ -449,7 +449,18 @@ function requireAgentFile(
 }
 
 function ensureAgentInstalled(agent: AgentId, agentFile: AgentFileState): void {
-  if (agentFile.exists || agentFile.parentExists) return
+  // Any of three signals proves the agent is present:
+  //   1. config file already exists,
+  //   2. config file's parent directory exists,
+  //   3. one of the catalog's installCheckPaths exists (populated in
+  //      readState). Widens (1)+(2) for agents whose global config is
+  //      user-created and therefore absent on a fresh install
+  //      (OpenCode, Codex, ...). When (3) fires and (2) is false,
+  //      applyPlan's writeOp{ensureDir:true} still mkdir -p's the
+  //      parent before the atomic write.
+  if (agentFile.exists || agentFile.parentExists || agentFile.installCheckHit) {
+    return
+  }
   throw new AgentNotInstalledError(
     agent,
     agentFile.configPath,

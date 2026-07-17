@@ -48,9 +48,12 @@ describe('isInstalled', () => {
   })
 
   test('returns installed: false when neither exists', async () => {
-    // Nothing under $HOME/.cursor at all: agent not installed.
-    const result = await isInstalled({ agents: ['cursor'] })
-    expect(result.cursor).toBe(false)
+    // Nothing under $HOME/.codex at all: agent not installed. Uses
+    // codex because every one of its installCheckPaths lives under
+    // $HOME, so redirecting HOME to a fresh tmp dir fully isolates
+    // the probe from whatever real agents live on the runner.
+    const result = await isInstalled({ agents: ['codex'] })
+    expect(result.codex).toBe(false)
   })
 
   test('returns only the requested agents (no extra keys)', async () => {
@@ -75,11 +78,13 @@ describe('isInstalled', () => {
 
   test('reports false when the OS cannot resolve any path candidate', async () => {
     // Clearing $HOME makes all $HOME/... candidates unresolvable on
-    // this OS. resolveAgentMcpConfigPath throws UnresolvedConfigPath
-    // Error, which isInstalled catches and returns false for.
+    // this OS. Both installCheckPaths and systemPaths for codex
+    // reference $HOME, so `resolveInstallCheckPaths` returns an
+    // empty list and `resolveAgentMcpConfigPath` throws
+    // UnresolvedConfigPathError, which isInstalled catches.
     delete process.env.HOME
-    const result = await isInstalled({ agents: ['cursor'] })
-    expect(result.cursor).toBe(false)
+    const result = await isInstalled({ agents: ['codex'] })
+    expect(result.codex).toBe(false)
   })
 
   test('respects scope: project with projectRoot', async () => {
@@ -108,5 +113,28 @@ describe('isInstalled', () => {
     // `in` operator.
     const result = await isInstalled({ agents: ['cursor'] })
     expect(Object.getPrototypeOf(result)).toBe(Object.prototype)
+  })
+
+  test('returns true when only an installCheckPaths entry exists (systemPath absent)', async () => {
+    // Regression coverage for BrowserOS issue #1861: OpenCode's global
+    // `opencode.json` is USER-CREATED. A fresh install has no
+    // systemPath file or parent yet, but the catalog's
+    // installCheckPaths point at OpenCode's data dirs. The probe must
+    // recognize this state as "installed", or the /mcp page hides the
+    // row post-Disconnect.
+    await mkdir(join(workspaceDir, '.local', 'share', 'opencode'), {
+      recursive: true,
+    })
+    const result = await isInstalled({ agents: ['opencode'] })
+    expect(result.opencode).toBe(true)
+  })
+
+  test('returns true when the legacy installCheckPaths entry exists', async () => {
+    // Older OpenCode installs live under ~/.opencode/. That directory
+    // alone still counts as installed even without any of the
+    // XDG-style systemPath files.
+    await mkdir(join(workspaceDir, '.opencode'), { recursive: true })
+    const result = await isInstalled({ agents: ['opencode'] })
+    expect(result.opencode).toBe(true)
   })
 })
