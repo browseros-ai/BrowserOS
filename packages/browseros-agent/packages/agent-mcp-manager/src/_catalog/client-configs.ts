@@ -695,9 +695,9 @@ export const antigravity: ClientConfig = {
     win32: ['$USERPROFILE\\.gemini\\antigravity'],
   },
   systemPaths: {
-    darwin: ['$HOME/.gemini/antigravity/mcp_config.json'],
-    linux: ['$HOME/.gemini/antigravity/mcp_config.json'],
-    win32: ['$USERPROFILE\\.gemini\\antigravity\\mcp_config.json'],
+    darwin: ['$HOME/.gemini/config/mcp_config.json'],
+    linux: ['$HOME/.gemini/config/mcp_config.json'],
+    win32: ['$USERPROFILE\\.gemini\\config\\mcp_config.json'],
   },
   format: 'json',
   supportedTransports: { system: ['stdio', 'http'] },
@@ -710,7 +710,7 @@ export const antigravity: ClientConfig = {
     firstParty: 'https://antigravity.google/',
     smithery: SMITHERY_URL,
     notes:
-      "Google's Antigravity editor. Uses `serverUrl` for remote entries (matches Windsurf's convention).",
+      "Google's Antigravity editor. Config lives at `~/.gemini/config/mcp_config.json` (schema id: https://antigravity.google/schemas/mcp_config.json). Uses `serverUrl` for remote entries (matches Windsurf's convention).",
     verified: VERIFIED,
   },
 }
