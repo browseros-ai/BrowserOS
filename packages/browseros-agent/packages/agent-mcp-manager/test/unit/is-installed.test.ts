@@ -15,16 +15,25 @@ import { isInstalled } from '../../src/api'
 
 let workspaceDir: string
 let originalHome: string | undefined
+let originalUserProfile: string | undefined
 
 beforeEach(async () => {
   workspaceDir = await mkdtemp(join(tmpdir(), 'acpx-installed-'))
   originalHome = process.env.HOME
+  originalUserProfile = process.env.USERPROFILE
   process.env.HOME = workspaceDir
+  // Redirect the win32 home token too so the catalog's win32
+  // installCheckPaths / systemPaths (all `$USERPROFILE`-based) stay
+  // hermetic under the tmp dir. Without this, tests running on a
+  // win32 runner would silently probe the developer's real home.
+  process.env.USERPROFILE = workspaceDir
 })
 
 afterEach(async () => {
   if (originalHome === undefined) delete process.env.HOME
   else process.env.HOME = originalHome
+  if (originalUserProfile === undefined) delete process.env.USERPROFILE
+  else process.env.USERPROFILE = originalUserProfile
   await rm(workspaceDir, { recursive: true, force: true })
 })
 
