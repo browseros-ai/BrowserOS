@@ -25,6 +25,7 @@ import { bootstrapBrowserosBrowser } from './lib/browser-bootstrap'
 import { setBrowserSession } from './lib/browser-session'
 import { getClawServerDir } from './lib/browserclaw-dir'
 import { logger } from './lib/logger'
+import { migrateMcpConfigPaths } from './lib/migrate-mcp-config-paths'
 import { migrateMcpUrls } from './lib/migrate-mcp-urls'
 import { writeRuntimeFile } from './lib/runtime-file'
 import { setLocalServerUrl } from './local-server-url'
@@ -152,6 +153,23 @@ async function start(): Promise<void> {
     logger.info('mcpUrl migration finished', { ...migration })
   } catch (err) {
     logger.error('mcpUrl migration failed unexpectedly', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
+  // Self-heal loop 3: relocate BrowserClaw MCP entries when the
+  // agent catalog's OS-resolved default config path has moved
+  // between BrowserClaw versions (Antigravity 1.x -> 2.x moved
+  // from `~/.gemini/antigravity/` to `~/.gemini/config/`; future
+  // agent updates will do the same). Without this, existing
+  // installs keep rewriting the OLD file while the harness reads
+  // the NEW one, and users see a green "Configured" badge on a
+  // broken connection.
+  try {
+    const pathMigration = await migrateMcpConfigPaths()
+    logger.info('mcpConfigPath migration finished', { ...pathMigration })
+  } catch (err) {
+    logger.error('mcpConfigPath migration failed unexpectedly', {
       error: err instanceof Error ? err.message : String(err),
     })
   }
