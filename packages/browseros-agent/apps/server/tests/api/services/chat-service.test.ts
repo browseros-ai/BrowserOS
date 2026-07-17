@@ -1,4 +1,5 @@
 import { describe, expect, it, mock } from 'bun:test'
+import * as _ai from 'ai'
 import type { KlavisProxyStatus } from '../../../src/api/services/klavis'
 
 interface MockMessage {
@@ -53,7 +54,16 @@ const resolveLLMConfigSpy = mock(async () => ({
   apiKey: 'test-key',
 }))
 
+// Spread the real `ai` module so other test files in the same
+// bun-test process that import { tool } / { UIMessage } / etc. from
+// `ai` still get real exports. Without the spread, this partial mock
+// wipes the `ai` module in Bun's process-scoped mock registry and
+// unrelated files blow up at load with `SyntaxError: Export named
+// 'tool' not found in module .../ai/dist/index.mjs`. Reproducible on
+// Linux CI's file-load order but benign on macOS APFS. See the
+// 2026-07-17 test reliability audit for the failure mechanism.
 mock.module('ai', () => ({
+  ..._ai,
   createAgentUIStreamResponse: createAgentUIStreamResponseSpy,
 }))
 
