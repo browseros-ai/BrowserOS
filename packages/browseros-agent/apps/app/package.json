@@ -52,7 +52,7 @@
     "@wxt-dev/storage": "^1.2.8",
     "@xstate/store": "^3.10.0",
     "@xyflow/react": "^12.11.0",
-    "ai": "^6.0.208",
+    "ai": "6.0.208",
     "better-auth": "^1.6.19",
     "canvas-confetti": "^1.9.4",
     "class-variance-authority": "^0.7.1",
