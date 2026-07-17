@@ -195,7 +195,12 @@ ${suites.join('\n')}
  */
 function extractTopLevelTestsuites(xml: string): string[] {
   const results: string[] = []
-  const openRe = /<testsuite\b[^>]*>/g
+  // `[^/>]` on the last char excludes self-closing `<testsuite ... />`
+  // so we never increment depth on an element that has no matching
+  // close tag (Bun does not emit self-closing today, but the guard
+  // stays cheap and prevents a silent malformed-XML regression if
+  // that ever changes).
+  const openRe = /<testsuite\b[^>]*[^/>]>/g
   const closeRe = /<\/testsuite>/g
   let depth = 0
   let startOfCurrentTop = -1
