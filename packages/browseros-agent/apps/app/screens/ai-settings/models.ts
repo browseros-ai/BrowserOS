@@ -16,6 +16,7 @@ const CUSTOM_PROVIDER_MODELS: Partial<Record<ProviderType, ModelInfo[]>> = {
   browseros: [{ modelId: 'browseros-auto', contextLength: 200000 }],
   'openai-compatible': [],
   ollama: [],
+  lmstudio: [],
   'chatgpt-pro': [
     { modelId: 'gpt-5.5', contextLength: 1050000 },
     { modelId: 'gpt-5.4', contextLength: 1050000 },

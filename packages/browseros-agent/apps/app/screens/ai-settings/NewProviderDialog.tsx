@@ -79,7 +79,8 @@ import { cn } from '@/lib/utils'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { useAcpProbe } from '@/modules/llm-providers/acp-probe.hooks'
-import { getModelContextLength, getModelsForProvider } from './models'
+import { useLMStudioProbe } from '@/modules/llm-providers/lmstudio-probe.hooks'
+import { getModelsForProvider } from './models'
 import {
   isCredentiallessProviderType,
   normalizeProviderFormValues,
@@ -285,7 +286,15 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     }
   }, [acpProbe.data, watchedType, form])
 
-  const modelInfoList = getModelsForProvider(watchedType as ProviderType)
+  const lmStudioProbe = useLMStudioProbe({
+    providerType: watchedType as ProviderType,
+    baseUrl: watchedBaseUrl,
+  })
+
+  const modelInfoList =
+    watchedType === 'lmstudio' && lmStudioProbe.data
+      ? lmStudioProbe.data
+      : getModelsForProvider(watchedType as ProviderType)
 
   const modelFuse = useMemo(
     () =>
@@ -329,15 +338,14 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     if (initialValues?.id) return
 
     if (watchedModelId) {
-      const contextLength = getModelContextLength(
-        watchedType as ProviderType,
-        watchedModelId,
-      )
+      const contextLength = modelInfoList.find(
+        (m) => m.modelId === watchedModelId,
+      )?.contextLength
       if (contextLength) {
         form.setValue('contextWindow', contextLength)
       }
     }
-  }, [watchedModelId, watchedType, form, initialValues?.id])
+  }, [watchedModelId, form, initialValues?.id, modelInfoList])
 
   useEffect(() => {
     if (initialValues) {
@@ -1004,18 +1012,29 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                   <FormItem className="flex flex-col">
                     <FormLabel>Model *</FormLabel>
                     {modelInfoList.length === 0 ? (
-                      <FormControl>
-                        <Input
-                          placeholder={
-                            watchedType === 'azure'
-                              ? 'Enter your deployment name'
-                              : watchedType === 'bedrock'
-                                ? 'e.g., anthropic.claude-3-5-sonnet-20241022-v2:0'
-                                : 'Enter model ID'
-                          }
-                          {...field}
-                        />
-                      </FormControl>
+                      <>
+                        <FormControl>
+                          <Input
+                            placeholder={
+                              watchedType === 'azure'
+                                ? 'Enter your deployment name'
+                                : watchedType === 'bedrock'
+                                  ? 'e.g., anthropic.claude-3-5-sonnet-20241022-v2:0'
+                                  : 'Enter model ID'
+                            }
+                            {...field}
+                          />
+                        </FormControl>
+                        {watchedType === 'lmstudio' && (
+                          <FormDescription>
+                            {lmStudioProbe.isFetching
+                              ? 'Fetching models from LM Studio…'
+                              : lmStudioProbe.isError
+                                ? `Could not reach LM Studio at ${watchedBaseUrl}. Make sure the local server is running.`
+                                : 'No models loaded in LM Studio. Load a model, then reopen this dialog.'}
+                          </FormDescription>
+                        )}
+                      </>
                     ) : (
                       <Popover
                         open={modelPickerOpen}
