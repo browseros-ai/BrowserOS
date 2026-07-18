@@ -180,7 +180,7 @@
     },
     "apps/claw-onboard": {
       "name": "@browseros/claw-onboard",
-      "version": "0.0.11",
+      "version": "0.0.12",
       "dependencies": {
         "@base-ui/react": "^1.5.0",
         "@browseros/claw-server": "workspace:*",
@@ -208,7 +208,7 @@
     },
     "apps/claw-server": {
       "name": "@browseros/claw-server",
-      "version": "0.0.11",
+      "version": "0.0.12",
       "dependencies": {
         "@browseros/agent-mcp-manager": "workspace:*",
         "@browseros/browser-core": "workspace:*",
