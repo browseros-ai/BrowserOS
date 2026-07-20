@@ -14,10 +14,8 @@ const ONBOARDING_PROBE_LIMIT = 1
 export function Cockpit() {
   const { sessions } = useCockpitData()
 
-  // Probe the two data sources the onboarding state hinges on. Both
-  // queries live in react-query's cache under stable keys, so the
-  // downstream components (RecentActivity / Mcp screen) that read
-  // the same keys hit the cache instead of refetching.
+  // When no live session is connected, these probes decide which onboarding
+  // shell to show. Their stable keys are shared with RecentActivity and MCP.
   const connections = useConnections()
   const taskProbe = useSessions({
     variables: { limit: ONBOARDING_PROBE_LIMIT },
@@ -42,18 +40,24 @@ export function Cockpit() {
     connections.data?.items.some(
       (c) => c.installed && isUserFacingHarness(c.harness),
     ) ?? false
-  const hasActivity = (taskProbe.data?.pages ?? []).some(
+  const hasHistoricalActivity = (taskProbe.data?.pages ?? []).some(
     (p) => p.items.length > 0,
   )
+  const hasLiveSessions = sessions.length > 0
 
   // Wait for both probes to resolve at least once before deciding
   // which shell to render. Otherwise the onboarding block flashes on
   // first paint for returning users whose tasks are still in-flight.
   const probesResolved =
     connections.data !== undefined && taskProbe.data !== undefined
-  const state = probesResolved
-    ? getOnboardingState({ hasConnection, hasActivity })
-    : 'ready'
+  const state = hasLiveSessions
+    ? 'ready'
+    : probesResolved
+      ? getOnboardingState({
+          hasConnection,
+          hasActivity: hasHistoricalActivity,
+        })
+      : 'ready'
 
   if (state !== 'ready') {
     return (

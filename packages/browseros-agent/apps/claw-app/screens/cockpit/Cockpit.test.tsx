@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router'
 import * as _auditHooks from '@/modules/api/audit.hooks'
 import * as _connectionsHooks from '@/modules/api/connections.hooks'
 import * as _cockpitData from './cockpit.data'
+import type { LiveSessionCardRecord } from './cockpit.helpers'
 
 // Spread the real module in every mock.module: Bun's registry is
 // process-scoped so a partial replacement drops the un-overridden
@@ -12,10 +13,11 @@ import * as _cockpitData from './cockpit.data'
 // 2026-07-17 test reliability audit).
 mock.module('./cockpit.data', () => ({
   ..._cockpitData,
-  useCockpitData: () => ({
-    sessions: [],
-    isPending: false,
-  }),
+  useCockpitData: () =>
+    cockpitDataHookState()[cockpitDataResultKey] ?? {
+      sessions: [],
+      isPending: false,
+    },
 }))
 
 mock.module('@/modules/api/audit.hooks', () => ({
@@ -29,9 +31,21 @@ mock.module('@/modules/api/audit.hooks', () => ({
 }))
 
 const connectionsHookResultKey = '__browserclawConnectionsHookResult'
+const cockpitDataResultKey = '__browserclawCockpitDataResult'
 
 function connectionsHookState() {
   return globalThis as Record<string, unknown>
+}
+
+function cockpitDataHookState() {
+  return globalThis as Record<string, unknown>
+}
+
+function setCockpitSessions(sessions: LiveSessionCardRecord[]) {
+  cockpitDataHookState()[cockpitDataResultKey] = {
+    sessions,
+    isPending: false,
+  }
 }
 
 function setConnectionsProbePending() {
@@ -76,8 +90,12 @@ mock.module('@/modules/api/connections.hooks', () => ({
 const { Cockpit } = await import('./Cockpit')
 
 function renderApp(
-  options: { connections?: 'pending' | 'empty' } = {},
+  options: {
+    connections?: 'pending' | 'empty'
+    liveSessions?: LiveSessionCardRecord[]
+  } = {},
 ): string {
+  setCockpitSessions(options.liveSessions ?? [])
   if (options.connections === 'empty') {
     setConnectionsProbeEmpty()
   } else {
@@ -124,5 +142,33 @@ describe('Cockpit (v2)', () => {
     expect(html).toContain(
       'https://cdn.browseros.com/artifacts/claw/onboarding-video/v0.2.0/first-run-demo.mp4',
     )
+  })
+
+  it('shows a connected zero-tab live session before configuration or activity', () => {
+    const html = renderApp({
+      connections: 'empty',
+      liveSessions: [
+        {
+          sessionId: 'session-connected',
+          slug: 'codex',
+          label: 'Codex',
+          name: 'Connected session',
+          harness: 'Codex',
+          color: '#7A5AF8',
+          startedAt: 100,
+          state: 'idle',
+          selectedTab: null,
+          browserTabs: [],
+          toolCount: 0,
+          recentTools: [],
+        },
+      ],
+    })
+
+    expect(html).toContain('Running now')
+    expect(html).toContain('data-session-card="session-connected"')
+    expect(html).toContain('data-stop-session="session-connected"')
+    expect(html).not.toContain('You watch. Your agent')
+    expect(html).not.toContain('Set up MCP endpoint')
   })
 })
