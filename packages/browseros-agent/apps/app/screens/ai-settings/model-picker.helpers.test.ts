@@ -1,11 +1,28 @@
 import { describe, expect, it } from 'bun:test'
+import Fuse from 'fuse.js'
+import type { ProviderType } from '../../lib/llm-providers/types'
 import {
   getIncompleteCatalogHint,
+  getModelPickerRows,
   normalizeModelId,
   servesUserLoadedModels,
   shouldOfferCustomModel,
 } from './model-picker.helpers'
 import { getModelsForProvider, type ModelInfo } from './models'
+
+// Mirrors NewProviderDialog's Fuse setup so these tests exercise the real
+// ranking the picker sees, not an idealized substring match.
+function pickerRows(providerType: ProviderType, search: string) {
+  const models = getModelsForProvider(providerType)
+  const fuse = new Fuse(models, {
+    keys: ['modelId'],
+    threshold: 0.4,
+    distance: 100,
+  })
+  return getModelPickerRows(search, models, (query) =>
+    fuse.search(query).map((r) => r.item),
+  )
+}
 
 const catalog: ModelInfo[] = [
   { modelId: 'openai/gpt-oss-20b', contextLength: 131072 },
@@ -79,6 +96,67 @@ describe('getIncompleteCatalogHint', () => {
 
   it('falls back to a generic subject when the provider has no display name', () => {
     expect(getIncompleteCatalogHint('lmstudio', 3)).toContain('This provider')
+  })
+})
+
+describe('getModelPickerRows', () => {
+  it('offers the free-form row for an unlisted ID', () => {
+    const rows = pickerRows('lmstudio', 'mistralai/magistral-small-2509')
+
+    expect(rows.customModelId).toBe('mistralai/magistral-small-2509')
+  })
+
+  it('ranks a pasted catalog ID above its longer near-matches', () => {
+    // A trailing space used to reach Fuse verbatim, where the padded pattern
+    // scored better against `gpt-5.5` than against the exact `gpt-5` — and
+    // with no custom row to outrank it, Enter saved the wrong model.
+    for (const search of ['gpt-5 ', ' gpt-5', 'gpt-5\n', 'gpt-5\t']) {
+      const rows = pickerRows('openai', search)
+
+      expect(rows.customModelId).toBeNull()
+      expect(rows.models[0]?.modelId).toBe('gpt-5')
+    }
+  })
+
+  it('still resolves a catalog ID padded on both sides', () => {
+    // ` o3 ` matched nothing at all, emptying a list whose trimmed form is a
+    // direct hit and leaving Enter with no row to commit.
+    const rows = pickerRows('openai', '  o3  ')
+
+    expect(rows.customModelId).toBeNull()
+    expect(rows.models[0]?.modelId).toBe('o3')
+  })
+
+  it('shows the whole catalog before the user types', () => {
+    const rows = pickerRows('lmstudio', '')
+
+    expect(rows.customModelId).toBeNull()
+    expect(rows.models).toEqual(getModelsForProvider('lmstudio'))
+  })
+
+  it('always leaves a row for Enter to commit, which is why there is no empty state', () => {
+    const providers: ProviderType[] = [
+      'lmstudio',
+      'openai',
+      'anthropic',
+      'google',
+      'openrouter',
+    ]
+
+    for (const providerType of providers) {
+      for (const model of getModelsForProvider(providerType)) {
+        for (const search of [model.modelId, ` ${model.modelId} `]) {
+          const rows = pickerRows(providerType, search)
+
+          expect(
+            rows.models.length + (rows.customModelId ? 1 : 0),
+          ).toBeGreaterThan(0)
+        }
+      }
+
+      const rows = pickerRows(providerType, 'definitely-not-a-real-model')
+      expect(rows.customModelId).toBe('definitely-not-a-real-model')
+    }
   })
 })
 

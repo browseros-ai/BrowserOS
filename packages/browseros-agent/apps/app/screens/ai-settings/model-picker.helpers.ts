@@ -40,6 +40,39 @@ export function shouldOfferCustomModel(
   return !catalog.some((model) => model.modelId === modelId)
 }
 
+export interface ModelPickerRows {
+  /** Free-form row to offer, or null when the catalog already covers the ID. */
+  customModelId: string | null
+  /** Catalog rows to render for the current query. */
+  models: readonly ModelInfo[]
+}
+
+/**
+ * Rows the picker renders for the current search text.
+ *
+ * Both the fuzzy query and the free-form decision run on the *trimmed* ID, and
+ * they have to agree. Letting them diverge is what makes a stray pasted space
+ * dangerous: `Fuse` scores a padded `gpt-5 ` higher against the longer
+ * `gpt-5.5` than against the exact `gpt-5`, so Enter would silently save a
+ * different model, and a doubly-padded ` o3 ` matches nothing at all while the
+ * trimmed form is a catalog hit, leaving the list empty with no row to commit.
+ *
+ * Guarantees at least one row, which is why the picker needs no empty state:
+ * an exact catalog ID always scores 0 and ranks itself first, and anything else
+ * is by definition a custom ID.
+ */
+export function getModelPickerRows(
+  search: string,
+  catalog: readonly ModelInfo[],
+  fuzzySearch: (query: string) => readonly ModelInfo[],
+): ModelPickerRows {
+  const modelId = normalizeModelId(search)
+  return {
+    customModelId: shouldOfferCustomModel(search, catalog) ? modelId : null,
+    models: modelId ? fuzzySearch(modelId) : catalog,
+  }
+}
+
 /**
  * Guidance rendered under the Model field. Scoped to providers that show a
  * catalog they cannot actually vouch for: a short list reads as authoritative,

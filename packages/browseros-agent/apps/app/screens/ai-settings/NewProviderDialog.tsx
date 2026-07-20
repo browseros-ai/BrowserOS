@@ -72,8 +72,7 @@ import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { useAcpProbe } from '@/modules/llm-providers/acp-probe.hooks'
 import {
   getIncompleteCatalogHint,
-  normalizeModelId,
-  shouldOfferCustomModel,
+  getModelPickerRows,
 } from './model-picker.helpers'
 import { getModelContextLength, getModelsForProvider } from './models'
 import {
@@ -291,12 +290,11 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     [modelInfoList],
   )
 
-  const filteredModels = modelSearch
-    ? modelFuse.search(modelSearch).map((r) => r.item)
-    : modelInfoList
-
-  const customModelId = normalizeModelId(modelSearch)
-  const showCustomEntry = shouldOfferCustomModel(modelSearch, modelInfoList)
+  const { customModelId, models: filteredModels } = getModelPickerRows(
+    modelSearch,
+    modelInfoList,
+    (query) => modelFuse.search(query).map((r) => r.item),
+  )
 
   const commitModelId = (modelId: string, contextLength?: number) => {
     form.setValue('modelId', modelId)
@@ -1059,7 +1057,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                               }}
                             />
                             <CommandList ref={modelListRef}>
-                              {showCustomEntry && (
+                              {customModelId !== null && (
                                 <CommandGroup forceMount>
                                   <CommandItem
                                     forceMount
