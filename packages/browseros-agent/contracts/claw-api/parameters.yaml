@@ -39,9 +39,10 @@ RecordingDocumentId:
   name: X-Recording-Document-Id
   in: header
   required: true
+  description: Opaque 32-character hexadecimal document token supplied by Chrome.
   schema:
     type: string
-    format: uuid
+    pattern: '^[0-9A-Fa-f]{32}$'
 RecordingBatchId:
   name: X-Recording-Batch-Id
   in: header

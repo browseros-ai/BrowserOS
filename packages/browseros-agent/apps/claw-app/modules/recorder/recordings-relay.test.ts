@@ -10,6 +10,15 @@ import {
 } from './recordings-relay'
 
 const serverBaseUrl = 'http://127.0.0.1:9511'
+const documentIds = {
+  retrying: '33D25F3CF060E81B14070BC356FF1871',
+  restart: '8395FF2EF4A1D8579F1917B3B54ADECE',
+  oldSidecar: '9E84CDCAB8762569B5B109D125F60147',
+  gap: 'A18F47A71C2B7DEF81230123456789AC',
+  evicted: 'B18F47A71C2B7DEF81230123456789AD',
+  retained: 'C18F47A71C2B7DEF81230123456789AE',
+  oversized: 'D18F47A71C2B7DEF81230123456789AF',
+} as const
 
 function createMemoryOutbox(): RecordingOutbox & {
   batches: StoredRecordingBatch[]
@@ -132,8 +141,8 @@ describe('createRecordingsRelay', () => {
       warn: () => {},
     })
 
-    await relay.post(42, 'document-a', 'first')
-    await relay.post(42, 'document-a', 'second')
+    await relay.post(42, documentIds.retrying, 'first')
+    await relay.post(42, documentIds.retrying, 'second')
 
     expect(outbox.batches.map((batch) => batch.ndjson)).toEqual([
       'first',
@@ -152,7 +161,7 @@ describe('createRecordingsRelay', () => {
     expect(successful[0]).toMatchObject({
       url: `${serverBaseUrl}/api/v1/recordings/events`,
       tabId: '42',
-      documentId: 'document-a',
+      documentId: documentIds.retrying,
       sessionId: '',
       pageId: '',
       targetId: '',
@@ -176,7 +185,7 @@ describe('createRecordingsRelay', () => {
         1 as unknown as ReturnType<typeof globalThis.setTimeout>,
       warn: () => {},
     })
-    await firstRelay.post(7, 'document-restart', 'persisted')
+    await firstRelay.post(7, documentIds.restart, 'persisted')
 
     let resumedId = ''
     const resumedRelay = createRecordingsRelay({
@@ -216,7 +225,7 @@ describe('createRecordingsRelay', () => {
       warn: () => {},
     })
 
-    await relay.post(1, 'document-old-sidecar', 'queued')
+    await relay.post(1, documentIds.oldSidecar, 'queued')
     expect(postedBodies).toEqual([])
     expect(outbox.batches).toHaveLength(1)
 
@@ -243,10 +252,10 @@ describe('createRecordingsRelay', () => {
     })
     relay.onTabRecoveredAfterLoss((tabId) => recoveredTabs.push(tabId))
 
-    await relay.post(12, 'document-gap', 'checkpoint', true)
+    await relay.post(12, documentIds.gap, 'checkpoint', true)
 
     expect(gapHeader).toBe('true')
-    expect(outbox.gaps.has('document-gap')).toBe(false)
+    expect(outbox.gaps.has(documentIds.gap)).toBe(false)
     expect(recoveredTabs).toEqual([12])
   })
 
@@ -267,15 +276,15 @@ describe('createRecordingsRelay', () => {
     })
 
     const batchBytes = Math.floor(RECORDINGS_QUEUE_MAX_BYTES * 0.6)
-    await relay.post(1, 'document-one', 'a'.repeat(batchBytes))
-    await relay.post(2, 'document-two', 'b'.repeat(batchBytes))
+    await relay.post(1, documentIds.evicted, 'a'.repeat(batchBytes))
+    await relay.post(2, documentIds.retained, 'b'.repeat(batchBytes))
 
     expect(
       outbox.batches.reduce((sum, batch) => sum + batch.bytes, 0),
     ).toBeLessThanOrEqual(RECORDINGS_QUEUE_MAX_BYTES)
-    expect(outbox.gaps.has('document-one')).toBe(true)
+    expect(outbox.gaps.has(documentIds.evicted)).toBe(true)
     expect(
-      outbox.batches.every((batch) => batch.documentId !== 'document-one'),
+      outbox.batches.every((batch) => batch.documentId !== documentIds.evicted),
     ).toBe(true)
   })
 
@@ -294,11 +303,11 @@ describe('createRecordingsRelay', () => {
       warn: () => {},
     })
 
-    await relay.post(5, 'document-large', 'x'.repeat(101))
-    expect(outbox.gaps.has('document-large')).toBe(true)
-    await relay.post(5, 'document-large', 'small')
+    await relay.post(5, documentIds.oversized, 'x'.repeat(101))
+    expect(outbox.gaps.has(documentIds.oversized)).toBe(true)
+    await relay.post(5, documentIds.oversized, 'small')
 
     expect(gapHeaders).toEqual(['true'])
-    expect(outbox.gaps.has('document-large')).toBe(false)
+    expect(outbox.gaps.has(documentIds.oversized)).toBe(false)
   })
 })

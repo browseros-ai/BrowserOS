@@ -254,7 +254,7 @@ describe('canonical TypeScript API', () => {
       headers: {
         'content-type': 'application/x-ndjson',
         'x-recording-tab-id': '101',
-        'x-recording-document-id': '018f47a7-1c2b-7def-8123-0123456789ab',
+        'x-recording-document-id': '33D25F3CF060E81B14070BC356FF1871',
         'x-recording-batch-id': 'batch-1',
       },
       body: '{"ts":1}\n{"ts":2}\n',
@@ -264,7 +264,7 @@ describe('canonical TypeScript API', () => {
     expect(append).toHaveBeenCalledWith(
       {
         tabId: 101,
-        documentId: '018f47a7-1c2b-7def-8123-0123456789ab',
+        documentId: '33D25F3CF060E81B14070BC356FF1871',
       },
       '{"ts":1}\n{"ts":2}\n',
       'batch-1',
@@ -279,12 +279,39 @@ describe('canonical TypeScript API', () => {
       headers: {
         'content-type': 'application/x-ndjson',
         'x-recording-tab-id': '101',
-        'x-recording-document-id': '018f47a7-1c2b-7def-8123-0123456789ac',
+        'x-recording-document-id': '8395FF2EF4A1D8579F1917B3B54ADECE',
         'x-recording-batch-id': 'batch-ended',
       },
       body: '{"ts":3}\n',
     })
     expect(stillAccepted.status).toBe(200)
+  })
+
+  it('rejects malformed Chrome recording document IDs', async () => {
+    const append = mock(async () => ({ accepted: 1 }))
+    const app = createCanonicalApiRoute(
+      dependencies({ appendRecordingEvents: append }),
+    )
+
+    for (const documentId of [
+      '33D25F3CF060E81B14070BC356FF187',
+      '33D25F3CF060E81B14070BC356FF187Z',
+      '018f47a7-1c2b-7def-8123-0123456789ab',
+    ]) {
+      const response = await request(app, '/api/v1/recordings/events', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-ndjson',
+          'x-recording-tab-id': '101',
+          'x-recording-document-id': documentId,
+          'x-recording-batch-id': 'malformed-document',
+        },
+        body: '{"ts":1}\n',
+      })
+      expect(response.status).toBe(400)
+      expect(await response.json()).toMatchObject({ code: 'invalid_request' })
+    }
+    expect(append).not.toHaveBeenCalled()
   })
 
   it('rejects recording ingest from web-page origins before preflight', async () => {
@@ -312,7 +339,7 @@ describe('canonical TypeScript API', () => {
           origin: 'https://attacker.example',
           'content-type': 'application/x-ndjson',
           'x-recording-tab-id': '101',
-          'x-recording-document-id': '018f47a7-1c2b-7def-8123-0123456789ab',
+          'x-recording-document-id': '33D25F3CF060E81B14070BC356FF1871',
           'x-recording-batch-id': 'hostile-batch',
         },
         body: '{"ts":1}\n',
@@ -371,7 +398,7 @@ describe('canonical TypeScript API', () => {
     const headers = {
       'content-type': 'application/x-ndjson',
       'x-recording-tab-id': '101',
-      'x-recording-document-id': '018f47a7-1c2b-7def-8123-0123456789ab',
+      'x-recording-document-id': '33D25F3CF060E81B14070BC356FF1871',
       'x-recording-batch-id': 'batch-boundary',
     }
 

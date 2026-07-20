@@ -408,13 +408,36 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     );
     app.state.audit.drain_claim_writes().await;
 
+    for document_id in [
+        "33D25F3CF060E81B14070BC356FF187",
+        "33D25F3CF060E81B14070BC356FF187Z",
+        "018f47a7-1c2b-7def-8123-0123456789ab",
+    ] {
+        let malformed_headers = [
+            ("x-recording-tab-id", "101"),
+            ("x-recording-document-id", document_id),
+            ("x-recording-batch-id", "malformed-document"),
+        ];
+        let (status, _, bytes) = request_with_headers(
+            &app.router,
+            "POST",
+            "/api/v1/recordings/events",
+            Some("application/x-ndjson"),
+            &malformed_headers,
+            "{\"ts\":50}\n",
+        )
+        .await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(json_body(&bytes)?["code"], "invalid_request");
+    }
+
     let events =
         "{\"ts\":100,\"data\":{\"id\":\"seven-a\"}}\n{\"ts\":200,\"data\":{\"id\":\"seven-b\"}}\n";
     let recording_headers = [
         ("x-recording-tab-id", "101"),
         (
             "x-recording-document-id",
-            "018f47a7-1c2b-7def-8123-0123456789ab",
+            "33D25F3CF060E81B14070BC356FF1871",
         ),
         ("x-recording-batch-id", "batch-7"),
     ];
@@ -446,7 +469,7 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
         ("x-recording-tab-id", "102"),
         (
             "x-recording-document-id",
-            "018f47a7-1c2b-7def-8123-0123456789ac",
+            "8395FF2EF4A1D8579F1917B3B54ADECE",
         ),
         ("x-recording-batch-id", "batch-8"),
     ];
@@ -510,8 +533,8 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     );
     let events = String::from_utf8(bytes)?;
     assert_eq!(events.matches("session-live").count(), 3);
-    assert!(events.contains("018f47a7-1c2b-7def-8123-0123456789ab"));
-    assert!(events.contains("018f47a7-1c2b-7def-8123-0123456789ac"));
+    assert!(events.contains("33D25F3CF060E81B14070BC356FF1871"));
+    assert!(events.contains("8395FF2EF4A1D8579F1917B3B54ADECE"));
     let seven_a = events
         .find("seven-a")
         .ok_or_else(|| anyhow::anyhow!("missing first target-7 event"))?;
@@ -534,7 +557,7 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
         ("x-recording-tab-id", "101"),
         (
             "x-recording-document-id",
-            "018f47a7-1c2b-7def-8123-0123456789ad",
+            "9E84CDCAB8762569B5B109D125F60147",
         ),
         ("x-recording-batch-id", "batch-late"),
     ];

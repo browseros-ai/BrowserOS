@@ -137,7 +137,7 @@ export const contractCases: ContractCase[] = [
         '{"type":2,"data":{},"ts":100}\n{"type":3,"data":{},"ts":200}\n'
       const request = {
         xRecordingTabId: 101,
-        xRecordingDocumentId: '018f47a7-1c2b-7def-8123-0123456789ab',
+        xRecordingDocumentId: '33D25F3CF060E81B14070BC356FF1871',
         xRecordingBatchId: 'contract-batch-1',
         body,
       }
@@ -153,7 +153,7 @@ export const contractCases: ContractCase[] = [
             tabId: 101,
             segments: [
               {
-                documentId: '018f47a7-1c2b-7def-8123-0123456789ab',
+                documentId: '33D25F3CF060E81B14070BC356FF1871',
                 hasGap: false,
               },
             ],
@@ -168,6 +168,28 @@ export const contractCases: ContractCase[] = [
         'application/x-ndjson',
       )
       expect((await response.text()).trim().split('\n')).toHaveLength(2)
+    },
+  },
+  {
+    name: 'recording ingest rejects malformed Chrome document IDs',
+    async run({ api }) {
+      for (const [index, documentId] of [
+        '33D25F3CF060E81B14070BC356FF187',
+        '33D25F3CF060E81B14070BC356FF187Z',
+        '018f47a7-1c2b-7def-8123-0123456789ab',
+      ].entries()) {
+        await expectApiError(
+          () =>
+            api.appendRecordingEvents({
+              xRecordingTabId: 101,
+              xRecordingDocumentId: documentId,
+              xRecordingBatchId: `contract-malformed-${index.toString()}`,
+              body: '{"ts":125,"type":3,"data":{}}\n',
+            }),
+          400,
+          'invalid_request',
+        )
+      }
     },
   },
   {
@@ -192,7 +214,7 @@ export const contractCases: ContractCase[] = [
           origin: 'https://attacker.example',
           'content-type': 'application/x-ndjson',
           'x-recording-tab-id': '101',
-          'x-recording-document-id': '018f47a7-1c2b-7def-8123-0123456789ab',
+          'x-recording-document-id': '33D25F3CF060E81B14070BC356FF1871',
           'x-recording-batch-id': 'hostile-contract-batch',
         },
         body: '{"ts":150,"type":3,"data":{}}\n',
@@ -206,7 +228,7 @@ export const contractCases: ContractCase[] = [
           origin: 'chrome-extension://pjimfkbpehlcllblajnpfamdfjhhlgkc',
           'content-type': 'application/x-ndjson',
           'x-recording-tab-id': '101',
-          'x-recording-document-id': '018f47a7-1c2b-7def-8123-0123456789b0',
+          'x-recording-document-id': '8395FF2EF4A1D8579F1917B3B54ADECE',
           'x-recording-batch-id': 'trusted-contract-batch',
         },
         body: '{"ts":250,"type":3,"data":{}}\n',
@@ -222,7 +244,7 @@ export const contractCases: ContractCase[] = [
       expect(
         await api.appendRecordingEvents({
           xRecordingTabId: 101,
-          xRecordingDocumentId: '018f47a7-1c2b-7def-8123-0123456789ac',
+          xRecordingDocumentId: '9E84CDCAB8762569B5B109D125F60147',
           xRecordingBatchId: 'contract-boundary',
           body: accepted,
         }),
@@ -232,7 +254,7 @@ export const contractCases: ContractCase[] = [
         () =>
           api.appendRecordingEvents({
             xRecordingTabId: 101,
-            xRecordingDocumentId: '018f47a7-1c2b-7def-8123-0123456789ad',
+            xRecordingDocumentId: 'A18F47A71C2B7DEF81230123456789AC',
             xRecordingBatchId: 'contract-over-limit',
             body: recordingLineOfBytes(RECORDING_INGEST_MAX_BYTES + 1, 401),
           }),
@@ -243,7 +265,7 @@ export const contractCases: ContractCase[] = [
       expect(
         await api.appendRecordingEvents({
           xRecordingTabId: 101,
-          xRecordingDocumentId: '018f47a7-1c2b-7def-8123-0123456789ae',
+          xRecordingDocumentId: 'B18F47A71C2B7DEF81230123456789AD',
           xRecordingBatchId: 'contract-after-over-limit',
           body: '{"ts":402,"type":3,"data":{}}',
         }),
@@ -314,7 +336,7 @@ export const contractCases: ContractCase[] = [
       expect(
         await api.appendRecordingEvents({
           xRecordingTabId: 101,
-          xRecordingDocumentId: '018f47a7-1c2b-7def-8123-0123456789af',
+          xRecordingDocumentId: 'C18F47A71C2B7DEF81230123456789AE',
           xRecordingBatchId: 'contract-ended-independent',
           body: '{"ts":300,"type":3,"data":{}}\n',
         }),

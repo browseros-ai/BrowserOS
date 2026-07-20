@@ -166,7 +166,7 @@ export function createCanonicalApiRoute(deps: CanonicalApiDependencies) {
     const hasGap = recordingGap(c.req.header('x-recording-has-gap'))
     if (
       tabId === null ||
-      !isUuid(documentId) ||
+      !isChromeDocumentId(documentId) ||
       batchId.length === 0 ||
       hasGap === null
     ) {
@@ -296,10 +296,8 @@ function recordingGap(raw: string | undefined): boolean | null {
   return null
 }
 
-function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value,
-  )
+function isChromeDocumentId(value: string): boolean {
+  return /^[0-9a-f]{32}$/i.test(value)
 }
 
 function apiError(

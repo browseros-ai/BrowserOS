@@ -22,7 +22,7 @@ use claw_api::models::{
     SessionSummary,
 };
 use std::{collections::HashMap, sync::Arc};
-use uuid::{Uuid, Variant};
+use uuid::Uuid;
 
 #[derive(Default)]
 struct SessionQuery {
@@ -225,7 +225,7 @@ pub(super) async fn append_document_events(
     let document_id = required_header(&request_id, &headers, "x-recording-document-id")?;
     let batch_id = required_header(&request_id, &headers, "x-recording-batch-id")?;
     let gap_header = gap_header(&request_id, &headers)?;
-    if !is_document_uuid(&document_id) {
+    if !is_chrome_document_id(&document_id) {
         return Err(error(
             &request_id,
             StatusCode::BAD_REQUEST,
@@ -452,12 +452,8 @@ fn gap_header(request_id: &RequestId, headers: &HeaderMap) -> Result<bool, Canon
     }
 }
 
-fn is_document_uuid(value: &str) -> bool {
-    Uuid::parse_str(value).is_ok_and(|uuid| {
-        value.len() == 36
-            && uuid.get_variant() == Variant::RFC4122
-            && (1..=8).contains(&uuid.get_version_num())
-    })
+fn is_chrome_document_id(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn positive_recording_header(
