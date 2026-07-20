@@ -7,7 +7,7 @@ use axum::{http::StatusCode, response::IntoResponse};
 use claw_api::models::{
     ApiError, AppendRecordingEventsResponse, CancelSessionResponse, Connection, ConnectionList,
     HealthResponse, RecordingMetadata, SessionDetail, SessionList, ShutdownResponse, SystemInfo,
-    TabList, TelemetryState,
+    TelemetryState,
 };
 use claw_server_rust::error::{CanonicalError, RequestId};
 use serde::de::DeserializeOwned;
@@ -31,7 +31,6 @@ fn generated_dtos_deserialize_shared_fixtures() -> anyhow::Result<()> {
     let _: CancelSessionResponse = fixture("cancel-session.json")?;
     let _: RecordingMetadata = fixture("recording-metadata.json")?;
     let _: AppendRecordingEventsResponse = fixture("append-recording-events.json")?;
-    let _: TabList = fixture("tab-list.json")?;
     let _: Connection = fixture("connection.json")?;
     let _: ConnectionList = fixture("connection-list.json")?;
     let _: ApiError = fixture("api-error.json")?;

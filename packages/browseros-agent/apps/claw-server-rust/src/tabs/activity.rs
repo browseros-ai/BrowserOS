@@ -1,15 +1,19 @@
-use browseros_core::{BrowserSession, PageId, TargetId};
+use browseros_core::{BrowserSession, PageId, TargetId, pages::PageInfo};
 use std::{
     cmp::Reverse,
     collections::{HashMap, VecDeque},
     future::Future,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
 
 const ACTIVE_WINDOW: Duration = Duration::from_secs(30);
 const RECENT_TOOLS_CAP: usize = 8;
+const USE_SYSTEM_TIME: i64 = i64::MIN;
 
 #[derive(Debug, Clone)]
 pub struct ToolEvent {
@@ -63,6 +67,7 @@ struct RawRecord {
 enum LivePageState {
     Live {
         target_id: String,
+        tab_id: i64,
         url: String,
         title: String,
     },
@@ -70,9 +75,19 @@ enum LivePageState {
     Unavailable,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct TabActivityService {
     records: Arc<Mutex<HashMap<String, RawRecord>>>,
+    now_override_ms: Arc<AtomicI64>,
+}
+
+impl Default for TabActivityService {
+    fn default() -> Self {
+        Self {
+            records: Arc::new(Mutex::new(HashMap::new())),
+            now_override_ms: Arc::new(AtomicI64::new(USE_SYSTEM_TIME)),
+        }
+    }
 }
 
 pub struct RecordToolInput {
@@ -87,7 +102,7 @@ pub struct RecordToolInput {
 
 impl TabActivityService {
     pub async fn record_tool(&self, input: RecordToolInput) {
-        let now = now_ms();
+        let now = self.now_ms();
         let target_key = input.target_id.into_inner();
         let mut records = self.records.lock().await;
         if let Some(existing) = records.get_mut(&target_key) {
@@ -160,6 +175,7 @@ impl TabActivityService {
             match session.pages.refresh(page_id).await {
                 Ok(Some(info)) => LivePageState::Live {
                     target_id: info.target_id.into_inner(),
+                    tab_id: info.tab_id.0,
                     url: info.url,
                     title: info.title,
                 },
@@ -170,12 +186,35 @@ impl TabActivityService {
         .await
     }
 
+    /// Reconciles activity against one authoritative browser-page snapshot.
+    pub async fn reconcile_pages(&self, pages: &[PageInfo]) -> Vec<TabActivityRecord> {
+        let pages = pages
+            .iter()
+            .map(|page| (page.page_id.0, page.clone()))
+            .collect::<HashMap<_, _>>();
+        self.snapshot_with(|page_id| {
+            let page = pages.get(&page_id.0).cloned();
+            async move {
+                match page {
+                    Some(page) => LivePageState::Live {
+                        target_id: page.target_id.into_inner(),
+                        tab_id: page.tab_id.0,
+                        url: page.url,
+                        title: page.title,
+                    },
+                    None => LivePageState::Missing,
+                }
+            }
+        })
+        .await
+    }
+
     async fn snapshot_with<F, Fut>(&self, resolve: F) -> Vec<TabActivityRecord>
     where
         F: Fn(PageId) -> Fut,
         Fut: Future<Output = LivePageState>,
     {
-        let now = now_ms();
+        let now = self.now_ms();
         let target_ids = self
             .records
             .lock()
@@ -205,9 +244,12 @@ impl TabActivityService {
                 match live {
                     LivePageState::Live {
                         target_id: live_target_id,
+                        tab_id: live_tab_id,
                         url,
                         title,
-                    } if live_target_id == candidate.target_id => {
+                    } if live_target_id == candidate.target_id
+                        && live_tab_id == candidate.tab_id =>
+                    {
                         rows.push(TabActivityRecord {
                             target_id: candidate.target_id,
                             tab_id: candidate.tab_id,
@@ -241,6 +283,20 @@ impl TabActivityService {
         }
         rows.sort_by_key(|row| Reverse(row.last_tool_at));
         rows
+    }
+
+    fn now_ms(&self) -> i64 {
+        let override_ms = self.now_override_ms.load(Ordering::Relaxed);
+        if override_ms == USE_SYSTEM_TIME {
+            now_ms()
+        } else {
+            override_ms
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn set_now_for_testing(&self, now_ms: i64) {
+        self.now_override_ms.store(now_ms, Ordering::Relaxed);
     }
 }
 
@@ -417,9 +473,10 @@ mod tests {
             .await;
     }
 
-    fn live(target_id: &str, url: &str, title: &str) -> LivePageState {
+    fn live(target_id: &str, tab_id: i64, url: &str, title: &str) -> LivePageState {
         LivePageState::Live {
             target_id: target_id.to_string(),
+            tab_id,
             url: url.to_string(),
             title: title.to_string(),
         }
@@ -446,7 +503,9 @@ mod tests {
         }
 
         let records = service
-            .snapshot_with(|_| async { live("target-1", "https://example.com/current", "Current") })
+            .snapshot_with(|_| async {
+                live("target-1", 202, "https://example.com/current", "Current")
+            })
             .await;
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].session_id, "session-2");
@@ -469,7 +528,9 @@ mod tests {
         );
         assert!(
             service
-                .snapshot_with(|_| async { live("target-1", "https://example.com", "Example") })
+                .snapshot_with(|_| async {
+                    live("target-1", 107, "https://example.com", "Example")
+                })
                 .await
                 .is_empty()
         );
@@ -481,13 +542,15 @@ mod tests {
         record(&service, "target-old", 1, "session-1", "snapshot").await;
 
         let records = service
-            .snapshot_with(|_| async { live("target-new", "https://example.com/new", "New tab") })
+            .snapshot_with(|_| async {
+                live("target-new", 101, "https://example.com/new", "New tab")
+            })
             .await;
         assert!(records.is_empty());
         assert!(
             service
                 .snapshot_with(|_| async {
-                    live("target-old", "https://example.com/old", "Old tab")
+                    live("target-old", 101, "https://example.com/old", "Old tab")
                 })
                 .await
                 .is_empty()
@@ -509,7 +572,12 @@ mod tests {
 
         let records = service
             .snapshot_with(|_| async {
-                live("target-1", "https://example.com/reconnected", "Reconnected")
+                live(
+                    "target-1",
+                    101,
+                    "https://example.com/reconnected",
+                    "Reconnected",
+                )
             })
             .await;
         assert_eq!(records.len(), 1);
@@ -537,7 +605,12 @@ mod tests {
 
         let records = service
             .snapshot_with(|_| async {
-                live("target-1", "https://example.com/reconnected", "Reconnected")
+                live(
+                    "target-1",
+                    101,
+                    "https://example.com/reconnected",
+                    "Reconnected",
+                )
             })
             .await;
         assert_eq!(records.len(), 1);
@@ -598,7 +671,7 @@ mod tests {
                                 release_validation.notified().await;
                                 LivePageState::Missing
                             } else {
-                                live("target-1", "https://example.com/updated", "Updated")
+                                live("target-1", 101, "https://example.com/updated", "Updated")
                             }
                         }
                     })

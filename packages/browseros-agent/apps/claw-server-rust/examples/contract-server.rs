@@ -1,6 +1,6 @@
 //! Contract-testable claw-server-rust: the full router over real app
-//! state seeded with one live and one ended session, no browser or CDP
-//! required. The cross-server contract suite
+//! state seeded with three live sessions and one ended session over a scripted browser. The
+//! cross-server contract suite
 //! (`contracts/claw-api/tests`) builds and spawns this binary to run
 //! the shared cases against the Rust implementation; it can also be run
 //! by hand: `cargo run --example contract-server <port> <data-dir>`.
@@ -13,7 +13,7 @@ use claw_server_rust::{
     capture::audit::{DispatchResultSummary, RecordToolDispatchInput},
     config::Config,
     identity::{ClientIdentity, ConversationIdentity},
-    ids::{DispatchId, SessionId},
+    ids::{DispatchId, ProfileId, SessionId},
     sessions::Session,
     tabs::activity::{RecordToolInput, ScreencastFrame},
 };
@@ -43,11 +43,11 @@ impl CdpConnection for ContractBrowser {
         Box::pin(async move {
             match method {
                 "Browser.getTabs" => Ok(json!({
-                    "tabs": (1..=7).map(contract_tab).collect::<Vec<_>>()
+                    "tabs": (1..=9).map(contract_tab).collect::<Vec<_>>()
                 })),
                 "Browser.getTabInfo" => {
                     let tab_id = params.get("tabId").and_then(serde_json::Value::as_i64);
-                    let tab = (1..=7)
+                    let tab = (1..=9)
                         .map(contract_tab)
                         .find(|tab| tab["tabId"].as_i64() == tab_id)
                         .ok_or_else(|| CdpError::Protocol {
@@ -86,20 +86,31 @@ impl CdpConnection for ContractBrowser {
 }
 
 fn contract_tab(page_id: i64) -> serde_json::Value {
-    let (tab_id, target_id, url, title) = if page_id == 7 {
-        (
+    let (tab_id, target_id, url, title) = match page_id {
+        7 => (
             101,
             "target-7".to_string(),
             "https://browseros.com".to_string(),
             "BrowserOS".to_string(),
-        )
-    } else {
-        (
+        ),
+        8 => (
+            102,
+            "target-8".to_string(),
+            "https://example.com".to_string(),
+            "Example Domain".to_string(),
+        ),
+        9 => (
+            201,
+            "target-9".to_string(),
+            "https://browseros.com/releases".to_string(),
+            "BrowserOS Releases".to_string(),
+        ),
+        _ => (
             page_id,
             format!("fixture-target-{page_id}"),
             format!("https://fixture.example/{page_id}"),
             format!("Fixture {page_id}"),
-        )
+        ),
     };
     json!({
         "tabId": tab_id,
@@ -133,6 +144,7 @@ async fn main() -> anyhow::Result<()> {
         dev_mode: false,
         auth_token: None,
     });
+    seed_profiles(&config.browserclaw_dir).await?;
     let state = AppState::new_with_home(config, root.join("home")).await?;
     let browser = BrowserSession::new(ContractBrowser::new(), BrowserSessionHooks::default());
     browser.pages.list().await?;
@@ -162,7 +174,8 @@ fn arguments() -> anyhow::Result<(u16, PathBuf)> {
 async fn seed(state: &AppState) -> anyhow::Result<()> {
     let live = Session::new(
         SessionId::new("session-live"),
-        ClientIdentity::Ephemeral {
+        ClientIdentity::Profile {
+            profile_id: ProfileId::new("profile-shared"),
             slug: "codex".to_string(),
             label: "Codex".to_string(),
         },
@@ -170,6 +183,28 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
         tokio::time::Instant::now(),
     );
     state.sessions.insert_for_testing(live).await;
+    let second_live = Session::new(
+        SessionId::new("session-live-shared-profile"),
+        ClientIdentity::Profile {
+            profile_id: ProfileId::new("profile-shared"),
+            slug: "codex".to_string(),
+            label: "Codex".to_string(),
+        },
+        ConversationIdentity::new("codex", "Compare release notes".to_string()),
+        tokio::time::Instant::now(),
+    );
+    state.sessions.insert_for_testing(second_live).await;
+    let empty_live = Session::new(
+        SessionId::new("session-live-empty"),
+        ClientIdentity::Profile {
+            profile_id: ProfileId::new("profile-empty"),
+            slug: "claude-code".to_string(),
+            label: "Claude Code".to_string(),
+        },
+        ConversationIdentity::new("claude-code", "Waiting for first tool".to_string()),
+        tokio::time::Instant::now(),
+    );
+    state.sessions.insert_for_testing(empty_live).await;
 
     state
         .audit
@@ -187,6 +222,29 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
     state
         .audit
         .record_session_start(
+            "session-live-shared-profile",
+            "codex-compare-release-notes",
+            "codex",
+            "Codex",
+            "Codex",
+            "1.0",
+        )
+        .await?;
+    seed_dispatch(state, "session-live-shared-profile", 9, "target-9").await?;
+    state
+        .audit
+        .record_session_start(
+            "session-live-empty",
+            "claude-code-waiting-for-first-tool",
+            "claude-code",
+            "Claude Code",
+            "Claude Code",
+            "1.0",
+        )
+        .await?;
+    state
+        .audit
+        .record_session_start(
             "session-ended",
             "codex-ended",
             "codex",
@@ -201,6 +259,7 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
         .record_session_end("session-ended", "closed", Some("fixture"))
         .await?;
 
+    state.tab_activity.set_now_for_testing(110);
     state
         .tab_activity
         .record_tool(RecordToolInput {
@@ -220,6 +279,20 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
         "codex-research-browserclaw".to_string(),
         0,
     );
+    state.audit.enqueue_claim_tab_for_session(
+        102,
+        Some("target-8".to_string()),
+        "session-live".to_string(),
+        "codex-research-browserclaw".to_string(),
+        0,
+    );
+    state.audit.enqueue_claim_tab_for_session(
+        201,
+        Some("target-9".to_string()),
+        "session-live-shared-profile".to_string(),
+        "codex-compare-release-notes".to_string(),
+        0,
+    );
     state.audit.drain_claim_writes().await;
     state
         .screencast
@@ -236,6 +309,52 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
         .screenshots
         .write(&dispatch_id.to_string(), &[0xff, 0xd8])
         .await?;
+    Ok(())
+}
+
+async fn seed_profiles(browserclaw_dir: &std::path::Path) -> anyhow::Result<()> {
+    let agents_dir = browserclaw_dir.join("agents");
+    tokio::fs::create_dir_all(&agents_dir).await?;
+    for (file, profile) in [
+        (
+            "profile-shared.json",
+            json!({
+                "id": "profile-shared",
+                "name": "Codex",
+                "harness": "Codex",
+                "loginMode": "profile",
+                "selectedSites": [],
+                "approvals": {},
+                "aclRuleIds": [],
+                "customAclRules": [],
+                "slug": "codex",
+                "mcpUrl": "http://127.0.0.1:9200/mcp",
+                "status": "configured",
+                "createdAt": "now",
+                "updatedAt": "now"
+            }),
+        ),
+        (
+            "profile-empty.json",
+            json!({
+                "id": "profile-empty",
+                "name": "Claude Code",
+                "harness": "Claude Code",
+                "loginMode": "profile",
+                "selectedSites": [],
+                "approvals": {},
+                "aclRuleIds": [],
+                "customAclRules": [],
+                "slug": "claude-code",
+                "mcpUrl": "http://127.0.0.1:9200/mcp",
+                "status": "configured",
+                "createdAt": "now",
+                "updatedAt": "now"
+            }),
+        ),
+    ] {
+        tokio::fs::write(agents_dir.join(file), profile.to_string()).await?;
+    }
     Ok(())
 }
 

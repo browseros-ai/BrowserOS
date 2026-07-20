@@ -9,6 +9,7 @@ pub mod error;
 pub mod harness;
 pub mod identity;
 pub mod ids;
+mod live_sessions;
 pub mod mcp;
 pub mod routes;
 pub mod runtime;

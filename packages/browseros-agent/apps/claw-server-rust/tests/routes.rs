@@ -681,7 +681,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
         .screencast
         .clone()
         .start(app.state.browser.clone(), app.state.tab_activity.clone());
-    let _ = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
+    let _ = request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
     for _ in 0..50 {
         if app
             .state
@@ -955,7 +955,7 @@ async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result
 }
 
 #[tokio::test]
-async fn canonical_tabs_enrich_through_live_session_profile_identity() -> anyhow::Result<()> {
+async fn canonical_live_sessions_enrich_through_profile_identity() -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
     mock.add_tab(101, "target-exact", 1).await;
     mock.add_tab(102, "target-fallback", 1).await;
@@ -1011,6 +1011,8 @@ async fn canonical_tabs_enrich_through_live_session_profile_identity() -> anyhow
         .sessions
         .insert_for_testing(ephemeral_session.clone())
         .await;
+    record_session_start(&app, &stored_session).await?;
+    record_session_start(&app, &ephemeral_session).await?;
 
     app.state
         .tab_activity
@@ -1024,6 +1026,13 @@ async fn canonical_tabs_enrich_through_live_session_profile_identity() -> anyhow
             tool_name: "tabs".to_string(),
         })
         .await;
+    app.state.audit.enqueue_claim_tab_for_session(
+        101,
+        Some("target-exact".to_string()),
+        stored_session.id().as_str().to_string(),
+        stored_session.convo_id().as_str().to_string(),
+        1,
+    );
     app.state
         .tab_activity
         .record_tool(RecordToolInput {
@@ -1036,30 +1045,40 @@ async fn canonical_tabs_enrich_through_live_session_profile_identity() -> anyhow
             tool_name: "tabs".to_string(),
         })
         .await;
+    app.state.audit.enqueue_claim_tab_for_session(
+        102,
+        Some("target-fallback".to_string()),
+        ephemeral_session.id().as_str().to_string(),
+        ephemeral_session.convo_id().as_str().to_string(),
+        1,
+    );
 
-    let (status, body) = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
     assert_eq!(status, StatusCode::OK);
     let rows = body["items"]
         .as_array()
-        .ok_or_else(|| anyhow::anyhow!("tabs not array"))?;
+        .ok_or_else(|| anyhow::anyhow!("sessions not array"))?;
     let exact = rows
         .iter()
-        .find(|row| row["targetId"] == "target-exact")
-        .ok_or_else(|| anyhow::anyhow!("missing exact tab"))?;
+        .find(|row| row["sessionId"] == stored_session.id().as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing exact session"))?;
     assert_eq!(exact["label"], "Stored Agent");
     assert_eq!(exact["harness"], "Codex");
+    assert_eq!(exact["live"]["browserTabs"][0]["browserTabId"], 101);
 
     let fallback = rows
         .iter()
-        .find(|row| row["targetId"] == "target-fallback")
-        .ok_or_else(|| anyhow::anyhow!("missing fallback tab"))?;
+        .find(|row| row["sessionId"] == ephemeral_session.id().as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing fallback session"))?;
     assert_eq!(fallback["label"], "mcp");
     assert!(fallback["harness"].is_null());
+    assert_eq!(fallback["live"]["browserTabs"][0]["browserTabId"], 102);
     Ok(())
 }
 
 #[tokio::test]
-async fn canonical_associations_evict_external_close_and_screencast_frame() -> anyhow::Result<()> {
+async fn live_projection_filters_external_close_and_screencast_frame() -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
     mock.add_tab(101, "target-old", 1).await;
     let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
@@ -1073,6 +1092,7 @@ async fn canonical_associations_evict_external_close_and_screencast_frame() -> a
     assert_eq!(browser.pages.list().await?.len(), 1);
     let session = test_session(SessionId::new("session-live"), "codex-agent", "codex");
     app.state.sessions.insert_for_testing(session.clone()).await;
+    record_session_start(&app, &session).await?;
     app.state
         .tab_activity
         .record_tool(RecordToolInput {
@@ -1085,6 +1105,13 @@ async fn canonical_associations_evict_external_close_and_screencast_frame() -> a
             tool_name: "snapshot".to_string(),
         })
         .await;
+    app.state.audit.enqueue_claim_tab_for_session(
+        101,
+        Some("target-old".to_string()),
+        session.id().as_str().to_string(),
+        session.convo_id().as_str().to_string(),
+        1,
+    );
     app.state
         .screencast
         .cache_frame(
@@ -1097,9 +1124,13 @@ async fn canonical_associations_evict_external_close_and_screencast_frame() -> a
         )
         .await;
 
-    let (status, body) = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["items"][0]["targetId"], "target-old");
+    assert_eq!(
+        body["items"][0]["live"]["browserTabs"][0]["browserTabId"],
+        101
+    );
 
     mock.remove_tab(101).await;
     let recording_request = Request::builder()
@@ -1114,9 +1145,10 @@ async fn canonical_associations_evict_external_close_and_screencast_frame() -> a
     let recording_response = app.router.clone().oneshot(recording_request).await?;
     assert_eq!(recording_response.status(), StatusCode::CONFLICT);
 
-    let (status, body) = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["items"], json!([]));
+    assert_eq!(body["items"][0]["live"]["browserTabs"], json!([]));
 
     let screencast_task = app
         .state
@@ -1143,13 +1175,15 @@ async fn canonical_associations_evict_external_close_and_screencast_frame() -> a
 }
 
 #[tokio::test]
-async fn canonical_tabs_refresh_metadata_and_reject_reused_page_id() -> anyhow::Result<()> {
+async fn live_projection_refreshes_metadata_and_rejects_stale_preview_target() -> anyhow::Result<()>
+{
     let mock = MockCdp::start().await?;
     mock.add_tab(101, "target-old", 1).await;
     let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
     app.state.browser.connect_once_for_testing().await?;
     let session = test_session(SessionId::new("session-live"), "codex-agent", "codex");
     app.state.sessions.insert_for_testing(session.clone()).await;
+    record_session_start(&app, &session).await?;
     app.state
         .tab_activity
         .record_tool(RecordToolInput {
@@ -1162,6 +1196,13 @@ async fn canonical_tabs_refresh_metadata_and_reject_reused_page_id() -> anyhow::
             tool_name: "navigate".to_string(),
         })
         .await;
+    app.state.audit.enqueue_claim_tab_for_session(
+        101,
+        Some("target-old".to_string()),
+        session.id().as_str().to_string(),
+        session.convo_id().as_str().to_string(),
+        1,
+    );
 
     mock.update_tab(
         101,
@@ -1170,13 +1211,17 @@ async fn canonical_tabs_refresh_metadata_and_reject_reused_page_id() -> anyhow::
         "After navigation",
     )
     .await;
-    let (status, body) = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        body["items"][0]["url"],
+        body["items"][0]["live"]["browserTabs"][0]["url"],
         "https://example.com/after-navigation"
     );
-    assert_eq!(body["items"][0]["title"], "After navigation");
+    assert_eq!(
+        body["items"][0]["live"]["browserTabs"][0]["title"],
+        "After navigation"
+    );
     app.state
         .screencast
         .cache_frame(
@@ -1214,9 +1259,23 @@ async fn canonical_tabs_refresh_metadata_and_reject_reused_page_id() -> anyhow::
             .is_none()
     );
     assert_eq!(mock.captures.lock().await.len(), captures_before);
-    let (status, body) = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["items"], json!([]));
+    assert_eq!(
+        body["items"][0]["live"]["browserTabs"][0]["browserTabId"],
+        101
+    );
+    assert_eq!(body["items"][0]["live"]["browserTabs"][0]["toolCount"], 0);
+    assert_eq!(
+        request_status(
+            &app.router,
+            "GET",
+            "/api/v1/sessions/session-live/browser-tabs/101/preview",
+        )
+        .await?,
+        StatusCode::NOT_FOUND
+    );
 
     app.state
         .tab_activity
@@ -1230,27 +1289,43 @@ async fn canonical_tabs_refresh_metadata_and_reject_reused_page_id() -> anyhow::
             tool_name: "navigate".to_string(),
         })
         .await;
-    let (status, body) = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["items"][0]["targetId"], "target-new");
-    assert_eq!(body["items"][0]["previewCapturedAt"], Value::Null);
+    assert_eq!(body["items"][0]["live"]["browserTabs"][0]["toolCount"], 1);
     assert_eq!(
-        request_status(&app.router, "GET", "/api/v1/tabs/1/preview").await?,
+        body["items"][0]["live"]["browserTabs"][0]["previewCapturedAt"],
+        Value::Null
+    );
+    assert_eq!(
+        request_status(
+            &app.router,
+            "GET",
+            "/api/v1/sessions/session-live/browser-tabs/101/preview",
+        )
+        .await?,
         StatusCode::NOT_FOUND
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn canonical_tabs_expose_polled_screenshot_previews() -> anyhow::Result<()> {
+async fn live_session_reads_wake_polled_screenshot_previews() -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
-    mock.add_tab(1, "target-1", 1).await;
-    mock.add_tab(2, "target-2", 2).await;
+    mock.add_tab(101, "target-1", 1).await;
+    mock.add_tab(102, "target-2", 2).await;
     let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
     app.state.browser.connect_once_for_testing().await?;
     wait_for_cdp_connected(&app).await?;
 
     for (page_id, target_id, agent_id) in [(1, "target-1", "agent-a"), (2, "target-2", "agent-b")] {
+        let session = test_session(
+            SessionId::new(format!("session-{target_id}")),
+            agent_id,
+            "codex",
+        );
+        app.state.sessions.insert_for_testing(session.clone()).await;
+        record_session_start(&app, &session).await?;
         app.state
             .tab_activity
             .record_tool(RecordToolInput {
@@ -1263,6 +1338,13 @@ async fn canonical_tabs_expose_polled_screenshot_previews() -> anyhow::Result<()
                 tool_name: "tabs".to_string(),
             })
             .await;
+        app.state.audit.enqueue_claim_tab_for_session(
+            i64::from(page_id) + 100,
+            Some(target_id.to_string()),
+            session.id().as_str().to_string(),
+            session.convo_id().as_str().to_string(),
+            1,
+        );
     }
 
     let screencast_task = app
@@ -1274,17 +1356,18 @@ async fn canonical_tabs_expose_polled_screenshot_previews() -> anyhow::Result<()
     let mut last_previews: Vec<(String, Option<i64>)> = Vec::new();
     let mut done = false;
     for _ in 0..100 {
-        let (status, body) = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
+        let (status, body) =
+            request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
         assert_eq!(status, StatusCode::OK);
         let rows = body["items"]
             .as_array()
-            .ok_or_else(|| anyhow::anyhow!("tabs not array"))?;
+            .ok_or_else(|| anyhow::anyhow!("sessions not array"))?;
         last_previews = rows
             .iter()
             .map(|row| {
                 (
-                    row["targetId"].as_str().unwrap_or_default().to_string(),
-                    row["previewCapturedAt"].as_i64(),
+                    row["sessionId"].as_str().unwrap_or_default().to_string(),
+                    row["live"]["browserTabs"][0]["previewCapturedAt"].as_i64(),
                 )
             })
             .collect();
@@ -1300,18 +1383,18 @@ async fn canonical_tabs_expose_polled_screenshot_previews() -> anyhow::Result<()
     }
     assert!(
         done,
-        "polled frames never reached /api/v1/tabs; last: {last_previews:?}"
+        "polled frames never reached the live session projection; last: {last_previews:?}"
     );
 
     for (_, captured_at) in &last_previews {
         assert!(captured_at.is_some_and(|at| at > 0));
     }
-    for page_id in [1, 2] {
+    for (session_id, browser_tab_id) in [("session-target-1", 101), ("session-target-2", 102)] {
         assert_eq!(
             request_status(
                 &app.router,
                 "GET",
-                &format!("/api/v1/tabs/{page_id}/preview"),
+                &format!("/api/v1/sessions/{session_id}/browser-tabs/{browser_tab_id}/preview"),
             )
             .await?,
             StatusCode::OK
@@ -1355,6 +1438,21 @@ fn test_session(session_id: SessionId, agent_id: &str, slug: &str) -> Arc<Sessio
         ConversationIdentity::new(slug, generated_label),
         tokio::time::Instant::now(),
     )
+}
+
+async fn record_session_start(app: &TestApp, session: &Session) -> anyhow::Result<()> {
+    app.state
+        .audit
+        .record_session_start(
+            session.id().as_str(),
+            session.convo_id().as_str(),
+            session.agent().slug(),
+            session.agent().label(),
+            session.agent().label(),
+            "1.0",
+        )
+        .await?;
+    Ok(())
 }
 
 async fn initialize_mcp(app: &TestApp) -> anyhow::Result<String> {

@@ -134,9 +134,14 @@ impl ScreencastService {
             .cloned()
     }
 
-    /// Record an `/api/v1/tabs` read for the idle governor.
+    /// Records readership of the live-session cockpit projection for the idle governor.
     pub fn note_read(&self) {
         self.last_read_ms.store(now_epoch_ms(), Ordering::Relaxed);
+    }
+
+    #[doc(hidden)]
+    pub fn last_read_at_for_testing(&self) -> i64 {
+        self.last_read_ms.load(Ordering::Relaxed)
     }
 
     fn is_idle(&self, now: i64) -> bool {

@@ -589,6 +589,45 @@ impl AuditService {
         Ok(ListTasksResult { tasks, next_cursor })
     }
 
+    /// Returns the audit summary for one session without loading its dispatch history.
+    pub async fn get_task_summary(&self, session_id: &str) -> AppResult<Option<TaskSummary>> {
+        Ok(Tasks::find_by_id(session_id.to_owned())
+            .one(self.db.connection())
+            .await?
+            .map(TaskSummary::from))
+    }
+
+    /// Returns the durable browser-tab ownership windows that are still open.
+    pub async fn list_open_session_tabs(
+        &self,
+        session_ids: &[String],
+    ) -> AppResult<Vec<session_tabs::Model>> {
+        if session_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(SessionTabs::find()
+            .filter(session_tabs::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .filter(session_tabs::Column::ReleasedAt.is_null())
+            .order_by_asc(session_tabs::Column::SessionId)
+            .order_by_asc(session_tabs::Column::TabId)
+            .all(self.db.connection())
+            .await?)
+    }
+
+    /// Returns current durable ownership for one session and Chrome tab.
+    pub async fn open_session_tab(
+        &self,
+        session_id: &str,
+        tab_id: i64,
+    ) -> AppResult<Option<session_tabs::Model>> {
+        Ok(SessionTabs::find()
+            .filter(session_tabs::Column::SessionId.eq(session_id))
+            .filter(session_tabs::Column::TabId.eq(tab_id))
+            .filter(session_tabs::Column::ReleasedAt.is_null())
+            .one(self.db.connection())
+            .await?)
+    }
+
     /// Returns a task summary with its ordered events and dispatches.
     pub async fn get_task(&self, session_id: &str) -> AppResult<Option<TaskDetail>> {
         let Some(summary) = Tasks::find_by_id(session_id.to_owned())

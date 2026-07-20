@@ -18,10 +18,10 @@ use axum::{
 };
 use claw_api::RECORDING_INGEST_MAX_BYTES;
 
+mod artifacts;
 mod connections;
 mod sessions;
 mod system;
-mod tabs;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -34,6 +34,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/sessions", get(sessions::list))
         .route("/api/v1/sessions/{session_id}", get(sessions::get))
+        .route(
+            "/api/v1/sessions/{session_id}/browser-tabs/{browser_tab_id}/preview",
+            get(sessions::preview),
+        )
         .route(
             "/api/v1/sessions/{session_id}/cancel",
             post(sessions::cancel),
@@ -53,11 +57,9 @@ pub fn router() -> Router<AppState> {
             post(sessions::append_document_events)
                 .layer(DefaultBodyLimit::max(RECORDING_INGEST_MAX_BYTES)),
         )
-        .route("/api/v1/tabs", get(tabs::list))
-        .route("/api/v1/tabs/{page_id}/preview", get(tabs::preview))
         .route(
             "/api/v1/dispatches/{dispatch_id}/screenshot",
-            get(tabs::screenshot),
+            get(artifacts::screenshot),
         )
         .route("/api/v1/connections", get(connections::list))
         .route(

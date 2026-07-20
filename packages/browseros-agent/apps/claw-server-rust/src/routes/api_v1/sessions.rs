@@ -2,11 +2,12 @@ use super::{error, internal};
 use crate::{
     AppState,
     capture::{
-        audit::{ListTasksQuery, TaskDetail, TaskStatus, TaskSummary, ToolDispatchRow},
+        audit::{ListTasksQuery, TaskDetail, TaskStatus, ToolDispatchRow},
         recordings::RecordingEventInput,
     },
     error::{CanonicalError, RequestId},
     ids::SessionId,
+    live_sessions::{self, LiveSessionFilters},
     sessions::Session,
 };
 use axum::{
@@ -16,10 +17,10 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::Response,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use claw_api::models::{
     AppendRecordingEventsResponse, CancelSessionResponse, Dispatch, RecordingMetadata,
-    RecordingSegmentMetadata, RecordingTabMetadata, SessionDetail, SessionList, SessionStatus,
-    SessionSummary,
+    RecordingSegmentMetadata, RecordingTabMetadata, SessionDetail, SessionList,
 };
 use std::{collections::HashMap, sync::Arc};
 use uuid::{Uuid, Variant};
@@ -42,6 +43,22 @@ pub(super) async fn list(
     Query(raw): Query<HashMap<String, String>>,
 ) -> Result<Json<SessionList>, CanonicalError> {
     let query = parse_query(&request_id, &raw)?;
+    if query.status == Some(TaskStatus::Live) {
+        state.screencast.note_read();
+        let response = live_sessions::list(
+            &state,
+            &LiveSessionFilters {
+                profile_id: query.profile_id,
+                slug: query.slug,
+                site: query.site,
+                search: query.search,
+                since: query.since,
+            },
+        )
+        .await
+        .map_err(|source| internal(&request_id, source))?;
+        return Ok(Json(response));
+    }
     let result = state
         .audit
         .list_tasks(ListTasksQuery {
@@ -64,7 +81,7 @@ pub(super) async fn list(
     let mut items = Vec::with_capacity(result.tasks.len());
     for task in result.tasks {
         let session = live.get(task.session_id.as_str());
-        let summary = contract_summary(task, session).await;
+        let summary = live_sessions::contract_summary(task, session).await;
         if query
             .profile_id
             .as_ref()
@@ -98,6 +115,37 @@ pub(super) async fn get(
         })?;
     let live = state.sessions.lookup(&SessionId::new(session_id)).await;
     Ok(Json(contract_detail(task, live.as_ref()).await))
+}
+
+pub(super) async fn preview(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+    Path((session_id, browser_tab_id)): Path<(String, String)>,
+) -> Result<Response, CanonicalError> {
+    let browser_tab_id = positive_browser_tab_id(&request_id, &browser_tab_id)?;
+    let frame = live_sessions::preview(&state, &session_id, browser_tab_id)
+        .await
+        .map_err(|source| internal(&request_id, source))?
+        .ok_or_else(|| preview_not_found(&request_id))?;
+    let bytes = STANDARD.decode(frame.jpeg_base64).map_err(|source| {
+        tracing::error!(request_id = %request_id.0, error = %source, "cached preview is invalid");
+        error(
+            &request_id,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "internal server error",
+        )
+    })?;
+    // An empty cached frame is absent from the preview resource; the cockpit uses the same
+    // placeholder as it does before the first capture.
+    if bytes.is_empty() {
+        return Err(preview_not_found(&request_id));
+    }
+    // The next screencast frame supersedes this one, so clients must revalidate every read.
+    Ok(super::artifacts::jpeg_response(
+        bytes,
+        "private, max-age=0, must-revalidate",
+    ))
 }
 
 pub(super) async fn cancel(
@@ -535,38 +583,6 @@ async fn live_sessions(state: &AppState) -> HashMap<String, Arc<Session>> {
         .collect()
 }
 
-async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> SessionSummary {
-    // A live session can still rename itself, so prefer its current
-    // label; once ended, the audited title is all that remains.
-    let name = match live {
-        Some(session) => session.label().await,
-        None => task.title.clone(),
-    };
-    let mut summary = SessionSummary::new(
-        task.session_id,
-        task.slug,
-        task.agent_label,
-        name,
-        task.started_at,
-        task.duration_ms.max(0),
-        task.dispatch_count,
-        task.tool_sequence,
-        match task.status {
-            TaskStatus::Live => SessionStatus::Live,
-            TaskStatus::Done => SessionStatus::Done,
-            TaskStatus::Failed => SessionStatus::Failed,
-        },
-        task.error_count,
-    );
-    summary.profile_id = live
-        .and_then(|session| session.agent().profile_id())
-        .map(|profile_id| profile_id.as_str().to_string());
-    summary.site = task.site;
-    summary.ended_at = task.ended_at;
-    summary.last_screenshot_dispatch_id = task.last_screenshot_dispatch_id;
-    summary
-}
-
 async fn contract_detail(task: TaskDetail, live: Option<&Arc<Session>>) -> SessionDetail {
     let screenshots = task
         .screenshot_dispatch_ids
@@ -580,7 +596,10 @@ async fn contract_detail(task: TaskDetail, live: Option<&Arc<Session>>) -> Sessi
         .into_iter()
         .map(|row| contract_dispatch(row, &screenshots, profile_id.as_ref()))
         .collect();
-    SessionDetail::new(contract_summary(task.summary, live).await, dispatches)
+    SessionDetail::new(
+        live_sessions::contract_summary(task.summary, live).await,
+        dispatches,
+    )
 }
 
 fn contract_dispatch(
@@ -657,5 +676,32 @@ fn invalid_query(request_id: &RequestId, message: &str) -> CanonicalError {
         StatusCode::BAD_REQUEST,
         "invalid_request",
         message,
+    )
+}
+
+fn positive_browser_tab_id(
+    request_id: &RequestId,
+    browser_tab_id: &str,
+) -> Result<i64, CanonicalError> {
+    browser_tab_id
+        .parse::<i64>()
+        .ok()
+        .filter(|browser_tab_id| *browser_tab_id > 0)
+        .ok_or_else(|| {
+            error(
+                request_id,
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "browserTabId must be positive",
+            )
+        })
+}
+
+fn preview_not_found(request_id: &RequestId) -> CanonicalError {
+    error(
+        request_id,
+        StatusCode::NOT_FOUND,
+        "preview_not_found",
+        "tab preview not found",
     )
 }
