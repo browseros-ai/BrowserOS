@@ -45,7 +45,12 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/sessions/{session_id}/recording/events",
             get(sessions::download_events)
-                .post(sessions::append_events)
+                .post(sessions::append_legacy_events)
+                .layer(DefaultBodyLimit::max(RECORDING_INGEST_MAX_BYTES)),
+        )
+        .route(
+            "/api/v1/recordings/events",
+            post(sessions::append_document_events)
                 .layer(DefaultBodyLimit::max(RECORDING_INGEST_MAX_BYTES)),
         )
         .route("/api/v1/tabs", get(tabs::list))

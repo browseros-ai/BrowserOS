@@ -38,11 +38,13 @@ pub fn apply(
                 let session_id = context.call.session_id.as_str().to_string();
                 let agent_id = identity.session.convo_id().as_str().to_string();
                 let claimed_at = context.call.started_at_ms;
-                context
-                    .call
-                    .state
-                    .audit
-                    .enqueue_claim_target_for_session(target_id, session_id, agent_id, claimed_at);
+                context.call.state.audit.enqueue_claim_tab_for_session(
+                    info.tab_id.0,
+                    Some(target_id),
+                    session_id,
+                    agent_id,
+                    claimed_at,
+                );
             }
             context
                 .call
@@ -68,7 +70,7 @@ pub fn apply(
                     .call
                     .state
                     .audit
-                    .enqueue_release_target_for_session(target_id, session_id);
+                    .enqueue_release_tab_for_session(page.tab_id.0, session_id);
             }
             context
                 .call
@@ -88,7 +90,7 @@ const _: ToolEffect = apply;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::audit::entities::{prelude::TabClaims, tab_claims};
+    use crate::db::audit::entities::{prelude::SessionTabs, session_tabs};
     use browseros_cdp::{CdpError, CdpEvent, SessionId};
     use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
     use browseros_mcp::ToolResult;
@@ -163,9 +165,11 @@ mod tests {
     async fn wait_for_claim(
         call: &crate::mcp::dispatch::ToolCall,
         released: bool,
-    ) -> anyhow::Result<tab_claims::Model> {
+    ) -> anyhow::Result<session_tabs::Model> {
         for _ in 0..100 {
-            if let Some(claim) = TabClaims::find().one(call.state.audit.connection()).await?
+            if let Some(claim) = SessionTabs::find()
+                .one(call.state.audit.connection())
+                .await?
                 && claim.released_at.is_some() == released
             {
                 return Ok(claim);
@@ -176,7 +180,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn new_and_close_write_the_target_claim_window() -> anyhow::Result<()> {
+    async fn new_and_close_write_the_tab_claim_window() -> anyhow::Result<()> {
         let browser =
             BrowserSession::new(PageListConnection::new(), BrowserSessionHooks::default());
         assert_eq!(browser.pages.list().await?.len(), 1);
@@ -194,7 +198,8 @@ mod tests {
         })
         .await?;
         let claim = wait_for_claim(&new_call, false).await?;
-        assert_eq!(claim.target_id, "target-a");
+        assert_eq!(claim.tab_id, 11);
+        assert_eq!(claim.opened_target_id.as_deref(), Some("target-a"));
         assert_eq!(claim.session_id, "s1");
         assert_eq!(claim.claimed_at, 123);
 
@@ -202,11 +207,14 @@ mod tests {
             crate::mcp::test_support::tool_call("tabs", json!({ "action": "close", "page": 1 }))
                 .await?;
         close_call.page_snapshot = browser.pages.get_info(PageId(1)).await;
-        close_call
-            .state
-            .audit
-            .claim_target_for_session("target-a", "s1", "agent", 100)
-            .await?;
+        close_call.state.audit.enqueue_claim_tab_for_session(
+            11,
+            Some("target-a".to_string()),
+            "s1".to_string(),
+            "agent".to_string(),
+            100,
+        );
+        close_call.state.audit.drain_claim_writes().await;
         let result = ToolResult::text("closed page", None);
         apply(ToolEffectContext {
             call: &close_call,
@@ -215,13 +223,13 @@ mod tests {
             duration_ms: 1,
         })
         .await?;
-        let released = TabClaims::find()
-            .filter(tab_claims::Column::ClaimedAt.eq(100))
+        let released = SessionTabs::find()
+            .filter(session_tabs::Column::ClaimedAt.eq(100))
             .one(close_call.state.audit.connection())
             .await?
             .unwrap_or_else(|| panic!("close claim missing"));
         for _ in 0..100 {
-            let current = TabClaims::find_by_id(released.id)
+            let current = SessionTabs::find_by_id(released.id)
                 .one(close_call.state.audit.connection())
                 .await?
                 .unwrap_or_else(|| panic!("close claim missing"));

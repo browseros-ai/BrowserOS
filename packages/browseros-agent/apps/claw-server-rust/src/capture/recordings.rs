@@ -1,26 +1,23 @@
+//! Document-keyed rrweb persistence, independent of MCP session attribution.
+
 use crate::{
     capture::audit::AuditService,
+    clock::now_epoch_ms,
     db::audit::entities::{
-        prelude::{TabClaims, TabRecordings},
-        tab_claims, tab_recordings,
+        prelude::{RecordingBatches, RecordingStreams, SessionTabs, TabClaims, TabRecordings},
+        recording_batches, recording_streams, session_tabs, tab_claims, tab_recordings,
     },
     error::{AppError, AppResult, IoPath},
 };
 use sea_orm::{
-    ActiveValue::Set,
-    ColumnTrait, EntityTrait, QueryFilter,
-    sea_query::{Alias, Expr, OnConflict},
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
+    TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{
-    collections::{HashMap, VecDeque},
-    path::PathBuf,
-    sync::{Arc, Weak},
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::AsyncWriteExt,
     sync::Mutex,
     task::JoinHandle,
@@ -31,7 +28,7 @@ use tracing::{info, warn};
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 const RETENTION_INTERVAL: Duration = Duration::from_secs(60 * 60);
-const BATCH_ID_LRU_CAPACITY: usize = 256;
+pub const RECORDING_ORPHAN_TTL_MS: i64 = 60 * 60 * 1000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,9 +40,11 @@ pub struct RecordingEventInput {
     pub data: Option<Value>,
 }
 
+pub type RecordedEvent = RecordingEventInput;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RecordedEvent {
+pub struct LegacyRecordedEvent {
     pub tab_id: i64,
     pub ts: i64,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
@@ -60,28 +59,11 @@ pub struct RetentionSweepResult {
     pub claims_deleted: u64,
 }
 
-struct HandleEntry {
-    file: Arc<Mutex<File>>,
-    active_writes: usize,
-    generation: u64,
-    last_used: Instant,
-}
-
-#[derive(Default)]
-struct HandleCache {
-    entries: HashMap<String, HandleEntry>,
-    lru: VecDeque<String>,
-}
-
-/// Stores target-keyed rrweb events and keeps the SQLite catalog in sync.
+/// Stores each Chrome document stream and its durable batch acceptance ledger.
 pub struct RecordingStore {
     root: PathBuf,
     audit: Arc<AuditService>,
-    max_open_handles: usize,
-    idle_handle: Duration,
-    target_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
-    handles: Mutex<HandleCache>,
-    accepted_batch_ids: Mutex<HashMap<String, VecDeque<String>>>,
+    document_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
 impl RecordingStore {
@@ -89,131 +71,185 @@ impl RecordingStore {
     pub fn new(
         root: PathBuf,
         audit: Arc<AuditService>,
-        max_open_handles: usize,
-        idle_handle: Duration,
+        _max_open_handles: usize,
+        _idle_handle: Duration,
     ) -> Arc<Self> {
         Arc::new(Self {
             root,
             audit,
-            max_open_handles,
-            idle_handle,
-            target_locks: Mutex::new(HashMap::new()),
-            handles: Mutex::new(HandleCache::default()),
-            accepted_batch_ids: Mutex::new(HashMap::new()),
+            document_locks: Mutex::new(HashMap::new()),
         })
     }
 
+    /// Returns false only when this document already durably accepted the batch.
     pub async fn append_batch(
-        self: &Arc<Self>,
-        target_id: &str,
+        &self,
+        document_id: &str,
         tab_id: i64,
+        target_id: Option<&str>,
         events: &[RecordingEventInput],
-    ) -> AppResult<()> {
-        self.append_batch_with_id(target_id, tab_id, events, None)
-            .await
-            .map(|_| ())
+        batch_id: &str,
+        has_gap: bool,
+    ) -> AppResult<bool> {
+        let document_lock = self.lock_for(document_id).await;
+        let guard = document_lock.lock().await;
+        let result = self
+            .append_locked(document_id, tab_id, target_id, events, batch_id, has_gap)
+            .await;
+        drop(guard);
+        self.release_lock(document_id, &document_lock).await;
+        result
     }
 
-    /// Returns false only when this target already accepted the batch id.
-    pub async fn append_batch_with_id(
-        self: &Arc<Self>,
+    pub async fn append_legacy_batch(
+        &self,
         target_id: &str,
         tab_id: i64,
         events: &[RecordingEventInput],
-        batch_id: Option<&str>,
+        batch_id: &str,
+        has_gap: bool,
     ) -> AppResult<bool> {
-        let target_lock = self.lock_for(target_id).await;
-        let target_guard = target_lock.lock().await;
-        let result = async {
-            if let Some(batch_id) = batch_id
-                && self.has_accepted_batch_id(target_id, batch_id).await
+        self.append_batch(
+            &legacy_document_id(target_id),
+            tab_id,
+            Some(target_id),
+            events,
+            batch_id,
+            has_gap,
+        )
+        .await
+    }
+
+    async fn append_locked(
+        &self,
+        document_id: &str,
+        tab_id: i64,
+        target_id: Option<&str>,
+        events: &[RecordingEventInput],
+        batch_id: &str,
+        has_gap: bool,
+    ) -> AppResult<bool> {
+        if RecordingBatches::find_by_id((document_id.to_string(), batch_id.to_string()))
+            .one(self.audit.connection())
+            .await?
+            .is_some()
+        {
+            return Ok(false);
+        }
+        if events.is_empty() {
+            return Ok(true);
+        }
+
+        let mut payload = String::new();
+        for event in events {
+            payload.push_str(&serde_json::to_string(event)?);
+            payload.push('\n');
+        }
+        fs::create_dir_all(&self.root)
+            .await
+            .with_path(self.root.clone())?;
+        let path = self.path_for(document_id);
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await
+            .with_path(path.clone())?;
+        let original_size = file.metadata().await.with_path(path.clone())?.len();
+        if let Err(error) = async {
+            file.write_all(payload.as_bytes())
+                .await
+                .with_path(path.clone())?;
+            file.sync_data().await.with_path(path.clone())?;
+            Ok::<(), AppError>(())
+        }
+        .await
+        {
+            rollback_append(&mut file, document_id, original_size).await;
+            return Err(error);
+        }
+
+        let first_event_at = events
+            .iter()
+            .map(|event| event.ts)
+            .min()
+            .unwrap_or_default();
+        let last_event_at = events
+            .iter()
+            .map(|event| event.ts)
+            .max()
+            .unwrap_or_default();
+        let size_bytes = i64::try_from(payload.len()).unwrap_or(i64::MAX);
+        let event_count = i64::try_from(events.len()).unwrap_or(i64::MAX);
+        let txn = self.audit.connection().begin().await?;
+        let catalog_result = async {
+            if let Some(existing) = RecordingStreams::find_by_id(document_id.to_string())
+                .one(&txn)
+                .await?
             {
-                return Ok(false);
-            }
-            if events.is_empty() {
-                if let Some(batch_id) = batch_id {
-                    self.remember_accepted_batch_id(target_id, batch_id).await;
+                if existing.tab_id != tab_id {
+                    return Err(AppError::Internal(format!(
+                        "recording document {document_id} changed tab identity"
+                    )));
                 }
-                return Ok(true);
+                let mut update = existing.into_active_model();
+                if update.target_id.as_ref().is_none() && target_id.is_some() {
+                    update.target_id = Set(target_id.map(str::to_string));
+                }
+                update.first_event_at = Set(update.first_event_at.unwrap().min(first_event_at));
+                update.last_event_at = Set(update.last_event_at.unwrap().max(last_event_at));
+                update.size_bytes = Set(update.size_bytes.unwrap().saturating_add(size_bytes));
+                update.event_count = Set(update.event_count.unwrap().saturating_add(event_count));
+                update.has_gap = Set(update.has_gap.unwrap() || has_gap);
+                update.update(&txn).await?;
+            } else {
+                RecordingStreams::insert(recording_streams::ActiveModel {
+                    document_id: Set(document_id.to_string()),
+                    tab_id: Set(tab_id),
+                    target_id: Set(target_id.map(str::to_string)),
+                    first_event_at: Set(first_event_at),
+                    last_event_at: Set(last_event_at),
+                    size_bytes: Set(size_bytes),
+                    event_count: Set(event_count),
+                    has_gap: Set(has_gap),
+                })
+                .exec(&txn)
+                .await?;
             }
-            let mut payload = String::new();
-            for event in events {
-                payload.push_str(&serde_json::to_string(&RecordedEvent {
-                    tab_id,
-                    ts: event.ts,
-                    event_type: event.event_type.clone(),
-                    data: event.data.clone(),
-                })?);
-                payload.push('\n');
-            }
-            let first_event_at = events
-                .iter()
-                .map(|event| event.ts)
-                .min()
-                .unwrap_or_default();
-            let last_event_at = events
-                .iter()
-                .map(|event| event.ts)
-                .max()
-                .unwrap_or_default();
-            let file = self.open_for_append(target_id).await?;
-            let result = self
-                .append_and_catalog(
-                    target_id,
-                    tab_id,
-                    events.len(),
-                    first_event_at,
-                    last_event_at,
-                    payload.as_bytes(),
-                    &file,
-                )
-                .await;
-            self.release_append_handle(target_id).await;
-            result?;
-            if let Some(batch_id) = batch_id {
-                // Remember only committed batches so a failed append remains retryable.
-                self.remember_accepted_batch_id(target_id, batch_id).await;
-            }
-            Ok(true)
+            RecordingBatches::insert(recording_batches::ActiveModel {
+                document_id: Set(document_id.to_string()),
+                batch_id: Set(batch_id.to_string()),
+                accepted_at: Set(now_epoch_ms()),
+            })
+            .exec(&txn)
+            .await?;
+            txn.commit().await?;
+            Ok::<(), AppError>(())
         }
         .await;
-        drop(target_guard);
-        self.release_target_lock(target_id, &target_lock).await;
-        result
+        if let Err(error) = catalog_result {
+            rollback_append(&mut file, document_id, original_size).await;
+            return Err(error);
+        }
+        Ok(true)
     }
 
     pub async fn read_range(
         &self,
-        target_id: &str,
+        document_id: &str,
         from: i64,
         to: i64,
     ) -> AppResult<Vec<RecordedEvent>> {
-        let target_lock = self.lock_for(target_id).await;
-        let target_guard = target_lock.lock().await;
-        let result = async {
-            let path = self.path_for(target_id);
-            let text = match fs::read_to_string(&path).await {
-                Ok(text) => text,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    return Ok(Vec::new());
-                }
-                Err(source) => {
-                    return Err(AppError::Io {
-                        path: Some(path),
-                        source,
-                    });
-                }
-            };
-            Ok(text
-                .lines()
-                .filter_map(|line| serde_json::from_str::<RecordedEvent>(line).ok())
-                .filter(|event| event.ts >= from && event.ts <= to)
-                .collect())
-        }
-        .await;
-        drop(target_guard);
-        self.release_target_lock(target_id, &target_lock).await;
-        result
+        read_file_range::<RecordedEvent>(self.path_for(document_id), from, to).await
+    }
+
+    pub async fn read_legacy_range(
+        &self,
+        target_id: &str,
+        from: i64,
+        to: i64,
+    ) -> AppResult<Vec<LegacyRecordedEvent>> {
+        read_file_range::<LegacyRecordedEvent>(self.path_for(target_id), from, to).await
     }
 
     pub async fn sweep_retention(
@@ -224,34 +260,66 @@ impl RecordingStore {
         let retention_ms = i64::try_from(retention_days)
             .unwrap_or(i64::MAX)
             .saturating_mul(DAY_MS);
-        let cutoff = now.saturating_sub(retention_ms);
-        let expired = TabRecordings::find()
-            .filter(tab_recordings::Column::LastEventAt.lt(cutoff))
+        let retention_cutoff = now.saturating_sub(retention_ms);
+        let orphan_cutoff = now.saturating_sub(RECORDING_ORPHAN_TTL_MS);
+        let claims = SessionTabs::find().all(self.audit.connection()).await?;
+        let streams = RecordingStreams::find()
             .all(self.audit.connection())
             .await?;
         let mut recordings_deleted = 0;
-        for recording in expired {
+        for stream in streams {
+            let claimed = claims.iter().any(|claim| {
+                claim.tab_id == stream.tab_id
+                    && stream.last_event_at >= claim.claimed_at
+                    && stream.first_event_at <= claim.released_at.unwrap_or(i64::MAX)
+            });
+            let cutoff = if claimed {
+                retention_cutoff
+            } else {
+                orphan_cutoff
+            };
+            if stream.last_event_at < cutoff && self.delete_document(&stream.document_id).await? {
+                recordings_deleted += 1;
+            }
+        }
+
+        let legacy = TabRecordings::find()
+            .filter(tab_recordings::Column::LastEventAt.lt(retention_cutoff))
+            .all(self.audit.connection())
+            .await?;
+        for recording in legacy {
             if self
-                .delete_recording_if_expired(&recording.target_id, cutoff)
+                .delete_legacy_target(&recording.target_id, retention_cutoff)
                 .await?
             {
                 recordings_deleted += 1;
             }
         }
 
-        let claims = TabClaims::find()
-            .filter(tab_claims::Column::ReleasedAt.is_not_null())
-            .filter(tab_claims::Column::ReleasedAt.lt(cutoff))
+        let old_tab_claims = SessionTabs::find()
+            .filter(session_tabs::Column::ReleasedAt.is_not_null())
+            .filter(session_tabs::Column::ReleasedAt.lt(retention_cutoff))
             .all(self.audit.connection())
+            .await?;
+        let old_target_claims = TabClaims::find()
+            .filter(tab_claims::Column::ReleasedAt.is_not_null())
+            .filter(tab_claims::Column::ReleasedAt.lt(retention_cutoff))
+            .all(self.audit.connection())
+            .await?;
+        SessionTabs::delete_many()
+            .filter(session_tabs::Column::ReleasedAt.is_not_null())
+            .filter(session_tabs::Column::ReleasedAt.lt(retention_cutoff))
+            .exec(self.audit.connection())
             .await?;
         TabClaims::delete_many()
             .filter(tab_claims::Column::ReleasedAt.is_not_null())
-            .filter(tab_claims::Column::ReleasedAt.lt(cutoff))
+            .filter(tab_claims::Column::ReleasedAt.lt(retention_cutoff))
             .exec(self.audit.connection())
             .await?;
         Ok(RetentionSweepResult {
             recordings_deleted,
-            claims_deleted: u64::try_from(claims.len()).unwrap_or(u64::MAX),
+            claims_deleted: u64::try_from(old_tab_claims.len() + old_target_claims.len())
+                .unwrap_or(u64::MAX),
         })
     }
 
@@ -268,10 +336,7 @@ impl RecordingStore {
                 tokio::select! {
                     () = cancel.cancelled() => return,
                     _ = ticker.tick() => {
-                        match self
-                            .sweep_retention(retention_days, crate::clock::now_epoch_ms())
-                            .await
-                        {
+                        match self.sweep_retention(retention_days, now_epoch_ms()).await {
                             Ok(result) => info!(
                                 recordings_deleted = result.recordings_deleted,
                                 claims_deleted = result.claims_deleted,
@@ -285,319 +350,135 @@ impl RecordingStore {
         })
     }
 
-    pub async fn close(&self) {
-        let mut cache = self.handles.lock().await;
-        cache.entries.clear();
-        cache.lru.clear();
-    }
+    pub async fn close(&self) {}
 
-    #[cfg(test)]
-    async fn cached_handle_count(&self) -> usize {
-        self.handles.lock().await.entries.len()
-    }
-
-    #[cfg(test)]
-    async fn target_lock_count(&self) -> usize {
-        self.target_locks.lock().await.len()
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn append_and_catalog(
-        &self,
-        target_id: &str,
-        tab_id: i64,
-        event_count: usize,
-        first_event_at: i64,
-        last_event_at: i64,
-        payload: &[u8],
-        file: &Arc<Mutex<File>>,
-    ) -> AppResult<()> {
-        let path = self.path_for(target_id);
-        let mut file = file.lock().await;
-        let original_size = file.metadata().await.with_path(path.clone())?.len();
-        let write_result = async {
-            file.write_all(payload).await.with_path(path.clone())?;
-            file.flush().await.with_path(path.clone())?;
-            Ok::<(), AppError>(())
+    async fn delete_document(&self, document_id: &str) -> AppResult<bool> {
+        let lock = self.lock_for(document_id).await;
+        let guard = lock.lock().await;
+        let result = async {
+            let Some(stream) = RecordingStreams::find_by_id(document_id.to_string())
+                .one(self.audit.connection())
+                .await?
+            else {
+                return Ok(false);
+            };
+            if !remove_file(&self.path_for(document_id), document_id).await {
+                return Ok(false);
+            }
+            RecordingStreams::delete_by_id(stream.document_id)
+                .exec(self.audit.connection())
+                .await?;
+            Ok(true)
         }
         .await;
-        if let Err(error) = write_result {
-            rollback_append(&mut file, target_id, original_size).await;
-            return Err(error);
-        }
-        let size_bytes = i64::try_from(payload.len()).unwrap_or(i64::MAX);
-        let event_count = i64::try_from(event_count).unwrap_or(i64::MAX);
-        let result = TabRecordings::insert(tab_recordings::ActiveModel {
-            target_id: Set(target_id.to_string()),
-            tab_id: Set(tab_id),
-            first_event_at: Set(first_event_at),
-            last_event_at: Set(last_event_at),
-            size_bytes: Set(size_bytes),
-            event_count: Set(event_count),
-        })
-        .on_conflict(
-            OnConflict::column(tab_recordings::Column::TargetId)
-                .update_column(tab_recordings::Column::TabId)
-                .value(
-                    tab_recordings::Column::FirstEventAt,
-                    min_catalog_expr(tab_recordings::Column::FirstEventAt),
-                )
-                .value(
-                    tab_recordings::Column::LastEventAt,
-                    max_catalog_expr(tab_recordings::Column::LastEventAt),
-                )
-                .value(
-                    tab_recordings::Column::SizeBytes,
-                    add_catalog_expr(tab_recordings::Column::SizeBytes),
-                )
-                .value(
-                    tab_recordings::Column::EventCount,
-                    add_catalog_expr(tab_recordings::Column::EventCount),
-                )
-                .to_owned(),
-        )
-        .exec_without_returning(self.audit.connection())
-        .await;
-        if let Err(error) = result {
-            rollback_append(&mut file, target_id, original_size).await;
-            return Err(error.into());
-        }
-        Ok(())
-    }
-
-    async fn delete_recording_if_expired(&self, target_id: &str, cutoff: i64) -> AppResult<bool> {
-        let target_lock = self.lock_for(target_id).await;
-        let target_guard = target_lock.lock().await;
-        let result = self.delete_recording_locked(target_id, cutoff).await;
-        drop(target_guard);
-        self.release_target_lock(target_id, &target_lock).await;
+        drop(guard);
+        self.release_lock(document_id, &lock).await;
         result
     }
 
-    async fn delete_recording_locked(&self, target_id: &str, cutoff: i64) -> AppResult<bool> {
-        let Some(recording) = TabRecordings::find_by_id(target_id)
+    async fn delete_legacy_target(&self, target_id: &str, cutoff: i64) -> AppResult<bool> {
+        let Some(recording) = TabRecordings::find_by_id(target_id.to_string())
             .one(self.audit.connection())
             .await?
         else {
             return Ok(false);
         };
-        if recording.last_event_at >= cutoff {
+        if recording.last_event_at >= cutoff
+            || !remove_file(&self.path_for(target_id), target_id).await
+        {
             return Ok(false);
         }
-        self.close_cached_handle(target_id).await;
-        let path = self.path_for(target_id);
-        match fs::remove_file(&path).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                warn!(target_id, error = %error, "recording retention unlink failed");
-                return Ok(false);
-            }
-        }
-        TabRecordings::delete_by_id(target_id)
+        TabRecordings::delete_by_id(target_id.to_string())
             .exec(self.audit.connection())
             .await?;
-        self.accepted_batch_ids.lock().await.remove(target_id);
         Ok(true)
     }
 
-    async fn lock_for(&self, target_id: &str) -> Arc<Mutex<()>> {
-        self.target_locks
+    async fn lock_for(&self, document_id: &str) -> Arc<Mutex<()>> {
+        self.document_locks
             .lock()
             .await
-            .entry(target_id.to_string())
+            .entry(document_id.to_string())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
 
-    async fn release_target_lock(&self, target_id: &str, target_lock: &Arc<Mutex<()>>) {
-        let mut locks = self.target_locks.lock().await;
-        let removable = locks.get(target_id).is_some_and(|stored| {
-            Arc::ptr_eq(stored, target_lock) && Arc::strong_count(stored) == 2
-        });
-        if removable {
-            locks.remove(target_id);
-        }
-    }
-
-    async fn has_accepted_batch_id(&self, target_id: &str, batch_id: &str) -> bool {
-        let mut accepted = self.accepted_batch_ids.lock().await;
-        let Some(target_ids) = accepted.get_mut(target_id) else {
-            return false;
-        };
-        let Some(index) = target_ids
-            .iter()
-            .position(|candidate| candidate == batch_id)
-        else {
-            return false;
-        };
-        if let Some(batch_id) = target_ids.remove(index) {
-            target_ids.push_back(batch_id);
-        }
-        true
-    }
-
-    async fn remember_accepted_batch_id(&self, target_id: &str, batch_id: &str) {
-        let mut accepted = self.accepted_batch_ids.lock().await;
-        let target_ids = accepted.entry(target_id.to_string()).or_default();
-        target_ids.push_back(batch_id.to_string());
-        if target_ids.len() > BATCH_ID_LRU_CAPACITY {
-            target_ids.pop_front();
-        }
-    }
-
-    async fn open_for_append(self: &Arc<Self>, target_id: &str) -> AppResult<Arc<Mutex<File>>> {
+    async fn release_lock(&self, document_id: &str, lock: &Arc<Mutex<()>>) {
+        let mut locks = self.document_locks.lock().await;
+        if locks
+            .get(document_id)
+            .is_some_and(|stored| Arc::ptr_eq(stored, lock) && Arc::strong_count(stored) == 2)
         {
-            let mut cache = self.handles.lock().await;
-            if cache.entries.contains_key(target_id) {
-                let file = {
-                    let entry = cache
-                        .entries
-                        .get_mut(target_id)
-                        .unwrap_or_else(|| unreachable!());
-                    entry.active_writes += 1;
-                    entry.generation = entry.generation.wrapping_add(1);
-                    entry.last_used = Instant::now();
-                    entry.file.clone()
-                };
-                touch_lru(&mut cache, target_id);
-                return Ok(file);
-            }
-        }
-
-        fs::create_dir_all(&self.root)
-            .await
-            .with_path(self.root.clone())?;
-        let path = self.path_for(target_id);
-        let file = Arc::new(Mutex::new(
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-                .await
-                .with_path(path)?,
-        ));
-        let mut cache = self.handles.lock().await;
-        cache.entries.insert(
-            target_id.to_string(),
-            HandleEntry {
-                file: file.clone(),
-                active_writes: 1,
-                generation: 1,
-                last_used: Instant::now(),
-            },
-        );
-        touch_lru(&mut cache, target_id);
-        evict_over_limit(&mut cache, self.max_open_handles);
-        Ok(file)
-    }
-
-    async fn release_append_handle(self: &Arc<Self>, target_id: &str) {
-        let generation = {
-            let mut cache = self.handles.lock().await;
-            let Some(entry) = cache.entries.get_mut(target_id) else {
-                return;
-            };
-            entry.active_writes = entry.active_writes.saturating_sub(1);
-            entry.generation = entry.generation.wrapping_add(1);
-            entry.last_used = Instant::now();
-            let generation = entry.generation;
-            touch_lru(&mut cache, target_id);
-            evict_over_limit(&mut cache, self.max_open_handles);
-            generation
-        };
-        let store = Arc::downgrade(self);
-        let target_id = target_id.to_string();
-        let idle_handle = self.idle_handle;
-        tokio::spawn(async move {
-            tokio::time::sleep(idle_handle).await;
-            close_if_idle(store, &target_id, generation, idle_handle).await;
-        });
-    }
-
-    async fn close_cached_handle(&self, target_id: &str) {
-        let mut cache = self.handles.lock().await;
-        cache.entries.remove(target_id);
-        cache.lru.retain(|candidate| candidate != target_id);
-    }
-
-    fn path_for(&self, target_id: &str) -> PathBuf {
-        self.root
-            .join(format!("{}.ndjson", sanitize_target_id(target_id)))
-    }
-}
-
-async fn rollback_append(file: &mut File, target_id: &str, original_size: u64) {
-    if let Err(error) = file.set_len(original_size).await {
-        warn!(target_id, error = %error, "recording append rollback failed");
-    }
-}
-
-fn touch_lru(cache: &mut HandleCache, target_id: &str) {
-    cache.lru.retain(|candidate| candidate != target_id);
-    cache.lru.push_back(target_id.to_string());
-}
-
-fn evict_over_limit(cache: &mut HandleCache, max_open_handles: usize) {
-    while cache.entries.len() > max_open_handles {
-        let Some(index) = cache.lru.iter().position(|target_id| {
-            cache
-                .entries
-                .get(target_id)
-                .is_some_and(|entry| entry.active_writes == 0)
-        }) else {
-            return;
-        };
-        if let Some(target_id) = cache.lru.remove(index) {
-            cache.entries.remove(&target_id);
+            locks.remove(document_id);
         }
     }
+
+    fn path_for(&self, id: &str) -> PathBuf {
+        self.root.join(format!("{}.ndjson", sanitize_id(id)))
+    }
 }
 
-async fn close_if_idle(
-    store: Weak<RecordingStore>,
-    target_id: &str,
-    generation: u64,
-    idle_handle: Duration,
-) {
-    let Some(store) = store.upgrade() else {
-        return;
+async fn read_file_range<T>(path: PathBuf, from: i64, to: i64) -> AppResult<Vec<T>>
+where
+    T: for<'de> Deserialize<'de> + Timestamped,
+{
+    let text = match fs::read_to_string(&path).await {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(AppError::Io {
+                path: Some(path),
+                source,
+            });
+        }
     };
-    let mut cache = store.handles.lock().await;
-    let should_close = cache.entries.get(target_id).is_some_and(|entry| {
-        entry.active_writes == 0
-            && entry.generation == generation
-            && entry.last_used.elapsed() >= idle_handle
-    });
-    if should_close {
-        cache.entries.remove(target_id);
-        cache.lru.retain(|candidate| candidate != target_id);
+    Ok(text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<T>(line).ok())
+        .filter(|event| event.timestamp() >= from && event.timestamp() <= to)
+        .collect())
+}
+
+trait Timestamped {
+    fn timestamp(&self) -> i64;
+}
+
+impl Timestamped for RecordedEvent {
+    fn timestamp(&self) -> i64 {
+        self.ts
     }
 }
 
-fn catalog_expr(column: tab_recordings::Column) -> [sea_orm::sea_query::SimpleExpr; 2] {
-    [
-        Expr::col((Alias::new("tab_recordings"), column)).into(),
-        Expr::col((Alias::new("excluded"), column)).into(),
-    ]
+impl Timestamped for LegacyRecordedEvent {
+    fn timestamp(&self) -> i64 {
+        self.ts
+    }
 }
 
-fn min_catalog_expr(column: tab_recordings::Column) -> sea_orm::sea_query::SimpleExpr {
-    Expr::cust_with_exprs("min(?, ?)", catalog_expr(column))
+async fn rollback_append(file: &mut tokio::fs::File, document_id: &str, size: u64) {
+    if let Err(error) = file.set_len(size).await {
+        warn!(document_id, error = %error, "recording append rollback failed");
+    }
 }
 
-fn max_catalog_expr(column: tab_recordings::Column) -> sea_orm::sea_query::SimpleExpr {
-    Expr::cust_with_exprs("max(?, ?)", catalog_expr(column))
+async fn remove_file(path: &PathBuf, id: &str) -> bool {
+    match fs::remove_file(path).await {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(error) => {
+            warn!(id, error = %error, "recording retention unlink failed");
+            false
+        }
+    }
 }
 
-fn add_catalog_expr(column: tab_recordings::Column) -> sea_orm::sea_query::SimpleExpr {
-    Expr::col((Alias::new("tab_recordings"), column))
-        .add(Expr::col((Alias::new("excluded"), column)))
+#[must_use]
+pub fn legacy_document_id(target_id: &str) -> String {
+    format!("legacy-{target_id}")
 }
 
-fn sanitize_target_id(target_id: &str) -> String {
-    target_id
-        .chars()
+fn sanitize_id(id: &str) -> String {
+    id.chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
                 ch
@@ -610,371 +491,176 @@ fn sanitize_target_id(target_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{BATCH_ID_LRU_CAPACITY, RecordedEvent, RecordingEventInput, RecordingStore};
-    use crate::{
-        capture::audit::AuditService,
-        db::audit::entities::{
-            prelude::{TabClaims, TabRecordings},
-            tab_claims,
-        },
+    use super::*;
+    use crate::db::audit::entities::{
+        prelude::{RecordingBatches, RecordingStreams, SessionTabs},
+        session_tabs,
     };
     use sea_orm::{
         ActiveValue::{NotSet, Set},
-        ConnectionTrait, EntityTrait,
+        EntityTrait,
     };
-    use serde_json::json;
-    use std::{sync::Arc, time::Duration};
     use tempfile::tempdir;
 
-    fn event(ts: i64, value: &str) -> RecordingEventInput {
-        RecordingEventInput {
-            ts,
-            event_type: Some(json!(3)),
-            data: Some(json!({ "value": value })),
-        }
-    }
-
-    async fn store(
-        root: &std::path::Path,
-    ) -> anyhow::Result<(Arc<AuditService>, Arc<RecordingStore>)> {
-        let audit = Arc::new(AuditService::open(root.join("audit.sqlite")).await?);
-        let store = RecordingStore::new(
-            root.join("recordings"),
-            audit.clone(),
-            50,
-            Duration::from_secs(30),
-        );
-        Ok((audit, store))
-    }
-
-    #[tokio::test]
-    async fn appends_stamped_events_and_upserts_catalog_totals() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let (audit, store) = store(dir.path()).await?;
-        store
-            .append_batch("target-a", 11, &[event(200, "second"), event(100, "first")])
-            .await?;
-        store
-            .append_batch("target-a", 11, &[event(300, "third")])
-            .await?;
-
-        let text = tokio::fs::read_to_string(dir.path().join("recordings/target-a.ndjson")).await?;
-        let events = text
-            .lines()
-            .map(serde_json::from_str::<RecordedEvent>)
-            .collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(events.len(), 3);
-        assert_eq!(events[0].tab_id, 11);
-        assert_eq!(events[0].ts, 200);
-
-        let row = TabRecordings::find_by_id("target-a")
-            .one(audit.connection())
-            .await?
-            .unwrap_or_else(|| panic!("catalog row missing"));
-        assert_eq!(row.first_event_at, 100);
-        assert_eq!(row.last_event_at, 300);
-        assert_eq!(row.size_bytes, i64::try_from(text.len())?);
-        assert_eq!(row.event_count, 3);
-        assert_eq!(store.read_range("target-a", 100, 200).await?.len(), 2);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn serializes_concurrent_target_appends_without_tearing() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let (_, store) = store(dir.path()).await?;
-        let first = (0..50)
-            .map(|index| event(index, "first"))
-            .collect::<Vec<_>>();
-        let second = (50..100)
-            .map(|index| event(index, "second"))
-            .collect::<Vec<_>>();
-
-        tokio::try_join!(
-            store.append_batch("target-b", 22, &first),
-            store.append_batch("target-b", 22, &second)
-        )?;
-
-        let text = tokio::fs::read_to_string(dir.path().join("recordings/target-b.ndjson")).await?;
-        assert_eq!(text.lines().count(), 100);
-        for line in text.lines() {
-            serde_json::from_str::<RecordedEvent>(line)?;
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn deduplicates_accepted_batch_ids_independently_per_target() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let (_, store) = store(dir.path()).await?;
-        assert!(
-            store
-                .append_batch_with_id("target-dedupe", 23, &[event(1, "first")], Some("batch-a"))
-                .await?
-        );
-        let before_retry =
-            tokio::fs::read(dir.path().join("recordings/target-dedupe.ndjson")).await?;
-        assert!(
-            !store
-                .append_batch_with_id("target-dedupe", 23, &[event(1, "first")], Some("batch-a"))
-                .await?
-        );
-        assert_eq!(
-            tokio::fs::read(dir.path().join("recordings/target-dedupe.ndjson")).await?,
-            before_retry
-        );
-        assert!(
-            store
-                .append_batch_with_id("target-other", 24, &[event(1, "first")], Some("batch-a"))
-                .await?
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn appends_every_batch_without_a_batch_id() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let (_, store) = store(dir.path()).await?;
-        store
-            .append_batch("target-no-id", 23, &[event(1, "first")])
-            .await?;
-        store
-            .append_batch("target-no-id", 23, &[event(1, "first")])
-            .await?;
-
-        let text =
-            tokio::fs::read_to_string(dir.path().join("recordings/target-no-id.ndjson")).await?;
-        assert_eq!(text.lines().count(), 2);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn serializes_concurrent_retries_before_checking_the_batch_id() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let (_, store) = store(dir.path()).await?;
-        let events = [event(1, "first")];
-        let first = store.append_batch_with_id("target-concurrent", 23, &events, Some("batch-a"));
-        let second = store.append_batch_with_id("target-concurrent", 23, &events, Some("batch-a"));
-
-        let (first, second) = tokio::join!(first, second);
-        let mut results = [first?, second?];
-        results.sort_unstable();
-        assert_eq!(results, [false, true]);
-        let text =
-            tokio::fs::read_to_string(dir.path().join("recordings/target-concurrent.ndjson"))
-                .await?;
-        assert_eq!(text.lines().count(), 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn remembers_a_batch_id_only_after_append_succeeds() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let (audit, store) = store(dir.path()).await?;
-        audit
-            .connection()
-            .execute_unprepared(
-                "CREATE TRIGGER fail_recording_catalog
-                 BEFORE INSERT ON tab_recordings
-                 BEGIN SELECT RAISE(FAIL, 'catalog unavailable'); END",
-            )
-            .await?;
-
-        assert!(
-            store
-                .append_batch_with_id(
-                    "target-retry",
-                    23,
-                    &[event(1, "retry")],
-                    Some("batch-retry")
-                )
-                .await
-                .is_err()
-        );
-        let recording_path = dir.path().join("recordings/target-retry.ndjson");
-        assert_eq!(tokio::fs::read(&recording_path).await?, b"");
-        audit
-            .connection()
-            .execute_unprepared("DROP TRIGGER fail_recording_catalog")
-            .await?;
-
-        assert!(
-            store
-                .append_batch_with_id(
-                    "target-retry",
-                    23,
-                    &[event(1, "retry")],
-                    Some("batch-retry")
-                )
-                .await?
-        );
-        let text = tokio::fs::read_to_string(recording_path).await?;
-        assert_eq!(text.lines().count(), 1);
-        let row = TabRecordings::find_by_id("target-retry")
-            .one(audit.connection())
-            .await?
-            .unwrap_or_else(|| panic!("catalog row missing"));
-        assert_eq!(row.event_count, 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn evicts_the_least_recently_used_batch_id_after_256_entries() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let (_, store) = store(dir.path()).await?;
-        for index in 0..BATCH_ID_LRU_CAPACITY {
-            let batch_id = format!("batch-{index}");
-            assert!(
-                store
-                    .append_batch_with_id(
-                        "target-dedupe",
-                        23,
-                        &[event(i64::try_from(index + 1)?, "next")],
-                        Some(&batch_id),
-                    )
-                    .await?
-            );
-        }
-        assert!(
-            !store
-                .append_batch_with_id("target-dedupe", 23, &[event(1, "first")], Some("batch-0"))
-                .await?
-        );
-        assert!(
-            store
-                .append_batch_with_id(
-                    "target-dedupe",
-                    23,
-                    &[event(257, "next")],
-                    Some("batch-256")
-                )
-                .await?
-        );
-        assert!(
-            !store
-                .append_batch_with_id("target-dedupe", 23, &[event(1, "first")], Some("batch-0"))
-                .await?
-        );
-        assert!(
-            store
-                .append_batch_with_id(
-                    "target-dedupe",
-                    23,
-                    &[event(999, "evicted")],
-                    Some("batch-1")
-                )
-                .await?
-        );
-
-        let text =
-            tokio::fs::read_to_string(dir.path().join("recordings/target-dedupe.ndjson")).await?;
-        assert_eq!(text.lines().count(), BATCH_ID_LRU_CAPACITY + 2);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn rolls_back_file_bytes_when_catalog_update_fails() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let (audit, store) = store(dir.path()).await?;
-        audit
-            .connection()
-            .execute_unprepared("DROP TABLE tab_recordings")
-            .await?;
-
-        assert!(
-            store
-                .append_batch("target-rollback", 1, &[event(1, "discard")])
-                .await
-                .is_err()
-        );
-        assert_eq!(
-            tokio::fs::read(dir.path().join("recordings/target-rollback.ndjson")).await?,
-            b""
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn sanitizes_target_ids_used_as_filenames() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let (_, store) = store(dir.path()).await?;
-        store
-            .append_batch("../target/d", 44, &[event(1, "safe")])
-            .await?;
-        assert!(dir.path().join("recordings/.._target_d.ndjson").exists());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn bounds_the_handle_cache_and_closes_idle_entries() -> anyhow::Result<()> {
+    async fn setup() -> anyhow::Result<(tempfile::TempDir, Arc<AuditService>, Arc<RecordingStore>)>
+    {
         let dir = tempdir()?;
         let audit = Arc::new(AuditService::open(dir.path().join("audit.sqlite")).await?);
         let store = RecordingStore::new(
             dir.path().join("recordings"),
-            audit,
-            1,
-            Duration::from_millis(10),
+            audit.clone(),
+            10,
+            Duration::from_secs(1),
         );
-        store
-            .append_batch("target-one", 1, &[event(1, "one")])
-            .await?;
-        store
-            .append_batch("target-two", 2, &[event(2, "two")])
-            .await?;
-        assert_eq!(store.cached_handle_count().await, 1);
-        assert_eq!(store.target_lock_count().await, 0);
+        Ok((dir, audit, store))
+    }
 
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        assert_eq!(store.cached_handle_count().await, 0);
+    fn event(ts: i64) -> RecordingEventInput {
+        RecordingEventInput {
+            ts,
+            event_type: Some(Value::from(3)),
+            data: Some(serde_json::json!({ "ts": ts })),
+        }
+    }
+
+    #[tokio::test]
+    async fn document_catalog_and_durable_dedupe_survive_store_recreation() -> anyhow::Result<()> {
+        let (_dir, audit, store) = setup().await?;
+        let document_id = "018f47a7-1c2b-7def-8123-0123456789ab";
+        assert!(
+            store
+                .append_batch(
+                    document_id,
+                    11,
+                    None,
+                    &[event(200), event(100)],
+                    "batch-a",
+                    false
+                )
+                .await?
+        );
+        let recreated = RecordingStore::new(
+            store.root.clone(),
+            audit.clone(),
+            10,
+            Duration::from_secs(1),
+        );
+        assert!(
+            !recreated
+                .append_batch(document_id, 11, None, &[event(100)], "batch-a", false)
+                .await?
+        );
+        assert_eq!(
+            RecordingStreams::find()
+                .all(audit.connection())
+                .await?
+                .len(),
+            1
+        );
+        assert_eq!(
+            RecordingBatches::find()
+                .all(audit.connection())
+                .await?
+                .len(),
+            1
+        );
+        assert_eq!(recreated.read_range(document_id, 100, 150).await?.len(), 1);
         Ok(())
     }
 
     #[tokio::test]
-    async fn retention_sweeps_old_files_rows_and_only_closed_claims() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let (audit, store) = store(dir.path()).await?;
-        let day = 24 * 60 * 60 * 1000;
-        let now = 10 * day;
+    async fn gap_is_sticky_and_target_can_resolve_after_first_batch() -> anyhow::Result<()> {
+        let (_dir, audit, store) = setup().await?;
+        let document_id = "018f47a7-1c2b-7def-8123-0123456789ab";
         store
-            .append_batch("old-target", 1, &[event(now - 8 * day, "old")])
+            .append_batch(document_id, 11, None, &[event(100)], "batch-a", true)
             .await?;
         store
-            .append_batch("fresh-target", 2, &[event(now - day, "fresh")])
+            .append_batch(
+                document_id,
+                11,
+                Some("target-a"),
+                &[event(200)],
+                "batch-b",
+                false,
+            )
             .await?;
-        TabClaims::insert_many([
-            tab_claims::ActiveModel {
-                id: NotSet,
-                target_id: Set("old-target".to_string()),
-                session_id: Set("old-session".to_string()),
-                agent_id: Set("agent".to_string()),
-                claimed_at: Set(now - 9 * day),
-                released_at: Set(Some(now - 8 * day)),
-            },
-            tab_claims::ActiveModel {
-                id: NotSet,
-                target_id: Set("old-target".to_string()),
-                session_id: Set("open-session".to_string()),
-                agent_id: Set("agent".to_string()),
-                claimed_at: Set(now - 9 * day),
-                released_at: Set(None),
-            },
-        ])
+        let Some(stream) = RecordingStreams::find_by_id(document_id)
+            .one(audit.connection())
+            .await?
+        else {
+            anyhow::bail!("recording stream missing");
+        };
+        assert!(stream.has_gap);
+        assert_eq!(stream.target_id.as_deref(), Some("target-a"));
+        assert_eq!(stream.first_event_at, 100);
+        assert_eq!(stream.last_event_at, 200);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn orphan_retention_keeps_claimed_streams_and_cascades_batches() -> anyhow::Result<()> {
+        let (_dir, audit, store) = setup().await?;
+        let now = 10 * RECORDING_ORPHAN_TTL_MS;
+        let claimed = "018f47a7-1c2b-7def-8123-0123456789ab";
+        let orphan = "018f47a7-1c2b-7def-8123-0123456789ac";
+        store
+            .append_batch(
+                claimed,
+                11,
+                None,
+                &[event(now - 2 * RECORDING_ORPHAN_TTL_MS)],
+                "claimed",
+                false,
+            )
+            .await?;
+        store
+            .append_batch(
+                orphan,
+                22,
+                None,
+                &[event(now - 2 * RECORDING_ORPHAN_TTL_MS)],
+                "orphan",
+                false,
+            )
+            .await?;
+        SessionTabs::insert(session_tabs::ActiveModel {
+            id: NotSet,
+            session_id: Set("session-a".to_string()),
+            agent_id: Set("agent-a".to_string()),
+            tab_id: Set(11),
+            opened_target_id: Set(None),
+            claimed_at: Set(0),
+            released_at: Set(Some(now)),
+        })
         .exec(audit.connection())
         .await?;
 
-        let result = store.sweep_retention(7, now).await?;
-
-        assert_eq!(result.recordings_deleted, 1);
-        assert_eq!(result.claims_deleted, 1);
-        assert!(!dir.path().join("recordings/old-target.ndjson").exists());
-        assert!(dir.path().join("recordings/fresh-target.ndjson").exists());
+        assert_eq!(
+            store.sweep_retention(7, now).await?,
+            RetentionSweepResult {
+                recordings_deleted: 1,
+                claims_deleted: 0,
+            }
+        );
         assert!(
-            TabRecordings::find_by_id("old-target")
+            RecordingStreams::find_by_id(claimed)
+                .one(audit.connection())
+                .await?
+                .is_some()
+        );
+        assert!(
+            RecordingStreams::find_by_id(orphan)
                 .one(audit.connection())
                 .await?
                 .is_none()
         );
-        assert_eq!(TabClaims::find().all(audit.connection()).await?.len(), 1);
+        assert!(
+            RecordingBatches::find_by_id((orphan.to_string(), "orphan".to_string()))
+                .one(audit.connection())
+                .await?
+                .is_none()
+        );
         Ok(())
     }
 }

@@ -220,6 +220,7 @@ async fn seed_dispatch(app: &TestApp, session_id: &str) -> anyhow::Result<i64> {
             session_id: session_id.to_string(),
             tool_name: "snapshot".to_string(),
             page_id: Some(7),
+            tab_id: Some(101),
             target_id: Some("target-7".to_string()),
             url: None,
             title: None,
@@ -364,7 +365,7 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         json_body(&bytes)?,
-        json!({ "hasData": false, "sizeBytes": 0, "pageIds": [] })
+        json!({ "hasData": false, "complete": true, "sizeBytes": 0, "tabs": [] })
     );
 
     app.state
@@ -379,10 +380,13 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
             tool_name: "snapshot".to_string(),
         })
         .await;
-    app.state
-        .audit
-        .claim_target_for_session("target-7", "session-live", session.convo_id().as_str(), 0)
-        .await?;
+    app.state.audit.enqueue_claim_tab_for_session(
+        101,
+        Some("target-7".to_string()),
+        "session-live".to_string(),
+        session.convo_id().as_str().to_string(),
+        0,
+    );
     app.state
         .tab_activity
         .record_tool(RecordToolInput {
@@ -395,23 +399,29 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
             tool_name: "snapshot".to_string(),
         })
         .await;
-    app.state
-        .audit
-        .claim_target_for_session("target-8", "session-live", session.convo_id().as_str(), 0)
-        .await?;
+    app.state.audit.enqueue_claim_tab_for_session(
+        102,
+        Some("target-8".to_string()),
+        "session-live".to_string(),
+        session.convo_id().as_str().to_string(),
+        0,
+    );
+    app.state.audit.drain_claim_writes().await;
 
     let events =
         "{\"ts\":100,\"data\":{\"id\":\"seven-a\"}}\n{\"ts\":200,\"data\":{\"id\":\"seven-b\"}}\n";
     let recording_headers = [
         ("x-recording-tab-id", "101"),
-        ("x-recording-page-id", "7"),
-        ("x-recording-target-id", "target-7"),
+        (
+            "x-recording-document-id",
+            "018f47a7-1c2b-7def-8123-0123456789ab",
+        ),
         ("x-recording-batch-id", "batch-7"),
     ];
     let (status, _, bytes) = request_with_headers(
         &app.router,
         "POST",
-        "/api/v1/sessions/session-live/recording/events",
+        "/api/v1/recordings/events",
         Some("application/x-ndjson"),
         &recording_headers,
         events,
@@ -423,7 +433,7 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     let (status, _, bytes) = request_with_headers(
         &app.router,
         "POST",
-        "/api/v1/sessions/session-live/recording/events",
+        "/api/v1/recordings/events",
         Some("application/x-ndjson"),
         &recording_headers,
         events,
@@ -434,14 +444,16 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
 
     let second_headers = [
         ("x-recording-tab-id", "102"),
-        ("x-recording-page-id", "8"),
-        ("x-recording-target-id", "target-8"),
+        (
+            "x-recording-document-id",
+            "018f47a7-1c2b-7def-8123-0123456789ac",
+        ),
         ("x-recording-batch-id", "batch-8"),
     ];
     let (status, _, bytes) = request_with_headers(
         &app.router,
         "POST",
-        "/api/v1/sessions/session-live/recording/events",
+        "/api/v1/recordings/events",
         Some("application/x-ndjson"),
         &second_headers,
         "{\"ts\":150,\"data\":{\"id\":\"eight\"}}\n",
@@ -449,6 +461,20 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     .await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json_body(&bytes)?, json!({ "accepted": 1 }));
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/sessions/session-live/recording",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let metadata = json_body(&bytes)?;
+    assert_eq!(metadata["hasData"], true);
+    assert_eq!(metadata["complete"], true);
+    assert_eq!(metadata["tabs"].as_array().map(Vec::len), Some(2));
 
     let stale_headers = [
         ("x-recording-tab-id", "102"),
@@ -484,8 +510,8 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     );
     let events = String::from_utf8(bytes)?;
     assert_eq!(events.matches("session-live").count(), 3);
-    assert!(events.contains("\"targetId\":\"target-7\""));
-    assert!(events.contains("\"targetId\":\"target-8\""));
+    assert!(events.contains("018f47a7-1c2b-7def-8123-0123456789ab"));
+    assert!(events.contains("018f47a7-1c2b-7def-8123-0123456789ac"));
     let seven_a = events
         .find("seven-a")
         .ok_or_else(|| anyhow::anyhow!("missing first target-7 event"))?;
@@ -504,6 +530,26 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
             .remove(session.id(), "closed", Some("test"))
             .await?
     );
+    let late_headers = [
+        ("x-recording-tab-id", "101"),
+        (
+            "x-recording-document-id",
+            "018f47a7-1c2b-7def-8123-0123456789ad",
+        ),
+        ("x-recording-batch-id", "batch-late"),
+    ];
+    let (status, _, bytes) = request_with_headers(
+        &app.router,
+        "POST",
+        "/api/v1/recordings/events",
+        Some("application/x-ndjson"),
+        &late_headers,
+        "{\"ts\":300}\n",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?, json!({ "accepted": 1 }));
+
     let (status, _, bytes) = request(
         &app.router,
         "POST",

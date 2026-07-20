@@ -1,7 +1,9 @@
+//! Read-time attribution from logical-tab ownership windows to document streams.
+
 use crate::{
     capture::{
         audit::AuditService,
-        recordings::{RecordedEvent, RecordingStore},
+        recordings::{RecordedEvent, RecordingStore, legacy_document_id},
     },
     db::audit::entities::{
         prelude::{TabClaims, TabRecordings},
@@ -9,47 +11,53 @@ use crate::{
     },
     error::AppResult,
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter, Statement};
 use serde::Serialize;
-use std::{
-    cmp::{Ordering, Reverse},
-    collections::{BTreeMap, BinaryHeap, HashMap},
-    sync::Arc,
-};
-
-const RELEASE_TAIL_MS: i64 = 5_000;
+use std::{collections::HashMap, sync::Arc};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayEvent {
     pub session_id: String,
-    pub target_id: String,
+    pub document_id: String,
+    pub tab_id: i64,
+    pub target_id: Option<String>,
     #[serde(flatten)]
     pub event: RecordedEvent,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReplayTargetMeta {
-    pub target_id: String,
-    pub tab_id: i64,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplaySegmentMeta {
+    pub document_id: String,
+    pub target_id: Option<String>,
     pub first_event_at: i64,
     pub last_event_at: i64,
+    pub size_bytes: i64,
+    pub event_count: i64,
+    pub has_gap: bool,
+    pub legacy: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayTabMeta {
+    pub tab_id: i64,
+    pub complete: bool,
+    pub first_event_at: i64,
+    pub last_event_at: i64,
+    pub segments: Vec<ReplaySegmentMeta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplayMeta {
     pub exists: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub complete: bool,
     pub first_event_at: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event_at: Option<i64>,
     pub size_bytes: i64,
-    pub targets: Vec<ReplayTargetMeta>,
+    pub tabs: Vec<ReplayTabMeta>,
 }
 
-/// Assembles session replays by slicing target recordings through claim windows.
+/// Slices document streams through durable tab ownership windows.
 pub struct ReplayService {
     recordings: Arc<RecordingStore>,
     audit: Arc<AuditService>,
@@ -62,170 +70,311 @@ impl ReplayService {
     }
 
     pub async fn read_session(&self, session_id: &str) -> AppResult<Vec<ReplayEvent>> {
-        let claims = TabClaims::find()
-            .filter(tab_claims::Column::SessionId.eq(session_id))
-            .all(self.audit.connection())
-            .await?;
-        let mut slices = Vec::with_capacity(claims.len());
-        for claim in claims {
-            let to = claim
-                .released_at
-                .map(|released_at| released_at.saturating_add(RELEASE_TAIL_MS))
+        let matches = self.matches(session_id).await?;
+        let mut events = Vec::new();
+        for stream in group_matches(matches) {
+            let from = stream
+                .windows
+                .iter()
+                .map(|window| window.claimed_at)
+                .min()
                 .unwrap_or(i64::MAX);
-            let mut events = self
-                .recordings
-                .read_range(&claim.target_id, claim.claimed_at, to)
-                .await?
-                .into_iter()
-                .map(|event| ReplayEvent {
-                    session_id: session_id.to_string(),
-                    target_id: claim.target_id.clone(),
-                    event,
-                })
-                .collect::<Vec<_>>();
-            events.sort_by_key(|event| event.event.ts);
-            slices.push(events);
+            let to = stream
+                .windows
+                .iter()
+                .map(|window| window.released_at.unwrap_or(i64::MAX))
+                .max()
+                .unwrap_or(i64::MIN);
+            events.extend(
+                self.recordings
+                    .read_range(&stream.document_id, from, to)
+                    .await?
+                    .into_iter()
+                    .filter(|event| event_in_windows(event.ts, &stream.windows))
+                    .map(|event| ReplayEvent {
+                        session_id: session_id.to_string(),
+                        document_id: stream.document_id.clone(),
+                        tab_id: stream.tab_id,
+                        target_id: stream.target_id.clone(),
+                        event,
+                    }),
+            );
         }
-        Ok(merge_slices(slices))
+        events.extend(self.read_legacy_session(session_id).await?);
+        events.sort_by_key(|event| event.event.ts);
+        Ok(events)
     }
 
     pub async fn meta(&self, session_id: &str) -> AppResult<ReplayMeta> {
+        let mut entries = group_matches(self.matches(session_id).await?)
+            .into_iter()
+            .map(|stream| {
+                let first_event_at = stream.first_event_at.max(
+                    stream
+                        .windows
+                        .iter()
+                        .map(|window| window.claimed_at)
+                        .min()
+                        .unwrap_or(stream.first_event_at),
+                );
+                let last_event_at = stream.last_event_at.min(
+                    stream
+                        .windows
+                        .iter()
+                        .map(|window| window.released_at.unwrap_or(i64::MAX))
+                        .max()
+                        .unwrap_or(stream.last_event_at),
+                );
+                (
+                    stream.tab_id,
+                    ReplaySegmentMeta {
+                        legacy: stream.document_id.starts_with("legacy-"),
+                        document_id: stream.document_id,
+                        target_id: stream.target_id,
+                        first_event_at,
+                        last_event_at,
+                        size_bytes: stream.size_bytes,
+                        event_count: stream.event_count,
+                        has_gap: stream.has_gap,
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        entries.extend(self.legacy_meta(session_id).await?);
+        Ok(build_meta(entries))
+    }
+
+    async fn matches(&self, session_id: &str) -> AppResult<Vec<StreamMatchRow>> {
+        let statement = Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            r#"SELECT
+                rs.document_id, rs.tab_id, rs.target_id,
+                rs.first_event_at, rs.last_event_at, rs.size_bytes,
+                rs.event_count, rs.has_gap,
+                st.claimed_at, st.released_at
+              FROM session_tabs st
+              JOIN recording_streams rs
+                ON rs.tab_id = st.tab_id
+               AND rs.last_event_at >= st.claimed_at
+               AND rs.first_event_at <= COALESCE(st.released_at, 9223372036854775807)
+              WHERE st.session_id = ?
+              ORDER BY rs.first_event_at"#,
+            [session_id.into()],
+        );
+        Ok(StreamMatchRow::find_by_statement(statement)
+            .all(self.audit.connection())
+            .await?)
+    }
+
+    async fn read_legacy_session(&self, session_id: &str) -> AppResult<Vec<ReplayEvent>> {
         let claims = TabClaims::find()
             .filter(tab_claims::Column::SessionId.eq(session_id))
             .all(self.audit.connection())
             .await?;
-        if claims.is_empty() {
-            return Ok(empty_meta());
+        let mut events = Vec::new();
+        for claim in claims {
+            events.extend(
+                self.recordings
+                    .read_legacy_range(
+                        &claim.target_id,
+                        claim.claimed_at,
+                        claim.released_at.unwrap_or(i64::MAX),
+                    )
+                    .await?
+                    .into_iter()
+                    .map(|legacy| ReplayEvent {
+                        session_id: session_id.to_string(),
+                        document_id: legacy_document_id(&claim.target_id),
+                        tab_id: legacy.tab_id,
+                        target_id: Some(claim.target_id.clone()),
+                        event: RecordedEvent {
+                            ts: legacy.ts,
+                            event_type: legacy.event_type,
+                            data: legacy.data,
+                        },
+                    }),
+            );
         }
+        Ok(events)
+    }
+
+    async fn legacy_meta(&self, session_id: &str) -> AppResult<Vec<(i64, ReplaySegmentMeta)>> {
+        let claims = TabClaims::find()
+            .filter(tab_claims::Column::SessionId.eq(session_id))
+            .all(self.audit.connection())
+            .await?;
         let recordings = TabRecordings::find()
             .all(self.audit.connection())
             .await?
             .into_iter()
             .map(|recording| (recording.target_id.clone(), recording))
             .collect::<HashMap<_, _>>();
-        let mut claims_by_target = BTreeMap::<String, Vec<tab_claims::Model>>::new();
-        for claim in claims {
-            claims_by_target
-                .entry(claim.target_id.clone())
-                .or_default()
-                .push(claim);
-        }
+        Ok(claims
+            .into_iter()
+            .filter_map(|claim| {
+                let recording = recordings.get(&claim.target_id)?;
+                let first_event_at = claim.claimed_at.max(recording.first_event_at);
+                let last_event_at = claim
+                    .released_at
+                    .unwrap_or(i64::MAX)
+                    .min(recording.last_event_at);
+                (first_event_at <= last_event_at).then(|| {
+                    (
+                        recording.tab_id,
+                        ReplaySegmentMeta {
+                            document_id: legacy_document_id(&claim.target_id),
+                            target_id: Some(claim.target_id),
+                            first_event_at,
+                            last_event_at,
+                            size_bytes: recording.size_bytes,
+                            event_count: recording.event_count,
+                            has_gap: true,
+                            legacy: true,
+                        },
+                    )
+                })
+            })
+            .collect())
+    }
+}
 
-        let mut targets = Vec::new();
-        let mut size_bytes = 0_i64;
-        for (target_id, claims) in claims_by_target {
-            let Some(recording) = recordings.get(&target_id) else {
-                continue;
-            };
-            let claimed_at = claims
-                .iter()
-                .map(|claim| claim.claimed_at)
-                .min()
-                .unwrap_or(recording.first_event_at);
-            let released_at = claims
-                .iter()
-                .map(|claim| claim.released_at.unwrap_or(recording.last_event_at))
-                .max()
-                .unwrap_or(recording.last_event_at);
-            let first_event_at = claimed_at.max(recording.first_event_at);
-            let last_event_at = released_at.min(recording.last_event_at);
-            if first_event_at > last_event_at {
-                continue;
+#[derive(Debug, Clone, FromQueryResult)]
+struct StreamMatchRow {
+    document_id: String,
+    tab_id: i64,
+    target_id: Option<String>,
+    first_event_at: i64,
+    last_event_at: i64,
+    size_bytes: i64,
+    event_count: i64,
+    has_gap: bool,
+    claimed_at: i64,
+    released_at: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct Window {
+    claimed_at: i64,
+    released_at: Option<i64>,
+}
+
+#[derive(Debug)]
+struct MatchedStream {
+    document_id: String,
+    tab_id: i64,
+    target_id: Option<String>,
+    first_event_at: i64,
+    last_event_at: i64,
+    size_bytes: i64,
+    event_count: i64,
+    has_gap: bool,
+    windows: Vec<Window>,
+}
+
+fn group_matches(matches: Vec<StreamMatchRow>) -> Vec<MatchedStream> {
+    let mut order = Vec::new();
+    let mut grouped = HashMap::<String, MatchedStream>::new();
+    for row in matches {
+        let document_id = row.document_id.clone();
+        let entry = grouped.entry(document_id.clone()).or_insert_with(|| {
+            order.push(document_id.clone());
+            MatchedStream {
+                document_id,
+                tab_id: row.tab_id,
+                target_id: row.target_id.clone(),
+                first_event_at: row.first_event_at,
+                last_event_at: row.last_event_at,
+                size_bytes: row.size_bytes,
+                event_count: row.event_count,
+                has_gap: row.has_gap,
+                windows: Vec::new(),
             }
-            targets.push(ReplayTargetMeta {
-                target_id,
-                tab_id: recording.tab_id,
-                first_event_at,
-                last_event_at,
-            });
-            // Metadata intentionally reports whole target-file bytes; claim-window byte counts require file IO.
-            size_bytes = size_bytes.saturating_add(recording.size_bytes);
+        });
+        entry.windows.push(Window {
+            claimed_at: row.claimed_at,
+            released_at: row.released_at,
+        });
+    }
+    order
+        .into_iter()
+        .filter_map(|document_id| grouped.remove(&document_id))
+        .collect()
+}
+
+fn event_in_windows(timestamp: i64, windows: &[Window]) -> bool {
+    windows.iter().any(|window| {
+        timestamp >= window.claimed_at && timestamp <= window.released_at.unwrap_or(i64::MAX)
+    })
+}
+
+fn build_meta(entries: Vec<(i64, ReplaySegmentMeta)>) -> ReplayMeta {
+    if entries.is_empty() {
+        return ReplayMeta {
+            exists: false,
+            complete: true,
+            first_event_at: None,
+            last_event_at: None,
+            size_bytes: 0,
+            tabs: Vec::new(),
+        };
+    }
+    let mut by_tab = HashMap::<i64, Vec<ReplaySegmentMeta>>::new();
+    for (tab_id, segment) in entries {
+        let segments = by_tab.entry(tab_id).or_default();
+        if !segments
+            .iter()
+            .any(|candidate| candidate.document_id == segment.document_id)
+        {
+            segments.push(segment);
         }
-        if targets.is_empty() {
-            return Ok(empty_meta());
-        }
-        Ok(ReplayMeta {
-            exists: true,
-            first_event_at: targets.iter().map(|target| target.first_event_at).min(),
-            last_event_at: targets.iter().map(|target| target.last_event_at).max(),
-            size_bytes,
-            targets,
+    }
+    let mut tabs = by_tab
+        .into_iter()
+        .map(|(tab_id, mut segments)| {
+            segments.sort_by_key(|segment| segment.first_event_at);
+            ReplayTabMeta {
+                tab_id,
+                complete: segments
+                    .iter()
+                    .all(|segment| !segment.has_gap && !segment.legacy),
+                first_event_at: segments
+                    .iter()
+                    .map(|segment| segment.first_event_at)
+                    .min()
+                    .unwrap_or_default(),
+                last_event_at: segments
+                    .iter()
+                    .map(|segment| segment.last_event_at)
+                    .max()
+                    .unwrap_or_default(),
+                segments,
+            }
         })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct HeapEntry {
-    ts: i64,
-    slice: usize,
-    event: usize,
-}
-
-impl Ord for HeapEntry {
-    fn cmp(&self, other: &Self) -> Ordering {
-        (self.ts, self.slice, self.event).cmp(&(other.ts, other.slice, other.event))
-    }
-}
-
-impl PartialOrd for HeapEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-fn merge_slices(slices: Vec<Vec<ReplayEvent>>) -> Vec<ReplayEvent> {
-    let capacity = slices.iter().map(Vec::len).sum();
-    let mut merged = Vec::with_capacity(capacity);
-    let mut heap = BinaryHeap::new();
-    for (slice, events) in slices.iter().enumerate() {
-        if let Some(event) = events.first() {
-            heap.push(Reverse(HeapEntry {
-                ts: event.event.ts,
-                slice,
-                event: 0,
-            }));
-        }
-    }
-    while let Some(Reverse(entry)) = heap.pop() {
-        merged.push(slices[entry.slice][entry.event].clone());
-        let next = entry.event + 1;
-        if let Some(event) = slices[entry.slice].get(next) {
-            heap.push(Reverse(HeapEntry {
-                ts: event.event.ts,
-                slice: entry.slice,
-                event: next,
-            }));
-        }
-    }
-    merged
-}
-
-fn empty_meta() -> ReplayMeta {
+        .collect::<Vec<_>>();
+    tabs.sort_by_key(|tab| tab.first_event_at);
     ReplayMeta {
-        exists: false,
-        first_event_at: None,
-        last_event_at: None,
-        size_bytes: 0,
-        targets: Vec::new(),
+        exists: true,
+        complete: tabs.iter().all(|tab| tab.complete),
+        first_event_at: tabs.iter().map(|tab| tab.first_event_at).min(),
+        last_event_at: tabs.iter().map(|tab| tab.last_event_at).max(),
+        size_bytes: tabs
+            .iter()
+            .flat_map(|tab| &tab.segments)
+            .fold(0_i64, |sum, segment| sum.saturating_add(segment.size_bytes)),
+        tabs,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ReplayService;
+    use super::*;
     use crate::{
-        capture::{
-            audit::AuditService,
-            recordings::{RecordingEventInput, RecordingStore},
-        },
-        db::audit::entities::{prelude::TabClaims, tab_claims},
+        capture::recordings::RecordingEventInput,
+        db::audit::entities::{prelude::SessionTabs, session_tabs},
     };
-    use sea_orm::{
-        ActiveValue::{NotSet, Set},
-        EntityTrait,
-    };
+    use sea_orm::ActiveValue::{NotSet, Set};
     use serde_json::json;
-    use std::{sync::Arc, time::Duration};
+    use std::time::Duration;
     use tempfile::tempdir;
 
     fn event(ts: i64, id: &str) -> RecordingEventInput {
@@ -237,94 +386,61 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn merges_claimed_slices_and_excludes_unclaimed_targets() -> anyhow::Result<()> {
+    async fn joins_tab_windows_across_document_targets_and_filters_exactly() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let audit = Arc::new(AuditService::open(dir.path().join("audit.sqlite")).await?);
         let recordings = RecordingStore::new(
             dir.path().join("recordings"),
             audit.clone(),
-            50,
-            Duration::from_secs(30),
+            10,
+            Duration::from_secs(1),
         );
         recordings
             .append_batch(
-                "target-a",
+                "018f47a7-1c2b-7def-8123-0123456789ab",
                 11,
-                &[event(90, "outside"), event(100, "a1"), event(200, "a2")],
+                Some("target-a"),
+                &[event(90, "before"), event(100, "a"), event(150, "b")],
+                "batch-a",
+                false,
             )
             .await?;
         recordings
             .append_batch(
-                "target-b",
-                22,
-                &[event(160, "b1"), event(180, "b2-buffered")],
+                "018f47a7-1c2b-7def-8123-0123456789ac",
+                11,
+                Some("target-b"),
+                &[event(175, "c"), event(201, "after")],
+                "batch-b",
+                true,
             )
             .await?;
-        recordings
-            .append_batch("target-c", 33, &[event(170, "unclaimed")])
-            .await?;
-        TabClaims::insert_many([
-            claim("target-a", "session-a", 100, Some(200)),
-            claim("target-b", "session-a", 150, Some(170)),
-        ])
+        SessionTabs::insert(session_tabs::ActiveModel {
+            id: NotSet,
+            session_id: Set("session-a".to_string()),
+            agent_id: Set("agent-a".to_string()),
+            tab_id: Set(11),
+            opened_target_id: Set(Some("target-a".to_string())),
+            claimed_at: Set(100),
+            released_at: Set(Some(200)),
+        })
         .exec(audit.connection())
         .await?;
-        let replays = ReplayService::new(recordings, audit.clone());
+        let replay = ReplayService::new(recordings, audit);
 
-        let events = replays.read_session("session-a").await?;
-
+        let events = replay.read_session("session-a").await?;
         assert_eq!(
             events
                 .iter()
                 .filter_map(|event| event.event.data.as_ref()?.get("id")?.as_str())
                 .collect::<Vec<_>>(),
-            ["a1", "b1", "b2-buffered", "a2"]
+            ["a", "b", "c"]
         );
-        assert_eq!(events[0].session_id, "session-a");
-        assert_eq!(events[0].target_id, "target-a");
-
-        let meta = replays.meta("session-a").await?;
-        assert!(meta.exists);
-        assert_eq!(meta.first_event_at, Some(100));
-        assert_eq!(meta.last_event_at, Some(200));
-        assert_eq!(meta.targets.len(), 2);
-        assert_eq!(meta.targets[1].last_event_at, 170);
+        assert_eq!(events[2].target_id.as_deref(), Some("target-b"));
+        let meta = replay.meta("session-a").await?;
+        assert_eq!(meta.tabs.len(), 1);
+        assert_eq!(meta.tabs[0].segments.len(), 2);
+        assert!(!meta.complete);
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn returns_empty_replay_and_metadata_without_claims() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let audit = Arc::new(AuditService::open(dir.path().join("audit.sqlite")).await?);
-        let recordings = RecordingStore::new(
-            dir.path().join("recordings"),
-            audit.clone(),
-            50,
-            Duration::from_secs(30),
-        );
-        let replays = ReplayService::new(recordings, audit);
-
-        assert!(replays.read_session("missing").await?.is_empty());
-        assert_eq!(
-            serde_json::to_value(replays.meta("missing").await?)?,
-            json!({ "exists": false, "sizeBytes": 0, "targets": [] })
-        );
-        Ok(())
-    }
-
-    fn claim(
-        target_id: &str,
-        session_id: &str,
-        claimed_at: i64,
-        released_at: Option<i64>,
-    ) -> tab_claims::ActiveModel {
-        tab_claims::ActiveModel {
-            id: NotSet,
-            target_id: Set(target_id.to_string()),
-            session_id: Set(session_id.to_string()),
-            agent_id: Set("agent".to_string()),
-            claimed_at: Set(claimed_at),
-            released_at: Set(released_at),
-        }
     }
 }

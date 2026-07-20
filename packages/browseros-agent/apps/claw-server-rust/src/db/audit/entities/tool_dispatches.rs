@@ -14,6 +14,7 @@ pub struct Model {
     pub session_id: String,
     pub tool_name: String,
     pub page_id: Option<i64>,
+    pub tab_id: Option<i64>,
     pub target_id: Option<String>,
     pub url: Option<String>,
     pub title: Option<String>,

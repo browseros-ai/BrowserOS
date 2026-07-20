@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 serde.workspace = true
+serde_repr.workspace = true
 
 [lints]
 workspace = true

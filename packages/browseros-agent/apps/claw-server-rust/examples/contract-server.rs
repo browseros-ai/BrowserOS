@@ -213,10 +213,14 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
             tool_name: "snapshot".to_string(),
         })
         .await;
-    state
-        .audit
-        .claim_target_for_session("target-7", "session-live", "codex-research-browserclaw", 0)
-        .await?;
+    state.audit.enqueue_claim_tab_for_session(
+        101,
+        Some("target-7".to_string()),
+        "session-live".to_string(),
+        "codex-research-browserclaw".to_string(),
+        0,
+    );
+    state.audit.drain_claim_writes().await;
     state
         .screencast
         .cache_frame(
@@ -250,6 +254,7 @@ async fn seed_dispatch(
             session_id: session_id.to_string(),
             tool_name: "snapshot".to_string(),
             page_id: Some(page_id),
+            tab_id: Some(if page_id == 7 { 101 } else { page_id }),
             target_id: Some(target_id.to_string()),
             url: Some("https://browseros.com".to_string()),
             title: Some("BrowserOS".to_string()),

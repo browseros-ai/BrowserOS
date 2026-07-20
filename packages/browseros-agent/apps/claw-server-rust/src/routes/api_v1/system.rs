@@ -7,7 +7,7 @@ use axum::{
 };
 use claw_api::models::{
     HealthResponse, ShutdownResponse, SystemCapabilities, SystemInfo, TelemetryState,
-    UpdateTelemetryRequest,
+    UpdateTelemetryRequest, system_capabilities::RecordingIngestVersion,
 };
 
 // The contract's health is pure liveness: `status` is a single-variant
@@ -30,6 +30,7 @@ pub(super) async fn info(State(state): State<AppState>) -> Json<SystemInfo> {
         state.config.local_server_url(),
     );
     let mut capabilities = SystemCapabilities::new();
+    capabilities.recording_ingest_version = Some(RecordingIngestVersion::Variant2);
     capabilities.recording_ingest_max_bytes =
         Some(i64::try_from(claw_api::RECORDING_INGEST_MAX_BYTES).unwrap_or(i64::MAX));
     info.capabilities = Some(Box::new(capabilities));

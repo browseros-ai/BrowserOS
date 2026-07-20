@@ -9,7 +9,64 @@ impl MigratorTrait for AuditMigrator {
         vec![
             Box::new(m0001_baseline::Migration),
             Box::new(m0002_add_recordings_and_claims::Migration),
+            Box::new(m0003_document_recordings_and_tab_ownership::Migration),
         ]
+    }
+}
+
+mod m0003_document_recordings_and_tab_ownership {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0003_document_recordings_and_tab_ownership"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            let connection = manager.get_connection();
+            for statement in [
+                "CREATE TABLE IF NOT EXISTS session_tabs (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, tab_id INTEGER NOT NULL, opened_target_id TEXT, claimed_at INTEGER NOT NULL, released_at INTEGER)",
+                "CREATE INDEX IF NOT EXISTS session_tabs_session_idx ON session_tabs(session_id, claimed_at)",
+                "CREATE INDEX IF NOT EXISTS session_tabs_tab_window_idx ON session_tabs(tab_id, claimed_at, released_at)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS session_tabs_one_live_owner_idx ON session_tabs(tab_id) WHERE released_at IS NULL",
+                "CREATE TABLE IF NOT EXISTS recording_streams (document_id TEXT PRIMARY KEY NOT NULL, tab_id INTEGER NOT NULL, target_id TEXT, first_event_at INTEGER NOT NULL, last_event_at INTEGER NOT NULL, size_bytes INTEGER NOT NULL, event_count INTEGER NOT NULL, has_gap INTEGER NOT NULL DEFAULT 0)",
+                "CREATE INDEX IF NOT EXISTS recording_streams_tab_time_idx ON recording_streams(tab_id, first_event_at, last_event_at)",
+                "CREATE INDEX IF NOT EXISTS recording_streams_retention_idx ON recording_streams(last_event_at)",
+                "CREATE TABLE IF NOT EXISTS recording_batches (document_id TEXT NOT NULL REFERENCES recording_streams(document_id) ON DELETE CASCADE, batch_id TEXT NOT NULL, accepted_at INTEGER NOT NULL, PRIMARY KEY(document_id, batch_id))",
+            ] {
+                connection.execute_unprepared(statement).await?;
+            }
+            if !manager.has_column("tool_dispatches", "tab_id").await? {
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(Alias::new("tool_dispatches"))
+                            .add_column(ColumnDef::new(Alias::new("tab_id")).big_integer())
+                            .to_owned(),
+                    )
+                    .await?;
+            }
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            for table in ["recording_batches", "recording_streams", "session_tabs"] {
+                manager
+                    .drop_table(
+                        Table::drop()
+                            .table(Alias::new(table))
+                            .if_exists()
+                            .to_owned(),
+                    )
+                    .await?;
+            }
+            Ok(())
+        }
     }
 }
 

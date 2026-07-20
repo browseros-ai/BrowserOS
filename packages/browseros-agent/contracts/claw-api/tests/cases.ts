@@ -88,7 +88,7 @@ export const contractCases: ContractCase[] = [
   },
   {
     name: 'session list and detail',
-    async run({ api }) {
+    async run({ api, liveSessionId }) {
       const list = await api.listSessions({ limit: 100 })
       expect(list.items.some((item) => item.sessionId === liveSessionId)).toBe(
         true,

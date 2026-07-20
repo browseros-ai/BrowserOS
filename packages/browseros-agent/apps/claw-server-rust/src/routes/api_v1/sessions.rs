@@ -18,12 +18,11 @@ use axum::{
 };
 use claw_api::models::{
     AppendRecordingEventsResponse, CancelSessionResponse, Dispatch, RecordingMetadata,
-    SessionDetail, SessionList, SessionStatus, SessionSummary,
+    RecordingSegmentMetadata, RecordingTabMetadata, SessionDetail, SessionList, SessionStatus,
+    SessionSummary,
 };
-use std::{
-    collections::{BTreeSet, HashMap},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
+use uuid::{Uuid, Variant};
 
 #[derive(Default)]
 struct SessionQuery {
@@ -146,23 +145,42 @@ pub(super) async fn recording(
         .meta(&session_id)
         .await
         .map_err(|source| internal(&request_id, source))?;
-    // page_ids = tabs still claimed by this session whose targets have
-    // recorded events — the per-tab views a replay can offer.
-    let target_ids = metadata
-        .targets
-        .iter()
-        .map(|target| target.target_id.as_str())
-        .collect::<std::collections::HashSet<_>>();
-    let page_ids = state
-        .live_tab_activity()
-        .await
+    let tabs = metadata
+        .tabs
         .into_iter()
-        .filter(|tab| tab.session_id == session_id && target_ids.contains(tab.target_id.as_str()))
-        .map(|tab| i64::from(tab.page_id))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
+        .map(|tab| {
+            let segments = tab
+                .segments
+                .into_iter()
+                .map(|segment| {
+                    let mut contract = RecordingSegmentMetadata::new(
+                        segment.document_id,
+                        segment.first_event_at,
+                        segment.last_event_at,
+                        segment.size_bytes,
+                        segment.event_count,
+                        segment.has_gap,
+                    );
+                    contract.target_id = segment.target_id;
+                    contract.legacy = segment.legacy.then_some(true);
+                    contract
+                })
+                .collect();
+            RecordingTabMetadata::new(
+                tab.tab_id,
+                tab.complete,
+                tab.first_event_at,
+                tab.last_event_at,
+                segments,
+            )
+        })
         .collect();
-    let mut response = RecordingMetadata::new(metadata.exists, metadata.size_bytes, page_ids);
+    let mut response = RecordingMetadata::new(
+        metadata.exists,
+        metadata.complete,
+        metadata.size_bytes,
+        tabs,
+    );
     response.first_event_at = metadata.first_event_at;
     response.last_event_at = metadata.last_event_at;
     Ok(Json(response))
@@ -195,33 +213,59 @@ pub(super) async fn download_events(
     Ok(response)
 }
 
-pub(super) async fn append_events(
+pub(super) async fn append_document_events(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<String, StringRejection>,
+) -> Result<Json<AppendRecordingEventsResponse>, CanonicalError> {
+    let body = recording_body(&request_id, body)?;
+    require_ndjson(&request_id, &headers)?;
+    let tab_id = positive_recording_header(&request_id, &headers, "x-recording-tab-id")?;
+    let document_id = required_header(&request_id, &headers, "x-recording-document-id")?;
+    let batch_id = required_header(&request_id, &headers, "x-recording-batch-id")?;
+    let gap_header = gap_header(&request_id, &headers)?;
+    if !is_document_uuid(&document_id) {
+        return Err(error(
+            &request_id,
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "recording tab, document, batch, and gap headers are invalid",
+        ));
+    }
+    let parsed = parse_recording_events(&body);
+    let browser = state.browser.session().await;
+    let target_id = state
+        .tab_targets
+        .resolve(tab_id, browser, state.browser.state().epoch)
+        .await;
+    let appended = state
+        .recordings
+        .append_batch(
+            &document_id,
+            tab_id,
+            target_id.as_deref(),
+            &parsed.events,
+            &batch_id,
+            gap_header || parsed.dropped_lines > 0,
+        )
+        .await
+        .map_err(|source| internal(&request_id, source))?;
+    Ok(Json(AppendRecordingEventsResponse::new(if appended {
+        i64::try_from(parsed.events.len()).unwrap_or(i64::MAX)
+    } else {
+        0
+    })))
+}
+
+pub(super) async fn append_legacy_events(
     Extension(request_id): Extension<RequestId>,
     State(state): State<AppState>,
     Path(session_id): Path<String>,
     headers: HeaderMap,
     body: Result<String, StringRejection>,
 ) -> Result<Json<AppendRecordingEventsResponse>, CanonicalError> {
-    let body = body.map_err(|rejection| {
-        if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
-            error(
-                &request_id,
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "recording_payload_too_large",
-                &format!(
-                    "recording payload exceeds {} byte limit",
-                    claw_api::RECORDING_INGEST_MAX_BYTES
-                ),
-            )
-        } else {
-            error(
-                &request_id,
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                "recording payload must be valid UTF-8",
-            )
-        }
-    })?;
+    let body = recording_body(&request_id, body)?;
     let session_key = SessionId::new(session_id.clone());
     if !state.sessions.contains(&session_key).await {
         let known = state
@@ -246,26 +290,11 @@ pub(super) async fn append_events(
             )
         });
     }
-    let is_ndjson = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            value
-                .to_ascii_lowercase()
-                .starts_with("application/x-ndjson")
-        });
-    if !is_ndjson {
-        return Err(error(
-            &request_id,
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "content-type must be application/x-ndjson",
-        ));
-    }
+    require_ndjson(&request_id, &headers)?;
     let tab_id = positive_recording_header(&request_id, &headers, "x-recording-tab-id")?;
     let page_id = positive_recording_header(&request_id, &headers, "x-recording-page-id")?;
     let target_id = recording_target_header(&request_id, &headers)?;
-    let events = parse_recording_events(&body);
+    let parsed = parse_recording_events(&body);
     // Batches are pinned to the (tab, page, target) incarnation the
     // recorder captured them from. Any drift — the tab reclaimed by
     // another session, a navigation that swapped the target — makes the
@@ -286,14 +315,23 @@ pub(super) async fn append_events(
     };
     let batch_id = headers
         .get("x-recording-batch-id")
-        .and_then(|value| value.to_str().ok());
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let appended = state
         .recordings
-        .append_batch_with_id(&target.target_id, target.tab_id, &events, batch_id)
+        .append_legacy_batch(
+            &target.target_id,
+            target.tab_id,
+            &parsed.events,
+            &batch_id,
+            parsed.dropped_lines > 0,
+        )
         .await
         .map_err(|source| internal(&request_id, source))?;
     let accepted = if appended {
-        i64::try_from(events.len()).unwrap_or(i64::MAX)
+        i64::try_from(parsed.events.len()).unwrap_or(i64::MAX)
     } else {
         0
     };
@@ -302,18 +340,124 @@ pub(super) async fn append_events(
 
 /// Tolerant parse of recorder-supplied NDJSON: lines that are not JSON
 /// or lack an integer `ts` are dropped, never fatal.
-fn parse_recording_events(body: &str) -> Vec<RecordingEventInput> {
-    body.lines()
-        .filter_map(|line| {
-            let event = serde_json::from_str::<serde_json::Value>(line).ok()?;
-            let ts = event.get("ts")?.as_i64()?;
-            Some(RecordingEventInput {
-                ts,
-                event_type: event.get("type").cloned(),
-                data: event.get("data").cloned(),
-            })
+struct ParsedRecordingEvents {
+    events: Vec<RecordingEventInput>,
+    dropped_lines: usize,
+}
+
+fn parse_recording_events(body: &str) -> ParsedRecordingEvents {
+    let mut events = Vec::new();
+    let mut dropped_lines = 0;
+    for line in body.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            dropped_lines += 1;
+            continue;
+        };
+        let Some(ts) = event.get("ts").and_then(serde_json::Value::as_i64) else {
+            dropped_lines += 1;
+            continue;
+        };
+        events.push(RecordingEventInput {
+            ts,
+            event_type: event.get("type").cloned(),
+            data: event.get("data").cloned(),
+        });
+    }
+    ParsedRecordingEvents {
+        events,
+        dropped_lines,
+    }
+}
+
+fn recording_body(
+    request_id: &RequestId,
+    body: Result<String, StringRejection>,
+) -> Result<String, CanonicalError> {
+    body.map_err(|rejection| {
+        if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            error(
+                request_id,
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "recording_payload_too_large",
+                &format!(
+                    "recording payload exceeds {} byte limit",
+                    claw_api::RECORDING_INGEST_MAX_BYTES
+                ),
+            )
+        } else {
+            error(
+                request_id,
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "recording payload must be valid UTF-8",
+            )
+        }
+    })
+}
+
+fn require_ndjson(request_id: &RequestId, headers: &HeaderMap) -> Result<(), CanonicalError> {
+    let valid = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .to_ascii_lowercase()
+                .starts_with("application/x-ndjson")
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(error(
+            request_id,
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "content-type must be application/x-ndjson",
+        ))
+    }
+}
+
+fn required_header(
+    request_id: &RequestId,
+    headers: &HeaderMap,
+    name: &str,
+) -> Result<String, CanonicalError> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            error(
+                request_id,
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "recording tab, document, batch, and gap headers are invalid",
+            )
         })
-        .collect()
+}
+
+fn gap_header(request_id: &RequestId, headers: &HeaderMap) -> Result<bool, CanonicalError> {
+    match headers
+        .get("x-recording-has-gap")
+        .and_then(|value| value.to_str().ok())
+    {
+        None | Some("false") => Ok(false),
+        Some("true") => Ok(true),
+        Some(_) => Err(error(
+            request_id,
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "recording tab, document, batch, and gap headers are invalid",
+        )),
+    }
+}
+
+fn is_document_uuid(value: &str) -> bool {
+    Uuid::parse_str(value).is_ok_and(|uuid| {
+        value.len() == 36
+            && uuid.get_variant() == Variant::RFC4122
+            && (1..=8).contains(&uuid.get_version_num())
+    })
 }
 
 fn positive_recording_header(
@@ -455,6 +599,7 @@ fn contract_dispatch(
     );
     dispatch.profile_id = profile_id.cloned();
     dispatch.page_id = row.page_id;
+    dispatch.tab_id = row.tab_id;
     dispatch.target_id = row.target_id;
     dispatch.url = row.url;
     dispatch.title = row.title;

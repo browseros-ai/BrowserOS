@@ -95,7 +95,7 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_HEADERS,
             HeaderValue::from_static(
-                "accept,content-type,authorization,mcp-session-id,mcp-protocol-version,last-event-id,x-recording-batch-id,x-recording-tab-id,x-recording-page-id,x-recording-target-id",
+                "accept,content-type,authorization,mcp-session-id,mcp-protocol-version,last-event-id,x-recording-batch-id,x-recording-tab-id,x-recording-document-id,x-recording-has-gap,x-recording-page-id,x-recording-target-id",
             ),
         );
         if let Ok(value) = HeaderValue::from_str(&request_id.0) {

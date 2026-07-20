@@ -68,7 +68,11 @@ async fn record_dispatch(
     cancelled: bool,
     identity: &crate::mcp::dispatch::ToolIdentity,
 ) -> Option<AuditRecord> {
-    let page_id = extract_page_id(call);
+    let page_id = if call.flags.new_page {
+        result_page_id(result)
+    } else {
+        extract_page_id(call)
+    };
     let live = match (&call.browser_session, page_id) {
         (Some(browser), Some(page_id)) => browser.pages.get_info(PageId(page_id)).await,
         _ => None,
@@ -89,6 +93,7 @@ async fn record_dispatch(
             session_id: call.session_id.as_str().to_string(),
             tool_name: call.tool().name.to_string(),
             page_id: page_id.map(i64::from),
+            tab_id: live.as_ref().map(|page| page.tab_id.0),
             target_id: live
                 .as_ref()
                 .map(|page| page.target_id.as_str().to_string()),

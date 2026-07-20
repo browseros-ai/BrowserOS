@@ -1,4 +1,4 @@
-use crate::{capture::audit::AuditService, error::AppResult};
+use crate::{capture::audit::AuditService, clock::now_epoch_ms, error::AppResult};
 use browseros_cdp::{CdpEvent, browser};
 use browseros_core::BrowserSession;
 use futures_util::future::BoxFuture;
@@ -20,6 +20,8 @@ const NO_EPOCH: u64 = u64::MAX;
 const GRACE_MS: u64 = 5 * 60 * 1_000;
 
 type TargetClaimReleaser = Arc<dyn Fn(String) -> BoxFuture<'static, AppResult<()>> + Send + Sync>;
+type TabOwnerInheritor =
+    Arc<dyn Fn(i64, i64, String) -> BoxFuture<'static, AppResult<()>> + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TabIdentity {
@@ -57,24 +59,49 @@ pub struct TabTargetMap {
     ready_epoch: AtomicU64,
     rebuild: Mutex<()>,
     release_target_claims: TargetClaimReleaser,
+    inherit_tab_owner: TabOwnerInheritor,
 }
 
 impl TabTargetMap {
     #[must_use]
     pub fn new(audit: Arc<AuditService>) -> Arc<Self> {
-        Self::new_with_releaser(Arc::new(move |target_id| {
-            audit.enqueue_release_claims_for_target(target_id);
-            Box::pin(async { Ok(()) })
-        }))
+        let release_audit = audit.clone();
+        Self::new_with_callbacks(
+            Arc::new(move |target_id| {
+                release_audit.enqueue_release_claims_for_target(target_id);
+                Box::pin(async { Ok(()) })
+            }),
+            Arc::new(move |opener_tab_id, tab_id, target_id| {
+                audit.enqueue_inherit_tab_ownership(
+                    opener_tab_id,
+                    tab_id,
+                    target_id,
+                    now_epoch_ms() - 1_000,
+                );
+                Box::pin(async { Ok(()) })
+            }),
+        )
     }
 
+    #[cfg(test)]
     fn new_with_releaser(release_target_claims: TargetClaimReleaser) -> Arc<Self> {
+        Self::new_with_callbacks(
+            release_target_claims,
+            Arc::new(|_, _, _| Box::pin(async { Ok(()) })),
+        )
+    }
+
+    fn new_with_callbacks(
+        release_target_claims: TargetClaimReleaser,
+        inherit_tab_owner: TabOwnerInheritor,
+    ) -> Arc<Self> {
         Arc::new(Self {
             maps: RwLock::new(TargetMaps::default()),
             current_epoch: AtomicU64::new(NO_EPOCH),
             ready_epoch: AtomicU64::new(NO_EPOCH),
             rebuild: Mutex::new(()),
             release_target_claims,
+            inherit_tab_owner,
         })
     }
 
@@ -289,7 +316,21 @@ impl TabTargetMap {
                 let Some(target_id) = info.get("targetId").and_then(Value::as_str) else {
                     return;
                 };
+                let opener_tab_id = if event.method == "Target.targetCreated" {
+                    let opener_id = info.get("openerId").and_then(Value::as_str);
+                    match opener_id {
+                        Some(opener_id) => self.tab_for_target(opener_id).await,
+                        None => None,
+                    }
+                } else {
+                    None
+                };
                 self.upsert(TabIdentity::new(tab_id, target_id)).await;
+                if let Some(opener_tab_id) = opener_tab_id
+                    && opener_tab_id != tab_id
+                {
+                    self.inherit_owner(opener_tab_id, tab_id, target_id.to_string());
+                }
             }
             "Target.targetDestroyed" => {
                 if let Some(target_id) = event.params.get("targetId").and_then(Value::as_str) {
@@ -323,6 +364,21 @@ impl TabTargetMap {
         tokio::spawn(async move {
             if let Err(error) = release(target_id.clone()).await {
                 warn!(target_id, error = %error, "failed to release claims for destroyed target");
+            }
+        });
+    }
+
+    fn inherit_owner(&self, opener_tab_id: i64, tab_id: i64, target_id: String) {
+        let inherit = self.inherit_tab_owner.clone();
+        tokio::spawn(async move {
+            if let Err(error) = inherit(opener_tab_id, tab_id, target_id.clone()).await {
+                warn!(
+                    opener_tab_id,
+                    tab_id,
+                    target_id,
+                    error = %error,
+                    "failed to inherit popup tab ownership"
+                );
             }
         });
     }
@@ -499,6 +555,53 @@ mod tests {
         assert_eq!(
             map.target_for_tab_cached(44).await.as_deref(),
             Some("target-d")
+        );
+    }
+
+    #[tokio::test]
+    async fn target_created_inherits_the_live_opener_tab_owner() {
+        let inherited = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let captured = inherited.clone();
+        let map = TabTargetMap::new_with_callbacks(
+            Arc::new(|_| Box::pin(async { Ok(()) })),
+            Arc::new(move |opener_tab_id, tab_id, target_id| {
+                let captured = captured.clone();
+                Box::pin(async move {
+                    captured
+                        .lock()
+                        .await
+                        .push((opener_tab_id, tab_id, target_id));
+                    Ok(())
+                })
+            }),
+        );
+        map.rebuild_from_tabs(1, vec![TabIdentity::new(11, "target-opener")])
+            .await;
+        map.handle_event(
+            1,
+            CdpEvent {
+                method: "Target.targetCreated".to_string(),
+                params: json!({
+                    "targetInfo": {
+                        "targetId": "target-popup",
+                        "type": "page",
+                        "tabId": 22,
+                        "openerId": "target-opener"
+                    }
+                }),
+                session_id: None,
+            },
+        )
+        .await;
+        for _ in 0..100 {
+            if !inherited.lock().await.is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            *inherited.lock().await,
+            vec![(11, 22, "target-popup".to_string())]
         );
     }
 
