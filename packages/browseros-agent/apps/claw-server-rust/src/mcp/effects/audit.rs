@@ -161,15 +161,17 @@ async fn persist_screenshot(
     {
         return;
     }
-    let live = match &call.browser_session {
-        Some(browser) => browser.pages.refresh(page.clone()).await.ok().flatten(),
-        None => None,
-    }
-    .or_else(|| {
-        call.page_snapshot
-            .clone()
-            .filter(|snapshot| snapshot.page_id == page)
-    });
+    let dispatch_page = call
+        .page_snapshot
+        .clone()
+        .filter(|snapshot| snapshot.page_id == page);
+    let live = match dispatch_page {
+        Some(page) => Some(page),
+        None => match &call.browser_session {
+            Some(browser) => browser.pages.refresh(page.clone()).await.ok().flatten(),
+            None => None,
+        },
+    };
     let cached = match live {
         Some(page) => {
             call.state

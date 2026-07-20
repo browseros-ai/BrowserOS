@@ -45,7 +45,6 @@ struct ScreencastInner {
     live: HashSet<TabIncarnation>,
 }
 
-/** Page-scoped screencast state must also carry the stable target incarnation. */
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct TabIncarnation {
     page_id: u32,
