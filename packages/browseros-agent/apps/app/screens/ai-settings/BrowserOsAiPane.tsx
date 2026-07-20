@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { type FC, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { BrowserClawPromoBanner } from '@/components/promo/BrowserClawPromoBanner'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -409,6 +410,7 @@ export const BrowserOsAiPane: FC = () => {
         onAddProvider={handleAddProvider}
       />
 
+      <BrowserClawPromoBanner />
       <McpPromoBanner />
 
       <ProviderTemplatesSection
