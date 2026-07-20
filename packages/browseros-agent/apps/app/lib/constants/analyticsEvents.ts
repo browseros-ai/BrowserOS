@@ -65,6 +65,14 @@ export const MCP_PROMO_BANNER_CLICKED_EVENT =
   'settings.mcp_promo_banner.clicked'
 
 /** @public */
+export const BROWSERCLAW_PROMO_BANNER_CLICKED_EVENT =
+  'ui.browserclaw_promo_banner.clicked'
+
+/** @public */
+export const BROWSERCLAW_PROMO_BANNER_DISMISSED_EVENT =
+  'ui.browserclaw_promo_banner.dismissed'
+
+/** @public */
 export const MCP_EXTERNAL_ACCESS_ENABLED_EVENT =
   'settings.mcp_external_access.enabled'
 
