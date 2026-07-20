@@ -687,11 +687,14 @@ describe('createRecordingsRelay', () => {
     const recoveredTabs: number[] = []
     const postedBodies: string[] = []
     const rejected = new Set(['oversized', 'oversized-resnapshot'])
+    let tabAvailable = true
     const relay = createRecordingsRelay({
       resolveServerBaseUrl: async () => serverBaseUrl,
       fetch: async (input, init) => {
         const url = String(input)
-        if (url.endsWith('/tabs')) return Response.json({ items: [tab()] })
+        if (url.endsWith('/tabs')) {
+          return Response.json({ items: tabAvailable ? [tab()] : [] })
+        }
         const body = String(init?.body)
         postedBodies.push(body)
         return rejected.has(body)
@@ -714,6 +717,9 @@ describe('createRecordingsRelay', () => {
     expect(recoveredTabs).toEqual([42])
 
     await relay.post(42, 'oversized-resnapshot')
+    tabAvailable = false
+    await relay.post(42, 'while-tab-missing')
+    tabAvailable = true
     await relay.post(42, 'later-still')
     expect(recoveredTabs).toEqual([42])
     expect(clock.pendingTimers()).toBe(0)

@@ -286,7 +286,6 @@ export function createRecordingsRelay(
 
   function markGap(tabId: number): void {
     gappedTabs.add(tabId)
-    oversizeGappedTabs.delete(tabId)
   }
 
   function markOversizeGap(
