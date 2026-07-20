@@ -8,7 +8,7 @@ import { defineBackground } from 'wxt/utils/define-background'
 import { resolveBrowserOSServerBaseUrl } from '@/modules/api/browseros-ports'
 import { createRecordingsRelay } from '@/modules/recorder'
 
-/** Tags recorder batches with the sender tab and relays them to the local server. */
+/** Supplies Chrome's trusted tab/document identity to the durable recorder relay. */
 export default defineBackground(() => {
   const relay = createRecordingsRelay({
     resolveServerBaseUrl: resolveBrowserOSServerBaseUrl,
@@ -23,32 +23,31 @@ export default defineBackground(() => {
   }
 
   relay.onTabRecoveredAfterLoss(requestResnapshot)
+  void relay.start().catch((error) => {
+    console.warn('[browseros-claw replay] durable outbox startup failed', error)
+  })
 
-  chrome.runtime.onMessage.addListener((message, sender) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const recorderMessage = message as {
       type?: unknown
       ndjson?: unknown
+      hasGap?: unknown
     }
     const tabId = sender.tab?.id
+    const documentId = sender.documentId
     if (
       recorderMessage.type !== 'recorder-events' ||
       typeof recorderMessage.ndjson !== 'string' ||
-      typeof tabId !== 'number'
+      typeof recorderMessage.hasGap !== 'boolean' ||
+      typeof tabId !== 'number' ||
+      typeof documentId !== 'string'
     ) {
       return false
     }
-    void relay.post(tabId, recorderMessage.ndjson)
-    return false
+    void relay
+      .post(tabId, documentId, recorderMessage.ndjson, recorderMessage.hasGap)
+      .then(() => sendResponse({ persisted: true }))
+      .catch(() => sendResponse({ persisted: false }))
+    return true
   })
-
-  // Background memory owns the retry queue, so every restart means surviving
-  // documents need a new checkpoint after any batches that died with it.
-  void chrome.tabs
-    .query({})
-    .then((tabs) => {
-      for (const tab of tabs) {
-        if (typeof tab.id === 'number') requestResnapshot(tab.id)
-      }
-    })
-    .catch(() => {})
 })

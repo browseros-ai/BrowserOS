@@ -6,4 +6,5 @@
 
 export * from './recorder.types'
 export * from './recorder-buffer'
+export * from './recordings-outbox'
 export * from './recordings-relay'

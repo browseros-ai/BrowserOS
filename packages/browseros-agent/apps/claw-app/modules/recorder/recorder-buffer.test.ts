@@ -168,9 +168,13 @@ describe('createRecorderBuffer', () => {
 
   it('drops the oldest events at the buffer cap and reports the count', () => {
     const batches: string[] = []
+    const gaps: boolean[] = []
     const warnings: number[] = []
     const buffer = createRecorderBuffer({
-      send: (ndjson) => batches.push(ndjson),
+      send: (ndjson, hasGap) => {
+        batches.push(ndjson)
+        gaps.push(hasGap)
+      },
       warnDropped: (count) => warnings.push(count),
       queueMicrotask: (callback) => callback(),
       setTimeout: () => 1,
@@ -184,6 +188,7 @@ describe('createRecorderBuffer', () => {
     buffer.flushNow()
 
     expect(warnings).toEqual([1])
+    expect(gaps).toEqual([true])
     expect(batches[0].split('\n').map((line) => JSON.parse(line).ts)).toEqual([
       2, 3,
     ])

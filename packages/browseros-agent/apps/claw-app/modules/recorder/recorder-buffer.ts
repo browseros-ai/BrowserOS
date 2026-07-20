@@ -14,7 +14,7 @@ export interface RecorderEventTarget {
 }
 
 export interface RecorderBufferOptions {
-  send: (ndjson: string) => void
+  send: (ndjson: string, hasGap: boolean) => void
   warnDropped?: (count: number) => void
   now?: () => number
   queueMicrotask?: (callback: () => void) => void
@@ -67,11 +67,12 @@ export function createRecorderBuffer(
   let closed = false
 
   function send(ndjson: string): void {
+    const hasGap = dropped > 0
     if (dropped > 0) {
       options.warnDropped?.(dropped)
       dropped = 0
     }
-    options.send(ndjson)
+    options.send(ndjson, hasGap)
   }
 
   function flush(): void {

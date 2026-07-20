@@ -23,12 +23,13 @@ export default defineContentScript({
     ;(window as Marked).__browserosClawReplayInstalled = true
 
     const buffer = createRecorderBuffer({
-      send(ndjson) {
+      send(ndjson, hasGap) {
         try {
           void chrome.runtime
             .sendMessage({
               type: 'recorder-events',
               ndjson,
+              hasGap,
             } satisfies RecorderMessage)
             .catch((error) => {
               console.warn(

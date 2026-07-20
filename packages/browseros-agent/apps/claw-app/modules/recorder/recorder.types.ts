@@ -7,6 +7,7 @@
 export interface RecorderEventsMessage {
   type: 'recorder-events'
   ndjson: string
+  hasGap: boolean
 }
 
 export interface RecorderResnapshotMessage {
