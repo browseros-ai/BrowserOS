@@ -31,6 +31,7 @@ import type { ProviderTemplate } from '@/lib/llm-providers/providerTemplates'
 import { testProvider } from '@/lib/llm-providers/testProvider'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
+import { sentry } from '@/lib/sentry/sentry'
 import type { HarnessAgentAdapter } from '@/modules/agents/agent-harness-types'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useGraphqlMutation } from '@/modules/graphql/graphql-mutation.hooks'
@@ -148,6 +149,14 @@ export const BrowserOsAiPane: FC = () => {
       onSuccess: () => {
         queryClient.invalidateQueries({
           queryKey: [getQueryKeyFromDocument(GetRemoteLlmProvidersDocument)],
+        })
+      },
+      onError: (error, { rowId }) => {
+        sentry.captureException(error, {
+          extra: {
+            message: 'Failed to delete a synced provider',
+            providerId: rowId,
+          },
         })
       },
     },
