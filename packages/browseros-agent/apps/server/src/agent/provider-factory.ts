@@ -278,18 +278,21 @@ function createAnthropicFactory(
   })
 }
 
-// OpenAI-specific: `baseUrl` is intentionally NOT forwarded here.
-// The SDK's default transport is the Responses API and almost every
-// OpenAI-shape proxy in the wild (MiniMax, LiteLLM, self-hosted
-// gateways) speaks Chat Completions instead, so silently threading
-// baseURL would swap one silent failure for another. The /mcp UI
-// shows a hint on the OpenAI Base URL field pointing users at the
-// "OpenAI Compatible" provider template for that case.
+// The SDK defaults to the Responses API; many OpenAI-shape proxies
+// only speak Chat Completions. The `NewProviderDialog` shows a hint
+// on the OpenAI Base URL field pointing users at the "OpenAI
+// Compatible" provider template for that case, so a proxy that fails
+// here has a documented next step. Users who point at a Responses-
+// compatible custom endpoint get the direct-forward behavior they
+// asked for.
 function createOpenAIFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('OpenAI provider requires apiKey')
-  return createOpenAI({ apiKey: config.apiKey })
+  return createOpenAI({
+    apiKey: config.apiKey,
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
+  })
 }
 
 function createGoogleFactory(
