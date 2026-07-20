@@ -255,6 +255,7 @@ export const contractCases: ContractCase[] = [
     name: 'live session projection and browser-tab preview',
     async run({
       api,
+      baseUrl,
       liveSessionId,
       secondLiveSessionId,
       zeroTabLiveSessionId,
@@ -303,19 +304,32 @@ export const contractCases: ContractCase[] = [
       expect(second?.sessionId).not.toBe(primary?.sessionId)
       expect(zeroTab?.live).toEqual({ state: 'idle', browserTabs: [] })
 
-      const browserTabs = JSON.stringify(primary?.live?.browserTabs)
-      expect(browserTabs).not.toContain('pageId')
-      expect(browserTabs).not.toContain('targetId')
-      expect(browserTabs).not.toContain(INLINE_JPEG_KEY)
-      for (const sessionIdentityKey of [
+      const rawResponse = await fetch(`${baseUrl}/api/v1/sessions?status=live`)
+      expect(rawResponse.status).toBe(200)
+      const rawSnapshot = (await rawResponse.json()) as {
+        items: Array<{
+          sessionId: string
+          live?: { browserTabs?: unknown }
+        }>
+      }
+      const rawPrimary = rawSnapshot.items.find(
+        (session) => session.sessionId === liveSessionId,
+      )
+      expect(rawPrimary).toBeDefined()
+      expect(Array.isArray(rawPrimary?.live?.browserTabs)).toBe(true)
+      const rawBrowserTabs = JSON.stringify(rawPrimary?.live?.browserTabs)
+      for (const forbiddenKey of [
+        'pageId',
+        'targetId',
         'sessionId',
         'profileId',
         'slug',
         'label',
         'harness',
         'color',
+        INLINE_JPEG_KEY,
       ]) {
-        expect(browserTabs).not.toContain(sessionIdentityKey)
+        expect(rawBrowserTabs).not.toContain(`"${forbiddenKey}"`)
       }
 
       const preview = await api.getSessionBrowserTabPreview({
