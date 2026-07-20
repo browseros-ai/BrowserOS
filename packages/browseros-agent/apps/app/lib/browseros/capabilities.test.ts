@@ -67,32 +67,6 @@ describe('resolveStaticFeatureSupport', () => {
 })
 
 describe('resolveFeatureStaticSupport', () => {
-  it('gates Hermes support on alpha before server version checks', () => {
-    expect(
-      resolveFeatureStaticSupport({
-        feature: Feature.HERMES_AGENT_SUPPORT,
-        isDevelopment: true,
-        alphaFeaturesEnabled: false,
-      }),
-    ).toBe(true)
-
-    expect(
-      resolveFeatureStaticSupport({
-        feature: Feature.HERMES_AGENT_SUPPORT,
-        isDevelopment: false,
-        alphaFeaturesEnabled: false,
-      }),
-    ).toBe(false)
-
-    expect(
-      resolveFeatureStaticSupport({
-        feature: Feature.HERMES_AGENT_SUPPORT,
-        isDevelopment: false,
-        alphaFeaturesEnabled: true,
-      }),
-    ).toBeNull()
-  })
-
   it('preserves alpha-gated support for alpha features', () => {
     expect(
       resolveFeatureStaticSupport({
@@ -128,23 +102,5 @@ describe('checkFeatureSupport — AGENT_HARNESS_SUPPORT', () => {
   it('shows harness agents at or above BrowserOS 0.46.0.0', () => {
     expect(at([0, 46, 0, 0])).toBe(true)
     expect(at([0, 47, 0, 0])).toBe(true)
-  })
-})
-
-describe('checkFeatureSupport — HERMES_AGENT_SUPPORT', () => {
-  const at = (serverVersion: number[] | null) =>
-    checkFeatureSupport(
-      { browserOSVersion: null, serverVersion },
-      Feature.HERMES_AGENT_SUPPORT,
-    )
-
-  it('hides Hermes below server 0.0.116 or when version is unknown', () => {
-    expect(at(null)).toBe(false)
-    expect(at([0, 0, 115])).toBe(false)
-  })
-
-  it('shows Hermes at or above server 0.0.116', () => {
-    expect(at([0, 0, 116])).toBe(true)
-    expect(at([0, 0, 117])).toBe(true)
   })
 })

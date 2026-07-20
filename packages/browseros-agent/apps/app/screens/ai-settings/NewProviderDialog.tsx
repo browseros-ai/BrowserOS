@@ -60,20 +60,12 @@ import {
 } from '@/lib/constants/analyticsEvents'
 import { isLocalRuntimeProviderType } from '@/lib/llm-providers/provider-runtime'
 import {
-  type FeatureSupport,
-  visibleProviderTypeOptions,
-} from '@/lib/llm-providers/provider-visibility'
-import {
   getDefaultBaseUrlForProviders,
   getProviderTemplate,
   providerTypeOptions,
 } from '@/lib/llm-providers/providerTemplates'
 import { type TestResult, testProvider } from '@/lib/llm-providers/testProvider'
-import {
-  type LlmProviderConfig,
-  type ProviderType,
-  REMOTE_HERMES_PROVIDER_TYPE,
-} from '@/lib/llm-providers/types'
+import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
 import { cn } from '@/lib/utils'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
@@ -97,12 +89,8 @@ function isAcpProviderType(type: ProviderType | undefined): boolean {
   return type !== undefined && ACP_PROVIDER_TYPES.has(type)
 }
 
-function isRemoteHermesType(type: ProviderType | undefined): boolean {
-  return type === REMOTE_HERMES_PROVIDER_TYPE
-}
-
 function showsStandardModelField(type: ProviderType): boolean {
-  return !isAcpProviderType(type) && !isRemoteHermesType(type)
+  return !isAcpProviderType(type)
 }
 
 function defaultReasoningEffort(type?: ProviderType) {
@@ -132,7 +120,7 @@ function setupGuideLabel(type: ProviderType, providerName?: string): string {
 
 function isProviderTypeOptionSupported(
   value: ProviderType,
-  supports: FeatureSupport,
+  supports: (feature: Feature) => boolean,
 ): boolean {
   if (value === 'chatgpt-pro') return supports(Feature.CHATGPT_PRO_SUPPORT)
   if (value === 'github-copilot')
@@ -141,9 +129,11 @@ function isProviderTypeOptionSupported(
   return true
 }
 
-function getVisibleProviderTypeOptions(supports: FeatureSupport) {
-  return visibleProviderTypeOptions(providerTypeOptions, supports).filter(
-    (opt) => isProviderTypeOptionSupported(opt.value, supports),
+function getVisibleProviderTypeOptions(
+  supports: (feature: Feature) => boolean,
+) {
+  return providerTypeOptions.filter((opt) =>
+    isProviderTypeOptionSupported(opt.value, supports),
   )
 }
 
@@ -314,12 +304,6 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       form.setValue('secretAccessKey', '')
       form.setValue('region', '')
       form.setValue('sessionToken', '')
-    }
-    if (isRemoteHermesType(newType)) {
-      form.setValue('apiKey', '')
-      form.setValue('modelId', 'default')
-      if (!form.getValues('name')) form.setValue('name', 'Remote Hermes')
-      return
     }
     form.setValue('reasoningEffort', defaultReasoningEffort(newType))
     form.setValue('modelId', '')
@@ -498,14 +482,6 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   }
 
   const renderProviderSpecificFields = () => {
-    if (isRemoteHermesType(watchedType as ProviderType)) {
-      return (
-        <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 text-sm dark:border-green-800 dark:bg-green-950 dark:text-green-300">
-          Remote Hermes runs in a managed VM. No API key, base URL, or model
-          selection is required.
-        </div>
-      )
-    }
     if (isAcpProviderType(watchedType as ProviderType)) {
       return renderAcpFields()
     }

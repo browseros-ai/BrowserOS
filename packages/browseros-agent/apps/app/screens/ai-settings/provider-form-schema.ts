@@ -19,7 +19,6 @@ const providerTypeEnum = z.enum([
   'codex',
   'claude-code',
   'acp-custom',
-  'remote-hermes',
 ])
 
 const credentiallessProviderTypes: ReadonlySet<
@@ -31,7 +30,6 @@ const credentiallessProviderTypes: ReadonlySet<
   'codex',
   'claude-code',
   'acp-custom',
-  'remote-hermes',
 ])
 
 export const providerFormSchema = z
