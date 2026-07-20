@@ -12,7 +12,7 @@ const ONBOARDING_PROBE_LIMIT = 1
 
 /** Renders the Claw cockpit homepage. */
 export function Cockpit() {
-  const { agents } = useCockpitData()
+  const { sessions } = useCockpitData()
 
   // Probe the two data sources the onboarding state hinges on. Both
   // queries live in react-query's cache under stable keys, so the
@@ -66,7 +66,7 @@ export function Cockpit() {
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-8 px-8 pt-8 pb-16">
       <CockpitHero />
-      <RunningGrid agents={agents} />
+      <RunningGrid sessions={sessions} />
       <RecentActivity />
     </div>
   )

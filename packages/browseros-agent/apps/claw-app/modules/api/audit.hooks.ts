@@ -5,22 +5,21 @@
  *
  * Session audit surface for the cockpit and audit screens.
  *
- * useSessions        paginated session list (homepage + audit screen),
- *                    polled so live runs advance in place
+ * useSessions        paginated session history (homepage + audit screen)
+ * useLiveSessions    complete connected-session snapshot for Running now
  * useSessionDetail   one session's summary + full dispatch list;
  *                    polls only while the session is live
  *
- * taskScreenshotUrl builds the absolute URL to the binary screenshot
- * route so an <img src> can render the persisted JPEG without going
- * through the JSON client.
+ * The URL helpers let <img src> render binary JPEG routes without
+ * routing those payloads through the JSON client.
  */
 
-import type {
-  Dispatch,
-  SessionDetail,
-  SessionList,
+import {
+  type Dispatch,
+  type SessionDetail,
+  type SessionList,
   SessionStatus,
-  SessionSummary,
+  type SessionSummary,
 } from '@browseros/claw-api'
 import { useEffect, useState } from 'react'
 import { createInfiniteQuery, createQuery } from 'react-query-kit'
@@ -63,6 +62,13 @@ export const useSessions = createInfiniteQuery<
   placeholderData: (previous) => previous,
 })
 
+export const useLiveSessions = createQuery<SessionList>({
+  queryKey: ['api', 'sessions', 'live'],
+  fetcher: async () =>
+    (await apiClient()).listSessions({ status: SessionStatus.Live }),
+  refetchInterval: 1500,
+})
+
 export const useSessionDetail = createQuery<
   SessionDetail,
   { sessionId: string },
@@ -83,12 +89,21 @@ export function taskScreenshotUrl(
   return `${baseUrl}/api/v1/dispatches/${dispatchId}/screenshot`
 }
 
+/** Absolute URL for the latest JPEG captured from one live session tab. */
+export function sessionBrowserTabPreviewUrl(
+  sessionId: string,
+  browserTabId: number,
+  previewCapturedAt: number,
+  baseUrl = apiBaseUrl(),
+): string {
+  return `${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/browser-tabs/${browserTabId}/preview?capturedAt=${previewCapturedAt}`
+}
+
 /**
- * Screenshot URL base that follows the BrowserOS server-port pref. The
- * pref API is callback-based, so `taskScreenshotUrl`'s sync default
- * cannot see it; components resolve the base here and pass it in.
+ * API base that follows the BrowserOS server-port pref. The pref API is
+ * callback-based, so synchronous URL helpers cannot see it directly.
  */
-export function useTaskScreenshotBaseUrl(): string | null {
+function useResolvedApiBaseUrl(): string | null {
   const [baseUrl, setBaseUrl] = useState<string | null>(null)
 
   useEffect(() => {
@@ -102,4 +117,26 @@ export function useTaskScreenshotBaseUrl(): string | null {
   }, [])
 
   return baseUrl
+}
+
+export function useTaskScreenshotBaseUrl(): string | null {
+  return useResolvedApiBaseUrl()
+}
+
+export function useSessionBrowserTabPreviewUrl(
+  sessionId: string,
+  browserTabId?: number,
+  previewCapturedAt?: number,
+): string | null {
+  const baseUrl = useResolvedApiBaseUrl()
+  return baseUrl !== null &&
+    browserTabId !== undefined &&
+    previewCapturedAt !== undefined
+    ? sessionBrowserTabPreviewUrl(
+        sessionId,
+        browserTabId,
+        previewCapturedAt,
+        baseUrl,
+      )
+    : null
 }

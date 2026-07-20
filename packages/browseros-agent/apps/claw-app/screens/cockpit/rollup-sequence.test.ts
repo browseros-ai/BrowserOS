@@ -1,216 +1,92 @@
 /**
- * @license
- * Copyright 2025 BrowserOS
- * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * Simulates the homepage's perspective across the lifecycle of a
- * five-tab parallel burst by calling `tabsToAgentActivity` once per
- * synthetic poll and threading the resulting focus map back into the
- * next call. The assertions pin two invariants that PR 3 alone could
- * not guarantee:
- *
- *   - the rolled-up card's `currentFocus` stays anchored to whichever
- *     tab the agent first hit during the burst, instead of flipping
- *     to the freshest tab on every poll;
- *
- *   - the tab-count steps monotonically UP as the parallel landings
- *     arrive (no `5 -> 4 -> 2 -> 0` flicker mid-burst).
- *
- * The test is independent of real time: each "poll" is just a call
- * to `tabsToAgentActivity` with a fresh records array. Active vs.
- * idle is decided by the caller, mirroring how the cockpit's
- * `cockpit.data.ts` filters on `status === 'active'` before rolling
- * up.
+ * Replays successive live-session snapshots and threads the selected
+ * browser-tab map into the next projection. This pins the cockpit's
+ * cross-poll selection semantics independently of React rendering.
  */
 
 import { describe, expect, it } from 'bun:test'
-import type { TabActivityRecord } from '@/modules/api/tabs.hooks'
-import { tabsToAgentActivity } from './cockpit.helpers'
+import type { SessionBrowserTab, SessionSummary } from '@browseros/claw-api'
+import { sessionsToLiveCards } from './cockpit.helpers'
 
-function tab(over: Partial<TabActivityRecord>): TabActivityRecord {
+function browserTab(
+  browserTabId: number,
+  lastActivityAt: number,
+): SessionBrowserTab {
   return {
-    tabId: 101,
-    targetId: 't?',
-    pageId: 0,
-    url: 'https://example.com/',
-    title: 'Ex',
-    profileId: 'a1',
-    slug: 'finance-ops',
-    firstActivityAt: 0,
-    lastActivityAt: 0,
+    browserTabId,
+    url: `https://tab-${browserTabId}.example/`,
+    title: `Tab ${browserTabId}`,
+    firstActivityAt: lastActivityAt,
+    lastActivityAt,
     lastToolName: 'snapshot',
     toolCount: 1,
-    recentTools: [{ name: 'snapshot', at: 0 }],
-    status: 'active',
-    label: 'Finance Ops',
-    harness: 'Claude Code',
-    ...over,
+    recentTools: [{ name: 'snapshot', at: lastActivityAt }],
   }
 }
 
-function makeBurstTabs(
-  targetIds: ReadonlyArray<string>,
-  lastToolAtByTarget: ReadonlyMap<string, number>,
-): TabActivityRecord[] {
-  return targetIds.map((targetId, i) =>
-    tab({
-      targetId,
-      pageId: 7 + i,
-      url: `https://${targetId}.example/`,
-      title: `Tab ${targetId}`,
-      firstActivityAt: lastToolAtByTarget.get(targetId) ?? 0,
-      lastActivityAt: lastToolAtByTarget.get(targetId) ?? 0,
-    }),
-  )
+function session(browserTabs: SessionBrowserTab[]): SessionSummary {
+  return {
+    sessionId: 'session-1',
+    slug: 'codex',
+    label: 'Codex',
+    name: 'Parallel browser work',
+    startedAt: 0,
+    durationMs: 0,
+    dispatchCount: browserTabs.length,
+    toolSequence: browserTabs.map(() => 'snapshot'),
+    status: 'live',
+    errorCount: 0,
+    live: { state: 'active', browserTabs },
+  }
 }
 
-describe('rollup-sequence (sticky focus across polls)', () => {
-  it('keeps the card anchored to the first-landed tab through the full burst', () => {
-    // Synthetic landings (ms offsets from the burst start) replayed
-    // verbatim from the parallel-spawn experiment.
-    const landings = new Map<string, number>([
-      ['t7', 0],
-      ['t8', 2_300],
-      ['t9', 4_300],
-      ['t10', 6_300],
-      ['t11', 6_400],
-    ])
-
-    // Eight polls at the homepage's 1.5 s cadence covering the full
-    // burst plus a few seconds of "nothing fires" tail.
-    const pollSchedule: Array<{
-      atMs: number
-      visible: ReadonlyArray<string>
-    }> = [
-      { atMs: 0, visible: [] },
-      { atMs: 1_500, visible: ['t7'] },
-      { atMs: 3_000, visible: ['t7', 't8'] },
-      { atMs: 4_500, visible: ['t7', 't8', 't9'] },
-      { atMs: 6_000, visible: ['t7', 't8', 't9'] },
-      { atMs: 7_500, visible: ['t7', 't8', 't9', 't10', 't11'] },
-      { atMs: 15_000, visible: ['t7', 't8', 't9', 't10', 't11'] },
-      { atMs: 25_000, visible: ['t7', 't8', 't9', 't10', 't11'] },
+describe('live-session selection across polls', () => {
+  it('keeps the first selected tab through a burst, then re-elects on removal', () => {
+    const polls = [
+      [browserTab(7, 100)],
+      [browserTab(7, 100), browserTab(8, 200)],
+      [browserTab(7, 100), browserTab(8, 200), browserTab(9, 300)],
+      [browserTab(8, 200), browserTab(9, 300)],
     ]
+    let stickySelection = new Map<string, number>()
+    const observed: number[] = []
 
-    let stickyFocus = new Map<string, string>()
-    const observedFocus: string[] = []
-    const observedCount: number[] = []
-
-    for (const poll of pollSchedule) {
-      const visible = poll.visible.map((id) => id)
-      const records = makeBurstTabs(visible, landings)
-      const agents = tabsToAgentActivity(records, { stickyFocus })
-      if (agents.length === 0) {
-        observedFocus.push('none')
-        observedCount.push(0)
-      } else {
-        observedFocus.push(agents[0].currentFocus.targetId)
-        observedCount.push(agents[0].tabs.length)
-      }
-      const next = new Map<string, string>()
-      for (const a of agents) next.set(a.agentId, a.currentFocus.targetId)
-      stickyFocus = next
-    }
-
-    // Focus is `t7` (the first-landed) from the moment the agent
-    // appears, and never flips during the burst even as fresher tabs
-    // land.
-    expect(observedFocus).toEqual([
-      'none',
-      't7',
-      't7',
-      't7',
-      't7',
-      't7',
-      't7',
-      't7',
-    ])
-    // Tab count rides the high-water mark instead of bouncing.
-    expect(observedCount).toEqual([0, 1, 2, 3, 3, 5, 5, 5])
-  })
-
-  it('re-elects to the freshest tab when the anchor stops appearing in the active set', () => {
-    const landings = new Map<string, number>([
-      ['t-anchor', 0],
-      ['t-newer', 1_000],
-    ])
-
-    const polls: Array<ReadonlyArray<string>> = [
-      ['t-anchor'],
-      ['t-anchor', 't-newer'],
-      ['t-newer'], // t-anchor has aged past the registry's active window
-    ]
-
-    let stickyFocus = new Map<string, string>()
-    const focuses: string[] = []
-    for (const visible of polls) {
-      const agents = tabsToAgentActivity(makeBurstTabs(visible, landings), {
-        stickyFocus,
+    for (const browserTabs of polls) {
+      const [card] = sessionsToLiveCards([session(browserTabs)], {
+        stickySelection,
       })
-      focuses.push(agents[0]?.currentFocus.targetId ?? 'none')
-      const next = new Map<string, string>()
-      for (const a of agents) next.set(a.agentId, a.currentFocus.targetId)
-      stickyFocus = next
+      if (!card.selectedTab) throw new Error('expected a selected browser tab')
+      observed.push(card.selectedTab.browserTabId)
+      stickySelection = new Map([
+        [card.sessionId, card.selectedTab.browserTabId],
+      ])
     }
 
-    expect(focuses).toEqual(['t-anchor', 't-anchor', 't-newer'])
+    expect(observed).toEqual([7, 7, 7, 9])
   })
 
-  it('keeps per-agent focus maps independent across polls', () => {
-    const landings = new Map<string, number>([
-      ['t1-anchor', 0],
-      ['t1-newer', 5_000],
-      ['t2-anchor', 0],
-      ['t2-newer', 5_000],
-    ])
-
-    function buildTabs(
-      visible: ReadonlyArray<[string, string]>,
-    ): TabActivityRecord[] {
-      return visible.map(([agentId, targetId], i) =>
-        tab({
-          profileId: agentId,
-          targetId,
-          pageId: 100 + i,
-          firstActivityAt: landings.get(targetId) ?? 0,
-          lastActivityAt: landings.get(targetId) ?? 0,
-        }),
-      )
+  it('keeps independent selections for two sessions sharing one profile', () => {
+    const sessionA = {
+      ...session([browserTab(11, 100), browserTab(12, 200)]),
+      sessionId: 'session-a',
+      profileId: 'profile-shared',
     }
-
-    // Poll 1: each agent has only its anchor.
-    let stickyFocus = new Map<string, string>()
-    let agents = tabsToAgentActivity(
-      buildTabs([
-        ['a1', 't1-anchor'],
-        ['a2', 't2-anchor'],
+    const sessionB = {
+      ...session([browserTab(21, 100), browserTab(22, 200)]),
+      sessionId: 'session-b',
+      profileId: 'profile-shared',
+    }
+    const cards = sessionsToLiveCards([sessionA, sessionB], {
+      stickySelection: new Map([
+        ['session-a', 11],
+        ['session-b', 21],
       ]),
-      { stickyFocus },
-    )
+    })
+
     expect(
       Object.fromEntries(
-        agents.map((a) => [a.agentId, a.currentFocus.targetId]),
+        cards.map((card) => [card.sessionId, card.selectedTab?.browserTabId]),
       ),
-    ).toEqual({ a1: 't1-anchor', a2: 't2-anchor' })
-
-    const next = new Map<string, string>()
-    for (const a of agents) next.set(a.agentId, a.currentFocus.targetId)
-    stickyFocus = next
-
-    // Poll 2: each agent gains a fresher tab. Sticky focus holds.
-    agents = tabsToAgentActivity(
-      buildTabs([
-        ['a1', 't1-anchor'],
-        ['a1', 't1-newer'],
-        ['a2', 't2-anchor'],
-        ['a2', 't2-newer'],
-      ]),
-      { stickyFocus },
-    )
-    expect(
-      Object.fromEntries(
-        agents.map((a) => [a.agentId, a.currentFocus.targetId]),
-      ),
-    ).toEqual({ a1: 't1-anchor', a2: 't2-anchor' })
+    ).toEqual({ 'session-a': 11, 'session-b': 21 })
   })
 })

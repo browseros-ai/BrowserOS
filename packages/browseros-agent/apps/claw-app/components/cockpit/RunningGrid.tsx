@@ -1,27 +1,32 @@
 import { useCancelSession } from '@/modules/api/cancel.hooks'
-import { useFocusAgent } from '@/modules/api/focus.hooks'
-import type { AgentActivityRecord } from '@/screens/cockpit/cockpit.helpers'
+import { useFocusBrowserTab } from '@/modules/api/focus.hooks'
+import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
 import { AgentRunningCard } from './AgentRunningCard'
 
 interface RunningGridProps {
-  agents: AgentActivityRecord[]
+  sessions: LiveSessionCardRecord[]
 }
 
-/** Renders live agent cards and switches to the agent's focus tab on Watch. */
-export function RunningGrid({ agents }: RunningGridProps) {
-  const focus = useFocusAgent()
+/** Renders one card and one set of controls per connected live session. */
+export function RunningGrid({ sessions }: RunningGridProps) {
+  const focus = useFocusBrowserTab()
   const cancel = useCancelSession()
-  const liveCount = agents.filter((a) => a.status === 'active').length
 
-  if (agents.length === 0) return null
+  if (sessions.length === 0) return null
 
-  const onWatch = (agent: AgentActivityRecord) => {
+  const onWatch = (session: LiveSessionCardRecord) => {
+    const browserTabId = session.selectedTab?.browserTabId
+    if (browserTabId === undefined) return
     focus.mutate(
-      { agentId: agent.agentId, focusUrl: agent.currentFocus.url },
+      { browserTabId },
       {
         onError: (err) => {
           // eslint-disable-next-line no-console
-          console.warn('focus agent failed', { agentId: agent.agentId, err })
+          console.warn('focus browser tab failed', {
+            sessionId: session.sessionId,
+            browserTabId,
+            err,
+          })
         },
       },
     )
@@ -37,10 +42,14 @@ export function RunningGrid({ agents }: RunningGridProps) {
       },
     )
   }
-  const pendingAgentId =
-    focus.isPending && focus.variables ? focus.variables.agentId : null
+  const pendingBrowserTabId =
+    focus.isPending && focus.variables
+      ? focus.variables.browserTabId
+      : undefined
   const cancelPendingSessionId =
-    cancel.isPending && cancel.variables ? cancel.variables.sessionId : null
+    cancel.isPending && cancel.variables
+      ? cancel.variables.sessionId
+      : undefined
 
   return (
     <section className="space-y-4">
@@ -51,24 +60,20 @@ export function RunningGrid({ agents }: RunningGridProps) {
             aria-hidden
             className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent shadow-[0_0_8px_hsl(221_90%_55%/0.5)]"
           />
-          {liveCount} live
+          {sessions.length} live
         </span>
       </header>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {agents.map((a) => (
+        {sessions.map((session) => (
           <AgentRunningCard
-            key={a.agentId}
-            agent={a}
-            onWatch={() => onWatch(a)}
-            onStop={
-              a.currentFocus.sessionId
-                ? () => onStop(a.currentFocus.sessionId as string)
-                : undefined
+            key={session.sessionId}
+            session={session}
+            onWatch={session.selectedTab ? () => onWatch(session) : undefined}
+            onStop={() => onStop(session.sessionId)}
+            isFocusPending={
+              pendingBrowserTabId === session.selectedTab?.browserTabId
             }
-            isFocusPending={pendingAgentId === a.agentId}
-            isCancelPending={
-              cancelPendingSessionId === a.currentFocus.sessionId
-            }
+            isCancelPending={cancelPendingSessionId === session.sessionId}
           />
         ))}
       </div>

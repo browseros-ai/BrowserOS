@@ -13,8 +13,7 @@ import * as _cockpitData from './cockpit.data'
 mock.module('./cockpit.data', () => ({
   ..._cockpitData,
   useCockpitData: () => ({
-    agents: [],
-    activity: [],
+    sessions: [],
     isPending: false,
   }),
 }))

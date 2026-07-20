@@ -1,11 +1,13 @@
+import type {
+  LiveSessionActivityState,
+  SessionBrowserTab,
+  SessionSummary,
+  ToolEvent,
+} from '@browseros/claw-api'
 import { HARNESSES, type Harness } from '@/components/harness/harness.types'
-import type { ActivityRow } from '@/modules/api/activity.hooks'
-import type { TabActivityRecord, ToolEvent } from '@/modules/api/tabs.hooks'
 
-// Fallback palette used when the server-side join did not return a
-// colour for the agent (today no profile field exists; the server
-// always emits null). Hashing the slug keeps the colour stable per
-// agent so cards do not flicker between polls.
+// Missing parent colors fall back to a stable slug hash so card identity does
+// not flicker between live-session polls.
 const PALETTE = [
   '#16A34A',
   '#2F6FE0',
@@ -48,24 +50,19 @@ export function formatRelative(ms: number, now: number): string {
   return `${days}d ago`
 }
 
-/**
- * Returns the most recent N tool names joined with `->` for compact
- * card trail rows.
- */
+/** Returns the most recent N tool names joined for compact card trail rows. */
 export function formatToolTrail(
   recentTools: ToolEvent[],
   max: number = TRAIL_DISPLAY_CAP,
 ): string {
   if (recentTools.length === 0) return ''
-  const tail = recentTools.slice(-max)
-  return tail.map((t) => t.name).join(' -> ')
+  return recentTools
+    .slice(-max)
+    .map((tool) => tool.name)
+    .join(' -> ')
 }
 
-/**
- * Coerces the server-supplied harness string back into the UI's
- * `Harness` union. Missing or unknown values fall back to 'Claude Code'
- * so the harness icon still resolves to something concrete.
- */
+/** Coerces contract strings into the UI harness union with an honest fallback. */
 export function harnessForRow(value: string | undefined): Harness {
   if (!value) return 'Claude Code'
   return (HARNESSES as readonly string[]).includes(value)
@@ -73,135 +70,89 @@ export function harnessForRow(value: string | undefined): Harness {
     : 'Claude Code'
 }
 
-/**
- * Roll-up shape for the homepage's RunningGrid. PR 1 / PR 2 rendered
- * one card per tab; in practice one agent often drives multiple tabs
- * and the user wants one card per agent with the tabs nested inside.
- * The `currentFocus` is the tab the card surfaces. By default it is
- * the tab whose `lastActivityAt` is freshest, but callers can pass a
- * `stickyFocus` map keyed by the profile-or-slug group to anchor focus across polls
- * so the card does not flicker as new tool calls land on other tabs.
- * See `RollupOptions`.
- */
-export interface AgentActivityRecord {
-  agentId: string
+export interface LiveSessionCardRecord {
+  sessionId: string
+  profileId?: string
   slug: string
-  agentLabel: string
+  label: string
+  name: string
   harness: Harness
   color: string
-  firstToolAt: number
-  lastToolAt: number
-  lastToolName: string
+  startedAt: number
+  state: LiveSessionActivityState
+  selectedTab: SessionBrowserTab | null
+  browserTabs: SessionBrowserTab[]
   toolCount: number
-  /** Merged across all this agent's tabs, sorted by `at`, capped at MERGED_TRAIL_CAP. */
   recentTools: ToolEvent[]
-  status: 'active' | 'idle'
-  /** The freshest tab in the group. Always present (a rollup with no tabs is impossible). */
-  currentFocus: TabActivityRecord
-  /** All tabs in the group, newest activity first, so the popover reads chronologically. */
-  tabs: TabActivityRecord[]
 }
 
-/**
- * Caller hint that lets the rollup keep the same `currentFocus`
- * across polls. The value is keyed by the profile-or-slug group and carries the
- * focus target id chosen on the previous render. When the
- * previously-focused tab is still in the agent's active set, the
- * rollup keeps it as focus; otherwise it re-elects using the
- * freshest `lastActivityAt`. Without this hint the rollup behaves as
- * PR 3 shipped (freshest wins every time).
- */
-export interface RollupOptions {
-  stickyFocus?: ReadonlyMap<string, string>
+export interface LiveSessionCardOptions {
+  /** Previous selection keyed by session id and carrying a Chrome tab id. */
+  stickySelection?: ReadonlyMap<string, number>
 }
 
-/**
- * Groups tabs by `profileId ?? slug` so the homepage renders one card per
- * configured profile, with ephemeral sessions grouped by slug. Pure: same input + same options always
- * produces the same output. The status is `active` if any of the
- * agent's tabs are active; `firstToolAt` is the oldest first-touch
- * across the bunch (the moment this agent first started working);
- * `lastToolName` is whichever tab is currently the focus.
- */
-export function tabsToAgentActivity(
-  records: TabActivityRecord[],
-  options?: RollupOptions,
-): AgentActivityRecord[] {
-  const byAgent = new Map<string, TabActivityRecord[]>()
-  for (const record of records) {
-    const groupKey = record.profileId ?? record.slug
-    const bucket = byAgent.get(groupKey)
-    if (bucket) bucket.push(record)
-    else byAgent.set(groupKey, [record])
+function activityAt(tab: SessionBrowserTab): number | undefined {
+  return tab.lastActivityAt ?? tab.firstActivityAt
+}
+
+function compareBrowserTabs(
+  left: SessionBrowserTab,
+  right: SessionBrowserTab,
+): number {
+  const leftActivity = activityAt(left)
+  const rightActivity = activityAt(right)
+  if (leftActivity === undefined && rightActivity !== undefined) return 1
+  if (leftActivity !== undefined && rightActivity === undefined) return -1
+  if (leftActivity !== undefined && rightActivity !== undefined) {
+    const byActivity = rightActivity - leftActivity
+    if (byActivity !== 0) return byActivity
   }
-  const sticky = options?.stickyFocus
-  const out: AgentActivityRecord[] = []
-  for (const [agentId, tabs] of byAgent) {
-    const sorted = [...tabs].sort((a, b) => b.lastActivityAt - a.lastActivityAt)
-    const previousFocusTargetId = sticky?.get(agentId)
-    const stickyTab = previousFocusTargetId
-      ? sorted.find((t) => t.targetId === previousFocusTargetId)
-      : undefined
-    const focus = stickyTab ?? sorted[0]
-    const mergedTrail = sorted
-      .flatMap((t) => t.recentTools)
-      .sort((a, b) => a.at - b.at)
+  return left.browserTabId - right.browserTabId
+}
+
+/**
+ * Projects each connected session into one card. A previous browser-tab id
+ * remains selected while owned; otherwise activity freshness and then Chrome
+ * tab id provide deterministic election. Card order follows session arrival.
+ */
+export function sessionsToLiveCards(
+  sessions: SessionSummary[],
+  options?: LiveSessionCardOptions,
+): LiveSessionCardRecord[] {
+  const cards = sessions.map((session) => {
+    const browserTabs = [...(session.live?.browserTabs ?? [])].sort(
+      compareBrowserTabs,
+    )
+    const previousSelection = options?.stickySelection?.get(session.sessionId)
+    const selectedTab =
+      browserTabs.find((tab) => tab.browserTabId === previousSelection) ??
+      browserTabs[0] ??
+      null
+    const recentTools = browserTabs
+      .flatMap((tab) => tab.recentTools)
+      .sort((left, right) => left.at - right.at)
       .slice(-MERGED_TRAIL_CAP)
-    out.push({
-      agentId,
-      slug: focus.slug,
-      agentLabel: focus.label || focus.slug,
-      harness: harnessForRow(focus.harness),
-      color: focus.color ?? colorForSlug(focus.slug),
-      firstToolAt: Math.min(...tabs.map((t) => t.firstActivityAt)),
-      // lastToolAt is agent-level freshness (max across tabs) so the
-      // multi-agent sort below keeps the busiest agent on top even
-      // when the sticky focus rule is anchored to an older tab.
-      lastToolAt: Math.max(...tabs.map((t) => t.lastActivityAt)),
-      // lastToolName tracks the focus tab so the card's live-line
-      // ("snapshot -> example.com") stays stable across polls even
-      // when other tabs are firing.
-      lastToolName: focus.lastToolName,
-      toolCount: tabs.reduce((sum, t) => sum + t.toolCount, 0),
-      recentTools: mergedTrail,
-      status: tabs.some((t) => t.status === 'active') ? 'active' : 'idle',
-      currentFocus: focus,
-      tabs: sorted,
-    })
-  }
-  // Sort by arrival order (when each agent first appeared on the
-  // homepage), NOT by recency. Sorting by `lastToolAt` desc would
-  // swap card positions every poll whenever one agent fires a tool
-  // call and the other is briefly idle, which reads as "the cards
-  // keep re-arranging" and breaks the operator's mental model of
-  // "the agent I started first stays at the top". Tie-break on
-  // agentId so the order is deterministic when two agents share a
-  // same-ms firstToolAt (rare but possible during parallel boots).
-  return out.sort(
-    (a, b) =>
-      a.firstToolAt - b.firstToolAt || a.agentId.localeCompare(b.agentId),
-  )
-}
 
-/**
- * Idle records flow into RecentActivity so the user can see the last
- * thing each agent did on a tab even after the active window expires.
- */
-export function tabsToActivityRows(
-  records: TabActivityRecord[],
-  now: number,
-): ActivityRow[] {
-  return records
-    .filter((r) => r.status === 'idle')
-    .map((r) => ({
-      id: r.targetId,
-      agentLabel: r.label || r.slug,
-      color: r.color ?? colorForSlug(r.slug),
-      status: 'done' as const,
-      action: `${r.lastToolName} on ${r.title || siteOf(r.url)}`,
-      site: siteOf(r.url),
-      when: formatRelative(r.lastActivityAt, now),
-      toolCount: r.toolCount,
-      trail: formatToolTrail(r.recentTools),
-    }))
+    return {
+      sessionId: session.sessionId,
+      profileId: session.profileId,
+      slug: session.slug,
+      label: session.label || session.slug,
+      name: session.name,
+      harness: harnessForRow(session.harness),
+      color: session.color ?? colorForSlug(session.slug),
+      startedAt: session.startedAt,
+      state: session.live?.state ?? 'idle',
+      selectedTab,
+      browserTabs,
+      toolCount: browserTabs.reduce((sum, tab) => sum + tab.toolCount, 0),
+      recentTools,
+    }
+  })
+
+  return cards.sort(
+    (left, right) =>
+      left.startedAt - right.startedAt ||
+      left.sessionId.localeCompare(right.sessionId),
+  )
 }
