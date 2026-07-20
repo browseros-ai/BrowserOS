@@ -11,14 +11,10 @@ import { browserClawPromoDismissedStorage } from './browserclaw-promo.storage'
 
 const BROWSERCLAW_PROMO_URL = 'https://browseros.com/agents/'
 
-interface BrowserClawPromoBannerCardProps {
+export const BrowserClawPromoBannerCard: FC<{
   onOpen: () => void
   onDismiss: () => void
-}
-
-export const BrowserClawPromoBannerCard: FC<
-  BrowserClawPromoBannerCardProps
-> = ({ onOpen, onDismiss }) => (
+}> = ({ onOpen, onDismiss }) => (
   <div className="flex items-center gap-4 rounded-xl border border-border bg-card p-4 shadow-sm transition-all hover:shadow-md">
     <img
       src={BrowserClawLogo}
