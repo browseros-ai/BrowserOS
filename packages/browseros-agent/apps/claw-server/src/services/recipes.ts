@@ -203,3 +203,95 @@ function computeAgeDays(lastVerified: string | null, now: Date): number | null {
   if (diffMs < 0) return 0
   return Math.floor(diffMs / (1000 * 60 * 60 * 24))
 }
+
+const HOSTNAME_SHAPE =
+  /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i
+
+/**
+ * Resolves a caller-supplied host to a bucket. Accepts either a full
+ * http(s) URL or a bare hostname; returns null when the input is
+ * neither. Used by the on-demand list_recipes tool where the agent
+ * may pass whichever form is convenient.
+ */
+export function hostBucketFromInput(input: string): string | null {
+  const fromUrl = hostBucketFromUrl(input)
+  if (fromUrl) return fromUrl
+  const trimmed = input.trim().toLowerCase()
+  if (!trimmed) return null
+  if (!HOSTNAME_SHAPE.test(trimmed)) return null
+  const bucket = trimmed.replace(/^www\./, '')
+  return bucket.length > 0 ? bucket : null
+}
+
+export interface RecipeListing {
+  name: string
+  source: RecipeSource
+  age_days: number | null
+  stale: boolean
+}
+
+export interface RecipeDiscovery {
+  files: RecipeListing[]
+  /** Default write path for new cross-agent recipes. */
+  workspace_dir: string
+  shared_dir: string
+  agent_dir: string
+  /** One-line summary suitable for the model's context window. */
+  summary: string
+}
+
+/**
+ * Builds the on-demand discovery payload for a caller + host. Same
+ * data the navigate effect surfaces via structuredContent.domain_skills,
+ * exposed as a helper so the list_recipes MCP tool and the effect
+ * share one summary format and one wire shape.
+ */
+export function describeRecipesForHost(
+  slug: string,
+  hostBucket: string,
+  now: Date = new Date(),
+): RecipeDiscovery {
+  const entries = listRecipeFiles(slug, hostBucket)
+  const enriched = entries.map((entry) => ({
+    entry,
+    metadata: readRecipeMetadata(entry.absolutePath, now),
+  }))
+  const files: RecipeListing[] = enriched.map(({ entry, metadata }) => ({
+    name: entry.name,
+    source: entry.source,
+    age_days: metadata.ageDays,
+    stale: metadata.isStale,
+  }))
+  const shared_dir = sharedRecipesDirFor(hostBucket)
+  const agent_dir = agentRecipesDirFor(slug, hostBucket)
+  const summary = buildRecipeSummary(hostBucket, files, shared_dir)
+  return {
+    files,
+    workspace_dir: shared_dir,
+    shared_dir,
+    agent_dir,
+    summary,
+  }
+}
+
+function buildRecipeSummary(
+  host: string,
+  files: RecipeListing[],
+  workspaceDir: string,
+): string {
+  if (files.length === 0) {
+    return `Recipes for ${host}: none yet. Save prose notes as kebab-case Markdown files in ${workspaceDir} with a last_verified frontmatter stamp so future sessions know how fresh the guidance is.`
+  }
+  const names = files.map((f) => f.name).join(', ')
+  const stale = files
+    .filter((f) => f.stale)
+    .map((f) => `${f.name} (${f.age_days}d)`)
+  const parts = [`Recipes for ${host}: ${names}.`]
+  if (stale.length > 0) {
+    parts.push(
+      `Stale (>=${STALE_THRESHOLD_DAYS}d, verify selectors before trusting): ${stale.join(', ')}.`,
+    )
+  }
+  parts.push(`Shared workspace: ${workspaceDir}.`)
+  return parts.join(' ')
+}

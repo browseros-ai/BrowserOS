@@ -35,6 +35,10 @@ import {
   CANCELLATION_REASON,
   dispatchCancellation,
 } from '../services/dispatch-cancellation'
+import {
+  describeRecipesForHost,
+  hostBucketFromInput,
+} from '../services/recipes'
 import { cancellationErrorResult } from './cancellation-result'
 import { composeAbortSignals, dispatchErrorText } from './dispatch-util'
 import { applyAudit } from './effects/audit'
@@ -192,6 +196,42 @@ export function registerBrowserToolsForSingleServer(
         session: getBrowserSession(),
       })
       return textResult(`renamed to ${newTitle} (was ${oldTitle})`)
+    },
+  )
+  register(
+    'list_recipes',
+    {
+      description:
+        'List domain recipes cached for a host so this session can bootstrap on it without rediscovering the page. Recipes are context caching (not tool calls): Read the returned files with your own filesystem tools before acting. Pass either a bare hostname or a full http(s) URL.',
+      inputSchema: { host: z.string().min(1).max(256) },
+      annotations: {
+        title: 'List recipes',
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args, extra) => {
+      const identity = resolveIdentity(extra?.sessionId)
+      if (!identity) return errorResult('unable to resolve this session')
+      const rawHost = typeof args.host === 'string' ? args.host : ''
+      const bucket = hostBucketFromInput(rawHost)
+      if (!bucket) {
+        return errorResult(
+          `not a routable host: ${rawHost}. Pass a bare hostname or a full http(s) URL.`,
+        )
+      }
+      const discovery = describeRecipesForHost(identity.slug, bucket)
+      return {
+        content: [{ type: 'text', text: discovery.summary }],
+        structuredContent: {
+          host: bucket,
+          files: discovery.files,
+          workspace_dir: discovery.workspace_dir,
+          shared_dir: discovery.shared_dir,
+          agent_dir: discovery.agent_dir,
+        },
+      }
     },
   )
 }

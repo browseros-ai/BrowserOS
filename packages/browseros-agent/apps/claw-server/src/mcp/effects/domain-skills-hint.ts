@@ -3,11 +3,10 @@
  * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Surfaces domain-recipe files to the agent on navigate. The effect
- * merges the shared and per-agent overlay directories for the target
- * host, stamps each file with its age (via last_verified frontmatter),
- * and annotates the navigate response so the agent can Read the files
- * with its own tools before deciding how to proceed on the page.
+ * Surfaces domain-recipe files to the agent on navigate and on any
+ * SPA URL transition. The effect delegates the actual discovery to
+ * describeRecipesForHost so this file and the list_recipes tool
+ * share one wire shape and one summary format.
  *
  * Recipes are context caching: they do not replace the browser tools,
  * they make each tool call cheaper to reason about. The synthetic text
@@ -15,33 +14,10 @@
  */
 
 import {
-  agentRecipesDirFor,
+  describeRecipesForHost,
   hostBucketFromUrl,
-  listRecipeFiles,
-  type RecipeFileEntry,
-  type RecipeMetadata,
-  readRecipeMetadata,
-  sharedRecipesDirFor,
 } from '../../services/recipes'
 import type { ToolEffect } from '../dispatch'
-
-interface AnnotatedEntry {
-  entry: RecipeFileEntry
-  metadata: RecipeMetadata
-}
-
-interface DomainSkillsPayload {
-  files: Array<{
-    name: string
-    source: RecipeFileEntry['source']
-    age_days: number | null
-    stale: boolean
-  }>
-  /** Default write path for new cross-agent recipes. */
-  workspace_dir: string
-  shared_dir: string
-  agent_dir: string
-}
 
 /**
  * Per-session memory of the last host bucket surfaced to the caller.
@@ -73,26 +49,7 @@ export const applyDomainSkillsHint: ToolEffect = ({ call, result }) => {
 
   if (sessionKey) lastHostBySession.set(sessionKey, host)
 
-  const slug = call.identity.slug
-  const now = new Date()
-  const entries = listRecipeFiles(slug, host)
-  const annotated: AnnotatedEntry[] = entries.map((entry) => ({
-    entry,
-    metadata: readRecipeMetadata(entry.absolutePath, now),
-  }))
-
-  const payload: DomainSkillsPayload = {
-    files: annotated.map(({ entry, metadata }) => ({
-      name: entry.name,
-      source: entry.source,
-      age_days: metadata.ageDays,
-      stale: metadata.isStale,
-    })),
-    workspace_dir: sharedRecipesDirFor(host),
-    shared_dir: sharedRecipesDirFor(host),
-    agent_dir: agentRecipesDirFor(slug, host),
-  }
-
+  const discovery = describeRecipesForHost(call.identity.slug, host)
   const priorStructured =
     typeof result.structuredContent === 'object' &&
     result.structuredContent !== null
@@ -100,15 +57,16 @@ export const applyDomainSkillsHint: ToolEffect = ({ call, result }) => {
       : {}
   const structuredContent = {
     ...priorStructured,
-    domain_skills: payload,
+    domain_skills: {
+      files: discovery.files,
+      workspace_dir: discovery.workspace_dir,
+      shared_dir: discovery.shared_dir,
+      agent_dir: discovery.agent_dir,
+    },
   }
-
   return {
     ...result,
-    content: [
-      ...result.content,
-      { type: 'text', text: buildSummary(host, annotated, payload) },
-    ],
+    content: [...result.content, { type: 'text', text: discovery.summary }],
     structuredContent,
   }
 }
@@ -129,26 +87,4 @@ function extractUrl(
   const fromPage = call.pageSnapshot?.url
   if (typeof fromPage === 'string' && fromPage.length > 0) return fromPage
   return null
-}
-
-function buildSummary(
-  host: string,
-  annotated: AnnotatedEntry[],
-  payload: DomainSkillsPayload,
-): string {
-  if (annotated.length === 0) {
-    return `Recipes for ${host}: none yet. Save prose notes as kebab-case Markdown files in ${payload.workspace_dir} with a last_verified frontmatter stamp so future sessions know how fresh the guidance is.`
-  }
-  const names = annotated.map(({ entry }) => entry.name).join(', ')
-  const stale = annotated
-    .filter(({ metadata }) => metadata.isStale)
-    .map(({ entry, metadata }) => `${entry.name} (${metadata.ageDays}d)`)
-  const parts = [`Recipes for ${host}: ${names}.`]
-  if (stale.length > 0) {
-    parts.push(
-      `Stale (>=60d, verify selectors before trusting): ${stale.join(', ')}.`,
-    )
-  }
-  parts.push(`Shared workspace: ${payload.workspace_dir}.`)
-  return parts.join(' ')
 }

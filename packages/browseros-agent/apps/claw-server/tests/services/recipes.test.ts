@@ -13,6 +13,8 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { sep } from 'node:path'
 import {
   agentRecipesDirFor,
+  describeRecipesForHost,
+  hostBucketFromInput,
   hostBucketFromUrl,
   listRecipeFiles,
   readRecipeMetadata,
@@ -341,6 +343,81 @@ body`,
         'listitem',
         'aria-label=X',
       ])
+    })
+  })
+})
+
+describe('hostBucketFromInput', () => {
+  it('accepts a full http URL and reduces to the bucket', () => {
+    expect(hostBucketFromInput('https://www.linkedin.com/feed')).toBe(
+      'linkedin.com',
+    )
+    expect(hostBucketFromInput('http://docs.google.com/')).toBe(
+      'docs.google.com',
+    )
+  })
+
+  it('accepts a bare hostname and strips www.', () => {
+    expect(hostBucketFromInput('linkedin.com')).toBe('linkedin.com')
+    expect(hostBucketFromInput('www.linkedin.com')).toBe('linkedin.com')
+    expect(hostBucketFromInput('docs.google.com')).toBe('docs.google.com')
+    expect(hostBucketFromInput('  LINKEDIN.COM  ')).toBe('linkedin.com')
+  })
+
+  it('rejects garbage that is neither a URL nor a plausible hostname', () => {
+    expect(hostBucketFromInput('')).toBeNull()
+    expect(hostBucketFromInput('   ')).toBeNull()
+    expect(hostBucketFromInput('not a host')).toBeNull()
+    expect(hostBucketFromInput('has/slash.com')).toBeNull()
+    expect(hostBucketFromInput('has:port.com')).toBeNull()
+  })
+
+  it('rejects non-http(s) URLs', () => {
+    expect(hostBucketFromInput('file:///tmp/index.html')).toBeNull()
+    expect(hostBucketFromInput('chrome://newtab')).toBeNull()
+  })
+})
+
+describe('describeRecipesForHost', () => {
+  it('returns an empty listing and a cold-nudge summary when no recipes exist', async () => {
+    await withTempBrowserClawDir(async () => {
+      const d = describeRecipesForHost('claude-code', 'linkedin.com')
+      expect(d.files).toEqual([])
+      expect(d.workspace_dir).toContain('recipes/shared/linkedin.com')
+      expect(d.shared_dir).toBe(d.workspace_dir)
+      expect(d.agent_dir).toContain('recipes/agents/claude-code/linkedin.com')
+      expect(d.summary).toContain('none yet')
+      expect(d.summary).toContain(d.workspace_dir)
+    })
+  })
+
+  it('lists shared and agent overlays with source labels + fresh summary', async () => {
+    await withTempBrowserClawDir(async () => {
+      seed(sharedRecipesDirFor('linkedin.com'), 'invitation-manager.md')
+      seed(agentRecipesDirFor('claude-code', 'linkedin.com'), 'my-only.md')
+      const d = describeRecipesForHost('claude-code', 'linkedin.com')
+      expect(d.files.map((f) => `${f.name}:${f.source}`)).toEqual([
+        'invitation-manager.md:shared',
+        'my-only.md:agent',
+      ])
+      expect(d.summary).toContain('invitation-manager.md, my-only.md')
+      expect(d.summary).not.toContain('Stale')
+    })
+  })
+
+  it('flags stale entries in the summary', async () => {
+    await withTempBrowserClawDir(async () => {
+      const now = new Date('2026-07-20T12:00:00Z')
+      seed(
+        sharedRecipesDirFor('linkedin.com'),
+        'ancient.md',
+        '---\nlast_verified: 2026-01-01\n---\nbody',
+      )
+      const d = describeRecipesForHost('claude-code', 'linkedin.com', now)
+      expect(d.files[0]?.stale).toBe(true)
+      expect(d.summary).toContain('Stale')
+      expect(d.summary).toContain('ancient.md')
+      expect(d.summary).toContain(String(STALE_THRESHOLD_DAYS))
     })
   })
 })
