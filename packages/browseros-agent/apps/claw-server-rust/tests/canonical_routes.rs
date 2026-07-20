@@ -1078,10 +1078,10 @@ async fn preview_rejects_disconnected_session_after_browser_reconciliation() -> 
 }
 
 #[tokio::test]
-async fn preview_rejects_ownership_transfer_during_browser_reconciliation() -> anyhow::Result<()> {
+async fn preview_rejects_ownership_transfer_during_frame_lookup() -> anyhow::Result<()> {
     let app = test_app().await?;
     let fixture = seed_live_fixture(&app).await?;
-    let gate = app.connection.gate_next_get_tabs().await;
+    let gate = app.state.screencast.gate_next_frame_read_for_testing();
     let router = app.router.clone();
     let preview_path = format!(
         "/api/v1/sessions/{}/browser-tabs/101/preview",
@@ -1093,6 +1093,7 @@ async fn preview_rejects_ownership_transfer_during_browser_reconciliation() -> a
         );
 
     gate.wait_until_entered().await;
+    assert_eq!(app.connection.get_tabs_calls(), 1);
     app.state.audit.enqueue_claim_tab_for_session(
         101,
         Some("target-7".to_string()),

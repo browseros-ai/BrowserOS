@@ -10,12 +10,13 @@ use browseros_core::{
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::{
-        Arc,
+        Arc, Mutex as StdMutex,
         atomic::{AtomicBool, AtomicI64, Ordering},
     },
     time::Duration,
 };
 use tokio::{
+    sync::Notify,
     task::{JoinHandle, JoinSet},
     time::{MissedTickBehavior, interval, timeout},
 };
@@ -34,6 +35,23 @@ pub struct ScreencastService {
     tick_running: AtomicBool,
     cancel: CancellationToken,
     capacity: usize,
+    frame_read_gate: StdMutex<Option<Arc<FrameReadGate>>>,
+}
+
+#[doc(hidden)]
+pub struct FrameReadGate {
+    entered: Notify,
+    release: Notify,
+}
+
+impl FrameReadGate {
+    pub async fn wait_until_entered(&self) {
+        self.entered.notified().await;
+    }
+
+    pub fn release(&self) {
+        self.release.notify_one();
+    }
 }
 
 #[derive(Default)]
@@ -93,6 +111,7 @@ impl ScreencastService {
             tick_running: AtomicBool::new(false),
             cancel: CancellationToken::new(),
             capacity,
+            frame_read_gate: StdMutex::new(None),
         })
     }
 
@@ -126,12 +145,40 @@ impl ScreencastService {
     }
 
     pub async fn frame_for(&self, page_id: u32, target_id: &str) -> Option<ScreencastFrame> {
-        self.inner
+        let candidate = self
+            .inner
             .lock()
             .await
             .frames
             .get(&TabIncarnation::new(page_id, target_id))
-            .cloned()
+            .cloned();
+        let gate = self
+            .frame_read_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(gate) = gate {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
+        candidate
+    }
+
+    /// Pauses one `frame_for` after it clones the target-bound candidate.
+    /// Arming another gate before that read consumes this one is a test error.
+    #[doc(hidden)]
+    pub fn gate_next_frame_read_for_testing(&self) -> Arc<FrameReadGate> {
+        let gate = Arc::new(FrameReadGate {
+            entered: Notify::new(),
+            release: Notify::new(),
+        });
+        let mut slot = self
+            .frame_read_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(slot.is_none(), "frame read gate is already armed");
+        *slot = Some(gate.clone());
+        gate
     }
 
     /// Records readership of the live-session cockpit projection for the idle governor.
