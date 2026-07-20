@@ -174,10 +174,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isLoadingProviders,
   } = useChatRefs()
   const invalidateCredits = useInvalidateCredits()
-  const [vmStatus, setVmStatus] = useState<{
-    status: 'booting' | 'error'
-    progress?: string
-  } | null>(null)
 
   const {
     baseUrl: agentServerUrl,
@@ -412,23 +408,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     regenerate,
   } = useChat({
     transport: chatTransport,
-    onData: (part) => {
-      if (part.type !== 'data-vm-status') return
-      const data = part.data as
-        | { status?: string; progress?: string }
-        | undefined
-      const status = data?.status
-      if (!status || status === 'running') {
-        setVmStatus(null)
-        return
-      }
-      setVmStatus({
-        status: status as 'booting' | 'error',
-        progress: data?.progress,
-      })
-    },
     onFinish: async ({ message, messages, isAbort, isError, finishReason }) => {
-      setVmStatus(null)
       const nextMessages = addContentFilterNotice(
         messages,
         message,
@@ -795,6 +775,5 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     disliked,
     onClickDislike,
     conversationId,
-    vmStatus,
   }
 }
