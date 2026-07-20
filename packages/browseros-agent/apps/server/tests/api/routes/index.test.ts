@@ -44,7 +44,6 @@ function createTestApp(
     config: createTestConfig(),
     klavis: new KlavisService({ browserosId: null }),
     onShutdown,
-    remoteHermes: null,
     tokenManager: null,
     turnRegistry: new TurnRegistry(),
   })

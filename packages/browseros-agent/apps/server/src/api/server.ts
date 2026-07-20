@@ -10,14 +10,11 @@ import { HttpAgentError } from '../agent/errors'
 import { INLINED_ENV } from '../env'
 import { TurnRegistry } from '../lib/agents/turns/active-turn-registry'
 import { initializeOAuth, shutdownOAuth } from '../lib/clients/oauth'
-import { RemoteHermesClient } from '../lib/clients/remote-hermes/remote-hermes-client'
 import { getDb } from '../lib/db'
 import { logger } from '../lib/logger'
 import { Sentry } from '../lib/sentry'
 import { createApiRoutes } from './routes'
-import { REMOTE_AGENT_HARNESS_MCP_SOURCE } from './routes/mcp'
 import { KlavisService } from './services/klavis'
-import { RemoteHermesService } from './services/remote-hermes/remote-hermes-service'
 import { ServerActivity } from './services/server-activity'
 import type { HttpServerConfig } from './types'
 
@@ -65,39 +62,17 @@ export async function createHttpServer(config: HttpServerConfig) {
   const turnRegistry = new TurnRegistry()
   const activity = new ServerActivity(turnRegistry)
 
-  // Remote Hermes provider. Opt-in via AGENT_RUNNER_JWT_SECRET in env;
-  // when absent we still wire the routes but they return a soft
-  // not_configured response (agent UI degrades gracefully).
-  const remoteHermes =
-    browserosId && INLINED_ENV.AGENT_RUNNER_JWT_SECRET
-      ? new RemoteHermesService({
-          client: new RemoteHermesClient({
-            browserosId,
-            jwtSecret: INLINED_ENV.AGENT_RUNNER_JWT_SECRET,
-          }),
-          resolveLocalMcpUrl: (server) =>
-            server === 'browseros'
-              ? `http://127.0.0.1:${port}/mcp?source=${REMOTE_AGENT_HARNESS_MCP_SOURCE}`
-              : null,
-        })
-      : null
-  if (!remoteHermes) {
-    logger.warn('Remote Hermes disabled: AGENT_RUNNER_JWT_SECRET not set')
-  }
-
   const app = createApiRoutes({
     config: { ...config, activity },
     gatewayBaseUrl: INLINED_ENV.BROWSEROS_CONFIG_URL
       ? new URL(INLINED_ENV.BROWSEROS_CONFIG_URL).origin
       : undefined,
     klavis,
-    remoteHermes,
     tokenManager,
     turnRegistry,
     onShutdown: () => {
       shutdownOAuth()
       void klavis.stop()
-      remoteHermes?.close()
       onShutdown?.()
     },
   })
