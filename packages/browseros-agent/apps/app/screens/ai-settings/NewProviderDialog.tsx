@@ -96,6 +96,9 @@ function showsStandardModelField(type: ProviderType): boolean {
   return !isAcpProviderType(type)
 }
 
+/** Window assumed for any model the bundled catalog cannot size. */
+const DEFAULT_CONTEXT_WINDOW = 128000
+
 function defaultReasoningEffort(type?: ProviderType) {
   return type === 'chatgpt-pro' ? 'medium' : 'high'
 }
@@ -211,7 +214,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       modelId: initialValues?.modelId || '',
       apiKey: initialValues?.apiKey || '',
       supportsImages: initialValues?.supportsImages ?? false,
-      contextWindow: initialValues?.contextWindow || 128000,
+      contextWindow: initialValues?.contextWindow || DEFAULT_CONTEXT_WINDOW,
       temperature: initialValues?.temperature ?? 0.2,
       resourceName: initialValues?.resourceName || '',
       accessKeyId: initialValues?.accessKeyId || '',
@@ -325,16 +328,17 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 
   useEffect(() => {
     if (initialValues?.id) return
+    if (!watchedModelId) return
 
-    if (watchedModelId) {
-      const contextLength = getModelContextLength(
-        watchedType as ProviderType,
-        watchedModelId,
-      )
-      if (contextLength) {
-        form.setValue('contextWindow', contextLength)
-      }
-    }
+    // A custom model has no catalog entry, so fall back to the default rather
+    // than keeping whatever the previously selected model left behind: picking
+    // gpt-5.5 and then pasting an 8k local model would otherwise save a
+    // 1M-token window and overflow it on the first long chat.
+    const contextLength = getModelContextLength(
+      watchedType as ProviderType,
+      watchedModelId,
+    )
+    form.setValue('contextWindow', contextLength || DEFAULT_CONTEXT_WINDOW)
   }, [watchedModelId, watchedType, form, initialValues?.id])
 
   useEffect(() => {
@@ -348,7 +352,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         modelId: initialValues.modelId || '',
         apiKey: initialValues.apiKey || '',
         supportsImages: initialValues.supportsImages ?? false,
-        contextWindow: initialValues.contextWindow || 128000,
+        contextWindow: initialValues.contextWindow || DEFAULT_CONTEXT_WINDOW,
         temperature: initialValues.temperature ?? 0.2,
         resourceName: initialValues.resourceName || '',
         accessKeyId: initialValues.accessKeyId || '',
@@ -373,7 +377,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         modelId: '',
         apiKey: '',
         supportsImages: false,
-        contextWindow: 128000,
+        contextWindow: DEFAULT_CONTEXT_WINDOW,
         temperature: 0.2,
         resourceName: '',
         accessKeyId: '',

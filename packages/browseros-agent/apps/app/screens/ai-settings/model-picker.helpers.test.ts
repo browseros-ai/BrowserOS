@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import Fuse from 'fuse.js'
+import { getProviderTemplate } from '../../lib/llm-providers/providerTemplates'
 import type { ProviderType } from '../../lib/llm-providers/types'
 import {
   getIncompleteCatalogHint,
@@ -81,8 +82,13 @@ describe('servesUserLoadedModels', () => {
 
 describe('getIncompleteCatalogHint', () => {
   it('warns that a local runtime catalog is only a sample', () => {
-    expect(getIncompleteCatalogHint('lmstudio', 3, 'LM Studio')).toContain(
-      'LM Studio lists only common models',
+    // Names the provider off the same template the dialog passes in, so this
+    // asserts the sentence users actually read rather than echoing back a
+    // literal the call site never produces.
+    const providerName = getProviderTemplate('lmstudio')?.name
+
+    expect(getIncompleteCatalogHint('lmstudio', 3, providerName)).toBe(
+      `${providerName} lists only common models — paste the exact ID of any model you have loaded.`,
     )
   })
 
