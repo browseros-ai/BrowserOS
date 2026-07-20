@@ -15,7 +15,10 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import type { ClientIdentity } from '../../../src/lib/mcp-session'
 import { identityService } from '../../../src/lib/mcp-session'
 import type { ToolCall } from '../../../src/mcp/dispatch'
-import { applyDomainSkillsHint } from '../../../src/mcp/effects/domain-skills-hint'
+import {
+  applyDomainSkillsHint,
+  clearDomainSkillsHintForTesting,
+} from '../../../src/mcp/effects/domain-skills-hint'
 import type { ToolResult } from '../../../src/mcp/register-fn'
 import {
   agentRecipesDirFor,
@@ -116,15 +119,18 @@ function tailText(result: ToolResult | undefined): string {
 describe('applyDomainSkillsHint', () => {
   beforeEach(() => {
     identityService.clear()
+    clearDomainSkillsHintForTesting()
   })
 
-  it('is a no-op for non-navigate tools', async () => {
+  it('no-ops for non-navigate tools when the host has not changed for this session', async () => {
     await withTempBrowserClawDir(async () => {
       const identity = register('s1')
       seedRecipe(sharedRecipesDirFor('linkedin.com'), 'a.md')
-      expect(
-        apply(makeCall(identity, 'snapshot'), makeResult()),
-      ).toBeUndefined()
+      // Prime the tracker with a navigate to linkedin.
+      apply(makeCall(identity, 'navigate'), makeResult())
+      // A follow-up snapshot on the same host must NOT re-annotate.
+      const snap = apply(makeCall(identity, 'snapshot'), makeResult())
+      expect(snap).toBeUndefined()
     })
   })
 
@@ -279,6 +285,82 @@ describe('applyDomainSkillsHint', () => {
       expect(skills(codexReturned).files.map((f) => f.name)).toEqual([
         'theirs.md',
       ])
+    })
+  })
+
+  it('fires on non-navigate tool when the host changes mid-session (SPA transition)', async () => {
+    await withTempBrowserClawDir(async () => {
+      const identity = register('s1')
+      seedRecipe(sharedRecipesDirFor('linkedin.com'), 'linkedin.md')
+      seedRecipe(sharedRecipesDirFor('mail.google.com'), 'gmail.md')
+
+      // Prime with a navigate to linkedin.
+      apply(makeCall(identity, 'navigate'), makeResult())
+
+      // Now an act response that reports the new host (SPA route change).
+      const act = apply(
+        makeCall(identity, 'act', { ref: 'e42' }),
+        makeResult({
+          structuredContent: { url: 'https://mail.google.com/mail/u/0/#inbox' },
+        }),
+      )
+      const s = skills(act)
+      expect(s.files.map((f) => f.name)).toEqual(['gmail.md'])
+      expect(s.workspace_dir).toContain('recipes/shared/mail.google.com')
+    })
+  })
+
+  it('re-annotates on repeated navigate even when the host has not changed', async () => {
+    // navigate always fires; only non-navigate tools are debounced by host.
+    await withTempBrowserClawDir(async () => {
+      const identity = register('s1')
+      seedRecipe(sharedRecipesDirFor('linkedin.com'), 'a.md')
+
+      const first = apply(makeCall(identity, 'navigate'), makeResult())
+      const second = apply(makeCall(identity, 'navigate'), makeResult())
+      expect(skills(first).files).toHaveLength(1)
+      expect(skills(second).files).toHaveLength(1)
+    })
+  })
+
+  it('per-session trackers do not leak: session B fires on its first non-navigate', async () => {
+    await withTempBrowserClawDir(async () => {
+      const a = register('s-a', 'Claude Code')
+      const b = register('s-b', 'Codex CLI')
+      seedRecipe(sharedRecipesDirFor('linkedin.com'), 'shared.md')
+
+      // Prime session A on linkedin.
+      apply(makeCall(a, 'navigate'), makeResult())
+      // Session B has never observed linkedin, so its first act must fire.
+      const bAct = apply(
+        makeCall(b, 'act', { ref: 'e1' }),
+        makeResult({
+          structuredContent: { url: 'https://linkedin.com/feed' },
+        }),
+      )
+      expect(skills(bAct).files.map((f) => f.name)).toEqual(['shared.md'])
+    })
+  })
+
+  it('reads URL from call.pageSnapshot when neither result nor args carry it', async () => {
+    await withTempBrowserClawDir(async () => {
+      const identity = register('s1')
+      seedRecipe(sharedRecipesDirFor('linkedin.com'), 'a.md')
+
+      const call: ToolCall = {
+        ...makeCall(identity, 'act', { ref: 'e1' }),
+        pageSnapshot: {
+          pageId: 1,
+          targetId: 't1',
+          url: 'https://linkedin.com/mynetwork',
+          title: 'Network',
+        },
+      }
+      const returned = apply(
+        call,
+        makeResult({ structuredContent: { diff: 'clicked' } }),
+      )
+      expect(skills(returned).files.map((f) => f.name)).toEqual(['a.md'])
     })
   })
 
