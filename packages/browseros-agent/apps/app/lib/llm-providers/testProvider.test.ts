@@ -17,7 +17,7 @@ beforeEach(() => {
       ok: true,
       json: async () => ({ success: true, message: 'ok' }),
     } as Response
-  }) as typeof globalThis.fetch
+  }) as unknown as typeof globalThis.fetch
 })
 
 afterEach(() => {
@@ -91,7 +91,7 @@ describe('testProvider — client-side fetch failure (issue #1844)', () => {
   it('wraps a network fetch error as "could not reach BrowserOS server"', async () => {
     globalThis.fetch = (async () => {
       throw new TypeError('Failed to fetch')
-    }) as typeof globalThis.fetch
+    }) as unknown as typeof globalThis.fetch
 
     const result = await testProvider(baseProvider(), 'http://127.0.0.1:9200')
     expect(result.success).toBe(false)
@@ -112,7 +112,7 @@ describe('testProvider — client-side fetch failure (issue #1844)', () => {
         json: async () => {
           throw new SyntaxError('Unexpected token < in JSON')
         },
-      }) as unknown as Response) as typeof globalThis.fetch
+      }) as unknown as Response) as unknown as typeof globalThis.fetch
 
     const result = await testProvider(baseProvider(), 'http://127.0.0.1:9200')
     expect(result.success).toBe(false)
@@ -133,7 +133,7 @@ describe('testProvider — client-side fetch failure (issue #1844)', () => {
           success: false,
           message: '[anthropic] 401 Unauthorized',
         }),
-      }) as unknown as Response) as typeof globalThis.fetch
+      }) as unknown as Response) as unknown as typeof globalThis.fetch
 
     const result = await testProvider(baseProvider(), 'http://127.0.0.1:9200')
     expect(result.success).toBe(false)
