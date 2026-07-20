@@ -3,6 +3,26 @@
   <head>
     <meta charset="utf-8" />
     <title>Form fixture</title>
+    <style>
+      .styled-select {
+        position: relative;
+        display: inline-block;
+      }
+      .styled-select select {
+        width: 12rem;
+        height: 2rem;
+      }
+      .styled-select-prompt {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        padding: 0 0.5rem;
+        background: white;
+        border: 1px solid #777;
+        pointer-events: auto;
+      }
+    </style>
   </head>
   <body>
     <h1>Form fixture</h1>
@@ -12,12 +32,15 @@
       <label>Bio <textarea id="bio" name="bio"></textarea></label>
       <label>
         Color
-        <select id="color" name="color">
-          <option value="">Pick a color</option>
-          <option value="red">Red</option>
-          <option value="green">Green</option>
-          <option value="blue">Blue</option>
-        </select>
+        <span class="styled-select">
+          <select id="color" name="color">
+            <option value="">Pick a color</option>
+            <option value="red">Red</option>
+            <option value="green">Green</option>
+            <option value="blue">Blue</option>
+          </select>
+          <span class="styled-select-prompt" aria-hidden="true">Pick a color</span>
+        </span>
       </label>
       <label><input id="subscribe" name="subscribe" type="checkbox" /> Subscribe</label>
       <fieldset>
@@ -43,6 +66,14 @@
       })
       document.getElementById('apply').addEventListener('click', () => {
         result.textContent = 'applied'
+      })
+      const color = document.getElementById('color')
+      const colorPrompt = document.querySelector('.styled-select-prompt')
+      let colorChanges = 0
+      color.addEventListener('change', () => {
+        colorChanges += 1
+        color.dataset.changeCount = String(colorChanges)
+        colorPrompt.textContent = color.selectedOptions[0].textContent.trim()
       })
     </script>
   </body>

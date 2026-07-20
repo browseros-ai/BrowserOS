@@ -32,7 +32,7 @@ fn captured_pages() -> Vec<(String, PathBuf)> {
     let dir = captured_dir();
     let entries = fs::read_dir(&dir).unwrap_or_else(|err| panic!("read {}: {err}", dir.display()));
     for entry in entries {
-        let entry = entry.unwrap_or_else(|err| panic!("read entry in {}: {err}", dir.display()));
+        let entry = entry.unwrap_or_else(|err| panic!("read dir entry: {err}"));
         let ax = entry.path().join("get-full-ax-tree.json");
         if ax.is_file() {
             let name = entry.file_name().to_string_lossy().into_owned();
