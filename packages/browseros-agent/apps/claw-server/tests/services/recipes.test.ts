@@ -15,6 +15,8 @@ import {
   agentRecipesDirFor,
   hostBucketFromUrl,
   listRecipeFiles,
+  readRecipeMetadata,
+  STALE_THRESHOLD_DAYS,
   sharedRecipesDirFor,
 } from '../../src/services/recipes'
 import { withTempBrowserClawDir } from '../_helpers/temp-browserclaw-dir'
@@ -198,6 +200,147 @@ describe('listRecipeFiles', () => {
       expect(entries).toHaveLength(10)
       expect(entries[0]?.name).toBe('recipe-00.md')
       expect(entries[9]?.name).toBe('recipe-09.md')
+    })
+  })
+})
+
+describe('readRecipeMetadata', () => {
+  const NOW = new Date('2026-07-20T12:00:00Z')
+
+  function seedFrontmatter(body: string): string {
+    const dir = sharedRecipesDirFor('linkedin.com')
+    return seed(dir, 'invitation-manager.md', body)
+  }
+
+  it('returns empty metadata when the file is missing', async () => {
+    await withTempBrowserClawDir(async () => {
+      const path = `${sharedRecipesDirFor('linkedin.com')}/does-not-exist.md`
+      const meta = readRecipeMetadata(path, NOW)
+      expect(meta.frontmatter.lastVerified).toBeNull()
+      expect(meta.ageDays).toBeNull()
+      expect(meta.isStale).toBe(false)
+    })
+  })
+
+  it('returns empty metadata when the file has no frontmatter', async () => {
+    await withTempBrowserClawDir(async () => {
+      const path = seedFrontmatter('# Just prose, no yaml here\n')
+      const meta = readRecipeMetadata(path, NOW)
+      expect(meta.frontmatter).toEqual({
+        lastVerified: null,
+        verifiedBy: null,
+        usesSelectors: [],
+      })
+      expect(meta.ageDays).toBeNull()
+      expect(meta.isStale).toBe(false)
+    })
+  })
+
+  it('parses last_verified as an unquoted YAML date and computes age', async () => {
+    await withTempBrowserClawDir(async () => {
+      const path = seedFrontmatter(
+        `---
+last_verified: 2026-07-10
+verified_by: claude-code
+uses_selectors:
+  - listitem
+  - aria-label=Accept invitation from
+---
+
+# body`,
+      )
+      const meta = readRecipeMetadata(path, NOW)
+      expect(meta.frontmatter.lastVerified).toBe('2026-07-10')
+      expect(meta.frontmatter.verifiedBy).toBe('claude-code')
+      expect(meta.frontmatter.usesSelectors).toEqual([
+        'listitem',
+        'aria-label=Accept invitation from',
+      ])
+      expect(meta.ageDays).toBe(10)
+      expect(meta.isStale).toBe(false)
+    })
+  })
+
+  it('parses last_verified as a quoted string too', async () => {
+    await withTempBrowserClawDir(async () => {
+      const path = seedFrontmatter(
+        `---
+last_verified: "2026-05-01"
+---
+
+body`,
+      )
+      const meta = readRecipeMetadata(path, NOW)
+      expect(meta.frontmatter.lastVerified).toBe('2026-05-01')
+      expect(meta.ageDays).toBeGreaterThan(60)
+    })
+  })
+
+  it('flags recipes older than STALE_THRESHOLD_DAYS as stale', async () => {
+    await withTempBrowserClawDir(async () => {
+      const stalePath = seedFrontmatter(
+        `---\nlast_verified: 2026-04-01\n---\nbody`,
+      )
+      const meta = readRecipeMetadata(stalePath, NOW)
+      expect(meta.ageDays).toBeGreaterThanOrEqual(STALE_THRESHOLD_DAYS)
+      expect(meta.isStale).toBe(true)
+    })
+  })
+
+  it('exact boundary at STALE_THRESHOLD_DAYS counts as stale', async () => {
+    await withTempBrowserClawDir(async () => {
+      const then = new Date(NOW)
+      then.setUTCDate(then.getUTCDate() - STALE_THRESHOLD_DAYS)
+      const iso = then.toISOString().split('T')[0]
+      const path = seedFrontmatter(`---\nlast_verified: ${iso}\n---\nbody`)
+      const meta = readRecipeMetadata(path, NOW)
+      expect(meta.ageDays).toBe(STALE_THRESHOLD_DAYS)
+      expect(meta.isStale).toBe(true)
+    })
+  })
+
+  it('treats a future last_verified as fresh (ageDays=0)', async () => {
+    await withTempBrowserClawDir(async () => {
+      const path = seedFrontmatter(`---\nlast_verified: 2027-01-01\n---\n`)
+      const meta = readRecipeMetadata(path, NOW)
+      expect(meta.ageDays).toBe(0)
+      expect(meta.isStale).toBe(false)
+    })
+  })
+
+  it('returns null age when last_verified is unparseable', async () => {
+    await withTempBrowserClawDir(async () => {
+      const path = seedFrontmatter(
+        `---\nlast_verified: "not-a-date"\n---\nbody`,
+      )
+      const meta = readRecipeMetadata(path, NOW)
+      expect(meta.frontmatter.lastVerified).toBe('not-a-date')
+      expect(meta.ageDays).toBeNull()
+      expect(meta.isStale).toBe(false)
+    })
+  })
+
+  it('recovers to empty metadata on malformed YAML rather than throwing', async () => {
+    await withTempBrowserClawDir(async () => {
+      const path = seedFrontmatter(
+        `---\nlast_verified: {broken: [unclosed\n---\nbody`,
+      )
+      const meta = readRecipeMetadata(path, NOW)
+      expect(meta.frontmatter.lastVerified).toBeNull()
+      expect(meta.ageDays).toBeNull()
+    })
+  })
+
+  it('filters non-string entries out of uses_selectors', async () => {
+    await withTempBrowserClawDir(async () => {
+      const path = seedFrontmatter(
+        `---\nuses_selectors:\n  - listitem\n  - 42\n  - true\n  - aria-label=X\n---\n`,
+      )
+      const meta = readRecipeMetadata(path, NOW)
+      expect(meta.frontmatter.usesSelectors).toEqual([
+        'listitem',
+        'aria-label=X',
+      ])
     })
   })
 })

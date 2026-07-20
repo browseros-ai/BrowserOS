@@ -16,8 +16,9 @@
  * that agent (differing filesystem shape, tool signature, etc.).
  */
 
-import { readdirSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import matter from 'gray-matter'
 import { resolveClawServerPath } from '../lib/browserclaw-dir'
 
 export const RECIPES_DIR_NAME = 'recipes'
@@ -25,6 +26,7 @@ export const RECIPES_SHARED_DIR = 'shared'
 export const RECIPES_AGENTS_DIR = 'agents'
 export const RECIPE_FILE_EXTENSION = '.md'
 export const MAX_RECIPES_SURFACED = 10
+export const STALE_THRESHOLD_DAYS = 60
 
 /**
  * Reduces a URL to the host bucket used for recipe routing. Keeps the
@@ -120,4 +122,84 @@ function listMarkdownEntries(dir: string): RawEntry[] {
     out.push({ name, absolutePath })
   }
   return out
+}
+
+export interface RecipeFrontmatter {
+  /** ISO date (YYYY-MM-DD) or null if the recipe has no verification stamp. */
+  lastVerified: string | null
+  /** Agent slug that last confirmed the recipe against a live page. */
+  verifiedBy: string | null
+  /** Selectors the agent should cross-check before trusting a stale recipe. */
+  usesSelectors: string[]
+}
+
+export interface RecipeMetadata {
+  frontmatter: RecipeFrontmatter
+  /** Days since lastVerified, or null when the timestamp is absent/invalid. */
+  ageDays: number | null
+  /** True when ageDays >= STALE_THRESHOLD_DAYS. Soft signal only. */
+  isStale: boolean
+}
+
+const EMPTY_METADATA: RecipeMetadata = {
+  frontmatter: { lastVerified: null, verifiedBy: null, usesSelectors: [] },
+  ageDays: null,
+  isStale: false,
+}
+
+/**
+ * Reads a recipe's YAML frontmatter and derives its age. Any read or
+ * parse failure yields empty metadata so a malformed recipe never
+ * breaks discovery; the file's prose is still surfaced without an age
+ * stamp.
+ */
+export function readRecipeMetadata(
+  absolutePath: string,
+  now: Date = new Date(),
+): RecipeMetadata {
+  let raw: string
+  try {
+    raw = readFileSync(absolutePath, 'utf8')
+  } catch {
+    return EMPTY_METADATA
+  }
+  let data: Record<string, unknown>
+  try {
+    const parsed = matter(raw)
+    data = parsed.data as Record<string, unknown>
+  } catch {
+    return EMPTY_METADATA
+  }
+  const frontmatter: RecipeFrontmatter = {
+    lastVerified: normalizeDateField(data.last_verified),
+    verifiedBy: typeof data.verified_by === 'string' ? data.verified_by : null,
+    usesSelectors: Array.isArray(data.uses_selectors)
+      ? data.uses_selectors.filter((s): s is string => typeof s === 'string')
+      : [],
+  }
+  const ageDays = computeAgeDays(frontmatter.lastVerified, now)
+  return {
+    frontmatter,
+    ageDays,
+    isStale: ageDays !== null && ageDays >= STALE_THRESHOLD_DAYS,
+  }
+}
+
+function normalizeDateField(value: unknown): string | null {
+  if (typeof value === 'string') return value
+  // YAML unquoted dates like `last_verified: 2026-07-20` parse to Date.
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().split('T')[0] ?? null
+  }
+  return null
+}
+
+function computeAgeDays(lastVerified: string | null, now: Date): number | null {
+  if (!lastVerified) return null
+  const then = new Date(lastVerified)
+  const t = then.getTime()
+  if (Number.isNaN(t)) return null
+  const diffMs = now.getTime() - t
+  if (diffMs < 0) return 0
+  return Math.floor(diffMs / (1000 * 60 * 60 * 24))
 }
