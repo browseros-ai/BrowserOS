@@ -150,7 +150,13 @@ impl TabActivityService {
         let Some(session) = session else {
             return Vec::new();
         };
+        if !session.is_connected() {
+            return Vec::new();
+        }
         self.snapshot_with(|page_id| async move {
+            if !session.is_connected() {
+                return LivePageState::Unavailable;
+            }
             match session.pages.refresh(page_id).await {
                 Ok(Some(info)) => LivePageState::Live {
                     target_id: info.target_id.into_inner(),
@@ -248,7 +254,13 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{LivePageState, RecordToolInput, TabActivityService};
-    use browseros_core::TargetId;
+    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_core::{
+        BrowserSession, BrowserSessionHooks, CdpConnection, SessionId as ProtocolSessionId,
+        TargetId,
+    };
+    use futures_util::future::BoxFuture;
+    use serde_json::Value;
     use std::{
         sync::{
             Arc,
@@ -256,7 +268,50 @@ mod tests {
         },
         time::Duration,
     };
-    use tokio::sync::Notify;
+    use tokio::sync::{Notify, broadcast};
+
+    struct DisconnectedConnection {
+        events: broadcast::Sender<CdpEvent>,
+    }
+
+    impl DisconnectedConnection {
+        fn new() -> Arc<Self> {
+            let (events, _) = broadcast::channel(1);
+            Arc::new(Self { events })
+        }
+    }
+
+    impl CdpConnection for DisconnectedConnection {
+        fn send<'a>(
+            &'a self,
+            _method: &'a str,
+            _params: Value,
+            _session: Option<&'a ProtocolSessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async { Err(CdpError::NotConnected) })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            _method: &'a str,
+            _params_json: &'a str,
+            _session: Option<&'a ProtocolSessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async { Err(CdpError::NotConnected) })
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            self.events.subscribe()
+        }
+
+        fn is_connected(&self) -> bool {
+            false
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            0
+        }
+    }
 
     async fn record(
         service: &TabActivityService,
@@ -375,6 +430,33 @@ mod tests {
             .await;
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].url, "https://example.com/reconnected");
+    }
+
+    #[tokio::test]
+    async fn disconnected_session_returns_immediately_without_pruning() {
+        let service = TabActivityService::default();
+        record(&service, "target-1", 1, "session-1", "snapshot").await;
+        let session = BrowserSession::new(
+            DisconnectedConnection::new(),
+            BrowserSessionHooks::default(),
+        );
+
+        let Ok(records) = tokio::time::timeout(
+            Duration::from_millis(100),
+            service.snapshot(Some(session.as_ref())),
+        )
+        .await
+        else {
+            panic!("disconnected snapshot waited for PageManager reconnect");
+        };
+        assert!(records.is_empty());
+
+        let records = service
+            .snapshot_with(|_| async {
+                live("target-1", "https://example.com/reconnected", "Reconnected")
+            })
+            .await;
+        assert_eq!(records.len(), 1);
     }
 
     #[tokio::test]

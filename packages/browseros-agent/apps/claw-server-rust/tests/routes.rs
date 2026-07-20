@@ -3,7 +3,7 @@ use axum::{
     body::{Body, BodyDataStream, to_bytes},
     http::{HeaderMap, Request, StatusCode, header},
 };
-use browseros_core::TargetId;
+use browseros_core::{PageId, TargetId, screenshot::ScreenshotCaptureOptions};
 use claw_server_rust::{
     AppState, build_router,
     config::Config,
@@ -1196,6 +1196,24 @@ async fn canonical_tabs_refresh_metadata_and_reject_reused_page_id() -> anyhow::
         "Replacement tab",
     )
     .await;
+    let captures_before = mock.captures.lock().await.len();
+    let browser = app
+        .state
+        .browser
+        .session()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing browser session"))?;
+    assert!(
+        browser
+            .screenshot_for_target(
+                PageId(1),
+                &TargetId::from("target-old".to_string()),
+                ScreenshotCaptureOptions::default(),
+            )
+            .await?
+            .is_none()
+    );
+    assert_eq!(mock.captures.lock().await.len(), captures_before);
     let (status, body) = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["items"], json!([]));

@@ -4,7 +4,7 @@ use crate::{
     tabs::activity::{ScreencastFrame, TabActivityRecord, TabActivityService},
 };
 use browseros_core::{
-    BrowserSession, PageId,
+    BrowserSession, PageId, TargetId,
     screenshot::{ScreenshotCaptureOptions, ScreenshotCaptureResult, ScreenshotFormat},
 };
 use std::{
@@ -226,17 +226,22 @@ impl ScreencastService {
             // BrowserOS visibly resizes watched tabs when captureScreenshot includes a clip.
             clip: None,
         };
-        let mut capture =
-            tokio::spawn(async move { session.screenshot(PageId(page_id), options).await });
+        let target_id = TargetId::from(incarnation.target_id.clone());
+        let mut capture = tokio::spawn(async move {
+            session
+                .screenshot_for_target(PageId(page_id), &target_id, options)
+                .await
+        });
         let outcome = timeout(SCREENSHOT_TIMEOUT, &mut capture).await;
         match outcome {
             Ok(result) => {
                 self.clear_in_flight(&incarnation).await;
                 match result {
-                    Ok(Ok(capture)) if !capture.data.is_empty() => {
+                    Ok(Ok(Some(capture))) if !capture.data.is_empty() => {
                         self.store_capture(incarnation, capture).await;
                     }
-                    Ok(Ok(_)) => self.capture_failed(&incarnation, "empty screenshot").await,
+                    Ok(Ok(Some(_))) => self.capture_failed(&incarnation, "empty screenshot").await,
+                    Ok(Ok(None)) => {}
                     Ok(Err(err)) => self.capture_failed(&incarnation, &err.to_string()).await,
                     Err(err) => self.capture_failed(&incarnation, &err.to_string()).await,
                 }

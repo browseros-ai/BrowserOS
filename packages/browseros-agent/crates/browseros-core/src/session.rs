@@ -1,5 +1,5 @@
 use crate::{
-    CoreError, PageId,
+    CoreError, PageId, TargetId,
     connection::CdpConnection,
     frames::FrameRegistry,
     input::Input,
@@ -124,6 +124,42 @@ impl BrowserSession {
         let page = self.pages.get_session(page_id.clone()).await?;
         capture_screenshot_with_annotations(page.session, self.observe(page_id).await, options)
             .await
+    }
+
+    /// Captures only while the reusable page id still names the expected target incarnation.
+    /// The checks bracket CDP capture so a rebind can neither capture the replacement nor
+    /// publish a result for the old target after it closes.
+    pub async fn screenshot_for_target(
+        &self,
+        page_id: PageId,
+        target_id: &TargetId,
+        options: ScreenshotCaptureOptions,
+    ) -> Result<Option<ScreenshotCaptureResult>, CoreError> {
+        let live = self.pages.refresh(page_id.clone()).await?;
+        if live
+            .as_ref()
+            .is_none_or(|page| page.target_id.as_str() != target_id.as_str())
+        {
+            return Ok(None);
+        }
+        let page = self.pages.get_session(page_id.clone()).await?;
+        if page.target_id.as_str() != target_id.as_str() {
+            return Ok(None);
+        }
+        let capture = capture_screenshot_with_annotations(
+            page.session,
+            self.observe(page_id.clone()).await,
+            options,
+        )
+        .await?;
+        let live = self.pages.refresh(page_id).await?;
+        if live
+            .as_ref()
+            .is_none_or(|page| page.target_id.as_str() != target_id.as_str())
+        {
+            return Ok(None);
+        }
+        Ok(Some(capture))
     }
 
     pub async fn cdp(

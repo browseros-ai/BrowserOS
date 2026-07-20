@@ -172,11 +172,12 @@ async fn persist_screenshot(
             None => None,
         },
     };
-    let cached = match live {
-        Some(page) => {
+    let target_id = live.map(|page| page.target_id);
+    let cached = match &target_id {
+        Some(target_id) => {
             call.state
                 .screencast
-                .frame_for(page_id, page.target_id.as_str())
+                .frame_for(page_id, target_id.as_str())
                 .await
         }
         None => None,
@@ -185,14 +186,19 @@ async fn persist_screenshot(
     let dispatch_id = call.dispatch_id.clone();
     let Some(jpeg_base64) = fallback_screenshot_data(cached, now_epoch_ms(), move || async move {
         let browser = browser?;
+        let target_id = target_id?;
         match timeout(
             AUDIT_SCREENSHOT_CAPTURE,
-            browser.screenshot(PageId(page_id), fallback_capture_options()),
+            browser.screenshot_for_target(
+                PageId(page_id),
+                &target_id,
+                fallback_capture_options(),
+            ),
         )
         .await
         {
-            Ok(Ok(capture)) if !capture.data.is_empty() => Some(capture.data),
-            Ok(Ok(_)) => None,
+            Ok(Ok(Some(capture))) if !capture.data.is_empty() => Some(capture.data),
+            Ok(Ok(Some(_))) | Ok(Ok(None)) => None,
             Ok(Err(error)) => {
                 warn!(error = %error, dispatch_id = %dispatch_id, "fallback screenshot capture failed");
                 None
