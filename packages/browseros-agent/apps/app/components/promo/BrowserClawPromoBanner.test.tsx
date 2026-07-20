@@ -15,6 +15,12 @@ mock.module('@/lib/metrics/track', () => ({
   track: () => {},
 }))
 
+mock.module('@/lib/sentry/sentry', () => ({
+  sentry: {
+    captureException: () => {},
+  },
+}))
+
 mock.module('@/lib/constants/analyticsEvents', () => ({
   BROWSERCLAW_PROMO_BANNER_CLICKED_EVENT: 'ui.browserclaw_promo_banner.clicked',
   BROWSERCLAW_PROMO_BANNER_DISMISSED_EVENT:
@@ -35,6 +41,7 @@ mock.module('./browserclaw-promo.storage', () => ({
   browserClawPromoDismissedStorage: {
     getValue: async () => false,
     setValue: async () => {},
+    watch: () => () => {},
   },
 }))
 

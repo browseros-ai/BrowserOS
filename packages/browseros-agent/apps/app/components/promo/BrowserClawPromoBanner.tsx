@@ -7,6 +7,7 @@ import {
   BROWSERCLAW_PROMO_BANNER_DISMISSED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
+import { sentry } from '@/lib/sentry/sentry'
 import { browserClawPromoDismissedStorage } from './browserclaw-promo.storage'
 
 const BROWSERCLAW_PROMO_URL = 'https://browseros.com/agents/'
@@ -54,7 +55,20 @@ export const BrowserClawPromoBanner: FC = () => {
   const [dismissed, setDismissed] = useState<boolean | null>(null)
 
   useEffect(() => {
-    browserClawPromoDismissedStorage.getValue().then(setDismissed)
+    browserClawPromoDismissedStorage
+      .getValue()
+      .then(setDismissed)
+      .catch((error) => {
+        sentry.captureException(error, {
+          extra: { message: 'Failed to read BrowserClaw promo dismissal' },
+        })
+      })
+
+    const unwatch = browserClawPromoDismissedStorage.watch((newDismissed) => {
+      setDismissed(newDismissed)
+    })
+
+    return () => unwatch()
   }, [])
 
   if (dismissed !== false) return null
@@ -67,7 +81,13 @@ export const BrowserClawPromoBanner: FC = () => {
   const handleDismiss = async () => {
     track(BROWSERCLAW_PROMO_BANNER_DISMISSED_EVENT)
     setDismissed(true)
-    await browserClawPromoDismissedStorage.setValue(true)
+    try {
+      await browserClawPromoDismissedStorage.setValue(true)
+    } catch (error) {
+      sentry.captureException(error, {
+        extra: { message: 'Failed to persist BrowserClaw promo dismissal' },
+      })
+    }
   }
 
   return (
