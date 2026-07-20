@@ -1,6 +1,62 @@
 SessionStatus:
   type: string
   enum: [live, done, failed]
+LiveSessionActivityState:
+  type: string
+  enum: [active, idle]
+ToolEvent:
+  type: object
+  additionalProperties: false
+  required: [name, at]
+  properties:
+    name:
+      type: string
+    at:
+      type: integer
+      format: int64
+SessionBrowserTab:
+  type: object
+  additionalProperties: false
+  required: [browserTabId, url, title, toolCount, recentTools]
+  properties:
+    browserTabId:
+      type: integer
+      format: int64
+      minimum: 1
+    url:
+      type: string
+    title:
+      type: string
+    firstActivityAt:
+      type: integer
+      format: int64
+    lastActivityAt:
+      type: integer
+      format: int64
+    lastToolName:
+      type: string
+    toolCount:
+      type: integer
+      format: int64
+      minimum: 0
+    recentTools:
+      type: array
+      items:
+        $ref: '#/ToolEvent'
+    previewCapturedAt:
+      type: integer
+      format: int64
+LiveSessionState:
+  type: object
+  additionalProperties: false
+  required: [state, browserTabs]
+  properties:
+    state:
+      $ref: '#/LiveSessionActivityState'
+    browserTabs:
+      type: array
+      items:
+        $ref: '#/SessionBrowserTab'
 SessionSummary:
   type: object
   additionalProperties: false
@@ -19,6 +75,10 @@ SessionSummary:
     sessionId:
       type: string
     profileId:
+      type: string
+    harness:
+      type: string
+    color:
       type: string
     slug:
       type: string
@@ -56,6 +116,10 @@ SessionSummary:
       type: integer
       format: int64
       minimum: 1
+    live:
+      allOf:
+        - $ref: '#/LiveSessionState'
+      description: Present only on summaries returned by an explicit `status=live` list query.
 SessionList:
   type: object
   additionalProperties: false
@@ -69,6 +133,7 @@ SessionList:
       type: integer
       format: int64
       minimum: 1
+      description: Cursor for a subsequent historical query. Omitted from complete live snapshots.
 SessionDetail:
   type: object
   additionalProperties: false

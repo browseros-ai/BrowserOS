@@ -79,11 +79,6 @@ import {
     SystemInfoToJSON,
 } from '../models/SystemInfo.js';
 import {
-    type TabList,
-    TabListFromJSON,
-    TabListToJSON,
-} from '../models/TabList.js';
-import {
     type TelemetryState,
     TelemetryStateFromJSON,
     TelemetryStateToJSON,
@@ -130,8 +125,9 @@ export interface GetSessionRequest {
     sessionId: string;
 }
 
-export interface GetTabPreviewRequest {
-    pageId: number;
+export interface GetSessionBrowserTabPreviewRequest {
+    sessionId: string;
+    browserTabId: number;
 }
 
 export interface ListSessionsRequest {
@@ -571,6 +567,57 @@ export class DefaultApi extends runtime.BaseAPI {
     }
 
     /**
+     * Creates request options for getSessionBrowserTabPreview without sending the request
+     */
+    async getSessionBrowserTabPreviewRequestOpts(requestParameters: GetSessionBrowserTabPreviewRequest): Promise<runtime.RequestOpts> {
+        if (requestParameters['sessionId'] == null) {
+            throw new runtime.RequiredError(
+                'sessionId',
+                'Required parameter "sessionId" was null or undefined when calling getSessionBrowserTabPreview().'
+            );
+        }
+
+        if (requestParameters['browserTabId'] == null) {
+            throw new runtime.RequiredError(
+                'browserTabId',
+                'Required parameter "browserTabId" was null or undefined when calling getSessionBrowserTabPreview().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+
+        let urlPath = `/api/v1/sessions/{sessionId}/browser-tabs/{browserTabId}/preview`;
+        urlPath = urlPath.replace('{sessionId}', encodeURIComponent(String(requestParameters['sessionId'])));
+        urlPath = urlPath.replace('{browserTabId}', encodeURIComponent(String(requestParameters['browserTabId'])));
+
+        return {
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     */
+    async getSessionBrowserTabPreviewRaw(requestParameters: GetSessionBrowserTabPreviewRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Blob>> {
+        const requestOptions = await this.getSessionBrowserTabPreviewRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.BlobApiResponse(response);
+    }
+
+    /**
+     */
+    async getSessionBrowserTabPreview(requestParameters: GetSessionBrowserTabPreviewRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Blob> {
+        const response = await this.getSessionBrowserTabPreviewRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
      * Creates request options for getSystemInfo without sending the request
      */
     async getSystemInfoRequestOpts(): Promise<runtime.RequestOpts> {
@@ -602,49 +649,6 @@ export class DefaultApi extends runtime.BaseAPI {
      */
     async getSystemInfo(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<SystemInfo> {
         const response = await this.getSystemInfoRaw(initOverrides);
-        return await response.value();
-    }
-
-    /**
-     * Creates request options for getTabPreview without sending the request
-     */
-    async getTabPreviewRequestOpts(requestParameters: GetTabPreviewRequest): Promise<runtime.RequestOpts> {
-        if (requestParameters['pageId'] == null) {
-            throw new runtime.RequiredError(
-                'pageId',
-                'Required parameter "pageId" was null or undefined when calling getTabPreview().'
-            );
-        }
-
-        const queryParameters: any = {};
-
-        const headerParameters: runtime.HTTPHeaders = {};
-
-
-        let urlPath = `/api/v1/tabs/{pageId}/preview`;
-        urlPath = urlPath.replace('{pageId}', encodeURIComponent(String(requestParameters['pageId'])));
-
-        return {
-            path: urlPath,
-            method: 'GET',
-            headers: headerParameters,
-            query: queryParameters,
-        };
-    }
-
-    /**
-     */
-    async getTabPreviewRaw(requestParameters: GetTabPreviewRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Blob>> {
-        const requestOptions = await this.getTabPreviewRequestOpts(requestParameters);
-        const response = await this.request(requestOptions, initOverrides);
-
-        return new runtime.BlobApiResponse(response);
-    }
-
-    /**
-     */
-    async getTabPreview(requestParameters: GetTabPreviewRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Blob> {
-        const response = await this.getTabPreviewRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -770,6 +774,7 @@ export class DefaultApi extends runtime.BaseAPI {
     }
 
     /**
+     * An explicit `status=live` query returns the complete connected-session snapshot and omits `nextCursor`. Cursor and limit govern historical queries.
      */
     async listSessionsRaw(requestParameters: ListSessionsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<SessionList>> {
         const requestOptions = await this.listSessionsRequestOpts(requestParameters);
@@ -779,44 +784,10 @@ export class DefaultApi extends runtime.BaseAPI {
     }
 
     /**
+     * An explicit `status=live` query returns the complete connected-session snapshot and omits `nextCursor`. Cursor and limit govern historical queries.
      */
     async listSessions(requestParameters: ListSessionsRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<SessionList> {
         const response = await this.listSessionsRaw(requestParameters, initOverrides);
-        return await response.value();
-    }
-
-    /**
-     * Creates request options for listTabs without sending the request
-     */
-    async listTabsRequestOpts(): Promise<runtime.RequestOpts> {
-        const queryParameters: any = {};
-
-        const headerParameters: runtime.HTTPHeaders = {};
-
-
-        let urlPath = `/api/v1/tabs`;
-
-        return {
-            path: urlPath,
-            method: 'GET',
-            headers: headerParameters,
-            query: queryParameters,
-        };
-    }
-
-    /**
-     */
-    async listTabsRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TabList>> {
-        const requestOptions = await this.listTabsRequestOpts();
-        const response = await this.request(requestOptions, initOverrides);
-
-        return new runtime.JSONApiResponse(response, (jsonValue) => TabListFromJSON(jsonValue));
-    }
-
-    /**
-     */
-    async listTabs(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TabList> {
-        const response = await this.listTabsRaw(initOverrides);
         return await response.value();
     }
 

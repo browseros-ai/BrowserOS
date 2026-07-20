@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 pub struct SessionList {
     #[serde(rename = "items")]
     pub items: Vec<models::SessionSummary>,
+    /// Cursor for a subsequent historical query. Omitted from complete live snapshots.
     #[serde(rename = "nextCursor", skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<i64>,
 }

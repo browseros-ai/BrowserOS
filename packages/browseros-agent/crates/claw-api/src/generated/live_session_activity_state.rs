@@ -13,14 +13,14 @@ use serde::{Deserialize, Serialize};
 
 ///
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub enum TabStatus {
+pub enum LiveSessionActivityState {
     #[serde(rename = "active")]
     Active,
     #[serde(rename = "idle")]
     Idle,
 }
 
-impl std::fmt::Display for TabStatus {
+impl std::fmt::Display for LiveSessionActivityState {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::Active => write!(f, "active"),
@@ -29,8 +29,8 @@ impl std::fmt::Display for TabStatus {
     }
 }
 
-impl Default for TabStatus {
-    fn default() -> TabStatus {
+impl Default for LiveSessionActivityState {
+    fn default() -> LiveSessionActivityState {
         Self::Active
     }
 }

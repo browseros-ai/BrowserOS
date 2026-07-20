@@ -26,10 +26,8 @@ paths:
     $ref: ./paths/session-recording-events.yaml
   /api/v1/recordings/events:
     $ref: ./paths/recording-events.yaml
-  /api/v1/tabs:
-    $ref: ./paths/tabs.yaml
-  /api/v1/tabs/{pageId}/preview:
-    $ref: ./paths/tab-preview.yaml
+  /api/v1/sessions/{sessionId}/browser-tabs/{browserTabId}/preview:
+    $ref: ./paths/session-browser-tab-preview.yaml
   /api/v1/dispatches/{dispatchId}/screenshot:
     $ref: ./paths/dispatch-screenshot.yaml
   /api/v1/connections:
@@ -40,8 +38,8 @@ components:
   parameters:
     SessionId:
       $ref: ./parameters.yaml#/SessionId
-    PageId:
-      $ref: ./parameters.yaml#/PageId
+    BrowserTabId:
+      $ref: ./parameters.yaml#/BrowserTabId
     DispatchId:
       $ref: ./parameters.yaml#/DispatchId
     Harness:
@@ -84,6 +82,12 @@ components:
       $ref: ./schemas/system.yaml#/UpdateTelemetryRequest
     SessionStatus:
       $ref: ./schemas/sessions.yaml#/SessionStatus
+    LiveSessionActivityState:
+      $ref: ./schemas/sessions.yaml#/LiveSessionActivityState
+    LiveSessionState:
+      $ref: ./schemas/sessions.yaml#/LiveSessionState
+    SessionBrowserTab:
+      $ref: ./schemas/sessions.yaml#/SessionBrowserTab
     SessionSummary:
       $ref: ./schemas/sessions.yaml#/SessionSummary
     SessionList:
@@ -103,13 +107,7 @@ components:
     AppendRecordingEventsResponse:
       $ref: ./schemas/sessions.yaml#/AppendRecordingEventsResponse
     ToolEvent:
-      $ref: ./schemas/tabs.yaml#/ToolEvent
-    TabStatus:
-      $ref: ./schemas/tabs.yaml#/TabStatus
-    Tab:
-      $ref: ./schemas/tabs.yaml#/Tab
-    TabList:
-      $ref: ./schemas/tabs.yaml#/TabList
+      $ref: ./schemas/sessions.yaml#/ToolEvent
     Harness:
       $ref: ./schemas/connections.yaml#/Harness
     Connection:

@@ -13,6 +13,13 @@
  */
 
 import { mapValues } from '../runtime.js';
+import type { LiveSessionState } from './LiveSessionState.js';
+import {
+    LiveSessionStateFromJSON,
+    LiveSessionStateFromJSONTyped,
+    LiveSessionStateToJSON,
+    LiveSessionStateToJSONTyped,
+} from './LiveSessionState.js';
 import type { SessionStatus } from './SessionStatus.js';
 import {
     SessionStatusFromJSON,
@@ -39,6 +46,18 @@ export interface SessionSummary {
      * @memberof SessionSummary
      */
     profileId?: string;
+    /**
+     *
+     * @type {string}
+     * @memberof SessionSummary
+     */
+    harness?: string;
+    /**
+     *
+     * @type {string}
+     * @memberof SessionSummary
+     */
+    color?: string;
     /**
      *
      * @type {string}
@@ -111,6 +130,12 @@ export interface SessionSummary {
      * @memberof SessionSummary
      */
     lastScreenshotDispatchId?: number;
+    /**
+     * Present only on summaries returned by an explicit `status=live` list query.
+     * @type {LiveSessionState}
+     * @memberof SessionSummary
+     */
+    live?: LiveSessionState;
 }
 
 
@@ -144,6 +169,8 @@ export function SessionSummaryFromJSONTyped(json: any, ignoreDiscriminator: bool
 
         'sessionId': json['sessionId'],
         'profileId': json['profileId'] == null ? undefined : json['profileId'],
+        'harness': json['harness'] == null ? undefined : json['harness'],
+        'color': json['color'] == null ? undefined : json['color'],
         'slug': json['slug'],
         'label': json['label'],
         'name': json['name'],
@@ -156,6 +183,7 @@ export function SessionSummaryFromJSONTyped(json: any, ignoreDiscriminator: bool
         'status': SessionStatusFromJSON(json['status']),
         'errorCount': json['errorCount'],
         'lastScreenshotDispatchId': json['lastScreenshotDispatchId'] == null ? undefined : json['lastScreenshotDispatchId'],
+        'live': json['live'] == null ? undefined : LiveSessionStateFromJSON(json['live']),
     };
 }
 
@@ -172,6 +200,8 @@ export function SessionSummaryToJSONTyped(value?: SessionSummary | null, ignoreD
 
         'sessionId': value['sessionId'],
         'profileId': value['profileId'],
+        'harness': value['harness'],
+        'color': value['color'],
         'slug': value['slug'],
         'label': value['label'],
         'name': value['name'],
@@ -184,5 +214,6 @@ export function SessionSummaryToJSONTyped(value?: SessionSummary | null, ignoreD
         'status': SessionStatusToJSON(value['status']),
         'errorCount': value['errorCount'],
         'lastScreenshotDispatchId': value['lastScreenshotDispatchId'],
+        'live': LiveSessionStateToJSON(value['live']),
     };
 }

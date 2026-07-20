@@ -5,10 +5,10 @@
  * `contract-server` example (claw-server-rust), which seeds real app
  * state to the same shape.
  *
- * The fixtures here — `liveSession` / `endedSession`, tab 101 / page 7
- * / target-7, dispatch 1 with its screenshot — must stay in lockstep
- * with the Rust example's `seed()`: the cases assert the same values
- * against both servers.
+ * The fixtures here — two same-profile live sessions, one zero-tab live
+ * session, one ended session, browser tab 101, and dispatch 1 with its
+ * screenshot — must stay in lockstep with the Rust example's `seed()`:
+ * the cases assert the same values against both servers.
  */
 
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
@@ -28,16 +28,21 @@ export interface ContractServer {
   baseUrl: string
   api: DefaultApi
   liveSessionId: string
+  secondLiveSessionId: string
+  zeroTabLiveSessionId: string
   endedSessionId: string
   screenshotDispatchId: number
   stop(): Promise<void>
 }
 
-const liveSession = {
+const primarySession = {
   sessionId: 'session-live',
+  profileId: 'profile-shared',
   slug: 'codex',
   label: 'Codex',
   name: 'Research BrowserClaw',
+  harness: 'Codex',
+  color: '#0254ec',
   startedAt: 100,
   durationMs: 10,
   dispatchCount: 1,
@@ -46,8 +51,72 @@ const liveSession = {
   errorCount: 0,
 }
 
+const liveSession = {
+  ...primarySession,
+  live: {
+    state: 'active' as const,
+    browserTabs: [
+      {
+        browserTabId: 101,
+        url: 'https://browseros.com',
+        title: 'BrowserOS',
+        firstActivityAt: 100,
+        lastActivityAt: 110,
+        lastToolName: 'snapshot',
+        toolCount: 1,
+        recentTools: [{ name: 'snapshot', at: 110 }],
+        previewCapturedAt: 123,
+      },
+      {
+        browserTabId: 102,
+        url: 'https://example.com',
+        title: 'Example Domain',
+        toolCount: 0,
+        recentTools: [],
+      },
+    ],
+  },
+}
+
+const secondLiveSession = {
+  ...primarySession,
+  sessionId: 'session-live-shared-profile',
+  name: 'Compare release notes',
+  dispatchCount: 1,
+  toolSequence: ['read'],
+  live: {
+    state: 'idle' as const,
+    browserTabs: [
+      {
+        browserTabId: 201,
+        url: 'https://browseros.com/releases',
+        title: 'BrowserOS Releases',
+        firstActivityAt: 105,
+        lastActivityAt: 106,
+        lastToolName: 'read',
+        toolCount: 1,
+        recentTools: [{ name: 'read', at: 106 }],
+      },
+    ],
+  },
+}
+
+const zeroTabLiveSession = {
+  ...primarySession,
+  sessionId: 'session-live-empty',
+  profileId: 'profile-empty',
+  slug: 'claude-code',
+  label: 'Claude Code',
+  name: 'Waiting for first tool',
+  harness: undefined,
+  color: undefined,
+  dispatchCount: 0,
+  toolSequence: [],
+  live: { state: 'idle' as const, browserTabs: [] },
+}
+
 const endedSession = {
-  ...liveSession,
+  ...primarySession,
   sessionId: 'session-ended',
   name: 'Completed BrowserClaw research',
   status: 'done' as const,
@@ -82,11 +151,14 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
         consent,
       }
     },
-    listSessions: () => ({ items: [liveSession, endedSession] }),
+    listSessions: (query) =>
+      query.status === 'live'
+        ? { items: [liveSession, secondLiveSession, zeroTabLiveSession] }
+        : { items: [primarySession, endedSession] },
     getSession: (sessionId) =>
-      sessionId === liveSession.sessionId
+      sessionId === primarySession.sessionId
         ? {
-            session: liveSession,
+            session: primarySession,
             dispatches: [
               {
                 dispatchId: 1,
@@ -104,13 +176,19 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
           }
         : null,
     getSessionState: (sessionId) => {
-      if (sessionId === liveSession.sessionId) return 'live'
+      if (
+        sessionId === primarySession.sessionId ||
+        sessionId === secondLiveSession.sessionId ||
+        sessionId === zeroTabLiveSession.sessionId
+      ) {
+        return 'live'
+      }
       if (sessionId === endedSession.sessionId) return 'ended'
       return 'missing'
     },
     cancelSession: () => 0,
     getRecording: (sessionId) =>
-      sessionId === liveSession.sessionId
+      sessionId === primarySession.sessionId
         ? {
             hasData: recordingEvents.length > 0,
             complete: true,
@@ -142,7 +220,7 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
           }
         : null,
     downloadRecordingEvents: async (sessionId) =>
-      sessionId === liveSession.sessionId ? recordingEvents : null,
+      sessionId === primarySession.sessionId ? recordingEvents : null,
     async appendRecordingEvents(_identity, ndjson, batchId) {
       if (recordingBatchIds.has(batchId)) return { accepted: 0 }
       recordingEvents += ndjson
@@ -164,29 +242,10 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
         accepted: ndjson.split('\n').filter((line) => line.trim()).length,
       }
     },
-    listTabs: () => ({
-      items: [
-        {
-          tabId: 101,
-          pageId: 7,
-          targetId: 'target-7',
-          sessionId: liveSession.sessionId,
-          slug: 'codex',
-          label: 'Codex',
-          url: 'https://browseros.com',
-          title: 'BrowserOS',
-          status: 'active',
-          firstActivityAt: 100,
-          lastActivityAt: 110,
-          lastToolName: 'snapshot',
-          toolCount: 1,
-          recentTools: [{ name: 'snapshot', at: 110 }],
-          previewCapturedAt: 123,
-        },
-      ],
-    }),
-    getTabPreview: (pageId) =>
-      pageId === 7 ? { bytes: new Uint8Array([0xff, 0xd8]) } : null,
+    getSessionBrowserTabPreview: (sessionId, browserTabId) =>
+      sessionId === primarySession.sessionId && browserTabId === 101
+        ? { bytes: new Uint8Array([0xff, 0xd8]) }
+        : null,
     getDispatchScreenshot: (dispatchId) =>
       dispatchId === 1 ? { bytes: new Uint8Array([0xff, 0xd8]) } : null,
     async listConnections() {
@@ -214,7 +273,9 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
     name: 'typescript',
     baseUrl,
     api: new DefaultApi(new Configuration({ basePath: baseUrl })),
-    liveSessionId: liveSession.sessionId,
+    liveSessionId: primarySession.sessionId,
+    secondLiveSessionId: secondLiveSession.sessionId,
+    zeroTabLiveSessionId: zeroTabLiveSession.sessionId,
     endedSessionId: endedSession.sessionId,
     screenshotDispatchId: 1,
     async stop() {
@@ -275,7 +336,9 @@ export async function startRustServer(): Promise<ContractServer> {
     name: 'rust',
     baseUrl,
     api: new DefaultApi(new Configuration({ basePath: baseUrl })),
-    liveSessionId: liveSession.sessionId,
+    liveSessionId: primarySession.sessionId,
+    secondLiveSessionId: secondLiveSession.sessionId,
+    zeroTabLiveSessionId: zeroTabLiveSession.sessionId,
     endedSessionId: endedSession.sessionId,
     screenshotDispatchId: 1,
     async stop() {

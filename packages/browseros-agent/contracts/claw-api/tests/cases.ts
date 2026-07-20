@@ -6,9 +6,10 @@
  * implementation-specific. A case that passes on one server and fails
  * on the other is by definition a contract violation.
  *
- * Cases assume the seeded world the adapters provide (a live and an
- * ended session, tab 101 / page 7 / target-7, one screenshot). The
- * `shutdown` case must stay last: it kills the server it runs against.
+ * Cases assume the seeded world the adapters provide (two same-profile
+ * live sessions, a zero-tab live session, an ended session, browser tab
+ * 101, and one dispatch screenshot). The `shutdown` case must stay last:
+ * it kills the server it runs against.
  */
 
 import { expect } from 'bun:test'
@@ -17,6 +18,7 @@ import {
   Harness,
   RECORDING_INGEST_MAX_BYTES,
   ResponseError,
+  SessionStatus,
 } from '../../../packages/claw-api/src'
 import type { ContractServer } from './server-adapters'
 
@@ -25,12 +27,9 @@ export interface ContractCase {
   run(server: ContractServer): Promise<void>
 }
 
-// Legacy vocabulary the canonical surface must never leak (sessions
-// replaced agents/tasks/runs), and the inline-frame key the tab list
-// must not carry (binary travels via the preview/screenshot endpoints).
-// Spelled via concatenation so the forbidden names never appear
-// literally in the contract package — a plain grep for them under
-// `contracts/claw-api` should come up empty.
+// Legacy vocabulary the canonical surface must never leak: sessions
+// replaced agents/tasks/runs. Binary frames travel through preview and
+// screenshot endpoints rather than the live browser-tab projection.
 const FORBIDDEN_IDENTITY_KEYS = ['agent', 'task', 'run'].map(
   (scope) => `${scope}Id`,
 )
@@ -42,6 +41,8 @@ const RETIRED_ROUTES = [
   ['POST', '/system/telemetry'],
   ['POST', '/agents/agent-1/cancel'],
   ['GET', '/tabs/activity'],
+  ['GET', '/api/v1/tabs'],
+  ['GET', '/api/v1/tabs/7/preview'],
   ['GET', '/connections'],
   ['POST', '/connections/NotAHarness/connect'],
   ['POST', '/connections/NotAHarness/disconnect'],
@@ -251,29 +252,92 @@ export const contractCases: ContractCase[] = [
     },
   },
   {
-    name: 'tab list and JPEG artifacts',
-    async run({ api, baseUrl, screenshotDispatchId }) {
-      const tabs = await api.listTabs()
-      expect(tabs.items[0]).toMatchObject({
-        tabId: 101,
-        pageId: 7,
-        targetId: 'target-7',
-        sessionId: 'session-live',
-      })
-      expect(JSON.stringify(tabs)).not.toContain(INLINE_JPEG_KEY)
+    name: 'live session projection and browser-tab preview',
+    async run({
+      api,
+      liveSessionId,
+      secondLiveSessionId,
+      zeroTabLiveSessionId,
+    }) {
+      const snapshot = await api.listSessions({ status: SessionStatus.Live })
+      expect(snapshot.nextCursor).toBeUndefined()
 
-      for (const path of [
-        '/api/v1/tabs/7/preview',
-        `/api/v1/dispatches/${screenshotDispatchId}/screenshot`,
+      const primary = snapshot.items.find(
+        (session) => session.sessionId === liveSessionId,
+      )
+      const second = snapshot.items.find(
+        (session) => session.sessionId === secondLiveSessionId,
+      )
+      const zeroTab = snapshot.items.find(
+        (session) => session.sessionId === zeroTabLiveSessionId,
+      )
+      expect(primary).toMatchObject({
+        profileId: 'profile-shared',
+        harness: 'Codex',
+        color: '#0254ec',
+        live: {
+          state: 'active',
+          browserTabs: [
+            {
+              browserTabId: 101,
+              url: 'https://browseros.com',
+              title: 'BrowserOS',
+              toolCount: 1,
+              recentTools: [{ name: 'snapshot', at: 110 }],
+              previewCapturedAt: 123,
+            },
+            {
+              browserTabId: 102,
+              url: 'https://example.com',
+              title: 'Example Domain',
+              toolCount: 0,
+              recentTools: [],
+            },
+          ],
+        },
+      })
+      expect(second).toMatchObject({
+        profileId: primary?.profileId,
+        live: { state: 'idle' },
+      })
+      expect(second?.sessionId).not.toBe(primary?.sessionId)
+      expect(zeroTab?.live).toEqual({ state: 'idle', browserTabs: [] })
+
+      const browserTabs = JSON.stringify(primary?.live?.browserTabs)
+      expect(browserTabs).not.toContain('pageId')
+      expect(browserTabs).not.toContain('targetId')
+      expect(browserTabs).not.toContain(INLINE_JPEG_KEY)
+      for (const sessionIdentityKey of [
+        'sessionId',
+        'profileId',
+        'slug',
+        'label',
+        'harness',
+        'color',
       ]) {
-        const response = await fetch(`${baseUrl}${path}`)
-        expect(response.status, path).toBe(200)
-        expect(response.headers.get('content-type'), path).toBe('image/jpeg')
-        expect(
-          Array.from(new Uint8Array(await response.arrayBuffer())),
-          path,
-        ).toEqual([0xff, 0xd8])
+        expect(browserTabs).not.toContain(sessionIdentityKey)
       }
+
+      const preview = await api.getSessionBrowserTabPreview({
+        sessionId: liveSessionId,
+        browserTabId: 101,
+      })
+      expect(preview.type).toBe('image/jpeg')
+      expect(Array.from(new Uint8Array(await preview.arrayBuffer()))).toEqual([
+        0xff, 0xd8,
+      ])
+    },
+  },
+  {
+    name: 'dispatch screenshot',
+    async run({ baseUrl, screenshotDispatchId }) {
+      const path = `/api/v1/dispatches/${screenshotDispatchId}/screenshot`
+      const response = await fetch(`${baseUrl}${path}`)
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type')).toBe('image/jpeg')
+      expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([
+        0xff, 0xd8,
+      ])
     },
   },
   {
@@ -296,6 +360,16 @@ export const contractCases: ContractCase[] = [
         400,
         'invalid_request',
       )
+    },
+  },
+  {
+    name: 'invalid browser tab id',
+    async run({ baseUrl, liveSessionId }) {
+      const response = await fetch(
+        `${baseUrl}/api/v1/sessions/${liveSessionId}/browser-tabs/0/preview`,
+      )
+      expect(response.status).toBe(400)
+      expect(await response.json()).toMatchObject({ code: 'invalid_request' })
     },
   },
   {
@@ -333,9 +407,20 @@ export const contractCases: ContractCase[] = [
   },
   {
     name: 'missing binary artifacts',
-    async run({ baseUrl }) {
+    async run({ baseUrl, liveSessionId, secondLiveSessionId }) {
       for (const [path, code] of [
-        ['/api/v1/tabs/999/preview', 'preview_not_found'],
+        [
+          `/api/v1/sessions/${liveSessionId}/browser-tabs/999/preview`,
+          'preview_not_found',
+        ],
+        [
+          `/api/v1/sessions/${secondLiveSessionId}/browser-tabs/101/preview`,
+          'preview_not_found',
+        ],
+        [
+          '/api/v1/sessions/missing/browser-tabs/101/preview',
+          'preview_not_found',
+        ],
         ['/api/v1/dispatches/999/screenshot', 'screenshot_not_found'],
       ] as const) {
         const response = await fetch(`${baseUrl}${path}`)

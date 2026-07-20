@@ -17,6 +17,10 @@ pub struct SessionSummary {
     pub session_id: String,
     #[serde(rename = "profileId", skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<String>,
+    #[serde(rename = "harness", skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    #[serde(rename = "color", skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
     #[serde(rename = "slug")]
     pub slug: String,
     #[serde(rename = "label")]
@@ -44,6 +48,9 @@ pub struct SessionSummary {
         skip_serializing_if = "Option::is_none"
     )]
     pub last_screenshot_dispatch_id: Option<i64>,
+    /// Present only on summaries returned by an explicit `status=live` list query.
+    #[serde(rename = "live", skip_serializing_if = "Option::is_none")]
+    pub live: Option<Box<models::LiveSessionState>>,
 }
 
 impl SessionSummary {
@@ -62,6 +69,8 @@ impl SessionSummary {
         SessionSummary {
             session_id,
             profile_id: None,
+            harness: None,
+            color: None,
             slug,
             label,
             name,
@@ -74,6 +83,7 @@ impl SessionSummary {
             status,
             error_count,
             last_screenshot_dispatch_id: None,
+            live: None,
         }
     }
 }

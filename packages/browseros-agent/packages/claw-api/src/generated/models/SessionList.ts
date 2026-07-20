@@ -34,7 +34,7 @@ export interface SessionList {
      */
     items: Array<SessionSummary>;
     /**
-     *
+     * Cursor for a subsequent historical query. Omitted from complete live snapshots.
      * @type {number}
      * @memberof SessionList
      */

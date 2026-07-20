@@ -5,8 +5,8 @@ SessionId:
   schema:
     type: string
     minLength: 1
-PageId:
-  name: pageId
+BrowserTabId:
+  name: browserTabId
   in: path
   required: true
   schema:

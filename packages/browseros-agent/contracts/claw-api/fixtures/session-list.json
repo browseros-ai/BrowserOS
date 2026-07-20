@@ -2,32 +2,89 @@
   "items": [
     {
       "sessionId": "session-live",
+      "profileId": "profile-shared",
       "slug": "codex",
       "label": "Codex",
       "name": "Research BrowserClaw",
+      "harness": "Codex",
+      "color": "#0254ec",
       "startedAt": 1784300400000,
       "durationMs": 1200,
       "dispatchCount": 2,
       "toolSequence": ["navigate", "snapshot"],
       "status": "live",
-      "errorCount": 0
+      "errorCount": 0,
+      "live": {
+        "state": "active",
+        "browserTabs": [
+          {
+            "browserTabId": 101,
+            "url": "https://browseros.com",
+            "title": "BrowserOS",
+            "firstActivityAt": 1784300400000,
+            "lastActivityAt": 1784300401200,
+            "lastToolName": "snapshot",
+            "toolCount": 2,
+            "recentTools": [
+              { "name": "navigate", "at": 1784300400000 },
+              { "name": "snapshot", "at": 1784300401200 }
+            ],
+            "previewCapturedAt": 1784300401250
+          },
+          {
+            "browserTabId": 102,
+            "url": "https://example.com",
+            "title": "Example Domain",
+            "toolCount": 0,
+            "recentTools": []
+          }
+        ]
+      }
     },
     {
-      "sessionId": "session-complete",
-      "profileId": "profile-1",
+      "sessionId": "session-live-shared-profile",
+      "profileId": "profile-shared",
+      "slug": "codex",
+      "label": "Codex",
+      "name": "Compare release notes",
+      "startedAt": 1784300400500,
+      "durationMs": 700,
+      "dispatchCount": 1,
+      "toolSequence": ["read"],
+      "status": "live",
+      "errorCount": 0,
+      "live": {
+        "state": "idle",
+        "browserTabs": [
+          {
+            "browserTabId": 201,
+            "url": "https://browseros.com/releases",
+            "title": "BrowserOS Releases",
+            "firstActivityAt": 1784300400500,
+            "lastActivityAt": 1784300400600,
+            "lastToolName": "read",
+            "toolCount": 1,
+            "recentTools": [{ "name": "read", "at": 1784300400600 }]
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "session-live-empty",
+      "profileId": "profile-empty",
       "slug": "claude-code",
       "label": "Claude Code",
-      "name": "Review release notes",
-      "site": "browseros.com",
-      "startedAt": 1784290000000,
-      "endedAt": 1784290060000,
-      "durationMs": 60000,
-      "dispatchCount": 3,
-      "toolSequence": ["navigate", "read", "done"],
-      "status": "done",
+      "name": "Waiting for first tool",
+      "startedAt": 1784300401000,
+      "durationMs": 200,
+      "dispatchCount": 0,
+      "toolSequence": [],
+      "status": "live",
       "errorCount": 0,
-      "lastScreenshotDispatchId": 43
+      "live": {
+        "state": "idle",
+        "browserTabs": []
+      }
     }
-  ],
-  "nextCursor": 40
+  ]
 }

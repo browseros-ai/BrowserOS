@@ -1,5 +1,6 @@
 get:
   operationId: listSessions
+  description: An explicit `status=live` query returns the complete connected-session snapshot and omits `nextCursor`. Cursor and limit govern historical queries.
   parameters:
     - name: profileId
       in: query
@@ -11,6 +12,7 @@ get:
         type: string
     - name: status
       in: query
+      description: Use `live` to request a complete current snapshot with live browser state.
       schema:
         $ref: ../schemas/sessions.yaml#/SessionStatus
     - name: site
@@ -29,12 +31,14 @@ get:
         minimum: 0
     - name: cursor
       in: query
+      description: Historical pagination cursor; ignored for the complete live snapshot.
       schema:
         type: integer
         format: int64
         minimum: 1
     - name: limit
       in: query
+      description: Historical page size; ignored for the complete live snapshot.
       schema:
         type: integer
         format: int32
@@ -43,7 +47,7 @@ get:
         default: 25
   responses:
     '200':
-      description: Cursor-paginated sessions.
+      description: A complete connected-session snapshot for `status=live`; otherwise a cursor-paginated historical result.
       content:
         application/json:
           schema:
