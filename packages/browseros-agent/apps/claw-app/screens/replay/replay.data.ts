@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { RecordingMetadata } from '@browseros/claw-api'
 import { useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import type { RunStatus } from '@/lib/status'
@@ -18,13 +19,30 @@ import {
   type ReplayKind,
   type ReplayVerb,
   useReplayEvents,
+  useReplayMetadata,
 } from '@/modules/api/replay.hooks'
 import {
-  buildReplayEventTargets,
-  buildReplayTargetIds,
+  buildReplayDocumentIds,
+  buildReplayEventCatalog,
+  buildReplayTabIds,
   EMPTY_REPLAY_EVENTS,
-  type ReplayEventTargets,
+  type ReplayEventCatalog,
 } from './replay-events'
+
+export interface ReplaySegmentData {
+  documentId: string
+  targetId?: string | null
+  firstEventAt: number
+  lastEventAt: number
+  hasGap: boolean
+  legacy: boolean
+}
+
+export interface ReplayTabData {
+  tabId: number
+  complete: boolean | null
+  segments: ReplaySegmentData[]
+}
 
 export interface ReplayData {
   sessionId: string
@@ -48,8 +66,9 @@ export interface ReplayData {
   /** Total seconds the session covers, from start to last dispatch. */
   totalSeconds: number
   frames: ReplayFrame[]
-  targetIds: string[]
-  eventsForTarget: (targetId: string) => readonly ReplayEvent[]
+  complete: boolean | null
+  tabs: ReplayTabData[]
+  eventsForDocument: (documentId: string) => readonly ReplayEvent[]
 }
 
 // `buildTabView` and the `TabView` shape live in `./tab-view.ts` so
@@ -81,16 +100,16 @@ export function useReplayData(): UseReplayDataResult {
     variables: { sessionId },
     enabled: sessionId.length > 0,
   })
+  const metadataQuery = useReplayMetadata({
+    variables: { sessionId },
+    enabled: sessionId.length > 0,
+  })
   const events = eventsQuery.data?.events ?? EMPTY_REPLAY_EVENTS
-  const eventTargets = useMemo(() => buildReplayEventTargets(events), [events])
-  const targetIds = useMemo(
-    () => buildReplayTargetIds(undefined, eventTargets.targetIds),
-    [eventTargets.targetIds],
-  )
+  const eventCatalog = useMemo(() => buildReplayEventCatalog(events), [events])
   const replay = useMemo<ReplayData | null>(() => {
     if (!taskQuery.data) return null
-    return buildReplayData(taskQuery.data, eventTargets, targetIds)
-  }, [taskQuery.data, eventTargets, targetIds])
+    return buildReplayData(taskQuery.data, eventCatalog, metadataQuery.data)
+  }, [taskQuery.data, eventCatalog, metadataQuery.data])
 
   return {
     replay,
@@ -103,8 +122,8 @@ export function useReplayData(): UseReplayDataResult {
 /** Converts task rows into replay metadata while reusing event buckets. */
 function buildReplayData(
   detail: TaskDetail,
-  eventTargets: ReplayEventTargets,
-  targetIds: string[],
+  eventCatalog: ReplayEventCatalog,
+  metadata: RecordingMetadata | undefined,
 ): ReplayData {
   const { session: task, dispatches } = detail
   const sessionStartMs = task.startedAt
@@ -116,8 +135,15 @@ function buildReplayData(
     (task.endedAt ?? lastDispatchAt) - sessionStartMs,
   )
 
+  const tabs = buildReplayTabs(metadata, eventCatalog)
+  const targetTabs = new Map<string, number>()
+  for (const tab of tabs) {
+    for (const segment of tab.segments) {
+      if (segment.targetId) targetTabs.set(segment.targetId, tab.tabId)
+    }
+  }
   const frames: ReplayFrame[] = dispatches.map((row) =>
-    mapDispatchToFrame(row, sessionStartMs),
+    mapDispatchToFrame(row, sessionStartMs, targetTabs),
   )
 
   return {
@@ -134,9 +160,54 @@ function buildReplayData(
     steps: String(task.dispatchCount),
     totalSeconds: totalMs / 1000,
     frames,
-    targetIds,
-    eventsForTarget: eventTargets.eventsForTarget,
+    complete: metadata?.complete ?? null,
+    tabs,
+    eventsForDocument: eventCatalog.eventsForDocument,
   }
+}
+
+function buildReplayTabs(
+  metadata: RecordingMetadata | undefined,
+  eventCatalog: ReplayEventCatalog,
+): ReplayTabData[] {
+  const metadataByTab = new Map(metadata?.tabs.map((tab) => [tab.tabId, tab]))
+  return buildReplayTabIds(metadata?.tabs, eventCatalog.tabIds).map((tabId) => {
+    const tabMetadata = metadataByTab.get(tabId)
+    const discoveredDocuments = eventCatalog.documentIdsForTab(tabId)
+    const segmentMetadata = new Map(
+      tabMetadata?.segments.map((segment) => [segment.documentId, segment]),
+    )
+    const segments = buildReplayDocumentIds(
+      tabMetadata?.segments,
+      discoveredDocuments,
+    ).map((documentId): ReplaySegmentData => {
+      const known = segmentMetadata.get(documentId)
+      if (known) {
+        return {
+          documentId,
+          targetId: known.targetId,
+          firstEventAt: known.firstEventAt,
+          lastEventAt: known.lastEventAt,
+          hasGap: known.hasGap,
+          legacy: known.legacy === true,
+        }
+      }
+      const events = eventCatalog.eventsForDocument(documentId)
+      return {
+        documentId,
+        targetId: events.find((event) => event.targetId)?.targetId ?? undefined,
+        firstEventAt: events[0]?.ts ?? 0,
+        lastEventAt: events.at(-1)?.ts ?? 0,
+        hasGap: false,
+        legacy: false,
+      }
+    })
+    return {
+      tabId,
+      complete: tabMetadata?.complete ?? null,
+      segments,
+    }
+  })
 }
 
 const TOOL_TO_VERB: Record<string, ReplayVerb> = {
@@ -161,6 +232,7 @@ const TOOL_TO_VERB: Record<string, ReplayVerb> = {
 function mapDispatchToFrame(
   row: ToolDispatchRow,
   sessionStartMs: number,
+  targetTabs: ReadonlyMap<string, number>,
 ): ReplayFrame {
   const t = Math.max(0, (row.createdAt - sessionStartMs) / 1000)
   const meta = row.resultMeta ? safeParse(row.resultMeta) : null
@@ -180,6 +252,8 @@ function mapDispatchToFrame(
     caption,
     url: row.url,
     pageId: row.pageId,
+    tabId:
+      row.tabId ?? (row.targetId ? targetTabs.get(row.targetId) : undefined),
     targetId: row.targetId,
     note,
     dispatchId: row.dispatchId,

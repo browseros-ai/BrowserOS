@@ -49,6 +49,7 @@ const globalDescriptors = new Map(
 const events: ReplayEvent[] = [
   {
     sessionId: 'session-1',
+    documentId: 'document-a',
     targetId: 'target-a',
     tabId: 1,
     ts: 1_000,
@@ -57,6 +58,7 @@ const events: ReplayEvent[] = [
   },
   {
     sessionId: 'session-1',
+    documentId: 'document-a',
     targetId: 'target-a',
     tabId: 1,
     ts: 1_001,
@@ -142,6 +144,7 @@ describe('ReplayViewport', () => {
     )
     const replacementEvents = events.map((event) => ({
       ...event,
+      documentId: 'document-b',
       targetId: 'target-b',
     }))
     await act(async () => {

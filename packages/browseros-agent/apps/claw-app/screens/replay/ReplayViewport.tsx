@@ -34,7 +34,7 @@ interface ReplayViewportProps {
   site: string
   /** The frame whose caption is currently displayed in the overlay. */
   frame: ReplayFrame | undefined
-  /** rrweb events for the currently selected target. */
+  /** rrweb events for the currently selected document segment. */
   events: readonly ReplayEvent[]
   /** Called when the rrweb Replayer mounts or is destroyed. */
   onPlayerReady: (handle: ReplayPlayerHandle | null) => void

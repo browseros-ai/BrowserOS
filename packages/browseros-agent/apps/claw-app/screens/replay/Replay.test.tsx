@@ -5,7 +5,7 @@ import type { Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router'
 import type { ReplayEvent, ReplayFrame } from '@/modules/api/replay.hooks'
 import * as replayDataModule from './replay.data'
-import { buildReplayEventTargets } from './replay-events'
+import { buildReplayEventCatalog } from './replay-events'
 
 let replayResult: replayDataModule.UseReplayDataResult
 
@@ -17,7 +17,7 @@ mock.module('./replay.data', () => ({
 mock.module('./ReplayViewport', () => ({
   ReplayViewport: ({ events }: { events: readonly ReplayEvent[] }) => (
     <div
-      data-player-targets={events.map((event) => event.targetId).join(',')}
+      data-player-documents={events.map((event) => event.documentId).join(',')}
       data-player-types={events.map((event) => event.type).join(',')}
     />
   ),
@@ -49,7 +49,7 @@ mock.module('./EventTimeline', () => ({
         <button
           type="button"
           key={frame.dispatchId}
-          data-frame-target={frame.targetId}
+          data-frame-tab={frame.tabId}
           onClick={() => onSelectFrame(frame)}
         >
           {frame.caption}
@@ -99,6 +99,7 @@ mock.module('@/components/ui/tabs', () => ({
 const events: ReplayEvent[] = [
   {
     sessionId: 'session-1',
+    documentId: 'document-a',
     targetId: 'target-a',
     tabId: 1,
     ts: 1_000,
@@ -107,6 +108,7 @@ const events: ReplayEvent[] = [
   },
   {
     sessionId: 'session-1',
+    documentId: 'document-a',
     targetId: 'target-a',
     tabId: 1,
     ts: 1_001,
@@ -115,6 +117,7 @@ const events: ReplayEvent[] = [
   },
   {
     sessionId: 'session-1',
+    documentId: 'document-a',
     targetId: 'target-a',
     tabId: 1,
     ts: 5_000,
@@ -123,6 +126,7 @@ const events: ReplayEvent[] = [
   },
   {
     sessionId: 'session-1',
+    documentId: 'document-b',
     targetId: 'target-b',
     tabId: 2,
     ts: 10_000,
@@ -131,6 +135,7 @@ const events: ReplayEvent[] = [
   },
   {
     sessionId: 'session-1',
+    documentId: 'document-b',
     targetId: 'target-b',
     tabId: 2,
     ts: 10_001,
@@ -139,6 +144,7 @@ const events: ReplayEvent[] = [
   },
   {
     sessionId: 'session-1',
+    documentId: 'document-b',
     targetId: 'target-b',
     tabId: 2,
     ts: 15_000,
@@ -154,6 +160,7 @@ const frames: ReplayFrame[] = [
     verb: 'read',
     node: 'A',
     caption: 'Read target A',
+    tabId: 1,
     targetId: 'target-a',
     dispatchId: 1,
   },
@@ -163,16 +170,29 @@ const frames: ReplayFrame[] = [
     verb: 'click',
     node: 'B',
     caption: 'Click target B',
+    tabId: 2,
     targetId: 'target-b',
     dispatchId: 2,
   },
 ]
 
-function replayData(
-  replayEvents: readonly ReplayEvent[],
-  targetOrder?: string[],
-) {
-  const eventTargets = buildReplayEventTargets(replayEvents)
+function replayData(replayEvents: readonly ReplayEvent[], tabOrder?: number[]) {
+  const eventCatalog = buildReplayEventCatalog(replayEvents)
+  const tabs = (tabOrder ?? eventCatalog.tabIds).map((tabId) => ({
+    tabId,
+    complete: true,
+    segments: eventCatalog.documentIdsForTab(tabId).map((documentId) => {
+      const documentEvents = eventCatalog.eventsForDocument(documentId)
+      return {
+        documentId,
+        targetId: documentEvents.find((event) => event.targetId)?.targetId,
+        firstEventAt: documentEvents[0]?.ts ?? 0,
+        lastEventAt: documentEvents.at(-1)?.ts ?? 0,
+        hasGap: false,
+        legacy: false,
+      }
+    }),
+  }))
   return {
     sessionId: 'session-1',
     agentLabel: 'Codex',
@@ -187,8 +207,9 @@ function replayData(
     steps: '2',
     totalSeconds: 15,
     frames,
-    targetIds: targetOrder ?? eventTargets.targetIds,
-    eventsForTarget: eventTargets.eventsForTarget,
+    complete: true,
+    tabs,
+    eventsForDocument: eventCatalog.eventsForDocument,
   }
 }
 
@@ -251,7 +272,7 @@ afterEach(async () => {
 })
 
 describe('Replay', () => {
-  it('discovers stream targets and switches target on frame click', async () => {
+  it('discovers logical tabs and switches tab on frame click', async () => {
     await act(async () => {
       root.render(
         <MemoryRouter initialEntries={['/audit/session-1/replay']}>
@@ -279,19 +300,17 @@ describe('Replay', () => {
 
     expect(
       container
-        .querySelector('[data-player-targets]')
-        ?.getAttribute('data-player-targets'),
-    ).toBe('target-a,target-a,target-a')
+        .querySelector('[data-player-documents]')
+        ?.getAttribute('data-player-documents'),
+    ).toBe('document-a,document-a,document-a')
     expect(
       container
         .querySelector('[data-playback-playing]')
         ?.getAttribute('data-playback-playing'),
     ).toBe('true')
 
-    const targetBFrame = container.querySelector(
-      '[data-frame-target="target-b"]',
-    )
-    if (!targetBFrame) throw new Error('target B frame missing')
+    const targetBFrame = container.querySelector('[data-frame-tab="2"]')
+    if (!targetBFrame) throw new Error('tab 2 frame missing')
     await act(async () => {
       targetBFrame.dispatchEvent(new window.Event('click', { bubbles: true }))
     })
@@ -300,12 +319,12 @@ describe('Replay', () => {
       container
         .querySelector('[data-selected-target]')
         ?.getAttribute('data-selected-target'),
-    ).toBe('target-b')
+    ).toBe('2')
     expect(
       container
-        .querySelector('[data-player-targets]')
-        ?.getAttribute('data-player-targets'),
-    ).toBe('target-b,target-b,target-b')
+        .querySelector('[data-player-documents]')
+        ?.getAttribute('data-player-documents'),
+    ).toBe('document-b,document-b,document-b')
     expect(
       container
         .querySelector('[data-playback-time]')
@@ -314,7 +333,7 @@ describe('Replay', () => {
 
     replayResult = {
       ...replayResult,
-      replay: replayData(events, ['target-a']),
+      replay: replayData(events, [1]),
     }
     await act(async () => {
       root.render(
@@ -326,9 +345,9 @@ describe('Replay', () => {
 
     expect(
       container
-        .querySelector('[data-player-targets]')
-        ?.getAttribute('data-player-targets'),
-    ).toBe('target-a,target-a,target-a')
+        .querySelector('[data-player-documents]')
+        ?.getAttribute('data-player-documents'),
+    ).toBe('document-a,document-a,document-a')
     expect(
       container
         .querySelector('[data-playback-time]')
@@ -336,10 +355,58 @@ describe('Replay', () => {
     ).toBe('0')
   })
 
+  it('offers navigation segments without merging their rrweb lifecycles', async () => {
+    const navigationEvents: ReplayEvent[] = [
+      ...events.slice(0, 3),
+      ...events.slice(3).map((candidate) => ({
+        ...candidate,
+        tabId: 1,
+        documentId: 'document-b',
+      })),
+    ]
+    replayResult = {
+      ...replayResult,
+      replay: replayData(navigationEvents),
+    }
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={['/audit/session-1/replay']}>
+          <Replay />
+        </MemoryRouter>,
+      )
+    })
+
+    expect(container.textContent).toContain('Navigation 1')
+    expect(container.textContent).toContain('Navigation 2')
+    expect(
+      container
+        .querySelector('[data-player-documents]')
+        ?.getAttribute('data-player-documents'),
+    ).toBe('document-a,document-a,document-a')
+
+    const secondNavigation = container.querySelector(
+      '[data-target-chip="document-b"]',
+    )
+    if (!secondNavigation) throw new Error('second navigation missing')
+    await act(async () => {
+      secondNavigation.dispatchEvent(
+        new window.Event('click', { bubbles: true }),
+      )
+    })
+
+    expect(
+      container
+        .querySelector('[data-player-documents]')
+        ?.getAttribute('data-player-documents'),
+    ).toBe('document-b,document-b,document-b')
+  })
+
   it('slices orphan mutations and explains where visual playback starts', async () => {
     const incompleteEvents: ReplayEvent[] = [
       {
         sessionId: 'session-1',
+        documentId: 'document-a',
         targetId: 'target-a',
         tabId: 1,
         ts: 1_000,
@@ -348,6 +415,7 @@ describe('Replay', () => {
       },
       {
         sessionId: 'session-1',
+        documentId: 'document-a',
         targetId: 'target-a',
         tabId: 1,
         ts: 4_000,
@@ -356,6 +424,7 @@ describe('Replay', () => {
       },
       {
         sessionId: 'session-1',
+        documentId: 'document-a',
         targetId: 'target-a',
         tabId: 1,
         ts: 5_000,
@@ -383,6 +452,30 @@ describe('Replay', () => {
     ).toBe('2,3')
     expect(container.textContent).toContain(
       'Recording incomplete — playback starts at 0:03',
+    )
+  })
+
+  it('does not present a cataloged recording gap as complete', async () => {
+    const partialReplay = replayData(events.slice(0, 3))
+    partialReplay.complete = false
+    const firstTab = partialReplay.tabs[0]
+    if (firstTab) {
+      firstTab.complete = false
+      const firstSegment = firstTab.segments[0]
+      if (firstSegment) firstSegment.hasGap = true
+    }
+    replayResult = { ...replayResult, replay: partialReplay }
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={['/audit/session-1/replay']}>
+          <Replay />
+        </MemoryRouter>,
+      )
+    })
+
+    expect(container.textContent).toContain(
+      'Recording incomplete — this replay contains a known gap',
     )
   })
 })

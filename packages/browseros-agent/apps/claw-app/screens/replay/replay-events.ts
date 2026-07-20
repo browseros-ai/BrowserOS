@@ -4,57 +4,88 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type {
+  RecordingSegmentMetadata,
+  RecordingTabMetadata,
+} from '@browseros/claw-api'
 import type { ReplayEvent } from '@/modules/api/replay.hooks'
-
-interface ReplayTargetMetadata {
-  targetId: string
-  firstEventAt: number
-}
 
 export const EMPTY_REPLAY_EVENTS: readonly ReplayEvent[] = []
 
-export interface ReplayEventTargets {
-  targetIds: string[]
-  eventsForTarget: (targetId: string) => readonly ReplayEvent[]
+export interface ReplayEventCatalog {
+  tabIds: number[]
+  documentIdsForTab: (tabId: number) => readonly string[]
+  eventsForDocument: (documentId: string) => readonly ReplayEvent[]
 }
 
-/** Groups rrweb events by target while preserving each target array's identity. */
-export function buildReplayEventTargets(
+/** Keeps each Chrome document in its own stable rrweb event array. */
+export function buildReplayEventCatalog(
   events: readonly ReplayEvent[],
-): ReplayEventTargets {
+): ReplayEventCatalog {
   if (events.length === 0) {
     return {
-      targetIds: [],
-      eventsForTarget: () => EMPTY_REPLAY_EVENTS,
+      tabIds: [],
+      documentIdsForTab: () => [],
+      eventsForDocument: () => EMPTY_REPLAY_EVENTS,
     }
   }
 
-  const targetIds: string[] = []
-  const eventsByTarget = new Map<string, ReplayEvent[]>()
+  const tabIds: number[] = []
+  const seenTabs = new Set<number>()
+  const documentsByTab = new Map<number, string[]>()
+  const eventsByDocument = new Map<string, ReplayEvent[]>()
   for (const event of events) {
-    const list = eventsByTarget.get(event.targetId)
-    if (list) {
-      list.push(event)
-    } else {
-      eventsByTarget.set(event.targetId, [event])
-      targetIds.push(event.targetId)
+    if (!seenTabs.has(event.tabId)) {
+      seenTabs.add(event.tabId)
+      tabIds.push(event.tabId)
     }
+    const documentEvents = eventsByDocument.get(event.documentId)
+    if (documentEvents) {
+      documentEvents.push(event)
+      continue
+    }
+    eventsByDocument.set(event.documentId, [event])
+    const documentIds = documentsByTab.get(event.tabId) ?? []
+    documentIds.push(event.documentId)
+    documentsByTab.set(event.tabId, documentIds)
   }
 
   return {
-    targetIds,
-    eventsForTarget: (targetId) =>
-      eventsByTarget.get(targetId) ?? EMPTY_REPLAY_EVENTS,
+    tabIds,
+    documentIdsForTab: (tabId) => documentsByTab.get(tabId) ?? [],
+    eventsForDocument: (documentId) =>
+      eventsByDocument.get(documentId) ?? EMPTY_REPLAY_EVENTS,
   }
 }
 
-/** Returns metadata-ordered targets, falling back to stream discovery. */
-export function buildReplayTargetIds(
-  targets: readonly ReplayTargetMetadata[] | undefined,
-  discoveredTargetIds: readonly string[],
+/** Returns metadata-ordered logical tabs, falling back to stream discovery. */
+export function buildReplayTabIds(
+  tabs: readonly RecordingTabMetadata[] | undefined,
+  discoveredTabIds: readonly number[],
+): number[] {
+  if (!tabs) return [...discoveredTabIds]
+  const ordered = [...tabs]
+    .sort((left, right) => left.firstEventAt - right.firstEventAt)
+    .map((tab) => tab.tabId)
+  return [
+    ...ordered,
+    ...discoveredTabIds.filter((tabId) => !ordered.includes(tabId)),
+  ]
+}
+
+/** Returns metadata-ordered navigation segments for one logical tab. */
+export function buildReplayDocumentIds(
+  segments: readonly RecordingSegmentMetadata[] | undefined,
+  discoveredDocumentIds: readonly string[],
 ): string[] {
-  if (!targets) return [...discoveredTargetIds]
-  return [...targets]
-    .sort((a, b) => a.firstEventAt - b.firstEventAt)
-    .map((target) => target.targetId)
+  if (!segments) return [...discoveredDocumentIds]
+  const ordered = [...segments]
+    .sort((left, right) => left.firstEventAt - right.firstEventAt)
+    .map((segment) => segment.documentId)
+  return [
+    ...ordered,
+    ...discoveredDocumentIds.filter(
+      (documentId) => !ordered.includes(documentId),
+    ),
+  ]
 }

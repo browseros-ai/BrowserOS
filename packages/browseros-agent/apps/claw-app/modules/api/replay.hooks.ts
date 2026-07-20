@@ -43,7 +43,9 @@ export interface ReplayFrame {
    */
   url?: string | null
   pageId?: number | null
-  /** Stable CDP target this frame belongs to, when known. */
+  /** Chrome tab that owned this dispatch, when known. */
+  tabId?: number | null
+  /** CDP target observed for this dispatch; may change across navigation. */
   targetId?: string | null
   /** Optional badge shown on the timeline row ("Blocked", "Cancelled"). */
   note?: string
@@ -54,8 +56,10 @@ export interface ReplayFrame {
 export interface ReplayEvent {
   /** MCP session attributed from persisted claim state, not recorder input. */
   sessionId: string
-  /** Stable CDP target resolved by the server from the sender's Chrome tab id. */
-  targetId: string
+  /** Chrome document stream; a new value marks a navigation boundary. */
+  documentId: string
+  /** Best-effort CDP metadata observed when this document was recorded. */
+  targetId: string | null
   /** Chrome tab id captured at ingest; distinct from a BrowserOS page id. */
   tabId: number
   type: number
@@ -92,7 +96,8 @@ export interface UseReplayEventsVariables {
 
 export interface ReplayEventsBundle {
   events: ReplayEvent[]
-  targetIds: string[]
+  tabIds: number[]
+  documentIds: string[]
 }
 
 function isReplayEvent(value: unknown): value is ReplayEvent {
@@ -100,7 +105,8 @@ function isReplayEvent(value: unknown): value is ReplayEvent {
   const event = value as Partial<ReplayEvent>
   return (
     typeof event.sessionId === 'string' &&
-    typeof event.targetId === 'string' &&
+    typeof event.documentId === 'string' &&
+    (event.targetId === null || typeof event.targetId === 'string') &&
     typeof event.tabId === 'number' &&
     typeof event.ts === 'number' &&
     typeof event.type === 'number'
@@ -108,7 +114,7 @@ function isReplayEvent(value: unknown): value is ReplayEvent {
 }
 
 /**
- * Fetches and parses one session's target-addressed NDJSON stream.
+ * Fetches and parses one session's tab-attributed, document-keyed NDJSON stream.
  * Raw fetch rather than the generated client: the route serves
  * `application/x-ndjson`, which the JSON-typed client cannot parse.
  * 404 (nothing recorded) maps to an empty bundle so the viewer shows
@@ -122,26 +128,34 @@ export async function fetchReplayEvents({
     `${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/recording/events`,
   )
   if (!res.ok) {
-    if (res.status === 404) return { events: [], targetIds: [] }
+    if (res.status === 404) {
+      return { events: [], tabIds: [], documentIds: [] }
+    }
     return parseResponse<ReplayEventsBundle>(res)
   }
 
   const events: ReplayEvent[] = []
-  const targetIds: string[] = []
-  const seenTargets = new Set<string>()
+  const tabIds: number[] = []
+  const documentIds: string[] = []
+  const seenTabs = new Set<number>()
+  const seenDocuments = new Set<string>()
   for (const line of (await res.text()).split('\n')) {
     if (line.length === 0) continue
     try {
       const event: unknown = JSON.parse(line)
       if (!isReplayEvent(event)) continue
       events.push(event)
-      if (!seenTargets.has(event.targetId)) {
-        seenTargets.add(event.targetId)
-        targetIds.push(event.targetId)
+      if (!seenTabs.has(event.tabId)) {
+        seenTabs.add(event.tabId)
+        tabIds.push(event.tabId)
+      }
+      if (!seenDocuments.has(event.documentId)) {
+        seenDocuments.add(event.documentId)
+        documentIds.push(event.documentId)
       }
     } catch {}
   }
-  return { events, targetIds }
+  return { events, tabIds, documentIds }
 }
 
 export const useReplayEvents = createQuery<

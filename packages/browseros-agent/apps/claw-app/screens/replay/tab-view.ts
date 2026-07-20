@@ -5,23 +5,15 @@
  */
 
 import type { ReplayEvent, ReplayFrame } from '@/modules/api/replay.hooks'
+import type { ReplaySegmentData, ReplayTabData } from './replay.data'
 
-/**
- * A single tab's replay view. All fields are scoped to one
- * target:
- *   - `frames`: filtered AND time-shifted so `t=0` is the tab's
- *     first activity, not session start.
- *   - `events`: pass-through. rrweb treats the first event's `ts`
- *     as the tab-relative playback origin, except when leading orphan
- *     mutations must be dropped before the first usable checkpoint.
- *   - `totalSeconds`: duration of this tab's activity window (from
- *     first event to last event). 0 for empty tabs.
- */
 export interface TabView {
   frames: ReplayFrame[]
+  /** Events from exactly one Chrome document lifecycle. */
   events: readonly ReplayEvent[]
   totalSeconds: number
   hasFullSnapshot: boolean
+  knownIncomplete: boolean
   /** Captured time omitted before the first playable checkpoint. */
   incompleteUntilMs: number | null
 }
@@ -31,36 +23,58 @@ export const EMPTY_TAB_VIEW: TabView = {
   events: [],
   totalSeconds: 0,
   hasFullSnapshot: false,
+  knownIncomplete: false,
   incompleteUntilMs: null,
 }
 
 const NO_VISUAL_EVENTS: readonly ReplayEvent[] = []
+const playableEvents = new WeakMap<
+  readonly ReplayEvent[],
+  readonly ReplayEvent[]
+>()
 
 export interface BuildTabViewInput {
   frames: ReplayFrame[]
-  eventsForTarget: (targetId: string) => readonly ReplayEvent[]
+  tabs: ReplayTabData[]
+  eventsForDocument: (documentId: string) => readonly ReplayEvent[]
   startedAtMs: number
 }
 
-/** Builds the frame/event/duration view for the selected replay tab. */
+/** Builds one navigation segment without merging independent rrweb documents. */
 export function buildTabView(
   input: BuildTabViewInput,
-  targetId: string | null,
+  tabId: number | null,
+  documentId: string | null,
 ): TabView {
-  if (targetId === null) return EMPTY_TAB_VIEW
-  const rawFrames = input.frames.filter((frame) => frame.targetId === targetId)
-  const rawEvents = input.eventsForTarget(targetId)
+  const segment = findSegment(input.tabs, tabId, documentId)
+  if (!segment || tabId === null) return EMPTY_TAB_VIEW
+  const rawEvents = input.eventsForDocument(segment.documentId)
+  const rawFrames = input.frames.filter((frame) => {
+    if (frame.tabId !== tabId) return false
+    const timestamp = input.startedAtMs + frame.t * 1000
+    const tabSegments =
+      input.tabs.find((candidate) => candidate.tabId === tabId)?.segments ?? []
+    return (
+      segmentForTimestamp(tabSegments, timestamp)?.documentId === documentId
+    )
+  })
   if (rawFrames.length === 0 && rawEvents.length === 0) return EMPTY_TAB_VIEW
+
   const firstSnapshotIndex = rawEvents.findIndex((event) => event.type === 2)
   const hasFullSnapshot = firstSnapshotIndex !== -1
   const hasLeadingMutation =
     firstSnapshotIndex > 0 &&
     rawEvents.slice(0, firstSnapshotIndex).some((event) => event.type === 3)
-  const events = !hasFullSnapshot
-    ? NO_VISUAL_EVENTS
-    : hasLeadingMutation
-      ? rawEvents.slice(firstSnapshotIndex)
-      : rawEvents
+  let events: readonly ReplayEvent[]
+  if (!hasFullSnapshot) {
+    events = NO_VISUAL_EVENTS
+  } else if (hasLeadingMutation) {
+    const cached = playableEvents.get(rawEvents)
+    events = cached ?? rawEvents.slice(firstSnapshotIndex)
+    if (!cached) playableEvents.set(rawEvents, events)
+  } else {
+    events = rawEvents
+  }
   const incompleteUntilMs = hasLeadingMutation
     ? Math.max(
         0,
@@ -68,58 +82,87 @@ export function buildTabView(
       )
     : null
   const timingEvents = hasFullSnapshot ? events : rawEvents
-  const startedMs = input.startedAtMs
   const originMs =
-    timingEvents.length > 0
-      ? timingEvents[0]?.ts
-      : startedMs + (rawFrames[0]?.t ?? 0) * 1000
+    timingEvents[0]?.ts ?? input.startedAtMs + (rawFrames[0]?.t ?? 0) * 1000
   const endMs =
-    timingEvents.length > 0
-      ? timingEvents[timingEvents.length - 1]?.ts
-      : startedMs + (rawFrames[rawFrames.length - 1]?.t ?? 0) * 1000
-  const totalSeconds = Math.max(0, (endMs - originMs) / 1000)
-  const originT = (originMs - startedMs) / 1000
-  const frames = rawFrames.map((f) => ({
-    ...f,
-    t: Math.max(0, f.t - originT),
-  }))
+    timingEvents.at(-1)?.ts ??
+    input.startedAtMs + (rawFrames.at(-1)?.t ?? 0) * 1000
+  const originT = (originMs - input.startedAtMs) / 1000
   return {
-    frames,
+    frames: rawFrames.map((frame) => ({
+      ...frame,
+      t: Math.max(0, frame.t - originT),
+    })),
     events,
-    totalSeconds,
+    totalSeconds: Math.max(0, (endMs - originMs) / 1000),
     hasFullSnapshot,
+    knownIncomplete: segment.hasGap || segment.legacy || hasLeadingMutation,
     incompleteUntilMs,
   }
 }
 
-export interface TargetSeek {
-  targetId: string | null
+export interface TabSeek {
+  tabId: number | null
+  documentId: string | null
   seconds: number
 }
 
-/** Resolves a session frame to its target and target-relative playback time. */
-export function targetSeekForFrame(
+/** Resolves an audit frame to its logical tab and navigation segment clock. */
+export function tabSeekForFrame(
   input: BuildTabViewInput,
-  selectedTargetId: string | null,
+  selectedTabId: number | null,
+  selectedDocumentId: string | null,
   frame: ReplayFrame,
-): TargetSeek {
-  const targetId = frame.targetId ?? selectedTargetId
-  if (targetId === null) return { targetId, seconds: frame.t }
-
-  const targetFrames = input.frames.filter(
-    (candidate) => candidate.targetId === targetId,
-  )
-  const targetView = buildTabView(input, targetId)
-  if (frame.targetId == null) {
-    const originT =
-      targetView.events.length > 0
-        ? ((targetView.events[0]?.ts ?? input.startedAtMs) -
-            input.startedAtMs) /
-          1000
-        : (targetFrames[0]?.t ?? 0)
-    return { targetId, seconds: Math.max(0, frame.t - originT) }
+): TabSeek {
+  const tabId = frame.tabId ?? selectedTabId
+  if (tabId === null) {
+    return { tabId, documentId: selectedDocumentId, seconds: frame.t }
   }
-  const targetFrameIndex = targetFrames.indexOf(frame)
-  const shiftedFrame = targetView.frames[targetFrameIndex]
-  return { targetId, seconds: shiftedFrame?.t ?? frame.t }
+  const tab = input.tabs.find((candidate) => candidate.tabId === tabId)
+  const timestamp = input.startedAtMs + frame.t * 1000
+  const segment =
+    segmentForTimestamp(tab?.segments ?? [], timestamp) ??
+    findSegment(input.tabs, tabId, selectedDocumentId)
+  if (!segment) return { tabId, documentId: null, seconds: frame.t }
+  const view = buildTabView(input, tabId, segment.documentId)
+  const originMs =
+    view.events[0]?.ts ?? segment.firstEventAt ?? input.startedAtMs
+  return {
+    tabId,
+    documentId: segment.documentId,
+    seconds: Math.max(0, (timestamp - originMs) / 1000),
+  }
+}
+
+function findSegment(
+  tabs: readonly ReplayTabData[],
+  tabId: number | null,
+  documentId: string | null,
+): ReplaySegmentData | undefined {
+  if (tabId === null || documentId === null) return undefined
+  return tabs
+    .find((tab) => tab.tabId === tabId)
+    ?.segments.find((segment) => segment.documentId === documentId)
+}
+
+function segmentForTimestamp(
+  segments: readonly ReplaySegmentData[],
+  timestamp: number,
+): ReplaySegmentData | undefined {
+  const overlapping = segments.find(
+    (segment) =>
+      timestamp >= segment.firstEventAt && timestamp <= segment.lastEventAt,
+  )
+  if (overlapping) return overlapping
+  return [...segments].sort((left, right) => {
+    const leftDistance = Math.min(
+      Math.abs(timestamp - left.firstEventAt),
+      Math.abs(timestamp - left.lastEventAt),
+    )
+    const rightDistance = Math.min(
+      Math.abs(timestamp - right.firstEventAt),
+      Math.abs(timestamp - right.lastEventAt),
+    )
+    return leftDistance - rightDistance
+  })[0]
 }

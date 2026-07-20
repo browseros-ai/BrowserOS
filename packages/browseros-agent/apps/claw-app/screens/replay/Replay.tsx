@@ -16,46 +16,56 @@ import { PlaybackTransport } from './PlaybackTransport'
 import { type ReplayPlayerHandle, ReplayViewport } from './ReplayViewport'
 import { buildTabView, EMPTY_TAB_VIEW, useReplayData } from './replay.data'
 import { frameIndexAt } from './replay.helpers'
-import { targetSeekForFrame } from './tab-view'
+import { tabSeekForFrame } from './tab-view'
 import { usePlayback } from './use-playback'
 
 /** Renders the audit replay page and syncs rrweb playback to the transport UI. */
 export function Replay() {
   const { replay, isLoading, navigate } = useReplayData()
   const location = useLocation()
-  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null)
+  const [selectedTabId, setSelectedTabId] = useState<number | null>(null)
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
+    null,
+  )
   const playerHandleRef = useRef<ReplayPlayerHandle | null>(null)
   const playbackTimeRef = useRef(0)
   const playbackSpeedRef = useRef(1)
   const playbackIsPlayingRef = useRef(true)
-  const pendingTargetSeekRef = useRef<number | null>(null)
+  const pendingSegmentSeekRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (!replay) return
-    const firstTargetId = replay.targetIds[0] ?? null
-    if (firstTargetId === null) {
-      if (selectedTargetId !== null) {
-        pendingTargetSeekRef.current = 0
-        setSelectedTargetId(null)
+    const firstTab = replay.tabs[0]
+    if (!firstTab) {
+      if (selectedTabId !== null || selectedDocumentId !== null) {
+        pendingSegmentSeekRef.current = 0
+        setSelectedTabId(null)
+        setSelectedDocumentId(null)
       }
       return
     }
-    if (selectedTargetId === null) {
-      setSelectedTargetId(firstTargetId)
+    const selectedTab = replay.tabs.find((tab) => tab.tabId === selectedTabId)
+    if (!selectedTab) {
+      setSelectedTabId(firstTab.tabId)
+      setSelectedDocumentId(firstTab.segments[0]?.documentId ?? null)
       return
     }
-    if (!replay.targetIds.includes(selectedTargetId)) {
-      pendingTargetSeekRef.current = 0
-      setSelectedTargetId(firstTargetId)
+    if (
+      !selectedTab.segments.some(
+        (segment) => segment.documentId === selectedDocumentId,
+      )
+    ) {
+      setSelectedDocumentId(selectedTab.segments[0]?.documentId ?? null)
     }
-  }, [replay, selectedTargetId])
+  }, [replay, selectedDocumentId, selectedTabId])
 
   const tabViewInput = useMemo(
     () =>
       replay
         ? {
             frames: replay.frames,
-            eventsForTarget: replay.eventsForTarget,
+            tabs: replay.tabs,
+            eventsForDocument: replay.eventsForDocument,
             startedAtMs: replay.startedAtMs,
           }
         : null,
@@ -64,9 +74,9 @@ export function Replay() {
   const perTabView = useMemo(
     () =>
       tabViewInput
-        ? buildTabView(tabViewInput, selectedTargetId)
+        ? buildTabView(tabViewInput, selectedTabId, selectedDocumentId)
         : EMPTY_TAB_VIEW,
-    [selectedTargetId, tabViewInput],
+    [selectedDocumentId, selectedTabId, tabViewInput],
   )
 
   const playbackTotalSeconds = perTabView.hasFullSnapshot
@@ -127,43 +137,62 @@ export function Replay() {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: target changes must flush pending seeks even when both targets have the same duration.
   useEffect(() => {
-    const pendingSeconds = pendingTargetSeekRef.current
+    const pendingSeconds = pendingSegmentSeekRef.current
     if (pendingSeconds === null) return
-    pendingTargetSeekRef.current = null
+    pendingSegmentSeekRef.current = null
     seekTo(pendingSeconds)
-  }, [seekTo, selectedTargetId])
+  }, [seekTo, selectedDocumentId, selectedTabId])
 
-  const selectTarget = useCallback(
-    (targetId: string) => {
-      if (targetId === selectedTargetId) {
+  const selectTab = useCallback(
+    (value: string) => {
+      const tabId = Number(value)
+      if (!replay || !Number.isSafeInteger(tabId)) return
+      if (tabId === selectedTabId) {
         seekTo(0)
         return
       }
-      pendingTargetSeekRef.current = 0
-      setSelectedTargetId(targetId)
+      pendingSegmentSeekRef.current = 0
+      const tab = replay.tabs.find((candidate) => candidate.tabId === tabId)
+      setSelectedTabId(tabId)
+      setSelectedDocumentId(tab?.segments[0]?.documentId ?? null)
     },
-    [seekTo, selectedTargetId],
+    [replay, seekTo, selectedTabId],
+  )
+
+  const selectDocument = useCallback(
+    (documentId: string) => {
+      if (documentId === selectedDocumentId) {
+        seekTo(0)
+        return
+      }
+      pendingSegmentSeekRef.current = 0
+      setSelectedDocumentId(documentId)
+    },
+    [seekTo, selectedDocumentId],
   )
 
   const selectFrame = useCallback(
     (frame: ReplayFrame) => {
       if (!tabViewInput) return
-      const targetSeek = targetSeekForFrame(
+      const tabSeek = tabSeekForFrame(
         tabViewInput,
-        selectedTargetId,
+        selectedTabId,
+        selectedDocumentId,
         frame,
       )
       if (
-        targetSeek.targetId !== null &&
-        targetSeek.targetId !== selectedTargetId
+        tabSeek.tabId !== null &&
+        (tabSeek.tabId !== selectedTabId ||
+          tabSeek.documentId !== selectedDocumentId)
       ) {
-        pendingTargetSeekRef.current = targetSeek.seconds
-        setSelectedTargetId(targetSeek.targetId)
+        pendingSegmentSeekRef.current = tabSeek.seconds
+        setSelectedTabId(tabSeek.tabId)
+        setSelectedDocumentId(tabSeek.documentId)
         return
       }
-      seekTo(targetSeek.seconds)
+      seekTo(tabSeek.seconds)
     },
-    [seekTo, selectedTargetId, tabViewInput],
+    [seekTo, selectedDocumentId, selectedTabId, tabViewInput],
   )
 
   const onPlayerReady = useCallback((handle: ReplayPlayerHandle | null) => {
@@ -210,6 +239,7 @@ export function Replay() {
           (frame) => frame.dispatchId === currentTabFrame.dispatchId,
         )
       : -1
+  const selectedTab = replay.tabs.find((tab) => tab.tabId === selectedTabId)
 
   const stats: { label: string; value: string }[] = [
     { label: 'Duration', value: replay.duration },
@@ -258,17 +288,32 @@ export function Replay() {
 
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col gap-3 p-4">
-          {replay.targetIds.length > 1 && selectedTargetId !== null && (
-            <Tabs value={selectedTargetId} onValueChange={selectTarget}>
+          {replay.tabs.length > 1 && selectedTabId !== null && (
+            <Tabs value={selectedTabId.toString()} onValueChange={selectTab}>
               <TabsList variant="line">
-                {replay.targetIds.map((id, idx) => (
-                  <TabsTrigger key={id} value={id}>
+                {replay.tabs.map(({ tabId }, idx) => (
+                  <TabsTrigger key={tabId} value={tabId.toString()}>
                     Tab {idx + 1}
                   </TabsTrigger>
                 ))}
               </TabsList>
             </Tabs>
           )}
+          {(selectedTab?.segments.length ?? 0) > 1 &&
+            selectedDocumentId !== null && (
+              <Tabs value={selectedDocumentId} onValueChange={selectDocument}>
+                <TabsList variant="line">
+                  {selectedTab?.segments.map((segment, idx) => (
+                    <TabsTrigger
+                      key={segment.documentId}
+                      value={segment.documentId}
+                    >
+                      Navigation {idx + 1}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+            )}
           {perTabView.incompleteUntilMs !== null && (
             <div
               role="status"
@@ -278,6 +323,15 @@ export function Replay() {
               {formatIncompleteOffset(perTabView.incompleteUntilMs)}
             </div>
           )}
+          {perTabView.incompleteUntilMs === null &&
+            (perTabView.knownIncomplete || replay.complete === false) && (
+              <div
+                role="status"
+                className="rounded-lg border border-amber/30 bg-amber-tint px-3 py-2 font-medium text-ink-2 text-xs"
+              >
+                Recording incomplete — this replay contains a known gap
+              </div>
+            )}
           {perTabView.hasFullSnapshot ? (
             <>
               <ReplayViewport

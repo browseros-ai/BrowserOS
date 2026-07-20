@@ -23,10 +23,11 @@ describe('replay queries', () => {
   it('fetches canonical recording metadata', async () => {
     const metadata = {
       hasData: true,
+      complete: true,
       firstEventAt: 1_000,
       lastEventAt: 4_000,
       sizeBytes: 512,
-      pageIds: [7],
+      tabs: [],
     }
     const request = mock(async () => Response.json(metadata))
     globalThis.fetch = request as unknown as typeof fetch
@@ -41,7 +42,7 @@ describe('replay queries', () => {
   })
 
   it('preserves the empty metadata shape when no replay exists', async () => {
-    const metadata = { hasData: false, sizeBytes: 0, pageIds: [] }
+    const metadata = { hasData: false, complete: true, sizeBytes: 0, tabs: [] }
     globalThis.fetch = mock(async () =>
       Response.json(metadata),
     ) as unknown as typeof fetch
@@ -55,6 +56,7 @@ describe('replay queries', () => {
     const body = [
       JSON.stringify({
         sessionId: 'session-1',
+        documentId: 'document-b',
         targetId: 'target-b',
         tabId: 9,
         ts: 2_000,
@@ -64,6 +66,7 @@ describe('replay queries', () => {
       '{not-json',
       JSON.stringify({
         sessionId: 'session-1',
+        documentId: 'document-invalid',
         tabId: 9,
         ts: 2_500,
         type: 3,
@@ -71,6 +74,7 @@ describe('replay queries', () => {
       }),
       JSON.stringify({
         sessionId: 'session-1',
+        documentId: 'document-a',
         targetId: 'target-a',
         tabId: 3,
         ts: 3_000,
@@ -87,6 +91,7 @@ describe('replay queries', () => {
       events: [
         {
           sessionId: 'session-1',
+          documentId: 'document-b',
           targetId: 'target-b',
           tabId: 9,
           ts: 2_000,
@@ -95,6 +100,7 @@ describe('replay queries', () => {
         },
         {
           sessionId: 'session-1',
+          documentId: 'document-a',
           targetId: 'target-a',
           tabId: 3,
           ts: 3_000,
@@ -102,7 +108,8 @@ describe('replay queries', () => {
           data: {},
         },
       ],
-      targetIds: ['target-b', 'target-a'],
+      tabIds: [9, 3],
+      documentIds: ['document-b', 'document-a'],
     })
     expect(request).toHaveBeenCalledWith(
       'http://127.0.0.1:9200/api/v1/sessions/session-1/recording/events',
