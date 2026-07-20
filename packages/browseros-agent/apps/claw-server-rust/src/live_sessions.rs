@@ -176,11 +176,8 @@ pub async fn preview(
     session_id: &str,
     browser_tab_id: i64,
 ) -> AppResult<Option<ScreencastFrame>> {
-    if !state
-        .sessions
-        .contains(&crate::ids::SessionId::new(session_id))
-        .await
-    {
+    let live_session_id = crate::ids::SessionId::new(session_id);
+    if !state.sessions.contains(&live_session_id).await {
         return Ok(None);
     }
     state.audit.drain_claim_writes().await;
@@ -196,21 +193,24 @@ pub async fn preview(
     let Some(page) = pages.iter().find(|page| page.tab_id.0 == browser_tab_id) else {
         return Ok(None);
     };
-    // Browser reconciliation crosses an async CDP boundary. Re-check durable ownership so a
-    // transfer during that await cannot expose the prior owner's target-incarnation frame.
+    let candidate = state
+        .screencast
+        .frame_for(page.page_id.0, page.target_id.as_str())
+        .await;
+    // Browser reconciliation and cache access cross async boundaries. Re-check connected
+    // liveness and durable ownership afterward so teardown or reassignment cannot expose
+    // target-incarnation bytes after the requested session's authority ends.
     state.audit.drain_claim_writes().await;
-    if state
+    let owns_tab = state
         .audit
         .open_session_tab(session_id, browser_tab_id)
         .await?
-        .is_none()
-    {
+        .is_some();
+    let connected = state.sessions.contains(&live_session_id).await;
+    if !connected || !owns_tab {
         return Ok(None);
     }
-    Ok(state
-        .screencast
-        .frame_for(page.page_id.0, page.target_id.as_str())
-        .await)
+    Ok(candidate)
 }
 
 pub async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> SessionSummary {

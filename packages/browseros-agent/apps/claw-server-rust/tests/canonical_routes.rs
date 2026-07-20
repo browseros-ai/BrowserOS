@@ -30,7 +30,7 @@ use std::{
     time::Duration,
 };
 use tempfile::TempDir;
-use tokio::sync::broadcast;
+use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
@@ -45,6 +45,22 @@ struct FixtureConnection {
     events: broadcast::Sender<CdpEvent>,
     tabs: tokio::sync::Mutex<Vec<Value>>,
     get_tabs_calls: AtomicUsize,
+    next_get_tabs_gate: tokio::sync::Mutex<Option<Arc<GetTabsGate>>>,
+}
+
+struct GetTabsGate {
+    entered: Notify,
+    release: Notify,
+}
+
+impl GetTabsGate {
+    async fn wait_until_entered(&self) {
+        self.entered.notified().await;
+    }
+
+    fn release(&self) {
+        self.release.notify_one();
+    }
 }
 
 impl FixtureConnection {
@@ -54,6 +70,7 @@ impl FixtureConnection {
             events,
             tabs: tokio::sync::Mutex::new((1..=8).map(fixture_tab).collect()),
             get_tabs_calls: AtomicUsize::new(0),
+            next_get_tabs_gate: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -63,6 +80,15 @@ impl FixtureConnection {
 
     fn get_tabs_calls(&self) -> usize {
         self.get_tabs_calls.load(Ordering::SeqCst)
+    }
+
+    async fn gate_next_get_tabs(&self) -> Arc<GetTabsGate> {
+        let gate = Arc::new(GetTabsGate {
+            entered: Notify::new(),
+            release: Notify::new(),
+        });
+        *self.next_get_tabs_gate.lock().await = Some(gate.clone());
+        gate
     }
 
     async fn remove_tab(&self, tab_id: i64) {
@@ -97,6 +123,10 @@ impl CdpConnection for FixtureConnection {
             match method {
                 "Browser.getTabs" => {
                     self.get_tabs_calls.fetch_add(1, Ordering::SeqCst);
+                    if let Some(gate) = self.next_get_tabs_gate.lock().await.take() {
+                        gate.entered.notify_one();
+                        gate.release.notified().await;
+                    }
                     Ok(json!({ "tabs": self.tabs.lock().await.clone() }))
                 }
                 "Browser.getTabInfo" => {
@@ -997,5 +1027,99 @@ async fn secure_preview_is_owned_fail_closed_and_cache_only() -> anyhow::Result<
         assert_eq!(status, expected_status, "GET {path}");
         assert_eq!(json_body(&bytes)?["code"], code, "GET {path}");
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn preview_rejects_disconnected_session_after_browser_reconciliation() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let fixture = seed_live_fixture(&app).await?;
+    let gate = app.connection.gate_next_get_tabs().await;
+    let router = app.router.clone();
+    let preview_path = format!(
+        "/api/v1/sessions/{}/browser-tabs/101/preview",
+        fixture.primary.id().as_str()
+    );
+    let preview =
+        tokio::spawn(
+            async move { request(&router, "GET", &preview_path, None, Body::empty()).await },
+        );
+
+    gate.wait_until_entered().await;
+    assert!(
+        app.state
+            .sessions
+            .remove(fixture.primary.id(), "closed", Some("test disconnect"))
+            .await?
+    );
+    app.state.audit.enqueue_claim_tab_for_session(
+        101,
+        Some("target-7".to_string()),
+        fixture.primary.id().as_str().to_string(),
+        fixture.primary.convo_id().as_str().to_string(),
+        200,
+    );
+    app.state.audit.drain_claim_writes().await;
+    assert!(!app.state.sessions.contains(fixture.primary.id()).await);
+    assert!(
+        app.state
+            .audit
+            .open_session_tab(fixture.primary.id().as_str(), 101)
+            .await?
+            .is_some()
+    );
+
+    gate.release();
+    let (status, _, bytes) = preview.await??;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json_body(&bytes)?["code"], "preview_not_found");
+    assert_ne!(bytes, vec![0xff, 0xd8]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn preview_rejects_ownership_transfer_during_browser_reconciliation() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let fixture = seed_live_fixture(&app).await?;
+    let gate = app.connection.gate_next_get_tabs().await;
+    let router = app.router.clone();
+    let preview_path = format!(
+        "/api/v1/sessions/{}/browser-tabs/101/preview",
+        fixture.primary.id().as_str()
+    );
+    let preview =
+        tokio::spawn(
+            async move { request(&router, "GET", &preview_path, None, Body::empty()).await },
+        );
+
+    gate.wait_until_entered().await;
+    app.state.audit.enqueue_claim_tab_for_session(
+        101,
+        Some("target-7".to_string()),
+        fixture.second.id().as_str().to_string(),
+        fixture.second.convo_id().as_str().to_string(),
+        200,
+    );
+    app.state.audit.drain_claim_writes().await;
+    assert!(
+        app.state
+            .audit
+            .open_session_tab(fixture.primary.id().as_str(), 101)
+            .await?
+            .is_none()
+    );
+    assert!(
+        app.state
+            .audit
+            .open_session_tab(fixture.second.id().as_str(), 101)
+            .await?
+            .is_some()
+    );
+
+    gate.release();
+    let (status, _, bytes) = preview.await??;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json_body(&bytes)?["code"], "preview_not_found");
+    assert_ne!(bytes, vec![0xff, 0xd8]);
     Ok(())
 }
