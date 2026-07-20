@@ -38,6 +38,7 @@ import {
 import { cancellationErrorResult } from './cancellation-result'
 import { composeAbortSignals, dispatchErrorText } from './dispatch-util'
 import { applyAudit } from './effects/audit'
+import { applyDomainSkillsHint } from './effects/domain-skills-hint'
 import { applyOwnershipClaims } from './effects/ownership-claims'
 import { applySessionNaming } from './effects/session-naming'
 import { applyTabActivity } from './effects/tab-activity'
@@ -96,6 +97,9 @@ const GUARDS: readonly ToolGuard[] = [
 const BASE_EFFECTS: readonly NamedToolEffect[] = [
   { name: 'ownership-claims', run: applyOwnershipClaims },
   { name: 'tabs-list-view', run: applyTabsListView },
+  // Must run before audit so the persisted dispatch row records the
+  // navigate response with its domain_skills annotation intact.
+  { name: 'domain-skills-hint', run: applyDomainSkillsHint },
   { name: 'audit', run: applyAudit },
   { name: 'tab-activity', run: applyTabActivity },
   { name: 'tab-groups', run: applyTabGroups },
