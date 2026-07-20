@@ -26,6 +26,8 @@ pub mod session_summary;
 pub use self::session_summary::SessionSummary;
 pub mod shutdown_response;
 pub use self::shutdown_response::ShutdownResponse;
+pub mod system_capabilities;
+pub use self::system_capabilities::SystemCapabilities;
 pub mod system_info;
 pub use self::system_info::SystemInfo;
 pub mod tab;

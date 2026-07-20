@@ -23,6 +23,7 @@ post:
     - $ref: ../parameters.yaml#/RecordingBatchId
   requestBody:
     required: true
+    description: Atomic newline-delimited rrweb events. The UTF-8 encoded request body must not exceed the server's advertised recordingIngestMaxBytes capability.
     content:
       application/x-ndjson:
         schema:
@@ -42,5 +43,7 @@ post:
       $ref: ../responses.yaml#/Conflict
     '410':
       $ref: ../responses.yaml#/Gone
+    '413':
+      $ref: ../responses.yaml#/PayloadTooLarge
     '500':
       $ref: ../responses.yaml#/InternalError

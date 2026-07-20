@@ -22,6 +22,12 @@ Gone:
     application/json:
       schema:
         $ref: ./schemas/system.yaml#/ApiError
+PayloadTooLarge:
+  description: UTF-8 encoded request body exceeds the advertised ingest ceiling.
+  content:
+    application/json:
+      schema:
+        $ref: ./schemas/system.yaml#/ApiError
 InternalError:
   description: Internal server error.
   content:
