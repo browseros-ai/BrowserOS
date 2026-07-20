@@ -23,6 +23,7 @@ type FeatureConfig = {
 export enum Feature {
   // Unfinished UI surfaces behind an explicit alpha opt-in
   ALPHA_FEATURES_SUPPORT = 'ALPHA_FEATURES_SUPPORT',
+  VOICE_INPUT_SUPPORT = 'VOICE_INPUT_SUPPORT',
   // Inline chat in the new tab page
   NEWTAB_CHAT_SUPPORT = 'NEWTAB_CHAT_SUPPORT',
   // Vertical tabs preference and customization
@@ -54,6 +55,7 @@ export enum Feature {
  */
 const FEATURE_CONFIG: { [K in Feature]: FeatureConfig } = {
   [Feature.ALPHA_FEATURES_SUPPORT]: { requiresAlphaFlag: true },
+  [Feature.VOICE_INPUT_SUPPORT]: { requiresAlphaFlag: true },
   [Feature.NEWTAB_CHAT_SUPPORT]: { minBrowserOSVersion: '0.40.0.0' },
   [Feature.VERTICAL_TABS_SUPPORT]: { minBrowserOSVersion: '0.42.0.0' },
   [Feature.CHATGPT_PRO_SUPPORT]: { minServerVersion: '0.0.77' },
