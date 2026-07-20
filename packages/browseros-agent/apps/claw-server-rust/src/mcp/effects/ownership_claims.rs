@@ -61,6 +61,12 @@ pub fn apply(
                 context
                     .call
                     .state
+                    .tab_activity
+                    .remove_incarnation(page_id.0, &target_id)
+                    .await;
+                context
+                    .call
+                    .state
                     .audit
                     .enqueue_release_target_for_session(target_id, session_id);
             }
@@ -250,6 +256,51 @@ mod tests {
         .unwrap_or_else(|error| panic!("effect failed: {error}"));
         assert_eq!(call.state.sessions.owner_of_page(&PageId(9)).await, None);
         assert!(!identity.session.has_first_capture(&PageId(9)).await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn close_page_removes_the_exact_activity_incarnation() -> anyhow::Result<()> {
+        let browser =
+            BrowserSession::new(PageListConnection::new(), BrowserSessionHooks::default());
+        assert_eq!(browser.pages.list().await?.len(), 1);
+        let mut call =
+            crate::mcp::test_support::tool_call("tabs", json!({ "action": "close", "page": 1 }))
+                .await?;
+        call.page_snapshot = browser.pages.get_info(PageId(1)).await;
+        call.state
+            .tab_activity
+            .record_tool(crate::tabs::activity::RecordToolInput {
+                target_id: browser
+                    .pages
+                    .get_info(PageId(1))
+                    .await
+                    .unwrap_or_else(|| unreachable!())
+                    .target_id,
+                tab_id: 11,
+                page_id: 1,
+                session_id: call.session_id.as_str().to_string(),
+                agent_id: "agent".to_string(),
+                slug: "codex".to_string(),
+                tool_name: "snapshot".to_string(),
+            })
+            .await;
+
+        apply(ToolEffectContext {
+            call: &call,
+            result: &ToolResult::text("closed page", None),
+            cancelled: false,
+            duration_ms: 1,
+        })
+        .await?;
+
+        assert!(
+            call.state
+                .tab_activity
+                .snapshot(Some(&browser))
+                .await
+                .is_empty()
+        );
         Ok(())
     }
 }

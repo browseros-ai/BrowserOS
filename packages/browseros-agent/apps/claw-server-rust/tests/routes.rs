@@ -944,7 +944,18 @@ async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result
 
 #[tokio::test]
 async fn canonical_tabs_enrich_through_live_session_profile_identity() -> anyhow::Result<()> {
-    let app = test_app().await?;
+    let mock = MockCdp::start().await?;
+    mock.add_tab(101, "target-exact", 1).await;
+    mock.add_tab(102, "target-fallback", 1).await;
+    let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    let browser = app
+        .state
+        .browser
+        .session()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing browser session"))?;
+    assert_eq!(browser.pages.list().await?.len(), 2);
     let agents_dir = app.state.config.browserclaw_dir.join("agents");
     tokio::fs::create_dir_all(&agents_dir).await?;
     tokio::fs::write(
@@ -1032,6 +1043,132 @@ async fn canonical_tabs_enrich_through_live_session_profile_identity() -> anyhow
         .ok_or_else(|| anyhow::anyhow!("missing fallback tab"))?;
     assert_eq!(fallback["label"], "mcp");
     assert!(fallback["harness"].is_null());
+    Ok(())
+}
+
+#[tokio::test]
+async fn canonical_associations_evict_external_close_and_screencast_frame() -> anyhow::Result<()> {
+    let mock = MockCdp::start().await?;
+    mock.add_tab(101, "target-old", 1).await;
+    let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    let browser = app
+        .state
+        .browser
+        .session()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing browser session"))?;
+    assert_eq!(browser.pages.list().await?.len(), 1);
+    let session = test_session(SessionId::new("session-live"), "codex-agent", "codex");
+    app.state.sessions.insert_for_testing(session.clone()).await;
+    app.state
+        .tab_activity
+        .record_tool(RecordToolInput {
+            target_id: TargetId::from("target-old".to_string()),
+            tab_id: 101,
+            page_id: 1,
+            session_id: session.id().as_str().to_string(),
+            agent_id: session.convo_id().as_str().to_string(),
+            slug: "codex".to_string(),
+            tool_name: "snapshot".to_string(),
+        })
+        .await;
+    app.state
+        .screencast
+        .cache_frame(
+            1,
+            claw_server_rust::tabs::activity::ScreencastFrame {
+                jpeg_base64: "/9g=".to_string(),
+                captured_at: 123,
+            },
+        )
+        .await;
+
+    let (status, body) = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"][0]["targetId"], "target-old");
+
+    mock.remove_tab(101).await;
+    let recording_request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/sessions/session-live/recording/events")
+        .header(header::HOST, "localhost")
+        .header(header::CONTENT_TYPE, "application/x-ndjson")
+        .header("x-recording-tab-id", "101")
+        .header("x-recording-page-id", "1")
+        .header("x-recording-target-id", "target-old")
+        .body(Body::from("{\"ts\":1}\n"))?;
+    let recording_response = app.router.clone().oneshot(recording_request).await?;
+    assert_eq!(recording_response.status(), StatusCode::CONFLICT);
+
+    let (status, body) = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"], json!([]));
+
+    let screencast_task = app
+        .state
+        .screencast
+        .clone()
+        .start(app.state.browser.clone(), app.state.tab_activity.clone());
+    for _ in 0..100 {
+        if app.state.screencast.frame_for(1).await.is_none() {
+            app.state.screencast.stop();
+            screencast_task.await?;
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    app.state.screencast.stop();
+    screencast_task.await?;
+    anyhow::bail!("stale screencast frame was not garbage-collected")
+}
+
+#[tokio::test]
+async fn canonical_tabs_refresh_metadata_and_reject_reused_page_id() -> anyhow::Result<()> {
+    let mock = MockCdp::start().await?;
+    mock.add_tab(101, "target-old", 1).await;
+    let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    let session = test_session(SessionId::new("session-live"), "codex-agent", "codex");
+    app.state.sessions.insert_for_testing(session.clone()).await;
+    app.state
+        .tab_activity
+        .record_tool(RecordToolInput {
+            target_id: TargetId::from("target-old".to_string()),
+            tab_id: 101,
+            page_id: 1,
+            session_id: session.id().as_str().to_string(),
+            agent_id: session.convo_id().as_str().to_string(),
+            slug: "codex".to_string(),
+            tool_name: "navigate".to_string(),
+        })
+        .await;
+
+    mock.update_tab(
+        101,
+        "target-old",
+        "https://example.com/after-navigation",
+        "After navigation",
+    )
+    .await;
+    let (status, body) = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["items"][0]["url"],
+        "https://example.com/after-navigation"
+    );
+    assert_eq!(body["items"][0]["title"], "After navigation");
+
+    mock.update_tab(
+        101,
+        "target-new",
+        "https://example.com/reused",
+        "Replacement tab",
+    )
+    .await;
+    let (status, body) = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"], json!([]));
     Ok(())
 }
 
@@ -1328,6 +1465,24 @@ impl MockCdp {
             group_id: None,
             window_id,
         });
+    }
+
+    async fn remove_tab(&self, tab_id: i64) {
+        self.tabs.lock().await.retain(|tab| tab.tab_id != tab_id);
+    }
+
+    async fn update_tab(&self, tab_id: i64, target_id: &str, url: &str, title: &str) {
+        if let Some(tab) = self
+            .tabs
+            .lock()
+            .await
+            .iter_mut()
+            .find(|tab| tab.tab_id == tab_id)
+        {
+            tab.target_id = target_id.to_string();
+            tab.url = url.to_string();
+            tab.title = title.to_string();
+        }
     }
 }
 
