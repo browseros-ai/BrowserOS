@@ -13,7 +13,6 @@ import {
   type Connection,
   type ConnectionList,
   Harness,
-  RECORDING_INGEST_MAX_BYTES,
   type RecordingMetadata,
   type SessionDetail,
   type SessionList,
@@ -22,9 +21,9 @@ import {
   type TelemetryState,
 } from '@browseros/claw-api'
 import { type Context, Hono } from 'hono'
-import { bodyLimit } from 'hono/body-limit'
 import { canonicalApiError } from '../../lib/api-error'
 import type { RequestContextEnv } from '../../lib/request-id'
+import { recordingBodyLimit } from './recording-body-limit'
 
 export interface BinaryAsset {
   bytes: Uint8Array
@@ -141,16 +140,7 @@ export function createCanonicalApiRoute(deps: CanonicalApiDependencies) {
   })
   app.post(
     '/api/v1/sessions/:sessionId/recording/events',
-    bodyLimit({
-      maxSize: RECORDING_INGEST_MAX_BYTES,
-      onError: (c) =>
-        apiError(
-          c,
-          413,
-          'recording_payload_too_large',
-          `recording payload exceeds ${RECORDING_INGEST_MAX_BYTES.toString()} byte limit`,
-        ),
-    }),
+    recordingBodyLimit(),
     async (c) => {
       const sessionId = c.req.param('sessionId')
       const state = deps.getSessionState(sessionId)
