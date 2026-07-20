@@ -13,9 +13,13 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
 import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 
-let currentStream: {
+interface StreamTextArgs {
+  onError?: (event: { error: unknown }) => void
+}
+type StreamFactory = (args: StreamTextArgs) => {
   textStream: AsyncIterable<string>
-} | null = null
+}
+let currentStreamFactory: StreamFactory | null = null
 
 // Spread the real `ai` module so downstream consumers keep every
 // unrelated export and only `streamText` gets our test double.
@@ -23,11 +27,11 @@ let currentStream: {
 const realAi = await import('ai')
 mock.module('ai', () => ({
   ...realAi,
-  streamText: () => {
-    if (!currentStream) {
+  streamText: (args: StreamTextArgs) => {
+    if (!currentStreamFactory) {
       throw new Error('test stream not primed')
     }
-    return currentStream
+    return currentStreamFactory(args)
   },
 }))
 
@@ -67,7 +71,7 @@ function streamThatYieldsThenThrows(
 }
 
 beforeEach(() => {
-  currentStream = null
+  currentStreamFactory = null
 })
 
 const BASE_CONFIG = {
@@ -79,11 +83,13 @@ const BASE_CONFIG = {
 
 const REQUEST = { prompt: 'draft a task', name: 'Morning brief' }
 
+function primeStream(textStream: AsyncIterable<string>): void {
+  currentStreamFactory = () => ({ textStream })
+}
+
 describe('refinePrompt', () => {
   it('returns success: false when the stream throws before yielding anything', async () => {
-    currentStream = {
-      textStream: streamThatThrows('Failed to fetch (127.0.0.1:8098)'),
-    }
+    primeStream(streamThatThrows('Failed to fetch (127.0.0.1:8098)'))
     const result = await refinePrompt({ ...BASE_CONFIG }, REQUEST)
     expect(result.success).toBe(false)
     expect(result.message).toContain('Failed to fetch')
@@ -91,30 +97,45 @@ describe('refinePrompt', () => {
   })
 
   it('returns success: false when the stream throws mid-stream after a partial chunk', async () => {
-    currentStream = {
-      textStream: streamThatYieldsThenThrows(
-        'partial refinement',
-        'connection reset',
-      ),
-    }
+    primeStream(
+      streamThatYieldsThenThrows('partial refinement', 'connection reset'),
+    )
     const result = await refinePrompt({ ...BASE_CONFIG }, REQUEST)
     expect(result.success).toBe(false)
     expect(result.message).toContain('connection reset')
     expect(result.refined).toBeUndefined()
   })
 
-  it('returns success: true with the refined prompt when the stream yields chunks', async () => {
-    currentStream = {
-      textStream: streamOfChunks(['Open ', 'linkedin.com', ' and ', 'read']),
+  it('returns success: false when the SDK invokes onError instead of throwing', async () => {
+    // Same real-world failure mode as the sibling probe test: the SDK
+    // converts a provider APICallError into an `onError` callback and
+    // ends the textStream quietly. Without capturing `onError`, the
+    // loop iterates zero chunks and we misreport as "empty response".
+    currentStreamFactory = (args) => {
+      queueMicrotask(() => {
+        args.onError?.({
+          error: new Error('AI_APICallError: Unauthorized (status 401)'),
+        })
+      })
+      return { textStream: streamOfChunks([]) }
     }
+    const result = await refinePrompt({ ...BASE_CONFIG }, REQUEST)
+    expect(result.success).toBe(false)
+    expect(result.message).toContain('AI_APICallError')
+    expect(result.message).toContain('401')
+    expect(result.refined).toBeUndefined()
+  })
+
+  it('returns success: true with the refined prompt when the stream yields chunks', async () => {
+    primeStream(streamOfChunks(['Open ', 'linkedin.com', ' and ', 'read']))
     const result = await refinePrompt({ ...BASE_CONFIG }, REQUEST)
     expect(result.success).toBe(true)
     expect(result.refined).toBe('Open linkedin.com and read')
     expect(result.message).toBeUndefined()
   })
 
-  it("returns success: false with 'empty response' when the stream yields nothing", async () => {
-    currentStream = { textStream: streamOfChunks([]) }
+  it("returns success: false with 'empty response' when the stream yields nothing and no error", async () => {
+    primeStream(streamOfChunks([]))
     const result = await refinePrompt({ ...BASE_CONFIG }, REQUEST)
     expect(result.success).toBe(false)
     expect(result.message).toBe('Provider returned an empty response')
@@ -126,7 +147,7 @@ describe('refinePrompt', () => {
     // is indistinguishable from truly-empty and returns the same
     // failure. Guards against a future refactor that skips the trim
     // and reports whitespace as success.
-    currentStream = { textStream: streamOfChunks(['   ', '\n\t', '  ']) }
+    primeStream(streamOfChunks(['   ', '\n\t', '  ']))
     const result = await refinePrompt({ ...BASE_CONFIG }, REQUEST)
     expect(result.success).toBe(false)
     expect(result.message).toBe('Provider returned an empty response')

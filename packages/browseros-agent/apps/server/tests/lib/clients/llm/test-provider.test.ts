@@ -15,10 +15,16 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
 import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 
-// The stream this test controls per-case. Populated by helpers.
-let currentStream: {
+// Per-test stream factory. Receives the streamText args (so tests
+// can inspect / trigger the `onError` callback the caller passes)
+// and returns the object streamText would normally return.
+interface StreamTextArgs {
+  onError?: (event: { error: unknown }) => void
+}
+type StreamFactory = (args: StreamTextArgs) => {
   textStream: AsyncIterable<string>
-} | null = null
+}
+let currentStreamFactory: StreamFactory | null = null
 
 // Spread the real `ai` module so downstream consumers keep every
 // unrelated export (e.g. simulateReadableStream, tool types) and
@@ -28,11 +34,11 @@ let currentStream: {
 const realAi = await import('ai')
 mock.module('ai', () => ({
   ...realAi,
-  streamText: () => {
-    if (!currentStream) {
+  streamText: (args: StreamTextArgs) => {
+    if (!currentStreamFactory) {
       throw new Error('test stream not primed')
     }
-    return currentStream
+    return currentStreamFactory(args)
   },
 }))
 
@@ -72,7 +78,7 @@ function streamThatYieldsThenThrows(
 }
 
 beforeEach(() => {
-  currentStream = null
+  currentStreamFactory = null
 })
 
 const BASE_CONFIG = {
@@ -82,11 +88,16 @@ const BASE_CONFIG = {
   baseUrl: 'http://127.0.0.1:8098/v1',
 } as const
 
+// Sugar over the factory shape: primes a stream that ignores the
+// streamText args entirely. Suitable for the "throws" and
+// "empty chunks" cases where the caller's `onError` doesn't matter.
+function primeStream(textStream: AsyncIterable<string>): void {
+  currentStreamFactory = () => ({ textStream })
+}
+
 describe('testProviderConnection', () => {
   it('returns success: false when the stream throws before yielding anything', async () => {
-    currentStream = {
-      textStream: streamThatThrows('Failed to fetch (127.0.0.1:8098)'),
-    }
+    primeStream(streamThatThrows('Failed to fetch (127.0.0.1:8098)'))
     const result = await testProviderConnection({ ...BASE_CONFIG })
     expect(result.success).toBe(false)
     expect(result.message).toContain('Failed to fetch')
@@ -97,37 +108,60 @@ describe('testProviderConnection', () => {
   })
 
   it('returns success: false when the stream throws mid-stream after a partial chunk', async () => {
-    currentStream = {
-      textStream: streamThatYieldsThenThrows('partial', 'connection reset'),
-    }
+    primeStream(streamThatYieldsThenThrows('partial', 'connection reset'))
     const result = await testProviderConnection({ ...BASE_CONFIG })
     expect(result.success).toBe(false)
     expect(result.message).toContain('connection reset')
     expect(result.message).toContain(`[${BASE_CONFIG.provider}]`)
   })
 
+  it('returns success: false when the SDK invokes onError instead of throwing (real-world: OpenAI 404 on custom baseUrl)', async () => {
+    // Regression for the scenario Dani reproduced against a real
+    // OpenAI baseUrl of https://api.openai.com/coolbro: OpenAI's edge
+    // returns 404, the OpenAI SDK's failedResponseHandler surfaces an
+    // APICallError, and streamText intercepts it, calls `onError`,
+    // and lets the `textStream` end quietly. If the probe doesn't
+    // capture `onError`, the loop iterates zero chunks and we
+    // falsely report "Provider responded".
+    currentStreamFactory = (args) => {
+      // Invoke the caller's onError asynchronously so the stream is
+      // consumed first, exactly like the SDK does under real errors.
+      queueMicrotask(() => {
+        args.onError?.({
+          error: new Error(
+            'AI_APICallError: Not Found (status 404) at https://api.openai.com/coolbro/responses',
+          ),
+        })
+      })
+      return { textStream: streamOfChunks([]) }
+    }
+    const result = await testProviderConnection({ ...BASE_CONFIG })
+    expect(result.success).toBe(false)
+    expect(result.message).toContain('AI_APICallError')
+    expect(result.message).toContain('404')
+    expect(result.message).toContain(`[${BASE_CONFIG.provider}]`)
+  })
+
   it('returns success: true with a response preview when the stream yields chunks', async () => {
-    currentStream = { textStream: streamOfChunks(['ok']) }
+    primeStream(streamOfChunks(['ok']))
     const result = await testProviderConnection({ ...BASE_CONFIG })
     expect(result.success).toBe(true)
     expect(result.message).toContain('"ok"')
     expect(result.responseTime).toBeGreaterThanOrEqual(0)
   })
 
-  it('returns success: true with a generic message when the stream yields no chunks', async () => {
+  it('returns success: true with a generic message when the stream yields no chunks and no error', async () => {
     // Behavior preservation: a provider that responds with an empty
-    // body still counts as a successful connection at this layer.
-    // The bug this suite guards against is treating EXCEPTIONS as
-    // empty, not empty responses themselves.
-    currentStream = { textStream: streamOfChunks([]) }
+    // body BUT does NOT invoke onError still counts as a successful
+    // connection at this layer.
+    primeStream(streamOfChunks([]))
     const result = await testProviderConnection({ ...BASE_CONFIG })
     expect(result.success).toBe(true)
     expect(result.message).toContain('Provider responded')
   })
 
   it('truncates the response preview at 100 chars', async () => {
-    const long = 'x'.repeat(200)
-    currentStream = { textStream: streamOfChunks([long]) }
+    primeStream(streamOfChunks(['x'.repeat(200)]))
     const result = await testProviderConnection({ ...BASE_CONFIG })
     expect(result.success).toBe(true)
     expect(result.message).toContain(`${'x'.repeat(100)}...`)
