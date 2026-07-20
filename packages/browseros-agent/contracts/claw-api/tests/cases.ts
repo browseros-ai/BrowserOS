@@ -275,7 +275,7 @@ export const contractCases: ContractCase[] = [
       expect(primary).toMatchObject({
         profileId: 'profile-shared',
         harness: 'Codex',
-        color: '#0254ec',
+        color: '#7A5AF8',
         live: {
           state: 'active',
           browserTabs: [

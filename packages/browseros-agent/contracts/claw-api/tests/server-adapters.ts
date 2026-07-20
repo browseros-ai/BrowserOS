@@ -42,7 +42,7 @@ const primarySession = {
   label: 'Codex',
   name: 'Research BrowserClaw',
   harness: 'Codex',
-  color: '#0254ec',
+  color: '#7A5AF8',
   startedAt: 100,
   durationMs: 10,
   dispatchCount: 1,
