@@ -9,13 +9,22 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { sep } from 'node:path'
 import {
   agentRecipesDirFor,
   hostBucketFromUrl,
+  listRecipeFiles,
   sharedRecipesDirFor,
 } from '../../src/services/recipes'
 import { withTempBrowserClawDir } from '../_helpers/temp-browserclaw-dir'
+
+function seed(dir: string, name: string, body = '# stub'): string {
+  mkdirSync(dir, { recursive: true })
+  const path = `${dir}/${name}`
+  writeFileSync(path, body)
+  return path
+}
 
 describe('hostBucketFromUrl', () => {
   it('strips a leading www. and keeps the rest of the hostname', () => {
@@ -88,6 +97,107 @@ describe('recipe directory paths', () => {
       const claude = agentRecipesDirFor('claude-code', 'linkedin.com')
       const codex = agentRecipesDirFor('codex-cli', 'linkedin.com')
       expect(claude).not.toBe(codex)
+    })
+  })
+})
+
+describe('listRecipeFiles', () => {
+  it('returns an empty list when neither layer exists', async () => {
+    await withTempBrowserClawDir(async () => {
+      expect(listRecipeFiles('claude-code', 'linkedin.com')).toEqual([])
+    })
+  })
+
+  it('returns shared files with source=shared', async () => {
+    await withTempBrowserClawDir(async () => {
+      seed(sharedRecipesDirFor('linkedin.com'), 'invitation-manager.md')
+      seed(sharedRecipesDirFor('linkedin.com'), 'messages.md')
+      const entries = listRecipeFiles('claude-code', 'linkedin.com')
+      expect(entries.map((e) => e.name)).toEqual([
+        'invitation-manager.md',
+        'messages.md',
+      ])
+      expect(entries.every((e) => e.source === 'shared')).toBe(true)
+    })
+  })
+
+  it('returns agent-overlay files with source=agent', async () => {
+    await withTempBrowserClawDir(async () => {
+      seed(agentRecipesDirFor('codex-cli', 'linkedin.com'), 'codex-only.md')
+      const entries = listRecipeFiles('codex-cli', 'linkedin.com')
+      expect(entries).toEqual([
+        {
+          name: 'codex-only.md',
+          absolutePath: expect.stringContaining(
+            'recipes/agents/codex-cli/linkedin.com/codex-only.md',
+          ),
+          source: 'agent',
+        },
+      ])
+    })
+  })
+
+  it('agent overlay wins on filename collision', async () => {
+    await withTempBrowserClawDir(async () => {
+      seed(sharedRecipesDirFor('linkedin.com'), 'invitation-manager.md', 'S')
+      seed(
+        agentRecipesDirFor('claude-code', 'linkedin.com'),
+        'invitation-manager.md',
+        'A',
+      )
+      const entries = listRecipeFiles('claude-code', 'linkedin.com')
+      expect(entries).toHaveLength(1)
+      expect(entries[0]?.name).toBe('invitation-manager.md')
+      expect(entries[0]?.source).toBe('agent')
+      expect(entries[0]?.absolutePath).toContain('agents/claude-code')
+    })
+  })
+
+  it('agent slug is isolated: one agent does not see another overlay', async () => {
+    await withTempBrowserClawDir(async () => {
+      seed(agentRecipesDirFor('claude-code', 'linkedin.com'), 'mine.md')
+      seed(agentRecipesDirFor('codex-cli', 'linkedin.com'), 'theirs.md')
+      const claude = listRecipeFiles('claude-code', 'linkedin.com')
+      const codex = listRecipeFiles('codex-cli', 'linkedin.com')
+      expect(claude.map((e) => e.name)).toEqual(['mine.md'])
+      expect(codex.map((e) => e.name)).toEqual(['theirs.md'])
+    })
+  })
+
+  it('merges shared + agent, sorted by name', async () => {
+    await withTempBrowserClawDir(async () => {
+      seed(sharedRecipesDirFor('linkedin.com'), 'zulu.md')
+      seed(sharedRecipesDirFor('linkedin.com'), 'alpha.md')
+      seed(agentRecipesDirFor('claude-code', 'linkedin.com'), 'mike.md')
+      const names = listRecipeFiles('claude-code', 'linkedin.com').map(
+        (e) => e.name,
+      )
+      expect(names).toEqual(['alpha.md', 'mike.md', 'zulu.md'])
+    })
+  })
+
+  it('skips non-.md files and subdirectories', async () => {
+    await withTempBrowserClawDir(async () => {
+      const dir = sharedRecipesDirFor('linkedin.com')
+      seed(dir, 'ok.md')
+      seed(dir, 'notes.txt')
+      mkdirSync(`${dir}/subdir`, { recursive: true })
+      writeFileSync(`${dir}/subdir/nested.md`, 'nested')
+      const entries = listRecipeFiles('claude-code', 'linkedin.com')
+      expect(entries.map((e) => e.name)).toEqual(['ok.md'])
+    })
+  })
+
+  it('caps output at MAX_RECIPES_SURFACED (10) even when more exist', async () => {
+    await withTempBrowserClawDir(async () => {
+      const dir = sharedRecipesDirFor('linkedin.com')
+      for (let i = 0; i < 15; i++) {
+        seed(dir, `recipe-${String(i).padStart(2, '0')}.md`)
+      }
+      const entries = listRecipeFiles('claude-code', 'linkedin.com')
+      expect(entries).toHaveLength(10)
+      expect(entries[0]?.name).toBe('recipe-00.md')
+      expect(entries[9]?.name).toBe('recipe-09.md')
     })
   })
 })

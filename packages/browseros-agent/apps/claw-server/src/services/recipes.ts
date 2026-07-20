@@ -16,6 +16,8 @@
  * that agent (differing filesystem shape, tool signature, etc.).
  */
 
+import { readdirSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import { resolveClawServerPath } from '../lib/browserclaw-dir'
 
 export const RECIPES_DIR_NAME = 'recipes'
@@ -57,4 +59,65 @@ export function agentRecipesDirFor(slug: string, hostBucket: string): string {
     slug,
     hostBucket,
   )
+}
+
+export type RecipeSource = 'shared' | 'agent'
+
+export interface RecipeFileEntry {
+  /** Basename of the recipe file, e.g. `invitation-manager.md`. */
+  name: string
+  /** Absolute path on disk. */
+  absolutePath: string
+  /** Which layer the file came from. */
+  source: RecipeSource
+}
+
+/**
+ * Merges shared and agent-overlay recipe files for a host. Agent
+ * files win on filename collision so an agent-specific overlay masks
+ * the shared file with the same name. Returns entries sorted by name
+ * and capped at MAX_RECIPES_SURFACED.
+ */
+export function listRecipeFiles(
+  slug: string,
+  hostBucket: string,
+): RecipeFileEntry[] {
+  const byName = new Map<string, RecipeFileEntry>()
+  for (const entry of listMarkdownEntries(sharedRecipesDirFor(hostBucket))) {
+    byName.set(entry.name, { ...entry, source: 'shared' })
+  }
+  for (const entry of listMarkdownEntries(
+    agentRecipesDirFor(slug, hostBucket),
+  )) {
+    byName.set(entry.name, { ...entry, source: 'agent' })
+  }
+  return Array.from(byName.values())
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .slice(0, MAX_RECIPES_SURFACED)
+}
+
+interface RawEntry {
+  name: string
+  absolutePath: string
+}
+
+function listMarkdownEntries(dir: string): RawEntry[] {
+  let entries: string[]
+  try {
+    entries = readdirSync(dir)
+  } catch {
+    return []
+  }
+  const out: RawEntry[] = []
+  for (const name of entries) {
+    if (!name.endsWith(RECIPE_FILE_EXTENSION)) continue
+    const absolutePath = join(dir, name)
+    try {
+      if (!statSync(absolutePath).isFile()) continue
+    } catch {
+      continue
+    }
+    out.push({ name, absolutePath })
+  }
+  return out
 }
