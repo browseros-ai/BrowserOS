@@ -51,7 +51,15 @@ export async function refinePrompt(
       messages: [{ role: 'user', content: request.prompt }],
       abortSignal: AbortSignal.timeout(TIMEOUTS.REFINE_PROMPT),
     })
-    const refined = (await stream.text)?.trim()
+    // Iterate `textStream` instead of `await stream.text` so provider
+    // errors (bad URL, auth failure, timeout) throw and land in the
+    // catch below with the real error message, rather than resolving
+    // to '' and surfacing as the generic "empty response" branch.
+    const chunks: string[] = []
+    for await (const chunk of stream.textStream) {
+      chunks.push(chunk)
+    }
+    const refined = chunks.join('').trim()
 
     if (!refined) {
       return { success: false, message: 'Provider returned an empty response' }

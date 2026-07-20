@@ -39,7 +39,16 @@ export async function testProviderConnection(
       messages: [{ role: 'user', content: TEST_PROMPT }],
       abortSignal: AbortSignal.timeout(TIMEOUTS.TEST_PROVIDER),
     })
-    const text = await stream.text
+    // stream.text resolves to '' when the underlying provider errors
+    // mid-stream (the SDK surfaces streaming errors via `onError`, not
+    // by rejecting `.text`). Iterate `textStream` so bad URLs / auth
+    // failures / DNS errors throw and land in the catch below instead
+    // of being reported as a false-positive "Provider responded".
+    const chunks: string[] = []
+    for await (const chunk of stream.textStream) {
+      chunks.push(chunk)
+    }
+    const text = chunks.join('')
     const responseTime = Math.round(performance.now() - startTime)
 
     if (text) {
