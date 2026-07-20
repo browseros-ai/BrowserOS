@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { RECORDING_INGEST_FALLBACK_MAX_BYTES } from '@browseros/claw-api'
+
 export interface RecorderEventTarget {
   addEventListener(
     type: string,
@@ -20,6 +22,7 @@ export interface RecorderBufferOptions {
   clearTimeout?: (handle: unknown) => void
   bufferCap?: number
   flushAtSize?: number
+  maxBatchBytes?: number
   flushIntervalMs?: number
 }
 
@@ -39,6 +42,8 @@ export function createRecorderBuffer(
 ): RecorderBuffer {
   const bufferCap = options.bufferCap ?? DEFAULT_BUFFER_CAP
   const flushAtSize = options.flushAtSize ?? DEFAULT_FLUSH_AT_SIZE
+  const maxBatchBytes =
+    options.maxBatchBytes ?? RECORDING_INGEST_FALLBACK_MAX_BYTES
   const flushIntervalMs = options.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS
   const now = options.now ?? Date.now
   const enqueueMicrotask =
@@ -52,22 +57,56 @@ export function createRecorderBuffer(
   const cancel =
     options.clearTimeout ??
     ((handle: unknown) => clearTimeout(handle as number))
-  const lines: string[] = []
+  const encoder = new TextEncoder()
+  const lines: Array<{ value: string; bytes: number }> = []
   const rawQueue: unknown[] = []
+  let bufferedBytes = 0
   let dropped = 0
   let pendingSerialization = false
   let timer: unknown | null = null
   let closed = false
 
-  function flush(): void {
-    if (lines.length === 0) return
-    const ndjson = lines.join('\n')
-    lines.length = 0
+  function send(ndjson: string): void {
     if (dropped > 0) {
       options.warnDropped?.(dropped)
       dropped = 0
     }
     options.send(ndjson)
+  }
+
+  function flush(): void {
+    if (lines.length === 0) return
+    const ndjson = lines.map(({ value }) => value).join('\n')
+    lines.length = 0
+    bufferedBytes = 0
+    send(ndjson)
+  }
+
+  function appendLine(value: string): void {
+    const bytes = encoder.encode(value).byteLength
+    if (bytes > maxBatchBytes) {
+      flush()
+      send(value)
+      return
+    }
+    const separatorBytes = lines.length > 0 ? 1 : 0
+    if (
+      lines.length > 0 &&
+      bufferedBytes + separatorBytes + bytes > maxBatchBytes
+    ) {
+      flush()
+    }
+    if (lines.length >= bufferCap) {
+      const removed = lines.shift()
+      if (removed) {
+        bufferedBytes -= removed.bytes + (lines.length > 0 ? 1 : 0)
+      }
+      dropped++
+    }
+    if (lines.length > 0) bufferedBytes++
+    lines.push({ value, bytes })
+    bufferedBytes += bytes
+    if (lines.length >= flushAtSize) flush()
   }
 
   function armFlushTimer(): void {
@@ -99,12 +138,7 @@ export function createRecorderBuffer(
       } catch {
         continue
       }
-      if (lines.length >= bufferCap) {
-        lines.shift()
-        dropped++
-      }
-      lines.push(line)
-      if (lines.length >= flushAtSize) flush()
+      appendLine(line)
     }
     rawQueue.length = 0
     armFlushTimer()
@@ -118,6 +152,10 @@ export function createRecorderBuffer(
   return {
     emit(event): void {
       if (closed) return
+      if (rawQueue.length >= bufferCap) {
+        rawQueue.shift()
+        dropped++
+      }
       rawQueue.push(event)
       if (pendingSerialization) return
       pendingSerialization = true

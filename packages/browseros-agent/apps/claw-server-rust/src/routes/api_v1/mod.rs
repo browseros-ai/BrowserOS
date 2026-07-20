@@ -12,9 +12,11 @@ use crate::{
 };
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     http::StatusCode,
     routing::{get, post, put},
 };
+use claw_api::RECORDING_INGEST_MAX_BYTES;
 
 mod connections;
 mod sessions;
@@ -42,7 +44,9 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/sessions/{session_id}/recording/events",
-            get(sessions::download_events).post(sessions::append_events),
+            get(sessions::download_events)
+                .post(sessions::append_events)
+                .layer(DefaultBodyLimit::max(RECORDING_INGEST_MAX_BYTES)),
         )
         .route("/api/v1/tabs", get(tabs::list))
         .route("/api/v1/tabs/{page_id}/preview", get(tabs::preview))

@@ -20,6 +20,7 @@ import {
   type Connection,
   type Dispatch,
   type Harness,
+  RECORDING_INGEST_MAX_BYTES,
   type SessionDetail,
   type SessionSummary,
   type Tab,
@@ -65,6 +66,9 @@ export const canonicalApiDependencies: CanonicalApiDependencies = {
     url:
       getLocalServerUrl() ??
       `http://127.0.0.1:${CLAW_API_PORT_DEFAULT.toString()}`,
+    capabilities: {
+      recordingIngestMaxBytes: RECORDING_INGEST_MAX_BYTES,
+    },
   }),
   getTelemetry: getTelemetryState,
   updateTelemetry: setTelemetryConsent,

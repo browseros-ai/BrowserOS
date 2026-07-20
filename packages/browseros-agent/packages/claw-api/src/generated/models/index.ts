@@ -14,6 +14,7 @@ export * from './SessionList.js';
 export * from './SessionStatus.js';
 export * from './SessionSummary.js';
 export * from './ShutdownResponse.js';
+export * from './SystemCapabilities.js';
 export * from './SystemInfo.js';
 export * from './Tab.js';
 export * from './TabList.js';

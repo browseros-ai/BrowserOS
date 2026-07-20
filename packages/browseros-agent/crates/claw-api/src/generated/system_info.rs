@@ -19,6 +19,8 @@ pub struct SystemInfo {
     pub version: String,
     #[serde(rename = "url")]
     pub url: String,
+    #[serde(rename = "capabilities", skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Box<models::SystemCapabilities>>,
 }
 
 impl SystemInfo {
@@ -27,6 +29,7 @@ impl SystemInfo {
             product,
             version,
             url,
+            capabilities: None,
         }
     }
 }

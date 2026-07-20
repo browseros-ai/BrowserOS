@@ -8,6 +8,14 @@ function rrwebEvent(timestamp: number) {
   return { timestamp, type: 3, data: { source: timestamp } }
 }
 
+function serialized(event: ReturnType<typeof rrwebEvent>): string {
+  return JSON.stringify({
+    ts: event.timestamp,
+    type: event.type,
+    data: event.data,
+  })
+}
+
 describe('createRecorderBuffer', () => {
   it('flushes at 50 events with only the recorder event fields', () => {
     const batches: string[] = []
@@ -48,6 +56,114 @@ describe('createRecorderBuffer', () => {
 
     timerCallback?.()
     expect(batches).toHaveLength(1)
+  })
+
+  it('keeps an exact-byte-boundary batch together and flushes before the next line', () => {
+    const batches: string[] = []
+    const first = rrwebEvent(1)
+    const second = rrwebEvent(2)
+    const exactBytes = new TextEncoder().encode(
+      `${serialized(first)}\n${serialized(second)}`,
+    ).byteLength
+    const buffer = createRecorderBuffer({
+      send: (ndjson) => batches.push(ndjson),
+      queueMicrotask: (callback) => callback(),
+      setTimeout: () => 1,
+      flushAtSize: 10,
+      maxBatchBytes: exactBytes,
+    })
+
+    buffer.emit(first)
+    buffer.emit(second)
+    buffer.emit(rrwebEvent(3))
+    buffer.flushNow()
+
+    expect(batches).toEqual([
+      `${serialized(first)}\n${serialized(second)}`,
+      serialized(rrwebEvent(3)),
+    ])
+  })
+
+  it('counts multibyte text by UTF-8 bytes', () => {
+    const batches: string[] = []
+    const event = { timestamp: 1, type: 3, data: { text: 'é' } }
+    const line = JSON.stringify({ ts: 1, type: 3, data: { text: 'é' } })
+    const characterBoundary = line.length * 2 + 1
+    const buffer = createRecorderBuffer({
+      send: (ndjson) => batches.push(ndjson),
+      queueMicrotask: (callback) => callback(),
+      setTimeout: () => 1,
+      flushAtSize: 10,
+      maxBatchBytes: characterBoundary,
+    })
+
+    buffer.emit(event)
+    buffer.emit({ ...event, timestamp: 2 })
+    buffer.flushNow()
+
+    expect(
+      new TextEncoder().encode(`${line}\n${line}`).byteLength,
+    ).toBeGreaterThan(characterBoundary)
+    expect(batches).toHaveLength(2)
+  })
+
+  it('isolates an oversized line and continues later events in order', () => {
+    const batches: string[] = []
+    const large = { timestamp: 1, type: 2, data: { html: 'x'.repeat(200) } }
+    const later = rrwebEvent(2)
+    const buffer = createRecorderBuffer({
+      send: (ndjson) => batches.push(ndjson),
+      queueMicrotask: (callback) => callback(),
+      setTimeout: () => 1,
+      flushAtSize: 10,
+      maxBatchBytes: 100,
+    })
+
+    buffer.emit(large)
+    buffer.emit(later)
+    buffer.flushNow()
+
+    expect(batches.map((batch) => JSON.parse(batch).ts)).toEqual([1, 2])
+    expect(batches[0]?.split('\n')).toHaveLength(1)
+  })
+
+  it('bounds the raw callback backlog before serialization', () => {
+    let drain: (() => void) | undefined
+    let serializedCount = 0
+    const warnings: number[] = []
+    const batches: string[] = []
+    const buffer = createRecorderBuffer({
+      send: (ndjson) => batches.push(ndjson),
+      warnDropped: (count) => warnings.push(count),
+      queueMicrotask: (callback) => {
+        drain = callback
+      },
+      setTimeout: () => 1,
+      bufferCap: 2,
+      flushAtSize: 10,
+    })
+    const event = (timestamp: number) => ({
+      timestamp,
+      type: 3,
+      data: {
+        toJSON() {
+          serializedCount++
+          return { source: timestamp }
+        },
+      },
+    })
+
+    buffer.emit(event(1))
+    buffer.emit(event(2))
+    buffer.emit(event(3))
+    drain?.()
+    buffer.flushNow()
+
+    expect(serializedCount).toBe(2)
+    expect(warnings).toEqual([1])
+    expect(batches[0]?.split('\n').map((line) => JSON.parse(line).ts)).toEqual([
+      2, 3,
+    ])
   })
 
   it('drops the oldest events at the buffer cap and reports the count', () => {

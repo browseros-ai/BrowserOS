@@ -61,6 +61,8 @@ components:
       $ref: ./responses.yaml#/Conflict
     Gone:
       $ref: ./responses.yaml#/Gone
+    PayloadTooLarge:
+      $ref: ./responses.yaml#/PayloadTooLarge
     InternalError:
       $ref: ./responses.yaml#/InternalError
   schemas:
@@ -72,6 +74,8 @@ components:
       $ref: ./schemas/system.yaml#/ShutdownResponse
     SystemInfo:
       $ref: ./schemas/system.yaml#/SystemInfo
+    SystemCapabilities:
+      $ref: ./schemas/system.yaml#/SystemCapabilities
     TelemetryState:
       $ref: ./schemas/system.yaml#/TelemetryState
     UpdateTelemetryRequest:

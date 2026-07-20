@@ -13,6 +13,14 @@
  */
 
 import { mapValues } from '../runtime.js';
+import type { SystemCapabilities } from './SystemCapabilities.js';
+import {
+    SystemCapabilitiesFromJSON,
+    SystemCapabilitiesFromJSONTyped,
+    SystemCapabilitiesToJSON,
+    SystemCapabilitiesToJSONTyped,
+} from './SystemCapabilities.js';
+
 /**
  *
  * @export
@@ -37,6 +45,12 @@ export interface SystemInfo {
      * @memberof SystemInfo
      */
     url: string;
+    /**
+     *
+     * @type {SystemCapabilities}
+     * @memberof SystemInfo
+     */
+    capabilities?: SystemCapabilities;
 }
 
 /**
@@ -62,6 +76,7 @@ export function SystemInfoFromJSONTyped(json: any, ignoreDiscriminator: boolean)
         'product': json['product'],
         'version': json['version'],
         'url': json['url'],
+        'capabilities': json['capabilities'] == null ? undefined : SystemCapabilitiesFromJSON(json['capabilities']),
     };
 }
 
@@ -79,5 +94,6 @@ export function SystemInfoToJSONTyped(value?: SystemInfo | null, ignoreDiscrimin
         'product': value['product'],
         'version': value['version'],
         'url': value['url'],
+        'capabilities': SystemCapabilitiesToJSON(value['capabilities']),
     };
 }

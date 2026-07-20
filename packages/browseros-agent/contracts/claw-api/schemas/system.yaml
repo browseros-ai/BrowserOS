@@ -37,6 +37,17 @@ SystemInfo:
     url:
       type: string
       format: uri
+    capabilities:
+      $ref: '#/SystemCapabilities'
+SystemCapabilities:
+  type: object
+  additionalProperties: false
+  properties:
+    recordingIngestMaxBytes:
+      type: integer
+      format: int64
+      minimum: 1
+      description: Maximum UTF-8 encoded request-body bytes accepted by canonical recording ingest.
 TelemetryState:
   type: object
   additionalProperties: false

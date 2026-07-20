@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'bun:test'
-import type { Tab } from '@browseros/claw-api'
+import {
+  RECORDING_INGEST_FALLBACK_MAX_BYTES,
+  RECORDING_INGEST_MAX_BYTES,
+  type Tab,
+} from '@browseros/claw-api'
 import { createRecordingsRelay } from './recordings-relay'
 
 const serverBaseUrl = 'http://127.0.0.1:9511'
@@ -62,6 +66,13 @@ function createFakeClock() {
 
 function requestHeader(init: RequestInit | undefined, name: string): string {
   return new Headers(init?.headers).get(name) ?? ''
+}
+
+function rrwebLineOfBytes(bytes: number, timestamp = 1): string {
+  const prefix = `{"ts":${timestamp.toString()},"type":2,"data":{"html":"`
+  const suffix = '"}}'
+  if (bytes < prefix.length + suffix.length) throw new Error('line too small')
+  return `${prefix}${'x'.repeat(bytes - prefix.length - suffix.length)}${suffix}`
 }
 
 describe('createRecordingsRelay', () => {
@@ -524,5 +535,212 @@ describe('createRecordingsRelay', () => {
         ([message]) => message === '[browseros-claw replay] events POST failed',
       ),
     ).toHaveLength(2)
+  })
+
+  it('subdivides aggregate NDJSON at line boundaries with stable retry ids', async () => {
+    const clock = createFakeClock()
+    const lineBytes = Math.floor(RECORDING_INGEST_FALLBACK_MAX_BYTES * 0.6)
+    const first = rrwebLineOfBytes(lineBytes, 1)
+    const second = rrwebLineOfBytes(lineBytes, 2)
+    const third = '{"ts":3,"type":3,"data":{}}'
+    const attempts: Array<{
+      body: string
+      batchId: string
+      succeeded: boolean
+    }> = []
+    let serverUp = false
+    const relay = createRecordingsRelay({
+      resolveServerBaseUrl: async () => serverBaseUrl,
+      fetch: async (input, init) => {
+        const url = String(input)
+        if (url.endsWith('/tabs')) return Response.json({ items: [tab()] })
+        attempts.push({
+          body: String(init?.body),
+          batchId: requestHeader(init, 'X-Recording-Batch-Id'),
+          succeeded: serverUp,
+        })
+        if (!serverUp) throw new TypeError('connection refused')
+        return Response.json({ accepted: 1 })
+      },
+      now: clock.now,
+      setTimeout: clock.setTimeout,
+      clearTimeout: clock.clearTimeout,
+      warn: () => {},
+    })
+
+    await relay.post(42, `${first}\n${second}\n${third}`)
+    serverUp = true
+    await clock.advanceBy(5_000)
+
+    const successful = attempts.filter(({ succeeded }) => succeeded)
+    expect(successful.map(({ body }) => body)).toEqual([
+      first,
+      `${second}\n${third}`,
+    ])
+    const firstIds = attempts
+      .filter(({ body }) => body === first)
+      .map(({ batchId }) => batchId)
+    expect(new Set(firstIds).size).toBe(1)
+    expect(successful[1]?.batchId).not.toBe(firstIds[0])
+  })
+
+  it('uses an advertised ceiling to deliver a realistic large full snapshot and later events', async () => {
+    const largeSnapshot = rrwebLineOfBytes(2_724_439)
+    const later = '{"ts":2,"type":3,"data":{"source":0}}'
+    const postedBodies: string[] = []
+    let systemRequests = 0
+    const relay = createRecordingsRelay({
+      resolveServerBaseUrl: async () => serverBaseUrl,
+      fetch: async (input, init) => {
+        const url = String(input)
+        if (url.endsWith('/system')) {
+          systemRequests++
+          return Response.json({
+            product: 'BrowserClaw',
+            version: 'new',
+            url: serverBaseUrl,
+            capabilities: {
+              recordingIngestMaxBytes: RECORDING_INGEST_MAX_BYTES,
+            },
+          })
+        }
+        if (url.endsWith('/tabs')) return Response.json({ items: [tab()] })
+        postedBodies.push(String(init?.body))
+        return Response.json({ accepted: 1 })
+      },
+      warn: () => {},
+    })
+
+    await relay.post(42, largeSnapshot)
+    await relay.post(42, later)
+
+    expect(new TextEncoder().encode(largeSnapshot)).toHaveLength(2_724_439)
+    expect(systemRequests).toBe(1)
+    expect(postedBodies).toEqual([largeSnapshot, later])
+  })
+
+  it('uses the conservative fallback when an older server omits capabilities', async () => {
+    const largeSnapshot = rrwebLineOfBytes(
+      RECORDING_INGEST_FALLBACK_MAX_BYTES + 1,
+    )
+    const postedBodies: string[] = []
+    const recoveredTabs: number[] = []
+    let systemRequests = 0
+    const relay = createRecordingsRelay({
+      resolveServerBaseUrl: async () => serverBaseUrl,
+      fetch: async (input, init) => {
+        const url = String(input)
+        if (url.endsWith('/system')) {
+          systemRequests++
+          return Response.json({
+            product: 'BrowserClaw',
+            version: 'old',
+            url: serverBaseUrl,
+          })
+        }
+        if (url.endsWith('/tabs')) return Response.json({ items: [tab()] })
+        postedBodies.push(String(init?.body))
+        return Response.json({ accepted: 1 })
+      },
+      warn: () => {},
+    })
+    relay.onTabRecoveredAfterLoss((tabId) => recoveredTabs.push(tabId))
+
+    await relay.post(42, largeSnapshot)
+    await relay.post(42, '{"ts":2,"type":3,"data":{}}')
+
+    expect(systemRequests).toBe(1)
+    expect(postedBodies).toEqual(['{"ts":2,"type":3,"data":{}}'])
+    expect(recoveredTabs).toEqual([42])
+  })
+
+  it('lets ingest decide when capability discovery is temporarily unavailable', async () => {
+    const largeSnapshot = rrwebLineOfBytes(
+      RECORDING_INGEST_FALLBACK_MAX_BYTES + 1,
+    )
+    const postedBodies: string[] = []
+    const relay = createRecordingsRelay({
+      resolveServerBaseUrl: async () => serverBaseUrl,
+      fetch: async (input, init) => {
+        const url = String(input)
+        if (url.endsWith('/system')) {
+          return Response.json(
+            { code: 'temporarily_unavailable', message: 'retry' },
+            { status: 503 },
+          )
+        }
+        if (url.endsWith('/tabs')) return Response.json({ items: [tab()] })
+        postedBodies.push(String(init?.body))
+        return Response.json({ accepted: 1 })
+      },
+      warn: () => {},
+    })
+
+    await relay.post(42, largeSnapshot)
+
+    expect(postedBodies).toEqual([largeSnapshot])
+  })
+
+  it('drops a 413 queue head once, continues delivery, and backs off resnapshot recovery', async () => {
+    const clock = createFakeClock()
+    const warnings: unknown[][] = []
+    const recoveredTabs: number[] = []
+    const postedBodies: string[] = []
+    const rejected = new Set(['oversized', 'oversized-resnapshot'])
+    let tabAvailable = true
+    const relay = createRecordingsRelay({
+      resolveServerBaseUrl: async () => serverBaseUrl,
+      fetch: async (input, init) => {
+        const url = String(input)
+        if (url.endsWith('/tabs')) {
+          return Response.json({ items: tabAvailable ? [tab()] : [] })
+        }
+        const body = String(init?.body)
+        postedBodies.push(body)
+        return rejected.has(body)
+          ? Response.json(
+              { code: 'recording_payload_too_large', message: 'too large' },
+              { status: 413 },
+            )
+          : Response.json({ accepted: 1 })
+      },
+      now: clock.now,
+      setTimeout: clock.setTimeout,
+      clearTimeout: clock.clearTimeout,
+      warn: (...args) => warnings.push(args),
+    })
+    relay.onTabRecoveredAfterLoss((tabId) => recoveredTabs.push(tabId))
+
+    await relay.post(42, 'oversized')
+    expect(clock.pendingTimers()).toBe(0)
+    await relay.post(42, 'later')
+    expect(recoveredTabs).toEqual([42])
+
+    await relay.post(42, 'oversized-resnapshot')
+    tabAvailable = false
+    await relay.post(42, 'while-tab-missing')
+    tabAvailable = true
+    await relay.post(42, 'later-still')
+    expect(recoveredTabs).toEqual([42])
+    expect(clock.pendingTimers()).toBe(0)
+
+    await clock.advanceBy(60_000)
+    await relay.post(42, 'after-backoff')
+
+    expect(postedBodies).toEqual([
+      'oversized',
+      'later',
+      'oversized-resnapshot',
+      'later-still',
+      'after-backoff',
+    ])
+    expect(recoveredTabs).toEqual([42, 42])
+    expect(
+      warnings.filter(
+        ([message]) =>
+          message ===
+          '[browseros-claw replay] recording batch exceeds ingest limit; replay gap recorded',
+      ),
+    ).toHaveLength(1)
   })
 })

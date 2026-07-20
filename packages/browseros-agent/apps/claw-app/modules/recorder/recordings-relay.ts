@@ -7,6 +7,8 @@
 import {
   Configuration,
   DefaultApi,
+  RECORDING_INGEST_FALLBACK_MAX_BYTES,
+  RECORDING_INGEST_MAX_BYTES,
   ResponseError,
   type Tab,
 } from '@browseros/claw-api'
@@ -50,12 +52,19 @@ type SendOutcome =
   | { kind: 'success' }
   | { kind: 'legacy' }
   | { kind: 'unknown-tab' }
+  | { kind: 'oversize'; error: unknown }
   | { kind: 'transient'; error: unknown }
+type TerminalSendOutcome = Exclude<
+  SendOutcome,
+  { kind: 'legacy' } | { kind: 'transient'; error: unknown }
+>
 
-export const RECORDINGS_QUEUE_MAX_BYTES = 10 * 1024 * 1024
+export const RECORDINGS_QUEUE_MAX_BYTES = 2 * RECORDING_INGEST_MAX_BYTES
 const LEGACY_TTL_MS = 10 * 60_000
 const RETRY_INTERVAL_MS = 5_000
 const WARNING_INTERVAL_MS = 60_000
+const CAPABILITY_CACHE_TTL_MS = 60_000
+const OVERSIZE_RECOVERY_INTERVAL_MS = 60_000
 
 /**
  * Identity of the recording stream a tab's events belong to, as reported
@@ -90,13 +99,20 @@ export function createRecordingsRelay(
   const sendingTabs = new Set<number>()
   const sendingQueuedBatchIds = new Set<string>()
   const gappedTabs = new Set<number>()
+  const oversizeGappedTabs = new Set<number>()
   const recoveredListeners = new Set<(tabId: number) => void>()
   const lastWarningAt = new Map<string, number>()
+  const lastOversizeRecoveryAt = new Map<number, number>()
+  const ingestLimits = new Map<
+    string,
+    { maxBytes: number; expiresAt: number }
+  >()
   let legacyUntil = 0
   let totalBytes = 0
   let queuedBatchCount = 0
   let retryTimer: TimerHandle | null = null
   let drainPromise: Promise<void> | null = null
+  let deliveryInterrupted = false
   // Last known association per tab id, kept so batches queued while the
   // server is unreachable pin to the session that produced them, not to
   // whichever session owns the tab once delivery resumes.
@@ -130,16 +146,21 @@ export function createRecordingsRelay(
     retryTimer = null
   }
 
-  function reportQueueTransition(previousCount: number): void {
-    if (previousCount === 0 && queuedBatchCount > 0) {
+  function markDeliveryInterrupted(): void {
+    if (!deliveryInterrupted) {
+      deliveryInterrupted = true
       safeWarn('[browseros-claw replay] delivery interrupted; events queued')
-    } else if (previousCount > 0 && queuedBatchCount === 0) {
+    }
+  }
+
+  function reportDeliveryRecovered(): void {
+    if (deliveryInterrupted && queuedBatchCount === 0) {
+      deliveryInterrupted = false
       safeWarn('[browseros-claw replay] queued event delivery recovered')
     }
   }
 
   function addBatch(tabId: number, batch: QueuedBatch, atFront = false): void {
-    const previousCount = queuedBatchCount
     batch.association ??= associations.get(tabId)
     const queue = queues.get(tabId)
     if (queue) {
@@ -154,7 +175,6 @@ export function createRecordingsRelay(
     )
     totalBytes += batch.bytes
     queuedBatchCount++
-    reportQueueTransition(previousCount)
     enforceQueueBudget()
   }
 
@@ -162,7 +182,6 @@ export function createRecordingsRelay(
     const queue = queues.get(tabId)
     const batch = queue?.[index]
     if (!queue || !batch) return null
-    const previousCount = queuedBatchCount
     queue.splice(index, 1)
     if (queue.length === 0) queues.delete(tabId)
     const remainingBytes = (queuedBytesByTab.get(tabId) ?? 0) - batch.bytes
@@ -170,7 +189,7 @@ export function createRecordingsRelay(
     else queuedBytesByTab.delete(tabId)
     totalBytes -= batch.bytes
     queuedBatchCount--
-    reportQueueTransition(previousCount)
+    reportDeliveryRecovered()
     if (queuedBatchCount === 0) cancelRetry()
     return batch
   }
@@ -183,12 +202,11 @@ export function createRecordingsRelay(
 
   function clearQueues(): void {
     if (queuedBatchCount === 0) return
-    const previousCount = queuedBatchCount
     queues.clear()
     queuedBytesByTab.clear()
     totalBytes = 0
     queuedBatchCount = 0
-    reportQueueTransition(previousCount)
+    deliveryInterrupted = false
     cancelRetry()
   }
 
@@ -211,7 +229,7 @@ export function createRecordingsRelay(
 
       // Evict from the largest producer so one hot tab cannot starve all others.
       removeBatchAt(eviction.tabId, eviction.batchIndex)
-      gappedTabs.add(eviction.tabId)
+      markGap(eviction.tabId)
       warnRateLimited(
         'queue-eviction',
         '[browseros-claw replay] recording batch evicted under queue pressure',
@@ -228,8 +246,79 @@ export function createRecordingsRelay(
     }
   }
 
+  function makeBatches(ndjson: string): QueuedBatch[] {
+    const sourceLines = ndjson.split('\n')
+    if (sourceLines.length > 1 && sourceLines.at(-1) === '') sourceLines.pop()
+    if (sourceLines.length === 0) return [makeBatch('')]
+
+    const batches: QueuedBatch[] = []
+    let batchLines: string[] = []
+    let batchBytes = 0
+    const flush = () => {
+      if (batchLines.length === 0) return
+      batches.push(makeBatch(batchLines.join('\n')))
+      batchLines = []
+      batchBytes = 0
+    }
+
+    for (const line of sourceLines) {
+      const lineBytes = encoder.encode(line).byteLength
+      const separatorBytes = batchLines.length > 0 ? 1 : 0
+      if (
+        batchLines.length > 0 &&
+        batchBytes + separatorBytes + lineBytes >
+          RECORDING_INGEST_FALLBACK_MAX_BYTES
+      ) {
+        flush()
+      }
+      if (lineBytes > RECORDING_INGEST_FALLBACK_MAX_BYTES) {
+        flush()
+        batches.push(makeBatch(line))
+        continue
+      }
+      if (batchLines.length > 0) batchBytes++
+      batchLines.push(line)
+      batchBytes += lineBytes
+    }
+    flush()
+    return batches
+  }
+
+  function markGap(tabId: number): void {
+    gappedTabs.add(tabId)
+  }
+
+  function markOversizeGap(
+    tabId: number,
+    batch: QueuedBatch,
+    error: unknown,
+  ): void {
+    gappedTabs.add(tabId)
+    oversizeGappedTabs.add(tabId)
+    warnRateLimited(
+      'oversize-send',
+      '[browseros-claw replay] recording batch exceeds ingest limit; replay gap recorded',
+      new Error(
+        `${batch.bytes.toString()} byte batch: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    )
+  }
+
   function notifyRecovered(tabId: number): void {
-    if (!gappedTabs.delete(tabId)) return
+    if (!gappedTabs.has(tabId)) return
+    if (oversizeGappedTabs.has(tabId)) {
+      const timestamp = now()
+      const lastAt = lastOversizeRecoveryAt.get(tabId)
+      if (
+        lastAt !== undefined &&
+        timestamp - lastAt < OVERSIZE_RECOVERY_INTERVAL_MS
+      ) {
+        return
+      }
+      lastOversizeRecoveryAt.set(tabId, timestamp)
+      oversizeGappedTabs.delete(tabId)
+    }
+    gappedTabs.delete(tabId)
     for (const listener of recoveredListeners) {
       try {
         listener(tabId)
@@ -248,6 +337,20 @@ export function createRecordingsRelay(
     notifyRecovered(tabId)
   }
 
+  function handleTerminalOutcome(
+    tabId: number,
+    batch: QueuedBatch,
+    outcome: TerminalSendOutcome,
+  ): void {
+    if (outcome.kind === 'unknown-tab') {
+      markGap(tabId)
+    } else if (outcome.kind === 'oversize') {
+      markOversizeGap(tabId, batch, outcome.error)
+    } else {
+      markDeliverySuccess(tabId)
+    }
+  }
+
   async function sendBatch(
     tabId: number,
     batch: QueuedBatch,
@@ -257,6 +360,17 @@ export function createRecordingsRelay(
       const client = new DefaultApi(
         new Configuration({ basePath: baseUrl, fetchApi: fetch }),
       )
+      if (batch.bytes > RECORDING_INGEST_FALLBACK_MAX_BYTES) {
+        const maxBytes = await discoverIngestLimit(baseUrl, client)
+        if (maxBytes !== undefined && batch.bytes > maxBytes) {
+          return {
+            kind: 'oversize',
+            error: new Error(
+              `server accepts at most ${maxBytes.toString()} bytes`,
+            ),
+          }
+        }
+      }
       const tab = (await client.listTabs()).items.find(
         (candidate) =>
           candidate.tabId === tabId && typeof candidate.sessionId === 'string',
@@ -304,6 +418,12 @@ export function createRecordingsRelay(
         associations.delete(tabId)
         return { kind: 'unknown-tab' }
       }
+      if (response.status === 413) {
+        return {
+          kind: 'oversize',
+          error: new Error('recordings ingest returned 413'),
+        }
+      }
       if (!response.ok) {
         return {
           kind: 'transient',
@@ -322,6 +442,33 @@ export function createRecordingsRelay(
     }
   }
 
+  async function discoverIngestLimit(
+    baseUrl: string,
+    client: DefaultApi,
+  ): Promise<number | undefined> {
+    const cached = ingestLimits.get(baseUrl)
+    if (cached && now() < cached.expiresAt) return cached.maxBytes
+    try {
+      const system = await client.getSystemInfo()
+      const advertised = system.capabilities?.recordingIngestMaxBytes
+      const maxBytes =
+        typeof advertised === 'number' &&
+        Number.isSafeInteger(advertised) &&
+        advertised > 0
+          ? Math.min(advertised, RECORDINGS_QUEUE_MAX_BYTES)
+          : RECORDING_INGEST_FALLBACK_MAX_BYTES
+      ingestLimits.set(baseUrl, {
+        maxBytes,
+        expiresAt: now() + CAPABILITY_CACHE_TTL_MS,
+      })
+      return maxBytes
+    } catch {
+      // An unreachable capability endpoint is not evidence that the ingest
+      // endpoint is old; let the actual POST decide instead of dropping early.
+      return undefined
+    }
+  }
+
   function rememberAssociation(tabId: number, tab: Tab): TabAssociation {
     const association = {
       sessionId: tab.sessionId as string,
@@ -333,7 +480,7 @@ export function createRecordingsRelay(
       // The tab was reattached mid-recording; mark the gap so the next
       // successful delivery fires the recovered listeners and the
       // background re-checkpoints the new stream.
-      gappedTabs.add(tabId)
+      markGap(tabId)
     }
     associations.set(tabId, association)
     return association
@@ -353,8 +500,8 @@ export function createRecordingsRelay(
   function markLegacy(triggeringTabId: number): void {
     // A legacy verdict can outlive the server process that produced it. Keep
     // dropped tabs gapped so a later endpoint can heal them after the TTL.
-    gappedTabs.add(triggeringTabId)
-    for (const queuedTabId of queues.keys()) gappedTabs.add(queuedTabId)
+    markGap(triggeringTabId)
+    for (const queuedTabId of queues.keys()) markGap(queuedTabId)
     legacyUntil = now() + LEGACY_TTL_MS
     clearQueues()
   }
@@ -385,6 +532,7 @@ export function createRecordingsRelay(
             sendingTabs.delete(tabId)
             sendingQueuedBatchIds.delete(batch.batchId)
             enforceQueueBudget()
+            markDeliveryInterrupted()
             warnRateLimited(
               'transient-send',
               '[browseros-claw replay] events POST failed',
@@ -403,11 +551,7 @@ export function createRecordingsRelay(
             markLegacy(tabId)
             return
           }
-          if (outcome.kind === 'unknown-tab') {
-            gappedTabs.add(tabId)
-          } else {
-            markDeliverySuccess(tabId)
-          }
+          handleTerminalOutcome(tabId, batch, outcome)
         }
       }
     }
@@ -422,17 +566,20 @@ export function createRecordingsRelay(
   async function post(tabId: number, ndjson: string): Promise<void> {
     try {
       if (now() < legacyUntil) {
-        gappedTabs.add(tabId)
+        markGap(tabId)
         return
       }
-      const batch = makeBatch(ndjson)
+      const batches = makeBatches(ndjson)
       if ((queues.get(tabId)?.length ?? 0) > 0 || sendingTabs.has(tabId)) {
-        addBatch(tabId, batch)
+        for (const batch of batches) addBatch(tabId, batch)
         await drainQueues()
         return
       }
 
+      const [batch, ...remainingBatches] = batches
+      if (!batch) return
       sendingTabs.add(tabId)
+      for (const remaining of remainingBatches) addBatch(tabId, remaining)
       const outcome = await sendBatch(tabId, batch)
       sendingTabs.delete(tabId)
 
@@ -442,7 +589,8 @@ export function createRecordingsRelay(
       }
       if (outcome.kind === 'transient') {
         if (now() >= legacyUntil) addBatch(tabId, batch, true)
-        else gappedTabs.add(tabId)
+        else markGap(tabId)
+        markDeliveryInterrupted()
         warnRateLimited(
           'transient-send',
           '[browseros-claw replay] events POST failed',
@@ -451,11 +599,7 @@ export function createRecordingsRelay(
         armRetry()
         return
       }
-      if (outcome.kind === 'unknown-tab') {
-        gappedTabs.add(tabId)
-      } else {
-        markDeliverySuccess(tabId)
-      }
+      handleTerminalOutcome(tabId, batch, outcome)
 
       if ((queues.get(tabId)?.length ?? 0) > 0) await drainQueues()
     } catch (error) {
