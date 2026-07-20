@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { readdir, readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { parse } from 'yaml'
+import { flattenRequiredHeaderGuards } from './claw-api'
 
 interface OpenApiOperation {
   operationId?: string
@@ -30,6 +31,7 @@ const expectedPaths = [
   '/system/shutdown',
   '/api/v1/system',
   '/api/v1/settings/telemetry',
+  '/api/v1/recordings/events',
   '/api/v1/sessions',
   '/api/v1/sessions/{sessionId}',
   '/api/v1/sessions/{sessionId}/cancel',
@@ -79,6 +81,36 @@ describe('BrowserClaw OpenAPI contract', () => {
       ),
     )
     expect(sources.join('\n')).not.toMatch(/\b(?:agentId|taskId|runId)\b/)
+  })
+})
+
+describe('flattenRequiredHeaderGuards', () => {
+  test('flattens required header assignments and preserves optional guards', () => {
+    const generated = `        if (requestParameters['required'] == null) {
+            throw new Error('required');
+        }
+
+        if (requestParameters['required'] != null) {
+            headerParameters['Required'] = String(requestParameters['required']);
+        }
+
+        if (requestParameters['optional'] != null) {
+            headerParameters['Optional'] = String(requestParameters['optional']);
+        }
+`
+
+    expect(
+      flattenRequiredHeaderGuards(generated),
+    ).toBe(`        if (requestParameters['required'] == null) {
+            throw new Error('required');
+        }
+
+        headerParameters['Required'] = String(requestParameters['required']);
+
+        if (requestParameters['optional'] != null) {
+            headerParameters['Optional'] = String(requestParameters['optional']);
+        }
+`)
   })
 })
 

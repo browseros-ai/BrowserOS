@@ -192,17 +192,11 @@ export class DefaultApi extends runtime.BaseAPI {
 
         headerParameters['Content-Type'] = 'application/x-ndjson';
 
-        if (requestParameters['xRecordingTabId'] != null) {
-            headerParameters['X-Recording-Tab-Id'] = String(requestParameters['xRecordingTabId']);
-        }
+        headerParameters['X-Recording-Tab-Id'] = String(requestParameters['xRecordingTabId']);
 
-        if (requestParameters['xRecordingDocumentId'] != null) {
-            headerParameters['X-Recording-Document-Id'] = String(requestParameters['xRecordingDocumentId']);
-        }
+        headerParameters['X-Recording-Document-Id'] = String(requestParameters['xRecordingDocumentId']);
 
-        if (requestParameters['xRecordingBatchId'] != null) {
-            headerParameters['X-Recording-Batch-Id'] = String(requestParameters['xRecordingBatchId']);
-        }
+        headerParameters['X-Recording-Batch-Id'] = String(requestParameters['xRecordingBatchId']);
 
         if (requestParameters['xRecordingHasGap'] != null) {
             headerParameters['X-Recording-Has-Gap'] = String(requestParameters['xRecordingHasGap']);

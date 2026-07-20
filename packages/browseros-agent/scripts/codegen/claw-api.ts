@@ -35,6 +35,33 @@ interface GeneratedTrees {
   rust: string
 }
 
+/**
+ * OpenAPI Generator 7.22 guards required headers twice: first by throwing,
+ * then by conditionally assigning them. Flatten the unreachable second guard
+ * so generated clients remain clean under whole-repository static analysis.
+ */
+export function flattenRequiredHeaderGuards(source: string): string {
+  const requiredParameters = new Set(
+    [...source.matchAll(/if \(requestParameters\['([^']+)'\] == null\) \{/g)]
+      .map((match) => match[1])
+      .filter((parameter): parameter is string => parameter !== undefined),
+  )
+  let normalized = source
+  for (const parameter of requiredParameters) {
+    const escaped = parameter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const guardedAssignment = new RegExp(
+      `        if \\(requestParameters\\['${escaped}'\\] != null\\) \\{\\n(            headerParameters\\[[^\\n]+\\n)        \\}`,
+      'g',
+    )
+    normalized = normalized.replace(
+      guardedAssignment,
+      (_match, assignment: string) =>
+        assignment.replace(/^ {12}/, '        ').trimEnd(),
+    )
+  }
+  return normalized
+}
+
 function runGenerator(outputRoot: string): GeneratedTrees {
   // Run the container as the invoking user so the generated files on
   // the bind mount aren't root-owned on Linux hosts.
@@ -94,6 +121,7 @@ function runGenerator(outputRoot: string): GeneratedTrees {
       .map((line) => line.trimEnd())
       .join('\n')
       .trimEnd()}\n`
+    normalized = flattenRequiredHeaderGuards(normalized)
     if (file === 'runtime.ts') {
       // TypeScript requires `override` for the inherited Error.cause property;
       // OpenAPI Generator 7.22's FetchError template predates that check.
@@ -194,20 +222,22 @@ function assertTreeMatches(expected: string, actual: string): void {
   }
 }
 
-const temporaryRoot = mkdtempSync(join(tmpdir(), 'claw-api-codegen-'))
-try {
-  const trees = runGenerator(temporaryRoot)
-  if (check) {
-    assertTreeMatches(
-      trees.typescript,
-      join(root, 'packages/claw-api/src/generated'),
-    )
-    assertTreeMatches(trees.rust, join(root, 'crates/claw-api/src/generated'))
-    console.log('BrowserClaw API generated output is current.')
-  } else {
-    installGenerated(trees)
-    console.log('Generated BrowserClaw TypeScript client and Rust DTOs.')
+if (import.meta.main) {
+  const temporaryRoot = mkdtempSync(join(tmpdir(), 'claw-api-codegen-'))
+  try {
+    const trees = runGenerator(temporaryRoot)
+    if (check) {
+      assertTreeMatches(
+        trees.typescript,
+        join(root, 'packages/claw-api/src/generated'),
+      )
+      assertTreeMatches(trees.rust, join(root, 'crates/claw-api/src/generated'))
+      console.log('BrowserClaw API generated output is current.')
+    } else {
+      installGenerated(trees)
+      console.log('Generated BrowserClaw TypeScript client and Rust DTOs.')
+    }
+  } finally {
+    rmSync(temporaryRoot, { recursive: true, force: true })
   }
-} finally {
-  rmSync(temporaryRoot, { recursive: true, force: true })
 }
