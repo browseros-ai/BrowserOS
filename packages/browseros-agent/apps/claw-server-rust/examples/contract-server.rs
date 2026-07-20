@@ -6,7 +6,8 @@
 //! by hand: `cargo run --example contract-server <port> <data-dir>`.
 
 use axum::Router;
-use browseros_core::TargetId;
+use browseros_cdp::{CdpError, CdpEvent, SessionId as CdpSessionId};
+use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, TargetId};
 use claw_server_rust::{
     AppRuntime, AppState, build_router,
     capture::audit::{DispatchResultSummary, RecordToolDispatchInput},
@@ -16,9 +17,104 @@ use claw_server_rust::{
     sessions::Session,
     tabs::activity::{RecordToolInput, ScreencastFrame},
 };
+use futures_util::future::BoxFuture;
 use serde_json::json;
 use std::{path::PathBuf, sync::Arc, time::Duration};
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::broadcast};
+
+struct ContractBrowser {
+    events: broadcast::Sender<CdpEvent>,
+}
+
+impl ContractBrowser {
+    fn new() -> Arc<Self> {
+        let (events, _) = broadcast::channel(1);
+        Arc::new(Self { events })
+    }
+}
+
+impl CdpConnection for ContractBrowser {
+    fn send<'a>(
+        &'a self,
+        method: &'a str,
+        params: serde_json::Value,
+        _session: Option<&'a CdpSessionId>,
+    ) -> BoxFuture<'a, Result<serde_json::Value, CdpError>> {
+        Box::pin(async move {
+            match method {
+                "Browser.getTabs" => Ok(json!({
+                    "tabs": (1..=7).map(contract_tab).collect::<Vec<_>>()
+                })),
+                "Browser.getTabInfo" => {
+                    let tab_id = params.get("tabId").and_then(serde_json::Value::as_i64);
+                    let tab = (1..=7)
+                        .map(contract_tab)
+                        .find(|tab| tab["tabId"].as_i64() == tab_id)
+                        .ok_or_else(|| CdpError::Protocol {
+                            code: -32000,
+                            message: "tab not found".to_string(),
+                        })?;
+                    Ok(json!({ "tab": tab }))
+                }
+                "Target.attachToTarget" => Ok(json!({ "sessionId": "contract-page" })),
+                "Page.captureScreenshot" => Ok(json!({ "data": "/9g=" })),
+                _ => Ok(json!({})),
+            }
+        })
+    }
+
+    fn send_raw_json<'a>(
+        &'a self,
+        _method: &'a str,
+        _params_json: &'a str,
+        _session: Option<&'a CdpSessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        Box::pin(async { Ok("{}".to_string()) })
+    }
+
+    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        self.events.subscribe()
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    fn connection_epoch(&self) -> u64 {
+        1
+    }
+}
+
+fn contract_tab(page_id: i64) -> serde_json::Value {
+    let (tab_id, target_id, url, title) = if page_id == 7 {
+        (
+            101,
+            "target-7".to_string(),
+            "https://browseros.com".to_string(),
+            "BrowserOS".to_string(),
+        )
+    } else {
+        (
+            page_id,
+            format!("fixture-target-{page_id}"),
+            format!("https://fixture.example/{page_id}"),
+            format!("Fixture {page_id}"),
+        )
+    };
+    json!({
+        "tabId": tab_id,
+        "targetId": target_id,
+        "url": url,
+        "title": title,
+        "isActive": page_id == 7,
+        "isLoading": false,
+        "loadProgress": 1.0,
+        "isPinned": false,
+        "isHidden": false,
+        "windowId": 1,
+        "index": page_id - 1
+    })
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -38,6 +134,9 @@ async fn main() -> anyhow::Result<()> {
         auth_token: None,
     });
     let state = AppState::new_with_home(config, root.join("home")).await?;
+    let browser = BrowserSession::new(ContractBrowser::new(), BrowserSessionHooks::default());
+    browser.pages.list().await?;
+    state.browser.set_session_for_testing(browser).await;
     seed(&state).await?;
 
     let runtime = AppRuntime::start(state);

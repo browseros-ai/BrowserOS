@@ -93,6 +93,11 @@ impl BrowserService {
         Ok(())
     }
 
+    #[doc(hidden)]
+    pub async fn set_session_for_testing(&self, session: Arc<BrowserSession>) {
+        *self.session.write().await = Some(session);
+    }
+
     pub fn stop(&self) {
         self.cancel.cancel();
     }

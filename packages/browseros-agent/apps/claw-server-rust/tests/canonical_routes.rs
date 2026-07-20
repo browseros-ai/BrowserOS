@@ -9,7 +9,8 @@ use axum::{
     body::{Body, to_bytes},
     http::{HeaderMap, Request, StatusCode, header},
 };
-use browseros_core::TargetId;
+use browseros_cdp::{CdpError, CdpEvent, SessionId as CdpSessionId};
+use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, TargetId};
 use claw_server_rust::{
     AppState, build_router,
     capture::audit::{DispatchResultSummary, RecordToolDispatchInput},
@@ -19,9 +20,11 @@ use claw_server_rust::{
     sessions::Session,
     tabs::activity::{RecordToolInput, ScreencastFrame},
 };
+use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tempfile::TempDir;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
@@ -29,6 +32,103 @@ struct TestApp {
     router: Router,
     state: AppState,
     _dir: TempDir,
+}
+
+struct FixtureConnection {
+    events: broadcast::Sender<CdpEvent>,
+}
+
+impl FixtureConnection {
+    fn new() -> Arc<Self> {
+        let (events, _) = broadcast::channel(1);
+        Arc::new(Self { events })
+    }
+}
+
+impl CdpConnection for FixtureConnection {
+    fn send<'a>(
+        &'a self,
+        method: &'a str,
+        params: Value,
+        _session: Option<&'a CdpSessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        Box::pin(async move {
+            match method {
+                "Browser.getTabs" => Ok(json!({
+                    "tabs": (1..=8).map(fixture_tab).collect::<Vec<_>>()
+                })),
+                "Browser.getTabInfo" => {
+                    let tab_id = params.get("tabId").and_then(Value::as_i64);
+                    let tab = (1..=8)
+                        .map(fixture_tab)
+                        .find(|tab| tab["tabId"].as_i64() == tab_id)
+                        .ok_or_else(|| CdpError::Protocol {
+                            code: -32000,
+                            message: "tab not found".to_string(),
+                        })?;
+                    Ok(json!({ "tab": tab }))
+                }
+                _ => Ok(json!({})),
+            }
+        })
+    }
+
+    fn send_raw_json<'a>(
+        &'a self,
+        _method: &'a str,
+        _params_json: &'a str,
+        _session: Option<&'a CdpSessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        Box::pin(async { Ok("{}".to_string()) })
+    }
+
+    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        self.events.subscribe()
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    fn connection_epoch(&self) -> u64 {
+        1
+    }
+}
+
+fn fixture_tab(page_id: i64) -> Value {
+    let (tab_id, target_id, url, title) = match page_id {
+        7 => (
+            101,
+            "target-7".to_string(),
+            "https://browseros.com".to_string(),
+            "BrowserOS".to_string(),
+        ),
+        8 => (
+            102,
+            "target-8".to_string(),
+            "https://example.com".to_string(),
+            "Example".to_string(),
+        ),
+        _ => (
+            page_id,
+            format!("fixture-target-{page_id}"),
+            format!("https://fixture.example/{page_id}"),
+            format!("Fixture {page_id}"),
+        ),
+    };
+    json!({
+        "tabId": tab_id,
+        "targetId": target_id,
+        "url": url,
+        "title": title,
+        "isActive": page_id == 7,
+        "isLoading": false,
+        "loadProgress": 1.0,
+        "isPinned": false,
+        "isHidden": false,
+        "windowId": 1,
+        "index": page_id - 1
+    })
 }
 
 async fn test_app() -> anyhow::Result<TestApp> {
@@ -48,6 +148,9 @@ async fn test_app() -> anyhow::Result<TestApp> {
         auth_token: None,
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
+    let browser = BrowserSession::new(FixtureConnection::new(), BrowserSessionHooks::default());
+    assert_eq!(browser.pages.list().await?.len(), 8);
+    state.browser.set_session_for_testing(browser).await;
     Ok(TestApp {
         router: build_router(state.clone()),
         state,
