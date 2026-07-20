@@ -30,8 +30,7 @@ fn captured_dir() -> PathBuf {
 fn captured_pages() -> Vec<(String, PathBuf)> {
     let mut pages = Vec::new();
     let dir = captured_dir();
-    let entries = fs::read_dir(&dir)
-        .unwrap_or_else(|err| panic!("read {}: {err}", dir.display()));
+    let entries = fs::read_dir(&dir).unwrap_or_else(|err| panic!("read {}: {err}", dir.display()));
     for entry in entries {
         let entry = entry.expect("dir entry");
         let ax = entry.path().join("get-full-ax-tree.json");
@@ -45,8 +44,8 @@ fn captured_pages() -> Vec<(String, PathBuf)> {
 }
 
 fn load_nodes(path: &Path) -> Vec<AxNode> {
-    let raw = fs::read_to_string(path)
-        .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+    let raw =
+        fs::read_to_string(path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
     let result: AxTreeResult = serde_json::from_str(&raw)
         .unwrap_or_else(|err| panic!("deserialize {}: {err}", path.display()));
     result.nodes
