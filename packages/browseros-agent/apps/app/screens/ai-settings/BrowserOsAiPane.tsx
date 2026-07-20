@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { type FC, useMemo, useState } from 'react'
+import { type FC, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
   AlertDialog,
@@ -54,6 +54,7 @@ import { LlmProvidersHeader } from './LlmProvidersHeader'
 import { McpPromoBanner } from './McpPromoBanner'
 import { NewProviderDialog } from './NewProviderDialog'
 import { ProviderTemplatesSection } from './ProviderTemplatesSection'
+import { partitionSyncedProviders } from './synced-providers'
 
 // All OAuth providers share the same flow via useOAuthProviderFlow
 const OAUTH_PROVIDERS_CONFIG: Record<string, OAuthProviderFlowConfig> = {
@@ -140,7 +141,7 @@ export const BrowserOsAiPane: FC = () => {
     { enabled: !!profileId },
   )
 
-  const deleteRemoteProviderMutation = useGraphqlMutation(
+  const { mutate: deleteRemoteProvider } = useGraphqlMutation(
     DeleteRemoteLlmProviderDocument,
     {
       onSuccess: () => {
@@ -151,13 +152,22 @@ export const BrowserOsAiPane: FC = () => {
     },
   )
 
-  const incompleteProviders = useMemo<IncompleteProvider[]>(() => {
-    if (!remoteProvidersData?.llmProviders?.nodes) return []
+  const { incompleteProviders, retiredProviderIds } = useMemo(() => {
+    if (!remoteProvidersData?.llmProviders?.nodes) {
+      return { incompleteProviders: [], retiredProviderIds: [] }
+    }
     const localProviderIds = new Set(providers.map((p) => p.id))
-    return remoteProvidersData.llmProviders.nodes
-      .filter((node): node is NonNullable<typeof node> => node !== null)
-      .filter((node) => !localProviderIds.has(node.rowId))
+    return partitionSyncedProviders(
+      remoteProvidersData.llmProviders.nodes,
+      localProviderIds,
+    )
   }, [remoteProvidersData, providers])
+
+  useEffect(() => {
+    for (const rowId of retiredProviderIds) {
+      deleteRemoteProvider({ rowId })
+    }
+  }, [deleteRemoteProvider, retiredProviderIds])
 
   const [isNewDialogOpen, setIsNewDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
@@ -284,7 +294,7 @@ export const BrowserOsAiPane: FC = () => {
     }
 
     await deleteProvider(providerToDelete.id)
-    deleteRemoteProviderMutation.mutate({ rowId: providerToDelete.id })
+    deleteRemoteProvider({ rowId: providerToDelete.id })
 
     setProviderToDelete(null)
   }
@@ -314,7 +324,7 @@ export const BrowserOsAiPane: FC = () => {
 
   const confirmDeleteIncompleteProvider = () => {
     if (incompleteProviderToDelete) {
-      deleteRemoteProviderMutation.mutate({
+      deleteRemoteProvider({
         rowId: incompleteProviderToDelete.rowId,
       })
       setIncompleteProviderToDelete(null)
