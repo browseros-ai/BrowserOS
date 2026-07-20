@@ -248,12 +248,20 @@ impl PageManager {
             .await;
         match refreshed {
             Ok(result) => {
-                let updated = page_info_from_tab(page_id.clone(), result.tab, info.window_id);
-                self.state
-                    .lock()
-                    .await
-                    .pages
-                    .insert(page_id, updated.clone());
+                let updated =
+                    page_info_from_tab(page_id.clone(), result.tab, info.window_id.clone());
+                let mut state = self.state.lock().await;
+                let Some(current) = state.pages.get(&page_id) else {
+                    return Ok(None);
+                };
+                // A newer list or refresh may have rebound this reusable page id during CDP work.
+                if current != &info {
+                    return Ok(Some(current.clone()));
+                }
+                if updated.target_id != info.target_id {
+                    state.sessions.remove(&info.target_id);
+                }
+                state.pages.insert(page_id, updated.clone());
                 Ok(Some(updated))
             }
             Err(_err) => {

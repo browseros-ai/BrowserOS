@@ -256,7 +256,7 @@ mod tests {
     use super::{LivePageState, RecordToolInput, TabActivityService};
     use browseros_cdp::{CdpError, CdpEvent};
     use browseros_core::{
-        BrowserSession, BrowserSessionHooks, CdpConnection, SessionId as ProtocolSessionId,
+        BrowserSession, BrowserSessionHooks, CdpConnection, PageId, SessionId as ProtocolSessionId,
         TargetId,
     };
     use futures_util::future::BoxFuture;
@@ -310,6 +310,90 @@ mod tests {
 
         fn connection_epoch(&self) -> u64 {
             0
+        }
+    }
+
+    struct RebindingConnection {
+        events: broadcast::Sender<CdpEvent>,
+        list_calls: AtomicUsize,
+        refresh_started: Notify,
+        release_refresh: Notify,
+    }
+
+    impl RebindingConnection {
+        fn new() -> Arc<Self> {
+            let (events, _) = broadcast::channel(1);
+            Arc::new(Self {
+                events,
+                list_calls: AtomicUsize::new(0),
+                refresh_started: Notify::new(),
+                release_refresh: Notify::new(),
+            })
+        }
+
+        fn tab(target_id: &str) -> Value {
+            serde_json::json!({
+                "tabId": 101,
+                "targetId": target_id,
+                "url": format!("https://example.com/{target_id}"),
+                "title": target_id,
+                "isActive": true,
+                "isLoading": false,
+                "loadProgress": 1.0,
+                "isPinned": false,
+                "isHidden": false,
+                "windowId": 1,
+                "index": 0
+            })
+        }
+    }
+
+    impl CdpConnection for RebindingConnection {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            _params: Value,
+            _session: Option<&'a ProtocolSessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                match method {
+                    "Browser.getTabs" => {
+                        let target_id = if self.list_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                            "target-old"
+                        } else {
+                            "target-new"
+                        };
+                        Ok(serde_json::json!({ "tabs": [Self::tab(target_id)] }))
+                    }
+                    "Browser.getTabInfo" => {
+                        self.refresh_started.notify_one();
+                        self.release_refresh.notified().await;
+                        Ok(serde_json::json!({ "tab": Self::tab("target-old") }))
+                    }
+                    _ => Ok(serde_json::json!({})),
+                }
+            })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            _method: &'a str,
+            _params_json: &'a str,
+            _session: Option<&'a ProtocolSessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            self.events.subscribe()
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            1
         }
     }
 
@@ -457,6 +541,36 @@ mod tests {
             })
             .await;
         assert_eq!(records.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_page_rebind_wins_over_an_older_refresh() -> anyhow::Result<()> {
+        let service = TabActivityService::default();
+        record(&service, "target-old", 1, "session-1", "snapshot").await;
+        let connection = RebindingConnection::new();
+        let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+        let initial = session.pages.list().await?;
+        assert_eq!(initial[0].target_id.as_str(), "target-old");
+
+        let snapshot = {
+            let service = service.clone();
+            let session = session.clone();
+            tokio::spawn(async move { service.snapshot(Some(session.as_ref())).await })
+        };
+        connection.refresh_started.notified().await;
+        let rebound = session.pages.list().await?;
+        assert_eq!(rebound[0].target_id.as_str(), "target-new");
+        connection.release_refresh.notify_one();
+
+        let rows = snapshot.await?;
+        assert!(rows.is_empty());
+        let current = session
+            .pages
+            .get_info(PageId(1))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("rebound page missing"))?;
+        assert_eq!(current.target_id.as_str(), "target-new");
+        Ok(())
     }
 
     #[tokio::test]
