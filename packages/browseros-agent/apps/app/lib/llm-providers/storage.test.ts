@@ -7,14 +7,35 @@ import { resolveDefaultProviderId } from './provider-selection'
 import type { LlmProviderConfig } from './types'
 
 const storageValues = new Map<string, unknown>()
+const migratedStorageKeys = new Set<string>()
+
+interface MockStorageOptions<T> {
+  fallback?: T
+  migrations?: Record<number, (value: T | null) => T | null>
+}
 
 mock.module('@wxt-dev/storage', () => ({
   storage: {
-    defineItem: <T>(key: string, options?: { fallback?: T }) => ({
-      getValue: async () =>
-        storageValues.has(key) ? storageValues.get(key) : options?.fallback,
+    defineItem: <T>(key: string, options?: MockStorageOptions<T>) => ({
+      getValue: async () => {
+        let value = storageValues.has(key)
+          ? (storageValues.get(key) as T | null)
+          : (options?.fallback ?? null)
+        if (!migratedStorageKeys.has(key) && options?.migrations) {
+          const versions = Object.keys(options.migrations)
+            .map(Number)
+            .sort((a, b) => a - b)
+          for (const version of versions) {
+            value = options.migrations[version](value)
+          }
+          storageValues.set(key, value)
+          migratedStorageKeys.add(key)
+        }
+        return value
+      },
       setValue: async (value: T) => {
         storageValues.set(key, value)
+        migratedStorageKeys.add(key)
       },
       watch: () => () => {},
     }),
@@ -46,6 +67,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   storageValues.clear()
+  migratedStorageKeys.clear()
 })
 
 function providerConfig(
@@ -121,6 +143,23 @@ describe('migrateLlmProvidersToV3', () => {
 })
 
 describe('loadProviders', () => {
+  it('migrates an old Remote Hermes config before direct storage reads', async () => {
+    const openAI = providerConfig({ id: 'openai-1' })
+    const remoteHermes = providerConfig({
+      id: 'remote-hermes-1',
+      type: 'remote-hermes' as LlmProviderConfig['type'],
+      name: 'Remote Hermes',
+    })
+    storageValues.set('local:llm-providers', [remoteHermes, openAI])
+
+    const providers = await providersStorage.getValue()
+
+    expect(providers).toEqual([openAI])
+    expect(resolveDefaultProviderId(providers ?? [], remoteHermes.id)).toBe(
+      openAI.id,
+    )
+  })
+
   it('drops an old Remote Hermes config and falls back from its default id', async () => {
     const openAI = providerConfig({ id: 'openai-1' })
     const remoteHermes = providerConfig({

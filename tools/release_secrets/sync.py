@@ -138,10 +138,6 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
         ("release-browseros.yml", "release-server.yml"),
     ),  # BrowserOS server inline Sentry DSN.
     SecretSpec(
-        "AGENT_RUNNER_JWT_SECRET",
-        ("release-browseros.yml", "release-server.yml"),
-    ),  # Optional BrowserOS server remote-agent JWT signing secret.
-    SecretSpec(
         "ESIGNER_USERNAME",
         (
             "build-browseros.yml",
@@ -264,7 +260,6 @@ KNOWN_EXTERNAL_SECRETS = frozenset(
 )
 KNOWN_OPTIONAL_SECRETS = frozenset(
     {
-        "AGENT_RUNNER_JWT_SECRET",
         "CLAW_POSTHOG_HOST",
         "ESIGNER_CREDENTIAL_ID",
         "VITE_CLAW_POSTHOG_HOST",

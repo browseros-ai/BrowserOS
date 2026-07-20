@@ -149,18 +149,5 @@ class SecretPlanTest(unittest.TestCase):
         self.assertEqual(["ESIGNER_CREDENTIAL_ID"], result.optional)
         self.assertEqual([], result.missing_required)
 
-    def test_optional_agent_runner_secret_syncs_when_env_provides_it(self):
-        plan = build_plan({"AGENT_RUNNER_JWT_SECRET": "jwt-secret"}, set())
-
-        self.assertEqual(
-            ("AGENT_RUNNER_JWT_SECRET", "set"),
-            next(
-                (item.name, item.status)
-                for item in plan
-                if item.name == "AGENT_RUNNER_JWT_SECRET"
-            ),
-        )
-
-
 if __name__ == "__main__":
     unittest.main()

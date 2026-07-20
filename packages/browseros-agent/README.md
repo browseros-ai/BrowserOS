@@ -117,7 +117,6 @@ The server and Claw server read startup ports, resource directories, execution d
 | `app` | `.env.development` | Browser extension and local BrowserOS launch settings, including dev ports, public Vite values, source-map upload settings, and optional GraphQL schema path. |
 | `claw` | `.env.development` | Optional Claw app/server overrides such as Claw API URL, user-data dir, CDP port, and `BROWSERCLAW_DIR`. |
 | `server` | `.env.development`, `.env.production` | Server config URL, telemetry, Sentry, `NODE_ENV`, log level, and local server test settings. |
-| `build` | `.env.production` | Build-time production values such as `AGENT_RUNNER_JWT_SECRET`. |
 | `upload` | `.env.production` | Cloudflare R2 credentials and bucket for production artifact uploads. |
 
 Production build and upload scripts read root `.env.production` plus exported process env through the shared loader in `@browseros/shared/env/*`; exported process env takes precedence. Missing required values fail with an error naming the key, section, and root file.

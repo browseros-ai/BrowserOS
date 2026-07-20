@@ -50,15 +50,8 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
     tokenManager,
     turnRegistry,
   } = deps
-  const {
-    browser,
-    browserosId,
-    browserSession,
-    executionDir,
-    port,
-    resourcesDir,
-    version,
-  } = config
+  const { browser, browserosId, browserSession, port, resourcesDir, version } =
+    config
   const { activity } = config
 
   return (
@@ -93,7 +86,6 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
           version,
           browserSession,
           klavis,
-          executionDir,
           activity,
         }),
       )
