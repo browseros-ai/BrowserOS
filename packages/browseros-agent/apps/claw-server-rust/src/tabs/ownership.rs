@@ -193,6 +193,35 @@ impl PageOwnership {
         .await;
     }
 
+    /// Clears stale browser state only when it still names the completed operation's group.
+    pub async fn clear_tab_group_ref_if_current(
+        &self,
+        convo_id: &ConvoId,
+        group_ref: &str,
+    ) -> bool {
+        let mut inner = self.inner.write().await;
+        let Some(group) = inner
+            .convos
+            .get_mut(convo_id)
+            .and_then(|convo| convo.group.as_mut())
+        else {
+            return false;
+        };
+        if group.group_ref.as_deref() != Some(group_ref) {
+            return false;
+        }
+        group.group_ref = None;
+        group.collapsed = false;
+        group.title.mark_synced();
+        if group.is_empty()
+            && let Some(convo) = inner.convos.get_mut(convo_id)
+        {
+            convo.group = None;
+        }
+        inner.remove_empty_convos();
+        true
+    }
+
     pub async fn tab_group_color(&self, convo_id: &ConvoId) -> Option<TabGroupColor> {
         self.group(convo_id).await.and_then(|group| group.color)
     }
@@ -476,6 +505,63 @@ mod tests {
         ownership.set_tab_group_ref(codex.clone(), None).await;
 
         assert!(!ownership.tab_group_collapsed(&codex).await);
+    }
+
+    #[tokio::test]
+    async fn matching_group_clear_preserves_replacement_identity() {
+        let ownership = PageOwnership::new();
+        let codex = ConvoId::new("codex");
+        ownership
+            .set_tab_group_with_title(
+                codex.clone(),
+                "group-1".to_string(),
+                TabGroupColor::Purple,
+                "codex/first".to_string(),
+            )
+            .await;
+        ownership.set_tab_group_collapsed(codex.clone(), true).await;
+        ownership
+            .set_desired_group_title(codex.clone(), "codex/renamed".to_string())
+            .await;
+
+        assert!(
+            ownership
+                .clear_tab_group_ref_if_current(&codex, "group-1")
+                .await
+        );
+        let cleared = ownership
+            .tab_group_state(&codex)
+            .await
+            .unwrap_or_else(|| unreachable!());
+        assert_eq!(cleared.group_ref, None);
+        assert!(!cleared.collapsed);
+        assert_eq!(cleared.desired_title.as_deref(), Some("codex/renamed"));
+        assert!(!cleared.title_sync_pending);
+
+        ownership
+            .set_tab_group_with_title(
+                codex.clone(),
+                "group-2".to_string(),
+                TabGroupColor::Blue,
+                "codex/replacement".to_string(),
+            )
+            .await;
+
+        assert!(
+            !ownership
+                .clear_tab_group_ref_if_current(&codex, "group-1")
+                .await
+        );
+        let replacement = ownership
+            .tab_group_state(&codex)
+            .await
+            .unwrap_or_else(|| unreachable!());
+        assert_eq!(replacement.group_ref.as_deref(), Some("group-2"));
+        assert_eq!(replacement.color, Some(TabGroupColor::Blue));
+        assert_eq!(
+            replacement.desired_title.as_deref(),
+            Some("codex/replacement")
+        );
     }
 
     #[tokio::test]
