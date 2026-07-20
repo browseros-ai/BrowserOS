@@ -15,6 +15,7 @@ import { expect } from 'bun:test'
 import {
   type ApiError,
   Harness,
+  RECORDING_INGEST_MAX_BYTES,
   ResponseError,
 } from '../../../packages/claw-api/src'
 import type { ContractServer } from './server-adapters'
@@ -68,6 +69,9 @@ export const contractCases: ContractCase[] = [
       expect(value.product).toBe('BrowserClaw')
       expect(value.version).toBeString()
       expect(value.url).toStartWith('http://127.0.0.1:')
+      expect(value.capabilities?.recordingIngestMaxBytes).toBe(
+        RECORDING_INGEST_MAX_BYTES,
+      )
     },
   },
   {
@@ -148,6 +152,47 @@ export const contractCases: ContractCase[] = [
         'application/x-ndjson',
       )
       expect((await response.text()).trim().split('\n')).toHaveLength(2)
+    },
+  },
+  {
+    name: 'recording ingest byte ceiling',
+    async run({ api, liveSessionId }) {
+      const accepted = recordingLineOfBytes(RECORDING_INGEST_MAX_BYTES, 400)
+      expect(
+        await api.appendRecordingEvents({
+          sessionId: liveSessionId,
+          xRecordingTabId: 101,
+          xRecordingPageId: 7,
+          xRecordingTargetId: 'target-7',
+          xRecordingBatchId: 'contract-boundary',
+          body: accepted,
+        }),
+      ).toEqual({ accepted: 1 })
+
+      await expectApiError(
+        () =>
+          api.appendRecordingEvents({
+            sessionId: liveSessionId,
+            xRecordingTabId: 101,
+            xRecordingPageId: 7,
+            xRecordingTargetId: 'target-7',
+            xRecordingBatchId: 'contract-over-limit',
+            body: recordingLineOfBytes(RECORDING_INGEST_MAX_BYTES + 1, 401),
+          }),
+        413,
+        'recording_payload_too_large',
+      )
+
+      expect(
+        await api.appendRecordingEvents({
+          sessionId: liveSessionId,
+          xRecordingTabId: 101,
+          xRecordingPageId: 7,
+          xRecordingTargetId: 'target-7',
+          xRecordingBatchId: 'contract-after-over-limit',
+          body: '{"ts":402,"type":3,"data":{}}',
+        }),
+      ).toEqual({ accepted: 1 })
     },
   },
   {
@@ -287,4 +332,10 @@ async function expectApiError(
     return
   }
   throw new Error(`expected ${status} ${code}`)
+}
+
+function recordingLineOfBytes(bytes: number, timestamp: number): string {
+  const prefix = `{"ts":${timestamp.toString()},"type":2,"data":{"html":"`
+  const suffix = '"}}'
+  return `${prefix}${'x'.repeat(bytes - prefix.length - suffix.length)}${suffix}`
 }

@@ -5,16 +5,17 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
-import type {
-  Connection,
-  ConnectionList,
-  RecordingMetadata,
-  SessionDetail,
-  SessionList,
-  SessionSummary,
-  SystemInfo,
-  TabList,
-  TelemetryState,
+import {
+  type Connection,
+  type ConnectionList,
+  RECORDING_INGEST_MAX_BYTES,
+  type RecordingMetadata,
+  type SessionDetail,
+  type SessionList,
+  type SessionSummary,
+  type SystemInfo,
+  type TabList,
+  type TelemetryState,
 } from '@browseros/claw-api'
 import { identityService } from '../../src/lib/mcp-session'
 import {
@@ -33,6 +34,7 @@ const system: SystemInfo = {
   product: 'BrowserClaw',
   version: '1.2.3',
   url: 'http://127.0.0.1:9200',
+  capabilities: { recordingIngestMaxBytes: RECORDING_INGEST_MAX_BYTES },
 }
 const telemetry: TelemetryState = {
   distinctId: 'install-1',
@@ -132,6 +134,12 @@ function request(
   init?: RequestInit,
 ) {
   return app.request(`http://localhost${path}`, init)
+}
+
+function recordingLineOfBytes(bytes: number, timestamp: number): string {
+  const prefix = `{"ts":${timestamp.toString()},"type":2,"data":{"html":"`
+  const suffix = '"}}'
+  return `${prefix}${'x'.repeat(bytes - prefix.length - suffix.length)}${suffix}`
 }
 
 describe('canonical TypeScript API', () => {
@@ -292,6 +300,45 @@ describe('canonical TypeScript API', () => {
     )
     expect(rejected.status).toBe(410)
     expect(await rejected.json()).toMatchObject({ code: 'session_ended' })
+  })
+
+  it('enforces the recording byte ceiling before append', async () => {
+    const append = mock(async () => ({ accepted: 1 }))
+    const app = createCanonicalApiRoute(
+      dependencies({ appendRecordingEvents: append }),
+    )
+    const headers = {
+      'content-type': 'application/x-ndjson',
+      'x-recording-tab-id': '101',
+      'x-recording-page-id': '7',
+      'x-recording-target-id': 'target-7',
+    }
+
+    const accepted = await request(
+      app,
+      '/api/v1/sessions/session-live/recording/events',
+      {
+        method: 'POST',
+        headers,
+        body: recordingLineOfBytes(RECORDING_INGEST_MAX_BYTES, 1),
+      },
+    )
+    expect(accepted.status).toBe(200)
+
+    const rejected = await request(
+      app,
+      '/api/v1/sessions/session-live/recording/events',
+      {
+        method: 'POST',
+        headers,
+        body: recordingLineOfBytes(RECORDING_INGEST_MAX_BYTES + 1, 2),
+      },
+    )
+    expect(rejected.status).toBe(413)
+    expect(await rejected.json()).toMatchObject({
+      code: 'recording_payload_too_large',
+    })
+    expect(append).toHaveBeenCalledTimes(1)
   })
 
   it('selects the exact recording association in a multi-tab session', () => {

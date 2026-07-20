@@ -6,7 +6,8 @@ use axum::{
     http::StatusCode,
 };
 use claw_api::models::{
-    HealthResponse, ShutdownResponse, SystemInfo, TelemetryState, UpdateTelemetryRequest,
+    HealthResponse, ShutdownResponse, SystemCapabilities, SystemInfo, TelemetryState,
+    UpdateTelemetryRequest,
 };
 
 // The contract's health is pure liveness: `status` is a single-variant
@@ -23,11 +24,16 @@ pub(super) async fn shutdown(State(state): State<AppState>) -> Json<ShutdownResp
 }
 
 pub(super) async fn info(State(state): State<AppState>) -> Json<SystemInfo> {
-    Json(SystemInfo::new(
+    let mut info = SystemInfo::new(
         "BrowserClaw".to_string(),
         env!("CARGO_PKG_VERSION").to_string(),
         state.config.local_server_url(),
-    ))
+    );
+    let mut capabilities = SystemCapabilities::new();
+    capabilities.recording_ingest_max_bytes =
+        Some(i64::try_from(claw_api::RECORDING_INGEST_MAX_BYTES).unwrap_or(i64::MAX));
+    info.capabilities = Some(Box::new(capabilities));
+    Json(info)
 }
 
 pub(super) async fn telemetry(State(state): State<AppState>) -> Json<TelemetryState> {

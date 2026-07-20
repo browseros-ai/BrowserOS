@@ -12,7 +12,7 @@ use crate::{
 use axum::{
     Extension, Json,
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, rejection::StringRejection},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::Response,
 };
@@ -201,8 +201,28 @@ pub(super) async fn append_events(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
     headers: HeaderMap,
-    body: String,
+    body: Result<String, StringRejection>,
 ) -> Result<Json<AppendRecordingEventsResponse>, CanonicalError> {
+    let body = body.map_err(|rejection| {
+        if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            error(
+                &request_id,
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "recording_payload_too_large",
+                &format!(
+                    "recording payload exceeds {} byte limit",
+                    claw_api::RECORDING_INGEST_MAX_BYTES
+                ),
+            )
+        } else {
+            error(
+                &request_id,
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "recording payload must be valid UTF-8",
+            )
+        }
+    })?;
     let session_key = SessionId::new(session_id.clone());
     if !state.sessions.contains(&session_key).await {
         let known = state

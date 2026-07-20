@@ -13,6 +13,7 @@ import {
   type Connection,
   type ConnectionList,
   Harness,
+  RECORDING_INGEST_MAX_BYTES,
   type RecordingMetadata,
   type SessionDetail,
   type SessionList,
@@ -21,6 +22,7 @@ import {
   type TelemetryState,
 } from '@browseros/claw-api'
 import { type Context, Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import { canonicalApiError } from '../../lib/api-error'
 import type { RequestContextEnv } from '../../lib/request-id'
 
@@ -137,57 +139,70 @@ export function createCanonicalApiRoute(deps: CanonicalApiDependencies) {
     }
     return c.body(events, 200, { 'content-type': 'application/x-ndjson' })
   })
-  app.post('/api/v1/sessions/:sessionId/recording/events', async (c) => {
-    const sessionId = c.req.param('sessionId')
-    const state = deps.getSessionState(sessionId)
-    if (state === 'missing') {
-      return apiError(c, 404, 'session_not_found', 'session not found')
-    }
-    if (state === 'ended') {
-      return apiError(c, 410, 'session_ended', 'session has ended')
-    }
-    const contentType = c.req.header('content-type') ?? ''
-    if (!contentType.toLowerCase().startsWith('application/x-ndjson')) {
-      return apiError(
-        c,
-        400,
-        'invalid_request',
-        'content-type must be application/x-ndjson',
+  app.post(
+    '/api/v1/sessions/:sessionId/recording/events',
+    bodyLimit({
+      maxSize: RECORDING_INGEST_MAX_BYTES,
+      onError: (c) =>
+        apiError(
+          c,
+          413,
+          'recording_payload_too_large',
+          `recording payload exceeds ${RECORDING_INGEST_MAX_BYTES.toString()} byte limit`,
+        ),
+    }),
+    async (c) => {
+      const sessionId = c.req.param('sessionId')
+      const state = deps.getSessionState(sessionId)
+      if (state === 'missing') {
+        return apiError(c, 404, 'session_not_found', 'session not found')
+      }
+      if (state === 'ended') {
+        return apiError(c, 410, 'session_ended', 'session has ended')
+      }
+      const contentType = c.req.header('content-type') ?? ''
+      if (!contentType.toLowerCase().startsWith('application/x-ndjson')) {
+        return apiError(
+          c,
+          400,
+          'invalid_request',
+          'content-type must be application/x-ndjson',
+        )
+      }
+      // The recorder pins every batch to the (tab, page, target)
+      // incarnation it captured from. All three are required so a batch
+      // can never be attributed to a tab that was since reclaimed —
+      // appendRecordingEvents refuses (409) when the association no
+      // longer holds, and the recorder drops its cached association on
+      // any of 404/409/410.
+      const tabId = positiveInteger(c.req.header('x-recording-tab-id') ?? '')
+      const pageId = positiveInteger(c.req.header('x-recording-page-id') ?? '')
+      const targetId = c.req.header('x-recording-target-id')
+      if (tabId === null || pageId === null || !targetId) {
+        return apiError(
+          c,
+          400,
+          'invalid_request',
+          'recording tab, page, and target headers are required',
+        )
+      }
+      const result = await deps.appendRecordingEvents(
+        sessionId,
+        { tabId, pageId, targetId },
+        await c.req.text(),
+        c.req.header('x-recording-batch-id'),
       )
-    }
-    // The recorder pins every batch to the (tab, page, target)
-    // incarnation it captured from. All three are required so a batch
-    // can never be attributed to a tab that was since reclaimed —
-    // appendRecordingEvents refuses (409) when the association no
-    // longer holds, and the recorder drops its cached association on
-    // any of 404/409/410.
-    const tabId = positiveInteger(c.req.header('x-recording-tab-id') ?? '')
-    const pageId = positiveInteger(c.req.header('x-recording-page-id') ?? '')
-    const targetId = c.req.header('x-recording-target-id')
-    if (tabId === null || pageId === null || !targetId) {
-      return apiError(
-        c,
-        400,
-        'invalid_request',
-        'recording tab, page, and target headers are required',
-      )
-    }
-    const result = await deps.appendRecordingEvents(
-      sessionId,
-      { tabId, pageId, targetId },
-      await c.req.text(),
-      c.req.header('x-recording-batch-id'),
-    )
-    if (!result) {
-      return apiError(
-        c,
-        409,
-        'recording_association_changed',
-        'recording tab association changed',
-      )
-    }
-    return c.json(result)
-  })
+      if (!result) {
+        return apiError(
+          c,
+          409,
+          'recording_association_changed',
+          'recording tab association changed',
+        )
+      }
+      return c.json(result)
+    },
+  )
 
   app.get('/api/v1/tabs', (c) => c.json(deps.listTabs()))
   app.get('/api/v1/tabs/:pageId/preview', (c) => {
@@ -243,7 +258,7 @@ export function createCanonicalApiRoute(deps: CanonicalApiDependencies) {
 
 function apiError(
   c: Context<RequestContextEnv, string>,
-  status: 400 | 404 | 409 | 410,
+  status: 400 | 404 | 409 | 410 | 413,
   code: string,
   message: string,
 ) {

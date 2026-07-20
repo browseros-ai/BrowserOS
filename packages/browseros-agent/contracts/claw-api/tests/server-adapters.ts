@@ -20,6 +20,7 @@ import {
   Configuration,
   DefaultApi,
   type Harness,
+  RECORDING_INGEST_MAX_BYTES,
 } from '../../../packages/claw-api/src'
 
 export interface ContractServer {
@@ -63,6 +64,9 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
       product: 'BrowserClaw',
       version: 'contract-test',
       url: 'http://127.0.0.1:0',
+      capabilities: {
+        recordingIngestMaxBytes: RECORDING_INGEST_MAX_BYTES,
+      },
     }),
     getTelemetry: () => ({
       distinctId: 'contract-test',
