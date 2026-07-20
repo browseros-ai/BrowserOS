@@ -272,21 +272,37 @@ function createAnthropicFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('Anthropic provider requires apiKey')
-  return createAnthropic({ apiKey: config.apiKey })
+  return createAnthropic({
+    apiKey: config.apiKey,
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
+  })
 }
 
+// The SDK defaults to the Responses API; many OpenAI-shape proxies
+// only speak Chat Completions. The `NewProviderDialog` shows a hint
+// on the OpenAI Base URL field pointing users at the "OpenAI
+// Compatible" provider template for that case, so a proxy that fails
+// here has a documented next step. Users who point at a Responses-
+// compatible custom endpoint get the direct-forward behavior they
+// asked for.
 function createOpenAIFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('OpenAI provider requires apiKey')
-  return createOpenAI({ apiKey: config.apiKey })
+  return createOpenAI({
+    apiKey: config.apiKey,
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
+  })
 }
 
 function createGoogleFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('Google provider requires apiKey')
-  return createGoogleGenerativeAI({ apiKey: config.apiKey })
+  return createGoogleGenerativeAI({
+    apiKey: config.apiKey,
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
+  })
 }
 
 function createOpenRouterFactory(
@@ -297,18 +313,27 @@ function createOpenRouterFactory(
     apiKey: config.apiKey,
     extraBody: { reasoning: {} },
     fetch: createOpenRouterCompatibleFetch(),
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
   })
 }
 
 function createAzureFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
-  if (!config.apiKey || !config.resourceName) {
-    throw new Error('Azure provider requires apiKey and resourceName')
+  // baseUrl and resourceName are mutually exclusive per the
+  // @ai-sdk/azure contract; the SDK ignores resourceName when
+  // baseURL is set. Accept either so users of custom Azure OpenAI
+  // gateways can point at a full URL directly. The UI copy already
+  // says "Overrides resource name if set".
+  if (!config.apiKey || (!config.resourceName && !config.baseUrl)) {
+    throw new Error(
+      'Azure provider requires apiKey and either resourceName or baseUrl',
+    )
   }
   return createAzure({
-    resourceName: config.resourceName,
     apiKey: config.apiKey,
+    ...(config.resourceName && { resourceName: config.resourceName }),
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
   })
 }
 

@@ -889,6 +889,12 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
               <FormControl>
                 <Input placeholder="https://api.openai.com/v1" {...field} />
               </FormControl>
+              {watchedType === 'openai' && (
+                <FormDescription>
+                  If your custom endpoint doesn't work with OpenAI, try the
+                  OpenAI Compatible provider template instead.
+                </FormDescription>
+              )}
               <FormMessage />
             </FormItem>
           )}
