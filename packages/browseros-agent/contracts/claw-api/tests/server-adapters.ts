@@ -65,6 +65,7 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
       version: 'contract-test',
       url: 'http://127.0.0.1:0',
       capabilities: {
+        recordingIngestVersion: 2,
         recordingIngestMaxBytes: RECORDING_INGEST_MAX_BYTES,
       },
     }),
@@ -95,6 +96,7 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
                 sessionId,
                 toolName: 'snapshot',
                 pageId: 7,
+                tabId: 101,
                 targetId: 'target-7',
                 hasScreenshot: true,
               },
@@ -111,13 +113,45 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
       sessionId === liveSession.sessionId
         ? {
             hasData: recordingEvents.length > 0,
+            complete: true,
             sizeBytes: recordingEvents.length,
-            pageIds: recordingEvents.length > 0 ? [7] : [],
+            tabs:
+              recordingEvents.length > 0
+                ? [
+                    {
+                      tabId: 101,
+                      complete: true,
+                      firstEventAt: 100,
+                      lastEventAt: 402,
+                      segments: [
+                        {
+                          documentId: '018f47a7-1c2b-7def-8123-0123456789ab',
+                          targetId: 'target-7',
+                          firstEventAt: 100,
+                          lastEventAt: 200,
+                          sizeBytes: recordingEvents.length,
+                          eventCount: recordingEvents
+                            .split('\n')
+                            .filter(Boolean).length,
+                          hasGap: false,
+                        },
+                      ],
+                    },
+                  ]
+                : [],
           }
         : null,
     downloadRecordingEvents: async (sessionId) =>
       sessionId === liveSession.sessionId ? recordingEvents : null,
-    async appendRecordingEvents(_sessionId, association, ndjson, batchId) {
+    async appendRecordingEvents(_identity, ndjson, batchId) {
+      if (recordingBatchIds.has(batchId)) return { accepted: 0 }
+      recordingEvents += ndjson
+      recordingBatchIds.add(batchId)
+      return {
+        accepted: ndjson.split('\n').filter((line) => line.trim()).length,
+      }
+    },
+    async appendLegacyRecordingEvents(_sessionId, association, ndjson) {
       if (
         association.tabId !== 101 ||
         association.pageId !== 7 ||
@@ -125,9 +159,7 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
       ) {
         return null
       }
-      if (batchId && recordingBatchIds.has(batchId)) return { accepted: 0 }
       recordingEvents += ndjson
-      if (batchId) recordingBatchIds.add(batchId)
       return {
         accepted: ndjson.split('\n').filter((line) => line.trim()).length,
       }

@@ -7,9 +7,9 @@
 import { ownershipStore } from '../../domain/ownership'
 import { tabActivityRegistry } from '../../lib/tab-activity'
 import {
-  claimTargetForSession,
-  releaseTargetForSession,
-} from '../../services/tab-claims'
+  claimTabForSession,
+  releaseTabForSession,
+} from '../../services/session-tabs'
 import type { ToolEffect } from '../dispatch'
 
 /** Updates ownership for successful tab creation and closure results. */
@@ -27,7 +27,7 @@ export const applyOwnershipClaims: ToolEffect = ({
 
     // `tabs new` has no page in its args; the page id is born in the result.
     const live = call.session?.pages.getInfo(pageId)
-    if (live) {
+    if (live && typeof live.tabId === 'number') {
       tabActivityRegistry.recordTool({
         sessionId: call.sessionId,
         agentId: call.agent.agentId,
@@ -37,8 +37,9 @@ export const applyOwnershipClaims: ToolEffect = ({
         targetId: live.targetId,
         toolName: 'tabs',
       })
-      claimTargetForSession({
-        targetId: live.targetId,
+      claimTabForSession({
+        tabId: live.tabId,
+        openedTargetId: live.targetId,
         sessionId: call.sessionId,
         agentId: call.agent.agentId,
         claimedAt: startedAtMs,
@@ -54,7 +55,7 @@ export const applyOwnershipClaims: ToolEffect = ({
   if (typeof page === 'number' && Number.isInteger(page) && page >= 1) {
     ownershipStore.releasePage(call.key, page)
     if (call.pageSnapshot) {
-      releaseTargetForSession(call.pageSnapshot.targetId, call.sessionId)
+      releaseTabForSession(call.pageSnapshot.tabId, call.sessionId)
     }
   }
   return undefined

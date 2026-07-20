@@ -30,6 +30,7 @@ export const toolDispatches = sqliteTable(
     sessionId: text('session_id').notNull(),
     toolName: text('tool_name').notNull(),
     pageId: integer('page_id'),
+    tabId: integer('tab_id'),
     targetId: text('target_id'),
     url: text('url'),
     title: text('title'),

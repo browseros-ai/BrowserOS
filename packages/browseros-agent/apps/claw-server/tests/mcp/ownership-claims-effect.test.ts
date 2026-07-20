@@ -6,7 +6,7 @@ import {
   resetAuditDbForTesting,
   setAuditDbForTesting,
 } from '../../src/modules/db/db'
-import { tabClaims } from '../../src/modules/db/schema/tab-claims.sql'
+import { sessionTabs } from '../../src/modules/db/schema/session-tabs.sql'
 
 const ok = { isError: false, content: [], structuredContent: undefined }
 
@@ -14,7 +14,7 @@ beforeEach(() => setAuditDbForTesting())
 afterEach(() => resetAuditDbForTesting())
 
 describe('recording claims effect', () => {
-  it('inserts a target claim after tabs new succeeds', () => {
+  it('inserts a logical tab claim after tabs new succeeds', () => {
     applyOwnershipClaims({
       call: {
         sessionId: 'session-a',
@@ -31,9 +31,10 @@ describe('recording claims effect', () => {
       startedAtMs: 123,
     } as never)
 
-    const claim = getAuditDb().select().from(tabClaims).get()
+    const claim = getAuditDb().select().from(sessionTabs).get()
     expect(claim).toMatchObject({
-      targetId: 'target-a',
+      tabId: 101,
+      openedTargetId: 'target-a',
       sessionId: 'session-a',
       agentId: 'agent-a',
       claimedAt: 123,
@@ -43,16 +44,18 @@ describe('recording claims effect', () => {
 
   it('releases the matching open claim after tabs close succeeds', () => {
     getAuditDb()
-      .insert(tabClaims)
+      .insert(sessionTabs)
       .values([
         {
-          targetId: 'target-b',
+          tabId: 102,
+          openedTargetId: 'target-b',
           sessionId: 'session-b',
           agentId: 'agent-b',
           claimedAt: 100,
         },
         {
-          targetId: 'target-b',
+          tabId: 103,
+          openedTargetId: 'target-c',
           sessionId: 'other-session',
           agentId: 'agent-c',
           claimedAt: 200,
@@ -66,7 +69,13 @@ describe('recording claims effect', () => {
         agent: { agentId: 'agent-b', slug: 'agent' },
         key: 'agent-b',
         args: { page: 8 },
-        pageSnapshot: { pageId: 8, targetId: 'target-b', url: '', title: '' },
+        pageSnapshot: {
+          pageId: 8,
+          tabId: 102,
+          targetId: 'target-b',
+          url: '',
+          title: '',
+        },
         flags: { newPage: false, closePage: true, listTabs: false },
       },
       result: ok,
@@ -74,23 +83,20 @@ describe('recording claims effect', () => {
 
     const released = getAuditDb()
       .select()
-      .from(tabClaims)
+      .from(sessionTabs)
       .where(
-        and(
-          eq(tabClaims.sessionId, 'session-b'),
-          eq(tabClaims.targetId, 'target-b'),
-        ),
+        and(eq(sessionTabs.sessionId, 'session-b'), eq(sessionTabs.tabId, 102)),
       )
       .get()
     expect(released?.releasedAt).toBeNumber()
     expect(
       getAuditDb()
         .select()
-        .from(tabClaims)
+        .from(sessionTabs)
         .where(
           and(
-            eq(tabClaims.sessionId, 'other-session'),
-            isNull(tabClaims.releasedAt),
+            eq(sessionTabs.sessionId, 'other-session'),
+            isNull(sessionTabs.releasedAt),
           ),
         )
         .get(),

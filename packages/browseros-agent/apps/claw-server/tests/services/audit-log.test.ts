@@ -20,6 +20,7 @@ function record(
     sessionId: 's1',
     toolName: 'navigate',
     pageId: 1,
+    tabId: 101,
     targetId: 't1',
     url: 'https://example.com',
     title: 'Example',
@@ -44,6 +45,7 @@ describe('recordToolDispatch', () => {
     expect(rows.length).toBe(1)
     expect(rows[0]?.agentId).toBe('claude-code')
     expect(rows[0]?.toolName).toBe('navigate')
+    expect(rows[0]?.tabId).toBe(101)
     expect(rows[0]?.url).toBe('https://example.com')
     expect(rows[0]?.durationMs).toBe(12)
   })

@@ -12,6 +12,9 @@ import {
 import { resolveMigrationsFolder } from '../../../src/modules/db/migrator'
 import { agentSessionEnds } from '../../../src/modules/db/schema/agent-session-ends.sql'
 import { agentSessionStarts } from '../../../src/modules/db/schema/agent-session-starts.sql'
+import { recordingBatches } from '../../../src/modules/db/schema/recording-batches.sql'
+import { recordingStreams } from '../../../src/modules/db/schema/recording-streams.sql'
+import { sessionTabs } from '../../../src/modules/db/schema/session-tabs.sql'
 import { tabClaims } from '../../../src/modules/db/schema/tab-claims.sql'
 import { tabRecordings } from '../../../src/modules/db/schema/tab-recordings.sql'
 import { toolDispatches } from '../../../src/modules/db/schema/tool-dispatches.sql'
@@ -33,11 +36,14 @@ describe('audit DB (in-memory test seam)', () => {
     expect(rows).toEqual([])
   })
 
-  it('migrates the recording catalog and claim ledger tables', () => {
+  it('migrates document catalogs, durable batches, and tab ownership', () => {
     const db = getAuditDb()
 
     expect(db.select().from(tabRecordings).all()).toEqual([])
     expect(db.select().from(tabClaims).all()).toEqual([])
+    expect(db.select().from(recordingStreams).all()).toEqual([])
+    expect(db.select().from(recordingBatches).all()).toEqual([])
+    expect(db.select().from(sessionTabs).all()).toEqual([])
   })
 
   it('populates createdAt with an epoch-ms default within a few seconds of now', () => {

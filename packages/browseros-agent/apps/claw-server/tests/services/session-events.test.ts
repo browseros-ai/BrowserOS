@@ -13,6 +13,7 @@ import {
 import {
   agentSessionEnds,
   agentSessionStarts,
+  sessionTabs,
   tabClaims,
 } from '../../src/modules/db/schema/schema'
 import {
@@ -98,6 +99,15 @@ describe('session events', () => {
         },
       ])
       .run()
+    db.insert(sessionTabs)
+      .values({
+        tabId: 101,
+        openedTargetId: 'target-a',
+        sessionId: 'sid-5',
+        agentId: 'agent',
+        claimedAt: 1,
+      })
+      .run()
 
     recordSessionEnd({ sessionId: 'sid-5', kind: 'closed' })
 
@@ -109,6 +119,13 @@ describe('session events', () => {
         .all()
         .every((claim) => typeof claim.releasedAt === 'number'),
     ).toBe(true)
+    expect(
+      db
+        .select()
+        .from(sessionTabs)
+        .where(eq(sessionTabs.sessionId, 'sid-5'))
+        .get()?.releasedAt,
+    ).toBeNumber()
   })
 
   it('releases stale open claims without changing already closed claims', () => {

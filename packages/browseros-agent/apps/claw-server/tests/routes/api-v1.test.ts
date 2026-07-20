@@ -34,7 +34,10 @@ const system: SystemInfo = {
   product: 'BrowserClaw',
   version: '1.2.3',
   url: 'http://127.0.0.1:9200',
-  capabilities: { recordingIngestMaxBytes: RECORDING_INGEST_MAX_BYTES },
+  capabilities: {
+    recordingIngestVersion: 2,
+    recordingIngestMaxBytes: RECORDING_INGEST_MAX_BYTES,
+  },
 }
 const telemetry: TelemetryState = {
   distinctId: 'install-1',
@@ -70,8 +73,9 @@ const sessionDetail: SessionDetail = {
 }
 const recording: RecordingMetadata = {
   hasData: false,
+  complete: true,
   sizeBytes: 0,
-  pageIds: [],
+  tabs: [],
 }
 const tabs: TabList = {
   items: [
@@ -115,6 +119,7 @@ function dependencies(
     getRecording: () => recording,
     downloadRecordingEvents: async () => '',
     appendRecordingEvents: async () => ({ accepted: 2 }),
+    appendLegacyRecordingEvents: async () => ({ accepted: 2 }),
     listTabs: () => tabs,
     getTabPreview: () => ({ bytes: new Uint8Array([0xff, 0xd8]), etag: '111' }),
     getDispatchScreenshot: () => ({
@@ -226,7 +231,7 @@ describe('canonical TypeScript API', () => {
     expect(await response.json()).toEqual({ cancelled: 0 })
   })
 
-  it('serves NDJSON and rejects writes after a session ends', async () => {
+  it('serves session NDJSON and accepts session-neutral document writes', async () => {
     const append = mock(async () => ({ accepted: 2 }))
     const app = createCanonicalApiRoute(
       dependencies({
@@ -244,33 +249,50 @@ describe('canonical TypeScript API', () => {
     )
     expect(await download.text()).toBe('{"type":2}\n')
 
-    const upload = await request(
-      app,
-      '/api/v1/sessions/session-live/recording/events',
-      {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/x-ndjson',
-          'x-recording-tab-id': '101',
-          'x-recording-page-id': '7',
-          'x-recording-target-id': 'target-7',
-          'x-recording-batch-id': 'batch-1',
-        },
-        body: '{"ts":1}\n{"ts":2}\n',
+    const upload = await request(app, '/api/v1/recordings/events', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-ndjson',
+        'x-recording-tab-id': '101',
+        'x-recording-document-id': '018f47a7-1c2b-7def-8123-0123456789ab',
+        'x-recording-batch-id': 'batch-1',
       },
-    )
+      body: '{"ts":1}\n{"ts":2}\n',
+    })
     expect(upload.status).toBe(200)
     expect(await upload.json()).toEqual({ accepted: 2 })
     expect(append).toHaveBeenCalledWith(
-      'session-live',
-      { tabId: 101, pageId: 7, targetId: 'target-7' },
+      {
+        tabId: 101,
+        documentId: '018f47a7-1c2b-7def-8123-0123456789ab',
+      },
       '{"ts":1}\n{"ts":2}\n',
       'batch-1',
+      false,
     )
 
-    const changed = createCanonicalApiRoute(
-      dependencies({ appendRecordingEvents: async () => null }),
+    const ended = createCanonicalApiRoute(
+      dependencies({ getSessionState: () => 'ended' }),
     )
+    const stillAccepted = await request(ended, '/api/v1/recordings/events', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-ndjson',
+        'x-recording-tab-id': '101',
+        'x-recording-document-id': '018f47a7-1c2b-7def-8123-0123456789ac',
+        'x-recording-batch-id': 'batch-ended',
+      },
+      body: '{"ts":3}\n',
+    })
+    expect(stillAccepted.status).toBe(200)
+  })
+
+  it('keeps the old session-scoped write as a compatibility route', async () => {
+    const append = mock(async () => ({ accepted: 1 }))
+    const changed = createCanonicalApiRoute(
+      dependencies({ appendLegacyRecordingEvents: async () => null }),
+    )
+
     const changedResponse = await request(
       changed,
       '/api/v1/sessions/session-live/recording/events',
@@ -291,7 +313,10 @@ describe('canonical TypeScript API', () => {
     })
 
     const ended = createCanonicalApiRoute(
-      dependencies({ getSessionState: () => 'ended' }),
+      dependencies({
+        getSessionState: () => 'ended',
+        appendLegacyRecordingEvents: append,
+      }),
     )
     const rejected = await request(
       ended,
@@ -300,6 +325,7 @@ describe('canonical TypeScript API', () => {
     )
     expect(rejected.status).toBe(410)
     expect(await rejected.json()).toMatchObject({ code: 'session_ended' })
+    expect(append).not.toHaveBeenCalled()
   })
 
   it('enforces the recording byte ceiling before append', async () => {
@@ -310,30 +336,22 @@ describe('canonical TypeScript API', () => {
     const headers = {
       'content-type': 'application/x-ndjson',
       'x-recording-tab-id': '101',
-      'x-recording-page-id': '7',
-      'x-recording-target-id': 'target-7',
+      'x-recording-document-id': '018f47a7-1c2b-7def-8123-0123456789ab',
+      'x-recording-batch-id': 'batch-boundary',
     }
 
-    const accepted = await request(
-      app,
-      '/api/v1/sessions/session-live/recording/events',
-      {
-        method: 'POST',
-        headers,
-        body: recordingLineOfBytes(RECORDING_INGEST_MAX_BYTES, 1),
-      },
-    )
+    const accepted = await request(app, '/api/v1/recordings/events', {
+      method: 'POST',
+      headers,
+      body: recordingLineOfBytes(RECORDING_INGEST_MAX_BYTES, 1),
+    })
     expect(accepted.status).toBe(200)
 
-    const rejected = await request(
-      app,
-      '/api/v1/sessions/session-live/recording/events',
-      {
-        method: 'POST',
-        headers,
-        body: recordingLineOfBytes(RECORDING_INGEST_MAX_BYTES + 1, 2),
-      },
-    )
+    const rejected = await request(app, '/api/v1/recordings/events', {
+      method: 'POST',
+      headers,
+      body: recordingLineOfBytes(RECORDING_INGEST_MAX_BYTES + 1, 2),
+    })
     expect(rejected.status).toBe(413)
     expect(await rejected.json()).toMatchObject({
       code: 'recording_payload_too_large',

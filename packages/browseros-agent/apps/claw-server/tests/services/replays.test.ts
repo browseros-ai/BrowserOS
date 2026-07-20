@@ -7,14 +7,16 @@ import {
   resetAuditDbForTesting,
   setAuditDbForTesting,
 } from '../../src/modules/db/db'
-import { tabClaims } from '../../src/modules/db/schema/tab-claims.sql'
-import { tabRecordings } from '../../src/modules/db/schema/tab-recordings.sql'
+import { sessionTabs } from '../../src/modules/db/schema/session-tabs.sql'
 import {
   createRecordingStore,
   type RecordingStore,
 } from '../../src/services/recordings'
 import { createReplayService } from '../../src/services/replays'
 
+const firstDocument = '018f47a7-1c2b-7def-8123-0123456789ab'
+const secondDocument = '018f47a7-1c2b-7def-8123-0123456789ac'
+const otherDocument = '018f47a7-1c2b-7def-8123-0123456789ad'
 let dir: string
 let store: RecordingStore
 
@@ -30,118 +32,94 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
+function append(
+  documentId: string,
+  tabId: number,
+  targetId: string | null,
+  timestamps: number[],
+  hasGap = false,
+) {
+  return store.appendBatch({
+    documentId,
+    tabId,
+    targetId,
+    events: timestamps.map((ts) => ({ ts, type: 3, data: { ts } })),
+    batchId: `batch-${documentId}`,
+    hasGap,
+  })
+}
+
 describe('ReplayService', () => {
-  it('merges claimed target slices by timestamp and excludes unclaimed targets', async () => {
-    await store.appendBatch('target-a', 11, [
-      { ts: 90, type: 3, data: { id: 'outside' } },
-      { ts: 100, type: 3, data: { id: 'a1' } },
-      { ts: 200, type: 3, data: { id: 'a2' } },
-    ])
-    await store.appendBatch('target-b', 22, [
-      { ts: 160, type: 3, data: { id: 'b1' } },
-      { ts: 180, type: 3, data: { id: 'b2-buffered' } },
-    ])
-    await store.appendBatch('target-c', 33, [
-      { ts: 170, type: 3, data: { id: 'unclaimed' } },
-    ])
+  it('joins by tab across target changes and filters exact event windows', async () => {
+    await append(firstDocument, 11, 'target-before-nav', [90, 100, 150])
+    await append(secondDocument, 11, 'target-after-nav', [160, 200, 201])
+    await append(otherDocument, 22, null, [170])
     getAuditDb()
-      .insert(tabClaims)
-      .values([
-        {
-          targetId: 'target-a',
-          sessionId: 'session-a',
-          agentId: 'agent',
-          claimedAt: 100,
-          releasedAt: 200,
-        },
-        {
-          targetId: 'target-b',
-          sessionId: 'session-a',
-          agentId: 'agent',
-          claimedAt: 150,
-          releasedAt: 170,
-        },
-      ])
+      .insert(sessionTabs)
+      .values({
+        sessionId: 'session-a',
+        agentId: 'agent-a',
+        tabId: 11,
+        openedTargetId: 'target-before-nav',
+        claimedAt: 100,
+        releasedAt: 200,
+      })
       .run()
     const service = createReplayService({ recordingStore: store })
 
     const replay = await service.readSession('session-a')
-
-    expect(replay.map((event) => event.data)).toEqual([
-      { id: 'a1' },
-      { id: 'b1' },
-      { id: 'b2-buffered' },
-      { id: 'a2' },
+    expect(replay.map((event) => event.ts)).toEqual([100, 150, 160, 200])
+    expect(replay.map((event) => event.documentId)).toEqual([
+      firstDocument,
+      firstDocument,
+      secondDocument,
+      secondDocument,
     ])
-    expect(replay[0]).toMatchObject({
-      sessionId: 'session-a',
-      targetId: 'target-a',
-      tabId: 11,
-    })
+    expect(replay.every((event) => event.tabId === 11)).toBe(true)
   })
 
-  it('builds per-target metadata without reading files', async () => {
-    await store.appendBatch('target-a', 11, [
-      { ts: 90, type: 3, data: {} },
-      { ts: 200, type: 3, data: {} },
-    ])
-    await store.appendBatch('target-b', 22, [
-      { ts: 160, type: 3, data: {} },
-      { ts: 180, type: 3, data: {} },
-    ])
+  it('groups navigation segments under one logical tab and reports gaps', async () => {
+    await append(firstDocument, 11, 'target-before-nav', [100, 150])
+    await append(secondDocument, 11, 'target-after-nav', [160, 200], true)
     getAuditDb()
-      .insert(tabClaims)
-      .values([
-        {
-          targetId: 'target-a',
-          sessionId: 'session-a',
-          agentId: 'agent',
-          claimedAt: 100,
-          releasedAt: 200,
-        },
-        {
-          targetId: 'target-b',
-          sessionId: 'session-a',
-          agentId: 'agent',
-          claimedAt: 150,
-          releasedAt: 170,
-        },
-      ])
+      .insert(sessionTabs)
+      .values({
+        sessionId: 'session-a',
+        agentId: 'agent-a',
+        tabId: 11,
+        openedTargetId: 'target-before-nav',
+        claimedAt: 100,
+        releasedAt: 200,
+      })
       .run()
-    const rows = getAuditDb().select().from(tabRecordings).all()
-    const sizeBytes = rows.reduce((sum, row) => sum + row.sizeBytes, 0)
     const service = createReplayService({ recordingStore: store })
 
-    expect(service.getMeta('session-a')).toEqual({
+    expect(service.getMeta('session-a')).toMatchObject({
       exists: true,
+      complete: false,
       firstEventAt: 100,
       lastEventAt: 200,
-      sizeBytes,
-      targets: [
+      tabs: [
         {
-          targetId: 'target-a',
           tabId: 11,
-          firstEventAt: 100,
-          lastEventAt: 200,
-        },
-        {
-          targetId: 'target-b',
-          tabId: 22,
-          firstEventAt: 160,
-          lastEventAt: 170,
+          complete: false,
+          segments: [
+            { documentId: firstDocument, hasGap: false, legacy: false },
+            { documentId: secondDocument, hasGap: true, legacy: false },
+          ],
         },
       ],
     })
   })
 
-  it('returns empty replay and metadata for a session without claims', async () => {
+  it('returns empty complete metadata for a session without ownership', async () => {
     const service = createReplayService({ recordingStore: store })
-
     expect(await service.readSession('missing')).toEqual([])
     expect(service.getMeta('missing')).toEqual({
       exists: false,
+      complete: true,
       sizeBytes: 0,
-      targets: [],
+      tabs: [],
     })
   })
 })

@@ -93,7 +93,12 @@ function stubSessionForPageId(pageId: number, targetId: string): void {
     pages: {
       getInfo: (id: number) =>
         id === pageId
-          ? { targetId, url: 'https://example.com/', title: 'Ex' }
+          ? {
+              tabId: 101,
+              targetId,
+              url: 'https://example.com/',
+              title: 'Ex',
+            }
           : undefined,
     },
     // biome-ignore lint/suspicious/noExplicitAny: test stub

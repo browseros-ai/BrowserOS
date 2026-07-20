@@ -63,6 +63,7 @@ export interface ToolCall {
   defaultTabGroupId: string | null
   pageSnapshot?: {
     pageId: number
+    tabId: number
     targetId: string
     url: string
     title: string
@@ -245,6 +246,7 @@ function buildToolCall(
     ...(page && {
       pageSnapshot: {
         pageId: page.pageId,
+        tabId: page.tabId,
         targetId: page.targetId,
         url: page.url,
         title: page.title,

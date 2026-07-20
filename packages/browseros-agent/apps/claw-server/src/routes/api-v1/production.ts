@@ -30,6 +30,7 @@ import {
   type TabActivityRecord,
   tabActivityRegistry,
 } from '../../lib/tab-activity'
+import { getTabTargetMap } from '../../lib/tab-targets'
 import { getLocalServerUrl } from '../../local-server-url'
 import {
   getTelemetryState,
@@ -67,6 +68,7 @@ export const canonicalApiDependencies: CanonicalApiDependencies = {
       getLocalServerUrl() ??
       `http://127.0.0.1:${CLAW_API_PORT_DEFAULT.toString()}`,
     capabilities: {
+      recordingIngestVersion: 2,
       recordingIngestMaxBytes: RECORDING_INGEST_MAX_BYTES,
     },
   }),
@@ -113,17 +115,9 @@ export const canonicalApiDependencies: CanonicalApiDependencies = {
   getRecording(sessionId) {
     if (!knownSession(sessionId)) return null
     const metadata = replayService.getMeta(sessionId)
-    // pageIds = tabs still claimed by this session whose targets have
-    // recorded events — the per-tab views a replay can offer.
-    const targetIds = new Set(metadata.targets.map((target) => target.targetId))
-    const pageIds = tabActivityRegistry
-      .snapshot()
-      .filter(
-        (tab) => tab.sessionId === sessionId && targetIds.has(tab.targetId),
-      )
-      .map((tab) => tab.pageId)
     return {
       hasData: metadata.exists,
+      complete: metadata.complete,
       sizeBytes: metadata.sizeBytes,
       ...(metadata.firstEventAt === undefined
         ? {}
@@ -131,7 +125,22 @@ export const canonicalApiDependencies: CanonicalApiDependencies = {
       ...(metadata.lastEventAt === undefined
         ? {}
         : { lastEventAt: metadata.lastEventAt }),
-      pageIds: Array.from(new Set(pageIds)).sort((a, b) => a - b),
+      tabs: metadata.tabs.map((tab) => ({
+        tabId: tab.tabId,
+        complete: tab.complete,
+        firstEventAt: tab.firstEventAt,
+        lastEventAt: tab.lastEventAt,
+        segments: tab.segments.map((segment) => ({
+          documentId: segment.documentId,
+          ...(segment.targetId === null ? {} : { targetId: segment.targetId }),
+          firstEventAt: segment.firstEventAt,
+          lastEventAt: segment.lastEventAt,
+          sizeBytes: segment.sizeBytes,
+          eventCount: segment.eventCount,
+          hasGap: segment.hasGap,
+          ...(segment.legacy ? { legacy: true } : {}),
+        })),
+      })),
     }
   },
   async downloadRecordingEvents(sessionId) {
@@ -141,22 +150,38 @@ export const canonicalApiDependencies: CanonicalApiDependencies = {
       ? ''
       : `${events.map((event) => JSON.stringify(event)).join('\n')}\n`
   },
-  async appendRecordingEvents(sessionId, association, ndjson, batchId) {
-    const events = parseRecordingEvents(ndjson)
+  async appendRecordingEvents(identity, ndjson, batchId, hasGap) {
+    const parsed = parseRecordingEvents(ndjson)
+    const targetId =
+      (await getTabTargetMap()?.targetForTab(identity.tabId)) ?? null
+    if (parsed.events.length === 0) return { accepted: 0 }
+    const appended = await recordingStore.appendBatch({
+      documentId: identity.documentId,
+      tabId: identity.tabId,
+      targetId,
+      events: parsed.events,
+      batchId,
+      hasGap: hasGap || parsed.droppedLines > 0,
+    })
+    return { accepted: appended ? parsed.events.length : 0 }
+  },
+  async appendLegacyRecordingEvents(sessionId, association, ndjson, batchId) {
+    const parsed = parseRecordingEvents(ndjson)
     const target = recordingTargetFor(
       tabActivityRegistry.snapshot(),
       sessionId,
       association,
     )
     if (!target) return null
-    if (events.length === 0) return { accepted: 0 }
-    const appended = await recordingStore.appendBatch(
+    if (parsed.events.length === 0) return { accepted: 0 }
+    const appended = await recordingStore.appendLegacyBatch(
       target.targetId,
       target.tabId,
-      events,
-      batchId,
+      parsed.events,
+      batchId ?? crypto.randomUUID(),
+      parsed.droppedLines > 0,
     )
-    return { accepted: appended ? events.length : 0 }
+    return { accepted: appended ? parsed.events.length : 0 }
   },
   listTabs() {
     const identities = identityService.list()
@@ -278,6 +303,7 @@ function sessionDetail(task: TaskDetail): SessionDetail {
         sessionId: row.sessionId,
         toolName: row.toolName,
         ...(row.pageId === null ? {} : { pageId: row.pageId }),
+        ...(row.tabId === null ? {} : { tabId: row.tabId }),
         ...(row.targetId === null ? {} : { targetId: row.targetId }),
         ...(row.url === null ? {} : { url: row.url }),
         ...(row.title === null ? {} : { title: row.title }),
@@ -300,15 +326,24 @@ function connection(state: ConnectionState): Connection {
 }
 
 /** Tolerant parse of recorder-supplied NDJSON: lines that aren't JSON or lack a finite `ts` are dropped, never fatal. */
-function parseRecordingEvents(ndjson: string): RecordingEventInput[] {
+function parseRecordingEvents(ndjson: string): {
+  events: RecordingEventInput[]
+  droppedLines: number
+} {
   const events: RecordingEventInput[] = []
+  let droppedLines = 0
   for (const line of ndjson.split('\n')) {
     if (!line.trim()) continue
     try {
       const event = JSON.parse(line) as Record<string, unknown>
-      if (typeof event.ts !== 'number' || !Number.isFinite(event.ts)) continue
+      if (typeof event.ts !== 'number' || !Number.isFinite(event.ts)) {
+        droppedLines++
+        continue
+      }
       events.push({ ts: event.ts, type: event.type, data: event.data })
-    } catch {}
+    } catch {
+      droppedLines++
+    }
   }
-  return events
+  return { events, droppedLines }
 }

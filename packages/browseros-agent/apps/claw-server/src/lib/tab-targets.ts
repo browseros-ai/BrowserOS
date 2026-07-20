@@ -5,12 +5,14 @@
  */
 
 import type { BrowserSession } from '@browseros/browser-core/core/session'
+import { inheritTabOwnership } from '../services/session-tabs'
 import { releaseClaimsForTarget } from '../services/tab-claims'
 import { logger } from './logger'
 
 export interface TargetLifecycleInfo {
   targetId: string
   tabId?: number
+  openerId?: string
 }
 
 interface BrowserTabIdentity {
@@ -30,6 +32,11 @@ export interface TabTargetSource {
 
 interface TabTargetMapOptions {
   releaseTargetClaims?: (targetId: string) => Promise<void> | void
+  inheritTabOwner?: (
+    openerTabId: number,
+    tabId: number,
+    targetId: string,
+  ) => Promise<void> | void
   now?: () => number
 }
 
@@ -52,6 +59,11 @@ export class TabTargetMap {
   private readonly releaseTargetClaims: (
     targetId: string,
   ) => Promise<void> | void
+  private readonly inheritTabOwner: (
+    openerTabId: number,
+    tabId: number,
+    targetId: string,
+  ) => Promise<void> | void
   private readonly now: () => number
   private sourceEpoch = -1
   private rebuildPromise: Promise<void> | null = null
@@ -62,6 +74,7 @@ export class TabTargetMap {
   ) {
     this.releaseTargetClaims =
       options.releaseTargetClaims ?? releaseClaimsForTarget
+    this.inheritTabOwner = options.inheritTabOwner ?? inheritTabOwnership
     this.now = options.now ?? Date.now
   }
 
@@ -69,7 +82,7 @@ export class TabTargetMap {
   async start(): Promise<void> {
     if (this.unsubscribers.length === 0) {
       this.unsubscribers.push(
-        this.source.onTargetCreated((info) => this.upsert(info)),
+        this.source.onTargetCreated((info) => this.onCreated(info)),
         this.source.onTargetInfoChanged((info) => this.upsert(info)),
         this.source.onTargetDestroyed((targetId) => this.remove(targetId)),
       )
@@ -143,6 +156,35 @@ export class TabTargetMap {
     }
     this.targetByTab.set(info.tabId, info.targetId)
     this.tabByTarget.set(info.targetId, info.tabId)
+  }
+
+  private onCreated(info: TargetLifecycleInfo): void {
+    this.upsert(info)
+    if (info.tabId === undefined || info.openerId === undefined) return
+    const openerTabId = this.tabByTarget.get(info.openerId)
+    if (openerTabId === undefined || openerTabId === info.tabId) return
+    try {
+      const inherited = this.inheritTabOwner(
+        openerTabId,
+        info.tabId,
+        info.targetId,
+      )
+      if (inherited) {
+        void inherited.catch((error) =>
+          logger.warn('popup tab ownership inheritance failed', {
+            openerTabId,
+            tabId: info.tabId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        )
+      }
+    } catch (error) {
+      logger.warn('popup tab ownership inheritance failed', {
+        openerTabId,
+        tabId: info.tabId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
   }
 
   private remove(targetId: string): void {

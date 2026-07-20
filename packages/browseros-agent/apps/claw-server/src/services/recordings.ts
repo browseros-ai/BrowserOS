@@ -1,31 +1,25 @@
 /**
- * @license
- * Copyright 2025 BrowserOS
- * SPDX-License-Identifier: AGPL-3.0-or-later
+ * Document-keyed rrweb persistence. Recorder identity and session attribution
+ * are intentionally separate: this store accepts Chrome document streams now,
+ * while `replays.ts` joins them to server-owned tab windows later.
  */
 
-import {
-  type FileHandle,
-  mkdir,
-  open,
-  readFile,
-  rm,
-  unlink,
-} from 'node:fs/promises'
+import { mkdir, open, readFile, rm, unlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { and, eq, isNotNull, lt, sql } from 'drizzle-orm'
 import { resolveClawServerPath } from '../lib/browserclaw-dir'
 import { logger } from '../lib/logger'
 import { type AuditDb, getAuditDb } from '../modules/db/db'
+import { recordingBatches } from '../modules/db/schema/recording-batches.sql'
+import { recordingStreams } from '../modules/db/schema/recording-streams.sql'
+import { sessionTabs } from '../modules/db/schema/session-tabs.sql'
 import { tabClaims } from '../modules/db/schema/tab-claims.sql'
 import { tabRecordings } from '../modules/db/schema/tab-recordings.sql'
 
 const RECORDINGS_DIR_NAME = 'recordings'
-const MAX_OPEN_HANDLES = 50
-const IDLE_HANDLE_MS = 30_000
 const RETENTION_INTERVAL_MS = 60 * 60 * 1000
 const DAY_MS = 24 * 60 * 60 * 1000
-const BATCH_ID_LRU_CAPACITY = 256
+export const RECORDING_ORPHAN_TTL_MS = 60 * 60 * 1000
 
 export interface RecordingEventInput {
   ts: number
@@ -33,7 +27,18 @@ export interface RecordingEventInput {
   data: unknown
 }
 
-export interface RecordedEvent extends RecordingEventInput {
+export interface AppendRecordingBatchInput {
+  documentId: string
+  tabId: number
+  targetId: string | null
+  events: RecordingEventInput[]
+  batchId: string
+  hasGap: boolean
+}
+
+export interface RecordedEvent extends RecordingEventInput {}
+
+export interface LegacyRecordedEvent extends RecordingEventInput {
   tabId: number
 }
 
@@ -43,286 +48,228 @@ export interface RetentionSweepResult {
 }
 
 export interface RecordingStore {
-  /** Returns false only when this target already accepted the batch id. */
-  appendBatch(
+  /** Returns false only when this document already durably accepted the batch. */
+  appendBatch(input: AppendRecordingBatchInput): Promise<boolean>
+  appendLegacyBatch(
     targetId: string,
     tabId: number,
     events: RecordingEventInput[],
-    batchId?: string,
+    batchId: string,
+    hasGap?: boolean,
   ): Promise<boolean>
   readRange(
-    targetId: string,
+    documentId: string,
     from: number,
     to: number,
   ): Promise<RecordedEvent[]>
+  readLegacyRange(
+    targetId: string,
+    from: number,
+    to: number,
+  ): Promise<LegacyRecordedEvent[]>
   sweepRetention(
     retentionDays: number,
     now?: number,
   ): Promise<RetentionSweepResult>
-  /** Drains queued writes and closes every cached recording handle. */
   close(): Promise<void>
   resetForTesting(): Promise<void>
 }
 
 export interface RecordingStoreOptions {
   rootDir?: string
-  maxOpenHandles?: number
-  idleHandleMs?: number
   getDb?: () => AuditDb
+  now?: () => number
 }
 
-interface OpenEntry {
-  handle: FileHandle
-  closeTimer: ReturnType<typeof setTimeout> | null
-  activeWrites: number
-}
-
-/** Stores target-keyed rrweb events and keeps the SQLite catalog in sync. */
+/** Stores document streams and commits their file/catalog acceptance serially. */
 export function createRecordingStore(
   options: RecordingStoreOptions = {},
 ): RecordingStore {
-  const maxOpenHandles = options.maxOpenHandles ?? MAX_OPEN_HANDLES
-  const idleHandleMs = options.idleHandleMs ?? IDLE_HANDLE_MS
   const getDb = options.getDb ?? getAuditDb
-  const openHandles = new Map<string, OpenEntry>()
-  /**
-   * Serializes each target's append, retention, and dedupe state so concurrent
-   * relay retries cannot interleave writes or both pass the acceptance check.
-   */
+  const now = options.now ?? Date.now
   const chains = new Map<string, Promise<unknown>>()
-  /**
-   * Successful batch ids stay process-local and bounded: enough to absorb
-   * relay retries without turning every target into unbounded durable state.
-   */
-  const acceptedBatchIds = new Map<string, Map<string, undefined>>()
 
-  function hasAcceptedBatchId(targetId: string, batchId: string): boolean {
-    const targetBatchIds = acceptedBatchIds.get(targetId)
-    if (!targetBatchIds?.has(batchId)) return false
-    targetBatchIds.delete(batchId)
-    targetBatchIds.set(batchId, undefined)
-    return true
-  }
-
-  function rememberAcceptedBatchId(targetId: string, batchId: string): void {
-    let targetBatchIds = acceptedBatchIds.get(targetId)
-    if (!targetBatchIds) {
-      targetBatchIds = new Map()
-      acceptedBatchIds.set(targetId, targetBatchIds)
-    }
-    targetBatchIds.set(batchId, undefined)
-    if (targetBatchIds.size <= BATCH_ID_LRU_CAPACITY) return
-    const oldest = targetBatchIds.keys().next().value
-    if (oldest !== undefined) targetBatchIds.delete(oldest)
-  }
-
-  function resolvePath(targetId: string): string {
+  function resolvePath(documentId: string): string {
     const root = options.rootDir ?? resolveClawServerPath(RECORDINGS_DIR_NAME)
-    return join(root, `${sanitizeTargetId(targetId)}.ndjson`)
-  }
-
-  async function closeEntry(targetId: string): Promise<void> {
-    const entry = openHandles.get(targetId)
-    if (!entry || entry.activeWrites > 0) return
-    openHandles.delete(targetId)
-    if (entry.closeTimer) clearTimeout(entry.closeTimer)
-    try {
-      await entry.handle.close()
-    } catch (error) {
-      logger.warn('recording handle close failed', {
-        targetId,
-        error: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
-
-  function bumpIdleTimer(targetId: string): void {
-    const entry = openHandles.get(targetId)
-    if (!entry || entry.activeWrites > 0) return
-    if (entry.closeTimer) clearTimeout(entry.closeTimer)
-    entry.closeTimer = setTimeout(() => void closeEntry(targetId), idleHandleMs)
-    entry.closeTimer.unref?.()
-  }
-
-  async function evictOldestIfNeeded(): Promise<void> {
-    while (openHandles.size > maxOpenHandles) {
-      let oldestTarget: string | undefined
-      for (const [targetId, entry] of openHandles) {
-        if (entry.activeWrites === 0) {
-          oldestTarget = targetId
-          break
-        }
-      }
-      if (oldestTarget === undefined) return
-      await closeEntry(oldestTarget)
-    }
-  }
-
-  async function openForAppend(targetId: string): Promise<OpenEntry> {
-    const existing = openHandles.get(targetId)
-    if (existing) {
-      openHandles.delete(targetId)
-      openHandles.set(targetId, existing)
-      if (existing.closeTimer) clearTimeout(existing.closeTimer)
-      existing.closeTimer = null
-      existing.activeWrites++
-      return existing
-    }
-
-    const path = resolvePath(targetId)
-    await mkdir(dirname(path), { recursive: true })
-    const handle = await open(path, 'a')
-    const entry: OpenEntry = { handle, closeTimer: null, activeWrites: 1 }
-    openHandles.set(targetId, entry)
-    await evictOldestIfNeeded()
-    return entry
-  }
-
-  async function releaseAppendEntry(
-    targetId: string,
-    entry: OpenEntry,
-  ): Promise<void> {
-    entry.activeWrites--
-    if (openHandles.get(targetId) === entry) bumpIdleTimer(targetId)
-    await evictOldestIfNeeded()
-  }
-
-  async function append(
-    targetId: string,
-    tabId: number,
-    events: RecordingEventInput[],
-  ): Promise<void> {
-    if (events.length === 0) return
-    const lines = events.map((event) => JSON.stringify({ tabId, ...event }))
-    const payload = `${lines.join('\n')}\n`
-    let firstEventAt = events[0].ts
-    let lastEventAt = events[0].ts
-    for (const event of events.slice(1)) {
-      firstEventAt = Math.min(firstEventAt, event.ts)
-      lastEventAt = Math.max(lastEventAt, event.ts)
-    }
-    const sizeBytes = Buffer.byteLength(payload)
-    const entry = await openForAppend(targetId)
-    // The NDJSON append and SQLite catalog cannot share a transaction. Retain
-    // the byte boundary so a catalog failure can restore the file first.
-    let originalSize: number | null = null
-    try {
-      originalSize = (await entry.handle.stat()).size
-      await entry.handle.appendFile(payload, 'utf8')
-      getDb()
-        .insert(tabRecordings)
-        .values({
-          targetId,
-          tabId,
-          firstEventAt,
-          lastEventAt,
-          sizeBytes,
-          eventCount: events.length,
-        })
-        .onConflictDoUpdate({
-          target: tabRecordings.targetId,
-          set: {
-            tabId,
-            firstEventAt: sql`min(${tabRecordings.firstEventAt}, ${firstEventAt})`,
-            lastEventAt: sql`max(${tabRecordings.lastEventAt}, ${lastEventAt})`,
-            sizeBytes: sql`${tabRecordings.sizeBytes} + ${sizeBytes}`,
-            eventCount: sql`${tabRecordings.eventCount} + ${events.length}`,
-          },
-        })
-        .run()
-    } catch (error) {
-      if (originalSize !== null) {
-        try {
-          await entry.handle.truncate(originalSize)
-        } catch (rollbackError) {
-          logger.warn('recording append rollback failed', {
-            targetId,
-            error:
-              rollbackError instanceof Error
-                ? rollbackError.message
-                : String(rollbackError),
-          })
-        }
-      }
-      throw error
-    } finally {
-      await releaseAppendEntry(targetId, entry)
-    }
+    return join(root, `${sanitizeRecordingId(documentId)}.ndjson`)
   }
 
   function enqueue<T>(
-    targetId: string,
+    documentId: string,
     operation: () => Promise<T>,
   ): Promise<T> {
-    const previous = chains.get(targetId) ?? Promise.resolve()
+    const previous = chains.get(documentId) ?? Promise.resolve()
     const next = previous.catch(() => undefined).then(operation)
     const tracked = next.finally(() => {
-      if (chains.get(targetId) === tracked) chains.delete(targetId)
+      if (chains.get(documentId) === tracked) chains.delete(documentId)
     })
-    chains.set(targetId, tracked)
+    chains.set(documentId, tracked)
     return tracked
   }
 
-  async function deleteIfExpired(
+  async function append(input: AppendRecordingBatchInput): Promise<boolean> {
+    if (
+      getDb()
+        .select({ batchId: recordingBatches.batchId })
+        .from(recordingBatches)
+        .where(
+          and(
+            eq(recordingBatches.documentId, input.documentId),
+            eq(recordingBatches.batchId, input.batchId),
+          ),
+        )
+        .get()
+    ) {
+      return false
+    }
+    if (input.events.length === 0) return true
+
+    const lines = input.events.map((event) => JSON.stringify(event))
+    const payload = `${lines.join('\n')}\n`
+    const firstEventAt = Math.min(...input.events.map((event) => event.ts))
+    const lastEventAt = Math.max(...input.events.map((event) => event.ts))
+    const sizeBytes = Buffer.byteLength(payload)
+    const path = resolvePath(input.documentId)
+    await mkdir(dirname(path), { recursive: true })
+    const handle = await open(path, 'a+')
+    const originalSize = (await handle.stat()).size
+
+    try {
+      await handle.appendFile(payload, 'utf8')
+      getDb().transaction((tx) => {
+        tx.insert(recordingStreams)
+          .values({
+            documentId: input.documentId,
+            tabId: input.tabId,
+            targetId: input.targetId,
+            firstEventAt,
+            lastEventAt,
+            sizeBytes,
+            eventCount: input.events.length,
+            hasGap: input.hasGap,
+          })
+          .onConflictDoUpdate({
+            target: recordingStreams.documentId,
+            set: {
+              tabId: input.tabId,
+              targetId: sql`coalesce(${recordingStreams.targetId}, ${input.targetId})`,
+              firstEventAt: sql`min(${recordingStreams.firstEventAt}, ${firstEventAt})`,
+              lastEventAt: sql`max(${recordingStreams.lastEventAt}, ${lastEventAt})`,
+              sizeBytes: sql`${recordingStreams.sizeBytes} + ${sizeBytes}`,
+              eventCount: sql`${recordingStreams.eventCount} + ${input.events.length}`,
+              hasGap: sql`${recordingStreams.hasGap} or ${input.hasGap ? 1 : 0}`,
+            },
+          })
+          .run()
+        tx.insert(recordingBatches)
+          .values({
+            documentId: input.documentId,
+            batchId: input.batchId,
+            acceptedAt: now(),
+          })
+          .run()
+      })
+      return true
+    } catch (error) {
+      try {
+        await handle.truncate(originalSize)
+      } catch (rollbackError) {
+        logger.warn('recording append rollback failed', {
+          documentId: input.documentId,
+          error:
+            rollbackError instanceof Error
+              ? rollbackError.message
+              : String(rollbackError),
+        })
+      }
+      throw error
+    } finally {
+      await handle.close()
+    }
+  }
+
+  async function readDocumentRange(
+    documentId: string,
+    from: number,
+    to: number,
+  ): Promise<RecordedEvent[]> {
+    await chains.get(documentId)?.catch(() => undefined)
+    let text: string
+    try {
+      text = await readFile(resolvePath(documentId), 'utf8')
+    } catch (error) {
+      if ((error as { code?: string }).code === 'ENOENT') return []
+      throw error
+    }
+    const events: RecordedEvent[] = []
+    for (const line of text.split('\n')) {
+      if (!line) continue
+      const event = parseRecordedEvent(line)
+      if (event && event.ts >= from && event.ts <= to) events.push(event)
+    }
+    return events
+  }
+
+  async function deleteDocument(documentId: string): Promise<boolean> {
+    return enqueue(documentId, async () => {
+      const row = getDb()
+        .select({ documentId: recordingStreams.documentId })
+        .from(recordingStreams)
+        .where(eq(recordingStreams.documentId, documentId))
+        .get()
+      if (!row) return false
+      if (
+        !(await removeRecordingFile(resolvePath(documentId), { documentId }))
+      ) {
+        return false
+      }
+      getDb()
+        .delete(recordingStreams)
+        .where(eq(recordingStreams.documentId, documentId))
+        .run()
+      return true
+    })
+  }
+
+  async function deleteLegacyTarget(
     targetId: string,
     cutoff: number,
   ): Promise<boolean> {
-    return enqueue(targetId, async () => {
-      const current = getDb()
+    return enqueue(`legacy-file:${targetId}`, async () => {
+      const row = getDb()
         .select({ lastEventAt: tabRecordings.lastEventAt })
         .from(tabRecordings)
         .where(eq(tabRecordings.targetId, targetId))
         .get()
-      if (!current || current.lastEventAt >= cutoff) return false
-
-      await closeEntry(targetId)
-      try {
-        await unlink(resolvePath(targetId))
-      } catch (error) {
-        if ((error as { code?: string }).code !== 'ENOENT') {
-          logger.warn('recording retention unlink failed', {
-            targetId,
-            error: error instanceof Error ? error.message : String(error),
-          })
-          return false
-        }
+      if (!row || row.lastEventAt >= cutoff) return false
+      if (!(await removeRecordingFile(resolvePath(targetId), { targetId }))) {
+        return false
       }
       getDb()
         .delete(tabRecordings)
         .where(eq(tabRecordings.targetId, targetId))
         .run()
-      acceptedBatchIds.delete(targetId)
       return true
     })
   }
 
-  async function closeAll(): Promise<void> {
-    while (chains.size > 0) {
-      await Promise.allSettled([...chains.values()])
-    }
-    for (const targetId of [...openHandles.keys()]) {
-      await closeEntry(targetId)
-    }
-    chains.clear()
-  }
-
   return {
-    appendBatch(targetId, tabId, events, batchId) {
-      return enqueue(targetId, async () => {
-        // Check and remember share the target chain; remember only after append
-        // succeeds so a failed delivery remains retryable.
-        if (batchId !== undefined && hasAcceptedBatchId(targetId, batchId)) {
-          return false
-        }
-        await append(targetId, tabId, events)
-        if (batchId !== undefined) {
-          rememberAcceptedBatchId(targetId, batchId)
-        }
-        return true
+    appendBatch(input) {
+      return enqueue(input.documentId, () => append(input))
+    },
+    appendLegacyBatch(targetId, tabId, events, batchId, hasGap = false) {
+      return this.appendBatch({
+        documentId: legacyDocumentId(targetId),
+        tabId,
+        targetId,
+        events,
+        batchId,
+        hasGap,
       })
     },
-    async readRange(targetId, from, to) {
-      await chains.get(targetId)?.catch(() => undefined)
+    readRange: readDocumentRange,
+    async readLegacyRange(targetId, from, to) {
+      await chains.get(`legacy-file:${targetId}`)?.catch(() => undefined)
       let text: string
       try {
         text = await readFile(resolvePath(targetId), 'utf8')
@@ -330,54 +277,120 @@ export function createRecordingStore(
         if ((error as { code?: string }).code === 'ENOENT') return []
         throw error
       }
-      const events: RecordedEvent[] = []
+      const events: LegacyRecordedEvent[] = []
       for (const line of text.split('\n')) {
         if (!line) continue
-        const event = parseRecordedEvent(line)
+        const event = parseLegacyRecordedEvent(line)
         if (event && event.ts >= from && event.ts <= to) events.push(event)
       }
       return events
     },
-    async sweepRetention(retentionDays, now = Date.now()) {
-      const cutoff = now - retentionDays * DAY_MS
-      const expired = getDb()
+    async sweepRetention(retentionDays, timestamp = now()) {
+      const retentionCutoff = timestamp - retentionDays * DAY_MS
+      const orphanCutoff = timestamp - RECORDING_ORPHAN_TTL_MS
+      const claims = getDb().select().from(sessionTabs).all()
+      const streams = getDb().select().from(recordingStreams).all()
+      let recordingsDeleted = 0
+
+      for (const stream of streams) {
+        const claimed = claims.some(
+          (claim) =>
+            claim.tabId === stream.tabId &&
+            stream.lastEventAt >= claim.claimedAt &&
+            stream.firstEventAt <=
+              (claim.releasedAt ?? Number.MAX_SAFE_INTEGER),
+        )
+        const cutoff = claimed ? retentionCutoff : orphanCutoff
+        if (
+          stream.lastEventAt < cutoff &&
+          (await deleteDocument(stream.documentId))
+        ) {
+          recordingsDeleted++
+        }
+      }
+
+      const legacyExpired = getDb()
         .select({ targetId: tabRecordings.targetId })
         .from(tabRecordings)
-        .where(lt(tabRecordings.lastEventAt, cutoff))
+        .where(lt(tabRecordings.lastEventAt, retentionCutoff))
         .all()
-      let recordingsDeleted = 0
-      for (const { targetId } of expired) {
-        if (await deleteIfExpired(targetId, cutoff)) recordingsDeleted++
+      for (const { targetId } of legacyExpired) {
+        if (await deleteLegacyTarget(targetId, retentionCutoff)) {
+          recordingsDeleted++
+        }
       }
-      const expiredClaims = getDb()
+
+      const oldSessionTabIds = getDb()
+        .select({ id: sessionTabs.id })
+        .from(sessionTabs)
+        .where(
+          and(
+            isNotNull(sessionTabs.releasedAt),
+            lt(sessionTabs.releasedAt, retentionCutoff),
+          ),
+        )
+        .all()
+      const oldTargetClaimIds = getDb()
         .select({ id: tabClaims.id })
         .from(tabClaims)
         .where(
           and(
             isNotNull(tabClaims.releasedAt),
-            lt(tabClaims.releasedAt, cutoff),
+            lt(tabClaims.releasedAt, retentionCutoff),
           ),
         )
         .all()
+      getDb()
+        .delete(sessionTabs)
+        .where(
+          and(
+            isNotNull(sessionTabs.releasedAt),
+            lt(sessionTabs.releasedAt, retentionCutoff),
+          ),
+        )
+        .run()
       getDb()
         .delete(tabClaims)
         .where(
           and(
             isNotNull(tabClaims.releasedAt),
-            lt(tabClaims.releasedAt, cutoff),
+            lt(tabClaims.releasedAt, retentionCutoff),
           ),
         )
         .run()
-      return { recordingsDeleted, claimsDeleted: expiredClaims.length }
+      return {
+        recordingsDeleted,
+        claimsDeleted: oldSessionTabIds.length + oldTargetClaimIds.length,
+      }
     },
-    close: closeAll,
+    async close() {
+      while (chains.size > 0) {
+        await Promise.allSettled([...chains.values()])
+      }
+    },
     async resetForTesting() {
-      await closeAll()
-      acceptedBatchIds.clear()
+      await this.close()
       if (options.rootDir) {
         await rm(options.rootDir, { recursive: true, force: true })
       }
     },
+  }
+}
+
+async function removeRecordingFile(
+  path: string,
+  fields: Record<string, unknown>,
+): Promise<boolean> {
+  try {
+    await unlink(path)
+    return true
+  } catch (error) {
+    if ((error as { code?: string }).code === 'ENOENT') return true
+    logger.warn('recording retention unlink failed', {
+      ...fields,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return false
   }
 }
 
@@ -420,13 +433,27 @@ export function startRecordingRetention(
   }
 }
 
-function sanitizeTargetId(targetId: string): string {
-  return targetId.replace(/[^A-Za-z0-9._-]/g, '_')
+export function legacyDocumentId(targetId: string): string {
+  return `legacy-${targetId}`
+}
+
+function sanitizeRecordingId(id: string): string {
+  return id.replace(/[^A-Za-z0-9._-]/g, '_')
 }
 
 function parseRecordedEvent(line: string): RecordedEvent | null {
   try {
-    const event = JSON.parse(line) as Partial<RecordedEvent>
+    const event = JSON.parse(line) as Partial<RecordingEventInput>
+    if (typeof event.ts !== 'number') return null
+    return { ts: event.ts, type: event.type, data: event.data }
+  } catch {
+    return null
+  }
+}
+
+function parseLegacyRecordedEvent(line: string): LegacyRecordedEvent | null {
+  try {
+    const event = JSON.parse(line) as Partial<LegacyRecordedEvent>
     if (typeof event.tabId !== 'number' || typeof event.ts !== 'number') {
       return null
     }

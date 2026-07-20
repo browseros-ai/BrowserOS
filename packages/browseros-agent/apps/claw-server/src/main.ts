@@ -35,6 +35,7 @@ import { captureEvent, shutdownAnalytics } from './services/analytics'
 import { runIntegrityScan } from './services/integrity-scan'
 import { recordingStore, startRecordingRetention } from './services/recordings'
 import { startScreencastPoller } from './services/screencast-poller'
+import { releaseAllOpenSessionTabs } from './services/session-tabs'
 import { releaseAllOpenClaims } from './services/tab-claims'
 import { publicMcpUrl } from './shared/mcp-url'
 
@@ -48,6 +49,7 @@ async function start(): Promise<void> {
   applyClawConfig(config.value)
 
   releaseAllOpenClaims()
+  releaseAllOpenSessionTabs()
   // Ingest clients drop unknown-tab batches, so seed identity before health can report ready.
   const bootstrap = await bootstrapBrowserosBrowser()
   if (bootstrap) {
@@ -110,6 +112,7 @@ async function start(): Promise<void> {
       await Promise.allSettled([recordingStore.close()])
       stopTabTargets()
       releaseAllOpenClaims()
+      releaseAllOpenSessionTabs()
       const shutdownTasks: Promise<void>[] = [shutdownAnalytics()]
       if (bootstrap) shutdownTasks.push(bootstrap.disconnect())
       await Promise.allSettled(shutdownTasks)

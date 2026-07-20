@@ -88,7 +88,7 @@ export const contractCases: ContractCase[] = [
   },
   {
     name: 'session list and detail',
-    async run({ api, liveSessionId }) {
+    async run({ api }) {
       const list = await api.listSessions({ limit: 100 })
       expect(list.items.some((item) => item.sessionId === liveSessionId)).toBe(
         true,
@@ -172,7 +172,7 @@ export const contractCases: ContractCase[] = [
   },
   {
     name: 'recording ingest byte ceiling',
-    async run({ api, liveSessionId }) {
+    async run({ api }) {
       const accepted = recordingLineOfBytes(RECORDING_INGEST_MAX_BYTES, 400)
       expect(
         await api.appendRecordingEvents({

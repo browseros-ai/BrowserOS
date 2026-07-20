@@ -105,6 +105,27 @@ describe('TabTargetMap', () => {
     expect(await map.targetForTab(44)).toBe('target-d')
   })
 
+  it('inherits a popup from the live opener tab', async () => {
+    const source = new FakeSource()
+    source.tabs = [{ tabId: 11, targetId: 'opener-target' }]
+    const inherited: Array<[number, number, string]> = []
+    const map = new TabTargetMap(source, {
+      inheritTabOwner: (openerTabId, tabId, targetId) => {
+        inherited.push([openerTabId, tabId, targetId])
+      },
+    })
+    await map.start()
+
+    source.emitCreated({
+      targetId: 'popup-target',
+      tabId: 22,
+      openerId: 'opener-target',
+    })
+
+    expect(inherited).toEqual([[11, 22, 'popup-target']])
+    expect(await map.targetForTab(22)).toBe('popup-target')
+  })
+
   it('resolves a destroyed target during grace and closes its claims immediately', async () => {
     const source = new FakeSource()
     source.tabs = [{ tabId: 55, targetId: 'target-e' }]

@@ -26,6 +26,7 @@ export interface RecordToolDispatchInput {
   sessionId: string
   toolName: string
   pageId: number | null
+  tabId: number | null
   targetId: string | null
   url: string | null
   title: string | null
@@ -57,6 +58,7 @@ export function recordToolDispatch(
         sessionId: input.sessionId,
         toolName: input.toolName,
         pageId: input.pageId,
+        tabId: input.tabId,
         targetId: input.targetId,
         url: input.url,
         title: input.title,

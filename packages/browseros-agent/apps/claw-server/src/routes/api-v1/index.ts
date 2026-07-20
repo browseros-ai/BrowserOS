@@ -56,6 +56,11 @@ export interface RecordingAssociation {
   targetId: string
 }
 
+export interface RecordingIdentity {
+  tabId: number
+  documentId: string
+}
+
 export interface CanonicalApiDependencies {
   getSystemInfo(): SystemInfo
   getTelemetry(): TelemetryState
@@ -69,8 +74,15 @@ export interface CanonicalApiDependencies {
   getRecording(sessionId: string): RecordingMetadata | null
   /** Full NDJSON stream. Null means unknown session; `''` means known but nothing captured yet. */
   downloadRecordingEvents(sessionId: string): Promise<string | null>
-  /** Null means the (tab, page, target) association no longer belongs to this session. */
+  /** Session-neutral document ingest; target attribution is implementation-owned and best-effort. */
   appendRecordingEvents(
+    identity: RecordingIdentity,
+    ndjson: string,
+    batchId: string,
+    hasGap: boolean,
+  ): Promise<AppendRecordingEventsResponse>
+  /** Undocumented compatibility path for the already-shipped session-aware extension. */
+  appendLegacyRecordingEvents(
     sessionId: string,
     association: RecordingAssociation,
     ndjson: string,
@@ -138,6 +150,42 @@ export function createCanonicalApiRoute(deps: CanonicalApiDependencies) {
     }
     return c.body(events, 200, { 'content-type': 'application/x-ndjson' })
   })
+  app.post('/api/v1/recordings/events', recordingBodyLimit(), async (c) => {
+    const contentType = c.req.header('content-type') ?? ''
+    if (!contentType.toLowerCase().startsWith('application/x-ndjson')) {
+      return apiError(
+        c,
+        400,
+        'invalid_request',
+        'content-type must be application/x-ndjson',
+      )
+    }
+    const tabId = positiveInteger(c.req.header('x-recording-tab-id') ?? '')
+    const documentId = c.req.header('x-recording-document-id') ?? ''
+    const batchId = c.req.header('x-recording-batch-id') ?? ''
+    const hasGap = recordingGap(c.req.header('x-recording-has-gap'))
+    if (
+      tabId === null ||
+      !isUuid(documentId) ||
+      batchId.length === 0 ||
+      hasGap === null
+    ) {
+      return apiError(
+        c,
+        400,
+        'invalid_request',
+        'recording tab, document, batch, and gap headers are invalid',
+      )
+    }
+    return c.json(
+      await deps.appendRecordingEvents(
+        { tabId, documentId },
+        await c.req.text(),
+        batchId,
+        hasGap,
+      ),
+    )
+  })
   app.post(
     '/api/v1/sessions/:sessionId/recording/events',
     recordingBodyLimit(),
@@ -159,12 +207,8 @@ export function createCanonicalApiRoute(deps: CanonicalApiDependencies) {
           'content-type must be application/x-ndjson',
         )
       }
-      // The recorder pins every batch to the (tab, page, target)
-      // incarnation it captured from. All three are required so a batch
-      // can never be attributed to a tab that was since reclaimed —
-      // appendRecordingEvents refuses (409) when the association no
-      // longer holds, and the recorder drops its cached association on
-      // any of 404/409/410.
+      // Compatibility for recorder builds that pinned a batch to the live
+      // (tab, page, target) tuple. New recorders use the document-keyed route.
       const tabId = positiveInteger(c.req.header('x-recording-tab-id') ?? '')
       const pageId = positiveInteger(c.req.header('x-recording-page-id') ?? '')
       const targetId = c.req.header('x-recording-target-id')
@@ -176,7 +220,7 @@ export function createCanonicalApiRoute(deps: CanonicalApiDependencies) {
           'recording tab, page, and target headers are required',
         )
       }
-      const result = await deps.appendRecordingEvents(
+      const result = await deps.appendLegacyRecordingEvents(
         sessionId,
         { tabId, pageId, targetId },
         await c.req.text(),
@@ -244,6 +288,18 @@ export function createCanonicalApiRoute(deps: CanonicalApiDependencies) {
   })
 
   return app
+}
+
+function recordingGap(raw: string | undefined): boolean | null {
+  if (raw === undefined || raw === 'false') return false
+  if (raw === 'true') return true
+  return null
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  )
 }
 
 function apiError(
