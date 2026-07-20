@@ -14,9 +14,9 @@ import {
 } from '../../src/services/recordings'
 import { createReplayService } from '../../src/services/replays'
 
-const firstDocument = '018f47a7-1c2b-7def-8123-0123456789ab'
-const secondDocument = '018f47a7-1c2b-7def-8123-0123456789ac'
-const otherDocument = '018f47a7-1c2b-7def-8123-0123456789ad'
+const firstDocument = '33D25F3CF060E81B14070BC356FF1871'
+const secondDocument = '8395FF2EF4A1D8579F1917B3B54ADECE'
+const otherDocument = '9E84CDCAB8762569B5B109D125F60147'
 let dir: string
 let store: RecordingStore
 

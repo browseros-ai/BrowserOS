@@ -18,8 +18,8 @@ import {
   type RecordingStore,
 } from '../../src/services/recordings'
 
-const documentA = '018f47a7-1c2b-7def-8123-0123456789ab'
-const documentB = '018f47a7-1c2b-7def-8123-0123456789ac'
+const documentA = '33D25F3CF060E81B14070BC356FF1871'
+const documentB = '8395FF2EF4A1D8579F1917B3B54ADECE'
 let dir: string
 let store: RecordingStore
 
