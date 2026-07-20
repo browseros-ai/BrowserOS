@@ -477,7 +477,8 @@ export const actCases: ContractCase[] = [
     },
   },
   {
-    name: 'act: select picks a valid option and rejects an invalid one',
+    name: 'act: select updates a covered styled native select semantically',
+    smoke: true,
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const snap = await snapshot(ctx, page)
@@ -491,13 +492,17 @@ export const actCases: ContractCase[] = [
         }),
         'act select valid',
       )
-      const value = await evalIn(
+      const selectedState = await evalIn(
         ctx,
         page,
-        'return document.getElementById("color").value',
+        'const select = document.getElementById("color"); return JSON.stringify({value: select.value, changes: Number(select.dataset.changeCount), prompt: document.querySelector(".styled-select-prompt").textContent})',
       )
-      if (!value.includes('green')) {
-        throw new Error(`select did not apply: ${value}`)
+      if (
+        !selectedState.includes('"value":"green"') ||
+        !selectedState.includes('"changes":1') ||
+        !selectedState.includes('"prompt":"Green"')
+      ) {
+        throw new Error(`select did not apply semantically: ${selectedState}`)
       }
       const invalid = await ctx.mcp.callTool('act', {
         page,
@@ -505,8 +510,21 @@ export const actCases: ContractCase[] = [
         ref,
         value: 'chartreuse',
       })
-      ctx.record('act:select-valid-and-invalid', {
+      const missingState = await evalIn(
+        ctx,
+        page,
+        'const select = document.getElementById("color"); return JSON.stringify({value: select.value, changes: Number(select.dataset.changeCount)})',
+      )
+      if (
+        !missingState.includes('"value":"green"') ||
+        !missingState.includes('"changes":1')
+      ) {
+        throw new Error(`missing option changed select state: ${missingState}`)
+      }
+      ctx.record('act:styled-select-semantics', {
         validApplied: true,
+        changeBubbledOnce: true,
+        missingLeftStateUnchanged: true,
         invalidRejected: invalid.isError === true,
       })
     },
