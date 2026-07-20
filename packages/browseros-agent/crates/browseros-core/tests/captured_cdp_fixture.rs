@@ -32,7 +32,7 @@ fn captured_pages() -> Vec<(String, PathBuf)> {
     let dir = captured_dir();
     let entries = fs::read_dir(&dir).unwrap_or_else(|err| panic!("read {}: {err}", dir.display()));
     for entry in entries {
-        let entry = entry.expect("dir entry");
+        let entry = entry.unwrap_or_else(|err| panic!("read entry in {}: {err}", dir.display()));
         let ax = entry.path().join("get-full-ax-tree.json");
         if ax.is_file() {
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -111,7 +111,9 @@ fn interactive_captured_pages_mint_refs() {
 #[test]
 fn captured_frame_trees_and_describe_nodes_are_valid_json() {
     for (name, ax_path) in captured_pages() {
-        let dir = ax_path.parent().expect("page dir");
+        let dir = ax_path
+            .parent()
+            .unwrap_or_else(|| panic!("missing parent for {}", ax_path.display()));
         for companion in ["get-frame-tree.json", "describe-node.json"] {
             let path = dir.join(companion);
             let raw = fs::read_to_string(&path)
