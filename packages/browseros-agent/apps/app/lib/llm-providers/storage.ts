@@ -93,11 +93,18 @@ export function setupLlmProvidersSyncToBackend(): () => void {
 /** Returns provider configs after applying display-name compatibility fixes. */
 export async function loadProviders(): Promise<LlmProviderConfig[]> {
   const providers = (await providersStorage.getValue()) || []
-  const normalizedProviders = normalizeProviderNames(providers)
+  // The literal catches persisted configs from the unshipped alpha provider.
+  const supportedProviders = providers.filter(
+    (provider) => String(provider.type) !== 'remote-hermes',
+  )
+  const normalizedProviders = normalizeProviderNames(supportedProviders)
 
   // Keep storage consistent so every consumer sees the same provider name.
   if (
-    normalizedProviders.some((provider, index) => provider !== providers[index])
+    supportedProviders.length !== providers.length ||
+    normalizedProviders.some(
+      (provider, index) => provider !== supportedProviders[index],
+    )
   ) {
     await providersStorage.setValue(normalizedProviders)
   }
