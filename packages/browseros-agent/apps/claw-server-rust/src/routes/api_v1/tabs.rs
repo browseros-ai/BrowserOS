@@ -27,7 +27,7 @@ pub(super) async fn list(
         .await
         .map_err(|source| internal(&request_id, source))?;
     let mut items = Vec::new();
-    for record in state.tab_activity.snapshot().await {
+    for record in state.live_tab_activity().await {
         let session = state
             .sessions
             .lookup(&SessionId::new(record.session_id.clone()))

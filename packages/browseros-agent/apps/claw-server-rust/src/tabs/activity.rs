@@ -1,7 +1,8 @@
-use browseros_core::TargetId;
+use browseros_core::{BrowserSession, PageId, TargetId};
 use std::{
     cmp::Reverse,
     collections::{HashMap, VecDeque},
+    future::Future,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -44,11 +45,11 @@ pub struct ScreencastFrame {
 
 #[derive(Debug, Clone)]
 struct RawRecord {
+    /// Replaced on every mutation so reconciliation can detect both updates and remove/reinsert ABA races.
+    version: Arc<()>,
     target_id: String,
     tab_id: i64,
     page_id: u32,
-    url: String,
-    title: String,
     session_id: String,
     agent_id: String,
     slug: String,
@@ -57,6 +58,16 @@ struct RawRecord {
     last_tool_name: String,
     tool_count: usize,
     recent_tools: VecDeque<ToolEvent>,
+}
+
+enum LivePageState {
+    Live {
+        target_id: String,
+        url: String,
+        title: String,
+    },
+    Missing,
+    Unavailable,
 }
 
 #[derive(Clone, Default)]
@@ -69,8 +80,6 @@ pub struct RecordToolInput {
     pub tab_id: i64,
     pub page_id: u32,
     pub session_id: String,
-    pub url: String,
-    pub title: String,
     pub agent_id: String,
     pub slug: String,
     pub tool_name: String,
@@ -82,10 +91,9 @@ impl TabActivityService {
         let target_key = input.target_id.into_inner();
         let mut records = self.records.lock().await;
         if let Some(existing) = records.get_mut(&target_key) {
+            existing.version = Arc::new(());
             existing.tab_id = input.tab_id;
             existing.page_id = input.page_id;
-            existing.url = input.url;
-            existing.title = input.title;
             existing.session_id = input.session_id;
             existing.agent_id = input.agent_id;
             existing.slug = input.slug;
@@ -109,11 +117,10 @@ impl TabActivityService {
         records.insert(
             target_key.clone(),
             RawRecord {
+                version: Arc::new(()),
                 target_id: target_key,
                 tab_id: input.tab_id,
                 page_id: input.page_id,
-                url: input.url,
-                title: input.title,
                 session_id: input.session_id,
                 agent_id: input.agent_id,
                 slug: input.slug,
@@ -126,36 +133,106 @@ impl TabActivityService {
         );
     }
 
-    pub async fn snapshot(&self) -> Vec<TabActivityRecord> {
+    pub async fn remove_incarnation(&self, page_id: u32, target_id: &str) -> bool {
+        let mut records = self.records.lock().await;
+        if records
+            .get(target_id)
+            .is_some_and(|record| record.page_id == page_id)
+        {
+            records.remove(target_id);
+            return true;
+        }
+        false
+    }
+
+    /// Reconciles stored trails against live page and target identity before exposing them.
+    pub async fn snapshot(&self, session: Option<&BrowserSession>) -> Vec<TabActivityRecord> {
+        let Some(session) = session else {
+            return Vec::new();
+        };
+        self.snapshot_with(|page_id| async move {
+            match session.pages.refresh(page_id).await {
+                Ok(Some(info)) => LivePageState::Live {
+                    target_id: info.target_id.into_inner(),
+                    url: info.url,
+                    title: info.title,
+                },
+                Ok(None) => LivePageState::Missing,
+                Err(_) => LivePageState::Unavailable,
+            }
+        })
+        .await
+    }
+
+    async fn snapshot_with<F, Fut>(&self, resolve: F) -> Vec<TabActivityRecord>
+    where
+        F: Fn(PageId) -> Fut,
+        Fut: Future<Output = LivePageState>,
+    {
         let now = now_ms();
-        let mut rows: Vec<_> = self
+        let target_ids = self
             .records
             .lock()
             .await
-            .values()
-            .map(|record| TabActivityRecord {
-                target_id: record.target_id.clone(),
-                tab_id: record.tab_id,
-                page_id: record.page_id,
-                url: record.url.clone(),
-                title: record.title.clone(),
-                session_id: record.session_id.clone(),
-                agent_id: record.agent_id.clone(),
-                slug: record.slug.clone(),
-                first_tool_at: record.first_tool_at,
-                last_tool_at: record.last_tool_at,
-                last_tool_name: record.last_tool_name.clone(),
-                tool_count: record.tool_count,
-                recent_tools: record.recent_tools.iter().cloned().collect(),
-                status: if now.saturating_sub(record.last_tool_at)
-                    < i64::try_from(ACTIVE_WINDOW.as_millis()).unwrap_or(30_000)
-                {
-                    "active"
-                } else {
-                    "idle"
-                },
-            })
-            .collect();
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut rows = Vec::with_capacity(target_ids.len());
+        for target_id in target_ids {
+            loop {
+                let candidate = {
+                    let records = self.records.lock().await;
+                    records.get(&target_id).cloned()
+                };
+                let Some(candidate) = candidate else {
+                    break;
+                };
+                let live = resolve(PageId(candidate.page_id)).await;
+                let mut records = self.records.lock().await;
+                let Some(current) = records.get(&target_id) else {
+                    break;
+                };
+                if !Arc::ptr_eq(&current.version, &candidate.version) {
+                    drop(records);
+                    continue;
+                }
+                match live {
+                    LivePageState::Live {
+                        target_id: live_target_id,
+                        url,
+                        title,
+                    } if live_target_id == candidate.target_id => {
+                        rows.push(TabActivityRecord {
+                            target_id: candidate.target_id,
+                            tab_id: candidate.tab_id,
+                            page_id: candidate.page_id,
+                            url,
+                            title,
+                            session_id: candidate.session_id,
+                            agent_id: candidate.agent_id,
+                            slug: candidate.slug,
+                            first_tool_at: candidate.first_tool_at,
+                            last_tool_at: candidate.last_tool_at,
+                            last_tool_name: candidate.last_tool_name,
+                            tool_count: candidate.tool_count,
+                            recent_tools: candidate.recent_tools.into_iter().collect(),
+                            status: if now.saturating_sub(candidate.last_tool_at)
+                                < i64::try_from(ACTIVE_WINDOW.as_millis()).unwrap_or(30_000)
+                            {
+                                "active"
+                            } else {
+                                "idle"
+                            },
+                        });
+                    }
+                    LivePageState::Live { .. } | LivePageState::Missing => {
+                        records.remove(&target_id);
+                    }
+                    LivePageState::Unavailable => {}
+                }
+                break;
+            }
+        }
         rows.sort_by_key(|row| Reverse(row.last_tool_at));
         rows
     }
@@ -170,8 +247,44 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{RecordToolInput, TabActivityService};
+    use super::{LivePageState, RecordToolInput, TabActivityService};
     use browseros_core::TargetId;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+    use tokio::sync::Notify;
+
+    async fn record(
+        service: &TabActivityService,
+        target_id: &str,
+        page_id: u32,
+        session_id: &str,
+        tool_name: &str,
+    ) {
+        service
+            .record_tool(RecordToolInput {
+                target_id: TargetId::from(target_id.to_string()),
+                tab_id: i64::from(page_id) + 100,
+                page_id,
+                session_id: session_id.to_string(),
+                agent_id: session_id.to_string(),
+                slug: "codex".to_string(),
+                tool_name: tool_name.to_string(),
+            })
+            .await;
+    }
+
+    fn live(target_id: &str, url: &str, title: &str) -> LivePageState {
+        LivePageState::Live {
+            target_id: target_id.to_string(),
+            url: url.to_string(),
+            title: title.to_string(),
+        }
+    }
 
     #[tokio::test]
     async fn latest_session_and_tab_replace_the_target_association() {
@@ -186,8 +299,6 @@ mod tests {
                     tab_id,
                     page_id: 7,
                     session_id: session_id.to_string(),
-                    url: "https://example.com".to_string(),
-                    title: "Example".to_string(),
                     agent_id: session_id.to_string(),
                     slug: "codex".to_string(),
                     tool_name: tool_name.to_string(),
@@ -195,10 +306,122 @@ mod tests {
                 .await;
         }
 
-        let records = service.snapshot().await;
+        let records = service
+            .snapshot_with(|_| async { live("target-1", "https://example.com/current", "Current") })
+            .await;
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].session_id, "session-2");
         assert_eq!(records[0].tab_id, 202);
         assert_eq!(records[0].tool_count, 2);
+        assert_eq!(records[0].url, "https://example.com/current");
+        assert_eq!(records[0].title, "Current");
+    }
+
+    #[tokio::test]
+    async fn missing_page_is_evicted() {
+        let service = TabActivityService::default();
+        record(&service, "target-1", 7, "session-1", "navigate").await;
+
+        assert!(
+            service
+                .snapshot_with(|_| async { LivePageState::Missing })
+                .await
+                .is_empty()
+        );
+        assert!(
+            service
+                .snapshot_with(|_| async { live("target-1", "https://example.com", "Example") })
+                .await
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn reused_page_id_with_another_target_is_evicted() {
+        let service = TabActivityService::default();
+        record(&service, "target-old", 1, "session-1", "snapshot").await;
+
+        let records = service
+            .snapshot_with(|_| async { live("target-new", "https://example.com/new", "New tab") })
+            .await;
+        assert!(records.is_empty());
+        assert!(
+            service
+                .snapshot_with(|_| async {
+                    live("target-old", "https://example.com/old", "Old tab")
+                })
+                .await
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn session_absence_and_refresh_failure_hide_but_preserve_activity() {
+        let service = TabActivityService::default();
+        record(&service, "target-1", 1, "session-1", "snapshot").await;
+
+        assert!(service.snapshot(None).await.is_empty());
+        assert!(
+            service
+                .snapshot_with(|_| async { LivePageState::Unavailable })
+                .await
+                .is_empty()
+        );
+
+        let records = service
+            .snapshot_with(|_| async {
+                live("target-1", "https://example.com/reconnected", "Reconnected")
+            })
+            .await;
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].url, "https://example.com/reconnected");
+    }
+
+    #[tokio::test]
+    async fn update_during_stale_validation_is_retried_instead_of_pruned() {
+        let service = TabActivityService::default();
+        record(&service, "target-1", 1, "session-1", "navigate").await;
+        let validation_started = Arc::new(Notify::new());
+        let release_validation = Arc::new(Notify::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let snapshot = tokio::spawn({
+            let service = service.clone();
+            let validation_started = validation_started.clone();
+            let release_validation = release_validation.clone();
+            let calls = calls.clone();
+            async move {
+                service
+                    .snapshot_with(move |_| {
+                        let validation_started = validation_started.clone();
+                        let release_validation = release_validation.clone();
+                        let calls = calls.clone();
+                        async move {
+                            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                                validation_started.notify_one();
+                                release_validation.notified().await;
+                                LivePageState::Missing
+                            } else {
+                                live("target-1", "https://example.com/updated", "Updated")
+                            }
+                        }
+                    })
+                    .await
+            }
+        });
+
+        validation_started.notified().await;
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        record(&service, "target-1", 1, "session-2", "snapshot").await;
+        release_validation.notify_one();
+
+        let records = snapshot
+            .await
+            .unwrap_or_else(|error| panic!("snapshot failed: {error}"));
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].session_id, "session-2");
+        assert_eq!(records[0].last_tool_name, "snapshot");
+        assert_eq!(records[0].tool_count, 2);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

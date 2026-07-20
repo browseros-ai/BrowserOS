@@ -28,8 +28,6 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
                 tab_id: info.tab_id.0,
                 page_id,
                 session_id: context.call.session_id.as_str().to_string(),
-                url: info.url,
-                title: info.title,
                 agent_id: identity.session.convo_id().as_str().to_string(),
                 slug: identity.agent.slug().to_string(),
                 tool_name: context.call.tool().name.to_string(),
@@ -57,7 +55,13 @@ mod tests {
             duration_ms: 1,
         })
         .await?;
-        assert!(call.state.tab_activity.snapshot().await.is_empty());
+        assert!(
+            call.state
+                .tab_activity
+                .snapshot(call.browser_session.as_deref())
+                .await
+                .is_empty()
+        );
         Ok(())
     }
 }

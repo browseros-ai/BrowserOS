@@ -154,8 +154,7 @@ pub(super) async fn recording(
         .map(|target| target.target_id.as_str())
         .collect::<std::collections::HashSet<_>>();
     let page_ids = state
-        .tab_activity
-        .snapshot()
+        .live_tab_activity()
         .await
         .into_iter()
         .filter(|tab| tab.session_id == session_id && target_ids.contains(tab.target_id.as_str()))
@@ -252,7 +251,7 @@ pub(super) async fn append_events(
     // another session, a navigation that swapped the target — makes the
     // batch undeliverable rather than attributing its events to the
     // wrong replay; the 409 tells the recorder to drop its association.
-    let Some(target) = state.tab_activity.snapshot().await.into_iter().find(|tab| {
+    let Some(target) = state.live_tab_activity().await.into_iter().find(|tab| {
         tab.session_id == session_id
             && tab.tab_id == tab_id
             && i64::from(tab.page_id) == page_id

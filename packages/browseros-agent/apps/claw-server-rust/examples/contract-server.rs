@@ -109,8 +109,6 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
             tab_id: 101,
             page_id: 7,
             session_id: "session-live".to_string(),
-            url: "https://browseros.com".to_string(),
-            title: "BrowserOS".to_string(),
             agent_id: "codex-research-browserclaw".to_string(),
             slug: "codex".to_string(),
             tool_name: "snapshot".to_string(),

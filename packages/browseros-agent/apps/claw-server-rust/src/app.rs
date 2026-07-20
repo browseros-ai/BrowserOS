@@ -13,7 +13,10 @@ use crate::{
     runtime::ShutdownHandle,
     sessions::Sessions,
     storage::JsonStore,
-    tabs::{activity::TabActivityService, targets::TabTargetMap},
+    tabs::{
+        activity::{TabActivityRecord, TabActivityService},
+        targets::TabTargetMap,
+    },
     telemetry::TelemetryService,
 };
 use axum::{Router, middleware};
@@ -93,6 +96,11 @@ impl AppState {
             screencast: ScreencastService::new(50),
             shutdown: ShutdownHandle::new(),
         })
+    }
+
+    pub async fn live_tab_activity(&self) -> Vec<TabActivityRecord> {
+        let session = self.browser.session().await;
+        self.tab_activity.snapshot(session.as_deref()).await
     }
 }
 

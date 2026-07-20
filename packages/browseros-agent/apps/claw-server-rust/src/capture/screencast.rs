@@ -142,7 +142,8 @@ impl ScreencastService {
         tab_activity: &Arc<TabActivityService>,
     ) {
         let idle = self.is_idle(now_epoch_ms());
-        let records = tab_activity.snapshot().await;
+        let session = browser.session().await;
+        let records = tab_activity.snapshot(session.as_deref()).await;
         let (failures, in_flight, cached_page_ids) = {
             let inner = self.inner.lock().await;
             (
@@ -157,7 +158,7 @@ impl ScreencastService {
         if plan.capture.is_empty() {
             return;
         }
-        let Some(session) = browser.session().await else {
+        let Some(session) = session else {
             return;
         };
         for batch in plan.capture.chunks(MAX_PARALLEL_SHOTS) {
