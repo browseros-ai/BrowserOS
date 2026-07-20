@@ -4,13 +4,14 @@
  * while `replays.ts` joins them to server-owned tab windows later.
  */
 
-import { mkdir, open, readFile, rm, unlink } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { readFile, rm, unlink } from 'node:fs/promises'
+import { join } from 'node:path'
 import { and, eq, isNotNull, lt, sql } from 'drizzle-orm'
 import { resolveClawServerPath } from '../lib/browserclaw-dir'
 import { logger } from '../lib/logger'
 import { type AuditDb, getAuditDb } from '../modules/db/db'
 import { recordingBatches } from '../modules/db/schema/recording-batches.sql'
+import { recordingPayloads } from '../modules/db/schema/recording-payloads.sql'
 import { recordingStreams } from '../modules/db/schema/recording-streams.sql'
 import { sessionTabs } from '../modules/db/schema/session-tabs.sql'
 import { tabClaims } from '../modules/db/schema/tab-claims.sql'
@@ -81,7 +82,7 @@ export interface RecordingStoreOptions {
   now?: () => number
 }
 
-/** Stores document streams and commits their file/catalog acceptance serially. */
+/** Stores document streams and their batch ledger in one SQLite transaction. */
 export function createRecordingStore(
   options: RecordingStoreOptions = {},
 ): RecordingStore {
@@ -122,6 +123,16 @@ export function createRecordingStore(
     ) {
       return false
     }
+    const existingStream = getDb()
+      .select({ tabId: recordingStreams.tabId })
+      .from(recordingStreams)
+      .where(eq(recordingStreams.documentId, input.documentId))
+      .get()
+    if (existingStream && existingStream.tabId !== input.tabId) {
+      throw new Error(
+        `recording document ${input.documentId} changed tab identity`,
+      )
+    }
     if (input.events.length === 0) return true
 
     const lines = input.events.map((event) => JSON.stringify(event))
@@ -129,63 +140,48 @@ export function createRecordingStore(
     const firstEventAt = Math.min(...input.events.map((event) => event.ts))
     const lastEventAt = Math.max(...input.events.map((event) => event.ts))
     const sizeBytes = Buffer.byteLength(payload)
-    const path = resolvePath(input.documentId)
-    await mkdir(dirname(path), { recursive: true })
-    const handle = await open(path, 'a+')
-    const originalSize = (await handle.stat()).size
-
-    try {
-      await handle.appendFile(payload, 'utf8')
-      getDb().transaction((tx) => {
-        tx.insert(recordingStreams)
-          .values({
-            documentId: input.documentId,
-            tabId: input.tabId,
-            targetId: input.targetId,
-            firstEventAt,
-            lastEventAt,
-            sizeBytes,
-            eventCount: input.events.length,
-            hasGap: input.hasGap,
-          })
-          .onConflictDoUpdate({
-            target: recordingStreams.documentId,
-            set: {
-              tabId: input.tabId,
-              targetId: sql`coalesce(${recordingStreams.targetId}, ${input.targetId})`,
-              firstEventAt: sql`min(${recordingStreams.firstEventAt}, ${firstEventAt})`,
-              lastEventAt: sql`max(${recordingStreams.lastEventAt}, ${lastEventAt})`,
-              sizeBytes: sql`${recordingStreams.sizeBytes} + ${sizeBytes}`,
-              eventCount: sql`${recordingStreams.eventCount} + ${input.events.length}`,
-              hasGap: sql`${recordingStreams.hasGap} or ${input.hasGap ? 1 : 0}`,
-            },
-          })
-          .run()
-        tx.insert(recordingBatches)
-          .values({
-            documentId: input.documentId,
-            batchId: input.batchId,
-            acceptedAt: now(),
-          })
-          .run()
-      })
-      return true
-    } catch (error) {
-      try {
-        await handle.truncate(originalSize)
-      } catch (rollbackError) {
-        logger.warn('recording append rollback failed', {
+    getDb().transaction((tx) => {
+      tx.insert(recordingStreams)
+        .values({
           documentId: input.documentId,
-          error:
-            rollbackError instanceof Error
-              ? rollbackError.message
-              : String(rollbackError),
+          tabId: input.tabId,
+          targetId: input.targetId,
+          firstEventAt,
+          lastEventAt,
+          sizeBytes,
+          eventCount: input.events.length,
+          hasGap: input.hasGap,
         })
-      }
-      throw error
-    } finally {
-      await handle.close()
-    }
+        .onConflictDoUpdate({
+          target: recordingStreams.documentId,
+          set: {
+            targetId: sql`coalesce(${recordingStreams.targetId}, ${input.targetId})`,
+            firstEventAt: sql`min(${recordingStreams.firstEventAt}, ${firstEventAt})`,
+            lastEventAt: sql`max(${recordingStreams.lastEventAt}, ${lastEventAt})`,
+            sizeBytes: sql`${recordingStreams.sizeBytes} + ${sizeBytes}`,
+            eventCount: sql`${recordingStreams.eventCount} + ${input.events.length}`,
+            hasGap: sql`${recordingStreams.hasGap} or ${input.hasGap ? 1 : 0}`,
+          },
+        })
+        .run()
+      tx.insert(recordingPayloads)
+        .values({ documentId: input.documentId, eventsNdjson: payload })
+        .onConflictDoUpdate({
+          target: recordingPayloads.documentId,
+          set: {
+            eventsNdjson: sql`${recordingPayloads.eventsNdjson} || ${payload}`,
+          },
+        })
+        .run()
+      tx.insert(recordingBatches)
+        .values({
+          documentId: input.documentId,
+          batchId: input.batchId,
+          acceptedAt: now(),
+        })
+        .run()
+    })
+    return true
   }
 
   async function readDocumentRange(
@@ -194,13 +190,12 @@ export function createRecordingStore(
     to: number,
   ): Promise<RecordedEvent[]> {
     await chains.get(documentId)?.catch(() => undefined)
-    let text: string
-    try {
-      text = await readFile(resolvePath(documentId), 'utf8')
-    } catch (error) {
-      if ((error as { code?: string }).code === 'ENOENT') return []
-      throw error
-    }
+    const text =
+      getDb()
+        .select({ eventsNdjson: recordingPayloads.eventsNdjson })
+        .from(recordingPayloads)
+        .where(eq(recordingPayloads.documentId, documentId))
+        .get()?.eventsNdjson ?? ''
     const events: RecordedEvent[] = []
     for (const line of text.split('\n')) {
       if (!line) continue
@@ -218,11 +213,6 @@ export function createRecordingStore(
         .where(eq(recordingStreams.documentId, documentId))
         .get()
       if (!row) return false
-      if (
-        !(await removeRecordingFile(resolvePath(documentId), { documentId }))
-      ) {
-        return false
-      }
       getDb()
         .delete(recordingStreams)
         .where(eq(recordingStreams.documentId, documentId))

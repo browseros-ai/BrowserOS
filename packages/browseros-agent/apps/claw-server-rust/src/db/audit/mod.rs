@@ -68,6 +68,7 @@ mod tests {
             "tab_claims",
             "session_tabs",
             "recording_streams",
+            "recording_payloads",
             "recording_batches",
             "seaql_migrations",
         ] {
@@ -105,7 +106,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 3);
+        assert_eq!(migrations.len(), 4);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -117,6 +118,10 @@ mod tests {
         assert_eq!(
             migrations[2].try_get::<String>("", "version")?,
             "m0003_document_recordings_and_tab_ownership"
+        );
+        assert_eq!(
+            migrations[3].try_get::<String>("", "version")?,
+            "m0004_atomic_recording_payloads"
         );
         Ok(())
     }
@@ -219,7 +224,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 3);
+        assert_eq!(migrations.len(), 4);
         Ok(())
     }
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { eq } from 'drizzle-orm'
@@ -9,6 +9,7 @@ import {
   setAuditDbForTesting,
 } from '../../src/modules/db/db'
 import { recordingBatches } from '../../src/modules/db/schema/recording-batches.sql'
+import { recordingPayloads } from '../../src/modules/db/schema/recording-payloads.sql'
 import { recordingStreams } from '../../src/modules/db/schema/recording-streams.sql'
 import { sessionTabs } from '../../src/modules/db/schema/session-tabs.sql'
 import {
@@ -58,12 +59,13 @@ describe('RecordingStore', () => {
       targetId: 'target-after-resolution',
     })
 
-    const text = await readFile(join(dir, `${documentA}.ndjson`), 'utf8')
-    expect(text.trim().split('\n').map(JSON.parse)).toEqual([
+    const events = [
       { ts: 200, type: 3, data: { ts: 200 } },
       { ts: 100, type: 3, data: { ts: 100 } },
       { ts: 300, type: 3, data: { ts: 300 } },
-    ])
+    ]
+    expect(await store.readRange(documentA, 0, 400)).toEqual(events)
+    const eventsNdjson = `${events.map(JSON.stringify).join('\n')}\n`
     expect(
       getAuditDb()
         .select()
@@ -76,10 +78,17 @@ describe('RecordingStore', () => {
       targetId: 'target-after-resolution',
       firstEventAt: 100,
       lastEventAt: 300,
-      sizeBytes: Buffer.byteLength(text),
+      sizeBytes: Buffer.byteLength(eventsNdjson),
       eventCount: 3,
       hasGap: false,
     })
+    expect(
+      getAuditDb()
+        .select()
+        .from(recordingPayloads)
+        .where(eq(recordingPayloads.documentId, documentA))
+        .get(),
+    ).toEqual({ documentId: documentA, eventsNdjson })
   })
 
   it('reads only events inside an inclusive ownership window', async () => {
@@ -107,6 +116,12 @@ describe('RecordingStore', () => {
       [documentA, 'batch-a'],
       [documentB, 'batch-a'],
     ])
+    expect(
+      getAuditDb()
+        .select({ documentId: recordingPayloads.documentId })
+        .from(recordingPayloads)
+        .all(),
+    ).toEqual([{ documentId: documentA }, { documentId: documentB }])
   })
 
   it('serializes concurrent retries before the durable batch check', async () => {
@@ -115,11 +130,18 @@ describe('RecordingStore', () => {
       append(documentA, 11, 'batch-a', [100]),
     ])
     expect(results.sort()).toEqual([false, true])
-    expect(
-      (await readFile(join(dir, `${documentA}.ndjson`), 'utf8'))
-        .trim()
-        .split('\n'),
-    ).toHaveLength(1)
+    expect(await store.readRange(documentA, 0, 200)).toHaveLength(1)
+  })
+
+  it('rejects a document id that moves to another tab', async () => {
+    await append(documentA, 11, 'batch-a', [100])
+
+    await expect(append(documentA, 12, 'batch-b', [200])).rejects.toThrow(
+      `recording document ${documentA} changed tab identity`,
+    )
+    expect(await store.readRange(documentA, 0, 300)).toEqual([
+      { ts: 100, type: 3, data: { ts: 100 } },
+    ])
   })
 
   it('keeps a gap sticky across later complete batches', async () => {
@@ -155,15 +177,24 @@ describe('RecordingStore', () => {
       recordingsDeleted: 1,
       claimsDeleted: 0,
     })
-    expect(await Bun.file(join(dir, `${documentA}.ndjson`)).exists()).toBe(true)
-    expect(await Bun.file(join(dir, `${documentB}.ndjson`)).exists()).toBe(
-      false,
-    )
+    expect(
+      getAuditDb()
+        .select({ documentId: recordingStreams.documentId })
+        .from(recordingStreams)
+        .all(),
+    ).toEqual([{ documentId: documentA }])
     expect(
       getAuditDb()
         .select()
         .from(recordingBatches)
         .where(eq(recordingBatches.documentId, documentB))
+        .all(),
+    ).toEqual([])
+    expect(
+      getAuditDb()
+        .select()
+        .from(recordingPayloads)
+        .where(eq(recordingPayloads.documentId, documentB))
         .all(),
     ).toEqual([])
   })

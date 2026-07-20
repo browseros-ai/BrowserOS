@@ -1,13 +1,17 @@
-//! Document-keyed rrweb persistence, independent of MCP session attribution.
+//! Transactional document-keyed rrweb persistence, independent of MCP attribution.
 
 use crate::{
     capture::audit::AuditService,
     clock::now_epoch_ms,
     db::audit::entities::{
-        prelude::{RecordingBatches, RecordingStreams, SessionTabs, TabClaims, TabRecordings},
-        recording_batches, recording_streams, session_tabs, tab_claims, tab_recordings,
+        prelude::{
+            RecordingBatches, RecordingPayloads, RecordingStreams, SessionTabs, TabClaims,
+            TabRecordings,
+        },
+        recording_batches, recording_payloads, recording_streams, session_tabs, tab_claims,
+        tab_recordings,
     },
-    error::{AppError, AppResult, IoPath},
+    error::{AppError, AppResult},
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
@@ -17,8 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
-    fs::{self, OpenOptions},
-    io::AsyncWriteExt,
+    fs,
     sync::Mutex,
     task::JoinHandle,
     time::{MissedTickBehavior, interval},
@@ -129,46 +132,11 @@ impl RecordingStore {
         batch_id: &str,
         has_gap: bool,
     ) -> AppResult<bool> {
-        if RecordingBatches::find_by_id((document_id.to_string(), batch_id.to_string()))
-            .one(self.audit.connection())
-            .await?
-            .is_some()
-        {
-            return Ok(false);
-        }
-        if events.is_empty() {
-            return Ok(true);
-        }
-
         let mut payload = String::new();
         for event in events {
             payload.push_str(&serde_json::to_string(event)?);
             payload.push('\n');
         }
-        fs::create_dir_all(&self.root)
-            .await
-            .with_path(self.root.clone())?;
-        let path = self.path_for(document_id);
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .await
-            .with_path(path.clone())?;
-        let original_size = file.metadata().await.with_path(path.clone())?.len();
-        if let Err(error) = async {
-            file.write_all(payload.as_bytes())
-                .await
-                .with_path(path.clone())?;
-            file.sync_data().await.with_path(path.clone())?;
-            Ok::<(), AppError>(())
-        }
-        .await
-        {
-            rollback_append(&mut file, document_id, original_size).await;
-            return Err(error);
-        }
-
         let first_event_at = events
             .iter()
             .map(|event| event.ts)
@@ -182,7 +150,17 @@ impl RecordingStore {
         let size_bytes = i64::try_from(payload.len()).unwrap_or(i64::MAX);
         let event_count = i64::try_from(events.len()).unwrap_or(i64::MAX);
         let txn = self.audit.connection().begin().await?;
-        let catalog_result = async {
+        async {
+            if RecordingBatches::find_by_id((document_id.to_string(), batch_id.to_string()))
+                .one(&txn)
+                .await?
+                .is_some()
+            {
+                return Ok(false);
+            }
+            if events.is_empty() {
+                return Ok(true);
+            }
             if let Some(existing) = RecordingStreams::find_by_id(document_id.to_string())
                 .one(&txn)
                 .await?
@@ -216,6 +194,23 @@ impl RecordingStore {
                 .exec(&txn)
                 .await?;
             }
+            if let Some(existing) = RecordingPayloads::find_by_id(document_id.to_string())
+                .one(&txn)
+                .await?
+            {
+                let mut update = existing.into_active_model();
+                let mut events_ndjson = update.events_ndjson.take().unwrap_or_default();
+                events_ndjson.push_str(&payload);
+                update.events_ndjson = Set(events_ndjson);
+                update.update(&txn).await?;
+            } else {
+                RecordingPayloads::insert(recording_payloads::ActiveModel {
+                    document_id: Set(document_id.to_string()),
+                    events_ndjson: Set(payload),
+                })
+                .exec(&txn)
+                .await?;
+            }
             RecordingBatches::insert(recording_batches::ActiveModel {
                 document_id: Set(document_id.to_string()),
                 batch_id: Set(batch_id.to_string()),
@@ -224,14 +219,9 @@ impl RecordingStore {
             .exec(&txn)
             .await?;
             txn.commit().await?;
-            Ok::<(), AppError>(())
+            Ok::<bool, AppError>(true)
         }
-        .await;
-        if let Err(error) = catalog_result {
-            rollback_append(&mut file, document_id, original_size).await;
-            return Err(error);
-        }
-        Ok(true)
+        .await
     }
 
     pub async fn read_range(
@@ -240,7 +230,13 @@ impl RecordingStore {
         from: i64,
         to: i64,
     ) -> AppResult<Vec<RecordedEvent>> {
-        read_file_range::<RecordedEvent>(self.path_for(document_id), from, to).await
+        let Some(payload) = RecordingPayloads::find_by_id(document_id.to_string())
+            .one(self.audit.connection())
+            .await?
+        else {
+            return Ok(Vec::new());
+        };
+        Ok(read_payload_range(&payload.events_ndjson, from, to))
     }
 
     pub async fn read_legacy_range(
@@ -362,9 +358,6 @@ impl RecordingStore {
             else {
                 return Ok(false);
             };
-            if !remove_file(&self.path_for(document_id), document_id).await {
-                return Ok(false);
-            }
             RecordingStreams::delete_by_id(stream.document_id)
                 .exec(self.audit.connection())
                 .await?;
@@ -439,6 +432,16 @@ where
         .collect())
 }
 
+fn read_payload_range<T>(text: &str, from: i64, to: i64) -> Vec<T>
+where
+    T: for<'de> Deserialize<'de> + Timestamped,
+{
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<T>(line).ok())
+        .filter(|event| event.timestamp() >= from && event.timestamp() <= to)
+        .collect()
+}
+
 trait Timestamped {
     fn timestamp(&self) -> i64;
 }
@@ -452,12 +455,6 @@ impl Timestamped for RecordedEvent {
 impl Timestamped for LegacyRecordedEvent {
     fn timestamp(&self) -> i64 {
         self.ts
-    }
-}
-
-async fn rollback_append(file: &mut tokio::fs::File, document_id: &str, size: u64) {
-    if let Err(error) = file.set_len(size).await {
-        warn!(document_id, error = %error, "recording append rollback failed");
     }
 }
 
@@ -493,7 +490,7 @@ fn sanitize_id(id: &str) -> String {
 mod tests {
     use super::*;
     use crate::db::audit::entities::{
-        prelude::{RecordingBatches, RecordingStreams, SessionTabs},
+        prelude::{RecordingBatches, RecordingPayloads, RecordingStreams, SessionTabs},
         session_tabs,
     };
     use sea_orm::{
@@ -599,6 +596,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn document_identity_cannot_move_between_tabs() -> anyhow::Result<()> {
+        let (_dir, _audit, store) = setup().await?;
+        let document_id = "018f47a7-1c2b-7def-8123-0123456789ab";
+        store
+            .append_batch(document_id, 11, None, &[event(100)], "batch-a", false)
+            .await?;
+
+        let error = match store
+            .append_batch(document_id, 12, None, &[event(200)], "batch-b", false)
+            .await
+        {
+            Ok(_) => anyhow::bail!("changed tab identity was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("changed tab identity"));
+        assert_eq!(
+            store.read_range(document_id, 0, 300).await?,
+            vec![event(100)]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn orphan_retention_keeps_claimed_streams_and_cascades_batches() -> anyhow::Result<()> {
         let (_dir, audit, store) = setup().await?;
         let now = 10 * RECORDING_ORPHAN_TTL_MS;
@@ -657,6 +677,12 @@ mod tests {
         );
         assert!(
             RecordingBatches::find_by_id((orphan.to_string(), "orphan".to_string()))
+                .one(audit.connection())
+                .await?
+                .is_none()
+        );
+        assert!(
+            RecordingPayloads::find_by_id(orphan)
                 .one(audit.connection())
                 .await?
                 .is_none()

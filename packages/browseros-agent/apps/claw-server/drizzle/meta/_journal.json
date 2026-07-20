@@ -36,6 +36,13 @@
       "when": 1784577820113,
       "tag": "0004_gifted_giant_girl",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1784582424007,
+      "tag": "0005_white_elektra",
+      "breakpoints": true
     }
   ]
 }

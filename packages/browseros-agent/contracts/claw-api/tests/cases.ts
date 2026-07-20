@@ -171,6 +171,51 @@ export const contractCases: ContractCase[] = [
     },
   },
   {
+    name: 'recording ingest rejects web origins',
+    async run({ baseUrl }) {
+      const path = `${baseUrl}/api/v1/recordings/events`
+      const preflight = await fetch(path, {
+        method: 'OPTIONS',
+        headers: {
+          origin: 'https://attacker.example',
+          'access-control-request-method': 'POST',
+          'access-control-request-headers':
+            'content-type,x-recording-tab-id,x-recording-document-id,x-recording-batch-id',
+        },
+      })
+      expect(preflight.status).toBe(403)
+      expect(preflight.headers.get('access-control-allow-origin')).toBeNull()
+
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: {
+          origin: 'https://attacker.example',
+          'content-type': 'application/x-ndjson',
+          'x-recording-tab-id': '101',
+          'x-recording-document-id': '018f47a7-1c2b-7def-8123-0123456789ab',
+          'x-recording-batch-id': 'hostile-contract-batch',
+        },
+        body: '{"ts":150,"type":3,"data":{}}\n',
+      })
+      expect(response.status).toBe(403)
+      expect(await response.json()).toMatchObject({ code: 'forbidden' })
+
+      const trusted = await fetch(path, {
+        method: 'POST',
+        headers: {
+          origin: 'chrome-extension://pjimfkbpehlcllblajnpfamdfjhhlgkc',
+          'content-type': 'application/x-ndjson',
+          'x-recording-tab-id': '101',
+          'x-recording-document-id': '018f47a7-1c2b-7def-8123-0123456789b0',
+          'x-recording-batch-id': 'trusted-contract-batch',
+        },
+        body: '{"ts":250,"type":3,"data":{}}\n',
+      })
+      expect(trusted.status).toBe(200)
+      expect(await trusted.json()).toEqual({ accepted: 1 })
+    },
+  },
+  {
     name: 'recording ingest byte ceiling',
     async run({ api }) {
       const accepted = recordingLineOfBytes(RECORDING_INGEST_MAX_BYTES, 400)

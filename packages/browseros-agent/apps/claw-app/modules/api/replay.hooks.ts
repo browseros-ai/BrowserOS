@@ -94,6 +94,28 @@ export interface UseReplayEventsVariables {
   sessionId: string
 }
 
+/** Changes only when replay metadata says the downloadable event set changed. */
+export function replayEventsRevision(
+  metadata: RecordingMetadata | undefined,
+): string | null {
+  if (!metadata) return null
+  return JSON.stringify([
+    metadata.sizeBytes,
+    metadata.lastEventAt ?? null,
+    metadata.complete,
+    metadata.tabs.map((tab) => [
+      tab.tabId,
+      tab.complete,
+      tab.segments.map((segment) => [
+        segment.documentId,
+        segment.lastEventAt,
+        segment.eventCount,
+        segment.hasGap,
+      ]),
+    ]),
+  ])
+}
+
 export interface ReplayEventsBundle {
   events: ReplayEvent[]
   tabIds: number[]

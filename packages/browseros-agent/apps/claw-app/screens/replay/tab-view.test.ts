@@ -239,6 +239,27 @@ describe('buildTabView', () => {
 
     expect(buildTabView(input, 1, 'document-gap').knownIncomplete).toBe(true)
   })
+
+  it('marks an event stream without a full snapshot as incomplete', () => {
+    const input = makeInput({
+      tabs: [
+        tab(1, [
+          {
+            documentId: 'document-missing-snapshot',
+            firstEventAt: 1_001_000,
+            lastEventAt: 1_002_000,
+          },
+        ]),
+      ],
+      eventsForDocument: () => [
+        event(1_001_000, 'document-missing-snapshot', 1, 3),
+      ],
+    })
+
+    const view = buildTabView(input, 1, 'document-missing-snapshot')
+    expect(view.hasFullSnapshot).toBe(false)
+    expect(view.knownIncomplete).toBe(true)
+  })
 })
 
 describe('catalog ordering', () => {

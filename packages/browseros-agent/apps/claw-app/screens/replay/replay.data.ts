@@ -5,7 +5,7 @@
  */
 
 import type { RecordingMetadata } from '@browseros/claw-api'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import type { RunStatus } from '@/lib/status'
 import {
@@ -18,6 +18,7 @@ import {
   type ReplayFrame,
   type ReplayKind,
   type ReplayVerb,
+  replayEventsRevision,
   useReplayEvents,
   useReplayMetadata,
 } from '@/modules/api/replay.hooks'
@@ -96,14 +97,23 @@ export function useReplayData(): UseReplayDataResult {
     variables: { sessionId },
     enabled: sessionId.length > 0,
   })
-  const eventsQuery = useReplayEvents({
-    variables: { sessionId },
-    enabled: sessionId.length > 0,
-  })
   const metadataQuery = useReplayMetadata({
     variables: { sessionId },
     enabled: sessionId.length > 0,
   })
+  const eventsQuery = useReplayEvents({
+    variables: { sessionId },
+    enabled: sessionId.length > 0,
+  })
+  const metadataRevision = replayEventsRevision(metadataQuery.data)
+  const requestedRevision = useRef<string | null>(null)
+  useEffect(() => {
+    if (metadataRevision === null) return
+    const sessionRevision = `${sessionId}:${metadataRevision}`
+    if (requestedRevision.current === sessionRevision) return
+    requestedRevision.current = sessionRevision
+    void eventsQuery.refetch()
+  }, [eventsQuery.refetch, metadataRevision, sessionId])
   const events = eventsQuery.data?.events ?? EMPTY_REPLAY_EVENTS
   const eventCatalog = useMemo(() => buildReplayEventCatalog(events), [events])
   const replay = useMemo<ReplayData | null>(() => {

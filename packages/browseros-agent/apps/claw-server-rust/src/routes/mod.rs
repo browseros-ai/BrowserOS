@@ -2,7 +2,7 @@ mod api_v1;
 
 use crate::{
     AppState,
-    error::{AppError, RequestId},
+    error::{AppError, CanonicalError, RequestId},
     mcp::streamable_http_service,
 };
 use axum::{
@@ -68,10 +68,22 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
     req.extensions_mut().insert(request_id.clone());
     let method = req.method().clone();
     let path = req.uri().path().to_string();
+    let reject_recording_origin =
+        path == "/api/v1/recordings/events" && !trusted_recording_origin(req.headers());
     let span = info_span!("http_request", request_id = %request_id.0, %method, %path);
     async move {
         let start = Instant::now();
-        let mut response = next.run(req).await;
+        let mut response = if reject_recording_origin {
+            CanonicalError::new(
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "recording ingest is restricted to BrowserClaw",
+                Some(&request_id),
+            )
+            .into_response()
+        } else {
+            next.run(req).await
+        };
         // One structured line per failed request; sub-400 traffic stays
         // unlogged on purpose (claw-app polls several endpoints).
         let status = response.status().as_u16();
@@ -84,20 +96,22 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
             }
         }
         let headers = response.headers_mut();
-        headers.insert(
-            header::ACCESS_CONTROL_ALLOW_ORIGIN,
-            HeaderValue::from_static("*"),
-        );
-        headers.insert(
-            header::ACCESS_CONTROL_ALLOW_METHODS,
-            HeaderValue::from_static("GET,POST,PUT,PATCH,DELETE,OPTIONS"),
-        );
-        headers.insert(
-            header::ACCESS_CONTROL_ALLOW_HEADERS,
-            HeaderValue::from_static(
-                "accept,content-type,authorization,mcp-session-id,mcp-protocol-version,last-event-id,x-recording-batch-id,x-recording-tab-id,x-recording-document-id,x-recording-has-gap,x-recording-page-id,x-recording-target-id",
-            ),
-        );
+        if !reject_recording_origin {
+            headers.insert(
+                header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                HeaderValue::from_static("*"),
+            );
+            headers.insert(
+                header::ACCESS_CONTROL_ALLOW_METHODS,
+                HeaderValue::from_static("GET,POST,PUT,PATCH,DELETE,OPTIONS"),
+            );
+            headers.insert(
+                header::ACCESS_CONTROL_ALLOW_HEADERS,
+                HeaderValue::from_static(
+                    "accept,content-type,authorization,mcp-session-id,mcp-protocol-version,last-event-id,x-recording-batch-id,x-recording-tab-id,x-recording-document-id,x-recording-has-gap,x-recording-page-id,x-recording-target-id",
+                ),
+            );
+        }
         if let Ok(value) = HeaderValue::from_str(&request_id.0) {
             headers.insert("x-request-id", value);
         }
@@ -105,6 +119,26 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
     }
     .instrument(span)
     .await
+}
+
+/// Stable origin derived from claw-app's manifest signing key.
+const BROWSERCLAW_EXTENSION_ORIGIN: &str = "chrome-extension://pjimfkbpehlcllblajnpfamdfjhhlgkc";
+
+fn trusted_recording_origin(headers: &axum::http::HeaderMap) -> bool {
+    match headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    {
+        None => true,
+        Some(BROWSERCLAW_EXTENSION_ORIGIN) => true,
+        Some("null") => {
+            headers
+                .get("sec-fetch-site")
+                .and_then(|value| value.to_str().ok())
+                == Some("none")
+        }
+        Some(_) => false,
+    }
 }
 
 async fn route_fallback(request: Request) -> StatusCode {

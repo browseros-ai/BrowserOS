@@ -62,6 +62,7 @@ export function buildTabView(
 
   const firstSnapshotIndex = rawEvents.findIndex((event) => event.type === 2)
   const hasFullSnapshot = firstSnapshotIndex !== -1
+  const missingSnapshot = rawEvents.length > 0 && !hasFullSnapshot
   const hasLeadingMutation =
     firstSnapshotIndex > 0 &&
     rawEvents.slice(0, firstSnapshotIndex).some((event) => event.type === 3)
@@ -96,7 +97,8 @@ export function buildTabView(
     events,
     totalSeconds: Math.max(0, (endMs - originMs) / 1000),
     hasFullSnapshot,
-    knownIncomplete: segment.hasGap || segment.legacy || hasLeadingMutation,
+    knownIncomplete:
+      segment.hasGap || segment.legacy || missingSnapshot || hasLeadingMutation,
     incompleteUntilMs,
   }
 }

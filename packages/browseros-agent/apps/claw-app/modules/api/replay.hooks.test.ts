@@ -9,9 +9,8 @@ mock.module('./client', () => ({
   resolveApiBaseUrl: async () => 'http://127.0.0.1:9200',
 }))
 
-const { fetchReplayEvents, fetchReplayMetadata } = await import(
-  './replay.hooks'
-)
+const { fetchReplayEvents, fetchReplayMetadata, replayEventsRevision } =
+  await import('./replay.hooks')
 
 const originalFetch = globalThis.fetch
 
@@ -20,6 +19,42 @@ afterEach(() => {
 })
 
 describe('replay queries', () => {
+  it('changes the event revision when late recording metadata advances', () => {
+    const metadata = {
+      hasData: true,
+      complete: true,
+      lastEventAt: 2_000,
+      sizeBytes: 128,
+      tabs: [
+        {
+          tabId: 9,
+          complete: true,
+          firstEventAt: 1_000,
+          lastEventAt: 2_000,
+          segments: [
+            {
+              documentId: 'document-a',
+              firstEventAt: 1_000,
+              lastEventAt: 2_000,
+              sizeBytes: 128,
+              eventCount: 2,
+              hasGap: false,
+            },
+          ],
+        },
+      ],
+    }
+    const first = replayEventsRevision(metadata)
+    expect(replayEventsRevision({ ...metadata })).toBe(first)
+    expect(
+      replayEventsRevision({
+        ...metadata,
+        lastEventAt: 3_000,
+        sizeBytes: 192,
+      }),
+    ).not.toBe(first)
+  })
+
   it('fetches canonical recording metadata', async () => {
     const metadata = {
       hasData: true,

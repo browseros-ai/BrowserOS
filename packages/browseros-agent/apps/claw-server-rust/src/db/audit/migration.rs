@@ -10,6 +10,7 @@ impl MigratorTrait for AuditMigrator {
             Box::new(m0001_baseline::Migration),
             Box::new(m0002_add_recordings_and_claims::Migration),
             Box::new(m0003_document_recordings_and_tab_ownership::Migration),
+            Box::new(m0004_atomic_recording_payloads::Migration),
         ]
     }
 }
@@ -65,6 +66,43 @@ mod m0003_document_recordings_and_tab_ownership {
                     )
                     .await?;
             }
+            Ok(())
+        }
+    }
+}
+
+mod m0004_atomic_recording_payloads {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0004_atomic_recording_payloads"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    "CREATE TABLE IF NOT EXISTS recording_payloads (document_id TEXT PRIMARY KEY NOT NULL REFERENCES recording_streams(document_id) ON DELETE CASCADE, events_ndjson TEXT NOT NULL)",
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .drop_table(
+                    Table::drop()
+                        .table(Alias::new("recording_payloads"))
+                        .if_exists()
+                        .to_owned(),
+                )
+                .await?;
             Ok(())
         }
     }

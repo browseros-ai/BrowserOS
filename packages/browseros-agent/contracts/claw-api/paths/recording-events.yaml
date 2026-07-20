@@ -21,6 +21,8 @@ post:
             $ref: ../schemas/sessions.yaml#/AppendRecordingEventsResponse
     '400':
       $ref: ../responses.yaml#/BadRequest
+    '403':
+      $ref: ../responses.yaml#/Forbidden
     '413':
       $ref: ../responses.yaml#/PayloadTooLarge
     '500':

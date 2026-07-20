@@ -13,6 +13,7 @@ import { resolveMigrationsFolder } from '../../../src/modules/db/migrator'
 import { agentSessionEnds } from '../../../src/modules/db/schema/agent-session-ends.sql'
 import { agentSessionStarts } from '../../../src/modules/db/schema/agent-session-starts.sql'
 import { recordingBatches } from '../../../src/modules/db/schema/recording-batches.sql'
+import { recordingPayloads } from '../../../src/modules/db/schema/recording-payloads.sql'
 import { recordingStreams } from '../../../src/modules/db/schema/recording-streams.sql'
 import { sessionTabs } from '../../../src/modules/db/schema/session-tabs.sql'
 import { tabClaims } from '../../../src/modules/db/schema/tab-claims.sql'
@@ -42,6 +43,7 @@ describe('audit DB (in-memory test seam)', () => {
     expect(db.select().from(tabRecordings).all()).toEqual([])
     expect(db.select().from(tabClaims).all()).toEqual([])
     expect(db.select().from(recordingStreams).all()).toEqual([])
+    expect(db.select().from(recordingPayloads).all()).toEqual([])
     expect(db.select().from(recordingBatches).all()).toEqual([])
     expect(db.select().from(sessionTabs).all()).toEqual([])
   })

@@ -4,6 +4,12 @@ BadRequest:
     application/json:
       schema:
         $ref: ./schemas/system.yaml#/ApiError
+Forbidden:
+  description: The browser origin is not allowed to write recordings.
+  content:
+    application/json:
+      schema:
+        $ref: ./schemas/system.yaml#/ApiError
 NotFound:
   description: Resource not found.
   content:

@@ -69,11 +69,12 @@ interface CreateServerOptions {
 export function createServer(options: CreateServerOptions = {}) {
   const app = new Hono<RequestContextEnv>()
 
-  // Loopback-only bind (see main.ts) makes wildcard CORS safe and
-  // dodges the `null` Origin a chrome-extension:// page sends when
-  // fetching from `http://127.0.0.1:<port>`.
-  app.use('*', cors({ origin: '*' }))
   app.use('*', requestIdMiddleware)
+  app.use('/api/v1/recordings/events', recordingIngestOriginHygiene)
+  // Read APIs remain available to the extension's opaque/null origin. The
+  // write route above rejects web-page origins before this permissive CORS
+  // layer can answer their preflight.
+  app.use('*', cors({ origin: '*' }))
 
   // One structured line per failed request, however the failure was
   // produced: a router 404, a direct 4xx/5xx JSON return, or an
@@ -134,4 +135,30 @@ export function createServer(options: CreateServerOptions = {}) {
       ),
     )
     .route('/', mcpRoute)
+}
+
+/** Stable origin derived from claw-app's manifest signing key. */
+const BROWSERCLAW_EXTENSION_ORIGIN =
+  'chrome-extension://pjimfkbpehlcllblajnpfamdfjhhlgkc'
+
+/** Blocks browser-page CSRF while preserving native contract clients. */
+export const recordingIngestOriginHygiene: MiddlewareHandler<
+  RequestContextEnv
+> = async (c, next) => {
+  const origin = c.req.header('origin')
+  const trusted =
+    origin === undefined ||
+    origin === BROWSERCLAW_EXTENSION_ORIGIN ||
+    (origin === 'null' && c.req.header('sec-fetch-site') === 'none')
+  if (!trusted) {
+    return c.json(
+      canonicalApiError(
+        'forbidden',
+        'recording ingest is restricted to BrowserClaw',
+        requestIdFor(c),
+      ),
+      403,
+    )
+  }
+  return next()
 }
