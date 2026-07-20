@@ -446,6 +446,7 @@ describe('session query service', () => {
       'identity',
       'browser',
       'ownership',
+      'identity',
       'cache',
     ])
 
@@ -489,5 +490,30 @@ describe('session query service', () => {
     expect(
       await service.getSessionBrowserTabPreview('session-a', 101),
     ).toBeNull()
+  })
+
+  it('does not read the cache when the session disconnects during browser reconciliation', async () => {
+    let connectedIdentity: ClientIdentity | null = identity('session-a')
+    const openOwnership = ownership('session-a', 101)
+    const currentPage = page(101)
+    const getScreencastFrame = mock(() =>
+      frame(currentPage.pageId, currentPage.targetId),
+    )
+    const { service } = setup({
+      getConnectedIdentity: () => connectedIdentity,
+      getOpenSessionTab: () => openOwnership,
+      listBrowserPages: async () => {
+        connectedIdentity = null
+        return [currentPage]
+      },
+      getScreencastFrame,
+    })
+
+    expect(
+      await service.getSessionBrowserTabPreview('session-a', 101),
+    ).toBeNull()
+    expect(openOwnership.releasedAt).toBeNull()
+    expect(currentPage.targetId).toBe('target-101')
+    expect(getScreencastFrame).not.toHaveBeenCalled()
   })
 })

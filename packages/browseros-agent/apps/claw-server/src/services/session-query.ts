@@ -139,9 +139,15 @@ export function createSessionQueryService(
       const page = pages.find((candidate) => candidate.tabId === browserTabId)
       if (!page) return null
 
-      // Page reconciliation crosses an async CDP boundary. Re-check ownership so
-      // a transfer during that await cannot expose the prior owner's frame.
-      if (!deps.getOpenSessionTab(sessionId, browserTabId)) return null
+      // Page reconciliation crosses an async CDP boundary. Re-check ownership
+      // and liveness so a transfer or disconnect during that await cannot
+      // expose the prior session's frame.
+      if (
+        !deps.getOpenSessionTab(sessionId, browserTabId) ||
+        !deps.getConnectedIdentity(sessionId)
+      ) {
+        return null
+      }
       const frame = deps.getScreencastFrame(page.pageId, page.targetId)
       return frame?.jpegBase64 ? frame : null
     },
