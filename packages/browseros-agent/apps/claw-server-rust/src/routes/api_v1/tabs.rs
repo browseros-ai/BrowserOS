@@ -56,6 +56,11 @@ pub(super) async fn list(
             .into_iter()
             .map(|event| ToolEvent::new(event.name, event.at))
             .collect();
+        let preview_captured_at = state
+            .screencast
+            .frame_for(record.page_id, &record.target_id)
+            .await
+            .map(|frame| frame.captured_at);
         let mut tab = Tab::new(
             record.tab_id,
             i64::from(record.page_id),
@@ -81,11 +86,7 @@ pub(super) async fn list(
         tab.profile_id = profile.map(|profile| profile.id.clone());
         tab.harness = profile.map(|profile| profile.harness.to_string());
         tab.color = Some(crate::tabs::hex_for_slug(&record.slug).to_string());
-        tab.preview_captured_at = state
-            .screencast
-            .frame_for(record.page_id)
-            .await
-            .map(|frame| frame.captured_at);
+        tab.preview_captured_at = preview_captured_at;
         items.push(tab);
     }
     Ok(Json(TabList::new(items)))
@@ -97,7 +98,17 @@ pub(super) async fn preview(
     Path(page_id): Path<String>,
 ) -> Result<Response, CanonicalError> {
     let page_id = positive_page_id(&request_id, &page_id)?;
-    let frame = state.screencast.frame_for(page_id).await.ok_or_else(|| {
+    let target_id = state
+        .live_tab_activity()
+        .await
+        .into_iter()
+        .find(|record| record.page_id == page_id)
+        .map(|record| record.target_id);
+    let frame = match target_id {
+        Some(target_id) => state.screencast.frame_for(page_id, &target_id).await,
+        None => None,
+    }
+    .ok_or_else(|| {
         error(
             &request_id,
             StatusCode::NOT_FOUND,

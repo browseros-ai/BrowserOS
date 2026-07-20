@@ -683,12 +683,24 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
         .start(app.state.browser.clone(), app.state.tab_activity.clone());
     let _ = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
     for _ in 0..50 {
-        if app.state.screencast.frame_for(1).await.is_some() {
+        if app
+            .state
+            .screencast
+            .frame_for(1, "target-1")
+            .await
+            .is_some()
+        {
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert!(app.state.screencast.frame_for(1).await.is_some());
+    assert!(
+        app.state
+            .screencast
+            .frame_for(1, "target-1")
+            .await
+            .is_some()
+    );
 
     let wait = json!({
         "jsonrpc": "2.0",
@@ -1077,6 +1089,7 @@ async fn canonical_associations_evict_external_close_and_screencast_frame() -> a
         .screencast
         .cache_frame(
             1,
+            "target-old",
             claw_server_rust::tabs::activity::ScreencastFrame {
                 jpeg_base64: "/9g=".to_string(),
                 captured_at: 123,
@@ -1111,7 +1124,13 @@ async fn canonical_associations_evict_external_close_and_screencast_frame() -> a
         .clone()
         .start(app.state.browser.clone(), app.state.tab_activity.clone());
     for _ in 0..100 {
-        if app.state.screencast.frame_for(1).await.is_none() {
+        if app
+            .state
+            .screencast
+            .frame_for(1, "target-old")
+            .await
+            .is_none()
+        {
             app.state.screencast.stop();
             screencast_task.await?;
             return Ok(());
@@ -1158,6 +1177,17 @@ async fn canonical_tabs_refresh_metadata_and_reject_reused_page_id() -> anyhow::
         "https://example.com/after-navigation"
     );
     assert_eq!(body["items"][0]["title"], "After navigation");
+    app.state
+        .screencast
+        .cache_frame(
+            1,
+            "target-old",
+            claw_server_rust::tabs::activity::ScreencastFrame {
+                jpeg_base64: "/9g=".to_string(),
+                captured_at: 123,
+            },
+        )
+        .await;
 
     mock.update_tab(
         101,
@@ -1169,6 +1199,27 @@ async fn canonical_tabs_refresh_metadata_and_reject_reused_page_id() -> anyhow::
     let (status, body) = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["items"], json!([]));
+
+    app.state
+        .tab_activity
+        .record_tool(RecordToolInput {
+            target_id: TargetId::from("target-new".to_string()),
+            tab_id: 101,
+            page_id: 1,
+            session_id: session.id().as_str().to_string(),
+            agent_id: session.convo_id().as_str().to_string(),
+            slug: "codex".to_string(),
+            tool_name: "navigate".to_string(),
+        })
+        .await;
+    let (status, body) = request_json(&app.router, "GET", "/api/v1/tabs", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"][0]["targetId"], "target-new");
+    assert_eq!(body["items"][0]["previewCapturedAt"], Value::Null);
+    assert_eq!(
+        request_status(&app.router, "GET", "/api/v1/tabs/1/preview").await?,
+        StatusCode::NOT_FOUND
+    );
     Ok(())
 }
 

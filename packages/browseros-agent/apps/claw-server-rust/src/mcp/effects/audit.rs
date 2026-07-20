@@ -161,7 +161,24 @@ async fn persist_screenshot(
     {
         return;
     }
-    let cached = call.state.screencast.frame_for(page_id).await;
+    let live = match &call.browser_session {
+        Some(browser) => browser.pages.refresh(page.clone()).await.ok().flatten(),
+        None => None,
+    }
+    .or_else(|| {
+        call.page_snapshot
+            .clone()
+            .filter(|snapshot| snapshot.page_id == page)
+    });
+    let cached = match live {
+        Some(page) => {
+            call.state
+                .screencast
+                .frame_for(page_id, page.target_id.as_str())
+                .await
+        }
+        None => None,
+    };
     let browser = call.browser_session.clone();
     let dispatch_id = call.dispatch_id.clone();
     let Some(jpeg_base64) = fallback_screenshot_data(cached, now_epoch_ms(), move || async move {

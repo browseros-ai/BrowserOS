@@ -221,6 +221,7 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
         .screencast
         .cache_frame(
             7,
+            "target-7",
             ScreencastFrame {
                 jpeg_base64: "/9g=".to_string(),
                 captured_at: 123,

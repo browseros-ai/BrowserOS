@@ -38,10 +38,31 @@ pub struct ScreencastService {
 
 #[derive(Default)]
 struct ScreencastInner {
-    frames: HashMap<u32, ScreencastFrame>,
-    order: VecDeque<u32>,
-    failures: HashMap<u32, FailureState>,
-    in_flight: HashSet<u32>,
+    frames: HashMap<TabIncarnation, ScreencastFrame>,
+    order: VecDeque<TabIncarnation>,
+    failures: HashMap<TabIncarnation, FailureState>,
+    in_flight: HashSet<TabIncarnation>,
+    live: HashSet<TabIncarnation>,
+}
+
+/** Page-scoped screencast state must also carry the stable target incarnation. */
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TabIncarnation {
+    page_id: u32,
+    target_id: String,
+}
+
+impl TabIncarnation {
+    fn new(page_id: u32, target_id: impl Into<String>) -> Self {
+        Self {
+            page_id,
+            target_id: target_id.into(),
+        }
+    }
+
+    fn from_record(record: &TabActivityRecord) -> Self {
+        Self::new(record.page_id, record.target_id.clone())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,8 +73,8 @@ struct FailureState {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct TickPlan {
-    capture: Vec<u32>,
-    gc: Vec<u32>,
+    capture: Vec<TabIncarnation>,
+    gc: Vec<TabIncarnation>,
 }
 
 struct TickGuard<'a>(&'a AtomicBool);
@@ -105,8 +126,13 @@ impl ScreencastService {
         self.cancel.cancel();
     }
 
-    pub async fn frame_for(&self, page_id: u32) -> Option<ScreencastFrame> {
-        self.inner.lock().await.frames.get(&page_id).cloned()
+    pub async fn frame_for(&self, page_id: u32, target_id: &str) -> Option<ScreencastFrame> {
+        self.inner
+            .lock()
+            .await
+            .frames
+            .get(&TabIncarnation::new(page_id, target_id))
+            .cloned()
     }
 
     /// Record an `/api/v1/tabs` read for the idle governor.
@@ -144,16 +170,21 @@ impl ScreencastService {
         let idle = self.is_idle(now_epoch_ms());
         let session = browser.session().await;
         let records = tab_activity.snapshot(session.as_deref()).await;
-        let (failures, in_flight, cached_page_ids) = {
-            let inner = self.inner.lock().await;
+        let live = records
+            .iter()
+            .map(TabIncarnation::from_record)
+            .collect::<HashSet<_>>();
+        let (failures, in_flight, cached) = {
+            let mut inner = self.inner.lock().await;
+            inner.live = live;
             (
                 inner.failures.clone(),
                 inner.in_flight.clone(),
-                inner.order.iter().copied().collect::<Vec<_>>(),
+                inner.order.iter().cloned().collect::<Vec<_>>(),
             )
         };
-        let plan = plan_tick(idle, &records, &failures, &in_flight, &cached_page_ids);
-        self.gc_pages(&plan.gc).await;
+        let plan = plan_tick(idle, &records, &failures, &in_flight, &cached);
+        self.gc_incarnations(&plan.gc).await;
 
         if plan.capture.is_empty() {
             return;
@@ -163,11 +194,11 @@ impl ScreencastService {
         };
         for batch in plan.capture.chunks(MAX_PARALLEL_SHOTS) {
             let mut captures = JoinSet::new();
-            for page_id in batch.iter().copied() {
+            for incarnation in batch.iter().cloned() {
                 let service = self.clone();
                 let session = session.clone();
                 captures.spawn(async move {
-                    service.capture_one(session, page_id).await;
+                    service.capture_one(session, incarnation).await;
                 });
             }
             while let Some(result) = captures.join_next().await {
@@ -179,10 +210,15 @@ impl ScreencastService {
     }
 
     /// Capture one page while keeping timed-out CDP work guarded until it resolves.
-    async fn capture_one(self: Arc<Self>, session: Arc<BrowserSession>, page_id: u32) {
-        if !self.begin_capture(page_id).await {
+    async fn capture_one(
+        self: Arc<Self>,
+        session: Arc<BrowserSession>,
+        incarnation: TabIncarnation,
+    ) {
+        if !self.begin_capture(&incarnation).await {
             return;
         }
+        let page_id = incarnation.page_id;
         let options = ScreenshotCaptureOptions {
             format: Some(ScreenshotFormat::Jpeg),
             quality: Some(50),
@@ -196,96 +232,144 @@ impl ScreencastService {
         let outcome = timeout(SCREENSHOT_TIMEOUT, &mut capture).await;
         match outcome {
             Ok(result) => {
-                self.clear_in_flight(page_id).await;
+                self.clear_in_flight(&incarnation).await;
                 match result {
                     Ok(Ok(capture)) if !capture.data.is_empty() => {
-                        self.store_capture(page_id, capture).await;
+                        self.store_capture(incarnation, capture).await;
                     }
-                    Ok(Ok(_)) => self.capture_failed(page_id, "empty screenshot").await,
-                    Ok(Err(err)) => self.capture_failed(page_id, &err.to_string()).await,
-                    Err(err) => self.capture_failed(page_id, &err.to_string()).await,
+                    Ok(Ok(_)) => self.capture_failed(&incarnation, "empty screenshot").await,
+                    Ok(Err(err)) => self.capture_failed(&incarnation, &err.to_string()).await,
+                    Err(err) => self.capture_failed(&incarnation, &err.to_string()).await,
                 }
             }
             Err(_) => {
                 let service = self.clone();
+                let completed_incarnation = incarnation.clone();
                 tokio::spawn(async move {
                     let _ = capture.await;
-                    service.clear_in_flight(page_id).await;
+                    service.clear_in_flight(&completed_incarnation).await;
                 });
-                self.capture_failed(page_id, "screenshot timeout").await;
+                self.capture_failed(&incarnation, "screenshot timeout")
+                    .await;
             }
         }
     }
 
-    async fn begin_capture(&self, page_id: u32) -> bool {
-        self.inner.lock().await.in_flight.insert(page_id)
+    async fn begin_capture(&self, incarnation: &TabIncarnation) -> bool {
+        self.inner
+            .lock()
+            .await
+            .in_flight
+            .insert(incarnation.clone())
     }
 
-    async fn clear_in_flight(&self, page_id: u32) {
-        self.inner.lock().await.in_flight.remove(&page_id);
+    async fn clear_in_flight(&self, incarnation: &TabIncarnation) {
+        self.inner.lock().await.in_flight.remove(incarnation);
     }
 
-    async fn store_capture(&self, page_id: u32, capture: ScreenshotCaptureResult) {
-        self.cache_frame(
-            page_id,
+    async fn store_capture(&self, incarnation: TabIncarnation, capture: ScreenshotCaptureResult) {
+        let mut inner = self.inner.lock().await;
+        if !inner.live.contains(&incarnation) {
+            return;
+        }
+        self.insert_frame(
+            &mut inner,
+            incarnation,
             ScreencastFrame {
                 jpeg_base64: capture.data,
                 captured_at: now_epoch_ms(),
             },
-        )
-        .await;
+        );
     }
 
     /// Public so integration tests can seed preview frames; production
     /// frames arrive via `store_capture` from the poller.
-    pub async fn cache_frame(&self, page_id: u32, frame: ScreencastFrame) {
+    pub async fn cache_frame(&self, page_id: u32, target_id: &str, frame: ScreencastFrame) {
         let mut inner = self.inner.lock().await;
-        inner.frames.remove(&page_id);
-        inner.order.retain(|existing| *existing != page_id);
-        inner.frames.insert(page_id, frame);
-        inner.order.push_back(page_id);
-        inner.failures.remove(&page_id);
+        self.insert_frame(&mut inner, TabIncarnation::new(page_id, target_id), frame);
+    }
+
+    fn insert_frame(
+        &self,
+        inner: &mut ScreencastInner,
+        incarnation: TabIncarnation,
+        frame: ScreencastFrame,
+    ) {
+        inner.frames.remove(&incarnation);
+        inner.order.retain(|existing| existing != &incarnation);
+        inner.frames.insert(incarnation.clone(), frame);
+        inner.order.push_back(incarnation.clone());
+        inner.failures.remove(&incarnation);
         while inner.order.len() > self.capacity {
             if let Some(evicted) = inner.order.pop_front() {
                 inner.frames.remove(&evicted);
+                inner.failures.remove(&evicted);
             }
         }
     }
 
-    async fn capture_failed(&self, page_id: u32, error: &str) {
-        warn!(page_id, error, "screencast capture failed");
-        if self.record_failure(page_id, now_epoch_ms()).await {
-            warn!(page_id, "screencast page enters backoff");
+    async fn capture_failed(&self, incarnation: &TabIncarnation, error: &str) {
+        let Some(in_backoff) = self
+            .record_failure_if_live(incarnation, now_epoch_ms())
+            .await
+        else {
+            return;
+        };
+        warn!(page_id = incarnation.page_id, target_id = %incarnation.target_id, error, "screencast capture failed");
+        if in_backoff {
+            warn!(page_id = incarnation.page_id, target_id = %incarnation.target_id, "screencast page enters backoff");
         }
     }
 
-    async fn record_failure(&self, page_id: u32, now: i64) -> bool {
+    async fn record_failure_if_live(&self, incarnation: &TabIncarnation, now: i64) -> Option<bool> {
         let mut inner = self.inner.lock().await;
-        let state = inner.failures.entry(page_id).or_insert(FailureState {
-            consecutive: 0,
-            last_failure_at: now,
-        });
+        if !inner.live.contains(incarnation) {
+            return None;
+        }
+        Some(Self::record_failure_locked(&mut inner, incarnation, now))
+    }
+
+    #[cfg(test)]
+    async fn record_failure(&self, incarnation: &TabIncarnation, now: i64) -> bool {
+        let mut inner = self.inner.lock().await;
+        Self::record_failure_locked(&mut inner, incarnation, now)
+    }
+
+    fn record_failure_locked(
+        inner: &mut ScreencastInner,
+        incarnation: &TabIncarnation,
+        now: i64,
+    ) -> bool {
+        let state = inner
+            .failures
+            .entry(incarnation.clone())
+            .or_insert(FailureState {
+                consecutive: 0,
+                last_failure_at: now,
+            });
         state.consecutive = state.consecutive.saturating_add(1);
         state.last_failure_at = now;
         let in_backoff = state.consecutive >= FAILURE_BACKOFF_THRESHOLD;
         if in_backoff {
-            inner.frames.remove(&page_id);
-            inner.order.retain(|existing| *existing != page_id);
+            inner.frames.remove(incarnation);
+            inner.order.retain(|existing| existing != incarnation);
         }
         in_backoff
     }
 
-    async fn gc_pages(&self, page_ids: &[u32]) {
-        if page_ids.is_empty() {
+    async fn gc_incarnations(&self, incarnations: &[TabIncarnation]) {
+        if incarnations.is_empty() {
             return;
         }
-        let page_ids: HashSet<u32> = page_ids.iter().copied().collect();
+        let incarnations = incarnations.iter().cloned().collect::<HashSet<_>>();
         let mut inner = self.inner.lock().await;
-        for page_id in &page_ids {
-            inner.frames.remove(page_id);
-            inner.failures.remove(page_id);
+        for incarnation in &incarnations {
+            inner.frames.remove(incarnation);
+            inner.failures.remove(incarnation);
         }
-        inner.order.retain(|page_id| !page_ids.contains(page_id));
+        inner
+            .order
+            .retain(|incarnation| !incarnations.contains(incarnation));
     }
 }
 
@@ -293,37 +377,50 @@ impl ScreencastService {
 fn plan_tick(
     idle: bool,
     records: &[TabActivityRecord],
-    failures: &HashMap<u32, FailureState>,
-    in_flight: &HashSet<u32>,
-    cached_page_ids: &[u32],
+    failures: &HashMap<TabIncarnation, FailureState>,
+    in_flight: &HashSet<TabIncarnation>,
+    cached: &[TabIncarnation],
 ) -> TickPlan {
-    if idle {
-        return TickPlan::default();
-    }
-    let live_page_ids: HashSet<u32> = records.iter().map(|record| record.page_id).collect();
-    let capture = records
+    let live = records
         .iter()
-        .filter(|record| record.status == "active")
-        .filter(|record| !in_flight.contains(&record.page_id))
-        .filter(|record| {
-            !failures.get(&record.page_id).is_some_and(|failure| {
-                failure.consecutive >= FAILURE_BACKOFF_THRESHOLD
-                    && record.last_tool_at <= failure.last_failure_at
+        .map(TabIncarnation::from_record)
+        .collect::<HashSet<_>>();
+    let capture = if idle {
+        Vec::new()
+    } else {
+        records
+            .iter()
+            .filter(|record| record.status == "active")
+            .filter_map(|record| {
+                let incarnation = TabIncarnation::from_record(record);
+                if in_flight.contains(&incarnation)
+                    || failures.get(&incarnation).is_some_and(|failure| {
+                        failure.consecutive >= FAILURE_BACKOFF_THRESHOLD
+                            && record.last_tool_at <= failure.last_failure_at
+                    })
+                {
+                    return None;
+                }
+                Some(incarnation)
             })
-        })
-        .map(|record| record.page_id)
-        .collect();
-    let gc = cached_page_ids
-        .iter()
-        .copied()
-        .filter(|page_id| !live_page_ids.contains(page_id))
+            .collect()
+    };
+    let mut known = cached.to_vec();
+    for incarnation in failures.keys() {
+        if !known.contains(incarnation) {
+            known.push(incarnation.clone());
+        }
+    }
+    let gc = known
+        .into_iter()
+        .filter(|incarnation| !live.contains(incarnation))
         .collect();
     TickPlan { capture, gc }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{FailureState, ScreencastService, TickPlan, plan_tick};
+    use super::{FailureState, ScreencastService, TabIncarnation, TickPlan, plan_tick};
     use crate::tabs::activity::{ScreencastFrame, TabActivityRecord};
     use std::collections::{HashMap, HashSet};
 
@@ -355,6 +452,14 @@ mod tests {
         }
     }
 
+    fn key(page_id: u32) -> TabIncarnation {
+        TabIncarnation::new(page_id, format!("target-{page_id}"))
+    }
+
+    fn target_key(page_id: u32, target_id: &str) -> TabIncarnation {
+        TabIncarnation::new(page_id, target_id)
+    }
+
     fn frame(data: &str, captured_at: i64) -> ScreencastFrame {
         ScreencastFrame {
             jpeg_base64: data.to_string(),
@@ -366,22 +471,22 @@ mod tests {
     fn planner_captures_only_active_tabs() {
         let records = [record(1, "active", NOW), record(2, "idle", NOW)];
         let plan = plan_tick(false, &records, &HashMap::new(), &HashSet::new(), &[]);
-        assert_eq!(plan.capture, vec![1]);
+        assert_eq!(plan.capture, vec![key(1)]);
         assert!(plan.gc.is_empty());
     }
 
     #[test]
     fn planner_retries_before_failure_threshold() {
         let records = [record(1, "active", NOW)];
-        let failures = HashMap::from([(1, failure(2, NOW))]);
+        let failures = HashMap::from([(key(1), failure(2, NOW))]);
         let plan = plan_tick(false, &records, &failures, &HashSet::new(), &[]);
-        assert_eq!(plan.capture, vec![1]);
+        assert_eq!(plan.capture, vec![key(1)]);
     }
 
     #[test]
     fn planner_backs_off_after_three_failures() {
         let records = [record(1, "active", NOW)];
-        let failures = HashMap::from([(1, failure(3, NOW))]);
+        let failures = HashMap::from([(key(1), failure(3, NOW))]);
         let plan = plan_tick(false, &records, &failures, &HashSet::new(), &[]);
         assert!(plan.capture.is_empty());
     }
@@ -389,32 +494,66 @@ mod tests {
     #[test]
     fn planner_lifts_backoff_after_new_tool_activity() {
         let records = [record(1, "active", NOW + 1)];
-        let failures = HashMap::from([(1, failure(3, NOW))]);
+        let failures = HashMap::from([(key(1), failure(3, NOW))]);
         let plan = plan_tick(false, &records, &failures, &HashSet::new(), &[]);
-        assert_eq!(plan.capture, vec![1]);
+        assert_eq!(plan.capture, vec![key(1)]);
     }
 
     #[test]
     fn planner_skips_pages_with_capture_in_flight() {
         let records = [record(1, "active", NOW), record(2, "active", NOW)];
-        let in_flight = HashSet::from([1]);
+        let in_flight = HashSet::from([key(1)]);
         let plan = plan_tick(false, &records, &HashMap::new(), &in_flight, &[]);
-        assert_eq!(plan.capture, vec![2]);
+        assert_eq!(plan.capture, vec![key(2)]);
     }
 
     #[test]
     fn planner_garbage_collects_closed_page_frames() {
         let records = [record(2, "idle", NOW), record(3, "active", NOW)];
-        let plan = plan_tick(false, &records, &HashMap::new(), &HashSet::new(), &[1, 2]);
-        assert_eq!(plan.capture, vec![3]);
-        assert_eq!(plan.gc, vec![1]);
+        let plan = plan_tick(
+            false,
+            &records,
+            &HashMap::new(),
+            &HashSet::new(),
+            &[key(1), key(2)],
+        );
+        assert_eq!(plan.capture, vec![key(3)]);
+        assert_eq!(plan.gc, vec![key(1)]);
     }
 
     #[test]
-    fn idle_planner_is_a_no_op() {
+    fn idle_planner_skips_capture_but_still_collects_stale_state() {
         let records = [record(1, "active", NOW)];
-        let plan = plan_tick(true, &records, &HashMap::new(), &HashSet::new(), &[2]);
-        assert_eq!(plan, TickPlan::default());
+        let plan = plan_tick(true, &records, &HashMap::new(), &HashSet::new(), &[key(2)]);
+        assert_eq!(
+            plan,
+            TickPlan {
+                capture: Vec::new(),
+                gc: vec![key(2)],
+            }
+        );
+    }
+
+    #[test]
+    fn planner_collects_failure_only_state_and_old_page_incarnations() {
+        let records = [record(1, "active", NOW)];
+        let old = target_key(1, "target-old");
+        let closed = key(2);
+        let failures = HashMap::from([
+            (old.clone(), failure(3, NOW)),
+            (closed.clone(), failure(1, NOW)),
+        ]);
+
+        let plan = plan_tick(
+            true,
+            &records,
+            &failures,
+            &HashSet::new(),
+            std::slice::from_ref(&old),
+        );
+
+        assert_eq!(plan.capture, Vec::<TabIncarnation>::new());
+        assert_eq!(plan.gc, vec![old, closed]);
     }
 
     #[test]
@@ -443,18 +582,18 @@ mod tests {
     #[tokio::test]
     async fn frame_cache_is_lru_capped_and_updates_recency() {
         let service = ScreencastService::new(2);
-        service.cache_frame(1, frame("a", 1)).await;
-        service.cache_frame(2, frame("b", 2)).await;
-        service.cache_frame(1, frame("new-a", 3)).await;
-        service.cache_frame(3, frame("c", 4)).await;
+        service.cache_frame(1, "target-1", frame("a", 1)).await;
+        service.cache_frame(2, "target-2", frame("b", 2)).await;
+        service.cache_frame(1, "target-1", frame("new-a", 3)).await;
+        service.cache_frame(3, "target-3", frame("c", 4)).await;
 
-        let Some(refreshed) = service.frame_for(1).await else {
+        let Some(refreshed) = service.frame_for(1, "target-1").await else {
             panic!("missing page 1 frame");
         };
         assert_eq!(refreshed.jpeg_base64, "new-a");
         assert_eq!(refreshed.captured_at, 3);
-        assert!(service.frame_for(2).await.is_none());
-        let Some(newest) = service.frame_for(3).await else {
+        assert!(service.frame_for(2, "target-2").await.is_none());
+        let Some(newest) = service.frame_for(3, "target-3").await else {
             panic!("missing page 3 frame");
         };
         assert_eq!(newest.jpeg_base64, "c");
@@ -464,46 +603,81 @@ mod tests {
     #[tokio::test]
     async fn entering_backoff_drops_frame_but_keeps_failure_state() {
         let service = ScreencastService::new(2);
-        service.cache_frame(1, frame("stale", 1)).await;
-        assert!(!service.record_failure(1, NOW - 2).await);
-        assert!(!service.record_failure(1, NOW - 1).await);
-        assert!(service.record_failure(1, NOW).await);
+        let incarnation = key(1);
+        service.cache_frame(1, "target-1", frame("stale", 1)).await;
+        assert!(!service.record_failure(&incarnation, NOW - 2).await);
+        assert!(!service.record_failure(&incarnation, NOW - 1).await);
+        assert!(service.record_failure(&incarnation, NOW).await);
 
         let inner = service.inner.lock().await;
-        assert!(!inner.frames.contains_key(&1));
-        assert_eq!(inner.failures.get(&1), Some(&failure(3, NOW)));
+        assert!(!inner.frames.contains_key(&incarnation));
+        assert_eq!(inner.failures.get(&incarnation), Some(&failure(3, NOW)));
     }
 
     #[tokio::test]
     async fn successful_capture_clears_failure_state() {
         let service = ScreencastService::new(2);
-        assert!(!service.record_failure(1, NOW - 2).await);
-        assert!(!service.record_failure(1, NOW - 1).await);
-        assert!(service.record_failure(1, NOW).await);
-        service.cache_frame(1, frame("fresh", NOW + 1)).await;
+        let incarnation = key(1);
+        assert!(!service.record_failure(&incarnation, NOW - 2).await);
+        assert!(!service.record_failure(&incarnation, NOW - 1).await);
+        assert!(service.record_failure(&incarnation, NOW).await);
+        service
+            .cache_frame(1, "target-1", frame("fresh", NOW + 1))
+            .await;
 
-        assert!(!service.inner.lock().await.failures.contains_key(&1));
+        assert!(
+            !service
+                .inner
+                .lock()
+                .await
+                .failures
+                .contains_key(&incarnation)
+        );
     }
 
     #[tokio::test]
     async fn per_page_in_flight_guard_clears_only_on_completion() {
         let service = ScreencastService::new(2);
-        assert!(service.begin_capture(1).await);
-        assert!(!service.begin_capture(1).await);
-        service.clear_in_flight(1).await;
-        assert!(service.begin_capture(1).await);
+        let old = target_key(1, "target-old");
+        let replacement = target_key(1, "target-new");
+        assert!(service.begin_capture(&old).await);
+        assert!(!service.begin_capture(&old).await);
+        assert!(service.begin_capture(&replacement).await);
+        service.clear_in_flight(&old).await;
+        assert!(service.begin_capture(&old).await);
     }
 
     #[tokio::test]
     async fn garbage_collection_drops_frame_and_failure_state() {
         let service = ScreencastService::new(2);
-        service.cache_frame(1, frame("stale", 1)).await;
-        service.record_failure(1, NOW).await;
-        service.gc_pages(&[1]).await;
+        let incarnation = key(1);
+        service.cache_frame(1, "target-1", frame("stale", 1)).await;
+        service.record_failure(&incarnation, NOW).await;
+        service
+            .gc_incarnations(std::slice::from_ref(&incarnation))
+            .await;
 
         let inner = service.inner.lock().await;
-        assert!(!inner.frames.contains_key(&1));
-        assert!(!inner.failures.contains_key(&1));
-        assert!(!inner.order.contains(&1));
+        assert!(!inner.frames.contains_key(&incarnation));
+        assert!(!inner.failures.contains_key(&incarnation));
+        assert!(!inner.order.contains(&incarnation));
+    }
+
+    #[tokio::test]
+    async fn frame_lookup_never_crosses_a_reused_page_id() {
+        let service = ScreencastService::new(2);
+        service
+            .cache_frame(1, "target-old", frame("old", NOW))
+            .await;
+
+        assert!(service.frame_for(1, "target-new").await.is_none());
+        assert_eq!(
+            service
+                .frame_for(1, "target-old")
+                .await
+                .map(|frame| frame.jpeg_base64)
+                .as_deref(),
+            Some("old")
+        );
     }
 }
