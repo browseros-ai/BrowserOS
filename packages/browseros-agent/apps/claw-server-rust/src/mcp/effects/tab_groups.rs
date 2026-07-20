@@ -285,13 +285,17 @@ pub async fn close_agent_tab_group(
     .await;
     let close_error = match closed {
         Ok(_) => {
-            ownership.set_tab_group_ref(key.clone(), None).await;
+            ownership
+                .clear_tab_group_ref_if_current(key, &group_id)
+                .await;
             return true;
         }
         Err(error) => error,
     };
     if group_exists_unlocked(browser, &group_id, output_files).await == Some(false) {
-        ownership.set_tab_group_ref(key.clone(), None).await;
+        ownership
+            .clear_tab_group_ref_if_current(key, &group_id)
+            .await;
         return true;
     }
     warn!(key = %key, error = %close_error, "agent tab group close failed");
