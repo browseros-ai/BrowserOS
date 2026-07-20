@@ -29,6 +29,8 @@ pub struct Dispatch {
     pub tool_name: String,
     #[serde(rename = "pageId", skip_serializing_if = "Option::is_none")]
     pub page_id: Option<i64>,
+    #[serde(rename = "tabId", skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<i64>,
     #[serde(rename = "targetId", skip_serializing_if = "Option::is_none")]
     pub target_id: Option<String>,
     #[serde(rename = "url", skip_serializing_if = "Option::is_none")]
@@ -64,6 +66,7 @@ impl Dispatch {
             session_id,
             tool_name,
             page_id: None,
+            tab_id: None,
             target_id: None,
             url: None,
             title: None,

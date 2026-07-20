@@ -9,6 +9,8 @@ export * from './Dispatch.js';
 export * from './Harness.js';
 export * from './HealthResponse.js';
 export * from './RecordingMetadata.js';
+export * from './RecordingSegmentMetadata.js';
+export * from './RecordingTabMetadata.js';
 export * from './SessionDetail.js';
 export * from './SessionList.js';
 export * from './SessionStatus.js';

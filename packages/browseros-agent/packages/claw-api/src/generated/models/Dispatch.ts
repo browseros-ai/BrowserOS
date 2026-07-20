@@ -69,6 +69,12 @@ export interface Dispatch {
     pageId?: number;
     /**
      *
+     * @type {number}
+     * @memberof Dispatch
+     */
+    tabId?: number;
+    /**
+     *
      * @type {string}
      * @memberof Dispatch
      */
@@ -143,6 +149,7 @@ export function DispatchFromJSONTyped(json: any, ignoreDiscriminator: boolean): 
         'sessionId': json['sessionId'],
         'toolName': json['toolName'],
         'pageId': json['pageId'] == null ? undefined : json['pageId'],
+        'tabId': json['tabId'] == null ? undefined : json['tabId'],
         'targetId': json['targetId'] == null ? undefined : json['targetId'],
         'url': json['url'] == null ? undefined : json['url'],
         'title': json['title'] == null ? undefined : json['title'],
@@ -172,6 +179,7 @@ export function DispatchToJSONTyped(value?: Dispatch | null, ignoreDiscriminator
         'sessionId': value['sessionId'],
         'toolName': value['toolName'],
         'pageId': value['pageId'],
+        'tabId': value['tabId'],
         'targetId': value['targetId'],
         'url': value['url'],
         'title': value['title'],

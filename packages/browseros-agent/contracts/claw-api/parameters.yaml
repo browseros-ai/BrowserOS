@@ -35,25 +35,24 @@ RecordingTabId:
     type: integer
     format: int64
     minimum: 1
-RecordingPageId:
-  name: X-Recording-Page-Id
-  in: header
-  required: true
-  schema:
-    type: integer
-    format: int64
-    minimum: 1
-RecordingTargetId:
-  name: X-Recording-Target-Id
+RecordingDocumentId:
+  name: X-Recording-Document-Id
   in: header
   required: true
   schema:
     type: string
-    minLength: 1
+    format: uuid
 RecordingBatchId:
   name: X-Recording-Batch-Id
   in: header
-  required: false
+  required: true
   schema:
     type: string
     minLength: 1
+RecordingGap:
+  name: X-Recording-Has-Gap
+  in: header
+  required: false
+  description: Permanently marks this document stream partial after recorder-side loss.
+  schema:
+    type: boolean

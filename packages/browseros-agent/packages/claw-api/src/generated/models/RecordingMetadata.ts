@@ -13,6 +13,14 @@
  */
 
 import { mapValues } from '../runtime.js';
+import type { RecordingTabMetadata } from './RecordingTabMetadata.js';
+import {
+    RecordingTabMetadataFromJSON,
+    RecordingTabMetadataFromJSONTyped,
+    RecordingTabMetadataToJSON,
+    RecordingTabMetadataToJSONTyped,
+} from './RecordingTabMetadata.js';
+
 /**
  *
  * @export
@@ -25,6 +33,12 @@ export interface RecordingMetadata {
      * @memberof RecordingMetadata
      */
     hasData: boolean;
+    /**
+     * False when any selected segment has a known gap or legacy boundaries.
+     * @type {boolean}
+     * @memberof RecordingMetadata
+     */
+    complete: boolean;
     /**
      *
      * @type {number}
@@ -45,10 +59,10 @@ export interface RecordingMetadata {
     lastEventAt?: number;
     /**
      *
-     * @type {Array<number>}
+     * @type {Array<RecordingTabMetadata>}
      * @memberof RecordingMetadata
      */
-    pageIds: Array<number>;
+    tabs: Array<RecordingTabMetadata>;
 }
 
 /**
@@ -56,8 +70,9 @@ export interface RecordingMetadata {
  */
 export function instanceOfRecordingMetadata(value: object): value is RecordingMetadata {
     if (!('hasData' in value) || value['hasData'] === undefined) return false;
+    if (!('complete' in value) || value['complete'] === undefined) return false;
     if (!('sizeBytes' in value) || value['sizeBytes'] === undefined) return false;
-    if (!('pageIds' in value) || value['pageIds'] === undefined) return false;
+    if (!('tabs' in value) || value['tabs'] === undefined) return false;
     return true;
 }
 
@@ -72,10 +87,11 @@ export function RecordingMetadataFromJSONTyped(json: any, ignoreDiscriminator: b
     return {
 
         'hasData': json['hasData'],
+        'complete': json['complete'],
         'sizeBytes': json['sizeBytes'],
         'firstEventAt': json['firstEventAt'] == null ? undefined : json['firstEventAt'],
         'lastEventAt': json['lastEventAt'] == null ? undefined : json['lastEventAt'],
-        'pageIds': json['pageIds'],
+        'tabs': ((json['tabs'] as Array<any>).map(RecordingTabMetadataFromJSON)),
     };
 }
 
@@ -91,9 +107,10 @@ export function RecordingMetadataToJSONTyped(value?: RecordingMetadata | null, i
     return {
 
         'hasData': value['hasData'],
+        'complete': value['complete'],
         'sizeBytes': value['sizeBytes'],
         'firstEventAt': value['firstEventAt'],
         'lastEventAt': value['lastEventAt'],
-        'pageIds': value['pageIds'],
+        'tabs': ((value['tabs'] as Array<any>).map(RecordingTabMetadataToJSON)),
     };
 }

@@ -20,12 +20,28 @@ import { mapValues } from '../runtime.js';
  */
 export interface SystemCapabilities {
     /**
+     * Version 2 is session-neutral and keys each stream by Chrome document identity.
+     * @type {SystemCapabilitiesRecordingIngestVersionEnum}
+     * @memberof SystemCapabilities
+     */
+    recordingIngestVersion?: SystemCapabilitiesRecordingIngestVersionEnum;
+    /**
      * Maximum UTF-8 encoded request-body bytes accepted by canonical recording ingest.
      * @type {number}
      * @memberof SystemCapabilities
      */
     recordingIngestMaxBytes?: number;
 }
+
+
+/**
+ * @export
+ */
+export const SystemCapabilitiesRecordingIngestVersionEnum = {
+    NUMBER_2: 2
+} as const;
+export type SystemCapabilitiesRecordingIngestVersionEnum = typeof SystemCapabilitiesRecordingIngestVersionEnum[keyof typeof SystemCapabilitiesRecordingIngestVersionEnum];
+
 
 /**
  * Check if a given object implements the SystemCapabilities interface.
@@ -44,6 +60,7 @@ export function SystemCapabilitiesFromJSONTyped(json: any, ignoreDiscriminator: 
     }
     return {
 
+        'recordingIngestVersion': json['recordingIngestVersion'] == null ? undefined : json['recordingIngestVersion'],
         'recordingIngestMaxBytes': json['recordingIngestMaxBytes'] == null ? undefined : json['recordingIngestMaxBytes'],
     };
 }
@@ -59,6 +76,7 @@ export function SystemCapabilitiesToJSONTyped(value?: SystemCapabilities | null,
 
     return {
 
+        'recordingIngestVersion': value['recordingIngestVersion'],
         'recordingIngestMaxBytes': value['recordingIngestMaxBytes'],
     };
 }

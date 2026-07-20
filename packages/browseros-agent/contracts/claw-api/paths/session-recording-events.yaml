@@ -13,37 +13,3 @@ get:
       $ref: ../responses.yaml#/NotFound
     '500':
       $ref: ../responses.yaml#/InternalError
-post:
-  operationId: appendRecordingEvents
-  parameters:
-    - $ref: ../parameters.yaml#/SessionId
-    - $ref: ../parameters.yaml#/RecordingTabId
-    - $ref: ../parameters.yaml#/RecordingPageId
-    - $ref: ../parameters.yaml#/RecordingTargetId
-    - $ref: ../parameters.yaml#/RecordingBatchId
-  requestBody:
-    required: true
-    description: Atomic newline-delimited rrweb events. The UTF-8 encoded request body must not exceed the server's advertised recordingIngestMaxBytes capability.
-    content:
-      application/x-ndjson:
-        schema:
-          type: string
-  responses:
-    '200':
-      description: Number of accepted event lines.
-      content:
-        application/json:
-          schema:
-            $ref: ../schemas/sessions.yaml#/AppendRecordingEventsResponse
-    '400':
-      $ref: ../responses.yaml#/BadRequest
-    '404':
-      $ref: ../responses.yaml#/NotFound
-    '409':
-      $ref: ../responses.yaml#/Conflict
-    '410':
-      $ref: ../responses.yaml#/Gone
-    '413':
-      $ref: ../responses.yaml#/PayloadTooLarge
-    '500':
-      $ref: ../responses.yaml#/InternalError

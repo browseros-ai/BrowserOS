@@ -95,12 +95,11 @@ import {
 } from '../models/UpdateTelemetryRequest.js';
 
 export interface AppendRecordingEventsRequest {
-    sessionId: string;
     xRecordingTabId: number;
-    xRecordingPageId: number;
-    xRecordingTargetId: string;
+    xRecordingDocumentId: string;
+    xRecordingBatchId: string;
     body: string;
-    xRecordingBatchId?: string;
+    xRecordingHasGap?: boolean;
 }
 
 export interface CancelSessionRequest {
@@ -159,13 +158,6 @@ export class DefaultApi extends runtime.BaseAPI {
      * Creates request options for appendRecordingEvents without sending the request
      */
     async appendRecordingEventsRequestOpts(requestParameters: AppendRecordingEventsRequest): Promise<runtime.RequestOpts> {
-        if (requestParameters['sessionId'] == null) {
-            throw new runtime.RequiredError(
-                'sessionId',
-                'Required parameter "sessionId" was null or undefined when calling appendRecordingEvents().'
-            );
-        }
-
         if (requestParameters['xRecordingTabId'] == null) {
             throw new runtime.RequiredError(
                 'xRecordingTabId',
@@ -173,17 +165,17 @@ export class DefaultApi extends runtime.BaseAPI {
             );
         }
 
-        if (requestParameters['xRecordingPageId'] == null) {
+        if (requestParameters['xRecordingDocumentId'] == null) {
             throw new runtime.RequiredError(
-                'xRecordingPageId',
-                'Required parameter "xRecordingPageId" was null or undefined when calling appendRecordingEvents().'
+                'xRecordingDocumentId',
+                'Required parameter "xRecordingDocumentId" was null or undefined when calling appendRecordingEvents().'
             );
         }
 
-        if (requestParameters['xRecordingTargetId'] == null) {
+        if (requestParameters['xRecordingBatchId'] == null) {
             throw new runtime.RequiredError(
-                'xRecordingTargetId',
-                'Required parameter "xRecordingTargetId" was null or undefined when calling appendRecordingEvents().'
+                'xRecordingBatchId',
+                'Required parameter "xRecordingBatchId" was null or undefined when calling appendRecordingEvents().'
             );
         }
 
@@ -204,21 +196,20 @@ export class DefaultApi extends runtime.BaseAPI {
             headerParameters['X-Recording-Tab-Id'] = String(requestParameters['xRecordingTabId']);
         }
 
-        if (requestParameters['xRecordingPageId'] != null) {
-            headerParameters['X-Recording-Page-Id'] = String(requestParameters['xRecordingPageId']);
-        }
-
-        if (requestParameters['xRecordingTargetId'] != null) {
-            headerParameters['X-Recording-Target-Id'] = String(requestParameters['xRecordingTargetId']);
+        if (requestParameters['xRecordingDocumentId'] != null) {
+            headerParameters['X-Recording-Document-Id'] = String(requestParameters['xRecordingDocumentId']);
         }
 
         if (requestParameters['xRecordingBatchId'] != null) {
             headerParameters['X-Recording-Batch-Id'] = String(requestParameters['xRecordingBatchId']);
         }
 
+        if (requestParameters['xRecordingHasGap'] != null) {
+            headerParameters['X-Recording-Has-Gap'] = String(requestParameters['xRecordingHasGap']);
+        }
 
-        let urlPath = `/api/v1/sessions/{sessionId}/recording/events`;
-        urlPath = urlPath.replace('{sessionId}', encodeURIComponent(String(requestParameters['sessionId'])));
+
+        let urlPath = `/api/v1/recordings/events`;
 
         return {
             path: urlPath,

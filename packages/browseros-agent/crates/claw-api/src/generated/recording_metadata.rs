@@ -15,24 +15,33 @@ use serde::{Deserialize, Serialize};
 pub struct RecordingMetadata {
     #[serde(rename = "hasData")]
     pub has_data: bool,
+    /// False when any selected segment has a known gap or legacy boundaries.
+    #[serde(rename = "complete")]
+    pub complete: bool,
     #[serde(rename = "sizeBytes")]
     pub size_bytes: i64,
     #[serde(rename = "firstEventAt", skip_serializing_if = "Option::is_none")]
     pub first_event_at: Option<i64>,
     #[serde(rename = "lastEventAt", skip_serializing_if = "Option::is_none")]
     pub last_event_at: Option<i64>,
-    #[serde(rename = "pageIds")]
-    pub page_ids: Vec<i64>,
+    #[serde(rename = "tabs")]
+    pub tabs: Vec<models::RecordingTabMetadata>,
 }
 
 impl RecordingMetadata {
-    pub fn new(has_data: bool, size_bytes: i64, page_ids: Vec<i64>) -> RecordingMetadata {
+    pub fn new(
+        has_data: bool,
+        complete: bool,
+        size_bytes: i64,
+        tabs: Vec<models::RecordingTabMetadata>,
+    ) -> RecordingMetadata {
         RecordingMetadata {
             has_data,
+            complete,
             size_bytes,
             first_event_at: None,
             last_event_at: None,
-            page_ids,
+            tabs,
         }
     }
 }

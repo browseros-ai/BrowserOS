@@ -24,6 +24,8 @@ paths:
     $ref: ./paths/session-recording.yaml
   /api/v1/sessions/{sessionId}/recording/events:
     $ref: ./paths/session-recording-events.yaml
+  /api/v1/recordings/events:
+    $ref: ./paths/recording-events.yaml
   /api/v1/tabs:
     $ref: ./paths/tabs.yaml
   /api/v1/tabs/{pageId}/preview:
@@ -46,12 +48,12 @@ components:
       $ref: ./parameters.yaml#/Harness
     RecordingTabId:
       $ref: ./parameters.yaml#/RecordingTabId
-    RecordingPageId:
-      $ref: ./parameters.yaml#/RecordingPageId
-    RecordingTargetId:
-      $ref: ./parameters.yaml#/RecordingTargetId
+    RecordingDocumentId:
+      $ref: ./parameters.yaml#/RecordingDocumentId
     RecordingBatchId:
       $ref: ./parameters.yaml#/RecordingBatchId
+    RecordingGap:
+      $ref: ./parameters.yaml#/RecordingGap
   responses:
     BadRequest:
       $ref: ./responses.yaml#/BadRequest
@@ -94,6 +96,10 @@ components:
       $ref: ./schemas/sessions.yaml#/CancelSessionResponse
     RecordingMetadata:
       $ref: ./schemas/sessions.yaml#/RecordingMetadata
+    RecordingTabMetadata:
+      $ref: ./schemas/sessions.yaml#/RecordingTabMetadata
+    RecordingSegmentMetadata:
+      $ref: ./schemas/sessions.yaml#/RecordingSegmentMetadata
     AppendRecordingEventsResponse:
       $ref: ./schemas/sessions.yaml#/AppendRecordingEventsResponse
     ToolEvent:

@@ -112,6 +112,9 @@ Dispatch:
     pageId:
       type: integer
       format: int64
+    tabId:
+      type: integer
+      format: int64
     targetId:
       type: string
     url:
@@ -140,10 +143,13 @@ CancelSessionResponse:
 RecordingMetadata:
   type: object
   additionalProperties: false
-  required: [hasData, sizeBytes, pageIds]
+  required: [hasData, complete, sizeBytes, tabs]
   properties:
     hasData:
       type: boolean
+    complete:
+      type: boolean
+      description: False when any selected segment has a known gap or legacy boundaries.
     sizeBytes:
       type: integer
       format: int64
@@ -154,11 +160,65 @@ RecordingMetadata:
     lastEventAt:
       type: integer
       format: int64
-    pageIds:
+    tabs:
       type: array
       items:
-        type: integer
-        format: int64
+        $ref: '#/RecordingTabMetadata'
+RecordingTabMetadata:
+  type: object
+  additionalProperties: false
+  required: [tabId, complete, firstEventAt, lastEventAt, segments]
+  properties:
+    tabId:
+      type: integer
+      format: int64
+      minimum: 1
+    complete:
+      type: boolean
+    firstEventAt:
+      type: integer
+      format: int64
+    lastEventAt:
+      type: integer
+      format: int64
+    segments:
+      type: array
+      items:
+        $ref: '#/RecordingSegmentMetadata'
+RecordingSegmentMetadata:
+  type: object
+  additionalProperties: false
+  required:
+    - documentId
+    - firstEventAt
+    - lastEventAt
+    - sizeBytes
+    - eventCount
+    - hasGap
+  properties:
+    documentId:
+      type: string
+    targetId:
+      type: string
+    firstEventAt:
+      type: integer
+      format: int64
+    lastEventAt:
+      type: integer
+      format: int64
+    sizeBytes:
+      type: integer
+      format: int64
+      minimum: 0
+    eventCount:
+      type: integer
+      format: int64
+      minimum: 0
+    hasGap:
+      type: boolean
+    legacy:
+      type: boolean
+      description: True when the source predates trustworthy Chrome document identity.
 AppendRecordingEventsResponse:
   type: object
   additionalProperties: false

@@ -21,6 +21,7 @@
       "sessionId": "session-live",
       "toolName": "navigate",
       "pageId": 7,
+      "tabId": 101,
       "targetId": "target-7",
       "url": "https://browseros.com",
       "title": "BrowserOS",
@@ -35,6 +36,7 @@
       "sessionId": "session-live",
       "toolName": "snapshot",
       "pageId": 7,
+      "tabId": 101,
       "targetId": "target-7",
       "durationMs": 400,
       "hasScreenshot": true

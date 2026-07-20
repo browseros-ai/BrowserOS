@@ -72,6 +72,7 @@ export const contractCases: ContractCase[] = [
       expect(value.capabilities?.recordingIngestMaxBytes).toBe(
         RECORDING_INGEST_MAX_BYTES,
       )
+      expect(value.capabilities?.recordingIngestVersion).toBe(2)
     },
   },
   {
@@ -97,6 +98,7 @@ export const contractCases: ContractCase[] = [
       expect(detail.dispatches[0]).toMatchObject({
         dispatchId: 1,
         pageId: 7,
+        tabId: 101,
         targetId: 'target-7',
         hasScreenshot: true,
       })
@@ -122,20 +124,20 @@ export const contractCases: ContractCase[] = [
     async run({ api, liveSessionId }) {
       expect(await api.getRecording({ sessionId: liveSessionId })).toEqual({
         hasData: false,
+        complete: true,
         sizeBytes: 0,
-        pageIds: [],
+        tabs: [],
       })
     },
   },
   {
     name: 'recording append and NDJSON download',
     async run({ api, baseUrl, liveSessionId }) {
-      const body = '{"tabPageId":7,"ts":100}\n{"tabPageId":7,"ts":200}\n'
+      const body =
+        '{"type":2,"data":{},"ts":100}\n{"type":3,"data":{},"ts":200}\n'
       const request = {
-        sessionId: liveSessionId,
         xRecordingTabId: 101,
-        xRecordingPageId: 7,
-        xRecordingTargetId: 'target-7',
+        xRecordingDocumentId: '018f47a7-1c2b-7def-8123-0123456789ab',
         xRecordingBatchId: 'contract-batch-1',
         body,
       }
@@ -143,7 +145,21 @@ export const contractCases: ContractCase[] = [
       expect(await api.appendRecordingEvents(request)).toEqual({ accepted: 0 })
       expect(
         await api.getRecording({ sessionId: liveSessionId }),
-      ).toMatchObject({ hasData: true, pageIds: [7] })
+      ).toMatchObject({
+        hasData: true,
+        complete: true,
+        tabs: [
+          {
+            tabId: 101,
+            segments: [
+              {
+                documentId: '018f47a7-1c2b-7def-8123-0123456789ab',
+                hasGap: false,
+              },
+            ],
+          },
+        ],
+      })
       const response = await fetch(
         `${baseUrl}/api/v1/sessions/${liveSessionId}/recording/events`,
       )
@@ -160,10 +176,8 @@ export const contractCases: ContractCase[] = [
       const accepted = recordingLineOfBytes(RECORDING_INGEST_MAX_BYTES, 400)
       expect(
         await api.appendRecordingEvents({
-          sessionId: liveSessionId,
           xRecordingTabId: 101,
-          xRecordingPageId: 7,
-          xRecordingTargetId: 'target-7',
+          xRecordingDocumentId: '018f47a7-1c2b-7def-8123-0123456789ac',
           xRecordingBatchId: 'contract-boundary',
           body: accepted,
         }),
@@ -172,10 +186,8 @@ export const contractCases: ContractCase[] = [
       await expectApiError(
         () =>
           api.appendRecordingEvents({
-            sessionId: liveSessionId,
             xRecordingTabId: 101,
-            xRecordingPageId: 7,
-            xRecordingTargetId: 'target-7',
+            xRecordingDocumentId: '018f47a7-1c2b-7def-8123-0123456789ad',
             xRecordingBatchId: 'contract-over-limit',
             body: recordingLineOfBytes(RECORDING_INGEST_MAX_BYTES + 1, 401),
           }),
@@ -185,10 +197,8 @@ export const contractCases: ContractCase[] = [
 
       expect(
         await api.appendRecordingEvents({
-          sessionId: liveSessionId,
           xRecordingTabId: 101,
-          xRecordingPageId: 7,
-          xRecordingTargetId: 'target-7',
+          xRecordingDocumentId: '018f47a7-1c2b-7def-8123-0123456789ae',
           xRecordingBatchId: 'contract-after-over-limit',
           body: '{"ts":402,"type":3,"data":{}}',
         }),
@@ -254,20 +264,16 @@ export const contractCases: ContractCase[] = [
     },
   },
   {
-    name: 'ended recording write',
-    async run({ api, endedSessionId }) {
-      await expectApiError(
-        () =>
-          api.appendRecordingEvents({
-            sessionId: endedSessionId,
-            xRecordingTabId: 101,
-            xRecordingPageId: 7,
-            xRecordingTargetId: 'target-7',
-            body: '{"ts":300}\n',
-          }),
-        410,
-        'session_ended',
-      )
+    name: 'recording write is session neutral',
+    async run({ api }) {
+      expect(
+        await api.appendRecordingEvents({
+          xRecordingTabId: 101,
+          xRecordingDocumentId: '018f47a7-1c2b-7def-8123-0123456789af',
+          xRecordingBatchId: 'contract-ended-independent',
+          body: '{"ts":300,"type":3,"data":{}}\n',
+        }),
+      ).toEqual({ accepted: 1 })
     },
   },
   {
