@@ -19,7 +19,6 @@ import {
   SessionListFromJSON,
   ShutdownResponseFromJSON,
   SystemInfoFromJSON,
-  TabListFromJSON,
   TelemetryStateFromJSON,
 } from '@browseros/claw-api'
 import { canonicalApiError } from '../../src/lib/api-error'
@@ -39,7 +38,6 @@ const fixtures = [
   ['cancel-session.json', CancelSessionResponseFromJSON],
   ['recording-metadata.json', RecordingMetadataFromJSON],
   ['append-recording-events.json', AppendRecordingEventsResponseFromJSON],
-  ['tab-list.json', TabListFromJSON],
   ['connection.json', ConnectionFromJSON],
   ['connection-list.json', ConnectionListFromJSON],
   ['api-error.json', ApiErrorFromJSON],

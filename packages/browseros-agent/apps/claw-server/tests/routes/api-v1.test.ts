@@ -14,7 +14,6 @@ import {
   type SessionList,
   type SessionSummary,
   type SystemInfo,
-  type TabList,
   type TelemetryState,
 } from '@browseros/claw-api'
 import { identityService } from '../../src/lib/mcp-session'
@@ -77,27 +76,6 @@ const recording: RecordingMetadata = {
   sizeBytes: 0,
   tabs: [],
 }
-const tabs: TabList = {
-  items: [
-    {
-      tabId: 101,
-      pageId: 7,
-      targetId: 'target-7',
-      sessionId: 'session-live',
-      slug: 'codex',
-      label: 'Codex',
-      url: 'https://browseros.com',
-      title: 'BrowserOS',
-      status: 'active',
-      firstActivityAt: 100,
-      lastActivityAt: 110,
-      lastToolName: 'snapshot',
-      toolCount: 1,
-      recentTools: [{ name: 'snapshot', at: 110 }],
-      previewCapturedAt: 111,
-    },
-  ],
-}
 const connection: Connection = {
   harness: 'Codex',
   installed: true,
@@ -120,8 +98,10 @@ function dependencies(
     downloadRecordingEvents: async () => '',
     appendRecordingEvents: async () => ({ accepted: 2 }),
     appendLegacyRecordingEvents: async () => ({ accepted: 2 }),
-    listTabs: () => tabs,
-    getTabPreview: () => ({ bytes: new Uint8Array([0xff, 0xd8]), etag: '111' }),
+    getSessionBrowserTabPreview: async () => ({
+      bytes: new Uint8Array([0xff, 0xd8]),
+      etag: '111',
+    }),
     getDispatchScreenshot: () => ({
       bytes: new Uint8Array([0xff, 0xd8]),
       etag: '1',
@@ -148,7 +128,7 @@ function recordingLineOfBytes(bytes: number, timestamp: number): string {
 }
 
 describe('canonical TypeScript API', () => {
-  it('serves system, telemetry, session, tab, and connection JSON envelopes', async () => {
+  it('serves system, telemetry, session, and connection JSON envelopes', async () => {
     const app = createCanonicalApiRoute(dependencies())
     const cases: Array<[string, string, unknown, RequestInit | undefined]> = [
       ['/api/v1/system', 'GET', system, undefined],
@@ -166,7 +146,6 @@ describe('canonical TypeScript API', () => {
       ['/api/v1/sessions', 'GET', sessions, undefined],
       ['/api/v1/sessions/session-live', 'GET', sessionDetail, undefined],
       ['/api/v1/sessions/session-live/recording', 'GET', recording, undefined],
-      ['/api/v1/tabs', 'GET', tabs, undefined],
       ['/api/v1/connections', 'GET', connections, undefined],
       ['/api/v1/connections/Codex', 'PUT', connection, { method: 'PUT' }],
       [
@@ -436,9 +415,12 @@ describe('canonical TypeScript API', () => {
     ).toBeUndefined()
   })
 
-  it('serves binary artifacts without embedding preview bytes in tab JSON', async () => {
+  it('serves session-owned previews and immutable dispatch screenshots', async () => {
     const app = createCanonicalApiRoute(dependencies())
-    const preview = await request(app, '/api/v1/tabs/7/preview')
+    const preview = await request(
+      app,
+      '/api/v1/sessions/session-live/browser-tabs/101/preview',
+    )
     expect(preview.status).toBe(200)
     expect(preview.headers.get('content-type')).toBe('image/jpeg')
     expect(preview.headers.get('cache-control')).toBe(
@@ -448,7 +430,53 @@ describe('canonical TypeScript API', () => {
     const screenshot = await request(app, '/api/v1/dispatches/1/screenshot')
     expect(screenshot.status).toBe(200)
     expect(screenshot.headers.get('cache-control')).toContain('immutable')
-    expect(JSON.stringify(tabs)).not.toContain('jpegBase64')
+  })
+
+  it('validates browser tab ids before resolving a preview', async () => {
+    const getPreview = mock(async () => null)
+    const app = createCanonicalApiRoute(
+      dependencies({ getSessionBrowserTabPreview: getPreview }),
+    )
+
+    for (const browserTabId of ['0', '-1', '1.5', 'nope']) {
+      const response = await request(
+        app,
+        `/api/v1/sessions/session-live/browser-tabs/${browserTabId}/preview`,
+      )
+      expect(response.status).toBe(400)
+      expect(await response.json()).toMatchObject({ code: 'invalid_request' })
+    }
+    expect(getPreview).not.toHaveBeenCalled()
+  })
+
+  it('collapses every unresolved preview lookup to the same 404', async () => {
+    const app = createCanonicalApiRoute(
+      dependencies({ getSessionBrowserTabPreview: async () => null }),
+    )
+    const bodies = []
+    for (const path of [
+      '/api/v1/sessions/missing/browser-tabs/101/preview',
+      '/api/v1/sessions/session-live/browser-tabs/999/preview',
+      '/api/v1/sessions/session-foreign/browser-tabs/101/preview',
+    ]) {
+      const response = await request(app, path)
+      expect(response.status).toBe(404)
+      bodies.push(await response.json())
+    }
+    expect(bodies).toEqual([
+      {
+        code: 'preview_not_found',
+        message: 'browser tab preview not found',
+      },
+      {
+        code: 'preview_not_found',
+        message: 'browser tab preview not found',
+      },
+      {
+        code: 'preview_not_found',
+        message: 'browser tab preview not found',
+      },
+    ])
   })
 
   it('returns canonical errors for missing resources and unknown harnesses', async () => {
@@ -456,14 +484,14 @@ describe('canonical TypeScript API', () => {
       dependencies({
         getSession: () => null,
         getRecording: () => null,
-        getTabPreview: () => null,
+        getSessionBrowserTabPreview: async () => null,
         getDispatchScreenshot: () => null,
       }),
     )
     const cases: Array<[string, number]> = [
       ['/api/v1/sessions/missing', 404],
       ['/api/v1/sessions/missing/recording', 404],
-      ['/api/v1/tabs/7/preview', 404],
+      ['/api/v1/sessions/missing/browser-tabs/7/preview', 404],
       ['/api/v1/dispatches/1/screenshot', 404],
       ['/api/v1/connections/Unknown', 404],
     ]

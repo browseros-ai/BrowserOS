@@ -143,6 +143,7 @@ describe('screencast poller', () => {
     await runOneTick()
 
     const frame = screencastCache.get(7)
+    expect(frame?.targetId).toBe('t-7')
     expect(frame?.jpegBase64).toBe('AAA')
     expect(frame?.capturedAt).toBeGreaterThan(0)
     expect(frame?.byteLength).toBeGreaterThan(0)

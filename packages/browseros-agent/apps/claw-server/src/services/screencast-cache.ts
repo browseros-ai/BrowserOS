@@ -31,6 +31,8 @@
 import { logger } from '../lib/logger'
 
 export interface ScreencastFrame {
+  /** Stable CDP target captured with this frame; preview reads require an exact current match. */
+  targetId: string
   /** Raw base64; no `data:` prefix. */
   jpegBase64: string
   /** Unix ms when the frame was captured by the poller. */
@@ -50,7 +52,9 @@ interface FailureState {
 }
 
 export interface ScreencastCache {
+  /** Page-only reads preserve the dispatch screenshot fallback semantics. */
   get(pageId: number): ScreencastFrame | null
+  getForTarget(pageId: number, targetId: string): ScreencastFrame | null
   set(pageId: number, frame: ScreencastFrame): void
   /** Drop both the cached frame and the failure state for a pageId. */
   delete(pageId: number): void
@@ -80,6 +84,10 @@ export function createScreencastCache(
   return {
     get(pageId) {
       return frames.get(pageId) ?? null
+    },
+    getForTarget(pageId, targetId) {
+      const frame = frames.get(pageId)
+      return frame?.targetId === targetId ? frame : null
     },
     set(pageId, frame) {
       // Delete-then-insert bumps the key to the end of the Map's

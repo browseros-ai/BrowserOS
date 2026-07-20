@@ -10,8 +10,9 @@ import {
   type ScreencastFrame,
 } from '../../src/services/screencast-cache'
 
-function frame(byteLength = 100): ScreencastFrame {
+function frame(byteLength = 100, targetId = 'target-1'): ScreencastFrame {
   return {
+    targetId,
     jpegBase64: 'AAAA',
     capturedAt: Date.now(),
     byteLength,
@@ -35,6 +36,20 @@ describe('screencast cache', () => {
     const f = frame()
     cache.set(7, f)
     expect(cache.get(7)).toBe(f)
+  })
+
+  it('requires exact target provenance for a current-incarnation read', () => {
+    const cache = createScreencastCache({
+      maxEntries: 10,
+      maxConsecutiveFailures: 3,
+    })
+    const oldFrame = frame(100, 'target-old')
+    cache.set(7, oldFrame)
+
+    expect(cache.getForTarget(7, 'target-old')).toBe(oldFrame)
+    expect(cache.getForTarget(7, 'target-new')).toBeNull()
+    expect(cache.getForTarget(8, 'target-old')).toBeNull()
+    expect(cache.get(7)).toBe(oldFrame)
   })
 
   it('evicts the oldest entry once maxEntries is crossed', () => {

@@ -5,14 +5,14 @@
  *
  * In-memory registry mapping a stable CDP target id to the live
  * activity trail for the agent currently driving that tab. The
- * cockpit's `mcp/register.ts` wrapper appends to the trail after
- * every successful `executeTool` call; the homepage polls
- * `GET /api/v1/tabs` to render the current view.
+ * cockpit's dispatch effects append to the trail after every successful
+ * page-targeted tool call; the live-session query joins it to durable tab
+ * ownership as optional activity metadata.
  *
  * Each record carries:
  *   - `sessionId`: the MCP session currently claiming the tab. The
- *     canonical `/api/v1/tabs` attributes the tab to it, and recording
- *     ingest refuses batches whose claim has drifted from it.
+ *     canonical live-session projection attributes the activity to it,
+ *     and recording ingest refuses batches whose claim has drifted from it.
  *   - `tabId`: the browser tab id, kept alongside the CDP identifiers
  *     because the recorder addresses tabs by tab id — it is the join
  *     key between recorder batches and CDP-side state.

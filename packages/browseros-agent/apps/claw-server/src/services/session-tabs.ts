@@ -3,7 +3,10 @@
 import { and, eq, isNull, type SQL } from 'drizzle-orm'
 import { logger } from '../lib/logger'
 import { getAuditDb } from '../modules/db/db'
-import { sessionTabs } from '../modules/db/schema/session-tabs.sql'
+import {
+  type SessionTabRow,
+  sessionTabs,
+} from '../modules/db/schema/session-tabs.sql'
 
 export interface ClaimTabInput {
   tabId: number
@@ -11,6 +14,36 @@ export interface ClaimTabInput {
   sessionId: string
   agentId: string
   claimedAt: number
+}
+
+/** Returns the durable ownership windows that are still open. */
+export function listOpenSessionTabs(): SessionTabRow[] {
+  return getAuditDb()
+    .select()
+    .from(sessionTabs)
+    .where(isNull(sessionTabs.releasedAt))
+    .orderBy(sessionTabs.id)
+    .all()
+}
+
+/** Resolves current ownership without exposing whether another session owns the tab. */
+export function getOpenSessionTab(
+  sessionId: string,
+  tabId: number,
+): SessionTabRow | null {
+  return (
+    getAuditDb()
+      .select()
+      .from(sessionTabs)
+      .where(
+        and(
+          eq(sessionTabs.sessionId, sessionId),
+          eq(sessionTabs.tabId, tabId),
+          isNull(sessionTabs.releasedAt),
+        ),
+      )
+      .get() ?? null
+  )
 }
 
 /** Claims a logical tab, closing any stale live owner at the same boundary. */

@@ -19,6 +19,8 @@ const retiredRoutes = [
   ['POST', '/recordings/tabs/:tabId/events'],
   ['GET', '/audit/replays/:sessionId'],
   ['GET', '/audit/replays/:sessionId/meta'],
+  ['GET', '/api/v1/tabs'],
+  ['GET', '/api/v1/tabs/:pageId/preview'],
 ] as const
 
 describe('retired REST routes', () => {
@@ -33,4 +35,14 @@ describe('retired REST routes', () => {
       ).toBe(false)
     })
   }
+
+  test('retired canonical tab URLs return a bare router 404', async () => {
+    for (const path of ['/api/v1/tabs', '/api/v1/tabs/7/preview']) {
+      const response = await app.request(`http://localhost${path}`)
+      expect(response.status).toBe(404)
+      expect(response.headers.get('content-type') ?? '').not.toContain(
+        'application/json',
+      )
+    }
+  })
 })

@@ -17,7 +17,6 @@ import {
   type SessionDetail,
   type SessionList,
   type SystemInfo,
-  type TabList,
   type TelemetryState,
 } from '@browseros/claw-api'
 import { type Context, Hono } from 'hono'
@@ -61,11 +60,13 @@ export interface RecordingIdentity {
   documentId: string
 }
 
+type Awaitable<T> = T | Promise<T>
+
 export interface CanonicalApiDependencies {
   getSystemInfo(): SystemInfo
   getTelemetry(): TelemetryState
   updateTelemetry(consent: boolean): TelemetryState
-  listSessions(query: CanonicalSessionQuery): SessionList
+  listSessions(query: CanonicalSessionQuery): Awaitable<SessionList>
   getSession(sessionId: string): SessionDetail | null
   getSessionState(sessionId: string): SessionState
   /** Returns how many in-flight dispatches were aborted. */
@@ -88,8 +89,10 @@ export interface CanonicalApiDependencies {
     ndjson: string,
     batchId?: string,
   ): Promise<AppendRecordingEventsResponse | null>
-  listTabs(): TabList
-  getTabPreview(pageId: number): BinaryAsset | null
+  getSessionBrowserTabPreview(
+    sessionId: string,
+    browserTabId: number,
+  ): Awaitable<BinaryAsset | null>
   getDispatchScreenshot(dispatchId: number): BinaryAsset | null
   listConnections(): Promise<ConnectionList>
   connectHarness(harness: Harness): Promise<Connection>
@@ -111,12 +114,12 @@ export function createCanonicalApiRoute(deps: CanonicalApiDependencies) {
     return c.json(deps.updateTelemetry(body.consent))
   })
 
-  app.get('/api/v1/sessions', (c) => {
+  app.get('/api/v1/sessions', async (c) => {
     const query = parseSessionQuery(c.req.query())
     if ('error' in query) {
       return apiError(c, 400, 'invalid_request', query.error)
     }
-    return c.json(deps.listSessions(query))
+    return c.json(await deps.listSessions(query))
   })
   app.get('/api/v1/sessions/:sessionId', (c) => {
     const session = deps.getSession(c.req.param('sessionId'))
@@ -238,19 +241,34 @@ export function createCanonicalApiRoute(deps: CanonicalApiDependencies) {
     },
   )
 
-  app.get('/api/v1/tabs', (c) => c.json(deps.listTabs()))
-  app.get('/api/v1/tabs/:pageId/preview', (c) => {
-    const pageId = positiveInteger(c.req.param('pageId'))
-    if (pageId === null) {
-      return apiError(c, 400, 'invalid_request', 'pageId must be positive')
-    }
-    const asset = deps.getTabPreview(pageId)
-    if (!asset) {
-      return apiError(c, 404, 'preview_not_found', 'tab preview not found')
-    }
-    // Superseded by the next screencast frame — never serve from cache.
-    return binaryResponse(asset, 'private, max-age=0, must-revalidate')
-  })
+  app.get(
+    '/api/v1/sessions/:sessionId/browser-tabs/:browserTabId/preview',
+    async (c) => {
+      const browserTabId = positiveInteger(c.req.param('browserTabId'))
+      if (browserTabId === null) {
+        return apiError(
+          c,
+          400,
+          'invalid_request',
+          'browserTabId must be positive',
+        )
+      }
+      const asset = await deps.getSessionBrowserTabPreview(
+        c.req.param('sessionId'),
+        browserTabId,
+      )
+      if (!asset) {
+        return apiError(
+          c,
+          404,
+          'preview_not_found',
+          'browser tab preview not found',
+        )
+      }
+      // Superseded by the next screencast frame — never serve from cache.
+      return binaryResponse(asset, 'private, max-age=0, must-revalidate')
+    },
+  )
   app.get('/api/v1/dispatches/:dispatchId/screenshot', (c) => {
     const dispatchId = positiveInteger(c.req.param('dispatchId'))
     if (dispatchId === null) {

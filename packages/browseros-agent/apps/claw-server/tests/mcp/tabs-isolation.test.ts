@@ -199,6 +199,7 @@ describe('per-agent tabs isolation', () => {
       stubSessionForPage(7, 'target-7')
       const jpegBase64 = Buffer.from('cached-jpeg').toString('base64')
       screencastCache.set(7, {
+        targetId: 'target-7',
         jpegBase64,
         capturedAt: Date.now(),
         byteLength: Buffer.from(jpegBase64, 'base64').length,

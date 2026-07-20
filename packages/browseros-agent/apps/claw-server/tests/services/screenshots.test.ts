@@ -39,6 +39,7 @@ const AGENT = 'test-agent'
 function primeCache(pageId: number, b64: string = ONE_PX_JPEG_B64): void {
   const raw = Buffer.from(b64, 'base64')
   screencastCache.set(pageId, {
+    targetId: `target-${pageId.toString()}`,
     jpegBase64: b64,
     capturedAt: 1_000_000,
     byteLength: raw.length,

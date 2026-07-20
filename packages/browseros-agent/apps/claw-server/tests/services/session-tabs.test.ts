@@ -7,7 +7,9 @@ import {
 import { sessionTabs } from '../../src/modules/db/schema/session-tabs.sql'
 import {
   claimTabForSession,
+  getOpenSessionTab,
   inheritTabOwnership,
+  listOpenSessionTabs,
   releaseAllOpenSessionTabs,
   releaseTabForSession,
   releaseTabsForSession,
@@ -94,5 +96,32 @@ describe('session tab ownership', () => {
       { tabId: 22, releasedAt: 300 },
       { tabId: 33, releasedAt: 400 },
     ])
+  })
+
+  it('reads only current ownership and can resolve an exact session tab', () => {
+    claimTabForSession({
+      sessionId: 'session-a',
+      agentId: 'agent-a',
+      tabId: 11,
+      openedTargetId: 'target-a',
+      claimedAt: 100,
+    })
+    claimTabForSession({
+      sessionId: 'session-b',
+      agentId: 'agent-b',
+      tabId: 22,
+      openedTargetId: 'target-b',
+      claimedAt: 110,
+    })
+    releaseTabForSession(11, 'session-a', 200)
+
+    expect(listOpenSessionTabs()).toEqual([
+      expect.objectContaining({ sessionId: 'session-b', tabId: 22 }),
+    ])
+    expect(getOpenSessionTab('session-b', 22)).toEqual(
+      expect.objectContaining({ openedTargetId: 'target-b' }),
+    )
+    expect(getOpenSessionTab('session-a', 11)).toBeNull()
+    expect(getOpenSessionTab('session-a', 22)).toBeNull()
   })
 })
