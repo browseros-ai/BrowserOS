@@ -400,16 +400,28 @@ fn matches_filters(projection: &LiveSessionProjection, filters: &LiveSessionFilt
 mod tests {
     use super::*;
 
+    fn assemble_query(
+        sessions: Arc<Sessions>,
+        profiles: Arc<ProfileService>,
+        audit_log: Arc<AuditLog>,
+        session_tabs: Arc<SessionTabLedger>,
+        browser: Arc<BrowserService>,
+        tab_activity: Arc<TabActivityService>,
+        previews: Arc<PreviewService>,
+    ) -> CockpitQuery {
+        CockpitQuery::new(
+            sessions,
+            profiles,
+            audit_log,
+            session_tabs,
+            browser,
+            tab_activity,
+            previews,
+        )
+    }
+
     #[test]
     fn constructor_accepts_explicit_dependencies() {
-        let _: fn(
-            Arc<Sessions>,
-            Arc<ProfileService>,
-            Arc<AuditLog>,
-            Arc<SessionTabLedger>,
-            Arc<BrowserService>,
-            Arc<TabActivityService>,
-            Arc<PreviewService>,
-        ) -> CockpitQuery = CockpitQuery::new;
+        let _constructor = assemble_query;
     }
 }

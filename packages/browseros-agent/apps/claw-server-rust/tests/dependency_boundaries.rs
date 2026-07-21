@@ -69,16 +69,16 @@ impl<'ast> Visit<'ast> for DependencyVisitor {
 }
 
 #[test]
-fn source_tree_respects_dependency_boundaries() {
+fn source_tree_respects_dependency_boundaries() -> Result<(), Box<dyn std::error::Error>> {
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
-    collect_rust_files(&src, &mut files).expect("walk Rust source tree");
+    collect_rust_files(&src, &mut files)?;
     files.sort();
 
     let mut failures = Vec::new();
     for file in files {
-        let relative = file.strip_prefix(&src).expect("source file under src");
-        let source = fs::read_to_string(&file).expect("read Rust source file");
+        let relative = file.strip_prefix(&src)?;
+        let source = fs::read_to_string(&file)?;
         if let Err(errors) = check_source(relative, &source) {
             failures.extend(errors);
         }
@@ -89,6 +89,7 @@ fn source_tree_respects_dependency_boundaries() {
         "dependency boundary violations:\n{}",
         failures.join("\n")
     );
+    Ok(())
 }
 
 #[test]
@@ -104,11 +105,7 @@ fn browser_to_sessions_is_an_allowed_service_edge() {
 
 #[test]
 fn services_cannot_depend_on_api() {
-    let errors = check_source(
-        Path::new("services/browser/example.rs"),
-        "use crate::api::http;",
-    )
-    .expect_err("services -> api must fail");
+    let errors = violations("services/browser/example.rs", "use crate::api::http;");
     assert!(
         errors
             .iter()
@@ -118,11 +115,7 @@ fn services_cannot_depend_on_api() {
 
 #[test]
 fn db_cannot_depend_on_services() {
-    let errors = check_source(
-        Path::new("db/example.rs"),
-        "use crate::services::sessions::Sessions;",
-    )
-    .expect_err("db -> services must fail");
+    let errors = violations("db/example.rs", "use crate::services::sessions::Sessions;");
     assert!(
         errors
             .iter()
@@ -132,12 +125,17 @@ fn db_cannot_depend_on_services() {
 
 #[test]
 fn sea_orm_is_rejected_outside_db() {
-    let errors = check_source(
-        Path::new("services/recordings/example.rs"),
+    let errors = violations(
+        "services/recordings/example.rs",
         "use sea_orm::EntityTrait;",
-    )
-    .expect_err("non-DB SeaORM import must fail");
+    );
     assert!(errors.iter().any(|error| error.contains("sea_orm")));
+}
+
+fn violations(relative: &str, source: &str) -> Vec<String> {
+    check_source(Path::new(relative), source)
+        .err()
+        .unwrap_or_default()
 }
 
 fn check_source(relative: &Path, source: &str) -> Result<(), Vec<String>> {
