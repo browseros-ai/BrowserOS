@@ -150,6 +150,8 @@ bun run lint:fix              # Auto-fix
 bun run typecheck             # TypeScript check
 ```
 
+`bun run typecheck` runs the native TypeScript 7 compiler (`tsc` from `typescript@7`, the Go-native build). Unlike an editor's bundled classic TypeScript, the native compiler does not implicitly include every `@types/*` package it finds — each tsconfig must list its ambient type packages in `compilerOptions.types` (the root tsconfig defaults to `["node", "bun"]`). A new package that omits this may look green in the editor but fail `bun run typecheck` in CI with "Cannot find name 'Bun' / 'process'"; add the needed names to its `types` array. For editor parity with CI, install your editor's native TypeScript 7 support.
+
 `build:server` now emits artifacts under `dist/prod/server/<target>/` and zip files under `dist/prod/server/`.
 
 Direct server build script options:
