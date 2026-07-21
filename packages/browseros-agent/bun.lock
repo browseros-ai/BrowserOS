@@ -204,27 +204,6 @@
         "vite": "^7.3.6",
       },
     },
-    "apps/claw-server": {
-      "name": "@browseros/claw-server",
-      "version": "0.0.11",
-      "dependencies": {
-        "@browseros/agent-mcp-manager": "workspace:*",
-        "@browseros/browser-core": "workspace:*",
-        "@browseros/browser-mcp": "workspace:*",
-        "@browseros/claw-api": "workspace:*",
-        "@browseros/shared": "workspace:*",
-        "@modelcontextprotocol/sdk": "^1.27.1",
-        "commander": "^14.0.3",
-        "drizzle-orm": "^0.45.2",
-        "hono": "^4.12.30",
-        "posthog-node": "^4.0.0",
-        "zod": "^4.4.3",
-      },
-      "devDependencies": {
-        "@types/bun": "^1.3.5",
-        "drizzle-kit": "^0.31.10",
-      },
-    },
     "apps/server": {
       "name": "@browseros/server",
       "version": "0.0.127",
@@ -580,8 +559,6 @@
     "@browseros/claw-app": ["@browseros/claw-app@workspace:apps/claw-app"],
 
     "@browseros/claw-onboard": ["@browseros/claw-onboard@workspace:apps/claw-onboard"],
-
-    "@browseros/claw-server": ["@browseros/claw-server@workspace:apps/claw-server"],
 
     "@browseros/onboarding-video": ["@browseros/onboarding-video@workspace:packages/onboarding-video"],
 

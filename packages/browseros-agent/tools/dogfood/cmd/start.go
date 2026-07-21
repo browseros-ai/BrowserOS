@@ -375,7 +375,7 @@ func startClawEnvironment(parent context.Context, cfg config.Config, agentRoot s
 	reportProgress(opts, "starting Claw server")
 	e.managed = append(e.managed, proc.StartManaged(ctx, &e.wg, proc.ProcConfig{
 		Tag:         proc.TagServer,
-		Dir:         filepath.Join(agentRoot, "apps/claw-server"),
+		Dir:         agentRoot,
 		Env:         runtimeEnv,
 		Restart:     true,
 		LogPath:     cfg.LogPath(clawServerLogName),
@@ -421,7 +421,7 @@ func clawAppCommand() []string {
 }
 
 func clawServerCommand(configPath string) []string {
-	return []string{"bun", "--watch", "--env-file=../../.env.development", "src/main.ts", "--config", configPath}
+	return []string{"cargo", "run", "-p", "claw-server-rust", "--", "--config", configPath}
 }
 
 func serverRuntimeEnv(base []string, cfg config.Config) []string {

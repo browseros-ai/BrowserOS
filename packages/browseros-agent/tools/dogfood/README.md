@@ -21,6 +21,7 @@ High level:
 - macOS.
 - Go.
 - Bun.
+- Rust/Cargo for the BrowserClaw server.
 - BrowserOS installed at `/Applications/BrowserOS.app`; BrowserClaw optionally installed at `/Applications/BrowserClaw.app`.
 - A separate BrowserOS monorepo checkout for alpha dogfood.
 
