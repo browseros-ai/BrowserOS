@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v8.2.0
+        uses: astral-sh/setup-uv@v8.3.2
 
       - name: Run bos_build tests
         run: uv run python -m unittest discover -s bos_build -t . -p "*_test.py" -v

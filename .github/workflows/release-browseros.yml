@@ -425,7 +425,7 @@ jobs:
         with:
           ref: ${{ github.ref }}
 
-      - uses: astral-sh/setup-uv@v8.2.0
+      - uses: astral-sh/setup-uv@v8.3.2
         if: ${{ steps.stage_gate.outputs.should_stage == 'true' }}
 
       - name: Render staged update feeds
@@ -803,7 +803,7 @@ jobs:
         with:
           ref: ${{ github.ref }}
 
-      - uses: astral-sh/setup-uv@v8.2.0
+      - uses: astral-sh/setup-uv@v8.3.2
         if: ${{ steps.release_gate.outputs.should_create == 'true' }}
 
       - name: Create or refresh draft GitHub release
