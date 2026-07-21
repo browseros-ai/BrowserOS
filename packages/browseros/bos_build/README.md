@@ -269,12 +269,12 @@ file:
 | Bundle | Version source | Workflow | Tag |
 | --- | --- | --- | --- |
 | BrowserOS agent server | `packages/browseros-agent/apps/server/package.json` | `release-server.yml` | `agent-server/v*` |
-| BrowserClaw server (Bun) | `.../apps/claw-server/package.json` | `release-claw-server.yml` | `claw-server/v*` |
 | BrowserClaw server (Rust) | `.../apps/claw-server-rust/Cargo.toml` | `release-claw-server-rust.yml` | `claw-server-rust/v*` |
+| BrowserClaw onboarding | `.../apps/claw-onboard/package.json` | `release-claw-onboard.yml` | `claw-onboard/v*` |
 
-BrowserClaw browser builds download the Bun server today. The Rust blocks in
-`config/download_resources.yaml` and `config/copy_resources.yaml` sit beside the
-Bun ones, commented out.
+BrowserClaw browser builds and server OTA both consume the Rust server bundles
+published under `claw-server-rust/prod-resources`. Packaging normalizes the Rust
+binary name to `browseros-claw-server` for compatibility with the browser.
 
 Two signed macOS nightlies run on the self-hosted Mac and publish rolling
 prereleases anyone can download: `nightly-browseros` (04:00 UTC) and

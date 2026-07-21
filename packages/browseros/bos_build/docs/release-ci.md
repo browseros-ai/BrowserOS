@@ -37,7 +37,7 @@ release-browserclaw.yml
     - require extensions_version when extensions is alpha or prod
     - fail early when selected lane secrets or variables are missing
   server resources, when include_servers=true
-    - release-claw-server.yml
+    - release-claw-onboard.yml
     - release-claw-server-rust.yml
   browser builds
     - release-linux.yml -> build-browseros.yml with products=browserclaw
@@ -59,8 +59,8 @@ the self-hosted macOS builder.
 | Workflow | Purpose | Dispatch | Orchestrator use |
 | --- | --- | --- | --- |
 | `.github/workflows/release-server.yml` | Builds BrowserOS server resource zips for every browser target, uploads versioned R2 resource keys, attaches server release assets, and reflects the server package version. | Manual and `agent-server/v*` tags | Yes, when `include_servers=true` and `products` includes `browseros` |
-| `.github/workflows/release-claw-server.yml` | Builds BrowserClaw server and onboard resource zips, uploads versioned R2 keys, attaches server release assets, and reflects Claw package versions. | Manual and `claw-server/v*` tags | Yes, when `include_servers=true` and `products` includes `browserclaw` |
-| `.github/workflows/release-claw-server-rust.yml` | Builds BrowserClaw Rust server resource zips for every browser target, uploads versioned R2 keys under `claw-server-rust/prod-resources`, and attaches Rust server release assets. | Manual, reusable, and `claw-server-rust/v*` tags | Called by `release-browserclaw.yml` when `include_servers=true` |
+| `.github/workflows/release-claw-onboard.yml` | Builds and publishes BrowserClaw onboarding resources, attaches the onboarding release asset, and reflects its package version. | Manual, reusable, and `claw-onboard/v*` tags | Called by `release-browserclaw.yml` when `include_servers=true` |
+| `.github/workflows/release-claw-server-rust.yml` | Builds BrowserClaw server resource zips for every browser target, uploads versioned R2 keys under `claw-server-rust/prod-resources`, attaches server release assets, and can publish server OTA. | Manual, reusable, and `claw-server-rust/v*` tags | Called by `release-browserclaw.yml` when `include_servers=true` |
 | `.github/workflows/release-extensions.yml` | Builds, signs, and uploads CRXs for `agent`, `controller`, `bugreporter`, and `browserclaw`; it never reads or writes update feeds. | Manual and reusable | Called by per-product orchestrators with `secrets: inherit` |
 | `.github/workflows/release-extension-feeds.yml` | Regenerates extension update feeds through the guarded feed publisher, as a dry run by default or an explicit R2 publish. | Manual and reusable | Independent operator action; no orchestrator dependency |
 | `.github/workflows/release-cli.yml` | Builds browseros-cli release binaries, uploads them to CDN, publishes npm package metadata, and creates the CLI GitHub release. | `cli/v*` tags | No orchestrator use |
@@ -68,27 +68,27 @@ the self-hosted macOS builder.
 | `.github/workflows/release-windows.yml` | Builds Windows x64 browser artifacts on WarpBuild, one matrix entry per selected product, with optional signing. | Manual | Yes |
 | `.github/workflows/release-macos.yml` | Builds signed macOS artifacts on the dedicated self-hosted builder and downloads published server/onboard resource bundles from R2. | Manual | Yes |
 | `.github/workflows/release-browseros.yml` | Orchestrates one BrowserOS release, including server resources, selected browser platforms, optional agent CRX upload, staged feed artifacts, and draft GitHub release assets. | Manual only | No reusable entry point |
-| `.github/workflows/release-browserclaw.yml` | Orchestrates one BrowserClaw release, including TS and Rust server resources, selected browser platforms, optional BrowserClaw CRX upload, staged feed artifacts, and draft GitHub release assets. | Manual only | No reusable entry point |
+| `.github/workflows/release-browserclaw.yml` | Orchestrates one BrowserClaw release, including onboarding and Rust server resources, selected browser platforms, optional BrowserClaw CRX upload, staged feed artifacts, and draft GitHub release assets. | Manual only | No reusable entry point |
 
 Browser artifacts use the BrowserOS browser version from
 `packages/browseros/resources/BROWSEROS_VERSION` (for example `0.47.2.2`).
 Server resources do not use that version. `release-server.yml` resolves
 `packages/browseros-agent/apps/server/package.json` and tags
-`agent-server/vX.Y.Z`; `release-claw-server.yml` resolves
-`packages/browseros-agent/apps/claw-server/package.json` and tags
-`claw-server/vX.Y.Z`; `release-claw-server-rust.yml` resolves
+`agent-server/vX.Y.Z`; `release-claw-onboard.yml` resolves
+`packages/browseros-agent/apps/claw-onboard/package.json` and tags
+`claw-onboard/vX.Y.Z`; `release-claw-server-rust.yml` resolves
 `packages/browseros-agent/apps/claw-server-rust/Cargo.toml` and tags
 `claw-server-rust/vX.Y.Z`.
 
-The Rust Claw server lane publishes to a distinct CDN/R2 prefix:
+The BrowserClaw server lane publishes to the existing Rust CDN/R2 prefix:
 `claw-server-rust/prod-resources/{version,latest}/`. BrowserClaw browser builds
 ship the Rust server by default from
 `claw-server-rust/prod-resources/latest/`. The bos_build download step fails the
 whole Chromium build when a configured key is missing. The Rust copy blocks
 normalize legacy resource zips that still contain `browseros-claw-server-rs` to
 the runtime name `browseros-claw-server`.
-BrowserClaw server OTA feeds (`appcast-claw-server*.xml`) remain pinned to the
-TypeScript/Bun server bundle until a separate feed migration changes them.
+BrowserClaw server OTA consumes the same Rust bundle while retaining the
+`appcast-claw-server*.xml` feed names.
 
 `release-macos.yml` follows this release rule too: it does not build server
 resources from the checked-out `packages/browseros-agent` tree. Its browser
@@ -163,7 +163,7 @@ Individual workflow examples:
 
 ```bash
 gh workflow run release-server.yml -f version=0.0.124
-gh workflow run release-claw-server.yml -f version=0.0.3
+gh workflow run release-claw-onboard.yml -f version=0.0.3
 gh workflow run release-claw-server-rust.yml -f version=0.1.0
 gh workflow run release-linux.yml -f products=browseros -f upload_to_r2=true
 gh workflow run release-windows.yml -f products=browserclaw -f sign=false
@@ -193,8 +193,8 @@ paths and unrelated API keys from `.env.production`.
 | --- | --- | --- | --- |
 | R2 browser artifacts and final draft release | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | Present | Used by Linux/Windows browser downloads and uploads, server resource uploads, and the draft GitHub release asset step. |
 | BrowserOS server resources | R2 names plus `BROWSEROS_CONFIG_URL`, `POSTHOG_API_KEY`, `SENTRY_DSN` | Present | Per-product release preflight fails before starting paid builds if selected required names are absent. |
-| BrowserClaw server resources | R2 names | Present | `SPARKLE_PRIVATE_KEY` is optional for server OTA publishing; the orchestrator passes `publish_ota=false`. |
-| BrowserClaw Rust server resources | R2 names | Present | Uses only GitHub-hosted runners and writes `claw-server-rust/prod-resources`; no signing or OTA secrets are required. |
+| BrowserClaw onboarding resources | R2 names | Present | Publishes independently under `claw-onboard/prod-resources`; the full BrowserClaw release waits for it before browser builds. |
+| BrowserClaw server resources | R2 names | Present | Uses GitHub-hosted runners and writes `claw-server-rust/prod-resources`; `SPARKLE_PRIVATE_KEY` is optional for OTA publishing and the orchestrator passes `publish_ota=false`. |
 | Windows signing | `ESIGNER_USERNAME`, `ESIGNER_PASSWORD`, `ESIGNER_TOTP_SECRET`, `SPARKLE_PRIVATE_KEY` | Present after running `tools/release_secrets/sync.py --apply` | `ESIGNER_CREDENTIAL_ID` is optional and is also synced when present. Use `sign_windows=false` only for unsigned verification, not a signed release. |
 | Extension releases | R2 names plus `GH_TOKEN`, `BROWSEROS_AGENT_V2_KEY`, `BROWSEROS_CONTROLLER_KEY`, `BUGREPORTER_KEY`, `BROWSERCLAW_KEY`, `POSTHOG_API_KEY`, `VITE_PUBLIC_SENTRY_DSN`, `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT`, `VITE_PUBLIC_POSTHOG_KEY`, `VITE_PUBLIC_POSTHOG_HOST` | Extension signing, Sentry, and PostHog names are synced by `tools/release_secrets/sync.py`; `GH_TOKEN` is external | `GH_TOKEN` is for private extension repo clones and is not sourced from `.env.production`. |
 | macOS release builder | Repository variables `BROWSEROS_REPO_PATH`, `BROWSEROS_CHROMIUM_SRC` | Present | The reusable browser build also reads `MACOS_CERTIFICATE_NAME` and `PROD_MACOS_NOTARIZATION_*` from repo secrets when selected; the certificate P12, certificate password, and keychain password remain external to `.env.production`. |
