@@ -26,10 +26,7 @@ import { CLAW_API_PORT_DEFAULT } from '@browseros/shared/constants/ports'
 import { getBrowserSession } from '../../lib/browser-session'
 import { logger } from '../../lib/logger'
 import { identityService } from '../../lib/mcp-session'
-import {
-  type TabActivityRecord,
-  tabActivityRegistry,
-} from '../../lib/tab-activity'
+import { tabActivityRegistry } from '../../lib/tab-activity'
 import { getTabTargetMap } from '../../lib/tab-targets'
 import { getLocalServerUrl } from '../../local-server-url'
 import {
@@ -65,7 +62,7 @@ import {
   type TaskDetail,
 } from '../../services/tasks'
 import { VERSION } from '../../version'
-import type { CanonicalApiDependencies, RecordingAssociation } from '.'
+import type { CanonicalApiDependencies } from '.'
 
 const sessionQueryService = createSessionQueryService({
   listConnectedIdentities: () => identityService.list(),
@@ -175,24 +172,6 @@ export const canonicalApiDependencies: CanonicalApiDependencies = {
     })
     return { accepted: appended ? parsed.events.length : 0 }
   },
-  async appendLegacyRecordingEvents(sessionId, association, ndjson, batchId) {
-    const parsed = parseRecordingEvents(ndjson)
-    const target = recordingTargetFor(
-      tabActivityRegistry.snapshot(),
-      sessionId,
-      association,
-    )
-    if (!target) return null
-    if (parsed.events.length === 0) return { accepted: 0 }
-    const appended = await recordingStore.appendLegacyBatch(
-      target.targetId,
-      target.tabId,
-      parsed.events,
-      batchId ?? crypto.randomUUID(),
-      parsed.droppedLines > 0,
-    )
-    return { accepted: appended ? parsed.events.length : 0 }
-  },
   async getSessionBrowserTabPreview(sessionId, browserTabId) {
     const frame = await sessionQueryService.getSessionBrowserTabPreview(
       sessionId,
@@ -219,27 +198,6 @@ export const canonicalApiDependencies: CanonicalApiDependencies = {
   async disconnectHarness(harness) {
     return connection(await disconnectBrowserosFromHarness(harness))
   },
-}
-
-/**
- * A batch lands only while the recorder's (tab, page, target) claim
- * still matches the live registry for that session. Any drift — the tab
- * reclaimed by another session, a navigation that swapped the target —
- * makes the batch undeliverable rather than attributing its events to
- * the wrong replay. Exported for the route tests.
- */
-export function recordingTargetFor(
-  tabs: TabActivityRecord[],
-  sessionId: string,
-  association: RecordingAssociation,
-): TabActivityRecord | undefined {
-  return tabs.find(
-    (tab) =>
-      tab.sessionId === sessionId &&
-      tab.tabId === association.tabId &&
-      tab.pageId === association.pageId &&
-      tab.targetId === association.targetId,
-  )
 }
 
 function knownSession(sessionId: string): boolean {

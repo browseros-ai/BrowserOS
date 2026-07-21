@@ -35,7 +35,6 @@ import {
   type CanonicalApiDependencies,
   createCanonicalApiRoute,
 } from '../../src/routes/api-v1'
-import { recordingTargetFor } from '../../src/routes/api-v1/production'
 import { createServer } from '../../src/server'
 import { recordToolDispatch } from '../../src/services/audit-log'
 
@@ -107,7 +106,6 @@ function dependencies(
     getRecording: () => recording,
     downloadRecordingEvents: async () => '',
     appendRecordingEvents: async () => ({ accepted: 2 }),
-    appendLegacyRecordingEvents: async () => ({ accepted: 2 }),
     getSessionBrowserTabPreview: async () => ({
       bytes: new Uint8Array([0xff, 0xd8]),
       etag: '111',
@@ -338,14 +336,14 @@ describe('canonical TypeScript API', () => {
     expect(await upload.json()).toMatchObject({ code: 'forbidden' })
   })
 
-  it('keeps the old session-scoped write as a compatibility route', async () => {
+  it('does not support session-scoped recording writes', async () => {
     const append = mock(async () => ({ accepted: 1 }))
-    const changed = createCanonicalApiRoute(
-      dependencies({ appendLegacyRecordingEvents: async () => null }),
+    const app = createCanonicalApiRoute(
+      dependencies({ appendRecordingEvents: append }),
     )
 
-    const changedResponse = await request(
-      changed,
+    const response = await request(
+      app,
       '/api/v1/sessions/session-live/recording/events',
       {
         method: 'POST',
@@ -358,24 +356,7 @@ describe('canonical TypeScript API', () => {
         body: '{"ts":1}\n',
       },
     )
-    expect(changedResponse.status).toBe(409)
-    expect(await changedResponse.json()).toMatchObject({
-      code: 'recording_association_changed',
-    })
-
-    const ended = createCanonicalApiRoute(
-      dependencies({
-        getSessionState: () => 'ended',
-        appendLegacyRecordingEvents: append,
-      }),
-    )
-    const rejected = await request(
-      ended,
-      '/api/v1/sessions/session-old/recording/events',
-      { method: 'POST', body: '{"ts":1}\n' },
-    )
-    expect(rejected.status).toBe(410)
-    expect(await rejected.json()).toMatchObject({ code: 'session_ended' })
+    expect(response.status).toBe(404)
     expect(append).not.toHaveBeenCalled()
   })
 
@@ -408,48 +389,6 @@ describe('canonical TypeScript API', () => {
       code: 'recording_payload_too_large',
     })
     expect(append).toHaveBeenCalledTimes(1)
-  })
-
-  it('selects the exact recording association in a multi-tab session', () => {
-    const first = {
-      targetId: 'target-7',
-      tabId: 101,
-      pageId: 7,
-      sessionId: 'session-live',
-      agentId: 'codex-one',
-      slug: 'codex',
-      url: 'https://one.example',
-      title: 'One',
-      firstToolAt: 1,
-      lastToolAt: 2,
-      lastToolName: 'snapshot',
-      toolCount: 1,
-      recentTools: [],
-      status: 'active' as const,
-    }
-    const second = {
-      ...first,
-      targetId: 'target-8',
-      tabId: 102,
-      pageId: 8,
-      url: 'https://two.example',
-      title: 'Two',
-    }
-
-    expect(
-      recordingTargetFor([first, second], 'session-live', {
-        tabId: 102,
-        pageId: 8,
-        targetId: 'target-8',
-      }),
-    ).toBe(second)
-    expect(
-      recordingTargetFor([first, second], 'session-live', {
-        tabId: 102,
-        pageId: 8,
-        targetId: 'target-7',
-      }),
-    ).toBeUndefined()
   })
 
   it('serves session-owned previews and immutable dispatch screenshots', async () => {

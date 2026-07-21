@@ -32,9 +32,8 @@ export interface BinaryAsset {
 /**
  * `live` — an MCP transport is still attached; `ended` — the transport
  * is gone but audit history remains; `missing` — unknown id. The
- * distinction drives the canonical status split: for an ended session,
- * cancel answers 409 and recording ingest 410; both answer 404 for a
- * missing one.
+ * distinction drives cancellation semantics: ended sessions answer 409,
+ * while missing sessions answer 404.
  */
 export type SessionState = 'live' | 'ended' | 'missing'
 
@@ -47,12 +46,6 @@ export interface CanonicalSessionQuery {
   since?: number
   cursor?: number
   limit?: number
-}
-
-export interface RecordingAssociation {
-  tabId: number
-  pageId: number
-  targetId: string
 }
 
 export interface RecordingIdentity {
@@ -82,13 +75,6 @@ export interface CanonicalApiDependencies {
     batchId: string,
     hasGap: boolean,
   ): Promise<AppendRecordingEventsResponse>
-  /** Undocumented compatibility path for the already-shipped session-aware extension. */
-  appendLegacyRecordingEvents(
-    sessionId: string,
-    association: RecordingAssociation,
-    ndjson: string,
-    batchId?: string,
-  ): Promise<AppendRecordingEventsResponse | null>
   getSessionBrowserTabPreview(
     sessionId: string,
     browserTabId: number,
@@ -189,58 +175,6 @@ export function createCanonicalApiRoute(deps: CanonicalApiDependencies) {
       ),
     )
   })
-  app.post(
-    '/api/v1/sessions/:sessionId/recording/events',
-    recordingBodyLimit(),
-    async (c) => {
-      const sessionId = c.req.param('sessionId')
-      const state = deps.getSessionState(sessionId)
-      if (state === 'missing') {
-        return apiError(c, 404, 'session_not_found', 'session not found')
-      }
-      if (state === 'ended') {
-        return apiError(c, 410, 'session_ended', 'session has ended')
-      }
-      const contentType = c.req.header('content-type') ?? ''
-      if (!contentType.toLowerCase().startsWith('application/x-ndjson')) {
-        return apiError(
-          c,
-          400,
-          'invalid_request',
-          'content-type must be application/x-ndjson',
-        )
-      }
-      // Compatibility for recorder builds that pinned a batch to the live
-      // (tab, page, target) tuple. New recorders use the document-keyed route.
-      const tabId = positiveInteger(c.req.header('x-recording-tab-id') ?? '')
-      const pageId = positiveInteger(c.req.header('x-recording-page-id') ?? '')
-      const targetId = c.req.header('x-recording-target-id')
-      if (tabId === null || pageId === null || !targetId) {
-        return apiError(
-          c,
-          400,
-          'invalid_request',
-          'recording tab, page, and target headers are required',
-        )
-      }
-      const result = await deps.appendLegacyRecordingEvents(
-        sessionId,
-        { tabId, pageId, targetId },
-        await c.req.text(),
-        c.req.header('x-recording-batch-id'),
-      )
-      if (!result) {
-        return apiError(
-          c,
-          409,
-          'recording_association_changed',
-          'recording tab association changed',
-        )
-      }
-      return c.json(result)
-    },
-  )
-
   app.get(
     '/api/v1/sessions/:sessionId/browser-tabs/:browserTabId/preview',
     async (c) => {
