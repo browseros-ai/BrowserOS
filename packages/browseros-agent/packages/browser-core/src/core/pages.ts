@@ -172,14 +172,25 @@ export class PageManager {
       info = this.pages.get(pageId)
     }
     if (!info) return undefined
+    const observed = { ...info }
 
     try {
-      const result = await this.cdp.Browser.getTabInfo({ tabId: info.tabId })
+      const result = await this.cdp.Browser.getTabInfo({
+        tabId: observed.tabId,
+      })
       const tab = result.tab as TabInfo
       const updated: PageInfo = {
-        ...info,
+        ...observed,
         ...tab,
-        windowId: tab.windowId ?? info.windowId,
+        windowId: tab.windowId ?? observed.windowId,
+      }
+      const current = this.pages.get(pageId)
+      if (!current) return undefined
+      // Browser reconciliation can rebind a stable page ID while CDP is in
+      // flight. A stale response must not overwrite the newer incarnation.
+      if (!samePageInfo(current, observed)) return current
+      if (updated.targetId !== observed.targetId) {
+        this.sessions.delete(observed.targetId)
       }
       this.pages.set(pageId, updated)
       return updated
@@ -428,4 +439,22 @@ export class PageManager {
     this.pages.set(pageId, updated)
     return updated
   }
+}
+
+function samePageInfo(left: PageInfo, right: PageInfo): boolean {
+  return (
+    left.pageId === right.pageId &&
+    left.targetId === right.targetId &&
+    left.tabId === right.tabId &&
+    left.url === right.url &&
+    left.title === right.title &&
+    left.isActive === right.isActive &&
+    left.isLoading === right.isLoading &&
+    left.loadProgress === right.loadProgress &&
+    left.isPinned === right.isPinned &&
+    left.isHidden === right.isHidden &&
+    left.windowId === right.windowId &&
+    left.index === right.index &&
+    left.groupId === right.groupId
+  )
 }
