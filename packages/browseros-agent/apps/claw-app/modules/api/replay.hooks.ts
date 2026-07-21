@@ -137,10 +137,8 @@ function isReplayEvent(value: unknown): value is ReplayEvent {
 
 /**
  * Fetches and parses one session's tab-attributed, document-keyed NDJSON stream.
- * Raw fetch rather than the generated client: the route serves
- * `application/x-ndjson`, which the JSON-typed client cannot parse.
- * 404 (nothing recorded) maps to an empty bundle so the viewer shows
- * its empty state instead of an error.
+ * This streaming read stays raw so malformed lines can be skipped and a 404
+ * can map to an empty bundle instead of the typed client's error path.
  */
 export async function fetchReplayEvents({
   sessionId,

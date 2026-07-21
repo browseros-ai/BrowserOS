@@ -1,13 +1,4 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test'
-import { Configuration, DefaultApi } from '@browseros/claw-api'
-import * as client from './client'
-
-mock.module('./client', () => ({
-  ...client,
-  apiClient: async () =>
-    new DefaultApi(new Configuration({ basePath: 'http://127.0.0.1:9200' })),
-  resolveApiBaseUrl: async () => 'http://127.0.0.1:9200',
-}))
 
 const { fetchReplayEvents, fetchReplayMetadata, replayEventsRevision } =
   await import('./replay.hooks')

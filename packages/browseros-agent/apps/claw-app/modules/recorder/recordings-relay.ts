@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { Configuration, DefaultApi, ResponseError } from '@browseros/claw-api'
 import {
   RECORDING_INGEST_FALLBACK_MAX_BYTES,
   RECORDING_INGEST_MAX_BYTES,
 } from '@browseros/shared/constants/limits'
+import { ApiResponseError, ClawApiClient } from '../api/client'
 import {
   createIndexedDbRecordingOutbox,
   type NewRecordingBatch,
@@ -206,7 +206,7 @@ export function createRecordingsRelay(
 
   async function discoverCapability(
     baseUrl: string,
-    client: DefaultApi,
+    client: ClawApiClient,
   ): Promise<IngestCapability | undefined> {
     const cached = capabilities.get(baseUrl)
     if (cached && now() < cached.expiresAt) return cached
@@ -226,7 +226,7 @@ export function createRecordingsRelay(
       capabilities.set(baseUrl, capability)
       return capability
     } catch (error) {
-      if (error instanceof ResponseError && error.response.status === 404) {
+      if (error instanceof ApiResponseError && error.response.status === 404) {
         const capability = {
           supported: false,
           maxBytes: RECORDING_INGEST_FALLBACK_MAX_BYTES,
@@ -242,13 +242,7 @@ export function createRecordingsRelay(
   async function sendBatch(batch: StoredRecordingBatch): Promise<SendOutcome> {
     try {
       const baseUrl = await options.resolveServerBaseUrl()
-      const client = new DefaultApi(
-        new Configuration({
-          basePath: baseUrl,
-          credentials: 'omit',
-          fetchApi: fetch,
-        }),
-      )
+      const client = new ClawApiClient(baseUrl, { fetch })
       const capability = await discoverCapability(baseUrl, client)
       if (!capability) {
         return {
@@ -276,7 +270,7 @@ export function createRecordingsRelay(
       })
       return { kind: 'success', gapToken: gap?.token }
     } catch (error) {
-      if (error instanceof ResponseError) {
+      if (error instanceof ApiResponseError) {
         if (error.response.status === 413) return { kind: 'oversize', error }
         if (error.response.status === 400) return { kind: 'invalid', error }
       }

@@ -3,7 +3,12 @@ import {
   resolveBrowserOSMcpBaseUrl,
   resolveBrowserOSServerBaseUrl,
 } from './browseros-ports'
-import { apiClient, apiClientForBaseUrl } from './client'
+import {
+  ApiResponseError,
+  apiClient,
+  apiClientForBaseUrl,
+  ClawApiClient,
+} from './client'
 import { resolveApiBaseUrlFromSources } from './client.helpers'
 
 const fallback = 'http://127.0.0.1:9200'
@@ -245,7 +250,7 @@ describe('BrowserOS managed port resolution', () => {
     expect(requests).toEqual([])
   })
 
-  it('routes generated API calls through the BrowserOS server port pref', async () => {
+  it('routes typed API calls through the BrowserOS server port pref', async () => {
     installBrowserOSPrefs({ 'browseros.server.server_port': 9511 })
     const requests = installFetchRecorder()
 
@@ -255,7 +260,7 @@ describe('BrowserOS managed port resolution', () => {
     expect(requests).toEqual(['http://127.0.0.1:9511/system/health'])
   })
 
-  it('routes generated API calls through trusted fallbacks when the pref is invalid', async () => {
+  it('routes typed API calls through trusted fallbacks when the pref is invalid', async () => {
     installWindow('?apiUrl=http%3A%2F%2F127.0.0.1%3A9432')
     installBrowserOSPrefs({ 'browseros.server.server_port': '9511' })
     const requests = installFetchRecorder()
@@ -266,9 +271,119 @@ describe('BrowserOS managed port resolution', () => {
     expect(requests).toEqual(['http://127.0.0.1:9432/system/health'])
   })
 
-  it('reuses one generated client per resolved base URL', () => {
+  it('reuses one typed client per resolved base URL', () => {
     const first = apiClientForBaseUrl('http://127.0.0.1:9200')
     expect(apiClientForBaseUrl('http://127.0.0.1:9200')).toBe(first)
     expect(apiClientForBaseUrl('http://127.0.0.1:9300')).not.toBe(first)
+  })
+
+  it('maps typed JSON and NDJSON calls to the canonical wire contract', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = []
+    const client = new ClawApiClient('http://127.0.0.1:9200', {
+      fetch: async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input)
+        requests.push({ url, init })
+        if (url.includes('/api/v1/sessions?')) {
+          return Response.json({ items: [] })
+        }
+        if (url.endsWith('/api/v1/settings/telemetry')) {
+          return Response.json({
+            distinctId: 'install-1',
+            enabled: false,
+            consent: false,
+          })
+        }
+        return Response.json({ accepted: 1 })
+      },
+    })
+
+    await expect(
+      client.listSessions({
+        profileId: 'profile/one',
+        status: 'live',
+        since: 100,
+        limit: 25,
+      }),
+    ).resolves.toEqual({ items: [] })
+    await expect(
+      client.updateTelemetry({ updateTelemetryRequest: { consent: false } }),
+    ).resolves.toMatchObject({ consent: false })
+    await expect(
+      client.appendRecordingEvents({
+        xRecordingTabId: 101,
+        xRecordingDocumentId: '33D25F3CF060E81B14070BC356FF1871',
+        xRecordingBatchId: 'batch-1',
+        xRecordingHasGap: true,
+        body: '{"ts":100,"type":2,"data":{}}\n',
+      }),
+    ).resolves.toEqual({ accepted: 1 })
+
+    expect(requests[0]?.url).toBe(
+      'http://127.0.0.1:9200/api/v1/sessions?profileId=profile%2Fone&status=live&since=100&limit=25',
+    )
+    expect(requests[1]?.init).toMatchObject({
+      method: 'PUT',
+      credentials: 'omit',
+      body: '{"consent":false}',
+    })
+    expect(new Headers(requests[1]?.init?.headers).get('content-type')).toBe(
+      'application/json',
+    )
+    expect(requests[2]?.init).toMatchObject({
+      method: 'POST',
+      credentials: 'omit',
+    })
+    const recordingHeaders = new Headers(requests[2]?.init?.headers)
+    expect(recordingHeaders.get('content-type')).toBe('application/x-ndjson')
+    expect(recordingHeaders.get('x-recording-tab-id')).toBe('101')
+    expect(recordingHeaders.get('x-recording-document-id')).toBe(
+      '33D25F3CF060E81B14070BC356FF1871',
+    )
+    expect(recordingHeaders.get('x-recording-batch-id')).toBe('batch-1')
+    expect(recordingHeaders.get('x-recording-has-gap')).toBe('true')
+  })
+
+  it('returns JPEG blobs and preserves generated ApiError response bodies', async () => {
+    const client = new ClawApiClient('http://127.0.0.1:9200', {
+      fetch: async (input) => {
+        const url = input instanceof Request ? input.url : String(input)
+        if (url.endsWith('/preview')) {
+          return new Response(new Uint8Array([0xff, 0xd8]), {
+            headers: { 'content-type': 'image/jpeg' },
+          })
+        }
+        return Response.json(
+          {
+            code: 'session_not_found',
+            message: 'session not found',
+            requestId: 'request-1',
+          },
+          { status: 404 },
+        )
+      },
+    })
+
+    const preview = await client.getSessionBrowserTabPreview({
+      sessionId: 'session/one',
+      browserTabId: 101,
+    })
+    expect(preview.type).toBe('image/jpeg')
+    expect(Array.from(new Uint8Array(await preview.arrayBuffer()))).toEqual([
+      0xff, 0xd8,
+    ])
+
+    try {
+      await client.getSession({ sessionId: 'missing' })
+      throw new Error('expected getSession to reject')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ApiResponseError)
+      const response = (error as ApiResponseError).response
+      expect(response.status).toBe(404)
+      await expect(response.json()).resolves.toEqual({
+        code: 'session_not_found',
+        message: 'session not found',
+        requestId: 'request-1',
+      })
+    }
   })
 })
