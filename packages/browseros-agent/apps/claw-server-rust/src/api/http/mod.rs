@@ -80,6 +80,7 @@ pub fn router(state: AppState) -> Router<AppState> {
                 .layer(middleware::from_fn(mcp_request_hygiene)),
         )
         .fallback(route_fallback)
+        .layer(middleware::from_fn(options_preflight))
 }
 
 pub(super) fn error(
@@ -132,6 +133,13 @@ async fn mcp_request_hygiene(req: Request, next: Next) -> Response {
         if !is_json {
             return AppError::unsupported_media_type("unsupported content type").into_response();
         }
+    }
+    next.run(req).await
+}
+
+async fn options_preflight(req: Request, next: Next) -> Response {
+    if *req.method() == Method::OPTIONS {
+        return StatusCode::NO_CONTENT.into_response();
     }
     next.run(req).await
 }
