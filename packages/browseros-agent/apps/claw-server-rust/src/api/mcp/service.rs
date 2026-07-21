@@ -453,14 +453,18 @@ mod tests {
             info.instructions.as_deref(),
             Some(BROWSERCLAW_MCP_INSTRUCTIONS)
         );
-        assert!(info.instructions.as_deref().is_some_and(|instructions| {
-            instructions.contains("BrowserClaw — the browser for agents")
-        }));
-        assert!(info.instructions.as_deref().is_some_and(|instructions| {
-            instructions.contains(
-                "- Rename your session early with name_session using a 2-3 word task label;\n  tabs group as <client>/<name>."
-            )
-        }));
+        let instructions = info
+            .instructions
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("BrowserClaw instructions missing"))?;
+        assert!(instructions.contains("BrowserClaw — the browser for agents"));
+        assert!(instructions.contains(
+            "- Rename your session early with name_session using a 2-3 word task label;\n  tabs group as <client>/<name>."
+        ));
+        assert!(instructions.contains(
+            "- Work in your own tabs; touch a tab you don't own only when the user points\n  you at it."
+        ));
+        assert!(!instructions.contains("close them when done"));
         Ok(())
     }
 
