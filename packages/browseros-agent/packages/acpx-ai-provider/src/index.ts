@@ -1,30 +1,30 @@
 export type {
   EventTranslatorOptions,
   FinishOptions,
-} from './convert-events.ts'
-export { EventTranslator } from './convert-events.ts'
+} from './convert-events'
+export { EventTranslator } from './convert-events'
 export type {
   ConvertPromptAttachment,
   ConvertPromptInput,
   ConvertPromptMode,
   ConvertPromptOutput,
-} from './convert-prompt.ts'
-export { convertPrompt } from './convert-prompt.ts'
-export type { AcpxErrorOptions } from './errors.ts'
+} from './convert-prompt'
+export { convertPrompt } from './convert-prompt'
+export type { AcpxErrorOptions } from './errors'
 export {
   AcpxAgentNotFoundError,
   AcpxAuthRequiredError,
   AcpxError,
   AcpxTurnTimeoutError,
   fromRuntimeError,
-} from './errors.ts'
+} from './errors'
 export {
   createJsonCleanupTransform,
   stripMarkdownFences,
-} from './json-output.ts'
-export { AcpxLanguageModel } from './language-model.ts'
-export type { EnsureHandleResult } from './provider.ts'
-export { AcpxProvider, createAcpxProvider } from './provider.ts'
+} from './json-output'
+export { AcpxLanguageModel } from './language-model'
+export type { EnsureHandleResult } from './provider'
+export { AcpxProvider, createAcpxProvider } from './provider'
 export type {
   AcpPermissionDecision,
   AcpPermissionRequest,
@@ -46,6 +46,6 @@ export type {
   AcpxSessionMode,
   SessionAgentOptions,
   SystemPromptOption,
-} from './types.ts'
+} from './types'
 
 export const VERSION = '0.0.0'

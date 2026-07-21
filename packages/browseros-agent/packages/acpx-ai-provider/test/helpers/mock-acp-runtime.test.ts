@@ -4,8 +4,8 @@ import type {
   AcpRuntimeHandle,
   AcpRuntimeTurnResult,
 } from 'acpx/runtime'
-import { acpEvent, acpResult } from './acp-event-builders.ts'
-import { MockAcpRuntime } from './mock-acp-runtime.ts'
+import { acpEvent, acpResult } from './acp-event-builders'
+import { MockAcpRuntime } from './mock-acp-runtime'
 
 async function collectEvents(
   iterable: AsyncIterable<AcpRuntimeEvent>,

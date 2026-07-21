@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { toRuntimeMcpServers } from '../../src/mcp-servers.ts'
-import type { AcpxMcpServerConfig } from '../../src/types.ts'
+import { toRuntimeMcpServers } from '../../src/mcp-servers'
+import type { AcpxMcpServerConfig } from '../../src/types'
 
 describe('toRuntimeMcpServers', () => {
   test('returns undefined when input is undefined', () => {

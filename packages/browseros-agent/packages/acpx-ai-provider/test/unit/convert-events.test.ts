@@ -5,8 +5,8 @@ import type {
   LanguageModelV2Usage,
 } from '@ai-sdk/provider'
 import type { AcpRuntimeEvent, AcpRuntimeTurnResult } from 'acpx/runtime'
-import { EventTranslator } from '../../src/convert-events.ts'
-import { AcpxError } from '../../src/errors.ts'
+import { EventTranslator } from '../../src/convert-events'
+import { AcpxError } from '../../src/errors'
 
 function makeIdGen(prefix = 'id'): () => string {
   let i = 0

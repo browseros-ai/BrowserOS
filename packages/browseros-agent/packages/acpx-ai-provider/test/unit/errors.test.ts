@@ -6,7 +6,7 @@ import {
   AcpxError,
   AcpxTurnTimeoutError,
   fromRuntimeError,
-} from '../../src/errors.ts'
+} from '../../src/errors'
 
 describe('AcpxError', () => {
   test('sets code, retryable, and cause from options', () => {

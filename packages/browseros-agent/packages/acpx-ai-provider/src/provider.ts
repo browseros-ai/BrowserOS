@@ -12,13 +12,13 @@ import {
   createAgentRegistry,
   createFileSessionStore,
 } from 'acpx/runtime'
-import { AcpxLanguageModel } from './language-model.ts'
-import { toRuntimeMcpServers } from './mcp-servers.ts'
+import { AcpxLanguageModel } from './language-model'
+import { toRuntimeMcpServers } from './mcp-servers'
 import type {
   AcpxLanguageModelOptions,
   AcpxProviderSettings,
   AcpxSessionMode,
-} from './types.ts'
+} from './types'
 
 const DEFAULT_PERMISSION_MODE = 'approve-reads'
 const DEFAULT_NON_INTERACTIVE = 'deny'

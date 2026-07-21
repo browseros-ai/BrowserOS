@@ -3,11 +3,11 @@ import type {
   LanguageModelV2CallOptions,
   LanguageModelV2StreamPart,
 } from '@ai-sdk/provider'
-import { AcpxError } from '../../src/errors.ts'
-import { createAcpxProvider } from '../../src/index.ts'
-import { acpEvent, acpResult } from '../helpers/acp-event-builders.ts'
-import { MockAcpRuntime } from '../helpers/mock-acp-runtime.ts'
-import { convertReadableStreamToArray } from '../helpers/streams.ts'
+import { AcpxError } from '../../src/errors'
+import { createAcpxProvider } from '../../src/index'
+import { acpEvent, acpResult } from '../helpers/acp-event-builders'
+import { MockAcpRuntime } from '../helpers/mock-acp-runtime'
+import { convertReadableStreamToArray } from '../helpers/streams'
 
 function userPrompt(text: string): LanguageModelV2CallOptions['prompt'] {
   return [{ role: 'user', content: [{ type: 'text', text }] }]

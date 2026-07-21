@@ -4,7 +4,7 @@ import type {
   LanguageModelV2Usage,
 } from '@ai-sdk/provider'
 import type { AcpRuntimeEvent, AcpRuntimeTurnResult } from 'acpx/runtime'
-import { fromRuntimeError } from './errors.ts'
+import { fromRuntimeError } from './errors'
 
 type TextStream = 'output' | 'thought'
 type BlockKind = TextStream | null

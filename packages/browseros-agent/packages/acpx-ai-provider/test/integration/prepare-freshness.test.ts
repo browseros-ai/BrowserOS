@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { stepCountIs, streamText } from 'ai'
-import { createAcpxProvider } from '../../src/index.ts'
-import { acpEvent, acpResult } from '../helpers/acp-event-builders.ts'
-import { MockAcpRuntime } from '../helpers/mock-acp-runtime.ts'
+import { createAcpxProvider } from '../../src/index'
+import { acpEvent, acpResult } from '../helpers/acp-event-builders'
+import { MockAcpRuntime } from '../helpers/mock-acp-runtime'
 
 describe('streamText — prepare() does not consume session freshness', () => {
   test('prepare() then streamText preserves multi-turn messages on first turn', async () => {

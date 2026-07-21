@@ -4,7 +4,7 @@ import type {
   LanguageModelV2Prompt,
   LanguageModelV2ToolResultOutput,
 } from '@ai-sdk/provider'
-import { convertPrompt } from '../../src/convert-prompt.ts'
+import { convertPrompt } from '../../src/convert-prompt'
 
 function call(
   prompt: LanguageModelV2Prompt,

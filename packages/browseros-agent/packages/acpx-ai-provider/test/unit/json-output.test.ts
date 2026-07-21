@@ -3,7 +3,7 @@ import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
 import {
   createJsonCleanupTransform,
   stripMarkdownFences,
-} from '../../src/json-output.ts'
+} from '../../src/json-output'
 
 async function collectStream(
   parts: LanguageModelV2StreamPart[],

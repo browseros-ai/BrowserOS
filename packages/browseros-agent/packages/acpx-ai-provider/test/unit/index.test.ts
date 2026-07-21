@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { AcpxProvider, createAcpxProvider, VERSION } from '../../src/index.ts'
-import { MockAcpRuntime } from '../helpers/mock-acp-runtime.ts'
+import { AcpxProvider, createAcpxProvider, VERSION } from '../../src/index'
+import { MockAcpRuntime } from '../helpers/mock-acp-runtime'
 
 describe('package surface', () => {
   test('exports VERSION sentinel', () => {

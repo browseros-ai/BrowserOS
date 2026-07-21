@@ -9,11 +9,11 @@ import type {
   SharedV2ProviderMetadata,
 } from '@ai-sdk/provider'
 import type { AcpRuntimeTurn } from 'acpx/runtime'
-import { EventTranslator } from './convert-events.ts'
-import { convertPrompt } from './convert-prompt.ts'
-import { createJsonCleanupTransform } from './json-output.ts'
-import type { AcpxProvider } from './provider.ts'
-import type { AcpxLanguageModelOptions } from './types.ts'
+import { EventTranslator } from './convert-events'
+import { convertPrompt } from './convert-prompt'
+import { createJsonCleanupTransform } from './json-output'
+import type { AcpxProvider } from './provider'
+import type { AcpxLanguageModelOptions } from './types'
 
 const DEFAULT_TURN_TIMEOUT_MS = 5 * 60_000
 

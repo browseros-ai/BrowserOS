@@ -27,5 +27,5 @@ None incorporated. This is a clean-room provider built on the acpx runtime; its 
 ## Local patches (diverged from the snapshot above)
 
 - Stripped explicit `.ts` extensions from internal relative imports across `src/` and `test/` (`from './x.ts'` becomes `from './x'`). Required because the consuming `apps/server` typechecks under `moduleResolution: bundler` without `allowImportingTsExtensions`, and it deep-checks the imported source; explicit `.ts` specifiers would trip TS5097. Matches the extensionless-import convention already used by the sibling `agent-mcp-manager` package.
-- Formatted with Biome to satisfy the repo's `biome check` gate.
+- Verified clean against the repo's Biome config; `biome check` reports no changes (no reformatting was needed).
 - Not vendored: `test/e2e/` (spawns real Claude/Codex/Gemini agents) and `bunup.config.ts` (no build step here; the package exports raw TS source).

@@ -1,5 +1,5 @@
 import type { AcpRuntimeOptions } from 'acpx/runtime'
-import type { AcpxMcpServerConfig } from './types.ts'
+import type { AcpxMcpServerConfig } from './types'
 
 export type RuntimeMcpServer = NonNullable<
   AcpRuntimeOptions['mcpServers']
