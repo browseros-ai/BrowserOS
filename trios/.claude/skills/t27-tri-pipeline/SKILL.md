@@ -1,6 +1,6 @@
 ---
 name: t27-tri-pipeline
-description: T27 tri-pipeline for trios — build, e2e, seal, verify, promote using Rust rings and build.sh. No .sh scripts per L7 UNITY.
+description: T27 tri-pipeline for trios - build, e2e, seal, verify, promote using Rust rings and build.sh. No .sh scripts per L7 UNITY.
 argument-hint: [build|e2e|seal|verify|promote] [variant prod|staging]
 ---
 
@@ -94,7 +94,7 @@ Gates:
 ## Output Format
 
 ```
-## T27 tri-pipeline — {command} {variant}
+## T27 tri-pipeline - {command} {variant}
 Status: {PASS|FAIL|BLOCKED}
 Gates:
 - Build: {PASS|FAIL}

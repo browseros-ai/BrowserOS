@@ -1,6 +1,6 @@
 ---
 name: clade-seal
- description: Tri-cell seal pipeline — build, health probe, screenshot baseline for Canary before promote. Rust-first, no .sh.
+ description: Tri-cell seal pipeline - build, health probe, screenshot baseline for Canary before promote. Rust-first, no .sh.
  parameters:
    - name: variant
      type: string
@@ -34,7 +34,7 @@ name: clade-seal
  ```
 
  - Must return JSON with `"status":"ok"` within 5 seconds
- - If fail → kill Canary, reject promote
+ - If fail -> kill Canary, reject promote
 
  ## Cell 3: Screenshot Baseline (Seal-3)
 
@@ -44,7 +44,7 @@ name: clade-seal
 
  - Compare against `.trinity/baselines/sovereign.png` using perceptual hash
  - Similarity >= 95% required (no glitched rendering, no black rectangles)
- - If fail → reject promote, save screenshot to `.trinity/baselines/rejected/`
+ - If fail -> reject promote, save screenshot to `.trinity/baselines/rejected/`
 
  ## E2E Smoke Test (Seal-4)
 
@@ -67,13 +67,13 @@ name: clade-seal
  On completion:
  ```
  Phase complete: Seal
- → Phase 8: Land (clade-promote)
+ -> Phase 8: Land (clade-promote)
  ```
 
  If ANY cell fails:
  ```
- Phase complete: Seal — REJECTED
- → Phase 0: Rollback (clade-guard emergencyRollback)
+ Phase complete: Seal - REJECTED
+ -> Phase 0: Rollback (clade-guard emergencyRollback)
  ```
 
  ## Trinity Compliance

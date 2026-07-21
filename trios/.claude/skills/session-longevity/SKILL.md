@@ -26,5 +26,5 @@ On new session: query NotebookLM context, load last_wake.json, present summary, 
 
 ## Rules
 - MUST invoke before complex multi-step tasks
-- No .sh/.py — Swift actors + MCP tools only
+- No .sh/.py - Swift actors + MCP tools only
 - Auto-trigger wrap-up before session end

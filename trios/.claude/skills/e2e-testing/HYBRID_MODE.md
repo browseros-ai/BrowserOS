@@ -1,27 +1,27 @@
-## E2E Testing — BrowserOS Agent Autonomous Mode
+## E2E Testing - BrowserOS Agent Autonomous Mode
 
 ### What Agent Can Test Automatically
-1. **MCP API** — Health, shell, navigate, screenshot ✅ AUTONOMOUS
-2. **Business Logic** — Intent parsing, ViewModel state ✅ AUTONOMOUS
-3. **Git Integration** — Commit, push, branch ✅ AUTONOMOUS
+1. **MCP API** - Health, shell, navigate, screenshot [U+2705] AUTONOMOUS
+2. **Business Logic** - Intent parsing, ViewModel state [U+2705] AUTONOMOUS
+3. **Git Integration** - Commit, push, branch [U+2705] AUTONOMOUS
 
 ### What Requires Human (macOS Security)
-1. **UI Click on Status Bar** — Needs Accessibility grant
-2. **Panel Interaction** — Needs Accessibility grant
-3. **System Settings** — Requires user interaction
+1. **UI Click on Status Bar** - Needs Accessibility grant
+2. **Panel Interaction** - Needs Accessibility grant
+3. **System Settings** - Requires user interaction
 
 ### Solution: Hybrid Approach
 ```
 BrowserOS Agent (me) handles:
-  → MCP API testing
-  → Business logic verification
-  → Git operations
-  → File system operations
+  -> MCP API testing
+  -> Business logic verification
+  -> Git operations
+  -> File system operations
 
 Human handles:
-  → Initial Accessibility grant (one time)
-  → UI panel verification (visual check)
-  → Complex gestures
+  -> Initial Accessibility grant (one time)
+  -> UI panel verification (visual check)
+  -> Complex gestures
 ```
 
 ### After Accessibility Grant, Agent Can

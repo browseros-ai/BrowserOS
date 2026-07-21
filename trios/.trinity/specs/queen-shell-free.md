@@ -11,16 +11,16 @@ Remove all `/bin/zsh -c` invocations from `BR-OUTPUT/QueenStatusViewModel.swift`
 
 ## Interface
 Add private helpers:
-- `run(_ executable: String, arguments: [String], workDir: String?) -> String` — synchronous tokenized Process.
-- `runAsync(_ executable: String, arguments: [String], workDir: String?) async -> String` — detached wrapper.
+- `run(_ executable: String, arguments: [String], workDir: String?) -> String` - synchronous tokenized Process.
+- `runAsync(_ executable: String, arguments: [String], workDir: String?) async -> String` - detached wrapper.
 
 Replace:
-- `shellAsync("curl ...")` → `runAsync("/usr/bin/curl", arguments: [...])`
-- `shellAsync("pgrep ...")` → `runAsync("/usr/bin/pgrep", arguments: [...])`
-- `shellAsync("git ...")` → `runAsync("/usr/bin/git", arguments: [...])`
-- `shellAsync("swiftc ...")` → `runAsync("/usr/bin/swiftc", arguments: [...])`
-- `shell("tail -n 20 ...")` → `FileManager` read + suffix(20)
-- `shell("ls ... | wc -l")` → `FileManager` directory enumeration
+- `shellAsync("curl ...")` -> `runAsync("/usr/bin/curl", arguments: [...])`
+- `shellAsync("pgrep ...")` -> `runAsync("/usr/bin/pgrep", arguments: [...])`
+- `shellAsync("git ...")` -> `runAsync("/usr/bin/git", arguments: [...])`
+- `shellAsync("swiftc ...")` -> `runAsync("/usr/bin/swiftc", arguments: [...])`
+- `shell("tail -n 20 ...")` -> `FileManager` read + suffix(20)
+- `shell("ls ... | wc -l")` -> `FileManager` directory enumeration
 
 ## Failure modes
 - If the executable is missing, the helper returns an empty string and logs the error.

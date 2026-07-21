@@ -25,7 +25,7 @@ swiftc -O -o trios_app \
 ```
 
 ### Step 4: Test
-1. Open trios_app → click status bar icon
+1. Open trios_app -> click status bar icon
 2. Select "BrowserOS" tab
 3. Type: "open google.com"
 4. See BrowserOS navigate to Google
@@ -34,13 +34,13 @@ swiftc -O -o trios_app \
 ### Architecture
 
 ```
-trios SwiftUI → BrowserOSBridgeView → ChatViewModel+BrowserOS → TriosMCPClient → HTTP → MCP Server (9105) → BrowserOS Agent
+trios SwiftUI -> BrowserOSBridgeView -> ChatViewModel+BrowserOS -> TriosMCPClient -> HTTP -> MCP Server (9105) -> BrowserOS Agent
 ```
 
 ### Files Created
-- BR-OUTPUT/TriosMCPClient.swift — Actor for MCP HTTP
-- BR-OUTPUT/ChatViewModel+BrowserOS.swift — ViewModel with reverse control
-- BR-OUTPUT/BrowserOSBridgeView.swift — Native SwiftUI panel
+- BR-OUTPUT/TriosMCPClient.swift - Actor for MCP HTTP
+- BR-OUTPUT/ChatViewModel+BrowserOS.swift - ViewModel with reverse control
+- BR-OUTPUT/BrowserOSBridgeView.swift - Native SwiftUI panel
 
 ### No .sh/.py Rule
 All integration via Swift + HTTP only.

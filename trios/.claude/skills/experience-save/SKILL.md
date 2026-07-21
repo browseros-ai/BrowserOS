@@ -30,9 +30,9 @@ Captures learnings from trios macOS app development for future reference and age
 ## Storage Locations
 
 Learnings are saved to:
-- `.trinity/experience.md` — General learnings (append)
-- `.trinity/experience/YYYY-MM-DD_{topic}.json` — Structured episode
-- `.trinity/experience/mistakes-catalog.json` — Mistake registry
+- `.trinity/experience.md` - General learnings (append)
+- `.trinity/experience/YYYY-MM-DD_{topic}.json` - Structured episode
+- `.trinity/experience/mistakes-catalog.json` - Mistake registry
 
 ## Episode JSON Schema
 
@@ -59,7 +59,7 @@ Learnings are saved to:
 ## Format (Markdown appendix)
 
 ```markdown
-## YYYY-MM-DD — {Brief Title}
+## YYYY-MM-DD - {Brief Title}
 
 **Ring:** {SR-NNN or BR-OUTPUT}
 **Phase:** {phase}
@@ -86,7 +86,7 @@ Learnings are saved to:
 
 Saved learnings are:
 - Automatically loaded in subsequent sessions via `Read .trinity/experience.md`
-- Used for pattern matching when planning (MNL: Mistake → Not-repeat → Learning)
+- Used for pattern matching when planning (MNL: Mistake -> Not-repeat -> Learning)
 - Incorporated into agent decision-making
 
 ## Usage

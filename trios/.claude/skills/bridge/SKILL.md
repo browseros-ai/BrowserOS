@@ -1,11 +1,11 @@
 ---
 name: bridge
-description: BrowserOS Bridge — MCP tool bridge for AI agents. Connects trios to BrowserOS MCP server, provides fs_read/shell_execute access.
+description: BrowserOS Bridge - MCP tool bridge for AI agents. Connects trios to BrowserOS MCP server, provides fs_read/shell_execute access.
 argument-hint: [status|test|mcp]
 allowed-tools: Bash(curl *), Bash(cat *), Bash(echo *), Bash(date *), Read
 ---
 
-# BROWSEROS BRIDGE — MCP Access for AI Agents
+# BROWSEROS BRIDGE - MCP Access for AI Agents
 
 ## Architecture
 ```

@@ -4,7 +4,17 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-fn project_dir() -> String { std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string()) }
+fn project_dir() -> String {
+    std::env::var("TRIOS_ROOT").unwrap_or_else(|_| {
+        match std::env::current_dir() {
+            Ok(p) => p.to_string_lossy().into_owned(),
+            Err(e) => {
+                eprintln!("[FAIL] TRIOS_ROOT not set and current_dir unavailable: {}", e);
+                std::process::exit(1);
+            }
+        }
+    })
+}
 
 struct Variant {
     name: &'static str,
@@ -55,20 +65,20 @@ fn main() {
 
     let output = match cmd.output() {
         Ok(o) => o,
-        Err(e) => { eprintln!("❌ swiftc failed to start: {}", e); std::process::exit(1); }
+        Err(e) => { eprintln!("[FAIL] swiftc failed to start: {}", e); std::process::exit(1); }
     };
-    let log_path = format!("/tmp/trios_build_{}.log", variant.name);
+    let log_path = format!("{}/.trinity/logs/clade-build_{}.log", project_dir(), variant.name);
     if let Err(e) = fs::write(&log_path, &output.stderr) {
         eprintln!("[build] Failed to write build log {}: {}", log_path, e);
     }
 
     if !output.status.success() {
-        eprintln!("❌ Build failed for variant={}", variant.name);
+        eprintln!("[FAIL] Build failed for variant={}", variant.name);
         eprintln!("{}", String::from_utf8_lossy(&output.stderr));
         std::process::exit(1);
     }
 
-    println!("✅ Build successful: {}", variant.output.display());
+    println!("[OK] Build successful: {}", variant.output.display());
     if let Err(e) = fs::set_permissions(&variant.output, std::fs::Permissions::from_mode(0o755)) {
         eprintln!("[CladeBuild] Failed to set binary permissions: {}", e);
     }
@@ -108,12 +118,12 @@ fn main() {
         variant.a2a_port
     );
     if let Err(e) = fs::write(variant.app_bundle.join("Contents/Info.plist"), plist) {
-        eprintln!("❌ Failed to write Info.plist: {}", e);
+        eprintln!("[FAIL] Failed to write Info.plist: {}", e);
         std::process::exit(1);
     }
 
     println!(
-        "✅ Copied to .app bundle: {} (files={}, ports MCP={} A2A={})",
+        "[OK] Copied to .app bundle: {} (files={}, ports MCP={} A2A={})",
         variant.app_bundle.display(),
         file_count,
         variant.mcp_port,

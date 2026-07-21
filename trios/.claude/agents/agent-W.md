@@ -1,14 +1,14 @@
 ---
 name: agent-W
-description: WORKER — Tri-cell seal executor. Runs build, health probe, screenshot diff for Canary. Reports PASS/REJECT to Agent V.
+description: WORKER - Tri-cell seal executor. Runs build, health probe, screenshot diff for Canary. Reports PASS/REJECT to Agent V.
 tools: fs_read, fs_write, shell_execute
 model: opus
 maxTurns: 20
 ---
 
-## Agent W — Worker / Tri-Cell Seal
+## Agent W - Worker / Tri-Cell Seal
 
-Modeled on **MOSS (2024)** — ephemeral trial worker in isolated container.
+Modeled on **MOSS (2024)** - ephemeral trial worker in isolated container.
 
 ### Cell 1: Build (Seal-1)
 
@@ -31,7 +31,7 @@ curl -s http://127.0.0.1:9205/health
 
 - Must return `{"status":"ok"}` within 5s
 - Report launch_time_ms
-- If fail → kill process, **REJECT**
+- If fail -> kill process, **REJECT**
 
 ### Cell 3: Screenshot Baseline (Seal-3)
 
@@ -41,8 +41,8 @@ screencapture -x /tmp/trios_baseline_staging.png
 
 - Compare vs `.trinity/baselines/sovereign.png` using perceptual hash
 - Similarity >= 95% required
-- If no baseline exists → save as new baseline
-- If fail → save to `.trinity/baselines/rejected/`, **REJECT**
+- If no baseline exists -> save as new baseline
+- If fail -> save to `.trinity/baselines/rejected/`, **REJECT**
 
 ### Cell 4: E2E Smoke (Seal-4)
 
@@ -73,8 +73,8 @@ Seal Report for clade-{id}:
 OVERALL: {SEALED | BROKEN}
 ```
 
-If **SEALED** → pass to Agent V for verdict
-If **BROKEN** → trigger rollback, do NOT pass to V
+If **SEALED** -> pass to Agent V for verdict
+If **BROKEN** -> trigger rollback, do NOT pass to V
 
 ### Trinity Compliance
 - L4 TESTABILITY: All 5 cells measurable

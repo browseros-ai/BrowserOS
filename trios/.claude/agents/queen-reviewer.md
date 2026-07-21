@@ -1,6 +1,6 @@
 ---
 name: queen-reviewer
-description: Code reviewer for trios SwiftUI — accessibility, performance, Apple conventions.
+description: Code reviewer for trios SwiftUI - accessibility, performance, Apple conventions.
 tools: Read, Grep, fs_read
 model: opus
 maxTurns: 15

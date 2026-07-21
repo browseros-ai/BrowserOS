@@ -10,7 +10,7 @@
 2. Click status bar icon
 
 ### If panel does not open
-1. Check Accessibility: System Settings > Privacy > Accessibility > trios_app ✅
+1. Check Accessibility: System Settings > Privacy > Accessibility > trios_app [U+2705]
 2. Try Cmd+Shift+T global hotkey
 3. Check logs: `cat /tmp/trios_debug.log`
 

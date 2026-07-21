@@ -1,6 +1,6 @@
 ---
 name: phi-loop
-description: PHI LOOP execution — guides AI through 9 phases of ring-based development for trios. Clade-aware, Rust-first.
+description: PHI LOOP execution - guides AI through 9 phases of ring-based development for trios. Clade-aware, Rust-first.
 parameters:
   - name: ring
     type: string
@@ -35,24 +35,24 @@ Clade phases added for self-improving agent safety.
 
 ## Roads
 
-### Road A (fastest) — Direct fix
+### Road A (fastest) - Direct fix
 - For critical hotfixes only
 - Must snapshot Sovereign BEFORE change via `cargo run --bin clade-rollback`
 - Build + health check, no full seal
 
-### Road B (balanced) — Fix + test + experience save
+### Road B (balanced) - Fix + test + experience save
 - Standard ring development
 - Full PHI LOOP phases 1-9
 - Seal with `cargo run --bin clade-build` + `cargo run --bin clade-e2e`
 
-### Road B-clade (Canary) — Safe experimentation
+### Road B-clade (Canary) - Safe experimentation
 - Agent experiments in `.worktrees/staging` (canary branch)
 - Full tri-cell seal via `/clade-seal`
 - Agent V verdict via `/clade-promote`
 - Boot probe after promote
 - On failure: auto-rollback via `cargo run --bin clade-rollback`
 
-### Road C (deep) — Spec-first, full PHI LOOP
+### Road C (deep) - Spec-first, full PHI LOOP
 - For architecture changes, new rings, agent spawn
 - Write spec first, review with user
 - Full seal + verify + clade archive update
@@ -84,7 +84,7 @@ Clade phases added for self-improving agent safety.
 On phase completion, include:
 ```
 Phase complete: [phase name]
-→ Phase [next phase number]: [next phase name]
+-> Phase [next phase number]: [next phase name]
 ```
 
 This triggers automatic branch creation for next phase if needed.

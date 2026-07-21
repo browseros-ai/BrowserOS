@@ -1,6 +1,6 @@
 ---
 name: t27-experience-save
-description: T27 experience save for trios — records an episode to .trinity/experience/ after a task lands.
+description: T27 experience save for trios - records an episode to .trinity/experience/ after a task lands.
 argument-hint: [task_id] [issue_url]
 ---
 
@@ -16,15 +16,15 @@ Call this skill at the end of every T27 PHI LOOP after a successful land/promote
 
 Required context (gather from t27-queen or the diff):
 
-- `task_id` — e.g. `RECURSION-001`
-- `issue_url` — GitHub issue link
-- `domain` — e.g. `Kernel`, `UI`, `MCP`
-- `agent_chain` — list of agents involved
-- `root_cause` — one paragraph
-- `fix_pattern` — one paragraph
-- `files_changed` — list of relative paths
-- `tests_added` — list of test files
-- `lessons` — bullet list of reusable insights
+- `task_id` - e.g. `RECURSION-001`
+- `issue_url` - GitHub issue link
+- `domain` - e.g. `Kernel`, `UI`, `MCP`
+- `agent_chain` - list of agents involved
+- `root_cause` - one paragraph
+- `fix_pattern` - one paragraph
+- `files_changed` - list of relative paths
+- `tests_added` - list of test files
+- `lessons` - bullet list of reusable insights
 
 ## Actions
 

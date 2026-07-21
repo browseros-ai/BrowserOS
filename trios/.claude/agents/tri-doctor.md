@@ -1,6 +1,6 @@
 ---
 name: tri-doctor
-description: HEALER — fixes broken builds, commits dirty files, heals system.
+description: HEALER - fixes broken builds, commits dirty files, heals system.
 tools: fs_read, fs_write, fs_edit, shell_execute
 model: opus
 maxTurns: 25

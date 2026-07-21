@@ -51,14 +51,14 @@ name: clade-guard
  - Oldest auto-deleted by `CladeGuard.pruneOldSnapshots()`
  - Every snapshot gets `.sha256` sidecar
  - Rollback skips snapshots with invalid checksum
- - If no valid snapshots → manual intervention required
+ - If no valid snapshots -> manual intervention required
 
  ## Boot Probe
 
  After any rollback or promote:
  - Wait 10s
  - `curl http://127.0.0.1:9105/health`
- - If fail → log `Boot probe FAILED`, notify user
+ - If fail -> log `Boot probe FAILED`, notify user
 
  ## Trinity Compliance
  - L4 TESTABILITY: Health checks every 10s

@@ -1,17 +1,17 @@
 # GOLDEN CHAIN Rebrand Skill
-## Plan: Rebrand GOLDEN BRIDGE → GOLDEN CHAIN + README Rewrite
+## Plan: Rebrand GOLDEN BRIDGE -> GOLDEN CHAIN + README Rewrite
 
 ## Core Insight
 Mining $TRI tokens happens ONLY on TTSKY26b silicon chips (TinyTapeout).
 
 "Chain" metaphor reflects:
-1. **Blockchain** — hardware-verified chain of proof (Coq Qed. → silicon anchor 0x47C0 → GF16 Galois field)
-2. **Lucas chain** — L₂=3 → 0x47C0 anchor identity φ² + φ⁻² = 3
-3. **Honesty chain** — sharing what was tried and proven impossible (boundary theorems BT-1..BT-4) is itself proof
+1. **Blockchain** - hardware-verified chain of proof (Coq Qed. -> silicon anchor 0x47C0 -> GF16 Galois field)
+2. **Lucas chain** - L_2=3 -> 0x47C0 anchor identity phi^2 + phi^-^2 = 3
+3. **Honesty chain** - sharing what was tried and proven impossible (boundary theorems BT-1..BT-4) is itself proof
 
 ## Strong Side
-"Не доказательство — это доказательство."
-Boundary theorems formally prove which direct H4→SM paths do NOT work.
+"Ne dokazatelstvo - eto dokazatelstvo."
+Boundary theorems formally prove which direct H4->SM paths do NOT work.
 This is a permanent scientific asset, not a failure.
 
 ## Phase 1: Content Rewrite (no code changes)
@@ -34,7 +34,7 @@ This is a permanent scientific asset, not a failure.
 ## Phase 2: Game Code Rebrand
 | File | Action |
 |------|--------|
-| games/trinity_fold/docs/GOLDEN_BRIDGE.md | Rename → GOLDEN_CHAIN.md |
+| games/trinity_fold/docs/GOLDEN_BRIDGE.md | Rename -> GOLDEN_CHAIN.md |
 | games/trinity_fold/crates/ring4_canvas/src/bridge.rs | Rename module |
 | games/trinity_fold/crates/ring4_canvas/src/lib.rs | Update docs |
 | games/trinity_fold/crates/ring4_canvas/src/state.rs | Update naming |
@@ -47,7 +47,7 @@ This is a permanent scientific asset, not a failure.
 
 ## New README Positioning
 
-Title: **Trinity S³AI — Boundary-Mapping Research + Hardware-Verified Knowledge Chain**
+Title: **Trinity S^3AI - Boundary-Mapping Research + Hardware-Verified Knowledge Chain**
 
 Tagline: "We mine truth, not tokens. The $TRI chain is anchored in silicon."
 
@@ -55,17 +55,17 @@ Tagline: "We mine truth, not tokens. The $TRI chain is anchored in silicon."
 1. OLD: "GOLDEN BRIDGE is a hypothesis-discovery puzzle, not evidence"
    NEW: "GOLDEN CHAIN is a hardware-verified proof chain. Every link is either a Coq Qed., a silicon anchor (0x47C0), or a documented boundary theorem."
 2. OLD: "Boundary theorems are guideposts, not tombstones"
-   NEW: "Boundary theorems are the strongest links — they prove what CANNOT be done, saving the field from wasted effort."
+   NEW: "Boundary theorems are the strongest links - they prove what CANNOT be done, saving the field from wasted effort."
 3. NEW: "Why $TRI is mined only on TTSKY26b"
    - GF16 (4-bit Galois field) is optimal numeric format per BPB benchmarks
-   - 0x47C0 silicon anchor validates Lucas chain L₂=3 at reset
+   - 0x47C0 silicon anchor validates Lucas chain L_2=3 at reset
    - Euler crown (#4915) carries GF(16) arithmetic
-   - No generic CPU can reproduce φ-structured arithmetic efficiently
-4. NEW: "Our Honest Model — Impossibility as Proof"
-   - 5 real Admitted. — all honestly tagged
+   - No generic CPU can reproduce phi-structured arithmetic efficiently
+4. NEW: "Our Honest Model - Impossibility as Proof"
+   - 5 real Admitted. - all honestly tagged
    - 14 refutation theorems (*_refuted)
    - 4 boundary theorems (BT-1..BT-4)
    - 0 fake proofs, 0 cosmetic edits
 
 ### Tech Tree Update
-L6 becomes "GOLDEN CHAIN Game" — "hardware-verified hypothesis chain"
+L6 becomes "GOLDEN CHAIN Game" - "hardware-verified hypothesis chain"

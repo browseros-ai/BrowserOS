@@ -1,17 +1,17 @@
-## E2E Testing — REAL Results
+## E2E Testing - REAL Results
 
 ### CGEvent HID Test
 CGEvent at HID level (tap: .cghidEventTap) simulates real mouse events, BUT macOS still blocks interaction with protected UI elements like status bar items.
 
 ### What Works
-1. **MCP API** — No UI, pure HTTP ✅
-2. **Shell commands** — Via BrowserOS Agent ✅
-3. **Health checks** — curl to 127.0.0.1:9105 ✅
+1. **MCP API** - No UI, pure HTTP [U+2705]
+2. **Shell commands** - Via BrowserOS Agent [U+2705]
+3. **Health checks** - curl to 127.0.0.1:9105 [U+2705]
 
 ### What Requires Accessibility
-1. **Status bar click** — Requires System Settings > Accessibility > trios_app ✅
-2. **Panel interaction** — CGEvent works AFTER panel is open
-3. **Keyboard shortcuts** — Only works if app is focused
+1. **Status bar click** - Requires System Settings > Accessibility > trios_app [U+2705]
+2. **Panel interaction** - CGEvent works AFTER panel is open
+3. **Keyboard shortcuts** - Only works if app is focused
 
 ### Test Results
 - Health check: PASS

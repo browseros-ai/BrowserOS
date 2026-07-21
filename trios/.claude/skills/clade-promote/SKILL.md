@@ -7,7 +7,7 @@ name: clade-promote
      description: Clade to promote, e.g. clade-1.1.0
    - name: variant
      type: string
-     description: staging (always staging → prod)
+     description: staging (always staging -> prod)
 ---
 
  # Clade Promote Skill (PHI LOOP Phase 8)
@@ -24,7 +24,7 @@ name: clade-promote
  - Check `budget > 0`
  - Load `.trinity/state/clade.json` for current e-value
  - Gate: `e_value >= 5.0` required for promote
- - If any gate fails → REJECT, do NOT proceed
+ - If any gate fails -> REJECT, do NOT proceed
 
  ### Step 2: Snapshot Sovereign
 
@@ -49,7 +49,7 @@ name: clade-promote
  curl -s http://127.0.0.1:9105/health | grep '"status":"ok"'
  ```
 
- - If health FAIL → trigger rollback immediately via `CladeGuard.bootProbe()`
+ - If health FAIL -> trigger rollback immediately via `CladeGuard.bootProbe()`
 
  ### Step 5: Update State
 
@@ -71,20 +71,20 @@ name: clade-promote
  1. Log rejection to `.trinity/event_log.jsonl`
  2. Do NOT update Sovereign binary
  3. Update safety budget: `budget -= 1.0`, `total_failures += 1`
- 4. If `budget <= 0` → set `halted = true`, stop all auto-improvement
+ 4. If `budget <= 0` -> set `halted = true`, stop all auto-improvement
  5. Suggest manual hotfix via Road A
 
  ## Output Format
 
  ```
  Phase complete: Land
- → Phase 9: Learn (/experience-save)
+ -> Phase 9: Learn (/experience-save)
  ```
 
  Or on rejection:
  ```
- Phase complete: Land — REJECTED (reason: {gate_name})
- → Phase 0: Rollback (clade-guard)
+ Phase complete: Land - REJECTED (reason: {gate_name})
+ -> Phase 0: Rollback (clade-guard)
  ```
 
  ## Trinity Compliance

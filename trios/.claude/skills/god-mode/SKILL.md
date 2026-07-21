@@ -1,11 +1,11 @@
 ---
 name: god-mode
-description: GOD MODE — Agent oversight dashboard for trios. No .sh/.py scripts per L7 UNITY.
+description: GOD MODE - Agent oversight dashboard for trios. No .sh/.py scripts per L7 UNITY.
 argument-hint: [status|agents|tasks|violations|health]
 allowed-tools: fs_read, fs_write, fs_edit, shell_execute, fs_list
 ---
 
-# GOD MODE — Agent Oversight Dashboard
+# GOD MODE - Agent Oversight Dashboard
 
 ## L7 UNITY Compliance
 No ad-hoc .sh/.py scripts. Use MCP tools or tri CLI only.
@@ -27,9 +27,9 @@ shell_execute: "cd /Users/playra/BrowserOS-full/trios && git log --oneline -10 -
 shell_execute: "cd /Users/playra/BrowserOS-full/trios && git branch -a | head -10"
 
 ## Rule Violations
-- Dirty .swift files without commit → WARNING
-- Build broken > 30 min → CRITICAL
-- MCP server down > 5 min → CRITICAL
+- Dirty .swift files without commit -> WARNING
+- Build broken > 30 min -> CRITICAL
+- MCP server down > 5 min -> CRITICAL
 
 ## Report Format
 ```

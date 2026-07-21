@@ -8,14 +8,14 @@ Control BrowserOS FROM trios (SwiftUI native app).
 
 ### Architecture
 ```
-trios (SwiftUI) → ChatViewModel → HTTP/SSE → MCP Server (9105) → BrowserOS Agent (Chromium)
+trios (SwiftUI) -> ChatViewModel -> HTTP/SSE -> MCP Server (9105) -> BrowserOS Agent (Chromium)
 ```
 
 ### Components
-1. **TriosMCPClient** — Swift actor, HTTP client
-2. **ChatViewModel+BrowserOS** — MCP integration layer
-3. **BrowserOSBridgeView** — Reverse control panel UI
-4. **MessageSegment+BrowserOS** — Tool call rendering
+1. **TriosMCPClient** - Swift actor, HTTP client
+2. **ChatViewModel+BrowserOS** - MCP integration layer
+3. **BrowserOSBridgeView** - Reverse control panel UI
+4. **MessageSegment+BrowserOS** - Tool call rendering
 
 ### Workflow
 1. User types in trios SwiftUI chat

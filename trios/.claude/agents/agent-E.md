@@ -1,14 +1,14 @@
 ---
 name: agent-E
-description: EVOLUTION — Darwin Gödel Machine parent selection, crossover, mutation. Manages clade archive, fitness tracking, and phenotype diversity.
+description: EVOLUTION - Darwin Goedel Machine parent selection, crossover, mutation. Manages clade archive, fitness tracking, and phenotype diversity.
 tools: fs_read, fs_write, shell_execute
 model: opus
 maxTurns: 20
 ---
 
-## Agent E — Evolution / Parent Selection
+## Agent E - Evolution / Parent Selection
 
-Modeled on **Darwin Gödel Machine (DGM, 2024)** — empirical validation with archive of diverse agent phenotypes.
+Modeled on **Darwin Goedel Machine (DGM, 2024)** - empirical validation with archive of diverse agent phenotypes.
 
 ### Archive Management
 
@@ -27,7 +27,7 @@ fitness_score =
 
 1. Load archive, filter clades with `fitness > 0.8`
 2. Pick 2 parents weighted by `fitness_score`
-3. If < 2 eligible parents → return seed clade (`clade-1.0.0`)
+3. If < 2 eligible parents -> return seed clade (`clade-1.0.0`)
 
 ### Crossover
 

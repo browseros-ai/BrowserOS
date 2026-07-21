@@ -1,11 +1,11 @@
-# Plan: T27 Automation Refactor for trios — Seal Manual Swift Code Behind Agents
+# Plan: T27 Automation Refactor for trios - Seal Manual Swift Code Behind Agents
 
 **Date:** 2026-07-21
-**Issue target:** #TBD — create after plan approval
+**Issue target:** #TBD - create after plan approval
 **Branch:** `feat/t27-automation`
-**Status:** Draft — pending approval
+**Status:** Draft - pending approval
 
-> Goal: migrate all hand-written BR-OUTPUT Swift code behind a T27 agent-driven generation/verification pipeline, port t27 language-spec + skills + laws into trios, and enforce the rule: **no direct hand edits to generated/canon Swift; every change flows through Agent T (Queen) → Creator C → Verifier V → Experience E.**
+> Goal: migrate all hand-written BR-OUTPUT Swift code behind a T27 agent-driven generation/verification pipeline, port t27 language-spec + skills + laws into trios, and enforce the rule: **no direct hand edits to generated/canon Swift; every change flows through Agent T (Queen) -> Creator C -> Verifier V -> Experience E.**
 
 ---
 
@@ -15,7 +15,7 @@
 Transform trios from a hand-coded Swift macOS app into a **T27-governed system** where:
 
 1. **Agent instructions and `.t27`-style specs are the single source of truth** for BR-OUTPUT behavior.
-2. **Swift source in `BR-OUTPUT/` is treated as generated/canon output** — hand-edits require an agent review stamp (Agent V).
+2. **Swift source in `BR-OUTPUT/` is treated as generated/canon output** - hand-edits require an agent review stamp (Agent V).
 3. **A T27 agent lattice** (Creator C, Verifier V, Learner L, Queen T, Experience E) lives in `trios/.claude/agents/` and is invoked by skills.
 4. **The autonomous loop (`clade-monitor`) can spawn T27 agents** for planned refactoring tasks, not only health/build checks.
 5. **t27 laws, skills, hooks, and coordination protocol** are ported and adapted for a Swift/Rust codebase.
@@ -25,7 +25,7 @@ Transform trios from a hand-coded Swift macOS app into a **T27-governed system**
 - [ ] `trios/.claude/agents/t27-creator.md`, `t27-verifier.md`, `t27-learner.md`, `t27-queen.md`, `t27-experience.md` created and registered.
 - [ ] `trios/.claude/skills/t27-phi-loop/SKILL.md`, `t27-tri-pipeline/SKILL.md`, `t27-experience-save/SKILL.md`, `t27-wave-loop/SKILL.md` created.
 - [ ] `trios/.trinity/policy/coordination-law.md` and `.trinity/queue/` ported from t27.
-- [ ] A **pilot component** (`RecursionGuard.swift` or `ChatLogic.swift`) is fully spec-driven: spec → agent implementation → tests → seal → no hand edits allowed.
+- [ ] A **pilot component** (`RecursionGuard.swift` or `ChatLogic.swift`) is fully spec-driven: spec -> agent implementation -> tests -> seal -> no hand edits allowed.
 - [ ] L2 GENERATION law updated in `trios/.trinity/SOUL.md` and `trios/CLAUDE.md` to cover Swift canon files.
 - [ ] L7 UNITY clarification: `build.sh` and `e2e/trios_e2e_flow.sh` are grandfathered; all *new* build/test logic must be Rust rings or agent skills.
 - [ ] `clade-monitor` extended with a T27 task scheduler that can enqueue agent work into `.trinity/queue/`.
@@ -69,9 +69,9 @@ From `/Users/playra/t27`:
 - Preserve existing ASCII-only, TDD, NO-NEW-SHELL rules.
 
 #### 0.2 Update `trios/CLAUDE.md`
-- Add mandatory read order: `AGENTS.md` → `SOUL.md` → `.trinity/policy/coordination-law.md` → `TASK.md`/`TASK_PROTOCOL.md`.
-- Port AEL v2.0 OBSERVE→PLAN→DELEGATE→VERIFY→SYNTHESIZE→LEARN.
-- Port 9-phase PHI LOOP marker `Phase complete: [phase]` → `→ Phase [N]: [name]`.
+- Add mandatory read order: `AGENTS.md` -> `SOUL.md` -> `.trinity/policy/coordination-law.md` -> `TASK.md`/`TASK_PROTOCOL.md`.
+- Port AEL v2.0 OBSERVE->PLAN->DELEGATE->VERIFY->SYNTHESIZE->LEARN.
+- Port 9-phase PHI LOOP marker `Phase complete: [phase]` -> `-> Phase [N]: [name]`.
 - Clarify L7 UNITY: `build.sh` and `e2e/trios_e2e_flow.sh` are pre-existing exceptions; new critical-path tooling must be Rust rings or agent skills.
 
 #### 0.3 Create `trios/AGENTS.md` delta
@@ -126,22 +126,22 @@ From `/Users/playra/t27`:
 
 #### 1.6 Register agents in `trios/.claude/agents/registry.json`
 - If registry exists, append T27 agents.
-- Otherwise create it mapping agent name → file → domain → default skill.
+- Otherwise create it mapping agent name -> file -> domain -> default skill.
 
 ---
 
-### Phase 2: T27 Skills (P0–P1)
+### Phase 2: T27 Skills (P0-P1)
 *Goal: provide invocable skills that drive the T27 loop.*
 
 #### 2.1 `trios/.claude/skills/t27-phi-loop/SKILL.md`
 - Port `/Users/playra/t27/.claude/skills/phi-loop.md`.
-- 9 phases adapted for trios: Issue → Spec → TDD → Code/Impl → **Review** (no gen) → Seal → Verify → Land → Learn.
+- 9 phases adapted for trios: Issue -> Spec -> TDD -> Code/Impl -> **Review** (no gen) -> Seal -> Verify -> Land -> Learn.
 - Phase completion marker triggers automatic queue update.
 - Roads: A (critical hotfix), B (standard ring dev), B-clade (Canary), C (deep spec-first).
 
 #### 2.2 `trios/.claude/skills/t27-tri-pipeline/SKILL.md`
 - Port `/Users/playra/t27/.claude/skills/tri-pipeline.md`.
-- Pipeline for trios: `clade-build` → `clade-e2e` → `clade-seal` → `clade-promote`.
+- Pipeline for trios: `clade-build` -> `clade-e2e` -> `clade-seal` -> `clade-promote`.
 - Replaces `tri gen` with Swift compilation; keeps TDD/seal/verify semantics.
 
 #### 2.3 `trios/.claude/skills/t27-experience-save/SKILL.md`
@@ -151,7 +151,7 @@ From `/Users/playra/t27`:
 
 #### 2.4 `trios/.claude/skills/t27-wave-loop/SKILL.md`
 - Port `/Users/playra/t27/.claude/skills/t27-wave-loop.md`.
-- Standing-wave charter for trios: explore, plan 2–4 variants, implement one, closeout with 3 future options.
+- Standing-wave charter for trios: explore, plan 2-4 variants, implement one, closeout with 3 future options.
 
 #### 2.5 Update existing skills to reference T27
 - `phi-loop/SKILL.md`: add note that for deep/spec-first work use `/t27-phi-loop`.
@@ -186,7 +186,7 @@ From `/Users/playra/t27`:
 
 ---
 
-### Phase 4: Pilot — Spec-Driven `RecursionGuard` (P1)
+### Phase 4: Pilot - Spec-Driven `RecursionGuard` (P1)
 *Goal: prove the T27 pipeline on a single, safety-critical component.*
 
 #### 4.1 Create spec
@@ -239,7 +239,7 @@ From `/Users/playra/t27`:
 
 ---
 
-### Phase 6: Expand to All BR-OUTPUT Swift (P2–P3)
+### Phase 6: Expand to All BR-OUTPUT Swift (P2-P3)
 *Goal: every BR-OUTPUT file has a spec and provenance.*
 
 #### 6.1 Categorize files by domain/agent
@@ -252,11 +252,11 @@ From `/Users/playra/t27`:
 | TriosMCPClient.swift | X | `.trinity/specs/SR-01-mcp-client.*` |
 | QueenStatusViewModel.swift | T (Queen) | `.trinity/specs/SR-02-queen-vm.*` |
 | ProjectPaths.swift | A (Architect) | `.trinity/specs/SR-00-project-paths.*` |
-| TriosTheme.swift | H (UI) + P (Physics/φ) | `.trinity/specs/SR-00-theme.*` |
+| TriosTheme.swift | H (UI) + P (Physics/phi) | `.trinity/specs/SR-00-theme.*` |
 
 #### 6.2 Convert one file per wave loop
-- Each wave loop migrates 1–3 related files.
-- Follows T27 pipeline: spec → TDD → code → review → seal → verify → land → learn.
+- Each wave loop migrates 1-3 related files.
+- Follows T27 pipeline: spec -> TDD -> code -> review -> seal -> verify -> land -> learn.
 
 #### 6.3 Freeze migrated files
 - Add `.trinity/seals/{component}.json` after successful seal.
@@ -279,7 +279,7 @@ From `/Users/playra/t27`:
 
 ---
 
-### Phase 8: Documentation & Memory (P3–P4)
+### Phase 8: Documentation & Memory (P3-P4)
 *Goal: humans and agents know the new rules.*
 
 #### 8.1 Update `trios/README.md`
@@ -287,7 +287,7 @@ From `/Users/playra/t27`:
 - Add T27 section: how agents own code, how to invoke `/t27-phi-loop`.
 
 #### 8.2 Update `trios/LAUNCH.md`
-- Document T27 launch flow: Queen T → check queue → run skills.
+- Document T27 launch flow: Queen T -> check queue -> run skills.
 
 #### 8.3 Create `trios/docs/T27-CONSTITUTION.md`
 - Adapted from t27 with Swift/Rust specifics.
@@ -319,13 +319,13 @@ From `/Users/playra/t27`:
 |---|---|---|---|
 | M1: Constitution ported | SOUL.md, CLAUDE.md, coordination-law.md, queue/ | P0 | A + T |
 | M2: T27 agents live | 5 agent files + registry | P0 | T |
-| M3: T27 skills live | 4 skill directories | P0–P1 | T + Z |
+| M3: T27 skills live | 4 skill directories | P0-P1 | T + Z |
 | M4: Hooks enforce law | check-l1, stop-hook, git hooks | P1 | V + W |
 | M5: Pilot sealed | RecursionGuard spec-driven + seal | P1 | K + C + V |
 | M6: Monitor scheduler | clade-monitor reads/writes queue | P2 | Q + O |
-| M7: BR-OUTPUT migrated | All 34 files under T27 specs | P2–P3 | H, X, T, etc. |
+| M7: BR-OUTPUT migrated | All 34 files under T27 specs | P2-P3 | H, X, T, etc. |
 | M8: Rust rings governed | clade-* specs + agent ownership | P3 | R + V |
-| M9: Docs & memory | README, T27-CONSTITUTION, memory | P3–P4 | Z + E |
+| M9: Docs & memory | README, T27-CONSTITUTION, memory | P3-P4 | Z + E |
 
 ---
 
@@ -336,9 +336,9 @@ From `/Users/playra/t27`:
 3. Run Phase 0: update `SOUL.md`, `CLAUDE.md`, create `coordination-law.md` + `queue/`.
 4. Run Phase 1: create 5 T27 agent files.
 5. Run Phase 2: create 4 T27 skill directories.
-6. Open PR for Phase 0–2; land with `Closes #TBD`.
+6. Open PR for Phase 0-2; land with `Closes #TBD`.
 7. Then proceed to Phase 3 (hooks) and Phase 4 (RecursionGuard pilot).
 
 ---
 
-*φ² + 1/φ² = 3 | TRINITY*
+*phi^2 + 1/phi^2 = 3 | TRINITY*

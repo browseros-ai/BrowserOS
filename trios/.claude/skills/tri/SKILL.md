@@ -8,10 +8,10 @@ allowed-tools: fs_read, fs_write, fs_edit, shell_execute, fs_list
 ## Mode Detection
 
 Check arguments for mode:
-- If arguments contains full → MODE=FULL
-- If arguments contains short → MODE=COMPACT
-- If arguments contains audit → MODE=AUDIT
-- Otherwise → MODE=COMPACT
+- If arguments contains full -> MODE=FULL
+- If arguments contains short -> MODE=COMPACT
+- If arguments contains audit -> MODE=AUDIT
+- Otherwise -> MODE=COMPACT
 
 ## Compact Mode (~15 lines)
 

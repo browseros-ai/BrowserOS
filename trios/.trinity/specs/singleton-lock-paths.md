@@ -10,9 +10,9 @@ Move the trios singleton lock and PID files from world-writable `/tmp` to a proj
 4. The PID file must be written atomically and removed on graceful exit.
 
 ## Interface
-- `ProjectPaths.trinityRun` → `"\(trinity)/run"`
-- `ProjectPaths.singletonLockFile` → `"\(trinityRun)/trios_singleton.lock"`
-- `ProjectPaths.singletonPIDFile` → `"\(trinityRun)/trios_singleton.pid"`
+- `ProjectPaths.trinityRun` -> `"\(trinity)/run"`
+- `ProjectPaths.singletonLockFile` -> `"\(trinityRun)/trios_singleton.lock"`
+- `ProjectPaths.singletonPIDFile` -> `"\(trinityRun)/trios_singleton.pid"`
 
 ## Failure modes
 - If the runtime directory cannot be created, log the error and fall back to the open attempt (which will fail closed if permissions are wrong).

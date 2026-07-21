@@ -1,4 +1,4 @@
-## Branding Skill — GOLDEN CHAIN
+## Branding Skill - GOLDEN CHAIN
 
 ### Why CHAIN not BRIDGE
 
@@ -8,18 +8,18 @@ CHAIN: Recursive sequence growing link by link. Continuous proof. Mineable.
 ### Core Message
 
 Every link in Golden Chain is a silicon witness of:
-φ² + φ⁻² = 3 = TRINITY
+phi^2 + phi^-^2 = 3 = TRINITY
 
 ### Mining $TRI
 
-- Only on φ-structured hardware (TinyTapeout, FPGA, ASIC)
-- GF(16) arithmetic required — no generic CPU
+- Only on phi-structured hardware (TinyTapeout, FPGA, ASIC)
+- GF(16) arithmetic required - no generic CPU
 - Boundary Theorems protect chain integrity
 
 ### Brand Pillars
 
 1. Honesty: Impossibility proofs are proofs (BT-1..BT-4)
-2. Hardware: φ-arithmetic in silicon, not software
+2. Hardware: phi-arithmetic in silicon, not software
 3. Recursion: Chain grows, bridge is static
 4. Security: Boundary theorems prevent fake mining
 
