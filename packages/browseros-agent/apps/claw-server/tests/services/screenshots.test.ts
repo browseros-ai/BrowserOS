@@ -9,8 +9,8 @@
  *   1. Tool-result branch: image bytes in the tool result get written
  *      regardless of tool name.
  *   2. Screencast-fallback branch: state-mutating page-targeted
- *      dispatches with no image bytes AND a cache frame for the
- *      pageId AND the env flag on -> cache bytes get written.
+ *      dispatches with no image bytes AND a cache frame for the exact
+ *      session/page/target AND the env flag on -> cache bytes get written.
  *   3. First-capture override: the FIRST read-only dispatch on a
  *      given (agentId, pageId) pair also writes so an all-read-only
  *      audit still has a visual anchor for each tab. Subsequent
@@ -26,7 +26,8 @@ import { screencastCache } from '../../src/services/screencast-cache'
 import {
   clearFirstCapturesForTesting,
   dropFirstCaptures,
-  persistScreenshot,
+  type PersistScreenshotInput,
+  persistScreenshot as persistScreenshotService,
   screenshotPath,
 } from '../../src/services/screenshots'
 import { withTempBrowserClawDir } from '../_helpers/temp-browserclaw-dir'
@@ -35,14 +36,32 @@ const ONE_PX_JPEG_B64 =
   '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAr/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKpAA//Z'
 
 const AGENT = 'test-agent'
+const SESSION = 'session-a'
 
-function primeCache(pageId: number, b64: string = ONE_PX_JPEG_B64): void {
+function primeCache(
+  pageId: number,
+  b64: string = ONE_PX_JPEG_B64,
+  sessionId = SESSION,
+): void {
   const raw = Buffer.from(b64, 'base64')
   screencastCache.set(pageId, {
+    sessionId,
     targetId: `target-${pageId.toString()}`,
     jpegBase64: b64,
     capturedAt: 1_000_000,
     byteLength: raw.length,
+  })
+}
+
+function persistScreenshot(
+  input: Omit<PersistScreenshotInput, 'sessionId' | 'targetId'> &
+    Partial<Pick<PersistScreenshotInput, 'sessionId' | 'targetId'>>,
+): void {
+  persistScreenshotService({
+    sessionId: SESSION,
+    targetId:
+      input.pageId === null ? null : `target-${input.pageId.toString()}`,
+    ...input,
   })
 }
 
@@ -139,6 +158,40 @@ describe('persistScreenshot', () => {
       const path = screenshotPath(100)
       expect(existsSync(path)).toBe(true)
       expect(readFileSync(path).length).toBeGreaterThan(0)
+    })
+  })
+
+  it('does not persist a prior owner frame after an unchanged target transfer', async () => {
+    await withTempBrowserClawDir(async () => {
+      primeCache(8, ONE_PX_JPEG_B64, 'session-a')
+      persistScreenshot({
+        dispatchId: 101,
+        toolName: 'navigate',
+        pageId: 8,
+        agentId: AGENT,
+        sessionId: 'session-b',
+        result: {
+          isError: false,
+          content: [{ type: 'text', text: 'navigated' }],
+        },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(existsSync(screenshotPath(101))).toBe(false)
+
+      primeCache(8, ONE_PX_JPEG_B64, 'session-b')
+      persistScreenshot({
+        dispatchId: 102,
+        toolName: 'navigate',
+        pageId: 8,
+        agentId: AGENT,
+        sessionId: 'session-b',
+        result: {
+          isError: false,
+          content: [{ type: 'text', text: 'navigated again' }],
+        },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(existsSync(screenshotPath(102))).toBe(true)
     })
   })
 

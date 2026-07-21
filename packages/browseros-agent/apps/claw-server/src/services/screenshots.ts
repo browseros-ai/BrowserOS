@@ -18,10 +18,10 @@
  *      image bytes (the explicit `screenshot` tool does this; some
  *      future variants may too). We decode + write.
  *   2. Screencast-fallback branch: for a page-targeted state-mutating
- *      dispatch that produced no image bytes, we snapshot the current
- *      screencast cache frame for the tab. Populates the audit with
- *      visual context for `navigate` / `act` / `tabs new` / etc. that
- *      would otherwise render as image-less rows.
+ *      dispatch that produced no image bytes, we snapshot a screencast frame
+ *      matching that dispatch's MCP session and exact CDP target. This
+ *      populates the audit with visual context for `navigate` / `act` /
+ *      `tabs new` / etc. that would otherwise render as image-less rows.
  *
  * Read-only page-targeted tools (`snapshot`, `read`, `grep`, `diff`,
  * `wait`) are normally excluded from the fallback: back-to-back reads
@@ -53,6 +53,8 @@ export function screenshotPath(dispatchId: number): string {
 export interface PersistScreenshotInput {
   dispatchId: number
   toolName: string
+  /** MCP session that owns the dispatch and any eligible fallback frame. */
+  sessionId: string
   /**
    * Page id for the dispatch. For most tools this is the args-derived
    * value from `extractPageId`. For `tabs new` the caller derives it
@@ -61,6 +63,8 @@ export interface PersistScreenshotInput {
    * `windows`, `run`); the fallback path skips when this is null.
    */
   pageId: number | null
+  /** Exact CDP target observed for `pageId`; null when no page is resolved. */
+  targetId: string | null
   /**
    * Agent id resolved from the MCP client identity. Needed for the
    * first-capture-per-page policy so we can track per-agent-per-page
@@ -148,7 +152,7 @@ export function persistScreenshot(input: PersistScreenshotInput): void {
   // Branch 2: screencast cache fallback. Guarded by an env flag so
   // operators can revert to strict behaviour without a code change.
   if (!env.screencastScreenshotFallback) return
-  if (input.pageId === null) return
+  if (input.pageId === null || input.targetId === null) return
 
   if (READ_ONLY_TOOLS.has(input.toolName)) {
     // Read-only tools are skipped by default. EXCEPT: if this is
@@ -159,7 +163,11 @@ export function persistScreenshot(input: PersistScreenshotInput): void {
     if (hasFirstCapture(input.agentId, input.pageId)) return
   }
 
-  const frame = screencastCache.get(input.pageId)
+  const frame = screencastCache.getForSessionTarget(
+    input.sessionId,
+    input.pageId,
+    input.targetId,
+  )
   if (!frame?.jpegBase64) return
   // Buffer.from(str, 'base64') never throws in Node/Bun; invalid
   // chars are silently skipped. Guard against a zero-length result

@@ -17,7 +17,7 @@ import {
   recordSessionEnd,
   recordSessionStart,
 } from '../../src/services/session-events'
-import { getTask, listTasks } from '../../src/services/tasks'
+import { getTask, getTaskSummaries, listTasks } from '../../src/services/tasks'
 import { withTempBrowserClawDir } from '../_helpers/temp-browserclaw-dir'
 
 /**
@@ -240,6 +240,40 @@ describe('getTask', () => {
       const detail = getTask('cc-fb')!
       expect(detail.screenshotDispatchIds).toEqual([nav!, first_read!])
       expect(detail.screenshotDispatchIds).not.toContain(second_read)
+    })
+  })
+})
+
+describe('getTaskSummaries', () => {
+  beforeEach(() => setAuditDbForTesting())
+  afterEach(() => resetAuditDbForTesting())
+
+  it('returns one summary per requested session without screenshot enumeration or detail rows', async () => {
+    await withTempBrowserClawDir(async () => {
+      for (let i = 0; i < 20; i++) {
+        dispatch(`historical-${i.toString()}`, 'snapshot')
+      }
+      dispatch('connected-a', 'navigate', {
+        url: 'https://news.example.com/story',
+      })
+      dispatch('connected-b', 'read', { url: 'https://docs.example.com' })
+      const screenshot = dispatch('connected-a', 'screenshot')
+      if (screenshot === null) throw new Error('dispatch insert failed')
+      seedScreenshotFile(screenshot)
+
+      const summaries = getTaskSummaries(['connected-a', 'missing'])
+
+      expect([...summaries.keys()]).toEqual(['connected-a'])
+      expect(summaries.get('connected-a')).toMatchObject({
+        sessionId: 'connected-a',
+        site: 'news.example.com',
+        dispatchCount: 2,
+        toolSequence: ['navigate', 'screenshot'],
+        lastScreenshotDispatchId: null,
+      })
+      expect(getTask('connected-a')?.screenshotDispatchIds).toEqual([
+        screenshot,
+      ])
     })
   })
 })

@@ -65,7 +65,9 @@ export const applyAudit: ToolEffect = ({
   persistScreenshot({
     dispatchId,
     toolName: call.tool.name,
+    sessionId: call.sessionId,
     pageId,
+    targetId: page?.targetId ?? null,
     agentId: call.agent.agentId,
     result: {
       isError: result.isError ?? false,

@@ -4,7 +4,16 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  mock,
+  spyOn,
+} from 'bun:test'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
 import {
   type Connection,
   type ConnectionList,
@@ -16,6 +25,7 @@ import {
   type SystemInfo,
   type TelemetryState,
 } from '@browseros/claw-api'
+import { setBrowserSession } from '../../src/lib/browser-session'
 import { identityService } from '../../src/lib/mcp-session'
 import {
   resetAuditDbForTesting,
@@ -559,7 +569,47 @@ describe('mounted canonical TypeScript API', () => {
 
   afterEach(() => {
     identityService.clear()
+    setBrowserSession(null)
     resetAuditDbForTesting()
+  })
+
+  it('keeps connected sessions visible when production page reconciliation fails', async () => {
+    identityService.registerInitialize({
+      sessionId: 'session-connected',
+      clientInfo: { name: 'codex', version: '1.0.0', title: 'Codex CLI' },
+    })
+    setBrowserSession({
+      pages: {
+        list: async () => {
+          throw new Error('CDP unavailable')
+        },
+      },
+    } as unknown as BrowserSession)
+    const consoleError = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const response = await createServer().request(
+        'http://localhost/api/v1/sessions?status=live',
+      )
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({
+        items: [
+          {
+            sessionId: 'session-connected',
+            status: 'live',
+            live: { state: 'idle', browserTabs: [] },
+          },
+        ],
+      })
+      expect(
+        consoleError.mock.calls.some(([line]) =>
+          String(line).includes(
+            'live session browser reconciliation unavailable',
+          ),
+        ),
+      ).toBe(true)
+    } finally {
+      consoleError.mockRestore()
+    }
   })
 
   it('maps persisted task rows without leaking internal identities or nulls', async () => {

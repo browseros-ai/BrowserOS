@@ -80,8 +80,11 @@ function rec(
   pageId: number,
   status: 'active' | 'idle' = 'active',
   lastToolAt = 1_000_000,
+  sessionId = 'session-1',
 ): TabActivityRecord {
   return {
+    sessionId,
+    tabId: pageId + 100,
     targetId: `t-${pageId}`,
     pageId,
     url: `https://e.com/${pageId}`,
@@ -143,10 +146,54 @@ describe('screencast poller', () => {
     await runOneTick()
 
     const frame = screencastCache.get(7)
+    expect(frame?.sessionId).toBe('session-1')
     expect(frame?.targetId).toBe('t-7')
     expect(frame?.jpegBase64).toBe('AAA')
     expect(frame?.capturedAt).toBeGreaterThan(0)
     expect(frame?.byteLength).toBeGreaterThan(0)
+  })
+
+  it('keeps the triggering session provenance through in-flight completion', async () => {
+    let releaseCapture:
+      | ((result: { data: string; mimeType: string; annotations: [] }) => void)
+      | null = null
+    const captureStarted = Promise.withResolvers<void>()
+    const deferredSession = {
+      screenshot: () => {
+        captureStarted.resolve()
+        return new Promise<{
+          data: string
+          mimeType: string
+          annotations: []
+        }>((resolve) => {
+          releaseCapture = resolve
+        })
+      },
+    } as unknown as BrowserSession
+
+    setSnapshot([rec(41, 'active', 1_000_000, 'session-a')])
+    const handle = startScreencastPoller({
+      session: deferredSession,
+      intervalMs: 60_000,
+      registry: stubRegistry,
+    })
+    await captureStarted.promise
+    setSnapshot([rec(41, 'active', 1_000_100, 'session-b')])
+    releaseCapture?.({
+      data: 'FROM-A',
+      mimeType: 'image/jpeg',
+      annotations: [],
+    })
+    for (let i = 0; i < 10 && screencastCache.get(41) === null; i++) {
+      await Promise.resolve()
+    }
+    handle.stop()
+
+    expect(screencastCache.get(41)).toMatchObject({
+      sessionId: 'session-a',
+      targetId: 't-41',
+      jpegBase64: 'FROM-A',
+    })
   })
 
   it('marks failure when executeTool returns isError', async () => {

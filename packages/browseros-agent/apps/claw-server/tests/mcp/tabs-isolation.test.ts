@@ -198,7 +198,9 @@ describe('per-agent tabs isolation', () => {
     await withTempBrowserClawDir(async () => {
       stubSessionForPage(7, 'target-7')
       const jpegBase64 = Buffer.from('cached-jpeg').toString('base64')
+      const { client, key, sessionId } = await connect('claude-code')
       screencastCache.set(7, {
+        sessionId,
         targetId: 'target-7',
         jpegBase64,
         capturedAt: Date.now(),
@@ -209,8 +211,6 @@ describe('per-agent tabs isolation', () => {
         ok({ group: { groupId: 'G1', windowId: 42 } }),
         ok(),
       )
-      const { client, key, sessionId } = await connect('claude-code')
-
       const result = await client.callTool({
         name: 'tabs',
         arguments: { action: 'new', url: 'https://example.com/' },

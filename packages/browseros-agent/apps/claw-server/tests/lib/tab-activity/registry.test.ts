@@ -156,7 +156,7 @@ describe('TabActivityRegistry', () => {
     expect(second[0].name).toBe('navigate')
   })
 
-  it('updates session and tab attribution when a different session claims the target', () => {
+  it('starts a fresh history when a different session claims the target', () => {
     pages.set(1, { targetId: 't1', url: 'https://example.com/', title: 'Ex' })
     registry.recordTool({
       sessionId: 'session-1',
@@ -183,8 +183,11 @@ describe('TabActivityRegistry', () => {
     expect(snap[0].tabId).toBe(202)
     expect(snap[0].agentId).toBe('a2')
     expect(snap[0].slug).toBe('travel')
-    expect(snap[0].firstToolAt).toBe(1_000_000)
-    expect(snap[0].toolCount).toBe(2)
+    expect(snap[0].firstToolAt).toBe(1_000_500)
+    expect(snap[0].lastToolAt).toBe(1_000_500)
+    expect(snap[0].lastToolName).toBe('snapshot')
+    expect(snap[0].toolCount).toBe(1)
+    expect(snap[0].recentTools).toEqual([{ name: 'snapshot', at: 1_000_500 }])
   })
 
   it('marks records active within the window and idle outside it', () => {
@@ -336,8 +339,4 @@ describe('TabActivityRegistry', () => {
     const snap = registry.snapshot()
     expect(snap.map((r) => r.targetId)).toEqual(['t1', 't2'])
   })
-
-  // Superseded by "overwrites attribution but preserves firstToolAt"
-  // above; that case also checks the firstToolAt + toolCount semantics
-  // we want from PR 2.
 })

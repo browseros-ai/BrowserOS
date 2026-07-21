@@ -16,8 +16,8 @@
  *   - `tabId`: the browser tab id, kept alongside the CDP identifiers
  *     because the recorder addresses tabs by tab id — it is the join
  *     key between recorder batches and CDP-side state.
- *   - `firstToolAt`: when this agent first touched the tab (does not
- *     update on subsequent tool calls).
+ *   - `firstToolAt`: when the currently attributed session first touched the
+ *     tab; a different session claiming the same target starts a new history.
  *   - `lastToolAt` / `lastToolName`: the most recent dispatch.
  *   - `toolCount`: total dispatches against this target since the
  *     record was created.
@@ -117,12 +117,23 @@ export function createTabActivityRegistry(
       const t = now()
       const existing = records.get(input.targetId)
       if (existing) {
-        // Same agent or a different agent rebinding to this target:
-        // overwrite the attribution so the homepage reflects the
-        // most-recent caller. firstToolAt is preserved so the card
-        // can render "started 47s ago" against the original touch.
+        if (existing.sessionId !== input.sessionId) {
+          records.set(input.targetId, {
+            targetId: input.targetId,
+            tabId: input.tabId,
+            pageId: input.pageId,
+            sessionId: input.sessionId,
+            agentId: input.agentId,
+            slug: input.slug,
+            firstToolAt: t,
+            lastToolAt: t,
+            lastToolName: input.toolName,
+            toolCount: 1,
+            recentTools: [{ name: input.toolName, at: t }],
+          })
+          return
+        }
         existing.agentId = input.agentId
-        existing.sessionId = input.sessionId
         existing.slug = input.slug
         existing.tabId = input.tabId
         existing.pageId = input.pageId

@@ -117,12 +117,20 @@ async function runTick(
   const livePageIds = new Set<number>()
 
   // 1. Build the work list: active tabs not in failure backoff.
-  const work: Array<{ pageId: number; targetId: string }> = []
+  const work: Array<{
+    sessionId: string
+    pageId: number
+    targetId: string
+  }> = []
   for (const tab of tabs) {
     livePageIds.add(tab.pageId)
     if (tab.status !== 'active') continue
     if (screencastCache.isInBackoff(tab.pageId, tab.lastToolAt)) continue
-    work.push({ pageId: tab.pageId, targetId: tab.targetId })
+    work.push({
+      sessionId: tab.sessionId,
+      pageId: tab.pageId,
+      targetId: tab.targetId,
+    })
   }
 
   // 2. GC frames for tabs that closed since the last tick.
@@ -139,14 +147,15 @@ async function runTick(
   for (let i = 0; i < work.length; i += MAX_PARALLEL_SHOTS) {
     const batch = work.slice(i, i + MAX_PARALLEL_SHOTS)
     await Promise.allSettled(
-      batch.map(({ pageId, targetId }) =>
-        snapOne(pageId, targetId, session, inFlight),
+      batch.map(({ sessionId, pageId, targetId }) =>
+        snapOne(sessionId, pageId, targetId, session, inFlight),
       ),
     )
   }
 }
 
 async function snapOne(
+  sessionId: string,
   pageId: number,
   targetId: string,
   session: BrowserSession,
@@ -214,6 +223,7 @@ async function snapOne(
       return
     }
     screencastCache.set(pageId, {
+      sessionId,
       targetId,
       jpegBase64: result.data,
       capturedAt: Date.now(),

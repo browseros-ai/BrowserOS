@@ -24,6 +24,7 @@ import {
   type SessionDetail,
 } from '@browseros/claw-api'
 import { getBrowserSession } from '../../lib/browser-session'
+import { logger } from '../../lib/logger'
 import { identityService } from '../../lib/mcp-session'
 import {
   type TabActivityRecord,
@@ -57,7 +58,12 @@ import {
   getOpenSessionTab,
   listOpenSessionTabs,
 } from '../../services/session-tabs'
-import { getTask, listTasks, type TaskDetail } from '../../services/tasks'
+import {
+  getTask,
+  getTaskSummaries,
+  listTasks,
+  type TaskDetail,
+} from '../../services/tasks'
 import { VERSION } from '../../version'
 import type { CanonicalApiDependencies, RecordingAssociation } from '.'
 
@@ -65,16 +71,24 @@ const sessionQueryService = createSessionQueryService({
   listConnectedIdentities: () => identityService.list(),
   getConnectedIdentity: (sessionId) => identityService.getIdentity(sessionId),
   listTasks,
-  getTask,
+  getTaskSummaries,
   listOpenSessionTabs,
   getOpenSessionTab,
   async listBrowserPages() {
     const session = getBrowserSession()
-    return session ? await session.pages.list() : []
+    if (!session) return null
+    try {
+      return await session.pages.list()
+    } catch (error) {
+      logger.warn('live session browser reconciliation unavailable', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return null
+    }
   },
   snapshotTabActivity: () => tabActivityRegistry.snapshot(),
-  getScreencastFrame: (pageId, targetId) =>
-    screencastCache.getForTarget(pageId, targetId),
+  getScreencastFrame: (sessionId, pageId, targetId) =>
+    screencastCache.getForSessionTarget(sessionId, pageId, targetId),
   now: () => Date.now(),
 })
 

@@ -8,7 +8,9 @@
  * that session. The deriver groups tool_dispatches by session_id at
  * the SQL layer, then walks each group in JS to compute title (first
  * tabs URL), site, status (Live / Done / Failed), and the screenshot
- * dispatch ids in chronological order.
+ * dispatch ids in chronological order. The live cockpit uses the separate
+ * batched summary projection, which returns grouped rows and never inspects
+ * screenshot files or constructs task detail.
  *
  * Status semantics:
  *   - Failed: any dispatch with result_meta.isError = 1, or an
@@ -226,6 +228,126 @@ export function listTasks(query: ListTasksQuery): ListTasksResult {
   return { tasks, nextCursor }
 }
 
+interface TaskSummaryAggregateRow {
+  sessionId: string
+  cursorId: number
+  startedAt: number
+  lastDispatchAt: number
+  dispatchCount: number
+  errorCount: number
+  agentId: string
+  slug: string
+  agentLabel: string
+  toolSequenceJson: string
+  urlsJson: string
+  argsJsonsJson: string
+}
+
+/**
+ * Reads only summary projections for the requested connected sessions. The
+ * grouped SQL returns one row per session and deliberately leaves screenshot
+ * discovery to historical/detail reads, where filesystem work is expected.
+ */
+export function getTaskSummaries(
+  requestedSessionIds: readonly string[],
+): ReadonlyMap<string, TaskSummary> {
+  const sessionIds = [...new Set(requestedSessionIds)]
+  if (sessionIds.length === 0) return new Map()
+
+  const ids = sql.join(
+    sessionIds.map((sessionId) => sql`${sessionId}`),
+    sql`, `,
+  )
+  const db = getAuditDb()
+  const rows = db.all<TaskSummaryAggregateRow>(sql`
+    select
+      session_id as "sessionId",
+      max(id) as "cursorId",
+      min(created_at) as "startedAt",
+      max(created_at) as "lastDispatchAt",
+      count(*) as "dispatchCount",
+      sum(
+        case
+          when json_extract(result_meta, '$.isError') = 1 then 1
+          else 0
+        end
+      ) as "errorCount",
+      json_extract(json_group_array(agent_id), '$[0]') as "agentId",
+      json_extract(json_group_array(slug), '$[0]') as "slug",
+      json_extract(json_group_array(agent_label), '$[0]') as "agentLabel",
+      json_group_array(tool_name) as "toolSequenceJson",
+      json_group_array(url) as "urlsJson",
+      json_group_array(args_json) as "argsJsonsJson"
+    from (
+      select
+        id,
+        created_at,
+        agent_id,
+        slug,
+        agent_label,
+        session_id,
+        tool_name,
+        url,
+        args_json,
+        result_meta
+      from tool_dispatches
+      where session_id in (${ids})
+      order by id
+    ) ordered_dispatches
+    group by session_id
+    order by min(id)
+  `)
+  const ends = db
+    .select()
+    .from(agentSessionEnds)
+    .where(inArray(agentSessionEnds.sessionId, sessionIds))
+    .orderBy(agentSessionEnds.id)
+    .all()
+  const endBySession = new Map<string, (typeof ends)[number]>()
+  for (const end of ends) {
+    if (!endBySession.has(end.sessionId)) endBySession.set(end.sessionId, end)
+  }
+
+  const now = Date.now()
+  return new Map(
+    rows.map((row): [string, TaskSummary] => {
+      const end = endBySession.get(row.sessionId) ?? null
+      const toolSequence = parseStringArray(row.toolSequenceJson)
+      const site = firstSiteOfSources(
+        parseNullableStringArray(row.urlsJson),
+        parseNullableStringArray(row.argsJsonsJson),
+      )
+      const endedAt = end?.createdAt ?? null
+      const status = deriveStatus({
+        end,
+        errorCount: row.errorCount,
+        lastDispatchAt: row.lastDispatchAt,
+        now,
+      })
+      return [
+        row.sessionId,
+        {
+          sessionId: row.sessionId,
+          agentId: row.agentId,
+          slug: row.slug,
+          agentLabel: row.agentLabel,
+          title: site ? `Browsed ${site}` : `Session on ${row.agentLabel}`,
+          site,
+          startedAt: row.startedAt,
+          endedAt,
+          durationMs: (endedAt ?? row.lastDispatchAt) - row.startedAt,
+          dispatchCount: row.dispatchCount,
+          toolSequence,
+          status,
+          errorCount: row.errorCount,
+          lastScreenshotDispatchId: null,
+          cursorId: row.cursorId,
+        },
+      ]
+    }),
+  )
+}
+
 export function getTask(sessionId: string): TaskDetail | null {
   const db = getAuditDb()
   const dispatches = db
@@ -381,20 +503,40 @@ function hostnameOf(url: string): string | null {
  * back to argsJson which carries the raw call args including url.
  */
 function firstSiteOf(ds: ToolDispatchRow[]): string | null {
-  for (const d of ds) {
-    if (d.url) {
-      const h = hostnameOf(d.url)
+  return firstSiteOfSources(
+    ds.map((dispatch) => dispatch.url),
+    ds.map((dispatch) => dispatch.argsJson),
+  )
+}
+
+function firstSiteOfSources(
+  urls: readonly (string | null)[],
+  argsJsons: readonly (string | null)[],
+): string | null {
+  for (const url of urls) {
+    if (url) {
+      const h = hostnameOf(url)
       if (h) return h
     }
   }
-  for (const d of ds) {
-    const url = urlFromArgs(d.argsJson)
+  for (const argsJson of argsJsons) {
+    const url = urlFromArgs(argsJson)
     if (url) {
       const h = hostnameOf(url)
       if (h) return h
     }
   }
   return null
+}
+
+function parseStringArray(json: string): string[] {
+  const values = JSON.parse(json) as unknown[]
+  return values.filter((value): value is string => typeof value === 'string')
+}
+
+function parseNullableStringArray(json: string): Array<string | null> {
+  const values = JSON.parse(json) as unknown[]
+  return values.map((value) => (typeof value === 'string' ? value : null))
 }
 
 function urlFromArgs(argsJson: string | null): string | null {

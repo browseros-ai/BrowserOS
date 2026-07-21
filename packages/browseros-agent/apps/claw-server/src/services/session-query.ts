@@ -41,12 +41,19 @@ export interface SessionQueryDependencies {
   listConnectedIdentities(): ClientIdentity[]
   getConnectedIdentity(sessionId: string): ClientIdentity | null
   listTasks(query: ListTasksQuery): ListTasksResult
-  getTask(sessionId: string): TaskSummary | null
+  getTaskSummaries(
+    sessionIds: readonly string[],
+  ): ReadonlyMap<string, TaskSummary>
   listOpenSessionTabs(): SessionTabRow[]
   getOpenSessionTab(sessionId: string, tabId: number): SessionTabRow | null
-  listBrowserPages(): Promise<CurrentBrowserPage[]>
+  /** Null means reconciliation was unavailable; an empty array is authoritative. */
+  listBrowserPages(): Promise<CurrentBrowserPage[] | null>
   snapshotTabActivity(): TabActivityRecord[]
-  getScreencastFrame(pageId: number, targetId: string): ScreencastFrame | null
+  getScreencastFrame(
+    sessionId: string,
+    pageId: number,
+    targetId: string,
+  ): ScreencastFrame | null
   now(): number
 }
 
@@ -71,10 +78,14 @@ export function createSessionQueryService(
     async listSessions(query) {
       if (query.status !== 'live') return listHistoricalSessions(query, deps)
 
-      const candidates = deps
-        .listConnectedIdentities()
+      const pages = await deps.listBrowserPages()
+      const identities = deps.listConnectedIdentities()
+      const tasks = deps.getTaskSummaries(
+        identities.map((identity) => identity.sessionId),
+      )
+      const candidates = identities
         .map((identity): LiveCandidate => {
-          const task = deps.getTask(identity.sessionId)
+          const task = tasks.get(identity.sessionId) ?? null
           return {
             identity,
             task,
@@ -87,10 +98,11 @@ export function createSessionQueryService(
 
       if (candidates.length === 0) return { items: [] }
 
-      const ownerships = deps.listOpenSessionTabs()
-      const pages = await deps.listBrowserPages()
-      const activities = deps.snapshotTabActivity()
-      const pagesByTabId = new Map(pages.map((page) => [page.tabId, page]))
+      const ownerships = pages === null ? [] : deps.listOpenSessionTabs()
+      const activities = pages === null ? [] : deps.snapshotTabActivity()
+      const pagesByTabId = new Map(
+        (pages ?? []).map((page) => [page.tabId, page]),
+      )
       const activitiesByIncarnation = activityIndex(activities)
       const connectedSessionIds = new Set(
         candidates.map((candidate) => candidate.identity.sessionId),
@@ -136,6 +148,7 @@ export function createSessionQueryService(
       if (!ownership || !deps.getConnectedIdentity(sessionId)) return null
 
       const pages = await deps.listBrowserPages()
+      if (pages === null) return null
       const page = pages.find((candidate) => candidate.tabId === browserTabId)
       if (!page) return null
 
@@ -148,7 +161,11 @@ export function createSessionQueryService(
       ) {
         return null
       }
-      const frame = deps.getScreencastFrame(page.pageId, page.targetId)
+      const frame = deps.getScreencastFrame(
+        sessionId,
+        page.pageId,
+        page.targetId,
+      )
       return frame?.jpegBase64 ? frame : null
     },
   }
@@ -255,7 +272,11 @@ function projectBrowserTabs(
     const activity = activitiesByIncarnation.get(
       activityKey(sessionId, page.tabId, page.pageId, page.targetId),
     )
-    const preview = deps.getScreencastFrame(page.pageId, page.targetId)
+    const preview = deps.getScreencastFrame(
+      sessionId,
+      page.pageId,
+      page.targetId,
+    )
     const tab: SessionBrowserTab & {
       activityState: 'active' | 'idle' | undefined
     } = {
