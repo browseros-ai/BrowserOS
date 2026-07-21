@@ -4,7 +4,7 @@ use crate::{
     identity::{ClientIdentity, ConversationIdentity},
     ids::SessionId,
     mcp::dispatch::{ToolCall, ToolIdentity, linked_cancel_token},
-    sessions::Session,
+    services::sessions::Session,
 };
 use serde_json::Value;
 use std::{sync::Arc, time::Duration};

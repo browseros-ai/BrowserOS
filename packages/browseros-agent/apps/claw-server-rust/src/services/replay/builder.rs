@@ -1,9 +1,9 @@
 //! Read-time attribution from logical-tab ownership windows to document streams.
 
 use crate::{
-    capture::recordings::{RecordedEvent, RecordingStore, legacy_document_id},
     db::{RecordingIndex, StreamMatchRow},
     error::AppResult,
+    services::recordings::{RecordedEvent, RecordingStore, legacy_document_id},
 };
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
@@ -325,8 +325,8 @@ fn build_meta(entries: Vec<(i64, ReplaySegmentMeta)>) -> ReplayMeta {
 mod tests {
     use super::*;
     use crate::{
-        capture::recordings::RecordingEventInput,
         db::{Database, RecordingIndex},
+        services::recordings::RecordingEventInput,
     };
     use serde_json::json;
     use std::time::Duration;

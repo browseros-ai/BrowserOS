@@ -165,11 +165,11 @@ impl From<&StoredAgentProfile> for ProfileView {
 }
 
 #[derive(Clone)]
-pub struct AgentService {
+pub struct ProfileService {
     store: JsonStore,
 }
 
-impl AgentService {
+impl ProfileService {
     #[must_use]
     pub fn new(store: JsonStore) -> Self {
         Self { store }

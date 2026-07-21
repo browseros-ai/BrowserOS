@@ -8,7 +8,7 @@ use crate::{
         naming::{build_session_group_title, client_prefix_from_slug, normalize_small_name},
         prompt::BROWSERCLAW_MCP_INSTRUCTIONS,
     },
-    sessions::Session,
+    services::sessions::Session,
 };
 use browseros_mcp::{OutputFileAccess, ToolDef, catalog};
 use rmcp::{
@@ -156,7 +156,7 @@ impl ClawMcpService {
             lifecycle.started = true;
             session
         } else {
-            let profiles = self.state.agents.list_profiles().await.map_err(|error| {
+            let profiles = self.state.profiles.list_profiles().await.map_err(|error| {
                 McpError::internal_error(format!("agent profile lookup failed: {error}"), None)
             })?;
             let profiles = profiles.iter().map(ProfileView::from).collect::<Vec<_>>();

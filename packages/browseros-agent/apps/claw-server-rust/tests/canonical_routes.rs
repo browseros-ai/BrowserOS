@@ -17,8 +17,8 @@ use claw_server_rust::{
     db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
     identity::{ClientIdentity, ConversationIdentity},
     ids::{DispatchId, ProfileId, SessionId},
-    sessions::Session,
-    tabs::activity::{RecordToolInput, ScreencastFrame},
+    services::cockpit::{RecordToolInput, ScreencastFrame},
+    services::sessions::Session,
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -781,7 +781,7 @@ async fn seed_live_fixture(app: &TestApp) -> anyhow::Result<LiveFixture> {
         );
     }
     app.state
-        .screencast
+        .previews
         .cache_frame(
             primary.id().as_str(),
             7,
@@ -971,7 +971,7 @@ async fn open_claims_reconcile_closed_and_reassigned_browser_tabs() -> anyhow::R
 async fn secure_preview_is_owned_fail_closed_and_cache_only() -> anyhow::Result<()> {
     let app = test_app().await?;
     let fixture = seed_live_fixture(&app).await?;
-    assert_eq!(app.state.screencast.last_read_at_for_testing(), 0);
+    assert_eq!(app.state.previews.last_read_at_for_testing(), 0);
 
     let preview_path = format!(
         "/api/v1/sessions/{}/browser-tabs/101/preview",
@@ -982,7 +982,7 @@ async fn secure_preview_is_owned_fail_closed_and_cache_only() -> anyhow::Result<
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers[header::CONTENT_TYPE], "image/jpeg");
     assert_eq!(bytes, vec![0xff, 0xd8]);
-    assert_eq!(app.state.screencast.last_read_at_for_testing(), 0);
+    assert_eq!(app.state.previews.last_read_at_for_testing(), 0);
 
     let failures = [
         format!(
@@ -1039,7 +1039,7 @@ async fn secure_preview_is_owned_fail_closed_and_cache_only() -> anyhow::Result<
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    assert!(app.state.screencast.last_read_at_for_testing() > 0);
+    assert!(app.state.previews.last_read_at_for_testing() > 0);
 
     let screenshot_path = format!(
         "/api/v1/dispatches/{}/screenshot",
@@ -1126,7 +1126,7 @@ async fn preview_rejects_disconnected_session_after_browser_reconciliation() -> 
 async fn preview_rejects_ownership_transfer_during_frame_lookup() -> anyhow::Result<()> {
     let app = test_app().await?;
     let fixture = seed_live_fixture(&app).await?;
-    let gate = app.state.screencast.gate_next_frame_read_for_testing();
+    let gate = app.state.previews.gate_next_frame_read_for_testing();
     let router = app.router.clone();
     let preview_path = format!(
         "/api/v1/sessions/{}/browser-tabs/101/preview",
@@ -1218,7 +1218,7 @@ async fn transferred_session_cannot_read_prior_owner_frame() -> anyhow::Result<(
 async fn preview_rejects_target_rebind_during_frame_lookup() -> anyhow::Result<()> {
     let app = test_app().await?;
     let fixture = seed_live_fixture(&app).await?;
-    let gate = app.state.screencast.gate_next_frame_read_for_testing();
+    let gate = app.state.previews.gate_next_frame_read_for_testing();
     let router = app.router.clone();
     let preview_path = format!(
         "/api/v1/sessions/{}/browser-tabs/101/preview",
@@ -1248,7 +1248,7 @@ async fn preview_rejects_target_rebind_during_frame_lookup() -> anyhow::Result<(
 async fn preview_rejects_transfer_during_final_page_reconciliation() -> anyhow::Result<()> {
     let app = test_app().await?;
     let fixture = seed_live_fixture(&app).await?;
-    let frame_gate = app.state.screencast.gate_next_frame_read_for_testing();
+    let frame_gate = app.state.previews.gate_next_frame_read_for_testing();
     let router = app.router.clone();
     let preview_path = format!(
         "/api/v1/sessions/{}/browser-tabs/101/preview",

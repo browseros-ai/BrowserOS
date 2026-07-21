@@ -1,4 +1,4 @@
-use crate::sessions::Session;
+use crate::services::sessions::Session;
 
 const SMALL_NAME_WORD_LIMIT: usize = 3;
 const SMALL_NAME_MAX_LEN: usize = 32;

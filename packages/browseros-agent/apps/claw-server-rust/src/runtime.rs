@@ -53,7 +53,7 @@ impl AppRuntime {
             BackgroundTask {
                 name: "screencast loop",
                 handle: state
-                    .screencast
+                    .previews
                     .clone()
                     .start(state.browser.clone(), state.tab_activity.clone()),
             },
@@ -96,7 +96,7 @@ impl AppRuntime {
         let session_result = self.state.sessions.shutdown().await;
         self.state.session_tabs.drain_writes().await;
         self.state.recordings.close().await;
-        self.state.screencast.stop();
+        self.state.previews.stop();
         self.state.browser.stop();
         self.join_tasks().await;
         let drained = session_result?;

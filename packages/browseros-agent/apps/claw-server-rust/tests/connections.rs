@@ -7,7 +7,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use claw_server_rust::harness::{Harness, HarnessService};
+use claw_server_rust::services::harness::{Harness, HarnessService};
 use claw_server_rust::{AppState, build_router, config::Config};
 use serde_json::{Value, json};
 use std::{env, fs, path::Path, process::Command, sync::Arc, time::Duration};

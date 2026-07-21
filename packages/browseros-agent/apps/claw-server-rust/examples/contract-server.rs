@@ -14,8 +14,8 @@ use claw_server_rust::{
     db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
     identity::{ClientIdentity, ConversationIdentity},
     ids::{DispatchId, ProfileId, SessionId},
-    sessions::Session,
-    tabs::activity::{RecordToolInput, ScreencastFrame},
+    services::cockpit::{RecordToolInput, ScreencastFrame},
+    services::sessions::Session,
 };
 use futures_util::future::BoxFuture;
 use serde_json::json;
@@ -295,7 +295,7 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
     );
     state.session_tabs.drain_writes().await;
     state
-        .screencast
+        .previews
         .cache_frame(
             "session-live",
             7,

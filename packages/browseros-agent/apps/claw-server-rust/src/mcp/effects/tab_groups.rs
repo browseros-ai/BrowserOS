@@ -5,8 +5,10 @@ use crate::{
         naming::desired_group_title,
         timeouts::TAB_GROUP_OPERATION,
     },
-    sessions::Session,
-    tabs::{PageOwnership, color_for_slug},
+    services::{
+        browser::color_for_slug,
+        sessions::{PageOwnership, Session},
+    },
 };
 use browseros_core::{BrowserSession, PageId};
 use browseros_mcp::{
@@ -493,7 +495,7 @@ mod tests {
         db::{AuditLog, Database, SessionTabLedger},
         identity::{ClientIdentity, ConversationIdentity},
         ids::SessionId as AppSessionId,
-        sessions::{RetainedGroupAction, Sessions},
+        services::sessions::{RetainedGroupAction, Sessions},
     };
     use browseros_cdp::{CdpError, CdpEvent};
     use browseros_core::{BrowserSessionHooks, CdpConnection, SessionId};

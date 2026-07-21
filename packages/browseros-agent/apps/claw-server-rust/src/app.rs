@@ -1,22 +1,20 @@
 use crate::{
-    agents::AgentService,
-    browser::BrowserService,
-    capture::{
-        recordings::RecordingStore, replays::ReplayService as ReplayReadService,
-        screencast::ScreencastService, screenshots::ScreenshotService,
-    },
     config::Config,
     db::{AuditLog, Database, RecordingIndex, SessionTabLedger},
     error::AppResult,
-    harness::HarnessService,
     routes,
     runtime::ShutdownHandle,
-    sessions::Sessions,
-    storage::JsonStore,
-    tabs::{
-        activity::{TabActivityRecord, TabActivityService},
-        targets::TabTargetMap,
+    services::{
+        browser::{BrowserService, TabRegistry},
+        cockpit::{PreviewService, TabActivityRecord, TabActivityService},
+        harness::HarnessService,
+        profiles::ProfileService,
+        recordings::{RecordingIngestService, RecordingStore},
+        replay::ReplayService,
+        screenshots::ScreenshotService,
+        sessions::Sessions,
     },
+    storage::JsonStore,
     telemetry::TelemetryService,
 };
 use axum::{Router, middleware};
@@ -28,16 +26,17 @@ pub struct AppState {
     pub audit_log: Arc<AuditLog>,
     pub session_tabs: Arc<SessionTabLedger>,
     pub recordings: Arc<RecordingStore>,
-    pub replays: Arc<ReplayReadService>,
+    pub recording_ingest: Arc<RecordingIngestService>,
+    pub replay: Arc<ReplayService>,
     pub screenshots: Arc<ScreenshotService>,
     pub tab_activity: Arc<TabActivityService>,
-    pub tab_targets: Arc<TabTargetMap>,
+    pub tab_registry: Arc<TabRegistry>,
     pub harness: Arc<HarnessService>,
     pub telemetry: Arc<TelemetryService>,
-    pub agents: Arc<AgentService>,
+    pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
     pub browser: Arc<BrowserService>,
-    pub screencast: Arc<ScreencastService>,
+    pub previews: Arc<PreviewService>,
     pub shutdown: ShutdownHandle,
 }
 
@@ -63,7 +62,7 @@ impl AppState {
             50,
             Duration::from_secs(30),
         );
-        let replays = ReplayReadService::new(recordings.clone(), recording_index);
+        let replay = ReplayService::new(recordings.clone(), recording_index);
         let screenshots = Arc::new(ScreenshotService::new(
             config.browserclaw_dir.join("screenshots"),
         ));
@@ -72,7 +71,7 @@ impl AppState {
             home_dir,
         ));
         let telemetry = Arc::new(TelemetryService::new(&config.browserclaw_dir));
-        let agents = Arc::new(AgentService::new(store.clone()));
+        let profiles = Arc::new(ProfileService::new(store.clone()));
         let sessions = Sessions::new(
             audit_log.clone(),
             session_tabs.clone(),
@@ -80,25 +79,28 @@ impl AppState {
             config.session_retention,
             config.session_sweep_interval,
         );
-        let tab_targets = TabTargetMap::new(session_tabs.clone());
+        let tab_registry = TabRegistry::new(session_tabs.clone());
         let browser =
-            BrowserService::new(config.cdp_port, sessions.ownership(), tab_targets.clone());
+            BrowserService::new(config.cdp_port, sessions.ownership(), tab_registry.clone());
+        let recording_ingest =
+            RecordingIngestService::new(recordings.clone(), browser.clone(), tab_registry.clone());
         let tab_activity = Arc::new(TabActivityService::default());
         Ok(Self {
             config,
             audit_log,
             session_tabs,
             recordings,
-            replays,
+            recording_ingest,
+            replay,
             screenshots,
             tab_activity,
-            tab_targets,
+            tab_registry,
             harness,
             telemetry,
-            agents,
+            profiles,
             sessions,
             browser,
-            screencast: ScreencastService::new(50),
+            previews: PreviewService::new(50),
             shutdown: ShutdownHandle::new(),
         })
     }

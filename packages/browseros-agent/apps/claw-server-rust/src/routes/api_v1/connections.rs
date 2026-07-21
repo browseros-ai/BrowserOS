@@ -2,7 +2,7 @@ use super::{error, internal};
 use crate::{
     AppState,
     error::{CanonicalError, RequestId},
-    harness::{ConnectionState, Harness as ServiceHarness},
+    services::harness::{ConnectionState, Harness as ServiceHarness},
 };
 use axum::{Extension, Json, extract::Path, extract::State, http::StatusCode};
 use claw_api::models::{Connection, ConnectionList, Harness};

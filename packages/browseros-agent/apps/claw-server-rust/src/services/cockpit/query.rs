@@ -7,11 +7,12 @@
 
 use crate::{
     AppState,
-    agents::StoredAgentProfile,
     db::audit_log::{TaskStatus, TaskSummary},
     error::{AppError, AppResult},
-    sessions::Session,
-    tabs::{activity::ScreencastFrame, hex_for_slug},
+    services::{
+        browser::hex_for_slug, cockpit::ScreencastFrame, profiles::StoredAgentProfile,
+        sessions::Session,
+    },
 };
 use browseros_core::pages::PageInfo;
 use claw_api::models::{
@@ -45,7 +46,7 @@ struct ProjectedTab {
 
 pub async fn list(state: &AppState, filters: &LiveSessionFilters) -> AppResult<SessionList> {
     let sessions = state.sessions.snapshot().await;
-    let profiles = state.agents.list_profiles().await?;
+    let profiles = state.profiles.list_profiles().await?;
     let mut projected = Vec::with_capacity(sessions.len());
 
     for session in sessions {
@@ -159,7 +160,7 @@ pub async fn list(state: &AppState, filters: &LiveSessionFilters) -> AppResult<S
             tab.last_tool_name = Some(record.last_tool_name.clone());
         }
         tab.preview_captured_at = state
-            .screencast
+            .previews
             .frame_for(
                 &ownership.session_id,
                 page.page_id.0,
@@ -263,7 +264,7 @@ pub async fn preview(
     let page_id = page.page_id.0;
     let target_id = page.target_id.as_str().to_string();
     let candidate = state
-        .screencast
+        .previews
         .frame_for(session_id, page_id, &target_id)
         .await;
     let Some(current_pages) = current_pages(state).await else {

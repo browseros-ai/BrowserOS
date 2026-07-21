@@ -3,7 +3,7 @@ use crate::{
     identity::ClientIdentity,
     ids::{ConvoId, DispatchId, SessionId},
     mcp::{effects, guards},
-    sessions::Session,
+    services::sessions::Session,
 };
 use browseros_core::{BrowserSession, PageId, pages::PageInfo};
 use browseros_mcp::{

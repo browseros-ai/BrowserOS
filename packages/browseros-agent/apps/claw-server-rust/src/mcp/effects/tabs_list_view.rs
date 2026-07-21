@@ -164,7 +164,7 @@ mod tests {
     -> anyhow::Result<()> {
         let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
-        let other_session = crate::sessions::Session::new(
+        let other_session = crate::services::sessions::Session::new(
             crate::ids::SessionId::new("s2"),
             crate::identity::ClientIdentity::Ephemeral {
                 slug: "other".to_string(),

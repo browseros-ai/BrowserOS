@@ -25,7 +25,7 @@ pub fn apply(
                     .call
                     .state
                     .tab_activity
-                    .record_tool(crate::tabs::activity::RecordToolInput {
+                    .record_tool(crate::services::cockpit::RecordToolInput {
                         target_id: info.target_id,
                         tab_id: info.tab_id.0,
                         page_id,
@@ -282,7 +282,7 @@ mod tests {
         call.page_snapshot = browser.pages.get_info(PageId(1)).await;
         call.state
             .tab_activity
-            .record_tool(crate::tabs::activity::RecordToolInput {
+            .record_tool(crate::services::cockpit::RecordToolInput {
                 target_id: browser
                     .pages
                     .get_info(PageId(1))

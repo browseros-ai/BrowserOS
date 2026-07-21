@@ -1,13 +1,9 @@
-mod session;
-
-pub use session::Session;
-
+use super::{PageOwnership, Session};
 use crate::{
     db::{AuditLog, SessionTabLedger},
     error::{AppError, AppResult},
     identity::{ClientIdentity, ClientInfo, ConversationIdentity, generate_fun_name},
     ids::{ConvoId, SessionId},
-    tabs::PageOwnership,
 };
 use futures_util::future::BoxFuture;
 use std::{

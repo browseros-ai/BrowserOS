@@ -53,7 +53,7 @@ struct RecentlyDestroyed {
 }
 
 /// Maintains the Chrome tab id to stable CDP target id identity boundary.
-pub struct TabTargetMap {
+pub struct TabRegistry {
     maps: RwLock<TargetMaps>,
     current_epoch: AtomicU64,
     ready_epoch: AtomicU64,
@@ -62,7 +62,7 @@ pub struct TabTargetMap {
     inherit_tab_owner: TabOwnerInheritor,
 }
 
-impl TabTargetMap {
+impl TabRegistry {
     #[must_use]
     pub fn new(session_tabs: Arc<SessionTabLedger>) -> Arc<Self> {
         let release_session_tabs = session_tabs.clone();
@@ -392,7 +392,7 @@ fn prune_recently_destroyed(maps: &mut TargetMaps, now: Instant) {
 
 #[cfg(test)]
 mod tests {
-    use super::{TabIdentity, TabTargetMap};
+    use super::{TabIdentity, TabRegistry};
     use browseros_cdp::{CdpError, CdpEvent, SessionId};
     use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
     use futures_util::future::BoxFuture;
@@ -475,8 +475,8 @@ mod tests {
         }
     }
 
-    fn map_with_releases(releases: Arc<tokio::sync::Mutex<Vec<String>>>) -> Arc<TabTargetMap> {
-        TabTargetMap::new_with_releaser(Arc::new(move |target_id| {
+    fn map_with_releases(releases: Arc<tokio::sync::Mutex<Vec<String>>>) -> Arc<TabRegistry> {
+        TabRegistry::new_with_releaser(Arc::new(move |target_id| {
             let releases = releases.clone();
             Box::pin(async move {
                 releases.lock().await.push(target_id);
@@ -562,7 +562,7 @@ mod tests {
     async fn target_created_inherits_the_live_opener_tab_owner() {
         let inherited = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let captured = inherited.clone();
-        let map = TabTargetMap::new_with_callbacks(
+        let map = TabRegistry::new_with_callbacks(
             Arc::new(|_| Box::pin(async { Ok(()) })),
             Arc::new(move |opener_tab_id, tab_id, target_id| {
                 let captured = captured.clone();

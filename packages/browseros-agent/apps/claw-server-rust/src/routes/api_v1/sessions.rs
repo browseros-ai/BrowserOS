@@ -1,12 +1,14 @@
 use super::{error, internal};
 use crate::{
     AppState,
-    capture::recordings::RecordingEventInput,
     db::audit_log::{ListTasksQuery, TaskDetail, TaskStatus, ToolDispatchRow},
     error::{CanonicalError, RequestId},
     ids::SessionId,
-    live_sessions::{self, LiveSessionFilters},
-    sessions::Session,
+    services::recordings::RecordingEventInput,
+    services::{
+        cockpit::{self as live_sessions, LiveSessionFilters},
+        sessions::Session,
+    },
 };
 use axum::{
     Extension, Json,
@@ -42,7 +44,7 @@ pub(super) async fn list(
 ) -> Result<Json<SessionList>, CanonicalError> {
     let query = parse_query(&request_id, &raw)?;
     if query.status == Some(TaskStatus::Live) {
-        state.screencast.note_read();
+        state.previews.note_read();
         let response = live_sessions::list(
             &state,
             &LiveSessionFilters {
@@ -187,7 +189,7 @@ pub(super) async fn recording(
 ) -> Result<Json<RecordingMetadata>, CanonicalError> {
     require_known_session(&state, &request_id, &session_id).await?;
     let metadata = state
-        .replays
+        .replay
         .meta(&session_id)
         .await
         .map_err(|source| internal(&request_id, source))?;
@@ -239,7 +241,7 @@ pub(super) async fn download_events(
 ) -> Result<Response, CanonicalError> {
     require_known_session(&state, &request_id, &session_id).await?;
     let events = state
-        .replays
+        .replay
         .read_session(&session_id)
         .await
         .map_err(|source| internal(&request_id, source))?;
@@ -280,17 +282,11 @@ pub(super) async fn append_document_events(
         ));
     }
     let parsed = parse_recording_events(&body);
-    let browser = state.browser.session().await;
-    let target_id = state
-        .tab_targets
-        .resolve(tab_id, browser, state.browser.state().epoch)
-        .await;
     let appended = state
-        .recordings
-        .append_batch(
+        .recording_ingest
+        .append_document(
             &document_id,
             tab_id,
-            target_id.as_deref(),
             &parsed.events,
             &batch_id,
             gap_header || parsed.dropped_lines > 0,

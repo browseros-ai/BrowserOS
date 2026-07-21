@@ -1,4 +1,5 @@
-use crate::tabs::{PageOwnership, targets::TabTargetMap};
+use super::TabRegistry;
+use crate::services::sessions::PageOwnership;
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks,
@@ -27,7 +28,7 @@ pub struct BrowserService {
     state_tx: watch::Sender<BrowserConnectionState>,
     initial_attempt_tx: watch::Sender<bool>,
     session: Arc<RwLock<Option<Arc<browseros_core::BrowserSession>>>>,
-    tab_targets: Arc<TabTargetMap>,
+    tab_registry: Arc<TabRegistry>,
     cancel: CancellationToken,
 }
 
@@ -36,7 +37,7 @@ impl BrowserService {
     pub fn new(
         cdp_port: u16,
         ownership: Arc<PageOwnership>,
-        tab_targets: Arc<TabTargetMap>,
+        tab_registry: Arc<TabRegistry>,
     ) -> Arc<Self> {
         let (state_tx, _) = watch::channel(BrowserConnectionState {
             connected: false,
@@ -50,7 +51,7 @@ impl BrowserService {
             state_tx,
             initial_attempt_tx,
             session: Arc::new(RwLock::new(None)),
-            tab_targets,
+            tab_registry,
             cancel: CancellationToken::new(),
         })
     }
@@ -137,7 +138,7 @@ impl BrowserService {
             },
         );
         if let Err(error) = self
-            .tab_targets
+            .tab_registry
             .observe_session(session.clone(), epoch)
             .await
         {
@@ -210,7 +211,7 @@ impl BrowserService {
                     if connected != last_connected || epoch != last_epoch {
                         if connected
                             && let Some(session) = self.session().await
-                            && let Err(error) = self.tab_targets.observe_session(session, epoch).await
+                            && let Err(error) = self.tab_registry.observe_session(session, epoch).await
                         {
                             warn!(epoch, error = %error, "failed to seed tab target map after reconnect");
                         }
@@ -294,7 +295,7 @@ mod tests {
         let database = crate::db::Database::open(root.path().join("audit.sqlite")).await?;
         let audit_log = Arc::new(crate::db::AuditLog::new(database.clone()));
         let session_tabs = Arc::new(crate::db::SessionTabLedger::new(database));
-        let sessions = crate::sessions::Sessions::new(
+        let sessions = crate::services::sessions::Sessions::new(
             audit_log,
             session_tabs.clone(),
             Duration::from_secs(60),
@@ -302,7 +303,7 @@ mod tests {
             Duration::from_secs(60),
         );
         Ok((
-            BrowserService::new(0, sessions.ownership(), TabTargetMap::new(session_tabs)),
+            BrowserService::new(0, sessions.ownership(), TabRegistry::new(session_tabs)),
             root,
         ))
     }

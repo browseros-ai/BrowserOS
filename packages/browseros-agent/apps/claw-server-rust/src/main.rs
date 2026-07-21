@@ -39,7 +39,7 @@ async fn run(
     let state = runtime.state();
     state.browser.wait_for_initial_attempt().await;
     let initial_browser = state.browser.state();
-    if initial_browser.connected && !state.tab_targets.is_ready(initial_browser.epoch) {
+    if initial_browser.connected && !state.tab_registry.is_ready(initial_browser.epoch) {
         anyhow::bail!("failed to seed tab target identities before server startup");
     }
     if stdio_mode {

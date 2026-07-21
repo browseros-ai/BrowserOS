@@ -1,7 +1,9 @@
 use crate::{
-    browser::BrowserService,
     clock::now_epoch_ms,
-    tabs::activity::{ScreencastFrame, TabActivityRecord, TabActivityService},
+    services::{
+        browser::BrowserService,
+        cockpit::{ScreencastFrame, TabActivityRecord, TabActivityService},
+    },
 };
 use browseros_core::{
     BrowserSession, PageId, TargetId,
@@ -29,7 +31,7 @@ const MAX_PARALLEL_SHOTS: usize = 8;
 const FAILURE_BACKOFF_THRESHOLD: u8 = 3;
 const IDLE_AFTER_MS: i64 = 15_000;
 
-pub struct ScreencastService {
+pub struct PreviewService {
     inner: Arc<tokio::sync::Mutex<ScreencastInner>>,
     last_read_ms: AtomicI64,
     tick_running: AtomicBool,
@@ -108,7 +110,7 @@ impl Drop for TickGuard<'_> {
     }
 }
 
-impl ScreencastService {
+impl PreviewService {
     #[must_use]
     pub fn new(capacity: usize) -> Arc<Self> {
         Arc::new(Self {
@@ -497,8 +499,8 @@ fn plan_tick(
 
 #[cfg(test)]
 mod tests {
-    use super::{FailureState, ScreencastService, TabIncarnation, TickPlan, plan_tick};
-    use crate::tabs::activity::{ScreencastFrame, TabActivityRecord};
+    use super::{FailureState, PreviewService, TabIncarnation, TickPlan, plan_tick};
+    use crate::services::cockpit::{ScreencastFrame, TabActivityRecord};
     use std::collections::{HashMap, HashSet};
 
     const NOW: i64 = 1_000_000;
@@ -662,7 +664,7 @@ mod tests {
 
     #[test]
     fn tick_overlap_guard_resets_when_tick_finishes() {
-        let service = ScreencastService::new(2);
+        let service = PreviewService::new(2);
         let Some(guard) = service.begin_tick() else {
             panic!("first tick should start");
         };
@@ -673,7 +675,7 @@ mod tests {
 
     #[test]
     fn idle_governor_uses_fifteen_second_window() {
-        let service = ScreencastService::new(2);
+        let service = PreviewService::new(2);
         assert!(service.is_idle(NOW), "no reads yet means idle");
         service
             .last_read_ms
@@ -685,7 +687,7 @@ mod tests {
 
     #[tokio::test]
     async fn frame_cache_is_lru_capped_and_updates_recency() {
-        let service = ScreencastService::new(2);
+        let service = PreviewService::new(2);
         service
             .cache_frame(SESSION_ID, 1, "target-1", frame("a", 1))
             .await;
@@ -714,7 +716,7 @@ mod tests {
 
     #[tokio::test]
     async fn entering_backoff_drops_frame_but_keeps_failure_state() {
-        let service = ScreencastService::new(2);
+        let service = PreviewService::new(2);
         let incarnation = key(1);
         service
             .cache_frame(SESSION_ID, 1, "target-1", frame("stale", 1))
@@ -730,7 +732,7 @@ mod tests {
 
     #[tokio::test]
     async fn successful_capture_clears_failure_state() {
-        let service = ScreencastService::new(2);
+        let service = PreviewService::new(2);
         let incarnation = key(1);
         assert!(!service.record_failure(&incarnation, NOW - 2).await);
         assert!(!service.record_failure(&incarnation, NOW - 1).await);
@@ -751,7 +753,7 @@ mod tests {
 
     #[tokio::test]
     async fn per_page_in_flight_guard_clears_only_on_completion() {
-        let service = ScreencastService::new(2);
+        let service = PreviewService::new(2);
         let old = target_key(1, "target-old");
         let replacement = target_key(1, "target-new");
         assert!(service.begin_capture(&old).await);
@@ -763,7 +765,7 @@ mod tests {
 
     #[tokio::test]
     async fn garbage_collection_drops_frame_and_failure_state() {
-        let service = ScreencastService::new(2);
+        let service = PreviewService::new(2);
         let incarnation = key(1);
         service
             .cache_frame(SESSION_ID, 1, "target-1", frame("stale", 1))
@@ -781,7 +783,7 @@ mod tests {
 
     #[tokio::test]
     async fn frame_lookup_never_crosses_a_reused_page_id() {
-        let service = ScreencastService::new(2);
+        let service = PreviewService::new(2);
         service
             .cache_frame(SESSION_ID, 1, "target-old", frame("old", NOW))
             .await;
@@ -804,7 +806,7 @@ mod tests {
 
     #[tokio::test]
     async fn frame_lookup_never_crosses_session_ownership() {
-        let service = ScreencastService::new(2);
+        let service = PreviewService::new(2);
         service
             .cache_frame(SESSION_ID, 1, "target-1", frame("prior", NOW))
             .await;

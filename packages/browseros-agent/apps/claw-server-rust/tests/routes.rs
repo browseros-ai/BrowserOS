@@ -9,8 +9,8 @@ use claw_server_rust::{
     config::Config,
     identity::{ClientIdentity, ConversationIdentity},
     ids::{ConvoId, ProfileId, SessionId},
-    sessions::Session,
-    tabs::{PageOwnership, activity::RecordToolInput},
+    services::sessions::Session,
+    services::{cockpit::RecordToolInput, sessions::PageOwnership},
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -682,14 +682,14 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
 
     let screencast_task = app
         .state
-        .screencast
+        .previews
         .clone()
         .start(app.state.browser.clone(), app.state.tab_activity.clone());
     let _ = request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
     for _ in 0..50 {
         if app
             .state
-            .screencast
+            .previews
             .frame_for(&session_id, 1, "target-1")
             .await
             .is_some()
@@ -700,7 +700,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
     }
     assert!(
         app.state
-            .screencast
+            .previews
             .frame_for(&session_id, 1, "target-1")
             .await
             .is_some()
@@ -742,7 +742,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
         rows.iter().any(|row| row.has_screenshot),
         "no dispatch had a persisted screenshot"
     );
-    app.state.screencast.stop();
+    app.state.previews.stop();
     screencast_task.await?;
     drop(mock);
     Ok(())
@@ -1129,12 +1129,12 @@ async fn live_projection_filters_external_close_and_screencast_frame() -> anyhow
         1,
     );
     app.state
-        .screencast
+        .previews
         .cache_frame(
             session.id().as_str(),
             1,
             "target-old",
-            claw_server_rust::tabs::activity::ScreencastFrame {
+            claw_server_rust::services::cockpit::ScreencastFrame {
                 jpeg_base64: "/9g=".to_string(),
                 captured_at: 123,
             },
@@ -1169,24 +1169,24 @@ async fn live_projection_filters_external_close_and_screencast_frame() -> anyhow
 
     let screencast_task = app
         .state
-        .screencast
+        .previews
         .clone()
         .start(app.state.browser.clone(), app.state.tab_activity.clone());
     for _ in 0..100 {
         if app
             .state
-            .screencast
+            .previews
             .frame_for(session.id().as_str(), 1, "target-old")
             .await
             .is_none()
         {
-            app.state.screencast.stop();
+            app.state.previews.stop();
             screencast_task.await?;
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    app.state.screencast.stop();
+    app.state.previews.stop();
     screencast_task.await?;
     anyhow::bail!("stale screencast frame was not garbage-collected")
 }
@@ -1240,12 +1240,12 @@ async fn live_projection_refreshes_metadata_and_rejects_stale_preview_target() -
         "After navigation"
     );
     app.state
-        .screencast
+        .previews
         .cache_frame(
             session.id().as_str(),
             1,
             "target-old",
-            claw_server_rust::tabs::activity::ScreencastFrame {
+            claw_server_rust::services::cockpit::ScreencastFrame {
                 jpeg_base64: "/9g=".to_string(),
                 captured_at: 123,
             },
@@ -1367,7 +1367,7 @@ async fn live_session_reads_wake_polled_screenshot_previews() -> anyhow::Result<
 
     let screencast_task = app
         .state
-        .screencast
+        .previews
         .clone()
         .start(app.state.browser.clone(), app.state.tab_activity.clone());
 
@@ -1436,7 +1436,7 @@ async fn live_session_reads_wake_polled_screenshot_previews() -> anyhow::Result<
         );
     }
 
-    app.state.screencast.stop();
+    app.state.previews.stop();
     screencast_task.await?;
     drop(mock);
     Ok(())

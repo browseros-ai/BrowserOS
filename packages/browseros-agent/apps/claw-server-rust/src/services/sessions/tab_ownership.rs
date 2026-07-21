@@ -1,5 +1,5 @@
-use super::colors::TabGroupColor;
 use crate::ids::ConvoId;
+use crate::services::browser::TabGroupColor;
 use browseros_core::PageId;
 use std::{
     collections::{BTreeSet, HashMap},
@@ -374,7 +374,7 @@ impl Inner {
 #[cfg(test)]
 mod tests {
     use super::PageOwnership;
-    use crate::{ids::ConvoId, tabs::TabGroupColor};
+    use crate::{ids::ConvoId, services::browser::TabGroupColor};
     use browseros_core::PageId;
     use std::collections::BTreeSet;
 

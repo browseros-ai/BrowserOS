@@ -5,7 +5,7 @@ use crate::{
         dispatch::{ToolCall, ToolEffect, ToolEffectContext, extract_page_id, result_page_id},
         timeouts::{AUDIT_SCREENSHOT_CAPTURE, SCREENCAST_FRAME_FRESHNESS},
     },
-    tabs::activity::ScreencastFrame,
+    services::cockpit::ScreencastFrame,
 };
 use base64::Engine;
 use browseros_core::{
@@ -181,7 +181,7 @@ async fn persist_screenshot(
     let cached = match &target_id {
         Some(target_id) => {
             call.state
-                .screencast
+                .previews
                 .frame_for(call.session_id.as_str(), page_id, target_id.as_str())
                 .await
         }
@@ -481,7 +481,7 @@ mod tests {
             crate::mcp::test_support::tool_call("snapshot", json!({ "page": 1 })).await?;
         call.page_snapshot = Some(page_info("target-1"));
         call.state
-            .screencast
+            .previews
             .cache_frame(
                 "prior-session",
                 1,
@@ -502,7 +502,7 @@ mod tests {
         assert!(call.state.screenshots.read("7").await.is_err());
 
         call.state
-            .screencast
+            .previews
             .cache_frame(
                 call.session_id.as_str(),
                 1,

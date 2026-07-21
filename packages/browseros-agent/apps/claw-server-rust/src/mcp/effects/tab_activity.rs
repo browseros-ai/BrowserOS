@@ -26,7 +26,7 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
             .call
             .state
             .tab_activity
-            .record_tool(crate::tabs::activity::RecordToolInput {
+            .record_tool(crate::services::cockpit::RecordToolInput {
                 target_id: info.target_id.clone(),
                 tab_id: info.tab_id.0,
                 page_id,
