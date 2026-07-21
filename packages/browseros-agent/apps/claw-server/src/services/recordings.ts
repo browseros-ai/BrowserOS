@@ -51,13 +51,6 @@ export interface RetentionSweepResult {
 export interface RecordingStore {
   /** Returns false only when this document already durably accepted the batch. */
   appendBatch(input: AppendRecordingBatchInput): Promise<boolean>
-  appendLegacyBatch(
-    targetId: string,
-    tabId: number,
-    events: RecordingEventInput[],
-    batchId: string,
-    hasGap?: boolean,
-  ): Promise<boolean>
   readRange(
     documentId: string,
     from: number,
@@ -246,16 +239,6 @@ export function createRecordingStore(
   return {
     appendBatch(input) {
       return enqueue(input.documentId, () => append(input))
-    },
-    appendLegacyBatch(targetId, tabId, events, batchId, hasGap = false) {
-      return this.appendBatch({
-        documentId: legacyDocumentId(targetId),
-        tabId,
-        targetId,
-        events,
-        batchId,
-        hasGap,
-      })
     },
     readRange: readDocumentRange,
     async readLegacyRange(targetId, from, to) {

@@ -92,25 +92,6 @@ impl RecordingStore {
         result
     }
 
-    pub async fn append_legacy_batch(
-        &self,
-        target_id: &str,
-        tab_id: i64,
-        events: &[RecordingEventInput],
-        batch_id: &str,
-        has_gap: bool,
-    ) -> AppResult<bool> {
-        self.append_batch(
-            &legacy_document_id(target_id),
-            tab_id,
-            Some(target_id),
-            events,
-            batch_id,
-            has_gap,
-        )
-        .await
-    }
-
     async fn append_locked(
         &self,
         document_id: &str,

@@ -243,19 +243,6 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
         accepted: ndjson.split('\n').filter((line) => line.trim()).length,
       }
     },
-    async appendLegacyRecordingEvents(_sessionId, association, ndjson) {
-      if (
-        association.tabId !== 101 ||
-        association.pageId !== 7 ||
-        association.targetId !== 'target-7'
-      ) {
-        return null
-      }
-      recordingEvents += ndjson
-      return {
-        accepted: ndjson.split('\n').filter((line) => line.trim()).length,
-      }
-    },
     getSessionPreview: (sessionId) =>
       sessionId === primarySession.sessionId ||
       sessionId === secondLiveSession.sessionId
