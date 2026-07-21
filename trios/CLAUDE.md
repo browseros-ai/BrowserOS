@@ -62,10 +62,13 @@ When operating as the Trinity Agent (Queen), follow this 6-phase loop:
 ## 1. Mandatory read order for this repository
 
 1. `[AGENTS.md](AGENTS.md)` — entry point and constitutional stack.
-2. `[.trinity/SOUL.md](.trinity/SOUL.md)` — canonical law (TDD, language, validation).
-3. `[AGENTS.md](AGENTS.md)` — 27-agent alphabet and coordination rules.
-4. `[.trinity/state/session_summary.md](.trinity/state/session_summary.md)` — what was built last.
-5. `[.trinity/experience.md](.trinity/experience.md)` — prior learnings and mistakes.
+2. `[.trinity/SOUL.md](.trinity/SOUL.md)` — canonical law (TDD, language, validation, T27 canon files).
+3. `[.trinity/policy/coordination-law.md](.trinity/policy/coordination-law.md)` — shared-state mutation protocol (claims, queue, Akashic log).
+4. `[docs/T27-CONSTITUTION.md](docs/T27-CONSTITUTION.md)` — T27 law port (L1-L7, DOCS-TREE, SSOT-MATH/SWIFT).
+5. `[AGENTS.md](AGENTS.md)` — 27-agent alphabet and coordination rules.
+6. `[.claude/agents/t27-queen.md](.claude/agents/t27-queen.md)` — T27 Queen AEL v2.0 orchestration.
+7. `[.trinity/state/session_summary.md](.trinity/state/session_summary.md)` — what was built last.
+8. `[.trinity/experience.md](.trinity/experience.md)` — prior learnings and mistakes.
 
 ---
 
@@ -77,6 +80,7 @@ When operating as the Trinity Agent (Queen), follow this 6-phase loop:
 - **E2E:** `bash e2e/trios_e2e_flow.sh`
 - **Health:** `curl -s http://127.0.0.1:9105/health`
 - **Git:** branch `feat/zai-provider`, main branch is `dev`
+- **T27 pipeline:** `/t27-phi-loop` or `/t27-tri-pipeline` for spec-first work on canon files
 
 > **INVARIANT — menu-bar logo:** the trios status-bar logo must never disappear.
 > It only vanishes when the **app process dies**. After any `./build.sh` /
@@ -122,7 +126,14 @@ Phase complete: [phase name]
 
 ## 5. Skills and tooling
 
-### Available Skills
+### T27 Skills (spec-first / canon governance)
+
+- `/t27-phi-loop` — T27 9-phase PHI LOOP adapted for trios
+- `/t27-tri-pipeline` — `clade-build` → `clade-e2e` → `clade-seal` → `clade-promote`
+- `/t27-experience-save` — Save episodes to `.trinity/experience/`
+- `/t27-wave-loop` — Standing-wave charter for multi-variant work
+
+### trios-Specific Skills
 
 - `/phi-loop` — Execute 9-phase PHI LOOP
 - `/tri-pipeline` — Execute tri commands (build, e2e, verify)
@@ -148,9 +159,9 @@ Load these skills when their functionality matches the task.
 | Law | Name | Description |
 |------|------|-------------|
 | L1 | TRACEABILITY | No code merged without `Closes #N` |
-| L2 | GENERATION | Agent instructions are source of truth; generated Swift reviewed by agent |
+| L2 | GENERATION | Agent instructions/skills/specs are source of truth; canon Swift files (`BR-OUTPUT/`, selected `rings/`) are generated/reviewed artifacts; hand edits require Agent V waiver |
 | L3 | PURITY | Source files ASCII-only with English identifiers |
-| L4 | TESTABILITY | Every change must pass `./build.sh` + e2e flow |
+| L4 | TESTABILITY | Every change must pass `./build.sh` + e2e flow + agent V verdict |
 | L5 | IDENTITY | φ² = φ + 1; φ² + φ⁻² = 3; sacred constants in UI (GoldenFloat) |
 | L6 | CEILING | `ProjectPaths.swift` + `TriosTheme.swift` are UI SSOT |
 | L7 | UNITY | No new `*.sh` on critical path; use `build.sh` or MCP tools |

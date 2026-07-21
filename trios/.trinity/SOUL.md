@@ -166,22 +166,55 @@ Aligns the repository with TDD-MANDATE: behavior lives in Swift code + build scr
 
 ---
 
-## Article IX: Operational Safety Rules
+## Article IX: T27 Agent-Driven Generation (Canon Files)
 
-### §9.1 Checkpoint Rule
+### §9.1 Canon Files
+The following source locations are **canon/generated** and constitute the runtime of trios. Direct hand edits are permitted only under an explicit Agent V waiver or emergency override; routine changes MUST flow through the T27 pipeline:
+
+- `BR-OUTPUT/*.swift` — UI, ViewModels, and presentation helpers
+- `rings/SR-02/*.swift` — Application-layer ViewModels and business logic
+- Selected `rings/SR-01/*.swift` and `rings/SR-00/*.swift` when marked with a T27 seal
+
+### §9.2 Single Source of Truth
+For every canon file there MUST exist one of:
+- A `.trinity/specs/*.md` behavior specification
+- A `.claude/agents/` instruction that owns the file's domain
+- A `.claude/skills/*/SKILL.md` that defines the generation/verification pipeline
+
+The spec/instruction/skill is the SSOT; the Swift file is the derived artifact.
+
+### §9.3 Change Flow
+1. Update the spec or agent instruction.
+2. Delegate implementation to Agent C (Creator).
+3. Delegate verification to Agent V (Verifier).
+4. Seal with `/clade-seal` or `/t27-tri-pipeline`.
+5. Land with `Closes #N`.
+6. Record learning with `/experience-save`.
+
+### §9.4 Hand-Edit Waiver
+Emergency hand edits require:
+- A comment block `// AGENT-V-WAIVER: {issue-url} {reason}` at the top of the file.
+- Follow-up issue to bring the file back under T27 spec and re-verify.
+
+## Article X: Operational Safety Rules
+
+### §10.1 Checkpoint Rule
 After any build, e2e, audit, or agent run — write a structured checkpoint to `.trinity/experience/YYYY-MM-DD_hh-mm-ss_action.json`. Do not keep results only in session logs.
 
-### §9.2 Shell Whitelist Rule
+### §10.2 Shell Whitelist Rule
 `Process()` with `zsh -c` is permitted only if arguments pass an explicit allowlist. Forbidden substrings: `rm -rf /`, `curl .* | sh`, `> /dev/null`, `trios_app`, `open trios`. Violation = hard fail.
 
-### §9.3 Retry Budget Rule
+### §10.3 Retry Budget Rule
 Any external HTTP call or `Process().run()` has max 3 attempts with exponential backoff. After the 3rd — log `action: "halted_retry_exhausted"` to `event_log.jsonl` and stop. Silent retry is forbidden.
 
-### §9.4 Cleanup Rule
+### §10.4 Cleanup Rule
 After feature branch completion or clade promotion — delete `.worktrees/<branch>/`, `target/release/` artifacts, and snapshot files older than 7 days. Clean environment = stable environment.
 
-### §9.5 Boot Grace Rule
+### §10.5 Boot Grace Rule
 Any health-dependent auto-action (rollback, restart, kill) must have a boot grace period ≥ 60 seconds from process start. Until expired — logging only, no destructive actions.
+
+### §10.6 Coordination Law
+Before mutating shared canon state or the queue, agents MUST follow the protocol in `.trinity/policy/coordination-law.md`: read Akashic log, claims, and queue; acquire an exclusive claim with TTL and heartbeat; release it when done.
 
 ---
 
