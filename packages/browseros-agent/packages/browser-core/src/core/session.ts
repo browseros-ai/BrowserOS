@@ -90,11 +90,13 @@ export class BrowserSession {
     }
     const { session, targetId: currentTargetId } = resolved
     if (currentTargetId !== targetId) return null
-    return captureScreenshotWithAnnotations({
+    const capture = await captureScreenshotWithAnnotations({
       pageSession: session,
       observer: this.observe(pageId),
       options,
     })
+    const current = await this.pages.refresh(pageId)
+    return current?.targetId === targetId ? capture : null
   }
 
   /** Raw CDP escape hatch for `run` code, e.g. cdp("Page.navigate", { url }). */
