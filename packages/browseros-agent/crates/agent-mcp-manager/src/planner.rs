@@ -319,7 +319,7 @@ fn require_agent_file(
 }
 
 fn ensure_agent_installed(agent: AgentId, file: &AgentFileState) -> Result<(), Error> {
-    if file.exists || file.parent_exists {
+    if file.exists || file.parent_exists || file.install_check_hit {
         return Ok(());
     }
     Err(Error::AgentNotInstalled {
@@ -360,7 +360,10 @@ fn manifest_write_op(state: &State, manifest: &ServerManifest) -> Result<FsOp, E
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, path::PathBuf};
+    use std::{
+        collections::BTreeMap,
+        path::{Path, PathBuf},
+    };
 
     use super::{plan_disconnect, plan_link, plan_rescan, plan_unlink};
     use crate::{
@@ -391,6 +394,7 @@ mod tests {
                 raw_content: raw.to_string(),
                 exists: !raw.is_empty(),
                 parent_exists,
+                install_check_hit: false,
             }],
         }
     }
@@ -417,6 +421,17 @@ mod tests {
             plan_link(&state, &input, NOW),
             Err(Error::UnsupportedTransport { .. })
         ));
+    }
+
+    #[test]
+    fn install_fingerprint_allows_link_before_config_parent_exists() -> Result<(), Error> {
+        let mut state = state(AgentId::OpenCode, "", false);
+        state.agents[0].install_check_hit = true;
+        let planned = plan_link(&state, &link_input(AgentId::OpenCode), NOW)?;
+        assert!(planned.plan.ops.iter().any(|op| {
+            matches!(op, FsOp::WriteFile { path, .. } if path == Path::new("/tmp/ws/config.json"))
+        }));
+        Ok(())
     }
 
     #[test]

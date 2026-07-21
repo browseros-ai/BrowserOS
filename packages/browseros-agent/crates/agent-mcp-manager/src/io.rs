@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::{
     AgentId, AgentScope, Error, ServerManifest,
-    catalog::{ensure_system_scope, resolve_agent_mcp_config_path},
+    catalog::{ensure_system_scope, has_install_fingerprint, resolve_agent_mcp_config_path},
     paths::path_exists,
 };
 
@@ -32,6 +32,20 @@ pub(crate) struct AgentFileState {
     pub(crate) raw_content: String,
     pub(crate) exists: bool,
     pub(crate) parent_exists: bool,
+    pub(crate) install_check_hit: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigPathSource {
+    Catalog,
+    Explicit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentPath {
+    agent: AgentId,
+    config_path: PathBuf,
+    source: ConfigPathSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,11 +84,18 @@ pub(crate) fn read_state(
     let mut paths = Vec::with_capacity(agents.len());
     for agent in agents {
         ensure_system_scope(*agent, scope)?;
-        let config_path = match overrides.get(agent) {
-            Some(path) => path.clone(),
-            None => resolve_agent_mcp_config_path(*agent, scope)?,
+        let (config_path, source) = match overrides.get(agent) {
+            Some(path) => (path.clone(), ConfigPathSource::Explicit),
+            None => (
+                resolve_agent_mcp_config_path(*agent, scope)?,
+                ConfigPathSource::Catalog,
+            ),
         };
-        paths.push((*agent, config_path));
+        paths.push(AgentPath {
+            agent: *agent,
+            config_path,
+            source,
+        });
     }
     snapshot_state(workspace_dir, manifest, &paths, scope)
 }
@@ -89,33 +110,47 @@ pub(crate) fn read_state_at_paths(
     for (agent, _) in paths {
         ensure_system_scope(*agent, scope)?;
     }
-    snapshot_state(workspace_dir, manifest, paths, scope)
+    let explicit_paths = paths
+        .iter()
+        .map(|(agent, config_path)| AgentPath {
+            agent: *agent,
+            config_path: config_path.clone(),
+            source: ConfigPathSource::Explicit,
+        })
+        .collect::<Vec<_>>();
+    snapshot_state(workspace_dir, manifest, &explicit_paths, scope)
 }
 
 fn snapshot_state(
     workspace_dir: &Path,
     manifest: ServerManifest,
-    paths: &[(AgentId, PathBuf)],
+    paths: &[AgentPath],
     scope: AgentScope,
 ) -> Result<State, Error> {
     let mut agent_files = Vec::with_capacity(paths.len());
-    for (agent, config_path) in paths {
-        let (raw_content, exists) = read_file_with_existence(config_path)?;
+    for path in paths {
+        let (raw_content, exists) = read_file_with_existence(&path.config_path)?;
         let parent_exists = if exists {
             true
         } else {
-            match config_path.parent() {
+            match path.config_path.parent() {
                 Some(parent) => path_exists(parent)?,
                 None => false,
             }
         };
+        let install_check_hit = path.source == ConfigPathSource::Catalog
+            && scope == AgentScope::System
+            && !exists
+            && !parent_exists
+            && has_install_fingerprint(path.agent)?;
         agent_files.push(AgentFileState {
-            agent: *agent,
+            agent: path.agent,
             scope,
-            config_path: config_path.clone(),
+            config_path: path.config_path.clone(),
             raw_content,
             exists,
             parent_exists,
+            install_check_hit,
         });
     }
     Ok(State {

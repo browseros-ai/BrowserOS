@@ -5,7 +5,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{AgentId, AgentScope, Error, PerOsPaths, catalog::resolve_agent_mcp_config_path};
+use crate::{
+    AgentId, AgentScope, Error, PerOsPaths,
+    catalog::{has_install_fingerprint, resolve_agent_mcp_config_path},
+};
 
 pub(crate) fn selected_os_paths(paths: &PerOsPaths) -> &'static [&'static str] {
     match env::consts::OS {
@@ -95,17 +98,21 @@ fn is_config_path_installed(config_path: &Path) -> Result<bool, Error> {
     }
 }
 
-/// Checks whether each agent's config file or its parent directory exists.
+/// Checks whether each agent has an install fingerprint or a writable config location.
 pub fn is_installed(agents: &[AgentId]) -> Result<BTreeMap<AgentId, bool>, Error> {
     let mut result = BTreeMap::new();
     for agent in agents {
         if result.contains_key(agent) {
             continue;
         }
-        let installed = match resolve_agent_mcp_config_path(*agent, AgentScope::System) {
-            Ok(config_path) => is_config_path_installed(&config_path)?,
-            Err(Error::UnresolvedConfigPath { .. }) => false,
-            Err(error) => return Err(error),
+        let installed = if has_install_fingerprint(*agent)? {
+            true
+        } else {
+            match resolve_agent_mcp_config_path(*agent, AgentScope::System) {
+                Ok(config_path) => is_config_path_installed(&config_path)?,
+                Err(Error::UnresolvedConfigPath { .. }) => false,
+                Err(error) => return Err(error),
+            }
         };
         result.insert(*agent, installed);
     }

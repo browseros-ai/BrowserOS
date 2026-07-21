@@ -529,13 +529,17 @@ pub fn resolve_agent_mcp_config_path(agent: AgentId, scope: AgentScope) -> Resul
     })
 }
 
+pub(crate) fn has_install_fingerprint(agent: AgentId) -> Result<bool, Error> {
+    let checks = selected_os_paths(&get_catalog_entry(agent).install_check_paths);
+    any_exists(checks)
+}
+
 /// Reports catalog install checks separately from config-path writability.
 pub fn detect_installed_agents() -> Result<Vec<AgentInfo>, Error> {
     CATALOG
         .iter()
         .map(|entry| {
-            let checks = selected_os_paths(&entry.install_check_paths);
-            let installed = any_exists(checks)?;
+            let installed = has_install_fingerprint(entry.id)?;
             let config_path = resolve_agent_mcp_config_path(entry.id, AgentScope::System).ok();
             Ok(AgentInfo {
                 id: entry.id,
