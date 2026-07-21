@@ -82,6 +82,11 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Setup Biome
+        uses: biomejs/setup-biome@v2
+        with:
+          version: 2.5.4
+
       - name: Setup Rustfmt
         run: |
           rustup toolchain install stable --profile minimal

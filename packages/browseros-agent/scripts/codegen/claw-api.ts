@@ -442,7 +442,10 @@ function runGenerator(outputRoot: string): GeneratedTrees {
     clientOutput,
     `// This file is generated from contracts/claw-api/openapi.yaml. Do not edit.\n${readFileSync(clientOutput, 'utf8')}`,
   )
-  runFormatter(clientOutput)
+  runFormatter(
+    clientOutput,
+    join(root, 'packages/claw-api-client/src/generated/openapi.ts'),
+  )
   for (const file of listFiles(rust).filter((path) => path.endsWith('.rs'))) {
     const result = spawnSync(
       'rustfmt',
@@ -487,14 +490,21 @@ function runOpenApiTypescript(output: string): void {
   }
 }
 
-function runFormatter(output: string): void {
-  const result = spawnSync('bunx', ['biome', 'format', '--write', output], {
-    stdio: 'inherit',
-  })
+function runFormatter(output: string, sourcePath: string): void {
+  const result = spawnSync(
+    'biome',
+    ['format', `--stdin-file-path=${sourcePath}`],
+    {
+      encoding: 'utf8',
+      input: readFileSync(output, 'utf8'),
+      stdio: ['pipe', 'pipe', 'inherit'],
+    },
+  )
   if (result.error) throw result.error
   if (result.status !== 0) {
     throw new Error(`Biome exited with status ${result.status}`)
   }
+  writeFileSync(output, result.stdout)
 }
 
 function groupGeneratedModels(typescript: string, rust: string): string[] {
