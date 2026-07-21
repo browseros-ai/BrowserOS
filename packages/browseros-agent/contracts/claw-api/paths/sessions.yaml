@@ -1,59 +1,124 @@
-get:
-  operationId: listSessions
-  tags: [sessions]
-  description: An explicit `status=live` query returns the complete connected-session snapshot and omits `nextCursor`. Cursor and limit govern historical queries.
-  parameters:
-    - name: profileId
-      in: query
-      schema:
-        type: string
-    - name: slug
-      in: query
-      schema:
-        type: string
-    - name: status
-      in: query
-      description: Use `live` to request a complete current snapshot with live browser state.
-      schema:
-        $ref: ../schemas/sessions.yaml#/SessionStatus
-    - name: site
-      in: query
-      schema:
-        type: string
-    - name: search
-      in: query
-      schema:
-        type: string
-    - name: since
-      in: query
-      schema:
-        type: integer
-        format: int64
-        minimum: 0
-    - name: cursor
-      in: query
-      description: Historical pagination cursor; ignored for the complete live snapshot.
-      schema:
-        type: integer
-        format: int64
-        minimum: 1
-    - name: limit
-      in: query
-      description: Historical page size; ignored for the complete live snapshot.
-      schema:
-        type: integer
-        format: int32
-        minimum: 1
-        maximum: 100
-        default: 25
-  responses:
-    '200':
-      description: A complete connected-session snapshot for `status=live`; otherwise a cursor-paginated historical result.
-      content:
-        application/json:
-          schema:
-            $ref: ../schemas/sessions.yaml#/SessionList
-    '400':
-      $ref: ../responses.yaml#/BadRequest
-    '500':
-      $ref: ../responses.yaml#/InternalError
+collection:
+  get:
+    operationId: listSessions
+    tags: [sessions]
+    description: An explicit `status=live` query returns the complete connected-session snapshot and omits `nextCursor`. Cursor and limit govern historical queries.
+    parameters:
+      - name: profileId
+        in: query
+        schema:
+          type: string
+      - name: slug
+        in: query
+        schema:
+          type: string
+      - name: status
+        in: query
+        description: Use `live` to request a complete current snapshot with live browser state.
+        schema:
+          $ref: ../schemas/sessions.yaml#/SessionStatus
+      - name: site
+        in: query
+        schema:
+          type: string
+      - name: search
+        in: query
+        schema:
+          type: string
+      - name: since
+        in: query
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: cursor
+        in: query
+        description: Historical pagination cursor; ignored for the complete live snapshot.
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: limit
+        in: query
+        description: Historical page size; ignored for the complete live snapshot.
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 100
+          default: 25
+    responses:
+      '200':
+        description: A complete connected-session snapshot for `status=live`; otherwise a cursor-paginated historical result.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/sessions.yaml#/SessionList
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '500':
+        $ref: ../responses.yaml#/InternalError
+detail:
+  get:
+    operationId: getSession
+    tags: [sessions]
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+    responses:
+      '200':
+        description: A session and its ordered dispatches.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/sessions.yaml#/SessionDetail
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError
+cancel:
+  post:
+    operationId: cancelSession
+    tags: [sessions]
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+    responses:
+      '200':
+        description: Number of active dispatches cancelled, including zero for an idle live session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/sessions.yaml#/CancelSessionResponse
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '409':
+        $ref: ../responses.yaml#/Conflict
+      '500':
+        $ref: ../responses.yaml#/InternalError
+browserTabPreview:
+  get:
+    operationId: getSessionBrowserTabPreview
+    tags: [sessions]
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+      - $ref: ../parameters.yaml#/BrowserTabId
+    responses:
+      '200':
+        description: Latest cached JPEG frame for a browser tab currently owned by the session.
+        content:
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '404':
+        description: The session and browser tab do not resolve to a currently owned preview.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+            example:
+              code: preview_not_found
+              message: browser tab preview not found
+      '500':
+        $ref: ../responses.yaml#/InternalError

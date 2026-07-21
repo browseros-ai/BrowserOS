@@ -14,33 +14,33 @@ tags:
   - name: system
 paths:
   /system/health:
-    $ref: ./paths/system-health.yaml
+    $ref: ./paths/system.yaml#/health
   /system/shutdown:
-    $ref: ./paths/system-shutdown.yaml
+    $ref: ./paths/system.yaml#/shutdown
   /api/v1/system:
-    $ref: ./paths/system-info.yaml
+    $ref: ./paths/system.yaml#/info
   /api/v1/settings/telemetry:
-    $ref: ./paths/telemetry.yaml
+    $ref: ./paths/settings.yaml#/telemetry
   /api/v1/sessions:
-    $ref: ./paths/sessions.yaml
+    $ref: ./paths/sessions.yaml#/collection
   /api/v1/sessions/{sessionId}:
-    $ref: ./paths/session.yaml
+    $ref: ./paths/sessions.yaml#/detail
   /api/v1/sessions/{sessionId}/cancel:
-    $ref: ./paths/session-cancel.yaml
+    $ref: ./paths/sessions.yaml#/cancel
   /api/v1/sessions/{sessionId}/recording:
-    $ref: ./paths/session-recording.yaml
+    $ref: ./paths/recordings.yaml#/metadata
   /api/v1/sessions/{sessionId}/recording/events:
-    $ref: ./paths/session-recording-events.yaml
+    $ref: ./paths/recordings.yaml#/events
   /api/v1/recordings/events:
-    $ref: ./paths/recording-events.yaml
+    $ref: ./paths/recordings.yaml#/ingest
   /api/v1/sessions/{sessionId}/browser-tabs/{browserTabId}/preview:
-    $ref: ./paths/session-browser-tab-preview.yaml
+    $ref: ./paths/sessions.yaml#/browserTabPreview
   /api/v1/dispatches/{dispatchId}/screenshot:
-    $ref: ./paths/dispatch-screenshot.yaml
+    $ref: ./paths/dispatches.yaml#/screenshot
   /api/v1/connections:
-    $ref: ./paths/connections.yaml
+    $ref: ./paths/connections.yaml#/collection
   /api/v1/connections/{harness}:
-    $ref: ./paths/connection.yaml
+    $ref: ./paths/connections.yaml#/harness
 components:
   parameters:
     SessionId:

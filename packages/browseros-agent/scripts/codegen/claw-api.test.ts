@@ -51,6 +51,24 @@ const expectedPaths = [
   '/api/v1/connections/{harness}',
 ]
 
+const expectedPathGroups: Record<string, string> = {
+  '/system/health': 'system',
+  '/system/shutdown': 'system',
+  '/api/v1/system': 'system',
+  '/api/v1/settings/telemetry': 'settings',
+  '/api/v1/recordings/events': 'recordings',
+  '/api/v1/sessions': 'sessions',
+  '/api/v1/sessions/{sessionId}': 'sessions',
+  '/api/v1/sessions/{sessionId}/cancel': 'sessions',
+  '/api/v1/sessions/{sessionId}/recording': 'recordings',
+  '/api/v1/sessions/{sessionId}/recording/events': 'recordings',
+  '/api/v1/sessions/{sessionId}/browser-tabs/{browserTabId}/preview':
+    'sessions',
+  '/api/v1/dispatches/{dispatchId}/screenshot': 'dispatches',
+  '/api/v1/connections': 'connections',
+  '/api/v1/connections/{harness}': 'connections',
+}
+
 const expectedModelGroups = {
   ApiError: 'common',
   AppendRecordingEventsResponse: 'recordings',
@@ -107,14 +125,7 @@ describe('BrowserClaw OpenAPI contract', () => {
       expectedPaths.toSorted(),
     )
 
-    const pathItems = await Promise.all(
-      Object.values(document.paths ?? {}).map(async (path) => {
-        if (!path.$ref) return path
-        return parse(
-          await readFile(resolve(contractDirectory, path.$ref), 'utf8'),
-        ) as Record<string, OpenApiOperation>
-      }),
-    )
+    const pathItems = await resolvePathItems(document)
     const operations = pathItems.flatMap((path) =>
       Object.entries(path).filter(([method]) =>
         ['get', 'put', 'post', 'delete', 'patch'].includes(method),
@@ -151,14 +162,24 @@ describe('BrowserClaw OpenAPI contract', () => {
       extractModelGroups(source, Object.keys(expectedModelGroups)),
     ).toEqual(expectedModelGroups)
 
-    const pathItems = await Promise.all(
-      Object.values(document.paths ?? {}).map(async (path) => {
-        if (!path.$ref) return path
-        return parse(
-          await readFile(resolve(contractDirectory, path.$ref), 'utf8'),
-        ) as Record<string, OpenApiOperation>
-      }),
-    )
+    expect(
+      (await readdir(join(contractDirectory, 'paths'))).toSorted(),
+    ).toEqual([
+      'connections.yaml',
+      'dispatches.yaml',
+      'recordings.yaml',
+      'sessions.yaml',
+      'settings.yaml',
+      'system.yaml',
+    ])
+    for (const [path, pathItem] of Object.entries(document.paths ?? {})) {
+      const group = pathItem.$ref?.match(
+        /^\.\/paths\/([a-z][a-z0-9_]*)\.yaml#\/[A-Za-z][A-Za-z0-9]*$/,
+      )?.[1]
+      expect(group).toBe(expectedPathGroups[path])
+    }
+
+    const pathItems = await resolvePathItems(document)
     const operations = pathItems.flatMap((path) =>
       Object.entries(path)
         .filter(([method]) =>
@@ -179,6 +200,28 @@ describe('BrowserClaw OpenAPI contract', () => {
     )
   })
 })
+
+async function resolvePathItems(
+  document: OpenApiDocument,
+): Promise<Array<Record<string, OpenApiOperation>>> {
+  return Promise.all(
+    Object.values(document.paths ?? {}).map(async (pathItem) => {
+      if (!pathItem.$ref) return pathItem
+      const match = pathItem.$ref.match(
+        /^(\.\/paths\/[a-z][a-z0-9_]*\.yaml)#\/([A-Za-z][A-Za-z0-9]*)$/,
+      )
+      if (!match) throw new Error(`Invalid grouped path ref: ${pathItem.$ref}`)
+
+      const group = parse(
+        await readFile(resolve(contractDirectory, match[1] as string), 'utf8'),
+      ) as Record<string, Record<string, OpenApiOperation>>
+      const resolved = group[match[2] as string]
+      if (!resolved)
+        throw new Error(`Missing grouped path item: ${pathItem.$ref}`)
+      return resolved
+    }),
+  )
+}
 
 describe('TypeScript Claw API package boundary', () => {
   test('exports generated DTOs and wire enums without a transport client', async () => {
