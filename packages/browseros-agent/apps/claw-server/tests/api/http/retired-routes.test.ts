@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createServer } from '../../src/server'
+import { createServer } from '../../../src/server'
 
 const retiredRoutes = [
   ['GET', '/system/version'],
@@ -21,6 +21,8 @@ const retiredRoutes = [
   ['GET', '/audit/replays/:sessionId/meta'],
   ['GET', '/api/v1/tabs'],
   ['GET', '/api/v1/tabs/:pageId/preview'],
+  ['GET', '/api/v1/sessions/:sessionId/browser-tabs/:browserTabId/preview'],
+  ['GET', '/api/v1/dispatches/:dispatchId/screenshot'],
 ] as const
 
 describe('retired REST routes', () => {
@@ -37,7 +39,12 @@ describe('retired REST routes', () => {
   }
 
   test('retired canonical tab URLs return a bare router 404', async () => {
-    for (const path of ['/api/v1/tabs', '/api/v1/tabs/7/preview']) {
+    for (const path of [
+      '/api/v1/tabs',
+      '/api/v1/tabs/7/preview',
+      '/api/v1/sessions/session-1/browser-tabs/7/preview',
+      '/api/v1/dispatches/1/screenshot',
+    ]) {
       const response = await app.request(`http://localhost${path}`)
       expect(response.status).toBe(404)
       expect(response.headers.get('content-type') ?? '').not.toContain(

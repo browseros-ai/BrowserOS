@@ -6,8 +6,8 @@
 
 import { RECORDING_INGEST_MAX_BYTES } from '@browseros/shared/constants/limits'
 import type { Context, MiddlewareHandler } from 'hono'
-import { canonicalApiError } from '../../lib/api-error'
-import type { RequestContextEnv } from '../../lib/request-id'
+import { canonicalApiError } from '../errors'
+import type { RequestContextEnv } from '../request-context'
 
 /**
  * Bounds both declared-length and chunked uploads without retaining more than

@@ -1,7 +1,7 @@
 /**
  * Boots each implementation for the cross-server suite. The TypeScript
- * server runs in-process: `createServer` with scripted
- * `CanonicalApiDependencies`. The Rust server runs as the compiled
+ * server runs in-process: `createServer` with scripted resource handlers.
+ * The Rust server runs as the compiled
  * `contract-server` example (claw-server-rust), which seeds real app
  * state to the same shape.
  *
@@ -14,7 +14,15 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import type { CanonicalApiDependencies } from '../../../apps/claw-server/src/routes/api-v1'
+import type { HttpHandlerSet } from '../../../apps/claw-server/src/api/http'
+import { createConnectionHandlers } from '../../../apps/claw-server/src/api/http/handlers/connections'
+import { createPreviewHandlers } from '../../../apps/claw-server/src/api/http/handlers/previews'
+import { createRecordingHandlers } from '../../../apps/claw-server/src/api/http/handlers/recordings'
+import { createReplayHandlers } from '../../../apps/claw-server/src/api/http/handlers/replay'
+import { createScreenshotHandlers } from '../../../apps/claw-server/src/api/http/handlers/screenshots'
+import { createSessionHandlers } from '../../../apps/claw-server/src/api/http/handlers/sessions'
+import { createSettingsHandlers } from '../../../apps/claw-server/src/api/http/handlers/settings'
+import { createSystemHandlers } from '../../../apps/claw-server/src/api/http/handlers/system'
 import { createServer } from '../../../apps/claw-server/src/server'
 import type { Harness } from '../../../packages/claw-api/src'
 import { RECORDING_INGEST_MAX_BYTES } from '../../../packages/shared/src/constants/limits'
@@ -130,165 +138,181 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
   let recordingEvents = ''
   const recordingBatchIds = new Set<string>()
   const connections = new Map<Harness, boolean>()
-  const deps: CanonicalApiDependencies = {
-    getSystemInfo: () => ({
-      product: 'BrowserClaw',
-      version: 'contract-test',
-      url: 'http://127.0.0.1:0',
-      capabilities: {
-        recordingIngestVersion: 2,
-        recordingIngestMaxBytes: RECORDING_INGEST_MAX_BYTES,
+  const httpHandlers: HttpHandlerSet = {
+    system: createSystemHandlers({
+      getSystemInfo: () => ({
+        product: 'BrowserClaw',
+        version: 'contract-test',
+        url: 'http://127.0.0.1:0',
+        capabilities: {
+          recordingIngestVersion: 2,
+          recordingIngestMaxBytes: RECORDING_INGEST_MAX_BYTES,
+        },
+      }),
+    }),
+    settings: createSettingsHandlers({
+      getTelemetry: () => ({
+        distinctId: 'contract-test',
+        enabled: telemetryConsent,
+        consent: telemetryConsent,
+      }),
+      updateTelemetry(consent) {
+        telemetryConsent = consent
+        return {
+          distinctId: 'contract-test',
+          enabled: consent,
+          consent,
+        }
       },
     }),
-    getTelemetry: () => ({
-      distinctId: 'contract-test',
-      enabled: telemetryConsent,
-      consent: telemetryConsent,
+    sessions: createSessionHandlers({
+      listSessions: (query) =>
+        query.status === 'live'
+          ? { items: [liveSession, secondLiveSession, zeroTabLiveSession] }
+          : { items: [primarySession, endedSession] },
+      getSession: (sessionId) =>
+        sessionId === primarySession.sessionId
+          ? {
+              session: primarySession,
+              dispatches: [
+                {
+                  dispatchId: 1,
+                  createdAt: 100,
+                  slug: 'codex',
+                  label: 'Codex',
+                  sessionId,
+                  toolName: 'snapshot',
+                  pageId: 7,
+                  tabId: 101,
+                  targetId: 'target-7',
+                  screenshotId: 1,
+                },
+                {
+                  dispatchId: 2,
+                  createdAt: 200,
+                  slug: 'codex',
+                  label: 'Codex',
+                  sessionId,
+                  toolName: 'snapshot',
+                  pageId: 7,
+                  tabId: 101,
+                  targetId: 'target-7',
+                  screenshotId: 2,
+                },
+              ],
+            }
+          : null,
+      getSessionState: (sessionId) => {
+        if (
+          sessionId === primarySession.sessionId ||
+          sessionId === secondLiveSession.sessionId ||
+          sessionId === zeroTabLiveSession.sessionId
+        ) {
+          return 'live'
+        }
+        if (sessionId === endedSession.sessionId) return 'ended'
+        return 'missing'
+      },
+      cancelSession: () => 0,
     }),
-    updateTelemetry(consent) {
-      telemetryConsent = consent
-      return {
-        distinctId: 'contract-test',
-        enabled: consent,
-        consent,
-      }
-    },
-    listSessions: (query) =>
-      query.status === 'live'
-        ? { items: [liveSession, secondLiveSession, zeroTabLiveSession] }
-        : { items: [primarySession, endedSession] },
-    getSession: (sessionId) =>
-      sessionId === primarySession.sessionId
-        ? {
-            session: primarySession,
-            dispatches: [
-              {
-                dispatchId: 1,
-                createdAt: 100,
-                slug: 'codex',
-                label: 'Codex',
-                sessionId,
-                toolName: 'snapshot',
-                pageId: 7,
-                tabId: 101,
-                targetId: 'target-7',
-                screenshotId: 1,
-              },
-              {
-                dispatchId: 2,
-                createdAt: 200,
-                slug: 'codex',
-                label: 'Codex',
-                sessionId,
-                toolName: 'snapshot',
-                pageId: 7,
-                tabId: 101,
-                targetId: 'target-7',
-                screenshotId: 2,
-              },
+    recordings: createRecordingHandlers({
+      async appendRecordingEvents(_identity, events, batchId) {
+        if (recordingBatchIds.has(batchId)) return { accepted: 0 }
+        recordingEvents += `${events
+          .map((event) => JSON.stringify(event))
+          .join('\n')}\n`
+        recordingBatchIds.add(batchId)
+        return { accepted: events.length }
+      },
+    }),
+    replay: createReplayHandlers({
+      getRecording: (sessionId) =>
+        sessionId === primarySession.sessionId
+          ? {
+              hasData: recordingEvents.length > 0,
+              complete: true,
+              sizeBytes: recordingEvents.length,
+              tabs:
+                recordingEvents.length > 0
+                  ? [
+                      {
+                        tabId: 101,
+                        complete: true,
+                        firstEventAt: 100,
+                        lastEventAt: 402,
+                        segments: [
+                          {
+                            documentId: '33D25F3CF060E81B14070BC356FF1871',
+                            targetId: 'target-7',
+                            firstEventAt: 100,
+                            lastEventAt: 200,
+                            sizeBytes: recordingEvents.length,
+                            eventCount: recordingEvents
+                              .split('\n')
+                              .filter(Boolean).length,
+                            hasGap: false,
+                          },
+                        ],
+                      },
+                    ]
+                  : [],
+            }
+          : null,
+      downloadRecordingEvents: async (sessionId) =>
+        sessionId === primarySession.sessionId ? recordingEvents : null,
+    }),
+    previews: createPreviewHandlers({
+      getSessionPreview: (sessionId) =>
+        sessionId === primarySession.sessionId ||
+        sessionId === secondLiveSession.sessionId
+          ? { bytes: new Uint8Array([0xff, 0xd8]) }
+          : null,
+    }),
+    screenshots: createScreenshotHandlers({
+      listSessionScreenshots: (sessionId) => {
+        if (sessionId === primarySession.sessionId) {
+          return {
+            items: [
+              { screenshotId: 1, capturedAt: 100, toolName: 'snapshot' },
+              { screenshotId: 2, capturedAt: 200, toolName: 'snapshot' },
             ],
           }
-        : null,
-    getSessionState: (sessionId) => {
-      if (
-        sessionId === primarySession.sessionId ||
-        sessionId === secondLiveSession.sessionId ||
-        sessionId === zeroTabLiveSession.sessionId
-      ) {
-        return 'live'
-      }
-      if (sessionId === endedSession.sessionId) return 'ended'
-      return 'missing'
-    },
-    cancelSession: () => 0,
-    getRecording: (sessionId) =>
-      sessionId === primarySession.sessionId
-        ? {
-            hasData: recordingEvents.length > 0,
-            complete: true,
-            sizeBytes: recordingEvents.length,
-            tabs:
-              recordingEvents.length > 0
-                ? [
-                    {
-                      tabId: 101,
-                      complete: true,
-                      firstEventAt: 100,
-                      lastEventAt: 402,
-                      segments: [
-                        {
-                          documentId: '33D25F3CF060E81B14070BC356FF1871',
-                          targetId: 'target-7',
-                          firstEventAt: 100,
-                          lastEventAt: 200,
-                          sizeBytes: recordingEvents.length,
-                          eventCount: recordingEvents
-                            .split('\n')
-                            .filter(Boolean).length,
-                          hasGap: false,
-                        },
-                      ],
-                    },
-                  ]
-                : [],
-          }
-        : null,
-    downloadRecordingEvents: async (sessionId) =>
-      sessionId === primarySession.sessionId ? recordingEvents : null,
-    async appendRecordingEvents(_identity, ndjson, batchId) {
-      if (recordingBatchIds.has(batchId)) return { accepted: 0 }
-      recordingEvents += ndjson
-      recordingBatchIds.add(batchId)
-      return {
-        accepted: ndjson.split('\n').filter((line) => line.trim()).length,
-      }
-    },
-    getSessionPreview: (sessionId) =>
-      sessionId === primarySession.sessionId ||
-      sessionId === secondLiveSession.sessionId
-        ? { bytes: new Uint8Array([0xff, 0xd8]) }
-        : null,
-    listSessionScreenshots: (sessionId) => {
-      if (sessionId === primarySession.sessionId) {
-        return {
-          items: [
-            { screenshotId: 1, capturedAt: 100, toolName: 'snapshot' },
-            { screenshotId: 2, capturedAt: 200, toolName: 'snapshot' },
-          ],
         }
-      }
-      return [
-        secondLiveSession.sessionId,
-        zeroTabLiveSession.sessionId,
-        endedSession.sessionId,
-      ].includes(sessionId)
-        ? { items: [] }
-        : null
-    },
-    getSessionScreenshot: (sessionId, screenshotId) =>
-      sessionId === primarySession.sessionId &&
-      (screenshotId === 1 || screenshotId === 2)
-        ? { bytes: new Uint8Array([0xff, 0xd8]) }
-        : null,
-    async listConnections() {
-      return {
-        items: Array.from(connections, ([harness, installed]) => ({
-          harness,
-          installed,
-          message: installed ? 'Connected.' : 'Disconnected.',
-        })),
-      }
-    },
-    async connectHarness(harness) {
-      connections.set(harness, true)
-      return { harness, installed: true, message: 'Connected.' }
-    },
-    async disconnectHarness(harness) {
-      connections.set(harness, false)
-      return { harness, installed: false, message: 'Disconnected.' }
-    },
+        return [
+          secondLiveSession.sessionId,
+          zeroTabLiveSession.sessionId,
+          endedSession.sessionId,
+        ].includes(sessionId)
+          ? { items: [] }
+          : null
+      },
+      getSessionScreenshot: (sessionId, screenshotId) =>
+        sessionId === primarySession.sessionId &&
+        (screenshotId === 1 || screenshotId === 2)
+          ? { bytes: new Uint8Array([0xff, 0xd8]) }
+          : null,
+    }),
+    connections: createConnectionHandlers({
+      async listConnections() {
+        return {
+          items: Array.from(connections, ([harness, installed]) => ({
+            harness,
+            installed,
+            message: installed ? 'Connected.' : 'Disconnected.',
+          })),
+        }
+      },
+      async connectHarness(harness) {
+        connections.set(harness, true)
+        return { harness, installed: true, message: 'Connected.' }
+      },
+      async disconnectHarness(harness) {
+        connections.set(harness, false)
+        return { harness, installed: false, message: 'Disconnected.' }
+      },
+    }),
   }
-  const app = createServer({ canonicalApiDependencies: deps })
+  const app = createServer({ httpHandlers })
   const server = Bun.serve({ port: 0, fetch: app.fetch })
   const baseUrl = `http://127.0.0.1:${server.port}`
   return {
