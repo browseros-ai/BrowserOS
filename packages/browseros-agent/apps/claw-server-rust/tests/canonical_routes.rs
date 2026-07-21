@@ -697,6 +697,34 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn recording_ingest_accepts_bodies_larger_than_ten_mebibytes() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let headers = [
+        ("x-recording-tab-id", "101"),
+        (
+            "x-recording-document-id",
+            "33D25F3CF060E81B14070BC356FF1871",
+        ),
+        ("x-recording-batch-id", "large-batch"),
+    ];
+    let body = format!("{{\"ts\":100}}\n{}", " ".repeat(10 * 1024 * 1024));
+
+    let (status, _, bytes) = request_with_headers(
+        &app.router,
+        "POST",
+        "/api/v1/recordings/events",
+        Some("application/x-ndjson"),
+        &headers,
+        body,
+    )
+    .await?;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?, json!({ "accepted": 1 }));
+    Ok(())
+}
+
 struct LiveFixture {
     primary: Arc<Session>,
     second: Arc<Session>,

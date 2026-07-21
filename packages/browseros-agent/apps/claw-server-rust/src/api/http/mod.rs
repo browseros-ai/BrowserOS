@@ -26,7 +26,7 @@ mod sessions;
 mod settings;
 mod system;
 
-pub(super) const RECORDING_INGEST_MAX_BYTES: usize = 4 * 1024 * 1024;
+pub(super) const RECORDING_INGEST_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
