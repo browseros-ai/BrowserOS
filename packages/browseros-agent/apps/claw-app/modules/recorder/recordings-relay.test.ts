@@ -102,6 +102,76 @@ function systemResponse(version: number | null = 2, maxBytes = 4_194_304) {
 }
 
 describe('createRecordingsRelay', () => {
+  it('invokes fetch without a receiver so a queued batch reaches ingest', async () => {
+    const outbox = createMemoryOutbox()
+    const requests: Array<{
+      url: string
+      method: string
+      body: string
+      contentType: string
+      tabId: string
+      documentId: string
+      batchId: string
+      hasGap: string
+    }> = []
+    const receivers: unknown[] = []
+    const ndjson =
+      '{"timestamp":100,"type":2,"data":{"href":"https://example.com"}}\n'
+
+    async function receiverSensitiveFetch(
+      this: void,
+      input: Parameters<typeof globalThis.fetch>[0],
+      init?: Parameters<typeof globalThis.fetch>[1],
+    ): Promise<Response> {
+      receivers.push(this)
+      if (this !== undefined) {
+        throw new TypeError("Failed to execute 'fetch': Illegal invocation")
+      }
+
+      const url = input instanceof Request ? input.url : String(input)
+      const headers = new Headers(init?.headers)
+      requests.push({
+        url,
+        method: init?.method ?? 'GET',
+        body: String(init?.body ?? ''),
+        contentType: headers.get('content-type') ?? '',
+        tabId: headers.get('x-recording-tab-id') ?? '',
+        documentId: headers.get('x-recording-document-id') ?? '',
+        batchId: headers.get('x-recording-batch-id') ?? '',
+        hasGap: headers.get('x-recording-has-gap') ?? '',
+      })
+      if (url.endsWith('/api/v1/system')) return systemResponse()
+      return Response.json({ accepted: 1 })
+    }
+
+    const relay = createRecordingsRelay({
+      resolveServerBaseUrl: async () => serverBaseUrl,
+      outbox,
+      fetch: receiverSensitiveFetch,
+      warn: () => {},
+    })
+
+    await relay.post(42, documentIds.retrying, ndjson, true)
+
+    expect(requests).toHaveLength(2)
+    expect(requests[0]).toMatchObject({
+      url: `${serverBaseUrl}/api/v1/system`,
+      method: 'GET',
+    })
+    expect(requests[1]).toMatchObject({
+      url: `${serverBaseUrl}/api/v1/recordings/events`,
+      method: 'POST',
+      body: ndjson,
+      contentType: 'application/x-ndjson',
+      tabId: '42',
+      documentId: documentIds.retrying,
+      hasGap: 'true',
+    })
+    expect(requests[1]?.batchId).toBeString()
+    expect(outbox.batches).toEqual([])
+    expect(receivers).toEqual([undefined, undefined])
+  })
+
   it('persists before delivery and retries stable document batches without tab discovery', async () => {
     const clock = createFakeClock()
     const outbox = createMemoryOutbox()
