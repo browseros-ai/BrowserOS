@@ -296,7 +296,7 @@ mod tests {
         audit
             .record_session_start("session-id", "agent-id", "agent", "Agent", "test", "1")
             .await?;
-        assert!(audit.get_task("session-id").await?.is_some());
+        assert!(audit.get_task_summary("session-id").await?.is_some());
         Ok(())
     }
 
