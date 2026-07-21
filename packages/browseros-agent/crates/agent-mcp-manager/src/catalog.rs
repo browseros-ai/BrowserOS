@@ -363,13 +363,19 @@ const OPENCODE: ClientConfig = ClientConfig {
             "$XDG_CONFIG_HOME/opencode",
             "$HOME/.config/opencode",
             "$HOME/.opencode",
+            "$HOME/.local/share/opencode",
         ],
         &[
             "$XDG_CONFIG_HOME/opencode",
             "$HOME/.config/opencode",
             "$HOME/.opencode",
+            "$HOME/.local/share/opencode",
         ],
-        &["$USERPROFILE\\.config\\opencode", "$USERPROFILE\\.opencode"],
+        &[
+            "$USERPROFILE\\.config\\opencode",
+            "$USERPROFILE\\.opencode",
+            "$USERPROFILE\\.local\\share\\opencode",
+        ],
     ),
     system_paths: paths(
         &[
@@ -431,9 +437,9 @@ const ANTIGRAVITY: ClientConfig = ClientConfig {
         &["$USERPROFILE\\.gemini\\antigravity"],
     ),
     system_paths: paths(
-        &["$HOME/.gemini/antigravity/mcp_config.json"],
-        &["$HOME/.gemini/antigravity/mcp_config.json"],
-        &["$USERPROFILE\\.gemini\\antigravity\\mcp_config.json"],
+        &["$HOME/.gemini/config/mcp_config.json"],
+        &["$HOME/.gemini/config/mcp_config.json"],
+        &["$USERPROFILE\\.gemini\\config\\mcp_config.json"],
     ),
     project_file: None,
     format: ConfigFormat::Json,
@@ -454,7 +460,7 @@ const ANTIGRAVITY: ClientConfig = ClientConfig {
         first_party: "https://antigravity.google/",
         smithery: Some(SMITHERY_URL),
         notes: Some(
-            "Google's Antigravity editor. Uses `serverUrl` for remote entries (matches Windsurf's convention).",
+            "Google's Antigravity editor. Config lives at `~/.gemini/config/mcp_config.json` (schema id: https://antigravity.google/schemas/mcp_config.json). Uses `serverUrl` for remote entries (matches Windsurf's convention).",
         ),
         verified: VERIFIED,
     },

@@ -261,6 +261,66 @@ fn malformed_manifest_is_never_silently_reset() -> Result<(), Box<dyn std::error
 }
 
 #[test]
+fn recent_catalog_path_fixes_match_typescript() -> Result<(), Box<dyn std::error::Error>> {
+    let opencode = resolve_agent_surface(AgentId::OpenCode, AgentScope::System)?.client;
+    assert_eq!(
+        opencode.install_check_paths.darwin,
+        &[
+            "$XDG_CONFIG_HOME/opencode",
+            "$HOME/.config/opencode",
+            "$HOME/.opencode",
+            "$HOME/.local/share/opencode",
+        ]
+    );
+    assert_eq!(
+        opencode.install_check_paths.linux,
+        &[
+            "$XDG_CONFIG_HOME/opencode",
+            "$HOME/.config/opencode",
+            "$HOME/.opencode",
+            "$HOME/.local/share/opencode",
+        ]
+    );
+    assert_eq!(
+        opencode.install_check_paths.windows,
+        &[
+            "$USERPROFILE\\.config\\opencode",
+            "$USERPROFILE\\.opencode",
+            "$USERPROFILE\\.local\\share\\opencode",
+        ]
+    );
+    assert_eq!(
+        opencode.system_paths.darwin,
+        &[
+            "$XDG_CONFIG_HOME/opencode/opencode.json",
+            "$HOME/.config/opencode/opencode.json",
+            "$XDG_CONFIG_HOME/opencode/opencode.jsonc",
+            "$HOME/.config/opencode/opencode.jsonc",
+            "$HOME/.opencode/opencode.jsonc",
+        ]
+    );
+
+    let antigravity = resolve_agent_surface(AgentId::Antigravity, AgentScope::System)?.client;
+    assert_eq!(
+        antigravity.install_check_paths.darwin,
+        &["$HOME/.gemini/antigravity"]
+    );
+    assert_eq!(
+        antigravity.system_paths.darwin,
+        &["$HOME/.gemini/config/mcp_config.json"]
+    );
+    assert_eq!(
+        antigravity.system_paths.linux,
+        &["$HOME/.gemini/config/mcp_config.json"]
+    );
+    assert_eq!(
+        antigravity.system_paths.windows,
+        &["$USERPROFILE\\.gemini\\config\\mcp_config.json"]
+    );
+    Ok(())
+}
+
+#[test]
 fn public_agent_helpers_expose_exactly_the_seven_harness_targets()
 -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(
