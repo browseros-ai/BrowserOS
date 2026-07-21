@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/startup/infobar_utils.cc b/chrome/browser/ui/startup/infobar_utils.cc
-index 505e8669edbbf..88201c009146e 100644
+index 4907b9a951040624eab323061636a222315194e5..237ddaf198aabc5f1f6737b4ddb1e6e50cf3e774 100644
 --- a/chrome/browser/ui/startup/infobar_utils.cc
 +++ b/chrome/browser/ui/startup/infobar_utils.cc
-@@ -184,10 +184,6 @@ void AddInfoBarsIfNecessary(BrowserWindowInterface* browser,
+@@ -185,10 +185,6 @@ void AddInfoBarsIfNecessary(BrowserWindowInterface* browser,
    infobars::ContentInfoBarManager* infobar_manager =
        infobars::ContentInfoBarManager::FromWebContents(web_contents);
  

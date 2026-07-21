@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/views/side_panel/side_panel.cc b/chrome/browser/ui/views/side_panel/side_panel.cc
-index b341cbd160ba3..8a637ab8bd2f6 100644
+index 90f261de2344dd9674f6b10599b80ffd6a0eb951..d13fe9aa60d34f57448828ac2514735e8a396ed0 100644
 --- a/chrome/browser/ui/views/side_panel/side_panel.cc
 +++ b/chrome/browser/ui/views/side_panel/side_panel.cc
-@@ -967,8 +967,10 @@ double SidePanel::GetAnimationValueFor(BrowserAnimationSequence which) const {
+@@ -716,8 +716,10 @@ double SidePanel::GetAnimationValueFor(BrowserAnimationSequence which) const {
  }
  
  bool SidePanel::ShouldShowAnimation() const {
@@ -11,6 +11,6 @@ index b341cbd160ba3..8a637ab8bd2f6 100644
 -      gfx::Animation::ShouldRenderRichAnimation() && !animations_disabled_;
 +      gfx::Animation::ShouldRenderRichAnimation() && !animations_disabled_ &&
 +      animations_disabled_browseros_;
- #if BUILDFLAG(IS_WIN)
-   // Don't show open/close animations for the toolbar height panel on Windows
-   // due to jank. The "show from" animation should still run which is the only
+   return should_show_animations;
+ }
+ 

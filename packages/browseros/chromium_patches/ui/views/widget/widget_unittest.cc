@@ -1,8 +1,8 @@
 diff --git a/ui/views/widget/widget_unittest.cc b/ui/views/widget/widget_unittest.cc
-index 3256fb93c938b..c87a995bb174d 100644
+index 7d5098e1473847a5c335a8686ae937fe08ccb4aa..f2105ebec87fb286805acfab8aa49182b6dd8fb5 100644
 --- a/ui/views/widget/widget_unittest.cc
 +++ b/ui/views/widget/widget_unittest.cc
-@@ -264,6 +264,14 @@ TEST_F(WidgetTest, WidgetInitParams) {
+@@ -265,6 +265,14 @@ TEST_F(WidgetTest, WidgetInitParams) {
    EXPECT_EQ(Widget::InitParams::WindowOpacity::kInferred, init1.opacity);
  }
  

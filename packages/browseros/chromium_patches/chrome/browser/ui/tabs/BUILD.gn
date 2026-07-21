@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/tabs/BUILD.gn b/chrome/browser/ui/tabs/BUILD.gn
-index 4a638c0371d70..1a3726e0f3a71 100644
+index 5c63bfc932aae2dd3891ed0e9a3e77bd71287b12..16a4f523af18c511a0c4ad1e850d15fcbc0a908c 100644
 --- a/chrome/browser/ui/tabs/BUILD.gn
 +++ b/chrome/browser/ui/tabs/BUILD.gn
-@@ -487,6 +487,7 @@ if (!is_android) {
+@@ -453,6 +453,7 @@ if (!is_android) {
        "//chrome/browser/accessibility_annotator/content_annotator",
        "//chrome/browser/actor",
        "//chrome/browser/actor/ui",

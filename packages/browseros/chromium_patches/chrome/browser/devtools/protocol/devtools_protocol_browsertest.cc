@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
-index 6a3a8ba7d7997..12cd7a001c5e6 100644
+index c7a4d458d226f4eb4ca60c77172a1b59f8c4381c..f7995ff1bf2cdcc33820c934985ad0aed5067e34 100644
 --- a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
 +++ b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
 @@ -21,6 +21,7 @@
@@ -18,7 +18,7 @@ index 6a3a8ba7d7997..12cd7a001c5e6 100644
  #include "chrome/browser/preloading/preloading_prefs.h"
  #include "chrome/browser/privacy_sandbox/privacy_sandbox_attestations/privacy_sandbox_attestations_mixin.h"
  #include "chrome/browser/profiles/profile.h"
-@@ -41,6 +43,8 @@
+@@ -42,6 +44,8 @@
  #include "components/content_settings/core/browser/cookie_settings.h"
  #include "components/content_settings/core/common/pref_names.h"
  #include "components/custom_handlers/protocol_handler_registry.h"
@@ -27,9 +27,9 @@ index 6a3a8ba7d7997..12cd7a001c5e6 100644
  #include "components/infobars/content/content_infobar_manager.h"
  #include "components/infobars/core/infobar.h"
  #include "components/infobars/core/infobar_delegate.h"
-@@ -2121,6 +2125,93 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
-   SendCommandSync("Target.getTargets");
-   EXPECT_EQ(2u, result()->FindList("targetInfos")->size());
+@@ -2232,6 +2236,93 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
+   EXPECT_EQ(group_id.ToString(),
+             *second_get_target_info_data.FindString("tabGroupId"));
  }
 +
 +IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,

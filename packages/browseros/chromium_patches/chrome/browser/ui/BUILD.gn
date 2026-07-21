@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
-index 5907498d01115..1d062220a528c 100644
+index fd453a37ea0cf246bf94234780ac59db17e19f56..8ebcc5dd8c7039d920e7ad8e279df5ab2c00a0f0 100644
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
 @@ -8,6 +8,7 @@ import("//build/config/features.gni")
@@ -10,15 +10,15 @@ index 5907498d01115..1d062220a528c 100644
  import("//chrome/common/features.gni")
  import("//components/captive_portal/core/features.gni")
  import("//components/compose/features.gni")
-@@ -278,6 +279,7 @@ static_library("ui") {
-     "//chrome/browser:flags",
-     "//chrome/browser:font_pref",
-     "//chrome/browser:global_features",
+@@ -482,6 +483,7 @@ static_library("ui") {
+     "//chrome/browser:icon_manager",
+     "//chrome/browser:renderer_preferences_util",
+     "//chrome/browser:resources_util",
 +    "//chrome/browser/browseros/onboarding",
      "//chrome/browser/affiliations",
      "//chrome/browser/ai",
      "//chrome/browser/autocomplete",
-@@ -1349,6 +1351,8 @@ static_library("ui") {
+@@ -1518,6 +1520,8 @@ static_library("ui") {
        "webui/settings/search_engines_handler.h",
        "webui/settings/security_settings_provider.cc",
        "webui/settings/security_settings_provider.h",
@@ -27,25 +27,3 @@ index 5907498d01115..1d062220a528c 100644
        "webui/settings/settings_clear_browsing_data_handler.cc",
        "webui/settings/settings_clear_browsing_data_handler.h",
        "webui/settings/settings_localized_strings_privacy_sandbox_provider.cc",
-@@ -3356,6 +3360,8 @@ static_library("ui") {
-       "views/frame/immersive_mode_overlay_views_mac.mm",
-       "views/tab_contents/chrome_web_contents_view_delegate_views_mac.h",
-       "views/tab_contents/chrome_web_contents_view_delegate_views_mac.mm",
-+      "webui/help/sparkle_version_updater_mac.h",
-+      "webui/help/sparkle_version_updater_mac.mm",
-       "webui/help/version_updater_mac.mm",
-       "webui/settings/mac_system_settings_handler.cc",
-       "webui/settings/mac_system_settings_handler.h",
-@@ -3497,6 +3503,12 @@ static_library("ui") {
-       ]
-     } else {
-       sources += [ "webui/help/version_updater_basic.cc" ]
-+      if (enable_winsparkle) {
-+        sources += [
-+          "webui/help/winsparkle_version_updater_win.cc",
-+          "webui/help/winsparkle_version_updater_win.h",
-+        ]
-+      }
-     }
-   }
- 

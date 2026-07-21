@@ -1,8 +1,8 @@
 diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
-index cc98a1463c539..5b3c5bfae4e0d 100644
+index 973a46b2a34bb170e49417f4f76f8b2d899317d8..6549827d6c12aa9dd290daf9d244c44746f20a83 100644
 --- a/chrome/BUILD.gn
 +++ b/chrome/BUILD.gn
-@@ -16,7 +16,9 @@ import("//build/config/win/console_app.gni")
+@@ -15,7 +15,9 @@ import("//build/config/win/console_app.gni")
  import("//build/config/win/manifest.gni")
  import("//build/private_code_test/private_code_test.gni")
  import("//build/toolchain/toolchain.gni")
@@ -12,7 +12,7 @@ index cc98a1463c539..5b3c5bfae4e0d 100644
  import("//chrome/chrome_paks.gni")
  import("//chrome/common/features.gni")
  import("//chrome/process_version_rc_template.gni")
-@@ -376,6 +378,8 @@ if (!is_android && !is_mac) {
+@@ -371,6 +373,8 @@ if (!is_android && !is_mac) {
      }
  
      data_deps += [
@@ -21,7 +21,7 @@ index cc98a1463c539..5b3c5bfae4e0d 100644
        "//chrome/browser/resources/media/mei_preload:component",
        "//chrome/browser/web_applications/isolated_web_apps/key_distribution/preload:component",
        "//components/privacy_sandbox/privacy_sandbox_attestations/preload:component",
-@@ -515,6 +519,7 @@ if (is_win) {
+@@ -524,6 +528,7 @@ if (is_win) {
        "CHROMIUM_BUNDLE_ID=$chrome_mac_bundle_id",
        "CHROMIUM_SHORT_NAME=$chrome_product_short_name",
        "CHROMIUM_CREATOR=$chrome_mac_creator_code",
@@ -29,7 +29,7 @@ index cc98a1463c539..5b3c5bfae4e0d 100644
      ]
  
      sources = [ "app/chrome_exe_main_mac.cc" ]
-@@ -527,6 +532,7 @@ if (is_win) {
+@@ -536,6 +541,7 @@ if (is_win) {
        ":chrome_versioned_bundle_data",
        "//base/allocator:early_zone_registration_apple",
        "//build:branding_buildflags",
@@ -37,9 +37,9 @@ index cc98a1463c539..5b3c5bfae4e0d 100644
        "//chrome/common:buildflags",
        "//chrome/common:version_header",
      ]
-@@ -1198,6 +1204,9 @@ if (is_win) {
-       bundle_deps += [ ":preinstalled_apps" ]
-     }
+@@ -1219,12 +1225,21 @@ if (is_win) {
+       "//components/privacy_sandbox/privacy_sandbox_attestations/preload:component_bundle",
+     ]
  
 +    # BrowserOS bundled extensions for immediate install on first run
 +    bundle_deps += [ "//chrome/browser/browseros/bundled_extensions" ]
@@ -47,9 +47,8 @@ index cc98a1463c539..5b3c5bfae4e0d 100644
      if (!use_static_angle) {
        bundle_deps += [ ":angle_binaries" ]
      }
-@@ -1205,6 +1214,12 @@ if (is_win) {
-     bundle_deps +=
-         [ "//third_party/search_engines_data:prepopulated_engines_bundle_data" ]
+ 
+     bundle_deps += [ ":vulkan_loader_binaries" ]
  
 +    if (enable_sparkle) {
 +      bundle_deps += [ "//third_party/sparkle:sparkle_framework_bundle" ]

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.cc b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
 new file mode 100644
-index 0000000000000..ea477521a09d7
+index 0000000000000000000000000000000000000000..8de9a4a1655460ffdf1aa3b3cc18ae7f5dd67c8f
 --- /dev/null
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
-@@ -0,0 +1,341 @@
+@@ -0,0 +1,362 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -28,8 +28,10 @@ index 0000000000000..ea477521a09d7
 +#include "chrome/browser/platform_util.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/ui/browser.h"
-+#include "chrome/browser/ui/browser_finder.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 +#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/browser/ui/toasts/api/toast_id.h"
@@ -47,6 +49,25 @@ index 0000000000000..ea477521a09d7
 +namespace api {
 +
 +namespace {
++
++// Returns the most recently activated user-visible browser for `profile`.
++// Hidden agent-owned browsers are never returned.
++Browser* FindLastActiveVisibleBrowser(Profile* profile) {
++  BrowserWindowInterface* last_active = nullptr;
++  if (ProfileBrowserCollection* collection =
++          ProfileBrowserCollection::GetForProfile(profile)) {
++    collection->ForEach(
++        [&last_active](BrowserWindowInterface* browser) {
++          if (!ShouldShowBrowserInUserInterface(browser)) {
++            return true;
++          }
++          last_active = browser;
++          return false;  // stop iterating
++        },
++        BrowserCollection::Order::kActivation);
++  }
++  return last_active ? last_active->GetBrowserForMigrationOnly() : nullptr;
++}
 +
 +PrefService* FindPrefService(const std::string& pref_name, Profile* profile) {
 +  PrefService* local_state = g_browser_process->local_state();
@@ -276,7 +297,7 @@ index 0000000000000..ea477521a09d7
 +  }
 +
 +  Profile* profile = Profile::FromBrowserContext(browser_context());
-+  Browser* browser = chrome::FindLastActiveWithProfile(profile);
++  Browser* browser = FindLastActiveVisibleBrowser(profile);
 +  if (!browser) {
 +    return RespondNow(Error("No active browser window"));
 +  }
@@ -311,7 +332,7 @@ index 0000000000000..ea477521a09d7
 +  }
 +
 +  Profile* profile = Profile::FromBrowserContext(browser_context());
-+  Browser* browser = chrome::FindLastActiveWithProfile(profile);
++  Browser* browser = FindLastActiveVisibleBrowser(profile);
 +  if (!browser) {
 +    return RespondNow(Error("No active browser window"));
 +  }

@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/browsing_data/chrome_browsing_data_remover_delegate_unittest.cc b/chrome/browser/browsing_data/chrome_browsing_data_remover_delegate_unittest.cc
-index b0c2b67afd6a9..4450284732db9 100644
+index d48567325f29813127166b34c596214abbb12885..8f10fdb4f283c2f4adaa0892f9f1dd155a347777 100644
 --- a/chrome/browser/browsing_data/chrome_browsing_data_remover_delegate_unittest.cc
 +++ b/chrome/browser/browsing_data/chrome_browsing_data_remover_delegate_unittest.cc
-@@ -825,6 +825,7 @@ class RemoveDownloadsTester {
+@@ -828,6 +828,7 @@ class RemoveDownloadsTester {
    raw_ptr<ChromeDownloadManagerDelegate> chrome_download_manager_delegate_;
  };
  
@@ -10,7 +10,7 @@ index b0c2b67afd6a9..4450284732db9 100644
  base::RepeatingCallback<bool(const GURL&)> CreateUrlFilterFromOriginFilter(
      const base::RepeatingCallback<bool(const url::Origin&)>& origin_filter) {
    if (origin_filter.is_null()) {
-@@ -834,6 +835,7 @@ base::RepeatingCallback<bool(const GURL&)> CreateUrlFilterFromOriginFilter(
+@@ -837,6 +838,7 @@ base::RepeatingCallback<bool(const GURL&)> CreateUrlFilterFromOriginFilter(
      return origin_filter.Run(url::Origin::Create(url));
    });
  }

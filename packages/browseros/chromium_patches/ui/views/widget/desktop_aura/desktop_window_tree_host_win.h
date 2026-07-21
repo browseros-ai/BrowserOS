@@ -1,10 +1,10 @@
 diff --git a/ui/views/widget/desktop_aura/desktop_window_tree_host_win.h b/ui/views/widget/desktop_aura/desktop_window_tree_host_win.h
-index a389e96de45c8..befe01b46b1d0 100644
+index 9ba64dc1b546b3a4e48e13949a555c227e02327c..a7755b89ec4c5f5ebf1c2e05cfc3373ecde465b4 100644
 --- a/ui/views/widget/desktop_aura/desktop_window_tree_host_win.h
 +++ b/ui/views/widget/desktop_aura/desktop_window_tree_host_win.h
-@@ -351,6 +351,12 @@ class VIEWS_EXPORT DesktopWindowTreeHostWin
-   // True if the window is allow to take screenshots, by default is true.
-   bool allow_screenshots_ = true;
+@@ -368,6 +368,12 @@ class VIEWS_EXPORT DesktopWindowTreeHostWin
+   // Overrides the remote session detection for testing.
+   std::optional<bool> remote_session_for_testing_;
  
 +  // Honors Widget::InitParams::headless: the HWND is created but never
 +  // transitioned to visible via ShowWindow(SW_SHOW*), so the OS compositor

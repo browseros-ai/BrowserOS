@@ -1,8 +1,8 @@
 diff --git a/ui/ozone/platform/x11/x11_window.h b/ui/ozone/platform/x11/x11_window.h
-index f744189f0aa26..ad022d7303ccf 100644
+index 0d71c66f4609b09acda9275c42b0c73f0d99d2a5..af7d407e904b2a055585e2ad52ae6620f2f250b2 100644
 --- a/ui/ozone/platform/x11/x11_window.h
 +++ b/ui/ozone/platform/x11/x11_window.h
-@@ -428,6 +428,11 @@ class X11Window : public PlatformWindow,
+@@ -434,6 +434,11 @@ class X11Window : public PlatformWindow,
    // True if the window is security-sensitive. Implies |is_always_on_top_|.
    bool is_security_surface_ = false;
  

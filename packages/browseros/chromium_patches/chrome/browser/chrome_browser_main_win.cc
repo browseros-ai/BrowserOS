@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/chrome_browser_main_win.cc b/chrome/browser/chrome_browser_main_win.cc
-index 5baaa31780017..2e060b78b2a2a 100644
+index 9c8bee99ab0a48802d1c1b7ccad571b6b412a4b0..f4d888b3bcefbe878b73d5630c85505374e5c753 100644
 --- a/chrome/browser/chrome_browser_main_win.cc
 +++ b/chrome/browser/chrome_browser_main_win.cc
-@@ -57,6 +57,7 @@
+@@ -58,6 +58,7 @@
  #include "chrome/browser/active_use_util.h"
  #include "chrome/browser/browser_features.h"
  #include "chrome/browser/browser_process.h"
@@ -10,7 +10,7 @@ index 5baaa31780017..2e060b78b2a2a 100644
  #include "chrome/browser/first_run/first_run.h"
  #include "chrome/browser/first_run/upgrade_util.h"
  #include "chrome/browser/first_run/upgrade_util_win.h"
-@@ -135,6 +136,10 @@
+@@ -138,6 +139,10 @@
  #include "chrome/browser/platform_experience/installer/installer_win.h"
  #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
  
@@ -21,7 +21,7 @@ index 5baaa31780017..2e060b78b2a2a 100644
  namespace {
  
  typedef HRESULT (STDAPICALLTYPE* RegisterApplicationRestartProc)(
-@@ -599,6 +604,11 @@ void ChromeBrowserMainPartsWin::PostCreateThreads() {
+@@ -602,6 +607,11 @@ void ChromeBrowserMainPartsWin::PostCreateThreads() {
  }
  
  void ChromeBrowserMainPartsWin::PostMainMessageLoopRun() {
@@ -33,7 +33,7 @@ index 5baaa31780017..2e060b78b2a2a 100644
    base::ImportantFileWriterCleaner::GetInstance().Stop();
  
    ChromeBrowserMainParts::PostMainMessageLoopRun();
-@@ -660,6 +670,12 @@ void ChromeBrowserMainPartsWin::PostBrowserStart() {
+@@ -663,6 +673,12 @@ void ChromeBrowserMainPartsWin::PostBrowserStart() {
  
    InitializeChromeElf();
  

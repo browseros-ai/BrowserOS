@@ -63,7 +63,6 @@ features:
       - chrome/common/chrome_paths_linux.cc
       - chrome/install_static/chromium_install_modes.h
       # About page (version + branding display)
-      - chrome/browser/resources/settings/about_page/about_page.html
       - chrome/browser/resources/settings/about_page/about_page.ts
       - chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
       # Dock icon variants
@@ -74,6 +73,8 @@ features:
       - components/vector_icons/BUILD.gn
       - components/vector_icons/chat_orange.icon
 
+      - "chrome/browser/resources/settings/about_page/about_page.css"
+      - "chrome/browser/resources/settings/about_page/about_page.html.ts"
   browserclaw-product-dir:
     description: "feat: per-product user-data dir via browseros_product buildflag"
     files:
@@ -127,6 +128,7 @@ features:
       - chrome/browser/lifetime/application_lifetime.cc
       - chrome/browser/upgrade_detector/upgrade_detector_impl.cc
 
+      - "chrome/browser/ui/webui/help/BUILD.gn"
   sparkle-third-party:
     description: "feat: sparkle third party framework (downloaded on-the-fly)"
     files:
@@ -356,9 +358,6 @@ features:
       - chrome/browser/sessions/session_service_base.cc
       - chrome/browser/ui/browser.cc
       - chrome/browser/ui/browser.h
-      - chrome/browser/ui/browser_finder.cc
-      - chrome/browser/ui/browser_list.cc
-      - chrome/browser/ui/browser_list.h
       - chrome/browser/ui/browser_unittest.cc
       - chrome/browser/ui/views/frame/browser_native_widget_ash.cc
       - chrome/browser/ui/views/frame/browser_native_widget_aura.cc
@@ -376,6 +375,10 @@ features:
       - ui/views/widget/widget_hwnd_utils.cc
       - ui/views/widget/widget_unittest.cc
 
+      - "chrome/browser/ui/browser_manager_service.cc"
+      - "chrome/browser/ui/browser_window/internal/browser_window_interface_iterator_non_android.cc"
+      - "chrome/browser/ui/browser_window/internal/profile_browser_collection.cc"
+      - "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
   cdp-api:
     description: "feat: chrome devtools protocol API"
     files:
@@ -418,12 +421,10 @@ features:
       - chrome/browser/browser_features.cc
       - chrome/browser/browser_features.h
       - chrome/browser/net/profile_network_context_service.cc
-      - chrome/browser/resources/settings/reset_page/reset_profile_dialog.html
       - chrome/browser/themes/BUILD.gn
       - chrome/browser/themes/theme_service.cc
       - chrome/browser/ui/browser_ui_prefs.cc
       - chrome/browser/ui/views/extensions/extension_view_views.cc
-      - chrome/browser/ui/views/chrome_layout_provider.cc
       - chrome/browser/ui/views/infobars/infobar_container_view.cc
       - chrome/browser/ui/views/new_tab_footer/
       - chrome/browser/ui/webui/new_tab_footer/
@@ -433,6 +434,7 @@ features:
       - components/payments/core/payment_prefs.cc
       - components/search/ntp_features.cc
 
+      - "chrome/browser/resources/settings/reset_page/reset_profile_dialog.html.ts"
   cdp-fixes:
     description: "fix: chrome devtools protocol fixes"
     files:

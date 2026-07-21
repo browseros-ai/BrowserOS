@@ -1,18 +1,18 @@
 diff --git a/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler.cc b/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler.cc
-index c442fa1941dff..0a0a70845b0a0 100644
+index 96695a255df870dd5f5109bd00ec0a0f3c5edd02..1560e97a5d65c1f96e0b3412a0ec28670eea8d1b 100644
 --- a/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler.cc
 +++ b/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler.cc
-@@ -94,6 +94,9 @@ MojoActionForChromeAction(actions::ActionId action_id) {
-       return side_panel::customize_chrome::mojom::ActionId::kSplitTab;
-     case kActionSidePanelShowContextualTasks:
-       return side_panel::customize_chrome::mojom::ActionId::kContextualTasks;
+@@ -98,6 +98,9 @@ MojoActionForChromeAction(actions::ActionId action_id) {
+     case kActionSidePanelShowTabsFromOtherDevices:
+       return side_panel::customize_chrome::mojom::ActionId::
+           kShowTabsFromOtherDevices;
 +    // BrowserOS: custom toolbar actions
 +    case kActionSidePanelShowThirdPartyLlm:
 +      return side_panel::customize_chrome::mojom::ActionId::kShowThirdPartyLlm;
      default:
        return std::nullopt;
    }
-@@ -154,6 +157,9 @@ std::optional<actions::ActionId> ChromeActionForMojoAction(
+@@ -161,6 +164,9 @@ std::optional<actions::ActionId> ChromeActionForMojoAction(
        return kActionSplitTab;
      case side_panel::customize_chrome::mojom::ActionId::kContextualTasks:
        return kActionSidePanelShowContextualTasks;
@@ -22,9 +22,9 @@ index c442fa1941dff..0a0a70845b0a0 100644
      default:
        return std::nullopt;
    }
-@@ -344,6 +350,8 @@ void CustomizeToolbarHandler::ListActions(ListActionsCallback callback) {
+@@ -333,6 +339,8 @@ void CustomizeToolbarHandler::ListActions(ListActionsCallback callback) {
               side_panel::customize_chrome::mojom::CategoryId::kYourChrome);
-   add_action(kActionSidePanelShowReadingList,
+   add_action(kActionSidePanelShowTabsFromOtherDevices,
               side_panel::customize_chrome::mojom::CategoryId::kYourChrome);
 +  add_action(kActionSidePanelShowThirdPartyLlm,
 +             side_panel::customize_chrome::mojom::CategoryId::kYourChrome);

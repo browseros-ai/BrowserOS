@@ -1,8 +1,8 @@
 diff --git a/chrome/common/extensions/api/_api_features.json b/chrome/common/extensions/api/_api_features.json
-index 61747d2e11813..8ed80de268684 100644
+index 79ef33aa4bcb0cefcf0fd6533d2d97ecdb7ecc70..425dbd745aa98e8a6a4f8f2a9f32969b0054d2f3 100644
 --- a/chrome/common/extensions/api/_api_features.json
 +++ b/chrome/common/extensions/api/_api_features.json
-@@ -186,6 +186,10 @@
+@@ -230,6 +230,10 @@
      ],
      "contexts": ["privileged_extension"]
    }],

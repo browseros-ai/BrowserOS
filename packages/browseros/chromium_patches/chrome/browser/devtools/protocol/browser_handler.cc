@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler.cc b/chrome/browser/devtools/protocol/browser_handler.cc
-index 30bd52d09c3fc..5ef348c475174 100644
+index ccf5dd29d87387ffed251ea944406722a87c2997..16305fdd8049c14aafb1ca3f5a280291fa0cabcd 100644
 --- a/chrome/browser/devtools/protocol/browser_handler.cc
 +++ b/chrome/browser/devtools/protocol/browser_handler.cc
-@@ -4,23 +4,39 @@
+@@ -4,22 +4,38 @@
  
  #include "chrome/browser/devtools/protocol/browser_handler.h"
  
@@ -24,7 +24,6 @@ index 30bd52d09c3fc..5ef348c475174 100644
  #include "chrome/browser/profiles/profile_manager.h"
 +#include "chrome/browser/ui/browser.h"
  #include "chrome/browser/ui/browser_commands.h"
- #include "chrome/browser/ui/browser_list.h"
 +#include "chrome/browser/ui/browser_tabstrip.h"
  #include "chrome/browser/ui/browser_window.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -42,7 +41,7 @@ index 30bd52d09c3fc..5ef348c475174 100644
  #include "content/public/browser/browser_task_traits.h"
  #include "content/public/browser/browser_thread.h"
  #include "content/public/browser/devtools_agent_host.h"
-@@ -30,10 +46,32 @@
+@@ -29,10 +45,32 @@
  #include "ui/gfx/image/image.h"
  #include "ui/gfx/image/image_png_rep.h"
  
@@ -75,7 +74,7 @@ index 30bd52d09c3fc..5ef348c475174 100644
  BrowserWindow* GetBrowserWindow(int window_id) {
    BrowserWindow* result = nullptr;
    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-@@ -72,12 +110,468 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
+@@ -70,12 +108,468 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
        .Build();
  }
  
@@ -545,7 +544,7 @@ index 30bd52d09c3fc..5ef348c475174 100644
    if (dispatcher)
      protocol::Browser::Dispatcher::wire(dispatcher, this);
  }
-@@ -120,6 +614,65 @@ Response BrowserHandler::GetWindowForTarget(
+@@ -118,6 +612,65 @@ Response BrowserHandler::GetWindowForTarget(
    return Response::Success();
  }
  
@@ -611,7 +610,7 @@ index 30bd52d09c3fc..5ef348c475174 100644
  Response BrowserHandler::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -297,3 +850,810 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
+@@ -295,3 +848,810 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
        net::SchemefulSite(url_to_add));
    return Response::Success();
  }

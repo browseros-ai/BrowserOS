@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc
 new file mode 100644
-index 0000000000000..5b60a5f2373df
+index 0000000000000000000000000000000000000000..695361f8fa1017b51e6eb71bf5ea913d5d5801c1
 --- /dev/null
 +++ b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc
-@@ -0,0 +1,1174 @@
+@@ -0,0 +1,1177 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -23,9 +23,10 @@ index 0000000000000..5b60a5f2373df
 +#include "base/strings/utf_string_conversions.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/ui/browser.h"
-+#include "chrome/browser/ui/browser_list.h"
 +#include "chrome/browser/ui/browser_window.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 +#include "chrome/browser/ui/views/chrome_layout_provider.h"
 +#include "chrome/browser/ui/side_panel/side_panel_entry.h"
 +#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
@@ -49,8 +50,8 @@ index 0000000000000..5b60a5f2373df
 +#include "components/prefs/pref_service.h"
 +#include "components/user_prefs/user_prefs.h"
 +#include "components/pref_registry/pref_registry_syncable.h"
-+#include "chrome/browser/ui/browser_navigator.h"
-+#include "chrome/browser/ui/browser_navigator_params.h"
++#include "chrome/browser/ui/navigator/browser_navigator.h"
++#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "content/public/browser/browser_accessibility_state.h"
 +#include "ui/accessibility/ax_node.h"
@@ -122,7 +123,8 @@ index 0000000000000..5b60a5f2373df
 +      tab_strip_model_(CHECK_DEREF(tab_strip_model)),
 +      feedback_timer_(std::make_unique<base::OneShotTimer>()) {
 +  // Register for early cleanup notifications
-+  browser_list_observation_.Observe(BrowserList::GetInstance());
++  browser_collection_observation_.Observe(
++      GlobalBrowserCollection::GetInstance());
 +  profile_observation_.Observe(&profile_.get());
 +
 +  // Load providers from preferences
@@ -256,7 +258,7 @@ index 0000000000000..5b60a5f2373df
 +          weak_factory_.GetWeakPtr())));
 +  screenshot_button->SetImageModel(
 +      views::Button::STATE_NORMAL,
-+      ui::ImageModel::FromVectorIcon(vector_icons::kPhotoChromeRefreshIcon, ui::kColorIcon, 20));
++      ui::ImageModel::FromVectorIcon(vector_icons::kPhotoChromeRefreshOldIcon, ui::kColorIcon, 20));
 +  screenshot_button->SetAccessibleName(u"Take screenshot");
 +  screenshot_button->SetTooltipText(u"Capture visible page screenshot to clipboard");
 +  screenshot_button->SetPreferredSize(gfx::Size(32, 32));
@@ -270,7 +272,7 @@ index 0000000000000..5b60a5f2373df
 +          weak_factory_.GetWeakPtr())));
 +  refresh_button->SetImageModel(
 +      views::Button::STATE_NORMAL,
-+      ui::ImageModel::FromVectorIcon(vector_icons::kReloadIcon, ui::kColorIcon, 20));
++      ui::ImageModel::FromVectorIcon(vector_icons::kReloadChromeRefreshOldIcon, ui::kColorIcon, 20));
 +  refresh_button->SetAccessibleName(u"Refresh");
 +  refresh_button->SetTooltipText(u"Reload default page for current provider");
 +  refresh_button->SetPreferredSize(gfx::Size(32, 32));
@@ -284,7 +286,7 @@ index 0000000000000..5b60a5f2373df
 +          weak_factory_.GetWeakPtr())));
 +  open_button->SetImageModel(
 +      views::Button::STATE_NORMAL,
-+      ui::ImageModel::FromVectorIcon(vector_icons::kLaunchIcon, ui::kColorIcon, 20));
++      ui::ImageModel::FromVectorIcon(vector_icons::kLaunchOldIcon, ui::kColorIcon, 20));
 +  open_button->SetAccessibleName(u"Open in new tab");
 +  open_button->SetTooltipText(u"Open in new tab");
 +  open_button->SetPreferredSize(gfx::Size(32, 32));
@@ -298,7 +300,7 @@ index 0000000000000..5b60a5f2373df
 +          weak_factory_.GetWeakPtr())));
 +  menu_button_->SetImageModel(
 +      views::Button::STATE_NORMAL,
-+      ui::ImageModel::FromVectorIcon(kBrowserToolsIcon, ui::kColorIcon, 20));
++      ui::ImageModel::FromVectorIcon(kBrowserToolsOldIcon, ui::kColorIcon, 20));
 +  menu_button_->SetAccessibleName(u"More options");
 +  menu_button_->SetTooltipText(u"More options");
 +  menu_button_->SetPreferredSize(gfx::Size(32, 32));
@@ -1079,14 +1081,15 @@ index 0000000000000..5b60a5f2373df
 +  Observe(nullptr);
 +}
 +
-+void ThirdPartyLlmPanelCoordinator::OnBrowserRemoved(Browser* browser) {
++void ThirdPartyLlmPanelCoordinator::OnBrowserClosed(
++    BrowserWindowInterface* browser) {
 +  // Only clean up when the *owning* browser window is removed. Other windows
 +  // on the same profile should not blank out this panel's WebContents.
 +  if (!browser) {
 +    return;
 +  }
 +
-+  if (browser->tab_strip_model() != &tab_strip_model_.get()) {
++  if (browser->GetTabStripModel() != &tab_strip_model_.get()) {
 +    return;
 +  }
 +
@@ -1114,15 +1117,15 @@ index 0000000000000..5b60a5f2373df
 +  menu_model_->AddItemWithIcon(
 +      IDC_SCREENSHOT,
 +      u"Screenshot webpage and copy",
-+      ui::ImageModel::FromVectorIcon(vector_icons::kPhotoChromeRefreshIcon));
++      ui::ImageModel::FromVectorIcon(vector_icons::kPhotoChromeRefreshOldIcon));
 +  menu_model_->AddItemWithIcon(
 +      IDC_REFRESH,
 +      u"Reset LLM chat",
-+      ui::ImageModel::FromVectorIcon(vector_icons::kReloadIcon));
++      ui::ImageModel::FromVectorIcon(vector_icons::kReloadChromeRefreshOldIcon));
 +  menu_model_->AddItemWithIcon(
 +      IDC_OPEN_IN_NEW_TAB,
 +      u"Open in new tab",
-+      ui::ImageModel::FromVectorIcon(vector_icons::kLaunchIcon));
++      ui::ImageModel::FromVectorIcon(vector_icons::kLaunchOldIcon));
 +
 +  // Create and run menu
 +  menu_runner_ = std::make_unique<views::MenuRunner>(

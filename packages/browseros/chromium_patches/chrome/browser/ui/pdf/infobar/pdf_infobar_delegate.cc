@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/pdf/infobar/pdf_infobar_delegate.cc b/chrome/browser/ui/pdf/infobar/pdf_infobar_delegate.cc
-index 3f3868e1ba674ed4680ae36a74589209c3a55c04..5523eaedd37bb4ac74e98e598c058dcd5b5d5fa0 100644
+index 8b730307fe49f7c2ae7cdebc7cb5abfd9233ea1d..41c48012b1146413c1f8dfdacb518f5bbac41b7e 100644
 --- a/chrome/browser/ui/pdf/infobar/pdf_infobar_delegate.cc
 +++ b/chrome/browser/ui/pdf/infobar/pdf_infobar_delegate.cc
 @@ -15,10 +15,9 @@
@@ -13,13 +13,15 @@ index 3f3868e1ba674ed4680ae36a74589209c3a55c04..5523eaedd37bb4ac74e98e598c058dcd
 -#include "components/vector_icons/vector_icons.h"
  #include "content/public/browser/web_contents.h"
  #include "ui/base/l10n/l10n_util.h"
- #include "ui/gfx/native_ui_types.h"
-@@ -130,9 +129,8 @@ infobars::InfoBarDelegate::InfoBarIdentifier PdfInfoBarDelegate::GetIdentifier()
+ #include "ui/base/ui_base_features.h"
+@@ -131,11 +130,8 @@ infobars::InfoBarDelegate::InfoBarIdentifier PdfInfoBarDelegate::GetIdentifier()
    return PDF_INFOBAR_DELEGATE;
  }
  
 -const gfx::VectorIcon& PdfInfoBarDelegate::GetVectorIcon() const {
--  return dark_mode() ? omnibox::kProductChromeRefreshIcon
+-  return dark_mode() ? features::IsRoundedIconsEnabled()
+-                           ? omnibox::kChromeProductIcon
+-                           : omnibox::kProductChromeRefreshOldIcon
 -                     : vector_icons::kProductRefreshIcon;
 +int PdfInfoBarDelegate::GetIconId() const {
 +  return IDR_PRODUCT_LOGO_16;

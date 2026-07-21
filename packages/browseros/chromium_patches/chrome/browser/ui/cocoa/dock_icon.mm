@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/cocoa/dock_icon.mm b/chrome/browser/ui/cocoa/dock_icon.mm
-index f08c2b156c0fd..c61eb7974ea6a 100644
+index f08c2b156c0fd82e0f6b0ab5a699d655c05f0269..c61eb7974ea6acc3c8e98e246f2aba293063b2c2 100644
 --- a/chrome/browser/ui/cocoa/dock_icon.mm
 +++ b/chrome/browser/ui/cocoa/dock_icon.mm
-@@ -32,6 +32,26 @@
+@@ -32,6 +32,26 @@ constexpr struct {
  // The maximum update rate for the dock icon. 200ms = 5fps.
  constexpr int64_t kUpdateFrequencyMs = 200;
  
@@ -29,7 +29,7 @@ index f08c2b156c0fd..c61eb7974ea6a 100644
  }  // namespace
  
  // A view that draws our dock tile.
-@@ -47,6 +67,8 @@ @interface DockTileView : NSView
+@@ -47,6 +67,8 @@ constexpr int64_t kUpdateFrequencyMs = 200;
  // Indicates the amount of progress made of the download. Ranges from [0..1].
  @property(nonatomic) float progress;
  
@@ -38,7 +38,7 @@ index f08c2b156c0fd..c61eb7974ea6a 100644
  @end
  
  @implementation DockTileView
-@@ -54,6 +76,7 @@ @implementation DockTileView
+@@ -54,6 +76,7 @@ constexpr int64_t kUpdateFrequencyMs = 200;
  @synthesize downloads = _downloads;
  @synthesize indeterminate = _indeterminate;
  @synthesize progress = _progress;
@@ -46,7 +46,7 @@ index f08c2b156c0fd..c61eb7974ea6a 100644
  
  - (void)drawRect:(NSRect)dirtyRect {
    // This needs to draw the current app icon, whether it's using the default
-@@ -72,6 +95,9 @@ - (void)drawRect:(NSRect)dirtyRect {
+@@ -72,6 +95,9 @@ constexpr int64_t kUpdateFrequencyMs = 200;
    // Therefore, use [NSImage imageNamed:NSImageNameApplicationIcon].
  
    NSImage* appIcon = [NSImage imageNamed:NSImageNameApplicationIcon];
@@ -56,7 +56,7 @@ index f08c2b156c0fd..c61eb7974ea6a 100644
    [appIcon drawInRect:self.bounds
               fromRect:NSZeroRect
              operation:NSCompositingOperationSourceOver
-@@ -223,6 +249,19 @@ - (void)updateIcon {
+@@ -223,6 +249,19 @@ constexpr int64_t kUpdateFrequencyMs = 200;
    [dockTile display];
  }
  

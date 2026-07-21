@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc b/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc
-index 0177d0e3bda7c..9d074bf01dca6 100644
+index c2ac3ec9618c1e77a90bf89822ca0df6d4130982..7878a3148379247438bc1657ce9399d34003d940 100644
 --- a/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc
 +++ b/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc
 @@ -16,6 +16,8 @@
@@ -10,7 +10,7 @@ index 0177d0e3bda7c..9d074bf01dca6 100644
 +#include "chrome/browser/browseros/core/browseros_prefs.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/actions/chrome_action_id.h"
- #include "chrome/browser/ui/tab_search_feature.h"
+ #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model_factory.h"
 @@ -37,8 +39,26 @@ PinnedToolbarActionsModel::PinnedToolbarActionsModel(Profile* profile)
        base::BindRepeating(&PinnedToolbarActionsModel::UpdatePinnedActionIds,
                            base::Unretained(this)));
@@ -38,7 +38,7 @@ index 0177d0e3bda7c..9d074bf01dca6 100644
  }
  
  PinnedToolbarActionsModel::~PinnedToolbarActionsModel() = default;
-@@ -239,8 +259,11 @@ void PinnedToolbarActionsModel::MaybeMigrateExistingPinnedStates() {
+@@ -237,8 +257,11 @@ void PinnedToolbarActionsModel::MaybeMigrateExistingPinnedStates() {
    if (!CanUpdate()) {
      return;
    }
@@ -50,8 +50,8 @@ index 0177d0e3bda7c..9d074bf01dca6 100644
 +    // UpdatePinnedState(kActionShowChromeLabs, true);  // No longer auto-pin
      pref_service_->SetBoolean(prefs::kPinnedChromeLabsMigrationComplete, true);
    }
-   if (features::HasTabSearchToolbarButton() &&
-@@ -256,6 +279,49 @@ void PinnedToolbarActionsModel::MaybeMigrateExistingPinnedStates() {
+   if (!pref_service_->GetBoolean(prefs::kPinnedCastMigrationComplete)) {
+@@ -257,6 +280,49 @@ void PinnedToolbarActionsModel::MaybeMigrateExistingPinnedStates() {
    }
  }
  
@@ -101,7 +101,7 @@ index 0177d0e3bda7c..9d074bf01dca6 100644
  const std::vector<actions::ActionId>&
  PinnedToolbarActionsModel::PinnedActionIds() const {
    return pinned_action_ids_;
-@@ -274,3 +340,20 @@ void PinnedToolbarActionsModel::UpdatePref(
+@@ -275,3 +341,20 @@ void PinnedToolbarActionsModel::UpdatePref(
      list_of_values.Append(id_string.value());
    }
  }

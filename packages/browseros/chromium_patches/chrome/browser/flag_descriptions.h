@@ -1,10 +1,10 @@
 diff --git a/chrome/browser/flag_descriptions.h b/chrome/browser/flag_descriptions.h
-index eb93b7a1529f9..0bc2602ef8dd4 100644
+index 17f541b40aa7cf85e95c4fff9a2d2dcd22166354..d5d596bd53ba903a8be41783988995c6b4c29608 100644
 --- a/chrome/browser/flag_descriptions.h
 +++ b/chrome/browser/flag_descriptions.h
-@@ -291,6 +291,18 @@ inline constexpr char kBookmarksTreeViewName[] =
- inline constexpr char kBookmarksTreeViewDescription[] =
-     "Show the bookmarks side panel in a tree view while in compact mode.";
+@@ -314,6 +314,18 @@ inline constexpr char kBlockingFocusWithoutUserActivationDescription[] =
+     "(element.focus(), window.focus(), autofocus) from iframes unless "
+     "triggered by a user gesture.";
  
 +// BrowserOS: feature flags
 +inline constexpr char kBrowserOsAlphaFeaturesName[] =
@@ -18,6 +18,6 @@ index eb93b7a1529f9..0bc2602ef8dd4 100644
 +    "Enables BrowserOS keyboard shortcuts (Cmd+Shift+K, Cmd+Shift+L, "
 +    "Option+A). Disable if these conflict with your keyboard layout.";
 +
- inline constexpr char kBrowsingHistoryActorIntegrationM2Name[] =
-     "Browsing History Actor Integration M2";
- inline constexpr char kBrowsingHistoryActorIntegrationM2Description[] =
+ inline constexpr char kBrowsingHistoryActorIntegrationM3Name[] =
+     "Browsing History Actor Integration M3";
+ inline constexpr char kBrowsingHistoryActorIntegrationM3Description[] =

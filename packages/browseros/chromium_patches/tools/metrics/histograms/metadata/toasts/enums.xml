@@ -1,12 +1,12 @@
 diff --git a/tools/metrics/histograms/metadata/toasts/enums.xml b/tools/metrics/histograms/metadata/toasts/enums.xml
-index de288d30cc6c3..e20afd52721e3 100644
+index 7154b72b5b556b9e5006e26a75a48a57ba3075ce..d412dd2db473d006bce017aeaa19e1656f51ea96 100644
 --- a/tools/metrics/histograms/metadata/toasts/enums.xml
 +++ b/tools/metrics/histograms/metadata/toasts/enums.xml
-@@ -92,6 +92,7 @@ chromium-metrics-reviews@google.com.
-   <int value="31" label="Filter Suggestion"/>
-   <int value="32" label="Filter Suggestion Recent"/>
-   <int value="33" label="Saved Skill without Invoke Button"/>
-+  <int value="34" label="BrowserOS extension toast"/>
+@@ -105,6 +105,7 @@ chromium-metrics-reviews@google.com.
+   <int value="44" label="Tab strip switch to vertical delayed toast"/>
+   <int value="45" label="Showed Autofill AI prefetch error message"/>
+   <int value="48" label="Dictation error"/>
++  <int value="49" label="BrowserOS extension toast"/>
  </enum>
  
  <!-- LINT.ThenChange(/chrome/browser/ui/toasts/api/toast_id.h:ToastId) -->

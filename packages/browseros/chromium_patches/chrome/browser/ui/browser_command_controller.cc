@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
-index 738696abf04fa..ec170ce291d37 100644
+index a457075948e34dcc2df8a1c127c146bf4dc92a02..880aa41ede81d35e8ce58c25d47098be06b7d71b 100644
 --- a/chrome/browser/ui/browser_command_controller.cc
 +++ b/chrome/browser/ui/browser_command_controller.cc
 @@ -7,7 +7,9 @@
@@ -12,9 +12,9 @@ index 738696abf04fa..ec170ce291d37 100644
  
  #include "base/check_deref.h"
  #include "base/command_line.h"
-@@ -24,10 +26,13 @@
- #include "chrome/app/chrome_command_ids.h"
+@@ -27,10 +29,13 @@
  #include "chrome/browser/actor/ui/actor_overlay_web_view.h"
+ #include "chrome/browser/bookmarks/bookmark_model_factory.h"
  #include "chrome/browser/browser_process.h"
 +#include "chrome/browser/browseros/core/browseros_constants.h"
  #include "chrome/browser/browsing_data/browsing_data_important_sites_util.h"
@@ -25,8 +25,8 @@ index 738696abf04fa..ec170ce291d37 100644
 +#include "chrome/browser/extensions/extension_tab_util.h"
  #include "chrome/browser/feedback/public/feedback_source.h"
  #include "chrome/browser/feedback/show_feedback_page.h"
- #include "chrome/browser/glic/fre/glic_fre_controller.h"
-@@ -37,6 +42,7 @@
+ #include "chrome/browser/glic/glic_enums.h"
+@@ -39,6 +44,7 @@
  #include "chrome/browser/glic/public/glic_enabling.h"
  #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
  #include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
@@ -34,23 +34,23 @@ index 738696abf04fa..ec170ce291d37 100644
  #include "chrome/browser/lifetime/application_lifetime.h"
  #include "chrome/browser/prefs/incognito_mode_prefs.h"
  #include "chrome/browser/profiles/profile.h"
-@@ -86,6 +92,7 @@
- #include "chrome/browser/ui/toolbar/chrome_labs/chrome_labs_utils.h"
+@@ -95,6 +101,7 @@
  #include "chrome/browser/ui/ui_features.h"
  #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/side_panel/tabs_from_other_devices/tabs_from_other_devices_side_panel_coordinator.h"
 +#include "chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.h"
  #include "chrome/browser/ui/web_applications/app_browser_controller.h"
  #include "chrome/browser/ui/web_applications/web_app_dialog_utils.h"
  #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
-@@ -101,6 +108,7 @@
- #include "chrome/common/webui_url_constants.h"
+@@ -112,6 +119,7 @@
+ #include "components/bookmarks/common/bookmark_bar_visibility_state.h"
  #include "components/bookmarks/common/bookmark_pref_names.h"
  #include "components/dom_distiller/core/dom_distiller_features.h"
 +#include "components/infobars/content/content_infobar_manager.h"
  #include "components/input/native_web_keyboard_event.h"
  #include "components/lens/buildflags.h"
  #include "components/password_manager/core/browser/manage_passwords_referrer.h"
-@@ -1089,6 +1097,65 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
+@@ -1203,6 +1211,65 @@ void BrowserCommandController::HandleCommandWithDisposition(
        browser_->GetFeatures().side_panel_ui()->Show(
            SidePanelEntryId::kBookmarks, SidePanelOpenTrigger::kAppMenu);
        break;
@@ -116,17 +116,17 @@ index 738696abf04fa..ec170ce291d37 100644
      case IDC_SHOW_APP_MENU:
        base::RecordAction(base::UserMetricsAction("Accel_Show_App_Menu"));
        ShowAppMenu(browser_);
-@@ -1802,6 +1869,15 @@ void BrowserCommandController::InitCommandState() {
+@@ -1966,6 +2033,15 @@ void BrowserCommandController::InitCommandState() {
    }
  
-   command_updater_.UpdateCommandEnabled(IDC_SHOW_BOOKMARK_SIDE_PANEL, true);
-+  command_updater_.UpdateCommandEnabled(
+   command_updater_->UpdateCommandEnabled(IDC_SHOW_BOOKMARK_SIDE_PANEL, true);
++  command_updater_->UpdateCommandEnabled(
 +      IDC_SHOW_THIRD_PARTY_LLM_SIDE_PANEL,
 +      base::FeatureList::IsEnabled(features::kThirdPartyLlmPanel));
-+  command_updater_.UpdateCommandEnabled(
++  command_updater_->UpdateCommandEnabled(
 +      IDC_CYCLE_THIRD_PARTY_LLM_PROVIDER,
 +      base::FeatureList::IsEnabled(features::kThirdPartyLlmPanel));
-+  command_updater_.UpdateCommandEnabled(
++  command_updater_->UpdateCommandEnabled(
 +      IDC_TOGGLE_BROWSEROS_AGENT,
 +      browseros::IsActiveBrowserOSExtension(browseros::kAgentExtensionId));
  

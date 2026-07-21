@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h b/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h
-index 9f7cbd0272c0a..84b696bf47bce 100644
+index a183b49e14fbd5d7a74f01132d24ce13706ead47..994b90982961a3d6ca866c41f2a0d71499a03da6 100644
 --- a/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h
 +++ b/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h
 @@ -55,6 +55,9 @@ class PinnedToolbarActionsModel : public KeyedService {
@@ -12,8 +12,8 @@ index 9f7cbd0272c0a..84b696bf47bce 100644
     protected:
      virtual ~Observer() = default;
    };
-@@ -96,6 +99,11 @@ class PinnedToolbarActionsModel : public KeyedService {
-   // Search migrations are complete.
+@@ -95,6 +98,11 @@ class PinnedToolbarActionsModel : public KeyedService {
+   // TODO(crbug.com/353323253): Remove after all migrations are complete.
    void MaybeMigrateExistingPinnedStates();
  
 +  // Ensures that certain actions are always pinned to the toolbar.
@@ -24,7 +24,7 @@ index 9f7cbd0272c0a..84b696bf47bce 100644
    // Returns the ordered list of pinned ActionIds.
    virtual const std::vector<actions::ActionId>& PinnedActionIds() const;
  
-@@ -114,6 +122,14 @@ class PinnedToolbarActionsModel : public KeyedService {
+@@ -113,6 +121,14 @@ class PinnedToolbarActionsModel : public KeyedService {
  
    void UpdatePref(const std::vector<actions::ActionId>& updated_list);
  

@@ -1,13 +1,16 @@
 diff --git a/chrome/browser/ui/browser_actions.cc b/chrome/browser/ui/browser_actions.cc
-index 8a43e7c2fcde5..2f9e4a7a80b4b 100644
+index 812961aed273a301c710fc37cedd59d426384daa..04929659b704bda83b3609bfbe1b11f117918934 100644
 --- a/chrome/browser/ui/browser_actions.cc
 +++ b/chrome/browser/ui/browser_actions.cc
-@@ -18,13 +18,17 @@
+@@ -21,17 +21,21 @@
  #include "build/branding_buildflags.h"
  #include "chrome/app/chrome_command_ids.h"
  #include "chrome/app/vector_icons/vector_icons.h"
 +#include "chrome/browser/browseros/core/browseros_constants.h"
+ #include "chrome/browser/contextual_cueing/features.h"
  #include "chrome/browser/contextual_tasks/contextual_tasks_side_panel_coordinator.h"
+ #include "chrome/browser/contextual_tasks/contextual_tasks_utils.h"
+ #include "chrome/browser/contextual_tasks/entry_point_eligibility_manager.h"
  #include "chrome/browser/devtools/devtools_window.h"
 +#include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
 +#include "chrome/browser/extensions/extension_tab_util.h"
@@ -15,42 +18,45 @@ index 8a43e7c2fcde5..2f9e4a7a80b4b 100644
  #include "chrome/browser/glic/host/glic.mojom.h"
  #include "chrome/browser/glic/public/glic_enabling.h"
  #include "chrome/browser/glic/public/glic_keyed_service.h"
+ #include "chrome/browser/glic/resources/grit/glic_browser_resources.h"
  #include "chrome/browser/indigo/indigo_page_action_controller.h"
 +#include "chrome/browser/infobars/simple_alert_infobar_creator.h"
+ #include "chrome/browser/lifetime/application_lifetime.h"
  #include "chrome/browser/prefs/incognito_mode_prefs.h"
  #include "chrome/browser/profiles/profile.h"
- #include "chrome/browser/search_engines/template_url_service_factory.h"
-@@ -49,6 +53,7 @@
- #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
- #include "chrome/browser/ui/commerce/commerce_ui_tab_helper.h"
+@@ -95,6 +99,7 @@
  #include "chrome/browser/ui/customize_chrome/side_panel_controller.h"
+ #include "chrome/browser/ui/dialogs/browser_dialogs.h"
+ #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 +#include "chrome/browser/ui/extensions/extension_side_panel_utils.h"
  #include "chrome/browser/ui/intent_picker_tab_helper.h"
  #include "chrome/browser/ui/lens/lens_overlay_controller.h"
  #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
-@@ -107,11 +112,13 @@
- #include "chrome/common/record_replay/record_replay_features.h"
+@@ -167,6 +172,7 @@
+ #include "chrome/common/url_constants.h"
  #include "chrome/grit/branded_strings.h"
  #include "chrome/grit/generated_resources.h"
 +#include "chrome/grit/theme_resources.h"
+ #include "components/autofill/core/common/autofill_payments_features.h"
+ #include "components/bookmarks/common/bookmark_pref_names.h"
  #include "components/collaboration/public/messaging/activity_log.h"
- #include "components/commerce/core/metrics/discounts_metric_collector.h"
+@@ -174,6 +180,7 @@
  #include "components/content_settings/core/common/features.h"
  #include "components/contextual_tasks/public/features.h"
  #include "components/feature_engagement/public/feature_constants.h"
 +#include "components/infobars/content/content_infobar_manager.h"
  #include "components/lens/lens_features.h"
+ #include "components/lens/lens_overlay_invocation_source.h"
  #include "components/media_router/browser/media_router_dialog_controller.h"
- #include "components/media_router/browser/media_router_metrics.h"
-@@ -125,6 +132,7 @@
- #include "components/tabs/public/tab_interface.h"
+@@ -208,6 +215,7 @@
+ #include "components/translate/core/browser/translate_manager.h"
  #include "components/user_prefs/user_prefs.h"
  #include "components/vector_icons/vector_icons.h"
 +#include "extensions/browser/extension_registry.h"
+ #include "printing/buildflags/buildflags.h"
  #include "ui/accessibility/accessibility_features.h"
  #include "ui/actions/actions.h"
- #include "ui/base/l10n/l10n_util.h"
-@@ -310,6 +318,92 @@ void BrowserActions::InitializeSidePanelActions() {
+@@ -407,6 +415,92 @@ void BrowserActions::InitializeSidePanelActions() {
              .Build());
    }
  

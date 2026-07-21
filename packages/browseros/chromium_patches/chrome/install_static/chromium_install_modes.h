@@ -1,5 +1,5 @@
 diff --git a/chrome/install_static/chromium_install_modes.h b/chrome/install_static/chromium_install_modes.h
-index ee62888f89705a08a95f130505ebfafb246f4bc2..a0835e7f66dd12edeed11c672368f2d6e4de92a8 100644
+index f29a8228fe611cc2d0a9dcab08cd624f60d2ebdc..1797fd40e3e49ff53f6f472021148ba6bd8ea9f9 100644
 --- a/chrome/install_static/chromium_install_modes.h
 +++ b/chrome/install_static/chromium_install_modes.h
 @@ -10,6 +10,7 @@
@@ -97,7 +97,7 @@ index ee62888f89705a08a95f130505ebfafb246f4bc2..a0835e7f66dd12edeed11c672368f2d6
  
  // The brand-specific safe browsing client name.
  inline constexpr char kSafeBrowsingName[] = "chromium";
-@@ -43,50 +119,33 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
+@@ -43,47 +119,31 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
          .install_suffix =
              L"",  // Empty install_suffix for the primary install mode.
          .logo_suffix = L"",  // No logo suffix for the primary install mode.
@@ -124,11 +124,6 @@ index ee62888f89705a08a95f130505ebfafb246f4bc2..a0835e7f66dd12edeed11c672368f2d6
 -        .active_setup_guid =
 -            L"{7D2B3E1D-D096-4594-9D8F-A6667F12E0AC}",  // Active Setup
 -                                                        // GUID.
-+            kProductInstallIdentity.pdf_prog_id_description,
-+        .active_setup_guid = kProductInstallIdentity.active_setup_guid,
-         .legacy_command_execute_clsid =
--            L"{A2DF06F9-A21A-44A8-8A99-8B9C84F29160}",  // CommandExecuteImpl
--                                                        // CLSID.
 -        .toast_activator_clsid = {0x635EFA6F,
 -                                  0x08D6,
 -                                  0x4EC9,
@@ -141,7 +136,8 @@ index ee62888f89705a08a95f130505ebfafb246f4bc2..a0835e7f66dd12edeed11c672368f2d6
 -                            0xB0}},  // Elevator CLSID.
 -        .elevator_iid = {0xbb19a0e5,
 -                         0xc6,
-+            kProductInstallIdentity.legacy_command_execute_clsid,
++            kProductInstallIdentity.pdf_prog_id_description,
++        .active_setup_guid = kProductInstallIdentity.active_setup_guid,
 +        .toast_activator_clsid = kProductInstallIdentity.toast_activator_clsid,
 +        .elevator_clsid = kProductInstallIdentity.elevator_clsid,
 +        .elevator_iid = {0xBB19A0E5,
@@ -170,7 +166,7 @@ index ee62888f89705a08a95f130505ebfafb246f4bc2..a0835e7f66dd12edeed11c672368f2d6
          .default_channel_name =
              L"",  // Empty default channel name since no update integration.
          .channel_strategy = ChannelStrategy::UNSUPPORTED,
-@@ -100,10 +159,7 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
+@@ -97,10 +157,7 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
              icon_resources::kHtmlDocIndex,  // HTML doc icon resource index.
          .pdf_doc_icon_resource_index =
              icon_resources::kPDFDocIndex,  // PDF doc icon resource index.

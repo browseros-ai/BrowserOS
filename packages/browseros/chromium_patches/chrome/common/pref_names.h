@@ -1,8 +1,8 @@
 diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
-index 831ef13b599e6..b291b3328955d 100644
+index 049343a0aeb2d3723854b1225e3658de25d20c38..8c01258595f68d1dbaa9716d4958ef94d404a06e 100644
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
-@@ -1135,6 +1135,9 @@ inline constexpr char kImportDialogSavedPasswords[] =
+@@ -928,6 +928,9 @@ inline constexpr char kImportDialogSavedPasswords[] =
      "import_dialog_saved_passwords";
  inline constexpr char kImportDialogSearchEngine[] =
      "import_dialog_search_engine";
@@ -12,9 +12,9 @@ index 831ef13b599e6..b291b3328955d 100644
  
  // Profile avatar and name
  inline constexpr char kProfileAvatarIndex[] = "profile.avatar_index";
-@@ -3673,6 +3676,18 @@ inline constexpr char kAuxiliarySearchLastDonatedHistoryEntryVisitTime[] =
- inline constexpr char kAppRatingPromptShown[] = "app_rating_prompt_shown";
- #endif  // BUILDFLAG(IS_ANDROID)
+@@ -3255,6 +3258,18 @@ inline constexpr char kCpuPerformanceTierOverride[] =
+ // Value indicating that the CPU performance tier has not been overridden.
+ inline constexpr int kCpuPerformanceTierOverrideNone = -1;
  
 +// BrowserOS: metrics prefs
 +// String containing the stable client ID for BrowserOS metrics

@@ -1,11 +1,11 @@
 diff --git a/chrome/browser/ui/toasts/api/toast_id.cc b/chrome/browser/ui/toasts/api/toast_id.cc
-index 6a52e958fdcb5..8d2e1ae503c60 100644
+index f167d2e1c1ceeb44c0890c38f82b14b401f57ee2..cfac472d3863149a67f9cb6b5dc6be97fc97a44c 100644
 --- a/chrome/browser/ui/toasts/api/toast_id.cc
 +++ b/chrome/browser/ui/toasts/api/toast_id.cc
-@@ -75,6 +75,8 @@ std::string_view GetToastName(ToastId toast_id) {
-       return "MultistepFilterSuggestionRecent";
-     case ToastId::kSkillSavedWithoutInvokeButton:
-       return "SkillSavedWithoutInvokeButton";
+@@ -101,6 +101,8 @@ std::string_view GetToastName(ToastId toast_id) {
+       return "AutofillAiPreFetchErrorMessage";
+     case ToastId::kDictationError:
+       return "DictationError";
 +    case ToastId::kBrowserOSToast:
 +      return "BrowserOSToast";
    }

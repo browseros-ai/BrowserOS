@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
-index d6d2a757c2b63..abe157b257c04 100644
+index 46037e75841673859243a90fc0acccf5f5da8b9b..4efda01f9b5d143dec063fb134771a54dca47ba8 100644
 --- a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
 +++ b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
-@@ -568,6 +568,9 @@ - (NSTouchBar*)makeTouchBar {
+@@ -649,6 +649,9 @@ views::Widget::InitParams BrowserNativeWidgetMac::GetWidgetParams(
      views::Widget::InitParams::Ownership ownership) {
    views::Widget::InitParams params(ownership);
    params.native_widget = this;

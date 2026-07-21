@@ -1,16 +1,16 @@
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index f823433796c5c..1bc6610d0626e 100644
+index cbac8ed6171b76d887a52b694e5c926b11081ed4..edc92bf43514a854e720fc6193f4c6d34eab44a1 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -623,6 +623,7 @@
+@@ -642,6 +642,7 @@
  #endif
  
  #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 +#include "chrome/browser/browseros/core/browseros_constants.h"
  #include "chrome/browser/extensions/chrome_content_browser_client_extensions_part.h"
  #include "chrome/browser/extensions/chrome_extension_cookies.h"
- #include "extensions/browser/api/web_request/web_request_api.h"
-@@ -1541,7 +1542,7 @@ void ChromeContentBrowserClient::RegisterLocalStatePrefs(
+ #include "chrome/browser/extensions/extension_util.h"
+@@ -1524,7 +1525,7 @@ void ChromeContentBrowserClient::RegisterLocalStatePrefs(
  void ChromeContentBrowserClient::RegisterProfilePrefs(
      user_prefs::PrefRegistrySyncable* registry) {
    registry->RegisterBooleanPref(prefs::kDisable3DAPIs, false);
@@ -19,22 +19,7 @@ index f823433796c5c..1bc6610d0626e 100644
    // Register user prefs for mapping SitePerProcess and IsolateOrigins in
    // user policy in addition to the same named ones in Local State (which are
    // used for mapping the command-line flags).
-@@ -4479,10 +4480,10 @@ bool ChromeContentBrowserClient::CanCreateWindow(
-         web_contents->GetResponsibleWebContents();
-     bool is_from_embedded_page = web_contents != responsible_web_contents;
-     if (contextual_tasks_ui_service &&
--        contextual_tasks_ui_service->HandleNavigation(
--            std::move(url_params), responsible_web_contents,
--            is_from_embedded_page,
--            /*is_to_new_tab=*/true)) {
-+        contextual_tasks_ui_service->HandleNavigation(std::move(url_params),
-+                                                      responsible_web_contents,
-+                                                      is_from_embedded_page,
-+                                                      /*is_to_new_tab=*/true)) {
-       return false;
-     }
-   }
-@@ -5052,6 +5053,44 @@ bool ChromeContentBrowserClient::
+@@ -5148,6 +5149,44 @@ bool ChromeContentBrowserClient::
               prefs.root_scrollbar_theme_color;
  }
  
@@ -79,7 +64,7 @@ index f823433796c5c..1bc6610d0626e 100644
  void ChromeContentBrowserClient::BrowserURLHandlerCreated(
      BrowserURLHandler* handler) {
    // The group policy NTP URL handler must be registered before the other NTP
-@@ -5068,6 +5107,13 @@ void ChromeContentBrowserClient::BrowserURLHandlerCreated(
+@@ -5164,6 +5203,13 @@ void ChromeContentBrowserClient::BrowserURLHandlerCreated(
    handler->AddHandlerPair(&HandleChromeAboutAndChromeSyncRewrite,
                            BrowserURLHandler::null_handler());
  
@@ -93,7 +78,7 @@ index f823433796c5c..1bc6610d0626e 100644
  #if BUILDFLAG(IS_ANDROID)
    // Handler to rewrite chrome://newtab on Android.
    handler->AddHandlerPair(&chrome::android::HandleAndroidNativePageURL,
-@@ -7901,6 +7947,15 @@ content::ContentBrowserClient::LocalNetworkAccessRequestPolicyOverride
+@@ -8192,6 +8238,15 @@ content::ContentBrowserClient::LocalNetworkAccessRequestPolicyOverride
  ChromeContentBrowserClient::ShouldOverrideLocalNetworkAccessRequestPolicy(
      content::BrowserContext* browser_context,
      const url::Origin& origin) {
