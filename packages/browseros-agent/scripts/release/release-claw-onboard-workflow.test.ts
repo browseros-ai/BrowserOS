@@ -41,6 +41,10 @@ describe('release-claw-onboard workflow', () => {
     expect(reflection).toContain('apps/claw-onboard/package.json')
     expect(reflection).toContain('"apps\\/claw-onboard"')
     expect(reflection).not.toContain('apps/claw-server/package.json')
+    expect(reflection).toContain('git config user.name "github-actions[bot]"')
+    expect(reflection).toContain(
+      'git config user.email "41898282+github-actions[bot]@users.noreply.github.com"',
+    )
     expect(reflection).toContain('gh pr create')
     expect(reflection).toContain('gh pr merge "$branch" --squash --auto')
   })

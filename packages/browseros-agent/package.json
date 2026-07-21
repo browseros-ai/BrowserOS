@@ -60,6 +60,7 @@
     "gen:cdp": "bun --env-file=.env.development scripts/codegen/cdp-protocol.ts",
     "codegen:claw-api": "bun scripts/codegen/claw-api.ts",
     "codegen:claw-api:check": "bun scripts/codegen/claw-api.ts --check",
+    "test:claw-api-contract": "bun test contracts/claw-api/tests/fixtures.test.ts contracts/claw-api/tests/schema.test.ts",
     "test:claw-mcp-smoke": "bun contracts/claw-mcp/tests/run.ts --smoke",
     "test:claw-mcp-contract": "bun contracts/claw-mcp/tests/run.ts",
     "env:examples": "bun scripts/env/generate-examples.ts",

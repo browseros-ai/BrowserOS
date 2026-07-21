@@ -122,11 +122,20 @@ describe('release-claw-server-rust workflow', () => {
   })
 
   it('publishes OTA from Rust artifacts only when requested', () => {
+    const publishOta = workflow.slice(workflow.indexOf('  publish-ota:'))
     expect(workflow).toContain(
       `if: \${{ inputs.publish_ota == true && needs.release.outputs.version != '' }}`,
     )
-    expect(workflow).toContain('SPARKLE_PRIVATE_KEY:')
-    expect(workflow).toContain(
+    for (const secret of [
+      'SPARKLE_PRIVATE_KEY',
+      'R2_ACCOUNT_ID',
+      'R2_ACCESS_KEY_ID',
+      'R2_SECRET_ACCESS_KEY',
+      'R2_BUCKET',
+    ]) {
+      expect(publishOta).toContain(`${secret}: \${{ secrets.${secret} }}`)
+    }
+    expect(publishOta).toContain(
       'uv run browseros ota server release --version "$VERSION" --channel alpha --product browserclaw',
     )
     expect(workflow.indexOf('  publish-ota:')).toBeGreaterThan(

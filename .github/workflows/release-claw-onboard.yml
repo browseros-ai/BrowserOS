@@ -255,6 +255,8 @@ jobs:
             exit 0
           fi
 
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
           git add "$package_json" "$lock"
           git commit -m "chore: bump claw onboarding version to ${VERSION}"
