@@ -9,10 +9,12 @@ import {
   flattenRequiredHeaderGuards,
   mergeRustModels,
   mergeTypeScriptModels,
+  rewriteTypeScriptApiModelImports,
 } from './claw-api'
 
 interface OpenApiOperation {
   operationId?: string
+  tags?: string[]
   parameters?: Array<{
     in?: string
     name?: string
@@ -21,6 +23,7 @@ interface OpenApiOperation {
 
 interface OpenApiDocument {
   openapi?: string
+  tags?: Array<{ name?: string }>
   paths?: Record<string, Record<string, OpenApiOperation> & { $ref?: string }>
   components?: {
     schemas?: Record<string, unknown>
@@ -49,6 +52,52 @@ const expectedPaths = [
   '/api/v1/connections',
   '/api/v1/connections/{harness}',
 ]
+
+const expectedModelGroups = {
+  ApiError: 'common',
+  AppendRecordingEventsResponse: 'recordings',
+  CancelSessionResponse: 'sessions',
+  Connection: 'connections',
+  ConnectionList: 'connections',
+  Dispatch: 'dispatches',
+  Harness: 'connections',
+  HealthResponse: 'system',
+  LiveSessionActivityState: 'sessions',
+  LiveSessionState: 'sessions',
+  RecordingMetadata: 'recordings',
+  RecordingSegmentMetadata: 'recordings',
+  RecordingTabMetadata: 'recordings',
+  SessionBrowserTab: 'sessions',
+  SessionDetail: 'sessions',
+  SessionList: 'sessions',
+  SessionStatus: 'sessions',
+  SessionSummary: 'sessions',
+  ShutdownResponse: 'system',
+  SystemCapabilities: 'system',
+  SystemInfo: 'system',
+  TelemetryState: 'settings',
+  ToolEvent: 'sessions',
+  UpdateTelemetryRequest: 'settings',
+}
+
+const expectedOperationGroups = {
+  appendRecordingEvents: 'recordings',
+  cancelSession: 'sessions',
+  connectHarness: 'connections',
+  disconnectHarness: 'connections',
+  downloadRecordingEvents: 'recordings',
+  getDispatchScreenshot: 'dispatches',
+  getHealth: 'system',
+  getRecording: 'recordings',
+  getSession: 'sessions',
+  getSessionBrowserTabPreview: 'sessions',
+  getSystemInfo: 'system',
+  getTelemetry: 'settings',
+  listConnections: 'connections',
+  listSessions: 'sessions',
+  shutdown: 'system',
+  updateTelemetry: 'settings',
+}
 
 describe('BrowserClaw OpenAPI contract', () => {
   test('defines only the approved canonical surface with unique operation IDs', async () => {
@@ -87,6 +136,49 @@ describe('BrowserClaw OpenAPI contract', () => {
       ),
     )
     expect(sources.join('\n')).not.toMatch(/\b(?:agentId|taskId|runId)\b/)
+  })
+
+  test('owns every model and operation through a declared route group', async () => {
+    const source = await readFile(contractPath, 'utf8')
+    const document = parse(source) as OpenApiDocument
+    expect(document.tags?.map(({ name }) => name).sort()).toEqual([
+      'connections',
+      'dispatches',
+      'recordings',
+      'sessions',
+      'settings',
+      'system',
+    ])
+    expect(
+      extractModelGroups(source, Object.keys(expectedModelGroups)),
+    ).toEqual(expectedModelGroups)
+
+    const pathItems = await Promise.all(
+      Object.values(document.paths ?? {}).map(async (path) => {
+        if (!path.$ref) return path
+        return parse(
+          await readFile(resolve(contractDirectory, path.$ref), 'utf8'),
+        ) as Record<string, OpenApiOperation>
+      }),
+    )
+    const operations = pathItems.flatMap((path) =>
+      Object.entries(path)
+        .filter(([method]) =>
+          ['get', 'put', 'post', 'delete', 'patch'].includes(method),
+        )
+        .map(([, operation]) => operation),
+    )
+    expect(
+      Object.fromEntries(
+        operations.map((operation) => [
+          operation.operationId,
+          operation.tags?.[0],
+        ]),
+      ),
+    ).toEqual(expectedOperationGroups)
+    expect(operations.every((operation) => operation.tags?.length === 1)).toBe(
+      true,
+    )
   })
 })
 
@@ -208,6 +300,45 @@ pub struct Zebra;
       }),
     ).toThrow('Rust model Beta has a different generated header')
   })
+
+  test('prefixes model-local helper types that lose their module namespace', () => {
+    expect(
+      mergeRustModels({
+        Alpha: `${header}
+
+use serde::{Deserialize, Serialize};
+
+pub struct Alpha {
+    pub status: Status,
+}
+pub enum Status { Ok }
+impl Default for Status {
+    fn default() -> Status { Status::Ok }
+}
+`,
+        Beta: `${header}
+
+use serde::{Deserialize, Serialize};
+
+pub struct Beta {
+    pub status: Status,
+}
+pub enum Status { Ok }
+`,
+      }),
+    ).toContain('pub status: AlphaStatus')
+    expect(
+      mergeRustModels({
+        Alpha: `${header}\n\nuse serde::Serialize;\n\npub struct Alpha;\npub enum Status { Ok }\n`,
+        Beta: `${header}\n\nuse serde::Serialize;\n\npub struct Beta;\npub enum Status { Ok }\n`,
+      }),
+    ).toContain('pub enum BetaStatus')
+    expect(
+      mergeRustModels({
+        Alpha: `${header}\n\nuse serde::Serialize;\n\npub struct Alpha;\npub enum Status { Ok }\n`,
+      }),
+    ).toContain('pub use super::AlphaStatus as Status;')
+  })
 })
 
 describe('emitRustModuleIndex', () => {
@@ -248,7 +379,6 @@ import {
     ZebraFromJSON,
     ZebraToJSON,
 } from './Zebra.js';
-
 export interface Beta {}
 `,
           Alpha: `${preamble}
@@ -296,6 +426,23 @@ export interface Alpha {}
       ),
     ).toThrow('TypeScript model Alpha has an unrecognized import')
   })
+
+  test('merges generated enum models that have no imports', () => {
+    expect(
+      mergeTypeScriptModels(
+        {
+          Alpha: `${preamble}
+
+export const Alpha = { Value: 'value' } as const;
+`,
+        },
+        modelGroups,
+      ),
+    ).toBe(`${preamble}
+
+export const Alpha = { Value: 'value' } as const;
+`)
+  })
 })
 
 describe('emitTypeScriptModelIndex', () => {
@@ -308,6 +455,48 @@ export * from './sessions.js';
 export * from './system.js';
 `,
     )
+  })
+})
+
+describe('rewriteTypeScriptApiModelImports', () => {
+  test('repoints and merges API imports into group model modules', () => {
+    const source = `import * as runtime from '../runtime.js';
+import {
+    type ApiError,
+    ApiErrorFromJSON,
+} from '../models/ApiError.js';
+import {
+    type SessionDetail,
+    SessionDetailFromJSON,
+} from '../models/SessionDetail.js';
+import {
+    type SessionList,
+    SessionListFromJSON,
+} from '../models/SessionList.js';
+
+export class SessionsApi extends runtime.BaseAPI {}
+`
+
+    expect(
+      rewriteTypeScriptApiModelImports(source, {
+        ApiError: 'common',
+        SessionDetail: 'sessions',
+        SessionList: 'sessions',
+      }),
+    ).toBe(`import * as runtime from '../runtime.js';
+import {
+    ApiErrorFromJSON,
+    type ApiError,
+} from '../models/common.js';
+import {
+    SessionDetailFromJSON,
+    SessionListFromJSON,
+    type SessionDetail,
+    type SessionList,
+} from '../models/sessions.js';
+
+export class SessionsApi extends runtime.BaseAPI {}
+`)
   })
 })
 

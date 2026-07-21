@@ -1,5 +1,6 @@
 put:
   operationId: connectHarness
+  tags: [connections]
   parameters:
     - $ref: ../parameters.yaml#/Harness
   responses:
@@ -15,6 +16,7 @@ put:
       $ref: ../responses.yaml#/InternalError
 delete:
   operationId: disconnectHarness
+  tags: [connections]
   parameters:
     - $ref: ../parameters.yaml#/Harness
   responses:

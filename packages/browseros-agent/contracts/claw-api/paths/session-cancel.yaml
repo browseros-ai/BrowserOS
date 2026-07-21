@@ -1,5 +1,6 @@
 post:
   operationId: cancelSession
+  tags: [sessions]
   parameters:
     - $ref: ../parameters.yaml#/SessionId
   responses:

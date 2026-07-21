@@ -3,40 +3,40 @@ BadRequest:
   content:
     application/json:
       schema:
-        $ref: ./schemas/system.yaml#/ApiError
+        $ref: ./schemas/common.yaml#/ApiError
 Forbidden:
   description: The browser origin is not allowed to write recordings.
   content:
     application/json:
       schema:
-        $ref: ./schemas/system.yaml#/ApiError
+        $ref: ./schemas/common.yaml#/ApiError
 NotFound:
   description: Resource not found.
   content:
     application/json:
       schema:
-        $ref: ./schemas/system.yaml#/ApiError
+        $ref: ./schemas/common.yaml#/ApiError
 Conflict:
   description: Resource is not in the required state.
   content:
     application/json:
       schema:
-        $ref: ./schemas/system.yaml#/ApiError
+        $ref: ./schemas/common.yaml#/ApiError
 Gone:
   description: Resource no longer accepts writes.
   content:
     application/json:
       schema:
-        $ref: ./schemas/system.yaml#/ApiError
+        $ref: ./schemas/common.yaml#/ApiError
 PayloadTooLarge:
   description: UTF-8 encoded request body exceeds the advertised ingest ceiling.
   content:
     application/json:
       schema:
-        $ref: ./schemas/system.yaml#/ApiError
+        $ref: ./schemas/common.yaml#/ApiError
 InternalError:
   description: Internal server error.
   content:
     application/json:
       schema:
-        $ref: ./schemas/system.yaml#/ApiError
+        $ref: ./schemas/common.yaml#/ApiError

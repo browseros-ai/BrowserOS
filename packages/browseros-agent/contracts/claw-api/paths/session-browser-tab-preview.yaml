@@ -1,5 +1,6 @@
 get:
   operationId: getSessionBrowserTabPreview
+  tags: [sessions]
   parameters:
     - $ref: ../parameters.yaml#/SessionId
     - $ref: ../parameters.yaml#/BrowserTabId
@@ -18,7 +19,7 @@ get:
       content:
         application/json:
           schema:
-            $ref: ../schemas/system.yaml#/ApiError
+            $ref: ../schemas/common.yaml#/ApiError
           example:
             code: preview_not_found
             message: browser tab preview not found

@@ -1,5 +1,6 @@
 get:
   operationId: getSystemInfo
+  tags: [system]
   responses:
     '200':
       description: Product and implementation information.

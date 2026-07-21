@@ -19,7 +19,15 @@
  * change moves subsequent requests to the new server without a reload.
  */
 
-import { Configuration, DefaultApi } from '@browseros/claw-api'
+import {
+  Configuration,
+  ConnectionsApi,
+  DispatchesApi,
+  RecordingsApi,
+  SessionsApi,
+  SettingsApi,
+  SystemApi,
+} from '@browseros/claw-api'
 import {
   apiBaseUrlSourcesFromWindow,
   resolveBrowserOSServerBaseUrl,
@@ -46,12 +54,12 @@ let cachedBase: string | null = null
 let cachedClient: ClawApiClient | null = null
 
 export interface ClawApiClient {
-  connections: DefaultApi
-  dispatches: DefaultApi
-  recordings: DefaultApi
-  sessions: DefaultApi
-  settings: DefaultApi
-  system: DefaultApi
+  connections: ConnectionsApi
+  dispatches: DispatchesApi
+  recordings: RecordingsApi
+  sessions: SessionsApi
+  settings: SettingsApi
+  system: SystemApi
 }
 
 export function apiClientForBaseUrl(baseUrl: string): ClawApiClient {
@@ -59,12 +67,12 @@ export function apiClientForBaseUrl(baseUrl: string): ClawApiClient {
     cachedBase = baseUrl
     const configuration = new Configuration({ basePath: baseUrl })
     cachedClient = {
-      connections: new DefaultApi(configuration),
-      dispatches: new DefaultApi(configuration),
-      recordings: new DefaultApi(configuration),
-      sessions: new DefaultApi(configuration),
-      settings: new DefaultApi(configuration),
-      system: new DefaultApi(configuration),
+      connections: new ConnectionsApi(configuration),
+      dispatches: new DispatchesApi(configuration),
+      recordings: new RecordingsApi(configuration),
+      sessions: new SessionsApi(configuration),
+      settings: new SettingsApi(configuration),
+      system: new SystemApi(configuration),
     }
   }
   return cachedClient

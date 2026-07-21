@@ -1,20 +1,28 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test'
-import { Configuration, DefaultApi } from '@browseros/claw-api'
+import {
+  Configuration,
+  ConnectionsApi,
+  DispatchesApi,
+  RecordingsApi,
+  SessionsApi,
+  SettingsApi,
+  SystemApi,
+} from '@browseros/claw-api'
 import * as client from './client'
 
 mock.module('./client', () => ({
   ...client,
   apiClient: async () => {
-    const api = new DefaultApi(
-      new Configuration({ basePath: 'http://127.0.0.1:9200' }),
-    )
+    const configuration = new Configuration({
+      basePath: 'http://127.0.0.1:9200',
+    })
     return {
-      connections: api,
-      dispatches: api,
-      recordings: api,
-      sessions: api,
-      settings: api,
-      system: api,
+      connections: new ConnectionsApi(configuration),
+      dispatches: new DispatchesApi(configuration),
+      recordings: new RecordingsApi(configuration),
+      sessions: new SessionsApi(configuration),
+      settings: new SettingsApi(configuration),
+      system: new SystemApi(configuration),
     }
   },
   resolveApiBaseUrl: async () => 'http://127.0.0.1:9200',

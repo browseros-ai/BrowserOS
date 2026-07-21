@@ -1,14 +1,3 @@
-ApiError:
-  type: object
-  additionalProperties: false
-  required: [code, message]
-  properties:
-    code:
-      type: string
-    message:
-      type: string
-    requestId:
-      type: string
 HealthResponse:
   type: object
   additionalProperties: false
@@ -53,21 +42,3 @@ SystemCapabilities:
       format: int64
       minimum: 1
       description: Maximum UTF-8 encoded request-body bytes accepted by canonical recording ingest.
-TelemetryState:
-  type: object
-  additionalProperties: false
-  required: [distinctId, enabled, consent]
-  properties:
-    distinctId:
-      type: string
-    enabled:
-      type: boolean
-    consent:
-      type: boolean
-UpdateTelemetryRequest:
-  type: object
-  additionalProperties: false
-  required: [consent]
-  properties:
-    consent:
-      type: boolean

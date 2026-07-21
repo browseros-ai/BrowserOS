@@ -1,5 +1,6 @@
 get:
   operationId: getSession
+  tags: [sessions]
   parameters:
     - $ref: ../parameters.yaml#/SessionId
   responses:

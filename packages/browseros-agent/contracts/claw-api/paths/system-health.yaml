@@ -1,5 +1,6 @@
 get:
   operationId: getHealth
+  tags: [system]
   responses:
     '200':
       description: The server is ready.

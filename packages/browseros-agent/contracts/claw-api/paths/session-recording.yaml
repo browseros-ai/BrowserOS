@@ -1,5 +1,6 @@
 get:
   operationId: getRecording
+  tags: [recordings]
   parameters:
     - $ref: ../parameters.yaml#/SessionId
   responses:
@@ -8,7 +9,7 @@ get:
       content:
         application/json:
           schema:
-            $ref: ../schemas/sessions.yaml#/RecordingMetadata
+            $ref: ../schemas/recordings.yaml#/RecordingMetadata
     '404':
       $ref: ../responses.yaml#/NotFound
     '500':

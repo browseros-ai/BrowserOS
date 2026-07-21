@@ -3,8 +3,9 @@
  * `contracts/claw-api/openapi.yaml` and emits both generated clients:
  * the TypeScript fetch client into `packages/claw-api/src/generated`
  * and the Rust DTOs into `crates/claw-api/src/generated`. Neither tree
- * is ever hand-edited — change the spec, then regenerate with
- * `bun run codegen:claw-api`.
+ * is ever hand-edited. Operations and models are grouped by their route
+ * tags and schema files, then flat-re-exported for consumer compatibility.
+ * Change the spec, then regenerate with `bun run codegen:claw-api`.
  *
  * The generator runs in Docker with a pinned image and the output is
  * normalized (trailing whitespace stripped, generated Rust run through
@@ -86,7 +87,7 @@ export function extractModelGroups(
     const match =
       typeof ref === 'string'
         ? ref.match(
-            /^\.\/schemas\/([a-z][a-z0-9-]*)\.yaml#\/([A-Za-z][A-Za-z0-9]*)$/,
+            /^\.\/schemas\/([a-z][a-z0-9_]*)\.yaml#\/([A-Za-z][A-Za-z0-9]*)$/,
           )
         : null
     if (!match || match[2] !== model) {
@@ -135,7 +136,7 @@ export function mergeRustModels(sources: Record<string, string>): string {
 
   const imports = new Set(parsed.flatMap(({ source }) => source.imports))
   return `${header}\n\n${[...imports].toSorted().join('\n')}\n\n${parsed
-    .map(({ source }) => source.body)
+    .map(({ model, source }) => namespaceRustModelHelpers(model, source.body))
     .join('\n\n')}\n`
 }
 
@@ -199,7 +200,8 @@ export function mergeTypeScriptModels(
     })
     .join('\n')
 
-  return `${preamble}\n\n${importBlock}\n\n${parsed
+  const importSection = importBlock ? `${importBlock}\n\n` : ''
+  return `${preamble}\n\n${importSection}${parsed
     .map(({ source }) => source.body)
     .join('\n\n')}\n`
 }
@@ -253,6 +255,48 @@ export function emitTypeScriptModelIndex(groups: Iterable<string>): string {
     .join('\n')}\n`
 }
 
+export function rewriteTypeScriptApiModelImports(
+  source: string,
+  modelGroups: Readonly<Record<string, string>>,
+): string {
+  const imports = new Map<string, Set<string>>()
+  const rewritten = source.replace(
+    /import \{([\s\S]*?)\} from '\.\.\/models\/([A-Za-z][A-Za-z0-9]*)\.js';\n/g,
+    (_statement, rawSpecifiers: string, model: string) => {
+      const group = modelGroups[model]
+      if (!group) throw new Error(`API imports unknown model ${model}`)
+      const specifiers = imports.get(group) ?? new Set<string>()
+      for (const specifier of rawSpecifiers
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean)) {
+        specifiers.add(specifier)
+      }
+      imports.set(group, specifiers)
+      return ''
+    },
+  )
+  if (rewritten.includes("from '../models/")) {
+    throw new Error('OpenAPI Generator TypeScript API import shape changed')
+  }
+
+  const runtimeImport = "import * as runtime from '../runtime.js';"
+  if (!rewritten.includes(runtimeImport)) {
+    throw new Error('OpenAPI Generator TypeScript API runtime import changed')
+  }
+  const importBlock = [...imports.entries()]
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([group, specifiers]) =>
+      formatTypeScriptImport(
+        `../models/${group}.js`,
+        false,
+        [...specifiers].toSorted(),
+      ),
+    )
+    .join('\n')
+  return rewritten.replace(runtimeImport, `${runtimeImport}\n${importBlock}`)
+}
+
 function parseRustModel(model: string, source: string): ParsedRustModel {
   const normalized = source.trimEnd()
   const header = normalized.match(/^\/\*[\s\S]*?\*\//)?.[0]
@@ -282,19 +326,49 @@ function parseRustModel(model: string, source: string): ParsedRustModel {
   }
 }
 
+/**
+ * Per-model files namespace inline-schema helpers implicitly. A merged group
+ * prefixes those helpers and keeps their former module path as an alias.
+ */
+function namespaceRustModelHelpers(model: string, body: string): string {
+  const helpers = [
+    ...body.matchAll(/^pub (?:struct|enum|type) ([A-Za-z][A-Za-z0-9]*)\b/gm),
+  ]
+    .map((match) => match[1] as string)
+    .filter((name) => name !== model)
+  if (helpers.length === 0) return body
+
+  let namespaced = body
+  for (const helper of helpers) {
+    namespaced = namespaced.replaceAll(
+      new RegExp(`\\b${helper}\\b`, 'g'),
+      `${model}${helper}`,
+    )
+  }
+  const legacyModule = model
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+  const aliases = helpers
+    .map((helper) => `    pub use super::${model}${helper} as ${helper};`)
+    .join('\n')
+  return `${namespaced}\n\npub mod ${legacyModule} {\n${aliases}\n}`
+}
+
 function parseTypeScriptModel(
   model: string,
   source: string,
 ): ParsedTypeScriptModel {
   const normalized = source.trimEnd()
-  const firstImport = normalized.indexOf('\nimport ')
-  if (firstImport === -1) {
-    throw new Error(`TypeScript model ${model} has no generated imports`)
+  const preamble = normalized.match(
+    /^\/\* tslint:disable \*\/\n\/\* eslint-disable \*\/\n\/\*\*[\s\S]*?\*\//,
+  )?.[0]
+  if (!preamble) {
+    throw new Error(`TypeScript model ${model} has no generated preamble`)
   }
 
-  const preamble = normalized.slice(0, firstImport).trimEnd()
   const imports: ParsedTypeScriptImport[] = []
-  let cursor = firstImport + 1
+  let cursor = preamble.length
+  while (normalized[cursor] === '\n') cursor += 1
   while (normalized.startsWith('import ', cursor)) {
     const end = normalized.indexOf(';\n', cursor)
     if (end === -1) {
@@ -321,14 +395,14 @@ function parseTypeScriptModel(
     })
     cursor = end + 2
   }
-  if (normalized[cursor] !== '\n') {
-    throw new Error(`TypeScript model ${model} has an unrecognized import`)
-  }
+  while (normalized[cursor] === '\n') cursor += 1
+  const body = normalized.slice(cursor).trim()
+  if (!body) throw new Error(`TypeScript model ${model} has no model body`)
 
   return {
     preamble,
     imports,
-    body: normalized.slice(cursor + 1).trim(),
+    body,
   }
 }
 
@@ -407,6 +481,7 @@ function runGenerator(outputRoot: string): GeneratedTrees {
     force: true,
   })
   rmSync(join(typescript, '.openapi-generator-ignore'), { force: true })
+  groupGeneratedModels(typescript, rust)
   for (const file of listFiles(typescript).filter((path) =>
     path.endsWith('.ts'),
   )) {
@@ -451,6 +526,101 @@ function runGenerator(outputRoot: string): GeneratedTrees {
     typescript,
     rust,
   }
+}
+
+function groupGeneratedModels(typescript: string, rust: string): void {
+  const typescriptModels = join(typescript, 'models')
+  const typescriptFiles = listFiles(typescriptModels).filter(
+    (file) => file.endsWith('.ts') && file !== 'index.ts',
+  )
+  const typescriptModelNames = typescriptFiles.map((file) => file.slice(0, -3))
+  const openApiSource = readFileSync(
+    join(root, 'contracts/claw-api/openapi.yaml'),
+    'utf8',
+  )
+  const modelGroups = extractModelGroups(openApiSource, typescriptModelNames)
+  const groups = [...new Set(Object.values(modelGroups))].toSorted()
+  const typescriptApis = join(typescript, 'apis')
+  for (const file of listFiles(typescriptApis).filter((file) =>
+    file.endsWith('Api.ts'),
+  )) {
+    const path = join(typescriptApis, file)
+    writeFileSync(
+      path,
+      rewriteTypeScriptApiModelImports(readFileSync(path, 'utf8'), modelGroups),
+    )
+  }
+  const typescriptSources = sourcesByGroup(
+    typescriptModelNames,
+    modelGroups,
+    (model) => readFileSync(join(typescriptModels, `${model}.ts`), 'utf8'),
+  )
+
+  const rustIndex = readFileSync(join(rust, 'mod.rs'), 'utf8')
+  const rustFilesByModel = rustModelFilesByModel(rustIndex)
+  extractModelGroups(openApiSource, Object.keys(rustFilesByModel))
+  const rustSources = sourcesByGroup(
+    Object.keys(rustFilesByModel),
+    modelGroups,
+    (model) =>
+      readFileSync(join(rust, rustFilesByModel[model] as string), 'utf8'),
+  )
+
+  for (const file of typescriptFiles) rmSync(join(typescriptModels, file))
+  for (const group of groups) {
+    writeFileSync(
+      join(typescriptModels, `${group}.ts`),
+      mergeTypeScriptModels(
+        typescriptSources[group] as Record<string, string>,
+        modelGroups,
+      ),
+    )
+  }
+  writeFileSync(
+    join(typescriptModels, 'index.ts'),
+    emitTypeScriptModelIndex(groups),
+  )
+
+  for (const file of listFiles(rust).filter((file) => file.endsWith('.rs'))) {
+    rmSync(join(rust, file))
+  }
+  for (const group of groups) {
+    writeFileSync(
+      join(rust, `${group}.rs`),
+      mergeRustModels(rustSources[group] as Record<string, string>),
+    )
+  }
+  writeFileSync(join(rust, 'mod.rs'), emitRustModuleIndex(groups))
+}
+
+function sourcesByGroup(
+  models: string[],
+  modelGroups: Readonly<Record<string, string>>,
+  sourceForModel: (model: string) => string,
+): Record<string, Record<string, string>> {
+  const sources: Record<string, Record<string, string>> = {}
+  for (const model of models.toSorted()) {
+    const group = modelGroups[model]
+    if (!group) throw new Error(`Generated model ${model} has no schema group`)
+    const groupSources = sources[group] ?? {}
+    groupSources[model] = sourceForModel(model)
+    sources[group] = groupSources
+  }
+  return sources
+}
+
+function rustModelFilesByModel(indexSource: string): Record<string, string> {
+  const entries = [
+    ...indexSource.matchAll(
+      /^pub use self::([a-z][a-z0-9_]*)::([A-Za-z][A-Za-z0-9]*);$/gm,
+    ),
+  ]
+  if (entries.length === 0) {
+    throw new Error('OpenAPI Generator Rust model index shape changed')
+  }
+  return Object.fromEntries(
+    entries.map((match) => [match[2] as string, `${match[1] as string}.rs`]),
+  )
 }
 
 function runDocker(args: string[]): void {

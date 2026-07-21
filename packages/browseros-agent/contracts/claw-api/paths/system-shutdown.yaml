@@ -1,5 +1,6 @@
 post:
   operationId: shutdown
+  tags: [system]
   responses:
     '200':
       description: Shutdown was accepted.

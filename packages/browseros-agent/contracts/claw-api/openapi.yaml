@@ -5,6 +5,13 @@ info:
   description: Implementation-neutral REST contract shared by BrowserClaw clients and servers.
 servers:
   - url: http://127.0.0.1:9200
+tags:
+  - name: connections
+  - name: dispatches
+  - name: recordings
+  - name: sessions
+  - name: settings
+  - name: system
 paths:
   /system/health:
     $ref: ./paths/system-health.yaml
@@ -67,7 +74,7 @@ components:
       $ref: ./responses.yaml#/InternalError
   schemas:
     ApiError:
-      $ref: ./schemas/system.yaml#/ApiError
+      $ref: ./schemas/common.yaml#/ApiError
     HealthResponse:
       $ref: ./schemas/system.yaml#/HealthResponse
     ShutdownResponse:
@@ -77,9 +84,9 @@ components:
     SystemCapabilities:
       $ref: ./schemas/system.yaml#/SystemCapabilities
     TelemetryState:
-      $ref: ./schemas/system.yaml#/TelemetryState
+      $ref: ./schemas/settings.yaml#/TelemetryState
     UpdateTelemetryRequest:
-      $ref: ./schemas/system.yaml#/UpdateTelemetryRequest
+      $ref: ./schemas/settings.yaml#/UpdateTelemetryRequest
     SessionStatus:
       $ref: ./schemas/sessions.yaml#/SessionStatus
     LiveSessionActivityState:
@@ -95,17 +102,17 @@ components:
     SessionDetail:
       $ref: ./schemas/sessions.yaml#/SessionDetail
     Dispatch:
-      $ref: ./schemas/sessions.yaml#/Dispatch
+      $ref: ./schemas/dispatches.yaml#/Dispatch
     CancelSessionResponse:
       $ref: ./schemas/sessions.yaml#/CancelSessionResponse
     RecordingMetadata:
-      $ref: ./schemas/sessions.yaml#/RecordingMetadata
+      $ref: ./schemas/recordings.yaml#/RecordingMetadata
     RecordingTabMetadata:
-      $ref: ./schemas/sessions.yaml#/RecordingTabMetadata
+      $ref: ./schemas/recordings.yaml#/RecordingTabMetadata
     RecordingSegmentMetadata:
-      $ref: ./schemas/sessions.yaml#/RecordingSegmentMetadata
+      $ref: ./schemas/recordings.yaml#/RecordingSegmentMetadata
     AppendRecordingEventsResponse:
-      $ref: ./schemas/sessions.yaml#/AppendRecordingEventsResponse
+      $ref: ./schemas/recordings.yaml#/AppendRecordingEventsResponse
     ToolEvent:
       $ref: ./schemas/sessions.yaml#/ToolEvent
     Harness:

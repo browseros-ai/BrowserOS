@@ -1,0 +1,51 @@
+Dispatch:
+  type: object
+  additionalProperties: false
+  required:
+    - dispatchId
+    - createdAt
+    - slug
+    - label
+    - sessionId
+    - toolName
+    - hasScreenshot
+  properties:
+    dispatchId:
+      type: integer
+      format: int64
+      minimum: 1
+    createdAt:
+      type: integer
+      format: int64
+    profileId:
+      type: string
+    slug:
+      type: string
+    label:
+      type: string
+    sessionId:
+      type: string
+    toolName:
+      type: string
+    pageId:
+      type: integer
+      format: int64
+    tabId:
+      type: integer
+      format: int64
+    targetId:
+      type: string
+    url:
+      type: string
+    title:
+      type: string
+    argsJson:
+      type: string
+    resultMeta:
+      type: string
+    durationMs:
+      type: integer
+      format: int64
+      minimum: 0
+    hasScreenshot:
+      type: boolean

@@ -6,10 +6,11 @@
 
 import {
   Configuration,
-  DefaultApi,
   RECORDING_INGEST_FALLBACK_MAX_BYTES,
   RECORDING_INGEST_MAX_BYTES,
+  RecordingsApi,
   ResponseError,
+  SystemApi,
 } from '@browseros/claw-api'
 import {
   createIndexedDbRecordingOutbox,
@@ -60,8 +61,8 @@ interface IngestCapability {
 }
 
 interface RecordingApiClient {
-  recordings: DefaultApi
-  system: DefaultApi
+  recordings: RecordingsApi
+  system: SystemApi
 }
 
 export const RECORDINGS_QUEUE_MAX_BYTES = 2 * RECORDING_INGEST_MAX_BYTES
@@ -255,8 +256,8 @@ export function createRecordingsRelay(
         fetchApi: fetch,
       })
       const client = {
-        recordings: new DefaultApi(configuration),
-        system: new DefaultApi(configuration),
+        recordings: new RecordingsApi(configuration),
+        system: new SystemApi(configuration),
       }
       const capability = await discoverCapability(baseUrl, client)
       if (!capability) {

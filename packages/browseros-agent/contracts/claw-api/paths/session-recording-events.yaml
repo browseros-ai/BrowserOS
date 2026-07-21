@@ -1,5 +1,6 @@
 get:
   operationId: downloadRecordingEvents
+  tags: [recordings]
   parameters:
     - $ref: ../parameters.yaml#/SessionId
   responses:

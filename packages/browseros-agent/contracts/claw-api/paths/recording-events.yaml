@@ -1,5 +1,6 @@
 post:
   operationId: appendRecordingEvents
+  tags: [recordings]
   parameters:
     - $ref: ../parameters.yaml#/RecordingTabId
     - $ref: ../parameters.yaml#/RecordingDocumentId
@@ -18,7 +19,7 @@ post:
       content:
         application/json:
           schema:
-            $ref: ../schemas/sessions.yaml#/AppendRecordingEventsResponse
+            $ref: ../schemas/recordings.yaml#/AppendRecordingEventsResponse
     '400':
       $ref: ../responses.yaml#/BadRequest
     '403':

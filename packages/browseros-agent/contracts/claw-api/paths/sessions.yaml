@@ -1,5 +1,6 @@
 get:
   operationId: listSessions
+  tags: [sessions]
   description: An explicit `status=live` query returns the complete connected-session snapshot and omits `nextCursor`. Cursor and limit govern historical queries.
   parameters:
     - name: profileId

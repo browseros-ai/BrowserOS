@@ -18,9 +18,14 @@ import type { CanonicalApiDependencies } from '../../../apps/claw-server/src/rou
 import { createServer } from '../../../apps/claw-server/src/server'
 import {
   Configuration,
-  DefaultApi,
+  ConnectionsApi,
+  DispatchesApi,
   type Harness,
   RECORDING_INGEST_MAX_BYTES,
+  RecordingsApi,
+  SessionsApi,
+  SettingsApi,
+  SystemApi,
 } from '../../../packages/claw-api/src'
 
 export interface ContractServer {
@@ -36,23 +41,23 @@ export interface ContractServer {
 }
 
 export interface ContractApiClient {
-  connections: DefaultApi
-  dispatches: DefaultApi
-  recordings: DefaultApi
-  sessions: DefaultApi
-  settings: DefaultApi
-  system: DefaultApi
+  connections: ConnectionsApi
+  dispatches: DispatchesApi
+  recordings: RecordingsApi
+  sessions: SessionsApi
+  settings: SettingsApi
+  system: SystemApi
 }
 
 function contractApiClient(baseUrl: string): ContractApiClient {
   const configuration = new Configuration({ basePath: baseUrl })
   return {
-    connections: new DefaultApi(configuration),
-    dispatches: new DefaultApi(configuration),
-    recordings: new DefaultApi(configuration),
-    sessions: new DefaultApi(configuration),
-    settings: new DefaultApi(configuration),
-    system: new DefaultApi(configuration),
+    connections: new ConnectionsApi(configuration),
+    dispatches: new DispatchesApi(configuration),
+    recordings: new RecordingsApi(configuration),
+    sessions: new SessionsApi(configuration),
+    settings: new SettingsApi(configuration),
+    system: new SystemApi(configuration),
   }
 }
 
