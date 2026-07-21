@@ -12,21 +12,8 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 import type { Dispatch } from './Dispatch.js';
-import {
-    DispatchFromJSON,
-    DispatchFromJSONTyped,
-    DispatchToJSON,
-    DispatchToJSONTyped,
-} from './Dispatch.js';
 import type { SessionSummary } from './SessionSummary.js';
-import {
-    SessionSummaryFromJSON,
-    SessionSummaryFromJSONTyped,
-    SessionSummaryToJSON,
-    SessionSummaryToJSONTyped,
-} from './SessionSummary.js';
 
 /**
  *
@@ -46,44 +33,4 @@ export interface SessionDetail {
      * @memberof SessionDetail
      */
     dispatches: Array<Dispatch>;
-}
-
-/**
- * Check if a given object implements the SessionDetail interface.
- */
-export function instanceOfSessionDetail(value: object): value is SessionDetail {
-    if (!('session' in value) || value['session'] === undefined) return false;
-    if (!('dispatches' in value) || value['dispatches'] === undefined) return false;
-    return true;
-}
-
-export function SessionDetailFromJSON(json: any): SessionDetail {
-    return SessionDetailFromJSONTyped(json, false);
-}
-
-export function SessionDetailFromJSONTyped(json: any, ignoreDiscriminator: boolean): SessionDetail {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'session': SessionSummaryFromJSON(json['session']),
-        'dispatches': ((json['dispatches'] as Array<any>).map(DispatchFromJSON)),
-    };
-}
-
-export function SessionDetailToJSON(json: any): SessionDetail {
-    return SessionDetailToJSONTyped(json, false);
-}
-
-export function SessionDetailToJSONTyped(value?: SessionDetail | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'session': SessionSummaryToJSON(value['session']),
-        'dispatches': ((value['dispatches'] as Array<any>).map(DispatchToJSON)),
-    };
 }

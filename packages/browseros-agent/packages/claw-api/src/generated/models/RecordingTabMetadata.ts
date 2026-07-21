@@ -12,14 +12,7 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 import type { RecordingSegmentMetadata } from './RecordingSegmentMetadata.js';
-import {
-    RecordingSegmentMetadataFromJSON,
-    RecordingSegmentMetadataFromJSONTyped,
-    RecordingSegmentMetadataToJSON,
-    RecordingSegmentMetadataToJSONTyped,
-} from './RecordingSegmentMetadata.js';
 
 /**
  *
@@ -57,53 +50,4 @@ export interface RecordingTabMetadata {
      * @memberof RecordingTabMetadata
      */
     segments: Array<RecordingSegmentMetadata>;
-}
-
-/**
- * Check if a given object implements the RecordingTabMetadata interface.
- */
-export function instanceOfRecordingTabMetadata(value: object): value is RecordingTabMetadata {
-    if (!('tabId' in value) || value['tabId'] === undefined) return false;
-    if (!('complete' in value) || value['complete'] === undefined) return false;
-    if (!('firstEventAt' in value) || value['firstEventAt'] === undefined) return false;
-    if (!('lastEventAt' in value) || value['lastEventAt'] === undefined) return false;
-    if (!('segments' in value) || value['segments'] === undefined) return false;
-    return true;
-}
-
-export function RecordingTabMetadataFromJSON(json: any): RecordingTabMetadata {
-    return RecordingTabMetadataFromJSONTyped(json, false);
-}
-
-export function RecordingTabMetadataFromJSONTyped(json: any, ignoreDiscriminator: boolean): RecordingTabMetadata {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'tabId': json['tabId'],
-        'complete': json['complete'],
-        'firstEventAt': json['firstEventAt'],
-        'lastEventAt': json['lastEventAt'],
-        'segments': ((json['segments'] as Array<any>).map(RecordingSegmentMetadataFromJSON)),
-    };
-}
-
-export function RecordingTabMetadataToJSON(json: any): RecordingTabMetadata {
-    return RecordingTabMetadataToJSONTyped(json, false);
-}
-
-export function RecordingTabMetadataToJSONTyped(value?: RecordingTabMetadata | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'tabId': value['tabId'],
-        'complete': value['complete'],
-        'firstEventAt': value['firstEventAt'],
-        'lastEventAt': value['lastEventAt'],
-        'segments': ((value['segments'] as Array<any>).map(RecordingSegmentMetadataToJSON)),
-    };
 }

@@ -27,31 +27,3 @@ export const Harness = {
     Zed: 'Zed'
 } as const;
 export type Harness = typeof Harness[keyof typeof Harness];
-
-
-export function instanceOfHarness(value: any): boolean {
-    for (const key in Harness) {
-        if (Object.prototype.hasOwnProperty.call(Harness, key)) {
-            if (Harness[key as keyof typeof Harness] === value) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-export function HarnessFromJSON(json: any): Harness {
-    return HarnessFromJSONTyped(json, false);
-}
-
-export function HarnessFromJSONTyped(json: any, ignoreDiscriminator: boolean): Harness {
-    return json as Harness;
-}
-
-export function HarnessToJSON(value?: Harness | null): any {
-    return value as any;
-}
-
-export function HarnessToJSONTyped(value: any, ignoreDiscriminator: boolean): Harness {
-    return value as Harness;
-}

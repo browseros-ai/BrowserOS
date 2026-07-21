@@ -12,7 +12,6 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 /**
  *
  * @export
@@ -35,41 +34,3 @@ export const HealthResponseStatusEnum = {
     Ok: 'ok'
 } as const;
 export type HealthResponseStatusEnum = typeof HealthResponseStatusEnum[keyof typeof HealthResponseStatusEnum];
-
-
-/**
- * Check if a given object implements the HealthResponse interface.
- */
-export function instanceOfHealthResponse(value: object): value is HealthResponse {
-    if (!('status' in value) || value['status'] === undefined) return false;
-    return true;
-}
-
-export function HealthResponseFromJSON(json: any): HealthResponse {
-    return HealthResponseFromJSONTyped(json, false);
-}
-
-export function HealthResponseFromJSONTyped(json: any, ignoreDiscriminator: boolean): HealthResponse {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'status': json['status'],
-    };
-}
-
-export function HealthResponseToJSON(json: any): HealthResponse {
-    return HealthResponseToJSONTyped(json, false);
-}
-
-export function HealthResponseToJSONTyped(value?: HealthResponse | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'status': value['status'],
-    };
-}

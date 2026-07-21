@@ -12,21 +12,8 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 import type { LiveSessionActivityState } from './LiveSessionActivityState.js';
-import {
-    LiveSessionActivityStateFromJSON,
-    LiveSessionActivityStateFromJSONTyped,
-    LiveSessionActivityStateToJSON,
-    LiveSessionActivityStateToJSONTyped,
-} from './LiveSessionActivityState.js';
 import type { SessionBrowserTab } from './SessionBrowserTab.js';
-import {
-    SessionBrowserTabFromJSON,
-    SessionBrowserTabFromJSONTyped,
-    SessionBrowserTabToJSON,
-    SessionBrowserTabToJSONTyped,
-} from './SessionBrowserTab.js';
 
 /**
  *
@@ -46,46 +33,4 @@ export interface LiveSessionState {
      * @memberof LiveSessionState
      */
     browserTabs: Array<SessionBrowserTab>;
-}
-
-
-
-/**
- * Check if a given object implements the LiveSessionState interface.
- */
-export function instanceOfLiveSessionState(value: object): value is LiveSessionState {
-    if (!('state' in value) || value['state'] === undefined) return false;
-    if (!('browserTabs' in value) || value['browserTabs'] === undefined) return false;
-    return true;
-}
-
-export function LiveSessionStateFromJSON(json: any): LiveSessionState {
-    return LiveSessionStateFromJSONTyped(json, false);
-}
-
-export function LiveSessionStateFromJSONTyped(json: any, ignoreDiscriminator: boolean): LiveSessionState {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'state': LiveSessionActivityStateFromJSON(json['state']),
-        'browserTabs': ((json['browserTabs'] as Array<any>).map(SessionBrowserTabFromJSON)),
-    };
-}
-
-export function LiveSessionStateToJSON(json: any): LiveSessionState {
-    return LiveSessionStateToJSONTyped(json, false);
-}
-
-export function LiveSessionStateToJSONTyped(value?: LiveSessionState | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'state': LiveSessionActivityStateToJSON(value['state']),
-        'browserTabs': ((value['browserTabs'] as Array<any>).map(SessionBrowserTabToJSON)),
-    };
 }

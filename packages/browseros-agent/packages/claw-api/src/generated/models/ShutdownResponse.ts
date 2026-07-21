@@ -12,7 +12,6 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 /**
  *
  * @export
@@ -35,41 +34,3 @@ export const ShutdownResponseStatusEnum = {
     Ok: 'ok'
 } as const;
 export type ShutdownResponseStatusEnum = typeof ShutdownResponseStatusEnum[keyof typeof ShutdownResponseStatusEnum];
-
-
-/**
- * Check if a given object implements the ShutdownResponse interface.
- */
-export function instanceOfShutdownResponse(value: object): value is ShutdownResponse {
-    if (!('status' in value) || value['status'] === undefined) return false;
-    return true;
-}
-
-export function ShutdownResponseFromJSON(json: any): ShutdownResponse {
-    return ShutdownResponseFromJSONTyped(json, false);
-}
-
-export function ShutdownResponseFromJSONTyped(json: any, ignoreDiscriminator: boolean): ShutdownResponse {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'status': json['status'],
-    };
-}
-
-export function ShutdownResponseToJSON(json: any): ShutdownResponse {
-    return ShutdownResponseToJSONTyped(json, false);
-}
-
-export function ShutdownResponseToJSONTyped(value?: ShutdownResponse | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'status': value['status'],
-    };
-}

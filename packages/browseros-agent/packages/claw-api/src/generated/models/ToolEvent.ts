@@ -12,7 +12,6 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 /**
  *
  * @export
@@ -31,44 +30,4 @@ export interface ToolEvent {
      * @memberof ToolEvent
      */
     at: number;
-}
-
-/**
- * Check if a given object implements the ToolEvent interface.
- */
-export function instanceOfToolEvent(value: object): value is ToolEvent {
-    if (!('name' in value) || value['name'] === undefined) return false;
-    if (!('at' in value) || value['at'] === undefined) return false;
-    return true;
-}
-
-export function ToolEventFromJSON(json: any): ToolEvent {
-    return ToolEventFromJSONTyped(json, false);
-}
-
-export function ToolEventFromJSONTyped(json: any, ignoreDiscriminator: boolean): ToolEvent {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'name': json['name'],
-        'at': json['at'],
-    };
-}
-
-export function ToolEventToJSON(json: any): ToolEvent {
-    return ToolEventToJSONTyped(json, false);
-}
-
-export function ToolEventToJSONTyped(value?: ToolEvent | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'name': value['name'],
-        'at': value['at'],
-    };
 }

@@ -12,7 +12,6 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 /**
  *
  * @export
@@ -25,41 +24,4 @@ export interface UpdateTelemetryRequest {
      * @memberof UpdateTelemetryRequest
      */
     consent: boolean;
-}
-
-/**
- * Check if a given object implements the UpdateTelemetryRequest interface.
- */
-export function instanceOfUpdateTelemetryRequest(value: object): value is UpdateTelemetryRequest {
-    if (!('consent' in value) || value['consent'] === undefined) return false;
-    return true;
-}
-
-export function UpdateTelemetryRequestFromJSON(json: any): UpdateTelemetryRequest {
-    return UpdateTelemetryRequestFromJSONTyped(json, false);
-}
-
-export function UpdateTelemetryRequestFromJSONTyped(json: any, ignoreDiscriminator: boolean): UpdateTelemetryRequest {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'consent': json['consent'],
-    };
-}
-
-export function UpdateTelemetryRequestToJSON(json: any): UpdateTelemetryRequest {
-    return UpdateTelemetryRequestToJSONTyped(json, false);
-}
-
-export function UpdateTelemetryRequestToJSONTyped(value?: UpdateTelemetryRequest | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'consent': value['consent'],
-    };
 }

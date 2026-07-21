@@ -12,14 +12,7 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 import type { ToolEvent } from './ToolEvent.js';
-import {
-    ToolEventFromJSON,
-    ToolEventFromJSONTyped,
-    ToolEventToJSON,
-    ToolEventToJSONTyped,
-} from './ToolEvent.js';
 
 /**
  *
@@ -81,61 +74,4 @@ export interface SessionBrowserTab {
      * @memberof SessionBrowserTab
      */
     previewCapturedAt?: number;
-}
-
-/**
- * Check if a given object implements the SessionBrowserTab interface.
- */
-export function instanceOfSessionBrowserTab(value: object): value is SessionBrowserTab {
-    if (!('browserTabId' in value) || value['browserTabId'] === undefined) return false;
-    if (!('url' in value) || value['url'] === undefined) return false;
-    if (!('title' in value) || value['title'] === undefined) return false;
-    if (!('toolCount' in value) || value['toolCount'] === undefined) return false;
-    if (!('recentTools' in value) || value['recentTools'] === undefined) return false;
-    return true;
-}
-
-export function SessionBrowserTabFromJSON(json: any): SessionBrowserTab {
-    return SessionBrowserTabFromJSONTyped(json, false);
-}
-
-export function SessionBrowserTabFromJSONTyped(json: any, ignoreDiscriminator: boolean): SessionBrowserTab {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'browserTabId': json['browserTabId'],
-        'url': json['url'],
-        'title': json['title'],
-        'firstActivityAt': json['firstActivityAt'] == null ? undefined : json['firstActivityAt'],
-        'lastActivityAt': json['lastActivityAt'] == null ? undefined : json['lastActivityAt'],
-        'lastToolName': json['lastToolName'] == null ? undefined : json['lastToolName'],
-        'toolCount': json['toolCount'],
-        'recentTools': ((json['recentTools'] as Array<any>).map(ToolEventFromJSON)),
-        'previewCapturedAt': json['previewCapturedAt'] == null ? undefined : json['previewCapturedAt'],
-    };
-}
-
-export function SessionBrowserTabToJSON(json: any): SessionBrowserTab {
-    return SessionBrowserTabToJSONTyped(json, false);
-}
-
-export function SessionBrowserTabToJSONTyped(value?: SessionBrowserTab | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'browserTabId': value['browserTabId'],
-        'url': value['url'],
-        'title': value['title'],
-        'firstActivityAt': value['firstActivityAt'],
-        'lastActivityAt': value['lastActivityAt'],
-        'lastToolName': value['lastToolName'],
-        'toolCount': value['toolCount'],
-        'recentTools': ((value['recentTools'] as Array<any>).map(ToolEventToJSON)),
-        'previewCapturedAt': value['previewCapturedAt'],
-    };
 }

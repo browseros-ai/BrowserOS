@@ -12,7 +12,6 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 /**
  *
  * @export
@@ -37,47 +36,4 @@ export interface TelemetryState {
      * @memberof TelemetryState
      */
     consent: boolean;
-}
-
-/**
- * Check if a given object implements the TelemetryState interface.
- */
-export function instanceOfTelemetryState(value: object): value is TelemetryState {
-    if (!('distinctId' in value) || value['distinctId'] === undefined) return false;
-    if (!('enabled' in value) || value['enabled'] === undefined) return false;
-    if (!('consent' in value) || value['consent'] === undefined) return false;
-    return true;
-}
-
-export function TelemetryStateFromJSON(json: any): TelemetryState {
-    return TelemetryStateFromJSONTyped(json, false);
-}
-
-export function TelemetryStateFromJSONTyped(json: any, ignoreDiscriminator: boolean): TelemetryState {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'distinctId': json['distinctId'],
-        'enabled': json['enabled'],
-        'consent': json['consent'],
-    };
-}
-
-export function TelemetryStateToJSON(json: any): TelemetryState {
-    return TelemetryStateToJSONTyped(json, false);
-}
-
-export function TelemetryStateToJSONTyped(value?: TelemetryState | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'distinctId': value['distinctId'],
-        'enabled': value['enabled'],
-        'consent': value['consent'],
-    };
 }

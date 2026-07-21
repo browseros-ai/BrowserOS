@@ -23,31 +23,3 @@ export const SessionStatus = {
     Failed: 'failed'
 } as const;
 export type SessionStatus = typeof SessionStatus[keyof typeof SessionStatus];
-
-
-export function instanceOfSessionStatus(value: any): boolean {
-    for (const key in SessionStatus) {
-        if (Object.prototype.hasOwnProperty.call(SessionStatus, key)) {
-            if (SessionStatus[key as keyof typeof SessionStatus] === value) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-export function SessionStatusFromJSON(json: any): SessionStatus {
-    return SessionStatusFromJSONTyped(json, false);
-}
-
-export function SessionStatusFromJSONTyped(json: any, ignoreDiscriminator: boolean): SessionStatus {
-    return json as SessionStatus;
-}
-
-export function SessionStatusToJSON(value?: SessionStatus | null): any {
-    return value as any;
-}
-
-export function SessionStatusToJSONTyped(value: any, ignoreDiscriminator: boolean): SessionStatus {
-    return value as SessionStatus;
-}

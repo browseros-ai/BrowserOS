@@ -12,21 +12,8 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 import type { LiveSessionState } from './LiveSessionState.js';
-import {
-    LiveSessionStateFromJSON,
-    LiveSessionStateFromJSONTyped,
-    LiveSessionStateToJSON,
-    LiveSessionStateToJSONTyped,
-} from './LiveSessionState.js';
 import type { SessionStatus } from './SessionStatus.js';
-import {
-    SessionStatusFromJSON,
-    SessionStatusFromJSONTyped,
-    SessionStatusToJSON,
-    SessionStatusToJSONTyped,
-} from './SessionStatus.js';
 
 /**
  *
@@ -136,84 +123,4 @@ export interface SessionSummary {
      * @memberof SessionSummary
      */
     live?: LiveSessionState;
-}
-
-
-
-/**
- * Check if a given object implements the SessionSummary interface.
- */
-export function instanceOfSessionSummary(value: object): value is SessionSummary {
-    if (!('sessionId' in value) || value['sessionId'] === undefined) return false;
-    if (!('slug' in value) || value['slug'] === undefined) return false;
-    if (!('label' in value) || value['label'] === undefined) return false;
-    if (!('name' in value) || value['name'] === undefined) return false;
-    if (!('startedAt' in value) || value['startedAt'] === undefined) return false;
-    if (!('durationMs' in value) || value['durationMs'] === undefined) return false;
-    if (!('dispatchCount' in value) || value['dispatchCount'] === undefined) return false;
-    if (!('toolSequence' in value) || value['toolSequence'] === undefined) return false;
-    if (!('status' in value) || value['status'] === undefined) return false;
-    if (!('errorCount' in value) || value['errorCount'] === undefined) return false;
-    return true;
-}
-
-export function SessionSummaryFromJSON(json: any): SessionSummary {
-    return SessionSummaryFromJSONTyped(json, false);
-}
-
-export function SessionSummaryFromJSONTyped(json: any, ignoreDiscriminator: boolean): SessionSummary {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'sessionId': json['sessionId'],
-        'profileId': json['profileId'] == null ? undefined : json['profileId'],
-        'harness': json['harness'] == null ? undefined : json['harness'],
-        'color': json['color'] == null ? undefined : json['color'],
-        'slug': json['slug'],
-        'label': json['label'],
-        'name': json['name'],
-        'site': json['site'] == null ? undefined : json['site'],
-        'startedAt': json['startedAt'],
-        'endedAt': json['endedAt'] == null ? undefined : json['endedAt'],
-        'durationMs': json['durationMs'],
-        'dispatchCount': json['dispatchCount'],
-        'toolSequence': json['toolSequence'],
-        'status': SessionStatusFromJSON(json['status']),
-        'errorCount': json['errorCount'],
-        'lastScreenshotDispatchId': json['lastScreenshotDispatchId'] == null ? undefined : json['lastScreenshotDispatchId'],
-        'live': json['live'] == null ? undefined : LiveSessionStateFromJSON(json['live']),
-    };
-}
-
-export function SessionSummaryToJSON(json: any): SessionSummary {
-    return SessionSummaryToJSONTyped(json, false);
-}
-
-export function SessionSummaryToJSONTyped(value?: SessionSummary | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'sessionId': value['sessionId'],
-        'profileId': value['profileId'],
-        'harness': value['harness'],
-        'color': value['color'],
-        'slug': value['slug'],
-        'label': value['label'],
-        'name': value['name'],
-        'site': value['site'],
-        'startedAt': value['startedAt'],
-        'endedAt': value['endedAt'],
-        'durationMs': value['durationMs'],
-        'dispatchCount': value['dispatchCount'],
-        'toolSequence': value['toolSequence'],
-        'status': SessionStatusToJSON(value['status']),
-        'errorCount': value['errorCount'],
-        'lastScreenshotDispatchId': value['lastScreenshotDispatchId'],
-        'live': LiveSessionStateToJSON(value['live']),
-    };
 }

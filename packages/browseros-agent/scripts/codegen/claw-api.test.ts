@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test'
 import { readdir, readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { parse } from 'yaml'
-import { flattenRequiredHeaderGuards } from './claw-api'
 
 interface OpenApiOperation {
   operationId?: string
@@ -37,8 +36,7 @@ const expectedPaths = [
   '/api/v1/sessions/{sessionId}/cancel',
   '/api/v1/sessions/{sessionId}/recording',
   '/api/v1/sessions/{sessionId}/recording/events',
-  '/api/v1/tabs',
-  '/api/v1/tabs/{pageId}/preview',
+  '/api/v1/sessions/{sessionId}/browser-tabs/{browserTabId}/preview',
   '/api/v1/dispatches/{dispatchId}/screenshot',
   '/api/v1/connections',
   '/api/v1/connections/{harness}',
@@ -84,33 +82,33 @@ describe('BrowserClaw OpenAPI contract', () => {
   })
 })
 
-describe('flattenRequiredHeaderGuards', () => {
-  test('flattens required header assignments and preserves optional guards', () => {
-    const generated = `        if (requestParameters['required'] == null) {
-            throw new Error('required');
-        }
+describe('TypeScript Claw API package boundary', () => {
+  test('exports generated DTOs and wire enums without a transport client', async () => {
+    const packageDirectory = resolve(import.meta.dir, '../../packages/claw-api')
+    const generatedDirectory = join(packageDirectory, 'src/generated')
+    const files = await treeFiles(generatedDirectory)
+    const modelFiles = files.filter((file) => file.startsWith('models/'))
 
-        if (requestParameters['required'] != null) {
-            headerParameters['Required'] = String(requestParameters['required']);
-        }
-
-        if (requestParameters['optional'] != null) {
-            headerParameters['Optional'] = String(requestParameters['optional']);
-        }
-`
-
+    expect(files).toContain('index.ts')
+    expect(modelFiles.length).toBeGreaterThan(0)
     expect(
-      flattenRequiredHeaderGuards(generated),
-    ).toBe(`        if (requestParameters['required'] == null) {
-            throw new Error('required');
-        }
+      files.every(
+        (file) =>
+          file === 'index.ts' || /^models\/[A-Za-z0-9]+\.ts$/.test(file),
+      ),
+    ).toBe(true)
 
-        headerParameters['Required'] = String(requestParameters['required']);
-
-        if (requestParameters['optional'] != null) {
-            headerParameters['Optional'] = String(requestParameters['optional']);
-        }
-`)
+    const generatedSource = (
+      await Promise.all(
+        files.map((file) => readFile(join(generatedDirectory, file), 'utf8')),
+      )
+    ).join('\n')
+    expect(generatedSource).not.toMatch(
+      /\b(?:Configuration|DefaultApi|ResponseError|FromJSON|ToJSON|runtime)\b/,
+    )
+    expect(await readFile(join(packageDirectory, 'src/index.ts'), 'utf8')).toBe(
+      "export * from './generated/index.js'\n",
+    )
   })
 })
 
@@ -124,4 +122,17 @@ async function yamlFiles(directory: string): Promise<string[]> {
     }),
   )
   return nested.flat()
+}
+
+async function treeFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true })
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.isDirectory()) return [entry.name]
+      return (await treeFiles(join(directory, entry.name))).map((file) =>
+        join(entry.name, file),
+      )
+    }),
+  )
+  return nested.flat().toSorted()
 }

@@ -12,14 +12,7 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 import type { Connection } from './Connection.js';
-import {
-    ConnectionFromJSON,
-    ConnectionFromJSONTyped,
-    ConnectionToJSON,
-    ConnectionToJSONTyped,
-} from './Connection.js';
 
 /**
  *
@@ -33,41 +26,4 @@ export interface ConnectionList {
      * @memberof ConnectionList
      */
     items: Array<Connection>;
-}
-
-/**
- * Check if a given object implements the ConnectionList interface.
- */
-export function instanceOfConnectionList(value: object): value is ConnectionList {
-    if (!('items' in value) || value['items'] === undefined) return false;
-    return true;
-}
-
-export function ConnectionListFromJSON(json: any): ConnectionList {
-    return ConnectionListFromJSONTyped(json, false);
-}
-
-export function ConnectionListFromJSONTyped(json: any, ignoreDiscriminator: boolean): ConnectionList {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'items': ((json['items'] as Array<any>).map(ConnectionFromJSON)),
-    };
-}
-
-export function ConnectionListToJSON(json: any): ConnectionList {
-    return ConnectionListToJSONTyped(json, false);
-}
-
-export function ConnectionListToJSONTyped(value?: ConnectionList | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'items': ((value['items'] as Array<any>).map(ConnectionToJSON)),
-    };
 }

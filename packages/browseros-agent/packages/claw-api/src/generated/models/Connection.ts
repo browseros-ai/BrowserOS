@@ -12,14 +12,7 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 import type { Harness } from './Harness.js';
-import {
-    HarnessFromJSON,
-    HarnessFromJSONTyped,
-    HarnessToJSON,
-    HarnessToJSONTyped,
-} from './Harness.js';
 
 /**
  *
@@ -51,51 +44,4 @@ export interface Connection {
      * @memberof Connection
      */
     message: string;
-}
-
-
-
-/**
- * Check if a given object implements the Connection interface.
- */
-export function instanceOfConnection(value: object): value is Connection {
-    if (!('harness' in value) || value['harness'] === undefined) return false;
-    if (!('installed' in value) || value['installed'] === undefined) return false;
-    if (!('message' in value) || value['message'] === undefined) return false;
-    return true;
-}
-
-export function ConnectionFromJSON(json: any): Connection {
-    return ConnectionFromJSONTyped(json, false);
-}
-
-export function ConnectionFromJSONTyped(json: any, ignoreDiscriminator: boolean): Connection {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'harness': HarnessFromJSON(json['harness']),
-        'installed': json['installed'],
-        'configPath': json['configPath'] == null ? undefined : json['configPath'],
-        'message': json['message'],
-    };
-}
-
-export function ConnectionToJSON(json: any): Connection {
-    return ConnectionToJSONTyped(json, false);
-}
-
-export function ConnectionToJSONTyped(value?: Connection | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'harness': HarnessToJSON(value['harness']),
-        'installed': value['installed'],
-        'configPath': value['configPath'],
-        'message': value['message'],
-    };
 }

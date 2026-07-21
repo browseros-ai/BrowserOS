@@ -12,7 +12,6 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 /**
  *
  * @export
@@ -67,60 +66,4 @@ export interface RecordingSegmentMetadata {
      * @memberof RecordingSegmentMetadata
      */
     legacy?: boolean;
-}
-
-/**
- * Check if a given object implements the RecordingSegmentMetadata interface.
- */
-export function instanceOfRecordingSegmentMetadata(value: object): value is RecordingSegmentMetadata {
-    if (!('documentId' in value) || value['documentId'] === undefined) return false;
-    if (!('firstEventAt' in value) || value['firstEventAt'] === undefined) return false;
-    if (!('lastEventAt' in value) || value['lastEventAt'] === undefined) return false;
-    if (!('sizeBytes' in value) || value['sizeBytes'] === undefined) return false;
-    if (!('eventCount' in value) || value['eventCount'] === undefined) return false;
-    if (!('hasGap' in value) || value['hasGap'] === undefined) return false;
-    return true;
-}
-
-export function RecordingSegmentMetadataFromJSON(json: any): RecordingSegmentMetadata {
-    return RecordingSegmentMetadataFromJSONTyped(json, false);
-}
-
-export function RecordingSegmentMetadataFromJSONTyped(json: any, ignoreDiscriminator: boolean): RecordingSegmentMetadata {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'documentId': json['documentId'],
-        'targetId': json['targetId'] == null ? undefined : json['targetId'],
-        'firstEventAt': json['firstEventAt'],
-        'lastEventAt': json['lastEventAt'],
-        'sizeBytes': json['sizeBytes'],
-        'eventCount': json['eventCount'],
-        'hasGap': json['hasGap'],
-        'legacy': json['legacy'] == null ? undefined : json['legacy'],
-    };
-}
-
-export function RecordingSegmentMetadataToJSON(json: any): RecordingSegmentMetadata {
-    return RecordingSegmentMetadataToJSONTyped(json, false);
-}
-
-export function RecordingSegmentMetadataToJSONTyped(value?: RecordingSegmentMetadata | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'documentId': value['documentId'],
-        'targetId': value['targetId'],
-        'firstEventAt': value['firstEventAt'],
-        'lastEventAt': value['lastEventAt'],
-        'sizeBytes': value['sizeBytes'],
-        'eventCount': value['eventCount'],
-        'hasGap': value['hasGap'],
-        'legacy': value['legacy'],
-    };
 }

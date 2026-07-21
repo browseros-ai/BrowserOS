@@ -12,14 +12,7 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 import type { SessionSummary } from './SessionSummary.js';
-import {
-    SessionSummaryFromJSON,
-    SessionSummaryFromJSONTyped,
-    SessionSummaryToJSON,
-    SessionSummaryToJSONTyped,
-} from './SessionSummary.js';
 
 /**
  *
@@ -39,43 +32,4 @@ export interface SessionList {
      * @memberof SessionList
      */
     nextCursor?: number;
-}
-
-/**
- * Check if a given object implements the SessionList interface.
- */
-export function instanceOfSessionList(value: object): value is SessionList {
-    if (!('items' in value) || value['items'] === undefined) return false;
-    return true;
-}
-
-export function SessionListFromJSON(json: any): SessionList {
-    return SessionListFromJSONTyped(json, false);
-}
-
-export function SessionListFromJSONTyped(json: any, ignoreDiscriminator: boolean): SessionList {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'items': ((json['items'] as Array<any>).map(SessionSummaryFromJSON)),
-        'nextCursor': json['nextCursor'] == null ? undefined : json['nextCursor'],
-    };
-}
-
-export function SessionListToJSON(json: any): SessionList {
-    return SessionListToJSONTyped(json, false);
-}
-
-export function SessionListToJSONTyped(value?: SessionList | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'items': ((value['items'] as Array<any>).map(SessionSummaryToJSON)),
-        'nextCursor': value['nextCursor'],
-    };
 }

@@ -12,14 +12,7 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 import type { RecordingTabMetadata } from './RecordingTabMetadata.js';
-import {
-    RecordingTabMetadataFromJSON,
-    RecordingTabMetadataFromJSONTyped,
-    RecordingTabMetadataToJSON,
-    RecordingTabMetadataToJSONTyped,
-} from './RecordingTabMetadata.js';
 
 /**
  *
@@ -63,54 +56,4 @@ export interface RecordingMetadata {
      * @memberof RecordingMetadata
      */
     tabs: Array<RecordingTabMetadata>;
-}
-
-/**
- * Check if a given object implements the RecordingMetadata interface.
- */
-export function instanceOfRecordingMetadata(value: object): value is RecordingMetadata {
-    if (!('hasData' in value) || value['hasData'] === undefined) return false;
-    if (!('complete' in value) || value['complete'] === undefined) return false;
-    if (!('sizeBytes' in value) || value['sizeBytes'] === undefined) return false;
-    if (!('tabs' in value) || value['tabs'] === undefined) return false;
-    return true;
-}
-
-export function RecordingMetadataFromJSON(json: any): RecordingMetadata {
-    return RecordingMetadataFromJSONTyped(json, false);
-}
-
-export function RecordingMetadataFromJSONTyped(json: any, ignoreDiscriminator: boolean): RecordingMetadata {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'hasData': json['hasData'],
-        'complete': json['complete'],
-        'sizeBytes': json['sizeBytes'],
-        'firstEventAt': json['firstEventAt'] == null ? undefined : json['firstEventAt'],
-        'lastEventAt': json['lastEventAt'] == null ? undefined : json['lastEventAt'],
-        'tabs': ((json['tabs'] as Array<any>).map(RecordingTabMetadataFromJSON)),
-    };
-}
-
-export function RecordingMetadataToJSON(json: any): RecordingMetadata {
-    return RecordingMetadataToJSONTyped(json, false);
-}
-
-export function RecordingMetadataToJSONTyped(value?: RecordingMetadata | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'hasData': value['hasData'],
-        'complete': value['complete'],
-        'sizeBytes': value['sizeBytes'],
-        'firstEventAt': value['firstEventAt'],
-        'lastEventAt': value['lastEventAt'],
-        'tabs': ((value['tabs'] as Array<any>).map(RecordingTabMetadataToJSON)),
-    };
 }

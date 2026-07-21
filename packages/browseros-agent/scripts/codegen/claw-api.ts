@@ -1,8 +1,8 @@
 /**
  * Codegen for the canonical BrowserClaw API. Reads the OpenAPI spec at
- * `contracts/claw-api/openapi.yaml` and emits both generated clients:
- * the TypeScript fetch client into `packages/claw-api/src/generated`
- * and the Rust DTOs into `crates/claw-api/src/generated`. Neither tree
+ * `contracts/claw-api/openapi.yaml` and emits language-specific DTOs:
+ * TypeScript models into `packages/claw-api/src/generated` and Rust
+ * models into `crates/claw-api/src/generated`. Neither tree
  * is ever hand-edited — change the spec, then regenerate with
  * `bun run codegen:claw-api`.
  *
@@ -35,33 +35,6 @@ interface GeneratedTrees {
   rust: string
 }
 
-/**
- * OpenAPI Generator 7.22 guards required headers twice: first by throwing,
- * then by conditionally assigning them. Flatten the unreachable second guard
- * so generated clients remain clean under whole-repository static analysis.
- */
-export function flattenRequiredHeaderGuards(source: string): string {
-  const requiredParameters = new Set(
-    [...source.matchAll(/if \(requestParameters\['([^']+)'\] == null\) \{/g)]
-      .map((match) => match[1])
-      .filter((parameter): parameter is string => parameter !== undefined),
-  )
-  let normalized = source
-  for (const parameter of requiredParameters) {
-    const escaped = parameter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const guardedAssignment = new RegExp(
-      `        if \\(requestParameters\\['${escaped}'\\] != null\\) \\{\\n(            headerParameters\\[[^\\n]+\\n)        \\}`,
-      'g',
-    )
-    normalized = normalized.replace(
-      guardedAssignment,
-      (_match, assignment: string) =>
-        assignment.replace(/^ {12}/, '        ').trimEnd(),
-    )
-  }
-  return normalized
-}
-
 function runGenerator(outputRoot: string): GeneratedTrees {
   // Run the container as the invoking user so the generated files on
   // the bind mount aren't root-owned on Linux hosts.
@@ -85,10 +58,12 @@ function runGenerator(outputRoot: string): GeneratedTrees {
     ...common,
     '-g',
     'typescript-fetch',
+    '-t',
+    '/local/scripts/codegen/templates/claw-api/typescript-fetch',
     '-o',
     '/out/typescript',
     '--global-property',
-    'apiDocs=false,modelDocs=false,apiTests=false,modelTests=false',
+    'models,modelDocs=false,modelTests=false',
     '--additional-properties',
     'supportsES6=true,typescriptThreePlus=true,importFileExtension=.js,disallowAdditionalPropertiesIfNotPresent=false',
   ])
@@ -116,27 +91,22 @@ function runGenerator(outputRoot: string): GeneratedTrees {
   )) {
     const path = join(typescript, file)
     const source = readFileSync(path, 'utf8')
-    let normalized = `${source
+    const normalized = `${source
       .split('\n')
       .map((line) => line.trimEnd())
       .join('\n')
       .trimEnd()}\n`
-    normalized = flattenRequiredHeaderGuards(normalized)
-    if (file === 'runtime.ts') {
-      // TypeScript requires `override` for the inherited Error.cause property;
-      // OpenAPI Generator 7.22's FetchError template predates that check.
-      const generatorConstructor =
-        'constructor(public cause: Error, msg?: string)'
-      if (!normalized.includes(generatorConstructor)) {
-        throw new Error('OpenAPI Generator FetchError template changed')
-      }
-      normalized = normalized.replace(
-        generatorConstructor,
-        'constructor(public override cause: Error, msg?: string)',
-      )
-    }
     writeFileSync(path, normalized)
   }
+  const typescriptModels = listFiles(join(typescript, 'models')).filter(
+    (file) => file.endsWith('.ts'),
+  )
+  writeFileSync(
+    join(typescript, 'index.ts'),
+    `${typescriptModels
+      .map((file) => `export * from './models/${file.replace(/\.ts$/, '.js')}'`)
+      .join('\n')}\n`,
+  )
   for (const file of listFiles(rust).filter((path) => path.endsWith('.rs'))) {
     const result = spawnSync(
       'rustfmt',
@@ -235,7 +205,7 @@ if (import.meta.main) {
       console.log('BrowserClaw API generated output is current.')
     } else {
       installGenerated(trees)
-      console.log('Generated BrowserClaw TypeScript client and Rust DTOs.')
+      console.log('Generated BrowserClaw TypeScript and Rust DTOs.')
     }
   } finally {
     rmSync(temporaryRoot, { recursive: true, force: true })

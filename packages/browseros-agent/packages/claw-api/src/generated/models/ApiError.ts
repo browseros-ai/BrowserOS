@@ -12,7 +12,6 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 /**
  *
  * @export
@@ -37,46 +36,4 @@ export interface ApiError {
      * @memberof ApiError
      */
     requestId?: string;
-}
-
-/**
- * Check if a given object implements the ApiError interface.
- */
-export function instanceOfApiError(value: object): value is ApiError {
-    if (!('code' in value) || value['code'] === undefined) return false;
-    if (!('message' in value) || value['message'] === undefined) return false;
-    return true;
-}
-
-export function ApiErrorFromJSON(json: any): ApiError {
-    return ApiErrorFromJSONTyped(json, false);
-}
-
-export function ApiErrorFromJSONTyped(json: any, ignoreDiscriminator: boolean): ApiError {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'code': json['code'],
-        'message': json['message'],
-        'requestId': json['requestId'] == null ? undefined : json['requestId'],
-    };
-}
-
-export function ApiErrorToJSON(json: any): ApiError {
-    return ApiErrorToJSONTyped(json, false);
-}
-
-export function ApiErrorToJSONTyped(value?: ApiError | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'code': value['code'],
-        'message': value['message'],
-        'requestId': value['requestId'],
-    };
 }

@@ -12,7 +12,6 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 /**
  *
  * @export
@@ -25,41 +24,4 @@ export interface CancelSessionResponse {
      * @memberof CancelSessionResponse
      */
     cancelled: number;
-}
-
-/**
- * Check if a given object implements the CancelSessionResponse interface.
- */
-export function instanceOfCancelSessionResponse(value: object): value is CancelSessionResponse {
-    if (!('cancelled' in value) || value['cancelled'] === undefined) return false;
-    return true;
-}
-
-export function CancelSessionResponseFromJSON(json: any): CancelSessionResponse {
-    return CancelSessionResponseFromJSONTyped(json, false);
-}
-
-export function CancelSessionResponseFromJSONTyped(json: any, ignoreDiscriminator: boolean): CancelSessionResponse {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'cancelled': json['cancelled'],
-    };
-}
-
-export function CancelSessionResponseToJSON(json: any): CancelSessionResponse {
-    return CancelSessionResponseToJSONTyped(json, false);
-}
-
-export function CancelSessionResponseToJSONTyped(value?: CancelSessionResponse | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'cancelled': value['cancelled'],
-    };
 }

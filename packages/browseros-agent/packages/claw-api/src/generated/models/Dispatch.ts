@@ -12,7 +12,6 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 /**
  *
  * @export
@@ -115,77 +114,4 @@ export interface Dispatch {
      * @memberof Dispatch
      */
     hasScreenshot: boolean;
-}
-
-/**
- * Check if a given object implements the Dispatch interface.
- */
-export function instanceOfDispatch(value: object): value is Dispatch {
-    if (!('dispatchId' in value) || value['dispatchId'] === undefined) return false;
-    if (!('createdAt' in value) || value['createdAt'] === undefined) return false;
-    if (!('slug' in value) || value['slug'] === undefined) return false;
-    if (!('label' in value) || value['label'] === undefined) return false;
-    if (!('sessionId' in value) || value['sessionId'] === undefined) return false;
-    if (!('toolName' in value) || value['toolName'] === undefined) return false;
-    if (!('hasScreenshot' in value) || value['hasScreenshot'] === undefined) return false;
-    return true;
-}
-
-export function DispatchFromJSON(json: any): Dispatch {
-    return DispatchFromJSONTyped(json, false);
-}
-
-export function DispatchFromJSONTyped(json: any, ignoreDiscriminator: boolean): Dispatch {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'dispatchId': json['dispatchId'],
-        'createdAt': json['createdAt'],
-        'profileId': json['profileId'] == null ? undefined : json['profileId'],
-        'slug': json['slug'],
-        'label': json['label'],
-        'sessionId': json['sessionId'],
-        'toolName': json['toolName'],
-        'pageId': json['pageId'] == null ? undefined : json['pageId'],
-        'tabId': json['tabId'] == null ? undefined : json['tabId'],
-        'targetId': json['targetId'] == null ? undefined : json['targetId'],
-        'url': json['url'] == null ? undefined : json['url'],
-        'title': json['title'] == null ? undefined : json['title'],
-        'argsJson': json['argsJson'] == null ? undefined : json['argsJson'],
-        'resultMeta': json['resultMeta'] == null ? undefined : json['resultMeta'],
-        'durationMs': json['durationMs'] == null ? undefined : json['durationMs'],
-        'hasScreenshot': json['hasScreenshot'],
-    };
-}
-
-export function DispatchToJSON(json: any): Dispatch {
-    return DispatchToJSONTyped(json, false);
-}
-
-export function DispatchToJSONTyped(value?: Dispatch | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'dispatchId': value['dispatchId'],
-        'createdAt': value['createdAt'],
-        'profileId': value['profileId'],
-        'slug': value['slug'],
-        'label': value['label'],
-        'sessionId': value['sessionId'],
-        'toolName': value['toolName'],
-        'pageId': value['pageId'],
-        'tabId': value['tabId'],
-        'targetId': value['targetId'],
-        'url': value['url'],
-        'title': value['title'],
-        'argsJson': value['argsJson'],
-        'resultMeta': value['resultMeta'],
-        'durationMs': value['durationMs'],
-        'hasScreenshot': value['hasScreenshot'],
-    };
 }

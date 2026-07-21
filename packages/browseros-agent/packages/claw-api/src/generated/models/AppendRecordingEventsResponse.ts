@@ -12,7 +12,6 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 /**
  *
  * @export
@@ -25,41 +24,4 @@ export interface AppendRecordingEventsResponse {
      * @memberof AppendRecordingEventsResponse
      */
     accepted: number;
-}
-
-/**
- * Check if a given object implements the AppendRecordingEventsResponse interface.
- */
-export function instanceOfAppendRecordingEventsResponse(value: object): value is AppendRecordingEventsResponse {
-    if (!('accepted' in value) || value['accepted'] === undefined) return false;
-    return true;
-}
-
-export function AppendRecordingEventsResponseFromJSON(json: any): AppendRecordingEventsResponse {
-    return AppendRecordingEventsResponseFromJSONTyped(json, false);
-}
-
-export function AppendRecordingEventsResponseFromJSONTyped(json: any, ignoreDiscriminator: boolean): AppendRecordingEventsResponse {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'accepted': json['accepted'],
-    };
-}
-
-export function AppendRecordingEventsResponseToJSON(json: any): AppendRecordingEventsResponse {
-    return AppendRecordingEventsResponseToJSONTyped(json, false);
-}
-
-export function AppendRecordingEventsResponseToJSONTyped(value?: AppendRecordingEventsResponse | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'accepted': value['accepted'],
-    };
 }

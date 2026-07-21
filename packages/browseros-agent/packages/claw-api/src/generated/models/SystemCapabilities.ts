@@ -12,7 +12,6 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 /**
  *
  * @export
@@ -41,42 +40,3 @@ export const SystemCapabilitiesRecordingIngestVersionEnum = {
     NUMBER_2: 2
 } as const;
 export type SystemCapabilitiesRecordingIngestVersionEnum = typeof SystemCapabilitiesRecordingIngestVersionEnum[keyof typeof SystemCapabilitiesRecordingIngestVersionEnum];
-
-
-/**
- * Check if a given object implements the SystemCapabilities interface.
- */
-export function instanceOfSystemCapabilities(value: object): value is SystemCapabilities {
-    return true;
-}
-
-export function SystemCapabilitiesFromJSON(json: any): SystemCapabilities {
-    return SystemCapabilitiesFromJSONTyped(json, false);
-}
-
-export function SystemCapabilitiesFromJSONTyped(json: any, ignoreDiscriminator: boolean): SystemCapabilities {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'recordingIngestVersion': json['recordingIngestVersion'] == null ? undefined : json['recordingIngestVersion'],
-        'recordingIngestMaxBytes': json['recordingIngestMaxBytes'] == null ? undefined : json['recordingIngestMaxBytes'],
-    };
-}
-
-export function SystemCapabilitiesToJSON(json: any): SystemCapabilities {
-    return SystemCapabilitiesToJSONTyped(json, false);
-}
-
-export function SystemCapabilitiesToJSONTyped(value?: SystemCapabilities | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'recordingIngestVersion': value['recordingIngestVersion'],
-        'recordingIngestMaxBytes': value['recordingIngestMaxBytes'],
-    };
-}

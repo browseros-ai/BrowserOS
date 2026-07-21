@@ -12,14 +12,7 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 import type { SystemCapabilities } from './SystemCapabilities.js';
-import {
-    SystemCapabilitiesFromJSON,
-    SystemCapabilitiesFromJSONTyped,
-    SystemCapabilitiesToJSON,
-    SystemCapabilitiesToJSONTyped,
-} from './SystemCapabilities.js';
 
 /**
  *
@@ -51,49 +44,4 @@ export interface SystemInfo {
      * @memberof SystemInfo
      */
     capabilities?: SystemCapabilities;
-}
-
-/**
- * Check if a given object implements the SystemInfo interface.
- */
-export function instanceOfSystemInfo(value: object): value is SystemInfo {
-    if (!('product' in value) || value['product'] === undefined) return false;
-    if (!('version' in value) || value['version'] === undefined) return false;
-    if (!('url' in value) || value['url'] === undefined) return false;
-    return true;
-}
-
-export function SystemInfoFromJSON(json: any): SystemInfo {
-    return SystemInfoFromJSONTyped(json, false);
-}
-
-export function SystemInfoFromJSONTyped(json: any, ignoreDiscriminator: boolean): SystemInfo {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'product': json['product'],
-        'version': json['version'],
-        'url': json['url'],
-        'capabilities': json['capabilities'] == null ? undefined : SystemCapabilitiesFromJSON(json['capabilities']),
-    };
-}
-
-export function SystemInfoToJSON(json: any): SystemInfo {
-    return SystemInfoToJSONTyped(json, false);
-}
-
-export function SystemInfoToJSONTyped(value?: SystemInfo | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'product': value['product'],
-        'version': value['version'],
-        'url': value['url'],
-        'capabilities': SystemCapabilitiesToJSON(value['capabilities']),
-    };
 }

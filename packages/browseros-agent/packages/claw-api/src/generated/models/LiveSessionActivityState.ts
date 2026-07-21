@@ -22,31 +22,3 @@ export const LiveSessionActivityState = {
     Idle: 'idle'
 } as const;
 export type LiveSessionActivityState = typeof LiveSessionActivityState[keyof typeof LiveSessionActivityState];
-
-
-export function instanceOfLiveSessionActivityState(value: any): boolean {
-    for (const key in LiveSessionActivityState) {
-        if (Object.prototype.hasOwnProperty.call(LiveSessionActivityState, key)) {
-            if (LiveSessionActivityState[key as keyof typeof LiveSessionActivityState] === value) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-export function LiveSessionActivityStateFromJSON(json: any): LiveSessionActivityState {
-    return LiveSessionActivityStateFromJSONTyped(json, false);
-}
-
-export function LiveSessionActivityStateFromJSONTyped(json: any, ignoreDiscriminator: boolean): LiveSessionActivityState {
-    return json as LiveSessionActivityState;
-}
-
-export function LiveSessionActivityStateToJSON(value?: LiveSessionActivityState | null): any {
-    return value as any;
-}
-
-export function LiveSessionActivityStateToJSONTyped(value: any, ignoreDiscriminator: boolean): LiveSessionActivityState {
-    return value as LiveSessionActivityState;
-}
