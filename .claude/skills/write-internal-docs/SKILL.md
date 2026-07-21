@@ -125,21 +125,24 @@ Sweep the whole clone for drift — from inside it:
 CLONE="${TMPDIR:-/tmp}/internal-docs-<slug>"
 [ -d "$CLONE/.git" ] || { echo "work clone missing: $CLONE"; exit 1; }
 cd "$CLONE"
-# Index entries, with commented-out placeholders stripped first
-sed '/<!--/,/-->/d' README.md | grep -o '([a-z-]*/[^)]*\.md)' | tr -d '()' | sort > /tmp/indexed.txt
+IDX="${TMPDIR:-/tmp}/internal-docs-<slug>-index.txt"
+# Index entries, with commented-out placeholders stripped first. Per-line strip on
+# purpose: a range delete (sed '/<!--/,/-->/d') swallows live entries between
+# non-adjacent comment lines.
+sed 's/<!--.*-->//' README.md | grep -o '([a-z-]*/[^)]*\.md)' | tr -d '()' | sort > "$IDX"
 # 1. Dead links: live index entries pointing at files that do not exist
-while read -r f; do [ -f "$f" ] || echo "dead: $f"; done < /tmp/indexed.txt
+while read -r f; do [ -f "$f" ] || echo "dead: $f"; done < "$IDX"
 # 2. Docs on disk missing from the index
-find setup features architecture designs -name '*.md' 2>/dev/null | sort | comm -13 /tmp/indexed.txt -
+find setup features architecture designs -name '*.md' 2>/dev/null | sort | comm -13 "$IDX" -
 # 3. Misfiled docs: read anything whose filename or frontmatter suggests the wrong dir
 ```
 
 Interpret before acting:
 
 - Commented-out index lines are placeholders the maintainers left on purpose — the `sed` excludes them; never delete or uncomment them.
-- A doc whose parent directory's own `README.md` is in the index (e.g. `architecture/rust-port/*`) is subtree-indexed, not drift. Skip it.
+- A doc with any ancestor directory whose own `README.md` is in the index (e.g. everything under `architecture/rust-port/`, including its `reference/` subdir) is subtree-indexed, not drift. Skip it.
 - The doc this run is adding is not yet indexed by design — its line lands in Step 7. Skip it.
-- What remains is real drift: add the missing index line, repoint or remove the dead link, `git mv` the misfiled doc and fix its entry.
+- What remains is real drift: add the missing index line, repoint or remove the dead link, `git mv` the misfiled doc and fix its entry. A moved doc's `.html` sibling and its `(html)` index link move with it.
 
 Commit tidy changes here, separate from the doc, so the reviewer sees them apart. No findings → no commit:
 
@@ -165,9 +168,10 @@ Then commit the doc (tidy changes were committed in Step 6) and open the PR:
 ```bash
 CLONE="${TMPDIR:-/tmp}/internal-docs-<slug>"
 [ -d "$CLONE/.git" ] || { echo "work clone missing: $CLONE"; exit 1; }
-git -C "$CLONE" add "<dir>/<file>.md" "<dir>/<file>.html" README.md
-git -C "$CLONE" commit -m "docs(<type>): <slug>"
-git -C "$CLONE" push -u origin "docs/<slug>"
+cd "$CLONE"
+git add "<dir>/<file>.md" "<dir>/<file>.html" README.md
+git commit -m "docs(<type>): <slug>"
+git push -u origin "docs/<slug>"
 gh pr create -R browseros-ai/internal-docs --base main --head "docs/<slug>" \
   --title "docs(<type>): <slug>" \
   --body "<summary, source branch, related OSS PR, tidy-pass findings if any>"
