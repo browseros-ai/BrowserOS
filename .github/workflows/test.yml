@@ -75,7 +75,9 @@ jobs:
             junit_path: test-results/build.xml
             needs_browser: false
           - suite: claw-server-rust
-            command: cargo test --workspace --locked
+            # SQLite-backed tests use deliberately small pools; serial execution
+            # avoids pool starvation on two-core GitHub-hosted runners.
+            command: cargo test --workspace --locked -- --test-threads=1
             junit_path: test-results/claw-server-rust.xml
             needs_browser: false
             needs_rust: true
